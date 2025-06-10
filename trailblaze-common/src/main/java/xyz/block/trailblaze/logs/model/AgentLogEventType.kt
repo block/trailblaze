@@ -1,0 +1,10 @@
+package xyz.block.trailblaze.logs.model
+
+enum class AgentLogEventType {
+  LLM_REQUEST,
+  MAESTRO_COMMAND,
+  MAESTRO_DRIVER,
+  TRAILBLAZE_COMMAND,
+  AGENT_TASK_STATUS,
+  SESSION_STATUS,
+}

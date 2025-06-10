@@ -1,0 +1,104 @@
+name: Checks
+
+on:
+  # Runs on PRs targeting the default branch
+  pull_request:
+    branches: [ "main" ]
+
+  # Runs after merging to the default branch
+  push:
+    branches: [ "main" ]
+
+# Allow only one concurrent deployment, skipping runs queued between the run in-progress and latest queued.
+# However, do NOT cancel in-progress runs as we want to allow these production deployments to complete.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Run Tests
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+          check-latest: true
+
+      - name: Test on Ubuntu
+        run: ./gradlew assemble check
+
+      - name: Verify Documentation is up-to-date
+        run: ./scripts/generate-docs-and-diff.sh
+
+  # Run Android Instrumentation Tests
+  android-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Enable KVM group perms
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls /dev/kvm
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: 17
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407
+
+      - name: Create and start emulator
+        uses: reactivecircus/android-emulator-runner@1dcd0090116d15e7c562f8db72807de5e036a4ed
+        with:
+          api-level: 34
+          arch: x86_64
+          disable-animations: true
+          disk-size: 6000M
+          heap-size: 600M
+          profile: Nexus 6
+          script: |
+            set +e  # Allow failure so we can post-process
+            
+            # Run Android Tests
+            ./gradlew --info :examples:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class="xyz.block.trailblaze.examples.settings.AndroidSettingsTest#becomeADeveloperMaestroYaml" -Pandroid.testInstrumentationRunnerArguments.trailblaze.ai.enabled=false
+            TEST_EXIT_CODE=$?
+            echo "Exit code was $TEST_EXIT_CODE"
+            
+            echo "Pulling logs from device..."
+            mkdir -p "$(pwd)/trailblaze-logs" && adb pull /sdcard/Download/trailblaze-logs/. "$(pwd)/trailblaze-logs"
+            
+            # Generate Trailblaze report
+            echo "Generating Trailblaze report..."
+            ./gradlew :trailblaze-report:run --args="$(pwd)/trailblaze-logs"
+            
+            # Zip up logs
+            cd "$(pwd)/trailblaze-logs" && zip -r "../trailblaze-logs.zip" . && cd ..
+            
+            # Final step: exit with test result to fail the job if needed
+            exit $TEST_EXIT_CODE
+
+      - name: Upload artifacts
+        if: always()  # Ensures this runs even if the previous step failed
+        uses: actions/upload-artifact@v4
+        with:
+          name: trailblaze-artifacts
+          path: |
+            trailblaze-logs.zip

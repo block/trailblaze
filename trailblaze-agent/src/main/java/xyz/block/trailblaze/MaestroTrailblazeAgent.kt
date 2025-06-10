@@ -1,0 +1,122 @@
+package xyz.block.trailblaze
+
+import maestro.orchestra.Command
+import xyz.block.trailblaze.agent.AgentTask
+import xyz.block.trailblaze.api.ScreenState
+import xyz.block.trailblaze.api.TrailblazeAgent
+import xyz.block.trailblaze.api.ViewHierarchyTreeNode
+import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
+import xyz.block.trailblaze.toolcalls.MapsToMaestroCommands
+import xyz.block.trailblaze.toolcalls.TrailblazeTool
+import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
+import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.toolcalls.commands.TapOnElementByNodeIdTrailblazeTool
+import xyz.block.trailblaze.viewhierarchy.findBestTapMaestroCommandForNode
+
+abstract class MaestroTrailblazeAgent : TrailblazeAgent {
+  override lateinit var currentTask: AgentTask
+
+  /**
+   * This will allow you to handle custom [TrailblazeTool]s that are not directly mapped to Maestro commands.
+   */
+  open val customTrailblazeToolHandler: (TrailblazeToolExecutionContext) -> TrailblazeToolResult? = { null }
+
+  override fun setUpTask(instruction: String): AgentTask {
+    currentTask = AgentTask(instruction, 50)
+    return currentTask
+  }
+
+  protected abstract fun executeMaestroCommands(
+    maestroCommands: List<Command>,
+    llmResponseId: String?,
+  ): TrailblazeToolResult
+
+  override fun runMaestroCommands(
+    maestroCommands: List<Command>,
+    llmResponseId: String?,
+  ): TrailblazeToolResult {
+    maestroCommands.forEach { command ->
+      val result = executeMaestroCommands(
+        maestroCommands = listOf(command),
+        llmResponseId = llmResponseId,
+      )
+      if (result != TrailblazeToolResult.Success) {
+        return result
+      }
+    }
+    return TrailblazeToolResult.Success
+  }
+
+  override fun runTrailblazeTools(
+    tools: List<TrailblazeTool>,
+    llmResponseId: String?,
+    screenState: ScreenState?,
+  ): Pair<List<TrailblazeTool>, TrailblazeToolResult> {
+    val updatedTools = mutableListOf<TrailblazeTool>()
+    tools.forEach { trailblazeTool ->
+      updatedTools.add(trailblazeTool)
+      val result = when (trailblazeTool) {
+        is MapsToMaestroCommands -> {
+          runMaestroCommands(trailblazeTool.toMaestroCommands())
+        }
+        is ExecutableTrailblazeTool -> {
+          trailblazeTool.execute(
+            TrailblazeToolExecutionContext(
+              trailblazeTool = trailblazeTool,
+              screenState = screenState,
+              llmResponseId = llmResponseId,
+            ),
+          )
+        }
+        is TapOnElementByNodeIdTrailblazeTool -> {
+          var response: TrailblazeToolResult = TrailblazeToolResult.Error.UnknownTrailblazeTool(trailblazeTool)
+          if (screenState?.viewHierarchy != null) {
+            println("Full View Hierarchy:\n" + prettyPrintViewHierarchy(screenState.viewHierarchy))
+            println("TapOnElementByNodeId: Looking for nodeId=${trailblazeTool.nodeId}")
+            val matchingNode = ViewHierarchyTreeNode.dfs(screenState.viewHierarchy) {
+              it.nodeId == trailblazeTool.nodeId
+            }
+            if (matchingNode != null) {
+              println("TapOnElementByNodeId: Found node: text='${matchingNode.text}', accessibilityText='${matchingNode.accessibilityText}', bounds=${matchingNode.bounds}")
+              val command = findBestTapMaestroCommandForNode(screenState.viewHierarchyOriginal, matchingNode, trailblazeTool.longPress)
+              response = runMaestroCommands(
+                maestroCommands = listOf(command),
+                llmResponseId = llmResponseId,
+              )
+            } else {
+              println("TapOnElementByNodeId: No node found with nodeId=${trailblazeTool.nodeId}")
+            }
+          }
+          response
+        }
+        else -> {
+          customTrailblazeToolHandler(
+            TrailblazeToolExecutionContext(
+              trailblazeTool = trailblazeTool,
+              screenState = screenState,
+              llmResponseId = llmResponseId,
+            ),
+          ) ?: TrailblazeToolResult.Error.UnknownTrailblazeTool(
+            trailblazeTool,
+          )
+        }
+      }
+      if (result != TrailblazeToolResult.Success) return updatedTools to result
+    }
+    return updatedTools to TrailblazeToolResult.Success
+  }
+
+  private fun prettyPrintViewHierarchy(
+    node: ViewHierarchyTreeNode,
+    indent: String = "",
+  ): String {
+    val builder = StringBuilder()
+    builder.append(
+      "$indent- nodeId=${node.nodeId}, text='${node.text}', accessibilityText='${node.accessibilityText}', bounds=${node.bounds}\n",
+    )
+    node.children.forEach { child ->
+      builder.append(prettyPrintViewHierarchy(child, "$indent  "))
+    }
+    return builder.toString()
+  }
+}

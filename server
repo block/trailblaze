@@ -1,0 +1,17 @@
+#!/bin/sh
+
+# Start Gradle in the background
+echo "The trailblaze logs server is compiling and starting up..."
+./gradlew :trailblaze-server:run --args="$(pwd) $@" &
+
+# Capture the Gradle process ID
+GRADLE_PID=$!
+
+# Ensure Gradle is killed when this script is terminated
+trap "kill $GRADLE_PID" EXIT
+
+echo "Once the server is running, you'll be able to view captured logs from any executions."
+echo "Load http://localhost:8080 once the server is running and execute trailblaze in host or on-device mode."
+
+# Wait for the Gradle process to finish (rejoins it)
+wait $GRADLE_PID
