@@ -25,12 +25,14 @@ dependencies {
   implementation(libs.ktor.http)
   implementation(libs.ktor.utils)
   implementation(libs.kotlin.reflect)
+  implementation(libs.snakeyaml)
 
   runtimeOnly(libs.jackson.dataformat.yaml)
   runtimeOnly(libs.jackson.module.kotlin)
 
   testImplementation(libs.kotlin.test.junit4)
   testImplementation(libs.maestro.orchestra) { isTransitive = false }
+  testImplementation(libs.assertk)
 }
 
 dependencyGuard {

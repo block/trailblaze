@@ -13,7 +13,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeLogServerClient
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.ObjectiveCompleteTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool
 import java.security.SecureRandom
 import java.security.cert.X509Certificate
 import javax.net.ssl.SSLContext
@@ -224,7 +224,7 @@ class TrailblazeAndroidLoggingRule : SimpleTestRule() {
         .filterIsInstance<TrailblazeLog.TrailblazeToolLog>()
         .filter { it.successful }
         // objective completes throw off the recording
-        .filter { it.command !is ObjectiveCompleteTrailblazeTool }
+        .filter { it.command !is ObjectiveStatusTrailblazeTool }
         .forEach { commandLog -> recordLogs.add(commandLog) }
     }
   }

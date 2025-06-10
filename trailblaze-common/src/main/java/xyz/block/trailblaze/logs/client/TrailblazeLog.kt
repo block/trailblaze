@@ -113,6 +113,7 @@ sealed interface TrailblazeLog {
   data class TrailblazeToolLog(
     override val agentTaskStatus: AgentTaskStatus,
     val command: TrailblazeTool,
+    val toolName: String,
     val instructions: String,
     val successful: Boolean,
     val llmResponseId: String?,
@@ -128,5 +129,33 @@ sealed interface TrailblazeLog {
     fun asCommandJson(): String = buildString {
       appendLine(TrailblazeToolToCodeSerializer().serializeTrailblazeToolToCode(command))
     }
+  }
+
+  @Serializable
+  data class ObjectiveStartLog(
+    val description: String,
+    override val session: String,
+    override val timestamp: Long,
+  ) : TrailblazeLog {
+    override val type: AgentLogEventType = AgentLogEventType.OBJECTIVE_START
+  }
+
+  @Serializable
+  data class ObjectiveCompleteLog(
+    val description: String,
+    val objectiveResult: AgentTaskStatus,
+    override val session: String,
+    override val timestamp: Long,
+  ) : TrailblazeLog {
+    override val type: AgentLogEventType = AgentLogEventType.OBJECTIVE_COMPLETE
+  }
+
+  @Serializable
+  data class TopLevelMaestroCommandLog(
+    val command: String,
+    override val session: String,
+    override val timestamp: Long,
+  ) : TrailblazeLog {
+    override val type: AgentLogEventType = AgentLogEventType.TOP_LEVEL_MAESTRO_COMMAND
   }
 }

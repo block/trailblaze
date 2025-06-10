@@ -62,6 +62,9 @@ data class SessionSummary(
             is TrailblazeLog.MaestroCommandLog,
             is TrailblazeLog.TrailblazeToolLog,
             is TrailblazeLog.TrailblazeSessionStatusChangeLog,
+            is TrailblazeLog.ObjectiveStartLog,
+            is TrailblazeLog.ObjectiveCompleteLog,
+            is TrailblazeLog.TopLevelMaestroCommandLog,
             -> it
           }
         }.sortedBy { it.timestamp }
@@ -198,6 +201,11 @@ data class SessionSummary(
               timestamp = log.timestamp,
               elapsedTimeMs = log.timestamp - sessionStartTimestampMs,
             )
+
+            is TrailblazeLog.ObjectiveStartLog,
+            is TrailblazeLog.ObjectiveCompleteLog,
+            is TrailblazeLog.TopLevelMaestroCommandLog,
+            -> null
           }
         }
         val trailblazeToolsForPrompt = logsInGroup.logs

@@ -9,7 +9,7 @@ import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.LaunchAppTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.LongPressElementWithAccessibilityTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.LongPressOnElementWithTextTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.ObjectiveCompleteTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.PressBackTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.SwipeTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnElementByNodeIdTrailblazeTool
@@ -30,7 +30,7 @@ class TrailblazeToolRepo(
     val DEFAULT_COMMON_COMMAND_CLASSES: Set<KClass<out TrailblazeTool>> = setOf(
       HideKeyboardTrailblazeTool::class,
       InputTextTrailblazeTool::class,
-      ObjectiveCompleteTrailblazeTool::class,
+      ObjectiveStatusTrailblazeTool::class,
       EraseTextTrailblazeTool::class,
       PressBackTrailblazeTool::class,
       SwipeTrailblazeTool::class,

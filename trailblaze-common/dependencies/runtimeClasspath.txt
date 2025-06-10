@@ -60,4 +60,4 @@ org.jetbrains.kotlinx:kotlinx-serialization-json-jvm:1.8.1
 org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1
 org.jetbrains:annotations:23.0.0
 org.slf4j:slf4j-api:2.0.16
-org.yaml:snakeyaml:2.3
+org.yaml:snakeyaml:2.4

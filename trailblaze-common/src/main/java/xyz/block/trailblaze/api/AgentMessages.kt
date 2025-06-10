@@ -16,6 +16,7 @@ object AgentMessages {
     is Error.EmptyToolCall -> emptyToolCallErrorContentString()
     is Error.ExceptionThrown -> errorExceptionContentString(this)
     is Error.UnknownTool -> unknownToolErrorContentString(functionName, functionArgs, errorMessage)
+    is Error.MissingRequiredArgs -> missingRequiredArgsContentString(functionName, functionArgs, requiredArgs)
   }
 
   private fun errorExceptionContentString(errorException: Error.ExceptionThrown) = buildString {
@@ -68,5 +69,16 @@ object AgentMessages {
     appendLine("Tool: $functionName")
     appendLine("Parameters $functionArgs")
     appendLine("Error message: $errorMessage")
+  }
+
+  private fun missingRequiredArgsContentString(
+    functionName: String,
+    functionArgs: JsonObject,
+    requiredArguments: List<String>,
+  ) = buildString {
+    appendLine("# Tool attempted is missing required arguments.")
+    appendLine("Tool: $functionName")
+    appendLine("Parameters provided $functionArgs")
+    appendLine("Parameters required $requiredArguments")
   }
 }

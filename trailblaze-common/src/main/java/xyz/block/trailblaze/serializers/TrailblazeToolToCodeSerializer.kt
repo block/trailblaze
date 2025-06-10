@@ -8,7 +8,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.temp.flattenTrailblazeJson
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.ObjectiveCompleteTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool
 
 class TrailblazeToolToCodeSerializer {
 
@@ -91,7 +91,7 @@ class TrailblazeToolToCodeSerializer {
         indentCount++
         appendLine("${indent()}listOf(")
         trailblazeTools
-          .filter { it !is ObjectiveCompleteTrailblazeTool }
+          .filter { it !is ObjectiveStatusTrailblazeTool }
           .forEach { trailblazeTool ->
             indentCount++
             append(serializeTrailblazeToolToCode(trailblazeTool))

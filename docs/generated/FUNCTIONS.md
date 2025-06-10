@@ -5,7 +5,7 @@
 - [hideKeyboard](functions/custom/hideKeyboard.md)
 - [inputText](functions/custom/inputText.md)
 - [launchApp](functions/custom/launchApp.md)
-- [objectiveComplete](functions/custom/objectiveComplete.md)
+- [objectiveStatus](functions/custom/objectiveStatus.md)
 - [pressBack](functions/custom/pressBack.md)
 - [swipe](functions/custom/swipe.md)
 - [wait](functions/custom/wait.md)

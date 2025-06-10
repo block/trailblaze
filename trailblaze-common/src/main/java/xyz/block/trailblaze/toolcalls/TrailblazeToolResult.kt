@@ -58,6 +58,16 @@ Please always provide a tool call that will help complete the task.
     ) : Error
 
     @Serializable
+    data class MissingRequiredArgs(
+      val functionName: String,
+      val functionArgs: JsonObject,
+      val requiredArgs: List<String>,
+    ) : Error {
+      override val errorMessage: String
+        get() = "Tool call $functionName is missing required args. Provided args: $functionArgs. Required args: $requiredArgs."
+    }
+
+    @Serializable
     data class UnknownTrailblazeTool(
       val command: TrailblazeTool,
     ) : Error {

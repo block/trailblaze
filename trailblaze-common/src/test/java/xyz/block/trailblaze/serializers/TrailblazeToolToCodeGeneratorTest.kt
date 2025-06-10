@@ -4,7 +4,7 @@ import kotlinx.serialization.Serializable
 import org.junit.Test
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.EraseTextTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.ObjectiveCompleteTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.SwipeTrailblazeTool
 import kotlin.test.assertEquals
 
@@ -50,9 +50,9 @@ EraseTextTrailblazeTool(
   }
 
   @Test
-  fun testTrailblazeObjectiveCompleteCommand() {
+  fun testTrailblazeObjectiveStatusCommand() {
     val generatedCode = TrailblazeToolToCodeSerializer().serializeTrailblazeToolToCode(
-      ObjectiveCompleteTrailblazeTool(
+      ObjectiveStatusTrailblazeTool(
         description = "Test objective",
         explanation = "explanation",
         status = "completed",
@@ -62,7 +62,7 @@ EraseTextTrailblazeTool(
 
     assertEquals(
       """
-ObjectiveCompleteTrailblazeTool(
+ObjectiveStatusTrailblazeTool(
   description = "Test objective",
   explanation = "explanation",
   status = "completed",

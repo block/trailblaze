@@ -1,7 +1,6 @@
 package xyz.block.trailblaze
 
 import maestro.orchestra.Command
-import xyz.block.trailblaze.agent.AgentTask
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeAgent
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
@@ -11,20 +10,13 @@ import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.commands.TapOnElementByNodeIdTrailblazeTool
-import xyz.block.trailblaze.viewhierarchy.findBestTapMaestroCommandForNode
+import xyz.block.trailblaze.toolcalls.commands.findBestTapTrailblazeToolForNode
 
 abstract class MaestroTrailblazeAgent : TrailblazeAgent {
-  override lateinit var currentTask: AgentTask
-
   /**
    * This will allow you to handle custom [TrailblazeTool]s that are not directly mapped to Maestro commands.
    */
   open val customTrailblazeToolHandler: (TrailblazeToolExecutionContext) -> TrailblazeToolResult? = { null }
-
-  override fun setUpTask(instruction: String): AgentTask {
-    currentTask = AgentTask(instruction, 50)
-    return currentTask
-  }
 
   protected abstract fun executeMaestroCommands(
     maestroCommands: List<Command>,
@@ -78,9 +70,16 @@ abstract class MaestroTrailblazeAgent : TrailblazeAgent {
             }
             if (matchingNode != null) {
               println("TapOnElementByNodeId: Found node: text='${matchingNode.text}', accessibilityText='${matchingNode.accessibilityText}', bounds=${matchingNode.bounds}")
-              val command = findBestTapMaestroCommandForNode(screenState.viewHierarchyOriginal, matchingNode, trailblazeTool.longPress)
+              val tool = findBestTapTrailblazeToolForNode(
+                screenState.viewHierarchyOriginal,
+                matchingNode,
+                trailblazeTool.longPress,
+              )
+              println("Selected TrailblazeTool: $tool")
+              updatedTools.add(tool)
+              val commands = (tool as MapsToMaestroCommands).toMaestroCommands()
               response = runMaestroCommands(
-                maestroCommands = listOf(command),
+                maestroCommands = commands,
                 llmResponseId = llmResponseId,
               )
             } else {

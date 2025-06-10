@@ -6,6 +6,7 @@ import xyz.block.trailblaze.AndroidMaestroTrailblazeAgent
 import xyz.block.trailblaze.SimpleTestRuleChain
 import xyz.block.trailblaze.TrailblazeAndroidLoggingRule
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
+import xyz.block.trailblaze.agent.model.toTrailblazePrompt
 import xyz.block.trailblaze.android.uiautomator.AndroidOnDeviceUiAutomatorScreenState
 import xyz.block.trailblaze.api.TestAgentRunner
 import xyz.block.trailblaze.exception.TrailblazeException
@@ -53,7 +54,7 @@ class AndroidTrailblazeRule(
    * Run natural language instructions with the agent.
    */
   override fun prompt(objective: String): Boolean {
-    val trailblazeOpenAiRunnerResult = trailblazeOpenAiRunner.run(objective)
+    val trailblazeOpenAiRunnerResult = trailblazeOpenAiRunner.run(objective.toTrailblazePrompt())
     return if (trailblazeOpenAiRunnerResult is AgentTaskStatus.Success) {
       // Success!
       true

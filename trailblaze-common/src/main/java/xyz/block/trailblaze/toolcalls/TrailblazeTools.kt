@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.toolcalls
 
 import kotlin.reflect.KClass
+import kotlin.reflect.full.findAnnotation
 import kotlin.reflect.full.isSubclassOf
 
 object TrailblazeTools {
@@ -19,4 +20,14 @@ NOTE:
       """
 
   fun List<KClass<out TrailblazeTool>>.filterForMapsToMaestroCommands(): List<KClass<out TrailblazeTool>> = this.filter { it.isSubclassOf(MapsToMaestroCommands::class) }
+}
+
+// Make this a top-level public function so it can be used elsewhere
+@Suppress("UNCHECKED_CAST")
+fun TrailblazeTool.getToolNameFromAnnotation(): String = try {
+  val kClass = this::class
+  val annotation = kClass.findAnnotation<TrailblazeToolClass>()
+  annotation?.name ?: kClass.simpleName ?: "UnknownTool"
+} catch (e: Exception) {
+  this::class.simpleName ?: "UnknownTool"
 }

@@ -8,15 +8,19 @@ import com.aallam.openai.api.chat.ToolCall
 import com.aallam.openai.api.chat.ToolChoice
 import com.aallam.openai.api.chat.chatCompletionRequest
 import com.aallam.openai.api.chat.chatMessage
+import com.aallam.openai.api.exception.OpenAIServerException
 import com.aallam.openai.api.http.Timeout
 import com.aallam.openai.api.logging.LogLevel
 import com.aallam.openai.api.model.ModelId
 import com.aallam.openai.client.LoggingConfig
 import com.aallam.openai.client.OpenAI
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
-import xyz.block.trailblaze.agent.AgentTask
+import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
+import xyz.block.trailblaze.agent.model.PromptStep
+import xyz.block.trailblaze.agent.model.TestObjective.TrailblazeObjective.TrailblazePrompt
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TestAgentRunner
 import xyz.block.trailblaze.api.TrailblazeAgent
@@ -25,9 +29,11 @@ import xyz.block.trailblaze.llm.LlmModel
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
+import xyz.block.trailblaze.toolcalls.TrailblazeToolAsLlmTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
-import xyz.block.trailblaze.toolcalls.commands.ObjectiveCompleteTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool
+import xyz.block.trailblaze.toolcalls.getToolNameFromAnnotation
 import xyz.block.trailblaze.util.TemplatingUtil
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
@@ -52,151 +58,158 @@ class TrailblazeOpenAiRunner(
 
   private val llmModel = llmModel ?: LlmModel.GPT_4_1
 
-  // Create an instance of the ObjectiveManager
-  private val objectiveManager = ObjectiveManager()
-
   private val openAi = OpenAI(
     token = openAiApiKey,
     timeout = Timeout(socket = 180.seconds),
     logging = LoggingConfig(logLevel = LogLevel.None),
   )
 
-  /* This function accepts an instructional prompt which details the goal
-  // of the agent. The agent will review the instructions, view hierarchy,
-  // and historical actions to determine the appropriate actions to take
-  // to achieve the instructions.
-   */
-  override fun run(instructions: String): AgentTaskStatus {
-    println("\n\u001B[1;35m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\u001B[0m")
-    println("\u001B[1;35m🚀 Starting new agent objective: $instructions\u001B[0m")
-    println("\u001B[1;35m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\u001B[0m")
-
-    val task = agent.setUpTask(instructions)
-
+  override fun run(prompt: TrailblazePrompt): AgentTaskStatus {
     TrailblazeLogger.log(
       TrailblazeLog.TrailblazeAgentTaskStatusChangeLog(
-        agentTaskStatus = task.currentStatus.value,
+        agentTaskStatus = prompt.steps.first().currentStatus.value,
         session = TrailblazeLogger.getCurrentSessionId(),
         timestamp = System.currentTimeMillis(),
       ),
     )
-
-    // Generate objectives by splitting the instructions by line using the ObjectiveManager
-    val objectives = objectiveManager.generateObjectivesFromLines(instructions)
-
-    // Save the objectives to the AgentTask object
-    task.setObjectives(objectives)
-
-    do {
-      val currentObjectiveIndex = task.currentObjectiveIndex
-      if (currentObjectiveIndex >= 0 && task.objectives.isNotEmpty()) {
-        // Print progress bar showing which objectives are completed/pending using the ObjectiveManager
-        objectiveManager.printObjectiveProgressBar(task)
+    LogHelper.logPromptStart(prompt)
+    prompt.steps.forEachIndexed { index, step ->
+      println("\n[LOOP_STATUS] Objective: ${index + 1}/${prompt.steps.size}")
+      // TODO: Separate Objective results from TestCase results
+      when (val objectiveResult: AgentTaskStatus = run(step)) {
+        is AgentTaskStatus.Success.ObjectiveComplete -> {
+          // do nothing, move on to the next objective
+        }
+        is AgentTaskStatus.InProgress -> {
+          throw IllegalStateException("In Progress should never be returned as the final objective result")
+        }
+        // In the failure cases return them to fail the entire test case
+        else -> return objectiveResult
       }
+    }
+    // This is dumb but it's just returning the last status
+    // If we get here we've processed through all of the objectives so all should have a status
+    val exitStatus = prompt.steps.last().currentStatus.value
+    TrailblazeLogger.log(
+      TrailblazeLog.TrailblazeAgentTaskStatusChangeLog(
+        agentTaskStatus = exitStatus,
+        session = TrailblazeLogger.getCurrentSessionId(),
+        timestamp = System.currentTimeMillis(),
+      ),
+    )
+    return exitStatus
+  }
 
-      // Simplified debug output
-      println("\n[LOOP_STATUS] Status: ${task.currentStatus.value.javaClass.simpleName} | Call: ${task.agentCallCount + 1} | Objective: ${currentObjectiveIndex + 1}/${task.objectives.size}")
-
+  override fun run(step: PromptStep): AgentTaskStatus {
+    TrailblazeLogger.log(
+      TrailblazeLog.ObjectiveStartLog(
+        description = step.description,
+        session = TrailblazeLogger.getCurrentSessionId(),
+        timestamp = System.currentTimeMillis(),
+      ),
+    )
+    forceStepStatusUpdate = false
+    do {
+      println("\n[LOOP_STATUS] Status: ${step.currentStatus.value.javaClass.simpleName} | Call: ${step.llmResponseHistory.size + 1}")
       val screenStateForLlmRequest = screenStateProvider()
       val requestStartTimeMs = System.currentTimeMillis()
       val openAiRequest: ChatCompletionRequest = createNextChatRequest(
         screenState = screenStateForLlmRequest,
-        task = task,
+        step = step,
       )
+
+      // Use retry logic for OpenAI calls
       val openAiResponse: ChatCompletion = runBlocking {
-        openAi.chatCompletion(openAiRequest)
+        openAiChatCompletionWithRetry(openAiRequest)
       }
+
       val llmResponseId = openAiResponse.id
-      task.increaseLlmCallCount()
       TrailblazeLogger.logLlmRequest(
-        agentTaskStatus = task.currentStatus.value,
+        agentTaskStatus = step.currentStatus.value,
         screenState = screenStateForLlmRequest,
-        instructions = instructions,
+        instructions = step.fullPrompt,
         request = openAiRequest,
         response = openAiResponse,
         startTime = requestStartTimeMs,
         llmRequestId = llmResponseId,
       )
-      val (llmMessage, action) = parseResponse(openAiResponse)
 
-      // Simplified response info
+      val (llmMessage, action) = parseResponse(openAiResponse)
       println("[LLM_RESPONSE] Has tool call: ${action != null} | Tool: ${action?.function?.name ?: "None"}")
 
       if (action != null) {
         val trailblazeTool: TrailblazeTool? = trailblazeToolRepo.toolCallToTrailblazeTool(action)
         val trailblazeToolResult = if (trailblazeTool == null) {
           unknownToolError(action)
+        } else if (TrailblazeToolAsLlmTool(trailblazeTool::class).properties
+            .filter { it.isRequired }
+            .any { prop ->
+              (Json.parseToJsonElement(action.function.arguments) as? JsonObject)?.containsKey(prop.name) != true
+            }
+        ) {
+          missingRequiredArgsError(
+            action,
+            TrailblazeToolAsLlmTool(trailblazeTool::class).properties
+              .filter { it.isRequired }
+              .map { it.name },
+          )
         } else {
-          handleTrailblazeTool(trailblazeTool, task, llmResponseId, instructions, screenStateForLlmRequest)
+          handleTrailblazeToolForPrompt(trailblazeTool, llmResponseId, step, screenStateForLlmRequest)
         }
 
-        task.addToolCall(
+        step.addToolCall(
           llmResponseContent = llmMessage,
           function = action.function,
           commandResult = trailblazeToolResult,
         )
       } else {
-        task.addEmptyToolCall(
+        println("[WARNING] No tool call detected - forcing tool call on next iteration")
+        step.addEmptyToolCall(
           llmResponseContent = llmMessage,
           result = TrailblazeToolResult.Error.EmptyToolCall,
         )
         shouldForceToolCall = true
-
-        // Simplified warning
-        println("[WARNING] No tool call detected - forcing tool call on next iteration")
       }
+      LogHelper.logStepStatus(step)
+    } while (!step.isFinished())
 
-      // Simplified end of iteration status
-      println("[END_ITERATION] Status: ${task.currentStatus.value.javaClass.simpleName} | Finished: ${task.isFinished()} | Continue: ${!task.isFinished()}")
-    } while (!task.isFinished())
-
-    // Simplified exit reason
-    println("\n[LOOP_EXIT] Status: ${task.currentStatus.value.javaClass.simpleName} | Calls: ${task.agentCallCount} | Objectives completed: ${task.currentObjectiveIndex + 1}/${task.objectives.size}")
-    if (task.currentStatus.value is AgentTaskStatus.Failure) {
-      val failure = task.currentStatus.value as AgentTaskStatus.Failure
-      println("[FAILURE] Type: ${failure.javaClass.simpleName}")
+    val exitStatus = step.currentStatus.value
+    if (exitStatus is AgentTaskStatus.Failure) {
+      println("[FAILURE] Type: ${exitStatus.javaClass.simpleName}")
     }
 
-    // Log the final task completion status
-    val taskCompletionTime = System.currentTimeMillis()
     TrailblazeLogger.log(
-      TrailblazeLog.TrailblazeAgentTaskStatusChangeLog(
-        agentTaskStatus = task.currentStatus.value,
+      TrailblazeLog.ObjectiveCompleteLog(
+        description = step.description,
+        objectiveResult = step.currentStatus.value,
         session = TrailblazeLogger.getCurrentSessionId(),
-        timestamp = taskCompletionTime,
+        timestamp = System.currentTimeMillis(),
       ),
     )
 
-    // Print final summary with additional formatting
-    println("\n\u001B[1;35m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\u001B[0m")
-    println("\u001B[1;35m📊 FINAL TASK SUMMARY\u001B[0m")
-    println("\u001B[1;35m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\u001B[0m")
-    task.printResultsToConsole()
-    println("\u001B[1;35m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\u001B[0m")
-
-    return task.currentStatus.value
+    return step.currentStatus.value
   }
 
+  private var forceStepStatusUpdate = false
   private fun createNextChatRequest(
     screenState: ScreenState,
-    task: AgentTask,
+    step: PromptStep,
   ) = chatCompletionRequest {
     model = ModelId(llmModel.id)
 
     // Limit message history to reduce memory usage
-    val limitedHistory = task.llmResponseHistory.takeLast(5) // Only keep recent messages
+    val limitedHistory = step.llmResponseHistory.takeLast(5) // Only keep recent messages
 
     messages = toOpenAiChatMessages(
       screenState = screenState,
-      instructions = task.instructions,
+      step = step,
       previousLlmResponses = limitedHistory,
-      task = task,
     )
     tools {
-      if (objectiveManager.getForceTaskStatusUpdate()) {
-        // When we need to force a task status update, only register the objectiveComplete tool
+      if (step.llmStatusChecks && forceStepStatusUpdate) {
+        // When we need to force a task status update, only register the objectiveStatus tool
         // This ensures only this tool can be used
-        trailblazeToolRepo.registerSpecificToolOnly(this, ObjectiveCompleteTrailblazeTool::class)
+        trailblazeToolRepo.registerSpecificToolOnly(this, ObjectiveStatusTrailblazeTool::class)
         toolChoice = ToolChoice.Mode("required")
       } else {
         // Register all tools that have been registered with the trailblazeToolRepo
@@ -212,9 +225,8 @@ class TrailblazeOpenAiRunner(
    */
   private fun toOpenAiChatMessages(
     screenState: ScreenState,
-    instructions: String,
+    step: PromptStep,
     previousLlmResponses: List<ChatMessage>,
-    task: AgentTask,
   ): List<ChatMessage> = buildList {
     add(
       chatMessage {
@@ -228,72 +240,55 @@ class TrailblazeOpenAiRunner(
         content = TemplatingUtil.renderTemplate(
           template = userObjectiveTemplate,
           values = mapOf(
-            "objective" to instructions,
+            "objective" to step.fullPrompt,
           ),
         )
       },
     )
 
     // Add objectives information if available
-    val objectives = task.objectives
-    if (objectives.isNotEmpty()) {
-      // Get current objective information
-      val currentObjectiveIndex = task.currentObjectiveIndex
-      if (currentObjectiveIndex >= 0 && currentObjectiveIndex < objectives.size) {
-        val currentObjective = objectives[currentObjectiveIndex]
-
-        // Reminder message - depending on whether we need to force a task status update
-        val reminderMessage = if (objectiveManager.getForceTaskStatusUpdate()) {
-          """
-            ## ACTION REQUIRED: REPORT TASK STATUS
-            
-            You just performed an action using a tool.
-            You MUST now report the status of the current objective item by calling the objectiveComplete tool with one of the following statuses:
-            - status="completed" if you've fully accomplished this specific objective item (you'll advance to the next item)
-            - status="in_progress" if you're still working on this specific objective item and need to take more actions
-            - status="failed" if this specific objective item cannot be completed or the action you took didn't succeed
-            
-            Include a detailed message explaining what you just did and your assessment of the situation.
-            
-            IMPORTANT: You CANNOT perform any other action until you report progress using objectiveComplete.
-            Carefully assess if the action you just took completely fulfilled this specific objective item before deciding the status.
-            
-            ## CURRENT TASK
-            
-            Current objective item to focus on is:
-            
-            > Task #${currentObjectiveIndex + 1}: ${currentObjective.description}
-          """.trimIndent()
-        } else {
-          """
-            ## CURRENT TASK
-            
-            Your current objective item to focus on is:
-            
-            > Task #${currentObjectiveIndex + 1}: ${currentObjective.description}
-            
-            IMPORTANT: Focus ONLY on completing this specific objective item. 
-            After you complete this objective item, call the objectiveComplete tool IMMEDIATELY.
-            DO NOT proceed to the next objective item until this one is complete and you've called objectiveComplete.
-          """.trimIndent()
-        }
-
-        add(
-          chatMessage {
-            role = ChatRole.User
-            content = reminderMessage
-          },
-        )
-      } else {
-        add(
-          chatMessage {
-            role = ChatRole.User
-            content =
-              "Thanks for creating this task list. Now let's work through these tasks one by one to achieve the objective."
-          },
-        )
-      }
+    // Reminder message - depending on whether we need to force a task status update
+    val reminderMessage = if (forceStepStatusUpdate) {
+      """
+        ## ACTION REQUIRED: REPORT TASK STATUS
+        
+        You just performed an action using a tool.
+        You MUST now report the status of the current objective item by calling the objectiveStatus tool with one of the following statuses:
+        - status="in_progress" if you're still working on this specific objective item and need to take more actions
+        - status="completed" if you've fully accomplished all instructions in the current objective.
+        - status="failed" if this specific objective item cannot be completed after multiple attempts.
+        
+        Include a detailed message explaining what you just did and your assessment of the situation.
+        
+        IMPORTANT: You CANNOT perform any other action until you report progress using objectiveStatus.
+        Carefully assess if the action you just took completely fulfilled this specific objective item before deciding the status.
+        
+        ## CURRENT TASK
+        
+        Current objective item to focus on is:
+        
+        > Task #${step.taskIndex}: ${step.description}
+      """.trimIndent()
+    } else {
+      """
+        ## CURRENT TASK
+        
+        Your current objective item to focus on is:
+        
+        > Task #${step.taskIndex}: ${step.description}
+        
+        IMPORTANT: Focus ONLY on completing this specific objective item. 
+        After you complete this objective item, call the objectiveStatus tool IMMEDIATELY.
+        DO NOT proceed to the next objective item until this one is complete and you've called objectiveStatus.
+      """.trimIndent()
     }
+
+    add(
+      chatMessage {
+        role = ChatRole.User
+        content = reminderMessage
+      },
+    )
 
     addAll(previousLlmResponses)
     add(
@@ -346,19 +341,34 @@ class TrailblazeOpenAiRunner(
     return TrailblazeToolResult.Error.UnknownTool(functionName, functionArgs)
   }
 
-  fun handleTrailblazeTool(
+  private fun missingRequiredArgsError(action: ToolCall.Function, requiredArgs: List<String>): TrailblazeToolResult {
+    val function = action.function
+    val functionName = function.name
+    val functionArgs = function.argumentsAsJson()
+    return TrailblazeToolResult.Error.MissingRequiredArgs(functionName, functionArgs, requiredArgs)
+  }
+
+  fun handleTrailblazeToolForPrompt(
     trailblazeTool: TrailblazeTool,
-    task: AgentTask,
     llmResponseId: String?,
-    instructions: String,
+    step: PromptStep,
     screenStateForLlmRequest: ScreenState,
   ): TrailblazeToolResult = when (trailblazeTool) {
-    is ObjectiveCompleteTrailblazeTool -> {
-      objectiveManager.handleObjectiveCompleteCommand(
-        task = task,
-        command = trailblazeTool,
-        llmResponseId = llmResponseId,
-      )
+    is ObjectiveStatusTrailblazeTool -> {
+      forceStepStatusUpdate = false
+      when (trailblazeTool.status) {
+        "in_progress" -> TrailblazeToolResult.Success
+        "failed" -> {
+          step.markAsFailed()
+          // Using objective to determine when we're done, not the tool result
+          TrailblazeToolResult.Success
+        }
+        "completed" -> {
+          step.markAsComplete()
+          TrailblazeToolResult.Success
+        }
+        else -> TrailblazeToolResult.Error.UnknownTrailblazeTool(trailblazeTool)
+      }
     }
 
     else -> {
@@ -371,61 +381,49 @@ class TrailblazeOpenAiRunner(
       for (command in updatedTools) {
         TrailblazeLogger.log(
           TrailblazeLog.TrailblazeToolLog(
-            agentTaskStatus = task.currentStatus.value,
+            agentTaskStatus = step.currentStatus.value,
             command = command,
+            toolName = command.getToolNameFromAnnotation(),
             exceptionMessage = (trailblazeToolResult as? TrailblazeToolResult.Error)?.errorMessage,
             successful = trailblazeToolResult == TrailblazeToolResult.Success,
             duration = System.currentTimeMillis() - startTime,
             timestamp = startTime,
-            instructions = instructions,
+            instructions = step.fullPrompt,
             llmResponseId = llmResponseId,
             session = TrailblazeLogger.getCurrentSessionId(),
           ),
         )
       }
-      objectiveManager.setForceTaskStatusUpdate(true)
+      forceStepStatusUpdate = true
       println("\u001B[33m\n[ACTION_TAKEN] Tool executed: ${trailblazeTool.javaClass.simpleName}\u001B[0m")
       trailblazeToolResult
     }
   }
 
   /**
-   * Run a tool step from a YAML map (tool name as key, params as value)
+   * Calls OpenAI with retry logic and exponential backoff for server errors
    */
-  fun runToolStep(
-    step: Map<*, *>,
-    llmResponseId: String?,
-    instructions: String,
-    screenStateForLlmRequest: ScreenState,
-  ): TrailblazeToolResult {
-    val toolName = step.keys.firstOrNull()?.toString() ?: return TrailblazeToolResult.Error.UnknownTool("<missing>", kotlinx.serialization.json.buildJsonObject { })
-    val params = step.values.firstOrNull() as? Map<*, *> ?: emptyMap<String, Any?>()
-    val allPossibleTools = TrailblazeToolRepo.ALL + trailblazeToolRepo.getRegisteredTrailblazeTools()
-    val toolClass = allPossibleTools.firstOrNull {
-      xyz.block.trailblaze.toolcalls.TrailblazeToolAsLlmTool(it).name == toolName
-    } ?: return TrailblazeToolResult.Error.UnknownTool(toolName, kotlinx.serialization.json.buildJsonObject { })
-    val jsonParams = kotlinx.serialization.json.buildJsonObject {
-      params.forEach { (k, v) ->
-        when (v) {
-          is Boolean -> put(k.toString(), kotlinx.serialization.json.JsonPrimitive(v))
-          is Number -> put(k.toString(), kotlinx.serialization.json.JsonPrimitive(v))
-          is String -> put(k.toString(), kotlinx.serialization.json.JsonPrimitive(v))
-          else -> put(k.toString(), kotlinx.serialization.json.JsonPrimitive(v.toString()))
+  private suspend fun openAiChatCompletionWithRetry(request: ChatCompletionRequest): ChatCompletion {
+    var lastException: Exception? = null
+    val maxRetries = 3
+
+    for (attempt in 1..maxRetries) {
+      try {
+        return openAi.chatCompletion(request)
+      } catch (e: OpenAIServerException) {
+        if (attempt < maxRetries) {
+          val baseDelayMs = 1000L // 1 second base delay
+          val delayMs = baseDelayMs + (attempt - 1) * 3000L // Add 3 seconds per retry
+          println("[RETRY] OpenAI server error (attempt $attempt/$maxRetries), retrying in ${delayMs}ms...")
+          delay(delayMs)
+        } else {
+          // exhausted retries
+          throw e
         }
+      } catch (e: Exception) {
+        throw e
       }
     }
-    val tool = try {
-      xyz.block.trailblaze.toolcalls.JsonSerializationUtil.deserializeTrailblazeTool(toolClass, jsonParams)
-    } catch (e: Exception) {
-      println("[TrailblazeOpenAiRunner] Failed to deserialize tool: $toolName with params $params: " + e.message)
-      return TrailblazeToolResult.Error.UnknownTool(toolName, jsonParams)
-    }
-    return handleTrailblazeTool(
-      trailblazeTool = tool,
-      task = agent.currentTask,
-      llmResponseId = llmResponseId,
-      instructions = instructions,
-      screenStateForLlmRequest = screenStateForLlmRequest,
-    )
+    throw lastException ?: RuntimeException("Unexpected error in retry logic")
   }
 }
