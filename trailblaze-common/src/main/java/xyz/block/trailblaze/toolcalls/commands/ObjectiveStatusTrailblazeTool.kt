@@ -6,9 +6,9 @@ import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 
 @Serializable
-@TrailblazeToolClass(
-  name = "objectiveStatus",
-  description = """
+@TrailblazeToolClass("objectiveStatus")
+@LLMDescription(
+  """
 Use this tool to indicate the status of the current objective.
 First determine if all of the objective's goals have been met, and if they have not return an 'in_progress' status.
 If all of the goals have been met successfully, return a 'completed' status.

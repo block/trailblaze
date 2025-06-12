@@ -9,12 +9,8 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 
 @Serializable
-@TrailblazeToolClass(
-  name = "androidSystemUiDemoMode",
-  description = """
-Use this to enable demo mode on the device which will freeze the clock and prevent it from changing.
-    """,
-)
+@TrailblazeToolClass("androidSystemUiDemoMode")
+@LLMDescription("Use this to enable demo mode on the device which will freeze the clock and prevent it from changing.")
 data class AndroidSystemUiDemoModeTrailblazeTool(
   @LLMDescription("If we should enable demo mode on the device.")
   val enable: Boolean = true,

@@ -9,9 +9,9 @@ import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 
 @Serializable
-@TrailblazeToolClass(
-  name = "tapOnPoint",
-  description = """
+@TrailblazeToolClass("tapOnPoint")
+@LLMDescription(
+  """
 Taps on the UI at the provided coordinates.
       """,
 )

@@ -10,9 +10,9 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
  * Returns true/false with explanation of why the assertion passed or failed.
  */
 @Serializable
-@TrailblazeToolClass(
-  name = "booleanAssertion",
-  description = "Evaluate if a statement about the current screen is true or false",
+@TrailblazeToolClass("booleanAssertion")
+@LLMDescription(
+  "Evaluate if a statement about the current screen is true or false",
 )
 data class BooleanAssertionTrailblazeTool(
   @LLMDescription("Explanation of why the statement is true or false")

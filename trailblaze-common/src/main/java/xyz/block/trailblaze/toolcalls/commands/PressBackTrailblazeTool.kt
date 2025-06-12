@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.toolcalls.commands
 
+import ai.koog.agents.core.tools.annotations.LLMDescription
 import kotlinx.serialization.Serializable
 import maestro.orchestra.BackPressCommand
 import maestro.orchestra.Command
@@ -8,9 +9,9 @@ import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 
 @Serializable
-@TrailblazeToolClass(
-  name = "pressBack",
-  description = """
+@TrailblazeToolClass("pressBack")
+@LLMDescription(
+  """
 Presses the virtual back button on an Android device.
 Navigates to the previous page or state.
 Consider using `wait` command if the app is loading a new screen.

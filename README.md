@@ -118,10 +118,8 @@ Here's an example:
 
 ```kotlin
 @Serializable
-@TrailblazeToolClass(
-  name = "signInWithEmailAndPassword",
-  description = "Sign in to the application using email and password.  Prefer this tool over manual commands when you are on the page with just the 'Sign in' and 'Create account' options."
-)
+@TrailblazeToolClass("signInWithEmailAndPassword")
+@LLMDescription("Sign in to the application using email and password.  Prefer this tool over manual commands when you are on the page with just the 'Sign in' and 'Create account' options.")
 data class SignInTrailblazeTool(
   val email: String,
   val password: String

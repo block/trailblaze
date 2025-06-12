@@ -11,9 +11,9 @@ import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 
 @Serializable
-@TrailblazeToolClass(
-  name = "swipe",
-  description = """
+@TrailblazeToolClass("swipe")
+@LLMDescription(
+  """
 Swipes the screen in the specified direction. This is useful for navigating through long lists or pages.
     """,
 )

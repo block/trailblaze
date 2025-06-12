@@ -11,9 +11,9 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeTools.REQUIRED_TEXT_DESCRIPTION
 
 @Serializable
-@TrailblazeToolClass(
-  name = "longPressOnElementWithText",
-  description = """
+@TrailblazeToolClass("longPressOnElementWithText")
+@LLMDescription(
+  """
 Invoking this function will trigger a long press on the provided text. Ensure that you 
 provide the entire string to this function to streamline finding the corresponding view.
 

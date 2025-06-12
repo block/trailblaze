@@ -9,9 +9,9 @@ import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 
 @Serializable
-@TrailblazeToolClass(
-  name = "launchApp",
-  description = """
+@TrailblazeToolClass("launchApp")
+@LLMDescription(
+  """
 Use this to open an app on the device as if a user tapped on the app icon in the launcher.
     """,
 )

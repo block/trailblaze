@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.toolcalls.commands
 
+import ai.koog.agents.core.tools.annotations.LLMDescription
 import kotlinx.serialization.Serializable
 import maestro.orchestra.Command
 import maestro.orchestra.EraseTextCommand
@@ -8,9 +9,9 @@ import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 
 @Serializable
-@TrailblazeToolClass(
-  name = "eraseText",
-  description = """
+@TrailblazeToolClass("eraseText")
+@LLMDescription(
+  """
 Erases the specified number of characters from the text field.  If no number is provided, it will erase all.
     """,
 )

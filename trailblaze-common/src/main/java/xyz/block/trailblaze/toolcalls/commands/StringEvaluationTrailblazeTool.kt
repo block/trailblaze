@@ -10,9 +10,9 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
  * Returns a string value with explanation of how it was determined.
  */
 @Serializable
-@TrailblazeToolClass(
-  name = "stringEvaluation",
-  description = "Extract or evaluate textual information from the current screen",
+@TrailblazeToolClass("stringEvaluation")
+@LLMDescription(
+  "Extract or evaluate textual information from the current screen",
 )
 data class StringEvaluationTrailblazeTool(
   @LLMDescription("Explanation of how this value was determined")

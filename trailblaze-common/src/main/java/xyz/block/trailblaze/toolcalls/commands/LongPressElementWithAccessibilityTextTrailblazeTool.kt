@@ -11,9 +11,9 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeTools.REQUIRED_ACCESSIBILITY_TEXT_DESCRIPTION
 
 @Serializable
-@TrailblazeToolClass(
-  name = "longPressElementWithAccessibilityText",
-  description = """
+@TrailblazeToolClass("longPressElementWithAccessibilityText")
+@LLMDescription(
+  """
 Invoking this function will trigger a long press on a view with the provided accessibility
 text. This will commonly be used when long pressing on visual elements on the screen that do
 not have text to identify it. This includes images or avatars with text, prefer to use the

@@ -16,13 +16,13 @@ data class TrailblazeToolAsLlmTool(
   val trailblazeToolClass: KClass<out Any>,
   val excludedProperties: List<String> = listOf(),
 ) {
-  private val trailblazeClassInfo =
-    trailblazeToolClass.findAnnotation<TrailblazeToolClass>()
-      ?: error("Please add @TrailblazeToolClass to $trailblazeToolClass")
-
+  private val trailblazeClassInfo = trailblazeToolClass.findAnnotation<TrailblazeToolClass>()
+    ?: error("Please add @TrailblazeToolClass to $trailblazeToolClass")
   val name: String = trailblazeClassInfo.name.trim()
 
-  val description: String = trailblazeClassInfo.description.trim()
+  private val llmDescriptionAnnotation = trailblazeToolClass.findAnnotation<LLMDescription>()
+    ?: error("Please add @LLMDescription to $trailblazeToolClass")
+  val description: String = llmDescriptionAnnotation.description.trim()
 
   val properties = trailblazeToolClass.primaryConstructor?.parameters?.map { parameter ->
     val trailblazeToolPropertyInfo = parameter.findAnnotation<LLMDescription>()

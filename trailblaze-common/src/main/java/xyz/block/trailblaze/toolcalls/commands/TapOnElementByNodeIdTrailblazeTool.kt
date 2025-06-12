@@ -6,9 +6,9 @@ import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 
 @Serializable
-@TrailblazeToolClass(
-  name = "tapOnElementByNodeId",
-  description = """
+@TrailblazeToolClass("tapOnElementByNodeId")
+@LLMDescription(
+  """
 Provide the nodeId of the element you want to tap on in the nodeId parameter.
 """,
 )

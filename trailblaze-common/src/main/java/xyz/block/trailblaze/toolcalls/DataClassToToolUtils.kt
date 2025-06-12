@@ -22,10 +22,12 @@ object DataClassToToolUtils {
   ) {
     val trailblazeClassInfo =
       clazz.findAnnotation<TrailblazeToolClass>() ?: error("Please add @TrailblazeToolClass to $clazz")
+    val llmDescription =
+      clazz.findAnnotation<LLMDescription>() ?: error("Please add @LLMDescription to $clazz")
     with(builder) {
       function(
         name = trailblazeClassInfo.name.trim(),
-        description = trailblazeClassInfo.description.trim(),
+        description = llmDescription.description.trim(),
       ) {
         generateJsonSchema(this, clazz, propertyFilter)
       }

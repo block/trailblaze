@@ -14,9 +14,9 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
  * text/element later.
  */
 @Serializable
-@TrailblazeToolClass(
-  name = "elementRetriever",
-  description = "Retrieve a selector for an element based on natural language description",
+@TrailblazeToolClass("elementRetriever")
+@LLMDescription(
+  "Retrieve a selector for an element based on natural language description",
 )
 data class ElementRetrieverTrailblazeTool(
   @LLMDescription("The natural language description of the element to find")
