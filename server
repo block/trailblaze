@@ -11,7 +11,7 @@ GRADLE_PID=$!
 trap "kill $GRADLE_PID" EXIT
 
 echo "Once the server is running, you'll be able to view captured logs from any executions."
-echo "Load http://localhost:8080 once the server is running and execute trailblaze in host or on-device mode."
+echo "Load http://localhost:52525 once the server is running and execute trailblaze in host or on-device mode."
 
 # Wait for the Gradle process to finish (rejoins it)
 wait $GRADLE_PID

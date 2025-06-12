@@ -56,7 +56,7 @@ class TrailblazeOpenAiRunner(
   )!!,
 ) : TestAgentRunner {
 
-  private val llmModel = llmModel ?: LlmModel.GPT_4_1
+  val llmModel = llmModel ?: LlmModel.GPT_4_1
 
   private val openAi = OpenAI(
     token = openAiApiKey,

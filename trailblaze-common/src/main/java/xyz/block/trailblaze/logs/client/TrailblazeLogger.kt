@@ -107,19 +107,25 @@ object TrailblazeLogger {
 
   private var sessionId: String = generateSessionId("Trailblaze")
 
-  fun startSession(sessionName: String): String = synchronized(sessionId) {
-    val newSessionId = generateSessionId(sessionName)
-    return newSessionId.also { this.sessionId = newSessionId }
-  }
+  fun startSession(sessionName: String): String = overrideSessionId(
+    sessionIdOverride = generateSessionId(sessionName),
+  )
 
   fun getCurrentSessionId(): String = synchronized(sessionId) {
     return this.sessionId
   }
 
+  private fun truncateSessionId(sessionId: String): String = sessionId.substring(0, minOf(sessionId.length, 100))
+    .replace(Regex("[^a-zA-Z0-9]"), "_")
+    .lowercase()
+
   /**
-   * Prefer startSession() unless you need to explicitly override it
+   * Note: This will truncate the session ID to 100 characters and replace any non-alphanumeric characters with underscores.
    */
-  fun overrideSessionId(sessionId: String) = synchronized(sessionId) {
-    this.sessionId = sessionId
+  @Deprecated("Prefer startSession() unless you need to explicitly override the session id")
+  fun overrideSessionId(sessionIdOverride: String): String = synchronized(this.sessionId) {
+    truncateSessionId(sessionIdOverride).also {
+      this.sessionId = it
+    }
   }
 }

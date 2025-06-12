@@ -1,4 +1,4 @@
-package xyz.block.trailblaze.logs.server
+package xyz.block.trailblaze.report.utils
 
 import java.io.File
 import java.nio.file.FileSystems
@@ -36,7 +36,13 @@ class FileWatchService(
   // Create a WatchService
   val watchService: WatchService = FileSystems.getDefault().newWatchService()
 
-  suspend fun startWatching() {
+  fun stopWatching() {
+    // Close the WatchService to stop watching
+    watchService.close()
+    println("Stopped watching directory: $path")
+  }
+
+  fun startWatching() {
     // Register the directory with the WatchService for create, delete, and modify events
     path.register(
       watchService,

@@ -18,7 +18,6 @@ dependencies {
   implementation(libs.coroutines)
   implementation(libs.kotlinx.serialization.core)
   implementation(libs.kotlinx.serialization.json)
-  implementation(libs.snakeyaml)
 
   runtimeOnly(libs.kotlin.reflect)
 }

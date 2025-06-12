@@ -29,12 +29,14 @@ data class SessionSummary(
 ) {
   companion object {
 
+    private const val HTTP_PORT: Int = 52525 // Default port for the report server
+
     fun screenshotUrl(sessionId: String, screenshotFile: String?, isStandaloneFileReport: Boolean): String? = if (screenshotFile == null) {
       null
     } else if (isStandaloneFileReport) {
       "$sessionId/$screenshotFile"
     } else {
-      "http://localhost:8080/static/$sessionId/$screenshotFile"
+      "http://localhost:$HTTP_PORT/static/$sessionId/$screenshotFile"
     }
 
     fun fromLogs(sessionId: String, logs: List<TrailblazeLog>, isStandaloneFileReport: Boolean): SessionSummary {

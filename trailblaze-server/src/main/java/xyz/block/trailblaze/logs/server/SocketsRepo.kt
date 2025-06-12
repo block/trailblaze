@@ -4,6 +4,7 @@ import io.ktor.websocket.DefaultWebSocketSession
 import io.ktor.websocket.Frame
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.launch
+import xyz.block.trailblaze.report.utils.FileWatchService
 import java.io.File
 
 object SocketsRepo {

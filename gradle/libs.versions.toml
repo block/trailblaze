@@ -19,6 +19,7 @@ jetbrains-compose-multiplatform = "1.7.3"
 jsoup = "1.19.1"
 junit = "4.13.2"
 kaml = "0.73.0"
+koog = "0.2.1"
 # Kotlin 2.0.21 currently for compatibility with existing integrations
 kotlin = "2.0.21"
 kotlin-logging = "3.0.5"
@@ -86,8 +87,12 @@ ktor-server-freemarker = { module = "io.ktor:ktor-server-freemarker", version.re
 ktor-server-websockets = { module = "io.ktor:ktor-server-websockets", version.ref = "ktor" }
 ktor-server-netty = { module = "io.ktor:ktor-server-netty", version.ref = "ktor" }
 ktor-server-jetty = { module = "io.ktor:ktor-server-jetty", version.ref = "ktor" }
+ktor-server-tomcat = { module = "io.ktor:ktor-server-tomcat", version.ref = "ktor" }
 ktor-server-jetty-jakarta = { module = "io.ktor:ktor-server-jetty-jakarta", version.ref = "ktor" }
 ktor-network-tls-certificates = { module = "io.ktor:ktor-network-tls-certificates", version.ref = "ktor" }
+koog-agents = { module = "ai.koog:koog-agents", version.ref = "koog" }
+koog-agents-tools = { module = "ai.koog:agents-tools", version.ref = "koog" }
+koog-prompt-executor-clients = { module = "ai.koog:prompt-executor-clients", version.ref = "koog" }
 kotlin-logging = { group = "io.github.microutils", name = "kotlin-logging-jvm", version.ref = "kotlin-logging" }
 kotlin-test-junit4 = { group = "org.jetbrains.kotlin", name = "kotlin-test", version.ref = "kotlin" }
 kotlin-test = { group = "org.jetbrains.kotlin", name = "kotlin-test-junit5", version.ref = "kotlin" }

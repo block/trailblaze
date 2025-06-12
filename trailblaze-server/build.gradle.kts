@@ -13,11 +13,20 @@ application {
 
 dependencies {
   api(libs.ktor.server.core)
-  api(libs.ktor.server.netty)
+  api(libs.ktor.server.netty) {
+    exclude(group = "io.netty", module = "netty-codec-http2")
+    because("Maestro has binary incompatible code with the new version of netty-codec-http2, so we use the old version from maestro")
+  }
+  constraints {
+    api("io.netty:netty-codec-http2:4.1.79.Final") {
+      because("Maestro has binary incompatible code with the new version of netty-codec-http2, so we use the old version from maestro")
+    }
+  }
 
   implementation(project(":trailblaze-common"))
   implementation(project(":trailblaze-report"))
   implementation(libs.okhttp)
+
   implementation(libs.ktor.server.core.jvm)
   implementation(libs.ktor.network.tls.certificates)
   implementation(libs.ktor.server.content.negotiation)

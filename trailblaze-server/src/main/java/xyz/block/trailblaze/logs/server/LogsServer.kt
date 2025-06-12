@@ -108,7 +108,7 @@ object LogsServer {
 
   fun startServer(
     shouldWait: Boolean = true,
-    requestedHttpPort: Int = 8080,
+    requestedHttpPort: Int = 52525,
     requestedHttpsPort: Int = 8443,
   ): EmbeddedServer<*, *> {
     // Delete all session directories on server start
@@ -118,7 +118,7 @@ object LogsServer {
     println("Use trailblaze using 'host' mode (from your laptop) or 'on-device' mode (within the Android device).")
     println("With the server is running, you'll be able to view captured logs from any executions.")
     println("Running the logs-server is NOT required, but extremely helpful for debugging local usage.")
-    println("Open http://localhost:8080 in your browser to view the trailblaze logs.")
+    println("Open http://localhost:52525 in your browser to view the trailblaze logs.")
     println("NOTE: Gradle will continue to say 'EXECUTING' until you stop the server.")
 
     return embeddedServer(
