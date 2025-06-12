@@ -17,10 +17,10 @@ class DocsGenerator(
 ) {
 
   fun createPageForCommand(
-    TrailblazeToolAsLlmTool: TrailblazeToolAsLlmTool,
+    trailblazeToolAsLlmTool: TrailblazeToolAsLlmTool,
   ) {
 
-    val pagePath = "custom/${TrailblazeToolAsLlmTool.name}.md"
+    val pagePath = "custom/${trailblazeToolAsLlmTool.name}.md"
 
     File(generatedFunctionsDocsDir, pagePath).also { file ->
       file.parentFile.mkdirs() // Ensure directory exists
@@ -33,27 +33,26 @@ class DocsGenerator(
         tools {
           DataClassToToolUtils.registerManualToolForDataClass(
             builder = this,
-            clazz = TrailblazeToolAsLlmTool.trailblazeToolClass,
+            clazz = trailblazeToolAsLlmTool.trailblazeToolClass,
             propertyFilter = { propertyName: String ->
-              !TrailblazeToolAsLlmTool.excludedProperties.contains(propertyName)
+              !trailblazeToolAsLlmTool.excludedProperties.contains(propertyName)
             }
           )
         }
       }.tools?.first {
-        it.function.name == TrailblazeToolAsLlmTool.name
+        it.function.name == trailblazeToolAsLlmTool.name
       }!!.function
 
       val json = TrailblazeJsonInstance.encodeToString(registeredOpenAiToolCallFunction)
-      println(file.absolutePath + ": $json")
       file.writeText(
         """
 # Function `${registeredOpenAiToolCallFunction.name}`
 
 ## Description
-${TrailblazeToolAsLlmTool.description}
+${trailblazeToolAsLlmTool.description}
 
 ### Command Class
-`${TrailblazeToolAsLlmTool.trailblazeToolClass.qualifiedName}`
+`${trailblazeToolAsLlmTool.trailblazeToolClass.qualifiedName}`
 
 ## Registered Tool Call to Open AI
 ```json
@@ -69,9 +68,9 @@ $THIS_DOC_IS_GENERATED_MESSAGE
   fun generate() {
     TrailblazeToolRepo.ALL
       .map { TrailblazeToolAsLlmTool(it) }
-      .forEach { TrailblazeToolAsLlmTool: TrailblazeToolAsLlmTool ->
+      .forEach { trailblazeToolAsLlmTool: TrailblazeToolAsLlmTool ->
         createPageForCommand(
-          TrailblazeToolAsLlmTool,
+          trailblazeToolAsLlmTool,
         )
       }
 

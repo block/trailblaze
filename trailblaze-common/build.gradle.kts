@@ -14,11 +14,11 @@ dependencies {
   api(libs.junit)
   api(libs.openai.client.core)
   api(libs.okio)
+  api(libs.koog.agents.tools)
   api(libs.ktor.client.core)
   api(libs.maestro.orchestra.models) { isTransitive = false }
   api(libs.maestro.client) { isTransitive = false }
 
-  implementation(libs.kotlinx.serialization.core)
   implementation(libs.gson)
   implementation(libs.kotlinx.serialization.core)
   implementation(libs.ktor.client.okhttp)

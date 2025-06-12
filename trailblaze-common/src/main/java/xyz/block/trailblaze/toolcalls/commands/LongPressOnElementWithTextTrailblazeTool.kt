@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.toolcalls.commands
 
+import ai.koog.agents.core.tools.annotations.LLMDescription
 import kotlinx.serialization.Serializable
 import maestro.orchestra.Command
 import maestro.orchestra.ElementSelector
@@ -7,7 +8,6 @@ import maestro.orchestra.TapOnElementCommand
 import xyz.block.trailblaze.toolcalls.MapsToMaestroCommands
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
-import xyz.block.trailblaze.toolcalls.TrailblazeToolProperty
 import xyz.block.trailblaze.toolcalls.TrailblazeTools.REQUIRED_TEXT_DESCRIPTION
 
 @Serializable
@@ -23,7 +23,7 @@ the specific view to long press on.
       """,
 )
 data class LongPressOnElementWithTextTrailblazeTool(
-  @TrailblazeToolProperty(
+  @LLMDescription(
     description = REQUIRED_TEXT_DESCRIPTION,
   )
   val text: String,

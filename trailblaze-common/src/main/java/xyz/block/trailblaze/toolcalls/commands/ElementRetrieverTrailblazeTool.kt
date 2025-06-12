@@ -1,9 +1,9 @@
 package xyz.block.trailblaze.toolcalls.commands
 
+import ai.koog.agents.core.tools.annotations.LLMDescription
 import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
-import xyz.block.trailblaze.toolcalls.TrailblazeToolProperty
 
 /**
  * Command to retrieve a selector for an element based on the description.
@@ -19,22 +19,22 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolProperty
   description = "Retrieve a selector for an element based on natural language description",
 )
 data class ElementRetrieverTrailblazeTool(
-  @TrailblazeToolProperty("The natural language description of the element to find")
+  @LLMDescription("The natural language description of the element to find")
   val identifier: String,
 
-  @TrailblazeToolProperty("The type of locator to use (RESOURCE_ID, TEXT, or ACCESSIBILITY_TEXT)")
+  @LLMDescription("The type of locator to use (RESOURCE_ID, TEXT, or ACCESSIBILITY_TEXT)")
   val locatorType: LocatorType,
 
-  @TrailblazeToolProperty("The actual value of the locator from the view hierarchy")
+  @LLMDescription("The actual value of the locator from the view hierarchy")
   val value: String,
 
-  @TrailblazeToolProperty("Index to use when multiple elements match the same locator (0-based)")
+  @LLMDescription("Index to use when multiple elements match the same locator (0-based)")
   val index: Int = 0,
 
-  @TrailblazeToolProperty("Whether a reliable locator was found")
+  @LLMDescription("Whether a reliable locator was found")
   val success: Boolean = true,
 
-  @TrailblazeToolProperty("Explanation of the chosen locator or reason for failure")
+  @LLMDescription("Explanation of the chosen locator or reason for failure")
   val reason: String = "",
 ) : TrailblazeTool {
   /**

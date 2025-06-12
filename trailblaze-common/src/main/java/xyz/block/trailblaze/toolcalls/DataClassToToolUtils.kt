@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.toolcalls
 
+import ai.koog.agents.core.tools.annotations.LLMDescription
 import com.aallam.openai.api.chat.ToolBuilder
 import kotlinx.serialization.json.JsonObjectBuilder
 import kotlinx.serialization.json.add
@@ -9,7 +10,6 @@ import kotlinx.serialization.json.putJsonObject
 import kotlin.reflect.KClass
 import kotlin.reflect.KType
 import kotlin.reflect.full.findAnnotation
-import kotlin.reflect.full.memberProperties
 import kotlin.reflect.full.primaryConstructor
 
 object DataClassToToolUtils {
@@ -50,11 +50,12 @@ object DataClassToToolUtils {
           putJsonObject(paramName) {
             put("type", getTypeString(paramType))
 
-            val fieldInfo = clazz.memberProperties.first { it.name == paramName }.findAnnotation<TrailblazeToolProperty>()
-
-            fieldInfo?.description?.let {
-              put("description", it.trim())
-            }
+            // Add description if available
+            clazz.primaryConstructor
+              ?.parameters
+              ?.firstOrNull { it.name == paramName }
+              ?.findAnnotation<LLMDescription>()
+              ?.description?.let { put("description", it.trimIndent()) }
 
             // Handle nested objects recursively
             if (paramType.classifier is KClass<*>) {

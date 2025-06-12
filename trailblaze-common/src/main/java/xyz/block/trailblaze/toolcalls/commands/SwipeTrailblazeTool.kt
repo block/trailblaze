@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.toolcalls.commands
 
+import ai.koog.agents.core.tools.annotations.LLMDescription
 import kotlinx.serialization.Serializable
 import maestro.SwipeDirection
 import maestro.orchestra.Command
@@ -8,7 +9,6 @@ import maestro.orchestra.SwipeCommand
 import xyz.block.trailblaze.toolcalls.MapsToMaestroCommands
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
-import xyz.block.trailblaze.toolcalls.TrailblazeToolProperty
 
 @Serializable
 @TrailblazeToolClass(
@@ -18,9 +18,9 @@ Swipes the screen in the specified direction. This is useful for navigating thro
     """,
 )
 class SwipeTrailblazeTool(
-  @TrailblazeToolProperty("Valid values: UP, DOWN, LEFT, RIGHT")
+  @LLMDescription("Valid values: UP, DOWN, LEFT, RIGHT")
   val direction: String,
-  @TrailblazeToolProperty(
+  @LLMDescription(
     """
 The text value to swipe on. If not provided, the swipe will be performed on the center of the screen.
   """,

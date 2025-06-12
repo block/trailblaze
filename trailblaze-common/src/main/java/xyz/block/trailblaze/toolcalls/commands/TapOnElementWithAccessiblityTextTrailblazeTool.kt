@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.toolcalls.commands
 
+import ai.koog.agents.core.tools.annotations.LLMDescription
 import kotlinx.serialization.Serializable
 import maestro.orchestra.Command
 import maestro.orchestra.ElementSelector
@@ -7,7 +8,6 @@ import maestro.orchestra.TapOnElementCommand
 import xyz.block.trailblaze.toolcalls.MapsToMaestroCommands
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
-import xyz.block.trailblaze.toolcalls.TrailblazeToolProperty
 import xyz.block.trailblaze.toolcalls.TrailblazeTools.REQUIRED_ACCESSIBILITY_TEXT_DESCRIPTION
 
 @Serializable
@@ -27,7 +27,7 @@ used to identify the specific view to tap on.
       """,
 )
 data class TapOnElementWithAccessiblityTextTrailblazeTool(
-  @TrailblazeToolProperty(REQUIRED_ACCESSIBILITY_TEXT_DESCRIPTION) val accessibilityText: String,
+  @LLMDescription(REQUIRED_ACCESSIBILITY_TEXT_DESCRIPTION) val accessibilityText: String,
   val id: String? = null,
   val index: String? = null,
   val enabled: Boolean? = null,

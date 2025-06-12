@@ -1,9 +1,9 @@
 package xyz.block.trailblaze.toolcalls.commands
 
+import ai.koog.agents.core.tools.annotations.LLMDescription
 import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
-import xyz.block.trailblaze.toolcalls.TrailblazeToolProperty
 
 /**
  * Command for boolean assertions on UI elements.
@@ -15,9 +15,9 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolProperty
   description = "Evaluate if a statement about the current screen is true or false",
 )
 data class BooleanAssertionTrailblazeTool(
-  @TrailblazeToolProperty("Explanation of why the statement is true or false")
+  @LLMDescription("Explanation of why the statement is true or false")
   val reason: String,
 
-  @TrailblazeToolProperty("Whether the statement is true or false")
+  @LLMDescription("Whether the statement is true or false")
   val result: Boolean,
 ) : TrailblazeTool

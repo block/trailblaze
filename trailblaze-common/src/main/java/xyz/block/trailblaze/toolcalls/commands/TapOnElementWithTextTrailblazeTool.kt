@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.toolcalls.commands
 
+import ai.koog.agents.core.tools.annotations.LLMDescription
 import kotlinx.serialization.Serializable
 import maestro.orchestra.Command
 import maestro.orchestra.ElementSelector
@@ -7,7 +8,6 @@ import maestro.orchestra.TapOnElementCommand
 import xyz.block.trailblaze.toolcalls.MapsToMaestroCommands
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
-import xyz.block.trailblaze.toolcalls.TrailblazeToolProperty
 import xyz.block.trailblaze.toolcalls.TrailblazeTools.REQUIRED_TEXT_DESCRIPTION
 
 @Serializable
@@ -27,11 +27,11 @@ NOTE:
 """,
 )
 data class TapOnElementWithTextTrailblazeTool(
-  @TrailblazeToolProperty(REQUIRED_TEXT_DESCRIPTION)
+  @LLMDescription(REQUIRED_TEXT_DESCRIPTION)
   val text: String,
-  @TrailblazeToolProperty("0-based index of the view to select among those that match all other criteria.")
+  @LLMDescription("0-based index of the view to select among those that match all other criteria.")
   val index: Int = 0,
-  @TrailblazeToolProperty("Regex for selecting the view by id.  This is helpful to disambiguate when multiple views have the same text.")
+  @LLMDescription("Regex for selecting the view by id.  This is helpful to disambiguate when multiple views have the same text.")
   val id: String? = null,
   val enabled: Boolean? = null,
   val selected: Boolean? = null,

@@ -1,12 +1,12 @@
 package xyz.block.trailblaze.toolcalls.commands
 
+import ai.koog.agents.core.tools.annotations.LLMDescription
 import kotlinx.serialization.Serializable
 import maestro.orchestra.Command
 import maestro.orchestra.LaunchAppCommand
 import xyz.block.trailblaze.toolcalls.MapsToMaestroCommands
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
-import xyz.block.trailblaze.toolcalls.TrailblazeToolProperty
 
 @Serializable
 @TrailblazeToolClass(
@@ -16,9 +16,9 @@ Use this to open an app on the device as if a user tapped on the app icon in the
     """,
 )
 data class LaunchAppTrailblazeTool(
-  @TrailblazeToolProperty("The package name of the app to launch. Example: 'com.example.app'")
+  @LLMDescription("The package name of the app to launch. Example: 'com.example.app'")
   val appId: String,
-  @TrailblazeToolProperty(
+  @LLMDescription(
     """
 Available App Launch Modes:
 - "REINSTALL" (Default if unspecified) will launch the app as if it was just installed and never run on the device before.

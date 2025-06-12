@@ -1,12 +1,12 @@
 package xyz.block.trailblaze.toolcalls.commands
 
+import ai.koog.agents.core.tools.annotations.LLMDescription
 import kotlinx.serialization.Serializable
 import maestro.orchestra.Command
 import maestro.orchestra.InputTextCommand
 import xyz.block.trailblaze.toolcalls.MapsToMaestroCommands
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
-import xyz.block.trailblaze.toolcalls.TrailblazeToolProperty
 import xyz.block.trailblaze.toolcalls.TrailblazeTools.REQUIRED_TEXT_DESCRIPTION
 
 @Serializable
@@ -19,7 +19,7 @@ This will type characters into the currently focused text field. This is useful 
       """,
 )
 data class InputTextTrailblazeTool(
-  @TrailblazeToolProperty(REQUIRED_TEXT_DESCRIPTION) val text: String,
+  @LLMDescription(REQUIRED_TEXT_DESCRIPTION) val text: String,
 ) : TrailblazeTool,
   MapsToMaestroCommands {
   override fun toMaestroCommands(): List<Command> = listOf(

@@ -1,12 +1,12 @@
 package xyz.block.trailblaze.toolcalls.commands
 
+import ai.koog.agents.core.tools.annotations.LLMDescription
 import kotlinx.serialization.Serializable
 import maestro.orchestra.Command
 import maestro.orchestra.WaitForAnimationToEndCommand
 import xyz.block.trailblaze.toolcalls.MapsToMaestroCommands
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
-import xyz.block.trailblaze.toolcalls.TrailblazeToolProperty
 
 @Serializable
 @TrailblazeToolClass(
@@ -18,7 +18,7 @@ Prefer using this over the back button.
     """,
 )
 data class WaitForIdleSyncTrailblazeTool(
-  @TrailblazeToolProperty("Unit: seconds. Default Value: 5 seconds.")
+  @LLMDescription("Unit: seconds. Default Value: 5 seconds.")
   val timeToWaitInSeconds: Int = 5,
 ) : TrailblazeTool,
   MapsToMaestroCommands {

@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.toolcalls
 
+import ai.koog.agents.core.tools.annotations.LLMDescription
 import kotlin.reflect.KClass
 import kotlin.reflect.full.findAnnotation
 import kotlin.reflect.full.primaryConstructor
@@ -24,7 +25,7 @@ data class TrailblazeToolAsLlmTool(
   val description: String = trailblazeClassInfo.description.trim()
 
   val properties = trailblazeToolClass.primaryConstructor?.parameters?.map { parameter ->
-    val trailblazeToolPropertyInfo = parameter.findAnnotation<TrailblazeToolProperty>()
+    val trailblazeToolPropertyInfo = parameter.findAnnotation<LLMDescription>()
     val type = parameter.type
     val isRequired = !parameter.isOptional
     val description = trailblazeToolPropertyInfo?.description?.trim() ?: ""

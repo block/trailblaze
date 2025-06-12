@@ -1,11 +1,11 @@
 package xyz.block.trailblaze.android.tools
 
+import ai.koog.agents.core.tools.annotations.LLMDescription
 import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.AdbCommandUtil
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
-import xyz.block.trailblaze.toolcalls.TrailblazeToolProperty
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 
 @Serializable
@@ -16,7 +16,7 @@ Use this to enable demo mode on the device which will freeze the clock and preve
     """,
 )
 data class AndroidSystemUiDemoModeTrailblazeTool(
-  @TrailblazeToolProperty("If we should enable demo mode on the device.")
+  @LLMDescription("If we should enable demo mode on the device.")
   val enable: Boolean = true,
 ) : ExecutableTrailblazeTool {
   override fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult {

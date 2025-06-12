@@ -18,7 +18,7 @@ dependencyResolutionManagement {
 
 rootProject.name = "trailblaze"
 include(
-  ":docs-generator",
+  ":docs:generator",
   ":examples",
   ":trailblaze-android",
   ":trailblaze-common",
