@@ -18,18 +18,23 @@ abstract class MaestroTrailblazeAgent : TrailblazeAgent {
    */
   open val customTrailblazeToolHandler: (TrailblazeToolExecutionContext) -> TrailblazeToolResult? = { null }
 
+  abstract fun runMaestroYaml(
+    yaml: String,
+    llmResponseId: String? = null,
+  ): TrailblazeToolResult
+
   protected abstract fun executeMaestroCommands(
-    maestroCommands: List<Command>,
+    commands: List<Command>,
     llmResponseId: String?,
   ): TrailblazeToolResult
 
-  override fun runMaestroCommands(
+  fun runMaestroCommands(
     maestroCommands: List<Command>,
-    llmResponseId: String?,
+    llmResponseId: String? = null,
   ): TrailblazeToolResult {
     maestroCommands.forEach { command ->
       val result = executeMaestroCommands(
-        maestroCommands = listOf(command),
+        commands = listOf(command),
         llmResponseId = llmResponseId,
       )
       if (result != TrailblazeToolResult.Success) {
@@ -49,17 +54,23 @@ abstract class MaestroTrailblazeAgent : TrailblazeAgent {
       updatedTools.add(trailblazeTool)
       val result = when (trailblazeTool) {
         is MapsToMaestroCommands -> {
-          runMaestroCommands(trailblazeTool.toMaestroCommands())
+          runMaestroCommands(
+            trailblazeTool.toMaestroCommands(),
+            llmResponseId,
+          )
         }
+
         is ExecutableTrailblazeTool -> {
           trailblazeTool.execute(
             TrailblazeToolExecutionContext(
               trailblazeTool = trailblazeTool,
               screenState = screenState,
               llmResponseId = llmResponseId,
+              trailblazeAgentProvider = { this },
             ),
           )
         }
+
         is TapOnElementByNodeIdTrailblazeTool -> {
           var response: TrailblazeToolResult = TrailblazeToolResult.Error.UnknownTrailblazeTool(trailblazeTool)
           if (screenState?.viewHierarchy != null) {
@@ -88,12 +99,14 @@ abstract class MaestroTrailblazeAgent : TrailblazeAgent {
           }
           response
         }
+
         else -> {
           customTrailblazeToolHandler(
             TrailblazeToolExecutionContext(
               trailblazeTool = trailblazeTool,
               screenState = screenState,
               llmResponseId = llmResponseId,
+              trailblazeAgentProvider = { this },
             ),
           ) ?: TrailblazeToolResult.Error.UnknownTrailblazeTool(
             trailblazeTool,

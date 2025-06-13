@@ -86,7 +86,10 @@ class AndroidTrailblazeRule(
    * Run a Trailblaze tool with the agent.
    */
   override fun maestroCommands(vararg maestroCommand: Command): TrailblazeToolResult {
-    val runCommandsResult = trailblazeAgent.runMaestroCommands(maestroCommand.toList())
+    val runCommandsResult = trailblazeAgent.runMaestroCommands(
+      maestroCommand.toList(),
+      null,
+    )
     return if (runCommandsResult is TrailblazeToolResult.Success) {
       runCommandsResult
     } else {

@@ -20,8 +20,10 @@ import xyz.block.trailblaze.exception.TrailblazeToolExecutionException
 import xyz.block.trailblaze.llm.LlmModel
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
+import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import kotlin.math.abs
+import kotlin.reflect.KClass
 
 /**
  * MixedModeExecutor provides functionality to execute YAML flows that contain
@@ -33,6 +35,7 @@ class MixedModeExecutor(
   private val screenStateProvider: () -> ScreenState,
   private val runYamlFlowFunction: (String) -> TrailblazeToolResult,
   private val runner: TrailblazeOpenAiRunner,
+  private val additionalTrailblazeTools: List<KClass<out TrailblazeTool>> = emptyList(),
 ) {
   // Variable store for remember commands
   private val variables = mutableMapOf<String, String>()
@@ -57,7 +60,7 @@ class MixedModeExecutor(
     yamlContent: String,
     executeSteps: Boolean = true,
   ) {
-    val testCase = MixedModeTestCase(yamlContent, executeSteps)
+    val testCase = MixedModeTestCase(yamlContent, executeSteps, additionalTrailblazeTools)
     testCase.objectives.forEach { objective ->
       when (objective) {
         is AssertEqualsCommand -> handleAssertEqualsCommand(objective)

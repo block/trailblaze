@@ -335,7 +335,7 @@ class MixedModeTestCaseTest {
     val yaml = """
 - assertEquals:
     actual: "{{chargeText}}"
-    expected: "Charge ${'$'}5.00"
+    expected: "Charge $5.00"
     """.trimIndent()
     val testCase = MixedModeTestCase(yaml)
     assertThat(testCase.objectives)
@@ -367,7 +367,7 @@ class MixedModeTestCaseTest {
   fun assertEqualsCommandNoActual() {
     val yaml = """
 - assertEquals:
-    expected: "Charge ${'$'}5.00"
+    expected: "Charge $5.00"
     """.trimIndent()
     assertThat(
       runCatching {
@@ -428,7 +428,7 @@ class MixedModeTestCaseTest {
   fun assertWithAiCommand() {
     val yaml = """
 - assertWithAI:
-    prompt: "Is there a Charge button showing ${'$'}0.00 at the bottom of the screen?"
+    prompt: "Is there a Charge button showing $0.00 at the bottom of the screen?"
     """.trimIndent()
     val testCase = MixedModeTestCase(yaml)
     assertThat(testCase.objectives)

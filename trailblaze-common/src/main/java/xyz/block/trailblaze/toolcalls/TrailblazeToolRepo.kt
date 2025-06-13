@@ -53,7 +53,7 @@ class TrailblazeToolRepo(
       TapOnPointTrailblazeTool::class,
     )
 
-    val ALL = DEFAULT_COMMON_COMMAND_CLASSES + RECORDING_ENABLED_COMMAND_CLASSES + RECORDING_DISABLED_COMMAND_CLASSES + OTHER_COMMAND_CLASSES
+    val ALL: Set<KClass<out TrailblazeTool>> = DEFAULT_COMMON_COMMAND_CLASSES + RECORDING_ENABLED_COMMAND_CLASSES + RECORDING_DISABLED_COMMAND_CLASSES + OTHER_COMMAND_CLASSES
   }
 
   private val registeredTrailblazeToolClasses = mutableSetOf<KClass<out TrailblazeTool>>().apply {
