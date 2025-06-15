@@ -7,6 +7,7 @@ import kotlinx.serialization.json.add
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
+import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toKoogToolDescriptor
 import kotlin.reflect.KClass
 import kotlin.reflect.KType
 import kotlin.reflect.full.findAnnotation
@@ -16,20 +17,15 @@ object DataClassToToolUtils {
 
   fun registerManualToolForDataClass(
     builder: ToolBuilder,
-    clazz: KClass<*>,
-    /** Whether or not to include a property */
-    propertyFilter: (String) -> Boolean,
+    clazz: KClass<out TrailblazeTool>,
   ) {
-    val trailblazeClassInfo =
-      clazz.findAnnotation<TrailblazeToolClass>() ?: error("Please add @TrailblazeToolClass to $clazz")
-    val llmDescription =
-      clazz.findAnnotation<LLMDescription>() ?: error("Please add @LLMDescription to $clazz")
+    val toolDescriptor = clazz.toKoogToolDescriptor()
     with(builder) {
       function(
-        name = trailblazeClassInfo.name.trim(),
-        description = llmDescription.description.trim(),
+        name = toolDescriptor.name,
+        description = toolDescriptor.description,
       ) {
-        generateJsonSchema(this, clazz, propertyFilter)
+        generateJsonSchema(this, clazz)
       }
     }
   }
@@ -37,17 +33,12 @@ object DataClassToToolUtils {
   fun generateJsonSchema(
     builder: JsonObjectBuilder,
     clazz: KClass<*>,
-    propertyFilter: (String) -> Boolean,
   ) {
     with(builder) {
       put("type", "object")
       putJsonObject("properties") {
         clazz.primaryConstructor?.parameters?.forEach { param ->
           val paramName = param.name ?: return@forEach
-          if (!propertyFilter(paramName)) {
-            // Don't include this property
-            return@forEach
-          }
           val paramType = param.type
           putJsonObject(paramName) {
             put("type", getTypeString(paramType))

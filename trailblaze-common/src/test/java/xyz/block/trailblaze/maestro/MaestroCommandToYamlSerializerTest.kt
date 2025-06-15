@@ -353,7 +353,7 @@ class MaestroCommandToYamlSerializerTest {
   fun addMediaCommand() {
     // Example file for the test with a full path and the file needs to exist.
     // This would typically be a screenshot or video file.
-    val filePath = File("../docs-generator/README.md").canonicalPath
+    val filePath = File.createTempFile("media", ".txt").canonicalPath
     AddMediaCommand(
       mediaPaths = listOf(
         filePath,

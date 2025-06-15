@@ -123,7 +123,7 @@ Here's an example:
 data class SignInTrailblazeTool(
   val email: String,
   val password: String
-) : TrailblazeTool, MapsToMaestroCommands {
+) : MapsToMaestroCommands {
   override fun toMaestroCommands(): List<Command> =
     MaestroYaml.parseToCommands(
       """

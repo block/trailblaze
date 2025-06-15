@@ -87,10 +87,12 @@ class MixedModeExecutor(
         // Successfully completed
         println("AI Task completed successfully: ${trailblazeOpenAiRunnerResult.llmExplanation}")
       }
+
       is AgentTaskStatus.Success -> {
         // Some other success state
         println("AI Task succeeded: $trailblazeOpenAiRunnerResult")
       }
+
       else -> {
         throw TrailblazeException(trailblazeOpenAiRunnerResult.toString())
       }

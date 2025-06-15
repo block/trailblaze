@@ -5,7 +5,6 @@ import kotlinx.serialization.Serializable
 import maestro.orchestra.BackPressCommand
 import maestro.orchestra.Command
 import xyz.block.trailblaze.toolcalls.MapsToMaestroCommands
-import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 
 @Serializable
@@ -17,9 +16,7 @@ Navigates to the previous page or state.
 Consider using `wait` command if the app is loading a new screen.
     """,
 )
-class PressBackTrailblazeTool :
-  TrailblazeTool,
-  MapsToMaestroCommands {
+class PressBackTrailblazeTool : MapsToMaestroCommands() {
   override fun toMaestroCommands(): List<Command> = listOf(
     BackPressCommand(),
   )

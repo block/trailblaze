@@ -1,6 +1,6 @@
 # Trailblaze Tools
 
-## Common
+## DefaultUiToolSet
 - [eraseText](functions/custom/eraseText.md)
 - [hideKeyboard](functions/custom/hideKeyboard.md)
 - [inputText](functions/custom/inputText.md)
@@ -10,14 +10,17 @@
 - [swipe](functions/custom/swipe.md)
 - [wait](functions/custom/wait.md)
 
-## Additional for Recording Enabled
+## InteractWithElementsByPropertyToolSet
 - [longPressElementWithAccessibilityText](functions/custom/longPressElementWithAccessibilityText.md)
 - [longPressOnElementWithText](functions/custom/longPressOnElementWithText.md)
 - [tapOnElementWithAccessibilityText](functions/custom/tapOnElementWithAccessibilityText.md)
 - [tapOnElementWithText](functions/custom/tapOnElementWithText.md)
 
-## Additional for Recording Disabled
+## InteractWithElementsByNodeIdToolSet
 - [tapOnElementByNodeId](functions/custom/tapOnElementByNodeId.md)
+
+## NonDefaultUiToolSet
+- [tapOnPoint](functions/custom/tapOnPoint.md)
 
 <hr/>
 

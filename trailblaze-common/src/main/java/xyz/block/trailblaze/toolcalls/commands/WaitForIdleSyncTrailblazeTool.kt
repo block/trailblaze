@@ -5,7 +5,6 @@ import kotlinx.serialization.Serializable
 import maestro.orchestra.Command
 import maestro.orchestra.WaitForAnimationToEndCommand
 import xyz.block.trailblaze.toolcalls.MapsToMaestroCommands
-import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 
 @Serializable
@@ -20,8 +19,7 @@ Prefer using this over the back button.
 data class WaitForIdleSyncTrailblazeTool(
   @LLMDescription("Unit: seconds. Default Value: 5 seconds.")
   val timeToWaitInSeconds: Int = 5,
-) : TrailblazeTool,
-  MapsToMaestroCommands {
+) : MapsToMaestroCommands() {
   override fun toMaestroCommands(): List<Command> = listOf(
     WaitForAnimationToEndCommand(
       timeout = timeToWaitInSeconds.toLong() * 1000L,

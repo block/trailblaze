@@ -5,7 +5,6 @@ import kotlinx.serialization.Serializable
 import maestro.orchestra.Command
 import maestro.orchestra.TapOnPointV2Command
 import xyz.block.trailblaze.toolcalls.MapsToMaestroCommands
-import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 
 @Serializable
@@ -20,8 +19,7 @@ data class TapOnPointTrailblazeTool(
   val x: Int,
   @LLMDescription("The center Y coordinate for the clickable element")
   val y: Int,
-) : TrailblazeTool,
-  MapsToMaestroCommands {
+) : MapsToMaestroCommands() {
   override fun toMaestroCommands(): List<Command> = listOf(
     TapOnPointV2Command(
       point = "$x,$y",

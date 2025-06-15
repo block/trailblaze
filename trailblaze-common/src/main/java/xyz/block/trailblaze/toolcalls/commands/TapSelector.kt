@@ -1,10 +1,7 @@
 package xyz.block.trailblaze.toolcalls.commands
 
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
-import xyz.block.trailblaze.toolcalls.TrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.TapOnElementWithAccessiblityTextTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.TapOnElementWithTextTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.TapOnPointTrailblazeTool
+import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 
 /**
  * Given the root of the view hierarchy and a target node, find the best TrailblazeTool for tapping.
@@ -14,7 +11,7 @@ fun findBestTapTrailblazeToolForNode(
   root: ViewHierarchyTreeNode,
   target: ViewHierarchyTreeNode,
   longPress: Boolean = false,
-): TrailblazeTool {
+): ExecutableTrailblazeTool {
   val allNodes = root.aggregate().distinctBy { System.identityHashCode(it) }
   val targetAndDescendants = target.aggregate()
 

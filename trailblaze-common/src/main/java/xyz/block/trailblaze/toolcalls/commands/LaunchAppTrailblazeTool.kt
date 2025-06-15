@@ -5,7 +5,6 @@ import kotlinx.serialization.Serializable
 import maestro.orchestra.Command
 import maestro.orchestra.LaunchAppCommand
 import xyz.block.trailblaze.toolcalls.MapsToMaestroCommands
-import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 
 @Serializable
@@ -25,8 +24,7 @@ Available App Launch Modes:
     """,
   )
   val launchMode: String? = null,
-) : TrailblazeTool,
-  MapsToMaestroCommands {
+) : MapsToMaestroCommands() {
   override fun toMaestroCommands(): List<Command> = listOf(
     LaunchAppCommand(
       appId = appId,

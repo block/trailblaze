@@ -17,9 +17,9 @@ import xyz.block.trailblaze.agent.model.TestObjective.TrailblazeObjective.Trailb
 import xyz.block.trailblaze.agent.model.TestObjective.TrailblazeObjective.TrailblazePrompt
 import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.toolcalls.JsonSerializationUtil
+import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toKoogToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
-import xyz.block.trailblaze.toolcalls.TrailblazeToolAsLlmTool
-import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
+import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import java.util.UUID
 import kotlin.reflect.KClass
 
@@ -28,7 +28,8 @@ class MixedModeTestCase(
   private val executeSteps: Boolean = true,
   private val additionalTrailblazeTools: List<KClass<out TrailblazeTool>> = emptyList(),
 ) : TestCase(yamlContent) {
-  private val allPossibleTools = TrailblazeToolRepo.ALL + additionalTrailblazeTools
+  private val allPossibleTools: Set<KClass<out TrailblazeTool>> =
+    TrailblazeToolSet.BuiltInTrailblazeTools + additionalTrailblazeTools
 
   override val objectives: List<TestObjective> = parseObjectives()
 
@@ -122,8 +123,8 @@ class MixedModeTestCase(
     val toolName = stepMap.keys.firstOrNull()?.toString()
       ?: throw TrailblazeException("Unknown tool name provided for $step")
     val params = stepMap.values.firstOrNull() as? Map<*, *> ?: emptyMap<String, Any?>()
-    val toolClass = allPossibleTools.firstOrNull {
-      TrailblazeToolAsLlmTool(it).name == toolName
+    val toolClass = allPossibleTools.firstOrNull { toolKClass ->
+      toolKClass.toKoogToolDescriptor().name == toolName
     } ?: throw TrailblazeException("Could not find TrailblazeTool that matches tool name $toolName")
     val jsonParams = buildJsonObject {
       params.forEach { (k, v) ->

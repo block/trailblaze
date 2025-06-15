@@ -4,9 +4,11 @@ import com.aallam.openai.api.chat.chatCompletionRequest
 import com.aallam.openai.api.model.ModelId
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.toolcalls.DataClassToToolUtils
-import xyz.block.trailblaze.toolcalls.TrailblazeToolAsLlmTool
-import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
+import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toKoogToolDescriptor
+import xyz.block.trailblaze.toolcalls.TrailblazeTool
+import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import java.io.File
+import kotlin.reflect.KClass
 
 /**
  * Generates Documentation for [xyz.block.trailblaze.toolcalls.TrailblazeTool]s
@@ -17,14 +19,14 @@ class DocsGenerator(
 ) {
 
   fun createPageForCommand(
-    trailblazeToolAsLlmTool: TrailblazeToolAsLlmTool,
+    toolKClass: KClass<out TrailblazeTool>,
   ) {
+    val toolDescriptor = toolKClass.toKoogToolDescriptor()
 
-    val pagePath = "custom/${trailblazeToolAsLlmTool.name}.md"
+    val pagePath = "custom/${toolDescriptor.name}.md"
 
     File(generatedFunctionsDocsDir, pagePath).also { file ->
       file.parentFile.mkdirs() // Ensure directory exists
-
 
       // Creating a fake chatCompletionRequest to register the tool and print out the result
       val registeredOpenAiToolCallFunction = chatCompletionRequest {
@@ -33,14 +35,11 @@ class DocsGenerator(
         tools {
           DataClassToToolUtils.registerManualToolForDataClass(
             builder = this,
-            clazz = trailblazeToolAsLlmTool.trailblazeToolClass,
-            propertyFilter = { propertyName: String ->
-              !trailblazeToolAsLlmTool.excludedProperties.contains(propertyName)
-            }
+            clazz = toolKClass,
           )
         }
       }.tools?.first {
-        it.function.name == trailblazeToolAsLlmTool.name
+        it.function.name == toolDescriptor.name
       }!!.function
 
       val json = TrailblazeJsonInstance.encodeToString(registeredOpenAiToolCallFunction)
@@ -49,10 +48,10 @@ class DocsGenerator(
 # Function `${registeredOpenAiToolCallFunction.name}`
 
 ## Description
-${trailblazeToolAsLlmTool.description}
+${toolDescriptor.description}
 
 ### Command Class
-`${trailblazeToolAsLlmTool.trailblazeToolClass.qualifiedName}`
+`${toolKClass.qualifiedName}`
 
 ## Registered Tool Call to Open AI
 ```json
@@ -66,26 +65,35 @@ $THIS_DOC_IS_GENERATED_MESSAGE
   }
 
   fun generate() {
-    TrailblazeToolRepo.ALL
-      .map { TrailblazeToolAsLlmTool(it) }
-      .forEach { trailblazeToolAsLlmTool: TrailblazeToolAsLlmTool ->
-        createPageForCommand(
-          trailblazeToolAsLlmTool,
-        )
+    TrailblazeToolSet.BuiltInTrailblazeTools
+      .forEach { toolClass: KClass<out TrailblazeTool> ->
+        createPageForCommand(toolClass)
       }
 
     val map = mutableMapOf<String, Set<String>>().apply {
       put(
-        "Common",
-        TrailblazeToolRepo.DEFAULT_COMMON_COMMAND_CLASSES.map { TrailblazeToolAsLlmTool(it).name }.toSet()
+        "DefaultUiToolSet",
+        TrailblazeToolSet.DefaultUiToolSet.asTools()
+          .map { it.toKoogToolDescriptor().name }
+          .toSet()
       )
       put(
-        "Additional for Recording Enabled",
-        TrailblazeToolRepo.RECORDING_ENABLED_COMMAND_CLASSES.map { TrailblazeToolAsLlmTool(it).name }.toSet()
+        "InteractWithElementsByPropertyToolSet",
+        TrailblazeToolSet.InteractWithElementsByPropertyToolSet.asTools()
+          .map { it.toKoogToolDescriptor().name }
+          .toSet()
       )
       put(
-        "Additional for Recording Disabled",
-        TrailblazeToolRepo.RECORDING_DISABLED_COMMAND_CLASSES.map { TrailblazeToolAsLlmTool(it).name }.toSet()
+        "InteractWithElementsByNodeIdToolSet",
+        TrailblazeToolSet.InteractWithElementsByNodeIdToolSet.asTools()
+          .map { it.toKoogToolDescriptor().name }
+          .toSet()
+      )
+      put(
+        "NonDefaultUiToolSet",
+        TrailblazeToolSet.NonDefaultUiToolSet.asTools()
+          .map { it.toKoogToolDescriptor().name }
+          .toSet()
       )
 
     }
@@ -94,7 +102,7 @@ $THIS_DOC_IS_GENERATED_MESSAGE
 
   private fun createFunctionsIndexPage(map: Map<String, Set<String>>) {
 
-    File(generatedDir, "FUNCTIONS.md").also { file ->
+    File(generatedDir, "TOOLS.md").also { file ->
       val text = buildString {
         appendLine("# Trailblaze Tools")
         appendLine()

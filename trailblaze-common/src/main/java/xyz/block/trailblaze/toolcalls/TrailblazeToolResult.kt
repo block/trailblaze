@@ -36,17 +36,17 @@ Please always provide a tool call that will help complete the task.
     @Serializable
     data class ExceptionThrown(
       override val errorMessage: String,
-      val stackTrace: String,
-      val command: TrailblazeTool,
+      val command: TrailblazeTool? = null,
+      val stackTrace: String? = null,
     ) : Error {
       companion object {
         fun fromThrowable(
           throwable: Throwable,
-          command: TrailblazeTool,
+          trailblazeTool: TrailblazeTool? = null,
         ): ExceptionThrown = ExceptionThrown(
           errorMessage = throwable.message ?: "Unknown error",
           stackTrace = throwable.stackTraceToString(),
-          command = command,
+          command = trailblazeTool,
         )
       }
     }

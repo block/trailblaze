@@ -1,73 +1,36 @@
 package xyz.block.trailblaze.toolcalls
 
+import ai.koog.agents.core.tools.ToolRegistry
 import com.aallam.openai.api.chat.ToolBuilder
 import com.aallam.openai.api.chat.ToolCall
-import kotlinx.serialization.Serializable
-import xyz.block.trailblaze.toolcalls.commands.EraseTextTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.HideKeyboardTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.LaunchAppTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.LongPressElementWithAccessibilityTextTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.LongPressOnElementWithTextTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.PressBackTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.SwipeTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.TapOnElementByNodeIdTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.TapOnElementWithAccessiblityTextTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.TapOnElementWithTextTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.TapOnPointTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.WaitForIdleSyncTrailblazeTool
+import xyz.block.trailblaze.toolcalls.KoogToolExt.hasSerializableAnnotation
+import xyz.block.trailblaze.toolcalls.KoogToolExt.toKoogTools
+import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toKoogToolDescriptor
 import kotlin.reflect.KClass
-import kotlin.reflect.full.hasAnnotation
 
 /**
  * Manual calls we register that are not related to Maestro
  */
 class TrailblazeToolRepo(
-  val recordModeEnabled: Boolean = false,
+  val setOfMarkEnabled: Boolean = true,
 ) {
-  companion object {
-    val DEFAULT_COMMON_COMMAND_CLASSES: Set<KClass<out TrailblazeTool>> = setOf(
-      HideKeyboardTrailblazeTool::class,
-      InputTextTrailblazeTool::class,
-      ObjectiveStatusTrailblazeTool::class,
-      EraseTextTrailblazeTool::class,
-      PressBackTrailblazeTool::class,
-      SwipeTrailblazeTool::class,
-      WaitForIdleSyncTrailblazeTool::class,
-      LaunchAppTrailblazeTool::class,
-    )
-
-    val RECORDING_ENABLED_COMMAND_CLASSES: Set<KClass<out TrailblazeTool>> = setOf(
-      LongPressOnElementWithTextTrailblazeTool::class,
-      LongPressElementWithAccessibilityTextTrailblazeTool::class,
-      TapOnElementWithTextTrailblazeTool::class,
-      TapOnElementWithAccessiblityTextTrailblazeTool::class,
-    )
-
-    val RECORDING_DISABLED_COMMAND_CLASSES: Set<KClass<out TrailblazeTool>> = setOf(
-      TapOnElementByNodeIdTrailblazeTool::class,
-    )
-
-    val OTHER_COMMAND_CLASSES: Set<KClass<out TrailblazeTool>> = setOf(
-      TapOnPointTrailblazeTool::class,
-    )
-
-    val ALL: Set<KClass<out TrailblazeTool>> = DEFAULT_COMMON_COMMAND_CLASSES + RECORDING_ENABLED_COMMAND_CLASSES + RECORDING_DISABLED_COMMAND_CLASSES + OTHER_COMMAND_CLASSES
-  }
 
   private val registeredTrailblazeToolClasses = mutableSetOf<KClass<out TrailblazeTool>>().apply {
-    addAll(DEFAULT_COMMON_COMMAND_CLASSES)
-    if (recordModeEnabled) {
-      addAll(RECORDING_ENABLED_COMMAND_CLASSES)
+    addAll(TrailblazeToolSet.DefaultUiToolSet.asTools())
+    if (setOfMarkEnabled) {
+      addAll(TrailblazeToolSet.InteractWithElementsByNodeIdToolSet.asTools())
     } else {
-      addAll(RECORDING_DISABLED_COMMAND_CLASSES)
+      addAll(TrailblazeToolSet.InteractWithElementsByPropertyToolSet.asTools())
     }
+  }.also {
+    println("Registered Trailblaze tools (setOfMarkEnabled=$setOfMarkEnabled): ${it.map { it -> it.simpleName }}")
   }
 
   fun getRegisteredTrailblazeTools(): Set<KClass<out TrailblazeTool>> = registeredTrailblazeToolClasses
 
-  fun KClass<*>.hasSerializableAnnotation(): Boolean = this.hasAnnotation<Serializable>()
+  fun asToolRegistry(trailblazeToolContextProvider: () -> TrailblazeToolExecutionContext): ToolRegistry = ToolRegistry {
+    tools(getRegisteredTrailblazeTools().toKoogTools(trailblazeToolContextProvider))
+  }
 
   fun addTrailblazeTools(vararg trailblazeTool: KClass<out TrailblazeTool>) = synchronized(registeredTrailblazeToolClasses) {
     trailblazeTool.forEach { tool ->
@@ -78,8 +41,8 @@ class TrailblazeToolRepo(
     }
   }
 
-  fun removeTrailblazeTools(vararg trailblazeTool: KClass<out TrailblazeTool>) = synchronized(registeredTrailblazeToolClasses) {
-    trailblazeTool.forEach { tool ->
+  fun removeTrailblazeTools(vararg trailblazeToolArgs: KClass<out TrailblazeTool>) = synchronized(registeredTrailblazeToolClasses) {
+    trailblazeToolArgs.forEach { tool ->
       if (registeredTrailblazeToolClasses.contains(tool)) {
         registeredTrailblazeToolClasses.remove(tool)
       }
@@ -104,9 +67,6 @@ class TrailblazeToolRepo(
         DataClassToToolUtils.registerManualToolForDataClass(
           builder = this,
           clazz = trailblazeToolClass,
-          propertyFilter = { propertyName: String ->
-            !TrailblazeToolAsLlmTool(trailblazeToolClass).excludedProperties.contains(propertyName)
-          },
         )
       }
     }
@@ -123,9 +83,6 @@ class TrailblazeToolRepo(
       DataClassToToolUtils.registerManualToolForDataClass(
         builder = this,
         clazz = commandClass,
-        propertyFilter = { propertyName: String ->
-          !TrailblazeToolAsLlmTool(commandClass).excludedProperties.contains(propertyName)
-        },
       )
     }
   }
@@ -135,15 +92,16 @@ class TrailblazeToolRepo(
     val functionName = function.name
     val functionArgs = function.argumentsAsJson()
 
-    val trailblazeToolClass: KClass<out TrailblazeTool>? = registeredTrailblazeToolClasses.firstOrNull {
-      TrailblazeToolAsLlmTool(it).name == functionName
-    }
-    if (trailblazeToolClass == null) {
+    val trailblazeToolArgsClass: KClass<out TrailblazeTool>? =
+      registeredTrailblazeToolClasses.firstOrNull { toolKClass ->
+        toolKClass.toKoogToolDescriptor().name == functionName
+      }
+    if (trailblazeToolArgsClass == null) {
       // Count not find command class for function name
       return null
     }
     return try {
-      JsonSerializationUtil.deserializeTrailblazeTool(trailblazeToolClass, functionArgs)
+      JsonSerializationUtil.deserializeTrailblazeTool(trailblazeToolArgsClass, functionArgs)
     } catch (e: Exception) {
       // Failed to deserialize command
       null

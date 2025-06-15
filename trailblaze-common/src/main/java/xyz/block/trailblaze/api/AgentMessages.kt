@@ -20,9 +20,7 @@ object AgentMessages {
   }
 
   private fun errorExceptionContentString(errorException: Error.ExceptionThrown) = buildString {
-    appendLine(
-      "# Error executing a command of type ${errorException.command::class.java.simpleName}",
-    )
+    appendLine("# Error executing tool: $errorException")
     appendLine("Exception Message: ${errorException.errorMessage}")
     appendLine("Command: ${TrailblazeJsonInstance.encodeToString(errorException.command)}")
   }

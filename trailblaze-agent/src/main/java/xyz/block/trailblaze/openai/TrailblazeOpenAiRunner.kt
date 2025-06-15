@@ -1,5 +1,7 @@
 package xyz.block.trailblaze.openai
 
+import ai.koog.agents.core.tools.Tool
+import ai.koog.agents.core.tools.ToolResult
 import com.aallam.openai.api.chat.ChatCompletion
 import com.aallam.openai.api.chat.ChatCompletionRequest
 import com.aallam.openai.api.chat.ChatMessage
@@ -17,7 +19,7 @@ import com.aallam.openai.client.OpenAI
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonObject
+import xyz.block.trailblaze.MaestroTrailblazeAgent
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.agent.model.PromptStep
 import xyz.block.trailblaze.agent.model.TestObjective.TrailblazeObjective.TrailblazePrompt
@@ -26,10 +28,11 @@ import xyz.block.trailblaze.api.TestAgentRunner
 import xyz.block.trailblaze.api.TrailblazeAgent
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.llm.LlmModel
+import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
-import xyz.block.trailblaze.toolcalls.TrailblazeToolAsLlmTool
+import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool
@@ -44,7 +47,7 @@ class TrailblazeOpenAiRunner(
   private val screenStateProvider: () -> ScreenState,
   openAiApiKey: String,
   llmModel: LlmModel? = null,
-  private val trailblazeToolRepo: TrailblazeToolRepo = TrailblazeToolRepo(),
+  private val trailblazeToolRepo: TrailblazeToolRepo,
   private val systemPromptTemplate: String = TemplatingUtil.getResourceAsText(
     "trailblaze_system_prompt.md",
   )!!,
@@ -80,6 +83,7 @@ class TrailblazeOpenAiRunner(
         is AgentTaskStatus.Success.ObjectiveComplete -> {
           // do nothing, move on to the next objective
         }
+
         is AgentTaskStatus.InProgress -> {
           throw IllegalStateException("In Progress should never be returned as the final objective result")
         }
@@ -138,23 +142,33 @@ class TrailblazeOpenAiRunner(
       println("[LLM_RESPONSE] Has tool call: ${action != null} | Tool: ${action?.function?.name ?: "None"}")
 
       if (action != null) {
-        val trailblazeTool: TrailblazeTool? = trailblazeToolRepo.toolCallToTrailblazeTool(action)
-        val trailblazeToolResult = if (trailblazeTool == null) {
-          unknownToolError(action)
-        } else if (TrailblazeToolAsLlmTool(trailblazeTool::class).properties
-            .filter { it.isRequired }
-            .any { prop ->
-              (Json.parseToJsonElement(action.function.arguments) as? JsonObject)?.containsKey(prop.name) != true
-            }
-        ) {
-          missingRequiredArgsError(
-            action,
-            TrailblazeToolAsLlmTool(trailblazeTool::class).properties
-              .filter { it.isRequired }
-              .map { it.name },
+        val toolRegistry = trailblazeToolRepo.asToolRegistry {
+          TrailblazeToolExecutionContext(
+            trailblazeAgent = agent as MaestroTrailblazeAgent,
+            screenState = screenStateForLlmRequest,
+            llmResponseId = llmResponseId,
           )
-        } else {
-          handleTrailblazeToolForPrompt(trailblazeTool, llmResponseId, step, screenStateForLlmRequest)
+        }
+
+        val trailblazeToolResult = try {
+          @Suppress("UNCHECKED_CAST")
+          val koogTool: Tool<TrailblazeTool, ToolResult> =
+            toolRegistry.getTool(action.function.name) as Tool<TrailblazeTool, ToolResult>
+          val trailblazeTool: TrailblazeTool = TrailblazeJsonInstance.decodeFromJsonElement(
+            deserializer = koogTool.argsSerializer,
+            element = action.function.argumentsAsJson(TrailblazeJsonInstance),
+          )
+          handleTrailblazeToolForPrompt(
+            trailblazeTool = trailblazeTool,
+            llmResponseId = llmResponseId,
+            step = step,
+            screenStateForLlmRequest = screenStateForLlmRequest,
+          )
+        } catch (e: Exception) {
+          TrailblazeToolResult.Error.ExceptionThrown.fromThrowable(
+            throwable = e,
+            trailblazeTool = null,
+          )
         }
 
         step.addToolCall(
@@ -363,10 +377,12 @@ class TrailblazeOpenAiRunner(
           // Using objective to determine when we're done, not the tool result
           TrailblazeToolResult.Success
         }
+
         "completed" -> {
           step.markAsComplete()
           TrailblazeToolResult.Success
         }
+
         else -> TrailblazeToolResult.Error.UnknownTrailblazeTool(trailblazeTool)
       }
     }

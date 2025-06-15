@@ -6,7 +6,6 @@ import maestro.orchestra.Command
 import maestro.orchestra.ElementSelector
 import maestro.orchestra.TapOnElementCommand
 import xyz.block.trailblaze.toolcalls.MapsToMaestroCommands
-import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeTools.REQUIRED_ACCESSIBILITY_TEXT_DESCRIPTION
 
@@ -32,8 +31,7 @@ data class TapOnElementWithAccessiblityTextTrailblazeTool(
   val index: String? = null,
   val enabled: Boolean? = null,
   val selected: Boolean? = null,
-) : TrailblazeTool,
-  MapsToMaestroCommands {
+) : MapsToMaestroCommands() {
   override fun toMaestroCommands(): List<Command> = listOf(
     TapOnElementCommand(
       selector = ElementSelector(

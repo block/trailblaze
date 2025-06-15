@@ -13,24 +13,19 @@ import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.openai.TrailblazeOpenAiRunner
 import xyz.block.trailblaze.rules.TrailblazeRule
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
-import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 
 /**
  * On-Device Android Trailblaze Rule Implementation.
  */
-class AndroidTrailblazeRule(
-  /**
-   * Use this to handle custom [TrailblazeTool] that are not directly mapped to Maestro commands.
-   */
-  val customTrailblazeToolHandler: (TrailblazeToolExecutionContext) -> TrailblazeToolResult? = { null },
-) : SimpleTestRuleChain(TrailblazeAndroidLoggingRule()),
+class AndroidTrailblazeRule :
+  SimpleTestRuleChain(
+    TrailblazeAndroidLoggingRule(),
+  ),
   TrailblazeRule {
 
-  private val trailblazeAgent = AndroidMaestroTrailblazeAgent(
-    customTrailblazeToolHandler = customTrailblazeToolHandler,
-  )
+  private val trailblazeAgent = AndroidMaestroTrailblazeAgent()
   private lateinit var trailblazeOpenAiRunner: TestAgentRunner
 
   val trailblazeToolRepo = TrailblazeToolRepo()
