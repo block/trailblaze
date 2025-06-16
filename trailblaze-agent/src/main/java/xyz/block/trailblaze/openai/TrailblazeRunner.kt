@@ -5,6 +5,7 @@ import ai.koog.prompt.llm.LLModel
 import ai.koog.prompt.message.Message
 import ai.koog.prompt.params.LLMParams
 import kotlinx.coroutines.runBlocking
+import kotlinx.datetime.Clock
 import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.MaestroTrailblazeAgent
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
@@ -58,7 +59,7 @@ class TrailblazeRunner(
       TrailblazeLog.TrailblazeAgentTaskStatusChangeLog(
         agentTaskStatus = prompt.steps.first().currentStatus.value,
         session = TrailblazeLogger.getCurrentSessionId(),
-        timestamp = System.currentTimeMillis(),
+        timestamp = Clock.System.now(),
       ),
     )
     LogHelper.logPromptStart(prompt)
@@ -84,7 +85,7 @@ class TrailblazeRunner(
       TrailblazeLog.TrailblazeAgentTaskStatusChangeLog(
         agentTaskStatus = exitStatus,
         session = TrailblazeLogger.getCurrentSessionId(),
-        timestamp = System.currentTimeMillis(),
+        timestamp = Clock.System.now(),
       ),
     )
     return exitStatus
@@ -95,14 +96,14 @@ class TrailblazeRunner(
       TrailblazeLog.ObjectiveStartLog(
         description = step.description,
         session = TrailblazeLogger.getCurrentSessionId(),
-        timestamp = System.currentTimeMillis(),
+        timestamp = Clock.System.now(),
       ),
     )
     trailblazeOpenAiRunnerHelper.setForceStepStatusUpdate(false)
     do {
       println("\n[LOOP_STATUS] Status: ${step.currentStatus.value.javaClass.simpleName} | Call: ${step.getHistorySize() + 1}")
       val screenStateForLlmRequest = screenStateProvider()
-      val requestStartTimeMs = System.currentTimeMillis()
+      val requestStartTimeMs = Clock.System.now()
 
       val llmResponseId = UUID.randomUUID().toString()
 
@@ -203,7 +204,7 @@ class TrailblazeRunner(
         description = step.description,
         objectiveResult = step.currentStatus.value,
         session = TrailblazeLogger.getCurrentSessionId(),
-        timestamp = System.currentTimeMillis(),
+        timestamp = Clock.System.now(),
       ),
     )
 

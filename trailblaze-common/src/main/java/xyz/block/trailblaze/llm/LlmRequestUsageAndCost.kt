@@ -17,7 +17,9 @@ data class LlmRequestUsageAndCost(
     fun List<Message.Response>.calculateCost(llmModelId: String): LlmRequestUsageAndCost {
       val usage = this.last().metaInfo
       val modelName = llmModelId
-      val pricing = LlmModel.getModelByName(modelName)
+      // Default to GPT-4.1 if the model name is not found.
+      // We will want to get away from our old `LlmModel` info in the future and use Koog's.
+      val pricing = LlmModel.getModelByName(modelName) ?: LlmModel.GPT_4_1
       val promptTokens = usage.inputTokensCount?.toLong() ?: 0L
       val completionTokens = usage.outputTokensCount?.toLong() ?: 0L
       val promptCost = promptTokens * pricing.inputCostPerOneMillionTokens / 1_000_000.0

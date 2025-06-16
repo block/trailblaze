@@ -26,7 +26,7 @@ object GetEndpointSessionDetail {
         when (it) {
           is TrailblazeLog.TrailblazeLlmRequestLog -> {
             if (it.screenshotFile?.startsWith("https") != true) {
-              it.copy(screenshotFile = "/static/$sessionId/" + it.screenshotFile)
+              it.copy(screenshotFile = it.screenshotFile?.let { fileName -> "/static/$sessionId/$fileName" })
             } else {
               it
             }
@@ -34,7 +34,7 @@ object GetEndpointSessionDetail {
 
           is TrailblazeLog.MaestroDriverLog -> {
             if (it.screenshotFile?.startsWith("https") != true) {
-              it.copy(screenshotFile = "/static/$sessionId/" + it.screenshotFile)
+              it.copy(screenshotFile = it.screenshotFile?.let { fileName -> "/static/$sessionId/$fileName" })
             } else {
               it
             }

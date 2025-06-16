@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.logs.model
 
 enum class AgentLogEventType {
+  DELEGATING_TRAILBLAZE_TOOL,
   LLM_REQUEST,
   MAESTRO_COMMAND,
   MAESTRO_DRIVER,

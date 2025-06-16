@@ -8,6 +8,7 @@ plugins {
 }
 
 dependencies {
+  api(libs.kotlinx.datetime)
   api(libs.kotlinx.serialization.json)
   api(libs.coroutines)
   api(libs.junit)

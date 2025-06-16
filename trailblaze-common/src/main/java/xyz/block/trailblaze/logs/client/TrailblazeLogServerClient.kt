@@ -9,6 +9,7 @@ import io.ktor.client.statement.HttpResponse
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
+import kotlinx.datetime.Clock
 
 class TrailblazeLogServerClient(
   val httpClient: HttpClient,
@@ -17,13 +18,13 @@ class TrailblazeLogServerClient(
   private suspend fun ping(): HttpResponse = httpClient.get("$baseUrl/ping")
 
   suspend fun isServerRunning(): Boolean {
-    val startTime = System.currentTimeMillis()
+    val startTime = Clock.System.now()
     val isRunning = try {
       ping().status.value == HttpStatusCode.OK.value
     } catch (e: Exception) {
       false
     }
-    println("isServerRunning $isRunning in ${System.currentTimeMillis() - startTime}ms")
+    println("isServerRunning $isRunning in ${Clock.System.now() - startTime}ms")
     return isRunning
   }
 

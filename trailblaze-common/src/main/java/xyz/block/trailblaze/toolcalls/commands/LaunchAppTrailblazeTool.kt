@@ -23,18 +23,18 @@ Available App Launch Modes:
 - "FORCE_RESTART" will force stop the application and then launch the app like you would from the app launcher.
     """,
   )
-  val launchMode: String? = null,
+  val launchMode: LaunchMode = LaunchMode.REINSTALL,
 ) : MapsToMaestroCommands() {
   override fun toMaestroCommands(): List<Command> = listOf(
     LaunchAppCommand(
       appId = appId,
-      clearState = when (LaunchMode.fromString(launchMode)) {
+      clearState = when (launchMode) {
         LaunchMode.REINSTALL -> true
         LaunchMode.RESUME,
         LaunchMode.FORCE_RESTART,
         -> false
       },
-      stopApp = when (LaunchMode.fromString(launchMode)) {
+      stopApp = when (launchMode) {
         LaunchMode.RESUME -> false
         LaunchMode.FORCE_RESTART,
         LaunchMode.REINSTALL,

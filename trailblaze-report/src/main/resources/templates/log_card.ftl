@@ -5,6 +5,7 @@
             <#assign logColors = {
             "MAESTRO_DRIVER": "lightblue",
             "MAESTRO_COMMAND": "mediumpurple",
+            "DELEGATING_TRAILBLAZE_TOOL": "lightyellow",
             "TRAILBLAZE_COMMAND": "lightyellow",
             "LLM_REQUEST": "lightgreen",
             "AGENT_TASK_STATUS": "lightgray",
@@ -39,6 +40,8 @@
                     <pre class="small">${log.asMaestroYaml()?html}</pre>
                 <#elseif log.type == "TRAILBLAZE_COMMAND">
                     <pre class="small">${log.asCommandJson()?html}</pre>
+                <#elseif log.type == "DELEGATING_TRAILBLAZE_TOOL">
+                    <pre class="small">${log.asCommandJson()?html}</pre>
                 <#elseif log.type == "AGENT_TASK_STATUS">
                     <h6 class="font-weight-bold">${log.agentTaskStatus.class.simpleName}</h6>
                     <pre class="small">${log.agentTaskStatus.statusData.prompt?html}</pre>
@@ -67,7 +70,7 @@
         <div class="card-body">
             <p class="card-text">
                 <strong>Time Elapsed:</strong>
-                <span>${(log.timestamp - logs[0].timestamp)?number_to_date?string("mm:ss")}</span>
+                <span>${(log.timestamp.toEpochMilliseconds() - logs[0].timestamp.toEpochMilliseconds())?number_to_date?string("mm:ss")}</span>
             </p>
             <div class=" text-center">
                 <button type="button" class="btn btn-primary" data-bs-toggle="modal"
@@ -95,7 +98,7 @@
                                 <h5>LLM Response</h5>
                                 <pre>${log.llmResponse[0]?html}</pre>
                                 <h5>Request Duration</h5>
-                                <pre>${(log.duration)?number_to_date?string("mm:ss")}</pre>
+                                <pre>${(log.durationMs)?number_to_date?string("mm:ss")}</pre>
                                 <#if log.llmMessage??>
                                     <h5>LLM Message</h5>
                                     <pre>${log.llmMessage?html}</pre>

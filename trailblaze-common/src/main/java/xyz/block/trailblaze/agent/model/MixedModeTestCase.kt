@@ -25,7 +25,7 @@ import kotlin.reflect.KClass
 
 class MixedModeTestCase(
   yamlContent: String,
-  private val executeSteps: Boolean = true,
+  private val executeRecordedSteps: Boolean = true,
   private val additionalTrailblazeTools: List<KClass<out TrailblazeTool>> = emptyList(),
 ) : TestCase(yamlContent) {
   private val allPossibleTools: Set<KClass<out TrailblazeTool>> =
@@ -98,7 +98,7 @@ class MixedModeTestCase(
     }
   }
 
-  private fun shouldParseCommands(objectives: List<*>): Boolean = objectives.all { it is Map<*, *> } and executeSteps
+  private fun shouldParseCommands(objectives: List<*>): Boolean = objectives.all { it is Map<*, *> } and executeRecordedSteps
 
   private fun parseTrailblazeCommands(objectives: List<*>): TrailblazeCommand {
     val staticObjectives = objectives.map { obj ->

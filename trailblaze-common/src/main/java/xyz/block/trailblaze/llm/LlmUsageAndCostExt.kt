@@ -20,7 +20,7 @@ object LlmUsageAndCostExt {
     return LlmSessionUsageAndCost(
       modelName = modelName,
       totalRequestCount = requests.size,
-      averageDurationMillis = requests.map { it.duration }.average(),
+      averageDurationMillis = requests.map { it.durationMs }.average(),
       averageInputTokens = requestCostBreakdowns.map { it.inputTokens }.average(),
       averageOutputTokens = requestCostBreakdowns.map { it.outputTokens }.average(),
       totalCostInUsDollars = requestCostBreakdowns.sumOf { it.totalCost }.let { BigDecimal(it).setScale(2, RoundingMode.HALF_EVEN).toDouble() },

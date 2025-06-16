@@ -26,7 +26,7 @@ class AndroidOnDeviceUiAutomatorScreenState(
   filterViewHierarchy: Boolean = false,
   maxDimension1: Int? = 1024,
   maxDimension2: Int? = 512,
-  private val setOfMarkEnabled: Boolean = false,
+  private val setOfMarkEnabled: Boolean = true,
   maxAttempts: Int = 1,
 ) : ScreenState {
 
@@ -123,7 +123,7 @@ class AndroidOnDeviceUiAutomatorScreenState(
      */
     fun takeScreenshot(
       viewHierarchy: ViewHierarchyTreeNode?,
-      setOfMarkEnabled: Boolean = false,
+      setOfMarkEnabled: Boolean = true,
     ): Bitmap? {
       val screenshotBitmap = withUiAutomation { takeScreenshot() }
       if (setOfMarkEnabled && screenshotBitmap != null) {
@@ -163,7 +163,10 @@ class AndroidOnDeviceUiAutomatorScreenState(
     maxDimension1: Int?,
     maxDimension2: Int?,
   ): ByteArray? {
-    val screenshotBitmap = takeScreenshot(viewHierarchy, setOfMarkEnabled)
+    val screenshotBitmap = takeScreenshot(
+      viewHierarchy = viewHierarchy,
+      setOfMarkEnabled = setOfMarkEnabled,
+    )
     if (screenshotBitmap != null) {
       val scaledBitmap = if (maxDimension1 != null && maxDimension2 != null) {
         screenshotBitmap.scale(

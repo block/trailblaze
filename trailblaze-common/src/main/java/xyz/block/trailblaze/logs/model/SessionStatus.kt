@@ -12,16 +12,16 @@ sealed interface SessionStatus {
   sealed interface Ended :
     SessionStatus,
     HasDuration {
-    override val duration: Long
+    override val durationMs: Long
 
     @Serializable
     data class Succeeded(
-      override val duration: Long,
+      override val durationMs: Long,
     ) : Ended
 
     @Serializable
     data class Failed(
-      override val duration: Long,
+      override val durationMs: Long,
       val exceptionMessage: String?,
     ) : Ended
   }

@@ -1,14 +1,18 @@
 package xyz.block.trailblaze
 
+import kotlinx.datetime.Clock
 import maestro.orchestra.Command
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeAgent
 import xyz.block.trailblaze.exception.TrailblazeException
+import xyz.block.trailblaze.logs.client.TrailblazeLog
+import xyz.block.trailblaze.logs.client.TrailblazeLogger
+import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
-import xyz.block.trailblaze.toolcalls.MapsToExecutableTrailblazeTools
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.toolcalls.getToolNameFromAnnotation
 
 /**
  * Abstract class for Trailblaze agents that handle Maestro commands.
@@ -59,13 +63,25 @@ abstract class MaestroTrailblazeAgent : TrailblazeAgent {
     val executableTrailblazeTools: List<ExecutableTrailblazeTool> = tools.flatMap { trailblazeTool ->
       when (trailblazeTool) {
         is ExecutableTrailblazeTool -> listOf(trailblazeTool)
-        is MapsToExecutableTrailblazeTools -> trailblazeTool.toExecutableTrailblazeTools(trailblazeExecutionContext)
+        is DelegatingTrailblazeTool -> {
+          val executableTools = trailblazeTool.toExecutableTrailblazeTools(trailblazeExecutionContext)
+          TrailblazeLogger.log(
+            TrailblazeLog.DelegatingTrailblazeToolLog(
+              command = trailblazeTool,
+              executableTools = executableTools,
+              session = TrailblazeLogger.getCurrentSessionId(),
+              timestamp = Clock.System.now(),
+            ),
+          )
+          executableTools
+        }
+
         else -> throw TrailblazeException(
           message = buildString {
             appendLine("Unhandled Trailblaze tool ${trailblazeTool::class.java.simpleName}.")
             appendLine("Supported Trailblaze Tools must implement one of the following:")
             appendLine("- ${ExecutableTrailblazeTool::class.java.simpleName}")
-            appendLine("- ${MapsToExecutableTrailblazeTools::class.java.simpleName}")
+            appendLine("- ${DelegatingTrailblazeTool::class.java.simpleName}")
           },
         )
       }
@@ -73,10 +89,24 @@ abstract class MaestroTrailblazeAgent : TrailblazeAgent {
     val toolsExecuted = mutableListOf<TrailblazeTool>()
     executableTrailblazeTools.forEach { trailblazeTool ->
       toolsExecuted.add(trailblazeTool)
-      val result = trailblazeTool.execute(trailblazeExecutionContext)
-      if (result != TrailblazeToolResult.Success) {
+      val timeBeforeToolExecution = Clock.System.now()
+      val trailblazeToolResult = trailblazeTool.execute(trailblazeExecutionContext)
+      TrailblazeLogger.log(
+        TrailblazeLog.TrailblazeToolLog(
+          command = trailblazeTool,
+          toolName = trailblazeTool.getToolNameFromAnnotation(),
+          exceptionMessage = (trailblazeToolResult as? TrailblazeToolResult.Error)?.errorMessage,
+          successful = trailblazeToolResult == TrailblazeToolResult.Success,
+          durationMs = Clock.System.now().toEpochMilliseconds() - timeBeforeToolExecution.toEpochMilliseconds(),
+          timestamp = timeBeforeToolExecution,
+          llmResponseId = llmResponseId,
+          session = TrailblazeLogger.getCurrentSessionId(),
+        ),
+      )
+
+      if (trailblazeToolResult != TrailblazeToolResult.Success) {
         // Exit early if any tool execution fails
-        return toolsExecuted to result
+        return toolsExecuted to trailblazeToolResult
       }
     }
     return toolsExecuted to TrailblazeToolResult.Success

@@ -57,9 +57,8 @@ enum class LlmModel(
   ;
 
   companion object {
-    fun getModelByName(modelName: String): LlmModel = LlmModel.entries.firstOrNull {
+    fun getModelByName(modelName: String): LlmModel? = LlmModel.entries.firstOrNull {
       it.id == modelName || it.alias == modelName
     }
-      ?: error("Unknown Model: $modelName. Please add an entry in LlmModel.kt")
   }
 }

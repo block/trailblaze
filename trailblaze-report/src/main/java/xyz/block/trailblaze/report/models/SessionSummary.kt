@@ -63,6 +63,7 @@ data class SessionSummary(
             is TrailblazeLog.TrailblazeAgentTaskStatusChangeLog,
             is TrailblazeLog.MaestroCommandLog,
             is TrailblazeLog.TrailblazeToolLog,
+            is TrailblazeLog.DelegatingTrailblazeToolLog,
             is TrailblazeLog.TrailblazeSessionStatusChangeLog,
             is TrailblazeLog.ObjectiveStartLog,
             is TrailblazeLog.ObjectiveCompleteLog,
@@ -71,7 +72,7 @@ data class SessionSummary(
           }
         }.sortedBy { it.timestamp }
 
-      val sessionStartTimestampMs = sortedLogs.first().timestamp
+      val sessionStartTimestamp = sortedLogs.first().timestamp
       val screenshotUrls: List<String> = sortedLogs.mapNotNull { log ->
         when (log) {
           is TrailblazeLog.TrailblazeLlmRequestLog -> log.screenshotFile
@@ -147,8 +148,8 @@ data class SessionSummary(
               screenshotFile = log.screenshotFile,
               deviceWidth = log.deviceWidth,
               deviceHeight = log.deviceHeight,
-              durationMs = log.duration,
-              elapsedTimeMs = log.timestamp - sessionStartTimestampMs,
+              durationMs = log.durationMs,
+              elapsedTimeMs = log.timestamp.toEpochMilliseconds() - sessionStartTimestamp.toEpochMilliseconds(),
             )
 
             is TrailblazeLog.MaestroDriverLog -> {
@@ -163,8 +164,8 @@ data class SessionSummary(
                 screenshotFile = log.screenshotFile,
                 deviceWidth = log.deviceWidth,
                 deviceHeight = log.deviceHeight,
-                durationMs = log.duration,
-                elapsedTimeMs = log.timestamp - sessionStartTimestampMs,
+                durationMs = log.durationMs,
+                elapsedTimeMs = log.timestamp.toEpochMilliseconds() - sessionStartTimestamp.toEpochMilliseconds(),
                 code = TrailblazeJsonInstance.encodeToString(log.action),
                 x = clickCoordinates?.x,
                 y = clickCoordinates?.y,
@@ -173,34 +174,35 @@ data class SessionSummary(
 
             is TrailblazeLog.MaestroCommandLog -> SessionEvent.MaestroCommand(
               timestamp = log.timestamp,
-              durationMs = log.duration,
+              durationMs = log.durationMs,
               code = MaestroCommandToYamlSerializer.toYaml(listOf(log.maestroCommand.asCommand()!!), false),
-              elapsedTimeMs = log.timestamp - sessionStartTimestampMs,
+              elapsedTimeMs = log.timestamp.toEpochMilliseconds() - sessionStartTimestamp.toEpochMilliseconds(),
             )
 
             is TrailblazeLog.TrailblazeToolLog -> SessionEvent.TrailblazeTool(
               code = TrailblazeToolToCodeSerializer().serializeTrailblazeToolToCode(log.command),
               timestamp = log.timestamp,
-              durationMs = log.duration,
-              elapsedTimeMs = log.timestamp - sessionStartTimestampMs,
+              durationMs = log.durationMs,
+              elapsedTimeMs = log.timestamp.toEpochMilliseconds() - sessionStartTimestamp.toEpochMilliseconds(),
             )
 
             is TrailblazeLog.TrailblazeAgentTaskStatusChangeLog -> SessionEvent.AgentStatusChanged(
               details = log.agentTaskStatus::class.java.simpleName,
               prompt = log.agentTaskStatus.statusData.prompt,
               timestamp = log.timestamp,
-              elapsedTimeMs = log.timestamp - sessionStartTimestampMs,
+              elapsedTimeMs = log.timestamp.toEpochMilliseconds() - sessionStartTimestamp.toEpochMilliseconds(),
             )
 
             is TrailblazeLog.TrailblazeSessionStatusChangeLog -> SessionEvent.SessionStatusChanged(
               details = log.sessionStatus::class.java.simpleName,
               timestamp = log.timestamp,
-              elapsedTimeMs = log.timestamp - sessionStartTimestampMs,
+              elapsedTimeMs = log.timestamp.toEpochMilliseconds() - sessionStartTimestamp.toEpochMilliseconds(),
             )
 
             is TrailblazeLog.ObjectiveStartLog,
             is TrailblazeLog.ObjectiveCompleteLog,
             is TrailblazeLog.TopLevelMaestroCommandLog,
+            is TrailblazeLog.DelegatingTrailblazeToolLog,
             -> null
           }
         }
@@ -233,7 +235,7 @@ data class SessionSummary(
         sessionId = sessionId,
         outcome = finalStatus?.let { it.agentTaskStatus::class.java.simpleName },
         llmCallCount = sortedLogs.filterIsInstance<TrailblazeLog.TrailblazeLlmRequestLog>().size,
-        sessionStartTimestampMs = sessionStartTimestampMs,
+        sessionStartTimestampMs = sessionStartTimestamp.toEpochMilliseconds(),
         screenshots = screenshotUrls,
         agentTasks = sortedLogs.filterIsInstance<HasAgentTaskStatus>()
           .sortedBy { (it as TrailblazeLog).timestamp }
@@ -243,7 +245,7 @@ data class SessionSummary(
         screenshotCount = screenshotUrls.size,
         llmModelId = sortedLogs.filterIsInstance<TrailblazeLog.TrailblazeLlmRequestLog>()
           .firstOrNull()?.llmModelId,
-        sessionDurationSeconds = (sortedLogs.last().timestamp - sessionStartTimestampMs) / 1000.0,
+        sessionDurationSeconds = (sortedLogs.last().timestamp.toEpochMilliseconds() - sessionStartTimestamp.toEpochMilliseconds()) / 1000.0,
         eventGroups = mappedToEvents,
       )
     }

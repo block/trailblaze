@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.logs.model
 
 interface HasDuration {
-  val duration: Long
+  /** Duration in milliseconds */
+  val durationMs: Long
 }

@@ -6,6 +6,8 @@ import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
+import kotlinx.datetime.Clock
+import kotlinx.datetime.Instant
 import org.junit.runner.Description
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
@@ -22,12 +24,12 @@ import javax.net.ssl.X509TrustManager
 
 class TrailblazeAndroidLoggingRule : SimpleTestRule() {
 
-  private var startTime: Long = System.currentTimeMillis()
+  private var startTime: Instant = Clock.System.now()
 
   private val isServerAvailable = runBlocking {
-    val startTime = System.currentTimeMillis()
+    val startTime = Clock.System.now()
     val isRunning = trailblazeLogServerClient.isServerRunning()
-    println("isServerAvailable [$isRunning] took ${System.currentTimeMillis() - startTime}ms")
+    println("isServerAvailable [$isRunning] took ${Clock.System.now() - startTime}ms")
     if (!isRunning) {
       println(
         "Log Server is not available at ${trailblazeLogServerClient.baseUrl}. Run with ./gradlew :trailblaze-server:run",
@@ -48,28 +50,29 @@ class TrailblazeAndroidLoggingRule : SimpleTestRule() {
       TrailblazeLog.TrailblazeSessionStatusChangeLog(
         sessionStatus = SessionStatus.Started,
         session = TrailblazeLogger.getCurrentSessionId(),
-        timestamp = System.currentTimeMillis(),
+        timestamp = Clock.System.now(),
       ),
     )
   }
 
   override fun afterTestExecution(description: Description, result: Result<Nothing?>) {
+    val nowMs = Clock.System.now().toEpochMilliseconds()
     val testEndedLog = if (result.isSuccess) {
       TrailblazeLog.TrailblazeSessionStatusChangeLog(
         sessionStatus = SessionStatus.Ended.Succeeded(
-          duration = System.currentTimeMillis() - startTime,
+          durationMs = nowMs - startTime.toEpochMilliseconds(),
         ),
         session = TrailblazeLogger.getCurrentSessionId(),
-        timestamp = System.currentTimeMillis(),
+        timestamp = Clock.System.now(),
       )
     } else {
       TrailblazeLog.TrailblazeSessionStatusChangeLog(
         sessionStatus = SessionStatus.Ended.Failed(
-          duration = System.currentTimeMillis() - startTime,
+          durationMs = nowMs - startTime.toEpochMilliseconds(),
           exceptionMessage = result.exceptionOrNull()?.message,
         ),
         session = TrailblazeLogger.getCurrentSessionId(),
-        timestamp = System.currentTimeMillis(),
+        timestamp = Clock.System.now(),
       )
     }
     TrailblazeLogger.log(testEndedLog)
@@ -80,13 +83,9 @@ class TrailblazeAndroidLoggingRule : SimpleTestRule() {
     try {
       // Don't save empty recording
       if (recordLogs.isEmpty()) return
-      val instructionMap: Map<String, List<TrailblazeTool>> = recordLogs
-        .groupBy { it.instructions }
-        .mapValues { mapEntry ->
-          mapEntry.value.map {
-            it.command
-          }
-        }
+      val instructionMap: Map<String, List<TrailblazeTool>> =
+        // This used to be grouped by "instructions", but that is no able to be part of the log anymore
+        mapOf("tools" to recordLogs.map { it.command })
       recordLogs.clear()
 
       val recordingJson = TrailblazeJsonInstance.encodeToString(instructionMap)
@@ -155,7 +154,7 @@ class TrailblazeAndroidLoggingRule : SimpleTestRule() {
       writeToDisk: Boolean,
     ) {
       TrailblazeLogger.setLogScreenshotListener { screenshotBytes ->
-        val screenshotFileName = "${currentTestName}_${System.currentTimeMillis()}.png"
+        val screenshotFileName = "${currentTestName}_${Clock.System.now().toEpochMilliseconds()}.png"
         // Send Log
         runBlocking(Dispatchers.Main) {
           if (sendOverHttp) {
@@ -207,7 +206,7 @@ class TrailblazeAndroidLoggingRule : SimpleTestRule() {
     private fun writeLogToDisk(log: TrailblazeLog) {
       try {
         val json = TrailblazeJsonInstance.encodeToString(TrailblazeLog.serializer(), log)
-        val fileName = "${currentTestName}_${log.timestamp}.json"
+        val fileName = "${currentTestName}_${log.timestamp.toEpochMilliseconds()}.json"
         FileReadWriteUtil.writeToDownloadsFile(
           context = InstrumentationRegistry.getInstrumentation().context,
           fileName = fileName,

@@ -4,8 +4,8 @@ import ai.koog.agents.core.tools.annotations.LLMDescription
 import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.exception.TrailblazeException
+import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
-import xyz.block.trailblaze.toolcalls.MapsToExecutableTrailblazeTools
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 
@@ -23,7 +23,7 @@ data class TapOnElementByNodeIdTrailblazeTool(
   val nodeId: Long,
   @LLMDescription("A standard tap is default, but return 'true' to perform a long press instead.")
   val longPress: Boolean = false,
-) : MapsToExecutableTrailblazeTools {
+) : DelegatingTrailblazeTool {
 
   private fun prettyPrintViewHierarchy(
     node: ViewHierarchyTreeNode,

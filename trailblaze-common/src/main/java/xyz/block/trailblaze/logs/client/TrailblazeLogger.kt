@@ -1,6 +1,8 @@
 package xyz.block.trailblaze.logs.client
 
 import ai.koog.prompt.message.Message
+import kotlinx.datetime.Clock
+import kotlinx.datetime.Instant
 import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.api.ScreenState
@@ -38,7 +40,7 @@ object TrailblazeLogger {
     instructions: String,
     llmMessages: List<LlmMessage>,
     response: List<Message.Response>,
-    startTime: Long,
+    startTime: Instant,
   ) {
     val toolMessages = response.filterIsInstance<Message.Tool>()
 
@@ -61,8 +63,8 @@ object TrailblazeLogger {
             TrailblazeJsonInstance.decodeFromString(JsonObject.serializer(), it.content),
           )
         },
-        timestamp = startTime,
-        duration = System.currentTimeMillis() - startTime,
+        timestamp = Clock.System.now(),
+        durationMs = Clock.System.now().epochSeconds - startTime.epochSeconds,
         llmResponseId = llmRequestId,
         deviceWidth = screenState.deviceWidth,
         deviceHeight = screenState.deviceHeight,

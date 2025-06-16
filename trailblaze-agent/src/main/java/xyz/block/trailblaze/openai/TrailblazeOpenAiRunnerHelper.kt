@@ -3,17 +3,15 @@ package xyz.block.trailblaze.openai
 import ai.koog.agents.core.tools.Tool
 import ai.koog.agents.core.tools.ToolRegistry
 import ai.koog.agents.core.tools.ToolResult
+import kotlinx.datetime.Clock
 import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.agent.model.TrailblazePromptStep
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeAgent
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
-import xyz.block.trailblaze.logs.client.TrailblazeLog
-import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool
-import xyz.block.trailblaze.toolcalls.getToolNameFromAnnotation
 
 class TrailblazeOpenAiRunnerHelper(
   private val agent: TrailblazeAgent,
@@ -65,28 +63,12 @@ class TrailblazeOpenAiRunnerHelper(
     }
 
     else -> {
-      val startTime = System.currentTimeMillis() - 1
+      val startTime = Clock.System.now()
       val (updatedTools, trailblazeToolResult) = agent.runTrailblazeTools(
         tools = listOf(trailblazeTool),
         llmResponseId = llmResponseId,
         screenState = screenStateForLlmRequest,
       )
-      for (command in updatedTools) {
-        TrailblazeLogger.log(
-          TrailblazeLog.TrailblazeToolLog(
-            agentTaskStatus = step.currentStatus.value,
-            command = command,
-            toolName = command.getToolNameFromAnnotation(),
-            exceptionMessage = (trailblazeToolResult as? TrailblazeToolResult.Error)?.errorMessage,
-            successful = trailblazeToolResult == TrailblazeToolResult.Success,
-            duration = System.currentTimeMillis() - startTime,
-            timestamp = startTime,
-            instructions = step.fullPrompt,
-            llmResponseId = llmResponseId,
-            session = TrailblazeLogger.getCurrentSessionId(),
-          ),
-        )
-      }
       setForceStepStatusUpdate(true)
       println("\u001B[33m\n[ACTION_TAKEN] Tool executed: ${trailblazeTool.javaClass.simpleName}\u001B[0m")
       trailblazeToolResult

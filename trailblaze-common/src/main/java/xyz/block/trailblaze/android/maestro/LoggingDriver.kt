@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.android.maestro
 
+import kotlinx.datetime.Clock
 import maestro.Driver
 import maestro.Point
 import maestro.SwipeDirection
@@ -21,7 +22,7 @@ class LoggingDriver(
 
   private fun logActionWithScreenshot(action: MaestroDriverActionType, block: () -> Unit = {}) {
     val screenState = screenStateProvider()
-    val startTime = System.currentTimeMillis()
+    val startTime = Clock.System.now()
     val executionTimeMs = measureTimeMillis {
       block()
     }
@@ -31,7 +32,7 @@ class LoggingDriver(
         viewHierarchy = screenState.viewHierarchy,
         screenshotFile = screenshotFilename,
         action = action,
-        duration = executionTimeMs,
+        durationMs = executionTimeMs,
         timestamp = startTime,
         session = TrailblazeLogger.getCurrentSessionId(),
         deviceWidth = screenState.deviceWidth,
@@ -42,7 +43,7 @@ class LoggingDriver(
 
   private fun logActionWithoutScreenshot(action: MaestroDriverActionType, block: () -> Unit = {}) {
     val screenState = screenStateProvider()
-    val startTime = System.currentTimeMillis()
+    val startTime = Clock.System.now()
     val executionTimeMs = measureTimeMillis {
       block()
     }
@@ -51,7 +52,7 @@ class LoggingDriver(
         viewHierarchy = null,
         screenshotFile = null,
         action = action,
-        duration = executionTimeMs,
+        durationMs = executionTimeMs,
         timestamp = startTime,
         session = TrailblazeLogger.getCurrentSessionId(),
         deviceWidth = screenState.deviceWidth,

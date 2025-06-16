@@ -15,16 +15,6 @@
         </div>
     </div>
     <hr/>
-    <h3>Trailblaze Recording</h3>
-    <div class="row">
-        <div class="col">
-            <pre>${json}</pre>
-            <button onclick="copyTextToClipboard(window.json)">Copy JSON</button>
-            <button onclick="downloadJsonFile(window.json)">Download JSON</button>
-        </div>
-    </div>
-    <br/>
-    <hr/>
     <br/>
     <div class="row">
         <div class="col">

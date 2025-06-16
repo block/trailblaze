@@ -2,6 +2,7 @@ package xyz.block.trailblaze.setofmark.android
 
 import android.graphics.Bitmap
 import android.os.Environment
+import kotlinx.datetime.Clock
 import maestro.DeviceInfo
 import maestro.Platform
 import org.junit.Test
@@ -54,7 +55,7 @@ class AndroidCanvasSetOfMarkTest {
 
     val screenshotFile = File(
       testAppFilesDir,
-      "${System.currentTimeMillis().toInt()}.png",
+      "${Clock.System.now().toEpochMilliseconds()}.png",
     ).also { it.createNewFile() }
     println("screenshotFile: ${screenshotFile.canonicalPath}")
     screenshotFile.also { file ->

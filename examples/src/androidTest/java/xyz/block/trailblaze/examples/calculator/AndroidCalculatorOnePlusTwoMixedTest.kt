@@ -28,7 +28,7 @@ class AndroidCalculatorOnePlusTwoMixedTest {
     trailblazeRule.tool(
       LaunchAppTrailblazeTool(
         appId = "com.android.calculator2",
-        launchMode = LaunchAppTrailblazeTool.LaunchMode.REINSTALL.name
+        launchMode = LaunchAppTrailblazeTool.LaunchMode.REINSTALL
       )
     )
   }

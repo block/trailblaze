@@ -27,6 +27,13 @@ object AgentLogEndpoint {
   }
 
   val countBySession = mutableMapOf<String, Int>()
+
+  fun getNextLogCountForSession(sessionId: String): Int = synchronized(countBySession) {
+    val newValue = (countBySession[sessionId] ?: 0) + 1
+    countBySession[sessionId] = newValue
+    newValue
+  }
+
   fun register(
     routing: Routing,
     logsRepo: LogsRepo,
@@ -36,11 +43,7 @@ object AgentLogEndpoint {
       logListener(logEvent)
       val sessionDir = logsRepo.getSessionDir(logEvent.session)
 
-      val logCount = synchronized(countBySession) {
-        val newValue = (countBySession[logEvent.session] ?: 0) + 1
-        countBySession[logEvent.session] = newValue
-        newValue
-      }
+      val logCount = getNextLogCountForSession(logEvent.session)
 
       val jsonLogFilename =
         File(sessionDir, "agent_${logCount}_${logEvent::class.java.simpleName}.json")

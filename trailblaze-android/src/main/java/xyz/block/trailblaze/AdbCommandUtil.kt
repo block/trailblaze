@@ -1,6 +1,7 @@
 package xyz.block.trailblaze
 
 import android.content.pm.PackageManager
+import kotlinx.datetime.Clock
 import xyz.block.trailblaze.InstrumentationUtil.withInstrumentation
 import xyz.block.trailblaze.InstrumentationUtil.withUiDevice
 
@@ -100,7 +101,7 @@ object AdbCommandUtil {
     conditionDescription: String,
     condition: () -> Boolean,
   ): Boolean {
-    val startTime = System.currentTimeMillis()
+    val startTime = Clock.System.now()
     var elapsedTime = 0L
     while (elapsedTime < maxWaitMs) {
       val conditionResult: Boolean = try {
@@ -115,7 +116,7 @@ object AdbCommandUtil {
       } else {
         println("Condition [$conditionDescription] not yet met after ${elapsedTime}ms with timeout of ${maxWaitMs}ms")
         Thread.sleep(intervalMs)
-        elapsedTime = System.currentTimeMillis() - startTime
+        elapsedTime = Clock.System.now().toEpochMilliseconds() - startTime.toEpochMilliseconds()
       }
     }
     println("Timed out (${maxWaitMs}ms limit) met [$conditionDescription] after ${elapsedTime}ms")

@@ -24,7 +24,7 @@ class TrailblazePromptStep(
 
   fun getKoogLlmResponseHistory(): List<ai.koog.prompt.message.Message> = koogLlmResponseHistory
 
-  private val taskCreatedTimestamp = System.currentTimeMillis()
+  private val taskCreatedTimestamp = Clock.System.now()
   val currentStatus = MutableStateFlow<AgentTaskStatus>(
     AgentTaskStatus.InProgress(
       statusData = AgentTaskStatusData(
@@ -107,7 +107,7 @@ class TrailblazePromptStep(
         prompt = description,
         callCount = getHistorySize(),
         taskStartTime = taskCreatedTimestamp,
-        totalDurationMs = System.currentTimeMillis() - taskCreatedTimestamp,
+        totalDurationMs = Clock.System.now().epochSeconds - taskCreatedTimestamp.epochSeconds,
         taskId = taskId,
       ),
       llmExplanation = "All objectives completed successfully",
@@ -120,7 +120,7 @@ class TrailblazePromptStep(
         prompt = description,
         callCount = getHistorySize(),
         taskStartTime = taskCreatedTimestamp,
-        totalDurationMs = System.currentTimeMillis() - taskCreatedTimestamp,
+        totalDurationMs = Clock.System.now().toEpochMilliseconds() - taskCreatedTimestamp.toEpochMilliseconds(),
         taskId = taskId,
       ),
       llmExplanation = "The objective failed to complete",

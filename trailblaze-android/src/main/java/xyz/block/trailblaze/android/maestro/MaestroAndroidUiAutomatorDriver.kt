@@ -348,7 +348,10 @@ internal class MaestroAndroidUiAutomatorDriver : Driver {
 
   @OptIn(ExperimentalEncodingApi::class)
   override fun takeScreenshot(out: Sink, compressed: Boolean) {
-    val screenshot = AndroidOnDeviceUiAutomatorScreenState.takeScreenshot(null)
+    val screenshot = AndroidOnDeviceUiAutomatorScreenState.takeScreenshot(
+      viewHierarchy = null,
+      setOfMarkEnabled = false,
+    )
     val finalSink = if (compressed) out.gzip() else out
     finalSink.buffer().use { sink ->
       screenshot?.let { sink.write(screenshot.toByteArray()) }

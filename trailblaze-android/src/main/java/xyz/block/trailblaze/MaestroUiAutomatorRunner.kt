@@ -1,5 +1,6 @@
 package xyz.block.trailblaze
 
+import kotlinx.datetime.Clock
 import maestro.Maestro
 import maestro.orchestra.ApplyConfigurationCommand
 import maestro.orchestra.Command
@@ -76,7 +77,7 @@ object MaestroUiAutomatorRunner {
     llmResponseId: String?,
   ): TrailblazeToolResult {
     commands.forEach { maestroCommand ->
-      val startTime = System.currentTimeMillis()
+      val startTime = Clock.System.now()
       // Run Flow
       var result: TrailblazeToolResult = TrailblazeToolResult.Success
       val runSuccess: Boolean = Orchestra(
@@ -96,7 +97,7 @@ object MaestroUiAutomatorRunner {
           maestroCommand = maestroCommand,
           trailblazeToolResult = result,
           timestamp = startTime,
-          duration = System.currentTimeMillis() - startTime,
+          durationMs = Clock.System.now().toEpochMilliseconds() - startTime.toEpochMilliseconds(),
           llmResponseId = llmResponseId,
           successful = result is TrailblazeToolResult.Success,
           session = TrailblazeLogger.getCurrentSessionId(),

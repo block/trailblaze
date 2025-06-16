@@ -2,6 +2,7 @@ package xyz.block.trailblaze.openai
 
 import ai.koog.prompt.executor.clients.LLMClient
 import ai.koog.prompt.llm.LLModel
+import kotlinx.datetime.Clock
 import net.objecthunter.exp4j.ExpressionBuilder
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.agent.model.MixedModeTestCase
@@ -55,13 +56,13 @@ class MixedModeExecutor(
    * or direct Maestro commands.
    *
    * @param yamlContent The YAML content containing the mixed commands
-   * @param executeSteps If true, execute static Trailblaze steps; if false, run the objective as a Trailblaze command
+   * @param executeRecordedSteps If true, execute static Trailblaze steps; if false, run the objective as a Trailblaze command
    */
   fun runMixedMode(
     yamlContent: String,
-    executeSteps: Boolean = true,
+    executeRecordedSteps: Boolean = true,
   ) {
-    val testCase = MixedModeTestCase(yamlContent, executeSteps, additionalTrailblazeTools)
+    val testCase = MixedModeTestCase(yamlContent, executeRecordedSteps, additionalTrailblazeTools)
     testCase.objectives.forEach { objective ->
       when (objective) {
         is AssertEqualsCommand -> handleAssertEqualsCommand(objective)
@@ -219,7 +220,7 @@ class MixedModeExecutor(
       TrailblazeLog.TopLevelMaestroCommandLog(
         command = interpolatedMaestroCommand,
         session = TrailblazeLogger.getCurrentSessionId(),
-        timestamp = System.currentTimeMillis(),
+        timestamp = Clock.System.now(),
       ),
     )
     val result = runYamlFlowFunction(interpolatedMaestroCommand)
