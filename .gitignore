@@ -33,6 +33,9 @@ local.settings.gradle
 # Goose hints file
 .goosehints
 
+# Github Pages mkdocs site
+/site
+
 # FOSSA
 /.fossa
 

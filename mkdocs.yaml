@@ -1,0 +1,75 @@
+# pip3 install mkdocs mkdocs-material
+# mkdocs serve
+
+site_name: Trailblaze
+repo_name: Trailblaze
+repo_url: https://github.com/block/trailblaze
+site_description: "AI-powered mobile testing framework."
+site_author: Block, Inc.
+remote_branch: gh-pages
+
+copyright: 'Copyright &copy; 2025 Block, Inc.'
+
+theme:
+  name: 'material'
+  palette:
+    - media: '(prefers-color-scheme: light)'
+      scheme: default
+      primary: 'white'
+      accent: 'green'
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: '(prefers-color-scheme: dark)'
+      scheme: slate
+      primary: 'black'
+      accent: 'green'
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  font:
+    text: 'Inter'
+    code: 'Fira Code'
+  features:
+    - content.code.copy
+    - content.code.select
+    - navigation.expand
+
+#extra_css:
+#  - 'css/app.css'
+
+markdown_extensions:
+  - smarty
+  - codehilite:
+      guess_lang: false
+  - footnotes
+  - meta
+  - toc:
+      permalink: true
+  - pymdownx.betterem:
+      smart_enable: all
+  - pymdownx.caret
+  - pymdownx.inlinehilite
+  - pymdownx.magiclink
+  - pymdownx.smartsymbols
+  - pymdownx.superfences
+  - pymdownx.emoji
+  - pymdownx.tabbed:
+      alternate_style: true
+  - tables
+  - admonition
+  - attr_list
+  - md_in_html
+
+nav:
+  - 'Introduction': index.md
+  - 'Usage':
+    - 'Getting Started': getting_started.md
+    - 'Tools': tools.md
+    - 'Default Tools': generated/TOOLS.md
+    - 'Logging': logging.md
+    - 'LLM Support': llms.md
+  - 'Maestro Compatibility': maestro.md
+  - 'Architecture': architecture.md
+  - 'Roadmap': roadmap.md
+  - 'Support': support.md
