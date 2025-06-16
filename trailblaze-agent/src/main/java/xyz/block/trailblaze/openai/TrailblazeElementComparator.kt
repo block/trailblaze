@@ -1,57 +1,44 @@
 package xyz.block.trailblaze.openai
 
-import com.aallam.openai.api.chat.ChatCompletionRequest
-import com.aallam.openai.api.chat.ChatRole
-import com.aallam.openai.api.chat.ToolCall
-import com.aallam.openai.api.chat.ToolChoice
-import com.aallam.openai.api.chat.chatCompletionRequest
-import com.aallam.openai.api.chat.chatMessage
-import com.aallam.openai.api.http.Timeout
-import com.aallam.openai.api.logging.LogLevel
-import com.aallam.openai.api.model.ModelId
-import com.aallam.openai.client.LoggingConfig
-import com.aallam.openai.client.OpenAI
+import ai.koog.prompt.executor.clients.LLMClient
+import ai.koog.prompt.llm.LLModel
+import ai.koog.prompt.message.MediaContent
+import ai.koog.prompt.message.Message
+import ai.koog.prompt.message.RequestMetaInfo
+import ai.koog.prompt.params.LLMParams
 import kotlinx.coroutines.runBlocking
+import kotlinx.datetime.Clock
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
-import xyz.block.trailblaze.llm.LlmModel
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
+import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.toolcalls.commands.BooleanAssertionTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.ElementRetrieverTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.ElementRetrieverTrailblazeTool.LocatorResponse
 import xyz.block.trailblaze.toolcalls.commands.ElementRetrieverTrailblazeTool.LocatorType
 import xyz.block.trailblaze.toolcalls.commands.StringEvaluationTrailblazeTool
 import xyz.block.trailblaze.util.TemplatingUtil
-import kotlin.io.encoding.Base64
-import kotlin.io.encoding.ExperimentalEncodingApi
-import kotlin.time.Duration.Companion.seconds
+import java.io.File
 
 /**
  * Service that identifies element locators and evaluates UI elements.
  */
 internal class TrailblazeElementComparator(
   private val screenStateProvider: () -> ScreenState,
-  openAiApiKey: String,
-  private val llmModel: LlmModel = LlmModel.GPT_4_1,
+  llmModel: LLModel,
+  llmClient: LLMClient,
   private val systemPromptToolTemplate: String = TemplatingUtil.getResourceAsText("trailblaze_locator_tool_system_prompt.md")!!,
   private val userPromptTemplate: String = TemplatingUtil.getResourceAsText("trailblaze_locator_user_prompt_template.md")!!,
 ) {
-  private val openAi = OpenAI(
-    token = openAiApiKey,
-    timeout = Timeout(socket = 60.seconds),
-    logging = LoggingConfig(logLevel = LogLevel.None),
-  )
 
-  // Repo specific for locator identification
-  private val locatorToolRepo = TrailblazeToolRepo().apply {
-    removeAllTrailblazeTools()
-    addTrailblazeTools(
-      ElementRetrieverTrailblazeTool::class,
-    )
-  }
+  private val koogLlmClientHelper = TrailblazeKoogLlmClientHelper(
+    llmModel = llmModel,
+    llmClient = llmClient,
+    systemPromptTemplate = systemPromptToolTemplate,
+    userMessageTemplate = userPromptTemplate,
+    userObjectiveTemplate = userPromptTemplate,
+  )
 
   // Regex to extract any positive or negative integer or float from a string
   private val numberRegex = """(-?\d+(\.\d+)?)""".toRegex()
@@ -88,13 +75,11 @@ internal class TrailblazeElementComparator(
    * Evaluates a statement about the UI and returns a boolean result with explanation.
    */
   fun evaluateBoolean(statement: String): BooleanAssertionTrailblazeTool {
-    val screenState = prepareScreenState()
     println("Evaluating boolean assertion: '$statement'")
 
     // Use LLM with boolean assertion tool
-    val request = createToolRequest(
+    val koogAiRequestMessages = createToolRequest(
       prompt = statement,
-      toolType = "booleanAssertion",
       systemPrompt = """
         You are a UI testing assistant that evaluates statements about the current screen.
         Use the booleanAssertion tool to analyze and respond.
@@ -103,21 +88,31 @@ internal class TrailblazeElementComparator(
       """.trimIndent(),
     )
 
-    val openAiResponse = runBlocking { openAi.chatCompletion(request) }
-    val toolCalls =
-      openAiResponse.choices.first().message.toolCalls?.filterIsInstance<ToolCall.Function>() ?: emptyList()
-    val assertionToolCall = toolCalls.firstOrNull() ?: return BooleanAssertionTrailblazeTool(
+    val booleanAssertionToolRepo = TrailblazeToolRepo(
+      TrailblazeToolSet(BooleanAssertionTrailblazeTool::class),
+    )
+    val koogRequestData = TrailblazeKoogLlmClientHelper.KoogLlmRequestData(
+      messages = koogAiRequestMessages,
+      toolDescriptors = booleanAssertionToolRepo.getCurrentToolDescriptors(),
+      toolChoice = LLMParams.ToolChoice.Required,
+    )
+
+    val koogLlmChatResponse: List<Message.Response> = runBlocking { koogLlmClientHelper.callLlm(koogRequestData) }
+    val toolCalls = koogLlmChatResponse.filterIsInstance<Message.Tool>()
+    val assertionToolMessage: Message.Tool = toolCalls.firstOrNull() ?: return BooleanAssertionTrailblazeTool(
       result = false,
       reason = "Failed to get tool response from LLM",
     )
 
     try {
-      val booleanCommand =
-        evaluationToolRepo.toolCallToTrailblazeTool(assertionToolCall) as? BooleanAssertionTrailblazeTool
-          ?: return BooleanAssertionTrailblazeTool(
-            result = false,
-            reason = "Failed to parse tool call response",
-          )
+      val booleanCommand = booleanAssertionToolRepo.toolCallToTrailblazeTool(
+        toolName = assertionToolMessage.tool,
+        toolContent = assertionToolMessage.content,
+      ) as? BooleanAssertionTrailblazeTool
+        ?: return BooleanAssertionTrailblazeTool(
+          result = false,
+          reason = "Failed to parse tool call response",
+        )
 
       return booleanCommand
     } catch (e: Exception) {
@@ -132,13 +127,11 @@ internal class TrailblazeElementComparator(
    * Evaluates a prompt and returns a descriptive string response with explanation.
    */
   fun evaluateString(query: String): StringEvaluationTrailblazeTool {
-    val screenState = prepareScreenState()
     println("Evaluating string query: '$query'")
 
     // Use LLM with string evaluation tool
-    val request = createToolRequest(
+    val koogAiRequestMessages: List<Message> = createToolRequest(
       prompt = query,
-      toolType = "stringEvaluation",
       systemPrompt = """
         You are a UI testing assistant that answers questions about the current screen.
         Use the stringEvaluation tool to respond with accurate information.
@@ -147,10 +140,22 @@ internal class TrailblazeElementComparator(
       """.trimIndent(),
     )
 
-    val openAiResponse = runBlocking { openAi.chatCompletion(request) }
+    val evaluationToolRepo = TrailblazeToolRepo(
+      TrailblazeToolSet(
+        StringEvaluationTrailblazeTool::class,
+      ),
+    )
 
-    val toolCalls =
-      openAiResponse.choices.first().message.toolCalls?.filterIsInstance<ToolCall.Function>() ?: emptyList()
+    val koogLlmChatResponse: List<Message.Response> = runBlocking {
+      koogLlmClientHelper.callLlm(
+        TrailblazeKoogLlmClientHelper.KoogLlmRequestData(
+          messages = koogAiRequestMessages,
+          toolDescriptors = evaluationToolRepo.getCurrentToolDescriptors(),
+          toolChoice = LLMParams.ToolChoice.Required,
+        ),
+      )
+    }
+    val toolCalls = koogLlmChatResponse.filterIsInstance<Message.Tool>()
 
     val evalToolCall = toolCalls.firstOrNull()
     if (evalToolCall == null) {
@@ -160,10 +165,13 @@ internal class TrailblazeElementComparator(
       )
     }
 
-    println("Tool call found: ${evalToolCall.function.name}, arguments: ${evalToolCall.function.argumentsAsJson()}")
+    println("Tool call found: ${evalToolCall.tool}, arguments: ${evalToolCall.content}")
 
     try {
-      val stringCommand = evaluationToolRepo.toolCallToTrailblazeTool(evalToolCall) as? StringEvaluationTrailblazeTool
+      val stringCommand = evaluationToolRepo.toolCallToTrailblazeTool(
+        evalToolCall.tool,
+        evalToolCall.content,
+      ) as? StringEvaluationTrailblazeTool
       if (stringCommand == null) {
         println("ERROR: Failed to parse tool call as StringEvaluationCommand")
         return StringEvaluationTrailblazeTool(
@@ -194,13 +202,6 @@ internal class TrailblazeElementComparator(
   }
 
   /**
-   * Extract all numbers from a prompt text.
-   */
-  private fun extractNumbersFromPrompt(prompt: String): List<Double> = numberRegex.findAll(prompt)
-    .mapNotNull { it.groupValues[1].toDoubleOrNull() }
-    .toList()
-
-  /**
    * Extracts a number from a string using regex.
    */
   fun extractNumberFromString(input: String): Double? = numberRegex.find(input)?.groupValues?.getOrNull(1)?.toDoubleOrNull()
@@ -210,13 +211,50 @@ internal class TrailblazeElementComparator(
    */
   private fun identifyElementLocator(screenState: ScreenState, prompt: String): LocatorResponse {
     println("Identifying element locator for: $prompt")
+    val viewHierarchyJson = Json.encodeToString(ViewHierarchyTreeNode.serializer(), screenState.viewHierarchy)
 
-    val request = createLocatorRequest(screenState, prompt)
-    val openAiResponse = runBlocking { openAi.chatCompletion(request) }
+    val koogRequestMessages: List<Message.Request> = buildList {
+      add(
+        Message.System(
+          content = systemPromptToolTemplate,
+          metaInfo = RequestMetaInfo.create(Clock.System),
+        ),
+      )
+      add(
+        Message.User(
+          content = TemplatingUtil.renderTemplate(
+            template = userPromptTemplate,
+            values = mapOf(
+              "identifier" to prompt,
+              "view_hierarchy" to viewHierarchyJson,
+            ),
+          ),
+          metaInfo = RequestMetaInfo.create(Clock.System),
+          mediaContent = buildList {
+            screenState.screenshotBytes?.let { screenshotBytes ->
+              val screenshotFile = File.createTempFile("screenshot", ".png").apply {
+                writeBytes(screenshotBytes)
+              }
+              add(MediaContent.Image(screenshotFile.canonicalPath))
+            }
+          },
+        ),
+      )
+    }
 
-    val toolCalls =
-      openAiResponse.choices.first().message.toolCalls?.filterIsInstance<ToolCall.Function>() ?: emptyList()
-    val locatorToolCall = toolCalls.firstOrNull() ?: return LocatorResponse(
+    val elementRetrieverToolRepo = TrailblazeToolRepo(TrailblazeToolSet(ElementRetrieverTrailblazeTool::class))
+    val koogLlmChatResponse: List<Message.Response> = runBlocking {
+      koogLlmClientHelper.callLlm(
+        TrailblazeKoogLlmClientHelper.KoogLlmRequestData(
+          messages = koogRequestMessages,
+          toolDescriptors = elementRetrieverToolRepo.getCurrentToolDescriptors(),
+          toolChoice = LLMParams.ToolChoice.Required,
+        ),
+      )
+    }
+    val toolCalls = koogLlmChatResponse.filterIsInstance<Message.Tool>()
+
+    val locatorToolCall: Message.Tool = toolCalls.firstOrNull() ?: return LocatorResponse(
       success = false,
       locatorType = null,
       value = null,
@@ -225,8 +263,9 @@ internal class TrailblazeElementComparator(
     )
 
     try {
-      val elementRetrieverCommand = locatorToolRepo.toolCallToTrailblazeTool(locatorToolCall)
-        ?: return parseToolCallManually(locatorToolCall)
+      // Repo specific for locator identification
+      val elementRetrieverCommand = elementRetrieverToolRepo.toolCallToTrailblazeTool(locatorToolCall)
+        ?: error("Failed to parse tool call response as ElementRetrieverCommand $locatorToolCall")
 
       val retrieverCommand = elementRetrieverCommand as ElementRetrieverTrailblazeTool
       return LocatorResponse(
@@ -248,128 +287,29 @@ internal class TrailblazeElementComparator(
   }
 
   /**
-   * Parse tool call manually as a fallback method
-   */
-  private fun parseToolCallManually(toolCall: ToolCall.Function): LocatorResponse {
-    try {
-      val jsonObject = Json.parseToJsonElement(toolCall.function.argumentsAsJson().toString()).jsonObject
-      val identifier = jsonObject["identifier"]?.jsonPrimitive?.content
-      val locatorTypeStr = jsonObject["locatorType"]?.jsonPrimitive?.content
-      val value = jsonObject["value"]?.jsonPrimitive?.content
-      val indexStr = jsonObject["index"]?.jsonPrimitive?.content
-      val successStr = jsonObject["success"]?.jsonPrimitive?.content
-      val reason = jsonObject["reason"]?.jsonPrimitive?.content
-
-      if (identifier != null && locatorTypeStr != null && value != null) {
-        try {
-          val locatorType = LocatorType.valueOf(locatorTypeStr)
-          val index = indexStr?.toIntOrNull() ?: 0
-          val success = successStr?.toBoolean() ?: true
-
-          return LocatorResponse(
-            success = success,
-            locatorType = locatorType,
-            value = value,
-            index = index,
-            reason = reason ?: "",
-          )
-        } catch (e: Exception) {
-          // Failed to create manual command
-        }
-      }
-    } catch (e: Exception) {
-      // Manual JSON parse failed
-    }
-
-    return LocatorResponse(
-      success = false,
-      locatorType = null,
-      value = null,
-      index = null,
-      reason = "Could not parse tool call to ElementRetrieverCommand",
-    )
-  }
-
-  /**
-   * Creates a chat completion request for locator identification.
-   */
-  private fun createLocatorRequest(screenState: ScreenState, prompt: String): ChatCompletionRequest {
-    val viewHierarchyJson = Json.encodeToString(ViewHierarchyTreeNode.serializer(), screenState.viewHierarchy)
-
-    val renderedTemplate = TemplatingUtil.renderTemplate(
-      template = userPromptTemplate,
-      values = mapOf(
-        "identifier" to prompt,
-        "view_hierarchy" to viewHierarchyJson,
-      ),
-    )
-
-    return chatCompletionRequest {
-      model = ModelId(llmModel.id)
-      messages = listOf(
-        chatMessage {
-          role = ChatRole.System
-          content = systemPromptToolTemplate
-        },
-        chatMessage {
-          role = ChatRole.User
-          content {
-            text(renderedTemplate)
-            getBase64EncodedScreenshot(screenState)?.let { base64EncodedScreenshot ->
-              image("data:image/png;base64,$base64EncodedScreenshot")
-            }
-          }
-        },
-      )
-      tools {
-        locatorToolRepo.registerManualTools(this)
-        toolChoice = ToolChoice.Mode("required") // Force tool usage
-      }
-    }
-  }
-
-  // Setup the tool repo for assertions and evaluations
-  private val evaluationToolRepo = TrailblazeToolRepo().apply {
-    removeAllTrailblazeTools()
-    addTrailblazeTools(
-      BooleanAssertionTrailblazeTool::class,
-      StringEvaluationTrailblazeTool::class,
-    )
-  }
-
-  /**
    * Creates a tool-based request for evaluation commands.
    */
-  private fun createToolRequest(prompt: String, toolType: String, systemPrompt: String): ChatCompletionRequest {
+  private fun createToolRequest(prompt: String, systemPrompt: String): List<Message> = buildList {
     val screenState = screenStateProvider()
-
-    return chatCompletionRequest {
-      model = ModelId(llmModel.id)
-      messages = listOf(
-        chatMessage {
-          role = ChatRole.System
-          content = systemPrompt
-        },
-        chatMessage {
-          role = ChatRole.User
-          content {
-            text("Evaluate this on the current screen: $prompt")
-            getBase64EncodedScreenshot(screenState)?.let { base64EncodedScreenshot ->
-              image("data:image/png;base64,$base64EncodedScreenshot")
+    add(
+      Message.System(
+        content = systemPrompt,
+        metaInfo = RequestMetaInfo.create(Clock.System),
+      ),
+    )
+    add(
+      Message.User(
+        content = "Evaluate this on the current screen: $prompt",
+        metaInfo = RequestMetaInfo.create(Clock.System),
+        mediaContent = buildList {
+          screenState.screenshotBytes?.let { screenshotBytes ->
+            val screenshotFile = File.createTempFile("screenshot", ".png").apply {
+              writeBytes(screenshotBytes)
             }
+            add(MediaContent.Image(screenshotFile.canonicalPath))
           }
         },
-      )
-      tools {
-        evaluationToolRepo.registerManualTools(this)
-        toolChoice = ToolChoice.Mode("required") // Force tool usage
-      }
-    }
+      ),
+    )
   }
-
-  /**
-   * Helper method to convert screenshot bytes to Base64 string
-   */
-  @OptIn(ExperimentalEncodingApi::class)
-  private fun getBase64EncodedScreenshot(screenState: ScreenState): String? = screenState.screenshotBytes?.let { Base64.encode(it) }
 }

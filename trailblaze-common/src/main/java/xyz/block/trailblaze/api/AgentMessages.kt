@@ -1,6 +1,5 @@
 package xyz.block.trailblaze.api
 
-import com.aallam.openai.api.chat.FunctionCall
 import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
@@ -9,10 +8,10 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult.Success
 
 object AgentMessages {
 
-  fun TrailblazeToolResult.toContentString(function: FunctionCall): String = when (this) {
-    is Success -> successContentString(function)
-    is Error.MaestroValidationError -> validationErrorContentString(function, errorMessage)
-    is Error.UnknownTrailblazeTool -> unknownCommandErrorContentString(function, errorMessage)
+  fun TrailblazeToolResult.toContentString(toolName: String, toolArgs: JsonObject): String = when (this) {
+    is Success -> successContentString(toolName, toolArgs)
+    is Error.MaestroValidationError -> validationErrorContentString(toolName, toolArgs, errorMessage)
+    is Error.UnknownTrailblazeTool -> unknownCommandErrorContentString(toolName, toolArgs, errorMessage)
     is Error.EmptyToolCall -> emptyToolCallErrorContentString()
     is Error.ExceptionThrown -> errorExceptionContentString(this)
     is Error.UnknownTool -> unknownToolErrorContentString(functionName, functionArgs, errorMessage)
@@ -25,31 +24,33 @@ object AgentMessages {
     appendLine("Command: ${TrailblazeJsonInstance.encodeToString(errorException.command)}")
   }
 
-  private fun successContentString(function: FunctionCall) = buildString {
+  private fun successContentString(toolName: String, toolArgs: JsonObject) = buildString {
     appendLine("# Successfully performed the following action on the device:")
-    appendLine("Tool: ${function.name}")
-    appendLine("Parameters ${function.argumentsAsJson()}")
+    appendLine("Tool: $toolName")
+    appendLine("Parameters $toolArgs")
   }
 
   private fun validationErrorContentString(
-    function: FunctionCall,
+    toolName: String,
+    toolArgs: JsonObject,
     errorMessage: String,
   ) = buildString {
     appendLine(
       "# Failed to perform the following action on the device because of a verification error.",
     )
-    appendLine("Tool: ${function.name}")
-    appendLine("Parameters ${function.argumentsAsJson()}")
+    appendLine("Tool: $toolName")
+    appendLine("Parameters $toolArgs")
     appendLine("Error message: $errorMessage")
   }
 
   private fun unknownCommandErrorContentString(
-    function: FunctionCall,
+    toolName: String,
+    toolArgs: JsonObject,
     errorMessage: String,
   ) = buildString {
     appendLine("# Unknown command provided, please try a different tool.")
-    appendLine("Tool: ${function.name}")
-    appendLine("Parameters ${function.argumentsAsJson()}")
+    appendLine("Tool: $toolName")
+    appendLine("Parameters $toolArgs")
     appendLine("Error message: $errorMessage")
   }
 

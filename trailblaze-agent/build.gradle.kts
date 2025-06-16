@@ -11,14 +11,11 @@ dependencies {
   api(project(":trailblaze-common"))
   api(libs.maestro.orchestra.models) { isTransitive = false }
 
-  implementation(platform(libs.openai.client.bom))
-  implementation(libs.openai.client.core)
-  implementation(libs.openai.client)
   implementation(libs.exp4j)
   implementation(libs.coroutines)
   implementation(libs.kotlinx.serialization.core)
   implementation(libs.kotlinx.serialization.json)
-
+  implementation(libs.koog.prompt.executor.clients)
   runtimeOnly(libs.kotlin.reflect)
 }
 

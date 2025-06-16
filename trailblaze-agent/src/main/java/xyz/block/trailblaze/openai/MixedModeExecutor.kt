@@ -1,9 +1,10 @@
 package xyz.block.trailblaze.openai
 
+import ai.koog.prompt.executor.clients.LLMClient
+import ai.koog.prompt.llm.LLModel
 import net.objecthunter.exp4j.ExpressionBuilder
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.agent.model.MixedModeTestCase
-import xyz.block.trailblaze.agent.model.PromptStep
 import xyz.block.trailblaze.agent.model.TestObjective.AssertEqualsCommand
 import xyz.block.trailblaze.agent.model.TestObjective.AssertMathCommand
 import xyz.block.trailblaze.agent.model.TestObjective.AssertNotEqualsCommand
@@ -14,10 +15,10 @@ import xyz.block.trailblaze.agent.model.TestObjective.RememberTextCommand
 import xyz.block.trailblaze.agent.model.TestObjective.RememberWithAiCommand
 import xyz.block.trailblaze.agent.model.TestObjective.TrailblazeObjective.TrailblazeCommand
 import xyz.block.trailblaze.agent.model.TestObjective.TrailblazeObjective.TrailblazePrompt
+import xyz.block.trailblaze.agent.model.TrailblazePromptStep
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.exception.TrailblazeToolExecutionException
-import xyz.block.trailblaze.llm.LlmModel
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
@@ -30,11 +31,11 @@ import kotlin.reflect.KClass
  * a mix of direct Trailblaze AI commands and Maestro commands.
  */
 class MixedModeExecutor(
-  openAiApiKey: String,
-  llmModel: LlmModel? = null,
+  llmModel: LLModel,
+  llmClient: LLMClient,
   private val screenStateProvider: () -> ScreenState,
   private val runYamlFlowFunction: (String) -> TrailblazeToolResult,
-  private val runner: TrailblazeOpenAiRunner,
+  private val runner: TrailblazeRunner,
   private val additionalTrailblazeTools: List<KClass<out TrailblazeTool>> = emptyList(),
 ) {
   // Variable store for remember commands
@@ -45,8 +46,8 @@ class MixedModeExecutor(
 
   private val elementComparator = TrailblazeElementComparator(
     screenStateProvider = screenStateProvider,
-    openAiApiKey = openAiApiKey,
-    llmModel = llmModel ?: LlmModel.GPT_4_1,
+    llmClient = llmClient,
+    llmModel = llmModel,
   )
 
   /**
@@ -109,7 +110,7 @@ class MixedModeExecutor(
           trailblazeTool = tool,
           llmResponseId = null,
           // Empty prompt step since we're just triggering the tool
-          step = PromptStep(description = ""),
+          step = TrailblazePromptStep(description = ""),
           screenStateForLlmRequest = screenStateProvider(),
         )
       }

@@ -34,7 +34,6 @@ dependencies {
   implementation(libs.ktor.server.websockets)
   implementation(libs.ktor.serialization.kotlinx.json)
   implementation(libs.coroutines)
-  implementation(libs.openai.client.core)
   implementation(libs.maestro.orchestra.models) { isTransitive = false }
   implementation(libs.ktor.http)
   implementation(libs.ktor.serialization)

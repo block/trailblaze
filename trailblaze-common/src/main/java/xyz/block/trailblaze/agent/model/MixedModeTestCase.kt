@@ -163,13 +163,13 @@ class MixedModeTestCase(
     return fullInstructions
   }
 
-  private fun generatePromptSteps(stepInstructions: String): List<PromptStep> {
+  private fun generatePromptSteps(stepInstructions: String): List<TrailblazePromptStep> {
     val taskId = UUID.randomUUID().toString()
     return stepInstructions.lines()
       .map { it.trim() }
       .filter { it.isNotEmpty() }
       .mapIndexed { index, line ->
-        PromptStep(
+        TrailblazePromptStep(
           description = line,
           taskId = taskId,
           taskIndex = index,

@@ -93,7 +93,7 @@
                                 <pre>${log.debugString()?html}</pre>
                             <#elseif log.type == 'LLM_REQUEST'>
                                 <h5>LLM Response</h5>
-                                <pre>${log.llmResponse?html}</pre>
+                                <pre>${log.llmResponse[0]?html}</pre>
                                 <h5>Request Duration</h5>
                                 <pre>${(log.duration)?number_to_date?string("mm:ss")}</pre>
                                 <#if log.llmMessage??>

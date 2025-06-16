@@ -31,7 +31,6 @@ maestro = "1.40.0"
 mcp-sdk = "0.5.0"
 okhttp = "4.12.0"
 okio = "3.10.2"
-openai = "4.0.1"
 picocli = "4.6.3"
 androidx-test-runner = "1.6.2"
 slf4j = "2.0.17"
@@ -93,6 +92,8 @@ ktor-network-tls-certificates = { module = "io.ktor:ktor-network-tls-certificate
 koog-agents = { module = "ai.koog:koog-agents", version.ref = "koog" }
 koog-agents-tools = { module = "ai.koog:agents-tools", version.ref = "koog" }
 koog-prompt-executor-clients = { module = "ai.koog:prompt-executor-clients", version.ref = "koog" }
+koog-prompt-executor-google = { module = "ai.koog:prompt-executor-google-client", version.ref = "koog" }
+koog-prompt-executor-openai = { module = "ai.koog:prompt-executor-openai-client", version.ref = "koog" }
 kotlin-logging = { group = "io.github.microutils", name = "kotlin-logging-jvm", version.ref = "kotlin-logging" }
 kotlin-test-junit4 = { group = "org.jetbrains.kotlin", name = "kotlin-test", version.ref = "kotlin" }
 kotlin-test = { group = "org.jetbrains.kotlin", name = "kotlin-test-junit5", version.ref = "kotlin" }
@@ -112,9 +113,6 @@ maestro-web = { module = "dev.mobile:maestro-web", version.ref = "maestro" }
 mcp-sdk = { module = "io.modelcontextprotocol:kotlin-sdk", version.ref = "mcp-sdk" }
 okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
 okio = { module = "com.squareup.okio:okio", version.ref = "okio" }
-openai-client = { module = "com.aallam.openai:openai-client" }
-openai-client-bom = { module = "com.aallam.openai:openai-client-bom", version.ref = "openai" }
-openai-client-core = { module = "com.aallam.openai:openai-core", version.ref = "openai" }
 picocli = { module = "info.picocli:picocli", version.ref = "picocli" }
 slf4j-android = { module = "org.slf4j:slf4j-android", version.ref = "slf4j-android" }
 slf4j-api = { module = "org.slf4j:slf4j-api", version.ref = "slf4j" }

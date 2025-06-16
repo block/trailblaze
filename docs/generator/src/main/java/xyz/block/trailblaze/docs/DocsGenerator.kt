@@ -1,9 +1,6 @@
 package xyz.block.trailblaze.docs
 
-import com.aallam.openai.api.chat.chatCompletionRequest
-import com.aallam.openai.api.model.ModelId
-import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
-import xyz.block.trailblaze.toolcalls.DataClassToToolUtils
+import ai.koog.agents.core.tools.ToolParameterDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toKoogToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
@@ -18,6 +15,15 @@ class DocsGenerator(
   private val generatedFunctionsDocsDir: File,
 ) {
 
+  fun paramsString(params: List<ToolParameterDescriptor>): String = buildString {
+    params.forEach { param ->
+      appendLine("- `${param.name}`: `${param.type}`")
+      if (param.description.isNotBlank()) {
+        appendLine("  " + param.description)
+      }
+    }
+  }
+
   fun createPageForCommand(
     toolKClass: KClass<out TrailblazeTool>,
   ) {
@@ -25,27 +31,23 @@ class DocsGenerator(
 
     val pagePath = "custom/${toolDescriptor.name}.md"
 
+    val propertiesMarkdown = buildString {
+      if (toolDescriptor.requiredParameters.isNotEmpty()) {
+        appendLine("### Required Parameters")
+        appendLine(paramsString(toolDescriptor.requiredParameters))
+      }
+      if (toolDescriptor.optionalParameters.isNotEmpty()) {
+        appendLine("### Optional Parameters")
+        appendLine(paramsString(toolDescriptor.optionalParameters))
+      }
+    }
+
     File(generatedFunctionsDocsDir, pagePath).also { file ->
       file.parentFile.mkdirs() // Ensure directory exists
 
-      // Creating a fake chatCompletionRequest to register the tool and print out the result
-      val registeredOpenAiToolCallFunction = chatCompletionRequest {
-        model = ModelId("")
-        messages = listOf()
-        tools {
-          DataClassToToolUtils.registerManualToolForDataClass(
-            builder = this,
-            clazz = toolKClass,
-          )
-        }
-      }.tools?.first {
-        it.function.name == toolDescriptor.name
-      }!!.function
-
-      val json = TrailblazeJsonInstance.encodeToString(registeredOpenAiToolCallFunction)
       file.writeText(
         """
-# Function `${registeredOpenAiToolCallFunction.name}`
+## Tool `${toolDescriptor.name}`
 
 ## Description
 ${toolDescriptor.description}
@@ -53,10 +55,8 @@ ${toolDescriptor.description}
 ### Command Class
 `${toolKClass.qualifiedName}`
 
-## Registered Tool Call to Open AI
-```json
-$json
-```
+### Registered `${toolKClass.simpleName}` in `ToolRegistry`
+$propertiesMarkdown
 
 $THIS_DOC_IS_GENERATED_MESSAGE
           """.trimMargin()

@@ -1,6 +1,6 @@
 package xyz.block.trailblaze.logs.client
 
-import com.aallam.openai.api.chat.ChatCompletion
+import ai.koog.prompt.message.Message
 import kotlinx.serialization.Contextual
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
@@ -51,8 +51,9 @@ sealed interface TrailblazeLog {
     override val agentTaskStatus: AgentTaskStatus,
     val viewHierarchy: ViewHierarchyTreeNode,
     val instructions: String,
+    val llmModelId: String,
     val llmMessages: List<LlmMessage>,
-    val llmResponse: ChatCompletion,
+    val llmResponse: List<Message.Response>,
     val actions: List<Action>,
     override val screenshotFile: String?,
     override val duration: Long,

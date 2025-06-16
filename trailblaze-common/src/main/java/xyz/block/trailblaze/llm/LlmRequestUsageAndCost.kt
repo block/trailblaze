@@ -1,6 +1,6 @@
 package xyz.block.trailblaze.llm
 
-import com.aallam.openai.api.chat.ChatCompletion
+import ai.koog.prompt.message.Message
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -14,17 +14,17 @@ data class LlmRequestUsageAndCost(
 ) {
 
   companion object {
-    fun ChatCompletion.calculateCost(): LlmRequestUsageAndCost {
-      val usage = this.usage
-      val modelName = this.model.id
+    fun List<Message.Response>.calculateCost(llmModelId: String): LlmRequestUsageAndCost {
+      val usage = this.last().metaInfo
+      val modelName = llmModelId
       val pricing = LlmModel.getModelByName(modelName)
-      val promptTokens = usage?.promptTokens?.toLong() ?: 0L
-      val completionTokens = usage?.completionTokens?.toLong() ?: 0L
+      val promptTokens = usage.inputTokensCount?.toLong() ?: 0L
+      val completionTokens = usage.outputTokensCount?.toLong() ?: 0L
       val promptCost = promptTokens * pricing.inputCostPerOneMillionTokens / 1_000_000.0
       val completionCost = completionTokens * pricing.outputCostPerOneMillionTokens / 1_000_000.0
 
       return LlmRequestUsageAndCost(
-        modelName = pricing.id,
+        modelName = llmModelId,
         inputTokens = promptTokens,
         outputTokens = completionTokens,
         promptCost = promptCost,
@@ -35,10 +35,14 @@ data class LlmRequestUsageAndCost(
 
   fun debugString(): String = buildString {
     appendLine("Model: $modelName")
-    appendLine("Prompt Tokens: $inputTokens")
-    appendLine("Completion Tokens: $outputTokens")
-    appendLine("Prompt Cost: $${"%.6f".format(promptCost)}")
-    appendLine("Completion Cost: $${"%.6f".format(completionCost)}")
-    appendLine("Total Cost: $${"%.6f".format(totalCost)}")
+    if (inputTokens == 0L && outputTokens == 0L) {
+      appendLine("Usage not available.")
+    } else {
+      appendLine("Prompt Tokens: $inputTokens")
+      appendLine("Completion Tokens: $outputTokens")
+      appendLine("Prompt Cost: $${"%.6f".format(promptCost)}")
+      appendLine("Completion Cost: $${"%.6f".format(completionCost)}")
+      appendLine("Total Cost: $${"%.6f".format(totalCost)}")
+    }
   }
 }

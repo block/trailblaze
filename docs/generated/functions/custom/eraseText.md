@@ -1,4 +1,4 @@
-# Function `eraseText`
+## Tool `eraseText`
 
 ## Description
 Erases the specified number of characters from the text field.  If no number is provided, it will erase all.
@@ -6,22 +6,11 @@ Erases the specified number of characters from the text field.  If no number is 
 ### Command Class
 `xyz.block.trailblaze.toolcalls.commands.EraseTextTrailblazeTool`
 
-## Registered Tool Call to Open AI
-```json
-{
-    "name": "eraseText",
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "charactersToErase": {
-                "type": "integer"
-            }
-        },
-        "required": []
-    },
-    "description": "Erases the specified number of characters from the text field.  If no number is provided, it will erase all."
-}
-```
+### Registered `EraseTextTrailblazeTool` in `ToolRegistry`
+### Optional Parameters
+- `charactersToErase`: `Integer`
+
+
 
 <hr/>
 

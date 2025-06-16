@@ -18,7 +18,7 @@ interface TestObjective {
     ) : TrailblazeObjective
     data class TrailblazePrompt(
       val fullPrompt: String,
-      val steps: List<PromptStep>,
+      val steps: List<TrailblazePromptStep>,
     ) : TrailblazeObjective
   }
 }
@@ -34,7 +34,7 @@ fun String.toTrailblazePrompt(
 ) = TrailblazePrompt(
   fullPrompt = this,
   steps = listOf(
-    PromptStep(
+    TrailblazePromptStep(
       description = this,
       llmStatusChecks = llmStatusChecks,
     ),

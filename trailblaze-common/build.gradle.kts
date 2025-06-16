@@ -8,11 +8,9 @@ plugins {
 }
 
 dependencies {
-  api(platform(libs.openai.client.bom))
   api(libs.kotlinx.serialization.json)
   api(libs.coroutines)
   api(libs.junit)
-  api(libs.openai.client.core)
   api(libs.okio)
   api(libs.koog.agents.tools)
   api(libs.ktor.client.core)
@@ -26,6 +24,7 @@ dependencies {
   implementation(libs.ktor.utils)
   implementation(libs.kotlin.reflect)
   implementation(libs.snakeyaml)
+  implementation(libs.koog.prompt.executor.clients)
 
   runtimeOnly(libs.jackson.dataformat.yaml)
   runtimeOnly(libs.jackson.module.kotlin)

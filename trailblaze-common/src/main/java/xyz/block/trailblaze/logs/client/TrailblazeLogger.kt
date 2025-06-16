@@ -1,15 +1,7 @@
 package xyz.block.trailblaze.logs.client
 
-import com.aallam.openai.api.chat.ChatCompletion
-import com.aallam.openai.api.chat.ChatCompletionRequest
-import com.aallam.openai.api.chat.ChatMessage
-import com.aallam.openai.api.chat.Content
-import com.aallam.openai.api.chat.ImagePart
-import com.aallam.openai.api.chat.ListContent
-import com.aallam.openai.api.chat.TextContent
-import com.aallam.openai.api.chat.TextPart
-import com.aallam.openai.api.chat.ToolCall
-import com.aallam.openai.api.core.Role
+import ai.koog.prompt.message.Message
+import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.logs.client.TrailblazeLog.TrailblazeLlmRequestLog.Action
@@ -38,34 +30,17 @@ object TrailblazeLogger {
 
   fun logScreenshot(screenshotBytes: ByteArray): String = logScreenshotListener(screenshotBytes)
 
-  /** Transforms an Open AI [Content] object into a [String] representation */
-  private fun contentToString(openAiContent: Content?): String? = when (openAiContent) {
-    is ListContent -> {
-      val result = openAiContent.content.map { content ->
-        when (content) {
-          is ImagePart -> null
-          is TextPart -> content.text
-        }
-      }
-      result.filterNotNull().joinToString(",")
-    }
-
-    is TextContent -> openAiContent.content
-    null -> null
-  }
-
   fun logLlmRequest(
+    llmModelId: String,
     llmRequestId: String,
     agentTaskStatus: AgentTaskStatus,
     screenState: ScreenState,
     instructions: String,
-    request: ChatCompletionRequest,
-    response: ChatCompletion,
+    llmMessages: List<LlmMessage>,
+    response: List<Message.Response>,
     startTime: Long,
   ) {
-    val firstOpenAiResponseMessage: ChatMessage = response.choices.first().message
-    val actions =
-      firstOpenAiResponseMessage.toolCalls?.filterIsInstance<ToolCall.Function>() ?: emptyList()
+    val toolMessages = response.filterIsInstance<Message.Tool>()
 
     @OptIn(ExperimentalEncodingApi::class)
     val bytes = screenState.screenshotBytes ?: byteArrayOf()
@@ -76,20 +51,16 @@ object TrailblazeLogger {
         agentTaskStatus = agentTaskStatus,
         viewHierarchy = screenState.viewHierarchy,
         instructions = instructions,
-        llmMessages = request.messages.map {
-          LlmMessage(
-            role = it.role.role,
-            message = contentToString(it.messageContent),
-          )
-        }.plus(
-          LlmMessage(
-            role = Role.Assistant.role,
-            message = contentToString(response.choices.firstOrNull()?.message?.messageContent),
-          ),
-        ),
+        llmModelId = llmModelId,
+        llmMessages = llmMessages,
         screenshotFile = screenshotFilename,
         llmResponse = response,
-        actions = actions.map { Action(it.function.name, it.function.argumentsAsJson()) },
+        actions = toolMessages.map {
+          Action(
+            it.tool,
+            TrailblazeJsonInstance.decodeFromString(JsonObject.serializer(), it.content),
+          )
+        },
         timestamp = startTime,
         duration = System.currentTimeMillis() - startTime,
         llmResponseId = llmRequestId,

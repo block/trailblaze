@@ -1,5 +1,7 @@
 package xyz.block.trailblaze.android
 
+import ai.koog.prompt.executor.clients.LLMClient
+import ai.koog.prompt.llm.LLModel
 import maestro.orchestra.Command
 import org.junit.runner.Description
 import xyz.block.trailblaze.AndroidMaestroTrailblazeAgent
@@ -10,31 +12,39 @@ import xyz.block.trailblaze.agent.model.toTrailblazePrompt
 import xyz.block.trailblaze.android.uiautomator.AndroidOnDeviceUiAutomatorScreenState
 import xyz.block.trailblaze.api.TestAgentRunner
 import xyz.block.trailblaze.exception.TrailblazeException
-import xyz.block.trailblaze.openai.TrailblazeOpenAiRunner
+import xyz.block.trailblaze.openai.TrailblazeRunner
 import xyz.block.trailblaze.rules.TrailblazeRule
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 
 /**
  * On-Device Android Trailblaze Rule Implementation.
  */
-class AndroidTrailblazeRule :
-  SimpleTestRuleChain(
-    TrailblazeAndroidLoggingRule(),
-  ),
+class AndroidTrailblazeRule(
+  val llmClient: LLMClient,
+  val llmModel: LLModel,
+) : SimpleTestRuleChain(
+  TrailblazeAndroidLoggingRule(),
+),
   TrailblazeRule {
 
   private val trailblazeAgent = AndroidMaestroTrailblazeAgent()
   private lateinit var trailblazeOpenAiRunner: TestAgentRunner
 
-  val trailblazeToolRepo = TrailblazeToolRepo()
+  val trailblazeToolRepo = TrailblazeToolRepo(
+    TrailblazeToolSet.getSetOfMarkToolSet(
+      setOfMarkEnabled = true,
+    ),
+  )
 
   override fun ruleCreation(description: Description) {
     super.ruleCreation(description)
-    trailblazeOpenAiRunner = TrailblazeOpenAiRunner(
+    trailblazeOpenAiRunner = TrailblazeRunner(
       trailblazeToolRepo = trailblazeToolRepo,
-      openAiApiKey = InstrumentationArgUtil.getApiKeyFromInstrumentationArg(),
+      llmModel = llmModel,
+      llmClient = llmClient,
       screenStateProvider = {
         AndroidOnDeviceUiAutomatorScreenState(
           filterViewHierarchy = true,

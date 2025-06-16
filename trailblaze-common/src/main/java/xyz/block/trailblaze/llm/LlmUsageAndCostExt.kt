@@ -13,9 +13,9 @@ object LlmUsageAndCostExt {
       return null
     }
     val requestCostBreakdowns: List<LlmRequestUsageAndCost> = requests.map {
-      it.llmResponse.calculateCost()
+      it.llmResponse.calculateCost(it.llmModelId)
     }
-    val modelName = requests.first().llmResponse.model.id
+    val modelName = requests.first().llmModelId
 
     return LlmSessionUsageAndCost(
       modelName = modelName,

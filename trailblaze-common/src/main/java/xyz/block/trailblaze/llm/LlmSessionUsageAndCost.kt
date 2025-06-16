@@ -20,12 +20,17 @@ data class LlmSessionUsageAndCost(
     appendLine("Model: $modelName")
     appendLine("--- Totals ---")
     appendLine("- Requests: $totalRequestCount")
-    appendLine("- Input Token Count: $totalInputTokens")
-    appendLine("- Output Token Count: $totalOutputTokens")
-    appendLine("- Cost: $${"%.2f".format(totalCostInUsDollars)}")
+    if (totalRequestCount > 0 && totalOutputTokens > 0) {
+      appendLine("- Input Token Count: $totalInputTokens")
+      appendLine("- Output Token Count: $totalOutputTokens")
+      appendLine("- Cost: $${"%.2f".format(totalCostInUsDollars)}")
+    }
     appendLine("--- Averages ---")
     appendLine("- Duration (seconds): ${"%.2f".format(averageDurationMillis / 1000)}")
-    appendLine("- Input Tokens: ${"%.2f".format(averageInputTokens / 1000)}")
-    appendLine("- Output Tokens: ${"%.2f".format(averageOutputTokens / 1000)}")
+
+    if (totalRequestCount > 0 && totalOutputTokens > 0) {
+      appendLine("- Input Tokens: ${"%.2f".format(averageInputTokens / 1000)}")
+      appendLine("- Output Tokens: ${"%.2f".format(averageOutputTokens / 1000)}")
+    }
   }
 }

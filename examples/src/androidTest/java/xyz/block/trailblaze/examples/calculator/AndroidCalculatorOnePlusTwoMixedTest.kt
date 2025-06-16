@@ -1,9 +1,12 @@
 package xyz.block.trailblaze.examples.calculator
 
+import ai.koog.prompt.executor.clients.openai.OpenAILLMClient
+import ai.koog.prompt.executor.clients.openai.OpenAIModels
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import xyz.block.trailblaze.android.AndroidTrailblazeRule
+import xyz.block.trailblaze.android.InstrumentationArgUtil
 import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.toolcalls.commands.LaunchAppTrailblazeTool
 
@@ -13,7 +16,12 @@ import xyz.block.trailblaze.toolcalls.commands.LaunchAppTrailblazeTool
 class AndroidCalculatorOnePlusTwoMixedTest {
 
   @get:Rule
-  val trailblazeRule = AndroidTrailblazeRule()
+  val trailblazeRule = AndroidTrailblazeRule(
+    llmClient = OpenAILLMClient(
+      apiKey = InstrumentationArgUtil.getApiKeyFromInstrumentationArg(),
+    ),
+    llmModel = OpenAIModels.Chat.GPT4_1,
+  )
 
   @Before
   fun setUp() {

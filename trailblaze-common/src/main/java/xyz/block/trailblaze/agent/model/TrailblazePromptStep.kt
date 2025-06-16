@@ -1,22 +1,28 @@
 package xyz.block.trailblaze.agent.model
 
-import com.aallam.openai.api.chat.ChatMessage
-import com.aallam.openai.api.chat.ChatRole
-import com.aallam.openai.api.chat.FunctionCall
-import com.aallam.openai.api.chat.chatMessage
+import ai.koog.prompt.message.RequestMetaInfo
+import ai.koog.prompt.message.ResponseMetaInfo
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.datetime.Clock
+import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.api.AgentMessages.toContentString
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 
-// provide defaults
-class PromptStep(
+/**
+ * A single step in an overall [TestObjective.TrailblazeObjective.TrailblazePrompt] objective.
+ */
+class TrailblazePromptStep(
   val description: String,
   val taskId: String = "",
   val taskIndex: Int = 0,
   val fullPrompt: String = "",
   val llmStatusChecks: Boolean = true,
 ) {
-  val llmResponseHistory = mutableListOf<ChatMessage>()
+  private val koogLlmResponseHistory = mutableListOf<ai.koog.prompt.message.Message>()
+
+  fun getHistorySize() = koogLlmResponseHistory.size
+
+  fun getKoogLlmResponseHistory(): List<ai.koog.prompt.message.Message> = koogLlmResponseHistory
 
   private val taskCreatedTimestamp = System.currentTimeMillis()
   val currentStatus = MutableStateFlow<AgentTaskStatus>(
@@ -37,37 +43,61 @@ class PromptStep(
   // without completing the task or via some other error
   fun isFinished(): Boolean = currentStatus.value !is AgentTaskStatus.InProgress
 
-  fun addToolCall(
-    llmResponseContent: String?,
+  fun addCompletedToolCallToChatHistory(
     commandResult: TrailblazeToolResult,
-    function: FunctionCall,
+    llmResponseContent: String?,
+    toolName: String?,
+    toolArgs: JsonObject?,
   ) {
     llmResponseContent?.let { llmContent ->
-      llmResponseHistory.add(
-        chatMessage {
-          role = ChatRole.Assistant
-          content = llmContent
-        },
+      addAssistantMessageToChatHistory(
+        llmContent = llmContent,
       )
     }
+    if (toolName != null && toolArgs != null) {
+      addToolExecutionResultUserMessageToChatHistory(
+        commandResult = commandResult,
+        toolName = toolName,
+        toolArgs = toolArgs,
+      )
+    }
+  }
 
-    llmResponseHistory.add(
-      chatMessage {
-        role = ChatRole.User
-        content = commandResult.toContentString(function)
-      },
+  private fun addToolExecutionResultUserMessageToChatHistory(
+    commandResult: TrailblazeToolResult,
+    toolName: String,
+    toolArgs: JsonObject,
+  ) {
+    val contentString = commandResult.toContentString(
+      toolName = toolName,
+      toolArgs = toolArgs,
+    )
+    koogLlmResponseHistory.add(
+      ai.koog.prompt.message.Message.User(
+        content = contentString,
+        metaInfo = RequestMetaInfo.create(Clock.System),
+      ),
     )
   }
 
-  fun addEmptyToolCall(
+  private fun addAssistantMessageToChatHistory(llmContent: String) {
+    koogLlmResponseHistory.add(
+      ai.koog.prompt.message.Message.Assistant(
+        content = llmContent,
+        metaInfo = ResponseMetaInfo.create(Clock.System),
+      ),
+    )
+  }
+
+  fun addEmptyToolCallToChatHistory(
     llmResponseContent: String?,
-    result: TrailblazeToolResult,
+    result: TrailblazeToolResult.Error.EmptyToolCall,
   ) {
-    addToolCall(
+    addCompletedToolCallToChatHistory(
       llmResponseContent = llmResponseContent,
       commandResult = result,
-      // fake function call since it is not needed in the tool history
-      function = FunctionCall(),
+      toolName = null,
+      toolArgs = null,
     )
   }
 
@@ -75,7 +105,7 @@ class PromptStep(
     currentStatus.value = AgentTaskStatus.Success.ObjectiveComplete(
       statusData = AgentTaskStatusData(
         prompt = description,
-        callCount = llmResponseHistory.size,
+        callCount = getHistorySize(),
         taskStartTime = taskCreatedTimestamp,
         totalDurationMs = System.currentTimeMillis() - taskCreatedTimestamp,
         taskId = taskId,
@@ -88,7 +118,7 @@ class PromptStep(
     currentStatus.value = AgentTaskStatus.Failure.ObjectiveFailed(
       statusData = AgentTaskStatusData(
         prompt = description,
-        callCount = llmResponseHistory.size,
+        callCount = getHistorySize(),
         taskStartTime = taskCreatedTimestamp,
         totalDurationMs = System.currentTimeMillis() - taskCreatedTimestamp,
         taskId = taskId,

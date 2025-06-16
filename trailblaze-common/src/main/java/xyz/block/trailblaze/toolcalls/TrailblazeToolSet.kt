@@ -20,9 +20,21 @@ class TrailblazeToolSet(
   vararg tools: KClass<out TrailblazeTool>,
 ) {
   private val toolSet = tools.toSet()
-  fun asTools() = toolSet
+  fun asTools(): Set<KClass<out TrailblazeTool>> = toolSet
 
   companion object {
+    fun getSetOfMarkToolSet(setOfMarkEnabled: Boolean): TrailblazeToolSet {
+      val trailblazeTools = mutableSetOf<KClass<out TrailblazeTool>>().apply {
+        addAll(DefaultUiToolSet.asTools())
+        if (setOfMarkEnabled) {
+          addAll(InteractWithElementsByNodeIdToolSet.asTools())
+        } else {
+          addAll(InteractWithElementsByPropertyToolSet.asTools())
+        }
+      }
+      return TrailblazeToolSet(*trailblazeTools.toTypedArray())
+    }
+
     val DefaultUiToolSet = TrailblazeToolSet(
       HideKeyboardTrailblazeTool::class,
       InputTextTrailblazeTool::class,
@@ -55,6 +67,7 @@ class TrailblazeToolSet(
       InteractWithElementsByPropertyToolSet,
       InteractWithElementsByNodeIdToolSet,
     )
-    val BuiltInTrailblazeTools: Set<KClass<out TrailblazeTool>> = BuiltInTrailblazeToolSets.flatMap { it.asTools() }.toSet()
+    val BuiltInTrailblazeTools: Set<KClass<out TrailblazeTool>> =
+      BuiltInTrailblazeToolSets.flatMap { it.asTools() }.toSet()
   }
 }

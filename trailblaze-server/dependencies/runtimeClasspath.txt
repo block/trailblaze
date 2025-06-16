@@ -1,8 +1,11 @@
 ai.koog:agents-tools-jvm:0.2.1
 ai.koog:agents-tools:0.2.1
-com.aallam.openai:openai-client-bom:4.0.1
-com.aallam.openai:openai-core-jvm:4.0.1
-com.aallam.openai:openai-core:4.0.1
+ai.koog:prompt-executor-clients-jvm:0.2.1
+ai.koog:prompt-executor-clients:0.2.1
+ai.koog:prompt-llm-jvm:0.2.1
+ai.koog:prompt-llm:0.2.1
+ai.koog:prompt-model-jvm:0.2.1
+ai.koog:prompt-model:0.2.1
 com.fasterxml.jackson.core:jackson-annotations:2.18.2
 com.fasterxml.jackson.core:jackson-core:2.18.2
 com.fasterxml.jackson.core:jackson-databind:2.18.2
@@ -82,6 +85,8 @@ org.jetbrains.kotlinx:kotlinx-coroutines-bom:1.10.2
 org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.10.2
 org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2
 org.jetbrains.kotlinx:kotlinx-coroutines-slf4j:1.10.2
+org.jetbrains.kotlinx:kotlinx-datetime-jvm:0.6.2
+org.jetbrains.kotlinx:kotlinx-datetime:0.6.2
 org.jetbrains.kotlinx:kotlinx-io-bytestring-jvm:0.7.0
 org.jetbrains.kotlinx:kotlinx-io-bytestring:0.7.0
 org.jetbrains.kotlinx:kotlinx-io-core-jvm:0.7.0

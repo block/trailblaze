@@ -1,4 +1,4 @@
-# Function `hideKeyboard`
+## Tool `hideKeyboard`
 
 ## Description
 This hide the keyboard on the screen. This is useful to do after entering text into an input field.
@@ -6,18 +6,8 @@ This hide the keyboard on the screen. This is useful to do after entering text i
 ### Command Class
 `xyz.block.trailblaze.toolcalls.commands.HideKeyboardTrailblazeTool`
 
-## Registered Tool Call to Open AI
-```json
-{
-    "name": "hideKeyboard",
-    "parameters": {
-        "type": "object",
-        "properties": {},
-        "required": []
-    },
-    "description": "This hide the keyboard on the screen. This is useful to do after entering text into an input field."
-}
-```
+### Registered `HideKeyboardTrailblazeTool` in `ToolRegistry`
+
 
 <hr/>
 

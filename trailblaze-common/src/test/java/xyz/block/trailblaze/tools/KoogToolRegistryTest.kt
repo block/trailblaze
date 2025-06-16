@@ -8,6 +8,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.Test
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
+import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
 
 @OptIn(InternalAgentToolsApi::class)
@@ -18,7 +19,9 @@ class KoogToolRegistryTest {
   @Test
   fun test() = runBlocking {
     val trailblazeAgent = FakeTrailblazeAgent()
-    val toolRepo = TrailblazeToolRepo()
+    val toolRepo = TrailblazeToolRepo(
+      TrailblazeToolSet(InputTextTrailblazeTool::class),
+    )
     val toolRegistry = toolRepo.asToolRegistry({
       TrailblazeToolExecutionContext(
         trailblazeAgent = trailblazeAgent,

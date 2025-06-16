@@ -53,6 +53,7 @@ dependencies {
   androidTestImplementation(project(":trailblaze-android"))
   androidTestImplementation(libs.junit)
   androidTestImplementation(libs.maestro.orchestra.models)
+  androidTestImplementation(libs.koog.prompt.executor.openai)
 
   androidTestRuntimeOnly(libs.androidx.test.runner)
   androidTestRuntimeOnly(libs.coroutines.android)

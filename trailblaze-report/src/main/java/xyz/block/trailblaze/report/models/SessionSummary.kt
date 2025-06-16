@@ -108,12 +108,6 @@ data class SessionSummary(
         currGroup.logs.add(log)
       }
 
-      fun addToCurrentGroupAndCreateNewGroup(log: TrailblazeLog) {
-        currGroup.logs.add(log)
-        groups.add(currGroup)
-        currGroup = PromptLogGroup()
-      }
-
       fun createNewGroupAndAddToThatNewGroup(newPromptLogGroup: PromptLogGroup) {
         if (currGroup.logs.isNotEmpty()) {
           groups.add(currGroup.sorted())
@@ -248,7 +242,7 @@ data class SessionSummary(
         totalCostInUsDollars = sortedLogs.computeUsageSummary()?.totalCostInUsDollars ?: 0.0,
         screenshotCount = screenshotUrls.size,
         llmModelId = sortedLogs.filterIsInstance<TrailblazeLog.TrailblazeLlmRequestLog>()
-          .firstOrNull()?.llmResponse?.model?.id,
+          .firstOrNull()?.llmModelId,
         sessionDurationSeconds = (sortedLogs.last().timestamp - sessionStartTimestampMs) / 1000.0,
         eventGroups = mappedToEvents,
       )

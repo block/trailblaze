@@ -37,8 +37,8 @@ android {
 dependencies {
   api(project(":trailblaze-common"))
   api(project(":trailblaze-agent"))
+
   api(libs.androidx.uiautomator)
-  api(platform(libs.openai.client.bom))
   api(libs.ktor.client.okhttp)
   api(libs.kotlinx.serialization.core)
   api(libs.junit)
@@ -53,6 +53,7 @@ dependencies {
   implementation(libs.okhttp)
   implementation(libs.okio)
   implementation(libs.slf4j.api)
+  implementation(libs.koog.prompt.executor.clients)
 
   implementation(libs.ktor.http)
   implementation(libs.coroutines)

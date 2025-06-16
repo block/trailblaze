@@ -1,8 +1,11 @@
 package xyz.block.trailblaze.toolcalls
 
+import ai.koog.agents.core.tools.ToolDescriptor
 import ai.koog.agents.core.tools.ToolRegistry
-import com.aallam.openai.api.chat.ToolBuilder
-import com.aallam.openai.api.chat.ToolCall
+import ai.koog.prompt.message.Message
+import kotlinx.serialization.InternalSerializationApi
+import kotlinx.serialization.serializer
+import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.toolcalls.KoogToolExt.hasSerializableAnnotation
 import xyz.block.trailblaze.toolcalls.KoogToolExt.toKoogTools
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toKoogToolDescriptor
@@ -12,19 +15,14 @@ import kotlin.reflect.KClass
  * Manual calls we register that are not related to Maestro
  */
 class TrailblazeToolRepo(
-  val setOfMarkEnabled: Boolean = true,
+  /**
+   * The initial set of tools that are registered in this repository.
+   */
+  trailblazeToolSet: TrailblazeToolSet,
 ) {
-
-  private val registeredTrailblazeToolClasses = mutableSetOf<KClass<out TrailblazeTool>>().apply {
-    addAll(TrailblazeToolSet.DefaultUiToolSet.asTools())
-    if (setOfMarkEnabled) {
-      addAll(TrailblazeToolSet.InteractWithElementsByNodeIdToolSet.asTools())
-    } else {
-      addAll(TrailblazeToolSet.InteractWithElementsByPropertyToolSet.asTools())
-    }
-  }.also {
-    println("Registered Trailblaze tools (setOfMarkEnabled=$setOfMarkEnabled): ${it.map { it -> it.simpleName }}")
-  }
+  val registeredTrailblazeToolClasses: MutableSet<KClass<out TrailblazeTool>> = trailblazeToolSet
+    .asTools()
+    .toMutableSet()
 
   fun getRegisteredTrailblazeTools(): Set<KClass<out TrailblazeTool>> = registeredTrailblazeToolClasses
 
@@ -53,58 +51,31 @@ class TrailblazeToolRepo(
     registeredTrailblazeToolClasses.clear()
   }
 
-  /**
-   * Register all manual tools with the OpenAI tool builder.
-   *
-   * @param builder The ToolBuilder to register the tools with
-   */
-  fun registerManualTools(
-    builder: ToolBuilder,
-  ) {
-    with(builder) {
-      // Register standard tools
-      registeredTrailblazeToolClasses.forEach { trailblazeToolClass ->
-        DataClassToToolUtils.registerManualToolForDataClass(
-          builder = this,
-          clazz = trailblazeToolClass,
-        )
-      }
-    }
-  }
+  fun toolCallToTrailblazeTool(toolMessage: Message.Tool): TrailblazeTool? = toolCallToTrailblazeTool(
+    toolName = toolMessage.tool,
+    toolContent = toolMessage.content,
+  )
 
-  /**
-   * Register only a specific tool, useful when we want to force the LLM to use a particular tool
-   * @param builder The ToolBuilder to register the tool with
-   * @param commandClass The specific command class to register
-   */
-  fun registerSpecificToolOnly(builder: ToolBuilder, commandClass: KClass<out TrailblazeTool>) {
-    // Register only this specific tool
-    with(builder) {
-      DataClassToToolUtils.registerManualToolForDataClass(
-        builder = this,
-        clazz = commandClass,
-      )
-    }
-  }
-
-  fun toolCallToTrailblazeTool(action: ToolCall.Function): TrailblazeTool? {
-    val function = action.function
-    val functionName = function.name
-    val functionArgs = function.argumentsAsJson()
-
-    val trailblazeToolArgsClass: KClass<out TrailblazeTool>? =
+  fun toolCallToTrailblazeTool(
+    toolName: String,
+    /** The JSON string of the tool arguments. */
+    toolContent: String,
+  ): TrailblazeTool? {
+    val trailblazeToolClass: KClass<out TrailblazeTool> =
       registeredTrailblazeToolClasses.firstOrNull { toolKClass ->
-        toolKClass.toKoogToolDescriptor().name == functionName
-      }
-    if (trailblazeToolArgsClass == null) {
-      // Count not find command class for function name
-      return null
-    }
-    return try {
-      JsonSerializationUtil.deserializeTrailblazeTool(trailblazeToolArgsClass, functionArgs)
-    } catch (e: Exception) {
-      // Failed to deserialize command
-      null
-    }
+        toolKClass.toKoogToolDescriptor().name == toolName
+      } ?: error(
+        buildString {
+          appendLine("Could not find Trailblaze tool class for name: $toolName.")
+          appendLine("Registered tools: ${registeredTrailblazeToolClasses.map { it.simpleName }}")
+        },
+      )
+
+    @OptIn(InternalSerializationApi::class)
+    return TrailblazeJsonInstance.decodeFromString(trailblazeToolClass.serializer(), toolContent)
+  }
+
+  fun getCurrentToolDescriptors(): List<ToolDescriptor> = registeredTrailblazeToolClasses.map { toolClass ->
+    toolClass.toKoogToolDescriptor()
   }
 }

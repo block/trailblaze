@@ -10,8 +10,6 @@ application {
 
 dependencies {
   implementation(project(":trailblaze-common"))
-  implementation(platform(libs.openai.client.bom))
-  implementation(libs.openai.client.core)
   implementation(libs.kotlinx.serialization.core)
   implementation(libs.kotlinx.serialization.json)
   runtimeOnly(libs.kotlin.reflect)

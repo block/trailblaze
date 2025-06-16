@@ -15,7 +15,6 @@ application {
 dependencies {
   implementation(project(":trailblaze-common"))
   implementation(libs.freemarker)
-  implementation(libs.openai.client.core)
   implementation(libs.maestro.orchestra.models) { isTransitive = false }
   implementation(libs.kotlinx.serialization.core)
   implementation(libs.kotlinx.serialization.json)
