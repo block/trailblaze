@@ -1,4 +1,4 @@
-package xyz.block.trailblaze.openai
+package xyz.block.trailblaze.agent.util
 
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 
@@ -9,23 +9,6 @@ import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 object ElementRetriever {
   private const val TAG = "ElementRetriever"
 
-  // Cache of the current view hierarchy for lookups
-  private var currentViewHierarchy: ViewHierarchyTreeNode? = null
-
-  /**
-   * Sets the current view hierarchy for subsequent lookups
-   */
-  fun setViewHierarchy(viewHierarchy: ViewHierarchyTreeNode) {
-    currentViewHierarchy = viewHierarchy
-  }
-
-  /**
-   * Gets the current view hierarchy
-   *
-   * @return The current view hierarchy or null if not set
-   */
-  fun getViewHierarchy(): ViewHierarchyTreeNode? = currentViewHierarchy
-
   /**
    * Gets the text content of an element identified by resource ID.
    *
@@ -33,7 +16,11 @@ object ElementRetriever {
    * @param index The index of the element if multiple elements share the same resource ID (0-based)
    * @return The text content of the element
    */
-  fun getTextByResourceId(resourceId: String, index: Int = 0): String {
+  fun getTextByResourceId(
+    currentViewHierarchy: ViewHierarchyTreeNode?,
+    resourceId: String,
+    index: Int = 0,
+  ): String {
     println("$TAG: Getting text by resource ID: $resourceId, index: $index")
 
     if (currentViewHierarchy == null) {
@@ -67,7 +54,11 @@ object ElementRetriever {
    * @param index The index of the element if multiple elements share the same content description (0-based)
    * @return The text content of the element
    */
-  fun getTextByContentDescription(contentDescription: String, index: Int = 0): String {
+  fun getTextByContentDescription(
+    currentViewHierarchy: ViewHierarchyTreeNode?,
+    contentDescription: String,
+    index: Int = 0,
+  ): String {
     println("$TAG: Getting text by content description: $contentDescription, index: $index")
 
     val nodes = findNodes(currentViewHierarchy) { it.accessibilityText == contentDescription }
@@ -90,7 +81,11 @@ object ElementRetriever {
    * @param index The index of the element if multiple elements share the same text (0-based)
    * @return The text content of the element
    */
-  fun getTextByText(text: String, index: Int = 0): String {
+  fun getTextByText(
+    currentViewHierarchy: ViewHierarchyTreeNode?,
+    text: String,
+    index: Int = 0,
+  ): String {
     println("$TAG: Getting text by text: $text, index: $index")
 
     // For text search, we can actually just return the text if we find the node

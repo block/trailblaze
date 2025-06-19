@@ -10,7 +10,7 @@ import xyz.block.trailblaze.llm.LlmUsageAndCostExt.computeUsageSummary
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.HasAgentTaskStatus
-import xyz.block.trailblaze.maestro.MaestroCommandToYamlSerializer
+import xyz.block.trailblaze.maestro.MaestroYamlSerializer
 import xyz.block.trailblaze.serializers.TrailblazeToolToCodeSerializer
 
 @Serializable
@@ -175,7 +175,7 @@ data class SessionSummary(
             is TrailblazeLog.MaestroCommandLog -> SessionEvent.MaestroCommand(
               timestamp = log.timestamp,
               durationMs = log.durationMs,
-              code = MaestroCommandToYamlSerializer.toYaml(listOf(log.maestroCommand.asCommand()!!), false),
+              code = MaestroYamlSerializer.toYaml(listOf(log.maestroCommand.asCommand()!!), false),
               elapsedTimeMs = log.timestamp.toEpochMilliseconds() - sessionStartTimestamp.toEpochMilliseconds(),
             )
 
@@ -218,7 +218,7 @@ data class SessionSummary(
         val commands = logsInGroup.logs
           .filterIsInstance<TrailblazeLog.MaestroCommandLog>()
           .map { it.maestroCommand.asCommand()!! }
-        val maestroYaml = MaestroCommandToYamlSerializer.toYaml(
+        val maestroYaml = MaestroYamlSerializer.toYaml(
           commands = commands,
           includeConfiguration = false,
         )

@@ -7,12 +7,13 @@ import org.junit.runner.Description
 import xyz.block.trailblaze.AndroidMaestroTrailblazeAgent
 import xyz.block.trailblaze.SimpleTestRuleChain
 import xyz.block.trailblaze.TrailblazeAndroidLoggingRule
+import xyz.block.trailblaze.agent.TrailblazeRunner
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.agent.model.toTrailblazePrompt
 import xyz.block.trailblaze.android.uiautomator.AndroidOnDeviceUiAutomatorScreenState
 import xyz.block.trailblaze.api.TestAgentRunner
 import xyz.block.trailblaze.exception.TrailblazeException
-import xyz.block.trailblaze.openai.TrailblazeRunner
+import xyz.block.trailblaze.maestro.MaestroYamlParser
 import xyz.block.trailblaze.rules.TrailblazeRule
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
@@ -84,7 +85,7 @@ class AndroidTrailblazeRule(
    * Run a Trailblaze tool with the agent.
    */
   override fun maestro(maestroYaml: String): TrailblazeToolResult = maestroCommands(
-    maestroCommand = AndroidMaestroYaml.parseYaml(maestroYaml).toTypedArray(),
+    maestroCommand = MaestroYamlParser.parseYaml(maestroYaml).toTypedArray(),
   )
 
   /**

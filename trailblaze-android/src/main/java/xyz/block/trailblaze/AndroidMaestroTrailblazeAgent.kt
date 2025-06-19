@@ -1,7 +1,6 @@
 package xyz.block.trailblaze
 
 import maestro.orchestra.Command
-import xyz.block.trailblaze.android.AndroidMaestroYaml
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 
 class AndroidMaestroTrailblazeAgent : MaestroTrailblazeAgent() {
@@ -9,15 +8,4 @@ class AndroidMaestroTrailblazeAgent : MaestroTrailblazeAgent() {
     commands = commands,
     llmResponseId = llmResponseId,
   )
-
-  override fun runMaestroYaml(
-    yaml: String,
-    llmResponseId: String?,
-  ): TrailblazeToolResult {
-    val commands = AndroidMaestroYaml.parseYaml(yaml)
-    return executeMaestroCommands(
-      commands = commands,
-      llmResponseId = llmResponseId,
-    )
-  }
 }

@@ -1,4 +1,4 @@
-package xyz.block.trailblaze.openai
+package xyz.block.trailblaze.agent
 
 import xyz.block.trailblaze.agent.model.TrailblazePromptStep
 

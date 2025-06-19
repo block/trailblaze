@@ -16,6 +16,7 @@ dependencies {
   api(libs.koog.agents.tools)
   api(libs.ktor.client.core)
   api(libs.maestro.orchestra.models) { isTransitive = false }
+  api(libs.maestro.orchestra) { isTransitive = false }
   api(libs.maestro.client) { isTransitive = false }
 
   implementation(libs.gson)

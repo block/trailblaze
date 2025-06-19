@@ -525,7 +525,7 @@ class MaestroCommandToYamlSerializerTest {
     val gsonInstance: Gson = GsonBuilder().setPrettyPrinting().create()
     private fun convertCommandsToYamlAndParseAndCompare(original: Command, expected: Command) {
       val commands = listOf(original)
-      val yamlString = MaestroCommandToYamlSerializer.toYaml(commands)
+      val yamlString = MaestroYamlSerializer.toYaml(commands)
       println(yamlString)
 
       val flowFile = File.createTempFile("flow", ".yaml").apply { writeText(yamlString) }

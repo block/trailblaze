@@ -1,15 +1,12 @@
-package xyz.block.trailblaze.android
+package xyz.block.trailblaze.maestro
 
-import android.content.Context
-import kotlinx.datetime.Clock
 import maestro.orchestra.Command
 import maestro.orchestra.MaestroCommand
 import maestro.orchestra.yaml.YamlCommandReader
-import xyz.block.trailblaze.InstrumentationUtil.withInstrumentation
 import java.io.File
 import kotlin.io.path.Path
 
-object AndroidMaestroYaml {
+object MaestroYamlParser {
 
   /**
    * Will write the given YAML to a temporary file and parse it with Maestro's official YAML parser.
@@ -26,12 +23,11 @@ $yaml
     }
     return parseYamlToCommandsUsingMaestroImpl(
       yamlWithConfig,
-      withInstrumentation { this.context },
     )
   }
 
-  private fun parseYamlToCommandsUsingMaestroImpl(yamlString: String, context: Context): List<Command> {
-    val tempFlowFile = File(context.dataDir, "flow_${Clock.System.now().toEpochMilliseconds()}.yaml").apply {
+  private fun parseYamlToCommandsUsingMaestroImpl(yamlString: String): List<Command> {
+    val tempFlowFile = File.createTempFile("maestro", ".yaml").apply {
       println("Writing Flow yaml=$yamlString")
       writeText(yamlString)
     }

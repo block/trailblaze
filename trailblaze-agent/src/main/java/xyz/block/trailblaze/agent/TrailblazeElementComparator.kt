@@ -1,4 +1,4 @@
-package xyz.block.trailblaze.openai
+package xyz.block.trailblaze.agent
 
 import ai.koog.prompt.executor.clients.LLMClient
 import ai.koog.prompt.llm.LLModel
@@ -9,6 +9,7 @@ import ai.koog.prompt.params.LLMParams
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
 import kotlinx.serialization.json.Json
+import xyz.block.trailblaze.agent.util.ElementRetriever
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
@@ -47,7 +48,7 @@ internal class TrailblazeElementComparator(
    * Gets the value of an element based on a prompt description.
    */
   fun getElementValue(prompt: String): String? {
-    val screenState = prepareScreenState()
+    val screenState = screenStateProvider()
     println("Getting element value for prompt: '$prompt'")
 
     val locatorResponse = identifyElementLocator(screenState, prompt)
@@ -61,9 +62,24 @@ internal class TrailblazeElementComparator(
 
     return try {
       when (locatorResponse.locatorType) {
-        LocatorType.RESOURCE_ID -> ElementRetriever.getTextByResourceId(locatorValue, locatorIndex)
-        LocatorType.CONTENT_DESCRIPTION -> ElementRetriever.getTextByContentDescription(locatorValue, locatorIndex)
-        LocatorType.TEXT -> ElementRetriever.getTextByText(locatorValue, locatorIndex)
+        LocatorType.RESOURCE_ID -> ElementRetriever.getTextByResourceId(
+          currentViewHierarchy = screenState.viewHierarchy,
+          resourceId = locatorValue,
+          index = locatorIndex,
+        )
+
+        LocatorType.CONTENT_DESCRIPTION -> ElementRetriever.getTextByContentDescription(
+          currentViewHierarchy = screenState.viewHierarchy,
+          contentDescription = locatorValue,
+          index = locatorIndex,
+        )
+
+        LocatorType.TEXT -> ElementRetriever.getTextByText(
+          currentViewHierarchy = screenState.viewHierarchy,
+          text = locatorValue,
+          index = locatorIndex,
+        )
+
         null -> null
       }
     } catch (e: Exception) {
@@ -91,7 +107,7 @@ internal class TrailblazeElementComparator(
     val booleanAssertionToolRepo = TrailblazeToolRepo(
       TrailblazeToolSet(BooleanAssertionTrailblazeTool::class),
     )
-    val koogRequestData = TrailblazeKoogLlmClientHelper.KoogLlmRequestData(
+    val koogRequestData = KoogLlmRequestData(
       messages = koogAiRequestMessages,
       toolDescriptors = booleanAssertionToolRepo.getCurrentToolDescriptors(),
       toolChoice = LLMParams.ToolChoice.Required,
@@ -148,7 +164,7 @@ internal class TrailblazeElementComparator(
 
     val koogLlmChatResponse: List<Message.Response> = runBlocking {
       koogLlmClientHelper.callLlm(
-        TrailblazeKoogLlmClientHelper.KoogLlmRequestData(
+        KoogLlmRequestData(
           messages = koogAiRequestMessages,
           toolDescriptors = evaluationToolRepo.getCurrentToolDescriptors(),
           toolChoice = LLMParams.ToolChoice.Required,
@@ -190,15 +206,6 @@ internal class TrailblazeElementComparator(
         reason = "Error processing evaluation: ${e.message}",
       )
     }
-  }
-
-  /**
-   * Helper to prepare screen state and set view hierarchy
-   */
-  private fun prepareScreenState(): ScreenState {
-    val screenState = screenStateProvider()
-    ElementRetriever.setViewHierarchy(screenState.viewHierarchy)
-    return screenState
   }
 
   /**
@@ -245,7 +252,7 @@ internal class TrailblazeElementComparator(
     val elementRetrieverToolRepo = TrailblazeToolRepo(TrailblazeToolSet(ElementRetrieverTrailblazeTool::class))
     val koogLlmChatResponse: List<Message.Response> = runBlocking {
       koogLlmClientHelper.callLlm(
-        TrailblazeKoogLlmClientHelper.KoogLlmRequestData(
+        KoogLlmRequestData(
           messages = koogRequestMessages,
           toolDescriptors = elementRetrieverToolRepo.getCurrentToolDescriptors(),
           toolChoice = LLMParams.ToolChoice.Required,

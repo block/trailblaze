@@ -5,7 +5,6 @@ import maestro.Maestro
 import maestro.orchestra.ApplyConfigurationCommand
 import maestro.orchestra.Command
 import maestro.orchestra.MaestroCommand
-import xyz.block.trailblaze.android.AndroidMaestroYaml
 import xyz.block.trailblaze.android.maestro.LoggingDriver
 import xyz.block.trailblaze.android.maestro.MaestroAndroidUiAutomatorDriver
 import xyz.block.trailblaze.android.maestro.orchestra.Orchestra
@@ -14,6 +13,7 @@ import xyz.block.trailblaze.android.uiautomator.AndroidOnDeviceUiAutomatorScreen
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
+import xyz.block.trailblaze.maestro.MaestroYamlParser
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 
 /**
@@ -43,7 +43,7 @@ object MaestroUiAutomatorRunner {
   }
 
   fun runMaestroYaml(appId: String, yamlStringWithoutConfig: String): TrailblazeToolResult {
-    val maestroCommandsFromYaml: List<MaestroCommand> = AndroidMaestroYaml.parseYaml(
+    val maestroCommandsFromYaml: List<MaestroCommand> = MaestroYamlParser.parseYaml(
       yaml = yamlStringWithoutConfig,
       appId = appId,
     ).map {
@@ -65,7 +65,7 @@ object MaestroUiAutomatorRunner {
   )
 
   private fun runMaestroYaml(yamlString: String): TrailblazeToolResult {
-    val commands: List<Command> = AndroidMaestroYaml.parseYaml(
+    val commands: List<Command> = MaestroYamlParser.parseYaml(
       yamlString,
     )
     val result = runCommands(commands, null)

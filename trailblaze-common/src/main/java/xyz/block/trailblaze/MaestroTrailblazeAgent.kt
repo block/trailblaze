@@ -22,11 +22,6 @@ import xyz.block.trailblaze.toolcalls.getToolNameFromAnnotation
  */
 abstract class MaestroTrailblazeAgent : TrailblazeAgent {
 
-  abstract fun runMaestroYaml(
-    yaml: String,
-    llmResponseId: String? = null,
-  ): TrailblazeToolResult
-
   protected abstract fun executeMaestroCommands(
     commands: List<Command>,
     llmResponseId: String?,

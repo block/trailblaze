@@ -38,7 +38,7 @@ import maestro.orchestra.ToggleAirplaneModeCommand
 import maestro.orchestra.TravelCommand
 import maestro.orchestra.WaitForAnimationToEndCommand
 
-object MaestroCommandToYamlSerializer {
+object MaestroYamlSerializer {
 
   private fun indent(count: Int = 1, string: String): String = string.prependIndent(" ".repeat(count * 4))
 

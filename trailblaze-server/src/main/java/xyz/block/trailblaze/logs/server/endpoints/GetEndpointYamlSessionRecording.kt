@@ -6,7 +6,7 @@ import io.ktor.server.routing.get
 import maestro.orchestra.MaestroCommand
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLog.TrailblazeLlmRequestLog
-import xyz.block.trailblaze.maestro.MaestroCommandToYamlSerializer
+import xyz.block.trailblaze.maestro.MaestroYamlSerializer
 import xyz.block.trailblaze.report.utils.LogsRepo
 
 /**
@@ -28,7 +28,7 @@ object GetEndpointYamlSessionRecording {
           listOf(toolCommandLog.maestroCommand)
         }
 
-      val yamlString = MaestroCommandToYamlSerializer.toYaml(
+      val yamlString = MaestroYamlSerializer.toYaml(
         commands = basicCommands.mapNotNull { it.asCommand() },
         prompt = logs.filterIsInstance<TrailblazeLlmRequestLog>().firstOrNull()?.instructions,
       )

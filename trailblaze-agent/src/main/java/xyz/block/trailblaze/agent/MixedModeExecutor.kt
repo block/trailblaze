@@ -1,9 +1,10 @@
-package xyz.block.trailblaze.openai
+package xyz.block.trailblaze.agent
 
 import ai.koog.prompt.executor.clients.LLMClient
 import ai.koog.prompt.llm.LLModel
 import kotlinx.datetime.Clock
 import net.objecthunter.exp4j.ExpressionBuilder
+import xyz.block.trailblaze.MaestroTrailblazeAgent
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.agent.model.MixedModeTestCase
 import xyz.block.trailblaze.agent.model.TestObjective.AssertEqualsCommand
@@ -22,6 +23,7 @@ import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.exception.TrailblazeToolExecutionException
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
+import xyz.block.trailblaze.maestro.MaestroYamlParser
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import kotlin.math.abs
@@ -36,7 +38,7 @@ class MixedModeExecutor(
   llmClient: LLMClient,
   private val screenStateProvider: () -> ScreenState,
   private val runYamlFlowFunction: (String) -> TrailblazeToolResult,
-  private val runner: TrailblazeRunner,
+  private val trailblazeRunner: TrailblazeRunner,
   private val additionalTrailblazeTools: List<KClass<out TrailblazeTool>> = emptyList(),
 ) {
   // Variable store for remember commands
@@ -69,7 +71,7 @@ class MixedModeExecutor(
         is AssertMathCommand -> handleAssertMathCommand(objective)
         is AssertNotEqualsCommand -> handleAssertNotEqualsCommand(objective)
         is AssertWithAiCommand -> handleAssertWithAICommand(objective)
-        is MaestroCommand -> handleMaestroCommand(objective)
+        is MaestroCommand -> handleMaestroCommand(objective, trailblazeRunner.agent as MaestroTrailblazeAgent)
         is RememberNumberCommand -> handleRememberNumberCommand(objective)
         is RememberTextCommand -> handleRememberTextCommand(objective)
         is RememberWithAiCommand -> handleRememberWithAICommand(objective)
@@ -84,19 +86,19 @@ class MixedModeExecutor(
    * Handles a Trailblaze prompt by calling the LLM
    */
   private fun handleTrailblazePrompt(prompt: TrailblazePrompt) {
-    when (val trailblazeOpenAiRunnerResult = runner.run(prompt)) {
+    when (val trailblazeRunnerResult = trailblazeRunner.run(prompt)) {
       is AgentTaskStatus.Success.ObjectiveComplete -> {
         // Successfully completed
-        println("AI Task completed successfully: ${trailblazeOpenAiRunnerResult.llmExplanation}")
+        println("AI Task completed successfully: ${trailblazeRunnerResult.llmExplanation}")
       }
 
       is AgentTaskStatus.Success -> {
         // Some other success state
-        println("AI Task succeeded: $trailblazeOpenAiRunnerResult")
+        println("AI Task succeeded: $trailblazeRunnerResult")
       }
 
       else -> {
-        throw TrailblazeException(trailblazeOpenAiRunnerResult.toString())
+        throw TrailblazeException(trailblazeRunnerResult.toString())
       }
     }
   }
@@ -107,7 +109,7 @@ class MixedModeExecutor(
   private fun handleTrailblazeCommand(objective: TrailblazeCommand) {
     objective.tools.forEach { staticObjective ->
       staticObjective.tools.forEach { tool ->
-        runner.handleTrailblazeToolForPrompt(
+        trailblazeRunner.handleTrailblazeToolForPrompt(
           trailblazeTool = tool,
           llmResponseId = null,
           // Empty prompt step since we're just triggering the tool
@@ -214,16 +216,18 @@ class MixedModeExecutor(
   /**
    * Handles a Maestro command with a key-value pair
    */
-  private fun handleMaestroCommand(objective: MaestroCommand) {
-    val interpolatedMaestroCommand = interpolateVariables(objective.maestroCommandWithVars)
+  private fun handleMaestroCommand(objective: MaestroCommand, agent: MaestroTrailblazeAgent) {
+    val interpolatedMaestroYaml: String = interpolateVariables(objective.maestroCommandWithVars)
     TrailblazeLogger.log(
       TrailblazeLog.TopLevelMaestroCommandLog(
-        command = interpolatedMaestroCommand,
+        command = interpolatedMaestroYaml,
         session = TrailblazeLogger.getCurrentSessionId(),
         timestamp = Clock.System.now(),
       ),
     )
-    val result = runYamlFlowFunction(interpolatedMaestroCommand)
+    val result: TrailblazeToolResult = agent.runMaestroCommands(
+      maestroCommands = MaestroYamlParser.parseYaml(interpolatedMaestroYaml),
+    )
     if (result is TrailblazeToolResult.Error) {
       throw TrailblazeToolExecutionException(result)
     }
@@ -231,7 +235,7 @@ class MixedModeExecutor(
 
   /**
    * Helper method to directly evaluate a statement about the UI using the element comparator.
-   * This replaces OpenAI runner usage while still maintaining AI-like assertion capabilities.
+   * This replaces runner usage while still maintaining AI-like assertion capabilities.
    *
    * @param prompt The prompt to evaluate against the screen
    * @return String representation of the result (typically "true" or "false")

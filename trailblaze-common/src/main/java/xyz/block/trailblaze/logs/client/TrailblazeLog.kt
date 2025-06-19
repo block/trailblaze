@@ -16,7 +16,7 @@ import xyz.block.trailblaze.logs.model.HasScreenshot
 import xyz.block.trailblaze.logs.model.HasTrailblazeTool
 import xyz.block.trailblaze.logs.model.LlmMessage
 import xyz.block.trailblaze.logs.model.SessionStatus
-import xyz.block.trailblaze.maestro.MaestroCommandToYamlSerializer
+import xyz.block.trailblaze.maestro.MaestroYamlSerializer
 import xyz.block.trailblaze.serializers.TrailblazeToolToCodeSerializer
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
@@ -89,7 +89,7 @@ sealed interface TrailblazeLog {
   ) : TrailblazeLog,
     HasDuration {
     override val type: AgentLogEventType = AgentLogEventType.MAESTRO_COMMAND
-    fun asMaestroYaml(): String = MaestroCommandToYamlSerializer.toYaml(listOf(maestroCommand.asCommand()!!), false)
+    fun asMaestroYaml(): String = MaestroYamlSerializer.toYaml(listOf(maestroCommand.asCommand()!!), false)
   }
 
   @Serializable

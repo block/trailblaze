@@ -1,4 +1,4 @@
-package xyz.block.trailblaze.openai
+package xyz.block.trailblaze.agent
 
 import ai.koog.prompt.executor.clients.LLMClient
 import ai.koog.prompt.llm.LLModel
@@ -11,6 +11,7 @@ import xyz.block.trailblaze.MaestroTrailblazeAgent
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.agent.model.TestObjective.TrailblazeObjective.TrailblazePrompt
 import xyz.block.trailblaze.agent.model.TrailblazePromptStep
+import xyz.block.trailblaze.agent.util.LogHelper
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TestAgentRunner
 import xyz.block.trailblaze.api.TrailblazeAgent
@@ -41,10 +42,6 @@ class TrailblazeRunner(
     "trailblaze_current_screen_user_prompt_template.md",
   )!!,
 ) : TestAgentRunner {
-
-  private val trailblazeOpenAiRunnerHelper = TrailblazeOpenAiRunnerHelper(
-    agent = agent,
-  )
 
   private val trailblazeKoogLlmClientHelper = TrailblazeKoogLlmClientHelper(
     systemPromptTemplate = systemPromptTemplate,
@@ -99,7 +96,7 @@ class TrailblazeRunner(
         timestamp = Clock.System.now(),
       ),
     )
-    trailblazeOpenAiRunnerHelper.setForceStepStatusUpdate(false)
+    trailblazeKoogLlmClientHelper.setForceStepStatusUpdate(false)
     do {
       println("\n[LOOP_STATUS] Status: ${step.currentStatus.value.javaClass.simpleName} | Call: ${step.getHistorySize() + 1}")
       val screenStateForLlmRequest = screenStateProvider()
@@ -115,80 +112,77 @@ class TrailblazeRunner(
         )
       }
 
-      suspend fun callWithKoogOpenAi() {
-        // Limit message history to reduce memory usage
-        val limitedHistory: List<Message> = step.getKoogLlmResponseHistory().takeLast(5) // Only keep recent messages
+      // Limit message history to reduce context window
+      val limitedHistory: List<Message> = step.getKoogLlmResponseHistory().takeLast(5) // Only keep recent messages
 
-        val koogAiRequestMessages: List<Message> = trailblazeKoogLlmClientHelper.createNextChatRequestKoog(
-          limitedHistory = limitedHistory,
-          screenState = screenStateForLlmRequest,
-          step = step,
-          forceStepStatusUpdate = trailblazeOpenAiRunnerHelper.getForceStepStatusUpdate(),
-        )
+      val koogAiRequestMessages: List<Message> = trailblazeKoogLlmClientHelper.createNextChatRequestKoog(
+        limitedHistory = limitedHistory,
+        screenState = screenStateForLlmRequest,
+        step = step,
+        forceStepStatusUpdate = trailblazeKoogLlmClientHelper.getForceStepStatusUpdate(),
+      )
 
-        val koogLlmResponseMessages: List<Message.Response> = trailblazeKoogLlmClientHelper.callLlm(
-          TrailblazeKoogLlmClientHelper.KoogLlmRequestData(
+      val koogLlmResponseMessages: List<Message.Response> = runBlocking {
+        trailblazeKoogLlmClientHelper.callLlm(
+          KoogLlmRequestData(
             callId = llmResponseId,
             messages = koogAiRequestMessages,
             toolDescriptors = trailblazeToolRepo.getCurrentToolDescriptors(),
-            toolChoice = if (trailblazeOpenAiRunnerHelper.getShouldForceToolCall()) {
+            toolChoice = if (trailblazeKoogLlmClientHelper.getShouldForceToolCall()) {
               LLMParams.ToolChoice.Required
             } else {
               LLMParams.ToolChoice.Auto
             },
           ),
         )
-
-        val toolMessage: Message.Tool? = koogLlmResponseMessages.filterIsInstance<Message.Tool>().firstOrNull()
-        val assistantMessage: Message.Assistant? = koogLlmResponseMessages
-          .filterIsInstance<Message.Assistant>()
-          .firstOrNull()
-        println(toolMessage)
-
-        TrailblazeLogger.logLlmRequest(
-          agentTaskStatus = step.currentStatus.value,
-          screenState = screenStateForLlmRequest,
-          instructions = step.fullPrompt,
-          llmMessages = limitedHistory.map { messageFromHistory ->
-            LlmMessage(
-              role = messageFromHistory.role.name.lowercase(),
-              message = messageFromHistory.content,
-            )
-          }.plus(
-            LlmMessage(
-              role = Message.Role.Assistant.name.lowercase(),
-              message = koogLlmResponseMessages.filterIsInstance<Message.Assistant>().firstOrNull()?.content,
-            ),
-          ),
-          response = koogLlmResponseMessages,
-          startTime = requestStartTimeMs,
-          llmRequestId = llmResponseId,
-          llmModelId = llmModel.id,
-        )
-
-        val llmMessage = assistantMessage?.content
-        if (toolMessage != null) {
-          trailblazeOpenAiRunnerHelper.handleLlmResponse(
-            toolRegistry = toolRegistry,
-            llmMessage = llmMessage,
-            toolName = toolMessage.tool,
-            toolArgs = TrailblazeJsonInstance.decodeFromString(JsonObject.serializer(), toolMessage.content),
-            llmResponseId = llmResponseId,
-            step = step,
-            screenStateForLlmRequest = screenStateForLlmRequest,
-          )
-        } else {
-          println("[WARNING] No tool call detected - forcing tool call on next iteration")
-          step.addEmptyToolCallToChatHistory(
-            llmResponseContent = llmMessage,
-            result = TrailblazeToolResult.Error.EmptyToolCall,
-          )
-          trailblazeOpenAiRunnerHelper.setShouldForceToolCall(true)
-        }
       }
 
-      runBlocking {
-        callWithKoogOpenAi()
+      val toolMessage: Message.Tool? = koogLlmResponseMessages.filterIsInstance<Message.Tool>().firstOrNull()
+      val assistantMessage: Message.Assistant? = koogLlmResponseMessages
+        .filterIsInstance<Message.Assistant>()
+        .firstOrNull()
+      println(toolMessage)
+
+      TrailblazeLogger.logLlmRequest(
+        agentTaskStatus = step.currentStatus.value,
+        screenState = screenStateForLlmRequest,
+        instructions = step.fullPrompt,
+        llmMessages = limitedHistory.map { messageFromHistory ->
+          LlmMessage(
+            role = messageFromHistory.role.name.lowercase(),
+            message = messageFromHistory.content,
+          )
+        }.plus(
+          LlmMessage(
+            role = Message.Role.Assistant.name.lowercase(),
+            message = koogLlmResponseMessages.filterIsInstance<Message.Assistant>().firstOrNull()?.content,
+          ),
+        ),
+        response = koogLlmResponseMessages,
+        startTime = requestStartTimeMs,
+        llmRequestId = llmResponseId,
+        llmModelId = llmModel.id,
+      )
+
+      val llmMessage = assistantMessage?.content
+      if (toolMessage != null) {
+        trailblazeKoogLlmClientHelper.handleLlmResponse(
+          toolRegistry = toolRegistry,
+          llmMessage = llmMessage,
+          toolName = toolMessage.tool,
+          toolArgs = TrailblazeJsonInstance.decodeFromString(JsonObject.serializer(), toolMessage.content),
+          llmResponseId = llmResponseId,
+          step = step,
+          screenStateForLlmRequest = screenStateForLlmRequest,
+          agent = agent,
+        )
+      } else {
+        println("[WARNING] No tool call detected - forcing tool call on next iteration")
+        step.addEmptyToolCallToChatHistory(
+          llmResponseContent = llmMessage,
+          result = TrailblazeToolResult.Error.EmptyToolCall,
+        )
+        trailblazeKoogLlmClientHelper.setShouldForceToolCall(true)
       }
 
       LogHelper.logStepStatus(step)
@@ -217,11 +211,12 @@ class TrailblazeRunner(
     step: TrailblazePromptStep,
     screenStateForLlmRequest: ScreenState,
   ) {
-    trailblazeOpenAiRunnerHelper.handleTrailblazeToolForPrompt(
+    trailblazeKoogLlmClientHelper.handleTrailblazeToolForPrompt(
       trailblazeTool = trailblazeTool,
       llmResponseId = llmResponseId,
       step = step,
       screenStateForLlmRequest = screenStateForLlmRequest,
+      agent = agent,
     )
   }
 }

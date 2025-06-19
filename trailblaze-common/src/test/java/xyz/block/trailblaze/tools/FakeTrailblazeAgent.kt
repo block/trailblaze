@@ -7,13 +7,6 @@ import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 
 class FakeTrailblazeAgent : MaestroTrailblazeAgent() {
-  override fun runMaestroYaml(
-    yaml: String,
-    llmResponseId: String?,
-  ): TrailblazeToolResult {
-    TODO("Not yet implemented")
-  }
-
   override fun executeMaestroCommands(
     commands: List<Command>,
     llmResponseId: String?,
