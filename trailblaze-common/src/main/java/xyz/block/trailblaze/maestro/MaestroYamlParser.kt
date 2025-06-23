@@ -28,10 +28,8 @@ $yaml
 
   private fun parseYamlToCommandsUsingMaestroImpl(yamlString: String): List<Command> {
     val tempFlowFile = File.createTempFile("maestro", ".yaml").apply {
-      println("Writing Flow yaml=$yamlString")
       writeText(yamlString)
     }
-    println("Running Flow: ${tempFlowFile.canonicalPath} ${tempFlowFile.readText()}")
     val commands: List<MaestroCommand> = YamlCommandReader.readCommands(Path(tempFlowFile.absolutePath))
     tempFlowFile.delete()
     return commands.mapNotNull { it.asCommand() }

@@ -25,4 +25,5 @@ include(
   ":trailblaze-agent",
   ":trailblaze-report",
   ":trailblaze-server",
+  ":trailblaze-yaml",
 )

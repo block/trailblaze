@@ -16,7 +16,7 @@ Navigates to the previous page or state.
 Consider using `wait` command if the app is loading a new screen.
     """,
 )
-class PressBackTrailblazeTool : MapsToMaestroCommands() {
+data object PressBackTrailblazeTool : MapsToMaestroCommands() {
   override fun toMaestroCommands(): List<Command> = listOf(
     BackPressCommand(),
   )

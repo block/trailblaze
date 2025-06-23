@@ -18,7 +18,7 @@ jansi = "2.4.1"
 jetbrains-compose-multiplatform = "1.7.3"
 jsoup = "1.19.1"
 junit = "4.13.2"
-kaml = "0.73.0"
+kaml = "0.82.0"
 koog = "0.2.1"
 # Kotlin 2.0.21 currently for compatibility with existing integrations
 kotlin = "2.0.21"
