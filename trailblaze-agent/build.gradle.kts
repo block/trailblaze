@@ -9,13 +9,17 @@ plugins {
 
 dependencies {
   api(project(":trailblaze-common"))
-  api(libs.maestro.orchestra.models) { isTransitive = false }
+  api(libs.koog.agents.tools)
+  api(libs.koog.prompt.llm)
+  api(libs.koog.prompt.model)
 
   implementation(libs.exp4j)
   implementation(libs.coroutines)
   implementation(libs.kotlinx.serialization.core)
   implementation(libs.kotlinx.serialization.json)
   implementation(libs.koog.prompt.executor.clients)
+  implementation(libs.kotlinx.datetime)
+
   runtimeOnly(libs.kotlin.reflect)
 }
 

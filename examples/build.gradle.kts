@@ -2,6 +2,7 @@ plugins {
   alias(libs.plugins.android.library)
   alias(libs.plugins.kotlin.android)
   alias(libs.plugins.kotlin.serialization)
+  alias(libs.plugins.dependency.guard)
   alias(libs.plugins.dagp)
 }
 
@@ -52,9 +53,19 @@ dependencies {
   androidTestImplementation(project(":trailblaze-common"))
   androidTestImplementation(project(":trailblaze-android"))
   androidTestImplementation(libs.junit)
-  androidTestImplementation(libs.maestro.orchestra.models)
   androidTestImplementation(libs.koog.prompt.executor.openai)
 
   androidTestRuntimeOnly(libs.androidx.test.runner)
   androidTestRuntimeOnly(libs.coroutines.android)
+  androidTestImplementation(libs.koog.prompt.executor.clients)
+  androidTestImplementation(libs.koog.prompt.llm)
+  androidTestImplementation(libs.maestro.orchestra.models)
+  androidTestImplementation(libs.ktor.client.core)
+  androidTestImplementation(libs.kotlinx.datetime)
+}
+
+dependencyGuard {
+  configuration("debugAndroidTestRuntimeClasspath") {
+    tree = true
+  }
 }

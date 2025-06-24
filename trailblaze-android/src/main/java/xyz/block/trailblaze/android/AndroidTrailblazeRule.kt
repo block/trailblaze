@@ -35,9 +35,7 @@ class AndroidTrailblazeRule(
   private lateinit var trailblazeOpenAiRunner: TestAgentRunner
 
   val trailblazeToolRepo = TrailblazeToolRepo(
-    TrailblazeToolSet.getSetOfMarkToolSet(
-      setOfMarkEnabled = true,
-    ),
+    TrailblazeToolSet.SetOfMarkTrailblazeToolSet,
   )
 
   override fun ruleCreation(description: Description) {

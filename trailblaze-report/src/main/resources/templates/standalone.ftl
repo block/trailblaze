@@ -67,7 +67,6 @@
     </script>
 </head>
 <body class="bg-light">
-<#include "header.ftl">
 <div class="container-fluid p-3 bg-white rounded-lg shadow-sm">
     <div class="row">
         <div class="col">

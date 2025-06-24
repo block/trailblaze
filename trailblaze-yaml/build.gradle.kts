@@ -4,14 +4,22 @@ plugins {
   alias(libs.plugins.kotlin.serialization)
   alias(libs.plugins.dependency.guard)
   alias(libs.plugins.spotless)
+  alias(libs.plugins.dagp)
 }
 
 dependencies {
+  api(libs.maestro.orchestra.models) { isTransitive = false }
+
   api(project(":trailblaze-common"))
-  implementation(libs.kaml)
+  api(libs.kaml)
 
   testImplementation(libs.kotlin.test.junit4)
-  testImplementation(libs.assertk)
+  implementation(libs.koog.agents.tools)
+  testImplementation(libs.koog.agents.tools)
+  testImplementation(libs.maestro.client)
+  testImplementation(libs.junit)
+  api(libs.kotlinx.serialization.core)
+  testImplementation(libs.kotlinx.serialization.core)
 }
 
 tasks.test {

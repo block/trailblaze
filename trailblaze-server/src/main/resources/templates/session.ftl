@@ -80,9 +80,14 @@
                 </button>
             </a>
             <span> </span>
-            <a href="/recording/yaml/${session}">
+            <a href="/recording/maestro/${session}">
                 <button type="button" class="btn btn-primary me-3">
                     Maestro YAML Recording
+                </button>
+            </a>
+            <a href="/recording/trailblaze/${session}">
+                <button type="button" class="btn btn-primary me-3">
+                    Trailblaze YAML Recording
                 </button>
             </a>
             <span> </span>

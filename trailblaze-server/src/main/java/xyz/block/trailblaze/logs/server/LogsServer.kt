@@ -28,17 +28,21 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
+import xyz.block.trailblaze.logs.server.LogsServer.gitDir
 import xyz.block.trailblaze.logs.server.LogsServer.logsDir
 import xyz.block.trailblaze.logs.server.endpoints.AgentLogEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.DeleteLogsEndpoint
+import xyz.block.trailblaze.logs.server.endpoints.GetEndpointMaestroYamlSessionRecording
 import xyz.block.trailblaze.logs.server.endpoints.GetEndpointSessionDetail
-import xyz.block.trailblaze.logs.server.endpoints.GetEndpointYamlSessionRecording
+import xyz.block.trailblaze.logs.server.endpoints.GetEndpointTrailblazeYamlSessionRecording
 import xyz.block.trailblaze.logs.server.endpoints.LlmSessionEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.LogScreenshotPostEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.SessionJsonRecordingEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.SinglePageReportEndpoint
 import xyz.block.trailblaze.report.utils.LogsRepo
 import java.io.File
+import kotlin.io.encoding.Base64
+import kotlin.io.encoding.ExperimentalEncodingApi
 
 fun ApplicationEngine.Configuration.envConfig(requestedHttpPort: Int, requestedHttpsPort: Int) {
   val keyStoreFile = File("build/keystore.jks")
@@ -135,6 +139,7 @@ object LogsServer {
   }
 }
 
+@OptIn(ExperimentalEncodingApi::class)
 fun Application.module() {
   install(WebSockets)
   install(ContentNegotiation) {
@@ -154,12 +159,21 @@ fun Application.module() {
         val logsForSession = LogsServer.logsRepo.getLogsForSession(sessionName)
       }
 
+      val recipeFile = File(gitDir, "scripts/trailblaze_goose_recipe.json")
+      val gooseRecipeJson = if (recipeFile.exists()) {
+        recipeFile.readText()
+      } else {
+        null
+      }
       call.respond(
         FreeMarkerContent(
-          "home.ftl",
-          mapOf(
-            "sessions" to sessionDirs.map { dir -> dir.name },
-          ),
+          template = "home.ftl",
+          model = mutableMapOf<String, Any?>().apply {
+            put("sessions", sessionDirs.map { dir -> dir.name })
+            gooseRecipeJson?.let { gooseRecipeJson ->
+              put("gooseRecipe", Base64.encode(gooseRecipeJson.toByteArray()))
+            }
+          },
         ),
         null,
       )
@@ -198,7 +212,8 @@ fun Application.module() {
     GetEndpointSessionDetail.register(this, logsRepo)
     AgentLogEndpoint.register(this, logsRepo)
     DeleteLogsEndpoint.register(this, logsRepo)
-    GetEndpointYamlSessionRecording.register(this, logsRepo)
+    GetEndpointMaestroYamlSessionRecording.register(this, logsRepo)
+    GetEndpointTrailblazeYamlSessionRecording.register(this, logsRepo)
     LogScreenshotPostEndpoint.register(this, logsRepo)
     SinglePageReportEndpoint.register(this, logsRepo)
     staticFiles("/static", logsDir)

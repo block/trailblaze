@@ -3,7 +3,6 @@ plugins {
   alias(libs.plugins.kotlin.serialization)
   alias(libs.plugins.spotless)
   alias(libs.plugins.dependency.guard)
-  alias(libs.plugins.dagp)
   application
 }
 
@@ -23,6 +22,7 @@ dependencies {
 
   implementation(project(":trailblaze-common"))
   implementation(project(":trailblaze-report"))
+  implementation(project(":trailblaze-yaml"))
   implementation(libs.okhttp)
 
   implementation(libs.ktor.server.core.jvm)
@@ -33,6 +33,7 @@ dependencies {
   implementation(libs.ktor.serialization.kotlinx.json)
   implementation(libs.coroutines)
   implementation(libs.maestro.orchestra.models) { isTransitive = false }
+  implementation(libs.kotlinx.datetime)
   implementation(libs.ktor.http)
   implementation(libs.ktor.serialization)
   implementation(libs.ktor.utils)

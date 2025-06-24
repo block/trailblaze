@@ -29,7 +29,7 @@ class MixedModeTestCase(
   private val additionalTrailblazeTools: List<KClass<out TrailblazeTool>> = emptyList(),
 ) : TestCase(yamlContent) {
   private val allPossibleTools: Set<KClass<out TrailblazeTool>> =
-    TrailblazeToolSet.BuiltInTrailblazeTools + additionalTrailblazeTools
+    TrailblazeToolSet.AllBuiltInTrailblazeTools + additionalTrailblazeTools
 
   override val objectives: List<TestObjective> = parseObjectives()
 
@@ -83,20 +83,32 @@ class MixedModeTestCase(
   // TODO: Many, many unit tests for this
   private fun parseTrailblazePrompt(
     value: Any?,
-  ): TrailblazeObjective {
-    val objectives = value as? List<*>
-      ?: throw TrailblazeException("No objectives found in Trailblaze objective: $value")
-
-    return if (shouldParseCommands(objectives)) {
-      println("### parsing trailblaze commands")
-      parseTrailblazeCommands(objectives)
-    } else {
-      println("### parsing full prompt with prompt steps")
-      val fullInstructions = parseFullPrompt(objectives)
-      val promptSteps = generatePromptSteps(fullInstructions)
-      TrailblazePrompt(fullInstructions, promptSteps)
-    }
+  ): TrailblazeObjective = when (value) {
+    is List<*> -> parseTrailblazePromptSteps(value)
+    is String -> parseSinglePrompt(value)
+    else -> throw TrailblazeException("No objectives found in Trailblaze objective: $value")
   }
+
+  private fun parseTrailblazePromptSteps(
+    objectives: List<*>,
+  ): TrailblazeObjective = if (shouldParseCommands(objectives)) {
+    println("### parsing trailblaze commands")
+    parseTrailblazeCommands(objectives)
+  } else {
+    println("### parsing full prompt with prompt steps")
+    val fullInstructions = parseFullPrompt(objectives)
+    val promptSteps = generatePromptSteps(fullInstructions)
+    TrailblazePrompt(fullInstructions, promptSteps)
+  }
+
+  private fun parseSinglePrompt(instructions: String): TrailblazeObjective = TrailblazePrompt(
+    fullPrompt = instructions,
+    steps = listOf(
+      TrailblazePromptStep(
+        description = instructions,
+      ),
+    ),
+  )
 
   private fun shouldParseCommands(objectives: List<*>): Boolean = objectives.all { it is Map<*, *> } and executeRecordedSteps
 

@@ -141,6 +141,11 @@ class TrailblazeAndroidLoggingRule : SimpleTestRule() {
 
             sslSocketFactory(sslSocketFactory, trustAllCerts[0] as X509TrustManager)
             hostnameVerifier { _, _ -> true }
+
+            // Short timeouts because this should be a local call
+            writeTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
+            readTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
+            connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
           }
         }
       },
@@ -156,7 +161,7 @@ class TrailblazeAndroidLoggingRule : SimpleTestRule() {
       TrailblazeLogger.setLogScreenshotListener { screenshotBytes ->
         val screenshotFileName = "${currentTestName}_${Clock.System.now().toEpochMilliseconds()}.png"
         // Send Log
-        runBlocking(Dispatchers.Main) {
+        runBlocking(Dispatchers.IO) {
           if (sendOverHttp) {
             val logResult = trailblazeLogServerClient.postScreenshot(
               screenshotFilename = screenshotFileName,
@@ -175,7 +180,7 @@ class TrailblazeAndroidLoggingRule : SimpleTestRule() {
       }
       TrailblazeLogger.setLogListener { log: TrailblazeLog ->
         // Send Log
-        runBlocking(Dispatchers.Main) {
+        runBlocking(Dispatchers.IO) {
           if (sendOverHttp) {
             val logResult = trailblazeLogServerClient.postAgentLog(log)
             if (logResult.status.value != 200) {

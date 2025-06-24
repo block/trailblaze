@@ -28,6 +28,7 @@ class AndroidOnDeviceUiAutomatorScreenState(
   maxDimension2: Int? = 512,
   private val setOfMarkEnabled: Boolean = true,
   maxAttempts: Int = 1,
+  includeScreenshot: Boolean = true,
 ) : ScreenState {
 
   override var deviceWidth: Int = -1
@@ -61,7 +62,11 @@ class AndroidOnDeviceUiAutomatorScreenState(
         vh1Original
       }
 
-      val screenshot = getScreenshot(vh1Filtered, maxDimension1, maxDimension2)
+      val screenshot = if (includeScreenshot) {
+        getScreenshot(vh1Filtered, maxDimension1, maxDimension2)
+      } else {
+        null
+      }
 
       val vh2Original = MaestroUiAutomatorXmlParser.getUiAutomatorViewHierarchyAsSerializableTreeNodes(
         xmlHierarchy = dumpViewHierarchy(),

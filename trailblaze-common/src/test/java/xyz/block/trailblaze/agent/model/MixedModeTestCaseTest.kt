@@ -528,4 +528,59 @@ class MixedModeTestCaseTest {
         ),
       )
   }
+
+  @Test
+  fun multilineTrailblazePrompt() {
+    val yaml = """
+- run: |
+    Run something with one step
+    and maybe another step
+    """.trimIndent()
+    val testCase = MixedModeTestCase(yaml)
+    val objectives = testCase.objectives
+    assertThat(objectives.size).isEqualTo(1)
+    val prompt = objectives.first()
+    with(prompt as TrailblazePrompt) {
+      assertThat(prompt.fullPrompt).isEqualTo("Run something with one step\nand maybe another step")
+      assertThat(prompt.steps.size).isEqualTo(1)
+    }
+  }
+
+  @Test
+  fun trailblazePromptSingleStep() {
+    val yaml = """
+- run:
+    - Run something with one step
+    """.trimIndent()
+    val testCase = MixedModeTestCase(yaml)
+    val objectives = testCase.objectives
+    assertThat(objectives.size).isEqualTo(1)
+    val prompt = objectives.first()
+    with(prompt as TrailblazePrompt) {
+      assertThat(prompt.fullPrompt).isEqualTo("Run something with one step")
+      assertThat(prompt.steps.size).isEqualTo(1)
+      assertThat(prompt.steps.first().description).isEqualTo("Run something with one step")
+    }
+  }
+
+  @Test
+  fun trailblazePromptMultipleStep() {
+    val yaml = """
+- run:
+    - Run something with one step
+    - Run something with two steps
+    - Run something with three steps
+    """.trimIndent()
+    val testCase = MixedModeTestCase(yaml)
+    val objectives = testCase.objectives
+    assertThat(objectives.size).isEqualTo(1)
+    val prompt = objectives.first()
+    with(prompt as TrailblazePrompt) {
+      assertThat(prompt.fullPrompt).isEqualTo("Run something with one step\nRun something with two steps\nRun something with three steps")
+      assertThat(prompt.steps.size).isEqualTo(3)
+      assertThat(prompt.steps[0].description).isEqualTo("Run something with one step")
+      assertThat(prompt.steps[1].description).isEqualTo("Run something with two steps")
+      assertThat(prompt.steps[2].description).isEqualTo("Run something with three steps")
+    }
+  }
 }

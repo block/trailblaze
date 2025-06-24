@@ -1,7 +1,5 @@
 ai.koog:agents-tools-jvm:0.2.1
 ai.koog:agents-tools:0.2.1
-ai.koog:prompt-executor-clients-jvm:0.2.1
-ai.koog:prompt-executor-clients:0.2.1
 ai.koog:prompt-llm-jvm:0.2.1
 ai.koog:prompt-llm:0.2.1
 ai.koog:prompt-model-jvm:0.2.1

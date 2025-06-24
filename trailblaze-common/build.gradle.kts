@@ -16,7 +16,6 @@ dependencies {
   api(libs.koog.agents.tools)
   api(libs.ktor.client.core)
   api(libs.maestro.orchestra.models) { isTransitive = false }
-  api(libs.maestro.orchestra) { isTransitive = false }
   api(libs.maestro.client) { isTransitive = false }
 
   implementation(libs.gson)
@@ -25,19 +24,21 @@ dependencies {
   implementation(libs.ktor.http)
   implementation(libs.ktor.utils)
   implementation(libs.kotlin.reflect)
+  implementation(libs.maestro.orchestra) { isTransitive = false }
   implementation(libs.snakeyaml)
-  implementation(libs.koog.prompt.executor.clients)
+  implementation(libs.koog.prompt.model)
 
   runtimeOnly(libs.jackson.dataformat.yaml)
   runtimeOnly(libs.jackson.module.kotlin)
 
   testImplementation(libs.kotlin.test.junit4)
-  testImplementation(libs.maestro.orchestra) { isTransitive = false }
   testImplementation(libs.assertk)
 }
 
 dependencyGuard {
-  configuration("runtimeClasspath")
+  configuration("runtimeClasspath") {
+    tree = true
+  }
 }
 
 tasks.test {

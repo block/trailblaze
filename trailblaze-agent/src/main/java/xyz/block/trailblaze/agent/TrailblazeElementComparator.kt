@@ -105,7 +105,10 @@ internal class TrailblazeElementComparator(
     )
 
     val booleanAssertionToolRepo = TrailblazeToolRepo(
-      TrailblazeToolSet(BooleanAssertionTrailblazeTool::class),
+      TrailblazeToolSet.DynamicTrailblazeToolSet(
+        "Boolean Assertion",
+        setOf(BooleanAssertionTrailblazeTool::class),
+      ),
     )
     val koogRequestData = KoogLlmRequestData(
       messages = koogAiRequestMessages,
@@ -157,8 +160,9 @@ internal class TrailblazeElementComparator(
     )
 
     val evaluationToolRepo = TrailblazeToolRepo(
-      TrailblazeToolSet(
-        StringEvaluationTrailblazeTool::class,
+      TrailblazeToolSet.DynamicTrailblazeToolSet(
+        "String Evaluation",
+        setOf(StringEvaluationTrailblazeTool::class),
       ),
     )
 
@@ -249,7 +253,12 @@ internal class TrailblazeElementComparator(
       )
     }
 
-    val elementRetrieverToolRepo = TrailblazeToolRepo(TrailblazeToolSet(ElementRetrieverTrailblazeTool::class))
+    val elementRetrieverToolRepo = TrailblazeToolRepo(
+      TrailblazeToolSet.DynamicTrailblazeToolSet(
+        "Element Retriever",
+        setOf(ElementRetrieverTrailblazeTool::class),
+      ),
+    )
     val koogLlmChatResponse: List<Message.Response> = runBlocking {
       koogLlmClientHelper.callLlm(
         KoogLlmRequestData(

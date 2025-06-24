@@ -16,6 +16,7 @@ interface TestObjective {
     data class TrailblazeCommand(
       val tools: List<StaticObjective>,
     ) : TrailblazeObjective
+
     data class TrailblazePrompt(
       val fullPrompt: String,
       val steps: List<TrailblazePromptStep>,

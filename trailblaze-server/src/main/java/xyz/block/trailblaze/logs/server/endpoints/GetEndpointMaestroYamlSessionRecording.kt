@@ -12,10 +12,10 @@ import xyz.block.trailblaze.report.utils.LogsRepo
 /**
  * Registers an endpoint to display LLM conversation as an html chat view.
  */
-object GetEndpointYamlSessionRecording {
+object GetEndpointMaestroYamlSessionRecording {
 
   fun register(routing: Routing, logsDirUtil: LogsRepo) = with(routing) {
-    get("/recording/yaml/{session}") {
+    get("/recording/maestro/{session}") {
       println("Recording YAML")
       // Only save the llm request logs for now
       val sessionId = this.call.parameters["session"]

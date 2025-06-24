@@ -30,6 +30,10 @@ class TrailblazeToolRepo(
     tools(getRegisteredTrailblazeTools().toKoogTools(trailblazeToolContextProvider))
   }
 
+  fun addTrailblazeTools(trailblazeToolSet: TrailblazeToolSet) = synchronized(registeredTrailblazeToolClasses) {
+    addTrailblazeTools(*trailblazeToolSet.asTools().toTypedArray())
+  }
+
   fun addTrailblazeTools(vararg trailblazeTool: KClass<out TrailblazeTool>) = synchronized(registeredTrailblazeToolClasses) {
     trailblazeTool.forEach { tool ->
       if (!tool.hasSerializableAnnotation()) {

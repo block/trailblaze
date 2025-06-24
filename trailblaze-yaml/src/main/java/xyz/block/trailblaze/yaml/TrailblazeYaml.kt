@@ -5,6 +5,7 @@ import com.charleskorn.kaml.SingleLineStringStyle
 import com.charleskorn.kaml.Yaml
 import com.charleskorn.kaml.YamlConfiguration
 import com.charleskorn.kaml.YamlNamingStrategy
+import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.modules.SerializersModule
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
@@ -20,7 +21,7 @@ class TrailblazeYaml(
 ) {
 
   val allTrailblazeToolClasses: Set<KClass<out TrailblazeTool>> =
-    TrailblazeToolSet.BuiltInTrailblazeTools + customTrailblazeToolClasses
+    TrailblazeToolSet.AllBuiltInTrailblazeTools + customTrailblazeToolClasses
 
   companion object {
     private val yamlConfiguration = YamlConfiguration(
@@ -63,5 +64,13 @@ class TrailblazeYaml(
         TrailblazeToolYamlWrapper.TrailblazeToolYamlWrapperSerializer(allTrailblazeToolClasses),
       )
     },
+  )
+
+  fun encodeToString(items: MutableList<TrailYamlItem>): String = getInstance().encodeToString(
+    ListSerializer(
+      getInstance().serializersModule.getContextual(TrailYamlItem::class)
+        ?: error("Missing contextual serializer for TrailYamlItem"),
+    ),
+    items,
   )
 }

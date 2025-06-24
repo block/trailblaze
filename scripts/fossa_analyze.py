@@ -11,6 +11,7 @@ FOSSA_YAML_FILE = FOSSA_DIR / "fossa.yml"
 PATTERN = "**/dependencies/*RuntimeClasspath.txt"
 GRADLEW_PATH = REPO_ROOT / "gradlew"
 
+
 def run_gradle_dependency_guard():
     print("🔄 Running './gradlew dependencyGuardBaseline' to update dependency lock files...")
     result = subprocess.run([str(GRADLEW_PATH), "dependencyGuardBaseline"], cwd=REPO_ROOT)
@@ -19,8 +20,10 @@ def run_gradle_dependency_guard():
         sys.exit(result.returncode)
     print("✅ Gradle task completed.")
 
+
 def find_dependency_files():
     return list(REPO_ROOT.glob(PATTERN))
+
 
 def parse_dependencies(files):
     deps = set()
@@ -32,6 +35,7 @@ def parse_dependencies(files):
                     deps.add(dep)
     return sorted(deps)
 
+
 def generate_pom_xml(dependencies):
     print(f"📝 Generating synthetic pom.xml with {len(dependencies)} dependencies...")
     FOSSA_DIR.mkdir(parents=True, exist_ok=True)
@@ -42,11 +46,11 @@ def generate_pom_xml(dependencies):
         f.write('         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"\n')
         f.write('         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0\n')
         f.write('                             http://maven.apache.org/xsd/maven-4.0.0.xsd">\n')
-        f.write('  <modelVersion>4.0.0</modelVersion>\n')
-        f.write('  <groupId>com.trailblaze</groupId>\n')
-        f.write('  <artifactId>trailblaze-gradle-dependencies</artifactId>\n')
-        f.write('  <version>1.0.0</version>\n')
-        f.write('  <dependencies>\n')
+        f.write("  <modelVersion>4.0.0</modelVersion>\n")
+        f.write("  <groupId>com.trailblaze</groupId>\n")
+        f.write("  <artifactId>trailblaze-gradle-dependencies</artifactId>\n")
+        f.write("  <version>1.0.0</version>\n")
+        f.write("  <dependencies>\n")
 
         for dep in dependencies:
             group, artifact, version = dep.split(":")
@@ -61,6 +65,7 @@ def generate_pom_xml(dependencies):
 
     print(f"✅ Wrote {POM_FILE.relative_to(REPO_ROOT)}")
 
+
 def generate_fossa_yaml():
     print("📝 Generating .fossa/fossa.yml...")
     with open(FOSSA_YAML_FILE, "w") as f:
@@ -71,6 +76,7 @@ def generate_fossa_yaml():
         f.write("    type: gradle\n")
     print(f"✅ Wrote {FOSSA_YAML_FILE.relative_to(REPO_ROOT)}")
 
+
 def run_fossa_analyze():
     print("🚀 Running 'fossa analyze' in .fossa/...")
     result = subprocess.run(["fossa", "analyze"], cwd=FOSSA_DIR)
@@ -78,6 +84,7 @@ def run_fossa_analyze():
         print("❌ FOSSA analysis failed.")
         sys.exit(result.returncode)
     print("✅ FOSSA analysis completed.")
+
 
 def main():
     run_gradle_dependency_guard()
@@ -95,6 +102,7 @@ def main():
     generate_pom_xml(dependencies)
     generate_fossa_yaml()
     run_fossa_analyze()
+
 
 if __name__ == "__main__":
     main()

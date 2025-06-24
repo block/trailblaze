@@ -65,42 +65,15 @@ $THIS_DOC_IS_GENERATED_MESSAGE
   }
 
   fun generate() {
-    TrailblazeToolSet.BuiltInTrailblazeTools
+    TrailblazeToolSet.AllBuiltInTrailblazeTools
       .forEach { toolClass: KClass<out TrailblazeTool> ->
         createPageForCommand(toolClass)
       }
-
-    val map = mutableMapOf<String, Set<String>>().apply {
-      put(
-        "DefaultUiToolSet",
-        TrailblazeToolSet.DefaultUiToolSet.asTools()
-          .map { it.toKoogToolDescriptor().name }
-          .toSet()
-      )
-      put(
-        "InteractWithElementsByPropertyToolSet",
-        TrailblazeToolSet.InteractWithElementsByPropertyToolSet.asTools()
-          .map { it.toKoogToolDescriptor().name }
-          .toSet()
-      )
-      put(
-        "InteractWithElementsByNodeIdToolSet",
-        TrailblazeToolSet.InteractWithElementsByNodeIdToolSet.asTools()
-          .map { it.toKoogToolDescriptor().name }
-          .toSet()
-      )
-      put(
-        "NonDefaultUiToolSet",
-        TrailblazeToolSet.NonDefaultUiToolSet.asTools()
-          .map { it.toKoogToolDescriptor().name }
-          .toSet()
-      )
-
-    }
-    createFunctionsIndexPage(map)
+    createFunctionsIndexPage(TrailblazeToolSet.AllBuiltInTrailblazeToolSets)
   }
 
-  private fun createFunctionsIndexPage(map: Map<String, Set<String>>) {
+  private fun createFunctionsIndexPage(toolSets: Set<TrailblazeToolSet>) {
+    val map = toolSets.map { it.name to it.tools.map { it.toKoogToolDescriptor().name }.toSet() }.toMap()
 
     File(generatedDir, "TOOLS.md").also { file ->
       val text = buildString {

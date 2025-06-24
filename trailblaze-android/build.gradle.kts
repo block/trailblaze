@@ -36,7 +36,6 @@ android {
 
 dependencies {
   api(project(":trailblaze-common"))
-  api(project(":trailblaze-agent"))
 
   api(libs.androidx.uiautomator)
   api(libs.ktor.client.okhttp)
@@ -45,8 +44,10 @@ dependencies {
   api(libs.maestro.orchestra.models) { isTransitive = false }
   api(libs.maestro.utils) { isTransitive = false }
   api(libs.maestro.client) { isTransitive = false }
+  api(libs.koog.agents.tools)
+  api(libs.koog.prompt.llm)
 
-  // Required since we excluded transitives above
+  implementation(project(":trailblaze-agent"))
   implementation(libs.ktor.client.core.jvm)
   implementation(libs.maestro.orchestra) { isTransitive = false }
   implementation(libs.androidx.test.monitor)
@@ -54,6 +55,7 @@ dependencies {
   implementation(libs.okio)
   implementation(libs.slf4j.api)
   implementation(libs.koog.prompt.executor.clients)
+  implementation(libs.kotlinx.datetime)
 
   implementation(libs.ktor.http)
   implementation(libs.coroutines)

@@ -16,26 +16,25 @@ import xyz.block.trailblaze.toolcalls.commands.TapOnPointTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.WaitForIdleSyncTrailblazeTool
 import kotlin.reflect.KClass
 
-class TrailblazeToolSet(
-  vararg tools: KClass<out TrailblazeTool>,
+@Suppress("ktlint:standard:property-naming")
+abstract class TrailblazeToolSet(
+  val tools: Set<KClass<out TrailblazeTool>>,
 ) {
-  private val toolSet = tools.toSet()
-  fun asTools(): Set<KClass<out TrailblazeTool>> = toolSet
+
+  open val name: String = this::class.annotations
+    .filterIsInstance<TrailblazeToolSetClass>()
+    .firstOrNull()?.description ?: this::class.simpleName ?: error("A a @TrailblazeToolSetClass annotation")
+
+  fun asTools(): Set<KClass<out TrailblazeTool>> = tools
 
   companion object {
-    fun getSetOfMarkToolSet(setOfMarkEnabled: Boolean): TrailblazeToolSet {
-      val trailblazeTools = mutableSetOf<KClass<out TrailblazeTool>>().apply {
-        addAll(DefaultUiToolSet.asTools())
-        if (setOfMarkEnabled) {
-          addAll(InteractWithElementsByNodeIdToolSet.asTools())
-        } else {
-          addAll(InteractWithElementsByPropertyToolSet.asTools())
-        }
-      }
-      return TrailblazeToolSet(*trailblazeTools.toTypedArray())
+    fun getSetOfMarkToolSet(setOfMarkEnabled: Boolean): TrailblazeToolSet = if (setOfMarkEnabled) {
+      SetOfMarkTrailblazeToolSet
+    } else {
+      DeviceControlTrailblazeToolSet
     }
 
-    val DefaultUiToolSet = TrailblazeToolSet(
+    val defaultUiTools = setOf<KClass<out TrailblazeTool>>(
       HideKeyboardTrailblazeTool::class,
       InputTextTrailblazeTool::class,
       ObjectiveStatusTrailblazeTool::class,
@@ -46,28 +45,48 @@ class TrailblazeToolSet(
       LaunchAppTrailblazeTool::class,
     )
 
-    val NonDefaultUiToolSet = TrailblazeToolSet(
-      TapOnPointTrailblazeTool::class,
+    val AllBuiltInTrailblazeToolSets: Set<TrailblazeToolSet> = setOf(
+      DeviceControlTrailblazeToolSet,
+      InteractWithElementsByPropertyToolSet,
+      SetOfMarkTrailblazeToolSet,
     )
 
-    val InteractWithElementsByPropertyToolSet = TrailblazeToolSet(
+    val AllBuiltInTrailblazeTools: Set<KClass<out TrailblazeTool>> =
+      AllBuiltInTrailblazeToolSets.flatMap { it?.asTools() ?: listOf() }.toSet()
+  }
+
+  class DynamicTrailblazeToolSet(
+    override val name: String,
+    tools: Set<KClass<out TrailblazeTool>>,
+  ) : TrailblazeToolSet(tools)
+
+  @TrailblazeToolSetClass("Set of Mark Ui Interactions (For Recording) - Do Not Combine with Device Control")
+  object SetOfMarkTrailblazeToolSet : TrailblazeToolSet(
+    mutableSetOf<KClass<out TrailblazeTool>>().apply {
+      addAll(defaultUiTools)
+      addAll(setOf(TapOnElementByNodeIdTrailblazeTool::class))
+    },
+  )
+
+  @TrailblazeToolSetClass("Device Control Ui Interactions - Do Not Combine with Set of Mark")
+  object DeviceControlTrailblazeToolSet : TrailblazeToolSet(
+    mutableSetOf<KClass<out TrailblazeTool>>().apply {
+      addAll(defaultUiTools)
+      addAll(
+        setOf(
+          TapOnPointTrailblazeTool::class,
+        ),
+      )
+    },
+  )
+
+  @TrailblazeToolSetClass("TapOn By Property Toolset")
+  object InteractWithElementsByPropertyToolSet : TrailblazeToolSet(
+    tools = setOf(
       LongPressOnElementWithTextTrailblazeTool::class,
       LongPressElementWithAccessibilityTextTrailblazeTool::class,
       TapOnElementWithTextTrailblazeTool::class,
       TapOnElementWithAccessiblityTextTrailblazeTool::class,
-    )
-
-    val InteractWithElementsByNodeIdToolSet = TrailblazeToolSet(
-      TapOnElementByNodeIdTrailblazeTool::class,
-    )
-
-    val BuiltInTrailblazeToolSets: List<TrailblazeToolSet> = listOf(
-      DefaultUiToolSet,
-      NonDefaultUiToolSet,
-      InteractWithElementsByPropertyToolSet,
-      InteractWithElementsByNodeIdToolSet,
-    )
-    val BuiltInTrailblazeTools: Set<KClass<out TrailblazeTool>> =
-      BuiltInTrailblazeToolSets.flatMap { it.asTools() }.toSet()
-  }
+    ),
+  )
 }

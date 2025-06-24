@@ -20,7 +20,10 @@ class KoogToolRegistryTest {
   fun test() = runBlocking {
     val trailblazeAgent = FakeTrailblazeAgent()
     val toolRepo = TrailblazeToolRepo(
-      TrailblazeToolSet(InputTextTrailblazeTool::class),
+      TrailblazeToolSet.DynamicTrailblazeToolSet(
+        "Input Text Only",
+        setOf(InputTextTrailblazeTool::class),
+      ),
     )
     val toolRegistry = toolRepo.asToolRegistry({
       TrailblazeToolExecutionContext(

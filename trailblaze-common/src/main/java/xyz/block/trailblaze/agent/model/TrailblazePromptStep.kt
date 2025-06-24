@@ -11,7 +11,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 /**
  * A single step in an overall [TestObjective.TrailblazeObjective.TrailblazePrompt] objective.
  */
-class TrailblazePromptStep(
+data class TrailblazePromptStep(
   val description: String,
   val taskId: String = "",
   val taskIndex: Int = 0,

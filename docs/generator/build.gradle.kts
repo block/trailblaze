@@ -10,7 +10,6 @@ application {
 
 dependencies {
   implementation(project(":trailblaze-common"))
-  implementation(libs.kotlinx.serialization.core)
-  implementation(libs.kotlinx.serialization.json)
   runtimeOnly(libs.kotlin.reflect)
+  implementation(libs.koog.agents.tools)
 }
