@@ -26,6 +26,8 @@ object InstrumentationArgUtil {
     }
   }
 
+  fun getInstrumentationArg(key: String): String? = instrumentationArguments.getString(key)
+
   fun getApiKeyFromInstrumentationArg(): String = if (isAiEnabled()) {
     val openAiApiKey = instrumentationArguments.getString("OPENAI_API_KEY")
       ?: instrumentationArguments.getString("openAiApiKey")

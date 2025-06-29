@@ -12,7 +12,7 @@ android {
   namespace = "xyz.block.trailblaze.android"
   compileSdk = 35
   defaultConfig {
-    minSdk = 24
+    minSdk = 26
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
   compileOptions {
@@ -65,5 +65,7 @@ dependencies {
 }
 
 dependencyGuard {
-  configuration("debugRuntimeClasspath")
+  configuration("debugRuntimeClasspath") {
+    modules = true
+  }
 }

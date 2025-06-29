@@ -28,5 +28,7 @@ tasks.test {
 }
 
 dependencyGuard {
-  configuration("runtimeClasspath")
+  configuration("runtimeClasspath") {
+    modules = true
+  }
 }

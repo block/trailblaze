@@ -37,7 +37,7 @@ dependencies {
 
 dependencyGuard {
   configuration("runtimeClasspath") {
-    tree = true
+    modules = true
   }
 }
 

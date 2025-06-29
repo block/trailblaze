@@ -52,20 +52,21 @@ android {
 dependencies {
   androidTestImplementation(project(":trailblaze-common"))
   androidTestImplementation(project(":trailblaze-android"))
+
   androidTestImplementation(libs.junit)
   androidTestImplementation(libs.koog.prompt.executor.openai)
+  androidTestImplementation(libs.koog.prompt.executor.clients)
+  androidTestImplementation(libs.koog.prompt.llm)
+  androidTestImplementation(libs.ktor.client.core)
+  androidTestImplementation(libs.kotlinx.datetime)
 
   androidTestRuntimeOnly(libs.androidx.test.runner)
   androidTestRuntimeOnly(libs.coroutines.android)
-  androidTestImplementation(libs.koog.prompt.executor.clients)
-  androidTestImplementation(libs.koog.prompt.llm)
-  androidTestImplementation(libs.maestro.orchestra.models)
-  androidTestImplementation(libs.ktor.client.core)
-  androidTestImplementation(libs.kotlinx.datetime)
+  androidTestImplementation(libs.maestro.orchestra.models) { isTransitive = false }
 }
 
 dependencyGuard {
   configuration("debugAndroidTestRuntimeClasspath") {
-    tree = true
+    modules = true
   }
 }
