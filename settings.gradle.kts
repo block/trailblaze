@@ -21,6 +21,7 @@ include(
   ":docs:generator",
   ":examples",
   ":trailblaze-android",
+  ":trailblaze-android-ondevice-mcp",
   ":trailblaze-common",
   ":trailblaze-agent",
   ":trailblaze-report",

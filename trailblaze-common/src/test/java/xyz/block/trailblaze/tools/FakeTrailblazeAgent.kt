@@ -17,6 +17,6 @@ class FakeTrailblazeAgent : MaestroTrailblazeAgent() {
     llmResponseId: String?,
     screenState: ScreenState?,
   ): Pair<List<TrailblazeTool>, TrailblazeToolResult> {
-    TODO("Not yet implemented")
+    error("FakeTrailblazeAgent does not have an implementation for runTrailblazeTools()")
   }
 }

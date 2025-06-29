@@ -1,0 +1,24 @@
+{
+  "version": "1.0.0",
+  "title": "Trailblaze",
+  "description": "Trailblaze AI-powered mobile testing framework",
+  "instructions": "You will enable the user to use the Trailblaze Goose MCP Extension.  Provide Trailblaze with prompts (natural language) instructing Trailblaze what it should do on the device.  Assume that the user will ask you to do something on the device unless their request matches an available tool. Do not use the Computer Control extension.",
+  "extensions": [
+    {
+      "type": "sse",
+      "name": "trailblaze",
+      "description": "Interact with Trailblaze directly from Goose",
+      "uri": "http://localhost:52525/sse",
+      "envs": {},
+      "env_keys": [],
+      "enabled": true,
+      "bundled": false,
+      "timeout": 3000
+    }
+  ],
+  "activities": [
+    "Add a new alarm for 7:30 AM with the system clock app (com.google.android.deskclock), then delete it.",
+    "Open the Contacts App and add a new contact with the name 'Trailblaze' and website https://github.com/block/trailblaze."
+  ],
+  "parameters": []
+}

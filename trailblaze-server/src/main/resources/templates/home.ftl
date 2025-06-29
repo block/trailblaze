@@ -12,12 +12,10 @@
         <div class="col-md-6">
             <h1 class="display-4 font-weight-bold">Trailblaze Sessions</h1>
         </div>
-        <#if gooseRecipe??>
-            <div class="col-md-6">
-                <a href="goose://recipe?config=${gooseRecipe}" class="btn btn-primary">Start Trailblaze In Goose <img
-                            src="https://block.github.io/goose/img/logo_light.png" style="width:24px;height:24px;"/></a>
-            </div>
-        </#if>
+        <div class="col-md-6">
+            <a href="goose://recipe?config=${gooseRecipe}" class="btn btn-primary">Start Trailblaze In Goose <img
+                        src="https://block.github.io/goose/img/logo_light.png" style="width:24px;height:24px;"/></a>
+        </div>
     </div>
     <ul>
         <#list sessions as session>

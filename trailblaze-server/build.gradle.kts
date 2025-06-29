@@ -23,8 +23,9 @@ dependencies {
   implementation(project(":trailblaze-common"))
   implementation(project(":trailblaze-report"))
   implementation(project(":trailblaze-yaml"))
-  implementation(libs.okhttp)
 
+  implementation(libs.freemarker)
+  implementation(libs.okhttp)
   implementation(libs.ktor.server.core.jvm)
   implementation(libs.ktor.network.tls.certificates)
   implementation(libs.ktor.server.content.negotiation)
@@ -32,15 +33,16 @@ dependencies {
   implementation(libs.ktor.server.websockets)
   implementation(libs.ktor.serialization.kotlinx.json)
   implementation(libs.coroutines)
-  implementation(libs.maestro.orchestra.models) { isTransitive = false }
+  implementation(libs.koog.agents.tools)
   implementation(libs.kotlinx.datetime)
   implementation(libs.ktor.http)
   implementation(libs.ktor.serialization)
   implementation(libs.ktor.utils)
   implementation(libs.ktor.websockets)
-  implementation(libs.freemarker)
   implementation(libs.kotlinx.serialization.core)
   implementation(libs.kotlinx.serialization.json)
+  implementation(libs.maestro.orchestra.models) { isTransitive = false }
+  implementation(libs.mcp.sdk)
 
   runtimeOnly(libs.jackson.module.kotlin)
   runtimeOnly(libs.slf4j.simple)
