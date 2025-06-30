@@ -5,12 +5,10 @@ import kotlinx.serialization.KSerializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.modules.SerializersModule
 import kotlinx.serialization.serializer
-import maestro.orchestra.MaestroCommand
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.api.MaestroDriverActionType
 import xyz.block.trailblaze.logs.client.temp.registerTrailblazeToolSerializer
 import xyz.block.trailblaze.logs.model.SessionStatus
-import xyz.block.trailblaze.toolcalls.GenericGsonJsonSerializer
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 
 val TrailblazeJsonInstance = Json {
@@ -35,8 +33,6 @@ val TrailblazeJsonInstance = Json {
     polymorphicDefaultSerializer(SessionStatus::class) { value ->
       value::class.serializer() as? KSerializer<SessionStatus>
     }
-
-    contextual(MaestroCommand::class, GenericGsonJsonSerializer(MaestroCommand::class))
 
     this.registerTrailblazeToolSerializer()
   }

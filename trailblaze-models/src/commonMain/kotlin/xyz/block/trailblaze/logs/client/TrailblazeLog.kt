@@ -2,10 +2,8 @@ package xyz.block.trailblaze.logs.client
 
 import ai.koog.prompt.message.Message
 import kotlinx.datetime.Instant
-import kotlinx.serialization.Contextual
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
-import maestro.orchestra.MaestroCommand
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.api.MaestroDriverActionType
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
@@ -16,8 +14,6 @@ import xyz.block.trailblaze.logs.model.HasScreenshot
 import xyz.block.trailblaze.logs.model.HasTrailblazeTool
 import xyz.block.trailblaze.logs.model.LlmMessage
 import xyz.block.trailblaze.logs.model.SessionStatus
-import xyz.block.trailblaze.maestro.MaestroYamlSerializer
-import xyz.block.trailblaze.serializers.TrailblazeToolToCodeSerializer
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 
@@ -79,7 +75,7 @@ sealed interface TrailblazeLog {
 
   @Serializable
   data class MaestroCommandLog(
-    @Contextual val maestroCommand: MaestroCommand,
+    val maestroCommandJsonObj: JsonObject,
     val llmResponseId: String?,
     val successful: Boolean,
     val trailblazeToolResult: TrailblazeToolResult,
@@ -89,7 +85,6 @@ sealed interface TrailblazeLog {
   ) : TrailblazeLog,
     HasDuration {
     override val type: AgentLogEventType = AgentLogEventType.MAESTRO_COMMAND
-    fun asMaestroYaml(): String = MaestroYamlSerializer.toYaml(listOf(maestroCommand.asCommand()!!), false)
   }
 
   @Serializable
@@ -106,10 +101,6 @@ sealed interface TrailblazeLog {
     HasScreenshot,
     HasDuration {
     override val type: AgentLogEventType = AgentLogEventType.MAESTRO_DRIVER
-
-    fun debugString(): String = buildString {
-      appendLine(TrailblazeJsonInstance.encodeToString(action))
-    }
   }
 
   @Serializable
@@ -121,15 +112,6 @@ sealed interface TrailblazeLog {
   ) : TrailblazeLog,
     HasTrailblazeTool {
     override val type: AgentLogEventType = AgentLogEventType.DELEGATING_TRAILBLAZE_TOOL
-
-    fun asCommandJson(): String = buildString {
-      appendLine(TrailblazeToolToCodeSerializer().serializeTrailblazeToolToCode(command))
-      appendLine()
-      appendLine("Delegated to:")
-      executableTools.forEach { executableTool ->
-        appendLine(TrailblazeToolToCodeSerializer().serializeTrailblazeToolToCode(executableTool))
-      }
-    }
   }
 
   @Serializable
@@ -146,10 +128,6 @@ sealed interface TrailblazeLog {
     HasTrailblazeTool,
     HasDuration {
     override val type: AgentLogEventType = AgentLogEventType.TRAILBLAZE_COMMAND
-
-    fun asCommandJson(): String = buildString {
-      appendLine(TrailblazeToolToCodeSerializer().serializeTrailblazeToolToCode(command))
-    }
   }
 
   @Serializable

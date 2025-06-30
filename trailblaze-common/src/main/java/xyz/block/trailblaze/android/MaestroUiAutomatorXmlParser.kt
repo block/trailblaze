@@ -4,7 +4,7 @@ import maestro.TreeNode
 import org.w3c.dom.Element
 import org.w3c.dom.Node
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
-import xyz.block.trailblaze.api.ViewHierarchyTreeNode.Companion.toViewHierarchyTreeNode
+import xyz.block.trailblaze.utils.Ext.toViewHierarchyTreeNode
 import javax.xml.parsers.DocumentBuilderFactory
 
 /**

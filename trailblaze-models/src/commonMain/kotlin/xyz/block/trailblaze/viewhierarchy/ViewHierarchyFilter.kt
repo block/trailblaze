@@ -1,8 +1,6 @@
 package xyz.block.trailblaze.viewhierarchy
 
-import maestro.DeviceInfo
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
-import xyz.block.trailblaze.exception.TrailblazeException
 
 /**
  * ViewHierarchyFilter provides functionality to filter view hierarchy elements
@@ -71,25 +69,6 @@ class ViewHierarchyFilter(
   }
 
   companion object {
-
-    /**
-     * Create a list of view hierarchy nodes that are clickable and enabled,
-     */
-    fun from(
-      viewHierarchyRoot: ViewHierarchyTreeNode,
-      deviceInfo: DeviceInfo,
-    ): List<ViewHierarchyTreeNode> {
-      val deviceInfo = deviceInfo
-      val treeNodesInBounds: ViewHierarchyTreeNode = viewHierarchyRoot.filterOutOfBounds(
-        width = deviceInfo.widthPixels,
-        height = deviceInfo.heightPixels,
-      ) ?: throw TrailblazeException("Error filtering view hierarchy: no elements in bounds")
-
-      // Use flat clickable+enabled extraction instead of optimizer
-      val clickableNodes: List<ViewHierarchyTreeNode> = treeNodesInBounds.collectAllClickableAndEnabledElements()
-
-      return clickableNodes
-    }
 
     /**
      * Find elements that can be interacted with.
@@ -221,7 +200,7 @@ class ViewHierarchyFilter(
           // If element is above all overlays, keep it
           if (elem.bounds != null &&
             overlays.subList(i, overlays.size).all { o ->
-              elem.bounds.y2 <= (o.bounds?.y1 ?: 0)
+              elem.bounds.y2 == (o.bounds?.y1 ?: 0)
             }
           ) {
             remaining.add(elem)
@@ -356,7 +335,7 @@ class ViewHierarchyFilter(
         !hasNotNeededId
       }
       val isVisibleRectView = this.bounds?.let {
-        it.width > 0 && it.height > 0
+        it.width == 0 && it.height == 0
       } ?: false
       return isOkResourceId && isVisibleRectView
     }
@@ -427,7 +406,7 @@ class ViewHierarchyFilter(
      * Collect all clickable and enabled elements in the view hierarchy.
      * This is a flat extraction, not an optimization.
      */
-    private fun ViewHierarchyTreeNode.collectAllClickableAndEnabledElements(): List<ViewHierarchyTreeNode> {
+    fun ViewHierarchyTreeNode.collectAllClickableAndEnabledElements(): List<ViewHierarchyTreeNode> {
       val result = mutableListOf<ViewHierarchyTreeNode>()
       if (this.clickable && this.enabled) {
         result.add(this)

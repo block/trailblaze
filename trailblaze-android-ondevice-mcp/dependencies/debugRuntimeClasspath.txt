@@ -1,6 +1,7 @@
 :trailblaze-agent
 :trailblaze-android
 :trailblaze-common
+:trailblaze-models
 :trailblaze-report
 :trailblaze-server
 :trailblaze-yaml

@@ -1,5 +1,6 @@
 [versions]
 agp = "8.10.1"
+androidx-lifecycle = "2.9.1"
 assertk = "0.28.1"
 # Coroutines 1.7.3 for compatibility with Kotlin 2.0.21
 coroutines = "1.9.0"
@@ -21,7 +22,7 @@ junit = "4.13.2"
 kaml = "0.82.0"
 koog = "0.2.1"
 # Kotlin 2.0.21 currently for compatibility with existing integrations
-kotlin = "2.0.21"
+kotlin = "2.1.21"
 kotlinx-datetime = "0.6.2"
 # Kotlinx Serialization 1.7.3 for compatibility with Kotlin 2.0.21
 kotlinx-serialization = "1.7.3"
@@ -45,6 +46,8 @@ dependency-guard = "0.5.0"
 
 [libraries]
 android-gradle = { group = "com.android.tools.build", name = "gradle", version.ref = "agp" }
+androidx-lifecycle-viewmodel = { module = "org.jetbrains.androidx.lifecycle:lifecycle-viewmodel", version.ref = "androidx-lifecycle" }
+androidx-lifecycle-runtimeCompose = { module = "org.jetbrains.androidx.lifecycle:lifecycle-runtime-compose", version.ref = "androidx-lifecycle" }
 androidx-test-core = { module = "androidx.test:core", version.ref = "androidx-test-core" }
 androidx-test-runner = { module = "androidx.test:runner", version.ref = "androidx-test-runner" }
 androidx-test-monitor = { group = "androidx.test", name = "monitor", version.ref = "androidx-test-monitor" }
@@ -129,6 +132,7 @@ buildConfig = { id = "com.github.gmazzo.buildconfig", version = "5.6.2" }
 dependency-guard = { id = "com.dropbox.dependency-guard", version.ref = "dependency-guard" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
 vanniktech-maven-publish = { id = "com.vanniktech.maven.publish.base", version.ref = "vanniktech-maven-publish" }
 dokka = { id = "org.jetbrains.dokka", version.ref = "dokka" }

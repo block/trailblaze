@@ -4,17 +4,6 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import org.yaml.snakeyaml.DumperOptions
 import org.yaml.snakeyaml.Yaml
-import xyz.block.trailblaze.agent.model.TestObjective.AssertEqualsCommand
-import xyz.block.trailblaze.agent.model.TestObjective.AssertMathCommand
-import xyz.block.trailblaze.agent.model.TestObjective.AssertNotEqualsCommand
-import xyz.block.trailblaze.agent.model.TestObjective.AssertWithAiCommand
-import xyz.block.trailblaze.agent.model.TestObjective.MaestroCommand
-import xyz.block.trailblaze.agent.model.TestObjective.RememberNumberCommand
-import xyz.block.trailblaze.agent.model.TestObjective.RememberTextCommand
-import xyz.block.trailblaze.agent.model.TestObjective.RememberWithAiCommand
-import xyz.block.trailblaze.agent.model.TestObjective.TrailblazeObjective
-import xyz.block.trailblaze.agent.model.TestObjective.TrailblazeObjective.TrailblazeCommand
-import xyz.block.trailblaze.agent.model.TestObjective.TrailblazeObjective.TrailblazePrompt
 import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.toolcalls.JsonSerializationUtil
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toKoogToolDescriptor
@@ -83,7 +72,7 @@ class MixedModeTestCase(
   // TODO: Many, many unit tests for this
   private fun parseTrailblazePrompt(
     value: Any?,
-  ): TrailblazeObjective = when (value) {
+  ): TestObjective.TrailblazeObjective = when (value) {
     is List<*> -> parseTrailblazePromptSteps(value)
     is String -> parseSinglePrompt(value)
     else -> throw TrailblazeException("No objectives found in Trailblaze objective: $value")
@@ -91,17 +80,17 @@ class MixedModeTestCase(
 
   private fun parseTrailblazePromptSteps(
     objectives: List<*>,
-  ): TrailblazeObjective = if (shouldParseCommands(objectives)) {
+  ): TestObjective.TrailblazeObjective = if (shouldParseCommands(objectives)) {
     println("### parsing trailblaze commands")
     parseTrailblazeCommands(objectives)
   } else {
     println("### parsing full prompt with prompt steps")
     val fullInstructions = parseFullPrompt(objectives)
     val promptSteps = generatePromptSteps(fullInstructions)
-    TrailblazePrompt(fullInstructions, promptSteps)
+    TestObjective.TrailblazeObjective.TrailblazePrompt(fullInstructions, promptSteps)
   }
 
-  private fun parseSinglePrompt(instructions: String): TrailblazeObjective = TrailblazePrompt(
+  private fun parseSinglePrompt(instructions: String): TestObjective.TrailblazeObjective = TestObjective.TrailblazeObjective.TrailblazePrompt(
     fullPrompt = instructions,
     steps = listOf(
       TrailblazePromptStep(
@@ -112,7 +101,7 @@ class MixedModeTestCase(
 
   private fun shouldParseCommands(objectives: List<*>): Boolean = objectives.all { it is Map<*, *> } and executeRecordedSteps
 
-  private fun parseTrailblazeCommands(objectives: List<*>): TrailblazeCommand {
+  private fun parseTrailblazeCommands(objectives: List<*>): TestObjective.TrailblazeObjective.TrailblazeCommand {
     val staticObjectives = objectives.map { obj ->
       val objMap = obj as? Map<*, *>
         ?: throw TrailblazeException("Cannot parse objectives from invalid type $obj")
@@ -126,7 +115,7 @@ class MixedModeTestCase(
       val tools = steps.map { parseTrailblazeToolsForStep(it) }
       StaticObjective(tools)
     }
-    return TrailblazeCommand(staticObjectives)
+    return TestObjective.TrailblazeObjective.TrailblazeCommand(staticObjectives)
   }
 
   private fun parseTrailblazeToolsForStep(step: Any?): TrailblazeTool {
@@ -190,7 +179,7 @@ class MixedModeTestCase(
       }
   }
 
-  private fun parseRememberTextCommand(value: Any?): RememberTextCommand = if (value is Map<*, *>) {
+  private fun parseRememberTextCommand(value: Any?): TestObjective.RememberTextCommand = if (value is Map<*, *>) {
     val prompt = value["prompt"]?.toString()
     val variable = value["variable"]?.toString()
 
@@ -198,12 +187,12 @@ class MixedModeTestCase(
       throw TrailblazeException("Invalid rememberText command: missing prompt or variable name")
     }
 
-    RememberTextCommand(prompt, variable)
+    TestObjective.RememberTextCommand(prompt, variable)
   } else {
     throw TrailblazeException("Invalid rememberText command format")
   }
 
-  private fun parseRememberNumberCommand(value: Any?): RememberNumberCommand = if (value is Map<*, *>) {
+  private fun parseRememberNumberCommand(value: Any?): TestObjective.RememberNumberCommand = if (value is Map<*, *>) {
     val prompt = value["prompt"]?.toString()
     val variable = value["variable"]?.toString()
 
@@ -211,24 +200,24 @@ class MixedModeTestCase(
       throw TrailblazeException("Invalid rememberNumber command: missing prompt or variable name")
     }
 
-    RememberNumberCommand(prompt, variable)
+    TestObjective.RememberNumberCommand(prompt, variable)
   } else {
     throw TrailblazeException("Invalid rememberNumber command format")
   }
 
-  private fun parseRememberWithAiCommand(value: Any?): RememberWithAiCommand = if (value is Map<*, *>) {
+  private fun parseRememberWithAiCommand(value: Any?): TestObjective.RememberWithAiCommand = if (value is Map<*, *>) {
     val prompt = value["prompt"]?.toString()
     val variable = value["variable"]?.toString()
 
     if (prompt == null || variable == null) {
       throw TrailblazeException("Invalid rememberWithAI command: missing prompt or variable name")
     }
-    RememberWithAiCommand(prompt, variable)
+    TestObjective.RememberWithAiCommand(prompt, variable)
   } else {
     throw TrailblazeException("Invalid rememberWithAI command format")
   }
 
-  private fun parseAssertEqualsCommand(value: Any?): AssertEqualsCommand = if (value is Map<*, *>) {
+  private fun parseAssertEqualsCommand(value: Any?): TestObjective.AssertEqualsCommand = if (value is Map<*, *>) {
     val actual = value["actual"]?.toString()
     val expected = value["expected"]?.toString()
 
@@ -236,12 +225,12 @@ class MixedModeTestCase(
       throw TrailblazeException("Invalid assertEquals command: missing actual or expected name")
     }
 
-    AssertEqualsCommand(actual, expected)
+    TestObjective.AssertEqualsCommand(actual, expected)
   } else {
     throw TrailblazeException("Invalid assertEquals command format")
   }
 
-  private fun parseAssertNotEqualsCommand(value: Any?): AssertNotEqualsCommand = if (value is Map<*, *>) {
+  private fun parseAssertNotEqualsCommand(value: Any?): TestObjective.AssertNotEqualsCommand = if (value is Map<*, *>) {
     val actual = value["actual"]?.toString()
     val expected = value["expected"]?.toString()
 
@@ -249,21 +238,21 @@ class MixedModeTestCase(
       throw TrailblazeException("Invalid assertNotEquals command: missing actual or expected name")
     }
 
-    AssertNotEqualsCommand(actual, expected)
+    TestObjective.AssertNotEqualsCommand(actual, expected)
   } else {
     throw TrailblazeException("Invalid assertNotEquals command format")
   }
 
-  private fun parseAssertWithAiCommand(value: Any?): AssertWithAiCommand = if (value is Map<*, *>) {
+  private fun parseAssertWithAiCommand(value: Any?): TestObjective.AssertWithAiCommand = if (value is Map<*, *>) {
     val prompt = value["prompt"]?.toString()
       ?: throw TrailblazeException("Invalid assertWithAi command: missing prompt")
 
-    AssertWithAiCommand(prompt)
+    TestObjective.AssertWithAiCommand(prompt)
   } else {
     throw TrailblazeException("Invalid assertWithAi command")
   }
 
-  private fun parseAssertMathCommand(value: Any?): AssertMathCommand = if (value is Map<*, *>) {
+  private fun parseAssertMathCommand(value: Any?): TestObjective.AssertMathCommand = if (value is Map<*, *>) {
     val expression = value["expression"]?.toString()
     val expected = value["expected"]?.toString()
 
@@ -271,12 +260,12 @@ class MixedModeTestCase(
       throw TrailblazeException("Invalid assertMath command: missing expression or expected values")
     }
 
-    AssertMathCommand(expression, expected)
+    TestObjective.AssertMathCommand(expression, expected)
   } else {
     throw TrailblazeException("Invalid assertMath command")
   }
 
-  private fun parseMaestroCommand(key: String, value: Any?): MaestroCommand {
+  private fun parseMaestroCommand(key: String, value: Any?): TestObjective.MaestroCommand {
     val maestroCommand = when (value) {
       null -> "- $key"
       is Map<*, *> -> {
@@ -293,7 +282,7 @@ class MixedModeTestCase(
       else -> "- $key: $value"
     }
 
-    return MaestroCommand(maestroCommand)
+    return TestObjective.MaestroCommand(maestroCommand)
   }
 
   companion object {

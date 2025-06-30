@@ -13,7 +13,7 @@ import xyz.block.trailblaze.serializers.TrailblazeToolToCodeSerializer
 object SessionJsonRecordingEndpoint {
 
   fun register(routing: Routing, logsRepo: LogsRepo) = with(routing) {
-    get("/recording/json/{session}") {
+    get("/recording/kotlin/{session}") {
       // Only save the llm request logs for now
       val sessionId = this.call.parameters["session"]
 
@@ -25,7 +25,7 @@ object SessionJsonRecordingEndpoint {
 
       call.respond(
         FreeMarkerContent(
-          "recording_json.ftl",
+          "recording_kotlin.ftl",
           mapOf(
             "session" to sessionId,
             "kotlinCode" to recordingKotlin,

@@ -24,6 +24,16 @@ android {
   lint {
     abortOnError = false
   }
+
+  packaging {
+    exclude("META-INF/INDEX.LIST")
+    exclude("META-INF/AL2.0")
+    exclude("META-INF/LICENSE.md")
+    exclude("META-INF/LICENSE-notice.md")
+    exclude("META-INF/LGPL2.1")
+    exclude("META-INF/io.netty.versions.properties")
+  }
+
   @Suppress("UnstableApiUsage")
   testOptions {
     unitTests.all {

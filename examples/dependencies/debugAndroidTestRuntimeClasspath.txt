@@ -2,6 +2,7 @@
 :trailblaze-agent
 :trailblaze-android
 :trailblaze-common
+:trailblaze-models
 ai.koog:agents-tools-jvm:0.2.1
 ai.koog:agents-tools:0.2.1
 ai.koog:agents-utils-jvm:0.2.1

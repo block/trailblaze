@@ -15,6 +15,7 @@ import xyz.block.trailblaze.setofmark.android.AndroidBitmapUtils.scale
 import xyz.block.trailblaze.setofmark.android.AndroidBitmapUtils.toByteArray
 import xyz.block.trailblaze.setofmark.android.AndroidCanvasSetOfMark
 import xyz.block.trailblaze.viewhierarchy.ViewHierarchyFilter
+import xyz.block.trailblaze.viewhierarchy.ViewHierarchyTreeNodeUtils
 import java.io.ByteArrayOutputStream
 import kotlin.io.encoding.ExperimentalEncodingApi
 
@@ -147,7 +148,7 @@ class AndroidOnDeviceUiAutomatorScreenState(
       }
       AndroidCanvasSetOfMark.drawSetOfMarkOnBitmap(
         originalScreenshotBitmap = mutableBitmap,
-        elements = ViewHierarchyFilter.from(
+        elements = ViewHierarchyTreeNodeUtils.from(
           viewHierarchy,
           DeviceInfo(
             platform = Platform.ANDROID,

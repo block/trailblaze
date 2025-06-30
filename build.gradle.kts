@@ -13,6 +13,9 @@ plugins {
   alias(libs.plugins.dokka) apply false
   alias(libs.plugins.spotless) apply false
   alias(libs.plugins.dagp) apply false
+  alias(libs.plugins.compose.compiler) apply false
+  alias(libs.plugins.jetbrains.compose.multiplatform) apply false
+  alias(libs.plugins.kotlin.multiplatform) apply false
 }
 
 subprojects {

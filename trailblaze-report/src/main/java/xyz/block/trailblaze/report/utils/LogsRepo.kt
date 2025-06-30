@@ -9,6 +9,11 @@ private typealias TrailblazeSessionId = String
 
 class LogsRepo(val logsDir: File) {
 
+  init {
+    // Ensure the logs directory exists
+    logsDir.mkdirs()
+  }
+
   /**
    * A map of trailblaze session IDs to their corresponding file watcher services.
    */

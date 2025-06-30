@@ -1,27 +1,38 @@
 package xyz.block.trailblaze.api
 
 import kotlinx.serialization.json.JsonObject
-import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
-import xyz.block.trailblaze.toolcalls.TrailblazeToolResult.Error
-import xyz.block.trailblaze.toolcalls.TrailblazeToolResult.Success
 
 object AgentMessages {
 
   fun TrailblazeToolResult.toContentString(toolName: String, toolArgs: JsonObject): String = when (this) {
-    is Success -> successContentString(toolName, toolArgs)
-    is Error.MaestroValidationError -> validationErrorContentString(toolName, toolArgs, errorMessage)
-    is Error.UnknownTrailblazeTool -> unknownCommandErrorContentString(toolName, toolArgs, errorMessage)
-    is Error.EmptyToolCall -> emptyToolCallErrorContentString()
-    is Error.ExceptionThrown -> errorExceptionContentString(this)
-    is Error.UnknownTool -> unknownToolErrorContentString(functionName, functionArgs, errorMessage)
-    is Error.MissingRequiredArgs -> missingRequiredArgsContentString(functionName, functionArgs, requiredArgs)
+    is TrailblazeToolResult.Success -> successContentString(toolName, toolArgs)
+    is TrailblazeToolResult.Error.MaestroValidationError -> validationErrorContentString(
+      toolName,
+      toolArgs,
+      errorMessage,
+    )
+
+    is TrailblazeToolResult.Error.UnknownTrailblazeTool -> unknownCommandErrorContentString(
+      toolName,
+      toolArgs,
+      errorMessage,
+    )
+
+    is TrailblazeToolResult.Error.EmptyToolCall -> emptyToolCallErrorContentString()
+    is TrailblazeToolResult.Error.ExceptionThrown -> errorExceptionContentString(this)
+    is TrailblazeToolResult.Error.UnknownTool -> unknownToolErrorContentString(functionName, functionArgs, errorMessage)
+    is TrailblazeToolResult.Error.MissingRequiredArgs -> missingRequiredArgsContentString(
+      functionName,
+      functionArgs,
+      requiredArgs,
+    )
   }
 
-  private fun errorExceptionContentString(errorException: Error.ExceptionThrown) = buildString {
+  private fun errorExceptionContentString(errorException: TrailblazeToolResult.Error.ExceptionThrown) = buildString {
     appendLine("# Error executing tool: $errorException")
     appendLine("Exception Message: ${errorException.errorMessage}")
-    appendLine("Command: ${TrailblazeJsonInstance.encodeToString(errorException.command)}")
+    appendLine("Command: ${errorException.command}")
   }
 
   private fun successContentString(toolName: String, toolArgs: JsonObject) = buildString {
@@ -56,7 +67,7 @@ object AgentMessages {
 
   private fun emptyToolCallErrorContentString() = buildString {
     appendLine("# FAILURE: No tool call provided")
-    appendLine("Error message: ${Error.EmptyToolCall.errorMessage}")
+    appendLine("Error message: ${TrailblazeToolResult.Error.EmptyToolCall.errorMessage}")
   }
 
   private fun unknownToolErrorContentString(

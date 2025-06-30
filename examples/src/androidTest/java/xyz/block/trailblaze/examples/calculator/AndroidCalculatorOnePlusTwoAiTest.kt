@@ -2,7 +2,6 @@ package xyz.block.trailblaze.examples.calculator
 
 import ai.koog.prompt.executor.clients.openai.OpenAILLMClient
 import ai.koog.prompt.executor.clients.openai.OpenAIModels
-import io.ktor.client.HttpClient
 import maestro.orchestra.LaunchAppCommand
 import org.junit.Before
 import org.junit.Rule

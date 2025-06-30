@@ -28,6 +28,7 @@ import xyz.block.trailblaze.logs.server.endpoints.RealtimeWebsocketEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.SessionJsonRecordingEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.SinglePageReportEndpoint
 import xyz.block.trailblaze.report.utils.LogsRepo
+import xyz.block.trailblaze.report.utils.TemplateHelpers
 import kotlin.io.encoding.ExperimentalEncodingApi
 
 /**
@@ -43,6 +44,7 @@ object ServerEndpoints {
     }
     install(FreeMarker) {
       templateLoader = ClassTemplateLoader(this::class.java.classLoader, "templates")
+      this.setSharedVariable(TemplateHelpers::class.simpleName, TemplateHelpers)
     }
     routing {
       RealtimeWebsocketEndpoint.register(this, logsRepo)

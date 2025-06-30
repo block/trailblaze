@@ -8,6 +8,7 @@ plugins {
 }
 
 dependencies {
+  api(project(":trailblaze-models"))
   api(libs.kotlinx.datetime)
   api(libs.kotlinx.serialization.json)
   api(libs.coroutines)

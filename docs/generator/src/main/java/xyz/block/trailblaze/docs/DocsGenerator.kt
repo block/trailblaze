@@ -8,7 +8,7 @@ import java.io.File
 import kotlin.reflect.KClass
 
 /**
- * Generates Documentation for [xyz.block.trailblaze.toolcalls.TrailblazeTool]s
+ * Generates Documentation for [TrailblazeTool]s
  */
 class DocsGenerator(
   private val generatedDir: File,

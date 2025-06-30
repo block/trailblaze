@@ -74,7 +74,7 @@
             <h1 class="display-4 font-weight-bold">Trailblaze Logs</h1>
         </div>
         <div class="col-md-6">
-            <a href="/recording/json/${session}">
+            <a href="/recording/kotlin/${session}">
                 <button type="button" class="btn btn-primary me-3">
                     JSON and Kotlin Recording
                 </button>

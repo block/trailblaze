@@ -1,9 +1,7 @@
 package xyz.block.trailblaze.toolcalls
 
-import kotlinx.serialization.Contextual
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
-import maestro.orchestra.MaestroCommand
 
 @Serializable
 sealed interface TrailblazeToolResult {
@@ -54,7 +52,7 @@ Please always provide a tool call that will help complete the task.
     @Serializable
     data class MaestroValidationError(
       override val errorMessage: String,
-      @Contextual val command: MaestroCommand,
+      val commandJsonObject: JsonObject,
     ) : Error
 
     @Serializable

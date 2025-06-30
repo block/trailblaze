@@ -7,7 +7,7 @@ import maestro.DeviceInfo
 import maestro.Platform
 import org.junit.Test
 import xyz.block.trailblaze.android.uiautomator.AndroidOnDeviceUiAutomatorScreenState
-import xyz.block.trailblaze.viewhierarchy.ViewHierarchyFilter
+import xyz.block.trailblaze.viewhierarchy.ViewHierarchyTreeNodeUtils
 import java.io.ByteArrayOutputStream
 import java.io.File
 
@@ -36,7 +36,7 @@ class AndroidCanvasSetOfMarkTest {
     val screenState = AndroidOnDeviceUiAutomatorScreenState()
     val originalScreenshotBitmap = AndroidOnDeviceUiAutomatorScreenState.createBlankBitmapForCurrentWindowSize()
 
-    val elementList = ViewHierarchyFilter.from(
+    val elementList = ViewHierarchyTreeNodeUtils.from(
       screenState.viewHierarchy,
       DeviceInfo(
         platform = Platform.ANDROID,

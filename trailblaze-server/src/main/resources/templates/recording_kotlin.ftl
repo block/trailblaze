@@ -20,7 +20,6 @@
         <div class="col">
             <pre>${kotlinCode}</pre>
             <button onclick="copyTextToClipboard(window.kotlinCode)">Copy Kotlin</button>
-            <button onclick="downloadJsonFile(window.kotlinCode)">Download Kotlin</button>
         </div>
     </div>
     <br/>
@@ -40,8 +39,6 @@
 </div>
 <script>
     window.kotlinCode = `${kotlinCode}`
-    window.json = `${json}`
-    console.log(window.json)
 
     function copyTextToClipboard(textContent) {
         const textarea = document.createElement('textarea');
@@ -57,16 +54,6 @@
 
     function copyToClipboard(element) {
         copyTextToClipboard(element.textContent)
-    }
-
-    function downloadJsonFile(content) {
-        const blob = new Blob([content], {type: 'text/json'});
-        const link = document.createElement('a');
-        link.href = URL.createObjectURL(blob);
-        link.download = 'flow.json';
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
     }
 </script>
 </body>

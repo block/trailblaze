@@ -15,6 +15,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.maestro.MaestroYamlParser
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.utils.Ext.asJsonObject
 
 /**
  * Allows us to run Maestro Commands using UiAutomator.
@@ -59,7 +60,9 @@ object MaestroUiAutomatorRunner {
     driver = LoggingDriver(
       delegate = MaestroAndroidUiAutomatorDriver(),
       screenStateProvider = {
-        AndroidOnDeviceUiAutomatorScreenState()
+        AndroidOnDeviceUiAutomatorScreenState(
+          setOfMarkEnabled = false, // We don't need this unless it's an LLM Request that requires it
+        )
       },
     ),
   )
@@ -77,15 +80,16 @@ object MaestroUiAutomatorRunner {
     llmResponseId: String?,
   ): TrailblazeToolResult {
     commands.forEach { maestroCommand ->
+      val maestroCommandJsonObj = maestroCommand.asJsonObject()
       val startTime = Clock.System.now()
       // Run Flow
       var result: TrailblazeToolResult = TrailblazeToolResult.Success
       val runSuccess: Boolean = Orchestra(
         maestro = maestro,
         onCommandFailed = { index: Int, maestroCommand: MaestroCommand, throwable: Throwable ->
-          val commandJson = TrailblazeJsonInstance.encodeToString(maestroCommand)
+          val commandJson = TrailblazeJsonInstance.encodeToString(maestroCommand.asJsonObject())
           result = TrailblazeToolResult.Error.MaestroValidationError(
-            command = maestroCommand,
+            commandJsonObject = maestroCommandJsonObj,
             errorMessage = "Failed to run command: $commandJson.  Error: ${throwable.message}",
           )
           ErrorResolution.FAIL
@@ -94,7 +98,7 @@ object MaestroUiAutomatorRunner {
 
       TrailblazeLogger.log(
         TrailblazeLog.MaestroCommandLog(
-          maestroCommand = maestroCommand,
+          maestroCommandJsonObj = maestroCommandJsonObj,
           trailblazeToolResult = result,
           timestamp = startTime,
           durationMs = Clock.System.now().toEpochMilliseconds() - startTime.toEpochMilliseconds(),

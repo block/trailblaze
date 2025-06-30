@@ -37,11 +37,11 @@
                 <#if log.type == "TOP_LEVEL_MAESTRO_COMMAND">
                     <pre class="small"><b>Top-Level Maestro Command:</b> ${log.command?html}</pre>
                 <#elseif log.type == "MAESTRO_COMMAND">
-                    <pre class="small">${log.asMaestroYaml()?html}</pre>
+                    <pre class="small">${TemplateHelpers.asMaestroYaml(log)?html}</pre>
                 <#elseif log.type == "TRAILBLAZE_COMMAND">
-                    <pre class="small">${log.asCommandJson()?html}</pre>
+                    <pre class="small">${TemplateHelpers.asCommandJson(log)?html}</pre>
                 <#elseif log.type == "DELEGATING_TRAILBLAZE_TOOL">
-                    <pre class="small">${log.asCommandJson()?html}</pre>
+                    <pre class="small">${TemplateHelpers.asCommandJson(log)?html}</pre>
                 <#elseif log.type == "AGENT_TASK_STATUS">
                     <h6 class="font-weight-bold">${log.agentTaskStatus.class.simpleName}</h6>
                     <pre class="small">${log.agentTaskStatus.statusData.prompt?html}</pre>
@@ -93,7 +93,8 @@
                         <div class="modal-body">
                             <#if log.type == 'MAESTRO_DRIVER'>
                                 <pre>${log.action.class.simpleName}</pre>
-                                <pre>${log.debugString()?html}</pre>
+<#--                                <pre>${log.debugString()?html}</pre>-->
+                                <pre>${log.toString()?html}</pre>
                             <#elseif log.type == 'LLM_REQUEST'>
                                 <h5>LLM Response</h5>
                                 <pre>${log.llmResponse[0]?html}</pre>

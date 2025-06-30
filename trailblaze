@@ -1,0 +1,16 @@
+#!/bin/sh
+
+# Start Gradle in the background
+echo "Trailblaze is compiling and starting up..."
+./gradlew :trailblaze-desktop:run --args="$(pwd) $@" &
+
+# Capture the Gradle process ID
+GRADLE_PID=$!
+
+# Ensure Gradle is killed when this script is terminated
+trap "kill $GRADLE_PID" EXIT
+
+echo "Once Trailblaze is running, you'll be able to view captured logs from any executions."
+
+# Wait for the Gradle process to finish (rejoins it)
+wait $GRADLE_PID

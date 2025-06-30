@@ -3,6 +3,7 @@ package xyz.block.trailblaze.report
 import freemarker.template.Configuration
 import freemarker.template.Template
 import freemarker.template.TemplateExceptionHandler
+import xyz.block.trailblaze.report.utils.TemplateHelpers
 import java.io.StringWriter
 
 object ReportRenderer {
@@ -16,6 +17,7 @@ object ReportRenderer {
       // Load templates from src/main/resources
       setClassLoaderForTemplateLoading(Thread.currentThread().contextClassLoader, "/templates")
     }
+    cfg.setSharedVariable(TemplateHelpers::class.simpleName, TemplateHelpers)
 
     val template: Template = cfg.getTemplate(templatePath)
     val out = StringWriter()
