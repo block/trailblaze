@@ -41,16 +41,18 @@ kotlin {
 
   sourceSets {
     commonMain.dependencies {
-      implementation(project(":trailblaze-models"))
-      implementation(compose.runtime)
-      implementation(compose.foundation)
-      implementation(compose.material3)
-      implementation(compose.ui)
+      api(project(":trailblaze-models"))
+      api(compose.runtime)
+      api(compose.foundation)
+      api(compose.material3)
+      api(compose.ui)
+
       implementation(compose.components.resources)
       implementation(compose.components.uiToolingPreview)
       implementation(libs.androidx.lifecycle.viewmodel)
       implementation(libs.androidx.lifecycle.runtimeCompose)
       implementation(libs.kotlinx.serialization.core)
+      implementation(libs.kotlinx.serialization.json)
     }
   }
 }

@@ -42,7 +42,11 @@ import xyz.block.trailblaze.mcp.utils.McpDirectToolCalls
 import xyz.block.trailblaze.report.utils.LogsRepo
 import java.util.concurrent.ConcurrentHashMap
 
-class TrailblazeMcpServer(val logsRepo: LogsRepo) {
+class TrailblazeMcpServer(
+  val logsRepo: LogsRepo,
+  val isOnDeviceMode: () -> Boolean,
+  val additionalToolsProvider: (TrailblazeMcpSseSessionContext, Server) -> ToolRegistry = { _, _ -> ToolRegistry {} },
+) {
 
   // Per-session progress token tracking (multiplatform compatible)
   private val sessionContexts = ConcurrentHashMap<McpSseSessionId, TrailblazeMcpSseSessionContext>()
@@ -164,41 +168,46 @@ class TrailblazeMcpServer(val logsRepo: LogsRepo) {
         sse("/sse") {
           val sseServerSession = this
           withContext(Dispatchers.IO) {
-            val mcpServer = configureMcpServer()
+            val mcpSseServer = configureMcpServer()
             val transport = SseServerTransport("/message", sseServerSession)
             val mcpSseSessionId = McpSseSessionId(transport.sessionId)
             println("NEW SSE Connection ${sseServerSession.call.request.queryString()} ${sseServerSession.call.request.headers.toMap()} $mcpSseSessionId")
             // For SSE, you can also add prompts/tools/resources if needed:
             // server.addTool(...), server.addPrompt(...), server.addResource(...)
-            setSessionContext(mcpSseSessionId, mcpServer)
+            setSessionContext(mcpSseSessionId, mcpSseServer)
 
             val initialToolRegistry = ToolRegistry.Companion {
-              tools(
-                AndroidOnDeviceToolSet(
-                  sessionContext = getSessionContext(mcpSseSessionId),
-                  toolRegistryUpdated = { updatedToolRegistry ->
-                    addToolsAsMcpToolsFromRegistry(
-                      newToolRegistry = updatedToolRegistry,
-                      mcpServer = mcpServer,
-                      mcpSseSessionId = mcpSseSessionId,
-                    )
-                  },
-                ).asTools(TrailblazeJsonInstance),
-              )
-            }
+              if (isOnDeviceMode()) {
+                tools(
+                  AndroidOnDeviceToolSet(
+                    sessionContext = getSessionContext(mcpSseSessionId),
+                    toolRegistryUpdated = { updatedToolRegistry ->
+                      addToolsAsMcpToolsFromRegistry(
+                        newToolRegistry = updatedToolRegistry,
+                        mcpServer = mcpSseServer,
+                        mcpSseSessionId = mcpSseSessionId,
+                      )
+                    },
+                  ).asTools(TrailblazeJsonInstance),
+                )
+              }
+            } + additionalToolsProvider(
+              getSessionContext(mcpSseSessionId)!!,
+              mcpSseServer,
+            )
 
             addToolsAsMcpToolsFromRegistry(
               newToolRegistry = initialToolRegistry,
-              mcpServer = mcpServer,
+              mcpServer = mcpSseServer,
               mcpSseSessionId = mcpSseSessionId,
             )
 
-            mcpServer.onClose {
+            mcpSseServer.onClose {
               println("Server closed")
               sessionContexts.remove(McpSseSessionId(transport.sessionId)) // Clear session context for this session
             }
 
-            mcpServer.connect(transport)
+            mcpSseServer.connect(transport)
           }
         }
         post("/message") {

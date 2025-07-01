@@ -63,6 +63,8 @@ markdown_extensions:
 
 nav:
   - 'Introduction': index.md
+  - 'Getting Started':
+      - 'MCP & Goose': goose.md
   - 'Usage':
     - 'Getting Started': getting_started.md
     - 'Tools': tools.md

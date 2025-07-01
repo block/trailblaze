@@ -38,6 +38,7 @@ fun main() {
 }
 
 object TrailblazeMain {
+  val isOnDeviceMode: Boolean = true
   val HTTP_PORT = 52525
   val SERVER_URL = "http://localhost:${HTTP_PORT}"
 
@@ -51,7 +52,8 @@ object TrailblazeMain {
           println("Logs Server $individualServer")
           when (individualServer.serverRunning) {
             true -> {
-              logsServerInstance = TrailblazeMcpServer(logsRepo).startSseMcpServer(wait = false)
+              logsServerInstance =
+                TrailblazeMcpServer(logsRepo, isOnDeviceMode = { isOnDeviceMode }).startSseMcpServer(wait = false)
               delay(1000)
               Utils.openInDefaultBrowser(SERVER_URL)
             }
@@ -78,11 +80,14 @@ object TrailblazeMain {
             openLogsFolder = {
               Utils.openInFileBrowser(logsDir)
             },
-            toggleServer = { newState ->
+            updateState = { newState ->
               val currValue = serverStateFlow.value
               val currLogsServer = currValue.logsServer
               serverStateFlow.value =
                 currValue.copy(logsServer = currLogsServer.copy(serverRunning = !currLogsServer.serverRunning))
+            },
+            openUrl = { url ->
+              Utils.openInDefaultBrowser(url)
             },
             openUrlInBrowser = {
               Utils.openInDefaultBrowser(TrailblazeMain.SERVER_URL)

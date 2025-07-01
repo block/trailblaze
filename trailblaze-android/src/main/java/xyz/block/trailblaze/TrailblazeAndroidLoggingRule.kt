@@ -14,8 +14,6 @@ import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogServerClient
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.model.SessionStatus
-import xyz.block.trailblaze.toolcalls.TrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool
 import java.security.SecureRandom
 import java.security.cert.X509Certificate
 import javax.net.ssl.SSLContext
@@ -39,7 +37,6 @@ class TrailblazeAndroidLoggingRule : SimpleTestRule() {
   }
 
   override fun ruleCreation(description: Description) {
-    recordLogs.clear()
     currentTestName = description.toTestName()
     TrailblazeLogger.startSession(currentTestName)
     subscribeToLoggingEventsAndSendToServer(
@@ -76,41 +73,12 @@ class TrailblazeAndroidLoggingRule : SimpleTestRule() {
       )
     }
     TrailblazeLogger.log(testEndedLog)
-    saveRecording(description)
-  }
-
-  private fun saveRecording(description: Description) {
-    try {
-      // Don't save empty recording
-      if (recordLogs.isEmpty()) return
-      val instructionMap: Map<String, List<TrailblazeTool>> =
-        // This used to be grouped by "instructions", but that is no able to be part of the log anymore
-        mapOf("tools" to recordLogs.map { it.command })
-      recordLogs.clear()
-
-      val recordingJson = TrailblazeJsonInstance.encodeToString(instructionMap)
-      val fileName = "${description.toTestName()}.json"
-      // This saves the test record to the test device's Downloads folder
-      // It still needs to be downloaded to the local filesystem to save the recording
-      FileReadWriteUtil.writeToDownloadsFile(
-        context = InstrumentationRegistry.getInstrumentation().context,
-        fileName = fileName,
-        contentBytes = recordingJson.toByteArray(),
-        directory = RECORDING_DIR,
-      )
-    } catch (e: Exception) {
-      println("Error writing log to disk: ${e.message}")
-    }
   }
 
   companion object {
-    private const val RECORDING_DIR = "trailblazeRecordings"
     private const val LOGS_DIR = "trailblaze-logs"
 
     lateinit var currentTestName: String
-      private set
-
-    var recordLogs = mutableListOf<TrailblazeLog.TrailblazeToolLog>()
       private set
 
     val trailblazeLogServerClient = TrailblazeLogServerClient(
@@ -191,7 +159,6 @@ class TrailblazeAndroidLoggingRule : SimpleTestRule() {
             writeLogToDisk(log)
           }
         }
-        cacheRecording(log)
       }
     }
 
@@ -221,15 +188,6 @@ class TrailblazeAndroidLoggingRule : SimpleTestRule() {
       } catch (e: Exception) {
         println("Error writing log to disk: ${e.message}")
       }
-    }
-
-    private fun cacheRecording(log: TrailblazeLog) {
-      listOf(log)
-        .filterIsInstance<TrailblazeLog.TrailblazeToolLog>()
-        .filter { it.successful }
-        // objective completes throw off the recording
-        .filter { it.command !is ObjectiveStatusTrailblazeTool }
-        .forEach { commandLog -> recordLogs.add(commandLog) }
     }
   }
 }
