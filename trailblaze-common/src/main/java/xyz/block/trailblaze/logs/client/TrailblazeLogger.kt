@@ -74,7 +74,7 @@ object TrailblazeLogger {
   }
 
   @Suppress("SimpleDateFormat")
-  private val DATE_TIME_FORMAT = SimpleDateFormat("yyyy-MM-dd-HH-mm-ss", Locale.US)
+  private val DATE_TIME_FORMAT = SimpleDateFormat("yyyy_MM_dd_HH_mm_ss", Locale.US)
 
   private fun generateSessionId(seed: String): String = "${DATE_TIME_FORMAT.format(Date())}_$seed"
 

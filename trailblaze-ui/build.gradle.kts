@@ -54,6 +54,10 @@ kotlin {
       implementation(libs.kotlinx.serialization.core)
       implementation(libs.kotlinx.serialization.json)
     }
+    jvmMain.dependencies {
+      implementation(project(":trailblaze-server"))
+      implementation(libs.ktor.server.core)
+    }
   }
 }
 

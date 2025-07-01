@@ -18,7 +18,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import org.jetbrains.compose.ui.tooling.preview.Preview
-import xyz.block.trailblaze.ui.models.IndividualServer
 import xyz.block.trailblaze.ui.models.TrailblazeServerState
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
@@ -26,65 +25,13 @@ import kotlin.io.encoding.ExperimentalEncodingApi
 @Suppress("ktlint:standard:function-naming")
 object LogsServerComposables {
 
-  @Composable
-  @Preview
-  private fun IndividualServerComposable(
-    individualServer: IndividualServer,
-    updateServer: (IndividualServer) -> Unit,
-    openTrailblazeWeb: () -> Unit,
-    openUrl: (String) -> Unit,
-  ) {
-    Row(
-      modifier = Modifier
-        .fillMaxWidth()
-        .wrapContentHeight(),
-    ) {
-      val showDebugText = false
-      if (showDebugText) {
-        Text(text = "${individualServer.name} (Port ${individualServer.port})", modifier = Modifier.padding(8.dp))
-        Spacer(Modifier.width(16.dp))
-      }
-      val canStartStopServer = false
-      if (canStartStopServer) {
-        Button(onClick = {
-          updateServer(
-            individualServer.copy(
-              serverRunning = !individualServer.serverRunning,
-            ),
-          )
-        }) {
-          Text(
-            when (individualServer.serverRunning) {
-              true -> "Stop Server"
-              false -> "Start Server"
-            },
-          )
-        }
-        Spacer(Modifier.width(16.dp))
-      }
-      Button(openTrailblazeWeb) {
-        Text("Open Browser")
-      }
-      Spacer(Modifier.width(16.dp))
-      val gooseRecipeJson = this::class.java.classLoader.getResource("trailblaze_goose_recipe.json").readText()
-
-      @OptIn(ExperimentalEncodingApi::class)
-      val gooseRecipeEncoded = Base64.encode(gooseRecipeJson.toByteArray())
-      val gooseUrl = "goose://recipe?config=${gooseRecipeEncoded}"
-      Button(onClick = {
-        openUrl(gooseUrl)
-      }) {
-        Text("Open Goose")
-      }
-    }
-  }
 
   @Composable
   @Preview
   fun App(
     serverState: TrailblazeServerState,
     openLogsFolder: () -> Unit,
-    openUrl: (String) -> Unit,
+    openGoose: () -> Unit,
     updateState: (TrailblazeServerState) -> Unit,
     openUrlInBrowser: () -> Unit,
   ) {
@@ -99,24 +46,23 @@ object LogsServerComposables {
             .fillMaxWidth()
         ) {
           item {
-            IndividualServerComposable(
-              serverState.logsServer,
-              { individualServer ->
-                updateState(
-                  serverState.copy(
-                    logsServer = serverState.logsServer.copy(
-                      serverRunning = !individualServer.serverRunning
-                    )
-                  )
-                )
-              },
-              openTrailblazeWeb = {
-                openUrlInBrowser()
-              },
-              openUrl = openUrl,
-            )
+            Row(
+              modifier = Modifier
+                .fillMaxWidth()
+                .wrapContentHeight(),
+            ) {
+              Button(openUrlInBrowser) {
+                Text("Open Browser")
+              }
+              Spacer(Modifier.width(16.dp))
+              Button(onClick = {
+                openGoose()
+              }) {
+                Text("Open Goose")
+              }
+            }
           }
-          if (serverState.hostModeAvailable) {
+          if (serverState.appConfig.availableFeatures.hostMode) {
             item {
               Row(
                 modifier = Modifier
@@ -130,19 +76,73 @@ object LogsServerComposables {
                 Spacer(Modifier.width(16.dp))
                 Switch(
                   modifier = Modifier.align(Alignment.CenterVertically),
-                  checked = serverState.savedSettings.hostModeEnabled,
-                  onCheckedChange = {
-                    val savedSettings = serverState.savedSettings
+                  checked = serverState.appConfig.hostModeEnabled,
+                  onCheckedChange = { checkedValue ->
+                    val savedSettings = serverState.appConfig
                     updateState(
                       serverState.copy(
-                        savedSettings = savedSettings.copy(
-                          hostModeEnabled = !savedSettings.hostModeEnabled
+                        appConfig = savedSettings.copy(
+                          hostModeEnabled = checkedValue
                         ),
                       )
                     )
                   }
                 )
               }
+            }
+          }
+          item {
+            Row(
+              modifier = Modifier
+                .fillMaxWidth()
+                .wrapContentHeight(),
+            ) {
+              Text(
+                modifier = Modifier.align(Alignment.CenterVertically),
+                text = "Auto Launch Trailblaze in Browser on Startup"
+              )
+              Spacer(Modifier.width(16.dp))
+              Switch(
+                modifier = Modifier.align(Alignment.CenterVertically),
+                checked = serverState.appConfig.autoLaunchBrowser,
+                onCheckedChange = { checkedValue ->
+                  val savedSettings = serverState.appConfig
+                  updateState(
+                    serverState.copy(
+                      appConfig = savedSettings.copy(
+                        autoLaunchBrowser = checkedValue
+                      ),
+                    )
+                  )
+                }
+              )
+            }
+          }
+          item {
+            Row(
+              modifier = Modifier
+                .fillMaxWidth()
+                .wrapContentHeight(),
+            ) {
+              Text(
+                modifier = Modifier.align(Alignment.CenterVertically),
+                text = "Auto Launch Trailblaze in Goose on Startup"
+              )
+              Spacer(Modifier.width(16.dp))
+              Switch(
+                modifier = Modifier.align(Alignment.CenterVertically),
+                checked = serverState.appConfig.autoLaunchGoose,
+                onCheckedChange = { checkedValue ->
+                  val savedSettings = serverState.appConfig
+                  updateState(
+                    serverState.copy(
+                      appConfig = savedSettings.copy(
+                        autoLaunchGoose = checkedValue
+                      ),
+                    )
+                  )
+                }
+              )
             }
           }
           item {
