@@ -85,7 +85,7 @@ class MixedModeTestCase(
     parseTrailblazeCommands(objectives)
   } else {
     println("### parsing full prompt with prompt steps")
-    val fullInstructions = parseFullPrompt(objectives)
+    val fullInstructions = parseFullPrompt(objectives, useOnlyKeys = !executeRecordedSteps)
     val promptSteps = generatePromptSteps(fullInstructions)
     TestObjective.TrailblazeObjective.TrailblazePrompt(fullInstructions, promptSteps)
   }
@@ -144,17 +144,15 @@ class MixedModeTestCase(
     }
   }
 
-  private fun parseFullPrompt(objectives: List<*>): String {
+  private fun parseFullPrompt(objectives: List<*>, useOnlyKeys: Boolean = false): String {
     // Combine all descriptions into a single objective separated by newlines
     val fullInstructions = objectives.mapNotNull {
       when (it) {
         is String -> it
         is Map<*, *> -> {
           val key = it.keys.firstOrNull()?.toString() ?: ""
-          val value = it.values.firstOrNull()?.toString() ?: ""
-          "$key: $value"
+          if (useOnlyKeys) key else "$key: ${it.values.firstOrNull()?.toString() ?: ""}"
         }
-
         else -> null
       }
     }.joinToString("\n")

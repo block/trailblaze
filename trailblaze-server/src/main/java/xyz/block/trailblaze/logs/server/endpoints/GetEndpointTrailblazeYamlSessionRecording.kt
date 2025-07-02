@@ -61,6 +61,7 @@ object GetEndpointTrailblazeYamlSessionRecording {
           mapOf(
             "session" to sessionId,
             "yaml" to yaml,
+            "recordingType" to "Trailblaze Recording",
           ),
         ),
         null,

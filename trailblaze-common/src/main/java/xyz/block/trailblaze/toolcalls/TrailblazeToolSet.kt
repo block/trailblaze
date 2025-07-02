@@ -1,5 +1,9 @@
 package xyz.block.trailblaze.toolcalls
 
+import xyz.block.trailblaze.toolcalls.commands.AssertVisibleByNodeIdTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.AssertVisibleWithAccessibilityTextTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.AssertVisibleWithResourceIdTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.AssertVisibleWithTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.EraseTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.HideKeyboardTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
@@ -43,11 +47,13 @@ abstract class TrailblazeToolSet(
       SwipeTrailblazeTool::class,
       WaitForIdleSyncTrailblazeTool::class,
       LaunchAppTrailblazeTool::class,
+      AssertVisibleByNodeIdTrailblazeTool::class,
     )
 
     val AllBuiltInTrailblazeToolSets: Set<TrailblazeToolSet> = setOf(
       DeviceControlTrailblazeToolSet,
       InteractWithElementsByPropertyToolSet,
+      AssertByPropertyToolSet,
       SetOfMarkTrailblazeToolSet,
     )
 
@@ -87,6 +93,15 @@ abstract class TrailblazeToolSet(
       LongPressElementWithAccessibilityTextTrailblazeTool::class,
       TapOnElementWithTextTrailblazeTool::class,
       TapOnElementWithAccessiblityTextTrailblazeTool::class,
+    ),
+  )
+
+  @TrailblazeToolSetClass("Assert By Property Toolset")
+  object AssertByPropertyToolSet : TrailblazeToolSet(
+    tools = setOf(
+      AssertVisibleWithTextTrailblazeTool::class,
+      AssertVisibleWithAccessibilityTextTrailblazeTool::class,
+      AssertVisibleWithResourceIdTrailblazeTool::class,
     ),
   )
 }

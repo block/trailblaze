@@ -39,6 +39,7 @@ object GetEndpointMaestroYamlSessionRecording {
           mapOf(
             "session" to sessionId,
             "yaml" to yamlString,
+            "recordingType" to "Maestro Recording",
           ),
         ),
         null,

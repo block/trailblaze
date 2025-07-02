@@ -36,6 +36,10 @@ in a timely manner and providing no tools to call prohibits the completion of th
 Any blank or loading screens should use the wait tool in order to provide the next valid view
 state.
 
+When interpreting objectives, if an objective begins with the word "expect", "verify", "confirm", or
+"assert" (case-insensitive), you should use the assert visible tool to check the relevant UI element
+or state.
+
 **NOTE:**
 - If you perform the same action more than once and the app is not progressing, try a different action.
 - Do not return any images or binary content in your response.

@@ -15,7 +15,7 @@
         </div>
     </div>
     <hr/>
-    <h3>YAML Recording</h3>
+    <h3>${recordingType!"Recording"}</h3>
     <div class="row">
         <div class="col">
             <pre>${yaml}</pre>

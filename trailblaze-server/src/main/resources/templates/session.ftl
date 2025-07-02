@@ -90,6 +90,11 @@
                     Trailblaze YAML Recording
                 </button>
             </a>
+            <a href="/recording/tbsimple/${session}">
+                <button type="button" class="btn btn-primary me-3">
+                    Trailblaze Simple YAML Recording
+                </button>
+            </a>
             <span> </span>
             <a href="/llm/${session}">
                 <button type="button" class="btn btn-primary me-3">

@@ -63,14 +63,13 @@ markdown_extensions:
 
 nav:
   - 'Introduction': index.md
-  - 'Getting Started':
-      - 'MCP & Goose': goose.md
   - 'Usage':
     - 'Getting Started': getting_started.md
-    - 'Tools': tools.md
-    - 'Default Tools': generated/TOOLS.md
+    - 'MCP & Goose': goose.md
     - 'Logging': logging.md
     - 'LLM Support': llms.md
+    - 'Trailblaze Tools': tools.md
+    - 'Default Tools': generated/TOOLS.md
   - 'Maestro Compatibility': maestro.md
   - 'Architecture': architecture.md
   - 'Roadmap': roadmap.md

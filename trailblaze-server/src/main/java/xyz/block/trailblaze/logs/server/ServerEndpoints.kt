@@ -19,6 +19,7 @@ import xyz.block.trailblaze.logs.server.endpoints.AgentLogEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.DeleteLogsEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.GetEndpointMaestroYamlSessionRecording
 import xyz.block.trailblaze.logs.server.endpoints.GetEndpointSessionDetail
+import xyz.block.trailblaze.logs.server.endpoints.GetEndpointTrailblazeSimpleYamlSessionRecording
 import xyz.block.trailblaze.logs.server.endpoints.GetEndpointTrailblazeYamlSessionRecording
 import xyz.block.trailblaze.logs.server.endpoints.HomeEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.LlmSessionEndpoint
@@ -57,6 +58,7 @@ object ServerEndpoints {
       DeleteLogsEndpoint.register(this, logsRepo)
       GetEndpointMaestroYamlSessionRecording.register(this, logsRepo)
       GetEndpointTrailblazeYamlSessionRecording.register(this, logsRepo)
+      GetEndpointTrailblazeSimpleYamlSessionRecording.register(this, logsRepo)
       LogScreenshotPostEndpoint.register(this, logsRepo)
       SinglePageReportEndpoint.register(this, logsRepo)
       staticFiles("/static", logsRepo.logsDir)

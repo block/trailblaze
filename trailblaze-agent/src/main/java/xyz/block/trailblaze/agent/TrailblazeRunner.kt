@@ -147,7 +147,7 @@ class TrailblazeRunner(
         agentTaskStatus = step.currentStatus.value,
         screenState = screenStateForLlmRequest,
         instructions = step.fullPrompt,
-        llmMessages = limitedHistory.map { messageFromHistory ->
+        llmMessages = koogAiRequestMessages.map { messageFromHistory ->
           LlmMessage(
             role = messageFromHistory.role.name.lowercase(),
             message = messageFromHistory.content,

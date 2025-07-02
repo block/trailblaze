@@ -1,14 +1,15 @@
 Observability of the test execution and agent performance is crucial to adopting AI-based tests.
 Trailblaze includes thorough logging capabilities in all phases of the test execution.
 
-### Start the Server
+### Start Trailblaze
 
-Run the following to start the server:
+Run the following to start the trailblaze (including server):
 
 ```bash
-# Runs ./gradlew :trailblaze-server:run
-./server
+./trailblaze
 ```
+
+![launch-trailblaze.gif](assets/images/launch-trailblaze.gif)
 
 This initializes a local web server that Trailblaze will send all the logs to on your local machine.
 Logs _will not_ be collected if the server is not running.
