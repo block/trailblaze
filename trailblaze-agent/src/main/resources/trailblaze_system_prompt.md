@@ -47,4 +47,4 @@ or state.
 **UI Interaction hints:**
 - If the device is currently on a loading screen or a welcome screen, then always wait for the app to finish before choosing another tool.
 - Always use the accessibility text when interacting with Icons on the screen. Attempting to tap on them as an individual letter or symbol will not work.
-- Always use the close or back icons in the app to navigate vs using the device back button. The back button should only be used if there are no other
+- Always use the close or back icons in the app to navigate vs using the device back button. The back button should only be used if there are no other.

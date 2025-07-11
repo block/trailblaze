@@ -27,7 +27,7 @@ import java.io.File
 import kotlin.io.encoding.ExperimentalEncodingApi
 
 class TrailblazeKoogLlmClientHelper(
-  val systemPromptTemplate: String,
+  var systemPromptTemplate: String,
   val userObjectiveTemplate: String,
   val userMessageTemplate: String,
   val llmModel: LLModel,

@@ -9,6 +9,8 @@ import kotlinx.datetime.Clock
 import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.MaestroTrailblazeAgent
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
+import xyz.block.trailblaze.agent.model.AgentTaskStatus.Failure.MaxCallsLimitReached
+import xyz.block.trailblaze.agent.model.AgentTaskStatusData
 import xyz.block.trailblaze.agent.model.TestObjective.TrailblazeObjective.TrailblazePrompt
 import xyz.block.trailblaze.agent.model.TrailblazePromptStep
 import xyz.block.trailblaze.agent.util.LogHelper
@@ -31,25 +33,33 @@ class TrailblazeRunner(
   private val screenStateProvider: () -> ScreenState,
   val llmClient: LLMClient,
   val llmModel: LLModel,
+  private val maxSteps: Int = 50,
   private val trailblazeToolRepo: TrailblazeToolRepo,
-  private val systemPromptTemplate: String = TemplatingUtil.getResourceAsText(
-    "trailblaze_system_prompt.md",
-  )!!,
-  private val userObjectiveTemplate: String = TemplatingUtil.getResourceAsText(
+  systemPromptTemplate: String? = null,
+  userObjectiveTemplate: String = TemplatingUtil.getResourceAsText(
     "trailblaze_user_objective_template.md",
   )!!,
-  private val userMessageTemplate: String = TemplatingUtil.getResourceAsText(
+  userMessageTemplate: String = TemplatingUtil.getResourceAsText(
     "trailblaze_current_screen_user_prompt_template.md",
   )!!,
 ) : TestAgentRunner {
 
+  private var currentSystemPrompt: String = systemPromptTemplate ?: TemplatingUtil.getResourceAsText(
+    "trailblaze_system_prompt.md",
+  )!!
+
   private val trailblazeKoogLlmClientHelper = TrailblazeKoogLlmClientHelper(
-    systemPromptTemplate = systemPromptTemplate,
+    systemPromptTemplate = currentSystemPrompt,
     userObjectiveTemplate = userObjectiveTemplate,
     userMessageTemplate = userMessageTemplate,
     llmModel = this.llmModel,
     llmClient = llmClient,
   )
+
+  fun appendToSystemPrompt(context: String) {
+    currentSystemPrompt = currentSystemPrompt + "\n" + context
+    trailblazeKoogLlmClientHelper.systemPromptTemplate = currentSystemPrompt
+  }
 
   override fun run(prompt: TrailblazePrompt): AgentTaskStatus {
     TrailblazeLogger.log(
@@ -97,6 +107,8 @@ class TrailblazeRunner(
       ),
     )
     trailblazeKoogLlmClientHelper.setForceStepStatusUpdate(false)
+    val stepStartTime = Clock.System.now()
+    var currentStep = 0
     do {
       println("\n[LOOP_STATUS] Status: ${step.currentStatus.value.javaClass.simpleName} | Call: ${step.getHistorySize() + 1}")
       val screenStateForLlmRequest = screenStateProvider()
@@ -186,6 +198,21 @@ class TrailblazeRunner(
       }
 
       LogHelper.logStepStatus(step)
+
+      println("### Checking current step $currentStep against max steps: $maxSteps")
+      if (currentStep >= maxSteps) {
+        return MaxCallsLimitReached(
+          statusData = AgentTaskStatusData(
+            taskId = step.taskId,
+            prompt = step.description,
+            callCount = maxSteps,
+            taskStartTime = stepStartTime,
+            totalDurationMs = (Clock.System.now() - stepStartTime).inWholeMilliseconds,
+          ),
+        )
+      } else {
+        currentStep++
+      }
     } while (!step.isFinished())
 
     val exitStatus = step.currentStatus.value

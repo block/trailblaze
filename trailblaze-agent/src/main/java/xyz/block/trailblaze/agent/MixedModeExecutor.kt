@@ -45,7 +45,7 @@ class MixedModeExecutor(
   private val variables = mutableMapOf<String, String>()
 
   // Regex for detecting numbers
-  private val numberRegex = Regex("[-+]?\\d*\\.?\\d+")
+  private val numberRegex = """-?(?:\d{1,3}(?:,\d{1,3})+|\d+)(?:\.\d+)?""".toRegex()
 
   private val elementComparator = TrailblazeElementComparator(
     screenStateProvider = screenStateProvider,
@@ -65,6 +65,10 @@ class MixedModeExecutor(
     executeRecordedSteps: Boolean = true,
   ) {
     val testCase = MixedModeTestCase(yamlContent, executeRecordedSteps, additionalTrailblazeTools)
+    // If context is present, append it to the system prompt
+    testCase.contextString?.let { context ->
+      trailblazeRunner.appendToSystemPrompt("\n## Here is some additional context that you can use to complete the test:\n\n$context")
+    }
     testCase.objectives.forEach { objective ->
       when (objective) {
         is AssertEqualsCommand -> handleAssertEqualsCommand(objective)
@@ -141,7 +145,8 @@ class MixedModeExecutor(
 
     // Extract numeric value using regex
     val numberMatch = numberRegex.find(extractedValue)
-    variables[objective.variableName] = numberMatch?.value ?: "0" // todo: Should this throw if it's invalid?
+    val numberString = numberMatch?.value?.replace(",", "") ?: "0"
+    variables[objective.variableName] = numberString
   }
 
   /**

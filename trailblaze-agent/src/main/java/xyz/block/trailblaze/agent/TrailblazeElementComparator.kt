@@ -20,6 +20,7 @@ import xyz.block.trailblaze.toolcalls.commands.ElementRetrieverTrailblazeTool.Lo
 import xyz.block.trailblaze.toolcalls.commands.ElementRetrieverTrailblazeTool.LocatorType
 import xyz.block.trailblaze.toolcalls.commands.StringEvaluationTrailblazeTool
 import xyz.block.trailblaze.util.TemplatingUtil
+import xyz.block.trailblaze.utils.getNumberFromString
 import java.io.File
 
 /**
@@ -40,9 +41,6 @@ internal class TrailblazeElementComparator(
     userMessageTemplate = userPromptTemplate,
     userObjectiveTemplate = userPromptTemplate,
   )
-
-  // Regex to extract any positive or negative integer or float from a string
-  private val numberRegex = """(-?\d+(\.\d+)?)""".toRegex()
 
   /**
    * Gets the value of an element based on a prompt description.
@@ -213,9 +211,9 @@ internal class TrailblazeElementComparator(
   }
 
   /**
-   * Extracts a number from a string using regex.
+   * Extracts a number from a string using regex, handling commas as thousands separators.
    */
-  fun extractNumberFromString(input: String): Double? = numberRegex.find(input)?.groupValues?.getOrNull(1)?.toDoubleOrNull()
+  fun extractNumberFromString(input: String): Double? = getNumberFromString(input)
 
   /**
    * Uses LLM to identify the best locator for an element based on description.

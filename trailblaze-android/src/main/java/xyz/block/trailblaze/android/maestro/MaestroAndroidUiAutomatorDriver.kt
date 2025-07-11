@@ -27,7 +27,6 @@ import xyz.block.trailblaze.android.uiautomator.AndroidOnDeviceUiAutomatorScreen
 import xyz.block.trailblaze.setofmark.android.AndroidBitmapUtils.toByteArray
 import java.io.File
 import java.util.UUID
-import kotlin.io.encoding.ExperimentalEncodingApi
 
 /**
  * This is Trailblaze's Maestro on-device driver implementation for Android using UiAutomator.
@@ -346,7 +345,6 @@ internal class MaestroAndroidUiAutomatorDriver : Driver {
     }
   }
 
-  @OptIn(ExperimentalEncodingApi::class)
   override fun takeScreenshot(out: Sink, compressed: Boolean) {
     val screenshot = AndroidOnDeviceUiAutomatorScreenState.takeScreenshot(
       viewHierarchy = null,

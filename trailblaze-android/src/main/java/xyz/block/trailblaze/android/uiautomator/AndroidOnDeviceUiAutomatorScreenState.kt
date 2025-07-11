@@ -17,12 +17,10 @@ import xyz.block.trailblaze.setofmark.android.AndroidCanvasSetOfMark
 import xyz.block.trailblaze.viewhierarchy.ViewHierarchyFilter
 import xyz.block.trailblaze.viewhierarchy.ViewHierarchyTreeNodeUtils
 import java.io.ByteArrayOutputStream
-import kotlin.io.encoding.ExperimentalEncodingApi
 
 /**
  * Snapshot in time of what the screen has in it.
  */
-@OptIn(ExperimentalEncodingApi::class)
 class AndroidOnDeviceUiAutomatorScreenState(
   filterViewHierarchy: Boolean = false,
   maxDimension1: Int? = 1024,
@@ -34,9 +32,9 @@ class AndroidOnDeviceUiAutomatorScreenState(
 
   override var deviceWidth: Int = -1
   override var deviceHeight: Int = -1
-  override lateinit var screenshotBytes: ByteArray
-  override lateinit var viewHierarchyOriginal: ViewHierarchyTreeNode
-  override lateinit var viewHierarchy: ViewHierarchyTreeNode
+  override var screenshotBytes: ByteArray
+  override var viewHierarchyOriginal: ViewHierarchyTreeNode
+  override var viewHierarchy: ViewHierarchyTreeNode
 
   init {
     val (displayWidth, displayHeight) = withUiDevice { displayWidth to displayHeight }
@@ -99,13 +97,12 @@ class AndroidOnDeviceUiAutomatorScreenState(
   }
 
   companion object {
-    fun dumpViewHierarchy(): String {
-      val outputStream = ByteArrayOutputStream()
+    fun dumpViewHierarchy(): String = ByteArrayOutputStream().use { outputStream ->
       withUiDevice {
         setCompressedLayoutHierarchy(false)
         dumpWindowHierarchy(outputStream)
       }
-      return outputStream.toString()
+      outputStream.toString()
     }
 
     /**
@@ -132,15 +129,22 @@ class AndroidOnDeviceUiAutomatorScreenState(
       setOfMarkEnabled: Boolean = true,
     ): Bitmap? {
       val screenshotBitmap = withUiAutomation { takeScreenshot() }
-      if (setOfMarkEnabled && screenshotBitmap != null) {
-        viewHierarchy?.let {
-          return addSetOfMark(screenshotBitmap, viewHierarchy)
+      try {
+        if (setOfMarkEnabled && screenshotBitmap != null) {
+          viewHierarchy?.let {
+            val markedBitmap = addSetOfMark(screenshotBitmap, viewHierarchy)
+            screenshotBitmap.recycle()
+            return markedBitmap
+          }
         }
+        return screenshotBitmap
+      } catch (e: Exception) {
+        screenshotBitmap.recycle()
+        throw e
       }
-      return screenshotBitmap
     }
 
-    fun addSetOfMark(screenshotBitmap: Bitmap, viewHierarchy: ViewHierarchyTreeNode): Bitmap {
+    private fun addSetOfMark(screenshotBitmap: Bitmap, viewHierarchy: ViewHierarchyTreeNode): Bitmap {
       val mutableBitmap = if (!screenshotBitmap.isMutable) {
         screenshotBitmap.copy(Bitmap.Config.ARGB_8888, true)
       } else {

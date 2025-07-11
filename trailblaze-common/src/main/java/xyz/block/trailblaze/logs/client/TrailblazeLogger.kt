@@ -11,7 +11,6 @@ import xyz.block.trailblaze.logs.model.LlmMessage
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import kotlin.io.encoding.ExperimentalEncodingApi
 
 object TrailblazeLogger {
 
@@ -44,7 +43,6 @@ object TrailblazeLogger {
   ) {
     val toolMessages = response.filterIsInstance<Message.Tool>()
 
-    @OptIn(ExperimentalEncodingApi::class)
     val bytes = screenState.screenshotBytes ?: byteArrayOf()
     val screenshotFilename = logScreenshot(bytes)
 

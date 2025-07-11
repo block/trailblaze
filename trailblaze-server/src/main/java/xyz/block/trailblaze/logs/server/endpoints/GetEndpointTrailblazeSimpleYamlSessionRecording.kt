@@ -33,15 +33,16 @@ object GetEndpointTrailblazeSimpleYamlSessionRecording {
       val topLevelListSerializer = ListSerializer(MapSerializer(serializer<String>(), AnyValueSerializer))
 
       val yamlString = Yaml.default.encodeToString(topLevelListSerializer, trailblazeSimpleYamlBlocks)
+      val prettifiedYaml = removeQuotesIfNoColon(yamlString)
 
-      println("--- TRAILBLAZE SIMPLE YAML ---\n$yamlString\n---")
+      println("--- TRAILBLAZE SIMPLE YAML ---\n$prettifiedYaml\n---")
 
       call.respond(
         FreeMarkerContent(
           "recording_yaml.ftl",
           mapOf(
             "session" to sessionId,
-            "yaml" to yamlString,
+            "yaml" to prettifiedYaml,
             "recordingType" to "Trailblaze Simple Recording",
           ),
         ),
@@ -55,6 +56,7 @@ object GetEndpointTrailblazeSimpleYamlSessionRecording {
     val yamlBlocks = mutableListOf<Map<String, Any?>>()
     var currentObjective: ObjectiveBuilder? = null
     var inRun = false
+    var currentTaskId: String? = null
     val objectives = mutableListOf<Map<String, List<Map<String, Map<String, String>>>?>>()
     for (event in events) {
       when (event) {
@@ -68,6 +70,7 @@ object GetEndpointTrailblazeSimpleYamlSessionRecording {
             yamlBlocks.add(mapOf("run" to objectives.toList()))
             objectives.clear()
             inRun = false
+            currentTaskId = null
           }
           // Output the Maestro command as a top-level map
           val commandParts = event.command.removePrefix("- ").split(": ", limit = 2)
@@ -79,21 +82,34 @@ object GetEndpointTrailblazeSimpleYamlSessionRecording {
         }
         is TrailblazeLog.TrailblazeAgentTaskStatusChangeLog -> {
           val statusClass = event.agentTaskStatus::class.simpleName ?: ""
+          val taskId = event.agentTaskStatus.statusData.taskId
           if ("InProgress" in statusClass) {
             if (!inRun) {
               inRun = true
+              currentTaskId = taskId
               currentObjective = null
-            }
-          } else if ("Success" in statusClass || "Failure" in statusClass) {
-            if (inRun && (objectives.isNotEmpty() || currentObjective != null)) {
+            } else if (currentTaskId != null && currentTaskId != taskId) {
+              // New taskId, flush current run and start new
               if (currentObjective != null) {
                 objectives.add(currentObjective.build())
                 currentObjective = null
               }
               yamlBlocks.add(mapOf("run" to objectives.toList()))
               objectives.clear()
-              inRun = false
+              currentTaskId = taskId
+              inRun = true
             }
+          } else if (("Success" in statusClass || "Failure" in statusClass) && inRun && currentTaskId == taskId) {
+            if (objectives.isNotEmpty() || currentObjective != null) {
+              if (currentObjective != null) {
+                objectives.add(currentObjective.build())
+                currentObjective = null
+              }
+              yamlBlocks.add(mapOf("run" to objectives.toList()))
+              objectives.clear()
+            }
+            inRun = false
+            currentTaskId = null
           }
         }
         is TrailblazeLog.ObjectiveStartLog -> {
@@ -170,5 +186,17 @@ object GetEndpointTrailblazeSimpleYamlSessionRecording {
       }
     }
     override fun deserialize(decoder: kotlinx.serialization.encoding.Decoder): Any? = error("Not needed")
+  }
+
+  // Post-process YAML to remove quotes from strings that do not contain a colon
+  private fun removeQuotesIfNoColon(yaml: String): String {
+    // Regex to match quoted strings (single or double quotes)
+    val regex = Regex("""(['\"])([^'\":\n]+)\1""")
+    return regex.replace(yaml) { matchResult ->
+      val quote = matchResult.groupValues[1]
+      val content = matchResult.groupValues[2]
+      // Only remove quotes if there's no colon in the content
+      if (':' !in content) content else "$quote$content$quote"
+    }
   }
 }

@@ -20,19 +20,39 @@ class MixedModeTestCase(
   private val allPossibleTools: Set<KClass<out TrailblazeTool>> =
     TrailblazeToolSet.AllBuiltInTrailblazeTools + additionalTrailblazeTools
 
-  override val objectives: List<TestObjective> = parseObjectives()
+  // New property to hold context string if present
+  val contextString: String?
 
-  private fun parseObjectives(): List<TestObjective> {
-    if (instructions.isBlank()) {
-      throw TrailblazeException("Cannot generate test case from empty yamlConfig")
-    }
+  override val objectives: List<TestObjective>
+
+  init {
+    // Always parse YAML as a list
     val yaml = Yaml()
-    println("### Parsing yaml content: $instructions")
-    val parsedYaml = yaml.load(instructions) as List<*>
-    println("### Parsing parsed yaml: $parsedYaml")
+    val parsedYaml = yaml.load<Any>(instructions)
+    if (parsedYaml !is List<*>) {
+      throw TrailblazeException("YAML must be a list")
+    }
+    val list = parsedYaml
+    if (list.isNotEmpty() && list[0] is Map<*, *>) {
+      val firstMap = list[0] as Map<*, *>
+      if (firstMap.size == 1 && firstMap.containsKey("context")) {
+        contextString = firstMap["context"]?.toString()
+        objectives = parseObjectivesFromYaml(list.drop(1))
+      } else {
+        contextString = null
+        objectives = parseObjectivesFromYaml(list)
+      }
+    } else {
+      contextString = null
+      objectives = parseObjectivesFromYaml(list)
+    }
+  }
 
-    // Process each command, filtering out TB commands and collecting Maestro commands
-    return parsedYaml.map { command ->
+  private fun parseObjectivesFromYaml(yamlObj: Any?): List<TestObjective> {
+    if (yamlObj !is List<*>) {
+      throw TrailblazeException("Objectives must be a list")
+    }
+    return yamlObj.map { command ->
       println("### Parsing command from yaml $command")
       when (command) {
         is Map<*, *> -> {
@@ -85,9 +105,47 @@ class MixedModeTestCase(
     parseTrailblazeCommands(objectives)
   } else {
     println("### parsing full prompt with prompt steps")
-    val fullInstructions = parseFullPrompt(objectives, useOnlyKeys = !executeRecordedSteps)
-    val promptSteps = generatePromptSteps(fullInstructions)
-    TestObjective.TrailblazeObjective.TrailblazePrompt(fullInstructions, promptSteps)
+    // If all items are strings, treat each as a step, even if multi-line
+    val allStrings = objectives.all { it is String }
+    if (allStrings) {
+      val stringList = objectives.filterIsInstance<String>()
+      val fullInstructions = stringList.joinToString("\n")
+      val promptSteps = generatePromptStepsFromList(stringList, fullInstructions)
+      TestObjective.TrailblazeObjective.TrailblazePrompt(fullInstructions, promptSteps)
+    } else {
+      val fullInstructions = parseFullPrompt(objectives, useOnlyKeys = !executeRecordedSteps)
+      val promptSteps = generatePromptStepsFromString(fullInstructions)
+      TestObjective.TrailblazeObjective.TrailblazePrompt(fullInstructions, promptSteps)
+    }
+  }
+
+  // Accepts a list of strings, each string is a step (even if multi-line)
+  private fun generatePromptStepsFromList(steps: List<String>, fullPrompt: String): List<TrailblazePromptStep> {
+    val taskId = UUID.randomUUID().toString()
+    return steps.mapIndexed { index, step ->
+      TrailblazePromptStep(
+        description = step,
+        taskId = taskId,
+        taskIndex = index,
+        fullPrompt = fullPrompt,
+      )
+    }
+  }
+
+  // Accepts a single string, splits by lines (legacy/compat)
+  private fun generatePromptStepsFromString(stepInstructions: String): List<TrailblazePromptStep> {
+    val taskId = UUID.randomUUID().toString()
+    return stepInstructions.lines()
+      .map { it.trim() }
+      .filter { it.isNotEmpty() }
+      .mapIndexed { index, line ->
+        TrailblazePromptStep(
+          description = line,
+          taskId = taskId,
+          taskIndex = index,
+          fullPrompt = stepInstructions,
+        )
+      }
   }
 
   private fun parseSinglePrompt(instructions: String): TestObjective.TrailblazeObjective = TestObjective.TrailblazeObjective.TrailblazePrompt(
@@ -160,21 +218,6 @@ class MixedModeTestCase(
       throw TrailblazeException("Cannot parse objectives from empty instructions.")
     }
     return fullInstructions
-  }
-
-  private fun generatePromptSteps(stepInstructions: String): List<TrailblazePromptStep> {
-    val taskId = UUID.randomUUID().toString()
-    return stepInstructions.lines()
-      .map { it.trim() }
-      .filter { it.isNotEmpty() }
-      .mapIndexed { index, line ->
-        TrailblazePromptStep(
-          description = line,
-          taskId = taskId,
-          taskIndex = index,
-          fullPrompt = stepInstructions,
-        )
-      }
   }
 
   private fun parseRememberTextCommand(value: Any?): TestObjective.RememberTextCommand = if (value is Map<*, *>) {

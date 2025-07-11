@@ -583,4 +583,29 @@ class MixedModeTestCaseTest {
       assertThat(prompt.steps[2].description).isEqualTo("Run something with three steps")
     }
   }
+
+  @Test
+  fun trailblazePromptMultiLineStringStep() {
+    val yaml = """
+- run:
+    - |
+      IMPORTANT, testers must first:
+      *Logged in as an employee without the custom amount permission*
+    - Dismiss the start drawer screen
+    - Go to Keypad tab
+    """.trimIndent()
+    val testCase = MixedModeTestCase(yaml)
+    val objectives = testCase.objectives
+    assertThat(objectives.size).isEqualTo(1)
+    val prompt = objectives.first() as TrailblazePrompt
+    assertThat(prompt.steps.size).isEqualTo(3)
+    val expected0 = "IMPORTANT, testers must first:\n*Logged in as an employee without the custom amount permission*"
+    val actual0 = prompt.steps[0].description.trim()
+    if (actual0 != expected0) {
+      println("Actual step[0] description: >>>" + actual0 + "<<<")
+    }
+    assertThat(actual0).isEqualTo(expected0)
+    assertThat(prompt.steps[1].description).isEqualTo("Dismiss the start drawer screen")
+    assertThat(prompt.steps[2].description).isEqualTo("Go to Keypad tab")
+  }
 }

@@ -5,6 +5,22 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Logs Viewer</title>
     <link href="https://getbootstrap.com/docs/5.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        /* Custom blue button for all main actions, including View Details */
+        .btn-custom-sm {
+            background-color: #338be5; /* More blue, still soft */
+            color: #fff;
+            padding: 0.25rem 0.75rem;
+            font-size: 0.85rem;
+            border-radius: 0.25rem;
+            border: none;
+            transition: background 0.2s;
+        }
+        .btn-custom-sm:hover, .btn-custom-sm:focus {
+            background-color: #2176c7; /* Slightly darker for hover */
+            color: #fff;
+        }
+    </style>
     <script type="text/javascript">
         drawScreenshotCircle = function (log_index, deviceWidth, deviceHeight, clickX, clickY) {
             document.addEventListener('DOMContentLoaded', function () {
@@ -75,29 +91,29 @@
         </div>
         <div class="col-md-6">
             <a href="/recording/kotlin/${session}">
-                <button type="button" class="btn btn-primary me-3">
+                <button type="button" class="btn btn-custom-sm me-3">
                     JSON and Kotlin Recording
                 </button>
             </a>
             <span> </span>
             <a href="/recording/maestro/${session}">
-                <button type="button" class="btn btn-primary me-3">
+                <button type="button" class="btn btn-custom-sm me-3">
                     Maestro YAML Recording
                 </button>
             </a>
             <a href="/recording/trailblaze/${session}">
-                <button type="button" class="btn btn-primary me-3">
+                <button type="button" class="btn btn-custom-sm me-3">
                     Trailblaze YAML Recording
                 </button>
             </a>
             <a href="/recording/tbsimple/${session}">
-                <button type="button" class="btn btn-primary me-3">
+                <button type="button" class="btn btn-custom-sm me-3">
                     Trailblaze Simple YAML Recording
                 </button>
             </a>
             <span> </span>
             <a href="/llm/${session}">
-                <button type="button" class="btn btn-primary me-3">
+                <button type="button" class="btn btn-custom-sm me-3">
                     LLM Messages
                 </button>
             </a>
