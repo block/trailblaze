@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.examples.clock
 
+import ai.koog.prompt.executor.clients.openai.OpenAIClientSettings
 import ai.koog.prompt.executor.clients.openai.OpenAILLMClient
 import ai.koog.prompt.executor.clients.openai.OpenAIModels
 import maestro.orchestra.LaunchAppCommand
@@ -18,6 +19,9 @@ class ClockTest {
   val trailblazeRule = AndroidTrailblazeRule(
     llmClient = OpenAILLMClient(
       apiKey = InstrumentationArgUtil.getApiKeyFromInstrumentationArg(),
+      settings = OpenAIClientSettings(
+        baseUrl = InstrumentationArgUtil.getBaseUrlFromInstrumentationArg()
+      ),
     ),
     llmModel = OpenAIModels.Chat.GPT4_1,
   )
