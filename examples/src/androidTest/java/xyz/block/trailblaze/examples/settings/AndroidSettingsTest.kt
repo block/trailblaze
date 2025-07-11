@@ -1,13 +1,11 @@
 package xyz.block.trailblaze.examples.settings
 
-import ai.koog.prompt.executor.clients.openai.OpenAILLMClient
 import ai.koog.prompt.executor.clients.openai.OpenAIModels
 import maestro.orchestra.LaunchAppCommand
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
-import xyz.block.trailblaze.android.AndroidTrailblazeRule
-import xyz.block.trailblaze.android.InstrumentationArgUtil
+import xyz.block.trailblaze.android.openai.OpenAiTrailblazeRule
 
 /**
  * Example showing how to use Trailblaze with Settings app via prompts and maestro.
@@ -15,11 +13,8 @@ import xyz.block.trailblaze.android.InstrumentationArgUtil
 class AndroidSettingsTest {
 
   @get:Rule
-  val trailblazeRule = AndroidTrailblazeRule(
-    llmClient = OpenAILLMClient(
-      apiKey = InstrumentationArgUtil.getApiKeyFromInstrumentationArg(),
-    ),
-    llmModel = OpenAIModels.Chat.GPT4_1,
+  val trailblazeRule = OpenAiTrailblazeRule(
+    llmModel = OpenAIModels.Reasoning.O3
   )
 
   @Before
