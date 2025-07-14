@@ -1,14 +1,11 @@
 package xyz.block.trailblaze.examples.calculator
 
-import ai.koog.prompt.executor.clients.openai.OpenAIClientSettings
-import ai.koog.prompt.executor.clients.openai.OpenAILLMClient
 import ai.koog.prompt.executor.clients.openai.OpenAIModels
 import maestro.orchestra.LaunchAppCommand
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
-import xyz.block.trailblaze.android.AndroidTrailblazeRule
-import xyz.block.trailblaze.android.InstrumentationArgUtil
+import xyz.block.trailblaze.android.openai.OpenAiTrailblazeRule
 import xyz.block.trailblaze.exception.TrailblazeException
 
 /**
@@ -17,13 +14,7 @@ import xyz.block.trailblaze.exception.TrailblazeException
 class AndroidCalculatorOnePlusTwoAiTest {
 
   @get:Rule
-  val trailblazeRule = AndroidTrailblazeRule(
-    llmClient = OpenAILLMClient(
-      apiKey = InstrumentationArgUtil.getApiKeyFromInstrumentationArg(),
-      settings = OpenAIClientSettings(
-        baseUrl = InstrumentationArgUtil.getBaseUrlFromInstrumentationArg()
-      ),
-    ),
+  val trailblazeRule = OpenAiTrailblazeRule(
     llmModel = OpenAIModels.Chat.GPT4_1,
   )
 
@@ -31,8 +22,8 @@ class AndroidCalculatorOnePlusTwoAiTest {
   fun setUp() {
     trailblazeRule.maestroCommands(
       LaunchAppCommand(
-        appId = "com.android.calculator2"
-      )
+        appId = "com.android.calculator2",
+      ),
     )
   }
 
@@ -42,7 +33,7 @@ class AndroidCalculatorOnePlusTwoAiTest {
       """
       - calculate 1+2
       - verify the result is 3
-      """.trimIndent()
+      """.trimIndent(),
     )
   }
 
@@ -52,8 +43,7 @@ class AndroidCalculatorOnePlusTwoAiTest {
       """
       - calculate 1+2
       - verify the result is 4
-      """.trimIndent()
+      """.trimIndent(),
     )
   }
-
 }

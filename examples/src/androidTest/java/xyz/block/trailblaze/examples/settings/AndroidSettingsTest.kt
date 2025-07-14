@@ -1,14 +1,11 @@
 package xyz.block.trailblaze.examples.settings
 
-import ai.koog.prompt.executor.clients.openai.OpenAIClientSettings
-import ai.koog.prompt.executor.clients.openai.OpenAILLMClient
 import ai.koog.prompt.executor.clients.openai.OpenAIModels
 import maestro.orchestra.LaunchAppCommand
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
-import xyz.block.trailblaze.android.AndroidTrailblazeRule
-import xyz.block.trailblaze.android.InstrumentationArgUtil
+import xyz.block.trailblaze.android.openai.OpenAiTrailblazeRule
 
 /**
  * Example showing how to use Trailblaze with Settings app via prompts and maestro.
@@ -16,14 +13,8 @@ import xyz.block.trailblaze.android.InstrumentationArgUtil
 class AndroidSettingsTest {
 
   @get:Rule
-  val trailblazeRule = AndroidTrailblazeRule(
-    llmClient = OpenAILLMClient(
-      apiKey = InstrumentationArgUtil.getApiKeyFromInstrumentationArg(),
-      settings = OpenAIClientSettings(
-        baseUrl = InstrumentationArgUtil.getBaseUrlFromInstrumentationArg()
-      ),
-    ),
-    llmModel = OpenAIModels.Chat.GPT4_1,
+  val trailblazeRule = OpenAiTrailblazeRule(
+    llmModel = OpenAIModels.Reasoning.O3,
   )
 
   @Before
@@ -33,7 +24,7 @@ class AndroidSettingsTest {
         appId = "com.android.settings",
         stopApp = false,
         clearState = false,
-      )
+      ),
     )
   }
 
@@ -44,7 +35,7 @@ class AndroidSettingsTest {
       - Open the "System" section of the Settings app
       - Tap on the "about device" section.
       - Find the "Build number" and tap on it 7 times.
-      """.trimIndent()
+      """.trimIndent(),
     )
   }
 
@@ -63,8 +54,7 @@ class AndroidSettingsTest {
     text: Build number
     repeat: 7
     retryTapIfNoChange: false
-      """.trimIndent()
+      """.trimIndent(),
     )
   }
-
 }

@@ -19,12 +19,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import org.jetbrains.compose.ui.tooling.preview.Preview
 import xyz.block.trailblaze.ui.models.TrailblazeServerState
-import kotlin.io.encoding.Base64
-import kotlin.io.encoding.ExperimentalEncodingApi
 
 @Suppress("ktlint:standard:function-naming")
 object LogsServerComposables {
-
 
   @Composable
   @Preview
@@ -43,7 +40,7 @@ object LogsServerComposables {
         LazyColumn(
           modifier = Modifier
             .padding(16.dp)
-            .fillMaxWidth()
+            .fillMaxWidth(),
         ) {
           item {
             Row(
@@ -71,7 +68,7 @@ object LogsServerComposables {
               ) {
                 Text(
                   modifier = Modifier.align(Alignment.CenterVertically),
-                  text = "Host Mode Enabled (iOS Support)"
+                  text = "Host Mode Enabled (iOS Support)",
                 )
                 Spacer(Modifier.width(16.dp))
                 Switch(
@@ -82,11 +79,11 @@ object LogsServerComposables {
                     updateState(
                       serverState.copy(
                         appConfig = savedSettings.copy(
-                          hostModeEnabled = checkedValue
+                          hostModeEnabled = checkedValue,
                         ),
-                      )
+                      ),
                     )
-                  }
+                  },
                 )
               }
             }
@@ -99,7 +96,7 @@ object LogsServerComposables {
             ) {
               Text(
                 modifier = Modifier.align(Alignment.CenterVertically),
-                text = "Auto Launch Trailblaze in Browser on Startup"
+                text = "Auto Launch Trailblaze in Browser on Startup",
               )
               Spacer(Modifier.width(16.dp))
               Switch(
@@ -110,11 +107,11 @@ object LogsServerComposables {
                   updateState(
                     serverState.copy(
                       appConfig = savedSettings.copy(
-                        autoLaunchBrowser = checkedValue
+                        autoLaunchBrowser = checkedValue,
                       ),
-                    )
+                    ),
                   )
-                }
+                },
               )
             }
           }
@@ -126,7 +123,7 @@ object LogsServerComposables {
             ) {
               Text(
                 modifier = Modifier.align(Alignment.CenterVertically),
-                text = "Auto Launch Trailblaze in Goose on Startup"
+                text = "Auto Launch Trailblaze in Goose on Startup",
               )
               Spacer(Modifier.width(16.dp))
               Switch(
@@ -137,11 +134,11 @@ object LogsServerComposables {
                   updateState(
                     serverState.copy(
                       appConfig = savedSettings.copy(
-                        autoLaunchGoose = checkedValue
+                        autoLaunchGoose = checkedValue,
                       ),
-                    )
+                    ),
                   )
-                }
+                },
               )
             }
           }

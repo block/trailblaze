@@ -55,6 +55,7 @@ dependencies {
   implementation(libs.okio)
   implementation(libs.slf4j.api)
   implementation(libs.koog.prompt.executor.clients)
+  implementation(libs.koog.prompt.executor.openai)
   implementation(libs.kotlinx.datetime)
 
   implementation(libs.ktor.http)

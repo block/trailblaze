@@ -1,14 +1,11 @@
 package xyz.block.trailblaze.examples.clock
 
-import ai.koog.prompt.executor.clients.openai.OpenAIClientSettings
-import ai.koog.prompt.executor.clients.openai.OpenAILLMClient
 import ai.koog.prompt.executor.clients.openai.OpenAIModels
 import maestro.orchestra.LaunchAppCommand
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
-import xyz.block.trailblaze.android.AndroidTrailblazeRule
-import xyz.block.trailblaze.android.InstrumentationArgUtil
+import xyz.block.trailblaze.android.openai.OpenAiTrailblazeRule
 
 /**
  * Example test showing how to use Trailblaze with AI to use the Clock app via prompts.
@@ -16,13 +13,7 @@ import xyz.block.trailblaze.android.InstrumentationArgUtil
 class ClockTest {
 
   @get:Rule
-  val trailblazeRule = AndroidTrailblazeRule(
-    llmClient = OpenAILLMClient(
-      apiKey = InstrumentationArgUtil.getApiKeyFromInstrumentationArg(),
-      settings = OpenAIClientSettings(
-        baseUrl = InstrumentationArgUtil.getBaseUrlFromInstrumentationArg()
-      ),
-    ),
+  val trailblazeRule = OpenAiTrailblazeRule(
     llmModel = OpenAIModels.Chat.GPT4_1,
   )
 
@@ -33,7 +24,7 @@ class ClockTest {
         appId = "com.google.android.deskclock",
         stopApp = false,
         clearState = false,
-      )
+      ),
     )
   }
 
@@ -44,8 +35,7 @@ class ClockTest {
       - Add a new alarm for 7:30 AM
       - After it's been added, turn it off
       - Delete the alarm
-      """.trimIndent()
+      """.trimIndent(),
     )
   }
-
 }

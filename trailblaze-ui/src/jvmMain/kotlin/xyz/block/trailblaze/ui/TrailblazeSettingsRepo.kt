@@ -18,36 +18,34 @@ class TrailblazeSettingsRepo(
     println(
       "Saving Settings to: ${settingsFile.absolutePath}\n ${
         TrailblazeJsonInstance.encodeToString(
-          trailblazeSettings
+          trailblazeSettings,
         )
-      }"
+      }",
     )
     settingsFile.writeText(
       TrailblazeJsonInstance.encodeToString(
         TrailblazeServerState.SavedTrailblazeAppConfig.serializer(),
-        trailblazeSettings
-      )
+        trailblazeSettings,
+      ),
     )
   }
 
   fun load(
     initialConfig: TrailblazeServerState.SavedTrailblazeAppConfig,
-  ): TrailblazeServerState.SavedTrailblazeAppConfig =
-    try {
-      println("Loading Settings from: ${settingsFile.absolutePath}")
-      TrailblazeJsonInstance.decodeFromString(
-        TrailblazeServerState.SavedTrailblazeAppConfig.serializer(),
-        settingsFile.readText(),
-      )
-    } catch (e: Exception) {
-      println("Error loading settings, using default: ${e.message}")
-      initialConfig.also {
-        saveConfig(initialConfig)
-      }
-    }.also {
-      println("Loaded settings: $it")
+  ): TrailblazeServerState.SavedTrailblazeAppConfig = try {
+    println("Loading Settings from: ${settingsFile.absolutePath}")
+    TrailblazeJsonInstance.decodeFromString(
+      TrailblazeServerState.SavedTrailblazeAppConfig.serializer(),
+      settingsFile.readText(),
+    )
+  } catch (e: Exception) {
+    println("Error loading settings, using default: ${e.message}")
+    initialConfig.also {
+      saveConfig(initialConfig)
     }
-
+  }.also {
+    println("Loaded settings: $it")
+  }
 
   val serverStateFlow = MutableStateFlow(
     TrailblazeServerState(

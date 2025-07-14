@@ -23,7 +23,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 /**
  * On-Device Android Trailblaze Rule Implementation.
  */
-class AndroidTrailblazeRule(
+open class AndroidTrailblazeRule(
   val llmClient: LLMClient,
   val llmModel: LLModel,
 ) : SimpleTestRuleChain(
@@ -32,15 +32,15 @@ class AndroidTrailblazeRule(
   TrailblazeRule {
 
   private val trailblazeAgent = AndroidMaestroTrailblazeAgent()
-  private lateinit var trailblazeOpenAiRunner: TestAgentRunner
+  private lateinit var trailblazeRunner: TestAgentRunner
 
-  val trailblazeToolRepo = TrailblazeToolRepo(
+  private val trailblazeToolRepo = TrailblazeToolRepo(
     TrailblazeToolSet.SetOfMarkTrailblazeToolSet,
   )
 
   override fun ruleCreation(description: Description) {
     super.ruleCreation(description)
-    trailblazeOpenAiRunner = TrailblazeRunner(
+    trailblazeRunner = TrailblazeRunner(
       trailblazeToolRepo = trailblazeToolRepo,
       llmModel = llmModel,
       llmClient = llmClient,
@@ -58,12 +58,12 @@ class AndroidTrailblazeRule(
    * Run natural language instructions with the agent.
    */
   override fun prompt(objective: String): Boolean {
-    val trailblazeOpenAiRunnerResult = trailblazeOpenAiRunner.run(objective.toTrailblazePrompt())
-    return if (trailblazeOpenAiRunnerResult is AgentTaskStatus.Success) {
+    val runnerResult = trailblazeRunner.run(objective.toTrailblazePrompt())
+    return if (runnerResult is AgentTaskStatus.Success) {
       // Success!
       true
     } else {
-      throw TrailblazeException(trailblazeOpenAiRunnerResult.toString())
+      throw TrailblazeException(runnerResult.toString())
     }
   }
 

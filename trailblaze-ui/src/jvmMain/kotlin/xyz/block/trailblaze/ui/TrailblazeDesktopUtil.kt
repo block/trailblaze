@@ -50,7 +50,7 @@ object TrailblazeDesktopUtil {
 
     @OptIn(ExperimentalEncodingApi::class)
     val gooseRecipeEncoded = Base64.encode(gooseRecipeJson.toByteArray())
-    val gooseUrl = "goose://recipe?config=${gooseRecipeEncoded}"
+    val gooseUrl = "goose://recipe?config=$gooseRecipeEncoded"
     openInDefaultBrowser(gooseUrl)
   }
 }

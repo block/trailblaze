@@ -1,13 +1,10 @@
 package xyz.block.trailblaze.examples.calculator
 
-import ai.koog.prompt.executor.clients.openai.OpenAIClientSettings
-import ai.koog.prompt.executor.clients.openai.OpenAILLMClient
 import ai.koog.prompt.executor.clients.openai.OpenAIModels
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
-import xyz.block.trailblaze.android.AndroidTrailblazeRule
-import xyz.block.trailblaze.android.InstrumentationArgUtil
+import xyz.block.trailblaze.android.openai.OpenAiTrailblazeRule
 import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.toolcalls.commands.LaunchAppTrailblazeTool
 
@@ -17,13 +14,7 @@ import xyz.block.trailblaze.toolcalls.commands.LaunchAppTrailblazeTool
 class AndroidCalculatorOnePlusTwoMixedTest {
 
   @get:Rule
-  val trailblazeRule = AndroidTrailblazeRule(
-    llmClient = OpenAILLMClient(
-      apiKey = InstrumentationArgUtil.getApiKeyFromInstrumentationArg(),
-      settings = OpenAIClientSettings(
-        baseUrl = InstrumentationArgUtil.getBaseUrlFromInstrumentationArg()
-      ),
-    ),
+  val trailblazeRule = OpenAiTrailblazeRule(
     llmModel = OpenAIModels.Chat.GPT4_1,
   )
 
@@ -32,8 +23,8 @@ class AndroidCalculatorOnePlusTwoMixedTest {
     trailblazeRule.tool(
       LaunchAppTrailblazeTool(
         appId = "com.android.calculator2",
-        launchMode = LaunchAppTrailblazeTool.LaunchMode.REINSTALL
-      )
+        launchMode = LaunchAppTrailblazeTool.LaunchMode.REINSTALL,
+      ),
     )
   }
 
@@ -42,14 +33,14 @@ class AndroidCalculatorOnePlusTwoMixedTest {
     trailblazeRule.prompt(
       """
       - calculate 1+2
-      """.trimIndent()
+      """.trimIndent(),
     )
     trailblazeRule.maestro(
       """
 - assertVisible:
     id: "com.android.calculator2:id/result"
     text: "3"
-    """.trimIndent()
+      """.trimIndent(),
     )
   }
 
@@ -58,7 +49,7 @@ class AndroidCalculatorOnePlusTwoMixedTest {
     trailblazeRule.prompt(
       """
       - calculate 1+2
-      """.trimIndent()
+      """.trimIndent(),
     )
     // This will fail because the result is 3, not 4.
     trailblazeRule.maestro(
@@ -66,7 +57,7 @@ class AndroidCalculatorOnePlusTwoMixedTest {
 - assertVisible:
     id: "com.android.calculator2:id/result"
     text: "4"
-    """.trimIndent()
+      """.trimIndent(),
     )
   }
 }

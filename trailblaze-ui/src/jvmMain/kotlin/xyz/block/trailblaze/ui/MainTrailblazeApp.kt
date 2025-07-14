@@ -28,7 +28,7 @@ class MainTrailblazeApp(
       var trailblazeMcpServer = trailblazeMcpServerProvider()
       trailblazeMcpServer.startSseMcpServer(
         port = appConfig.serverPort,
-        wait = false
+        wait = false,
       )
 
       // Wait for the server to start

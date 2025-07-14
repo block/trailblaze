@@ -28,27 +28,6 @@ object InstrumentationArgUtil {
 
   fun getInstrumentationArg(key: String): String? = instrumentationArguments.getString(key)
 
-  fun getApiKeyFromInstrumentationArg(): String = if (isAiEnabled()) {
-    val openAiApiKey = instrumentationArguments.getString("OPENAI_API_KEY")
-      ?: instrumentationArguments.getString("openAiApiKey")
-    if (openAiApiKey.isNullOrBlank()) {
-      throw IllegalStateException("OPENAI_API_KEY environment variable is not set")
-    }
-    openAiApiKey
-  } else {
-    "AI_DISABLED"
-  }
-
-  fun getBaseUrlFromInstrumentationArg(): String {
-    val baseUrl = instrumentationArguments.getString("OPENAI_BASE_URL")
-      ?: instrumentationArguments.getString("openAiBaseUrl")
-    return if (baseUrl.isNullOrBlank()) {
-      "https://api.openai.com/v1/"
-    } else {
-      if (baseUrl.endsWith("/")) baseUrl else "$baseUrl/"
-    }
-  }
-
   fun isAiEnabled(): Boolean {
     val aiEnabled = instrumentationArguments.getString("trailblaze.ai.enabled", "false").toBoolean()
     return aiEnabled
