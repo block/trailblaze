@@ -20,19 +20,20 @@ import xyz.block.trailblaze.toolcalls.commands.ElementRetrieverTrailblazeTool.Lo
 import xyz.block.trailblaze.toolcalls.commands.ElementRetrieverTrailblazeTool.LocatorType
 import xyz.block.trailblaze.toolcalls.commands.StringEvaluationTrailblazeTool
 import xyz.block.trailblaze.util.TemplatingUtil
+import xyz.block.trailblaze.utils.ElementComparator
 import xyz.block.trailblaze.utils.getNumberFromString
 import java.io.File
 
 /**
  * Service that identifies element locators and evaluates UI elements.
  */
-internal class TrailblazeElementComparator(
+class TrailblazeElementComparator(
   private val screenStateProvider: () -> ScreenState,
   llmModel: LLModel,
   llmClient: LLMClient,
   private val systemPromptToolTemplate: String = TemplatingUtil.getResourceAsText("trailblaze_locator_tool_system_prompt.md")!!,
   private val userPromptTemplate: String = TemplatingUtil.getResourceAsText("trailblaze_locator_user_prompt_template.md")!!,
-) {
+) : ElementComparator {
 
   private val koogLlmClientHelper = TrailblazeKoogLlmClientHelper(
     llmModel = llmModel,
@@ -40,12 +41,13 @@ internal class TrailblazeElementComparator(
     systemPromptTemplate = systemPromptToolTemplate,
     userMessageTemplate = userPromptTemplate,
     userObjectiveTemplate = userPromptTemplate,
+    elementComparator = this,
   )
 
   /**
    * Gets the value of an element based on a prompt description.
    */
-  fun getElementValue(prompt: String): String? {
+  override fun getElementValue(prompt: String): String? {
     val screenState = screenStateProvider()
     println("Getting element value for prompt: '$prompt'")
 
@@ -88,7 +90,7 @@ internal class TrailblazeElementComparator(
   /**
    * Evaluates a statement about the UI and returns a boolean result with explanation.
    */
-  fun evaluateBoolean(statement: String): BooleanAssertionTrailblazeTool {
+  override fun evaluateBoolean(statement: String): BooleanAssertionTrailblazeTool {
     println("Evaluating boolean assertion: '$statement'")
 
     // Use LLM with boolean assertion tool
@@ -143,7 +145,7 @@ internal class TrailblazeElementComparator(
   /**
    * Evaluates a prompt and returns a descriptive string response with explanation.
    */
-  fun evaluateString(query: String): StringEvaluationTrailblazeTool {
+  override fun evaluateString(query: String): StringEvaluationTrailblazeTool {
     println("Evaluating string query: '$query'")
 
     // Use LLM with string evaluation tool
@@ -213,7 +215,7 @@ internal class TrailblazeElementComparator(
   /**
    * Extracts a number from a string using regex, handling commas as thousands separators.
    */
-  fun extractNumberFromString(input: String): Double? = getNumberFromString(input)
+  override fun extractNumberFromString(input: String): Double? = getNumberFromString(input)
 
   /**
    * Uses LLM to identify the best locator for an element based on description.

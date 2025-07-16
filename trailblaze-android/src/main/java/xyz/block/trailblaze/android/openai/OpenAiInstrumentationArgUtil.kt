@@ -33,7 +33,7 @@ object OpenAiInstrumentationArgUtil {
       ?: InstrumentationArgUtil.getInstrumentationArg("openAiBaseUrl")
 
     return if (baseUrl.isNullOrBlank()) {
-      "https://api.openai.com/v1/"
+      "https://api.openai.com"
     } else {
       // Ensure base URL ends with a slash
       if (baseUrl.endsWith("/")) baseUrl else "$baseUrl/"

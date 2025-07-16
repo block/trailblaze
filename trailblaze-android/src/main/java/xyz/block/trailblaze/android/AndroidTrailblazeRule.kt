@@ -7,6 +7,7 @@ import org.junit.runner.Description
 import xyz.block.trailblaze.AndroidMaestroTrailblazeAgent
 import xyz.block.trailblaze.SimpleTestRuleChain
 import xyz.block.trailblaze.TrailblazeAndroidLoggingRule
+import xyz.block.trailblaze.agent.TrailblazeElementComparator
 import xyz.block.trailblaze.agent.TrailblazeRunner
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.agent.model.toTrailblazePrompt
@@ -19,6 +20,10 @@ import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
+import xyz.block.trailblaze.yaml.TrailYamlItem
+import xyz.block.trailblaze.yaml.TrailYamlItem.PromptsTrailItem.PromptStep
+import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
+import xyz.block.trailblaze.yaml.TrailblazeYaml
 
 /**
  * On-Device Android Trailblaze Rule Implementation.
@@ -38,20 +43,74 @@ open class AndroidTrailblazeRule(
     TrailblazeToolSet.SetOfMarkTrailblazeToolSet,
   )
 
+  private val screenStateProvider = {
+    AndroidOnDeviceUiAutomatorScreenState(
+      filterViewHierarchy = true,
+      setOfMarkEnabled = true,
+    )
+  }
+
+  private val elementComparator = TrailblazeElementComparator(
+    screenStateProvider = screenStateProvider,
+    llmClient = llmClient,
+    llmModel = llmModel,
+  )
+
   override fun ruleCreation(description: Description) {
     super.ruleCreation(description)
     trailblazeRunner = TrailblazeRunner(
       trailblazeToolRepo = trailblazeToolRepo,
       llmModel = llmModel,
       llmClient = llmClient,
-      screenStateProvider = {
-        AndroidOnDeviceUiAutomatorScreenState(
-          filterViewHierarchy = true,
-          setOfMarkEnabled = true,
-        )
-      },
+      screenStateProvider = screenStateProvider,
       agent = trailblazeAgent,
     )
+  }
+
+  private val trailblazeYaml = TrailblazeYaml(
+    customTrailblazeToolClasses = setOf(),
+  )
+  override fun run(testYaml: String): Boolean {
+    trailblazeAgent.clearMemory()
+    val trailItems = trailblazeYaml.decodeTrail(testYaml)
+    for (item in trailItems) {
+      val itemResult = when (item) {
+        is TrailYamlItem.MaestroTrailItem -> runMaestroCommands(item.maestro.maestroCommands)
+        is TrailYamlItem.PromptsTrailItem -> runPrompt(item.promptSteps)
+        is TrailYamlItem.ToolTrailItem -> runTrailblazeTool(item.tools)
+      }
+      if (itemResult is TrailblazeToolResult.Error) {
+        throw TrailblazeException(itemResult.errorMessage)
+      }
+    }
+    return true
+  }
+
+  private fun runTrailblazeTool(tools: List<TrailblazeToolYamlWrapper>): TrailblazeToolResult {
+    val trailblazeTools = tools.map { it.trailblazeTool }
+    val result = trailblazeAgent.runTrailblazeTools(
+      tools = trailblazeTools,
+      screenState = screenStateProvider(),
+      elementComparator = elementComparator,
+    )
+    return result.second
+  }
+
+  private fun runMaestroCommands(maestroCommands: List<Command>): TrailblazeToolResult = trailblazeAgent.runMaestroCommands(maestroCommands)
+
+  private fun runPrompt(prompts: List<PromptStep>): TrailblazeToolResult {
+    for (prompt in prompts) {
+      val promptResult: TrailblazeToolResult = if (prompt.recordable && prompt.recording?.tools?.isNotEmpty() == true) {
+        runTrailblazeTool(prompt.recording!!.tools)
+      } else {
+        trailblazeRunner.run(prompt)
+        TrailblazeToolResult.Success // TODO: What to actually return here?
+      }
+      if (promptResult is TrailblazeToolResult.Error) {
+        return promptResult
+      }
+    }
+    return TrailblazeToolResult.Success
   }
 
   /**
@@ -71,7 +130,10 @@ open class AndroidTrailblazeRule(
    * Run a Trailblaze tool with the agent.
    */
   override fun tool(vararg trailblazeTool: TrailblazeTool): TrailblazeToolResult {
-    val result = trailblazeAgent.runTrailblazeTools(trailblazeTool.toList()).second
+    val result = trailblazeAgent.runTrailblazeTools(
+      tools = trailblazeTool.toList(),
+      elementComparator = elementComparator,
+    ).second
     return if (result is TrailblazeToolResult.Success) {
       result
     } else {

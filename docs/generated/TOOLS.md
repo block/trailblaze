@@ -35,6 +35,15 @@
 - [tapOnElementByNodeId](functions/custom/tapOnElementByNodeId.md)
 - [wait](functions/custom/wait.md)
 
+## RememberTrailblazeToolSet
+- [assertEquals](functions/custom/assertEquals.md)
+- [assertMath](functions/custom/assertMath.md)
+- [assertNotEquals](functions/custom/assertNotEquals.md)
+- [assertWithAi](functions/custom/assertWithAi.md)
+- [rememberNumber](functions/custom/rememberNumber.md)
+- [rememberText](functions/custom/rememberText.md)
+- [rememberWithAi](functions/custom/rememberWithAi.md)
+
 <hr/>
 
 **NOTE**: THIS IS GENERATED DOCUMENTATION

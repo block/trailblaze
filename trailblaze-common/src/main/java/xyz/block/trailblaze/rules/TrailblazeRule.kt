@@ -9,6 +9,11 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
  */
 interface TrailblazeRule {
   /**
+   * Run a full Trailblaze test using the YAML test format
+   */
+  fun run(testYaml: String): Boolean
+
+  /**
    * Run natural language instructions with the agent.
    *
    * @throws [xyz.block.trailblaze.exception.TrailblazeException] if the agent fails to complete the task.

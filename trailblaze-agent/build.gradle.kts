@@ -13,6 +13,7 @@ dependencies {
   api(libs.koog.prompt.llm)
   api(libs.koog.prompt.model)
 
+  implementation(project(":trailblaze-yaml"))
   implementation(libs.exp4j)
   implementation(libs.coroutines)
   implementation(libs.kotlinx.serialization.core)
@@ -21,6 +22,8 @@ dependencies {
   implementation(libs.kotlinx.datetime)
 
   runtimeOnly(libs.kotlin.reflect)
+  testImplementation(libs.kotlin.test)
+  testImplementation(libs.assertk)
 }
 
 tasks.test {

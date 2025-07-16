@@ -16,13 +16,13 @@ import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.encoding.decodeStructure
 import xyz.block.trailblaze.maestro.MaestroYamlParser
 import xyz.block.trailblaze.maestro.MaestroYamlSerializer
-import xyz.block.trailblaze.yaml.models.MaestroCommandList
-import xyz.block.trailblaze.yaml.models.TrailYamlItem
-import xyz.block.trailblaze.yaml.models.TrailblazeToolYamlWrapper
+import xyz.block.trailblaze.yaml.MaestroCommandList
+import xyz.block.trailblaze.yaml.TrailYamlItem
+import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
 
 class TrailYamlItemSerializer(
   private val defaultYaml: Yaml,
-  private val trailblazeToolYamlWrapperSerializer: TrailblazeToolYamlWrapper.TrailblazeToolYamlWrapperSerializer,
+  private val trailblazeToolYamlWrapperSerializer: TrailblazeToolYamlWrapperSerializer,
 ) : KSerializer<TrailYamlItem> {
 
   override val descriptor: SerialDescriptor = buildClassSerialDescriptor("TrailItem")
@@ -33,9 +33,11 @@ class TrailYamlItemSerializer(
         encoder.encodeSerializableValue(
           MapSerializer(
             String.serializer(),
-            TrailYamlItem.PromptsTrailItem.PromptStep.serializer(),
+            ListSerializer(
+              TrailYamlItem.PromptsTrailItem.PromptStep.serializer(),
+            ),
           ),
-          mapOf(TrailYamlItem.KEYWORD_PROMPT to value.promptStep),
+          mapOf(TrailYamlItem.KEYWORD_PROMPTS to value.promptSteps),
         )
       }
 
@@ -86,9 +88,12 @@ class TrailYamlItemSerializer(
     val yaml = decoder.yaml // needed to call `decodeFromYamlNode`
 
     when (key) {
-      TrailYamlItem.KEYWORD_PROMPT -> {
-        val step = yaml.decodeFromYamlNode(TrailYamlItem.PromptsTrailItem.PromptStep.serializer(), valueNode)
-        TrailYamlItem.PromptsTrailItem(step)
+      TrailYamlItem.KEYWORD_PROMPTS -> {
+        val steps = yaml.decodeFromYamlNode(
+          ListSerializer(TrailYamlItem.PromptsTrailItem.PromptStep.serializer()),
+          valueNode,
+        )
+        TrailYamlItem.PromptsTrailItem(steps)
       }
 
       TrailYamlItem.KEYWORD_TOOLS -> {

@@ -3,6 +3,7 @@
 :trailblaze-android
 :trailblaze-common
 :trailblaze-models
+:trailblaze-yaml
 ai.koog:agents-tools-jvm:0.2.1
 ai.koog:agents-tools:0.2.1
 ai.koog:agents-utils-jvm:0.2.1
@@ -22,6 +23,8 @@ androidx.test.uiautomator:uiautomator:2.3.0
 androidx.test:monitor:1.7.2
 androidx.test:runner:1.6.2
 androidx.tracing:tracing:1.1.0
+com.charleskorn.kaml:kaml-jvm:0.82.0
+com.charleskorn.kaml:kaml:0.82.0
 com.fasterxml.jackson.core:jackson-annotations:2.18.2
 com.fasterxml.jackson.core:jackson-core:2.18.2
 com.fasterxml.jackson.core:jackson-databind:2.18.2
@@ -32,8 +35,8 @@ com.google.code.gson:gson:2.11.0
 com.google.errorprone:error_prone_annotations:2.27.0
 com.squareup.okhttp3:okhttp-sse:4.12.0
 com.squareup.okhttp3:okhttp:4.12.0
-com.squareup.okio:okio-jvm:3.10.2
-com.squareup.okio:okio:3.10.2
+com.squareup.okio:okio-jvm:3.13.0
+com.squareup.okio:okio:3.13.0
 dev.mobile:maestro-client:1.40.0
 dev.mobile:maestro-orchestra-models:1.40.0
 dev.mobile:maestro-orchestra:1.40.0
@@ -74,8 +77,12 @@ io.ktor:ktor-websocket-serialization-jvm:3.1.3
 io.ktor:ktor-websocket-serialization:3.1.3
 io.ktor:ktor-websockets-jvm:3.1.3
 io.ktor:ktor-websockets:3.1.3
+it.krzeminski:snakeyaml-engine-kmp-jvm:3.1.1
+it.krzeminski:snakeyaml-engine-kmp:3.1.1
 junit:junit:4.13.2
 net.objecthunter:exp4j:0.4.8
+net.thauvin.erik.urlencoder:urlencoder-lib-jvm:1.6.0
+net.thauvin.erik.urlencoder:urlencoder-lib:1.6.0
 org.hamcrest:hamcrest-core:1.3
 org.jetbrains.kotlin:kotlin-reflect:2.1.21
 org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.8.21

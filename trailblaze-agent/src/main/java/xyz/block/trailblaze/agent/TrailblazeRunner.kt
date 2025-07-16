@@ -26,8 +26,10 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.util.TemplatingUtil
+import xyz.block.trailblaze.yaml.TrailYamlItem
 import java.util.UUID
 
+// TODO remove screen state from any functions since we have it in the constructor
 class TrailblazeRunner(
   val agent: TrailblazeAgent,
   private val screenStateProvider: () -> ScreenState,
@@ -48,12 +50,19 @@ class TrailblazeRunner(
     "trailblaze_system_prompt.md",
   )!!
 
+  private val elementComparator = TrailblazeElementComparator(
+    screenStateProvider = screenStateProvider,
+    llmClient = llmClient,
+    llmModel = llmModel,
+  )
+
   private val trailblazeKoogLlmClientHelper = TrailblazeKoogLlmClientHelper(
     systemPromptTemplate = currentSystemPrompt,
     userObjectiveTemplate = userObjectiveTemplate,
     userMessageTemplate = userMessageTemplate,
     llmModel = this.llmModel,
     llmClient = llmClient,
+    elementComparator = elementComparator,
   )
 
   fun appendToSystemPrompt(context: String) {
@@ -230,6 +239,18 @@ class TrailblazeRunner(
     )
 
     return step.currentStatus.value
+  }
+
+  override fun run(prompt: TrailYamlItem.PromptsTrailItem.PromptStep): AgentTaskStatus {
+    // Convert the typesafe yaml PromptStep object into a TrailblazePromptStep
+    val step = TrailblazePromptStep(
+      description = prompt.text,
+      taskId = UUID.randomUUID().toString(),
+      taskIndex = 0,
+      fullPrompt = prompt.text,
+      llmStatusChecks = false,
+    )
+    return run(step)
   }
 
   fun handleTrailblazeToolForPrompt(

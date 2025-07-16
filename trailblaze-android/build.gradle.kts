@@ -48,6 +48,7 @@ dependencies {
   api(libs.koog.prompt.llm)
 
   implementation(project(":trailblaze-agent"))
+  implementation(project(":trailblaze-yaml"))
   implementation(libs.ktor.client.core.jvm)
   implementation(libs.maestro.orchestra) { isTransitive = false }
   implementation(libs.androidx.test.monitor)

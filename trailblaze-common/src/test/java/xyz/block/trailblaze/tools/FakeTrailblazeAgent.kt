@@ -5,6 +5,7 @@ import xyz.block.trailblaze.MaestroTrailblazeAgent
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.utils.ElementComparator
 
 class FakeTrailblazeAgent : MaestroTrailblazeAgent() {
   override fun executeMaestroCommands(
@@ -16,6 +17,7 @@ class FakeTrailblazeAgent : MaestroTrailblazeAgent() {
     tools: List<TrailblazeTool>,
     llmResponseId: String?,
     screenState: ScreenState?,
+    elementComparator: ElementComparator,
   ): Pair<List<TrailblazeTool>, TrailblazeToolResult> {
     error("FakeTrailblazeAgent does not have an implementation for runTrailblazeTools()")
   }

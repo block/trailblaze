@@ -32,6 +32,7 @@ class TrailblazeKoogLlmClientHelper(
   val userMessageTemplate: String,
   val llmModel: LLModel,
   val llmClient: LLMClient,
+  val elementComparator: TrailblazeElementComparator,
 ) {
 
   // This field will be used to determine whether or not our next request to the LLM should require
@@ -81,11 +82,11 @@ class TrailblazeKoogLlmClientHelper(
     }
 
     else -> {
-      val startTime = Clock.System.now()
       val (updatedTools, trailblazeToolResult) = agent.runTrailblazeTools(
         tools = listOf(trailblazeTool),
         llmResponseId = llmResponseId,
         screenState = screenStateForLlmRequest,
+        elementComparator = elementComparator,
       )
       setForceStepStatusUpdate(true)
       println("\u001B[33m\n[ACTION_TAKEN] Tool executed: ${trailblazeTool.javaClass.simpleName}\u001B[0m")

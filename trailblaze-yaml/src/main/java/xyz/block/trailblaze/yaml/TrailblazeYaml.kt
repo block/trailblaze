@@ -5,15 +5,14 @@ import com.charleskorn.kaml.SingleLineStringStyle
 import com.charleskorn.kaml.Yaml
 import com.charleskorn.kaml.YamlConfiguration
 import com.charleskorn.kaml.YamlNamingStrategy
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.modules.SerializersModule
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
-import xyz.block.trailblaze.yaml.models.MaestroCommandList
-import xyz.block.trailblaze.yaml.models.TrailYamlItem
-import xyz.block.trailblaze.yaml.models.TrailblazeToolYamlWrapper
 import xyz.block.trailblaze.yaml.serializers.MaestroCommandListSerializer
 import xyz.block.trailblaze.yaml.serializers.TrailYamlItemSerializer
+import xyz.block.trailblaze.yaml.serializers.TrailblazeToolYamlWrapperSerializer
 import kotlin.reflect.KClass
 
 class TrailblazeYaml(
@@ -37,7 +36,7 @@ class TrailblazeYaml(
     )
   }
 
-  val trailblazeToolYamlWrapperSerializer = TrailblazeToolYamlWrapper.TrailblazeToolYamlWrapperSerializer(
+  val trailblazeToolYamlWrapperSerializer = TrailblazeToolYamlWrapperSerializer(
     allTrailblazeToolClasses,
   )
 
@@ -61,7 +60,7 @@ class TrailblazeYaml(
 
       contextual(
         TrailblazeToolYamlWrapper::class,
-        TrailblazeToolYamlWrapper.TrailblazeToolYamlWrapperSerializer(allTrailblazeToolClasses),
+        TrailblazeToolYamlWrapperSerializer(allTrailblazeToolClasses),
       )
     },
   )
@@ -73,4 +72,15 @@ class TrailblazeYaml(
     ),
     items,
   )
+
+  @OptIn(ExperimentalSerializationApi::class)
+  fun decodeTrail(yaml: String): List<TrailYamlItem> = with(getInstance()) {
+    decodeFromString(
+      ListSerializer(
+        serializersModule.getContextual(TrailYamlItem::class)
+          ?: error("Missing contextual serializer for TrailYamlItem"),
+      ),
+      yaml,
+    )
+  }
 }

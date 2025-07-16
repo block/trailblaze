@@ -9,8 +9,8 @@ import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.encoding.decodeStructure
 import xyz.block.trailblaze.maestro.MaestroYamlSerializer
+import xyz.block.trailblaze.yaml.MaestroCommandList
 import xyz.block.trailblaze.yaml.TrailblazeYaml
-import xyz.block.trailblaze.yaml.models.MaestroCommandList
 
 class MaestroCommandListSerializer : KSerializer<MaestroCommandList> {
 

@@ -21,6 +21,7 @@ dependencies {
   testImplementation(libs.maestro.client)
   testImplementation(libs.junit)
   testImplementation(libs.kotlinx.serialization.core)
+  testImplementation(libs.assertk)
 }
 
 tasks.test {

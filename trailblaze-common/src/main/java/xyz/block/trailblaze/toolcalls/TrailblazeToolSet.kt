@@ -18,6 +18,13 @@ import xyz.block.trailblaze.toolcalls.commands.TapOnElementWithAccessiblityTextT
 import xyz.block.trailblaze.toolcalls.commands.TapOnElementWithTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnPointTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.WaitForIdleSyncTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.memory.AssertEqualsTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.memory.AssertMathTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.memory.AssertNotEqualsTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.memory.AssertWithAiTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.memory.RememberNumberTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.memory.RememberTextTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.memory.RememberWithAiTrailblazeTool
 import kotlin.reflect.KClass
 
 @Suppress("ktlint:standard:property-naming")
@@ -55,6 +62,7 @@ abstract class TrailblazeToolSet(
       InteractWithElementsByPropertyToolSet,
       AssertByPropertyToolSet,
       SetOfMarkTrailblazeToolSet,
+      RememberTrailblazeToolSet,
     )
 
     val AllBuiltInTrailblazeTools: Set<KClass<out TrailblazeTool>> =
@@ -84,6 +92,18 @@ abstract class TrailblazeToolSet(
         ),
       )
     },
+  )
+
+  object RememberTrailblazeToolSet : TrailblazeToolSet(
+    tools = setOf(
+      AssertEqualsTrailblazeTool::class,
+      AssertMathTrailblazeTool::class,
+      AssertNotEqualsTrailblazeTool::class,
+      AssertWithAiTrailblazeTool::class,
+      RememberNumberTrailblazeTool::class,
+      RememberTextTrailblazeTool::class,
+      RememberWithAiTrailblazeTool::class,
+    ),
   )
 
   @TrailblazeToolSetClass("TapOn By Property Toolset")

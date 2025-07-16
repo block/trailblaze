@@ -1,4 +1,4 @@
-package xyz.block.trailblaze.yaml.models
+package xyz.block.trailblaze.yaml
 
 import kotlinx.serialization.Contextual
 import kotlinx.serialization.Serializable
@@ -15,7 +15,7 @@ sealed interface TrailYamlItem {
    * It can contain a text prompt and an optional recording of tools used in that step.
    */
   @Serializable
-  data class PromptsTrailItem(val promptStep: PromptStep) : TrailYamlItem {
+  data class PromptsTrailItem(val promptSteps: List<PromptStep>) : TrailYamlItem {
     @Serializable
     data class PromptStep(
       val text: String,
@@ -51,7 +51,7 @@ sealed interface TrailYamlItem {
   ) : TrailYamlItem
 
   companion object {
-    val KEYWORD_PROMPT = "prompt"
+    val KEYWORD_PROMPTS = "prompts"
     val KEYWORD_TOOLS = "tools"
     val KEYWORD_MAESTRO = "maestro"
   }

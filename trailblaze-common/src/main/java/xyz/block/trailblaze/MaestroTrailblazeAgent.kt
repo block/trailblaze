@@ -12,7 +12,9 @@ import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.toolcalls.commands.memory.MemoryTrailblazeTool
 import xyz.block.trailblaze.toolcalls.getToolNameFromAnnotation
+import xyz.block.trailblaze.utils.ElementComparator
 
 /**
  * Abstract class for Trailblaze agents that handle Maestro commands.
@@ -26,6 +28,13 @@ abstract class MaestroTrailblazeAgent : TrailblazeAgent {
     commands: List<Command>,
     llmResponseId: String?,
   ): TrailblazeToolResult
+
+  val memory = AgentMemory()
+
+  // Clear any variables that exist in the agent's memory between test runs
+  fun clearMemory() {
+    memory.clear()
+  }
 
   fun runMaestroCommands(
     maestroCommands: List<Command>,
@@ -48,6 +57,7 @@ abstract class MaestroTrailblazeAgent : TrailblazeAgent {
     tools: List<TrailblazeTool>,
     llmResponseId: String?,
     screenState: ScreenState?,
+    elementComparator: ElementComparator,
   ): Pair<List<TrailblazeTool>, TrailblazeToolResult> {
     val trailblazeExecutionContext = TrailblazeToolExecutionContext(
       screenState = screenState,
@@ -55,22 +65,37 @@ abstract class MaestroTrailblazeAgent : TrailblazeAgent {
       trailblazeAgent = this,
     )
 
-    val executableTrailblazeTools: List<ExecutableTrailblazeTool> = tools.flatMap { trailblazeTool ->
+    val toolsExecuted = mutableListOf<TrailblazeTool>()
+    for (trailblazeTool in tools) {
       when (trailblazeTool) {
-        is ExecutableTrailblazeTool -> listOf(trailblazeTool)
+        is ExecutableTrailblazeTool -> {
+          toolsExecuted.add(trailblazeTool)
+          val result = handleExecutableTool(trailblazeTool, trailblazeExecutionContext)
+          if (result != TrailblazeToolResult.Success) {
+            // Exit early if any tool execution fails
+            return toolsExecuted to result
+          }
+        }
         is DelegatingTrailblazeTool -> {
           val executableTools = trailblazeTool.toExecutableTrailblazeTools(trailblazeExecutionContext)
-          TrailblazeLogger.log(
-            TrailblazeLog.DelegatingTrailblazeToolLog(
-              command = trailblazeTool,
-              executableTools = executableTools,
-              session = TrailblazeLogger.getCurrentSessionId(),
-              timestamp = Clock.System.now(),
-            ),
-          )
-          executableTools
+          logDelegatingTrailblazeTool(trailblazeTool, executableTools)
+          for (mappedTool in executableTools) {
+            toolsExecuted.add(mappedTool)
+            val result = handleExecutableTool(mappedTool, trailblazeExecutionContext)
+            if (result != TrailblazeToolResult.Success) {
+              // Exit early if any tool execution fails
+              return toolsExecuted to result
+            }
+          }
         }
-
+        is MemoryTrailblazeTool -> {
+          // Execute the memory tool with the execution context and the handleMemoryTool lambda
+          // The lambda will call the TrailblazeElementComparator
+          trailblazeTool.execute(
+            memory = trailblazeExecutionContext.trailblazeAgent.memory,
+            elementComparator = elementComparator,
+          )
+        }
         else -> throw TrailblazeException(
           message = buildString {
             appendLine("Unhandled Trailblaze tool ${trailblazeTool::class.java.simpleName}.")
@@ -81,29 +106,49 @@ abstract class MaestroTrailblazeAgent : TrailblazeAgent {
         )
       }
     }
-    val toolsExecuted = mutableListOf<TrailblazeTool>()
-    executableTrailblazeTools.forEach { trailblazeTool ->
-      toolsExecuted.add(trailblazeTool)
-      val timeBeforeToolExecution = Clock.System.now()
-      val trailblazeToolResult = trailblazeTool.execute(trailblazeExecutionContext)
-      TrailblazeLogger.log(
-        TrailblazeLog.TrailblazeToolLog(
-          command = trailblazeTool,
-          toolName = trailblazeTool.getToolNameFromAnnotation(),
-          exceptionMessage = (trailblazeToolResult as? TrailblazeToolResult.Error)?.errorMessage,
-          successful = trailblazeToolResult == TrailblazeToolResult.Success,
-          durationMs = Clock.System.now().toEpochMilliseconds() - timeBeforeToolExecution.toEpochMilliseconds(),
-          timestamp = timeBeforeToolExecution,
-          llmResponseId = llmResponseId,
-          session = TrailblazeLogger.getCurrentSessionId(),
-        ),
-      )
-
-      if (trailblazeToolResult != TrailblazeToolResult.Success) {
-        // Exit early if any tool execution fails
-        return toolsExecuted to trailblazeToolResult
-      }
-    }
     return toolsExecuted to TrailblazeToolResult.Success
+  }
+
+  private fun handleExecutableTool(
+    trailblazeTool: ExecutableTrailblazeTool,
+    trailblazeExecutionContext: TrailblazeToolExecutionContext,
+  ): TrailblazeToolResult {
+    val trailblazeToolResult = trailblazeTool.execute(trailblazeExecutionContext)
+    logTrailblazeTool(trailblazeTool, trailblazeExecutionContext, trailblazeToolResult)
+    return trailblazeToolResult
+  }
+
+  private fun logTrailblazeTool(
+    trailblazeTool: ExecutableTrailblazeTool,
+    trailblazeExecutionContext: TrailblazeToolExecutionContext,
+    trailblazeToolResult: TrailblazeToolResult,
+  ) {
+    val timeBeforeToolExecution = Clock.System.now()
+    TrailblazeLogger.log(
+      TrailblazeLog.TrailblazeToolLog(
+        command = trailblazeTool,
+        toolName = trailblazeTool.getToolNameFromAnnotation(),
+        exceptionMessage = (trailblazeToolResult as? TrailblazeToolResult.Error)?.errorMessage,
+        successful = trailblazeToolResult == TrailblazeToolResult.Success,
+        durationMs = Clock.System.now().toEpochMilliseconds() - timeBeforeToolExecution.toEpochMilliseconds(),
+        timestamp = timeBeforeToolExecution,
+        llmResponseId = trailblazeExecutionContext.llmResponseId,
+        session = TrailblazeLogger.getCurrentSessionId(),
+      ),
+    )
+  }
+
+  private fun logDelegatingTrailblazeTool(
+    trailblazeTool: DelegatingTrailblazeTool,
+    executableTools: List<ExecutableTrailblazeTool>,
+  ) {
+    TrailblazeLogger.log(
+      TrailblazeLog.DelegatingTrailblazeToolLog(
+        command = trailblazeTool,
+        executableTools = executableTools,
+        session = TrailblazeLogger.getCurrentSessionId(),
+        timestamp = Clock.System.now(),
+      ),
+    )
   }
 }
