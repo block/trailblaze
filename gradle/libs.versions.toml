@@ -43,7 +43,7 @@ spotless = "7.0.3"
 testParameterInjector = "1.18"
 truth = "1.4.4"
 uiautomator = "2.3.0"
-vanniktech-maven-publish = "0.34.0"
+vanniktech-maven-publish = "0.31.0"
 dependency-guard = "0.5.0"
 
 [libraries]
