@@ -57,31 +57,12 @@ subprojects
         }
       }
 
-      val hasPublishPlugin = it.plugins.hasPlugin("com.vanniktech.maven.publish.base")
+      val hasPublishPlugin = it.plugins.hasPlugin("com.vanniktech.maven.publish")
       if (hasPublishPlugin) {
         it.extensions.getByType(MavenPublishBaseExtension::class.java).also { publishing ->
           publishing.pom {
-            url.set("https://www.github.com/block/trailblaze")
             name = "trailblaze"
             description = "trailblaze"
-            licenses {
-              license {
-                name.set("The Apache Software License, Version 2.0")
-                url.set("https://www.apache.org/licenses/LICENSE-2.0.txt")
-                distribution.set("repo")
-              }
-            }
-            scm {
-              url.set("https://www.github.com/block/trailblaze")
-              connection.set("scm:git:git://github.com/block/trailblaze.git")
-              developerConnection.set("scm:git:ssh://git@github.com/block/trailblaze.git")
-            }
-            developers {
-              developer {
-                name.set("Block, Inc.")
-                url.set("https://github.com/block")
-              }
-            }
           }
 
           if (plugins.hasPlugin("org.jetbrains.kotlin.jvm")) {
