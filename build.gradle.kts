@@ -15,7 +15,19 @@ plugins {
   alias(libs.plugins.compose.compiler) apply false
   alias(libs.plugins.jetbrains.compose.multiplatform) apply false
   alias(libs.plugins.kotlin.multiplatform) apply false
-  alias(libs.plugins.vanniktech.maven.publish)
+  alias(libs.plugins.vanniktech.maven.publish) apply false
+}
+
+// Add ASM configuration to support sealed classes
+allprojects {
+  configurations.all {
+    resolutionStrategy.eachDependency {
+      if (requested.group == "org.ow2.asm") {
+        useVersion("9.5")
+        because("Sealed classes support requires ASM 9+")
+      }
+    }
+  }
 }
 
 subprojects {
@@ -56,39 +68,39 @@ subprojects
           }
         }
       }
+    }
 
-      val hasPublishPlugin = it.plugins.hasPlugin("com.vanniktech.maven.publish")
-      if (hasPublishPlugin) {
-        it.extensions.getByType(MavenPublishBaseExtension::class.java).also { publishing ->
-          publishing.pom {
-            name = "trailblaze"
-            description = "trailblaze"
-          }
+    it.plugins.withId("com.vanniktech.maven.publish") {
+      it.extensions.getByType(MavenPublishBaseExtension::class.java).also { publishing ->
+        publishing.publishToMavenCentral(automaticRelease = true)
+        publishing.pom {
+          name = "trailblaze"
+          description = "An AI-Driven end-to-end testing library"
+        }
 
-          if (plugins.hasPlugin("org.jetbrains.kotlin.jvm")) {
-            publishing.configure(
-              KotlinJvm(
-                sourcesJar = true,
-                javadocJar = JavadocJar.None(),
-              )
+        if (it.plugins.hasPlugin("org.jetbrains.kotlin.jvm")) {
+          publishing.configure(
+            KotlinJvm(
+              sourcesJar = true,
+              javadocJar = JavadocJar.None(),
             )
-          }
-          if (plugins.hasPlugin("com.android.library")) {
-            publishing.configure(
-              AndroidSingleVariantLibrary(
-                sourcesJar = true,
-                publishJavadocJar = false,
-              )
+          )
+        }
+        if (it.plugins.hasPlugin("com.android.library")) {
+          publishing.configure(
+            AndroidSingleVariantLibrary(
+              sourcesJar = true,
+              publishJavadocJar = false,
             )
-          }
-          if (plugins.hasPlugin("org.jetbrains.kotlin.multiplatform")) {
-            publishing.configure(
-              KotlinMultiplatform(
-                sourcesJar = true,
-                javadocJar = JavadocJar.None(),
-              )
+          )
+        }
+        if (it.plugins.hasPlugin("org.jetbrains.kotlin.multiplatform")) {
+          publishing.configure(
+            KotlinMultiplatform(
+              sourcesJar = true,
+              javadocJar = JavadocJar.None(),
             )
-          }
+          )
         }
       }
     }
