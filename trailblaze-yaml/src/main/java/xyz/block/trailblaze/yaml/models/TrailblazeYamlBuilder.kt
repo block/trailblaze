@@ -17,7 +17,7 @@ class TrailblazeYamlBuilder {
     recording: List<TrailblazeTool>? = null,
   ) = apply {
     val newStep = TrailYamlItem.PromptsTrailItem.PromptStep(
-      text = text,
+      step = text,
       recordable = recordable,
       recording = recording.toToolRecording(),
     )

@@ -18,7 +18,7 @@ sealed interface TrailYamlItem {
   data class PromptsTrailItem(val promptSteps: List<PromptStep>) : TrailYamlItem {
     @Serializable
     data class PromptStep(
-      val text: String,
+      val step: String,
       val recordable: Boolean = true,
       val recording: ToolRecording? = null,
     ) {

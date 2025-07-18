@@ -244,10 +244,10 @@ class TrailblazeRunner(
   override fun run(prompt: TrailYamlItem.PromptsTrailItem.PromptStep): AgentTaskStatus {
     // Convert the typesafe yaml PromptStep object into a TrailblazePromptStep
     val step = TrailblazePromptStep(
-      description = prompt.text,
+      description = prompt.step,
       taskId = UUID.randomUUID().toString(),
       taskIndex = 0,
-      fullPrompt = prompt.text,
+      fullPrompt = prompt.step,
       llmStatusChecks = false,
     )
     return run(step)
