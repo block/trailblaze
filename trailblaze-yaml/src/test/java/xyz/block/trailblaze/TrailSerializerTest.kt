@@ -191,7 +191,7 @@ class TrailSerializerTest {
     val trailToolItem = TrailYamlItem.PromptsTrailItem(
       promptSteps = listOf(
         PromptStep(
-          text = "This is a prompt",
+          step = "This is a prompt",
           recordable = true,
           recording = ToolRecording(
             tools = listOf(
@@ -264,7 +264,7 @@ class TrailSerializerTest {
   @Test
   fun promptStepTest() {
     val promptStep = PromptStep(
-      text = "This is some prompt",
+      step = "This is some prompt",
       recordable = false,
       recording = ToolRecording(
         tools = listOf(
@@ -312,7 +312,7 @@ class TrailSerializerTest {
   fun deserializeBasicPrompt() {
     val yaml = """
 - prompts:
-    - text: This is a prompt but doesn't have a recording yet, but could.
+    - step: This is a prompt but doesn't have a recording yet, but could.
     """.trimIndent()
 
     val trailItems = trailblazeYaml.decodeTrail(yaml)
@@ -324,7 +324,7 @@ class TrailSerializerTest {
         assertThat(promptSteps).isEqualTo(
           listOf(
             PromptStep(
-              text = "This is a prompt but doesn't have a recording yet, but could.",
+              step = "This is a prompt but doesn't have a recording yet, but could.",
               recordable = true,
               recording = null,
             ),
@@ -338,7 +338,7 @@ class TrailSerializerTest {
   fun deserializeRecordedPrompt() {
     val yaml = """
 - prompts:
-    - text: This is a prompt
+    - step: This is a prompt
       recording:
         tools:
         - inputText:
@@ -355,7 +355,7 @@ class TrailSerializerTest {
         assertThat(promptSteps).isEqualTo(
           listOf(
             PromptStep(
-              text = "This is a prompt",
+              step = "This is a prompt",
               recordable = true,
               recording = ToolRecording(
                 tools = listOf(
@@ -380,7 +380,7 @@ class TrailSerializerTest {
   fun deserializeNonRecordablePrompt() {
     val yaml = """
 - prompts:
-    - text: This is a non-recordable prompt
+    - step: This is a non-recordable prompt
       recordable: false
     """.trimIndent()
 
@@ -393,7 +393,7 @@ class TrailSerializerTest {
         assertThat(promptSteps).isEqualTo(
           listOf(
             PromptStep(
-              text = "This is a non-recordable prompt",
+              step = "This is a non-recordable prompt",
               recordable = false,
               recording = null,
             ),
@@ -407,14 +407,14 @@ class TrailSerializerTest {
   fun deserializeManyPrompts() {
     val yaml = """
 - prompts:
-    - text: This is a prompt but doesn't have a recording yet, but could.
-    - text: This is a prompt
+    - step: This is a prompt but doesn't have a recording yet, but could.
+    - step: This is a prompt
       recording:
           tools:
           - inputText:
               text: Hello World
           - pressBack: {}
-    - text: This is a non-recordable prompt
+    - step: This is a non-recordable prompt
       recordable: false
     """.trimIndent()
 
@@ -425,12 +425,12 @@ class TrailSerializerTest {
         assertThat(promptSteps).isEqualTo(
           listOf(
             PromptStep(
-              text = "This is a prompt but doesn't have a recording yet, but could.",
+              step = "This is a prompt but doesn't have a recording yet, but could.",
               recordable = true,
               recording = null,
             ),
             PromptStep(
-              text = "This is a prompt",
+              step = "This is a prompt",
               recordable = true,
               recording = ToolRecording(
                 tools = listOf(
@@ -446,7 +446,7 @@ class TrailSerializerTest {
               ),
             ),
             PromptStep(
-              text = "This is a non-recordable prompt",
+              step = "This is a non-recordable prompt",
               recordable = false,
               recording = null,
             ),
@@ -463,16 +463,16 @@ class TrailSerializerTest {
     val yaml = """
 - prompts:
     - 
-      text: This is a prompt but doesn't have a recording yet, but could.
+      step: This is a prompt but doesn't have a recording yet, but could.
     - 
-      text: This is a prompt
+      step: This is a prompt
       recording:
           tools:
           - inputText:
               text: Hello World
           - pressBack: {}
     - 
-      text: This is a non-recordable prompt
+      step: This is a non-recordable prompt
       recordable: false
     """.trimIndent()
 
@@ -483,12 +483,12 @@ class TrailSerializerTest {
         assertThat(promptSteps).isEqualTo(
           listOf(
             PromptStep(
-              text = "This is a prompt but doesn't have a recording yet, but could.",
+              step = "This is a prompt but doesn't have a recording yet, but could.",
               recordable = true,
               recording = null,
             ),
             PromptStep(
-              text = "This is a prompt",
+              step = "This is a prompt",
               recordable = true,
               recording = ToolRecording(
                 tools = listOf(
@@ -504,7 +504,7 @@ class TrailSerializerTest {
               ),
             ),
             PromptStep(
-              text = "This is a non-recordable prompt",
+              step = "This is a non-recordable prompt",
               recordable = false,
               recording = null,
             ),
@@ -519,16 +519,16 @@ class TrailSerializerTest {
   fun deserializeManyPromptsVerbose() {
     val yaml = """
 - prompts:
-    - text: This is a prompt but doesn't have a recording yet, but could.
+    - step: This is a prompt but doesn't have a recording yet, but could.
 - prompts:
-    - text: This is a prompt
+    - step: This is a prompt
       recording:
         tools:
             - inputText:
                 text: Hello World
             - pressBack: {}
 - prompts:
-    - text: This is a non-recordable prompt
+    - step: This is a non-recordable prompt
       recordable: false
     """.trimIndent()
 
@@ -539,7 +539,7 @@ class TrailSerializerTest {
         assertThat(promptSteps).isEqualTo(
           listOf(
             PromptStep(
-              text = "This is a prompt but doesn't have a recording yet, but could.",
+              step = "This is a prompt but doesn't have a recording yet, but could.",
               recordable = true,
               recording = null,
             ),
@@ -550,7 +550,7 @@ class TrailSerializerTest {
         assertThat(promptSteps).isEqualTo(
           listOf(
             PromptStep(
-              text = "This is a prompt",
+              step = "This is a prompt",
               recordable = true,
               recording = ToolRecording(
                 tools = listOf(
@@ -572,7 +572,7 @@ class TrailSerializerTest {
         assertThat(promptSteps).isEqualTo(
           listOf(
             PromptStep(
-              text = "This is a non-recordable prompt",
+              step = "This is a non-recordable prompt",
               recordable = false,
               recording = null,
             ),
