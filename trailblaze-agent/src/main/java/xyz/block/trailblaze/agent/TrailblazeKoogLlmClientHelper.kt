@@ -6,7 +6,8 @@ import ai.koog.agents.core.tools.ToolResult
 import ai.koog.prompt.dsl.Prompt
 import ai.koog.prompt.executor.clients.LLMClient
 import ai.koog.prompt.llm.LLModel
-import ai.koog.prompt.message.MediaContent
+import ai.koog.prompt.message.Attachment
+import ai.koog.prompt.message.AttachmentContent
 import ai.koog.prompt.message.Message
 import ai.koog.prompt.message.RequestMetaInfo
 import ai.koog.prompt.params.LLMParams
@@ -23,8 +24,6 @@ import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool
 import xyz.block.trailblaze.util.TemplatingUtil
-import java.io.File
-import kotlin.io.encoding.ExperimentalEncodingApi
 
 class TrailblazeKoogLlmClientHelper(
   var systemPromptTemplate: String,
@@ -225,13 +224,14 @@ class TrailblazeKoogLlmClientHelper(
             "view_hierarchy" to viewHierarchyJson,
           ),
         ),
-        mediaContent = mutableListOf<MediaContent>().apply {
+        attachments = buildList {
           screenState.screenshotBytes?.let { screenshotBytes ->
-            val screenshotFile = File.createTempFile("screenshot", ".png").apply {
-              writeBytes(screenshotBytes)
-            }
-            @OptIn(ExperimentalEncodingApi::class)
-            MediaContent.Image(screenshotFile.canonicalPath)
+            add(
+              Attachment.Image(
+                AttachmentContent.Binary.Bytes(screenshotBytes),
+                format = "png",
+              ),
+            )
           }
         },
         metaInfo = RequestMetaInfo.create(Clock.System),

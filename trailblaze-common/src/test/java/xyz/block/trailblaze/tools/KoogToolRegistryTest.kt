@@ -2,6 +2,7 @@ package xyz.block.trailblaze.tools
 
 import ai.koog.agents.core.tools.DirectToolCallsEnabler
 import ai.koog.agents.core.tools.Tool
+import ai.koog.agents.core.tools.ToolArgs
 import ai.koog.agents.core.tools.ToolResult
 import ai.koog.agents.core.tools.annotations.InternalAgentToolsApi
 import kotlinx.coroutines.runBlocking
@@ -32,11 +33,11 @@ class KoogToolRegistryTest {
         screenState = null,
       )
     })
-    val inputTextTool = toolRegistry.getTool("inputText") as Tool<Tool.Args, ToolResult>
+    val inputTextTool = toolRegistry.getTool("inputText") as Tool<ToolArgs, ToolResult>
     println("Koog Tool: $inputTextTool")
     println("descriptor: ${inputTextTool.descriptor}")
     val trailblazeToolArgs = InputTextTrailblazeTool("hello world")
-    val result = inputTextTool.executeAndSerialize(
+    val result = inputTextTool.execute(
       args = trailblazeToolArgs,
       enabler = MyEnabler,
     )

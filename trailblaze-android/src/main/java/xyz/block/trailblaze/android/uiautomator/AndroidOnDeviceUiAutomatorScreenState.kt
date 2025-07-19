@@ -133,7 +133,10 @@ class AndroidOnDeviceUiAutomatorScreenState(
         if (setOfMarkEnabled && screenshotBitmap != null) {
           viewHierarchy?.let {
             val markedBitmap = addSetOfMark(screenshotBitmap, viewHierarchy)
-            screenshotBitmap.recycle()
+            if (screenshotBitmap != markedBitmap) {
+              // Recycle the original bitmap to free up memory
+              screenshotBitmap.recycle()
+            }
             return markedBitmap
           }
         }

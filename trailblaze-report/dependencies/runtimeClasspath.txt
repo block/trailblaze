@@ -1,11 +1,11 @@
 :trailblaze-common
 :trailblaze-models
-ai.koog:agents-tools-jvm:0.2.1
-ai.koog:agents-tools:0.2.1
-ai.koog:prompt-llm-jvm:0.2.1
-ai.koog:prompt-llm:0.2.1
-ai.koog:prompt-model-jvm:0.2.1
-ai.koog:prompt-model:0.2.1
+ai.koog:agents-tools-jvm:0.3.0
+ai.koog:agents-tools:0.3.0
+ai.koog:prompt-llm-jvm:0.3.0
+ai.koog:prompt-llm:0.3.0
+ai.koog:prompt-model-jvm:0.3.0
+ai.koog:prompt-model:0.3.0
 com.fasterxml.jackson.core:jackson-annotations:2.18.2
 com.fasterxml.jackson.core:jackson-core:2.18.2
 com.fasterxml.jackson.core:jackson-databind:2.18.2

@@ -2,7 +2,8 @@ package xyz.block.trailblaze.agent
 
 import ai.koog.prompt.executor.clients.LLMClient
 import ai.koog.prompt.llm.LLModel
-import ai.koog.prompt.message.MediaContent
+import ai.koog.prompt.message.Attachment
+import ai.koog.prompt.message.AttachmentContent
 import ai.koog.prompt.message.Message
 import ai.koog.prompt.message.RequestMetaInfo
 import ai.koog.prompt.params.LLMParams
@@ -22,7 +23,6 @@ import xyz.block.trailblaze.toolcalls.commands.StringEvaluationTrailblazeTool
 import xyz.block.trailblaze.util.TemplatingUtil
 import xyz.block.trailblaze.utils.ElementComparator
 import xyz.block.trailblaze.utils.getNumberFromString
-import java.io.File
 
 /**
  * Service that identifies element locators and evaluates UI elements.
@@ -241,12 +241,14 @@ class TrailblazeElementComparator(
             ),
           ),
           metaInfo = RequestMetaInfo.create(Clock.System),
-          mediaContent = buildList {
+          attachments = buildList {
             screenState.screenshotBytes?.let { screenshotBytes ->
-              val screenshotFile = File.createTempFile("screenshot", ".png").apply {
-                writeBytes(screenshotBytes)
-              }
-              add(MediaContent.Image(screenshotFile.canonicalPath))
+              add(
+                Attachment.Image(
+                  AttachmentContent.Binary.Bytes(screenshotBytes),
+                  format = "png",
+                ),
+              )
             }
           },
         ),
@@ -317,12 +319,14 @@ class TrailblazeElementComparator(
       Message.User(
         content = "Evaluate this on the current screen: $prompt",
         metaInfo = RequestMetaInfo.create(Clock.System),
-        mediaContent = buildList {
+        attachments = buildList {
           screenState.screenshotBytes?.let { screenshotBytes ->
-            val screenshotFile = File.createTempFile("screenshot", ".png").apply {
-              writeBytes(screenshotBytes)
-            }
-            add(MediaContent.Image(screenshotFile.canonicalPath))
+            add(
+              Attachment.Image(
+                AttachmentContent.Binary.Bytes(screenshotBytes),
+                format = "png",
+              ),
+            )
           }
         },
       ),

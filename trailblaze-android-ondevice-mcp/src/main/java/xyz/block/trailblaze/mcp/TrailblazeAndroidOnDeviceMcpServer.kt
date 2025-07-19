@@ -1,11 +1,10 @@
 package xyz.block.trailblaze.mcp
 
 import ai.koog.agents.core.tools.Tool
-import ai.koog.agents.core.tools.Tool.Args
+import ai.koog.agents.core.tools.ToolArgs
 import ai.koog.agents.core.tools.ToolRegistry
 import ai.koog.agents.core.tools.ToolResult
 import ai.koog.agents.core.tools.annotations.InternalAgentToolsApi
-import ai.koog.agents.mcp.ToolArgs
 import ai.koog.prompt.executor.clients.openai.OpenAIClientSettings
 import ai.koog.prompt.executor.clients.openai.OpenAILLMClient
 import ai.koog.prompt.executor.clients.openai.OpenAIModels
@@ -139,17 +138,18 @@ object TrailblazeAndroidOnDeviceMcpServer {
         val koogTool: Tool<ToolArgs, ToolResult> =
           newToolRegistry.getTool(tool.descriptor.name) as Tool<ToolArgs, ToolResult>
 
-        val koogToolArgs: Args =
+        val koogToolArgs: ToolArgs =
           TrailblazeJsonInstance.decodeFromJsonElement(koogTool.argsSerializer, request.arguments)
 
         println("Executing tool: \\${koogTool.descriptor.name} with arguments: \\$koogToolArgs")
 
-        val (_: ToolResult, toolResponseMessage: String) =
-          @OptIn(InternalAgentToolsApi::class)
-          koogTool.executeAndSerialize(
-            args = koogToolArgs,
-            enabler = McpDirectToolCalls,
-          )
+        @OptIn(InternalAgentToolsApi::class)
+        val toolResponse = koogTool.execute(
+          args = koogToolArgs,
+          enabler = McpDirectToolCalls,
+        )
+
+        val toolResponseMessage = toolResponse.toStringDefault()
 
         println("Tool result toolResponseMessage: \\$toolResponseMessage")
 

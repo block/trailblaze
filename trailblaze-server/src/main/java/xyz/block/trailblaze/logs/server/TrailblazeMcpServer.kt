@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.logs.server
 
 import ai.koog.agents.core.tools.Tool
+import ai.koog.agents.core.tools.ToolArgs
 import ai.koog.agents.core.tools.ToolRegistry
 import ai.koog.agents.core.tools.ToolResult
 import ai.koog.agents.core.tools.annotations.InternalAgentToolsApi
@@ -117,21 +118,21 @@ class TrailblazeMcpServer(
         sessionContexts[mcpSseSessionId]?.progressToken = progressToken
 
         @Suppress("UNCHECKED_CAST")
-        val koogTool: Tool<Tool.Args, ToolResult> =
-          newToolRegistry.getTool(tool.descriptor.name) as Tool<Tool.Args, ToolResult>
+        val koogTool: Tool<ToolArgs, ToolResult> =
+          newToolRegistry.getTool(tool.descriptor.name) as Tool<ToolArgs, ToolResult>
 
-        val koogToolArgs: Tool.Args =
+        val koogToolArgs: ToolArgs =
           TrailblazeJsonInstance.decodeFromJsonElement(koogTool.argsSerializer, request.arguments)
 
         println("Executing tool: \\${koogTool.descriptor.name} with arguments: \\$koogToolArgs")
 
-        val (_: ToolResult, toolResponseMessage: String) =
-          @OptIn(InternalAgentToolsApi::class)
-          koogTool.executeAndSerialize(
-            args = koogToolArgs,
-            enabler = McpDirectToolCalls,
-          )
+        @OptIn(InternalAgentToolsApi::class)
+        val toolResponse: ToolResult = koogTool.execute(
+          args = koogToolArgs,
+          enabler = McpDirectToolCalls,
+        )
 
+        val toolResponseMessage = toolResponse.toStringDefault()
         println("Tool result toolResponseMessage: \\$toolResponseMessage")
 
         CallToolResult(
