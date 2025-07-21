@@ -32,6 +32,8 @@ allprojects {
 
 subprojects {
   apply(plugin = "org.jetbrains.dokka")
+  version = rootProject.version
+  group = rootProject.group
 }
 
 subprojects
