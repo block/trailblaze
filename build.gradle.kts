@@ -73,16 +73,39 @@ subprojects
     it.plugins.withId("com.vanniktech.maven.publish") {
       it.extensions.getByType(MavenPublishBaseExtension::class.java).also { publishing ->
         publishing.publishToMavenCentral(automaticRelease = true)
+        publishing.signAllPublications()
         publishing.pom {
           name = "trailblaze"
           description = "An AI-Driven end-to-end testing library"
+          url = "https://www.github.com/block/trailblaze"
+
+          licenses {
+            license {
+              name = "The Apache Software License, Version 2.0"
+              url = "http://www.apache.org/licenses/LICENSE-2.0.txt"
+              distribution = "repo"
+            }
+          }
+
+          developers {
+            developer {
+              name = "Block, Inc."
+              url = "https://github.com/block"
+            }
+          }
+
+          scm {
+            url = "https://www.github.com/block/trailblaze"
+            connection = "scm:git:git://github.com/block/trailblaze.git"
+            developerConnection = "scm:git:ssh://git@github.com/block/trailblaze.git"
+          }
         }
 
         if (it.plugins.hasPlugin("org.jetbrains.kotlin.jvm")) {
           publishing.configure(
             KotlinJvm(
               sourcesJar = true,
-              javadocJar = JavadocJar.None(),
+              javadocJar = JavadocJar.Dokka("dokkaHtml"),
             )
           )
         }
@@ -98,7 +121,7 @@ subprojects
           publishing.configure(
             KotlinMultiplatform(
               sourcesJar = true,
-              javadocJar = JavadocJar.None(),
+              javadocJar = JavadocJar.Dokka("dokkaHtml"),
             )
           )
         }
