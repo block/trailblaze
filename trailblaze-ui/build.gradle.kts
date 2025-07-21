@@ -7,6 +7,7 @@ plugins {
   alias(libs.plugins.jetbrains.compose.multiplatform)
   alias(libs.plugins.kotlin.multiplatform)
   alias(libs.plugins.kotlin.serialization)
+  alias(libs.plugins.vanniktech.maven.publish)
 }
 
 kotlin {
