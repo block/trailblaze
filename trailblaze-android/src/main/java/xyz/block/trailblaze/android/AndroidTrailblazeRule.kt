@@ -70,13 +70,16 @@ open class AndroidTrailblazeRule(
   private val trailblazeYaml = TrailblazeYaml(
     customTrailblazeToolClasses = setOf(),
   )
-  override fun run(testYaml: String): Boolean {
+  override fun run(
+    testYaml: String,
+    useRecordedSteps: Boolean,
+  ): Boolean {
     trailblazeAgent.clearMemory()
     val trailItems = trailblazeYaml.decodeTrail(testYaml)
     for (item in trailItems) {
       val itemResult = when (item) {
         is TrailYamlItem.MaestroTrailItem -> runMaestroCommands(item.maestro.maestroCommands)
-        is TrailYamlItem.PromptsTrailItem -> runPrompt(item.promptSteps)
+        is TrailYamlItem.PromptsTrailItem -> runPrompt(item.promptSteps, useRecordedSteps)
         is TrailYamlItem.ToolTrailItem -> runTrailblazeTool(item.tools)
       }
       if (itemResult is TrailblazeToolResult.Error) {
@@ -98,9 +101,12 @@ open class AndroidTrailblazeRule(
 
   private fun runMaestroCommands(maestroCommands: List<Command>): TrailblazeToolResult = trailblazeAgent.runMaestroCommands(maestroCommands)
 
-  private fun runPrompt(prompts: List<PromptStep>): TrailblazeToolResult {
+  private fun runPrompt(
+    prompts: List<PromptStep>,
+    useRecordedSteps: Boolean,
+  ): TrailblazeToolResult {
     for (prompt in prompts) {
-      val promptResult: TrailblazeToolResult = if (prompt.recordable && prompt.recording?.tools?.isNotEmpty() == true) {
+      val promptResult: TrailblazeToolResult = if (useRecordedSteps && prompt.canRunRecording()) {
         runTrailblazeTool(prompt.recording!!.tools)
       } else {
         trailblazeRunner.run(prompt)
@@ -112,6 +118,8 @@ open class AndroidTrailblazeRule(
     }
     return TrailblazeToolResult.Success
   }
+
+  private fun PromptStep.canRunRecording(): Boolean = recordable && recording?.tools?.isNotEmpty() == true
 
   /**
    * Run natural language instructions with the agent.
