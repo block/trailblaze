@@ -5,10 +5,6 @@ on:
   pull_request:
     branches: [ "main" ]
 
-  # Runs after merging to the default branch
-  push:
-    branches: [ "main" ]
-
 # Allow only one concurrent deployment, skipping runs queued between the run in-progress and latest queued.
 # However, do NOT cancel in-progress runs as we want to allow these production deployments to complete.
 concurrency:
@@ -102,28 +98,3 @@ jobs:
           name: trailblaze-artifacts
           path: |
             trailblaze-logs.zip
-
-  # Publish snapshot version on merge to main
-  publish:
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
-    needs:
-      - build
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Configure JDK
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'zulu'
-          java-version: 17
-
-      - name: Publish Artifacts
-        run: ./gradlew publishAllPublicationsToMavenCentralRepository
-        env:
-          ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.SONATYPE_CENTRAL_USERNAME }}
-          ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.SONATYPE_CENTRAL_PASSWORD }}
-          ORG_GRADLE_PROJECT_signingInMemoryKey: ${{ secrets.GPG_SECRET_KEY }}
-          ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.GPG_SECRET_PASSPHRASE }}
