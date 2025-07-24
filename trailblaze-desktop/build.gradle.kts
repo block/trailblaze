@@ -5,7 +5,6 @@ plugins {
   alias(libs.plugins.jetbrains.compose.multiplatform)
   alias(libs.plugins.dependency.guard)
   alias(libs.plugins.spotless)
-  alias(libs.plugins.vanniktech.maven.publish)
 }
 
 dependencies {

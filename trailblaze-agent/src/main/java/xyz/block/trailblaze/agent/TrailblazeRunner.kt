@@ -26,7 +26,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.util.TemplatingUtil
-import xyz.block.trailblaze.yaml.TrailYamlItem
+import xyz.block.trailblaze.yaml.TrailYamlItem.PromptsTrailItem.PromptStep
 import java.util.UUID
 
 // TODO remove screen state from any functions since we have it in the constructor
@@ -70,6 +70,7 @@ class TrailblazeRunner(
     trailblazeKoogLlmClientHelper.systemPromptTemplate = currentSystemPrompt
   }
 
+  @Deprecated("Move to the current run(PromptStep) version of this function")
   override fun run(prompt: TrailblazePrompt): AgentTaskStatus {
     TrailblazeLogger.log(
       TrailblazeLog.TrailblazeAgentTaskStatusChangeLog(
@@ -107,10 +108,14 @@ class TrailblazeRunner(
     return exitStatus
   }
 
+  @Deprecated("Move to the current run(PromptStep) version of this function")
   override fun run(step: TrailblazePromptStep): AgentTaskStatus {
     TrailblazeLogger.log(
       TrailblazeLog.ObjectiveStartLog(
-        description = step.description,
+        // Transform to PromptStep so we can reuse
+        promptStep = PromptStep(
+          step = step.description,
+        ),
         session = TrailblazeLogger.getCurrentSessionId(),
         timestamp = Clock.System.now(),
       ),
@@ -208,7 +213,6 @@ class TrailblazeRunner(
 
       LogHelper.logStepStatus(step)
 
-      println("### Checking current step $currentStep against max steps: $maxSteps")
       if (currentStep >= maxSteps) {
         return MaxCallsLimitReached(
           statusData = AgentTaskStatusData(
@@ -231,7 +235,9 @@ class TrailblazeRunner(
 
     TrailblazeLogger.log(
       TrailblazeLog.ObjectiveCompleteLog(
-        description = step.description,
+        promptStep = PromptStep(
+          step = step.description,
+        ),
         objectiveResult = step.currentStatus.value,
         session = TrailblazeLogger.getCurrentSessionId(),
         timestamp = Clock.System.now(),
@@ -241,7 +247,7 @@ class TrailblazeRunner(
     return step.currentStatus.value
   }
 
-  override fun run(prompt: TrailYamlItem.PromptsTrailItem.PromptStep): AgentTaskStatus {
+  override fun run(prompt: PromptStep): AgentTaskStatus {
     // Convert the typesafe yaml PromptStep object into a TrailblazePromptStep
     val step = TrailblazePromptStep(
       description = prompt.step,

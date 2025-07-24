@@ -90,34 +90,22 @@
             <h1 class="display-4 font-weight-bold">Trailblaze Logs</h1>
         </div>
         <div class="col-md-6">
-            <a href="/recording/kotlin/${session}">
-                <button type="button" class="btn btn-custom-sm me-3">
-                    JSON and Kotlin Recording
-                </button>
-            </a>
-            <span> </span>
             <a href="/recording/maestro/${session}">
                 <button type="button" class="btn btn-custom-sm me-3">
                     Maestro YAML Recording
                 </button>
             </a>
+            <span> </span>
             <a href="/recording/trailblaze/${session}">
                 <button type="button" class="btn btn-custom-sm me-3">
                     Trailblaze YAML Recording
                 </button>
-            </a>
-            <a href="/recording/tbsimple/${session}">
-                <button type="button" class="btn btn-custom-sm me-3">
-                    Trailblaze Simple YAML Recording
-                </button>
-            </a>
             <span> </span>
             <a href="/llm/${session}">
                 <button type="button" class="btn btn-custom-sm me-3">
                     LLM Messages
                 </button>
             </a>
-            <span> </span>
         </div>
     </div>
     <#if status??>

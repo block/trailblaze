@@ -68,6 +68,7 @@ fun moveJsonFilesToSessionDirs(logsDir: File) {
           is TrailblazeLog.TrailblazeLlmRequestLog -> log.copy(
             screenshotFile = screenshotFileInSessionDirPath,
           )
+          else -> {}
         }
       }
 

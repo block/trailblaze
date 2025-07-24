@@ -9,31 +9,17 @@ plugins {
   alias(libs.plugins.android.library) apply false
   alias(libs.plugins.kotlin.android) apply false
   alias(libs.plugins.kotlin.jvm) apply false
+  alias(libs.plugins.vanniktech.maven.publish) apply false
   alias(libs.plugins.dokka) apply false
   alias(libs.plugins.spotless) apply false
   alias(libs.plugins.dagp) apply false
   alias(libs.plugins.compose.compiler) apply false
   alias(libs.plugins.jetbrains.compose.multiplatform) apply false
   alias(libs.plugins.kotlin.multiplatform) apply false
-  alias(libs.plugins.vanniktech.maven.publish) apply false
-}
-
-// Add ASM configuration to support sealed classes
-allprojects {
-  configurations.all {
-    resolutionStrategy.eachDependency {
-      if (requested.group == "org.ow2.asm") {
-        useVersion("9.5")
-        because("Sealed classes support requires ASM 9+")
-      }
-    }
-  }
 }
 
 subprojects {
   apply(plugin = "org.jetbrains.dokka")
-  version = rootProject.version
-  group = rootProject.group
 }
 
 subprojects
@@ -70,62 +56,58 @@ subprojects
           }
         }
       }
-    }
 
-    it.plugins.withId("com.vanniktech.maven.publish") {
-      it.extensions.getByType(MavenPublishBaseExtension::class.java).also { publishing ->
-        publishing.publishToMavenCentral(automaticRelease = true)
-        publishing.signAllPublications()
-        publishing.pom {
-          name = "trailblaze"
-          description = "An AI-Driven end-to-end testing library"
-          url = "https://www.github.com/block/trailblaze"
-
-          licenses {
-            license {
-              name = "The Apache Software License, Version 2.0"
-              url = "http://www.apache.org/licenses/LICENSE-2.0.txt"
-              distribution = "repo"
+      val hasPublishPlugin = it.plugins.hasPlugin("com.vanniktech.maven.publish.base")
+      if (hasPublishPlugin) {
+        it.extensions.getByType(MavenPublishBaseExtension::class.java).also { publishing ->
+          publishing.pom {
+            url.set("https://www.github.com/block/trailblaze")
+            name = "trailblaze"
+            description = "trailblaze"
+            licenses {
+              license {
+                name.set("The Apache Software License, Version 2.0")
+                url.set("https://www.apache.org/licenses/LICENSE-2.0.txt")
+                distribution.set("repo")
+              }
+            }
+            scm {
+              url.set("https://www.github.com/block/trailblaze")
+              connection.set("scm:git:git://github.com/block/trailblaze.git")
+              developerConnection.set("scm:git:ssh://git@github.com/block/trailblaze.git")
+            }
+            developers {
+              developer {
+                name.set("Block, Inc.")
+                url.set("https://github.com/block")
+              }
             }
           }
 
-          developers {
-            developer {
-              name = "Block, Inc."
-              url = "https://github.com/block"
-            }
+          if (plugins.hasPlugin("org.jetbrains.kotlin.jvm")) {
+            publishing.configure(
+              KotlinJvm(
+                sourcesJar = true,
+                javadocJar = JavadocJar.None(),
+              )
+            )
           }
-
-          scm {
-            url = "https://www.github.com/block/trailblaze"
-            connection = "scm:git:git://github.com/block/trailblaze.git"
-            developerConnection = "scm:git:ssh://git@github.com/block/trailblaze.git"
+          if (plugins.hasPlugin("com.android.library")) {
+            publishing.configure(
+              AndroidSingleVariantLibrary(
+                sourcesJar = true,
+                publishJavadocJar = false,
+              )
+            )
           }
-        }
-
-        if (it.plugins.hasPlugin("org.jetbrains.kotlin.jvm")) {
-          publishing.configure(
-            KotlinJvm(
-              sourcesJar = true,
-              javadocJar = JavadocJar.Dokka("dokkaHtml"),
+          if (plugins.hasPlugin("org.jetbrains.kotlin.multiplatform")) {
+            publishing.configure(
+              KotlinMultiplatform(
+                sourcesJar = true,
+                javadocJar = JavadocJar.None(),
+              )
             )
-          )
-        }
-        if (it.plugins.hasPlugin("com.android.library")) {
-          publishing.configure(
-            AndroidSingleVariantLibrary(
-              sourcesJar = true,
-              publishJavadocJar = false,
-            )
-          )
-        }
-        if (it.plugins.hasPlugin("org.jetbrains.kotlin.multiplatform")) {
-          publishing.configure(
-            KotlinMultiplatform(
-              sourcesJar = true,
-              javadocJar = JavadocJar.Dokka("dokkaHtml"),
-            )
-          )
+          }
         }
       }
     }

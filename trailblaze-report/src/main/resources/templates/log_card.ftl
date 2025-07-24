@@ -72,10 +72,10 @@
                         <pre class="small">${log.sessionStatus?html}</pre>
                     <#elseif log.type == "OBJECTIVE_START">
                         <b>Objective Start:</b>
-                        <pre class="small">${log.description?html}</pre>
+                        <pre class="small">${log.promptStep.step?html}</pre>
                     <#elseif log.type == "OBJECTIVE_COMPLETE">
                         <b>Objective Complete:</b>
-                        <pre class="small">${log.description?html}</pre>
+                        <pre class="small">${log.promptStep.step?html}</pre>
                         <#if log.objectiveResult??>
                             <b>Result:</b>
                             <pre class="small">${log.objectiveResult.llmExplanation?html}</pre>
@@ -174,10 +174,10 @@
                                     <pre style="white-space: pre-wrap; word-break: break-word; background: #f8f9fa; border: 1px solid #ccc; border-radius: 4px; padding: 8px; margin-bottom: 8px;">${log.sessionStatus?html}</pre>
                                 <#elseif log.type == 'OBJECTIVE_START'>
                                     <h5>Objective Start</h5>
-                                    <pre style="white-space: pre-wrap; word-break: break-word; background: #f8f9fa; border: 1px solid #ccc; border-radius: 4px; padding: 8px; margin-bottom: 8px;">${log.description?string?replace('^\\s+|\\s+$', '', 'r')?html}</pre>
+                                    <pre style="white-space: pre-wrap; word-break: break-word; background: #f8f9fa; border: 1px solid #ccc; border-radius: 4px; padding: 8px; margin-bottom: 8px;">${log.promptStep.step?string?replace('^\\s+|\\s+$', '', 'r')?html}</pre>
                                 <#elseif log.type == 'OBJECTIVE_COMPLETE'>
                                     <h5>Objective Complete</h5>
-                                    <pre style="white-space: pre-wrap; word-break: break-word; background: #f8f9fa; border: 1px solid #ccc; border-radius: 4px; padding: 8px; margin-bottom: 8px;">${log.description?string?replace('^\\s+|\\s+$', '', 'r')?html}</pre>
+                                    <pre style="white-space: pre-wrap; word-break: break-word; background: #f8f9fa; border: 1px solid #ccc; border-radius: 4px; padding: 8px; margin-bottom: 8px;">${log.promptStep.step?string?replace('^\\s+|\\s+$', '', 'r')?html}</pre>
                                     <#if log.objectiveResult??>
                                         <h5>Result</h5>
                                         <pre style="white-space: pre-wrap; word-break: break-word; background: #f8f9fa; border: 1px solid #ccc; border-radius: 4px; padding: 8px; margin-bottom: 8px;">${log.objectiveResult.llmExplanation?string?replace('^\\s+|\\s+$', '', 'r')?html}</pre>

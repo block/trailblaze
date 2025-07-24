@@ -10,6 +10,7 @@ import xyz.block.trailblaze.TrailblazeAndroidLoggingRule
 import xyz.block.trailblaze.agent.TrailblazeElementComparator
 import xyz.block.trailblaze.agent.TrailblazeRunner
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
+import xyz.block.trailblaze.agent.model.AgentTaskStatus.Success.ObjectiveComplete
 import xyz.block.trailblaze.agent.model.toTrailblazePrompt
 import xyz.block.trailblaze.android.uiautomator.AndroidOnDeviceUiAutomatorScreenState
 import xyz.block.trailblaze.api.TestAgentRunner
@@ -70,13 +71,16 @@ open class AndroidTrailblazeRule(
   private val trailblazeYaml = TrailblazeYaml(
     customTrailblazeToolClasses = setOf(),
   )
-  override fun run(testYaml: String): Boolean {
+  override fun run(
+    testYaml: String,
+    useRecordedSteps: Boolean,
+  ): Boolean {
     trailblazeAgent.clearMemory()
     val trailItems = trailblazeYaml.decodeTrail(testYaml)
     for (item in trailItems) {
       val itemResult = when (item) {
         is TrailYamlItem.MaestroTrailItem -> runMaestroCommands(item.maestro.maestroCommands)
-        is TrailYamlItem.PromptsTrailItem -> runPrompt(item.promptSteps)
+        is TrailYamlItem.PromptsTrailItem -> runPrompt(item.promptSteps, useRecordedSteps)
         is TrailYamlItem.ToolTrailItem -> runTrailblazeTool(item.tools)
       }
       if (itemResult is TrailblazeToolResult.Error) {
@@ -93,25 +97,41 @@ open class AndroidTrailblazeRule(
       screenState = screenStateProvider(),
       elementComparator = elementComparator,
     )
-    return result.second
+    return when (val toolResult = result.second) {
+      is TrailblazeToolResult.Success -> toolResult
+      is TrailblazeToolResult.Error -> throw TrailblazeException(toolResult.errorMessage)
+      else -> throw TrailblazeException("Unknown TrailblazeToolResult when running tools $tools")
+    }
   }
 
-  private fun runMaestroCommands(maestroCommands: List<Command>): TrailblazeToolResult = trailblazeAgent.runMaestroCommands(maestroCommands)
+  private fun runMaestroCommands(maestroCommands: List<Command>): TrailblazeToolResult = when (val maestroResult = trailblazeAgent.runMaestroCommands(maestroCommands)) {
+    is TrailblazeToolResult.Success -> maestroResult
+    is TrailblazeToolResult.Error -> throw TrailblazeException(maestroResult.errorMessage)
+    else -> throw TrailblazeException("Unknown TrailblazeToolResult when running maestro commands $maestroCommands")
+  }
 
-  private fun runPrompt(prompts: List<PromptStep>): TrailblazeToolResult {
+  private fun runPrompt(
+    prompts: List<PromptStep>,
+    useRecordedSteps: Boolean,
+  ): TrailblazeToolResult {
     for (prompt in prompts) {
-      val promptResult: TrailblazeToolResult = if (prompt.recordable && prompt.recording?.tools?.isNotEmpty() == true) {
+      val promptResult: TrailblazeToolResult = if (useRecordedSteps && prompt.canUseRecording()) {
         runTrailblazeTool(prompt.recording!!.tools)
       } else {
-        trailblazeRunner.run(prompt)
-        TrailblazeToolResult.Success // TODO: What to actually return here?
+        val status = trailblazeRunner.run(prompt)
+        when (status) {
+          is ObjectiveComplete -> TrailblazeToolResult.Success
+          else -> throw TrailblazeException("Failed to successfully run prompt with AI $prompt")
+        }
       }
       if (promptResult is TrailblazeToolResult.Error) {
-        return promptResult
+        throw TrailblazeException("Failed to successfully run prompt $prompt with error ${promptResult.errorMessage}")
       }
     }
     return TrailblazeToolResult.Success
   }
+
+  private fun PromptStep.canUseRecording() = recordable && recording != null
 
   /**
    * Run natural language instructions with the agent.

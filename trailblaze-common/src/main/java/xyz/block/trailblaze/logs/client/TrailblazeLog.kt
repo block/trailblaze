@@ -16,6 +16,7 @@ import xyz.block.trailblaze.logs.model.LlmMessage
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.yaml.TrailYamlItem.PromptsTrailItem.PromptStep
 
 @Serializable
 sealed interface TrailblazeLog {
@@ -132,7 +133,7 @@ sealed interface TrailblazeLog {
 
   @Serializable
   data class ObjectiveStartLog(
-    val description: String,
+    val promptStep: PromptStep,
     override val session: String,
     override val timestamp: Instant,
   ) : TrailblazeLog {
@@ -141,7 +142,7 @@ sealed interface TrailblazeLog {
 
   @Serializable
   data class ObjectiveCompleteLog(
-    val description: String,
+    val promptStep: PromptStep,
     val objectiveResult: AgentTaskStatus,
     override val session: String,
     override val timestamp: Instant,

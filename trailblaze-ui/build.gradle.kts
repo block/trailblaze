@@ -7,7 +7,6 @@ plugins {
   alias(libs.plugins.jetbrains.compose.multiplatform)
   alias(libs.plugins.kotlin.multiplatform)
   alias(libs.plugins.kotlin.serialization)
-  alias(libs.plugins.vanniktech.maven.publish)
 }
 
 kotlin {
@@ -42,7 +41,7 @@ kotlin {
 
   sourceSets {
     commonMain.dependencies {
-      api(project(":trailblaze-models"))
+      api(project(":trailblaze-common"))
       api(compose.runtime)
       api(compose.foundation)
       api(compose.material3)

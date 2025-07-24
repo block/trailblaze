@@ -43,7 +43,7 @@ spotless = "7.0.3"
 testParameterInjector = "1.18"
 truth = "1.4.4"
 uiautomator = "2.3.0"
-vanniktech-maven-publish = "0.34.0"
+vanniktech-maven-publish = "0.31.0"
 dependency-guard = "0.5.0"
 
 [libraries]
@@ -138,7 +138,7 @@ kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
 kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
-vanniktech-maven-publish = { id = "com.vanniktech.maven.publish", version.ref = "vanniktech-maven-publish" }
+vanniktech-maven-publish = { id = "com.vanniktech.maven.publish.base", version.ref = "vanniktech-maven-publish" }
 dokka = { id = "org.jetbrains.dokka", version.ref = "dokka" }
 jetbrains-compose-multiplatform = { id = "org.jetbrains.compose", version.ref = "jetbrains-compose-multiplatform" }
 compose-compiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }

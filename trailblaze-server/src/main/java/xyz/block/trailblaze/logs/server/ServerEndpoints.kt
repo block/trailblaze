@@ -19,14 +19,12 @@ import xyz.block.trailblaze.logs.server.endpoints.AgentLogEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.DeleteLogsEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.GetEndpointMaestroYamlSessionRecording
 import xyz.block.trailblaze.logs.server.endpoints.GetEndpointSessionDetail
-import xyz.block.trailblaze.logs.server.endpoints.GetEndpointTrailblazeSimpleYamlSessionRecording
 import xyz.block.trailblaze.logs.server.endpoints.GetEndpointTrailblazeYamlSessionRecording
 import xyz.block.trailblaze.logs.server.endpoints.HomeEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.LlmSessionEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.LogScreenshotPostEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.PingEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.RealtimeWebsocketEndpoint
-import xyz.block.trailblaze.logs.server.endpoints.SessionJsonRecordingEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.SinglePageReportEndpoint
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.report.utils.TemplateHelpers
@@ -52,13 +50,11 @@ object ServerEndpoints {
       HomeEndpoint.register(this, logsRepo)
       PingEndpoint.register(this)
       LlmSessionEndpoint.register(this, logsRepo)
-      SessionJsonRecordingEndpoint.register(this, logsRepo)
       GetEndpointSessionDetail.register(this, logsRepo)
       AgentLogEndpoint.register(this, logsRepo)
       DeleteLogsEndpoint.register(this, logsRepo)
       GetEndpointMaestroYamlSessionRecording.register(this, logsRepo)
       GetEndpointTrailblazeYamlSessionRecording.register(this, logsRepo)
-      GetEndpointTrailblazeSimpleYamlSessionRecording.register(this, logsRepo)
       LogScreenshotPostEndpoint.register(this, logsRepo)
       SinglePageReportEndpoint.register(this, logsRepo)
       staticFiles("/static", logsRepo.logsDir)
