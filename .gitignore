@@ -42,3 +42,4 @@ local.settings.gradle
 # Trailblaze Logs
 /logs/
 /kotlin-js-store/yarn.lock
+/.idea/vcs.xml
