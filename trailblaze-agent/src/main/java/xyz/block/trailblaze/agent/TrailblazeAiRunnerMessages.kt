@@ -1,10 +1,10 @@
 package xyz.block.trailblaze.agent
 
-import xyz.block.trailblaze.agent.model.TrailblazePromptStep
+import xyz.block.trailblaze.yaml.PromptStep
 
 object TrailblazeAiRunnerMessages {
 
-  fun getReminderMessage(step: TrailblazePromptStep, forceStepStatusUpdate: Boolean): String {
+  fun getReminderMessage(promptStep: PromptStep, forceStepStatusUpdate: Boolean): String {
     // Add objectives information if available
     // Reminder message - depending on whether we need to force a task status update
     val reminderMessage = if (forceStepStatusUpdate) {
@@ -26,7 +26,7 @@ object TrailblazeAiRunnerMessages {
         
         Current objective item to focus on is:
         
-        > Task #${step.taskIndex}: ${step.description}
+        > Task ${promptStep.step}
       """.trimIndent()
     } else {
       """
@@ -34,7 +34,7 @@ object TrailblazeAiRunnerMessages {
         
         Your current objective item to focus on is:
         
-        > Task #${step.taskIndex}: ${step.description}
+        > Task ${promptStep.step}
         
         IMPORTANT: Focus ONLY on completing this specific objective item. 
         After you complete this objective item, call the objectiveStatus tool IMMEDIATELY.

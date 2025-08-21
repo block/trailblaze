@@ -1,13 +1,21 @@
 package xyz.block.trailblaze.android.maestro
 
 import kotlinx.datetime.Clock
+import maestro.Capability
+import maestro.DeviceInfo
 import maestro.Driver
+import maestro.KeyCode
 import maestro.Point
+import maestro.ScreenRecording
 import maestro.SwipeDirection
+import maestro.TreeNode
+import maestro.ViewHierarchy
+import okio.Sink
 import xyz.block.trailblaze.api.MaestroDriverActionType
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
+import xyz.block.trailblaze.tracing.TrailblazeTracer.traceRecorder
 import java.io.File
 import java.util.UUID
 import kotlin.system.measureTimeMillis
@@ -18,13 +26,20 @@ import kotlin.system.measureTimeMillis
 class LoggingDriver(
   private val delegate: Driver,
   private val screenStateProvider: () -> ScreenState,
-) : Driver by delegate {
+) : Driver {
+
+  private inline fun <T> traceMaestroDriver(name: String, block: () -> T): T = traceRecorder.trace(name, "MaestroDriver", emptyMap(), block)
+
+  private inline fun <T> traceMaestroDriverAction(action: MaestroDriverActionType, block: () -> T): T = traceMaestroDriver(action::class.simpleName!!, block)
 
   private fun logActionWithScreenshot(action: MaestroDriverActionType, block: () -> Unit = {}) {
     val screenState = screenStateProvider()
     val startTime = Clock.System.now()
+
     val executionTimeMs = measureTimeMillis {
-      block()
+      traceMaestroDriverAction(action) {
+        block()
+      }
     }
     val screenshotFilename = screenState.screenshotBytes?.let { TrailblazeLogger.logScreenshot(it) }
     TrailblazeLogger.log(
@@ -45,7 +60,9 @@ class LoggingDriver(
     val screenState = screenStateProvider()
     val startTime = Clock.System.now()
     val executionTimeMs = measureTimeMillis {
-      block()
+      traceMaestroDriverAction(action) {
+        block()
+      }
     }
     TrailblazeLogger.log(
       TrailblazeLog.MaestroDriverLog(
@@ -69,12 +86,54 @@ class LoggingDriver(
     delegate.backPress()
   }
 
+  override fun capabilities(): List<Capability> = traceMaestroDriver("capabilities") {
+    delegate.capabilities()
+  }
+
   override fun clearAppState(appId: String) = logActionWithoutScreenshot(MaestroDriverActionType.ClearAppState(appId)) {
     delegate.clearAppState(appId)
   }
 
+  override fun clearKeychain() = traceMaestroDriver("clearKeychain") {
+    delegate.clearKeychain()
+  }
+
+  override fun close() = traceMaestroDriver("close") {
+    delegate.close()
+  }
+
+  override fun contentDescriptor(excludeKeyboardElements: Boolean): TreeNode = traceMaestroDriver("contentDescriptor") {
+    delegate.contentDescriptor(excludeKeyboardElements)
+  }
+
+  override fun deviceInfo(): DeviceInfo = traceMaestroDriver("deviceInfo") {
+    delegate.deviceInfo()
+  }
+
+  override fun eraseText(charactersToErase: Int) = traceMaestroDriver("eraseText") { delegate.eraseText(charactersToErase) }
+
+  override fun hideKeyboard() = traceMaestroDriver("hideKeyboard") {
+    delegate.hideKeyboard()
+  }
+
   override fun inputText(text: String) = logActionWithScreenshot(MaestroDriverActionType.EnterText(text)) {
     delegate.inputText(text)
+  }
+
+  override fun isAirplaneModeEnabled(): Boolean = traceMaestroDriver("isAirplaneModeEnabled") {
+    delegate.isAirplaneModeEnabled()
+  }
+
+  override fun isKeyboardVisible(): Boolean = traceMaestroDriver("isKeyboardVisible") {
+    delegate.isKeyboardVisible()
+  }
+
+  override fun isShutdown(): Boolean = traceMaestroDriver("isShutdown") {
+    delegate.isShutdown()
+  }
+
+  override fun isUnicodeInputSupported(): Boolean = traceMaestroDriver("isUnicodeInputSupported") {
+    delegate.isUnicodeInputSupported()
   }
 
   override fun killApp(appId: String) = logActionWithoutScreenshot(MaestroDriverActionType.KillApp(appId)) {
@@ -87,6 +146,17 @@ class LoggingDriver(
     sessionId: UUID?,
   ) = logActionWithoutScreenshot(MaestroDriverActionType.LaunchApp(appId)) {
     delegate.launchApp(appId, launchArguments, sessionId)
+  }
+
+  override fun setAirplaneMode(enabled: Boolean) = logActionWithoutScreenshot(MaestroDriverActionType.AirplaneMode(enabled)) {
+    delegate.setAirplaneMode(enabled)
+  }
+
+  override fun setLocation(latitude: Double, longitude: Double) = traceMaestroDriver("setLocation") {
+    delegate.setLocation(
+      latitude = latitude,
+      longitude = longitude,
+    )
   }
 
   override fun setPermissions(appId: String, permissions: Map<String, String>) {
@@ -103,23 +173,96 @@ class LoggingDriver(
     }
   }
 
+  override fun setProxy(host: String, port: Int) = traceMaestroDriver("startScreenRecording") {
+    delegate.setProxy(
+      host = host,
+      port = port,
+    )
+  }
+
+  override fun startScreenRecording(out: Sink): ScreenRecording = traceMaestroDriver("startScreenRecording") {
+    delegate.startScreenRecording(out)
+  }
+
   override fun stopApp(appId: String) = logActionWithoutScreenshot(MaestroDriverActionType.StopApp(appId)) {
     delegate.stopApp(appId)
   }
 
+  override fun swipe(start: Point, end: Point, durationMs: Long) = traceMaestroDriver("swipe") {
+    delegate.swipe(
+      start = start,
+      end = end,
+      durationMs = durationMs,
+    )
+  }
+
   override fun swipe(elementPoint: Point, direction: SwipeDirection, durationMs: Long) = logActionWithScreenshot(MaestroDriverActionType.Swipe(direction.name, durationMs)) {
-    delegate.swipe(elementPoint, direction, durationMs)
+    delegate.swipe(
+      elementPoint = elementPoint,
+      direction = direction,
+      durationMs = durationMs,
+    )
   }
 
   override fun swipe(swipeDirection: SwipeDirection, durationMs: Long) = logActionWithScreenshot(MaestroDriverActionType.Swipe(swipeDirection.name, durationMs)) {
-    delegate.swipe(swipeDirection, durationMs)
+    delegate.swipe(
+      swipeDirection = swipeDirection,
+      durationMs = durationMs,
+    )
+  }
+
+  override fun takeScreenshot(out: Sink, compressed: Boolean) = traceMaestroDriver("takeScreenshot") {
+    delegate.takeScreenshot(
+      out = out,
+      compressed = compressed,
+    )
   }
 
   override fun tap(point: Point) = logActionWithScreenshot(MaestroDriverActionType.TapPoint(point.x, point.y)) {
     delegate.tap(point)
   }
 
-  override fun longPress(point: Point) = logActionWithScreenshot(MaestroDriverActionType.LongPressPoint(point.x, point.y)) {
-    delegate.tap(point)
+  override fun waitForAppToSettle(
+    initialHierarchy: ViewHierarchy?,
+    appId: String?,
+    timeoutMs: Int?,
+  ): ViewHierarchy? = traceMaestroDriver("waitForAppToSettle") {
+    delegate.waitForAppToSettle(
+      initialHierarchy = initialHierarchy,
+      appId = appId,
+      timeoutMs = timeoutMs,
+    )
   }
+
+  override fun waitUntilScreenIsStatic(timeoutMs: Long): Boolean = traceMaestroDriver("waitUntilScreenIsStatic") {
+    delegate.waitUntilScreenIsStatic(timeoutMs)
+  }
+
+  override fun longPress(point: Point) = logActionWithScreenshot(MaestroDriverActionType.LongPressPoint(point.x, point.y)) {
+    delegate.longPress(point)
+  }
+
+  override fun name(): String = traceMaestroDriver("name") { delegate.name() }
+
+  override fun open() = traceMaestroDriver("open") { delegate.open() }
+
+  override fun openLink(
+    link: String,
+    appId: String?,
+    autoVerify: Boolean,
+    browser: Boolean,
+  ) = traceMaestroDriver("openLink") {
+    delegate.openLink(
+      link = link,
+      appId = appId,
+      autoVerify = autoVerify,
+      browser = browser,
+    )
+  }
+
+  override fun pressKey(code: KeyCode) = traceMaestroDriver("pressKey") { delegate.pressKey(code) }
+
+  override fun resetProxy() = traceMaestroDriver("resetProxy") { delegate.resetProxy() }
+
+  override fun scrollVertical() = traceMaestroDriver("scrollVertical") { delegate.scrollVertical() }
 }

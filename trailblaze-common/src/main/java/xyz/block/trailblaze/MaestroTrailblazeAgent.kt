@@ -5,6 +5,7 @@ import maestro.orchestra.Command
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeAgent
 import xyz.block.trailblaze.exception.TrailblazeException
+import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
@@ -76,6 +77,7 @@ abstract class MaestroTrailblazeAgent : TrailblazeAgent {
             return toolsExecuted to result
           }
         }
+
         is DelegatingTrailblazeTool -> {
           val executableTools = trailblazeTool.toExecutableTrailblazeTools(trailblazeExecutionContext)
           logDelegatingTrailblazeTool(trailblazeTool, executableTools)
@@ -88,6 +90,7 @@ abstract class MaestroTrailblazeAgent : TrailblazeAgent {
             }
           }
         }
+
         is MemoryTrailblazeTool -> {
           // Execute the memory tool with the execution context and the handleMemoryTool lambda
           // The lambda will call the TrailblazeElementComparator
@@ -96,6 +99,7 @@ abstract class MaestroTrailblazeAgent : TrailblazeAgent {
             elementComparator = elementComparator,
           )
         }
+
         else -> throw TrailblazeException(
           message = buildString {
             appendLine("Unhandled Trailblaze tool ${trailblazeTool::class.java.simpleName}.")
@@ -124,18 +128,19 @@ abstract class MaestroTrailblazeAgent : TrailblazeAgent {
     trailblazeToolResult: TrailblazeToolResult,
   ) {
     val timeBeforeToolExecution = Clock.System.now()
-    TrailblazeLogger.log(
-      TrailblazeLog.TrailblazeToolLog(
-        command = trailblazeTool,
-        toolName = trailblazeTool.getToolNameFromAnnotation(),
-        exceptionMessage = (trailblazeToolResult as? TrailblazeToolResult.Error)?.errorMessage,
-        successful = trailblazeToolResult == TrailblazeToolResult.Success,
-        durationMs = Clock.System.now().toEpochMilliseconds() - timeBeforeToolExecution.toEpochMilliseconds(),
-        timestamp = timeBeforeToolExecution,
-        llmResponseId = trailblazeExecutionContext.llmResponseId,
-        session = TrailblazeLogger.getCurrentSessionId(),
-      ),
+    val toolLog = TrailblazeLog.TrailblazeToolLog(
+      command = trailblazeTool,
+      toolName = trailblazeTool.getToolNameFromAnnotation(),
+      exceptionMessage = (trailblazeToolResult as? TrailblazeToolResult.Error)?.errorMessage,
+      successful = trailblazeToolResult == TrailblazeToolResult.Success,
+      durationMs = Clock.System.now().toEpochMilliseconds() - timeBeforeToolExecution.toEpochMilliseconds(),
+      timestamp = timeBeforeToolExecution,
+      llmResponseId = trailblazeExecutionContext.llmResponseId,
+      session = TrailblazeLogger.getCurrentSessionId(),
     )
+    val toolLogJson = TrailblazeJsonInstance.encodeToString(toolLog)
+    println("toolLogJson: $toolLogJson")
+    TrailblazeLogger.log(toolLog)
   }
 
   private fun logDelegatingTrailblazeTool(

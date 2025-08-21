@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.toolcalls
 
+import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import kotlin.reflect.KClass
 import kotlin.reflect.full.findAnnotation
 import kotlin.reflect.full.isSubclassOf
@@ -24,10 +25,14 @@ NOTE:
 
 // Make this a top-level public function so it can be used elsewhere
 @Suppress("UNCHECKED_CAST")
-fun TrailblazeTool.getToolNameFromAnnotation(): String = try {
-  val kClass = this::class
-  val annotation = kClass.findAnnotation<TrailblazeToolClass>()
-  annotation?.name ?: kClass.simpleName ?: "UnknownTool"
-} catch (e: Exception) {
-  this::class.simpleName ?: "UnknownTool"
+fun TrailblazeTool.getToolNameFromAnnotation(): String = if (this is OtherTrailblazeTool) {
+  this.toolName
+} else {
+  try {
+    val kClass = this::class
+    val annotation = kClass.findAnnotation<TrailblazeToolClass>()
+    annotation?.name ?: kClass.simpleName ?: "UnknownTool"
+  } catch (e: Exception) {
+    this::class.simpleName ?: "UnknownTool"
+  }
 }

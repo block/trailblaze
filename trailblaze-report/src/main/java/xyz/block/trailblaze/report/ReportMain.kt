@@ -24,20 +24,24 @@ fun main(args: Array<String>) {
   val summaryJsonFile = File(logsDir, "summary.json")
   summaryJsonFile.writeText(logsSummaryJson)
 
-  val trailblazeReportHtmlFile = File(logsDir, "trailblaze_report.html")
-
-  val html = ReportRenderer.renderTemplateFromResources(
-    "trailblaze_report.ftl",
-    mutableMapOf<String, Any>(
-      "summaryJson" to logsSummaryJson,
-    ),
-  )
-  println("file://${trailblazeReportHtmlFile.absolutePath}")
-  trailblazeReportHtmlFile.writeText(html)
-
   logsRepo.getSessionIds().forEach { sessionId ->
     processSession(logsRepo, sessionId)
   }
+
+  val trailblazeReportHtmlFile = File(logsDir, "trailblaze_report.html")
+  println("file://${trailblazeReportHtmlFile.absolutePath}")
+
+  val isInternal = File(logsRepo.logsDir.parentFile, "opensource").exists()
+
+  val trailblazeUiProjectDir = if (isInternal) {
+    File(logsRepo.logsDir.parentFile, "opensource/trailblaze-ui")
+  } else {
+    File(logsRepo.logsDir.parentFile, "trailblaze-ui")
+  }.also {
+    println("Using project directory: ${it.canonicalPath}")
+  }
+
+  WasmReport.generate(logsRepo, trailblazeUiProjectDir, trailblazeReportHtmlFile)
 }
 
 fun moveJsonFilesToSessionDirs(logsDir: File) {
@@ -65,6 +69,7 @@ fun moveJsonFilesToSessionDirs(logsDir: File) {
           is TrailblazeLog.MaestroDriverLog -> log.copy(
             screenshotFile = screenshotFileInSessionDirPath,
           )
+
           is TrailblazeLog.TrailblazeLlmRequestLog -> log.copy(
             screenshotFile = screenshotFileInSessionDirPath,
           )

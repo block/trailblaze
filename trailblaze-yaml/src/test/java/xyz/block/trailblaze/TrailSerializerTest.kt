@@ -4,6 +4,7 @@ import ai.koog.agents.core.tools.annotations.LLMDescription
 import assertk.assertThat
 import assertk.assertions.isEqualTo
 import assertk.assertions.isInstanceOf
+import assertk.assertions.isNull
 import kotlinx.serialization.DeserializationStrategy
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.KSerializer
@@ -40,11 +41,12 @@ import xyz.block.trailblaze.toolcalls.commands.memory.RememberNumberTrailblazeTo
 import xyz.block.trailblaze.toolcalls.commands.memory.RememberTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.memory.RememberWithAiTrailblazeTool
 import xyz.block.trailblaze.yaml.MaestroCommandList
+import xyz.block.trailblaze.yaml.PromptStep
+import xyz.block.trailblaze.yaml.ToolRecording
 import xyz.block.trailblaze.yaml.TrailYamlItem
-import xyz.block.trailblaze.yaml.TrailYamlItem.PromptsTrailItem.PromptStep
-import xyz.block.trailblaze.yaml.TrailYamlItem.PromptsTrailItem.PromptStep.ToolRecording
 import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
 import xyz.block.trailblaze.yaml.TrailblazeYaml
+import xyz.block.trailblaze.yaml.fromTrailblazeTool
 import xyz.block.trailblaze.yaml.models.TrailblazeYamlBuilder
 import xyz.block.trailblaze.yaml.serializers.TrailblazeToolYamlWrapperSerializer
 import kotlin.test.assertEquals
@@ -165,7 +167,7 @@ class TrailSerializerTest {
   fun trailItemToolTest() {
     val trailToolItem = TrailYamlItem.ToolTrailItem(
       listOf(
-        TrailblazeToolYamlWrapper.fromTrailblazeTool(
+        fromTrailblazeTool(
           InputTextTrailblazeTool("hi"),
         ),
       ),
@@ -195,8 +197,8 @@ class TrailSerializerTest {
           recordable = true,
           recording = ToolRecording(
             tools = listOf(
-              TrailblazeToolYamlWrapper.fromTrailblazeTool(InputTextTrailblazeTool("Hello World")),
-              TrailblazeToolYamlWrapper.fromTrailblazeTool(PressBackTrailblazeTool),
+              fromTrailblazeTool(InputTextTrailblazeTool("Hello World")),
+              fromTrailblazeTool(PressBackTrailblazeTool),
             ),
           ),
         ),
@@ -222,7 +224,7 @@ class TrailSerializerTest {
     val trailblazeTool = TapOnElementWithTextTrailblazeTool("Email")
     val yaml = trailblazeYamlInstance.encodeToString(
       trailblazeYaml.trailblazeToolYamlWrapperSerializer,
-      TrailblazeToolYamlWrapper.fromTrailblazeTool(trailblazeTool),
+      fromTrailblazeTool(trailblazeTool),
     )
     println(yaml)
 
@@ -248,7 +250,7 @@ class TrailSerializerTest {
     )
     val yaml = trailblazeYamlInstance.encodeToString(
       listOfToolsSerializer,
-      trailblazeTools.map { TrailblazeToolYamlWrapper.fromTrailblazeTool(it) },
+      trailblazeTools.map { fromTrailblazeTool(it) },
     )
     println(yaml)
 
@@ -268,8 +270,8 @@ class TrailSerializerTest {
       recordable = false,
       recording = ToolRecording(
         tools = listOf(
-          TrailblazeToolYamlWrapper.fromTrailblazeTool(InputTextTrailblazeTool("Hello World")),
-          TrailblazeToolYamlWrapper.fromTrailblazeTool(PressBackTrailblazeTool),
+          fromTrailblazeTool(InputTextTrailblazeTool("Hello World")),
+          fromTrailblazeTool(PressBackTrailblazeTool),
         ),
       ),
     )
@@ -291,7 +293,7 @@ class TrailSerializerTest {
     )
     val toolRecording = ToolRecording(
       tools = trailblazeTools.map {
-        TrailblazeToolYamlWrapper.fromTrailblazeTool(it)
+        fromTrailblazeTool(it)
       },
     )
 
@@ -1318,6 +1320,57 @@ class TrailSerializerTest {
             selected = null,
           ),
         )
+      }
+    }
+  }
+
+  // Config serialization
+  @Test
+  fun canDeserializeNullContext() {
+    val yaml = """
+- config: {}
+    """.trimIndent()
+
+    val trailItems = trailblazeYaml.decodeTrail(yaml)
+    with(trailItems) {
+      assertThat(size).isEqualTo(1)
+      with(get(0) as TrailYamlItem.ConfigTrailItem) {
+        assertThat(config.context).isNull()
+      }
+    }
+  }
+
+  @Test
+  fun canDeserializeSingleLineContext() {
+    val yaml = """
+- config:
+    context: This is some custom context
+    """.trimIndent()
+
+    val trailItems = trailblazeYaml.decodeTrail(yaml)
+    with(trailItems) {
+      assertThat(size).isEqualTo(1)
+      with(get(0) as TrailYamlItem.ConfigTrailItem) {
+        assertThat(config.context).isEqualTo("This is some custom context")
+      }
+    }
+  }
+
+  @Test
+  fun canDeserializeMultiLineContext() {
+    val yaml = """
+- config:
+    context: |
+      This is
+      some multiline
+      content
+    """.trimIndent()
+
+    val trailItems = trailblazeYaml.decodeTrail(yaml)
+    with(trailItems) {
+      assertThat(size).isEqualTo(1)
+      with(get(0) as TrailYamlItem.ConfigTrailItem) {
+        assertThat(config.context).isEqualTo("This is\nsome multiline\ncontent")
       }
     }
   }

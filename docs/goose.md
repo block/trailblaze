@@ -20,17 +20,7 @@ This will start the Trailblaze server and web UI.
 
 Now that you have the server running, you can install the Trailblaze extension in Goose.  You should only have to do this configuration once.
 
-Squid Automated 50%, how?
-- pytest based framework on Test Rack
-- Apps are a blind spot.  No coverage.  Every 2 weeks, faster than squid.
-- No Automation for Android Apps.
-- Slow Execution Time
-
-Challenges
-- Haven't seen a demo of what Rodion and Mike are building.
-- Food and Beverage Apps - iOS or Squid Device
-
-Add a new Goose Extension with:
+### Add a new Goose Extension with:
 
 - Name: `Trailblaze`
 - Type: `SSE`

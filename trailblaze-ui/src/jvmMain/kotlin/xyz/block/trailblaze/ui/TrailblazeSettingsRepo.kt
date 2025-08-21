@@ -1,29 +1,35 @@
 package xyz.block.trailblaze.ui
 
+import ai.koog.agents.core.tools.ToolDescriptor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.launch
-import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
+import kotlinx.serialization.json.Json
+import xyz.block.trailblaze.logs.client.TrailblazeJson
+import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.ui.models.TrailblazeServerState
 import java.io.File
+import kotlin.reflect.KClass
 
 class TrailblazeSettingsRepo(
   private val settingsFile: File = File("build/trailblaze-settings.json"),
   private val initialConfig: TrailblazeServerState.SavedTrailblazeAppConfig,
+  private val allToolClasses: Map<ToolDescriptor, KClass<out TrailblazeTool>>,
 ) {
+  private val trailblazeJson: Json = TrailblazeJson.createTrailblazeJsonInstance(allToolClasses)
 
   fun saveConfig(trailblazeSettings: TrailblazeServerState.SavedTrailblazeAppConfig) {
     println(
       "Saving Settings to: ${settingsFile.absolutePath}\n ${
-        TrailblazeJsonInstance.encodeToString(
+        trailblazeJson.encodeToString(
           trailblazeSettings,
         )
       }",
     )
     settingsFile.writeText(
-      TrailblazeJsonInstance.encodeToString(
+      trailblazeJson.encodeToString(
         TrailblazeServerState.SavedTrailblazeAppConfig.serializer(),
         trailblazeSettings,
       ),
@@ -34,7 +40,7 @@ class TrailblazeSettingsRepo(
     initialConfig: TrailblazeServerState.SavedTrailblazeAppConfig,
   ): TrailblazeServerState.SavedTrailblazeAppConfig = try {
     println("Loading Settings from: ${settingsFile.absolutePath}")
-    TrailblazeJsonInstance.decodeFromString(
+    trailblazeJson.decodeFromString(
       TrailblazeServerState.SavedTrailblazeAppConfig.serializer(),
       settingsFile.readText(),
     )

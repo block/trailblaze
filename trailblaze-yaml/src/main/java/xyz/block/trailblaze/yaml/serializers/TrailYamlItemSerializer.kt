@@ -17,6 +17,8 @@ import kotlinx.serialization.encoding.decodeStructure
 import xyz.block.trailblaze.maestro.MaestroYamlParser
 import xyz.block.trailblaze.maestro.MaestroYamlSerializer
 import xyz.block.trailblaze.yaml.MaestroCommandList
+import xyz.block.trailblaze.yaml.PromptStep
+import xyz.block.trailblaze.yaml.TrailConfig
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
 
@@ -34,7 +36,7 @@ class TrailYamlItemSerializer(
           MapSerializer(
             String.serializer(),
             ListSerializer(
-              TrailYamlItem.PromptsTrailItem.PromptStep.serializer(),
+              PromptStep.serializer(),
             ),
           ),
           mapOf(TrailYamlItem.KEYWORD_PROMPTS to value.promptSteps),
@@ -72,6 +74,16 @@ class TrailYamlItemSerializer(
           mapOf(TrailYamlItem.KEYWORD_MAESTRO to kamlYamlListOfMaestroCommands),
         )
       }
+
+      is TrailYamlItem.ConfigTrailItem -> {
+        encoder.encodeSerializableValue(
+          MapSerializer(
+            String.serializer(),
+            TrailConfig.serializer(),
+          ),
+          mapOf(TrailYamlItem.KEYWORD_CONFIG to value.config),
+        )
+      }
     }
   }
 
@@ -90,7 +102,7 @@ class TrailYamlItemSerializer(
     when (key) {
       TrailYamlItem.KEYWORD_PROMPTS -> {
         val steps = yaml.decodeFromYamlNode(
-          ListSerializer(TrailYamlItem.PromptsTrailItem.PromptStep.serializer()),
+          ListSerializer(PromptStep.serializer()),
           valueNode,
         )
         TrailYamlItem.PromptsTrailItem(steps)
@@ -119,6 +131,14 @@ class TrailYamlItemSerializer(
         // Parse the generated YAML into Maestro commands
         val maestroCommands = MaestroYamlParser.parseYaml(maestroYaml)
         TrailYamlItem.MaestroTrailItem(MaestroCommandList(maestroCommands))
+      }
+
+      TrailYamlItem.KEYWORD_CONFIG -> {
+        val config = yaml.decodeFromYamlNode(
+          TrailConfig.serializer(),
+          valueNode,
+        )
+        TrailYamlItem.ConfigTrailItem(config)
       }
 
       else -> error("Unknown key in TrailItem: $key")

@@ -3,7 +3,6 @@ package xyz.block.trailblaze.api
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.Transient
 import xyz.block.trailblaze.viewhierarchy.ViewHierarchyFilter
-import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Allows a data model that isn't just straight xml for view hierarchy information.
@@ -107,16 +106,15 @@ data class ViewHierarchyTreeNode(
     /**
      * We use this to provide unique IDs for each node in the view hierarchy.
      */
-    private val viewIdCount = AtomicLong(1)
 
     /**
      * Relabels the tree with new nodeIds using a shared atomic incrementer.
      * Returns a new tree with the same structure and data, but fresh nodeIds.
      */
     fun ViewHierarchyTreeNode.relabelWithFreshIds(): ViewHierarchyTreeNode {
-      viewIdCount.set(1)
+      var viewIdCount = 1L
       fun relabel(node: ViewHierarchyTreeNode): ViewHierarchyTreeNode = node.copy(
-        nodeId = viewIdCount.getAndIncrement(),
+        nodeId = viewIdCount++,
         children = node.children.map { relabel(it) },
       )
       return relabel(this)

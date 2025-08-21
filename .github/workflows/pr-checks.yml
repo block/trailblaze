@@ -78,7 +78,7 @@ jobs:
             set +e  # Allow failure so we can post-process
             
             # Run Android Tests
-            ./gradlew --info :examples:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class="xyz.block.trailblaze.examples.settings.AndroidSettingsTest#becomeADeveloperMaestroYaml" -Pandroid.testInstrumentationRunnerArguments.trailblaze.ai.enabled=false
+            ./gradlew --info :examples:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class="xyz.block.trailblaze.examples.settings.AndroidSettingsTest#becomeADeveloperMaestroYaml" -Pandroid.testInstrumentationRunnerArguments.trailblaze.aiEnabled=false
             TEST_EXIT_CODE=$?
             echo "Exit code was $TEST_EXIT_CODE"
             

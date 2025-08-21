@@ -89,8 +89,8 @@ object FileReadWriteUtil {
         File(downloadsDir, directory)
       } else {
         downloadsDir
-      }
-      if (!recordingDir.exists()) recordingDir.mkdirs()
+      }.also { it.mkdirs() }
+
       val file = File(recordingDir, fileName)
 
       // Ensure parent directories exist

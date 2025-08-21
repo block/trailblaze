@@ -8,3 +8,11 @@ interface TrailblazeSessionListener {
   fun onUpdate(message: String)
   fun onSessionEnded()
 }
+
+/**
+ * Listener for changes to the session list (when sessions are added or removed).
+ */
+interface SessionListListener {
+  fun onSessionAdded(sessionId: String)
+  fun onSessionRemoved(sessionId: String)
+}

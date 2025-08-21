@@ -46,8 +46,6 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.decodeFromJsonElement
 import xyz.block.trailblaze.AndroidMaestroTrailblazeAgent
 import xyz.block.trailblaze.agent.TrailblazeRunner
-import xyz.block.trailblaze.agent.model.TestObjective
-import xyz.block.trailblaze.agent.model.TrailblazePromptStep
 import xyz.block.trailblaze.android.openai.OpenAiInstrumentationArgUtil
 import xyz.block.trailblaze.android.uiautomator.AndroidOnDeviceUiAutomatorScreenState
 import xyz.block.trailblaze.api.TestAgentRunner
@@ -279,14 +277,14 @@ object TrailblazeAndroidOnDeviceMcpServer {
             val mcpPromptRequestData = call.receive<McpPromptRequestData>()
             println("Steps: $mcpPromptRequestData")
 
-            val prompt = TestObjective.TrailblazeObjective.TrailblazePrompt(
-              fullPrompt = mcpPromptRequestData.fullPrompt,
-              steps = mcpPromptRequestData.steps.map { step ->
-                TrailblazePromptStep(description = step)
-              },
-            )
-            val statusResult = trailblazeRunner.run(prompt)
-            call.respond(HttpStatusCode.OK, "Prompt Executed. $statusResult")
+//            val prompt = TestObjective.TrailblazeObjective.TrailblazePrompt(
+//              fullPrompt = mcpPromptRequestData.fullPrompt,
+//              steps = mcpPromptRequestData.steps.map { step ->
+//                TrailblazePromptStep(description = step)
+//              },
+//            )
+//            val statusResult = trailblazeRunner.run(prompt)
+//            call.respond(HttpStatusCode.OK, "Prompt Executed. $statusResult")
           } catch (e: Exception) {
             println("Exception in /prompt handler: ${e.message}")
             call.respond(HttpStatusCode.BadRequest, "Invalid request: ${e.message}")

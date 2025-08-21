@@ -1,6 +1,5 @@
 package xyz.block.trailblaze.examples.clock
 
-import ai.koog.prompt.executor.clients.openai.OpenAIModels
 import maestro.orchestra.LaunchAppCommand
 import org.junit.Before
 import org.junit.Rule
@@ -13,9 +12,7 @@ import xyz.block.trailblaze.android.openai.OpenAiTrailblazeRule
 class ClockTest {
 
   @get:Rule
-  val trailblazeRule = OpenAiTrailblazeRule(
-    llmModel = OpenAIModels.Chat.GPT4_1,
-  )
+  val trailblazeRule = OpenAiTrailblazeRule()
 
   @Before
   fun setUp() {

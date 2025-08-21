@@ -13,6 +13,18 @@
             overflow: hidden;
         }
     </style>
+    <script>
+        console.log("Trailblaze UI loaded");
+        window.getTrailblazeReportJsonFromBrowser = function (key, callback) {
+            console.log("getTrailblazeReportJsonFromBrowser called with key: " + key);
+            let value = window.trailblaze_report[key];
+            window.trailblaze_report[key] = null;
+            console.log(value);
+            let json = JSON.stringify(value)
+            callback(json);
+        }
+        window.trailblaze_report = {};
+    </script>
     <script type="application/javascript" src="composeApp.js"></script>
 </head>
 <body>

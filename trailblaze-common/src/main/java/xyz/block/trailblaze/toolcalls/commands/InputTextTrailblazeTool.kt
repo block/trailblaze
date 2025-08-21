@@ -18,7 +18,7 @@ This will type characters into the currently focused text field. This is useful 
       """,
 )
 data class InputTextTrailblazeTool(
-  @LLMDescription(REQUIRED_TEXT_DESCRIPTION) val text: String,
+  @param:LLMDescription(REQUIRED_TEXT_DESCRIPTION) val text: String,
 ) : MapsToMaestroCommands() {
 
   override fun toMaestroCommands(): List<Command> = listOf(

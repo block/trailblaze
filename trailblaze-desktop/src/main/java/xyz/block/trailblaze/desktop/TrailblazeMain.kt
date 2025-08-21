@@ -7,6 +7,7 @@ import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import xyz.block.trailblaze.logs.server.TrailblazeMcpServer
 import xyz.block.trailblaze.report.utils.LogsRepo
+import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.ui.MainTrailblazeApp
 import xyz.block.trailblaze.ui.TrailblazeSettingsRepo
 import xyz.block.trailblaze.ui.models.TrailblazeServerState
@@ -24,6 +25,7 @@ fun main() {
         hostMode = false,
       ),
     ),
+    allToolClasses = TrailblazeToolSet.AllBuiltInTrailblazeToolsByKoogToolDescriptor,
   )
   val server = TrailblazeMcpServer(
     logsRepo,
@@ -35,5 +37,5 @@ fun main() {
     trailblazeSavedSettingsRepo = trailblazeSavedSettingsRepo,
     logsDir = logsDir,
     trailblazeMcpServerProvider = { server },
-  ).runTrailblazeApp()
+  ).runTrailblazeApp(emptyList())
 }

@@ -14,6 +14,7 @@ import xyz.block.trailblaze.api.ViewHierarchyTreeNode.Companion.relabelWithFresh
 import xyz.block.trailblaze.setofmark.android.AndroidBitmapUtils.scale
 import xyz.block.trailblaze.setofmark.android.AndroidBitmapUtils.toByteArray
 import xyz.block.trailblaze.setofmark.android.AndroidCanvasSetOfMark
+import xyz.block.trailblaze.tracing.TrailblazeTracer.traceRecorder
 import xyz.block.trailblaze.viewhierarchy.ViewHierarchyFilter
 import xyz.block.trailblaze.viewhierarchy.ViewHierarchyTreeNodeUtils
 import java.io.ByteArrayOutputStream
@@ -97,12 +98,17 @@ class AndroidOnDeviceUiAutomatorScreenState(
   }
 
   companion object {
-    fun dumpViewHierarchy(): String = ByteArrayOutputStream().use { outputStream ->
-      withUiDevice {
-        setCompressedLayoutHierarchy(false)
-        dumpWindowHierarchy(outputStream)
+
+    private inline fun <T> traceOnDeviceUiAutomatorScreenState(name: String, block: () -> T): T = traceRecorder.trace(name, "OnDeviceUiAutomatorScreenState", emptyMap(), block)
+
+    fun dumpViewHierarchy(): String = traceOnDeviceUiAutomatorScreenState("dumpViewHierarchy") {
+      ByteArrayOutputStream().use { outputStream ->
+        withUiDevice {
+          setCompressedLayoutHierarchy(false)
+          dumpWindowHierarchy(outputStream)
+        }
+        outputStream.toString()
       }
-      outputStream.toString()
     }
 
     /**
@@ -127,8 +133,10 @@ class AndroidOnDeviceUiAutomatorScreenState(
     fun takeScreenshot(
       viewHierarchy: ViewHierarchyTreeNode?,
       setOfMarkEnabled: Boolean = true,
-    ): Bitmap? {
-      val screenshotBitmap = withUiAutomation { takeScreenshot() }
+    ): Bitmap? = traceOnDeviceUiAutomatorScreenState("${AndroidOnDeviceUiAutomatorScreenState::class.simpleName}.takeScreenshot") {
+      val screenshotBitmap = traceOnDeviceUiAutomatorScreenState("takeScreenshot") {
+        withUiAutomation { takeScreenshot() }
+      }
       try {
         if (setOfMarkEnabled && screenshotBitmap != null) {
           viewHierarchy?.let {
@@ -142,12 +150,12 @@ class AndroidOnDeviceUiAutomatorScreenState(
         }
         return screenshotBitmap
       } catch (e: Exception) {
-        screenshotBitmap.recycle()
+        screenshotBitmap?.recycle()
         throw e
       }
     }
 
-    private fun addSetOfMark(screenshotBitmap: Bitmap, viewHierarchy: ViewHierarchyTreeNode): Bitmap {
+    private fun addSetOfMark(screenshotBitmap: Bitmap, viewHierarchy: ViewHierarchyTreeNode): Bitmap = traceOnDeviceUiAutomatorScreenState("addSetOfMark") {
       val mutableBitmap = if (!screenshotBitmap.isMutable) {
         screenshotBitmap.copy(Bitmap.Config.ARGB_8888, true)
       } else {

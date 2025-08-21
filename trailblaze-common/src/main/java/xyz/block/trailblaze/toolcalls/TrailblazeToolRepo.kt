@@ -8,7 +8,6 @@ import kotlinx.serialization.serializer
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.toolcalls.KoogToolExt.hasSerializableAnnotation
 import xyz.block.trailblaze.toolcalls.KoogToolExt.toKoogTools
-import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toKoogToolDescriptor
 import kotlin.reflect.KClass
 
 /**

@@ -1,24 +1,20 @@
 package xyz.block.trailblaze
 
-import android.annotation.SuppressLint
 import androidx.test.platform.app.InstrumentationRegistry
-import io.ktor.client.HttpClient
-import io.ktor.client.engine.okhttp.OkHttp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
 import kotlinx.datetime.Instant
 import org.junit.runner.Description
+import xyz.block.trailblaze.android.InstrumentationArgUtil
+import xyz.block.trailblaze.http.TrailblazeHttpClientFactory
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogServerClient
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.model.SessionStatus
-import java.security.SecureRandom
-import java.security.cert.X509Certificate
-import javax.net.ssl.SSLContext
-import javax.net.ssl.TrustManager
-import javax.net.ssl.X509TrustManager
+import xyz.block.trailblaze.rules.SimpleTestRule
+import xyz.block.trailblaze.tracing.TrailblazeTracer
 
 class TrailblazeAndroidLoggingRule : SimpleTestRule() {
 
@@ -45,11 +41,19 @@ class TrailblazeAndroidLoggingRule : SimpleTestRule() {
     )
     TrailblazeLogger.log(
       TrailblazeLog.TrailblazeSessionStatusChangeLog(
-        sessionStatus = SessionStatus.Started,
+        sessionStatus = SessionStatus.Started(
+          testClassName = description.className,
+          testMethodName = description.methodName,
+        ),
         session = TrailblazeLogger.getCurrentSessionId(),
         timestamp = Clock.System.now(),
       ),
     )
+  }
+
+  override fun beforeTestExecution(description: Description) {
+    TrailblazeTracer.clear()
+    super.beforeTestExecution(description)
   }
 
   override fun afterTestExecution(description: Description, result: Result<Nothing?>) {
@@ -73,6 +77,8 @@ class TrailblazeAndroidLoggingRule : SimpleTestRule() {
       )
     }
     TrailblazeLogger.log(testEndedLog)
+
+    exportTraces()
   }
 
   companion object {
@@ -82,44 +88,10 @@ class TrailblazeAndroidLoggingRule : SimpleTestRule() {
       private set
 
     val trailblazeLogServerClient = TrailblazeLogServerClient(
-      httpClient = HttpClient(OkHttp) {
-        engine {
-          config {
-            /**
-             * Disabling SSL Verification for our Self-Signed Logging Certificate
-             */
-            val trustAllCerts = arrayOf<TrustManager>(
-              @SuppressLint("CustomX509TrustManager")
-              object : X509TrustManager {
-                @SuppressLint("TrustAllX509TrustManager")
-                override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {
-                }
-
-                @SuppressLint("TrustAllX509TrustManager")
-                override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {
-                }
-
-                override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
-              },
-            )
-
-            val sslContext = SSLContext.getInstance("SSL")
-            sslContext.init(null, trustAllCerts, SecureRandom())
-            val sslSocketFactory = sslContext.socketFactory
-
-            sslSocketFactory(sslSocketFactory, trustAllCerts[0] as X509TrustManager)
-            hostnameVerifier { _, _ -> true }
-
-            // Short timeouts because this should be a local call
-            writeTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
-            readTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
-            connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
-          }
-        }
-      },
-      baseUrl = run {
-        InstrumentationRegistry.getArguments().getString("trailblaze.logs.endpoint", "https://10.0.2.2:8443")
-      },
+      httpClient = TrailblazeHttpClientFactory.createInsecureTrustAllCertsHttpClient(
+        timeoutInSeconds = 5,
+      ),
+      baseUrl = InstrumentationArgUtil.logsEndpoint(),
     )
 
     fun subscribeToLoggingEventsAndSendToServer(
@@ -188,6 +160,18 @@ class TrailblazeAndroidLoggingRule : SimpleTestRule() {
       } catch (e: Exception) {
         println("Error writing log to disk: ${e.message}")
       }
+    }
+
+    private fun exportTraces() {
+//      val traceEventsJson = TrailblazeTracer.exportJson()
+//      withInstrumentation {
+//        FileReadWriteUtil.writeToDownloadsFile(
+//          context = context,
+//          fileName = "${TrailblazeLogger.getCurrentSessionId()}-trace.json",
+//          contentBytes = traceEventsJson.toByteArray(),
+//          directory = LOGS_DIR,
+//        )
+//      }
     }
   }
 }

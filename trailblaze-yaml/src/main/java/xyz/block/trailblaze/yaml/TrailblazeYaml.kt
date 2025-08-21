@@ -25,6 +25,7 @@ class TrailblazeYaml(
   companion object {
     private val yamlConfiguration = YamlConfiguration(
       encodeDefaults = false,
+      breakScalarsAt = 500,
       yamlNamingStrategy = YamlNamingStrategy.CamelCase,
       multiLineStringStyle = MultiLineStringStyle.Literal,
       singleLineStringStyle = SingleLineStringStyle.PlainExceptAmbiguous,

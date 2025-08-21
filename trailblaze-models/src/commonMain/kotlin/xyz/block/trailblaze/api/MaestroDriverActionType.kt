@@ -3,6 +3,7 @@ package xyz.block.trailblaze.api
 import kotlinx.serialization.Serializable
 
 enum class AgentActionType {
+  AIRPLANE_MODE,
   ENTER_TEXT,
   LAUNCH_APP,
   STOP_APP,
@@ -37,6 +38,11 @@ sealed interface MaestroDriverActionType {
   @Serializable
   data class ClearAppState(val appId: String) : MaestroDriverActionType {
     override val type = AgentActionType.CLEAR_APP_STATE
+  }
+
+  @Serializable
+  data class AirplaneMode(val enable: Boolean) : MaestroDriverActionType {
+    override val type = AgentActionType.AIRPLANE_MODE
   }
 
   @Serializable

@@ -19,9 +19,12 @@ dependencies {
   api(libs.maestro.orchestra.models) { isTransitive = false }
   api(libs.maestro.client) { isTransitive = false }
 
+  implementation(project(":trailblaze-tracing"))
+
   implementation(libs.exp4j)
   implementation(libs.gson)
   implementation(libs.kotlinx.serialization.core)
+  implementation(libs.ktor.client.logging)
   implementation(libs.ktor.client.okhttp)
   implementation(libs.ktor.http)
   implementation(libs.ktor.utils)

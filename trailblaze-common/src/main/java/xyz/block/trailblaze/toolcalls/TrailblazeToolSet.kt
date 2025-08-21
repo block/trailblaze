@@ -10,8 +10,11 @@ import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.LaunchAppTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.LongPressElementWithAccessibilityTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.LongPressOnElementWithTextTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.LongPressOnPointTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.NetworkConnectionTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.PressBackTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.ScrollUntilTextIsVisibleTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.SwipeTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnElementByNodeIdTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnElementWithAccessiblityTextTrailblazeTool
@@ -22,6 +25,7 @@ import xyz.block.trailblaze.toolcalls.commands.memory.AssertEqualsTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.memory.AssertMathTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.memory.AssertNotEqualsTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.memory.AssertWithAiTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.memory.DumpMemoryTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.memory.RememberNumberTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.memory.RememberTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.memory.RememberWithAiTrailblazeTool
@@ -30,20 +34,17 @@ import kotlin.reflect.KClass
 @Suppress("ktlint:standard:property-naming")
 abstract class TrailblazeToolSet(
   val tools: Set<KClass<out TrailblazeTool>>,
-) {
-
   open val name: String = this::class.annotations
     .filterIsInstance<TrailblazeToolSetClass>()
-    .firstOrNull()?.description ?: this::class.simpleName ?: error("A a @TrailblazeToolSetClass annotation")
+    .firstOrNull()?.description ?: this::class.simpleName ?: error("A a @TrailblazeToolSetClass annotation"),
+) {
+
+  // Provide a way to add multiple tool sets together
+  operator fun plus(otherToolSet: TrailblazeToolSet): TrailblazeToolSet = DynamicToolSet(tools = this.tools + otherToolSet.tools)
 
   fun asTools(): Set<KClass<out TrailblazeTool>> = tools
 
   companion object {
-    fun getSetOfMarkToolSet(setOfMarkEnabled: Boolean): TrailblazeToolSet = if (setOfMarkEnabled) {
-      SetOfMarkTrailblazeToolSet
-    } else {
-      DeviceControlTrailblazeToolSet
-    }
 
     val defaultUiTools = setOf<KClass<out TrailblazeTool>>(
       HideKeyboardTrailblazeTool::class,
@@ -55,7 +56,36 @@ abstract class TrailblazeToolSet(
       WaitForIdleSyncTrailblazeTool::class,
       LaunchAppTrailblazeTool::class,
       AssertVisibleByNodeIdTrailblazeTool::class,
+      NetworkConnectionTrailblazeTool::class,
+      ScrollUntilTextIsVisibleTrailblazeTool::class,
     )
+
+    val SetOfMarkTrailblazeToolSet = DynamicTrailblazeToolSet(
+      tools = mutableSetOf<KClass<out TrailblazeTool>>().apply {
+        addAll(defaultUiTools)
+        addAll(setOf(TapOnElementByNodeIdTrailblazeTool::class))
+      },
+      name = "Set of Mark Ui Interactions (For Recording) - Do Not Combine with Device Control",
+    )
+
+    val DeviceControlTrailblazeToolSet = DynamicTrailblazeToolSet(
+      tools = mutableSetOf<KClass<out TrailblazeTool>>().apply {
+        addAll(defaultUiTools)
+        addAll(
+          setOf(
+            TapOnPointTrailblazeTool::class,
+            LongPressOnPointTrailblazeTool::class,
+          ),
+        )
+      },
+      name = "Device Control Ui Interactions - Do Not Combine with Set of Mark",
+    )
+
+    fun getSetOfMarkToolSet(setOfMarkEnabled: Boolean): TrailblazeToolSet = if (setOfMarkEnabled) {
+      SetOfMarkTrailblazeToolSet
+    } else {
+      DeviceControlTrailblazeToolSet
+    }
 
     val AllBuiltInTrailblazeToolSets: Set<TrailblazeToolSet> = setOf(
       DeviceControlTrailblazeToolSet,
@@ -63,36 +93,21 @@ abstract class TrailblazeToolSet(
       AssertByPropertyToolSet,
       SetOfMarkTrailblazeToolSet,
       RememberTrailblazeToolSet,
-    )
+    ).also {
+      println("All Built In Trailblaze Tool Sets: $it")
+    }
 
     val AllBuiltInTrailblazeTools: Set<KClass<out TrailblazeTool>> =
-      AllBuiltInTrailblazeToolSets.flatMap { it?.asTools() ?: listOf() }.toSet()
+      AllBuiltInTrailblazeToolSets.flatMap { it.asTools() }.toSet()
+
+    val AllBuiltInTrailblazeToolsByKoogToolDescriptor = AllBuiltInTrailblazeTools
+      .associateBy { it.toKoogToolDescriptor() }
   }
 
   class DynamicTrailblazeToolSet(
     override val name: String,
     tools: Set<KClass<out TrailblazeTool>>,
   ) : TrailblazeToolSet(tools)
-
-  @TrailblazeToolSetClass("Set of Mark Ui Interactions (For Recording) - Do Not Combine with Device Control")
-  object SetOfMarkTrailblazeToolSet : TrailblazeToolSet(
-    mutableSetOf<KClass<out TrailblazeTool>>().apply {
-      addAll(defaultUiTools)
-      addAll(setOf(TapOnElementByNodeIdTrailblazeTool::class))
-    },
-  )
-
-  @TrailblazeToolSetClass("Device Control Ui Interactions - Do Not Combine with Set of Mark")
-  object DeviceControlTrailblazeToolSet : TrailblazeToolSet(
-    mutableSetOf<KClass<out TrailblazeTool>>().apply {
-      addAll(defaultUiTools)
-      addAll(
-        setOf(
-          TapOnPointTrailblazeTool::class,
-        ),
-      )
-    },
-  )
 
   object RememberTrailblazeToolSet : TrailblazeToolSet(
     tools = setOf(
@@ -103,6 +118,7 @@ abstract class TrailblazeToolSet(
       RememberNumberTrailblazeTool::class,
       RememberTextTrailblazeTool::class,
       RememberWithAiTrailblazeTool::class,
+      DumpMemoryTrailblazeTool::class,
     ),
   )
 
@@ -124,4 +140,7 @@ abstract class TrailblazeToolSet(
       AssertVisibleWithResourceIdTrailblazeTool::class,
     ),
   )
+
+  @TrailblazeToolSetClass("Toolset meant for combining multiple sets together")
+  class DynamicToolSet(tools: Set<KClass<out TrailblazeTool>>) : TrailblazeToolSet(tools)
 }

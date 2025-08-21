@@ -15,7 +15,7 @@ import kotlinx.coroutines.delay
 import kotlinx.datetime.Clock
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
-import xyz.block.trailblaze.agent.model.TrailblazePromptStep
+import xyz.block.trailblaze.agent.model.PromptStepStatus
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeAgent
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
@@ -24,6 +24,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool
 import xyz.block.trailblaze.util.TemplatingUtil
+import xyz.block.trailblaze.yaml.PromptStep
 
 class TrailblazeKoogLlmClientHelper(
   var systemPromptTemplate: String,
@@ -57,7 +58,7 @@ class TrailblazeKoogLlmClientHelper(
   fun handleTrailblazeToolForPrompt(
     trailblazeTool: TrailblazeTool,
     llmResponseId: String?,
-    step: TrailblazePromptStep,
+    step: PromptStepStatus,
     screenStateForLlmRequest: ScreenState,
     agent: TrailblazeAgent,
   ): TrailblazeToolResult = when (trailblazeTool) {
@@ -112,7 +113,7 @@ class TrailblazeKoogLlmClientHelper(
     toolName: String,
     toolArgs: JsonObject,
     llmResponseId: String?,
-    step: TrailblazePromptStep,
+    step: PromptStepStatus,
     screenStateForLlmRequest: ScreenState,
     agent: TrailblazeAgent,
   ) {
@@ -184,7 +185,7 @@ class TrailblazeKoogLlmClientHelper(
 
   fun createNextChatRequestKoog(
     screenState: ScreenState,
-    step: TrailblazePromptStep,
+    step: PromptStep,
     forceStepStatusUpdate: Boolean,
     limitedHistory: List<Message>,
   ) = buildList {
@@ -199,7 +200,7 @@ class TrailblazeKoogLlmClientHelper(
         content = TemplatingUtil.renderTemplate(
           template = userObjectiveTemplate,
           values = mapOf(
-            "objective" to step.fullPrompt,
+            "objective" to step.step,
           ),
         ),
         metaInfo = RequestMetaInfo.create(Clock.System),
@@ -225,7 +226,8 @@ class TrailblazeKoogLlmClientHelper(
           ),
         ),
         attachments = buildList {
-          screenState.screenshotBytes?.let { screenshotBytes ->
+          val screenshotBytes = screenState.screenshotBytes
+          if (screenshotBytes != null && screenshotBytes.isNotEmpty()) {
             add(
               Attachment.Image(
                 AttachmentContent.Binary.Bytes(screenshotBytes),

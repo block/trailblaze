@@ -8,6 +8,7 @@ import io.ktor.server.application.install
 import io.ktor.server.freemarker.FreeMarker
 import io.ktor.server.http.content.staticFiles
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.server.plugins.cors.routing.CORS
 import io.ktor.server.request.httpMethod
 import io.ktor.server.request.uri
 import io.ktor.server.response.respond
@@ -25,7 +26,7 @@ import xyz.block.trailblaze.logs.server.endpoints.LlmSessionEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.LogScreenshotPostEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.PingEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.RealtimeWebsocketEndpoint
-import xyz.block.trailblaze.logs.server.endpoints.SinglePageReportEndpoint
+import xyz.block.trailblaze.logs.server.endpoints.ReverseProxyEndpoint
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.report.utils.TemplateHelpers
 import kotlin.io.encoding.ExperimentalEncodingApi
@@ -40,6 +41,9 @@ object ServerEndpoints {
     install(WebSockets)
     install(ContentNegotiation) {
       json(TrailblazeJsonInstance)
+    }
+    install(CORS) {
+      anyHost()
     }
     install(FreeMarker) {
       templateLoader = ClassTemplateLoader(this::class.java.classLoader, "templates")
@@ -56,7 +60,7 @@ object ServerEndpoints {
       GetEndpointMaestroYamlSessionRecording.register(this, logsRepo)
       GetEndpointTrailblazeYamlSessionRecording.register(this, logsRepo)
       LogScreenshotPostEndpoint.register(this, logsRepo)
-      SinglePageReportEndpoint.register(this, logsRepo)
+      ReverseProxyEndpoint.register(this, logsRepo)
       staticFiles("/static", logsRepo.logsDir)
       route("{...}") {
         handle {

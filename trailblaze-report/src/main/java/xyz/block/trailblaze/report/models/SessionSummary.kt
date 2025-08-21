@@ -11,7 +11,6 @@ import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.HasAgentTaskStatus
 import xyz.block.trailblaze.maestro.MaestroYamlSerializer
-import xyz.block.trailblaze.serializers.TrailblazeToolToCodeSerializer
 import xyz.block.trailblaze.utils.Ext.asMaestroCommand
 
 @Serializable
@@ -181,7 +180,7 @@ data class SessionSummary(
             )
 
             is TrailblazeLog.TrailblazeToolLog -> SessionEvent.TrailblazeTool(
-              code = TrailblazeToolToCodeSerializer().serializeTrailblazeToolToCode(log.command),
+              code = TrailblazeJsonInstance.encodeToString(log.command),
               timestamp = log.timestamp,
               durationMs = log.durationMs,
               elapsedTimeMs = log.timestamp.toEpochMilliseconds() - sessionStartTimestamp.toEpochMilliseconds(),
@@ -207,14 +206,6 @@ data class SessionSummary(
             -> null
           }
         }
-        val trailblazeToolsForPrompt = logsInGroup.logs
-          .filterIsInstance<TrailblazeLog.TrailblazeToolLog>()
-          .map { it.command }
-        val kotlinCode = if (trailblazeToolsForPrompt.isNotEmpty() && logsInGroup.prompt != null) {
-          TrailblazeToolToCodeSerializer().serializeToCode(mapOf(logsInGroup.prompt to trailblazeToolsForPrompt))
-        } else {
-          null
-        }
 
         val commands = logsInGroup.logs
           .filterIsInstance<TrailblazeLog.MaestroCommandLog>()
@@ -226,7 +217,7 @@ data class SessionSummary(
 
         PromptEventGroup(
           prompt = logsInGroup.prompt,
-          kotlin = kotlinCode,
+          kotlin = null,
           yaml = maestroYaml,
           events = events,
         )

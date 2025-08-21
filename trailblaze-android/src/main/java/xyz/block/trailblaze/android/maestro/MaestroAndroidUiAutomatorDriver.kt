@@ -1,5 +1,9 @@
 package xyz.block.trailblaze.android.maestro
 
+import android.bluetooth.BluetoothManager
+import android.content.Context
+import android.net.wifi.WifiManager
+import android.telephony.TelephonyManager
 import android.util.Log
 import android.view.accessibility.AccessibilityWindowInfo
 import androidx.test.uiautomator.UiDeviceExt.clickExt
@@ -96,9 +100,22 @@ internal class MaestroAndroidUiAutomatorDriver : Driver {
     }
   }
 
-  override fun isAirplaneModeEnabled(): Boolean {
-    error("Unsupported Maestro Driver Call to ${this::class.simpleName}::isAirplaneModeEnabled")
+  /**
+   * We need to simulate airplane mode on-device because we can't toggle it programmatically on non rooted devices.
+   */
+  private fun isSimulatedAirplaneModeEnabled(): Boolean = withInstrumentation {
+    val wifiManager = context.getSystemService(Context.WIFI_SERVICE) as WifiManager
+    val telephonyManager = context.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
+    val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
+
+    val isWifiOn = wifiManager.isWifiEnabled
+    val isDataOn = telephonyManager.isDataEnabled
+    val isBluetoothOn = bluetoothManager.adapter.isEnabled
+
+    !isWifiOn && !isDataOn && !isBluetoothOn
   }
+
+  override fun isAirplaneModeEnabled(): Boolean = isSimulatedAirplaneModeEnabled()
 
   override fun isKeyboardVisible(): Boolean = withUiAutomation {
     windows.any { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
@@ -232,7 +249,16 @@ internal class MaestroAndroidUiAutomatorDriver : Driver {
   }
 
   override fun setAirplaneMode(enabled: Boolean) {
-    error("Unsupported Maestro Driver Call to ${this::class.simpleName}::setAirplaneMode $enabled")
+    val enableOrDisable = if (enabled) "disable" else "enable"
+    val command = listOf(
+      "svc wifi $enableOrDisable",
+      "svc data $enableOrDisable",
+      "svc bluetooth $enableOrDisable",
+    )
+
+    for (cmd in command) {
+      AdbCommandUtil.execShellCommand(cmd)
+    }
   }
 
   override fun setLocation(latitude: Double, longitude: Double) {
@@ -269,25 +295,28 @@ internal class MaestroAndroidUiAutomatorDriver : Driver {
   override fun swipe(elementPoint: Point, direction: SwipeDirection, durationMs: Long) {
     println("swipe $elementPoint, $direction, $durationMs")
     val deviceInfo = deviceInfo()
+    // The duration provided typically results in quick flings of the screen which is not what
+    // we want. Provide a slower duration to help scroll in a more controlled manner.
+    val delayedDuration: Long = 400
     when (direction) {
       SwipeDirection.UP -> {
         val endY = (deviceInfo.heightGrid * 0.1f).toInt()
-        directionalSwipe(durationMs, elementPoint, Point(elementPoint.x, endY))
+        directionalSwipe(delayedDuration, elementPoint, Point(elementPoint.x, endY))
       }
 
       SwipeDirection.DOWN -> {
         val endY = (deviceInfo.heightGrid * 0.9f).toInt()
-        directionalSwipe(durationMs, elementPoint, Point(elementPoint.x, endY))
+        directionalSwipe(delayedDuration, elementPoint, Point(elementPoint.x, endY))
       }
 
       SwipeDirection.RIGHT -> {
         val endX = (deviceInfo.widthGrid * 0.9f).toInt()
-        directionalSwipe(durationMs, elementPoint, Point(endX, elementPoint.y))
+        directionalSwipe(delayedDuration, elementPoint, Point(endX, elementPoint.y))
       }
 
       SwipeDirection.LEFT -> {
         val endX = (deviceInfo.widthGrid * 0.1f).toInt()
-        directionalSwipe(durationMs, elementPoint, Point(endX, elementPoint.y))
+        directionalSwipe(delayedDuration, elementPoint, Point(endX, elementPoint.y))
       }
     }
   }

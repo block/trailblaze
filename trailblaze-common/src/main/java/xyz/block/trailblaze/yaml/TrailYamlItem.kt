@@ -15,19 +15,7 @@ sealed interface TrailYamlItem {
    * It can contain a text prompt and an optional recording of tools used in that step.
    */
   @Serializable
-  data class PromptsTrailItem(val promptSteps: List<PromptStep>) : TrailYamlItem {
-    @Serializable
-    data class PromptStep(
-      val step: String,
-      val recordable: Boolean = true,
-      val recording: ToolRecording? = null,
-    ) {
-      @Serializable
-      data class ToolRecording(
-        val tools: List<@Contextual TrailblazeToolYamlWrapper>,
-      )
-    }
-  }
+  data class PromptsTrailItem(val promptSteps: List<PromptStep>) : TrailYamlItem
 
   /**
    * tools
@@ -54,5 +42,15 @@ sealed interface TrailYamlItem {
     val KEYWORD_PROMPTS = "prompts"
     val KEYWORD_TOOLS = "tools"
     val KEYWORD_MAESTRO = "maestro"
+    val KEYWORD_CONFIG = "config"
   }
+
+  /**
+   *  context
+   *
+   *  This is used to represent additional test context that will be added to the system prompt.
+   *  Use this to provide test data that is available during any steps handled by the LLM.
+   */
+  @Serializable
+  data class ConfigTrailItem(val config: TrailConfig) : TrailYamlItem
 }

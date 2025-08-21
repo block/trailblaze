@@ -1,6 +1,5 @@
 package xyz.block.trailblaze.examples.calculator
 
-import ai.koog.prompt.executor.clients.openai.OpenAIModels
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -14,9 +13,7 @@ import xyz.block.trailblaze.toolcalls.commands.LaunchAppTrailblazeTool
 class AndroidCalculatorOnePlusTwoMixedTest {
 
   @get:Rule
-  val trailblazeRule = OpenAiTrailblazeRule(
-    llmModel = OpenAIModels.Chat.GPT4_1,
-  )
+  val trailblazeRule = OpenAiTrailblazeRule()
 
   @Before
   fun setUp() {

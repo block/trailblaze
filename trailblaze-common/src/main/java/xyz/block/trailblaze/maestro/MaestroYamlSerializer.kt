@@ -37,6 +37,7 @@ import maestro.orchestra.TapOnPointV2Command
 import maestro.orchestra.ToggleAirplaneModeCommand
 import maestro.orchestra.TravelCommand
 import maestro.orchestra.WaitForAnimationToEndCommand
+import xyz.block.trailblaze.maestro.MaestroYamlSerializer.wrappedInQuotes
 
 object MaestroYamlSerializer {
 
@@ -51,16 +52,15 @@ object MaestroYamlSerializer {
     val mapToStringList: Map<String, List<String>> = emptyMap(),
   )
 
-  fun extractProperties(obj: Any): Map<String, String> {
-    val props = mutableMapOf<String, String>()
-    when (obj) {
-      // https://docs.maestro.dev/api-reference/selectors
+  private fun extractStringProperties(obj: Any): Map<String, String> {
+    return when (obj) {
       is ElementSelector -> {
+        val props = mutableMapOf<String, String>()
         // UNHANDLED
         //  point: 50%, 50%  # (optional) Relative position on screen. "50%, 50%" is the middle of screen
         //  point: 50, 75    # (optional) Exact coordinates on screen. x:50 y:50, in pixels
 
-        // UNHANDLED
+        // UNHANDLED map properties
         // val below: ElementSelector? = null,
         // val above: ElementSelector? = null,
         // val leftOf: ElementSelector? = null,
@@ -69,24 +69,50 @@ object MaestroYamlSerializer {
         // val containsDescendants: List<ElementSelector>? = null,
         // val traits: List<ElementTrait>? = null,
         // val childOf: ElementSelector? = null
-        obj.textRegex?.let { props.put("text", it.wrappedInQuotes()) }
-        obj.idRegex?.let { props.put("id", it.wrappedInQuotes()) }
-        obj.index?.let { props.put("index", it) }
+        obj.textRegex?.let { props["text"] = it.wrappedInQuotes() }
+        obj.idRegex?.let { props["id"] = it.wrappedInQuotes() }
+        obj.index?.let { props["index"] = it }
         obj.size?.let {
-          props.put("width", it.width.toString())
-          props.put("height", it.height.toString())
-          props.put("tolerance", it.tolerance.toString())
+          props["width"] = it.width.toString()
+          props["height"] = it.height.toString()
+          props["tolerance"] = it.tolerance.toString()
         }
-        obj.enabled?.let { props.put("enabled", it.toString()) }
-        obj.checked?.let { props.put("checked", it.toString()) }
-        obj.focused?.let { props.put("focused", it.toString()) }
-        obj.selected?.let { props.put("selected", it.toString()) }
+        obj.enabled?.let { props["enabled"] = it.toString() }
+        obj.checked?.let { props["checked"] = it.toString() }
+        obj.focused?.let { props["focused"] = it.toString() }
+        obj.selected?.let { props["selected"] = it.toString() }
+        return props
       }
+      else -> mapOf()
     }
+  }
+
+  private fun extractMapProperties(obj: Any): Map<String, Map<String, String>> = when (obj) {
+    is ElementSelector -> parseElementSelectorMaps(obj)
+    else -> mapOf()
+  }
+
+  // This function parses the map selectors, basically any field that contains another element selector
+  // For now just parse the string properties, we may need to support the full map later.
+  private fun parseElementSelectorMaps(selector: ElementSelector): Map<String, Map<String, String>> {
+    val props = mutableMapOf<String, Map<String, String>>()
+    // UNHANDLED
+    //  point: 50%, 50%  # (optional) Relative position on screen. "50%, 50%" is the middle of screen
+    //  point: 50, 75    # (optional) Exact coordinates on screen. x:50 y:50, in pixels
+
+    // UNHANDLED
+    // val traits: List<ElementTrait>? = null,
+    selector.below?.let { props["below"] = extractStringProperties(selector.below!!) }
+    selector.above?.let { props["above"] = extractStringProperties(selector.above!!) }
+    selector.leftOf?.let { props["leftOf"] = extractStringProperties(selector.leftOf!!) }
+    selector.rightOf?.let { props["rightOf"] = extractStringProperties(selector.rightOf!!) }
+    selector.containsChild?.let { props["containsChild"] = extractStringProperties(selector.containsChild!!) }
+    selector.containsDescendants?.let { props["containsDescendants"] = extractStringProperties(selector.containsDescendants!!) }
+    selector.childOf?.let { props["childOf"] = extractStringProperties(selector.childOf!!) }
     return props
   }
 
-  fun createTapOnCommand(
+  private fun createTapOnCommand(
     command: Command,
   ): MaestroCommandYamlNode {
     val longPress = when (command) {
@@ -104,7 +130,7 @@ object MaestroYamlSerializer {
       stringProps = mutableMapOf<String, String>().apply {
         when (command) {
           is TapOnElementCommand -> {
-            putAll(extractProperties(command.selector))
+            putAll(extractStringProperties(command.selector))
           }
 
           is TapOnPointV2Command -> {
@@ -140,7 +166,7 @@ object MaestroYamlSerializer {
     )
   }
 
-  fun toPrimitive(command: Command): MaestroCommandYamlNode? = when (command) {
+  private fun toPrimitive(command: Command): MaestroCommandYamlNode? = when (command) {
     // COMPLETE
     is TapOnElementCommand,
     is TapOnPointV2Command,
@@ -226,7 +252,7 @@ object MaestroYamlSerializer {
       MaestroCommandYamlNode(
         type = "copyTextFrom",
         stringProps = mutableMapOf<String, String>().apply {
-          putAll(extractProperties(command.selector))
+          putAll(extractStringProperties(command.selector))
         },
       )
     }
@@ -270,7 +296,7 @@ object MaestroYamlSerializer {
             if (command.direction == null) {
               error("Direction is required when specifying a 'from' element")
             }
-            put("from", extractProperties(selector))
+            put("from", extractStringProperties(selector))
           }
         },
       )
@@ -415,7 +441,7 @@ object MaestroYamlSerializer {
           }
         },
         mapProps = mutableMapOf<String, Map<String, String>>().apply {
-          put("element", extractProperties(command.selector))
+          put("element", extractStringProperties(command.selector))
         },
       )
     }
@@ -462,27 +488,32 @@ object MaestroYamlSerializer {
   // UNSUPPORTED FIELDS
   // val platform: Platform? = null,
   // val scriptCondition: String? = null,
-  fun conditionToMaestroCommand(condition: Condition, timeout: Long?): MaestroCommandYamlNode = if (condition.visible != null) {
+  private fun conditionToMaestroCommand(
+    condition: Condition,
+    timeout: Long?,
+  ): MaestroCommandYamlNode = if (condition.visible != null) {
     MaestroCommandYamlNode(
       type = "assertVisible",
       stringProps = mutableMapOf<String, String>().apply {
-        putAll(extractProperties(condition.visible!!))
+        putAll(extractStringProperties(condition.visible!!))
         timeout?.let { put("timeout", it.toString()) }
       },
+      mapProps = extractMapProperties(condition.visible!!),
     )
   } else if (condition.notVisible != null) {
     MaestroCommandYamlNode(
       type = "assertNotVisible",
       stringProps = mutableMapOf<String, String>().apply {
-        putAll(extractProperties(condition.notVisible!!))
+        putAll(extractStringProperties(condition.notVisible!!))
         timeout?.let { put("timeout", it.toString()) }
       },
+      mapProps = extractMapProperties(condition.notVisible!!),
     )
   } else {
     error("Unsupported state of Condition $condition $timeout")
   }
 
-  fun getSingleOrMultilineValue(value: String): String {
+  private fun getSingleOrMultilineValue(value: String): String {
     val lines = value.lines()
     return if (lines.size == 1) {
       value

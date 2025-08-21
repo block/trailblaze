@@ -29,5 +29,6 @@ include(
   ":trailblaze-ui",
   ":trailblaze-report",
   ":trailblaze-server",
+  ":trailblaze-tracing",
   ":trailblaze-yaml",
 )

@@ -6,7 +6,13 @@ import kotlinx.serialization.Serializable
 sealed interface SessionStatus {
 
   @Serializable
-  data object Started : SessionStatus
+  data object Unknown : SessionStatus
+
+  @Serializable
+  data class Started(
+    val testMethodName: String,
+    val testClassName: String,
+  ) : SessionStatus
 
   @Serializable
   sealed interface Ended :
@@ -26,3 +32,6 @@ sealed interface SessionStatus {
     ) : Ended
   }
 }
+
+val SessionStatus.inProgress: Boolean
+  get() = this is SessionStatus.Started

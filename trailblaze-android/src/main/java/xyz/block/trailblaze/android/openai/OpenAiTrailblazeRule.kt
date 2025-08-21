@@ -5,6 +5,8 @@ import ai.koog.prompt.executor.clients.openai.OpenAILLMClient
 import ai.koog.prompt.executor.clients.openai.OpenAIModels
 import ai.koog.prompt.llm.LLModel
 import xyz.block.trailblaze.android.AndroidTrailblazeRule
+import xyz.block.trailblaze.toolcalls.TrailblazeTool
+import kotlin.reflect.KClass
 
 /**
  * OpenAI-specific implementation of AndroidTrailblazeRule.
@@ -35,10 +37,12 @@ class OpenAiTrailblazeRule(
   apiKey: String = OpenAiInstrumentationArgUtil.getApiKeyFromInstrumentationArg(),
   baseUrl: String = OpenAiInstrumentationArgUtil.getBaseUrlFromInstrumentationArg(),
   llmModel: LLModel = OpenAIModels.Chat.GPT4_1,
+  customToolClasses: Set<KClass<out TrailblazeTool>> = setOf(),
 ) : AndroidTrailblazeRule(
   llmClient = OpenAILLMClient(
     apiKey = apiKey,
     settings = OpenAIClientSettings(baseUrl = baseUrl),
   ),
   llmModel = llmModel,
+  customToolClasses = customToolClasses,
 )

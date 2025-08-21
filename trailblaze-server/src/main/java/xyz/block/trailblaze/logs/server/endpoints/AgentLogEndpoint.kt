@@ -1,10 +1,11 @@
 package xyz.block.trailblaze.logs.server.endpoints
 
-import io.ktor.server.request.receive
+import io.ktor.server.request.receiveText
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.Routing
 import io.ktor.server.routing.post
 import org.jetbrains.annotations.TestOnly
+import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.report.utils.LogsRepo
@@ -39,7 +40,19 @@ object AgentLogEndpoint {
     logsRepo: LogsRepo,
   ) = with(routing) {
     post("/agentlog") {
-      val logEvent = call.receive<TrailblazeLog>()
+      val json = call.receiveText()
+      val logEvent = try {
+        TrailblazeJsonInstance.decodeFromString<TrailblazeLog>(json)
+      } catch (e: Exception) {
+        throw TrailblazeException(
+          message = buildString {
+            appendLine("Failed to decode log event: ${e.message}.")
+            appendLine("This usually happens when the device and desktop apps are running different versions.")
+            appendLine("Try restarting them.")
+          },
+          e,
+        )
+      }
       logListener(logEvent)
       val sessionDir = logsRepo.getSessionDir(logEvent.session)
 

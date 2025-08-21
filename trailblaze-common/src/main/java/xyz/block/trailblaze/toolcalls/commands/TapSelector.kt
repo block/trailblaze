@@ -21,9 +21,11 @@ fun findBestTapTrailblazeToolForNode(
     if (!text.isNullOrBlank()) {
       val nodesWithText = allNodes.filter { it.text == text }.distinctBy { System.identityHashCode(it) }
       if (nodesWithText.size == 1) {
-        return TapOnElementWithTextTrailblazeTool(
-          text = text,
-        )
+        return if (longPress) {
+          LongPressOnElementWithTextTrailblazeTool(text)
+        } else {
+          TapOnElementWithTextTrailblazeTool(text)
+        }
       }
     }
   }
@@ -35,9 +37,11 @@ fun findBestTapTrailblazeToolForNode(
       val nodesWithAccText = allNodes.filter { it.accessibilityText == accessibilityText }
         .distinctBy { System.identityHashCode(it) }
       if (nodesWithAccText.size == 1) {
-        return TapOnElementWithAccessiblityTextTrailblazeTool(
-          accessibilityText = accessibilityText,
-        )
+        return if (longPress) {
+          LongPressElementWithAccessibilityTextTrailblazeTool(accessibilityText)
+        } else {
+          TapOnElementWithAccessiblityTextTrailblazeTool(accessibilityText)
+        }
       }
     }
   }
@@ -45,8 +49,9 @@ fun findBestTapTrailblazeToolForNode(
   // Fallback to center point of the target node
   val bounds = target.bounds
   val (x, y) = if (bounds != null) bounds.centerX to bounds.centerY else 0 to 0
-  return TapOnPointTrailblazeTool(
-    x = x,
-    y = y,
-  )
+  return if (longPress) {
+    LongPressOnPointTrailblazeTool(x, y)
+  } else {
+    TapOnPointTrailblazeTool(x, y)
+  }
 }

@@ -14,6 +14,7 @@ application {
 
 dependencies {
   implementation(project(":trailblaze-common"))
+  implementation(project(":trailblaze-yaml"))
   implementation(libs.freemarker)
   implementation(libs.kotlinx.datetime)
   implementation(libs.maestro.orchestra.models) { isTransitive = false }

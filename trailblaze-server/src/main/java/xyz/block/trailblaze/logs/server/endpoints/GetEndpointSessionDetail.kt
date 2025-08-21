@@ -4,6 +4,7 @@ import freemarker.template.Configuration
 import freemarker.template.Template
 import freemarker.template.TemplateExceptionHandler
 import io.ktor.server.freemarker.FreeMarkerContent
+import io.ktor.server.response.respond
 import io.ktor.server.routing.Routing
 import io.ktor.server.routing.get
 import kotlinx.serialization.json.Json
@@ -12,15 +13,32 @@ import xyz.block.trailblaze.llm.LlmUsageAndCostExt.computeUsageSummary
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.HasAgentTaskStatus
 import xyz.block.trailblaze.report.utils.LogsRepo
+import xyz.block.trailblaze.report.utils.TrailblazeYamlSessionRecording.generateRecordedYaml
 import java.io.StringWriter
 
 object GetEndpointSessionDetail {
   private val basicPrettyPrintJson = Json { prettyPrint = true }
 
-  fun register(routing: Routing, logsDirUtil: LogsRepo) = with(routing) {
+  fun register(routing: Routing, logsRepo: LogsRepo) = with(routing) {
+    get("/api/session/{session}/logs") {
+      val sessionId = call.parameters["session"]
+      val logEntries: List<TrailblazeLog> = logsRepo.getLogsForSession(sessionId)
+        .sortedBy { it.timestamp }
+      call.respond(logEntries)
+    }
+    get("/api/session/{session}/yaml") {
+      val sessionId = call.parameters["session"]
+      val yaml: String = logsRepo.getLogsForSession(sessionId)
+        .sortedBy { it.timestamp }.generateRecordedYaml()
+      call.respond(yaml)
+    }
+    get("/api/sessions") {
+      val sessionIds: List<String> = logsRepo.getSessionIds()
+      call.respond(sessionIds)
+    }
     get("/session/{session}") {
       val sessionId = call.parameters["session"]
-      val allLogs = logsDirUtil.getLogsForSession(sessionId)
+      val allLogs = logsRepo.getLogsForSession(sessionId)
 
       val logsForCards: List<TrailblazeLog> = allLogs.map {
         when (it) {

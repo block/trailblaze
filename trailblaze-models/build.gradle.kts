@@ -9,13 +9,9 @@ plugins {
 }
 
 kotlin {
-  // Enable WASM once Koog 0.3.0 is released with WASM support
-  val useWasm = false
-  if (useWasm) {
-    @OptIn(ExperimentalWasmDsl::class)
-    wasmJs {
-      browser()
-    }
+  @OptIn(ExperimentalWasmDsl::class)
+  wasmJs {
+    browser()
   }
 
   jvm {

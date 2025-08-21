@@ -30,11 +30,12 @@ subprojects
           System.getenv("OPENAI_API_KEY")?.let { apiKey ->
             testInstrumentationRunnerArguments["OPENAI_API_KEY"] = apiKey
           }
-          testInstrumentationRunnerArguments["trailblaze.logs.endpoint"] =
-            rootProject.property("trailblaze.logs.endpoint")
-              ?.toString() ?: "https://10.0.2.2:8443"
-          testInstrumentationRunnerArguments["trailblaze.ai.enabled"] =
-            rootProject.findProperty("trailblaze.ai.enabled")?.toString() ?: "true"
+          rootProject.findProperty("trailblaze.reverseProxy")?.let { reverseProxy ->
+            testInstrumentationRunnerArguments["trailblaze.reverseProxy"] = reverseProxy.toString()
+          }
+          rootProject.findProperty("trailblaze.aiEnabled")?.let { aiEnabled ->
+            testInstrumentationRunnerArguments["trailblaze.aiEnabled"] = aiEnabled.toString()
+          }
         }
       }
     }

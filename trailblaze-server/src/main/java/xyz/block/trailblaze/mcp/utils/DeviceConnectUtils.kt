@@ -89,7 +89,7 @@ object DeviceConnectUtils {
       "shell", "am",
       "instrument", "-w", "-r",
       "-e", "class", "xyz.block.trailblaze.AndroidOnDeviceMcpServerTest",
-      "-e", "trailblaze.ai.enabled", "true",
+      "-e", "trailblaze.aiEnabled", "true",
       "-e", "OPENAI_API_KEY", System.getenv("OPENAI_API_KEY"),
       "$testAppId/androidx.test.runner.AndroidJUnitRunner",
     )

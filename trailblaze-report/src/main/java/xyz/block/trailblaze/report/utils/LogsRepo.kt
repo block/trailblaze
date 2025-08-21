@@ -1,13 +1,17 @@
 package xyz.block.trailblaze.report.utils
 
+import xyz.block.trailblaze.logs.TrailblazeLogsDataProvider
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
+import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.logs.model.SessionStatus
+import xyz.block.trailblaze.logs.model.getSessionStatus
+import xyz.block.trailblaze.report.utils.TrailblazeYamlSessionRecording.generateRecordedYaml
 import java.io.File
 
 private typealias TrailblazeSessionId = String
 
-class LogsRepo(val logsDir: File) {
+class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
 
   init {
     // Ensure the logs directory exists
@@ -18,6 +22,21 @@ class LogsRepo(val logsDir: File) {
    * A map of trailblaze session IDs to their corresponding file watcher services.
    */
   private val fileWatcherByTrailblazeSession = mutableMapOf<TrailblazeSessionId?, FileWatchService>()
+
+  /**
+   * File watcher for the logs directory to monitor session creation/deletion.
+   */
+  private var sessionListWatcher: FileWatchService? = null
+
+  /**
+   * Set of listeners for session list changes.
+   */
+  private val sessionListListeners = mutableSetOf<SessionListListener>()
+
+  /**
+   * Cache of current session IDs to detect additions/removals.
+   */
+  private var cachedSessionIds = getSessionIds().toSet()
 
   fun getSessionDirs(): List<File> = logsDir.listFiles().filter { it.isDirectory }.sortedByDescending { it.name }
 
@@ -97,6 +116,13 @@ class LogsRepo(val logsDir: File) {
     return emptyList()
   }
 
+  fun deleteLogsForSession(sessionId: String) {
+    val sessionDir = File(logsDir, sessionId)
+    if (sessionDir.exists()) {
+      sessionDir.deleteRecursively()
+    }
+  }
+
   /**
    * Clears all logs in the logs directory.
    * This will delete all session directories and their contents.
@@ -122,4 +148,93 @@ class LogsRepo(val logsDir: File) {
     }
     return sessionDir
   }
+
+  /**
+   * Adds a listener for session list changes.
+   */
+  fun addSessionListListener(listener: SessionListListener) {
+    sessionListListeners.add(listener)
+
+    // Start watching if this is the first listener
+    if (sessionListListeners.size == 1) {
+      startWatchingSessionList()
+    }
+  }
+
+  /**
+   * Removes a listener for session list changes.
+   */
+  fun removeSessionListListener(listener: SessionListListener) {
+    sessionListListeners.remove(listener)
+
+    // Stop watching if no more listeners
+    if (sessionListListeners.isEmpty()) {
+      stopWatchingSessionList()
+    }
+  }
+
+  /**
+   * Starts watching the logs directory for session additions/removals.
+   */
+  private fun startWatchingSessionList() {
+    if (sessionListWatcher == null) {
+      println("SESSIONLISTENER - Starting to watch session list: ${logsDir.canonicalPath}")
+      sessionListWatcher = FileWatchService(
+        logsDir,
+      ) { changeType: FileWatchService.ChangeType, fileChanged: File ->
+        println("SESSIONLISTENER - $changeType $fileChanged")
+
+        val currentSessionIds = getSessionIds().toSet()
+        val previousSessionIds = cachedSessionIds
+        val addedSessions = currentSessionIds - previousSessionIds
+        // Detect removals
+        val removedSessions = previousSessionIds - currentSessionIds
+
+        if (addedSessions.isNotEmpty()) {
+          // Detect additions
+          addedSessions.forEach { sessionId ->
+            sessionListListeners.forEach { listener ->
+              listener.onSessionAdded(sessionId)
+            }
+          }
+        }
+
+        if (removedSessions.isNotEmpty()) {
+          removedSessions.forEach { sessionId ->
+            sessionListListeners.forEach { listener ->
+              listener.onSessionRemoved(sessionId)
+            }
+          }
+        }
+
+        // Update cache
+        cachedSessionIds = currentSessionIds
+      }
+      sessionListWatcher?.startWatching()
+    }
+  }
+
+  /**
+   * Stops watching the logs directory for session additions/removals.
+   */
+  private fun stopWatchingSessionList() {
+    sessionListWatcher?.stopWatching()
+    sessionListWatcher = null
+    println("SESSIONLISTENER - Stopped watching session list")
+  }
+
+  override suspend fun getSessionIdsAsync(): List<String> = getSessionIds()
+
+  override suspend fun getLogsForSessionAsync(sessionId: String?): List<TrailblazeLog> = getLogsForSession(sessionId)
+  override suspend fun getSessionInfoAsync(sessionId: String): SessionInfo {
+    val logs = getLogsForSession(sessionId)
+
+    return SessionInfo(
+      sessionId = sessionId,
+      timestamp = logs.first().timestamp,
+      latestStatus = logs.getSessionStatus(),
+    )
+  }
+
+  override suspend fun getSessionRecordingYaml(sessionId: String): String = getLogsForSessionAsync(sessionId).generateRecordedYaml()
 }

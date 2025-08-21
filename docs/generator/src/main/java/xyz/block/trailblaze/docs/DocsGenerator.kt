@@ -1,9 +1,9 @@
 package xyz.block.trailblaze.docs
 
 import ai.koog.agents.core.tools.ToolParameterDescriptor
-import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toKoogToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
+import xyz.block.trailblaze.toolcalls.toKoogToolDescriptor
 import java.io.File
 import kotlin.reflect.KClass
 
@@ -73,7 +73,7 @@ $THIS_DOC_IS_GENERATED_MESSAGE
   }
 
   private fun createFunctionsIndexPage(toolSets: Set<TrailblazeToolSet>) {
-    val map = toolSets.map { it.name to it.tools.map { it.toKoogToolDescriptor().name }.toSet() }.toMap()
+    val map = toolSets.associate { it.name to it.tools.map { it.toKoogToolDescriptor().name }.toSet() }
 
     File(generatedDir, "TOOLS.md").also { file ->
       val text = buildString {
