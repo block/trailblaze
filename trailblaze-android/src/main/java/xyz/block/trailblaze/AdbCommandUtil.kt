@@ -123,6 +123,14 @@ object AdbCommandUtil {
     return false
   }
 
+  fun grantAppOpsPermission(
+    targetAppPackageName: String,
+    permission: String,
+  ): String {
+    val shellCommand = "appops set $targetAppPackageName $permission allow"
+    return execShellCommand(shellCommand)
+  }
+
   /**
    * Wait for app to come to foreground
    */

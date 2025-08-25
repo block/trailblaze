@@ -20,6 +20,7 @@ dependencies {
     because("Maestro has binary incompatible code with the new version of netty-codec-http2, so we use the old version from maestro")
   }
 
+  implementation(project(":trailblaze-models"))
   implementation(project(":trailblaze-common"))
   implementation(project(":trailblaze-report"))
   implementation(project(":trailblaze-yaml"))

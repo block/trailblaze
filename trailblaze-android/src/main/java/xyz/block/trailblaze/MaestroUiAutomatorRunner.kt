@@ -5,6 +5,7 @@ import maestro.Maestro
 import maestro.orchestra.ApplyConfigurationCommand
 import maestro.orchestra.Command
 import maestro.orchestra.MaestroCommand
+import xyz.block.trailblaze.MaestroTrailblazeAgent.Companion.generateIdIfNull
 import xyz.block.trailblaze.android.maestro.LoggingDriver
 import xyz.block.trailblaze.android.maestro.MaestroAndroidUiAutomatorDriver
 import xyz.block.trailblaze.android.maestro.orchestra.Orchestra
@@ -25,16 +26,17 @@ object MaestroUiAutomatorRunner {
   fun runCommands(
     commands: List<Command>,
     llmResponseId: String?,
-  ): TrailblazeToolResult = runMaestroYaml(
+  ): TrailblazeToolResult = runMaestroCommands(
     commands = commands.filterNot { it is ApplyConfigurationCommand }.map { MaestroCommand(it) },
     llmResponseId = llmResponseId,
   )
 
   fun runCommand(
+    llmResponseId: String?,
     vararg command: Command,
   ): TrailblazeToolResult = runCommands(
     commands = command.toList(),
-    llmResponseId = null,
+    llmResponseId = llmResponseId,
   )
 
   fun runYamlResource(resourcePath: String): TrailblazeToolResult {
@@ -50,7 +52,7 @@ object MaestroUiAutomatorRunner {
     ).map {
       MaestroCommand(it)
     }
-    return runMaestroYaml(
+    return runMaestroCommands(
       maestroCommandsFromYaml,
       null,
     )
@@ -75,10 +77,15 @@ object MaestroUiAutomatorRunner {
     return result
   }
 
-  private fun runMaestroYaml(
+  private fun runMaestroCommands(
     commands: List<MaestroCommand>,
     llmResponseId: String?,
   ): TrailblazeToolResult {
+    val toolChainId = generateIdIfNull(
+      prefix = "maestro",
+      llmResponseId = llmResponseId,
+    )
+
     commands.forEach { maestroCommand ->
       val maestroCommandJsonObj = maestroCommand.asJsonObject()
       val startTime = Clock.System.now()
@@ -102,13 +109,13 @@ object MaestroUiAutomatorRunner {
           trailblazeToolResult = result,
           timestamp = startTime,
           durationMs = Clock.System.now().toEpochMilliseconds() - startTime.toEpochMilliseconds(),
-          llmResponseId = llmResponseId,
+          llmResponseId = toolChainId,
           successful = result is TrailblazeToolResult.Success,
           session = TrailblazeLogger.getCurrentSessionId(),
         ),
       )
 
-      if (runSuccess == false) {
+      if (!runSuccess) {
         return result
       }
     }

@@ -86,9 +86,9 @@ jobs:
             mkdir -p "$(pwd)/trailblaze-logs" && adb pull /sdcard/Download/trailblaze-logs/. "$(pwd)/trailblaze-logs"
             
             # Generate Trailblaze report
-            echo "Generating Trailblaze report..."
             # Build the Compose Web/WASM UI
             ./gradlew :trailblaze-ui:wasmJsBrowserProductionWebpack
+            echo "Generating Trailblaze report..."
             ./gradlew :trailblaze-report:run --args="$(pwd)/trailblaze-logs"
             
             # Zip up logs

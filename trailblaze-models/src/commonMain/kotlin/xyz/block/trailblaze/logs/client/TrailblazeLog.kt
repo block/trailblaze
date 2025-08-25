@@ -10,6 +10,7 @@ import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.logs.model.AgentLogEventType
 import xyz.block.trailblaze.logs.model.HasAgentTaskStatus
 import xyz.block.trailblaze.logs.model.HasDuration
+import xyz.block.trailblaze.logs.model.HasLlmResponseId
 import xyz.block.trailblaze.logs.model.HasScreenshot
 import xyz.block.trailblaze.logs.model.HasTrailblazeTool
 import xyz.block.trailblaze.logs.model.LlmMessage
@@ -58,11 +59,12 @@ sealed interface TrailblazeLog {
     override val durationMs: Long,
     override val session: String,
     override val timestamp: Instant,
-    val llmResponseId: String,
+    override val llmResponseId: String,
     override val deviceHeight: Int,
     override val deviceWidth: Int,
   ) : TrailblazeLog,
     HasAgentTaskStatus,
+    HasLlmResponseId,
     HasScreenshot,
     HasDuration {
     override val type: AgentLogEventType = AgentLogEventType.LLM_REQUEST
@@ -77,13 +79,14 @@ sealed interface TrailblazeLog {
   @Serializable
   data class MaestroCommandLog(
     val maestroCommandJsonObj: JsonObject,
-    val llmResponseId: String?,
+    override val llmResponseId: String?,
     val successful: Boolean,
     val trailblazeToolResult: TrailblazeToolResult,
     override val session: String,
     override val timestamp: Instant,
     override val durationMs: Long,
   ) : TrailblazeLog,
+    HasLlmResponseId,
     HasDuration {
     override val type: AgentLogEventType = AgentLogEventType.MAESTRO_COMMAND
   }
@@ -106,11 +109,14 @@ sealed interface TrailblazeLog {
 
   @Serializable
   data class DelegatingTrailblazeToolLog(
+    val toolName: String,
     override val command: TrailblazeTool,
     override val session: String,
     override val timestamp: Instant,
+    override val llmResponseId: String?,
     val executableTools: List<TrailblazeTool>,
   ) : TrailblazeLog,
+    HasLlmResponseId,
     HasTrailblazeTool {
     override val type: AgentLogEventType = AgentLogEventType.DELEGATING_TRAILBLAZE_TOOL
   }
@@ -120,13 +126,14 @@ sealed interface TrailblazeLog {
     override val command: TrailblazeTool,
     val toolName: String,
     val successful: Boolean,
-    val llmResponseId: String?,
+    override val llmResponseId: String?,
     val exceptionMessage: String? = null,
     override val durationMs: Long,
     override val session: String,
     override val timestamp: Instant,
   ) : TrailblazeLog,
     HasTrailblazeTool,
+    HasLlmResponseId,
     HasDuration {
     override val type: AgentLogEventType = AgentLogEventType.TRAILBLAZE_COMMAND
   }
@@ -148,14 +155,5 @@ sealed interface TrailblazeLog {
     override val timestamp: Instant,
   ) : TrailblazeLog {
     override val type: AgentLogEventType = AgentLogEventType.OBJECTIVE_COMPLETE
-  }
-
-  @Serializable
-  data class TopLevelMaestroCommandLog(
-    val command: String,
-    override val session: String,
-    override val timestamp: Instant,
-  ) : TrailblazeLog {
-    override val type: AgentLogEventType = AgentLogEventType.TOP_LEVEL_MAESTRO_COMMAND
   }
 }

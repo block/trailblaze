@@ -108,6 +108,7 @@ koog-agents-tools = { module = "ai.koog:agents-tools", version.ref = "koog" }
 koog-prompt-executor-clients = { module = "ai.koog:prompt-executor-clients", version.ref = "koog" }
 koog-prompt-executor-google = { module = "ai.koog:prompt-executor-google-client", version.ref = "koog" }
 koog-prompt-executor-openai = { module = "ai.koog:prompt-executor-openai-client", version.ref = "koog" }
+koog-prompt-executor-ollama = { module = "ai.koog:prompt-executor-ollama-client", version.ref = "koog" }
 koog-prompt-llm = { module = "ai.koog:prompt-llm", version.ref = "koog" }
 koog-prompt-model = { module = "ai.koog:prompt-model", version.ref = "koog" }
 kotlin-test-junit4 = { group = "org.jetbrains.kotlin", name = "kotlin-test", version.ref = "kotlin" }
@@ -127,6 +128,7 @@ maestro-utils = { module = "dev.mobile:maestro-utils", version.ref = "maestro" }
 maestro-web = { module = "dev.mobile:maestro-web", version.ref = "maestro" }
 mcp-sdk = { module = "io.modelcontextprotocol:kotlin-sdk", version.ref = "mcp-sdk" }
 multiplatform-settings = { module = "com.russhwolf:multiplatform-settings", version.ref = "multiplatformSettings" }
+material-icons-extended = { module = "org.jetbrains.compose.material:material-icons-extended", version.ref = "jetbrains-compose-multiplatform" }
 okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
 okio = { module = "com.squareup.okio:okio", version.ref = "okio" }
 picocli = { module = "info.picocli:picocli", version.ref = "picocli" }

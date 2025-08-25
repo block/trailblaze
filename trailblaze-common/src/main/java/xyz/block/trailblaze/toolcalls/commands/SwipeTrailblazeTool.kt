@@ -6,6 +6,7 @@ import maestro.SwipeDirection
 import maestro.orchestra.Command
 import maestro.orchestra.ElementSelector
 import maestro.orchestra.SwipeCommand
+import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.toolcalls.MapsToMaestroCommands
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 
@@ -26,7 +27,7 @@ The text value to swipe on. If not provided, the swipe will be performed on the 
   )
   val swipeOnElementText: String? = null,
 ) : MapsToMaestroCommands() {
-  override fun toMaestroCommands(): List<Command> = listOf(
+  override fun toMaestroCommands(memory: AgentMemory): List<Command> = listOf(
     SwipeCommand(
       direction = SwipeDirection.valueOf(direction),
     ).let {

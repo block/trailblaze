@@ -13,6 +13,7 @@ android {
   defaultConfig {
     minSdk = 26
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    testApplicationId = "xyz.block.trailblaze.runner"
   }
   compileOptions {
     sourceCompatibility = JavaVersion.VERSION_17
@@ -57,6 +58,7 @@ dependencies {
   implementation(libs.ktor.serialization.kotlinx.json)
   implementation(libs.ktor.server.content.negotiation)
   implementation(libs.koog.prompt.executor.openai)
+  implementation(libs.koog.prompt.executor.ollama)
   implementation(libs.androidx.test.monitor)
 
   androidTestImplementation(libs.androidx.test.runner)

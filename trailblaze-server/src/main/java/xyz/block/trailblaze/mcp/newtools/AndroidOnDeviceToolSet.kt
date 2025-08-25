@@ -13,8 +13,9 @@ import xyz.block.trailblaze.mcp.android.ondevice.rpc.models.McpPromptRequestData
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.models.SelectToolSet
 import xyz.block.trailblaze.mcp.models.DeviceConnectionStatus
 import xyz.block.trailblaze.mcp.utils.DeviceConnectUtils
+import xyz.block.trailblaze.mcp.utils.DeviceConnectUtils.connectToInstrumentationAndInstallAppIfNotAvailable
 import xyz.block.trailblaze.mcp.utils.DeviceConnectUtils.getAdbDevices
-import xyz.block.trailblaze.mcp.utils.DeviceConnectUtils.startConnectionProcess
+import xyz.block.trailblaze.mcp.utils.TargetTestApp
 
 // --- Koog ToolSets ---
 @Suppress("unused")
@@ -33,7 +34,7 @@ class AndroidOnDeviceToolSet(
   @LLMDescription("Connect to the attached device using Trailblaze.")
   @Tool
   fun connectDevice(): String {
-    val connectionStatus = connectDeviceInternal()
+    val connectionStatus = runBlocking { connectDeviceInternal() }
     return when (connectionStatus) {
       is DeviceConnectionStatus.ConnectionFailure -> {
         "Connection failed: ${connectionStatus.errorMessage}"
@@ -50,7 +51,7 @@ class AndroidOnDeviceToolSet(
     }
   }
 
-  fun connectDeviceInternal(): DeviceConnectionStatus {
+  suspend fun connectDeviceInternal(): DeviceConnectionStatus {
     if (isThereAnActiveConnection()) {
       return getActiveConnection() ?: error("No active connection")
     }
@@ -82,7 +83,11 @@ class AndroidOnDeviceToolSet(
         "Starting connection process for device: ${device.name} ($deviceId)",
       )
       val deviceConnectionStatus: DeviceConnectionStatus = runBlocking {
-        startConnectionProcess(deviceId, sessionContext)
+        connectToInstrumentationAndInstallAppIfNotAvailable(
+          sendProgressMessage = { sessionContext.sendIndeterminateProgressMessage(it) },
+          deviceId = deviceId,
+          targetTestApp = TargetTestApp.DEFAULT,
+        )
       }
 
       return deviceConnectionStatus
@@ -215,7 +220,7 @@ The prompt/action/request will be sent to the mobile device to be run.
     )
     // This tool sends a prompt to the local server running on port 52526
     try {
-      DeviceConnectUtils.portForward(deviceId, ON_DEVICE_ANDROID_MCP_SERVER_PORT)
+      DeviceConnectUtils.adbPortForward(deviceId, ON_DEVICE_ANDROID_MCP_SERVER_PORT)
     } catch (e: Exception) {
       return "Failed to set up port forwarding for device $deviceId on port $ON_DEVICE_ANDROID_MCP_SERVER_PORT. Error: ${e.message}"
     }

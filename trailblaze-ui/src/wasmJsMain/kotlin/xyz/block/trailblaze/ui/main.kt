@@ -1,12 +1,26 @@
 package xyz.block.trailblaze.ui
 
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Button
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.ComposeViewport
 import kotlinx.browser.document
 import kotlinx.browser.window
@@ -14,6 +28,11 @@ import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.logs.TrailblazeLogsDataProvider
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionInfo
+import xyz.block.trailblaze.ui.composables.FullScreenModalOverlay
+import xyz.block.trailblaze.ui.tabs.session.SessionDetailComposable
+import xyz.block.trailblaze.ui.tabs.session.SessionListComposable
+import xyz.block.trailblaze.ui.tabs.session.group.LogDetailsDialog
+import xyz.block.trailblaze.ui.tabs.session.models.SessionDetail
 
 // Central data provider instance
 private val dataProvider: TrailblazeLogsDataProvider = InlinedDataLoader
@@ -99,7 +118,7 @@ fun SessionListView(
       isLoading = true
       errorMessage = null
       val sessionNames = dataProvider.getSessionIdsAsync()
-      sessions = sessionNames.map { sessionName ->
+      sessions = sessionNames.mapNotNull { sessionName ->
         dataProvider.getSessionInfoAsync(sessionName)
       }
     } catch (e: Exception) {
@@ -114,6 +133,7 @@ fun SessionListView(
     sessions = sessions,
     sessionClicked = onSessionClick,
     deleteSession = deleteSession,
+    clearAllLogs = null,
   )
 }
 
@@ -129,6 +149,12 @@ fun WasmSessionDetailView(
   var errorMessage by remember { mutableStateOf<String?>(null) }
   var sessionInfo by remember { mutableStateOf<SessionInfo?>(null) }
   var recordingYaml by remember { mutableStateOf<String?>(null) }
+
+  // Modal state
+  var showDetailsDialog by remember { mutableStateOf(false) }
+  var showInspectUIDialog by remember { mutableStateOf(false) }
+  var currentLog by remember { mutableStateOf<TrailblazeLog?>(null) }
+  var currentLlmLog by remember { mutableStateOf<TrailblazeLog.TrailblazeLlmRequestLog?>(null) }
 
   LaunchedEffect(sessionName) {
     try {
@@ -152,17 +178,90 @@ fun WasmSessionDetailView(
   }
 
   if (sessionInfo != null) {
-    SessionDetailComposable(
-      details = SessionDetail(
-        session = sessionInfo!!,
-        logs = logs,
-      ),
-      toMaestroYaml = toMaestroYaml,
-      onBackClick = onBackClick,
-      generateRecordingYaml = {
-        recordingYaml ?: "# Loading YAML..."
+    Box(modifier = Modifier.fillMaxSize()) {
+      SessionDetailComposable(
+        details = SessionDetail(
+          session = sessionInfo!!,
+          logs = logs,
+        ),
+        toMaestroYaml = toMaestroYaml,
+        onBackClick = onBackClick,
+        generateRecordingYaml = {
+          recordingYaml ?: "# Loading YAML..."
+        },
+        onShowDetails = { log ->
+          currentLog = log
+          showDetailsDialog = true
+        },
+        onShowInspectUI = { log ->
+          currentLlmLog = log
+          showInspectUIDialog = true
+        }
+      )
+
+      // Modal dialogs
+      if (showDetailsDialog && currentLog != null) {
+        FullScreenModalOverlay(
+          onDismiss = {
+            showDetailsDialog = false
+            currentLog = null
+          }
+        ) {
+          LogDetailsDialog(
+            log = currentLog!!,
+            onDismiss = {
+              showDetailsDialog = false
+              currentLog = null
+            }
+          )
+        }
       }
-    )
+
+      if (showInspectUIDialog && currentLlmLog != null) {
+        FullScreenModalOverlay(
+          onDismiss = {
+            showInspectUIDialog = false
+            currentLlmLog = null
+          }
+        ) {
+          Column(
+            modifier = Modifier.fillMaxSize()
+          ) {
+            // Header with close button
+            Row(
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+              horizontalArrangement = Arrangement.SpaceBetween,
+              verticalAlignment = Alignment.CenterVertically
+            ) {
+              Text(
+                text = "UI Inspector",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold
+              )
+              Button(
+                onClick = {
+                  showInspectUIDialog = false
+                  currentLlmLog = null
+                }
+              ) {
+                Text("Close")
+              }
+            }
+
+            // Inspector content
+            InspectViewHierarchyScreenComposable(
+              sessionId = sessionName,
+              viewHierarchy = currentLlmLog!!.viewHierarchy,
+              imageUrl = currentLlmLog!!.screenshotFile,
+              deviceWidth = currentLlmLog!!.deviceWidth,
+              deviceHeight = currentLlmLog!!.deviceHeight,
+            )
+          }
+        }
+      }
+    }
   } else if (isLoading) {
     // Optionally, show a loading indicator while sessionInfo is being determined
   } else {

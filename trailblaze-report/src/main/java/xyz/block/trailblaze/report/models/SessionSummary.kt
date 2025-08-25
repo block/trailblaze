@@ -67,7 +67,6 @@ data class SessionSummary(
             is TrailblazeLog.TrailblazeSessionStatusChangeLog,
             is TrailblazeLog.ObjectiveStartLog,
             is TrailblazeLog.ObjectiveCompleteLog,
-            is TrailblazeLog.TopLevelMaestroCommandLog,
             -> it
           }
         }.sortedBy { it.timestamp }
@@ -201,7 +200,6 @@ data class SessionSummary(
 
             is TrailblazeLog.ObjectiveStartLog,
             is TrailblazeLog.ObjectiveCompleteLog,
-            is TrailblazeLog.TopLevelMaestroCommandLog,
             is TrailblazeLog.DelegatingTrailblazeToolLog,
             -> null
           }

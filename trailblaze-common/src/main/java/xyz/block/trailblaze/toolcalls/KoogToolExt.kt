@@ -18,9 +18,9 @@ object KoogToolExt {
   fun KClass<out TrailblazeTool>.toKoogTool(
     trailblazeToolContextProvider: () -> TrailblazeToolExecutionContext,
   ): TrailblazeKoogTool<out TrailblazeTool> = TrailblazeKoogTool(this) { args: TrailblazeTool ->
-    val context = trailblazeToolContextProvider()
+    val executionContext = trailblazeToolContextProvider()
     val trailblazeToolResult: TrailblazeToolResult = if (args is ExecutableTrailblazeTool) {
-      args.execute(context)
+      args.execute(executionContext)
     } else {
       error("Tool $this does not implement ExecutableTrailblazeTool interface, cannot convert to Maestro commands")
     }

@@ -28,7 +28,7 @@ data class AssertEqualsTrailblazeTool(
     val interpolatedExpected = memory.interpolateVariables(expected)
 
     if (interpolatedActual != interpolatedExpected) {
-      throw TrailblazeException("Assertion failed: Expected '$expected', but got '$actual'")
+      throw TrailblazeException("Assertion failed: Expected '$interpolatedExpected', but got '$interpolatedActual'")
     }
     return TrailblazeToolResult.Success
   }

@@ -10,6 +10,7 @@ import xyz.block.trailblaze.agent.TrailblazeElementComparator
 import xyz.block.trailblaze.agent.TrailblazeRunner
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.android.uiautomator.AndroidOnDeviceUiAutomatorScreenState
+import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TestAgentRunner
 import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.maestro.MaestroYamlParser
@@ -33,20 +34,23 @@ import kotlin.reflect.KClass
 open class AndroidTrailblazeRule(
   val llmClient: LLMClient,
   val llmModel: LLModel,
+  additionalRules: List<TrailblazeAndroidLoggingRule> = listOf(
+    TrailblazeAndroidLoggingRule(),
+  ),
   customToolClasses: Set<KClass<out TrailblazeTool>> = setOf(),
 ) : SimpleTestRuleChain(
-  TrailblazeAndroidLoggingRule(),
+  *additionalRules.toTypedArray(),
 ),
   TrailblazeRule {
 
   private val trailblazeAgent = AndroidMaestroTrailblazeAgent()
-  private lateinit var trailblazeRunner: TestAgentRunner
 
   private val toolSet = SetOfMarkTrailblazeToolSet + DynamicToolSet(customToolClasses)
   private val trailblazeToolRepo = TrailblazeToolRepo(toolSet)
 
-  private val screenStateProvider = {
+  private val screenStateProvider: () -> ScreenState = {
     AndroidOnDeviceUiAutomatorScreenState(
+      includeScreenshot = true,
       filterViewHierarchy = true,
       setOfMarkEnabled = true,
     )
@@ -60,7 +64,14 @@ open class AndroidTrailblazeRule(
 
   override fun ruleCreation(description: Description) {
     super.ruleCreation(description)
-    trailblazeRunner = TrailblazeRunner(
+  }
+
+  private val trailblazeYaml = TrailblazeYaml(
+    customTrailblazeToolClasses = customToolClasses,
+  )
+
+  private val trailblazeRunner: TestAgentRunner by lazy {
+    TrailblazeRunner(
       trailblazeToolRepo = trailblazeToolRepo,
       llmModel = llmModel,
       llmClient = llmClient,
@@ -68,10 +79,6 @@ open class AndroidTrailblazeRule(
       agent = trailblazeAgent,
     )
   }
-
-  private val trailblazeYaml = TrailblazeYaml(
-    customTrailblazeToolClasses = customToolClasses,
-  )
 
   val trailblazeRunnerUtil by lazy {
     TrailblazeRunnerUtil(
@@ -109,14 +116,18 @@ open class AndroidTrailblazeRule(
     return when (val toolResult = result.second) {
       is TrailblazeToolResult.Success -> toolResult
       is TrailblazeToolResult.Error -> throw TrailblazeException(toolResult.errorMessage)
-      else -> throw TrailblazeException("Unknown TrailblazeToolResult when running tools $trailblazeTools")
     }
   }
 
-  private fun runMaestroCommands(maestroCommands: List<Command>): TrailblazeToolResult = when (val maestroResult = trailblazeAgent.runMaestroCommands(maestroCommands)) {
+  private fun runMaestroCommands(maestroCommands: List<Command>): TrailblazeToolResult = when (
+    val maestroResult =
+      trailblazeAgent.runMaestroCommands(
+        maestroCommands = maestroCommands,
+        llmResponseId = null,
+      )
+  ) {
     is TrailblazeToolResult.Success -> maestroResult
     is TrailblazeToolResult.Error -> throw TrailblazeException(maestroResult.errorMessage)
-    else -> throw TrailblazeException("Unknown TrailblazeToolResult when running maestro commands $maestroCommands")
   }
 
   private fun handleConfig(config: TrailConfig): TrailblazeToolResult {

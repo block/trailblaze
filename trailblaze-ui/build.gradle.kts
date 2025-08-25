@@ -54,6 +54,7 @@ kotlin {
 
       implementation(compose.components.resources)
       implementation(compose.components.uiToolingPreview)
+      implementation(libs.material.icons.extended)
       implementation(libs.androidx.lifecycle.viewmodel)
       implementation(libs.androidx.lifecycle.runtimeCompose)
       implementation(libs.kotlinx.serialization.core)
@@ -75,6 +76,7 @@ kotlin {
       implementation(libs.ktor.client.js)
     }
     jvmMain.dependencies {
+      implementation(project(":trailblaze-models"))
       implementation(project(":trailblaze-common"))
       implementation(project(":trailblaze-server"))
       implementation(project(":trailblaze-report"))

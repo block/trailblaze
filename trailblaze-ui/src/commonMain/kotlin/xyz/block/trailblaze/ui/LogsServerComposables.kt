@@ -10,13 +10,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.Button
-import androidx.compose.material3.Divider
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -31,6 +32,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import org.jetbrains.compose.ui.tooling.preview.Preview
+import xyz.block.trailblaze.llm.TrailblazeLlmModelList
+import xyz.block.trailblaze.llm.TrailblazeLlmProvider
+import xyz.block.trailblaze.llm.providers.OpenAITrailblazeLlmModelList
+import xyz.block.trailblaze.ui.composables.SelectableText
 import xyz.block.trailblaze.ui.models.TrailblazeServerState
 
 @Suppress("ktlint:standard:function-naming")
@@ -39,16 +44,17 @@ object LogsServerComposables {
   @OptIn(ExperimentalMaterial3Api::class)
   @Composable
   @Preview
-  fun Settings(
+  fun SettingsTab(
     serverState: TrailblazeServerState,
+    availableModelLists: Set<TrailblazeLlmModelList>,
     openLogsFolder: () -> Unit,
     openGoose: () -> Unit,
     updateState: (TrailblazeServerState) -> Unit,
     openUrlInBrowser: () -> Unit,
     additionalContent: @Composable () -> Unit,
-    envOpenAiApiKey: String? = null,
-    envDatabricksToken: String? = null,
+    environmentVariableProvider: (String) -> String? = { null },
   ) {
+
     MaterialTheme {
       Surface(
         modifier = Modifier
@@ -69,11 +75,11 @@ object LogsServerComposables {
               item {
                 OutlinedCard(modifier = Modifier.fillMaxWidth()) {
                   Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("Quick actions", style = MaterialTheme.typography.titleMedium)
+                    SelectableText("Quick actions", style = MaterialTheme.typography.titleMedium)
                     Row {
-                      Button(openUrlInBrowser) { Text("Open Browser") }
+                      Button(openUrlInBrowser) { SelectableText("Open Browser") }
                       Spacer(Modifier.width(16.dp))
-                      Button(onClick = { openGoose() }) { Text("Open Goose") }
+                      Button(onClick = { openGoose() }) { SelectableText("Open Goose") }
                     }
                   }
                 }
@@ -83,7 +89,7 @@ object LogsServerComposables {
               item {
                 OutlinedCard(modifier = Modifier.fillMaxWidth()) {
                   Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Application settings", style = MaterialTheme.typography.titleMedium)
+                    SelectableText("Application settings", style = MaterialTheme.typography.titleMedium)
 
                     // Theme Mode Selection
                     var showThemeMenu by remember { mutableStateOf(false) }
@@ -96,7 +102,7 @@ object LogsServerComposables {
                       themeOptions.find { it.first == serverState.appConfig.themeMode }?.second ?: "System"
 
                     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                      Text("Theme Mode", modifier = Modifier.weight(0.4f))
+                      SelectableText("Theme Mode", modifier = Modifier.weight(0.4f))
                       ExposedDropdownMenuBox(
                         expanded = showThemeMenu,
                         onExpandedChange = { showThemeMenu = !showThemeMenu },
@@ -115,7 +121,7 @@ object LogsServerComposables {
                         ) {
                           themeOptions.forEach { (themeMode, label) ->
                             DropdownMenuItem(
-                              text = { Text(label) },
+                              text = { SelectableText(label) },
                               onClick = {
                                 showThemeMenu = false
                                 val savedSettings = serverState.appConfig
@@ -130,11 +136,11 @@ object LogsServerComposables {
                         }
                       }
                     }
-                    Divider()
+                    HorizontalDivider()
 
                     if (serverState.appConfig.availableFeatures.hostMode) {
                       Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Text("Host Mode Enabled (iOS Support)", modifier = Modifier.weight(1f))
+                        SelectableText("Host Mode Enabled (iOS Support)", modifier = Modifier.weight(1f))
                         Switch(
                           checked = serverState.appConfig.hostModeEnabled,
                           onCheckedChange = { checkedValue ->
@@ -147,25 +153,10 @@ object LogsServerComposables {
                           },
                         )
                       }
-                      Divider()
+                      HorizontalDivider()
                     }
                     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                      Text("Auto Launch Trailblaze in Browser on Startup", modifier = Modifier.weight(1f))
-                      Switch(
-                        checked = serverState.appConfig.autoLaunchBrowser,
-                        onCheckedChange = { checkedValue ->
-                          val savedSettings = serverState.appConfig
-                          updateState(
-                            serverState.copy(
-                              appConfig = savedSettings.copy(autoLaunchBrowser = checkedValue),
-                            ),
-                          )
-                        },
-                      )
-                    }
-                    Divider()
-                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                      Text("Auto Launch Trailblaze in Goose on Startup", modifier = Modifier.weight(1f))
+                      SelectableText("Auto Launch Trailblaze in Goose on Startup", modifier = Modifier.weight(1f))
                       Switch(
                         checked = serverState.appConfig.autoLaunchGoose,
                         onCheckedChange = { checkedValue ->
@@ -178,28 +169,160 @@ object LogsServerComposables {
                         },
                       )
                     }
+                    HorizontalDivider()
+                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                      SelectableText("Keep Window Always on Top", modifier = Modifier.weight(1f))
+                      Switch(
+                        checked = serverState.appConfig.alwaysOnTop,
+                        onCheckedChange = { checkedValue ->
+                          val savedSettings = serverState.appConfig
+                          updateState(
+                            serverState.copy(
+                              appConfig = savedSettings.copy(alwaysOnTop = checkedValue),
+                            ),
+                          )
+                        },
+                      )
+                    }
+                    HorizontalDivider()
+
+                    // LLM Provider and Model Selection in a single row
+                    var showLlmProviderMenu by remember { mutableStateOf(false) }
+                    var showLlmModelMenu by remember { mutableStateOf(false) }
+
+                    val currentProviderModelList = availableModelLists.firstOrNull {
+                      it.provider.id == serverState.appConfig.llmProvider
+                    } ?: OpenAITrailblazeLlmModelList
+
+                    val currentProvider: TrailblazeLlmProvider = currentProviderModelList.provider
+
+                    val availableModelsForCurrentProvider = currentProviderModelList.entries
+                    val currentModel =
+                      currentProviderModelList.entries.firstOrNull {
+                        it.modelId == serverState.appConfig.llmModel
+                      } ?: currentProviderModelList.entries.first()
+
+                    val currentLlmModelLabel = currentModel.modelId
+
+                    Row(
+                      modifier = Modifier.fillMaxWidth(),
+                      verticalAlignment = Alignment.CenterVertically,
+                      horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                      // LLM Provider Section
+                      Column(modifier = Modifier.weight(1f)) {
+                        SelectableText("LLM Provider", style = MaterialTheme.typography.bodyMedium)
+                        ExposedDropdownMenuBox(
+                          expanded = showLlmProviderMenu,
+                          onExpandedChange = { showLlmProviderMenu = !showLlmProviderMenu }
+                        ) {
+                          OutlinedTextField(
+                            modifier = Modifier.fillMaxWidth().menuAnchor(MenuAnchorType.PrimaryNotEditable),
+                            value = currentProvider.llmProvider.display,
+                            onValueChange = {},
+                            readOnly = true,
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = showLlmProviderMenu) }
+                          )
+                          DropdownMenu(
+                            expanded = showLlmProviderMenu,
+                            onDismissRequest = { showLlmProviderMenu = false }
+                          ) {
+                            availableModelLists.forEach { modelList: TrailblazeLlmModelList ->
+                              val provider: TrailblazeLlmProvider = modelList.provider
+                              DropdownMenuItem(
+                                text = { SelectableText(provider.llmProvider.display) },
+                                onClick = {
+                                  showLlmProviderMenu = false
+                                  val savedSettings = serverState.appConfig
+                                  val providerModels = availableModelLists.first {
+                                    it.provider == provider
+                                  }.entries
+                                  updateState(
+                                    serverState.copy(
+                                      appConfig = savedSettings.copy(
+                                        llmProvider = provider.id,
+                                        llmModel = providerModels
+                                          .first()
+                                          .modelId
+                                      )
+                                    )
+                                  )
+                                }
+                              )
+                            }
+                          }
+                        }
+                      }
+
+                      // LLM Model Section
+                      Column(modifier = Modifier.weight(1f)) {
+                        SelectableText("LLM Model", style = MaterialTheme.typography.bodyMedium)
+                        ExposedDropdownMenuBox(
+                          expanded = showLlmModelMenu,
+                          onExpandedChange = { showLlmModelMenu = !showLlmModelMenu }
+                        ) {
+                          OutlinedTextField(
+                            modifier = Modifier.fillMaxWidth().menuAnchor(),
+                            value = currentLlmModelLabel,
+                            onValueChange = {},
+                            readOnly = true,
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = showLlmModelMenu) }
+                          )
+                          DropdownMenu(
+                            expanded = showLlmModelMenu,
+                            onDismissRequest = { showLlmModelMenu = false }
+                          ) {
+                            availableModelsForCurrentProvider.forEach { model ->
+                              DropdownMenuItem(
+                                text = { SelectableText(model.modelId) },
+                                onClick = {
+                                  showLlmModelMenu = false
+                                  val savedSettings = serverState.appConfig
+                                  updateState(
+                                    serverState.copy(
+                                      appConfig = savedSettings.copy(llmModel = model.modelId)
+                                    )
+                                  )
+                                }
+                              )
+                            }
+                          }
+                        }
+                      }
+                    }
                   }
                 }
               }
 
               // Environment variables section
               item {
-                val maskedOpenAi = if (envOpenAiApiKey.isNullOrBlank()) "Not set" else "…" + envOpenAiApiKey.takeLast(4)
-                val maskedDbx =
-                  if (envDatabricksToken.isNullOrBlank()) "Not set" else "…" + envDatabricksToken.takeLast(4)
+                val envVariableNames = listOf(
+                  "DATABRICKS_TOKEN",
+                  "OPENAI_API_KEY",
+                  "TEST_RAIL_API_KEY",
+                  "TEST_RAIL_EMAIL",
+                )
+
                 OutlinedCard(modifier = Modifier.fillMaxWidth()) {
                   Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Environment variables", style = MaterialTheme.typography.titleMedium)
-                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                      Text("OPENAI_API_KEY", modifier = Modifier.weight(1f))
-                      Text(maskedOpenAi, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    SelectableText("Environment variables", style = MaterialTheme.typography.titleMedium)
+
+                    envVariableNames.forEachIndexed { index, name ->
+                      val value = environmentVariableProvider(name)
+                      val maskedValue = if (value.isNullOrBlank()) "Not set" else "…" + value.takeLast(6)
+
+                      Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        SelectableText(name, modifier = Modifier.weight(1f))
+                        SelectableText(maskedValue, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                      }
+
+                      // Add divider between items, but not after the last one
+                      if (index < envVariableNames.size - 1) {
+                        HorizontalDivider()
+                      }
                     }
-                    Divider()
-                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                      Text("DATABRICKS_TOKEN", modifier = Modifier.weight(1f))
-                      Text(maskedDbx, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    Text(
+
+                    SelectableText(
                       text = "If you change your environment variables, please restart the app so it can be picked up.",
                       color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -211,7 +334,7 @@ object LogsServerComposables {
               item {
                 OutlinedCard(modifier = Modifier.fillMaxWidth()) {
                   Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("Utilities", style = MaterialTheme.typography.titleMedium)
+                    SelectableText("Utilities", style = MaterialTheme.typography.titleMedium)
                     Button(onClick = openLogsFolder) { Text("View Logs Folder") }
                   }
                 }
@@ -219,8 +342,6 @@ object LogsServerComposables {
             }
           }
         }
-
-
       }
     }
   }

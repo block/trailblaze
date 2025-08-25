@@ -5,7 +5,6 @@ import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.logs.model.SessionStatus
-import xyz.block.trailblaze.logs.model.getSessionStatus
 import xyz.block.trailblaze.report.utils.TrailblazeYamlSessionRecording.generateRecordedYaml
 import java.io.File
 
@@ -91,29 +90,30 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
     }
   }
 
+  private fun getLogFilesForSession(sessionId: String): List<File> = File(logsDir, sessionId).listFiles().filter { it.extension == "json" }
+
   /**
    * Returns a list of logs for the given session ID.
    * If the session ID is null or the session directory does not exist, an empty list is returned.
    */
   fun getLogsForSession(sessionId: String?): List<TrailblazeLog> {
     if (sessionId != null) {
-      val sessionDir = File(logsDir, sessionId)
-      if (sessionDir.exists()) {
-        val jsonFiles = sessionDir.listFiles().filter { it.extension == "json" }
-        val logs = jsonFiles.mapNotNull {
-          try {
-            TrailblazeJsonInstance.decodeFromString<TrailblazeLog>(
-              it.readText(),
-            )
-          } catch (e: Exception) {
-            println("Error Reading ${it.absolutePath}")
-            null
-          }
-        }.sortedBy { it.timestamp }
-        return logs
-      }
+      val jsonFiles = getLogFilesForSession(sessionId)
+      val logs: List<TrailblazeLog> = jsonFiles.mapNotNull {
+        parseTrailblazeLogFromFile(it)
+      }.sortedBy { it.timestamp }
+      return logs
     }
     return emptyList()
+  }
+
+  private fun parseTrailblazeLogFromFile(logFile: File): TrailblazeLog? = try {
+    TrailblazeJsonInstance.decodeFromString<TrailblazeLog>(
+      logFile.readText(),
+    )
+  } catch (e: Exception) {
+    println("Error Reading ${logFile.absolutePath}")
+    null
   }
 
   fun deleteLogsForSession(sessionId: String) {
@@ -226,15 +226,30 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
   override suspend fun getSessionIdsAsync(): List<String> = getSessionIds()
 
   override suspend fun getLogsForSessionAsync(sessionId: String?): List<TrailblazeLog> = getLogsForSession(sessionId)
-  override suspend fun getSessionInfoAsync(sessionId: String): SessionInfo {
-    val logs = getLogsForSession(sessionId)
-
-    return SessionInfo(
-      sessionId = sessionId,
-      timestamp = logs.first().timestamp,
-      latestStatus = logs.getSessionStatus(),
-    )
-  }
+  override suspend fun getSessionInfoAsync(sessionId: String): SessionInfo? = getSessionInfo(sessionId)
 
   override suspend fun getSessionRecordingYaml(sessionId: String): String = getLogsForSessionAsync(sessionId).generateRecordedYaml()
+
+  fun getSessionInfo(sessionId: String): SessionInfo? {
+    val logFiles = getLogFilesForSession(sessionId)
+    return logFiles
+      .sortedBy { it.lastModified() }
+      .firstOrNull {
+        val log = parseTrailblazeLogFromFile(it)
+        log is TrailblazeLog.TrailblazeSessionStatusChangeLog && log.sessionStatus is SessionStatus.Started
+      }
+      ?.let {
+        val log = parseTrailblazeLogFromFile(it)
+        val statusChangeLog = log as TrailblazeLog.TrailblazeSessionStatusChangeLog
+        val status = statusChangeLog.sessionStatus as SessionStatus.Started
+
+        SessionInfo(
+          sessionId = statusChangeLog.session,
+          timestamp = statusChangeLog.timestamp,
+          latestStatus = status,
+          testName = status.testMethodName,
+          testClass = status.testClassName,
+        )
+      }
+  }
 }

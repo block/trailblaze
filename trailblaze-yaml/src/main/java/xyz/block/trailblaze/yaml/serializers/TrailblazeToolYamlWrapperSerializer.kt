@@ -32,17 +32,18 @@ class TrailblazeToolYamlWrapperSerializer(
     val (keyNode, valueNode) = node.entries.entries.first()
     val toolName = keyNode.content
 
-    val toolKClass: KClass<out TrailblazeTool>? = allTrailblazeToolClasses.firstOrNull { toolKClass ->
-      toolKClass.toKoogToolDescriptor().name == toolName
-    }
-    if (toolKClass == null) {
-      throw IllegalArgumentException("TrailblazeYaml could not TrailblazeTool found with name: $toolName.  Did you register it?")
-    }
+    val toolKClass: KClass<out TrailblazeTool> = allTrailblazeToolClasses.firstOrNull { toolKClass ->
+      val koogToolDescriptor = toolKClass.toKoogToolDescriptor()
+      koogToolDescriptor.name == toolName
+    } ?: throw IllegalArgumentException(
+      "TrailblazeYaml could not TrailblazeTool found with name: $toolName.  Did you register it?",
+    )
 
     @OptIn(InternalSerializationApi::class)
     val trailblazeToolSerializer: KSerializer<TrailblazeTool> = toolKClass.serializer() as KSerializer<TrailblazeTool>
 
-    val trailblazeTool = TrailblazeYaml.defaultYamlInstance.decodeFromYamlNode(trailblazeToolSerializer, valueNode)
+    val trailblazeYaml = TrailblazeYaml(allTrailblazeToolClasses)
+    val trailblazeTool = trailblazeYaml.getInstance().decodeFromYamlNode(trailblazeToolSerializer, valueNode)
     return TrailblazeToolYamlWrapper(toolName, trailblazeTool)
   }
 

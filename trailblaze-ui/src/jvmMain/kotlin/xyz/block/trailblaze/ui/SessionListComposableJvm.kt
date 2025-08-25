@@ -2,28 +2,15 @@ package xyz.block.trailblaze.ui
 
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionInfo
-import xyz.block.trailblaze.logs.model.getSessionInfo
 import xyz.block.trailblaze.report.utils.LogsRepo
+import xyz.block.trailblaze.ui.images.ImageLoader
+import xyz.block.trailblaze.ui.tabs.session.LiveSessionDataProvider
+import xyz.block.trailblaze.ui.tabs.session.SessionListListener
+import xyz.block.trailblaze.ui.tabs.session.TrailblazeSessionListener
 import java.io.File
 import xyz.block.trailblaze.report.utils.SessionListListener as ReportSessionListListener
 import xyz.block.trailblaze.report.utils.TrailblazeSessionListener as ReportTrailblazeSessionListener
 
-// Internal variable to store the logs directory - can be set by MainTrailblazeApp
-private var _logsDirectory: File? = null
-
-// Function to set the logs directory - should be called from MainTrailblazeApp during initialization
-fun setLogsDirectory(logsDir: File) {
-  _logsDirectory = logsDir
-}
-
-actual fun createLogsFileSystemImageLoader(): ImageLoader {
-  // Use the set logs directory, system property, or default fallback
-  val logsDir = _logsDirectory?.absolutePath
-    ?: System.getProperty("trailblaze.logs.dir")
-    ?: "logs"
-
-  return FileSystemImageLoader(logsDir)
-}
 
 // JVM-specific helper that accepts a File parameter for better integration
 fun createLogsFileSystemImageLoader(logsDir: File): ImageLoader {
@@ -37,11 +24,11 @@ class JvmLiveSessionDataProvider(private val logsRepo: LogsRepo) : LiveSessionDa
 
   override fun getSessionIds(): List<String> = logsRepo.getSessionIds()
   override fun getSessions(): List<SessionInfo> {
-    return getSessionIds().map { getSessionInfo(it) }
+    return getSessionIds().mapNotNull { getSessionInfo(it) }
   }
 
-  override fun getSessionInfo(sessionId: String): SessionInfo {
-    return getLogsForSession(sessionId).getSessionInfo()
+  override fun getSessionInfo(sessionId: String): SessionInfo? {
+    return logsRepo.getSessionInfo(sessionId)
   }
 
   override fun getLogsForSession(sessionId: String): List<TrailblazeLog> = logsRepo.getLogsForSession(sessionId)
@@ -78,7 +65,6 @@ class JvmLiveSessionDataProvider(private val logsRepo: LogsRepo) : LiveSessionDa
 /**
  * Helper function to create a JvmLiveSessionDataProvider from LogsRepo
  */
-fun createLiveSessionDataProvider(logsRepo: LogsRepo): LiveSessionDataProvider {
+fun createLiveSessionDataProviderJvm(logsRepo: LogsRepo): LiveSessionDataProvider {
   return JvmLiveSessionDataProvider(logsRepo)
 }
-

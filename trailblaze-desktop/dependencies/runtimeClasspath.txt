@@ -157,6 +157,8 @@ org.jetbrains.compose.material3:material3:1.7.3
 org.jetbrains.compose.material:material-desktop:1.7.3
 org.jetbrains.compose.material:material-icons-core-desktop:1.7.3
 org.jetbrains.compose.material:material-icons-core:1.7.3
+org.jetbrains.compose.material:material-icons-extended-desktop:1.7.3
+org.jetbrains.compose.material:material-icons-extended:1.7.3
 org.jetbrains.compose.material:material-ripple-desktop:1.7.3
 org.jetbrains.compose.material:material-ripple:1.7.3
 org.jetbrains.compose.material:material:1.7.3

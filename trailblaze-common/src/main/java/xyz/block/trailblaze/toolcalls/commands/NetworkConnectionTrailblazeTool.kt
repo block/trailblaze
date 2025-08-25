@@ -5,6 +5,7 @@ import kotlinx.serialization.Serializable
 import maestro.orchestra.AirplaneValue
 import maestro.orchestra.Command
 import maestro.orchestra.SetAirplaneModeCommand
+import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.toolcalls.MapsToMaestroCommands
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 
@@ -20,7 +21,7 @@ data class NetworkConnectionTrailblazeTool(
   @param:LLMDescription("Whether the device should be connected or disconnected to the network.")
   val connected: Boolean,
 ) : MapsToMaestroCommands() {
-  override fun toMaestroCommands(): List<Command> = listOf(
+  override fun toMaestroCommands(memory: AgentMemory): List<Command> = listOf(
     SetAirplaneModeCommand(
       value = when (connected) {
         true -> AirplaneValue.Disable

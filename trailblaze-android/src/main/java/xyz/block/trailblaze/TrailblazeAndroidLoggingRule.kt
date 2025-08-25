@@ -4,7 +4,6 @@ import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
-import kotlinx.datetime.Instant
 import org.junit.runner.Description
 import xyz.block.trailblaze.android.InstrumentationArgUtil
 import xyz.block.trailblaze.http.TrailblazeHttpClientFactory
@@ -12,13 +11,12 @@ import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogServerClient
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
-import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.rules.SimpleTestRule
 import xyz.block.trailblaze.tracing.TrailblazeTracer
 
-class TrailblazeAndroidLoggingRule : SimpleTestRule() {
-
-  private var startTime: Instant = Clock.System.now()
+class TrailblazeAndroidLoggingRule(
+  private val sendStartAndEndLogs: Boolean = true,
+) : SimpleTestRule() {
 
   private val isServerAvailable = runBlocking {
     val startTime = Clock.System.now()
@@ -39,16 +37,12 @@ class TrailblazeAndroidLoggingRule : SimpleTestRule() {
       sendOverHttp = isServerAvailable,
       writeToDisk = !isServerAvailable,
     )
-    TrailblazeLogger.log(
-      TrailblazeLog.TrailblazeSessionStatusChangeLog(
-        sessionStatus = SessionStatus.Started(
-          testClassName = description.className,
-          testMethodName = description.methodName,
-        ),
-        session = TrailblazeLogger.getCurrentSessionId(),
-        timestamp = Clock.System.now(),
-      ),
-    )
+    if (sendStartAndEndLogs) {
+      TrailblazeLogger.sendStartLog(
+        className = description.className,
+        methodName = description.methodName,
+      )
+    }
   }
 
   override fun beforeTestExecution(description: Description) {
@@ -57,26 +51,9 @@ class TrailblazeAndroidLoggingRule : SimpleTestRule() {
   }
 
   override fun afterTestExecution(description: Description, result: Result<Nothing?>) {
-    val nowMs = Clock.System.now().toEpochMilliseconds()
-    val testEndedLog = if (result.isSuccess) {
-      TrailblazeLog.TrailblazeSessionStatusChangeLog(
-        sessionStatus = SessionStatus.Ended.Succeeded(
-          durationMs = nowMs - startTime.toEpochMilliseconds(),
-        ),
-        session = TrailblazeLogger.getCurrentSessionId(),
-        timestamp = Clock.System.now(),
-      )
-    } else {
-      TrailblazeLog.TrailblazeSessionStatusChangeLog(
-        sessionStatus = SessionStatus.Ended.Failed(
-          durationMs = nowMs - startTime.toEpochMilliseconds(),
-          exceptionMessage = result.exceptionOrNull()?.message,
-        ),
-        session = TrailblazeLogger.getCurrentSessionId(),
-        timestamp = Clock.System.now(),
-      )
+    if (sendStartAndEndLogs) {
+      TrailblazeLogger.sendEndLog(result.isSuccess, result.exceptionOrNull())
     }
-    TrailblazeLogger.log(testEndedLog)
 
     exportTraces()
   }

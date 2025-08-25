@@ -4,6 +4,7 @@ import ai.koog.agents.core.tools.annotations.LLMDescription
 import kotlinx.serialization.Serializable
 import maestro.orchestra.Command
 import maestro.orchestra.LaunchAppCommand
+import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.toolcalls.MapsToMaestroCommands
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 
@@ -25,7 +26,7 @@ Available App Launch Modes:
   )
   val launchMode: LaunchMode = LaunchMode.REINSTALL,
 ) : MapsToMaestroCommands() {
-  override fun toMaestroCommands(): List<Command> = listOf(
+  override fun toMaestroCommands(memory: AgentMemory): List<Command> = listOf(
     LaunchAppCommand(
       appId = appId,
       clearState = when (launchMode) {

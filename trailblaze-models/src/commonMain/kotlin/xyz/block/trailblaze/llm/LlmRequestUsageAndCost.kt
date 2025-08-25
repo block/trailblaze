@@ -2,6 +2,7 @@ package xyz.block.trailblaze.llm
 
 import ai.koog.prompt.message.Message
 import kotlinx.serialization.Serializable
+import xyz.block.trailblaze.llm.providers.OpenAITrailblazeLlmModelList
 import kotlin.math.round
 
 @Serializable
@@ -17,10 +18,10 @@ data class LlmRequestUsageAndCost(
   companion object {
     fun List<Message.Response>.calculateCost(llmModelId: String): LlmRequestUsageAndCost {
       val usage = this.last().metaInfo
-      val modelName = llmModelId
       // Default to GPT-4.1 if the model name is not found.
       // We will want to get away from our old `LlmModel` info in the future and use Koog's.
-      val pricing = TraiblazeLlmModel.getModelByName(modelName) ?: TraiblazeLlmModel.GPT_5
+      // TODO Find the matching model
+      val pricing = OpenAITrailblazeLlmModelList.OPENAI_GPT_4_1
       val promptTokens = usage.inputTokensCount?.toLong() ?: 0L
       val completionTokens = usage.outputTokensCount?.toLong() ?: 0L
       val promptCost = promptTokens * pricing.inputCostPerOneMillionTokens / 1_000_000.0

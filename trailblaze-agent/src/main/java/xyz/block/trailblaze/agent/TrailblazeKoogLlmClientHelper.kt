@@ -5,6 +5,7 @@ import ai.koog.agents.core.tools.ToolRegistry
 import ai.koog.agents.core.tools.ToolResult
 import ai.koog.prompt.dsl.Prompt
 import ai.koog.prompt.executor.clients.LLMClient
+import ai.koog.prompt.llm.LLMCapability
 import ai.koog.prompt.llm.LLModel
 import ai.koog.prompt.message.Attachment
 import ai.koog.prompt.message.AttachmentContent
@@ -227,7 +228,7 @@ class TrailblazeKoogLlmClientHelper(
         ),
         attachments = buildList {
           val screenshotBytes = screenState.screenshotBytes
-          if (screenshotBytes != null && screenshotBytes.isNotEmpty()) {
+          if (screenshotBytes != null && screenshotBytes.isNotEmpty() && llmModel.capabilities.contains(LLMCapability.Vision.Image)) {
             add(
               Attachment.Image(
                 AttachmentContent.Binary.Bytes(screenshotBytes),

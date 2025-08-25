@@ -9,14 +9,16 @@ data class TrailblazeServerState(
   @Serializable
   data class SavedTrailblazeAppConfig(
     val hostModeEnabled: Boolean = false,
-    val autoLaunchBrowser: Boolean = false,
     val autoLaunchGoose: Boolean = false,
+    val alwaysOnTop: Boolean = false,
     val serverPort: Int = HTTP_PORT,
     val serverUrl: String = "http://localhost:$HTTP_PORT",
     val lastSelectedTestRailAppName: String? = null,
     val lastSelectedTestRailSuiteId: Int? = null,
     val themeMode: ThemeMode = ThemeMode.System,
     val availableFeatures: AvailableFeatures,
+    val llmProvider: String = "openai", // Default to OpenAI provider
+    val llmModel: String = "gpt-4.1", // Default to GPT-4.1 model
   ) {
     @Serializable
     data class AvailableFeatures(

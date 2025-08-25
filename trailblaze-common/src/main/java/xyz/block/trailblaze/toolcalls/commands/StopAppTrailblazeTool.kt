@@ -4,6 +4,7 @@ import ai.koog.agents.core.tools.annotations.LLMDescription
 import kotlinx.serialization.Serializable
 import maestro.orchestra.Command
 import maestro.orchestra.StopAppCommand
+import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.toolcalls.MapsToMaestroCommands
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 
@@ -15,7 +16,7 @@ Kills the app with the provided appId. This is useful for stopping the app when 
     """,
 )
 data class StopAppTrailblazeTool(val appId: String) : MapsToMaestroCommands() {
-  override fun toMaestroCommands(): List<Command> = listOf(
+  override fun toMaestroCommands(memory: AgentMemory): List<Command> = listOf(
     StopAppCommand(
       appId = appId,
     ),

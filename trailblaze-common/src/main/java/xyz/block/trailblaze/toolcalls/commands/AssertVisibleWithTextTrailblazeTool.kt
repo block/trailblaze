@@ -6,6 +6,7 @@ import maestro.orchestra.AssertConditionCommand
 import maestro.orchestra.Command
 import maestro.orchestra.Condition
 import maestro.orchestra.ElementSelector
+import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.toolcalls.MapsToMaestroCommands
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeTools.REQUIRED_TEXT_DESCRIPTION
@@ -32,11 +33,11 @@ data class AssertVisibleWithTextTrailblazeTool(
   val enabled: Boolean? = null,
   val selected: Boolean? = null,
 ) : MapsToMaestroCommands() {
-  override fun toMaestroCommands(): List<Command> = listOf(
+  override fun toMaestroCommands(memory: AgentMemory): List<Command> = listOf(
     AssertConditionCommand(
       condition = Condition(
         visible = ElementSelector(
-          textRegex = text,
+          textRegex = memory.interpolateVariables(text),
           idRegex = id,
           index = if (index == 0) null else index.toString(),
           enabled = enabled,
