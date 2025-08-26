@@ -8,6 +8,13 @@ import maestro.js.JsEngine
  * the interface, and not have to worry about the actual implementation.
  */
 class FakeJsEngine : JsEngine {
+
+  override fun enterEnvScope() {
+    println("enterEnvScope")
+  }
+  override fun leaveEnvScope() {
+    println("leaveEnvScope")
+  }
   override fun enterScope() {
     println("enterScope")
   }

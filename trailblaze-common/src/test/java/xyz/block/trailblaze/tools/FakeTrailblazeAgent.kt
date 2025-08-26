@@ -8,7 +8,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.utils.ElementComparator
 
 class FakeTrailblazeAgent : MaestroTrailblazeAgent() {
-  override fun executeMaestroCommands(
+  override suspend fun executeMaestroCommands(
     commands: List<Command>,
     llmResponseId: String?,
   ): TrailblazeToolResult = TrailblazeToolResult.Success

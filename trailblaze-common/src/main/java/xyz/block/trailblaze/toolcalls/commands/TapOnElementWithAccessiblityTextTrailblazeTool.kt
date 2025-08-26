@@ -42,7 +42,6 @@ data class TapOnElementWithAccessiblityTextTrailblazeTool(
         enabled = enabled,
         selected = selected,
       ),
-      retryIfNoChange = false,
     ),
   )
 }

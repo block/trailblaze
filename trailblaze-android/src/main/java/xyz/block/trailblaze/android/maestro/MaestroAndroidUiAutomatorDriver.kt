@@ -30,7 +30,6 @@ import xyz.block.trailblaze.android.MaestroUiAutomatorXmlParser
 import xyz.block.trailblaze.android.uiautomator.AndroidOnDeviceUiAutomatorScreenState
 import xyz.block.trailblaze.setofmark.android.AndroidBitmapUtils.toByteArray
 import java.io.File
-import java.util.UUID
 
 /**
  * This is Trailblaze's Maestro on-device driver implementation for Android using UiAutomator.
@@ -134,7 +133,6 @@ internal class MaestroAndroidUiAutomatorDriver : Driver {
   override fun launchApp(
     appId: String,
     launchArguments: Map<String, Any>,
-    sessionId: UUID?,
   ) {
     val context = withInstrumentation { context }
     val intent = context.packageManager.getLaunchIntentForPackage(appId)
@@ -157,6 +155,10 @@ internal class MaestroAndroidUiAutomatorDriver : Driver {
 
     context.startActivity(intent)
     AdbCommandUtil.waitUntilAppInForeground(appId)
+  }
+
+  override fun setOrientation(orientation: maestro.DeviceOrientation) {
+    error("Unsupported Maestro Driver Call to ${this::class.simpleName}::setOrientation $orientation")
   }
 
   override fun longPress(point: Point) {

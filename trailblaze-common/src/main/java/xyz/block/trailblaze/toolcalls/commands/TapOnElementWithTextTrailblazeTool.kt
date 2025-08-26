@@ -45,7 +45,6 @@ data class TapOnElementWithTextTrailblazeTool(
         enabled = enabled,
         selected = selected,
       ),
-      retryIfNoChange = false,
     ),
   )
 }

@@ -17,7 +17,6 @@ import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.tracing.TrailblazeTracer.traceRecorder
 import java.io.File
-import java.util.UUID
 import kotlin.system.measureTimeMillis
 
 /**
@@ -143,9 +142,12 @@ class LoggingDriver(
   override fun launchApp(
     appId: String,
     launchArguments: Map<String, Any>,
-    sessionId: UUID?,
   ) = logActionWithoutScreenshot(MaestroDriverActionType.LaunchApp(appId)) {
-    delegate.launchApp(appId, launchArguments, sessionId)
+    delegate.launchApp(appId, launchArguments)
+  }
+
+  override fun setOrientation(orientation: maestro.DeviceOrientation) {
+    delegate.setOrientation(orientation)
   }
 
   override fun setAirplaneMode(enabled: Boolean) = logActionWithoutScreenshot(MaestroDriverActionType.AirplaneMode(enabled)) {

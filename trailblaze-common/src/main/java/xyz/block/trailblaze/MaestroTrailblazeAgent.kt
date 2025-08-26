@@ -1,5 +1,6 @@
 package xyz.block.trailblaze
 
+import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
 import kotlinx.datetime.Instant
 import maestro.orchestra.Command
@@ -27,7 +28,7 @@ import kotlin.random.Random
  */
 abstract class MaestroTrailblazeAgent : TrailblazeAgent {
 
-  protected abstract fun executeMaestroCommands(
+  protected abstract suspend fun executeMaestroCommands(
     commands: List<Command>,
     llmResponseId: String?,
   ): TrailblazeToolResult
@@ -39,7 +40,18 @@ abstract class MaestroTrailblazeAgent : TrailblazeAgent {
     memory.clear()
   }
 
-  fun runMaestroCommands(
+  @Deprecated("Prefer the suspend version of this function.")
+  fun runMaestroCommandsBlocking(
+    maestroCommands: List<Command>,
+    llmResponseId: String?,
+  ): TrailblazeToolResult = runBlocking {
+    runMaestroCommands(
+      maestroCommands = maestroCommands,
+      llmResponseId = llmResponseId,
+    )
+  }
+
+  suspend fun runMaestroCommands(
     maestroCommands: List<Command>,
     llmResponseId: String?,
   ): TrailblazeToolResult {
@@ -77,7 +89,7 @@ abstract class MaestroTrailblazeAgent : TrailblazeAgent {
       when (trailblazeTool) {
         is ExecutableTrailblazeTool -> {
           toolsExecuted.add(trailblazeTool)
-          val result = handleExecutableTool(trailblazeTool, trailblazeExecutionContext)
+          val result = handleExecutableToolBlocking(trailblazeTool, trailblazeExecutionContext)
           if (result != TrailblazeToolResult.Success) {
             // Exit early if any tool execution fails
             return toolsExecuted to result
@@ -93,7 +105,7 @@ abstract class MaestroTrailblazeAgent : TrailblazeAgent {
           )
           for (mappedTool in executableTools) {
             toolsExecuted.add(mappedTool)
-            val result = handleExecutableTool(mappedTool, trailblazeExecutionContext)
+            val result = handleExecutableToolBlocking(mappedTool, trailblazeExecutionContext)
             if (result != TrailblazeToolResult.Success) {
               // Exit early if any tool execution fails
               return toolsExecuted to result
@@ -123,7 +135,15 @@ abstract class MaestroTrailblazeAgent : TrailblazeAgent {
     return toolsExecuted to TrailblazeToolResult.Success
   }
 
-  private fun handleExecutableTool(
+  @Deprecated("Starting in Maestro 2.0.0 their api uses a suspend function. Prefer that implementation.")
+  private fun handleExecutableToolBlocking(
+    trailblazeTool: ExecutableTrailblazeTool,
+    trailblazeExecutionContext: TrailblazeToolExecutionContext,
+  ) = runBlocking {
+    handleExecutableTool(trailblazeTool, trailblazeExecutionContext)
+  }
+
+  private suspend fun handleExecutableTool(
     trailblazeTool: ExecutableTrailblazeTool,
     trailblazeExecutionContext: TrailblazeToolExecutionContext,
   ): TrailblazeToolResult {

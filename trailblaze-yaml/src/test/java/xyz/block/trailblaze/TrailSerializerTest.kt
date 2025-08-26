@@ -2,6 +2,7 @@ package xyz.block.trailblaze
 
 import ai.koog.agents.core.tools.annotations.LLMDescription
 import assertk.assertThat
+import assertk.assertions.contains
 import assertk.assertions.isEqualTo
 import assertk.assertions.isInstanceOf
 import assertk.assertions.isNull
@@ -17,6 +18,7 @@ import maestro.orchestra.AssertConditionCommand
 import maestro.orchestra.BackPressCommand
 import maestro.orchestra.Condition
 import maestro.orchestra.ElementSelector
+import maestro.orchestra.LaunchAppCommand
 import maestro.orchestra.SwipeCommand
 import org.junit.Test
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
@@ -1371,6 +1373,27 @@ class TrailSerializerTest {
       assertThat(size).isEqualTo(1)
       with(get(0) as TrailYamlItem.ConfigTrailItem) {
         assertThat(config.context).isEqualTo("This is\nsome multiline\ncontent")
+      }
+    }
+  }
+
+  @Test
+  fun canDeserializeMaestro() {
+    val yaml = """
+- maestro:
+  - launchApp:
+      appId: com.android.settings
+      stopApp: false
+      clearState: false
+    """.trimIndent()
+
+    val trailItems = trailblazeYaml.decodeTrail(yaml)
+    with(trailItems) {
+      assertThat(size).isEqualTo(1)
+      with(get(0) as TrailYamlItem.MaestroTrailItem) {
+        assertThat(this.maestro.maestroCommands).contains(
+          LaunchAppCommand(appId = "com.android.settings", stopApp = false, clearState = false),
+        )
       }
     }
   }

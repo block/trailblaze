@@ -42,7 +42,6 @@ data class LongPressOnElementWithTextTrailblazeTool(
         selected = selected,
       ),
       longPress = true,
-      retryIfNoChange = false,
     ),
   )
 }

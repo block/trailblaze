@@ -28,14 +28,7 @@ interface TrailblazeRule {
   fun tool(vararg trailblazeTool: TrailblazeTool): TrailblazeToolResult
 
   /**
-   * Run a Trailblaze tool with the agent.
-   *
-   * @throws [xyz.block.trailblaze.exception.TrailblazeException] if the agent fails to complete the task.
-   */
-  fun maestro(maestroYaml: String): TrailblazeToolResult
-
-  /**
    * Use Maestro [Command] Models Directly for Type Safety
    */
-  fun maestroCommands(vararg maestroCommand: Command): TrailblazeToolResult
+  suspend fun maestroCommands(vararg maestroCommand: Command): TrailblazeToolResult
 }

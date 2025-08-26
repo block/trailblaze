@@ -18,9 +18,9 @@ com.squareup.okhttp3:okhttp-sse:4.12.0
 com.squareup.okhttp3:okhttp:4.12.0
 com.squareup.okio:okio-jvm:3.13.0
 com.squareup.okio:okio:3.13.0
-dev.mobile:maestro-client:1.40.0
-dev.mobile:maestro-orchestra-models:1.40.0
-dev.mobile:maestro-orchestra:1.40.0
+dev.mobile:maestro-client:2.0.0
+dev.mobile:maestro-orchestra-models:2.0.0
+dev.mobile:maestro-orchestra:2.0.0
 io.ktor:ktor-client-core-jvm:3.1.3
 io.ktor:ktor-client-core:3.1.3
 io.ktor:ktor-client-logging-jvm:3.1.3

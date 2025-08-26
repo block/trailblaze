@@ -24,7 +24,6 @@ data class TapOnPointTrailblazeTool(
   override fun toMaestroCommands(memory: AgentMemory): List<Command> = listOf(
     TapOnPointV2Command(
       point = "$x,$y",
-      retryIfNoChange = false,
     ),
   )
 }

@@ -50,7 +50,7 @@ class MaestroCommandToYamlSerializerTest {
       speedMPS = 110.0,
     ).also { command ->
       convertCommandsToYamlAndParseAndCompare(
-        original = command,
+        commandToSerialize = command,
         expected = command,
       )
     }
@@ -65,7 +65,7 @@ class MaestroCommandToYamlSerializerTest {
       ),
     ).also { command ->
       convertCommandsToYamlAndParseAndCompare(
-        original = command,
+        commandToSerialize = command,
         expected = command.copy(
           speedMPS = 10.0, // Default Value
         ),
@@ -81,7 +81,7 @@ class MaestroCommandToYamlSerializerTest {
       endRelative = "50%,50%",
     ).also { command ->
       convertCommandsToYamlAndParseAndCompare(
-        original = command,
+        commandToSerialize = command,
         expected = command,
       )
     }
@@ -96,7 +96,7 @@ class MaestroCommandToYamlSerializerTest {
       direction = SwipeDirection.UP,
     ).also { command ->
       convertCommandsToYamlAndParseAndCompare(
-        original = command,
+        commandToSerialize = command,
         expected = command,
       )
     }
@@ -108,7 +108,7 @@ class MaestroCommandToYamlSerializerTest {
       direction = SwipeDirection.LEFT,
     ).also { command ->
       convertCommandsToYamlAndParseAndCompare(
-        original = command,
+        commandToSerialize = command,
         expected = command,
       )
     }
@@ -124,9 +124,9 @@ class MaestroCommandToYamlSerializerTest {
       ),
     ).also { command ->
       convertCommandsToYamlAndParseAndCompare(
-        original = command,
+        commandToSerialize = command,
         expected = command.copy(
-          retryIfNoChange = true, // Default Value
+          retryIfNoChange = false, // Default Value
           waitUntilVisible = false, // Default Value
           longPress = false, // Default Value
         ),
@@ -144,7 +144,7 @@ class MaestroCommandToYamlSerializerTest {
       waitUntilVisible = false,
     ).also { command ->
       convertCommandsToYamlAndParseAndCompare(
-        original = command,
+        commandToSerialize = command,
         expected = command.copy(
           longPress = false, // Default Value
         ),
@@ -161,9 +161,9 @@ class MaestroCommandToYamlSerializerTest {
       longPress = true,
     ).also { command ->
       convertCommandsToYamlAndParseAndCompare(
-        original = command,
+        commandToSerialize = command,
         expected = command.copy(
-          retryIfNoChange = true, // Default Value
+          retryIfNoChange = false, // Default Value
           waitUntilVisible = false, // Default Value
         ),
       )
@@ -179,9 +179,9 @@ class MaestroCommandToYamlSerializerTest {
       waitToSettleTimeoutMs = 1000,
     ).also { command ->
       convertCommandsToYamlAndParseAndCompare(
-        original = command,
+        commandToSerialize = command,
         expected = command.copy(
-          retryIfNoChange = true, // Default Value
+          retryIfNoChange = false, // Default Value
         ),
       )
     }
@@ -193,7 +193,7 @@ class MaestroCommandToYamlSerializerTest {
       value = AirplaneValue.Enable,
     ).also { command ->
       convertCommandsToYamlAndParseAndCompare(
-        original = command,
+        commandToSerialize = command,
         expected = command,
       )
     }
@@ -205,7 +205,7 @@ class MaestroCommandToYamlSerializerTest {
       value = AirplaneValue.Disable,
     ).also { command ->
       convertCommandsToYamlAndParseAndCompare(
-        original = command,
+        commandToSerialize = command,
         expected = command,
       )
     }
@@ -222,7 +222,7 @@ class MaestroCommandToYamlSerializerTest {
       centerElement = false,
     ).also { command ->
       convertCommandsToYamlAndParseAndCompare(
-        original = command,
+        commandToSerialize = command,
         expected = command,
       )
     }
@@ -234,7 +234,7 @@ class MaestroCommandToYamlSerializerTest {
       code = KeyCode.ENTER,
     ).also { command ->
       convertCommandsToYamlAndParseAndCompare(
-        original = command,
+        commandToSerialize = command,
         expected = command,
       )
     }
@@ -247,7 +247,7 @@ class MaestroCommandToYamlSerializerTest {
       length = 1,
     ).also { command ->
       convertCommandsToYamlAndParseAndCompare(
-        original = command,
+        commandToSerialize = command,
         expected = command,
       )
     }
@@ -259,7 +259,7 @@ class MaestroCommandToYamlSerializerTest {
       length = 3,
     ).also { command ->
       convertCommandsToYamlAndParseAndCompare(
-        original = command,
+        commandToSerialize = command,
         expected = command,
       )
     }
@@ -271,7 +271,7 @@ class MaestroCommandToYamlSerializerTest {
       inputType = InputRandomType.TEXT_PERSON_NAME,
     ).also { command ->
       convertCommandsToYamlAndParseAndCompare(
-        original = command,
+        commandToSerialize = command,
         expected = command,
       )
     }
@@ -283,7 +283,7 @@ class MaestroCommandToYamlSerializerTest {
       inputType = InputRandomType.TEXT_EMAIL_ADDRESS,
     ).also { command ->
       convertCommandsToYamlAndParseAndCompare(
-        original = command,
+        commandToSerialize = command,
         expected = command,
       )
     }
@@ -295,7 +295,7 @@ class MaestroCommandToYamlSerializerTest {
       inputType = InputRandomType.NUMBER,
     ).also { command ->
       convertCommandsToYamlAndParseAndCompare(
-        original = command,
+        commandToSerialize = command,
         expected = command,
       )
     }
@@ -307,7 +307,7 @@ class MaestroCommandToYamlSerializerTest {
       text = "user@example.com",
     ).also { command ->
       convertCommandsToYamlAndParseAndCompare(
-        original = command,
+        commandToSerialize = command,
         expected = command,
       )
     }
@@ -319,7 +319,7 @@ class MaestroCommandToYamlSerializerTest {
       text = "5105105105105100",
     ).also { command ->
       convertCommandsToYamlAndParseAndCompare(
-        original = command,
+        commandToSerialize = command,
         expected = command,
       )
     }
@@ -331,7 +331,7 @@ class MaestroCommandToYamlSerializerTest {
       text = "a b c d e f g",
     ).also { command ->
       convertCommandsToYamlAndParseAndCompare(
-        original = command,
+        commandToSerialize = command,
         expected = command,
       )
     }
@@ -343,7 +343,7 @@ class MaestroCommandToYamlSerializerTest {
       text = "Line 1\nLine 2\nLine 3\n",
     ).also { command ->
       convertCommandsToYamlAndParseAndCompare(
-        original = command,
+        commandToSerialize = command,
         expected = command,
       )
     }
@@ -360,7 +360,7 @@ class MaestroCommandToYamlSerializerTest {
       ),
     ).also { command ->
       convertCommandsToYamlAndParseAndCompare(
-        original = command,
+        commandToSerialize = command,
         expected = command,
       )
     }
@@ -377,7 +377,7 @@ class MaestroCommandToYamlSerializerTest {
       ),
     ).also { command ->
       convertCommandsToYamlAndParseAndCompare(
-        original = command,
+        commandToSerialize = command,
         expected = AssertConditionCommand(
           condition = Condition(
             visible = command.visible,
@@ -399,7 +399,7 @@ class MaestroCommandToYamlSerializerTest {
       ),
     ).also { command ->
       convertCommandsToYamlAndParseAndCompare(
-        original = command,
+        commandToSerialize = command,
         expected = command,
       )
     }
@@ -412,7 +412,7 @@ class MaestroCommandToYamlSerializerTest {
       longitude = "-122.4194",
     ).also { command ->
       convertCommandsToYamlAndParseAndCompare(
-        original = command,
+        commandToSerialize = command,
         expected = command,
       )
     }
@@ -426,7 +426,7 @@ class MaestroCommandToYamlSerializerTest {
       browser = true,
     ).also { command ->
       convertCommandsToYamlAndParseAndCompare(
-        original = command,
+        commandToSerialize = command,
         expected = command,
       )
     }
@@ -447,7 +447,7 @@ class MaestroCommandToYamlSerializerTest {
       ),
     ).also { command ->
       convertCommandsToYamlAndParseAndCompare(
-        original = command,
+        commandToSerialize = command,
         expected = command,
       )
     }
@@ -457,7 +457,7 @@ class MaestroCommandToYamlSerializerTest {
   fun clearKeychainCommand() {
     ClearKeychainCommand().also { command ->
       convertCommandsToYamlAndParseAndCompare(
-        original = command,
+        commandToSerialize = command,
         expected = command,
       )
     }
@@ -469,7 +469,7 @@ class MaestroCommandToYamlSerializerTest {
       charactersToErase = 12,
     ).also { command ->
       convertCommandsToYamlAndParseAndCompare(
-        original = command,
+        commandToSerialize = command,
         expected = command,
       )
     }
@@ -483,9 +483,9 @@ class MaestroCommandToYamlSerializerTest {
       ),
     ).also { command ->
       convertCommandsToYamlAndParseAndCompare(
-        original = command,
+        commandToSerialize = command,
         expected = command.copy(
-          retryIfNoChange = true, // Default Value
+          retryIfNoChange = false, // Default Value
           waitUntilVisible = false, // Default Value
           longPress = false, // Default Value
         ),
@@ -511,9 +511,9 @@ class MaestroCommandToYamlSerializerTest {
       ),
     ).also { command ->
       convertCommandsToYamlAndParseAndCompare(
-        original = command,
+        commandToSerialize = command,
         expected = command.copy(
-          retryIfNoChange = true, // Default Value
+          retryIfNoChange = false, // Default Value
           waitUntilVisible = false, // Default Value
           longPress = false, // Default Value
         ),
@@ -523,8 +523,8 @@ class MaestroCommandToYamlSerializerTest {
 
   companion object {
     val gsonInstance: Gson = GsonBuilder().setPrettyPrinting().create()
-    private fun convertCommandsToYamlAndParseAndCompare(original: Command, expected: Command) {
-      val commands = listOf(original)
+    private fun convertCommandsToYamlAndParseAndCompare(commandToSerialize: Command, expected: Command) {
+      val commands = listOf(commandToSerialize)
       val yamlString = MaestroYamlSerializer.toYaml(commands)
       println(yamlString)
 

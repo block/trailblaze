@@ -1,11 +1,8 @@
 package xyz.block.trailblaze.examples.settings
 
-import ai.koog.prompt.executor.clients.openai.OpenAIModels
-import maestro.orchestra.LaunchAppCommand
-import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
-import xyz.block.trailblaze.android.openai.OpenAiTrailblazeRule
+import xyz.block.trailblaze.examples.ExamplesAndroidTrailblazeRuleOpenAiTrailblazeRule
 
 /**
  * Example showing how to use Trailblaze with Settings app via prompts and maestro.
@@ -13,47 +10,69 @@ import xyz.block.trailblaze.android.openai.OpenAiTrailblazeRule
 class AndroidSettingsTest {
 
   @get:Rule
-  val trailblazeRule = OpenAiTrailblazeRule(
-    llmModel = OpenAIModels.Reasoning.O3,
-  )
-
-  @Before
-  fun setUp() {
-    trailblazeRule.maestroCommands(
-      LaunchAppCommand(
-        appId = "com.android.settings",
-        stopApp = false,
-        clearState = false,
-      ),
-    )
-  }
+  val trailblazeRule = ExamplesAndroidTrailblazeRuleOpenAiTrailblazeRule()
 
   @Test
   fun becomeADeveloperAi() {
-    trailblazeRule.prompt(
+    trailblazeRule.run(
       """
-      - Open the "System" section of the Settings app
-      - Tap on the "about device" section.
-      - Find the "Build number" and tap on it 7 times.
+- maestro:
+  - launchApp:
+      appId: com.android.settings
+      stopApp: true
+- prompts:
+    - step: Open the "System" section of the Settings app
+    - step: Tap on the "about device" section.
+    - step: Find the "Build number" and tap on it 7 times.
       """.trimIndent(),
     )
   }
 
   @Test
   fun becomeADeveloperMaestroYaml() {
-    trailblazeRule.maestro(
+    trailblazeRule.run(
       """
-- tapOn:
-    text: Search settings
-- inputText:
-    text: Build number
-- tapOn:
-    id: "android:id/title"
-    text: Build number
-- tapOn:
-    text: Build number
-    repeat: 7
-    retryTapIfNoChange: false
+
+- maestro:
+  - launchApp:
+      appId: com.android.settings
+      stopApp: true
+- prompts:
+  - step: Open the "System" section of the Settings app
+    recording:
+      tools:
+      - scrollUntilTextIsVisible:
+          text: System
+          direction: DOWN
+      - tapOnElementWithText:
+          text: System
+  - step: Tap on the "about device" section.
+    recording:
+      tools:
+      - tapOnElementWithAccessibilityText:
+          accessibilityText: Back
+  - step: Find the "Build number" and tap on it 7 times.
+    recording:
+      tools:
+      - tapOnElementWithText:
+          text: About emulated device
+      - scrollUntilTextIsVisible:
+          text: Build number
+          direction: DOWN
+      - tapOnElementWithText:
+          text: Build number
+      - tapOnElementWithText:
+          text: Build number
+      - tapOnElementWithText:
+          text: Build number
+      - tapOnElementWithText:
+          text: Build number
+      - tapOnElementWithText:
+          text: Build number
+      - tapOnElementWithText:
+          text: Build number
+      - tapOnElementWithText:
+          text: Build number
       """.trimIndent(),
     )
   }

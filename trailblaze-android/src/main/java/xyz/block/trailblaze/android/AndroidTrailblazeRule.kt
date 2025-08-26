@@ -2,6 +2,7 @@ package xyz.block.trailblaze.android
 
 import ai.koog.prompt.executor.clients.LLMClient
 import ai.koog.prompt.llm.LLModel
+import kotlinx.coroutines.runBlocking
 import maestro.orchestra.Command
 import org.junit.runner.Description
 import xyz.block.trailblaze.AndroidMaestroTrailblazeAgent
@@ -13,7 +14,6 @@ import xyz.block.trailblaze.android.uiautomator.AndroidOnDeviceUiAutomatorScreen
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TestAgentRunner
 import xyz.block.trailblaze.exception.TrailblazeException
-import xyz.block.trailblaze.maestro.MaestroYamlParser
 import xyz.block.trailblaze.rules.SimpleTestRuleChain
 import xyz.block.trailblaze.rules.TrailblazeRule
 import xyz.block.trailblaze.rules.TrailblazeRunnerUtil
@@ -95,7 +95,7 @@ open class AndroidTrailblazeRule(
     val trailItems = trailblazeYaml.decodeTrail(testYaml)
     for (item in trailItems) {
       val itemResult = when (item) {
-        is TrailYamlItem.MaestroTrailItem -> runMaestroCommands(item.maestro.maestroCommands)
+        is TrailYamlItem.MaestroTrailItem -> runMaestroCommandsBlocking(item.maestro.maestroCommands)
         is TrailYamlItem.PromptsTrailItem -> trailblazeRunnerUtil.runPrompt(item.promptSteps, useRecordedSteps)
         is TrailYamlItem.ToolTrailItem -> runTrailblazeTool(item.tools.map { it.trailblazeTool })
         is TrailYamlItem.ConfigTrailItem -> handleConfig(item.config)
@@ -119,15 +119,20 @@ open class AndroidTrailblazeRule(
     }
   }
 
-  private fun runMaestroCommands(maestroCommands: List<Command>): TrailblazeToolResult = when (
-    val maestroResult =
-      trailblazeAgent.runMaestroCommands(
-        maestroCommands = maestroCommands,
-        llmResponseId = null,
-      )
-  ) {
-    is TrailblazeToolResult.Success -> maestroResult
-    is TrailblazeToolResult.Error -> throw TrailblazeException(maestroResult.errorMessage)
+  @Deprecated("Prefer the suspend version.")
+  private fun runMaestroCommandsBlocking(maestroCommands: List<Command>): TrailblazeToolResult = runBlocking { runMaestroCommands(maestroCommands) }
+
+  private suspend fun runMaestroCommands(maestroCommands: List<Command>): TrailblazeToolResult = runBlocking {
+    when (
+      val maestroResult =
+        trailblazeAgent.runMaestroCommands(
+          maestroCommands = maestroCommands,
+          llmResponseId = null,
+        )
+    ) {
+      is TrailblazeToolResult.Success -> maestroResult
+      is TrailblazeToolResult.Error -> throw TrailblazeException(maestroResult.errorMessage)
+    }
   }
 
   private fun handleConfig(config: TrailConfig): TrailblazeToolResult {
@@ -166,14 +171,7 @@ open class AndroidTrailblazeRule(
   /**
    * Run a Trailblaze tool with the agent.
    */
-  override fun maestro(maestroYaml: String): TrailblazeToolResult = maestroCommands(
-    maestroCommand = MaestroYamlParser.parseYaml(maestroYaml).toTypedArray(),
-  )
-
-  /**
-   * Run a Trailblaze tool with the agent.
-   */
-  override fun maestroCommands(vararg maestroCommand: Command): TrailblazeToolResult {
+  override suspend fun maestroCommands(vararg maestroCommand: Command): TrailblazeToolResult {
     val runCommandsResult = trailblazeAgent.runMaestroCommands(
       maestroCommand.toList(),
       null,

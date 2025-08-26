@@ -1,10 +1,10 @@
 package xyz.block.trailblaze.examples.clock
 
-import maestro.orchestra.LaunchAppCommand
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
-import xyz.block.trailblaze.android.openai.OpenAiTrailblazeRule
+import xyz.block.trailblaze.examples.ExamplesAndroidTrailblazeRuleOpenAiTrailblazeRule
+import xyz.block.trailblaze.toolcalls.commands.LaunchAppTrailblazeTool
 
 /**
  * Example test showing how to use Trailblaze with AI to use the Clock app via prompts.
@@ -12,26 +12,29 @@ import xyz.block.trailblaze.android.openai.OpenAiTrailblazeRule
 class ClockTest {
 
   @get:Rule
-  val trailblazeRule = OpenAiTrailblazeRule()
+  val trailblazeRule = ExamplesAndroidTrailblazeRuleOpenAiTrailblazeRule()
 
   @Before
   fun setUp() {
-    trailblazeRule.maestroCommands(
-      LaunchAppCommand(
+    trailblazeRule.tool(
+      LaunchAppTrailblazeTool(
         appId = "com.google.android.deskclock",
-        stopApp = false,
-        clearState = false,
+        launchMode = LaunchAppTrailblazeTool.LaunchMode.FORCE_RESTART,
       ),
     )
   }
 
   @Test
   fun setAnAlarm() {
-    trailblazeRule.prompt(
+    trailblazeRule.run(
       """
-      - Add a new alarm for 7:30 AM
-      - After it's been added, turn it off
-      - Delete the alarm
+- maestro:
+  - launchApp:
+      appId: com.google.android.deskclock
+- prompts:
+  - step: Add a new alarm for 7:30 AM
+  - step: After it's been added, turn it off
+  - step: Delete the alarm
       """.trimIndent(),
     )
   }

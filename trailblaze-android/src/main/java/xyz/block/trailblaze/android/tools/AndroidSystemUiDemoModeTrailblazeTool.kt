@@ -15,7 +15,7 @@ data class AndroidSystemUiDemoModeTrailblazeTool(
   @LLMDescription("If we should enable demo mode on the device.")
   val enable: Boolean = true,
 ) : ExecutableTrailblazeTool {
-  override fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult {
+  override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult {
     val adbShellCommands = if (enable) {
       listOf(
         "settings put global sysui_demo_allowed 1",

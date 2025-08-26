@@ -9,7 +9,7 @@ import xyz.block.trailblaze.AgentMemory
 abstract class MapsToMaestroCommands : ExecutableTrailblazeTool {
   abstract fun toMaestroCommands(memory: AgentMemory): List<Command>
 
-  override fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult = toolExecutionContext.trailblazeAgent.runMaestroCommands(
+  override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult = toolExecutionContext.trailblazeAgent.runMaestroCommands(
     maestroCommands = toMaestroCommands(toolExecutionContext.trailblazeAgent.memory),
     llmResponseId = toolExecutionContext.llmResponseId,
   )

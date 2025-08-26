@@ -46,7 +46,6 @@ data class LongPressElementWithAccessibilityTextTrailblazeTool(
         selected = selected,
       ),
       longPress = true,
-      retryIfNoChange = false,
     ),
   )
 }

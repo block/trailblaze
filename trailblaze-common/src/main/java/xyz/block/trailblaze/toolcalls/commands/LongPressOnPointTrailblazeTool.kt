@@ -25,7 +25,6 @@ data class LongPressOnPointTrailblazeTool(
     TapOnPointV2Command(
       point = "$x,$y",
       longPress = true,
-      retryIfNoChange = false,
     ),
   )
 }

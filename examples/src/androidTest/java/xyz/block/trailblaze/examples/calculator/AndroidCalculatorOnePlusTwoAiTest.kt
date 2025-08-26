@@ -1,10 +1,8 @@
 package xyz.block.trailblaze.examples.calculator
 
-import maestro.orchestra.LaunchAppCommand
-import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
-import xyz.block.trailblaze.android.openai.OpenAiTrailblazeRule
+import xyz.block.trailblaze.examples.ExamplesAndroidTrailblazeRuleOpenAiTrailblazeRule
 import xyz.block.trailblaze.exception.TrailblazeException
 
 /**
@@ -13,33 +11,32 @@ import xyz.block.trailblaze.exception.TrailblazeException
 class AndroidCalculatorOnePlusTwoAiTest {
 
   @get:Rule
-  val trailblazeRule = OpenAiTrailblazeRule()
-
-  @Before
-  fun setUp() {
-    trailblazeRule.maestroCommands(
-      LaunchAppCommand(
-        appId = "com.android.calculator2",
-      ),
-    )
-  }
+  val trailblazeRule = ExamplesAndroidTrailblazeRuleOpenAiTrailblazeRule()
 
   @Test
   fun trailblazeSuccess() {
-    trailblazeRule.prompt(
+    trailblazeRule.run(
       """
-      - calculate 1+2
-      - verify the result is 3
+- maestro:
+  - launchApp:
+      appId: com.android.calculator2
+- prompts:
+  - step: calculate 1+2
+  - step: verify the result is 3
       """.trimIndent(),
     )
   }
 
   @Test(expected = TrailblazeException::class)
   fun trailblazeExpectedFailure() {
-    trailblazeRule.prompt(
+    trailblazeRule.run(
       """
-      - calculate 1+2
-      - verify the result is 4
+- maestro:
+  - launchApp:
+      appId: com.android.calculator2
+- prompts:
+  - step: calculate 1+2
+  - step: verify the result is 4
       """.trimIndent(),
     )
   }

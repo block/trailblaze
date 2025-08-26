@@ -3,7 +3,7 @@ package xyz.block.trailblaze.examples.calculator
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
-import xyz.block.trailblaze.android.openai.OpenAiTrailblazeRule
+import xyz.block.trailblaze.examples.ExamplesAndroidTrailblazeRuleOpenAiTrailblazeRule
 import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.toolcalls.commands.LaunchAppTrailblazeTool
 
@@ -13,7 +13,7 @@ import xyz.block.trailblaze.toolcalls.commands.LaunchAppTrailblazeTool
 class AndroidCalculatorOnePlusTwoMixedTest {
 
   @get:Rule
-  val trailblazeRule = OpenAiTrailblazeRule()
+  val trailblazeRule = ExamplesAndroidTrailblazeRuleOpenAiTrailblazeRule()
 
   @Before
   fun setUp() {
@@ -27,33 +27,34 @@ class AndroidCalculatorOnePlusTwoMixedTest {
 
   @Test
   fun trailblazeSuccessWithManualAssertion() {
-    trailblazeRule.prompt(
+    trailblazeRule.run(
       """
-      - calculate 1+2
-      """.trimIndent(),
-    )
-    trailblazeRule.maestro(
-      """
-- assertVisible:
-    id: "com.android.calculator2:id/result"
-    text: "3"
+- maestro:
+  - launchApp:
+      appId: com.android.calculator2
+- prompts:
+  - step: calculate 1+2
+- maestro:
+    - assertVisible:
+        id: "com.android.calculator2:id/result"
+        text: "3"
       """.trimIndent(),
     )
   }
 
   @Test(expected = TrailblazeException::class)
   fun trailblazeSuccessWithManualAssertionExpectedFailure() {
-    trailblazeRule.prompt(
+    trailblazeRule.run(
       """
-      - calculate 1+2
-      """.trimIndent(),
-    )
-    // This will fail because the result is 3, not 4.
-    trailblazeRule.maestro(
-      """
-- assertVisible:
-    id: "com.android.calculator2:id/result"
-    text: "4"
+- maestro:
+  - launchApp:
+      appId: com.android.calculator2
+- prompts:
+  - step: calculate 1+2
+- maestro:
+    - assertVisible:
+        id: "com.android.calculator2:id/result"
+        text: "4"
       """.trimIndent(),
     )
   }
