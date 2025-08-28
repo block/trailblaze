@@ -9,7 +9,6 @@ import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.report.utils.LogsRepo
-import java.io.File
 
 /**
  * Handles POST requests to the /agentlog endpoint to accept `TrailblazeLog` requests.
@@ -25,14 +24,6 @@ object AgentLogEndpoint {
   @TestOnly
   fun setServerReceivedLogsListener(logListener: (TrailblazeLog) -> Unit) {
     this.logListener = logListener
-  }
-
-  val countBySession = mutableMapOf<String, Int>()
-
-  fun getNextLogCountForSession(sessionId: String): Int = synchronized(countBySession) {
-    val newValue = (countBySession[sessionId] ?: 0) + 1
-    countBySession[sessionId] = newValue
-    newValue
   }
 
   fun register(
@@ -54,18 +45,8 @@ object AgentLogEndpoint {
         )
       }
       logListener(logEvent)
-      val sessionDir = logsRepo.getSessionDir(logEvent.session)
-
-      val logCount = getNextLogCountForSession(logEvent.session)
-
-      val jsonLogFilename =
-        File(sessionDir, "agent_${logCount}_${logEvent::class.java.simpleName}.json")
-      jsonLogFilename.writeText(
-        TrailblazeJsonInstance.encodeToString<TrailblazeLog>(
-          logEvent,
-        ),
-      )
-      call.respondText("Log received and saved as $jsonLogFilename")
+      val jsonLogFile = logsRepo.saveLogToDisk(logEvent)
+      call.respondText("Log received and saved as $jsonLogFile")
     }
   }
 }

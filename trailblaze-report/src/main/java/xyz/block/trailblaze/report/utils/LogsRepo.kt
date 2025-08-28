@@ -220,7 +220,6 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
   private fun stopWatchingSessionList() {
     sessionListWatcher?.stopWatching()
     sessionListWatcher = null
-    println("SESSIONLISTENER - Stopped watching session list")
   }
 
   override suspend fun getSessionIdsAsync(): List<String> = getSessionIds()
@@ -232,24 +231,61 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
 
   fun getSessionInfo(sessionId: String): SessionInfo? {
     val logFiles = getLogFilesForSession(sessionId)
-    return logFiles
+    val sessionStartedLog: TrailblazeLog.TrailblazeSessionStatusChangeLog? = logFiles
       .sortedBy { it.lastModified() }
       .firstOrNull {
         val log = parseTrailblazeLogFromFile(it)
         log is TrailblazeLog.TrailblazeSessionStatusChangeLog && log.sessionStatus is SessionStatus.Started
-      }
-      ?.let {
-        val log = parseTrailblazeLogFromFile(it)
-        val statusChangeLog = log as TrailblazeLog.TrailblazeSessionStatusChangeLog
-        val status = statusChangeLog.sessionStatus as SessionStatus.Started
+      }?.let { parseTrailblazeLogFromFile(it) as TrailblazeLog.TrailblazeSessionStatusChangeLog }
 
-        SessionInfo(
-          sessionId = statusChangeLog.session,
-          timestamp = statusChangeLog.timestamp,
-          latestStatus = status,
-          testName = status.testMethodName,
-          testClass = status.testClassName,
-        )
-      }
+    val lastSessionStatusLog: TrailblazeLog.TrailblazeSessionStatusChangeLog? = logFiles
+      .sortedByDescending { it.lastModified() }
+      .firstOrNull {
+        val log = parseTrailblazeLogFromFile(it)
+        log is TrailblazeLog.TrailblazeSessionStatusChangeLog
+      }?.let { parseTrailblazeLogFromFile(it) as TrailblazeLog.TrailblazeSessionStatusChangeLog }
+
+    return if (sessionStartedLog != null && lastSessionStatusLog != null) {
+      val startedStatus: SessionStatus.Started = sessionStartedLog.sessionStatus as SessionStatus.Started
+      SessionInfo(
+        sessionId = sessionStartedLog.session,
+        timestamp = sessionStartedLog.timestamp,
+        latestStatus = lastSessionStatusLog.sessionStatus,
+        testName = startedStatus.testMethodName,
+        testClass = startedStatus.testClassName,
+      )
+    } else {
+      null
+    }
+  }
+
+  private val countBySession = mutableMapOf<String, Int>()
+
+  private fun getNextLogCountForSession(sessionId: String): Int = synchronized(countBySession) {
+    val newValue = (countBySession[sessionId] ?: 0) + 1
+    countBySession[sessionId] = newValue
+    newValue
+  }
+
+  /**
+   * If the number has 3 or more digits, it will just use its natural width, so 1000 stays 1000 (4 digits).
+   */
+  private fun formatNumber(num: Int): String = String.format("%03d", num)
+
+  /**
+   * @return the file where the log was written
+   */
+  fun saveLogToDisk(logEvent: TrailblazeLog): File {
+    val logCount = getNextLogCountForSession(logEvent.session)
+    val jsonLogFilename = File(
+      getSessionDir(logEvent.session),
+      "${formatNumber(logCount)}_${logEvent::class.java.simpleName}.json",
+    )
+    jsonLogFilename.writeText(
+      TrailblazeJsonInstance.encodeToString<TrailblazeLog>(
+        logEvent,
+      ),
+    )
+    return jsonLogFilename
   }
 }

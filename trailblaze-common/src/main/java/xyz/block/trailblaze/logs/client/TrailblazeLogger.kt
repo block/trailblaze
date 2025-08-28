@@ -15,16 +15,14 @@ import java.util.Locale
 
 object TrailblazeLogger {
 
-  private var logListener: (TrailblazeLog) -> Unit = {}
-  private var logScreenshotListener: (ByteArray) -> String = { "Screenshot_Not_Logged" }
+  private var logListener: (TrailblazeLog) -> Unit = { }
+  private var logScreenshotListener: (ByteArray) -> String = { "No Logger Set for Screenshots" }
 
   fun setLogListener(logListener: (TrailblazeLog) -> Unit) {
     this.logListener = logListener
   }
 
-  fun log(trailblazeLog: TrailblazeLog) {
-    logListener(trailblazeLog)
-  }
+  fun log(trailblazeLog: TrailblazeLog) = logListener(trailblazeLog)
 
   fun setLogScreenshotListener(logScreenshotListener: (ByteArray) -> String) {
     this.logScreenshotListener = logScreenshotListener

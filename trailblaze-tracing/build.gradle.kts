@@ -7,6 +7,7 @@ plugins {
   alias(libs.plugins.kotlin.serialization)
   alias(libs.plugins.spotless)
   alias(libs.plugins.dependency.guard)
+  alias(libs.plugins.vanniktech.maven.publish)
 }
 
 android {
@@ -24,6 +25,7 @@ kotlin {
   }
 
   androidTarget {
+    publishLibraryVariants("release", "debug")
     this.compilerOptions {
       jvmTarget = JvmTarget.JVM_17
     }

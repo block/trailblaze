@@ -3,6 +3,7 @@ plugins {
   alias(libs.plugins.kotlin.serialization)
   alias(libs.plugins.spotless)
   alias(libs.plugins.dependency.guard)
+  alias(libs.plugins.vanniktech.maven.publish)
   application
 }
 

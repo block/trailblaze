@@ -58,8 +58,7 @@ subprojects
         }
       }
 
-      val hasPublishPlugin = it.plugins.hasPlugin("com.vanniktech.maven.publish.base")
-      if (hasPublishPlugin) {
+      if (it.plugins.hasPlugin("com.vanniktech.maven.publish.base")) {
         it.extensions.getByType(MavenPublishBaseExtension::class.java).also { publishing ->
           publishing.pom {
             url.set("https://www.github.com/block/trailblaze")
@@ -93,19 +92,19 @@ subprojects
               )
             )
           }
-          if (plugins.hasPlugin("com.android.library")) {
-            publishing.configure(
-              AndroidSingleVariantLibrary(
-                sourcesJar = true,
-                publishJavadocJar = false,
-              )
-            )
-          }
+
           if (plugins.hasPlugin("org.jetbrains.kotlin.multiplatform")) {
             publishing.configure(
               KotlinMultiplatform(
                 sourcesJar = true,
                 javadocJar = JavadocJar.None(),
+              )
+            )
+          } else if (plugins.hasPlugin("com.android.library")) {
+            publishing.configure(
+              AndroidSingleVariantLibrary(
+                sourcesJar = true,
+                publishJavadocJar = false,
               )
             )
           }

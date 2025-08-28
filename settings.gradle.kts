@@ -24,6 +24,7 @@ include(
   ":trailblaze-android-ondevice-mcp",
   ":trailblaze-common",
   ":trailblaze-desktop",
+  ":trailblaze-host",
   ":trailblaze-models",
   ":trailblaze-ui",
   ":trailblaze-report",

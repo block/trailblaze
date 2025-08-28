@@ -56,7 +56,7 @@ object TrailblazeHttpClientFactory {
           println("TrailblazeClient: $message")
         }
       }
-      level = LogLevel.ALL
+      level = LogLevel.INFO
     }
   }
 
