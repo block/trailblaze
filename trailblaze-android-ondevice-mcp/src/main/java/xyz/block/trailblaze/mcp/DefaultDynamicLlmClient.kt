@@ -17,8 +17,9 @@ class DefaultDynamicLlmClient(
 ) : DynamicLlmClient {
 
   val modelId: String = dynamicLlmConfig.modelId
+  val contextLength: Long = dynamicLlmConfig.contextLength
   val providerId: String = dynamicLlmConfig.providerId
-  val capabilities = dynamicLlmConfig.capabilities.mapNotNull {
+  val capabilities = dynamicLlmConfig.capabilityIds.mapNotNull {
     LlmCapabilitiesUtil.capabilityFromString(it)
   }
 
@@ -35,6 +36,7 @@ class DefaultDynamicLlmClient(
       }
     },
     capabilities = capabilities,
+    contextLength = contextLength,
   )
 
   override fun createLlmClient(

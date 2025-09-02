@@ -337,7 +337,8 @@ fun YamlTabComposable(
     val dynamicLlmConfig = DynamicLlmConfig(
       modelId = currentModel.modelId,
       providerId = currentProvider.id,
-      capabilities = currentModel.capabilityIds
+      capabilityIds = currentModel.capabilityIds,
+      contextLength = currentModel.contextLength
     )
 
     Row(

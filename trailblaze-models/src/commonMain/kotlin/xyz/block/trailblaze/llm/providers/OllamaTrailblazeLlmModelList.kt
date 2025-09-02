@@ -10,11 +10,13 @@ object OllamaTrailblazeLlmModelList : TrailblazeLlmModelList {
     modelId = "gpt-oss:20b",
     inputCostPerOneMillionTokens = 0.0,
     outputCostPerOneMillionTokens = 0.0,
-    capabilityIds = listOf(
+    capabilities = listOf(
       LLMCapability.Temperature,
-      LLMCapability.Schema.JSON.Simple,
+      LLMCapability.Schema.JSON.Standard,
       LLMCapability.Tools,
-    ).map { it.id },
+    ),
+    contextLength = 131_072L, // 128K context window
+    maxOutputTokens = 65_536L, // 64K output tokens
   )
   override val entries = listOf(
     OLLAMA_GPT_OSS_20B,

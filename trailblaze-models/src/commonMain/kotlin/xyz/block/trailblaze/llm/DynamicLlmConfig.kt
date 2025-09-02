@@ -9,5 +9,6 @@ import kotlinx.serialization.Serializable
 data class DynamicLlmConfig(
   val modelId: String,
   val providerId: String,
-  val capabilities: List<String>,
+  val capabilityIds: List<String>,
+  val contextLength: Long,
 )

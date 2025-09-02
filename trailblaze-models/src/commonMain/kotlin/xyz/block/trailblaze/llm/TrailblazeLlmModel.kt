@@ -1,5 +1,7 @@
 package xyz.block.trailblaze.llm
 
+import ai.koog.prompt.llm.LLMCapability
+
 interface TrailblazeLlmModelList {
   val entries: List<TrailblazeLlmModel>
   val provider: TrailblazeLlmProvider
@@ -13,7 +15,11 @@ interface TrailblazeLlmModelList {
 data class TrailblazeLlmModel(
   val trailblazeLlmProvider: TrailblazeLlmProvider,
   val modelId: String,
+  private val capabilities: List<LLMCapability>,
   val inputCostPerOneMillionTokens: Double,
   val outputCostPerOneMillionTokens: Double,
-  val capabilityIds: List<String>,
-)
+  val contextLength: Long,
+  val maxOutputTokens: Long,
+) {
+  val capabilityIds: List<String> = capabilities.map { it.id }
+}
