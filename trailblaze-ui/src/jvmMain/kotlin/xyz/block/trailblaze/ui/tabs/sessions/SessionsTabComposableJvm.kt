@@ -37,6 +37,7 @@ fun SessionsTabComposableJvm(logsRepo: LogsRepo) {
     LiveSessionDetailComposable(
       sessionDataProvider = liveSessionDataProvider,
       toMaestroYaml = TemplateHelpers::asMaestroYaml,
+      toTrailblazeYaml = TemplateHelpers::asTrailblazeYaml,
       generateRecordingYaml = {
         val logs = liveSessionDataProvider.getLogsForSession(selectedSession!!.sessionId)
         logs.generateRecordedYaml()

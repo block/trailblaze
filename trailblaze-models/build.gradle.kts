@@ -26,6 +26,8 @@ kotlin {
       implementation(libs.coroutines)
       implementation(libs.koog.agents.tools)
       implementation(libs.koog.prompt.model)
+      implementation(libs.koog.prompt.executor.clients)
+      implementation(libs.koog.prompt.executor.llms)
       implementation(libs.kotlinx.datetime)
       implementation(libs.kotlinx.serialization.core)
     }

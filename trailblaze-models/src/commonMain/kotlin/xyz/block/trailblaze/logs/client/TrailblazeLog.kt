@@ -11,6 +11,7 @@ import xyz.block.trailblaze.logs.model.AgentLogEventType
 import xyz.block.trailblaze.logs.model.HasAgentTaskStatus
 import xyz.block.trailblaze.logs.model.HasDuration
 import xyz.block.trailblaze.logs.model.HasLlmResponseId
+import xyz.block.trailblaze.logs.model.HasPromptStep
 import xyz.block.trailblaze.logs.model.HasScreenshot
 import xyz.block.trailblaze.logs.model.HasTrailblazeTool
 import xyz.block.trailblaze.logs.model.LlmMessage
@@ -110,7 +111,7 @@ sealed interface TrailblazeLog {
   @Serializable
   data class DelegatingTrailblazeToolLog(
     val toolName: String,
-    override val command: TrailblazeTool,
+    override val trailblazeTool: TrailblazeTool,
     override val session: String,
     override val timestamp: Instant,
     override val llmResponseId: String?,
@@ -123,7 +124,7 @@ sealed interface TrailblazeLog {
 
   @Serializable
   data class TrailblazeToolLog(
-    override val command: TrailblazeTool,
+    override val trailblazeTool: TrailblazeTool,
     val toolName: String,
     val successful: Boolean,
     override val llmResponseId: String?,
@@ -140,20 +141,22 @@ sealed interface TrailblazeLog {
 
   @Serializable
   data class ObjectiveStartLog(
-    val promptStep: PromptStep,
+    override val promptStep: PromptStep,
     override val session: String,
     override val timestamp: Instant,
-  ) : TrailblazeLog {
+  ) : TrailblazeLog,
+    HasPromptStep {
     override val type: AgentLogEventType = AgentLogEventType.OBJECTIVE_START
   }
 
   @Serializable
   data class ObjectiveCompleteLog(
-    val promptStep: PromptStep,
+    override val promptStep: PromptStep,
     val objectiveResult: AgentTaskStatus,
     override val session: String,
     override val timestamp: Instant,
-  ) : TrailblazeLog {
+  ) : TrailblazeLog,
+    HasPromptStep {
     override val type: AgentLogEventType = AgentLogEventType.OBJECTIVE_COMPLETE
   }
 }

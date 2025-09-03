@@ -24,8 +24,10 @@ import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.logs.model.SessionStatus
+import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.ui.InspectViewHierarchyScreenComposable
 import xyz.block.trailblaze.ui.composables.FullScreenModalOverlay
+import xyz.block.trailblaze.ui.composables.ScreenshotImageModal
 import xyz.block.trailblaze.ui.images.ImageLoader
 import xyz.block.trailblaze.ui.images.NetworkImageLoader
 import xyz.block.trailblaze.ui.tabs.session.group.LogDetailsDialog
@@ -37,6 +39,7 @@ fun LiveSessionDetailComposable(
   sessionDataProvider: LiveSessionDataProvider,
   session: SessionInfo,
   toMaestroYaml: (JsonObject) -> String,
+  toTrailblazeYaml: (toolName: String, trailblazeTool: TrailblazeTool) -> String,
   generateRecordingYaml: () -> String,
   onBackClick: () -> Unit,
   imageLoader: ImageLoader = NetworkImageLoader(),
@@ -46,6 +49,14 @@ fun LiveSessionDetailComposable(
   var showInspectUIDialog by remember { mutableStateOf(false) }
   var currentLog by remember { mutableStateOf<TrailblazeLog?>(null) }
   var currentLlmLog by remember { mutableStateOf<TrailblazeLog.TrailblazeLlmRequestLog?>(null) }
+  
+  // Screenshot modal state
+  var showScreenshotModal by remember { mutableStateOf(false) }
+  var modalImageModel by remember { mutableStateOf<Any?>(null) }
+  var modalDeviceWidth by remember { mutableStateOf(0) }
+  var modalDeviceHeight by remember { mutableStateOf(0) }
+  var modalClickX by remember { mutableStateOf<Int?>(null) }
+  var modalClickY by remember { mutableStateOf<Int?>(null) }
 
   var logs by remember(session.sessionId) {
     mutableStateOf(sessionDataProvider.getLogsForSession(session.sessionId))
@@ -125,17 +136,28 @@ fun LiveSessionDetailComposable(
     showInspectUIDialog = true
   }
 
+  val handleShowScreenshotModal: (Any?, Int, Int, Int?, Int?) -> Unit = { imageModel, deviceWidth, deviceHeight, clickX, clickY ->
+    modalImageModel = imageModel
+    modalDeviceWidth = deviceWidth
+    modalDeviceHeight = deviceHeight
+    modalClickX = clickX
+    modalClickY = clickY
+    showScreenshotModal = true
+  }
+
   // Root Box that contains everything - main content AND modals
   Box(modifier = Modifier.fillMaxSize()) {
     // Main content
     SessionDetailComposable(
       details = sessionDetail,
       toMaestroYaml = toMaestroYaml,
+      toTrailblazeYaml = toTrailblazeYaml,
       generateRecordingYaml = generateRecordingYaml,
       onBackClick = onBackClick,
       imageLoader = imageLoader,
       onShowDetails = handleShowDetails,
-      onShowInspectUI = handleShowInspectUI
+      onShowInspectUI = handleShowInspectUI,
+      onShowScreenshotModal = handleShowScreenshotModal
     )
 
     // Modal dialogs as separate children with high zIndex
@@ -199,6 +221,23 @@ fun LiveSessionDetailComposable(
           )
         }
       }
+    }
+
+    // Screenshot modal
+    if (showScreenshotModal && modalImageModel != null) {
+      ScreenshotImageModal(
+        imageModel = modalImageModel!!,
+        deviceWidth = modalDeviceWidth,
+        deviceHeight = modalDeviceHeight,
+        clickX = modalClickX,
+        clickY = modalClickY,
+        onDismiss = {
+          showScreenshotModal = false
+          modalImageModel = null
+          modalClickX = null
+          modalClickY = null
+        }
+      )
     }
   }
 }

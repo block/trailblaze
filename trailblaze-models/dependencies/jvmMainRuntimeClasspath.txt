@@ -1,5 +1,11 @@
 ai.koog:agents-tools-jvm:0.4.1
 ai.koog:agents-tools:0.4.1
+ai.koog:prompt-executor-clients-jvm:0.4.1
+ai.koog:prompt-executor-clients:0.4.1
+ai.koog:prompt-executor-llms-jvm:0.4.1
+ai.koog:prompt-executor-llms:0.4.1
+ai.koog:prompt-executor-model-jvm:0.4.1
+ai.koog:prompt-executor-model:0.4.1
 ai.koog:prompt-llm-jvm:0.4.1
 ai.koog:prompt-llm:0.4.1
 ai.koog:prompt-markdown-jvm:0.4.1
@@ -10,6 +16,8 @@ ai.koog:prompt-xml-jvm:0.4.1
 ai.koog:prompt-xml:0.4.1
 ai.koog:rag-base-jvm:0.4.1
 ai.koog:rag-base:0.4.1
+io.github.oshai:kotlin-logging-jvm:7.0.7
+io.github.oshai:kotlin-logging:7.0.7
 org.jetbrains.kotlin:kotlin-reflect:2.1.21
 org.jetbrains.kotlin:kotlin-stdlib:2.1.21
 org.jetbrains.kotlinx:kotlinx-coroutines-bom:1.10.2

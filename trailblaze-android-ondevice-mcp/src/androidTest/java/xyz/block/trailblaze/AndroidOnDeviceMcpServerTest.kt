@@ -1,10 +1,16 @@
 package xyz.block.trailblaze
 
+import ai.koog.prompt.executor.clients.LLMClient
+import ai.koog.prompt.executor.clients.openai.OpenAILLMClient
+import ai.koog.prompt.executor.ollama.client.OllamaClient
+import ai.koog.prompt.llm.LLMProvider
 import org.junit.Rule
 import org.junit.Test
 import xyz.block.trailblaze.android.AndroidTrailblazeRule
+import xyz.block.trailblaze.android.InstrumentationArgUtil
+import xyz.block.trailblaze.http.DefaultDynamicLlmClient
+import xyz.block.trailblaze.http.TrailblazeHttpClientFactory
 import xyz.block.trailblaze.llm.RunYamlRequest
-import xyz.block.trailblaze.mcp.DefaultDynamicLlmClient
 import xyz.block.trailblaze.mcp.OnDeviceRpcServerUtils
 
 /**
@@ -28,7 +34,28 @@ class AndroidOnDeviceMcpServerTest {
   }
 
   private fun handleRunRequest(runYamlRequest: RunYamlRequest) {
-    val defaultDynamicLlmClient = DefaultDynamicLlmClient(runYamlRequest.dynamicLlmConfig)
+    val openAiApiKey: String? = InstrumentationArgUtil.getInstrumentationArg("OPENAI_API_KEY")
+    val baseClient = TrailblazeHttpClientFactory.createInsecureTrustAllCertsHttpClient(
+      timeoutInSeconds = 120,
+      reverseProxyUrl = InstrumentationArgUtil.reverseProxyEndpoint(),
+    )
+
+    val defaultDynamicLlmClient = DefaultDynamicLlmClient(
+      dynamicLlmConfig = runYamlRequest.dynamicLlmConfig,
+      llmClients = mutableMapOf<LLMProvider, LLMClient>(
+        LLMProvider.Ollama to OllamaClient(baseClient = baseClient),
+      ).apply {
+        openAiApiKey?.let {
+          put(
+            LLMProvider.OpenAI,
+            OpenAILLMClient(
+              baseClient = baseClient,
+              apiKey = openAiApiKey,
+            ),
+          )
+        }
+      },
+    )
 
     AndroidTrailblazeRule(
       llmModel = defaultDynamicLlmClient.createLlmModel(),

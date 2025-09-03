@@ -19,6 +19,10 @@ data class TrailblazeServerState(
     val availableFeatures: AvailableFeatures,
     val llmProvider: String = "openai", // Default to OpenAI provider
     val llmModel: String = "gpt-4.1", // Default to GPT-4.1 model
+    val yamlContent: String = """
+- prompts:
+    - step: click back
+""".trimIndent(), // Default YAML content
   ) {
     @Serializable
     data class AvailableFeatures(

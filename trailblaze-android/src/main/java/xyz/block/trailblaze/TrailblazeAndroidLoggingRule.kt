@@ -39,14 +39,18 @@ class TrailblazeAndroidLoggingRule(
     }
   },
   writeTraceToDisk = { sessionId: String, json: String ->
-    // Currently disabled due to exception on some API levels
-    withInstrumentation {
-      FileReadWriteUtil.writeToDownloadsFile(
-        context = context,
-        fileName = "$sessionId-trace.json",
-        contentBytes = json.toByteArray(),
-        directory = LOGS_DIR,
-      )
+    try {
+      // Currently disabled due to exception on some API levels
+      withInstrumentation {
+        FileReadWriteUtil.writeToDownloadsFile(
+          context = context,
+          fileName = "$sessionId-trace.json",
+          contentBytes = json.toByteArray(),
+          directory = LOGS_DIR,
+        )
+      }
+    } catch (e: Exception) {
+      println("Error writing trace file to disk: ${e.message}")
     }
   },
 ) {

@@ -48,6 +48,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import xyz.block.trailblaze.llm.DynamicLlmConfig
@@ -67,15 +68,9 @@ fun YamlTabComposable(
   targetTestApp: TargetTestApp,
   serverState: TrailblazeServerState,
   availableLlmModelLists: Set<TrailblazeLlmModelList>,
+  updateState: (TrailblazeServerState) -> Unit,
 ) {
-  var yamlContent by remember {
-    mutableStateOf(
-      """
-- prompts:
-    - step: click back
-""".trimIndent()
-    )
-  }
+  val yamlContent = serverState.appConfig.yamlContent
 
   var availableDevices by remember { mutableStateOf<List<AdbDevice>>(emptyList()) }
   var selectedDevice by remember { mutableStateOf<AdbDevice?>(null) }
@@ -85,7 +80,26 @@ fun YamlTabComposable(
   var progressMessages by remember { mutableStateOf<List<String>>(emptyList()) }
   var connectionStatus by remember { mutableStateOf<DeviceConnectionStatus?>(null) }
 
+  // Local state for YAML content to avoid saving on every character
+  var localYamlContent by remember(yamlContent) { mutableStateOf(yamlContent) }
+
   val coroutineScope = rememberCoroutineScope()
+
+  // Debounce Y AML content updates
+  LaunchedEffect(localYamlContent) {
+    if (localYamlContent != yamlContent) {
+      delay(500) // 500ms debounce
+      if (localYamlContent != yamlContent) { // Check again after delay
+        updateState(
+          serverState.copy(
+            appConfig = serverState.appConfig.copy(
+              yamlContent = localYamlContent
+            )
+          )
+        )
+      }
+    }
+  }
 
   val savedProviderId = serverState.appConfig.llmProvider
   val savedModelId: String = serverState.appConfig.llmModel
@@ -222,8 +236,10 @@ fun YamlTabComposable(
         Spacer(modifier = Modifier.height(8.dp))
 
         OutlinedTextField(
-          value = yamlContent,
-          onValueChange = { yamlContent = it },
+          value = localYamlContent,
+          onValueChange = { newContent ->
+            localYamlContent = newContent
+          },
           modifier = Modifier
             .fillMaxSize(),
           textStyle = TextStyle(
@@ -347,11 +363,11 @@ fun YamlTabComposable(
     ) {
       Button(
         onClick = {
-          if (selectedDevice != null && yamlContent.isNotBlank()) {
+          if (selectedDevice != null && localYamlContent.isNotBlank()) {
             coroutineScope.launch {
               runYamlOnDevice(
                 device = selectedDevice!!,
-                yamlContent = yamlContent,
+                yamlContent = localYamlContent,
                 targetTestApp = targetTestApp,
                 onProgressMessage = { message ->
                   progressMessages = progressMessages + message
@@ -363,7 +379,7 @@ fun YamlTabComposable(
             }
           }
         },
-        enabled = !isRunning && selectedDevice != null && yamlContent.isNotBlank(),
+        enabled = !isRunning && selectedDevice != null && localYamlContent.isNotBlank(),
         modifier = Modifier.weight(1f)
       ) {
         if (isRunning) {

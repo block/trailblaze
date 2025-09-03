@@ -12,16 +12,13 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.key
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
 import coil3.compose.AsyncImage
 import xyz.block.trailblaze.ui.images.ImageLoader
 import xyz.block.trailblaze.ui.images.NetworkImageLoader
@@ -36,8 +33,9 @@ fun ScreenshotImage(
   clickY: Int? = null,
   modifier: Modifier = Modifier,
   imageLoader: ImageLoader = NetworkImageLoader(),
+  forceHighQuality: Boolean = false,
+  onImageClick: ((imageModel: Any?, deviceWidth: Int, deviceHeight: Int, clickX: Int?, clickY: Int?) -> Unit)? = null,
 ) {
-  var showImageDialog by remember { mutableStateOf(false) }
   val imageModel = imageLoader.getImageModel(sessionId, screenshotFile)
 
   if (imageModel != null) {
@@ -45,15 +43,23 @@ fun ScreenshotImage(
       modifier = modifier
         .aspectRatio(deviceWidth.toFloat() / deviceHeight.toFloat())
         .clip(RoundedCornerShape(8.dp))
-        .clickable { showImageDialog = true }
+        .clickable { 
+          onImageClick?.invoke(imageModel, deviceWidth, deviceHeight, clickX, clickY)
+        }
     ) {
-      // Base image
-      AsyncImage(
-        model = imageModel,
-        contentDescription = "Screenshot",
-        modifier = Modifier.fillMaxSize(),
-        contentScale = ContentScale.Fit
-      )
+      val density = LocalDensity.current
+      val widthPx = with(density) { maxWidth.toPx().toInt() }
+      val heightPx = with(density) { maxHeight.toPx().toInt() }
+      
+      // Use key() to force recomposition when size changes for high quality mode
+      key(if (forceHighQuality) "${widthPx}x${heightPx}" else "default") {
+        AsyncImage(
+          model = imageModel,
+          contentDescription = "Screenshot",
+          modifier = Modifier.fillMaxSize(),
+          contentScale = ContentScale.Fit
+        )
+      }
 
       // Overlay click point if provided
       if (clickX != null && clickY != null && deviceWidth > 0 && deviceHeight > 0) {
@@ -80,18 +86,26 @@ fun ScreenshotImage(
       }
     }
 
-    // Image preview modal
-    if (showImageDialog) {
-      Dialog(onDismissRequest = { showImageDialog = false }) {
-        ImagePreviewDialog(
-          imageModel = imageModel,
-          deviceWidth = deviceWidth,
-          deviceHeight = deviceHeight,
-          clickX = clickX,
-          clickY = clickY,
-          onDismiss = { showImageDialog = false }
-        )
-      }
-    }
+  }
+}
+
+@Composable
+fun ScreenshotImageModal(
+  imageModel: Any,
+  deviceWidth: Int,
+  deviceHeight: Int,
+  clickX: Int?,
+  clickY: Int?,
+  onDismiss: () -> Unit,
+) {
+  FullScreenModalOverlay(onDismiss = onDismiss) {
+    ImagePreviewDialog(
+      imageModel = imageModel,
+      deviceWidth = deviceWidth,
+      deviceHeight = deviceHeight,
+      clickX = clickX,
+      clickY = clickY,
+      onDismiss = onDismiss
+    )
   }
 }

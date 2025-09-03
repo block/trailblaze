@@ -23,6 +23,16 @@ class TrailblazeYaml(
     TrailblazeToolSet.AllBuiltInTrailblazeTools + customTrailblazeToolClasses
 
   companion object {
+    fun toolToYaml(toolName: String, trailblazeTool: TrailblazeTool): String = defaultYamlInstance.encodeToString(
+      TrailblazeToolYamlWrapperSerializer(
+        setOf(),
+      ),
+      TrailblazeToolYamlWrapper(
+        name = toolName,
+        trailblazeTool = trailblazeTool,
+      ),
+    )
+
     private val yamlConfiguration = YamlConfiguration(
       encodeDefaults = false,
       breakScalarsAt = 500,

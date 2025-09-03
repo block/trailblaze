@@ -179,7 +179,7 @@ data class SessionSummary(
             )
 
             is TrailblazeLog.TrailblazeToolLog -> SessionEvent.TrailblazeTool(
-              code = TrailblazeJsonInstance.encodeToString(log.command),
+              code = TrailblazeJsonInstance.encodeToString(log.trailblazeTool),
               timestamp = log.timestamp,
               durationMs = log.durationMs,
               elapsedTimeMs = log.timestamp.toEpochMilliseconds() - sessionStartTimestamp.toEpochMilliseconds(),

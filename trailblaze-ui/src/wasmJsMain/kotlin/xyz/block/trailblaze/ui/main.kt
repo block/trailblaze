@@ -29,6 +29,7 @@ import xyz.block.trailblaze.logs.TrailblazeLogsDataProvider
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.ui.composables.FullScreenModalOverlay
+import xyz.block.trailblaze.ui.composables.ScreenshotImageModal
 import xyz.block.trailblaze.ui.tabs.session.SessionDetailComposable
 import xyz.block.trailblaze.ui.tabs.session.SessionListComposable
 import xyz.block.trailblaze.ui.tabs.session.group.LogDetailsDialog
@@ -155,6 +156,14 @@ fun WasmSessionDetailView(
   var showInspectUIDialog by remember { mutableStateOf(false) }
   var currentLog by remember { mutableStateOf<TrailblazeLog?>(null) }
   var currentLlmLog by remember { mutableStateOf<TrailblazeLog.TrailblazeLlmRequestLog?>(null) }
+  
+  // Screenshot modal state
+  var showScreenshotModal by remember { mutableStateOf(false) }
+  var modalImageModel by remember { mutableStateOf<Any?>(null) }
+  var modalDeviceWidth by remember { mutableStateOf(0) }
+  var modalDeviceHeight by remember { mutableStateOf(0) }
+  var modalClickX by remember { mutableStateOf<Int?>(null) }
+  var modalClickY by remember { mutableStateOf<Int?>(null) }
 
   LaunchedEffect(sessionName) {
     try {
@@ -196,6 +205,14 @@ fun WasmSessionDetailView(
         onShowInspectUI = { log ->
           currentLlmLog = log
           showInspectUIDialog = true
+        },
+        onShowScreenshotModal = { imageModel, deviceWidth, deviceHeight, clickX, clickY ->
+          modalImageModel = imageModel
+          modalDeviceWidth = deviceWidth
+          modalDeviceHeight = deviceHeight
+          modalClickX = clickX
+          modalClickY = clickY
+          showScreenshotModal = true
         }
       )
 
@@ -260,6 +277,23 @@ fun WasmSessionDetailView(
             )
           }
         }
+      }
+
+      // Screenshot modal
+      if (showScreenshotModal && modalImageModel != null) {
+        ScreenshotImageModal(
+          imageModel = modalImageModel!!,
+          deviceWidth = modalDeviceWidth,
+          deviceHeight = modalDeviceHeight,
+          clickX = modalClickX,
+          clickY = modalClickY,
+          onDismiss = {
+            showScreenshotModal = false
+            modalImageModel = null
+            modalClickX = null
+            modalClickY = null
+          }
+        )
       }
     }
   } else if (isLoading) {

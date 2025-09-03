@@ -107,6 +107,7 @@ ktor-network-tls-certificates = { module = "io.ktor:ktor-network-tls-certificate
 koog-agents = { module = "ai.koog:koog-agents", version.ref = "koog" }
 koog-agents-tools = { module = "ai.koog:agents-tools", version.ref = "koog" }
 koog-prompt-executor-clients = { module = "ai.koog:prompt-executor-clients", version.ref = "koog" }
+koog-prompt-executor-llms = { module = "ai.koog:prompt-executor-llms", version.ref = "koog" }
 koog-prompt-executor-google = { module = "ai.koog:prompt-executor-google-client", version.ref = "koog" }
 koog-prompt-executor-openai = { module = "ai.koog:prompt-executor-openai-client", version.ref = "koog" }
 koog-prompt-executor-ollama = { module = "ai.koog:prompt-executor-ollama-client", version.ref = "koog" }

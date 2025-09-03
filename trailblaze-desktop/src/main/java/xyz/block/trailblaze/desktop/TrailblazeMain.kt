@@ -69,7 +69,9 @@ fun main() {
         route = TrailblazeRoute.YamlRoute,
       ) {
         val serverState by trailblazeSavedSettingsRepo.serverStateFlow.collectAsState()
-        YamlTabComposable(TargetTestApp.DEFAULT, serverState, availableModelLists)
+        YamlTabComposable(TargetTestApp.DEFAULT, serverState, availableModelLists) { newState ->
+          trailblazeSavedSettingsRepo.serverStateFlow.value = newState
+        }
       },
     ),
     availableModelLists = availableModelLists,

@@ -32,6 +32,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import org.jetbrains.compose.ui.tooling.preview.Preview
+import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.llm.TrailblazeLlmModelList
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
 import xyz.block.trailblaze.llm.providers.OpenAITrailblazeLlmModelList
@@ -197,10 +198,9 @@ object LogsServerComposables {
                     val currentProvider: TrailblazeLlmProvider = currentProviderModelList.provider
 
                     val availableModelsForCurrentProvider = currentProviderModelList.entries
-                    val currentModel =
-                      currentProviderModelList.entries.firstOrNull {
-                        it.modelId == serverState.appConfig.llmModel
-                      } ?: currentProviderModelList.entries.first()
+                    val currentModel: TrailblazeLlmModel = currentProviderModelList.entries.firstOrNull {
+                      it.modelId == serverState.appConfig.llmModel
+                    } ?: currentProviderModelList.entries.first()
 
                     val currentLlmModelLabel = currentModel.modelId
 

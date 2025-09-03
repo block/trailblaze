@@ -1,5 +1,11 @@
 ai.koog:agents-tools-jvm:0.4.1
 ai.koog:agents-tools:0.4.1
+ai.koog:prompt-executor-clients-jvm:0.4.1
+ai.koog:prompt-executor-clients:0.4.1
+ai.koog:prompt-executor-llms-jvm:0.4.1
+ai.koog:prompt-executor-llms:0.4.1
+ai.koog:prompt-executor-model-jvm:0.4.1
+ai.koog:prompt-executor-model:0.4.1
 ai.koog:prompt-llm-jvm:0.4.1
 ai.koog:prompt-llm:0.4.1
 ai.koog:prompt-markdown-jvm:0.4.1
@@ -27,6 +33,8 @@ com.squareup.okio:okio:3.13.0
 dev.mobile:maestro-client:2.0.0
 dev.mobile:maestro-orchestra-models:2.0.0
 dev.mobile:maestro-orchestra:2.0.0
+io.github.oshai:kotlin-logging-jvm:7.0.7
+io.github.oshai:kotlin-logging:7.0.7
 io.ktor:ktor-client-core-jvm:3.2.3
 io.ktor:ktor-client-core:3.2.3
 io.ktor:ktor-client-logging-jvm:3.2.3

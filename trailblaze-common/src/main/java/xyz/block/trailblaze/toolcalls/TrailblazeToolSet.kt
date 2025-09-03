@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.toolcalls
 
+import xyz.block.trailblaze.toolcalls.commands.AssertNotVisibleWithTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleByNodeIdTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleWithAccessibilityTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleWithResourceIdTrailblazeTool
@@ -138,6 +139,7 @@ abstract class TrailblazeToolSet(
       AssertVisibleWithTextTrailblazeTool::class,
       AssertVisibleWithAccessibilityTextTrailblazeTool::class,
       AssertVisibleWithResourceIdTrailblazeTool::class,
+      AssertNotVisibleWithTextTrailblazeTool::class,
     ),
   )
 

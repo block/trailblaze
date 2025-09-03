@@ -1,11 +1,10 @@
 package xyz.block.trailblaze.logs.server.endpoints
 
-import io.ktor.server.freemarker.FreeMarkerContent
+import io.ktor.http.ContentType
+import io.ktor.server.response.respondText
 import io.ktor.server.routing.Routing
 import io.ktor.server.routing.get
 import xyz.block.trailblaze.report.utils.LogsRepo
-import kotlin.io.encoding.Base64
-import kotlin.io.encoding.ExperimentalEncodingApi
 
 /**
  * Endpoint to serve the home page of the Trailblaze logs server.
@@ -18,19 +17,19 @@ object HomeEndpoint {
     logsRepo: LogsRepo,
   ) = with(routing) {
     get("/") {
-      val sessionIds = logsRepo.getSessionIds()
-
-      val gooseRecipeJson = this::class.java.classLoader.getResource("trailblaze_goose_recipe.json").readText()
-      call.respond(
-        FreeMarkerContent(
-          template = "home.ftl",
-          model = mutableMapOf<String, Any?>().apply {
-            put("sessions", sessionIds)
-            @OptIn(ExperimentalEncodingApi::class)
-            put("gooseRecipe", Base64.encode(gooseRecipeJson.toByteArray()))
-          },
-        ),
-        null,
+      call.respondText(
+        """
+        <!DOCTYPE html>
+        <html>
+          <body>
+            <h1>The HTML Logs Viewer has been replaced by the Trailblaze Desktop App.</h1>
+            <h3>Start it by running the following command within the Trailblaze directory:</h3>
+            <h1><pre>./trailblaze</pre></h1>
+            <br/>
+          </body>
+        </html>
+        """.trimIndent(),
+        ContentType.Text.Html,
       )
     }
   }

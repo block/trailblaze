@@ -6,6 +6,8 @@ ai.koog:agents-tools-jvm:0.4.1
 ai.koog:agents-tools:0.4.1
 ai.koog:prompt-executor-clients-jvm:0.4.1
 ai.koog:prompt-executor-clients:0.4.1
+ai.koog:prompt-executor-llms-jvm:0.4.1
+ai.koog:prompt-executor-llms:0.4.1
 ai.koog:prompt-executor-model-jvm:0.4.1
 ai.koog:prompt-executor-model:0.4.1
 ai.koog:prompt-llm-jvm:0.4.1

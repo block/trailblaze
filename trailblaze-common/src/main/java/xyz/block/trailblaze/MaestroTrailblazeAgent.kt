@@ -167,7 +167,7 @@ abstract class MaestroTrailblazeAgent : TrailblazeAgent {
     trailblazeToolResult: TrailblazeToolResult,
   ) {
     val toolLog = TrailblazeLog.TrailblazeToolLog(
-      command = trailblazeTool,
+      trailblazeTool = trailblazeTool,
       toolName = trailblazeTool.getToolNameFromAnnotation(),
       exceptionMessage = (trailblazeToolResult as? TrailblazeToolResult.Error)?.errorMessage,
       successful = trailblazeToolResult == TrailblazeToolResult.Success,
@@ -188,7 +188,7 @@ abstract class MaestroTrailblazeAgent : TrailblazeAgent {
   ) {
     TrailblazeLogger.log(
       TrailblazeLog.DelegatingTrailblazeToolLog(
-        command = trailblazeTool,
+        trailblazeTool = trailblazeTool,
         toolName = trailblazeTool.getToolNameFromAnnotation(),
         executableTools = executableTools,
         session = TrailblazeLogger.getCurrentSessionId(),

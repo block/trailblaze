@@ -33,8 +33,8 @@ object TrailblazeYamlSessionRecording {
         println("### have current log ${currentLog::class}")
         when (currentLog) {
           is TrailblazeLog.DelegatingTrailblazeToolLog -> {
-            if (currentLog.command::class != OtherTrailblazeTool::class) {
-              tools(listOf(currentLog.command))
+            if (currentLog.trailblazeTool::class != OtherTrailblazeTool::class) {
+              tools(listOf(currentLog.trailblazeTool))
             }
           }
 
@@ -64,7 +64,7 @@ object TrailblazeYamlSessionRecording {
               .dropLast(1) // remove objective complete log
               .filterIsInstance<TrailblazeLog.TrailblazeToolLog>()
               .map { log ->
-                log.command
+                log.trailblazeTool
               }
 
             prompt(
@@ -77,8 +77,8 @@ object TrailblazeYamlSessionRecording {
           }
 
           is TrailblazeLog.TrailblazeToolLog -> {
-            if (currentLog.command::class != OtherTrailblazeTool::class) {
-              tools(listOf(currentLog.command))
+            if (currentLog.trailblazeTool::class != OtherTrailblazeTool::class) {
+              tools(listOf(currentLog.trailblazeTool))
             }
           }
 
