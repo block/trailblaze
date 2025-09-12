@@ -15,24 +15,84 @@ import kotlin.io.encoding.ExperimentalEncodingApi
  */
 object WasmReport {
 
-  fun mainTest() {
-    val logsDir = File(System.getProperty("user.dir"), "logs").also {
-      println("Using logs directory: ${it.canonicalPath}")
-      if (!it.exists()) {
-        error("Logs directory does not exist: ${it.canonicalPath}")
+  fun generate(
+    logsRepo: LogsRepo,
+    trailblazeUiProjectDir: File,
+    outputFile: File,
+    reportTemplateFile: File,
+  ) {
+    val sessionIds = logsRepo.getSessionIds()
+    val sessionJson = TrailblazeJsonInstance.encodeToString(sessionIds)
+    val sessionDetail: Map<String, List<TrailblazeLog>> = sessionIds.associateWith {
+      logsRepo.getLogsForSession(it)
+    }
+    val sessionDetailJson = TrailblazeJsonInstance.encodeToString(sessionDetail)
+    val sessionToYamlRecording: Map<String, String> = sessionIds.associateWith {
+      try {
+        logsRepo.getLogsForSession(it).generateRecordedYaml()
+      } catch (e: Exception) {
+        buildString {
+          appendLine("Exception while generating recorded YAML:")
+          appendLine(e.message)
+          appendLine(e.stackTraceToString())
+        }
       }
     }
-    val outputFile = File(System.getProperty("user.dir"), "trailblaze_report.html")
+    val sessionToYamlRecordingJson = TrailblazeJsonInstance.encodeToString(sessionToYamlRecording)
 
-    val logsRepo = LogsRepo(logsDir)
-
-    val trailblazeUiProjectDir = File(logsRepo.logsDir.parentFile, "opensource/trailblaze-ui").also {
-      println("Using project directory: ${it.canonicalPath}")
+    if (reportTemplateFile.exists()) {
+      generateFromTemplate(
+        reportTemplateFile = reportTemplateFile,
+        reportOutputFile = outputFile,
+        sessionJson = sessionJson,
+        sessionDetailJson = sessionDetailJson,
+        sessionToYamlRecordingJson = sessionToYamlRecordingJson,
+      )
+    } else {
+      generateRaw(
+        trailblazeUiProjectDir = trailblazeUiProjectDir,
+        reportOutputFile = outputFile,
+        sessionJson = sessionJson,
+        sessionDetailJson = sessionDetailJson,
+        sessionToYamlRecordingJson = sessionToYamlRecordingJson,
+      )
     }
-    generate(logsRepo, trailblazeUiProjectDir, outputFile)
+    println("\n✅ Success!")
+    println("Embedded HTML created at: ${outputFile.absolutePath}")
+    println("Final file size: ${outputFile.length() / 1024}KB")
+    println("\nYou can now open the HTML file in a web browser.")
   }
 
-  fun generate(logsRepo: LogsRepo, trailblazeUiProjectDir: File, outputFile: File) {
+  fun generateFromTemplate(
+    reportTemplateFile: File,
+    reportOutputFile: File,
+    sessionJson: String,
+    sessionDetailJson: String,
+    sessionToYamlRecordingJson: String,
+  ) {
+    println("Generating report from template: ${reportTemplateFile.absolutePath}")
+    // Read the HTML template
+    reportTemplateFile.readLines().joinToString("\n") { line ->
+      if (line.contains("window.trailblaze_report.sessions =")) {
+        line.replace("[]", sessionJson)
+      } else if (line.contains("window.trailblaze_report.session_detail =")) {
+        line.replace("{}", sessionDetailJson)
+      } else if (line.contains("window.trailblaze_report.session_yaml =")) {
+        line.replace("{}", sessionToYamlRecordingJson)
+      } else {
+        line
+      }
+    }.also { reportOutputFile.writeText(it) }
+  }
+
+  fun generateRaw(
+    trailblazeUiProjectDir: File,
+    reportOutputFile: File,
+    sessionJson: String,
+    sessionDetailJson: String,
+    sessionToYamlRecordingJson: String,
+  ) {
+    println("Generating report from wasm ui build artifacts: ${trailblazeUiProjectDir.absolutePath}")
     if (!trailblazeUiProjectDir.exists() || !trailblazeUiProjectDir.isDirectory) {
       error("Project directory does not exist or is not a directory: ${trailblazeUiProjectDir.canonicalPath}")
     }
@@ -71,25 +131,14 @@ object WasmReport {
 
     // Read the HTML template
     val htmlTemplate = indexHtmlFile.readText().let { html ->
-      val sessionIds = logsRepo.getSessionIds()
-      val sessionJson = TrailblazeJsonInstance.encodeToString(sessionIds)
-      val sessionDetail: Map<String, List<TrailblazeLog>> = sessionIds.associateWith {
-        logsRepo.getLogsForSession(it)
-      }
-      val sessionDetailJson = TrailblazeJsonInstance.encodeToString(sessionDetail)
-      val sessionToYamlRecording: Map<String, String> = sessionIds.associateWith {
-        logsRepo.getLogsForSession(it).generateRecordedYaml()
-      }
-      val sessionToYamlRecordingJson = TrailblazeJsonInstance.encodeToString(sessionToYamlRecording)
-
       val trailblazeReportWindowVarStr = "window.trailblaze_report = {};"
       html.replace(
         trailblazeReportWindowVarStr,
         buildString {
           appendLine(trailblazeReportWindowVarStr)
-          appendLine("window.trailblaze_report.sessions = $sessionJson;\n")
-          appendLine("window.trailblaze_report.session_detail = $sessionDetailJson;\n")
-          appendLine("window.trailblaze_report.session_yaml = $sessionToYamlRecordingJson;\n")
+          appendLine("window.trailblaze_report.sessions = $sessionJson;")
+          appendLine("window.trailblaze_report.session_detail = $sessionDetailJson;")
+          appendLine("window.trailblaze_report.session_yaml = $sessionToYamlRecordingJson;")
         },
       )
     }
@@ -110,12 +159,7 @@ object WasmReport {
     val embeddedHtml = createEmbeddedHtml(htmlTemplate, jsContent, wasmData)
 
     // Write the final HTML file
-    outputFile.writeText(embeddedHtml)
-
-    println("\n✅ Success!")
-    println("Embedded HTML created at: ${outputFile.absolutePath}")
-    println("Final file size: ${outputFile.length() / 1024}KB")
-    println("\nYou can now open the HTML file in a web browser.")
+    reportOutputFile.writeText(embeddedHtml)
   }
 
   fun createEmbeddedHtml(template: String, jsContent: String, wasmData: Map<String, String>): String {

@@ -37,7 +37,7 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
    */
   private var cachedSessionIds = getSessionIds().toSet()
 
-  fun getSessionDirs(): List<File> = logsDir.listFiles().filter { it.isDirectory }.sortedByDescending { it.name }
+  fun getSessionDirs(): List<File> = logsDir.listFiles()?.filter { it.isDirectory }?.sortedByDescending { it.name } ?: emptyList()
 
   fun getSessionIds(): List<String> = getSessionDirs().map { it.name }
 
@@ -253,6 +253,7 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
         latestStatus = lastSessionStatusLog.sessionStatus,
         testName = startedStatus.testMethodName,
         testClass = startedStatus.testClassName,
+        trailblazeDeviceInfo = startedStatus.trailblazeDeviceInfo,
       )
     } else {
       null

@@ -76,7 +76,7 @@ class TrailblazeYaml(
     },
   )
 
-  fun encodeToString(items: MutableList<TrailYamlItem>): String = getInstance().encodeToString(
+  fun encodeToString(items: List<TrailYamlItem>): String = getInstance().encodeToString(
     ListSerializer(
       getInstance().serializersModule.getContextual(TrailYamlItem::class)
         ?: error("Missing contextual serializer for TrailYamlItem"),

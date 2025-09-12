@@ -1,14 +1,14 @@
 package xyz.block.trailblaze.host
 
 import ai.koog.prompt.executor.clients.openai.OpenAILLMClient
-import ai.koog.prompt.executor.clients.openai.OpenAIModels
 import kotlinx.coroutines.runBlocking
 import xyz.block.trailblaze.agent.TrailblazeRunner
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.api.JvmOpenAiApiKeyUtil
+import xyz.block.trailblaze.llm.providers.OpenAITrailblazeLlmModelList
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
-import xyz.block.trailblaze.yaml.PromptStep
+import xyz.block.trailblaze.yaml.DirectionStep
 
 class InteractiveMainRunner(
   private val filterViewHierarchy: Boolean = true,
@@ -38,7 +38,7 @@ class InteractiveMainRunner(
     )
   }
 
-  val llmModel = OpenAIModels.Chat.GPT4_1
+  val trailblazeLlmModel = OpenAITrailblazeLlmModelList.OPENAI_GPT_4_1
   val llmClient = OpenAILLMClient(
     apiKey = JvmOpenAiApiKeyUtil.getApiKeyFromEnv(),
   )
@@ -49,7 +49,7 @@ class InteractiveMainRunner(
     val runner = TrailblazeRunner(
       screenStateProvider = hostMaestroAgent.maestroHostRunner.screenStateProvider,
       agent = hostMaestroAgent,
-      llmModel = llmModel,
+      trailblazeLlmModel = trailblazeLlmModel,
       llmClient = llmClient,
       trailblazeToolRepo = toolRepo,
     )
@@ -76,7 +76,7 @@ NOTE: our prompt will be sent to the agent which will work to fulfill your reque
       }
 
       runBlocking {
-        when (val result: AgentTaskStatus = openAiRunner.run(PromptStep(input))) {
+        when (val result: AgentTaskStatus = openAiRunner.run(DirectionStep(input))) {
           is AgentTaskStatus.InProgress -> {
             println("🤖 The agent is still working on the objective. Please wait...")
           }

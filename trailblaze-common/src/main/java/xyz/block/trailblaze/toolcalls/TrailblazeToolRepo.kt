@@ -8,6 +8,10 @@ import kotlinx.serialization.serializer
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.toolcalls.KoogToolExt.hasSerializableAnnotation
 import xyz.block.trailblaze.toolcalls.KoogToolExt.toKoogTools
+import xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool
+import xyz.block.trailblaze.yaml.DirectionStep
+import xyz.block.trailblaze.yaml.PromptStep
+import xyz.block.trailblaze.yaml.VerificationStep
 import kotlin.reflect.KClass
 
 /**
@@ -80,5 +84,18 @@ class TrailblazeToolRepo(
 
   fun getCurrentToolDescriptors(): List<ToolDescriptor> = registeredTrailblazeToolClasses.map { toolClass ->
     toolClass.toKoogToolDescriptor()
+  }
+
+  // When running - verify: only provide the assertion tools and the objective status tool
+  // If you don't provide the objective status tool then the agent cannot complete the step
+  private val assertionTools = TrailblazeToolSet.AssertByPropertyToolSet.tools +
+    ObjectiveStatusTrailblazeTool::class
+
+  // This function returns different tool descriptors based on the type of prompt step passed in.
+  // The DirectionStep returns all registered trailblaze tool classes, while the VerificationStep
+  // will only return the assert by property tool set.
+  fun getToolDescriptorsForStep(promptStep: PromptStep): List<ToolDescriptor> = when (promptStep) {
+    is DirectionStep -> getCurrentToolDescriptors()
+    is VerificationStep -> assertionTools.map { it.toKoogToolDescriptor() }
   }
 }

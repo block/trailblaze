@@ -15,7 +15,7 @@ import xyz.block.trailblaze.report.utils.TrailblazeSessionListener
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.toolcalls.toKoogToolDescriptor
-import xyz.block.trailblaze.yaml.PromptStep
+import xyz.block.trailblaze.yaml.DirectionStep
 
 // --- Koog ToolSets ---
 @Suppress("unused")
@@ -87,7 +87,7 @@ class HostDeviceToolSet(
       }
     }
 
-    steps.map { PromptStep(it) }
+    steps.map { DirectionStep(it) }
       .forEach { hostOpenAiRunnerProvider().run(it) }
 
     progressJob?.cancel()

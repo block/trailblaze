@@ -3,6 +3,8 @@ package xyz.block.trailblaze.host
 import kotlinx.coroutines.runBlocking
 import maestro.Driver
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
+import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
+import xyz.block.trailblaze.host.rules.HostTrailblazeLoggingRule
 import xyz.block.trailblaze.host.screenstate.HostMaestroDriverScreenState
 import xyz.block.trailblaze.host.setofmark.HostCanvasSetOfMark
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
@@ -10,7 +12,6 @@ import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.server.TrailblazeMcpServer
 import xyz.block.trailblaze.report.utils.GitUtils
 import xyz.block.trailblaze.report.utils.LogsRepo
-import xyz.block.trailblaze.rules.TrailblazeLoggingRule
 import xyz.block.trailblaze.viewhierarchy.ViewHierarchyFilter
 import xyz.block.trailblaze.viewhierarchy.ViewHierarchyTreeNodeUtils
 import java.io.File
@@ -28,7 +29,20 @@ private val logsRepo = LogsRepo(logsDir)
 fun main(args: Array<String>) {
   runBlocking {
     TrailblazeLogger.startSession(INTERACTIVE_NAME)
-    val trailblazeLoggingRule = TrailblazeLoggingRule()
+
+    val hostRunner = MaestroHostRunnerImpl()
+
+    val trailblazeDeviceInfoProvider = {
+      TrailblazeDeviceInfo(
+        trailblazeDriverType = hostRunner.connectedTrailblazeDriverType,
+        widthPixels = hostRunner.connectedDevice.initialMaestroDeviceInfo.widthPixels,
+        heightPixels = hostRunner.connectedDevice.initialMaestroDeviceInfo.heightPixels,
+      )
+    }
+
+    val trailblazeLoggingRule = HostTrailblazeLoggingRule(
+      trailblazeDeviceInfoProvider = trailblazeDeviceInfoProvider,
+    )
     if (!trailblazeLoggingRule.trailblazeLogServerClient.isServerRunning()) {
       TrailblazeMcpServer(
         logsRepo,
@@ -37,7 +51,6 @@ fun main(args: Array<String>) {
       Thread.sleep(1000)
     }
     trailblazeLoggingRule.subscribeToLoggingEventsAndSendToServer()
-    val hostRunner = MaestroHostRunnerImpl()
     if (args.isNotEmpty() && args[0] == "print-filtered-hierarchy") {
       runPrintFilteredHierarchy(hostRunner.loggingDriver)
       return@runBlocking
@@ -49,7 +62,11 @@ fun main(args: Array<String>) {
 
     // interactive
     // Parse flags
-    TrailblazeLogger.sendStartLog(INTERACTIVE_NAME, INTERACTIVE_NAME)
+    TrailblazeLogger.sendStartLog(
+      className = INTERACTIVE_NAME,
+      methodName = INTERACTIVE_NAME,
+      trailblazeDeviceInfo = trailblazeDeviceInfoProvider(),
+    )
     InteractiveMainRunner(
       filterViewHierarchy = true,
       setOfMarkEnabled = true,

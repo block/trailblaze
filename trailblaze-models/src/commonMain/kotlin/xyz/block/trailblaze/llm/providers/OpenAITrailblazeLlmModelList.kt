@@ -11,7 +11,7 @@ object OpenAITrailblazeLlmModelList : TrailblazeLlmModelList {
     modelId = "gpt-5",
     inputCostPerOneMillionTokens = 1.25,
     outputCostPerOneMillionTokens = 10.00,
-    capabilities = listOf(
+    capabilityIds = listOf(
       LLMCapability.Temperature,
       LLMCapability.Schema.JSON.Basic,
       LLMCapability.Schema.JSON.Standard,
@@ -24,7 +24,7 @@ object OpenAITrailblazeLlmModelList : TrailblazeLlmModelList {
       LLMCapability.MultipleChoices,
       LLMCapability.OpenAIEndpoint.Completions,
       LLMCapability.OpenAIEndpoint.Responses,
-    ),
+    ).map { it.id },
     contextLength = 400_000,
     maxOutputTokens = 128_000,
   )
@@ -33,7 +33,7 @@ object OpenAITrailblazeLlmModelList : TrailblazeLlmModelList {
     modelId = "gpt-5-mini",
     inputCostPerOneMillionTokens = 0.25,
     outputCostPerOneMillionTokens = 12.00,
-    capabilities = listOf(
+    capabilityIds = listOf(
       LLMCapability.Temperature,
       LLMCapability.Schema.JSON.Basic,
       LLMCapability.Schema.JSON.Standard,
@@ -46,7 +46,7 @@ object OpenAITrailblazeLlmModelList : TrailblazeLlmModelList {
       LLMCapability.MultipleChoices,
       LLMCapability.OpenAIEndpoint.Completions,
       LLMCapability.OpenAIEndpoint.Responses,
-    ),
+    ).map { it.id },
     contextLength = 400_000,
     maxOutputTokens = 128_000,
   )
@@ -55,7 +55,7 @@ object OpenAITrailblazeLlmModelList : TrailblazeLlmModelList {
     modelId = "gpt-4.1",
     inputCostPerOneMillionTokens = 2.00,
     outputCostPerOneMillionTokens = 8.00,
-    capabilities = listOf(
+    capabilityIds = listOf(
       LLMCapability.Temperature,
       LLMCapability.Schema.JSON.Basic,
       LLMCapability.Schema.JSON.Standard,
@@ -68,7 +68,7 @@ object OpenAITrailblazeLlmModelList : TrailblazeLlmModelList {
       LLMCapability.MultipleChoices,
       LLMCapability.OpenAIEndpoint.Completions,
       LLMCapability.OpenAIEndpoint.Responses,
-    ),
+    ).map { it.id },
     contextLength = 1_047_576,
     maxOutputTokens = 32_768,
   )
@@ -77,7 +77,7 @@ object OpenAITrailblazeLlmModelList : TrailblazeLlmModelList {
     modelId = "gpt-4.1-mini",
     inputCostPerOneMillionTokens = 0.40,
     outputCostPerOneMillionTokens = 1.60,
-    capabilities = listOf(
+    capabilityIds = listOf(
       LLMCapability.Temperature,
       LLMCapability.Schema.JSON.Basic,
       LLMCapability.Schema.JSON.Standard,
@@ -90,7 +90,7 @@ object OpenAITrailblazeLlmModelList : TrailblazeLlmModelList {
       LLMCapability.MultipleChoices,
       LLMCapability.OpenAIEndpoint.Completions,
       LLMCapability.OpenAIEndpoint.Responses,
-    ),
+    ).map { it.id },
     contextLength = 1_047_576,
     maxOutputTokens = 32_768,
   )

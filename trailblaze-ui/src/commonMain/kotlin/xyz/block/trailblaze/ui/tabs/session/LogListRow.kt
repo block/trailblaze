@@ -145,7 +145,7 @@ fun LogListRow(
 
     if (log is HasPromptStep) {
       SelectableText(
-        text = log.promptStep.step,
+        text = log.promptStep.prompt,
         style = MaterialTheme.typography.titleMedium,
         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
         fontWeight = FontWeight.Bold,

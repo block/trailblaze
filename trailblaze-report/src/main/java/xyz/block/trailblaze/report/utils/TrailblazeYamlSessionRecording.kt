@@ -7,7 +7,9 @@ import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.utils.Ext.asMaestroCommand
+import xyz.block.trailblaze.yaml.DirectionStep
 import xyz.block.trailblaze.yaml.TrailblazeYaml
+import xyz.block.trailblaze.yaml.VerificationStep
 import xyz.block.trailblaze.yaml.models.TrailblazeYamlBuilder
 
 /**
@@ -67,11 +69,23 @@ object TrailblazeYamlSessionRecording {
                 log.trailblazeTool
               }
 
-            prompt(
-              text = promptStep.step,
-              recordable = promptStep.recordable,
-              recording = tools.ifEmpty { null },
-            )
+            when (promptStep) {
+              is DirectionStep -> {
+                prompt(
+                  text = promptStep.prompt,
+                  recordable = promptStep.recordable,
+                  recording = tools.ifEmpty { null },
+                )
+              }
+              is VerificationStep -> {
+                verify(
+                  text = promptStep.prompt,
+                  recordable = promptStep.recordable,
+                  recording = tools.ifEmpty { null },
+                )
+              }
+            }
+
             // Set current index to the completed index to skip over the processed tools
             currentLogIndex = completeIndex
           }

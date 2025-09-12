@@ -1,35 +1,39 @@
 package xyz.block.trailblaze.llm
 
 import ai.koog.prompt.llm.LLMProvider
+import kotlinx.serialization.Serializable
 
+@Serializable
 data class TrailblazeLlmProvider(
-  /** Should match Koog's LLM Provider ID */
-  val llmProvider: LLMProvider,
+  val id: String,
+  val display: String,
 ) {
-
-  val id = llmProvider.id
+  fun toKoogLlmProvider(): LLMProvider = when (id) {
+    LLMProvider.OpenAI.id -> LLMProvider.OpenAI
+    LLMProvider.Ollama.id -> LLMProvider.Ollama
+    DATABRICKS_KOOG_LLM_PROVIDER.id -> DATABRICKS_KOOG_LLM_PROVIDER
+    else -> error("Unknown LLM provider: $id")
+  }
 
   companion object {
-    val OPENAI = TrailblazeLlmProvider(
-      llmProvider = LLMProvider.OpenAI,
-    )
-    val OLLAMA = TrailblazeLlmProvider(
-      llmProvider = LLMProvider.Ollama,
-    )
-    val DATABRICKS = TrailblazeLlmProvider(
-      llmProvider = DatabricksLLMProvider,
-    )
+    val DATABRICKS_KOOG_LLM_PROVIDER = object : LLMProvider(
+      id = "databricks",
+      display = "Databricks",
+    ) {}
 
-    val ALL_PROVIDERS = listOf(
+    val OPENAI: TrailblazeLlmProvider = fromKoogLlmProvider(LLMProvider.OpenAI)
+    val OLLAMA: TrailblazeLlmProvider = fromKoogLlmProvider(LLMProvider.Ollama)
+    val DATABRICKS: TrailblazeLlmProvider = fromKoogLlmProvider(DATABRICKS_KOOG_LLM_PROVIDER)
+
+    val ALL_PROVIDERS: List<TrailblazeLlmProvider> = listOf(
       DATABRICKS,
       OPENAI,
       OLLAMA,
     )
 
-    fun getTrailblazeLlmProviderById(id: String): TrailblazeLlmProvider? = ALL_PROVIDERS.firstOrNull {
-      it.id == id
-    }
+    fun fromKoogLlmProvider(koogLlmProvider: LLMProvider) = TrailblazeLlmProvider(
+      id = koogLlmProvider.id,
+      display = koogLlmProvider.display,
+    )
   }
-
-  data object DatabricksLLMProvider : LLMProvider("databricks", "Databricks")
 }

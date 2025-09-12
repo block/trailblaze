@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.host.devices
 
+import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.host.playwright.MaestroPlaywrightDriver
 
 class HostWebDriverFactory {
@@ -8,7 +9,10 @@ class HostWebDriverFactory {
     headless: Boolean = isRunningOnCi(),
   ): TrailblazeConnectedDevice {
     val playwrightDriver = MaestroPlaywrightDriver(headless)
-    return TrailblazeConnectedDevice(playwrightDriver)
+    return TrailblazeConnectedDevice(
+      maestroDriver = playwrightDriver,
+      trailblazeDriverType = TrailblazeDriverType.WEB_PLAYWRIGHT,
+    )
   }
 
   companion object {

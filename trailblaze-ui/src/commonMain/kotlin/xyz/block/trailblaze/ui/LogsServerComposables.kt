@@ -218,7 +218,7 @@ object LogsServerComposables {
                         ) {
                           OutlinedTextField(
                             modifier = Modifier.fillMaxWidth().menuAnchor(MenuAnchorType.PrimaryNotEditable),
-                            value = currentProvider.llmProvider.display,
+                            value = currentProvider.display,
                             onValueChange = {},
                             readOnly = true,
                             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = showLlmProviderMenu) }
@@ -230,7 +230,7 @@ object LogsServerComposables {
                             availableModelLists.forEach { modelList: TrailblazeLlmModelList ->
                               val provider: TrailblazeLlmProvider = modelList.provider
                               DropdownMenuItem(
-                                text = { SelectableText(provider.llmProvider.display) },
+                                text = { SelectableText(provider.display) },
                                 onClick = {
                                   showLlmProviderMenu = false
                                   val savedSettings = serverState.appConfig

@@ -3,12 +3,12 @@ package xyz.block.trailblaze.host.mcp.host
 import ai.koog.agents.core.tools.ToolRegistry
 import ai.koog.agents.core.tools.reflect.asTools
 import ai.koog.prompt.executor.clients.openai.OpenAILLMClient
-import ai.koog.prompt.executor.clients.openai.OpenAIModels
 import xyz.block.trailblaze.agent.TrailblazeRunner
 import xyz.block.trailblaze.api.JvmOpenAiApiKeyUtil
 import xyz.block.trailblaze.host.HostMaestroTrailblazeAgent
 import xyz.block.trailblaze.host.MaestroHostRunnerImpl
 import xyz.block.trailblaze.host.mcp.host.newtools.HostDeviceToolSet
+import xyz.block.trailblaze.llm.providers.OpenAITrailblazeLlmModelList
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.server.TrailblazeMcpServer
 import xyz.block.trailblaze.mcp.TrailblazeMcpSseSessionContext
@@ -41,7 +41,7 @@ class TrailblazeHostMcpServer(
       screenStateProvider = hostMaestroAgent.maestroHostRunner.screenStateProvider,
       agent = hostMaestroAgent,
       llmClient = OpenAILLMClient(JvmOpenAiApiKeyUtil.getApiKeyFromEnv()),
-      llmModel = OpenAIModels.Chat.GPT4_1,
+      trailblazeLlmModel = OpenAITrailblazeLlmModelList.OPENAI_GPT_4_1,
       trailblazeToolRepo = hostToolRepo,
     )
   }

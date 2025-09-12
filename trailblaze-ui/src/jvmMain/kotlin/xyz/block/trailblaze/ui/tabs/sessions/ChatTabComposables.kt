@@ -51,7 +51,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import xyz.block.trailblaze.llm.DynamicLlmConfig
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.llm.TrailblazeLlmModelList
@@ -107,8 +106,9 @@ fun YamlTabComposable(
     ?: OpenAITrailblazeLlmModelList
   val currentProvider = currentProviderModelList.provider
 
-  val currentModel: TrailblazeLlmModel = currentProviderModelList.entries.firstOrNull { it.modelId == savedModelId }
-    ?: OpenAITrailblazeLlmModelList.OPENAI_GPT_4_1
+  val selectedTrailblazeLlmModel: TrailblazeLlmModel =
+    currentProviderModelList.entries.firstOrNull { it.modelId == savedModelId }
+      ?: OpenAITrailblazeLlmModelList.OPENAI_GPT_4_1
 
   LaunchedEffect(Unit) {
     loadAvailableDevices(
@@ -212,7 +212,7 @@ fun YamlTabComposable(
         fontWeight = FontWeight.Medium
       )
       Text(
-        text = "Provider: ${currentProvider.id}, Model: ${currentModel.modelId}. Change settings in Settings tab.",
+        text = "Provider: ${currentProvider.id}, Model: ${selectedTrailblazeLlmModel.modelId}. Change settings in Settings tab.",
         style = MaterialTheme.typography.bodyMedium
       )
     }
@@ -350,13 +350,6 @@ fun YamlTabComposable(
       }
     }
 
-    val dynamicLlmConfig = DynamicLlmConfig(
-      modelId = currentModel.modelId,
-      providerId = currentProvider.id,
-      capabilityIds = currentModel.capabilityIds,
-      contextLength = currentModel.contextLength
-    )
-
     Row(
       modifier = Modifier.fillMaxWidth(),
       horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -372,7 +365,7 @@ fun YamlTabComposable(
                 onProgressMessage = { message ->
                   progressMessages = progressMessages + message
                 },
-                dynamicLlmConfig = dynamicLlmConfig,
+                trailblazeLlmModel = selectedTrailblazeLlmModel,
                 onStatusChanged = { running -> isRunning = running },
                 onConnectionStatus = { status -> connectionStatus = status }
               )
@@ -440,7 +433,7 @@ private suspend fun loadAvailableDevices(
 private suspend fun runYamlOnDevice(
   device: AdbDevice,
   targetTestApp: TargetTestApp,
-  dynamicLlmConfig: DynamicLlmConfig,
+  trailblazeLlmModel: TrailblazeLlmModel,
   yamlContent: String,
   onProgressMessage: (String) -> Unit,
   onStatusChanged: (Boolean) -> Unit,
@@ -464,7 +457,7 @@ private suspend fun runYamlOnDevice(
           RunYamlRequest(
             testName = "Yaml",
             yaml = yamlContent,
-            dynamicLlmConfig = dynamicLlmConfig,
+            trailblazeLlmModel = trailblazeLlmModel,
             useRecordedSteps = true,
           )
         )

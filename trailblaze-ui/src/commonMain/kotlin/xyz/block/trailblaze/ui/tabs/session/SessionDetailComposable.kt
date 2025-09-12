@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.ui.tabs.session
 
+import LlmUsageComposable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -13,21 +14,26 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridCells.Adaptive
+import androidx.compose.foundation.lazy.grid.GridCells.Fixed
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.MoveDown
 import androidx.compose.material.icons.outlined.ZoomIn
 import androidx.compose.material.icons.outlined.ZoomOut
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconToggleButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -40,7 +46,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlinx.serialization.json.JsonObject
+import xyz.block.trailblaze.llm.LlmSessionUsageAndCost
+import xyz.block.trailblaze.llm.LlmUsageAndCostExt.computeUsageSummary
 import xyz.block.trailblaze.logs.client.TrailblazeLog
+import xyz.block.trailblaze.logs.model.inProgress
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.ui.composables.CodeBlock
 import xyz.block.trailblaze.ui.composables.SelectableText
@@ -50,11 +59,12 @@ import xyz.block.trailblaze.ui.tabs.session.group.LogGroupRow
 import xyz.block.trailblaze.ui.tabs.session.models.GroupedLog
 import xyz.block.trailblaze.ui.tabs.session.models.SessionDetail
 import xyz.block.trailblaze.ui.utils.LogUtils
+import kotlin.math.pow
 import androidx.compose.foundation.lazy.grid.items as gridItems
 
 @Composable
 fun SessionDetailComposable(
-  details: SessionDetail,
+  sessionDetail: SessionDetail,
   toMaestroYaml: (JsonObject) -> String = { it.toString() },
   toTrailblazeYaml: (toolName: String, trailblazeTool: TrailblazeTool) -> String = { toolName, trailblazeTool ->
     buildString {
@@ -70,7 +80,7 @@ fun SessionDetailComposable(
   onShowInspectUI: (TrailblazeLog.TrailblazeLlmRequestLog) -> Unit = {},
   onShowScreenshotModal: (imageModel: Any?, deviceWidth: Int, deviceHeight: Int, clickX: Int?, clickY: Int?) -> Unit = { _, _, _, _, _ -> },
 ) {
-  if (details.logs.isEmpty()) {
+  if (sessionDetail.logs.isEmpty()) {
     Column(
       modifier = Modifier.fillMaxSize().padding(16.dp)
     ) {
@@ -102,7 +112,7 @@ fun SessionDetailComposable(
       Spacer(modifier = Modifier.height(16.dp))
 
       SelectableText(
-        text = "No logs available for Session \"${details.session.sessionId}\"",
+        text = "No logs available for Session \"${sessionDetail.session.sessionId}\"",
         modifier = Modifier.padding(16.dp),
         style = MaterialTheme.typography.bodyLarge,
       )
@@ -110,6 +120,13 @@ fun SessionDetailComposable(
   } else {
     val gridState = rememberLazyGridState()
     var viewMode by remember { mutableStateOf(SessionViewMode.List) }
+    var alwaysAtBottom by remember { mutableStateOf(sessionDetail.session.latestStatus.inProgress) }
+
+    LaunchedEffect(alwaysAtBottom, sessionDetail.logs) {
+      if (alwaysAtBottom) {
+        gridState.animateScrollToItem(sessionDetail.logs.lastIndex)
+      }
+    }
 
     BoxWithConstraints(modifier = Modifier.fillMaxSize().padding(16.dp)) {
       // Use the actual spacing from LazyVerticalGrid (12.dp)
@@ -211,6 +228,17 @@ fun SessionDetailComposable(
           Row(verticalAlignment = Alignment.CenterVertically) {
             // View mode toggle
             Row(verticalAlignment = Alignment.CenterVertically) {
+              if (sessionDetail.session.latestStatus.inProgress) {
+                IconToggleButton(
+                  checked = alwaysAtBottom, onCheckedChange = { alwaysAtBottom = it }) {
+                  Icon(
+                    imageVector = Icons.Default.MoveDown,
+                    contentDescription = "Toggle always at bottom",
+                    modifier = Modifier.size(24.dp)
+                  )
+                }
+              }
+              // Checkbox(checked = alwaysAtBottom, onCheckedChange = { alwaysAtBottom = it }, enabled = details.session.latestStatus.inProgress)
               TextButton(onClick = { viewMode = SessionViewMode.List }) {
                 Text(
                   text = "List",
@@ -221,6 +249,12 @@ fun SessionDetailComposable(
                 Text(
                   text = "Grid",
                   color = if (viewMode == SessionViewMode.Grid) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                )
+              }
+              TextButton(onClick = { viewMode = SessionViewMode.LlmUsage }) {
+                Text(
+                  text = "LLM Usage",
+                  color = if (viewMode == SessionViewMode.LlmUsage) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
                 )
               }
               TextButton(onClick = { viewMode = SessionViewMode.Recording }) {
@@ -237,7 +271,7 @@ fun SessionDetailComposable(
                 modifier = Modifier
                   .background(
                     MaterialTheme.colorScheme.surface,
-                    shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
+                    shape = RoundedCornerShape(8.dp)
                   )
                   .padding(2.dp)
               ) {
@@ -260,12 +294,12 @@ fun SessionDetailComposable(
 
         // Session summary item
         SessionSummaryRow(
-          status = details.overallStatus,
-          deviceName = details.deviceName,
-          deviceType = details.deviceType,
-          totalDurationMs = if (details.logs.isNotEmpty()) {
-            val firstLog = details.logs.minByOrNull { it.timestamp }
-            val lastLog = details.logs.maxByOrNull { it.timestamp }
+          status = sessionDetail.overallStatus,
+          deviceName = sessionDetail.deviceName,
+          deviceType = sessionDetail.deviceType,
+          totalDurationMs = if (sessionDetail.logs.isNotEmpty()) {
+            val firstLog = sessionDetail.logs.minByOrNull { it.timestamp }
+            val lastLog = sessionDetail.logs.maxByOrNull { it.timestamp }
             if (firstLog != null && lastLog != null) {
               lastLog.timestamp.toEpochMilliseconds() - firstLog.timestamp.toEpochMilliseconds()
             } else null
@@ -281,18 +315,18 @@ fun SessionDetailComposable(
           when (viewMode) {
             SessionViewMode.Grid -> {
               LazyVerticalGrid(
-                columns = GridCells.Adaptive(minSize = cardSize),
+                columns = Adaptive(minSize = cardSize),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 state = gridState,
                 modifier = Modifier.fillMaxSize()
               ) {
                 // Log items
-                gridItems(details.logs) { log ->
+                gridItems(sessionDetail.logs) { log ->
                   LogCard(
                     log = log,
-                    sessionId = details.session.sessionId,
-                    sessionStartTime = details.session.timestamp,
+                    sessionId = sessionDetail.session.sessionId,
+                    sessionStartTime = sessionDetail.session.timestamp,
                     toMaestroYaml = toMaestroYaml,
                     toTrailblazeYaml = toTrailblazeYaml,
                     imageLoader = imageLoader,
@@ -311,21 +345,21 @@ fun SessionDetailComposable(
 
             SessionViewMode.List -> {
               LazyVerticalGrid(
-                columns = GridCells.Fixed(1),
+                columns = Fixed(1),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalArrangement = Arrangement.spacedBy(0.dp),
                 state = gridState,
                 modifier = Modifier.fillMaxSize()
               ) {
-                val groupedLogs = LogUtils.groupLogsByLlmResponseId(details.logs)
+                val groupedLogs = LogUtils.groupLogsByLlmResponseId(sessionDetail.logs)
                 gridItems(groupedLogs) { groupedLog ->
                   Column {
                     when (groupedLog) {
                       is GroupedLog.Single -> {
                         LogListRow(
                           log = groupedLog.log,
-                          sessionId = details.session.sessionId,
-                          sessionStartTime = details.session.timestamp,
+                          sessionId = sessionDetail.session.sessionId,
+                          sessionStartTime = sessionDetail.session.timestamp,
                           imageLoader = imageLoader,
                           showDetails = { onShowDetails(groupedLog.log) }
                         )
@@ -334,8 +368,8 @@ fun SessionDetailComposable(
                       is GroupedLog.Group -> {
                         LogGroupRow(
                           group = groupedLog,
-                          sessionId = details.session.sessionId,
-                          sessionStartTime = details.session.timestamp,
+                          sessionId = sessionDetail.session.sessionId,
+                          sessionStartTime = sessionDetail.session.timestamp,
                           toMaestroYaml = toMaestroYaml,
                           toTrailblazeYaml = toTrailblazeYaml,
                           imageLoader = imageLoader,
@@ -365,7 +399,7 @@ fun SessionDetailComposable(
 
             SessionViewMode.Recording -> {
               LazyVerticalGrid(
-                columns = GridCells.Fixed(1),
+                columns = Fixed(1),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 state = gridState,
@@ -398,6 +432,11 @@ fun SessionDetailComposable(
                   }
                 }
               }
+            }
+
+            SessionViewMode.LlmUsage -> {
+              val llmSessionUsageAndCost: LlmSessionUsageAndCost? = sessionDetail.logs.computeUsageSummary()
+              LlmUsageComposable(llmSessionUsageAndCost, gridState)
             }
           }
         }

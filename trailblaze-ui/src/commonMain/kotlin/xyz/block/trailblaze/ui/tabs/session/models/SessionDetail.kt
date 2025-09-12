@@ -7,7 +7,6 @@ import xyz.block.trailblaze.logs.model.SessionStatus
 data class SessionDetail(
   val session: SessionInfo,
   val logs: List<TrailblazeLog>,
-  val llmUsageSummary: String? = null,
   val overallStatus: SessionStatus? = null,
   val deviceName: String? = null,
   val deviceType: String? = null,

@@ -1,9 +1,8 @@
 package xyz.block.trailblaze.host.rules
 
-import xyz.block.trailblaze.devices.TrailblazeDeviceType
-import xyz.block.trailblaze.host.rules.BaseHostTrailblazeTest
+import xyz.block.trailblaze.devices.TrailblazeDriverType
 
 abstract class BaseWebTrailblazeTest :
   BaseHostTrailblazeTest(
-    platform = TrailblazeDeviceType.WEB,
+    trailblazeDriverType = TrailblazeDriverType.WEB_PLAYWRIGHT,
   )

@@ -1,7 +1,6 @@
 package xyz.block.trailblaze.android
 
 import ai.koog.prompt.executor.clients.LLMClient
-import ai.koog.prompt.llm.LLModel
 import kotlinx.coroutines.runBlocking
 import maestro.orchestra.Command
 import org.junit.runner.Description
@@ -14,6 +13,7 @@ import xyz.block.trailblaze.android.uiautomator.AndroidOnDeviceUiAutomatorScreen
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TestAgentRunner
 import xyz.block.trailblaze.exception.TrailblazeException
+import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.rules.SimpleTestRuleChain
 import xyz.block.trailblaze.rules.TrailblazeRule
 import xyz.block.trailblaze.rules.TrailblazeRunnerUtil
@@ -22,7 +22,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet.Companion.SetOfMarkTrailblazeToolSet
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet.DynamicToolSet
-import xyz.block.trailblaze.yaml.PromptStep
+import xyz.block.trailblaze.yaml.DirectionStep
 import xyz.block.trailblaze.yaml.TrailConfig
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.TrailblazeYaml
@@ -33,7 +33,7 @@ import kotlin.reflect.KClass
  */
 open class AndroidTrailblazeRule(
   val llmClient: LLMClient,
-  val llmModel: LLModel,
+  val trailblazeLlmModel: TrailblazeLlmModel,
   additionalRules: List<TrailblazeAndroidLoggingRule> = listOf(
     TrailblazeAndroidLoggingRule(),
   ),
@@ -59,7 +59,7 @@ open class AndroidTrailblazeRule(
   private val elementComparator = TrailblazeElementComparator(
     screenStateProvider = screenStateProvider,
     llmClient = llmClient,
-    llmModel = llmModel,
+    trailblazeLlmModel = trailblazeLlmModel,
   )
 
   override fun ruleCreation(description: Description) {
@@ -73,7 +73,7 @@ open class AndroidTrailblazeRule(
   private val trailblazeRunner: TestAgentRunner by lazy {
     TrailblazeRunner(
       trailblazeToolRepo = trailblazeToolRepo,
-      llmModel = llmModel,
+      trailblazeLlmModel = trailblazeLlmModel,
       llmClient = llmClient,
       screenStateProvider = screenStateProvider,
       agent = trailblazeAgent,
@@ -144,7 +144,7 @@ open class AndroidTrailblazeRule(
    * Run natural language instructions with the agent.
    */
   override fun prompt(objective: String): Boolean {
-    val runnerResult = trailblazeRunner.run(PromptStep(objective))
+    val runnerResult = trailblazeRunner.run(DirectionStep(objective))
     return if (runnerResult is AgentTaskStatus.Success) {
       // Success!
       true

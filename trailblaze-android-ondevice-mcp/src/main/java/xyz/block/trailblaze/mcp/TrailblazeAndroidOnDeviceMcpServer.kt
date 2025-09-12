@@ -7,7 +7,6 @@ import ai.koog.agents.core.tools.ToolResult
 import ai.koog.agents.core.tools.annotations.InternalAgentToolsApi
 import ai.koog.prompt.executor.clients.openai.OpenAIClientSettings
 import ai.koog.prompt.executor.clients.openai.OpenAILLMClient
-import ai.koog.prompt.executor.clients.openai.OpenAIModels
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.serialization.kotlinx.json.json
@@ -40,7 +39,6 @@ import io.modelcontextprotocol.kotlin.sdk.server.ServerOptions
 import io.modelcontextprotocol.kotlin.sdk.server.SseServerTransport
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.decodeFromJsonElement
@@ -49,6 +47,7 @@ import xyz.block.trailblaze.agent.TrailblazeRunner
 import xyz.block.trailblaze.android.openai.OpenAiInstrumentationArgUtil
 import xyz.block.trailblaze.android.uiautomator.AndroidOnDeviceUiAutomatorScreenState
 import xyz.block.trailblaze.api.TestAgentRunner
+import xyz.block.trailblaze.llm.providers.OpenAITrailblazeLlmModelList
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.models.ListToolSets
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.models.McpPromptRequestData
@@ -95,7 +94,7 @@ object TrailblazeAndroidOnDeviceMcpServer {
         baseUrl = OpenAiInstrumentationArgUtil.getBaseUrlFromInstrumentationArg(),
       ),
     ),
-    llmModel = OpenAIModels.Chat.GPT4_1,
+    trailblazeLlmModel = OpenAITrailblazeLlmModelList.OPENAI_GPT_4_1,
     screenStateProvider = screenStateProvider,
     agent = trailblazeAgent,
   )

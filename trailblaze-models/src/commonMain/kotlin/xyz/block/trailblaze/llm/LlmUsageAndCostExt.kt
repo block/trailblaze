@@ -14,12 +14,12 @@ object LlmUsageAndCostExt {
       return null
     }
     val requestCostBreakdowns: List<LlmRequestUsageAndCost> = requests.map {
-      it.llmResponse.calculateCost(it.llmModelId)
+      it.llmResponse.calculateCost(it.trailblazeLlmModel)
     }
-    val modelName = requests.first().llmModelId
+    val llmModel: TrailblazeLlmModel = requests.first().trailblazeLlmModel
 
     return LlmSessionUsageAndCost(
-      modelName = modelName,
+      llmModel = llmModel,
       totalRequestCount = requests.size,
       averageDurationMillis = requests.map { it.durationMs }.average(),
       averageInputTokens = requestCostBreakdowns.map { it.inputTokens }.average(),

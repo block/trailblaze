@@ -2,16 +2,18 @@ package xyz.block.trailblaze.host.rules
 
 import ai.koog.prompt.executor.clients.LLMClient
 import ai.koog.prompt.executor.clients.openai.OpenAILLMClient
-import ai.koog.prompt.executor.clients.openai.OpenAIModels
-import ai.koog.prompt.llm.LLModel
 import org.junit.Rule
 import xyz.block.trailblaze.agent.TrailblazeElementComparator
 import xyz.block.trailblaze.agent.TrailblazeRunner
 import xyz.block.trailblaze.api.JvmOpenAiApiKeyUtil
-import xyz.block.trailblaze.devices.TrailblazeDeviceType
+import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
+import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.host.HostMaestroTrailblazeAgent
 import xyz.block.trailblaze.host.MaestroHostRunnerImpl
+import xyz.block.trailblaze.host.devices.TrailblazeHostDeviceClassifier
+import xyz.block.trailblaze.llm.TrailblazeLlmModel
+import xyz.block.trailblaze.llm.providers.OpenAITrailblazeLlmModelList
 import xyz.block.trailblaze.rules.TestStackTraceUtil
 import xyz.block.trailblaze.rules.TrailblazeLoggingRule
 import xyz.block.trailblaze.rules.TrailblazeRunnerUtil
@@ -24,19 +26,34 @@ import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.TrailblazeYaml
 
 abstract class BaseHostTrailblazeTest(
-  platform: TrailblazeDeviceType? = null,
+  trailblazeDriverType: TrailblazeDriverType,
   setOfMarkEnabled: Boolean = true,
 ) {
 
-  @get:Rule
-  val loggingRule: TrailblazeLoggingRule = HostTrailblazeLoggingRule()
-
   val hostRunner by lazy {
     MaestroHostRunnerImpl(
-      platform = platform,
+      requestedPlatform = trailblazeDriverType.platform,
       setOfMarkEnabled = setOfMarkEnabled,
     )
   }
+
+  val trailblazeDeviceInfo: TrailblazeDeviceInfo by lazy {
+    val initialMaestroDeviceInfo = hostRunner.connectedDevice.initialMaestroDeviceInfo
+    TrailblazeDeviceInfo(
+      trailblazeDriverType = trailblazeDriverType,
+      widthPixels = initialMaestroDeviceInfo.widthPixels,
+      heightPixels = initialMaestroDeviceInfo.heightPixels,
+      classifiers = TrailblazeHostDeviceClassifier(
+        trailblazeDriverType = trailblazeDriverType,
+        maestroDeviceInfoProvider = { hostRunner.connectedDevice.initialMaestroDeviceInfo },
+      ).getDeviceClassifiers(),
+    )
+  }
+
+  @get:Rule
+  val loggingRule: TrailblazeLoggingRule = HostTrailblazeLoggingRule(
+    trailblazeDeviceInfoProvider = { trailblazeDeviceInfo },
+  )
 
   val trailblazeAgent by lazy {
     HostMaestroTrailblazeAgent(
@@ -46,14 +63,14 @@ abstract class BaseHostTrailblazeTest(
 
   val llmClient: LLMClient = OpenAILLMClient(JvmOpenAiApiKeyUtil.getApiKeyFromEnv())
 
-  val llmModel: LLModel = OpenAIModels.Chat.GPT4_1
+  val trailblazeLlmModel: TrailblazeLlmModel = OpenAITrailblazeLlmModelList.OPENAI_GPT_4_1
 
   val trailblazeRunner: TrailblazeRunner by lazy {
     TrailblazeRunner(
       screenStateProvider = hostRunner.screenStateProvider,
       agent = trailblazeAgent,
       llmClient = llmClient,
-      llmModel = llmModel,
+      trailblazeLlmModel = trailblazeLlmModel,
       trailblazeToolRepo = TrailblazeToolRepo(
         TrailblazeToolSet.getSetOfMarkToolSet(
           setOfMarkEnabled = true,
@@ -65,7 +82,7 @@ abstract class BaseHostTrailblazeTest(
   private val elementComparator = TrailblazeElementComparator(
     screenStateProvider = hostRunner.screenStateProvider,
     llmClient = llmClient,
-    llmModel = llmModel,
+    trailblazeLlmModel = trailblazeLlmModel,
   )
 
   private val trailblazeYaml = TrailblazeYaml(

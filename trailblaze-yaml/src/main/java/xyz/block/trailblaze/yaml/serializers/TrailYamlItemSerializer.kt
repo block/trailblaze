@@ -17,7 +17,6 @@ import kotlinx.serialization.encoding.decodeStructure
 import xyz.block.trailblaze.maestro.MaestroYamlParser
 import xyz.block.trailblaze.maestro.MaestroYamlSerializer
 import xyz.block.trailblaze.yaml.MaestroCommandList
-import xyz.block.trailblaze.yaml.PromptStep
 import xyz.block.trailblaze.yaml.TrailConfig
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
@@ -35,23 +34,17 @@ class TrailYamlItemSerializer(
         encoder.encodeSerializableValue(
           MapSerializer(
             String.serializer(),
-            ListSerializer(
-              PromptStep.serializer(),
-            ),
+            ListSerializer(PromptStepSerializer()),
           ),
           mapOf(TrailYamlItem.KEYWORD_PROMPTS to value.promptSteps),
         )
       }
 
       is TrailYamlItem.ToolTrailItem -> {
-        @OptIn(ExperimentalSerializationApi::class)
-        val toolSerializer = trailblazeToolYamlWrapperSerializer
-        val listSerializer = ListSerializer(toolSerializer)
-
         encoder.encodeSerializableValue(
           MapSerializer(
             String.serializer(),
-            listSerializer,
+            ListSerializer(trailblazeToolYamlWrapperSerializer),
           ),
           mapOf(TrailYamlItem.KEYWORD_TOOLS to value.tools),
         )
@@ -102,7 +95,7 @@ class TrailYamlItemSerializer(
     when (key) {
       TrailYamlItem.KEYWORD_PROMPTS -> {
         val steps = yaml.decodeFromYamlNode(
-          ListSerializer(PromptStep.serializer()),
+          ListSerializer(PromptStepSerializer()),
           valueNode,
         )
         TrailYamlItem.PromptsTrailItem(steps)

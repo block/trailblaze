@@ -189,7 +189,7 @@ fun WasmSessionDetailView(
   if (sessionInfo != null) {
     Box(modifier = Modifier.fillMaxSize()) {
       SessionDetailComposable(
-        details = SessionDetail(
+        sessionDetail = SessionDetail(
           session = sessionInfo!!,
           logs = logs,
         ),

@@ -7,6 +7,7 @@ import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.api.MaestroDriverActionType
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
+import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.logs.model.AgentLogEventType
 import xyz.block.trailblaze.logs.model.HasAgentTaskStatus
 import xyz.block.trailblaze.logs.model.HasDuration
@@ -14,8 +15,8 @@ import xyz.block.trailblaze.logs.model.HasLlmResponseId
 import xyz.block.trailblaze.logs.model.HasPromptStep
 import xyz.block.trailblaze.logs.model.HasScreenshot
 import xyz.block.trailblaze.logs.model.HasTrailblazeTool
-import xyz.block.trailblaze.logs.model.LlmMessage
 import xyz.block.trailblaze.logs.model.SessionStatus
+import xyz.block.trailblaze.logs.model.TrailblazeLlmMessage
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.yaml.PromptStep
@@ -52,10 +53,11 @@ sealed interface TrailblazeLog {
     override val agentTaskStatus: AgentTaskStatus,
     val viewHierarchy: ViewHierarchyTreeNode,
     val instructions: String,
-    val llmModelId: String,
-    val llmMessages: List<LlmMessage>,
+    val trailblazeLlmModel: TrailblazeLlmModel,
+    val llmMessages: List<TrailblazeLlmMessage>,
     val llmResponse: List<Message.Response>,
     val actions: List<Action>,
+    val toolOptions: List<ToolOption>,
     override val screenshotFile: String?,
     override val durationMs: Long,
     override val session: String,
@@ -74,6 +76,11 @@ sealed interface TrailblazeLog {
     data class Action(
       val name: String,
       val args: JsonObject,
+    )
+
+    @Serializable
+    data class ToolOption(
+      val name: String,
     )
   }
 

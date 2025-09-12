@@ -7,6 +7,7 @@ import xyz.block.trailblaze.api.AgentActionType
 import xyz.block.trailblaze.api.HasClickCoordinates
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.llm.LlmUsageAndCostExt.computeUsageSummary
+import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.HasAgentTaskStatus
@@ -17,7 +18,7 @@ import xyz.block.trailblaze.utils.Ext.asMaestroCommand
 data class SessionSummary(
   val sessionId: String,
   val outcome: String?,
-  val llmModelId: String?,
+  val trailblazeLlmModel: TrailblazeLlmModel?,
   val llmCallCount: Int,
   val totalCostInUsDollars: Double,
   val screenshotCount: Int,
@@ -233,8 +234,8 @@ data class SessionSummary(
           .map { TaskIdAndPrompt(it.agentTaskStatus.statusData.taskId, it.agentTaskStatus.statusData.prompt) },
         totalCostInUsDollars = sortedLogs.computeUsageSummary()?.totalCostInUsDollars ?: 0.0,
         screenshotCount = screenshotUrls.size,
-        llmModelId = sortedLogs.filterIsInstance<TrailblazeLog.TrailblazeLlmRequestLog>()
-          .firstOrNull()?.llmModelId,
+        trailblazeLlmModel = sortedLogs.filterIsInstance<TrailblazeLog.TrailblazeLlmRequestLog>()
+          .firstOrNull()?.trailblazeLlmModel,
         sessionDurationSeconds = (sortedLogs.last().timestamp.toEpochMilliseconds() - sessionStartTimestamp.toEpochMilliseconds()) / 1000.0,
         eventGroups = mappedToEvents,
       )

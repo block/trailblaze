@@ -30,7 +30,11 @@ object LlmCapabilitiesUtil {
     LLMCapability.OpenAIEndpoint.Responses,
   )
 
-  fun capabilityFromString(capabilityId: String): LLMCapability? = ALL_LLM_CAPABILITIES.firstOrNull {
+  fun capabilityFromId(capabilityId: String): LLMCapability? = ALL_LLM_CAPABILITIES.firstOrNull {
     it.id == capabilityId
+  }
+
+  fun capabilitiesFromIds(capabilityIds: List<String>): List<LLMCapability> = capabilityIds.mapNotNull {
+    capabilityFromId(it)
   }
 }

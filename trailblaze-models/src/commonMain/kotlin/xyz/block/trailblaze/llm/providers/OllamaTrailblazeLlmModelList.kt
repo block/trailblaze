@@ -1,4 +1,5 @@
 package xyz.block.trailblaze.llm.providers
+
 import ai.koog.prompt.llm.LLMCapability
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.llm.TrailblazeLlmModelList
@@ -10,11 +11,11 @@ object OllamaTrailblazeLlmModelList : TrailblazeLlmModelList {
     modelId = "gpt-oss:20b",
     inputCostPerOneMillionTokens = 0.0,
     outputCostPerOneMillionTokens = 0.0,
-    capabilities = listOf(
+    capabilityIds = listOf(
       LLMCapability.Temperature,
       LLMCapability.Schema.JSON.Standard,
       LLMCapability.Tools,
-    ),
+    ).map { it.id },
     contextLength = 131_072L, // 128K context window
     maxOutputTokens = 65_536L, // 64K output tokens
   )

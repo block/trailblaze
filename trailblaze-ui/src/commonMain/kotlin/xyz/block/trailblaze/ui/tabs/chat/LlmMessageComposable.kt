@@ -12,11 +12,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import xyz.block.trailblaze.logs.model.LlmMessage
+import xyz.block.trailblaze.logs.model.TrailblazeLlmMessage
 
 
 @Composable
-fun LlmMessageComposable(message: LlmMessage) {
+fun LlmMessageComposable(message: TrailblazeLlmMessage) {
   val backgroundColor = when (message.role) {
     "user" -> MaterialTheme.colorScheme.primaryContainer
     "assistant" -> MaterialTheme.colorScheme.secondaryContainer

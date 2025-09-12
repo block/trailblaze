@@ -1,14 +1,18 @@
 package xyz.block.trailblaze.logs.client
 
+import ai.koog.agents.core.tools.ToolDescriptor
 import ai.koog.prompt.message.Message
 import kotlinx.datetime.Clock
 import kotlinx.datetime.Instant
 import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.api.ScreenState
+import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
+import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.logs.client.TrailblazeLog.TrailblazeLlmRequestLog.Action
-import xyz.block.trailblaze.logs.model.LlmMessage
+import xyz.block.trailblaze.logs.client.TrailblazeLog.TrailblazeLlmRequestLog.ToolOption
 import xyz.block.trailblaze.logs.model.SessionStatus
+import xyz.block.trailblaze.logs.model.TrailblazeLlmMessage
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -31,27 +35,29 @@ object TrailblazeLogger {
   fun logScreenshot(screenshotBytes: ByteArray): String = logScreenshotListener(screenshotBytes)
 
   fun logLlmRequest(
-    llmModelId: String,
+    trailblazeLlmModel: TrailblazeLlmModel,
     llmRequestId: String,
     agentTaskStatus: AgentTaskStatus,
     screenState: ScreenState,
     instructions: String,
-    llmMessages: List<LlmMessage>,
+    llmMessages: List<TrailblazeLlmMessage>,
     response: List<Message.Response>,
     startTime: Instant,
+    toolDescriptors: List<ToolDescriptor>,
   ) {
     val toolMessages = response.filterIsInstance<Message.Tool>()
 
     val bytes = screenState.screenshotBytes ?: byteArrayOf()
     val screenshotFilename = logScreenshot(bytes)
 
+    val toolOptions = toolDescriptors.map { ToolOption(it.name) }
     val endTime = Clock.System.now()
     log(
       TrailblazeLog.TrailblazeLlmRequestLog(
         agentTaskStatus = agentTaskStatus,
         viewHierarchy = screenState.viewHierarchy,
         instructions = instructions,
-        llmModelId = llmModelId,
+        trailblazeLlmModel = trailblazeLlmModel,
         llmMessages = llmMessages,
         screenshotFile = screenshotFilename,
         llmResponse = response,
@@ -67,6 +73,7 @@ object TrailblazeLogger {
         deviceWidth = screenState.deviceWidth,
         deviceHeight = screenState.deviceHeight,
         session = getCurrentSessionId(),
+        toolOptions = toolOptions,
       ),
     )
   }
@@ -103,12 +110,17 @@ object TrailblazeLogger {
     }
   }
 
-  fun sendStartLog(className: String, methodName: String) {
+  fun sendStartLog(
+    className: String,
+    methodName: String,
+    trailblazeDeviceInfo: TrailblazeDeviceInfo,
+  ) {
     TrailblazeLogger.log(
       TrailblazeLog.TrailblazeSessionStatusChangeLog(
         sessionStatus = SessionStatus.Started(
           testClassName = className,
           testMethodName = methodName,
+          trailblazeDeviceInfo = trailblazeDeviceInfo,
         ),
         session = TrailblazeLogger.getCurrentSessionId(),
         timestamp = Clock.System.now(),

@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.logs.model
 
 import kotlinx.serialization.Serializable
+import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 
 @Serializable
 sealed interface SessionStatus {
@@ -12,6 +13,7 @@ sealed interface SessionStatus {
   data class Started(
     val testMethodName: String,
     val testClassName: String,
+    val trailblazeDeviceInfo: TrailblazeDeviceInfo,
   ) : SessionStatus
 
   @Serializable

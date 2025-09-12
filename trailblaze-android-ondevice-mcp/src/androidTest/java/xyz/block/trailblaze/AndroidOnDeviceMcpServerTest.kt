@@ -41,7 +41,7 @@ class AndroidOnDeviceMcpServerTest {
     )
 
     val defaultDynamicLlmClient = DefaultDynamicLlmClient(
-      dynamicLlmConfig = runYamlRequest.dynamicLlmConfig,
+      trailblazeLlmModel = runYamlRequest.trailblazeLlmModel,
       llmClients = mutableMapOf<LLMProvider, LLMClient>(
         LLMProvider.Ollama to OllamaClient(baseClient = baseClient),
       ).apply {
@@ -58,7 +58,7 @@ class AndroidOnDeviceMcpServerTest {
     )
 
     AndroidTrailblazeRule(
-      llmModel = defaultDynamicLlmClient.createLlmModel(),
+      trailblazeLlmModel = defaultDynamicLlmClient.trailblazeLlmModel,
       llmClient = defaultDynamicLlmClient.createLlmClient(),
       additionalRules = listOf(),
     ).run(

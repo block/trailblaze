@@ -1,7 +1,6 @@
 package xyz.block.trailblaze.agent
 
 import ai.koog.prompt.executor.clients.LLMClient
-import ai.koog.prompt.llm.LLModel
 import ai.koog.prompt.message.Attachment
 import ai.koog.prompt.message.AttachmentContent
 import ai.koog.prompt.message.Message
@@ -13,6 +12,7 @@ import kotlinx.serialization.json.Json
 import xyz.block.trailblaze.agent.util.ElementRetriever
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
+import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.toolcalls.commands.BooleanAssertionTrailblazeTool
@@ -29,14 +29,14 @@ import xyz.block.trailblaze.utils.getNumberFromString
  */
 class TrailblazeElementComparator(
   private val screenStateProvider: () -> ScreenState,
-  llmModel: LLModel,
+  trailblazeLlmModel: TrailblazeLlmModel,
   llmClient: LLMClient,
   private val systemPromptToolTemplate: String = TemplatingUtil.getResourceAsText("trailblaze_locator_tool_system_prompt.md")!!,
   private val userPromptTemplate: String = TemplatingUtil.getResourceAsText("trailblaze_locator_user_prompt_template.md")!!,
 ) : ElementComparator {
 
   private val koogLlmClientHelper = TrailblazeKoogLlmClientHelper(
-    llmModel = llmModel,
+    trailblazeLlmModel = trailblazeLlmModel,
     llmClient = llmClient,
     systemPromptTemplate = systemPromptToolTemplate,
     userMessageTemplate = userPromptTemplate,

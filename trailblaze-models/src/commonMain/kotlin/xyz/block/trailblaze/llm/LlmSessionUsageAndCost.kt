@@ -8,7 +8,7 @@ import kotlin.math.round
  */
 @Serializable
 data class LlmSessionUsageAndCost(
-  val modelName: String,
+  val llmModel: TrailblazeLlmModel,
   val averageDurationMillis: Double,
   val totalCostInUsDollars: Double,
   val totalRequestCount: Int,
@@ -23,7 +23,7 @@ data class LlmSessionUsageAndCost(
   }
 
   fun debugString(): String = buildString {
-    appendLine("Model: $modelName")
+    appendLine("Model: ${llmModel.modelId}")
     appendLine("--- Totals ---")
     appendLine("- Requests: $totalRequestCount")
     if (totalRequestCount > 0 && totalOutputTokens > 0) {

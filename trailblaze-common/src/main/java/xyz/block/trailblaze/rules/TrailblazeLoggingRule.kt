@@ -4,6 +4,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
 import org.junit.runner.Description
+import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.http.TrailblazeHttpClientFactory
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogServerClient
@@ -13,13 +14,15 @@ import xyz.block.trailblaze.tracing.TrailblazeTracer
 /**
  * Base JUnit4 Logging Rule for Trailblaze Tests
  */
-open class TrailblazeLoggingRule(
+abstract class TrailblazeLoggingRule(
   private val sendStartAndEndLogs: Boolean = true,
   private val logsBaseUrl: String = "https://localhost:8443",
   private val writeLogToDisk: ((currentTestName: String, log: TrailblazeLog) -> Unit) = { _, _ -> },
   private val writeScreenshotToDisk: ((sessionId: String, fileName: String, bytes: ByteArray) -> Unit) = { _, _, _ -> },
   private val writeTraceToDisk: ((sessionId: String, json: String) -> Unit) = { _, _ -> },
 ) : SimpleTestRule() {
+
+  abstract val trailblazeDeviceInfoProvider: () -> TrailblazeDeviceInfo
 
   val trailblazeLogServerClient by lazy {
     TrailblazeLogServerClient(
@@ -49,6 +52,7 @@ open class TrailblazeLoggingRule(
       TrailblazeLogger.sendStartLog(
         className = description.className,
         methodName = description.methodName,
+        trailblazeDeviceInfo = trailblazeDeviceInfoProvider(),
       )
     }
   }

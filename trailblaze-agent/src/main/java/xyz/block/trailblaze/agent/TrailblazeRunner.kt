@@ -1,7 +1,6 @@
 package xyz.block.trailblaze.agent
 
 import ai.koog.prompt.executor.clients.LLMClient
-import ai.koog.prompt.llm.LLModel
 import ai.koog.prompt.message.Message
 import ai.koog.prompt.params.LLMParams
 import kotlinx.coroutines.runBlocking
@@ -15,10 +14,11 @@ import xyz.block.trailblaze.agent.model.PromptStepStatus
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TestAgentRunner
 import xyz.block.trailblaze.api.TrailblazeAgent
+import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
-import xyz.block.trailblaze.logs.model.LlmMessage
+import xyz.block.trailblaze.logs.model.TrailblazeLlmMessage
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
@@ -31,7 +31,7 @@ class TrailblazeRunner(
   val agent: TrailblazeAgent,
   private val screenStateProvider: () -> ScreenState,
   llmClient: LLMClient,
-  val llmModel: LLModel,
+  val trailblazeLlmModel: TrailblazeLlmModel,
   private val maxSteps: Int = 50,
   private val trailblazeToolRepo: TrailblazeToolRepo,
   systemPromptTemplate: String? = null,
@@ -52,14 +52,14 @@ class TrailblazeRunner(
   private val elementComparator = TrailblazeElementComparator(
     screenStateProvider = screenStateProvider,
     llmClient = tracingLlmClient,
-    llmModel = llmModel,
+    trailblazeLlmModel = trailblazeLlmModel,
   )
 
   private val trailblazeKoogLlmClientHelper = TrailblazeKoogLlmClientHelper(
     systemPromptTemplate = currentSystemPrompt,
     userObjectiveTemplate = userObjectiveTemplate,
     userMessageTemplate = userMessageTemplate,
-    llmModel = this.llmModel,
+    trailblazeLlmModel = trailblazeLlmModel,
     llmClient = tracingLlmClient,
     elementComparator = elementComparator,
   )
@@ -104,12 +104,13 @@ class TrailblazeRunner(
         forceStepStatusUpdate = trailblazeKoogLlmClientHelper.getForceStepStatusUpdate(),
       )
 
+      val toolDescriptors = trailblazeToolRepo.getToolDescriptorsForStep(prompt)
       val koogLlmResponseMessages: List<Message.Response> = runBlocking {
         trailblazeKoogLlmClientHelper.callLlm(
           KoogLlmRequestData(
             callId = llmResponseId,
             messages = koogAiRequestMessages,
-            toolDescriptors = trailblazeToolRepo.getCurrentToolDescriptors(),
+            toolDescriptors = toolDescriptors,
             toolChoice = if (trailblazeKoogLlmClientHelper.getShouldForceToolCall()) {
               LLMParams.ToolChoice.Required
             } else {
@@ -128,14 +129,14 @@ class TrailblazeRunner(
       TrailblazeLogger.logLlmRequest(
         agentTaskStatus = stepStatus.currentStatus.value,
         screenState = screenStateForLlmRequest,
-        instructions = prompt.step,
+        instructions = prompt.prompt,
         llmMessages = koogAiRequestMessages.map { messageFromHistory ->
-          LlmMessage(
+          TrailblazeLlmMessage(
             role = messageFromHistory.role.name.lowercase(),
             message = messageFromHistory.content,
           )
         }.plus(
-          LlmMessage(
+          TrailblazeLlmMessage(
             role = Message.Role.Assistant.name.lowercase(),
             message = koogLlmResponseMessages.filterIsInstance<Message.Assistant>().firstOrNull()?.content,
           ),
@@ -143,7 +144,8 @@ class TrailblazeRunner(
         response = koogLlmResponseMessages,
         startTime = requestStartTimeMs,
         llmRequestId = llmResponseId,
-        llmModelId = llmModel.id,
+        trailblazeLlmModel = trailblazeLlmModel,
+        toolDescriptors = toolDescriptors,
       )
 
       val llmMessage = assistantMessage?.content
@@ -171,7 +173,7 @@ class TrailblazeRunner(
         return MaxCallsLimitReached(
           statusData = AgentTaskStatusData(
             taskId = stepStatus.taskId,
-            prompt = prompt.step,
+            prompt = prompt.prompt,
             callCount = maxSteps,
             taskStartTime = stepStartTime,
             totalDurationMs = (Clock.System.now() - stepStartTime).inWholeMilliseconds,

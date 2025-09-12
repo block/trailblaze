@@ -1,10 +1,8 @@
 package xyz.block.trailblaze.report
 
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
-import xyz.block.trailblaze.llm.LlmUsageAndCostExt.computeUsageSummary
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
-import xyz.block.trailblaze.logs.model.HasAgentTaskStatus
 import xyz.block.trailblaze.logs.model.HasScreenshot
 import xyz.block.trailblaze.report.models.LogsSummary
 import xyz.block.trailblaze.report.utils.LogsRepo
@@ -24,10 +22,6 @@ fun main(args: Array<String>) {
   val summaryJsonFile = File(logsDir, "summary.json")
   summaryJsonFile.writeText(logsSummaryJson)
 
-  logsRepo.getSessionIds().forEach { sessionId ->
-    processSession(logsRepo, sessionId)
-  }
-
   val trailblazeReportHtmlFile = File(logsDir, "trailblaze_report.html")
   println("file://${trailblazeReportHtmlFile.absolutePath}")
 
@@ -41,7 +35,12 @@ fun main(args: Array<String>) {
     println("Using project directory: ${it.canonicalPath}")
   }
 
-  WasmReport.generate(logsRepo, trailblazeUiProjectDir, trailblazeReportHtmlFile)
+  WasmReport.generate(
+    logsRepo = logsRepo,
+    trailblazeUiProjectDir = trailblazeUiProjectDir,
+    outputFile = trailblazeReportHtmlFile,
+    reportTemplateFile = File(logsRepo.logsDir.parentFile, "trailblaze_report_template.html"),
+  )
 }
 
 fun moveJsonFilesToSessionDirs(logsDir: File) {
@@ -73,6 +72,7 @@ fun moveJsonFilesToSessionDirs(logsDir: File) {
           is TrailblazeLog.TrailblazeLlmRequestLog -> log.copy(
             screenshotFile = screenshotFileInSessionDirPath,
           )
+
           else -> {}
         }
       }
@@ -87,32 +87,6 @@ fun moveJsonFilesToSessionDirs(logsDir: File) {
     } catch (e: Exception) {
       println("Error processing ${downloadedJsonFile.absolutePath}: ${e.message}")
     }
-  }
-}
-
-fun processSession(logsRepo: LogsRepo, sessionId: String) {
-  val allLogs = logsRepo.getLogsForSession(sessionId)
-
-  val agentTaskStatus = allLogs.filterIsInstance<HasAgentTaskStatus>().map { it.agentTaskStatus }.lastOrNull()
-
-  println("Processing $sessionId")
-  val html = ReportRenderer.renderTemplateFromResources(
-    "standalone.ftl",
-    mutableMapOf<String, Any>(
-      "statusMessage" to getStatusMessage(agentTaskStatus),
-      "inProgress" to (agentTaskStatus is AgentTaskStatus.InProgress),
-      "statusJson" to TrailblazeJsonInstance.encodeToString(agentTaskStatus),
-      "logs" to allLogs,
-      "session" to sessionId,
-    ).apply {
-      agentTaskStatus?.statusData?.let { this.put("status", it) }
-      allLogs.computeUsageSummary()?.debugString()?.let { this.put("llmUsageSummary", it) }
-    },
-  )
-  val sessionDir = logsRepo.getSessionDir(sessionId)
-  val outputFile = File(sessionDir, "trailblaze_$sessionId.html").also {
-    println("file://${it.absolutePath}")
-    it.writeText(html)
   }
 }
 

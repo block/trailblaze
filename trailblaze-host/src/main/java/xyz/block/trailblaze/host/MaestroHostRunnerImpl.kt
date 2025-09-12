@@ -12,7 +12,8 @@ import maestro.orchestra.util.Env.withInjectedShellEnvVars
 import maestro.orchestra.yaml.YamlCommandReader
 import xyz.block.trailblaze.android.maestro.LoggingDriver
 import xyz.block.trailblaze.api.ScreenState
-import xyz.block.trailblaze.devices.TrailblazeDeviceType
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.host.devices.TrailblazeConnectedDevice
 import xyz.block.trailblaze.host.devices.TrailblazeDeviceService
 import xyz.block.trailblaze.host.screenstate.HostMaestroDriverScreenState
@@ -23,16 +24,18 @@ import xyz.block.trailblaze.utils.Ext.asJsonObject
 import java.io.File
 
 class MaestroHostRunnerImpl(
-  platform: TrailblazeDeviceType? = null,
+  requestedPlatform: TrailblazeDevicePlatform? = null,
   setOfMarkEnabled: Boolean = true,
 ) : MaestroHostRunner {
   val connectedDevice: TrailblazeConnectedDevice by lazy {
-    if (platform == null) {
+    if (requestedPlatform == null) {
       TrailblazeDeviceService.getFirstConnectedDevice()
     } else {
-      TrailblazeDeviceService.getConnectedDevice(platform) ?: error("No connected devices found.")
+      TrailblazeDeviceService.getConnectedDevice(requestedPlatform) ?: error("No connected devices found.")
     }
   }
+
+  val connectedTrailblazeDriverType: TrailblazeDriverType = connectedDevice.trailblazeDriverType
 
   val loggingDriver: LoggingDriver by lazy {
     connectedDevice.loggingDriver

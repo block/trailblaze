@@ -2,13 +2,19 @@ package xyz.block.trailblaze
 
 import androidx.test.platform.app.InstrumentationRegistry
 import xyz.block.trailblaze.InstrumentationUtil.withInstrumentation
+import xyz.block.trailblaze.android.AndroidTrailblazeDeviceInfoUtil
 import xyz.block.trailblaze.android.InstrumentationArgUtil
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifiersProvider
+import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
+import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.rules.TrailblazeLoggingRule
 
 class TrailblazeAndroidLoggingRule(
   sendStartAndEndLogs: Boolean = true,
+  /** Override the default device classifiers */
+  trailblazeDeviceClassifiersProvider: TrailblazeDeviceClassifiersProvider? = null,
 ) : TrailblazeLoggingRule(
   sendStartAndEndLogs = sendStartAndEndLogs,
   logsBaseUrl = InstrumentationArgUtil.logsEndpoint(),
@@ -54,6 +60,13 @@ class TrailblazeAndroidLoggingRule(
     }
   },
 ) {
+  override val trailblazeDeviceInfoProvider: () -> TrailblazeDeviceInfo = {
+    AndroidTrailblazeDeviceInfoUtil.collectCurrentDeviceInfo(
+      trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+      trailblazeDeviceClassifiersProvider = trailblazeDeviceClassifiersProvider,
+    )
+  }
+
   companion object {
     private const val LOGS_DIR = "trailblaze-logs"
   }

@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -19,14 +20,13 @@ import androidx.compose.ui.unit.sp
  * Simple and clear representation for TestRail
  */
 @Composable
-fun TestRailIcon(
-  modifier: Modifier = Modifier,
-  backgroundColor: Color = Color(0xFF7CB342), // TestRail green
-  textColor: Color = Color.White,
-  useSimpleVersion: Boolean = false, // Kept for compatibility but not used
+fun TextIcon(
+  text: String,
+  backgroundColor: Color = MaterialTheme.colorScheme.inverseOnSurface,
+  textColor: Color = MaterialTheme.colorScheme.onSurface,
 ) {
   Box(
-    modifier = modifier
+    modifier = Modifier
       .size(24.dp)
       .background(
         color = backgroundColor,
@@ -35,7 +35,7 @@ fun TestRailIcon(
     contentAlignment = Alignment.Center
   ) {
     Text(
-      text = "TR",
+      text = text,
       color = textColor,
       fontSize = 10.sp,
       fontWeight = FontWeight.Bold,

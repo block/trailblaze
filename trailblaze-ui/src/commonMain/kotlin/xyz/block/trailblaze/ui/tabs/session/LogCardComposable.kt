@@ -116,14 +116,14 @@ fun LogCard(
       title = "Objective Start",
       duration = null,
       elapsedTime = elapsedTimeMs,
-      preformattedText = log.promptStep.step
+      preformattedText = log.promptStep.prompt
     )
 
     is TrailblazeLog.ObjectiveCompleteLog -> LogCardData(
       title = "Objective Complete",
       duration = null,
       elapsedTime = elapsedTimeMs,
-      preformattedText = log.promptStep.step
+      preformattedText = log.promptStep.prompt
     )
 
     is TrailblazeLog.TrailblazeSessionStatusChangeLog -> LogCardData(

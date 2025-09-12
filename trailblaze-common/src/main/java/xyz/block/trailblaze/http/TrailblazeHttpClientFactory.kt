@@ -103,10 +103,13 @@ object TrailblazeHttpClientFactory {
    */
   private fun OkHttpClient.Builder.trustAllCerts() {
     val trustAllCerts = arrayOf<TrustManager>(
+      @Suppress("CustomX509TrustManager")
       object : X509TrustManager {
+        @Suppress("TrustAllX509TrustManager")
         override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {
         }
 
+        @Suppress("TrustAllX509TrustManager")
         override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {
         }
 

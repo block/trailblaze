@@ -26,7 +26,7 @@ object TrailblazeAiRunnerMessages {
         
         Current objective item to focus on is:
         
-        > Task ${promptStep.step}
+        > Task ${promptStep.prompt}
       """.trimIndent()
     } else {
       """
@@ -34,7 +34,7 @@ object TrailblazeAiRunnerMessages {
         
         Your current objective item to focus on is:
         
-        > Task ${promptStep.step}
+        > Task ${promptStep.prompt}
         
         IMPORTANT: Focus ONLY on completing this specific objective item. 
         After you complete this objective item, call the objectiveStatus tool IMMEDIATELY.

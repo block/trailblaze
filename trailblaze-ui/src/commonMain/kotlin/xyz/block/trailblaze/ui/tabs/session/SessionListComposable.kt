@@ -4,13 +4,16 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -26,9 +29,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import xyz.block.trailblaze.ui.icons.Android
+import xyz.block.trailblaze.ui.icons.Apple
+import xyz.block.trailblaze.ui.icons.BrowserChrome
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.ui.composables.SelectableText
 import xyz.block.trailblaze.ui.composables.StatusBadge
@@ -105,10 +112,76 @@ fun SessionListComposable(
                 verticalAlignment = Alignment.CenterVertically,
               ) {
                 val time = session.timestamp.toLocalDateTime(TimeZone.currentSystemDefault()).time
-                SelectableText(
-                  text = "${time.hour}:${time.minute.toString().padStart(2, '0')} - ${session.displayName}",
-                  modifier = Modifier.padding(8.dp),
-                )
+                Column(modifier = Modifier.align(Alignment.CenterVertically)) {
+                  Row {
+
+                    SelectableText(
+                      text = "${time.hour}:${time.minute.toString().padStart(2, '0')} - ${session.displayName}",
+                      modifier = Modifier.padding(8.dp),
+                    )
+                  }
+                  Row(modifier = Modifier) {
+                    session.trailblazeDeviceInfo?.let { trailblazeDeviceInfo ->
+                      AssistChip(
+                        onClick = { },
+                        label = {
+                          Icon(
+                            imageVector = when (trailblazeDeviceInfo.platform) {
+                              TrailblazeDevicePlatform.ANDROID -> Android
+                              TrailblazeDevicePlatform.IOS -> Apple
+                              TrailblazeDevicePlatform.WEB -> BrowserChrome
+                            },
+                            contentDescription = "Device Platform",
+                          )
+                          Spacer(modifier = Modifier.size(8.dp))
+                          Text(
+                            text = trailblazeDeviceInfo.platform.name.lowercase(),
+                            style = MaterialTheme.typography.labelSmall
+                          )
+                        },
+                      )
+                      Spacer(modifier = Modifier.padding(4.dp))
+
+                      trailblazeDeviceInfo.classifiers.forEach { classifier ->
+                        AssistChip(
+                          onClick = { },
+                          label = {
+                            Text(
+                              text = classifier.lowercase(),
+                              style = MaterialTheme.typography.labelSmall
+                            )
+                          },
+                        )
+                        Spacer(modifier = Modifier.padding(4.dp))
+                      }
+//                      trailblazeDeviceInfo.orientation?.let { orientation ->
+//                        AssistChip(
+//                          onClick = { },
+//                          label = {
+//                            Text(
+//                              text = orientation.name.lowercase(),
+//                              style = MaterialTheme.typography.labelSmall
+//                            )
+//                          },
+//                        )
+//                        Spacer(modifier = Modifier.padding(4.dp))
+//                      }
+//
+//                      trailblazeDeviceInfo.locale?.let { localeTag ->
+//                        AssistChip(
+//                          onClick = { },
+//                          label = {
+//                            Text(
+//                              text = localeTag,
+//                              style = MaterialTheme.typography.labelSmall
+//                            )
+//                          },
+//                        )
+//                        Spacer(modifier = Modifier.padding(4.dp))
+//                      }
+                    }
+                  }
+                }
 
                 Box(
                   modifier = Modifier

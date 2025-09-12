@@ -21,6 +21,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
+import xyz.block.trailblaze.android.AndroidTrailblazeDeviceInfoUtil
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifiersProvider
+import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
@@ -28,6 +31,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeLogger
 
 class OnDeviceRpcServerUtils(
   private val runTrailblazeYaml: suspend (RunYamlRequest) -> Unit,
+  private val trailblazeDeviceClassifiersProvider: TrailblazeDeviceClassifiersProvider? = null,
 ) {
   private var currPromptJob: Job? = null
 
@@ -54,7 +58,14 @@ class OnDeviceRpcServerUtils(
             println("Params: $runYamlRequest")
             val testName = runYamlRequest.testName
             TrailblazeLogger.startSession(testName)
-            TrailblazeLogger.sendStartLog(testName, testName)
+            TrailblazeLogger.sendStartLog(
+              className = testName,
+              methodName = testName,
+              trailblazeDeviceInfo = AndroidTrailblazeDeviceInfoUtil.collectCurrentDeviceInfo(
+                trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+                trailblazeDeviceClassifiersProvider = trailblazeDeviceClassifiersProvider,
+              ),
+            )
             currPromptJob?.let { job ->
               // Cancel the current prompt job if it's running'
               if (job.isActive) {

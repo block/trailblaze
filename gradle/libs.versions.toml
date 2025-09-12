@@ -2,6 +2,7 @@
 agp = "8.10.1"
 androidx-lifecycle = "2.9.1"
 assertk = "0.28.1"
+clikt = "5.0.3"
 coil3 = "3.0.4"
 compose-hot-reload = "1.0.0-alpha10"
 core = "1.6.0"
@@ -59,6 +60,7 @@ androidx-test-monitor = { group = "androidx.test", name = "monitor", version.ref
 androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espressoCore" }
 androidx-uiautomator = { group = "androidx.test.uiautomator", name = "uiautomator", version.ref = "uiautomator" }
 assertk = { module = "com.willowtreeapps.assertk:assertk", version.ref = "assertk" }
+clikt = { module = "com.github.ajalt.clikt:clikt", version.ref = "clikt" }
 coil3-compose = { module = "io.coil-kt.coil3:coil-compose", version.ref = "coil3" }
 coil3-network-ktor = { module = "io.coil-kt.coil3:coil-network-ktor3", version.ref = "coil3" }
 exp4j = { module = "net.objecthunter:exp4j", version.ref = "exp4j" }

@@ -56,6 +56,12 @@ fun LlmRequestDetailsFlat(log: TrailblazeLog.TrailblazeLlmRequestLog) {
       }
     }
 
+    DetailSection("Available Tools") {
+      log.toolOptions.forEach { toolOption ->
+        CodeBlock(toolOption.name)
+      }
+    }
+
     DetailSection("Chat History") {
       if (log.llmMessages.isNotEmpty()) {
         log.llmMessages.forEach { message ->

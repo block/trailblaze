@@ -28,7 +28,7 @@ data class PromptStepStatus(
   val currentStatus = MutableStateFlow<AgentTaskStatus>(
     AgentTaskStatus.InProgress(
       statusData = AgentTaskStatusData(
-        prompt = promptStep.step,
+        prompt = promptStep.prompt,
         callCount = 0,
         taskStartTime = taskCreatedTimestamp,
         totalDurationMs = 0,
@@ -104,7 +104,7 @@ data class PromptStepStatus(
   fun markAsComplete() {
     currentStatus.value = AgentTaskStatus.Success.ObjectiveComplete(
       statusData = AgentTaskStatusData(
-        prompt = promptStep.step,
+        prompt = promptStep.prompt,
         callCount = getHistorySize(),
         taskStartTime = taskCreatedTimestamp,
         totalDurationMs = Clock.System.now().epochSeconds - taskCreatedTimestamp.epochSeconds,
@@ -117,7 +117,7 @@ data class PromptStepStatus(
   fun markAsFailed() {
     currentStatus.value = AgentTaskStatus.Failure.ObjectiveFailed(
       statusData = AgentTaskStatusData(
-        prompt = promptStep.step,
+        prompt = promptStep.prompt,
         callCount = getHistorySize(),
         taskStartTime = taskCreatedTimestamp,
         totalDurationMs = Clock.System.now().toEpochMilliseconds() - taskCreatedTimestamp.toEpochMilliseconds(),

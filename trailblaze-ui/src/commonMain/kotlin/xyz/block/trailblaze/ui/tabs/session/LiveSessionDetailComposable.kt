@@ -149,7 +149,7 @@ fun LiveSessionDetailComposable(
   Box(modifier = Modifier.fillMaxSize()) {
     // Main content
     SessionDetailComposable(
-      details = sessionDetail,
+      sessionDetail = sessionDetail,
       toMaestroYaml = toMaestroYaml,
       toTrailblazeYaml = toTrailblazeYaml,
       generateRecordingYaml = generateRecordingYaml,

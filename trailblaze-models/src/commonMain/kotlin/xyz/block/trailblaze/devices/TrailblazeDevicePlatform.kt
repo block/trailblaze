@@ -1,7 +1,6 @@
 package xyz.block.trailblaze.devices
 
-enum class TrailblazeDeviceType {
-  ANDROID_ONDEVICE,
+enum class TrailblazeDevicePlatform {
   ANDROID,
   IOS,
   WEB,

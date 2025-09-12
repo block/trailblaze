@@ -6,7 +6,6 @@ import ai.koog.agents.core.tools.ToolResult
 import ai.koog.prompt.dsl.Prompt
 import ai.koog.prompt.executor.clients.LLMClient
 import ai.koog.prompt.llm.LLMCapability
-import ai.koog.prompt.llm.LLModel
 import ai.koog.prompt.message.Attachment
 import ai.koog.prompt.message.AttachmentContent
 import ai.koog.prompt.message.Message
@@ -20,6 +19,7 @@ import xyz.block.trailblaze.agent.model.PromptStepStatus
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeAgent
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
+import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
@@ -31,7 +31,7 @@ class TrailblazeKoogLlmClientHelper(
   var systemPromptTemplate: String,
   val userObjectiveTemplate: String,
   val userMessageTemplate: String,
-  val llmModel: LLModel,
+  val trailblazeLlmModel: TrailblazeLlmModel,
   val llmClient: LLMClient,
   val elementComparator: TrailblazeElementComparator,
 ) {
@@ -164,7 +164,7 @@ class TrailblazeKoogLlmClientHelper(
               toolChoice = llmRequestData.toolChoice,
             ),
           ),
-          model = llmModel,
+          model = trailblazeLlmModel.toKoogLlmModel(),
           tools = llmRequestData.toolDescriptors,
         )
         return koogLlmResponse
@@ -201,7 +201,7 @@ class TrailblazeKoogLlmClientHelper(
         content = TemplatingUtil.renderTemplate(
           template = userObjectiveTemplate,
           values = mapOf(
-            "objective" to step.step,
+            "objective" to step.prompt,
           ),
         ),
         metaInfo = RequestMetaInfo.create(Clock.System),
@@ -228,7 +228,12 @@ class TrailblazeKoogLlmClientHelper(
         ),
         attachments = buildList {
           val screenshotBytes = screenState.screenshotBytes
-          if (screenshotBytes != null && screenshotBytes.isNotEmpty() && llmModel.capabilities.contains(LLMCapability.Vision.Image)) {
+          if (screenshotBytes != null &&
+            screenshotBytes.isNotEmpty() &&
+            trailblazeLlmModel.capabilityIds.contains(
+              LLMCapability.Vision.Image.id,
+            )
+          ) {
             add(
               Attachment.Image(
                 AttachmentContent.Binary.Bytes(screenshotBytes),
