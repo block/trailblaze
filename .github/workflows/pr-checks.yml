@@ -63,10 +63,12 @@ jobs:
           java-version: 17
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407
+        uses: android-actions/setup-android@v3
 
       - name: Create and start emulator
-        uses: reactivecircus/android-emulator-runner@1dcd0090116d15e7c562f8db72807de5e036a4ed
+        id: emulator-tests
+        continue-on-error: true
+        uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 34
           arch: x86_64
@@ -75,32 +77,44 @@ jobs:
           heap-size: 600M
           profile: Nexus 6
           script: |
-            set +e  # Allow failure so we can post-process
+            set +e  # Don't exit on errors, we want to capture logs regardless
             
-            # Run Android Tests
-            ./gradlew --info :examples:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class="xyz.block.trailblaze.examples.settings.AndroidSettingsTest#becomeADeveloperMaestroYaml" -Pandroid.testInstrumentationRunnerArguments.trailblaze.aiEnabled=false
+            # Run Android Tests and capture exit code
+            ./gradlew --info :examples:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class="xyz.block.trailblaze.examples.settings.AndroidSettingsTest#almostBecomeADeveloperRecorded" -Pandroid.testInstrumentationRunnerArguments.trailblaze.aiEnabled=false
             TEST_EXIT_CODE=$?
             echo "Exit code was $TEST_EXIT_CODE"
+            echo "test_exit_code=$TEST_EXIT_CODE" >> $GITHUB_ENV
             
             echo "Pulling logs from device..."
-            mkdir -p "$(pwd)/trailblaze-logs" && adb pull /sdcard/Download/trailblaze-logs/. "$(pwd)/trailblaze-logs"
+            mkdir -p "$(pwd)/trailblaze-logs"
+            adb pull /sdcard/Download/trailblaze-logs/. "$(pwd)/trailblaze-logs" || echo "Failed to pull logs"
             
             # Generate Trailblaze report
             # Build the Compose Web/WASM UI
-            ./gradlew :trailblaze-ui:wasmJsBrowserProductionWebpack
+            ./gradlew :trailblaze-ui:wasmJsBrowserProductionWebpack || echo "Failed to build UI"
             echo "Generating Trailblaze report..."
-            ./gradlew :trailblaze-report:run --args="$(pwd)/trailblaze-logs"
+            ./gradlew :trailblaze-report:run --args="$(pwd)/trailblaze-logs" || echo "Failed to generate report"
             
-            # Zip up logs
+            # Zip up logs (do this before exit so it happens on both success and failure)
+            echo "Creating zip file of logs..."
+            ls -la "$(pwd)/trailblaze-logs" || echo "No trailblaze-logs directory found"
             cd "$(pwd)/trailblaze-logs" && zip -r "../trailblaze-logs.zip" . && cd ..
+            echo "Zip file created: $(ls -lh trailblaze-logs.zip)" || true
             
-            # Final step: exit with test result to fail the job if needed
-            exit $TEST_EXIT_CODE
+            echo "Script completed, returning success"
+            true
 
       - name: Upload artifacts
         if: always()  # Ensures this runs even if the previous step failed
         uses: actions/upload-artifact@v4
         with:
           name: trailblaze-artifacts
-          path: |
-            trailblaze-logs.zip
+          path: trailblaze-logs.zip
+
+      - name: Fail job if tests failed
+        if: always()
+        run: |
+          if [ "${{ env.test_exit_code }}" != "0" ]; then
+            echo "Tests failed with exit code ${{ env.test_exit_code }}"
+            exit ${{ env.test_exit_code }}
+          fi
