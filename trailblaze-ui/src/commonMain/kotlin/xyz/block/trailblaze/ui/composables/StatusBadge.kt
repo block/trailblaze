@@ -16,10 +16,15 @@ fun StatusBadge(
   status: SessionStatus,
   modifier: Modifier = Modifier,
 ) {
+  fun SessionStatus.isCancelled(): Boolean = when (this) {
+    is SessionStatus.Ended.Cancelled -> true
+    else -> false
+  }
   fun SessionStatus.isSuccess(): Boolean = when (this) {
     is SessionStatus.Started -> false
     is SessionStatus.Ended.Succeeded -> true
     is SessionStatus.Ended.Failed -> false
+    is SessionStatus.Ended.Cancelled -> false
     SessionStatus.Unknown -> false
   }
 
@@ -28,6 +33,13 @@ fun StatusBadge(
       "In Progress",
       Color(0xFFFFF3CD), // Light amber background - standard for in-progress
       Color(0xFF856404)  // Dark amber text
+    )
+
+
+    status.isCancelled() -> Triple(
+      "Cancelled",
+      Color(0xFFFFE5CC), // Light orange background - more orange than amber
+      Color(0xFFCC5500)  // Dark orange text - more orange than amber
     )
 
     status.isSuccess() -> Triple(

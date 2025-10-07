@@ -3,13 +3,19 @@ package xyz.block.trailblaze.host.mcp.host
 import ai.koog.agents.core.tools.ToolRegistry
 import ai.koog.agents.core.tools.reflect.asTools
 import ai.koog.prompt.executor.clients.openai.OpenAILLMClient
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import xyz.block.trailblaze.agent.TrailblazeRunner
 import xyz.block.trailblaze.api.JvmOpenAiApiKeyUtil
+import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.host.HostMaestroTrailblazeAgent
 import xyz.block.trailblaze.host.MaestroHostRunnerImpl
 import xyz.block.trailblaze.host.mcp.host.newtools.HostDeviceToolSet
+import xyz.block.trailblaze.host.rules.HostTrailblazeLoggingRule
 import xyz.block.trailblaze.llm.providers.OpenAITrailblazeLlmModelList
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
+import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.server.TrailblazeMcpServer
 import xyz.block.trailblaze.mcp.TrailblazeMcpSseSessionContext
 import xyz.block.trailblaze.report.utils.LogsRepo
@@ -20,11 +26,38 @@ class TrailblazeHostMcpServer(
   val logsRepo: LogsRepo,
   val isOnDeviceMode: () -> Boolean,
 ) {
-
-  val hostMaestroAgent: HostMaestroTrailblazeAgent by lazy {
-    val hostRunner = MaestroHostRunnerImpl(
+  val hostRunner by lazy {
+    MaestroHostRunnerImpl(
       setOfMarkEnabled = true,
     )
+  }
+
+  private val trailblazeDeviceInfoProvider: (() -> TrailblazeDeviceInfo) by lazy {
+    {
+      TrailblazeDeviceInfo(
+        trailblazeDriverType = hostRunner.connectedTrailblazeDriverType,
+        widthPixels = hostRunner.connectedDevice.initialMaestroDeviceInfo.widthPixels,
+        heightPixels = hostRunner.connectedDevice.initialMaestroDeviceInfo.heightPixels,
+      )
+    }
+  }
+
+  val loggingRule = HostTrailblazeLoggingRule(
+    trailblazeDeviceInfoProvider = trailblazeDeviceInfoProvider,
+  ).apply {
+    CoroutineScope(Dispatchers.IO).launch {
+      subscribeToLoggingEventsAndSendToServer()
+    }
+  }
+
+  val hostMaestroAgent: HostMaestroTrailblazeAgent by lazy {
+    TrailblazeLogger.sendStartLog(
+      trailConfig = null,
+      className = "TrailblazeHostMcpServer",
+      methodName = "TrailblazeHostMcpServer",
+      trailblazeDeviceInfo = trailblazeDeviceInfoProvider(),
+    )
+
     HostMaestroTrailblazeAgent(
       maestroHostRunner = hostRunner,
     )

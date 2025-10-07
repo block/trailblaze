@@ -14,6 +14,7 @@ import xyz.block.trailblaze.toolcalls.commands.LongPressOnElementWithTextTrailbl
 import xyz.block.trailblaze.toolcalls.commands.LongPressOnPointTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.NetworkConnectionTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.OpenUrlTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.PressBackTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.ScrollUntilTextIsVisibleTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.SwipeTrailblazeTool
@@ -59,6 +60,7 @@ abstract class TrailblazeToolSet(
       AssertVisibleByNodeIdTrailblazeTool::class,
       NetworkConnectionTrailblazeTool::class,
       ScrollUntilTextIsVisibleTrailblazeTool::class,
+      OpenUrlTrailblazeTool::class,
     )
 
     val SetOfMarkTrailblazeToolSet = DynamicTrailblazeToolSet(

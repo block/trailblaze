@@ -59,6 +59,7 @@ class OnDeviceRpcServerUtils(
             val testName = runYamlRequest.testName
             TrailblazeLogger.startSession(testName)
             TrailblazeLogger.sendStartLog(
+              trailConfig = null,
               className = testName,
               methodName = testName,
               trailblazeDeviceInfo = AndroidTrailblazeDeviceInfoUtil.collectCurrentDeviceInfo(

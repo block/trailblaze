@@ -11,7 +11,7 @@ class HostWebDriverFactory {
     val playwrightDriver = MaestroPlaywrightDriver(headless)
     return TrailblazeConnectedDevice(
       maestroDriver = playwrightDriver,
-      trailblazeDriverType = TrailblazeDriverType.WEB_PLAYWRIGHT,
+      trailblazeDriverType = TrailblazeDriverType.WEB_PLAYWRIGHT_HOST,
     )
   }
 

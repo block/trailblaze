@@ -31,6 +31,7 @@ class TrailblazeElementComparator(
   private val screenStateProvider: () -> ScreenState,
   trailblazeLlmModel: TrailblazeLlmModel,
   llmClient: LLMClient,
+  val toolRepo: TrailblazeToolRepo,
   private val systemPromptToolTemplate: String = TemplatingUtil.getResourceAsText("trailblaze_locator_tool_system_prompt.md")!!,
   private val userPromptTemplate: String = TemplatingUtil.getResourceAsText("trailblaze_locator_user_prompt_template.md")!!,
 ) : ElementComparator {
@@ -42,6 +43,7 @@ class TrailblazeElementComparator(
     userMessageTemplate = userPromptTemplate,
     userObjectiveTemplate = userPromptTemplate,
     elementComparator = this,
+    toolRepo = toolRepo,
   )
 
   /**

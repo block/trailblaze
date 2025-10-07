@@ -132,7 +132,7 @@ object TrailblazeAndroidOnDeviceMcpServer {
         sessionContexts[mcpSseSessionId]?.progressToken = progressToken
 
         @Suppress("UNCHECKED_CAST")
-        val koogTool: Tool<ToolArgs, ToolResult> =
+        val koogTool =
           newToolRegistry.getTool(tool.descriptor.name) as Tool<ToolArgs, ToolResult>
 
         val koogToolArgs: ToolArgs =
@@ -140,11 +140,14 @@ object TrailblazeAndroidOnDeviceMcpServer {
 
         println("Executing tool: \\${koogTool.descriptor.name} with arguments: \\$koogToolArgs")
 
-        @OptIn(InternalAgentToolsApi::class)
-        val toolResponse = koogTool.execute(
-          args = koogToolArgs,
-          enabler = McpDirectToolCalls,
-        )
+        // Execute tool in background thread to prevent UI blocking
+        val toolResponse = withContext(Dispatchers.IO) {
+          @OptIn(InternalAgentToolsApi::class)
+          koogTool.execute(
+            args = koogToolArgs,
+            enabler = McpDirectToolCalls,
+          )
+        }
 
         val toolResponseMessage = toolResponse.toStringDefault()
 
@@ -198,7 +201,7 @@ object TrailblazeAndroidOnDeviceMcpServer {
             val initialToolRegistry = trailblazeToolRepo.asToolRegistry {
               TrailblazeToolExecutionContext(
                 screenState = screenStateProvider(),
-                llmResponseId = null,
+                traceId = null,
                 trailblazeAgent = trailblazeAgent,
               )
             }

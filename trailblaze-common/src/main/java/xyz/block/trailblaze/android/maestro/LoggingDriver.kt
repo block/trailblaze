@@ -27,12 +27,23 @@ class LoggingDriver(
   private val screenStateProvider: () -> ScreenState,
 ) : Driver {
 
-  private inline fun <T> traceMaestroDriver(name: String, block: () -> T): T = traceRecorder.trace(name, "MaestroDriver", emptyMap(), block)
+  private inline fun <T> traceMaestroDriver(name: String, block: () -> T): T = traceRecorder.trace(name, "MaestroDriver", emptyMap(), block = {
+    println("Maestro-${delegate::class.java.simpleName}-$name()")
+    block()
+  })
+
+  /**
+   * Wraps the Screen State Provider so that we can use a cached value when requested.
+   */
+  fun getCurrentScreenState(): ScreenState = temporaryStaticScreenStateData?.let { screenStateTemporarilyDisabledData ->
+    println("Temporarily using cached  is currently preloaded because: ${screenStateTemporarilyDisabledData.reason}.")
+    screenStateTemporarilyDisabledData.screenState
+  } ?: screenStateProvider()
 
   private inline fun <T> traceMaestroDriverAction(action: MaestroDriverActionType, block: () -> T): T = traceMaestroDriver(action::class.simpleName!!, block)
 
   private fun logActionWithScreenshot(action: MaestroDriverActionType, block: () -> Unit = {}) {
-    val screenState = screenStateProvider()
+    val screenState = getCurrentScreenState()
     val startTime = Clock.System.now()
 
     val executionTimeMs = measureTimeMillis {
@@ -56,7 +67,7 @@ class LoggingDriver(
   }
 
   private fun logActionWithoutScreenshot(action: MaestroDriverActionType, block: () -> Unit = {}) {
-    val screenState = screenStateProvider()
+    val deviceInfo = delegate.deviceInfo()
     val startTime = Clock.System.now()
     val executionTimeMs = measureTimeMillis {
       traceMaestroDriverAction(action) {
@@ -71,8 +82,8 @@ class LoggingDriver(
         durationMs = executionTimeMs,
         timestamp = startTime,
         session = TrailblazeLogger.getCurrentSessionId(),
-        deviceWidth = screenState.deviceWidth,
-        deviceHeight = screenState.deviceHeight,
+        deviceWidth = deviceInfo.widthPixels,
+        deviceHeight = deviceInfo.heightPixels,
       ),
     )
   }
@@ -267,4 +278,36 @@ class LoggingDriver(
   override fun resetProxy() = traceMaestroDriver("resetProxy") { delegate.resetProxy() }
 
   override fun scrollVertical() = traceMaestroDriver("scrollVertical") { delegate.scrollVertical() }
+
+  companion object {
+
+    /**
+     * Only use this if you need to temporarily override what will be included in [ScreenState].
+     *
+     * Example: This is used to "double-tap" quickly in the iOS Debug Menu because it is too slow otherwise.
+     */
+    private data class TemporaryStaticScreenStateData(
+      val reason: String,
+      val screenState: ScreenState?,
+    )
+
+    /** Static [ScreenState] to use temporarily. */
+    private var temporaryStaticScreenStateData: TemporaryStaticScreenStateData? = null
+
+    /**
+     * Allows the work to be done inside this block to be done without screenshots logged
+     */
+    fun logWithStaticScreenStateTemporarily(
+      reason: String,
+      screenState: ScreenState?,
+      work: () -> Unit,
+    ) {
+      this.temporaryStaticScreenStateData = TemporaryStaticScreenStateData(
+        reason = reason,
+        screenState = screenState,
+      )
+      work()
+      this.temporaryStaticScreenStateData = null
+    }
+  }
 }

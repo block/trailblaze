@@ -15,6 +15,7 @@ fun main(args: Array<String>) {
 
   // Move the files into session directories.  This is needed after an adb pull
   moveJsonFilesToSessionDirs(logsDir)
+  movePngsToSessionDirs(logsDir)
 
   val standaloneFileReport = true
   val logsSummaryEvents = renderSummary(logsRepo, standaloneFileReport)
@@ -86,6 +87,33 @@ fun moveJsonFilesToSessionDirs(logsDir: File) {
       println("Deleting ${downloadedJsonFile.canonicalPath}")
     } catch (e: Exception) {
       println("Error processing ${downloadedJsonFile.absolutePath}: ${e.message}")
+    }
+  }
+}
+
+fun movePngsToSessionDirs(logsDir: File) {
+  val pngFilesInLogsDir = logsDir.listFiles()?.filter { it.extension == "png" } ?: emptyList()
+  pngFilesInLogsDir.forEach { pngFile ->
+    try {
+      val fileName = pngFile.name
+
+      val sessionId = fileName.substringBefore("_").takeIf { it.isNotEmpty() }
+        ?: fileName.substringBefore("-").takeIf { it.isNotEmpty() }
+        ?: fileName.substringBefore(".").takeIf { it != fileName }
+
+      if (sessionId != null && sessionId.isNotEmpty()) {
+        val sessionDir = File(logsDir, sessionId)
+        sessionDir.mkdirs()
+
+        val destFile = File(sessionDir, pngFile.name)
+        pngFile.copyTo(destFile, overwrite = true)
+        pngFile.delete()
+        println("Moved ${pngFile.name} to session directory: $sessionId")
+      } else {
+        println("Could not determine session ID for PNG file: ${pngFile.name}, skipping")
+      }
+    } catch (e: Exception) {
+      println("Error processing PNG file ${pngFile.absolutePath}: ${e.message}")
     }
   }
 }

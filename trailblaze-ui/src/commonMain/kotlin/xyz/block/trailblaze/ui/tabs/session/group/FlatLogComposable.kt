@@ -13,7 +13,6 @@ import androidx.compose.ui.unit.dp
 import xyz.block.trailblaze.logs.client.TrailblazeJson
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.ui.composables.CodeBlock
-import xyz.block.trailblaze.ui.tabs.chat.LlmMessageComposable
 import xyz.block.trailblaze.ui.tabs.session.DetailSection
 import xyz.block.trailblaze.ui.utils.FormattingUtils.formatDuration
 
@@ -23,7 +22,7 @@ import xyz.block.trailblaze.ui.utils.FormattingUtils.formatDuration
 @Composable
 fun LlmRequestDetailsFlat(log: TrailblazeLog.TrailblazeLlmRequestLog) {
   Column(modifier = Modifier.padding(horizontal = 16.dp)) {
-    DetailSection("LLM Response") {
+    DetailSection("LLM Response & Actions") {
       log.llmResponse.forEach { response ->
         CodeBlock(response.toString())
         if (log.llmResponse.last() != response) {
@@ -36,26 +35,6 @@ fun LlmRequestDetailsFlat(log: TrailblazeLog.TrailblazeLlmRequestLog) {
       Text(formatDuration(log.durationMs))
     }
 
-    if (log.llmMessages.isNotEmpty()) {
-      DetailSection("LLM Messages") {
-        log.llmMessages.forEach { message ->
-          CodeBlock(message.message ?: "")
-          if (log.llmMessages.last() != message) {
-            Spacer(modifier = Modifier.height(8.dp))
-          }
-        }
-      }
-    }
-
-    DetailSection("Actions Returned") {
-      log.actions.forEach { action ->
-        CodeBlock(action.toString())
-        if (log.actions.last() != action) {
-          Spacer(modifier = Modifier.height(8.dp))
-        }
-      }
-    }
-
     DetailSection("Available Tools") {
       log.toolOptions.forEach { toolOption ->
         CodeBlock(toolOption.name)
@@ -63,17 +42,12 @@ fun LlmRequestDetailsFlat(log: TrailblazeLog.TrailblazeLlmRequestLog) {
     }
 
     DetailSection("Chat History") {
-      if (log.llmMessages.isNotEmpty()) {
-        log.llmMessages.forEach { message ->
-          LlmMessageComposable(message)
-        }
-      } else {
-        Text("No chat history available.", style = MaterialTheme.typography.bodyMedium)
-      }
+      Text("Use the 'Chat History' button", style = MaterialTheme.typography.bodyMedium)
+
     }
 
     DetailSection("View Hierarchy") {
-      Text("View hierarchy inspection available via 'Inspect UI' button", style = MaterialTheme.typography.bodyMedium)
+      Text("Use the 'Inspect UI' button", style = MaterialTheme.typography.bodyMedium)
     }
   }
 }

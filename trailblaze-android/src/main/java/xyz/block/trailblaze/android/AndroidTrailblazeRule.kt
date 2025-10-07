@@ -14,6 +14,7 @@ import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TestAgentRunner
 import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
+import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.rules.SimpleTestRuleChain
 import xyz.block.trailblaze.rules.TrailblazeRule
 import xyz.block.trailblaze.rules.TrailblazeRunnerUtil
@@ -34,13 +35,9 @@ import kotlin.reflect.KClass
 open class AndroidTrailblazeRule(
   val llmClient: LLMClient,
   val trailblazeLlmModel: TrailblazeLlmModel,
-  additionalRules: List<TrailblazeAndroidLoggingRule> = listOf(
-    TrailblazeAndroidLoggingRule(),
-  ),
+  val trailblazeLoggingRule: TrailblazeAndroidLoggingRule = TrailblazeAndroidLoggingRule(),
   customToolClasses: Set<KClass<out TrailblazeTool>> = setOf(),
-) : SimpleTestRuleChain(
-  *additionalRules.toTypedArray(),
-),
+) : SimpleTestRuleChain(trailblazeLoggingRule),
   TrailblazeRule {
 
   private val trailblazeAgent = AndroidMaestroTrailblazeAgent()
@@ -60,6 +57,7 @@ open class AndroidTrailblazeRule(
     screenStateProvider = screenStateProvider,
     llmClient = llmClient,
     trailblazeLlmModel = trailblazeLlmModel,
+    toolRepo = trailblazeToolRepo,
   )
 
   override fun ruleCreation(description: Description) {
@@ -91,6 +89,14 @@ open class AndroidTrailblazeRule(
     testYaml: String,
     useRecordedSteps: Boolean,
   ): Boolean {
+    val trailConfig = trailblazeYaml.extractTrailConfig(testYaml)
+    TrailblazeLogger.sendStartLog(
+      trailConfig = trailConfig,
+      className = this.trailblazeLoggingRule.description?.className ?: "AndroidTrailblazeRule",
+      methodName = this.trailblazeLoggingRule.description?.methodName ?: "run",
+      trailblazeDeviceInfo = this.trailblazeLoggingRule.trailblazeDeviceInfoProvider(),
+      rawYaml = testYaml,
+    )
     trailblazeAgent.clearMemory()
     val trailItems = trailblazeYaml.decodeTrail(testYaml)
     for (item in trailItems) {
@@ -127,7 +133,7 @@ open class AndroidTrailblazeRule(
       val maestroResult =
         trailblazeAgent.runMaestroCommands(
           maestroCommands = maestroCommands,
-          llmResponseId = null,
+          traceId = null,
         )
     ) {
       is TrailblazeToolResult.Success -> maestroResult

@@ -42,15 +42,16 @@ object FormattingUtils {
   }
 
   /**
-   * Formats a double with exactly the specified number of decimal places.
-   * Pads with zeros or truncates as needed (e.g., 123.4 with 2 decimals → "123.40").
+   * Formats a double with exactly the specified number of decimal places and comma separators.
+   * Pads with zeros or truncates as needed (e.g., 1234.4 with 2 decimals → "1,234.40").
    */
   fun formatDouble(value: Double, decimals: Int): String {
     val factor = 10.0.pow(decimals)
     val rounded = kotlin.math.round(value * factor) / factor
     val str = rounded.toString()
     val dotIndex = str.indexOf(".")
-    return if (decimals <= 0) str.substringBefore(".") else when {
+
+    val formattedStr = if (decimals <= 0) str.substringBefore(".") else when {
       dotIndex < 0 -> str + "." + "0".repeat(decimals)
       else -> {
         val currentDecimals = str.length - dotIndex - 1
@@ -59,6 +60,19 @@ object FormattingUtils {
         else str.substring(0, dotIndex + 1 + decimals)
       }
     }
-  }
 
+    // Add comma separators to the integer part
+    val finalDotIndex = formattedStr.indexOf(".")
+    val integerPart = if (finalDotIndex >= 0) formattedStr.take(finalDotIndex) else formattedStr
+    val decimalPart = if (finalDotIndex >= 0) formattedStr.substring(finalDotIndex) else ""
+
+    val formattedIntegerPart = buildString {
+      for ((i, c) in integerPart.reversed().withIndex()) {
+        if (i > 0 && i % 3 == 0) append(",")
+        append(c)
+      }
+    }.reversed()
+
+    return formattedIntegerPart + decimalPart
+  }
 }

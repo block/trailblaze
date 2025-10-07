@@ -15,7 +15,7 @@ import xyz.block.trailblaze.mcp.models.DeviceConnectionStatus
 import xyz.block.trailblaze.mcp.utils.DeviceConnectUtils
 import xyz.block.trailblaze.mcp.utils.DeviceConnectUtils.connectToInstrumentationAndInstallAppIfNotAvailable
 import xyz.block.trailblaze.mcp.utils.DeviceConnectUtils.getAdbDevices
-import xyz.block.trailblaze.mcp.utils.TargetTestApp
+import xyz.block.trailblaze.model.TargetTestApp
 
 // --- Koog ToolSets ---
 @Suppress("unused")
@@ -86,7 +86,7 @@ class AndroidOnDeviceToolSet(
         connectToInstrumentationAndInstallAppIfNotAvailable(
           sendProgressMessage = { sessionContext.sendIndeterminateProgressMessage(it) },
           deviceId = deviceId,
-          targetTestApp = TargetTestApp.DEFAULT,
+          targetTestApp = TargetTestApp.DEFAULT_ANDROID_ON_DEVICE,
         )
       }
 

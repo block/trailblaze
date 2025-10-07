@@ -9,6 +9,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.graphics.Color
+import androidx.compose.material3.Text as MaterialText
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.Modifier
 import xyz.block.trailblaze.ui.models.TrailblazeServerState.ThemeMode
 
 // Custom colors for Trailblaze branding
@@ -63,6 +71,7 @@ private val TrailblazeDarkColorScheme = darkColorScheme(
 
 // CompositionLocal to provide current theme mode
 val LocalThemeMode = compositionLocalOf { ThemeMode.System }
+val LocalFontScale = compositionLocalOf { 1f }
 
 @Composable
 fun TrailblazeTheme(
@@ -100,4 +109,41 @@ fun isDarkTheme(): Boolean {
     ThemeMode.Dark -> true
     ThemeMode.System -> systemInDarkTheme
   }
+}
+
+/**
+ * Trailblaze custom Text composable which automatically applies font scaling from LocalFontScale.
+ */
+@Composable
+fun Text(
+  text: String,
+  modifier: Modifier = Modifier,
+  color: Color = Color.Unspecified,
+  fontSize: TextUnit = TextUnit.Unspecified,
+  fontWeight: FontWeight? = null,
+  textAlign: TextAlign? = null,
+  textDecoration: TextDecoration? = null,
+  style: TextStyle = TextStyle.Default,
+  maxLines: Int = Int.MAX_VALUE,
+  overflow: TextOverflow = TextOverflow.Clip,
+) {
+  val fontScale = LocalFontScale.current
+  val scaledFontSize =
+    if (fontSize != TextUnit.Unspecified)
+      fontSize * fontScale
+    else
+      TextUnit.Unspecified
+
+  MaterialText(
+    text = text,
+    modifier = modifier,
+    color = color,
+    fontSize = scaledFontSize,
+    fontWeight = fontWeight,
+    textAlign = textAlign,
+    textDecoration = textDecoration,
+    style = style,
+    maxLines = maxLines,
+    overflow = overflow,
+  )
 }

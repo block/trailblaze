@@ -17,12 +17,21 @@ import xcuitest.installer.Context
 import xcuitest.installer.LocalXCTestInstaller
 import xcuitest.installer.LocalXCTestInstaller.IOSDriverConfig
 import java.nio.file.Paths
+import java.util.concurrent.TimeUnit
 import kotlin.io.path.pathString
 
 internal object HostIosDriverFactory {
 
   private val defaultXctestHost = "127.0.0.1"
   private val defaultXcTestPort = 22087
+
+  // Singleton driver reuse within the same JVM session
+  private var cachedMaestro: Maestro? = null
+  private var cachedDeviceId: String? = null
+  private var cachedDriverHostPort: Int? = null
+
+  @Volatile
+  private var hasPerformedInitialCleanup = false
 
   fun createIOS(
     deviceId: String,
@@ -32,6 +41,29 @@ internal object HostIosDriverFactory {
     platformConfiguration: WorkspaceConfig.PlatformConfiguration?,
     deviceType: Device.DeviceType,
   ): Maestro {
+    val targetPort = driverHostPort ?: defaultXcTestPort
+
+    // Check if we can reuse existing driver
+    if (cachedMaestro != null &&
+      cachedDeviceId == deviceId &&
+      cachedDriverHostPort == targetPort &&
+      !cachedMaestro!!.driver.isShutdown()
+    ) {
+      println("Reusing existing iOS driver for device $deviceId on port $targetPort")
+      return cachedMaestro!!
+    }
+
+    // Only perform cleanup on first creation in this JVM (handles stale processes from previous runs)
+    if (!hasPerformedInitialCleanup) {
+      println("Performing initial cleanup for fresh JVM - killing stale processes on port $targetPort")
+      killProcessesUsingPort(targetPort)
+      // Give the system a moment to fully release the port after killing processes
+      Thread.sleep(1000)
+      hasPerformedInitialCleanup = true
+    } else {
+      println("Skipping process cleanup - reusing connection within same JVM session")
+    }
+
     val iOSDeviceType = when (deviceType) {
       Device.DeviceType.REAL -> IOSDeviceType.REAL
       Device.DeviceType.SIMULATOR -> IOSDeviceType.SIMULATOR
@@ -85,7 +117,7 @@ internal object HostIosDriverFactory {
       deviceId = deviceId,
       host = defaultXctestHost,
       defaultPort = driverHostPort ?: defaultXcTestPort,
-      reinstallDriver = reinstallDriver,
+      reinstallDriver = !hasPerformedInitialCleanup || reinstallDriver, // Only reinstall on first run or if explicitly requested
       deviceType = iOSDeviceType,
       iOSDriverConfig = iOSDriverConfig,
       deviceController = deviceController,
@@ -94,7 +126,7 @@ internal object HostIosDriverFactory {
     val xcTestDriverClient = XCTestDriverClient(
       installer = xcTestInstaller,
       client = XCTestClient(defaultXctestHost, driverHostPort ?: defaultXcTestPort),
-      reinstallDriver = reinstallDriver,
+      reinstallDriver = !hasPerformedInitialCleanup || reinstallDriver, // Only reinstall on first run or if explicitly requested
     )
 
     val xcTestDevice = XCTestIOSDevice(
@@ -113,9 +145,50 @@ internal object HostIosDriverFactory {
       insights = CliInsights,
     )
 
-    return Maestro.ios(
+    val maestro = Maestro.ios(
       driver = iosDriver,
       openDriver = openDriver || xcTestDevice.isShutdown(),
     )
+
+    // Cache the driver for reuse
+    cachedMaestro = maestro
+    cachedDeviceId = deviceId
+    cachedDriverHostPort = targetPort
+
+    println("Created new iOS driver for device $deviceId on port $targetPort")
+    return maestro
+  }
+
+  private fun killProcessesUsingPort(port: Int) {
+    try {
+      // Use lsof to find processes using the port
+      val lsofProcess = ProcessBuilder(listOf("lsof", "-ti:$port"))
+        .redirectErrorStream(true)
+        .start()
+
+      val lsofCompleted = lsofProcess.waitFor(5, TimeUnit.SECONDS)
+      if (!lsofCompleted) {
+        lsofProcess.destroyForcibly()
+        return
+      }
+
+      val pids = lsofProcess.inputStream.bufferedReader().readText().trim()
+
+      if (pids.isNotEmpty()) {
+        pids.split("\n").filter { it.isNotBlank() }.forEach { pid ->
+          try {
+            val pidTrimmed = pid.trim()
+            // Force kill the process
+            ProcessBuilder(listOf("kill", "-9", pidTrimmed))
+              .start()
+              .waitFor(2, TimeUnit.SECONDS)
+          } catch (e: Exception) {
+            // Ignore individual process kill failures
+          }
+        }
+      }
+    } catch (e: Exception) {
+      // Ignore cleanup failures - don't prevent new connections
+    }
   }
 }

@@ -33,6 +33,7 @@ import xyz.block.trailblaze.ui.composables.ScreenshotImageModal
 import xyz.block.trailblaze.ui.tabs.session.SessionDetailComposable
 import xyz.block.trailblaze.ui.tabs.session.SessionListComposable
 import xyz.block.trailblaze.ui.tabs.session.group.LogDetailsDialog
+import xyz.block.trailblaze.ui.tabs.session.group.ChatHistoryDialog
 import xyz.block.trailblaze.ui.tabs.session.models.SessionDetail
 
 // Central data provider instance
@@ -154,8 +155,10 @@ fun WasmSessionDetailView(
   // Modal state
   var showDetailsDialog by remember { mutableStateOf(false) }
   var showInspectUIDialog by remember { mutableStateOf(false) }
+  var showChatHistoryDialog by remember { mutableStateOf(false) }
   var currentLog by remember { mutableStateOf<TrailblazeLog?>(null) }
   var currentLlmLog by remember { mutableStateOf<TrailblazeLog.TrailblazeLlmRequestLog?>(null) }
+  var currentChatHistoryLog by remember { mutableStateOf<TrailblazeLog.TrailblazeLlmRequestLog?>(null) }
   
   // Screenshot modal state
   var showScreenshotModal by remember { mutableStateOf(false) }
@@ -205,6 +208,10 @@ fun WasmSessionDetailView(
         onShowInspectUI = { log ->
           currentLlmLog = log
           showInspectUIDialog = true
+        },
+        onShowChatHistory = { log ->
+          currentChatHistoryLog = log
+          showChatHistoryDialog = true
         },
         onShowScreenshotModal = { imageModel, deviceWidth, deviceHeight, clickX, clickY ->
           modalImageModel = imageModel
@@ -276,6 +283,23 @@ fun WasmSessionDetailView(
               deviceHeight = currentLlmLog!!.deviceHeight,
             )
           }
+        }
+      }
+
+      if (showChatHistoryDialog && currentChatHistoryLog != null) {
+        FullScreenModalOverlay(
+          onDismiss = {
+            showChatHistoryDialog = false
+            currentChatHistoryLog = null
+          }
+        ) {
+          ChatHistoryDialog(
+            log = currentChatHistoryLog!!,
+            onDismiss = {
+              showChatHistoryDialog = false
+              currentChatHistoryLog = null
+            }
+          )
         }
       }
 

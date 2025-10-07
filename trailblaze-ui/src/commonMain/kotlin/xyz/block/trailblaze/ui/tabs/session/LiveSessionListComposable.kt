@@ -2,10 +2,16 @@ package xyz.block.trailblaze.ui.tabs.session
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import xyz.block.trailblaze.logs.model.SessionInfo
 
 @Composable
@@ -16,30 +22,35 @@ fun LiveSessionListComposable(
   clearAllLogs: () -> Unit,
 ) {
   var sessions by remember {
-    mutableStateOf(
-      sessionDataProvider.getSessionIds().mapNotNull { sessionId ->
-        val firstLog = sessionDataProvider.getLogsForSession(sessionId).firstOrNull()
-        if (firstLog != null) {
-          sessionDataProvider.getSessionInfo(sessionId)
-        } else {
-          null
-        }
+    mutableStateOf(emptyList<SessionInfo>())
+  }
+
+  // Load initial sessions asynchronously
+  LaunchedEffect(sessionDataProvider) {
+    withContext(Dispatchers.Default) {
+      val sessionIds = sessionDataProvider.getSessionIds()
+      val loadedSessions = sessionIds.mapNotNull { sessionId ->
+        sessionDataProvider.getSessionInfo(sessionId)
       }
-    )
+      sessions = loadedSessions
+    }
   }
 
   DisposableEffect(sessionDataProvider) {
     val listener = object : SessionListListener {
       override fun onSessionAdded(sessionId: String) {
-        val updatedSessions = sessionDataProvider.getSessionIds().mapNotNull { id ->
-          val firstLog = sessionDataProvider.getLogsForSession(id).firstOrNull()
-          if (firstLog != null) {
-            sessionDataProvider.getSessionInfo(id)
-          } else {
-            null
+        CoroutineScope(Dispatchers.Default).launch {
+          val sessionInfo = sessionDataProvider.getSessionInfo(sessionId)
+
+          // Only reload all sessions if we successfully got the new session info
+          if (sessionInfo != null) {
+            val sessionIds = sessionDataProvider.getSessionIds()
+            val updatedSessions = sessionIds.mapNotNull { id ->
+              sessionDataProvider.getSessionInfo(id)
+            }
+            sessions = updatedSessions
           }
         }
-        sessions = updatedSessions
       }
 
       override fun onSessionRemoved(sessionId: String) {

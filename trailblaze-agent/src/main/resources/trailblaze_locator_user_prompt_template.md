@@ -2,17 +2,17 @@
 
 Please identify the best locator for an element that answers this questions or matches this request:
 
-**Description**: ${identifier}
+**Description**: {{identifier}}
 
 Here is the current view hierarchy:
-```json
-${view_hierarchy}
+```
+{{view_hierarchy}}
 ```
 
 You MUST use the elementRetriever tool to return your response. Do not return raw JSON.
 
 The tool requires these parameters:
-- identifier: "${identifier}" (the user's description of the element)
+- identifier: "{{identifier}}" (the user's description of the element)
 - locatorType: One of "RESOURCE_ID", "ACCESSIBILITY_TEXT", or "TEXT"
 - value: The exact string value of the locator from the view hierarchy
 - index: (Optional, default 0) The 0-based index if multiple elements share the same locator

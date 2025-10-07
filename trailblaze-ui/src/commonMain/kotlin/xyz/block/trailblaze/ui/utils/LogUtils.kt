@@ -1,7 +1,8 @@
 package xyz.block.trailblaze.ui.utils
 
 import xyz.block.trailblaze.logs.client.TrailblazeLog
-import xyz.block.trailblaze.logs.model.HasLlmResponseId
+import xyz.block.trailblaze.logs.model.HasTraceId
+import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.ui.tabs.session.models.GroupedLog
 
 object LogUtils {
@@ -17,30 +18,30 @@ object LogUtils {
   }
 
   /**
-   * Groups logs by llmResponseId while maintaining timestamp ordering.
-   * Logs with the same non-null llmResponseId are grouped together.
+   * Groups logs by traceId while maintaining timestamp ordering.
+   * Logs with the same non-null traceId are grouped together.
    * The resulting list is sorted by the earliest timestamp in each group/single log.
    */
   fun groupLogsByLlmResponseId(logs: List<TrailblazeLog>): List<GroupedLog> {
     val sortedLogs = logs.sortedBy { it.timestamp }
 
-    // First pass: assign llmResponseId to MaestroDriverLog from most recent MaestroCommandLog
-    val logsWithAssignedIds = mutableListOf<Pair<TrailblazeLog, String?>>()
-    var currentMaestroCommandResponseId: String? = null
+    // First pass: assign traceId to MaestroDriverLog from most recent MaestroCommandLog
+    val logsWithAssignedIds = mutableListOf<Pair<TrailblazeLog, TraceId?>>()
+    var currentMaestroCommandTraceId: TraceId? = null
 
     for (log in sortedLogs) {
-      val responseId = when {
-        log is HasLlmResponseId -> {
+      val responseId : TraceId? = when {
+        log is HasTraceId -> {
           // Update the current response ID if this is a MaestroCommandLog
           if (log is TrailblazeLog.MaestroCommandLog) {
-            currentMaestroCommandResponseId = log.llmResponseId
+            currentMaestroCommandTraceId = log.traceId
           }
-          log.llmResponseId
+          log.traceId
         }
 
         log is TrailblazeLog.MaestroDriverLog -> {
           // Inherit from the most recent MaestroCommandLog
-          currentMaestroCommandResponseId
+          currentMaestroCommandTraceId
         }
 
         else -> null
@@ -50,7 +51,7 @@ object LogUtils {
     }
 
     // Group logs by the assigned response ID
-    val groupedByResponseId = mutableMapOf<String?, MutableList<TrailblazeLog>>()
+    val groupedByResponseId = mutableMapOf<TraceId?, MutableList<TrailblazeLog>>()
 
     for ((log, responseId) in logsWithAssignedIds) {
       groupedByResponseId.getOrPut(responseId) { mutableListOf() }.add(log)
@@ -58,12 +59,12 @@ object LogUtils {
 
     val result = mutableListOf<GroupedLog>()
 
-    // Process logs with llmResponseId = null (single logs)
+    // Process logs with traceId = null (single logs)
     groupedByResponseId[null]?.forEach { log ->
       result.add(GroupedLog.Single(log))
     }
 
-    // Process logs with non-null llmResponseId
+    // Process logs with non-null traceId
     groupedByResponseId.entries
       .filter { it.key != null }
       .forEach { (responseId, logsInGroup) ->

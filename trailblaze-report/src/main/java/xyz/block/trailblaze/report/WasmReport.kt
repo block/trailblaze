@@ -4,6 +4,7 @@ package xyz.block.trailblaze.report
 
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
+import xyz.block.trailblaze.logs.model.HasScreenshot
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.report.utils.TrailblazeYamlSessionRecording.generateRecordedYaml
 import java.io.File
@@ -23,10 +24,22 @@ object WasmReport {
   ) {
     val sessionIds = logsRepo.getSessionIds()
     val sessionJson = TrailblazeJsonInstance.encodeToString(sessionIds)
-    val sessionDetail: Map<String, List<TrailblazeLog>> = sessionIds.associateWith {
-      logsRepo.getLogsForSession(it)
+
+    // Collect and encode images for each session
+    val sessionToImages: Map<String, Map<String, String>> = sessionIds.associateWith { sessionId ->
+      logsRepo.getImagesForSession(sessionId).associate { imageFile ->
+        imageFile.name to Base64.encode(imageFile.readBytes())
+      }
+    }
+
+    // Get logs and replace screenshot file paths with base64 data URLs
+    val sessionDetail: Map<String, List<TrailblazeLog>> = sessionIds.associateWith { sessionId ->
+      val logs = logsRepo.getLogsForSession(sessionId)
+      val imageMap = sessionToImages[sessionId] ?: emptyMap()
+      replaceScreenshotPathsWithBase64(logs, imageMap)
     }
     val sessionDetailJson = TrailblazeJsonInstance.encodeToString(sessionDetail)
+
     val sessionToYamlRecording: Map<String, String> = sessionIds.associateWith {
       try {
         logsRepo.getLogsForSession(it).generateRecordedYaml()
@@ -94,11 +107,23 @@ object WasmReport {
   ) {
     println("Generating report from wasm ui build artifacts: ${trailblazeUiProjectDir.absolutePath}")
     if (!trailblazeUiProjectDir.exists() || !trailblazeUiProjectDir.isDirectory) {
-      error("Project directory does not exist or is not a directory: ${trailblazeUiProjectDir.canonicalPath}")
+      error(
+        "Project directory does not exist or is not a directory: " +
+          "${trailblazeUiProjectDir.canonicalPath}",
+      )
     }
-    val buildDir = File(trailblazeUiProjectDir, "build/kotlin-webpack/wasmJs/productionExecutable")
-    val resourcesDir = File(trailblazeUiProjectDir, "src/wasmJsMain/resources")
-    val outputDir = File(trailblazeUiProjectDir, "build/embedded")
+    val buildDir = File(
+      trailblazeUiProjectDir,
+      "build/kotlin-webpack/wasmJs/productionExecutable",
+    )
+    val resourcesDir = File(
+      trailblazeUiProjectDir,
+      "src/wasmJsMain/resources",
+    )
+    val outputDir = File(
+      trailblazeUiProjectDir,
+      "build/embedded",
+    )
 
     // Ensure output directory exists
     outputDir.mkdirs()
@@ -168,7 +193,8 @@ object WasmReport {
     val patchedJsContent = patchWebpackForEmbedding(jsContent, wasmData)
 
     // Replace the external JS script tag with inline JS
-    val jsScriptRegex = """<script\s+type="application/javascript"\s+src="composeApp\.js"></script>""".toRegex()
+    val jsScriptRegex = """<script\s+type="application/javascript"\s+src="composeApp\.js"></script>"""
+      .toRegex()
 
     return template.replace(jsScriptRegex) {
       """
@@ -304,4 +330,44 @@ object WasmReport {
     </script>
     """.trimIndent()
   }
+
+  /**
+   * Replaces screenshot file paths in logs with base64 data URLs
+   */
+  private fun replaceScreenshotPathsWithBase64(
+    logs: List<TrailblazeLog>,
+    imageMap: Map<String, String>,
+  ): List<TrailblazeLog> = logs.map { log ->
+    if (log is HasScreenshot) {
+      // Because this is a list of TrailblazeLog cast back to TrailblazeLog once replaced
+      val newLog = log.replaceScreenshotFile(imageMap) as? TrailblazeLog
+      newLog ?: log
+    } else {
+      log
+    }
+  }
+}
+
+private fun HasScreenshot.replaceScreenshotFile(
+  imageMap: Map<String, String>,
+): HasScreenshot? {
+  val screenshotFile = screenshotFile
+  if (screenshotFile != null) {
+    val filename = screenshotFile.substringAfterLast('/')
+    val base64Data = imageMap[filename]
+
+    if (base64Data != null) {
+      val dataUrl = "data:image/png;base64,$base64Data"
+      return when (this) {
+        is TrailblazeLog.MaestroDriverLog -> copy(screenshotFile = dataUrl)
+        is TrailblazeLog.TrailblazeLlmRequestLog -> copy(screenshotFile = dataUrl)
+        else -> error(
+          "Unsupported HasScreenshot type: ${this::class.simpleName}. " +
+            "Please add copy() support for this type.",
+        )
+      }
+    }
+  }
+
+  return null
 }

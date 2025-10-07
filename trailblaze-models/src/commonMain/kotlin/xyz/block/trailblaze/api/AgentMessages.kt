@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.api
 
 import kotlinx.serialization.json.JsonObject
+import xyz.block.trailblaze.logs.client.TrailblazeJson
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 
 object AgentMessages {
@@ -36,9 +37,14 @@ object AgentMessages {
   }
 
   private fun successContentString(toolName: String, toolArgs: JsonObject) = buildString {
-    appendLine("# Successfully performed the following action on the device:")
-    appendLine("Tool: $toolName")
-    appendLine("Parameters $toolArgs")
+    appendLine("**Successfully used the `$toolName` tool on the device with the following parameters:**")
+    appendLine(asJsonCodeBlock(toolArgs))
+  }
+
+  private fun asJsonCodeBlock(jsonObject: JsonObject) = buildString {
+    appendLine("```json")
+    appendLine(TrailblazeJson.defaultWithoutToolsInstance.encodeToString(jsonObject))
+    appendLine("```")
   }
 
   private fun validationErrorContentString(
@@ -47,11 +53,10 @@ object AgentMessages {
     errorMessage: String,
   ) = buildString {
     appendLine(
-      "# Failed to perform the following action on the device because of a verification error.",
+      "**Failed to perform the following `$toolName` action on the device because of a verification error.**",
     )
-    appendLine("Tool: $toolName")
-    appendLine("Parameters $toolArgs")
-    appendLine("Error message: $errorMessage")
+    appendLine("- Error message: $errorMessage")
+    appendLine("- Parameters ${asJsonCodeBlock(toolArgs)}")
   }
 
   private fun unknownCommandErrorContentString(
@@ -59,15 +64,14 @@ object AgentMessages {
     toolArgs: JsonObject,
     errorMessage: String,
   ) = buildString {
-    appendLine("# Unknown command provided, please try a different tool.")
-    appendLine("Tool: $toolName")
-    appendLine("Parameters $toolArgs")
-    appendLine("Error message: $errorMessage")
+    appendLine("# Unknown tool `$toolName`:")
+    appendLine("- Error message: $errorMessage")
+    appendLine("- Parameters ${asJsonCodeBlock(toolArgs)}")
   }
 
   private fun emptyToolCallErrorContentString() = buildString {
     appendLine("# FAILURE: No tool call provided")
-    appendLine("Error message: ${TrailblazeToolResult.Error.EmptyToolCall.errorMessage}")
+    appendLine("- Error message: ${TrailblazeToolResult.Error.EmptyToolCall.errorMessage}")
   }
 
   private fun unknownToolErrorContentString(
@@ -86,7 +90,7 @@ object AgentMessages {
     functionArgs: JsonObject,
     requiredArguments: List<String>,
   ) = buildString {
-    appendLine("# Tool attempted is missing required arguments.")
+    appendLine("# ERROR: Tool attempted is missing required arguments.")
     appendLine("Tool: $functionName")
     appendLine("Parameters provided $functionArgs")
     appendLine("Parameters required $requiredArguments")

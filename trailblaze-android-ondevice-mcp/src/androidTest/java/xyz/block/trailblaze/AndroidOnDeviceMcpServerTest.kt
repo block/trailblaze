@@ -20,9 +20,7 @@ import xyz.block.trailblaze.mcp.OnDeviceRpcServerUtils
 class AndroidOnDeviceMcpServerTest {
 
   @get:Rule
-  val trailblazeLoggingRule = TrailblazeAndroidLoggingRule(
-    sendStartAndEndLogs = false,
-  )
+  val trailblazeLoggingRule = TrailblazeAndroidLoggingRule()
 
   @Test
   fun mcpServer() {
@@ -60,7 +58,6 @@ class AndroidOnDeviceMcpServerTest {
     AndroidTrailblazeRule(
       trailblazeLlmModel = defaultDynamicLlmClient.trailblazeLlmModel,
       llmClient = defaultDynamicLlmClient.createLlmClient(),
-      additionalRules = listOf(),
     ).run(
       testYaml = runYamlRequest.yaml,
       useRecordedSteps = runYamlRequest.useRecordedSteps,

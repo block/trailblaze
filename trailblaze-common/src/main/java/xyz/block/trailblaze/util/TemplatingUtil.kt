@@ -15,7 +15,7 @@ object TemplatingUtil {
   fun renderTemplate(template: String, values: Map<String, String> = mapOf()): String = replaceVariables(template, values)
 
   /**
-   * Replaces `${key}` and `$key` in the template string with the corresponding values from the map.
+   * Replaces `{{key}}` and `{{ key }}` in the template string with the corresponding values from the map.
    */
   fun replaceVariables(template: String, values: Map<String, String>): String {
     // Ensure we have all required template variables
@@ -23,8 +23,12 @@ object TemplatingUtil {
 
     var result = template
     values.forEach { (key, value) ->
-      result = result.replace("\${$key}", value) // Handles ${key}
-      result = result.replace("$$key", value) // Handles $key
+      // Handles {{key}} and {{ key }}
+      // Use literal replacement to avoid treating $ and \ as special characters
+      result = result.replace(
+        """\{\{\s*$key\s*\}\}""".toRegex(),
+        value.replace("\\", "\\\\").replace("$", "\\$"),
+      )
     }
     return result
   }
@@ -62,9 +66,9 @@ object TemplatingUtil {
    * Extracts all required template variables from the template string.
    */
   fun getRequiredTemplateVariables(template: String): Set<String> {
-    val regex = Regex("""\$\{([a-zA-Z0-9_]+)\}|\$([a-zA-Z0-9_]+)""")
+    val regex = Regex("""\{\{\s*([a-zA-Z0-9_]+)\s*\}\}""")
     return regex.findAll(template)
-      .mapNotNull { it.groups[1]?.value ?: it.groups[2]?.value }
+      .mapNotNull { it.groups[1]?.value }
       .toSet()
   }
 }

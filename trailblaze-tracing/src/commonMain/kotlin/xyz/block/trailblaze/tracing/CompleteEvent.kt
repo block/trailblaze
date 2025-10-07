@@ -6,6 +6,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlin.time.Duration
 
+@OptIn(kotlin.time.ExperimentalTime::class)
 @Serializable
 data class CompleteEvent(
   val name: String,

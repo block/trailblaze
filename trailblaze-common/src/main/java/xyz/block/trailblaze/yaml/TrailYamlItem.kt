@@ -46,10 +46,11 @@ sealed interface TrailYamlItem {
   }
 
   /**
-   *  context
+   *  config
    *
-   *  This is used to represent additional test context that will be added to the system prompt.
-   *  Use this to provide test data that is available during any steps handled by the LLM.
+   *  This is used to represent additional test context and metadata.
+   *  Use this to provide test data that will be added to the system prompt,
+   *  as well as metadata like test ID, title, description, priority, and tags.
    */
   @Serializable
   data class ConfigTrailItem(val config: TrailConfig) : TrailYamlItem

@@ -44,7 +44,6 @@ android {
     exclude("META-INF/io.netty.versions.properties")
   }
 
-  @Suppress("UnstableApiUsage")
   testOptions {
     animationsDisabled = true
   }

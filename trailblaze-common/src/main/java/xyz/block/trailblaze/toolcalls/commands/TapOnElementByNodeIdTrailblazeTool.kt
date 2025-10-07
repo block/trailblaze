@@ -13,7 +13,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 @TrailblazeToolClass("tapOnElementByNodeId")
 @LLMDescription(
   """
-Provide the nodeId of the element you want to tap on in the nodeId parameter.
+Provide the nodeId of the element you want to tap/click on in the nodeId parameter.
 """,
 )
 data class TapOnElementByNodeIdTrailblazeTool(

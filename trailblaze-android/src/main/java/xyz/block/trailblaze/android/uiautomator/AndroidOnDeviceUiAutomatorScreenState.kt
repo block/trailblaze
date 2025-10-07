@@ -11,6 +11,7 @@ import xyz.block.trailblaze.android.MaestroUiAutomatorXmlParser
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode.Companion.relabelWithFreshIds
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.setofmark.android.AndroidBitmapUtils.scale
 import xyz.block.trailblaze.setofmark.android.AndroidBitmapUtils.toByteArray
 import xyz.block.trailblaze.setofmark.android.AndroidCanvasSetOfMark
@@ -96,6 +97,8 @@ class AndroidOnDeviceUiAutomatorScreenState(
     viewHierarchy = lastViewHierarchy ?: throw IllegalStateException("Failed to get view hierarchy")
     screenshotBytes = lastScreenshotBytes ?: ByteArray(0)
   }
+
+  override val trailblazeDevicePlatform: TrailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID
 
   companion object {
 

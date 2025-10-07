@@ -30,6 +30,10 @@ open class TrailblazeKoogTool<T : TrailblazeTool>(
 
   override val descriptor: ToolDescriptor = kClass.toKoogToolDescriptor()
 
+  override val name: String = descriptor.name
+
+  override val description: String = descriptor.description
+
   override suspend fun doExecute(args: T): String = executeTool(args)
 
   companion object {

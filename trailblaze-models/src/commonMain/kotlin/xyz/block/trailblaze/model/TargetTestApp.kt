@@ -1,4 +1,4 @@
-package xyz.block.trailblaze.mcp.utils
+package xyz.block.trailblaze.model
 
 /**
  * The test app that will be used for running the tests.
@@ -11,7 +11,7 @@ data class TargetTestApp(
 ) {
   /** Empty Companion object to allow extension values */
   companion object {
-    val DEFAULT = TargetTestApp(
+    val DEFAULT_ANDROID_ON_DEVICE = TargetTestApp(
       testAppId = "xyz.block.trailblaze.runner",
       fqTestName = "xyz.block.trailblaze.AndroidOnDeviceMcpServerTest",
       gradleInstallAndroidTestCommand = ":trailblaze-android-ondevice-mcp:installDebugAndroidTest",

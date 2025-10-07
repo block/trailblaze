@@ -12,9 +12,16 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells.Fixed
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.BarChart
+import androidx.compose.material.icons.filled.MonetizationOn
+import androidx.compose.material.icons.filled.Money
+import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Summarize
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -42,7 +49,7 @@ fun LlmUsageComposable(llmSessionUsageAndCost: LlmSessionUsageAndCost?, gridStat
         // Header with Model Information Combined
         Card(
           modifier = Modifier.fillMaxWidth(),
-          elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+          elevation = CardDefaults.cardElevation()
         ) {
           Column(
             modifier = Modifier
@@ -53,10 +60,6 @@ fun LlmUsageComposable(llmSessionUsageAndCost: LlmSessionUsageAndCost?, gridStat
               verticalAlignment = Alignment.CenterVertically,
               horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-              Text(
-                text = "🪙",
-                style = MaterialTheme.typography.headlineMedium
-              )
               Column {
                 Text(
                   text = "LLM Usage Summary",
@@ -115,7 +118,7 @@ fun LlmUsageComposable(llmSessionUsageAndCost: LlmSessionUsageAndCost?, gridStat
         // Key Metrics in Single Card
         Card(
           modifier = Modifier.fillMaxWidth(),
-          elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+          elevation = CardDefaults.cardElevation()
         ) {
           Row(
             modifier = Modifier
@@ -128,9 +131,9 @@ fun LlmUsageComposable(llmSessionUsageAndCost: LlmSessionUsageAndCost?, gridStat
               horizontalAlignment = Alignment.CenterHorizontally,
               modifier = Modifier.weight(1f)
             ) {
-              Text(
-                text = "💸",
-                style = MaterialTheme.typography.headlineSmall
+              Icon(
+                imageVector = Icons.Default.MonetizationOn,
+                contentDescription = null,
               )
               Spacer(modifier = Modifier.height(4.dp))
               Text(
@@ -161,9 +164,9 @@ fun LlmUsageComposable(llmSessionUsageAndCost: LlmSessionUsageAndCost?, gridStat
               horizontalAlignment = Alignment.CenterHorizontally,
               modifier = Modifier.weight(1f)
             ) {
-              Text(
-                text = "📊",
-                style = MaterialTheme.typography.headlineSmall
+              Icon(
+                imageVector = Icons.Default.BarChart,
+                contentDescription = null,
               )
               Spacer(modifier = Modifier.height(4.dp))
               Text(
@@ -193,9 +196,9 @@ fun LlmUsageComposable(llmSessionUsageAndCost: LlmSessionUsageAndCost?, gridStat
               horizontalAlignment = Alignment.CenterHorizontally,
               modifier = Modifier.weight(1f)
             ) {
-              Text(
-                text = "⚡",
-                style = MaterialTheme.typography.headlineSmall
+              Icon(
+                imageVector = Icons.Default.Speed,
+                contentDescription = null,
               )
               Spacer(modifier = Modifier.height(4.dp))
               Text(
@@ -219,7 +222,7 @@ fun LlmUsageComposable(llmSessionUsageAndCost: LlmSessionUsageAndCost?, gridStat
         // Token Usage & Cost Breakdown Combined
         Card(
           modifier = Modifier.fillMaxWidth(),
-          elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+          elevation = CardDefaults.cardElevation()
         ) {
           Column(
             modifier = Modifier

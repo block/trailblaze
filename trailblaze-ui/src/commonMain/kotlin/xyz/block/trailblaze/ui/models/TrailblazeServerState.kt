@@ -15,6 +15,8 @@ data class TrailblazeServerState(
     val serverUrl: String = "http://localhost:$HTTP_PORT",
     val lastSelectedTestRailAppName: String? = null,
     val lastSelectedTestRailSuiteId: Int? = null,
+    val lastSelectedTestRailTestCaseId: Int? = null,
+    val lastSelectedDeviceInstanceIds: List<String> = emptyList(),
     val themeMode: ThemeMode = ThemeMode.System,
     val availableFeatures: AvailableFeatures,
     val llmProvider: String = "openai", // Default to OpenAI provider
@@ -23,6 +25,17 @@ data class TrailblazeServerState(
 - prompts:
     - step: click back
 """.trimIndent(), // Default YAML content
+    // Session detail UI preferences
+    val sessionDetailZoomOffset: Int = 0, // Zoom offset for card size
+    val sessionDetailFontScale: Float = 1f, // Font size scale
+    // Current session navigation state (cleared on app restart)
+    val currentSessionId: String? = null, // Currently selected session
+    val currentSessionViewMode: String = "List", // Current view mode (List/Grid/LlmUsage/Recording)
+    // Window position and size
+    val windowX: Int? = null,
+    val windowY: Int? = null,
+    val windowWidth: Int? = null,
+    val windowHeight: Int? = null,
   ) {
     @Serializable
     data class AvailableFeatures(

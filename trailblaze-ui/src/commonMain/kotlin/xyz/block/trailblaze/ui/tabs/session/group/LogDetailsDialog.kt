@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material3.Icon
@@ -20,6 +21,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import xyz.block.trailblaze.logs.client.TrailblazeLog
+import xyz.block.trailblaze.ui.tabs.chat.LlmMessageComposable
 import xyz.block.trailblaze.ui.utils.DisplayUtils
 
 
@@ -28,8 +30,10 @@ fun LogDetailsDialog(
   log: TrailblazeLog,
   onDismiss: () -> Unit,
 ) {
+  val lazyListState = rememberLazyListState()
   LazyColumn(
-    modifier = Modifier.fillMaxSize().padding(horizontal = 32.dp)
+    modifier = Modifier.fillMaxSize().padding(horizontal = 32.dp),
+    state = lazyListState
   ) {
     // Header item
     item {
@@ -105,6 +109,58 @@ fun LogDetailsDialog(
         item {
           ObjectiveCompleteDetailsFlat(log)
         }
+      }
+    }
+
+    // Bottom padding
+    item {
+      Spacer(modifier = Modifier.height(16.dp))
+    }
+  }
+}
+
+@Composable
+fun ChatHistoryDialog(
+  log: TrailblazeLog.TrailblazeLlmRequestLog,
+  onDismiss: () -> Unit,
+) {
+  val lazyListState = rememberLazyListState()
+  LazyColumn(
+    modifier = Modifier.fillMaxSize().padding(horizontal = 32.dp),
+    state = lazyListState
+  ) {
+    // Header item
+    item {
+      Row(
+        modifier = Modifier
+          .fillMaxWidth()
+          .padding(16.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+      ) {
+        Text(
+          text = "Chat History",
+          style = MaterialTheme.typography.headlineSmall,
+          fontWeight = FontWeight.Bold
+        )
+        IconButton(onClick = onDismiss) {
+          Icon(Icons.Default.ArrowBack, contentDescription = "Close")
+        }
+      }
+    }
+
+    // Chat messages
+    if (log.llmMessages.isNotEmpty()) {
+      items(log.llmMessages.size) { index ->
+        LlmMessageComposable(log.llmMessages[index])
+      }
+    } else {
+      item {
+        Text(
+          text = "No chat history available.",
+          style = MaterialTheme.typography.bodyMedium,
+          modifier = Modifier.padding(16.dp)
+        )
       }
     }
 

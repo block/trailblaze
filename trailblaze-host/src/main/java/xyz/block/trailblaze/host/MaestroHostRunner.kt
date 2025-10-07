@@ -2,6 +2,7 @@ package xyz.block.trailblaze.host
 
 import maestro.orchestra.Command
 import xyz.block.trailblaze.api.ScreenState
+import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import java.io.File
 
@@ -15,5 +16,5 @@ interface MaestroHostRunner {
 
   fun runMaestroCommand(vararg commands: Command): TrailblazeToolResult
 
-  fun runMaestroCommands(commands: List<Command>, llmResponseId: String?): TrailblazeToolResult
+  fun runMaestroCommands(commands: List<Command>, traceId: TraceId?): TrailblazeToolResult
 }

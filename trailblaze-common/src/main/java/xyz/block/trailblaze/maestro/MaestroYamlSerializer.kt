@@ -509,6 +509,14 @@ object MaestroYamlSerializer {
       },
       mapProps = extractMapProperties(condition.notVisible!!),
     )
+  } else if (condition.scriptCondition != null) {
+    MaestroCommandYamlNode(
+      type = "assertScript",
+      stringProps = mutableMapOf<String, String>().apply {
+        put("script", condition.scriptCondition!!.wrappedInQuotes())
+        timeout?.let { put("timeout", it.toString()) }
+      },
+    )
   } else {
     error("Unsupported state of Condition $condition $timeout")
   }

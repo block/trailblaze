@@ -9,17 +9,14 @@ import java.io.File
 
 class HostTrailblazeLoggingRule(
   override val trailblazeDeviceInfoProvider: () -> TrailblazeDeviceInfo,
-  sendStartAndEndLogs: Boolean = true,
   logsBaseUrl: String = "https://localhost:8443",
 ) : TrailblazeLoggingRule(
-  sendStartAndEndLogs = sendStartAndEndLogs,
   logsBaseUrl = logsBaseUrl,
   writeLogToDisk = { currentTestName: String, log: TrailblazeLog ->
     logsRepo.saveLogToDisk(log)
   },
   writeScreenshotToDisk = { sessionId: String, fileName: String, bytes: ByteArray ->
-    val sessionDir = logsRepo.getSessionDir(sessionId)
-    File(sessionDir, fileName).writeBytes(bytes)
+    logsRepo.saveScreenshotToDisk(sessionId, fileName, bytes)
   },
   writeTraceToDisk = { sessionId: String, json: String ->
     val sessionDir = logsRepo.getSessionDir(sessionId)

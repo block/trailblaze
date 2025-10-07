@@ -94,4 +94,24 @@ class TrailblazeYaml(
       yaml,
     )
   }
+
+  /**
+   * Extracts config from the config trail item if it exists.
+   * Returns null if no config item is found.
+   */
+  @OptIn(ExperimentalSerializationApi::class)
+  fun extractTrailConfig(yaml: String): TrailConfig? {
+    val trailItems: List<TrailYamlItem> = decodeTrail(yaml)
+    return extractTrailConfig(trailItems)
+  }
+
+  /**
+   * Extracts config from the config trail item if it exists.
+   * Returns null if no config item is found.
+   */
+  @OptIn(ExperimentalSerializationApi::class)
+  fun extractTrailConfig(trailItems: List<TrailYamlItem>): TrailConfig? {
+    val configItem = trailItems.filterIsInstance<TrailYamlItem.ConfigTrailItem>().firstOrNull()
+    return configItem?.config
+  }
 }

@@ -16,11 +16,23 @@ class TrailblazeYamlBuilder {
 
   private val recordings = mutableListOf<TrailYamlItem>()
 
-  fun config(context: String) = apply {
+  fun config(
+    context: String? = null,
+    id: String? = null,
+    title: String? = null,
+    description: String? = null,
+    priority: String? = null,
+    metadata: Map<String, String>? = null,
+  ) = apply {
     recordings.add(
       TrailYamlItem.ConfigTrailItem(
         TrailConfig(
           context = context,
+          id = id,
+          title = title,
+          description = description,
+          priority = priority,
+          metadata = metadata,
         ),
       ),
     )

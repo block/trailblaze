@@ -1,9 +1,6 @@
 package xyz.block.trailblaze.tools
 
 import ai.koog.agents.core.tools.DirectToolCallsEnabler
-import ai.koog.agents.core.tools.Tool
-import ai.koog.agents.core.tools.ToolArgs
-import ai.koog.agents.core.tools.ToolResult
 import ai.koog.agents.core.tools.annotations.InternalAgentToolsApi
 import kotlinx.coroutines.runBlocking
 import org.junit.Test
@@ -18,7 +15,7 @@ class KoogToolRegistryTest {
   object MyEnabler : DirectToolCallsEnabler
 
   @Test
-  fun test() = runBlocking {
+  fun test() {
     val trailblazeAgent = FakeTrailblazeAgent()
     val toolRepo = TrailblazeToolRepo(
       TrailblazeToolSet.DynamicTrailblazeToolSet(
@@ -29,18 +26,20 @@ class KoogToolRegistryTest {
     val toolRegistry = toolRepo.asToolRegistry({
       TrailblazeToolExecutionContext(
         trailblazeAgent = trailblazeAgent,
-        llmResponseId = null,
+        traceId = null,
         screenState = null,
       )
     })
-    val inputTextTool = toolRegistry.getTool("inputText") as Tool<ToolArgs, ToolResult>
+    val inputTextTool = toolRegistry.getTool("inputText")
     println("Koog Tool: $inputTextTool")
     println("descriptor: ${inputTextTool.descriptor}")
     val trailblazeToolArgs = InputTextTrailblazeTool("hello world")
-    val result = inputTextTool.execute(
-      args = trailblazeToolArgs,
-      enabler = MyEnabler,
-    )
+    val result = runBlocking {
+      inputTextTool.executeUnsafe(
+        args = trailblazeToolArgs,
+        enabler = MyEnabler,
+      )
+    }
     println("Result: $result")
     println("InputTextTool args: $trailblazeToolArgs")
     println("Tools: " + toolRegistry.tools.map { it.name })

@@ -7,6 +7,7 @@ import okio.Buffer
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode.Companion.relabelWithFreshIds
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.host.setofmark.HostCanvasSetOfMark
 import xyz.block.trailblaze.utils.Ext.toViewHierarchyTreeNode
 import xyz.block.trailblaze.viewhierarchy.ViewHierarchyTreeNodeUtils
@@ -83,6 +84,8 @@ class HostMaestroDriverScreenState(
 
   override val viewHierarchy: ViewHierarchyTreeNode = stableRelabeledViewHierarchy
     ?: throw IllegalStateException("Failed to get stable view hierarchy from Maestro driver after $maxAttempts attempts.")
+
+  override val trailblazeDevicePlatform: TrailblazeDevicePlatform = deviceInfo.platform.toTrailblazeDevicePlatform()
 
   val screenshotModifier = { viewHierarchy: ViewHierarchyTreeNode, byteArray: ByteArray, bufferedImage: BufferedImage ->
     if (!setOfMarkEnabled) {

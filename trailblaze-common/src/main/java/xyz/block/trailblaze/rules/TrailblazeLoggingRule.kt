@@ -15,7 +15,6 @@ import xyz.block.trailblaze.tracing.TrailblazeTracer
  * Base JUnit4 Logging Rule for Trailblaze Tests
  */
 abstract class TrailblazeLoggingRule(
-  private val sendStartAndEndLogs: Boolean = true,
   private val logsBaseUrl: String = "https://localhost:8443",
   private val writeLogToDisk: ((currentTestName: String, log: TrailblazeLog) -> Unit) = { _, _ -> },
   private val writeScreenshotToDisk: ((sessionId: String, fileName: String, bytes: ByteArray) -> Unit) = { _, _, _ -> },
@@ -45,16 +44,13 @@ abstract class TrailblazeLoggingRule(
     isRunning
   }
 
+  var description: Description? = null
+    private set
+
   override fun ruleCreation(description: Description) {
+    this.description = description
     TrailblazeLogger.startSession("${description.testClass.canonicalName}_${description.methodName}")
     subscribeToLoggingEventsAndSendToServer()
-    if (sendStartAndEndLogs) {
-      TrailblazeLogger.sendStartLog(
-        className = description.className,
-        methodName = description.methodName,
-        trailblazeDeviceInfo = trailblazeDeviceInfoProvider(),
-      )
-    }
   }
 
   override fun beforeTestExecution(description: Description) {
@@ -63,9 +59,7 @@ abstract class TrailblazeLoggingRule(
   }
 
   override fun afterTestExecution(description: Description, result: Result<Nothing?>) {
-    if (sendStartAndEndLogs) {
-      TrailblazeLogger.sendEndLog(result.isSuccess, result.exceptionOrNull())
-    }
+    TrailblazeLogger.sendEndLog(result.isSuccess, result.exceptionOrNull())
     exportTraces()
   }
 

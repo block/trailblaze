@@ -49,6 +49,7 @@ fun LogGroupRow(
   cardSize: androidx.compose.ui.unit.Dp? = null,
   showDetails: ((TrailblazeLog) -> Unit)? = null,
   showInspectUI: ((TrailblazeLog) -> Unit)? = null,
+  showChatHistory: ((TrailblazeLog) -> Unit)? = null,
   onShowScreenshotModal: (imageModel: Any?, deviceWidth: Int, deviceHeight: Int, clickX: Int?, clickY: Int?) -> Unit = { _, _, _, _, _ -> },
 ) {
   val firstLog = group.logs.first()
@@ -115,6 +116,7 @@ fun LogGroupRow(
                   showInspectUI?.invoke(log) 
                 }
               },
+              showChatHistory = { showChatHistory?.invoke(log) },
               onShowScreenshotModal = onShowScreenshotModal
             )
           }

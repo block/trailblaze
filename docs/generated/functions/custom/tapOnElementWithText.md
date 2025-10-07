@@ -1,7 +1,7 @@
 ## Tool `tapOnElementWithText`
 
 ## Description
-Invoking this function will trigger a tap on the provided text. Ensure that you provide the
+Invoking this function will trigger a tap/click on the provided text. Ensure that you provide the
 entire string to this function to streamline finding the corresponding view.
 
 The text argument is required. Only provide additional fields if the text provided exactly

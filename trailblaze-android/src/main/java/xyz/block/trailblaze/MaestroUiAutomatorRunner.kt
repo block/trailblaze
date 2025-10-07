@@ -6,7 +6,6 @@ import maestro.Maestro
 import maestro.orchestra.ApplyConfigurationCommand
 import maestro.orchestra.Command
 import maestro.orchestra.MaestroCommand
-import xyz.block.trailblaze.MaestroTrailblazeAgent.Companion.generateIdIfNull
 import xyz.block.trailblaze.android.maestro.LoggingDriver
 import xyz.block.trailblaze.android.maestro.MaestroAndroidUiAutomatorDriver
 import xyz.block.trailblaze.android.maestro.orchestra.Orchestra
@@ -15,6 +14,8 @@ import xyz.block.trailblaze.android.uiautomator.AndroidOnDeviceUiAutomatorScreen
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
+import xyz.block.trailblaze.logs.model.TraceId
+import xyz.block.trailblaze.logs.model.TraceId.Companion.TraceOrigin
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.utils.Ext.asJsonObject
 
@@ -25,28 +26,28 @@ object MaestroUiAutomatorRunner {
 
   suspend fun runCommands(
     commands: List<Command>,
-    llmResponseId: String?,
+    traceId: TraceId?,
   ): TrailblazeToolResult = runMaestroCommands(
     commands = commands.filterNot { it is ApplyConfigurationCommand }.map { MaestroCommand(it) },
-    llmResponseId = llmResponseId,
+    traceId = traceId,
   )
 
   fun runCommandsBlocking(
     commands: List<Command>,
-    llmResponseId: String?,
+    traceId: TraceId?,
   ): TrailblazeToolResult = runBlocking {
     runCommands(
       commands = commands,
-      llmResponseId = llmResponseId,
+      traceId = traceId,
     )
   }
 
   suspend fun runCommand(
-    llmResponseId: String?,
+    traceId: TraceId?,
     vararg command: Command,
   ): TrailblazeToolResult = runCommands(
     commands = command.toList(),
-    llmResponseId = llmResponseId,
+    traceId = traceId,
   )
 
   private val maestro = Maestro(
@@ -62,12 +63,9 @@ object MaestroUiAutomatorRunner {
 
   private suspend fun runMaestroCommands(
     commands: List<MaestroCommand>,
-    llmResponseId: String?,
+    traceId: TraceId?,
   ): TrailblazeToolResult {
-    val toolChainId = generateIdIfNull(
-      prefix = "maestro",
-      llmResponseId = llmResponseId,
-    )
+    val traceId = traceId ?: TraceId.generate(TraceOrigin.MAESTRO)
 
     commands.forEach { maestroCommand ->
       val maestroCommandJsonObj = maestroCommand.asJsonObject()
@@ -92,7 +90,7 @@ object MaestroUiAutomatorRunner {
           trailblazeToolResult = result,
           timestamp = startTime,
           durationMs = Clock.System.now().toEpochMilliseconds() - startTime.toEpochMilliseconds(),
-          llmResponseId = toolChainId,
+          traceId = traceId,
           successful = result is TrailblazeToolResult.Success,
           session = TrailblazeLogger.getCurrentSessionId(),
         ),

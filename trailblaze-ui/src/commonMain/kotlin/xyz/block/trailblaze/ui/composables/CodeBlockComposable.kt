@@ -15,6 +15,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import xyz.block.trailblaze.ui.theme.isDarkTheme
+import xyz.block.trailblaze.ui.theme.LocalFontScale
 
 @Composable
 fun CodeBlock(
@@ -24,6 +25,7 @@ fun CodeBlock(
   val backgroundColor = if (isDarkTheme()) Color(0xFF2D2D2D) else Color(0xFFF6F8FA)
   val textColor = if (isDarkTheme()) Color(0xFFE0E0E0) else Color.Black
   val borderColor = if (isDarkTheme()) Color(0xFF444444) else Color(0xFFE1E4E8)
+  val fontScale = LocalFontScale.current
 
   Surface(
     color = backgroundColor,
@@ -36,7 +38,8 @@ fun CodeBlock(
         text = text,
         style = textStyle.copy(
           fontFamily = FontFamily.Monospace,
-          color = textColor
+          color = textColor,
+          fontSize = textStyle.fontSize * fontScale
         ),
         modifier = Modifier
           .padding(16.dp)

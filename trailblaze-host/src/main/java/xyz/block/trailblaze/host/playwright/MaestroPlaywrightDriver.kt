@@ -20,9 +20,6 @@ import okio.buffer
 import okio.gzip
 import xyz.block.trailblaze.host.devices.HostWebDriverFactory.Companion.isRunningOnCi
 import java.io.File
-import java.io.IOException
-import java.net.HttpURLConnection
-import java.net.URL
 import java.util.concurrent.TimeUnit
 
 /**
@@ -147,16 +144,6 @@ class MaestroPlaywrightDriver(headless: Boolean) : Driver {
       } catch (_: Exception) {
         "<error>"
       }
-      val readyState = try {
-        currentPage.evaluate("document.readyState") as? String ?: "<unknown>"
-      } catch (_: Exception) {
-        "<error>"
-      }
-      val canonicalHref = try {
-        currentPage.querySelector("link[rel='canonical']")?.getAttribute("href")
-      } catch (_: Exception) {
-        null
-      }
       val loadingState = try {
         currentPage.evaluate("window.performance.timing")?.toString()
       } catch (_: Exception) {
@@ -164,8 +151,6 @@ class MaestroPlaywrightDriver(headless: Boolean) : Driver {
       }
       println("  URL: $url")
       println("  Title: $title")
-      println("  Document readyState: $readyState")
-      println("  Canonical link: $canonicalHref")
       println("  Performance timing: $loadingState")
       // Network info: active requests (using performance API)
       try {
@@ -190,55 +175,6 @@ class MaestroPlaywrightDriver(headless: Boolean) : Driver {
     (count as? Number)?.toInt() ?: -1
   } catch (_: Exception) {
     -1
-  }
-
-  /**
-   * Performs basic network connectivity check by making an HTTP GET request to verify DNS and TCP connectivity.
-   * Returns true on success or false if network problems (DNS, timeout, or unreachable).
-   */
-  private fun testBasicNetworkConnectivity(testUrl: String = "https://www.google.com"): Boolean = try {
-    println("[Playwright] Network connectivity check: Attempting connection to $testUrl")
-    val connection = URL(testUrl).openConnection() as HttpURLConnection
-    connection.connectTimeout = 5000
-    connection.readTimeout = 5000
-    val responseCode = connection.responseCode
-    if (responseCode in 200..299) {
-      println("[Playwright] Network connectivity check: Success (response code: $responseCode)")
-      true
-    } else {
-      println("[Playwright] Network connectivity check: Failed (response code: $responseCode)")
-      false
-    }
-  } catch (ex: IOException) {
-    println("[Playwright] Network connectivity check failed: ${ex.message}")
-    false
-  }
-
-  private fun testCurlNetworkConnectivity(testUrl: String = "https://www.google.com"): Boolean = try {
-    println("[Playwright] Network connectivity check using curl: Attempting connection to $testUrl")
-    val process = Runtime.getRuntime().exec("curl -s -f -m 5 $testUrl")
-    process.waitFor()
-    val responseCode = process.exitValue()
-    if (responseCode == 0) {
-      println("[Playwright] Network connectivity check using curl: Success")
-      true
-    } else {
-      println("[Playwright] Network connectivity check using curl: Failed (response code: $responseCode)")
-      false
-    }
-  } catch (ex: Exception) {
-    println("[Playwright] Network connectivity check using curl failed: ${ex.message}")
-    false
-  }
-
-  private fun testDnsResolution(host: String = "www.google.com"): Boolean = try {
-    println("[Playwright] DNS resolution test: Attempting to resolve $host")
-    val addresses = java.net.InetAddress.getAllByName(host)
-    println("[Playwright] DNS resolution for $host succeeded: ${addresses.joinToString { it.hostAddress }}")
-    true
-  } catch (ex: Exception) {
-    println("[Playwright] DNS resolution test failed for $host: ${ex.message}")
-    false
   }
 
   override fun addMedia(mediaFiles: List<File>) {
@@ -337,11 +273,9 @@ class MaestroPlaywrightDriver(headless: Boolean) : Driver {
   ) {
     var retryCount = 0
     val maxRetries = 3
-    val waitTimeoutMs = if (isCI) 40000.0 else 20000.0
+    val waitTimeoutMs = if (isCI) 40000.0 else 10000.0
     val waitForSelectors = listOf(
       "body", // ensure body is present
-      "html", // ensure html is present
-      "[aria-busy=false]", // element is not busy (not always present, but useful)
     )
     var lastException: Exception? = null
 
@@ -350,37 +284,6 @@ class MaestroPlaywrightDriver(headless: Boolean) : Driver {
     println("[Playwright] openLink (raw): $link")
     println("[Playwright] openLink (processed): $processedLink")
 
-    // Network-level connectivity check before navigation
-    val hostToTest = try {
-      URL(processedLink).host
-    } catch (_: Exception) {
-      // Fallback: try to parse as a URL, if fails, default to google
-      "www.google.com"
-    }
-
-    var networkChecksPassed = false
-    val dnsPassed = testDnsResolution(hostToTest)
-    val httpPassed = testBasicNetworkConnectivity(processedLink)
-    val curlPassed = testCurlNetworkConnectivity(processedLink)
-
-    if (dnsPassed && (httpPassed || curlPassed)) {
-      networkChecksPassed = true
-    }
-
-    if (!networkChecksPassed) {
-      println("[Playwright] Comprehensive network connectivity check failed BEFORE navigation to '$processedLink'. Diagnostics:")
-      println("  DNS resolution for host '$hostToTest': ${if (dnsPassed) "SUCCESS" else "FAILED"}")
-      println("  HTTP connectivity: ${if (httpPassed) "SUCCESS" else "FAILED"}")
-      println("  curl connectivity: ${if (curlPassed) "SUCCESS" else "FAILED"}")
-      println("[Playwright] This might be due to DNS issues, lack of internet connectivity, or firewall restrictions.")
-      throw RuntimeException("[Playwright] Network connectivity check failed before attempting to navigate to '$processedLink'")
-    }
-
-    val waitStrategies = listOf<() -> Unit>(
-      { currentPage.waitForLoadState(com.microsoft.playwright.options.LoadState.NETWORKIDLE) },
-      { currentPage.waitForLoadState(com.microsoft.playwright.options.LoadState.DOMCONTENTLOADED) },
-      { currentPage.waitForLoadState(com.microsoft.playwright.options.LoadState.LOAD) },
-    )
     while (retryCount < maxRetries) {
       try {
         val startTimeMs = System.currentTimeMillis()
@@ -478,18 +381,6 @@ class MaestroPlaywrightDriver(headless: Boolean) : Driver {
         // Debug diagnostics after attempted load
         debugPageState("After all waits")
         println("[Playwright] Active network requests after load: ${activeNetworkRequestsCount()}")
-
-        // Optionally perform autoVerify
-        if (autoVerify) {
-          println("[Playwright] autoVerify enabled: checking for canonical link and title")
-          val title = currentPage.title()
-          val canonicalHref = try {
-            currentPage.querySelector("link[rel='canonical']")?.getAttribute("href")
-          } catch (_: Exception) {
-            null
-          }
-          println("[Playwright] Page title: '$title', canonical: '$canonicalHref'")
-        }
 
         // Debug: print timing
         val elapsedMs = System.currentTimeMillis() - startTimeMs

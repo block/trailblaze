@@ -1,11 +1,13 @@
 package xyz.block.trailblaze.ui
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -46,12 +48,12 @@ object LogsServerComposables {
   @Composable
   @Preview
   fun SettingsTab(
+    customEnvVariableNames: List<String>,
     serverState: TrailblazeServerState,
     availableModelLists: Set<TrailblazeLlmModelList>,
     openLogsFolder: () -> Unit,
     openGoose: () -> Unit,
     updateState: (TrailblazeServerState) -> Unit,
-    openUrlInBrowser: () -> Unit,
     additionalContent: @Composable () -> Unit,
     environmentVariableProvider: (String) -> String? = { null },
   ) {
@@ -66,162 +68,237 @@ object LogsServerComposables {
             additionalContent()
           }
           Row {
-            LazyColumn(
-              modifier = Modifier
-                .padding(16.dp)
-                .fillMaxWidth(),
-              verticalArrangement = Arrangement.spacedBy(16.dp),
+            Box(
+              modifier = Modifier.fillMaxWidth(),
+              contentAlignment = Alignment.TopCenter
             ) {
-              // Quick actions
-              item {
-                OutlinedCard(modifier = Modifier.fillMaxWidth()) {
-                  Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    SelectableText("Quick actions", style = MaterialTheme.typography.titleMedium)
-                    Row {
-                      Button(openUrlInBrowser) { SelectableText("Open Browser") }
-                      Spacer(Modifier.width(16.dp))
-                      Button(onClick = { openGoose() }) { SelectableText("Open Goose") }
+              LazyColumn(
+                modifier = Modifier
+                  .padding(16.dp)
+                  .width(600.dp),
+                verticalArrangement = Arrangement.spacedBy(20.dp),
+              ) {
+                // Quick actions
+                item {
+                  OutlinedCard(modifier = Modifier.fillMaxWidth()) {
+                    Column(
+                      modifier = Modifier.padding(20.dp),
+                      verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                      SelectableText("Quick Actions", style = MaterialTheme.typography.titleMedium)
+                      Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Button(onClick = { openGoose() }) { SelectableText("Open Goose") }
+                      }
                     }
                   }
                 }
-              }
 
-              // Application settings
-              item {
-                OutlinedCard(modifier = Modifier.fillMaxWidth()) {
-                  Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    SelectableText("Application settings", style = MaterialTheme.typography.titleMedium)
+                // Application settings
+                item {
+                  OutlinedCard(modifier = Modifier.fillMaxWidth()) {
+                    Column(
+                      modifier = Modifier.padding(20.dp),
+                      verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                      SelectableText(
+                        "Application Settings", style = MaterialTheme.typography.titleMedium
+                      )
 
-                    // Theme Mode Selection
-                    var showThemeMenu by remember { mutableStateOf(false) }
-                    val themeOptions = listOf(
-                      TrailblazeServerState.ThemeMode.System to "System",
-                      TrailblazeServerState.ThemeMode.Light to "Light",
-                      TrailblazeServerState.ThemeMode.Dark to "Dark"
-                    )
-                    val currentThemeLabel =
-                      themeOptions.find { it.first == serverState.appConfig.themeMode }?.second ?: "System"
+                      // Theme Mode Selection
+                      var showThemeMenu by remember { mutableStateOf(false) }
+                      val themeOptions = listOf(
+                        TrailblazeServerState.ThemeMode.System to "System",
+                        TrailblazeServerState.ThemeMode.Light to "Light",
+                        TrailblazeServerState.ThemeMode.Dark to "Dark"
+                      )
+                      val currentThemeLabel =
+                        themeOptions.find { it.first == serverState.appConfig.themeMode }?.second
+                          ?: "System"
 
-                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                      SelectableText("Theme Mode", modifier = Modifier.weight(0.4f))
-                      ExposedDropdownMenuBox(
-                        expanded = showThemeMenu,
-                        onExpandedChange = { showThemeMenu = !showThemeMenu },
-                        modifier = Modifier.weight(0.6f)
+                      Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                       ) {
-                        OutlinedTextField(
-                          modifier = Modifier.menuAnchor(),
-                          value = currentThemeLabel,
-                          onValueChange = {},
-                          readOnly = true,
-                          trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = showThemeMenu) }
-                        )
-                        DropdownMenu(
+                        SelectableText("Theme Mode", style = MaterialTheme.typography.bodyMedium)
+                        ExposedDropdownMenuBox(
                           expanded = showThemeMenu,
-                          onDismissRequest = { showThemeMenu = false }
+                          onExpandedChange = { showThemeMenu = !showThemeMenu }
                         ) {
-                          themeOptions.forEach { (themeMode, label) ->
-                            DropdownMenuItem(
-                              text = { SelectableText(label) },
-                              onClick = {
-                                showThemeMenu = false
-                                val savedSettings = serverState.appConfig
-                                updateState(
-                                  serverState.copy(
-                                    appConfig = savedSettings.copy(themeMode = themeMode)
+                          OutlinedTextField(
+                            modifier = Modifier.fillMaxWidth().menuAnchor(),
+                            value = currentThemeLabel,
+                            onValueChange = {},
+                            readOnly = true,
+                            trailingIcon = {
+                              ExposedDropdownMenuDefaults.TrailingIcon(
+                                expanded = showThemeMenu
+                              )
+                            }
+                          )
+                          DropdownMenu(
+                            expanded = showThemeMenu,
+                            onDismissRequest = { showThemeMenu = false }
+                          ) {
+                            themeOptions.forEach { (themeMode, label) ->
+                              DropdownMenuItem(
+                                text = { SelectableText(label) },
+                                onClick = {
+                                  showThemeMenu = false
+                                  val savedSettings = serverState.appConfig
+                                  updateState(
+                                    serverState.copy(
+                                      appConfig = savedSettings.copy(themeMode = themeMode)
+                                    )
                                   )
-                                )
-                              }
-                            )
+                                }
+                              )
+                            }
                           }
                         }
                       }
-                    }
-                    HorizontalDivider()
 
-                    if (serverState.appConfig.availableFeatures.hostMode) {
-                      Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        SelectableText("Host Mode Enabled (iOS Support)", modifier = Modifier.weight(1f))
+                      Spacer(modifier = Modifier.height(8.dp))
+
+                      if (serverState.appConfig.availableFeatures.hostMode) {
+                        Row(
+                          modifier = Modifier.fillMaxWidth(),
+                          horizontalArrangement = Arrangement.SpaceBetween,
+                          verticalAlignment = Alignment.CenterVertically
+                        ) {
+                          Column(modifier = Modifier.weight(1f)) {
+                            SelectableText("Host Mode", style = MaterialTheme.typography.bodyMedium)
+                            SelectableText(
+                              "Enable iOS support",
+                              style = MaterialTheme.typography.bodySmall,
+                              color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                          }
+                          Switch(
+                            checked = serverState.appConfig.hostModeEnabled,
+                            onCheckedChange = { checkedValue ->
+                              val savedSettings = serverState.appConfig
+                              updateState(
+                                serverState.copy(
+                                  appConfig = savedSettings.copy(hostModeEnabled = checkedValue),
+                                ),
+                              )
+                            },
+                          )
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                      }
+
+                      Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                      ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                          SelectableText(
+                            "Auto Launch Goose", style = MaterialTheme.typography.bodyMedium
+                          )
+                          SelectableText(
+                            "Launch Trailblaze in Goose on startup",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                          )
+                        }
                         Switch(
-                          checked = serverState.appConfig.hostModeEnabled,
+                          checked = serverState.appConfig.autoLaunchGoose,
                           onCheckedChange = { checkedValue ->
                             val savedSettings = serverState.appConfig
                             updateState(
                               serverState.copy(
-                                appConfig = savedSettings.copy(hostModeEnabled = checkedValue),
+                                appConfig = savedSettings.copy(autoLaunchGoose = checkedValue),
                               ),
                             )
                           },
                         )
                       }
-                      HorizontalDivider()
-                    }
-                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                      SelectableText("Auto Launch Trailblaze in Goose on Startup", modifier = Modifier.weight(1f))
-                      Switch(
-                        checked = serverState.appConfig.autoLaunchGoose,
-                        onCheckedChange = { checkedValue ->
-                          val savedSettings = serverState.appConfig
-                          updateState(
-                            serverState.copy(
-                              appConfig = savedSettings.copy(autoLaunchGoose = checkedValue),
-                            ),
+
+                      Spacer(modifier = Modifier.height(8.dp))
+
+                      Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                      ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                          SelectableText(
+                            "Always on Top", style = MaterialTheme.typography.bodyMedium
                           )
-                        },
-                      )
-                    }
-                    HorizontalDivider()
-                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                      SelectableText("Keep Window Always on Top", modifier = Modifier.weight(1f))
-                      Switch(
-                        checked = serverState.appConfig.alwaysOnTop,
-                        onCheckedChange = { checkedValue ->
-                          val savedSettings = serverState.appConfig
-                          updateState(
-                            serverState.copy(
-                              appConfig = savedSettings.copy(alwaysOnTop = checkedValue),
-                            ),
+                          SelectableText(
+                            "Keep window above other applications",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                           )
-                        },
-                      )
+                        }
+                        Switch(
+                          checked = serverState.appConfig.alwaysOnTop,
+                          onCheckedChange = { checkedValue ->
+                            val savedSettings = serverState.appConfig
+                            updateState(
+                              serverState.copy(
+                                appConfig = savedSettings.copy(alwaysOnTop = checkedValue),
+                              ),
+                            )
+                          },
+                        )
+                      }
                     }
-                    HorizontalDivider()
+                  }
+                }
 
-                    // LLM Provider and Model Selection in a single row
-                    var showLlmProviderMenu by remember { mutableStateOf(false) }
-                    var showLlmModelMenu by remember { mutableStateOf(false) }
-
-                    val currentProviderModelList = availableModelLists.firstOrNull {
-                      it.provider.id == serverState.appConfig.llmProvider
-                    } ?: OpenAITrailblazeLlmModelList
-
-                    val currentProvider: TrailblazeLlmProvider = currentProviderModelList.provider
-
-                    val availableModelsForCurrentProvider = currentProviderModelList.entries
-                    val currentModel: TrailblazeLlmModel = currentProviderModelList.entries.firstOrNull {
-                      it.modelId == serverState.appConfig.llmModel
-                    } ?: currentProviderModelList.entries.first()
-
-                    val currentLlmModelLabel = currentModel.modelId
-
-                    Row(
-                      modifier = Modifier.fillMaxWidth(),
-                      verticalAlignment = Alignment.CenterVertically,
-                      horizontalArrangement = Arrangement.spacedBy(8.dp)
+                // LLM Settings
+                item {
+                  OutlinedCard(modifier = Modifier.fillMaxWidth()) {
+                    Column(
+                      modifier = Modifier.padding(20.dp),
+                      verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
+                      SelectableText(
+                        "Language Model Settings", style = MaterialTheme.typography.titleMedium
+                      )
+
+                      // LLM Provider and Model Selection
+                      var showLlmProviderMenu by remember { mutableStateOf(false) }
+                      var showLlmModelMenu by remember { mutableStateOf(false) }
+
+                      val currentProviderModelList = availableModelLists.firstOrNull {
+                        it.provider.id == serverState.appConfig.llmProvider
+                      } ?: OpenAITrailblazeLlmModelList
+
+                      val currentProvider: TrailblazeLlmProvider = currentProviderModelList.provider
+
+                      val availableModelsForCurrentProvider = currentProviderModelList.entries
+                      val currentModel: TrailblazeLlmModel =
+                        currentProviderModelList.entries.firstOrNull {
+                          it.modelId == serverState.appConfig.llmModel
+                        } ?: currentProviderModelList.entries.first()
+
+                      val currentLlmModelLabel = currentModel.modelId
+
                       // LLM Provider Section
-                      Column(modifier = Modifier.weight(1f)) {
-                        SelectableText("LLM Provider", style = MaterialTheme.typography.bodyMedium)
+                      Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                      ) {
+                        SelectableText("Provider", style = MaterialTheme.typography.bodyMedium)
                         ExposedDropdownMenuBox(
                           expanded = showLlmProviderMenu,
                           onExpandedChange = { showLlmProviderMenu = !showLlmProviderMenu }
                         ) {
                           OutlinedTextField(
-                            modifier = Modifier.fillMaxWidth().menuAnchor(MenuAnchorType.PrimaryNotEditable),
+                            modifier = Modifier.fillMaxWidth()
+                              .menuAnchor(MenuAnchorType.PrimaryNotEditable),
                             value = currentProvider.display,
                             onValueChange = {},
                             readOnly = true,
-                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = showLlmProviderMenu) }
+                            trailingIcon = {
+                              ExposedDropdownMenuDefaults.TrailingIcon(
+                                expanded = showLlmProviderMenu
+                              )
+                            }
                           )
                           DropdownMenu(
                             expanded = showLlmProviderMenu,
@@ -255,8 +332,11 @@ object LogsServerComposables {
                       }
 
                       // LLM Model Section
-                      Column(modifier = Modifier.weight(1f)) {
-                        SelectableText("LLM Model", style = MaterialTheme.typography.bodyMedium)
+                      Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                      ) {
+                        SelectableText("Model", style = MaterialTheme.typography.bodyMedium)
                         ExposedDropdownMenuBox(
                           expanded = showLlmModelMenu,
                           onExpandedChange = { showLlmModelMenu = !showLlmModelMenu }
@@ -266,7 +346,11 @@ object LogsServerComposables {
                             value = currentLlmModelLabel,
                             onValueChange = {},
                             readOnly = true,
-                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = showLlmModelMenu) }
+                            trailingIcon = {
+                              ExposedDropdownMenuDefaults.TrailingIcon(
+                                expanded = showLlmModelMenu
+                              )
+                            }
                           )
                           DropdownMenu(
                             expanded = showLlmModelMenu,
@@ -292,50 +376,71 @@ object LogsServerComposables {
                     }
                   }
                 }
-              }
 
-              // Environment variables section
-              item {
-                val envVariableNames = listOf(
-                  "DATABRICKS_TOKEN",
-                  "OPENAI_API_KEY",
-                  "TEST_RAIL_API_KEY",
-                  "TEST_RAIL_EMAIL",
-                )
+                // Environment variables section
+                item {
+                  val envVariableNames = listOf(
+                    "OPENAI_API_KEY",
+                  ) + customEnvVariableNames
 
-                OutlinedCard(modifier = Modifier.fillMaxWidth()) {
-                  Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    SelectableText("Environment variables", style = MaterialTheme.typography.titleMedium)
+                  OutlinedCard(modifier = Modifier.fillMaxWidth()) {
+                    Column(
+                      modifier = Modifier.padding(20.dp),
+                      verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                      SelectableText(
+                        "Environment Variables", style = MaterialTheme.typography.titleMedium
+                      )
 
-                    envVariableNames.forEachIndexed { index, name ->
-                      val value = environmentVariableProvider(name)
-                      val maskedValue = if (value.isNullOrBlank()) "Not set" else "…" + value.takeLast(6)
+                      Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        envVariableNames.forEach { name ->
+                          val value = environmentVariableProvider(name)
+                          val maskedValue =
+                            if (value.isNullOrBlank()) "Not set" else "•••••" + value.takeLast(4)
 
-                      Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        SelectableText(name, modifier = Modifier.weight(1f))
-                        SelectableText(maskedValue, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                      }
-
-                      // Add divider between items, but not after the last one
-                      if (index < envVariableNames.size - 1) {
-                        HorizontalDivider()
+                          Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                          ) {
+                            SelectableText(
+                              text = name,
+                              style = MaterialTheme.typography.bodyMedium,
+                              modifier = Modifier.weight(1f)
+                            )
+                            SelectableText(
+                              text = maskedValue,
+                              color = if (value.isNullOrBlank())
+                                MaterialTheme.colorScheme.error
+                              else
+                                MaterialTheme.colorScheme.onSurfaceVariant,
+                              style = MaterialTheme.typography.bodyMedium
+                            )
+                          }
+                        }
                       }
                     }
 
+                    HorizontalDivider()
+
                     SelectableText(
-                      text = "If you change your environment variables, please restart the app so it can be picked up.",
+                      text = "💡 Tip: If you change environment variables, restart the app to apply changes.",
                       color = MaterialTheme.colorScheme.onSurfaceVariant,
+                      style = MaterialTheme.typography.bodySmall
                     )
                   }
                 }
-              }
 
-              // Utilities
-              item {
-                OutlinedCard(modifier = Modifier.fillMaxWidth()) {
-                  Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    SelectableText("Utilities", style = MaterialTheme.typography.titleMedium)
-                    Button(onClick = openLogsFolder) { Text("View Logs Folder") }
+                // Utilities
+                item {
+                  OutlinedCard(modifier = Modifier.fillMaxWidth()) {
+                    Column(
+                      modifier = Modifier.padding(20.dp),
+                      verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                      SelectableText("Utilities", style = MaterialTheme.typography.titleMedium)
+                      Button(onClick = openLogsFolder) { Text("View Logs Folder") }
+                    }
                   }
                 }
               }

@@ -8,7 +8,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
-
+import xyz.block.trailblaze.ui.theme.LocalFontScale
 
 @Composable
 fun SelectableText(
@@ -19,11 +19,12 @@ fun SelectableText(
   fontWeight: FontWeight? = null,
   maxLines: Int? = null,
 ) {
+  val fontScale = LocalFontScale.current
   SelectionContainer {
     Text(
       text = text,
       modifier = modifier,
-      style = style,
+      style = style.copy(fontSize = style.fontSize * fontScale),
       color = color,
       fontWeight = fontWeight,
       maxLines = maxLines ?: Int.MAX_VALUE,

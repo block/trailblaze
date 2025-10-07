@@ -8,18 +8,20 @@ plugins {
 }
 
 dependencies {
+  implementation(project(":trailblaze-agent"))
+  implementation(project(":trailblaze-common"))
+  implementation(project(":trailblaze-host"))
+  implementation(project(":trailblaze-models"))
+  implementation(project(":trailblaze-report"))
+  implementation(project(":trailblaze-server"))
+  implementation(project(":trailblaze-ui"))
+
   implementation(compose.desktop.currentOs)
   implementation(compose.ui)
   implementation(compose.runtime)
   implementation(compose.foundation)
   implementation(compose.material3)
   implementation(compose.components.resources)
-
-  implementation(project(":trailblaze-common"))
-  implementation(project(":trailblaze-agent"))
-  implementation(project(":trailblaze-report"))
-  implementation(project(":trailblaze-server"))
-  implementation(project(":trailblaze-ui"))
 }
 
 compose.desktop {

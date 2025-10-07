@@ -1,5 +1,9 @@
 package xyz.block.trailblaze.report.utils
 
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import xyz.block.trailblaze.logs.TrailblazeLogsDataProvider
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
@@ -11,6 +15,9 @@ import java.io.File
 private typealias TrailblazeSessionId = String
 
 class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
+
+  // Create a dedicated coroutine scope for background file operations
+  private val fileOperationScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
   init {
     // Ensure the logs directory exists
@@ -37,6 +44,9 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
    */
   private var cachedSessionIds = getSessionIds().toSet()
 
+  // Cache for session logs to avoid redundant file reads
+  private val sessionLogsCache = mutableMapOf<String, Pair<Long, List<TrailblazeLog>>>()
+
   fun getSessionDirs(): List<File> = logsDir.listFiles()?.filter { it.isDirectory }?.sortedByDescending { it.name } ?: emptyList()
 
   fun getSessionIds(): List<String> = getSessionDirs().map { it.name }
@@ -47,6 +57,8 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
   fun stopWatching(trailblazeSessionId: TrailblazeSessionId) {
     fileWatcherByTrailblazeSession[trailblazeSessionId]?.stopWatching()
     fileWatcherByTrailblazeSession.remove(trailblazeSessionId)
+    // Clear cache for stopped session
+    sessionLogsCache.remove(trailblazeSessionId)
   }
 
   /**
@@ -58,31 +70,41 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
       val sessionDir = getSessionDir(trailblazeSessionId)
       println("LOGLISTENER - Starting to watch trailblaze session: $trailblazeSessionId ${sessionDir.canonicalPath}")
       val fileWatchService = FileWatchService(
-        sessionDir,
-      ) { changeType: FileWatchService.ChangeType, fileChanged: File ->
-        println("LOGLISTENER - $changeType $fileChanged")
-        if (fileChanged.extension == "json") {
-          val logsForSession = getLogsForSession(trailblazeSessionId).sortedBy { it.timestamp }
-          if (logsForSession.size == 1) {
-            trailblazeSessionListener.onSessionStarted()
-            return@FileWatchService
-          }
-          val mostRecentLog = logsForSession.lastOrNull()
+        dirToWatch = sessionDir,
+        onFileChange = { changeType: FileWatchService.ChangeType, fileChanged: File ->
+          println("LOGLISTENER - $changeType $fileChanged")
+          if (fileChanged.extension == "json") {
+            fileOperationScope.launch {
+              try {
+                val logsForSession = getCachedLogsForSession(trailblazeSessionId).sortedBy { it.timestamp }
+                if (logsForSession.size == 1) {
+                  trailblazeSessionListener.onSessionStarted()
+                  return@launch
+                }
+                val mostRecentLog = logsForSession.lastOrNull()
 
-          if (mostRecentLog is TrailblazeLog.TrailblazeSessionStatusChangeLog) {
-            if (mostRecentLog.sessionStatus is SessionStatus.Ended) {
-              trailblazeSessionListener.onSessionEnded()
-              stopWatching(trailblazeSessionId)
-              return@FileWatchService
+                if (mostRecentLog is TrailblazeLog.TrailblazeSessionStatusChangeLog) {
+                  if (mostRecentLog.sessionStatus is SessionStatus.Ended) {
+                    trailblazeSessionListener.onSessionEnded()
+                    stopWatching(trailblazeSessionId)
+                    return@launch
+                  }
+                }
+
+                if (mostRecentLog != null) {
+                  trailblazeSessionListener.onUpdate("Session Updated: ${mostRecentLog::class.java.simpleName} ${mostRecentLog.timestamp}")
+                  return@launch
+                }
+              } catch (e: Exception) {
+                println("Error processing session update for $trailblazeSessionId: ${e.message}")
+                e.printStackTrace()
+              }
             }
           }
-
-          if (mostRecentLog != null) {
-            trailblazeSessionListener.onUpdate("Session Updated: ${mostRecentLog::class.java.simpleName} ${mostRecentLog.timestamp}")
-            return@FileWatchService
-          }
-        }
-      }
+        },
+        debounceDelayMs = 300L, // Shorter debounce for session events
+        maxEventsPerSecond = 5, // Lower rate limit for sessions
+      )
       fileWatcherByTrailblazeSession[trailblazeSessionId] = fileWatchService
       fileWatchService.startWatching()
     } else {
@@ -90,7 +112,34 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
     }
   }
 
-  private fun getLogFilesForSession(sessionId: String): List<File> = File(logsDir, sessionId).listFiles().filter { it.extension == "json" }
+  private fun getLogFilesForSession(sessionId: String): List<File> = File(logsDir, sessionId)
+    .listFiles()
+    ?.filter { it.extension == "json" }
+    ?: emptyList()
+
+  /**
+   * Returns a list of logs for the given session ID with caching to avoid redundant file reads.
+   * If the session ID is null or the session directory does not exist, an empty list is returned.
+   */
+  fun getCachedLogsForSession(sessionId: String?): List<TrailblazeLog> {
+    if (sessionId == null) return emptyList()
+
+    val sessionDir = File(logsDir, sessionId)
+    if (!sessionDir.exists()) return emptyList()
+
+    val lastModified = sessionDir.listFiles()?.maxOfOrNull { it.lastModified() } ?: 0L
+
+    // Check cache
+    val cached = sessionLogsCache[sessionId]
+    if (cached != null && cached.first >= lastModified) {
+      return cached.second
+    }
+
+    // Refresh cache
+    val logs = getLogsForSession(sessionId)
+    sessionLogsCache[sessionId] = Pair(lastModified, logs)
+    return logs
+  }
 
   /**
    * Returns a list of logs for the given session ID.
@@ -112,7 +161,9 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
       logFile.readText(),
     )
   } catch (e: Exception) {
-    println("Error Reading ${logFile.absolutePath}")
+    if (!logFile.name.endsWith("trace.json")) {
+      println("Could Not Parse Log: ${logFile.absolutePath}.  ${e.stackTraceToString()}")
+    }
     null
   }
 
@@ -180,36 +231,54 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
     if (sessionListWatcher == null) {
       println("SESSIONLISTENER - Starting to watch session list: ${logsDir.canonicalPath}")
       sessionListWatcher = FileWatchService(
-        logsDir,
-      ) { changeType: FileWatchService.ChangeType, fileChanged: File ->
-        println("SESSIONLISTENER - $changeType $fileChanged")
+        dirToWatch = logsDir,
+        onFileChange = { changeType: FileWatchService.ChangeType, fileChanged: File ->
+          println("SESSIONLISTENER - $changeType $fileChanged")
 
-        val currentSessionIds = getSessionIds().toSet()
-        val previousSessionIds = cachedSessionIds
-        val addedSessions = currentSessionIds - previousSessionIds
-        // Detect removals
-        val removedSessions = previousSessionIds - currentSessionIds
+          fileOperationScope.launch {
+            try {
+              val currentSessionIds = getSessionIds().toSet()
+              val previousSessionIds = cachedSessionIds
 
-        if (addedSessions.isNotEmpty()) {
-          // Detect additions
-          addedSessions.forEach { sessionId ->
-            sessionListListeners.forEach { listener ->
-              listener.onSessionAdded(sessionId)
+              // Only proceed if the session list actually changed
+              if (currentSessionIds == previousSessionIds) {
+                return@launch
+              }
+
+              val addedSessions = currentSessionIds - previousSessionIds
+              // Detect removals
+              val removedSessions = previousSessionIds - currentSessionIds
+
+              if (addedSessions.isNotEmpty()) {
+                // Detect additions
+                addedSessions.forEach { sessionId ->
+                  sessionListListeners.forEach { listener ->
+                    listener.onSessionAdded(sessionId)
+                  }
+                }
+              }
+
+              if (removedSessions.isNotEmpty()) {
+                removedSessions.forEach { sessionId ->
+                  // Clear cache for removed sessions
+                  sessionLogsCache.remove(sessionId)
+                  sessionListListeners.forEach { listener ->
+                    listener.onSessionRemoved(sessionId)
+                  }
+                }
+              }
+
+              // Update cache
+              cachedSessionIds = currentSessionIds
+            } catch (e: Exception) {
+              println("Error processing session list changes: ${e.message}")
+              e.printStackTrace()
             }
           }
-        }
-
-        if (removedSessions.isNotEmpty()) {
-          removedSessions.forEach { sessionId ->
-            sessionListListeners.forEach { listener ->
-              listener.onSessionRemoved(sessionId)
-            }
-          }
-        }
-
-        // Update cache
-        cachedSessionIds = currentSessionIds
-      }
+        },
+        debounceDelayMs = 1000L, // Longer debounce for session list changes
+        maxEventsPerSecond = 3, // Very low rate limit for session list
+      )
       sessionListWatcher?.startWatching()
     }
   }
@@ -231,19 +300,33 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
 
   fun getSessionInfo(sessionId: String): SessionInfo? {
     val logFiles = getLogFilesForSession(sessionId)
-    val sessionStartedLog: TrailblazeLog.TrailblazeSessionStatusChangeLog? = logFiles
-      .sortedBy { it.lastModified() }
-      .firstOrNull {
-        val log = parseTrailblazeLogFromFile(it)
-        log is TrailblazeLog.TrailblazeSessionStatusChangeLog && log.sessionStatus is SessionStatus.Started
-      }?.let { parseTrailblazeLogFromFile(it) as TrailblazeLog.TrailblazeSessionStatusChangeLog }
+    if (logFiles.isEmpty()) {
+      return null
+    }
 
-    val lastSessionStatusLog: TrailblazeLog.TrailblazeSessionStatusChangeLog? = logFiles
-      .sortedByDescending { it.lastModified() }
-      .firstOrNull {
-        val log = parseTrailblazeLogFromFile(it)
-        log is TrailblazeLog.TrailblazeSessionStatusChangeLog
-      }?.let { parseTrailblazeLogFromFile(it) as TrailblazeLog.TrailblazeSessionStatusChangeLog }
+    // Parse all log files once and filter for session status logs
+    val sessionStatusLogs = logFiles
+      .sortedBy { it.lastModified() }
+      .mapNotNull { file ->
+        val log = parseTrailblazeLogFromFile(file)
+        if (log is TrailblazeLog.TrailblazeSessionStatusChangeLog) {
+          Pair(file.lastModified(), log)
+        } else {
+          null
+        }
+      }
+
+    if (sessionStatusLogs.isEmpty()) {
+      return null
+    }
+
+    val sessionStartedLog = sessionStatusLogs
+      .firstOrNull { it.second.sessionStatus is SessionStatus.Started }
+      ?.second
+
+    val lastSessionStatusLog = sessionStatusLogs
+      .maxByOrNull { it.first }
+      ?.second
 
     return if (sessionStartedLog != null && lastSessionStatusLog != null) {
       val startedStatus: SessionStatus.Started = sessionStartedLog.sessionStatus as SessionStatus.Started
@@ -254,6 +337,7 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
         testName = startedStatus.testMethodName,
         testClass = startedStatus.testClassName,
         trailblazeDeviceInfo = startedStatus.trailblazeDeviceInfo,
+        trailConfig = startedStatus.trailConfig,
       )
     } else {
       null
@@ -287,6 +371,25 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
         logEvent,
       ),
     )
+    // Invalidate cache for this session since we wrote a new log
+    sessionLogsCache.remove(logEvent.session)
     return jsonLogFilename
+  }
+
+  fun saveScreenshotToDisk(sessionId: String, fileName: String, bytes: ByteArray) {
+    val sessionDir = getSessionDir(sessionId)
+    val screenshotFile = File(sessionDir, fileName)
+    println("Writing Screenshot to ${screenshotFile.absolutePath}")
+    screenshotFile.writeBytes(bytes)
+  }
+
+  /**
+   * Returns a list of PNG image files for the given session.
+   */
+  fun getImagesForSession(sessionId: String): List<File> {
+    val sessionDir = File(logsDir, sessionId)
+    if (!sessionDir.exists()) return emptyList()
+    return sessionDir.listFiles()?.filter { it.extension == "png" }?.sortedBy { it.name }
+      ?: emptyList()
   }
 }

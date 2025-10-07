@@ -49,7 +49,7 @@ object HostAdbCommandUtil {
     return output.trim()
   }
 
-  fun execShellCommand(shellCommand: String): String {
+  fun execAdbShellCommand(shellCommand: String): String {
     val fullCommand = listOf("adb", "shell") + shellCommand.split(" ")
     return execTerminal(fullCommand)
   }
@@ -58,15 +58,15 @@ object HostAdbCommandUtil {
     targetAppPackageName: String,
     permission: String,
   ) {
-    execShellCommand("pm grant $targetAppPackageName $permission")
+    execAdbShellCommand("pm grant $targetAppPackageName $permission")
   }
 
   fun clearPackageData(targetAppPackageName: String) {
-    execShellCommand("pm clear $targetAppPackageName")
+    execAdbShellCommand("pm clear $targetAppPackageName")
   }
 
   fun isAppRunning(appId: String): Boolean {
-    val output = execShellCommand("pidof $appId")
+    val output = execAdbShellCommand("pidof $appId")
     println("pidof $appId: $output")
     val isRunning = output.trim().isNotEmpty()
     return isRunning
@@ -95,19 +95,19 @@ object HostAdbCommandUtil {
   fun launchApp(
     appId: String,
   ) {
-    execShellCommand("monkey -p $appId 1")
+    execAdbShellCommand("monkey -p $appId 1")
   }
 
   fun clearAppData(
     appId: String,
   ) {
-    execShellCommand("pm clear $appId")
+    execAdbShellCommand("pm clear $appId")
   }
 
   fun forceStop(
     appId: String,
   ) {
-    execShellCommand("am force-stop $appId")
+    execAdbShellCommand("am force-stop $appId")
   }
 
   /**
@@ -144,4 +144,8 @@ object HostAdbCommandUtil {
     println("Timed out (${maxWaitMs}ms limit) met [$conditionDescription] after ${elapsedTimeMs}ms")
     return false
   }
+
+  fun listInstalledApps(): List<String> = execAdbShellCommand("pm list packages")
+    .lines()
+    .map { it.replaceFirst("package:", "") }
 }

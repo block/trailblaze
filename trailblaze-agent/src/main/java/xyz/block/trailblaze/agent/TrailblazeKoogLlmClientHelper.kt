@@ -15,17 +15,21 @@ import kotlinx.coroutines.delay
 import kotlinx.datetime.Clock
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import xyz.block.trailblaze.MaestroTrailblazeAgent
 import xyz.block.trailblaze.agent.model.PromptStepStatus
-import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeAgent
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
+import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
+import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
+import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool
 import xyz.block.trailblaze.util.TemplatingUtil
-import xyz.block.trailblaze.yaml.PromptStep
+import kotlin.uuid.ExperimentalUuidApi
+import kotlin.uuid.Uuid
 
 class TrailblazeKoogLlmClientHelper(
   var systemPromptTemplate: String,
@@ -34,6 +38,7 @@ class TrailblazeKoogLlmClientHelper(
   val trailblazeLlmModel: TrailblazeLlmModel,
   val llmClient: LLMClient,
   val elementComparator: TrailblazeElementComparator,
+  val toolRepo: TrailblazeToolRepo,
 ) {
 
   // This field will be used to determine whether or not our next request to the LLM should require
@@ -54,13 +59,10 @@ class TrailblazeKoogLlmClientHelper(
     forceStepStatusUpdate = force
   }
 
-  fun getForceStepStatusUpdate(): Boolean = forceStepStatusUpdate
-
   fun handleTrailblazeToolForPrompt(
     trailblazeTool: TrailblazeTool,
-    llmResponseId: String?,
+    traceId: TraceId,
     step: PromptStepStatus,
-    screenStateForLlmRequest: ScreenState,
     agent: TrailblazeAgent,
   ): TrailblazeToolResult = when (trailblazeTool) {
     is ObjectiveStatusTrailblazeTool -> {
@@ -85,8 +87,8 @@ class TrailblazeKoogLlmClientHelper(
     else -> {
       val (updatedTools, trailblazeToolResult) = agent.runTrailblazeTools(
         tools = listOf(trailblazeTool),
-        llmResponseId = llmResponseId,
-        screenState = screenStateForLlmRequest,
+        traceId = traceId,
+        screenState = step.currentScreenState,
         elementComparator = elementComparator,
       )
       setForceStepStatusUpdate(true)
@@ -109,15 +111,24 @@ class TrailblazeKoogLlmClientHelper(
   }
 
   fun handleLlmResponse(
-    toolRegistry: ToolRegistry,
     llmMessage: String?,
-    toolName: String,
-    toolArgs: JsonObject,
-    llmResponseId: String?,
+    tool: Message.Tool,
+    traceId: TraceId,
     step: PromptStepStatus,
-    screenStateForLlmRequest: ScreenState,
     agent: TrailblazeAgent,
   ) {
+    val toolRegistry = toolRepo.asToolRegistry {
+      TrailblazeToolExecutionContext(
+        trailblazeAgent = agent as MaestroTrailblazeAgent,
+        screenState = step.currentScreenState,
+        traceId = traceId,
+      )
+    }
+    val toolName = tool.tool
+    val toolArgs = TrailblazeJsonInstance.decodeFromString(
+      JsonObject.serializer(),
+      tool.content,
+    )
     val trailblazeToolResult = try {
       val trailblazeTool = toolRegistry.getTrailblazeToolFromToolRegistry(
         toolName = toolName,
@@ -125,9 +136,8 @@ class TrailblazeKoogLlmClientHelper(
       )
       handleTrailblazeToolForPrompt(
         trailblazeTool = trailblazeTool,
-        llmResponseId = llmResponseId,
         step = step,
-        screenStateForLlmRequest = screenStateForLlmRequest,
+        traceId = traceId,
         agent = agent,
       )
     } catch (e: Exception) {
@@ -153,10 +163,17 @@ class TrailblazeKoogLlmClientHelper(
 
     for (attempt in 1..maxRetries) {
       try {
+        /**
+         * Koog Requires each LLM Prompt to have an id
+         * We just generate a unique one to satisfy Koog
+         */
+        @OptIn(ExperimentalUuidApi::class)
+        val promptId = Uuid.random().toString()
+
         val koogLlmResponse: List<Message.Response> = llmClient.execute(
           prompt = Prompt(
             messages = llmRequestData.messages,
-            id = llmRequestData.callId,
+            id = promptId,
             params = LLMParams(
               temperature = null,
               speculation = null,
@@ -184,15 +201,17 @@ class TrailblazeKoogLlmClientHelper(
     throw lastException ?: RuntimeException("Unexpected error in retry logic")
   }
 
-  fun createNextChatRequestKoog(
-    screenState: ScreenState,
-    step: PromptStep,
-    forceStepStatusUpdate: Boolean,
-    limitedHistory: List<Message>,
-  ) = buildList {
+  fun createNextChatRequest(
+    stepStatus: PromptStepStatus,
+  ): List<Message> = buildList {
     add(
       Message.System(
-        content = systemPromptTemplate,
+        content = TemplatingUtil.renderTemplate(
+          template = systemPromptTemplate,
+          values = mapOf(
+            "device_platform" to stepStatus.currentScreenState.trailblazeDevicePlatform.displayName,
+          ),
+        ),
         metaInfo = RequestMetaInfo.create(Clock.System),
       ),
     )
@@ -201,7 +220,7 @@ class TrailblazeKoogLlmClientHelper(
         content = TemplatingUtil.renderTemplate(
           template = userObjectiveTemplate,
           values = mapOf(
-            "objective" to step.prompt,
+            "objective" to stepStatus.promptStep.prompt,
           ),
         ),
         metaInfo = RequestMetaInfo.create(Clock.System),
@@ -209,15 +228,18 @@ class TrailblazeKoogLlmClientHelper(
     )
     add(
       Message.User(
-        content = TrailblazeAiRunnerMessages.getReminderMessage(step, forceStepStatusUpdate),
+        content = TrailblazeAiRunnerMessages.getReminderMessage(stepStatus.promptStep, forceStepStatusUpdate),
         metaInfo = RequestMetaInfo.create(Clock.System),
       ),
     )
 
     // Add previous LLM responses
-    addAll(limitedHistory)
+    addAll(stepStatus.getLimitedHistory())
 
-    val viewHierarchyJson = Json.encodeToString(ViewHierarchyTreeNode.serializer(), screenState.viewHierarchy)
+    val viewHierarchyJson = Json.encodeToString(
+      serializer = ViewHierarchyTreeNode.serializer(),
+      value = stepStatus.currentScreenState.viewHierarchy,
+    )
     add(
       Message.User(
         content = TemplatingUtil.renderTemplate(
@@ -227,7 +249,7 @@ class TrailblazeKoogLlmClientHelper(
           ),
         ),
         attachments = buildList {
-          val screenshotBytes = screenState.screenshotBytes
+          val screenshotBytes = stepStatus.currentScreenState.screenshotBytes
           if (screenshotBytes != null &&
             screenshotBytes.isNotEmpty() &&
             trailblazeLlmModel.capabilityIds.contains(

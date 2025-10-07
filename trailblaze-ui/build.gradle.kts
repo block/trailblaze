@@ -52,6 +52,8 @@ kotlin {
       api(compose.material3)
       api(compose.ui)
 
+      implementation(libs.multiplatform.markdown.renderer)
+      implementation(libs.multiplatform.markdown.renderer.m3)
       implementation(compose.components.resources)
       implementation(compose.components.uiToolingPreview)
       implementation(libs.material.icons.extended)
@@ -62,6 +64,7 @@ kotlin {
       implementation(libs.kotlinx.datetime)
 
       implementation(libs.koog.prompt.model)
+      implementation(libs.koog.agents.tools)
       // Image loading
       implementation(libs.coil3.compose)
       implementation(libs.coil3.network.ktor)
@@ -78,6 +81,7 @@ kotlin {
     jvmMain.dependencies {
       implementation(project(":trailblaze-models"))
       implementation(project(":trailblaze-common"))
+      implementation(project(":trailblaze-host"))
       implementation(project(":trailblaze-server"))
       implementation(project(":trailblaze-report"))
       implementation(libs.ktor.server.core)

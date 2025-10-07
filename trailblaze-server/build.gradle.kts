@@ -26,7 +26,6 @@ dependencies {
   implementation(project(":trailblaze-report"))
   implementation(project(":trailblaze-yaml"))
 
-  implementation(libs.freemarker)
   implementation(libs.okhttp)
   implementation(libs.ktor.server.core.jvm)
   implementation(libs.ktor.network.tls.certificates)
@@ -34,7 +33,6 @@ dependencies {
   implementation(libs.ktor.client.logging)
   implementation(libs.ktor.server.content.negotiation)
   implementation(libs.ktor.server.cors)
-  implementation(libs.ktor.server.freemarker)
   implementation(libs.ktor.server.websockets)
   implementation(libs.ktor.serialization.kotlinx.json)
   implementation(libs.coroutines)
@@ -53,6 +51,9 @@ dependencies {
   runtimeOnly(libs.slf4j.simple)
 
   testImplementation(libs.ktor.client.okhttp)
+  testImplementation(libs.ktor.server.test.host)
+  testImplementation(libs.kotlin.test.junit4)
+  testImplementation(libs.junit)
 
   testRuntimeOnly(libs.kotlin.test.junit4)
 }

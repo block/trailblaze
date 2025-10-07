@@ -10,35 +10,17 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.datetime.Clock
 import kotlinx.serialization.json.Json
 import xyz.block.trailblaze.http.TrailblazeHttpClientFactory
 import xyz.block.trailblaze.llm.RunYamlRequest
-import xyz.block.trailblaze.llm.TrailblazeLlmProvider
 import xyz.block.trailblaze.mcp.models.AdbDevice
 import xyz.block.trailblaze.mcp.models.DeviceConnectionStatus
-import xyz.block.trailblaze.mcp.utils.HostAdbCommandUtils.createProcessBuilder
 import xyz.block.trailblaze.mcp.utils.HostAdbCommandUtils.runProcess
+import xyz.block.trailblaze.model.TargetTestApp
 import java.io.File
 
 object DeviceConnectUtils {
-
-  val availableTrailblazeLlmProviders = buildSet {
-    if (System.getenv("OPENAI_API_KEY") != null) {
-      add(TrailblazeLlmProvider.OPENAI)
-    }
-    if (System.getenv("DATABRICKS_TOKEN") != null) {
-      add(TrailblazeLlmProvider.DATABRICKS)
-    }
-    try {
-      val processSystemOutput: CommandProcessResult = createProcessBuilder(listOf("ollama", "-v")).runProcess {
-        println(it)
-      }
-      println("Ollama Found.  ${processSystemOutput.fullOutput}")
-      add(TrailblazeLlmProvider.OLLAMA)
-    } catch (e: Throwable) {
-      println("ollama installation not found")
-    }
-  }
 
   val ioScope = CoroutineScope(Dispatchers.IO)
 
@@ -75,7 +57,12 @@ object DeviceConnectUtils {
     adbPortForward(deviceId, port)
     adbPortReverse(deviceId, 8443)
 
-    if (!hasAlreadyBeenBuiltAndInstalledThisSession(targetTestApp) || !isAppInstalled(targetTestApp.testAppId, deviceId)) {
+    if (!hasAlreadyBeenBuiltAndInstalledThisSession(targetTestApp) ||
+      !isAppInstalled(
+        targetTestApp.testAppId,
+        deviceId,
+      )
+    ) {
       val installSuccessful = buildWithGradleAndInstallTestApp(
         targetTestApp = targetTestApp,
         sendProgressMessage = sendProgressMessage,
@@ -95,6 +82,115 @@ object DeviceConnectUtils {
     )
   }
 
+  fun execShellCommand(deviceId: String?, shellArgs: List<String>): String {
+    println("adb shell ${shellArgs.joinToString(" ")}")
+    return HostAdbCommandUtils.createAdbCommandProcessBuilder(
+      deviceId = deviceId,
+      args = listOf(
+        "shell",
+      ) + shellArgs,
+    ).runProcess {}.fullOutput
+  }
+
+  fun isAppRunning(deviceId: String?, appId: String): Boolean {
+    val output = execShellCommand(deviceId, listOf("pidof", "$appId"))
+    println("pidof $appId: $output")
+    val isRunning = output.trim().isNotEmpty()
+    return isRunning
+  }
+
+  /**
+   * @return true if the condition was met within the timeout, false otherwise
+   */
+  fun tryUntilSuccessOrTimeout(
+    maxWaitMs: Long,
+    intervalMs: Long,
+    conditionDescription: String,
+    condition: () -> Boolean,
+  ): Boolean {
+    val startTime = Clock.System.now()
+    var elapsedTime = 0L
+    while (elapsedTime < maxWaitMs) {
+      val conditionResult: Boolean = try {
+        condition()
+      } catch (e: Exception) {
+        println("Ignored Exception while computing Condition [$conditionDescription], Exception [${e.message}]")
+        false
+      }
+      if (conditionResult) {
+        println("Condition [$conditionDescription] met after ${elapsedTime}ms")
+        return true
+      } else {
+        println("Condition [$conditionDescription] not yet met after ${elapsedTime}ms with timeout of ${maxWaitMs}ms")
+        Thread.sleep(intervalMs)
+        elapsedTime = Clock.System.now().toEpochMilliseconds() - startTime.toEpochMilliseconds()
+      }
+    }
+    println("Timed out (${maxWaitMs}ms limit) met [$conditionDescription] after ${elapsedTime}ms")
+    return false
+  }
+
+  /**
+   * @return true if the condition was met within the timeout, false otherwise
+   */
+  fun tryUntilSuccessOrThrowException(
+    maxWaitMs: Long,
+    intervalMs: Long,
+    conditionDescription: String,
+    condition: () -> Boolean,
+  ) {
+    val successful = tryUntilSuccessOrTimeout(
+      maxWaitMs = maxWaitMs,
+      intervalMs = intervalMs,
+      conditionDescription = conditionDescription,
+      condition = condition,
+    )
+    if (successful == false) {
+      error("Timed out (${maxWaitMs}ms limit) met [$conditionDescription]")
+    }
+  }
+
+  fun forceStopApp(
+    deviceId: String?,
+    appId: String,
+  ) {
+    if (isAppRunning(deviceId = deviceId, appId)) {
+      execShellCommand(
+        deviceId,
+        listOf("am", "force-stop", appId),
+      )
+      tryUntilSuccessOrThrowException(
+        maxWaitMs = 30_000,
+        intervalMs = 200,
+        "App $appId should be force stopped",
+      ) {
+        execShellCommand(
+          deviceId = deviceId,
+          shellArgs = listOf("dumpsys", "package", appId, "|", "grep", "stopped=true"),
+        ).contains("stopped=true")
+      }
+    } else {
+      println("App $appId does not have an active process, no need to force stop")
+    }
+  }
+
+  val MAESTRO_APP_ID = "dev.mobile.maestro"
+  val MAESTRO_TEST_APP_ID = "dev.mobile.maestro.test"
+
+  suspend fun uninstallAllAndroidInstrumentationProcesses(targetTestApps: List<TargetTestApp>, deviceId: String?) {
+    val testAppIds: List<String> = targetTestApps.map { it.testAppId } + listOf(
+      MAESTRO_APP_ID,
+      MAESTRO_TEST_APP_ID,
+    ).distinct()
+    println("Ensure All Android Instrumentation Processes are Uninstalled.  IDs: $testAppIds")
+    testAppIds.forEach { appId ->
+      forceStopApp(
+        deviceId = deviceId,
+        appId = appId,
+      )
+    }
+  }
+
   suspend fun connectToInstrumentation(
     targetTestApp: TargetTestApp,
     deviceId: String?,
@@ -103,16 +199,11 @@ object DeviceConnectUtils {
     val completableDeferred: CompletableDeferred<DeviceConnectionStatus> = CompletableDeferred()
     var hasCallbackBeenCalled = false
 
-    if (isInstrumentationRunning(targetTestApp.testAppId)) {
-      sendProgressMessage("Instrumentation process already running. Stopping old session.")
-      stopApp(
-        targetTestApp.testAppId,
-        deviceId,
-        sendProgressMessage,
-      )
-    } else {
-      buildWithGradleAndInstallTestApp(targetTestApp, sendProgressMessage)
-    }
+    uninstallAllAndroidInstrumentationProcesses(
+      targetTestApps = listOf(element = targetTestApp),
+      deviceId = deviceId,
+    )
+    buildWithGradleAndInstallTestApp(targetTestApp, sendProgressMessage)
 
     adbPortForward(
       deviceId = deviceId,
@@ -145,7 +236,10 @@ object DeviceConnectUtils {
 
               while (attempts < maxAttempts) {
                 delay(delayAmount) // Wait between checks
-                instrumentationRunning = isInstrumentationRunning(targetTestApp.testAppId, deviceId)
+                instrumentationRunning = isAppRunning(
+                  deviceId = deviceId,
+                  appId = targetTestApp.testAppId,
+                )
                 attempts++
 
                 if (instrumentationRunning) {
@@ -248,14 +342,11 @@ object DeviceConnectUtils {
     return processBuilder
   }
 
-  private fun stopApp(appPackageId: String, deviceId: String? = null, sendProgressMessage: (String) -> Unit) {
-    sendProgressMessage("Ensuring old sessions for $appPackageId are stopped...")
+  private fun uninstallApp(appPackageId: String, deviceId: String? = null) {
     HostAdbCommandUtils.createAdbCommandProcessBuilder(
       deviceId = deviceId,
       args = listOf(
-        "shell",
-        "am",
-        "force-stop",
+        "uninstall",
         appPackageId,
       ),
     ).start().waitFor()
@@ -424,26 +515,6 @@ object DeviceConnectUtils {
       }
   } catch (e: Exception) {
     emptyList()
-  }
-
-  // Function to check if instrumentation process is currently running
-  suspend fun isInstrumentationRunning(testAppId: String, deviceId: String? = null): Boolean = try {
-    val result = HostAdbCommandUtils.createAdbCommandProcessBuilder(
-      deviceId = deviceId,
-      args = listOf("shell", "ps"),
-    ).runProcess(
-      outputLineCallback = {},
-    )
-
-    result.outputLines.any { line ->
-      !line.contains("grep") &&
-        (
-          line.contains(testAppId) ||
-            line.contains("androidx.test.runner.AndroidJUnitRunner")
-          )
-    }
-  } catch (e: Exception) {
-    false
   }
 
   suspend fun sentRequestStartTestWithYaml(request: RunYamlRequest): String {

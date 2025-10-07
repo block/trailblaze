@@ -3,6 +3,7 @@ package xyz.block.trailblaze.ui.model
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.Smartphone
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
@@ -19,6 +20,9 @@ data class TrailblazeRoute(
     }
     val YamlRoute = TrailblazeRoute("yaml", "Yaml") {
       Icon(Icons.Filled.Code, contentDescription = "Yaml")
+    }
+    val Devices = TrailblazeRoute("devices", "Devices") {
+      Icon(Icons.Filled.Smartphone, contentDescription = "Devices")
     }
     val Settings = TrailblazeRoute("settings", "Settings") {
       Icon(Icons.Filled.Settings, contentDescription = "Settings")

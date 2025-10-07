@@ -23,6 +23,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.MoveDown
+import androidx.compose.material.icons.outlined.TextDecrease
+import androidx.compose.material.icons.outlined.TextIncrease
 import androidx.compose.material.icons.outlined.ZoomIn
 import androidx.compose.material.icons.outlined.ZoomOut
 import androidx.compose.material3.Button
@@ -33,6 +35,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocal
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -45,6 +49,9 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.llm.LlmSessionUsageAndCost
 import xyz.block.trailblaze.llm.LlmUsageAndCostExt.computeUsageSummary
@@ -59,6 +66,7 @@ import xyz.block.trailblaze.ui.tabs.session.group.LogGroupRow
 import xyz.block.trailblaze.ui.tabs.session.models.GroupedLog
 import xyz.block.trailblaze.ui.tabs.session.models.SessionDetail
 import xyz.block.trailblaze.ui.utils.LogUtils
+import xyz.block.trailblaze.ui.theme.LocalFontScale
 import kotlin.math.pow
 import androidx.compose.foundation.lazy.grid.items as gridItems
 
@@ -78,7 +86,15 @@ fun SessionDetailComposable(
   // Modal callbacks
   onShowDetails: (TrailblazeLog) -> Unit = {},
   onShowInspectUI: (TrailblazeLog.TrailblazeLlmRequestLog) -> Unit = {},
+  onShowChatHistory: (TrailblazeLog.TrailblazeLlmRequestLog) -> Unit = {},
   onShowScreenshotModal: (imageModel: Any?, deviceWidth: Int, deviceHeight: Int, clickX: Int?, clickY: Int?) -> Unit = { _, _, _, _, _ -> },
+  // Persistent UI state
+  initialZoomOffset: Int = 0,
+  initialFontScale: Float = 1f,
+  initialViewMode: SessionViewMode = SessionViewMode.List,
+  onZoomOffsetChanged: (Int) -> Unit = {},
+  onFontScaleChanged: (Float) -> Unit = {},
+  onViewModeChanged: (SessionViewMode) -> Unit = {},
 ) {
   if (sessionDetail.logs.isEmpty()) {
     Column(
@@ -119,8 +135,43 @@ fun SessionDetailComposable(
     }
   } else {
     val gridState = rememberLazyGridState()
-    var viewMode by remember { mutableStateOf(SessionViewMode.List) }
+    var viewMode by remember { mutableStateOf(initialViewMode) }
     var alwaysAtBottom by remember { mutableStateOf(sessionDetail.session.latestStatus.inProgress) }
+
+    // Pre-compute heavy operations in background threads and cache results
+    var groupedLogs by remember { mutableStateOf<List<GroupedLog>>(emptyList()) }
+    var llmUsageSummary by remember { mutableStateOf<LlmSessionUsageAndCost?>(null) }
+    var recordingYamlCache by remember { mutableStateOf<String?>(null) }
+    var isLoadingGroupedLogs by remember { mutableStateOf(true) }
+    var isLoadingRecordingYaml by remember { mutableStateOf(true) }
+
+    // Background computation for grouped logs (used in List view)
+    LaunchedEffect(sessionDetail.logs) {
+      isLoadingGroupedLogs = true
+      withContext(Dispatchers.Default) {
+        val computedGroupedLogs = LogUtils.groupLogsByLlmResponseId(sessionDetail.logs)
+        groupedLogs = computedGroupedLogs
+        isLoadingGroupedLogs = false
+      }
+    }
+
+    // Background computation for LLM usage summary (used in LlmUsage view)
+    LaunchedEffect(sessionDetail.logs) {
+      withContext(Dispatchers.Default) {
+        val computedUsage = sessionDetail.logs.computeUsageSummary()
+        llmUsageSummary = computedUsage
+      }
+    }
+
+    // Background computation for recording YAML (used in Recording view)
+    LaunchedEffect(sessionDetail.logs) {
+      isLoadingRecordingYaml = true
+      withContext(Dispatchers.Default) {
+        val computedYaml = generateRecordingYaml()
+        recordingYamlCache = computedYaml
+        isLoadingRecordingYaml = false
+      }
+    }
 
     LaunchedEffect(alwaysAtBottom, sessionDetail.logs) {
       if (alwaysAtBottom) {
@@ -162,8 +213,9 @@ fun SessionDetailComposable(
       }
 
       // Manual zoom offset - positive means more cards, negative means fewer cards
-      var zoomOffset by remember { mutableStateOf(0) }
+      var zoomOffset by remember { mutableStateOf(initialZoomOffset) }
       var lastOptimalCount by remember { mutableStateOf(optimalCardsPerRow) }
+      var fontSizeScale by remember { mutableStateOf(initialFontScale) }
 
       // Only apply smoothing for automatic changes (window resize), not manual zoom
       val autoCardsPerRow = if (optimalCardsPerRow < lastOptimalCount) {
@@ -202,241 +254,374 @@ fun SessionDetailComposable(
       }
 
       Column(modifier = Modifier.fillMaxSize()) {
-        // Header item
-        Row(
-          modifier = Modifier.fillMaxWidth(),
-          horizontalArrangement = Arrangement.SpaceBetween,
-          verticalAlignment = Alignment.CenterVertically
-        ) {
+        CompositionLocalProvider(LocalFontScale provides fontSizeScale) {
+          // Header item
           Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
           ) {
-            IconButton(onClick = onBackClick) {
-              Icon(
-                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                contentDescription = "Back to sessions",
-                modifier = Modifier.size(20.dp)
+            Row(
+              verticalAlignment = Alignment.CenterVertically
+            ) {
+              IconButton(onClick = onBackClick) {
+                Icon(
+                  imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                  contentDescription = "Back to sessions",
+                  modifier = Modifier.size(20.dp)
+                )
+              }
+              Spacer(modifier = Modifier.width(8.dp))
+              SelectableText(
+                text = "Trailblaze Logs",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
               )
             }
-            Spacer(modifier = Modifier.width(8.dp))
-            SelectableText(
-              text = "Trailblaze Logs",
-              style = MaterialTheme.typography.headlineSmall,
-              fontWeight = FontWeight.Bold,
-            )
-          }
-          Row(verticalAlignment = Alignment.CenterVertically) {
-            // View mode toggle
             Row(verticalAlignment = Alignment.CenterVertically) {
-              if (sessionDetail.session.latestStatus.inProgress) {
-                IconToggleButton(
-                  checked = alwaysAtBottom, onCheckedChange = { alwaysAtBottom = it }) {
-                  Icon(
-                    imageVector = Icons.Default.MoveDown,
-                    contentDescription = "Toggle always at bottom",
-                    modifier = Modifier.size(24.dp)
+              // View mode toggle
+              Row(verticalAlignment = Alignment.CenterVertically) {
+                if (sessionDetail.session.latestStatus.inProgress) {
+                  IconToggleButton(
+                    checked = alwaysAtBottom, onCheckedChange = { alwaysAtBottom = it }) {
+                    Icon(
+                      imageVector = Icons.Default.MoveDown,
+                      contentDescription = "Toggle always at bottom",
+                      modifier = Modifier.size(24.dp)
+                    )
+                  }
+                }
+                // Checkbox(checked = alwaysAtBottom, onCheckedChange = { alwaysAtBottom = it }, enabled = details.session.latestStatus.inProgress)
+                TextButton(onClick = {
+                  viewMode = SessionViewMode.List
+                  onViewModeChanged(SessionViewMode.List)
+                }) {
+                  Text(
+                    text = "List",
+                    color = if (viewMode == SessionViewMode.List) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                  )
+                }
+                TextButton(onClick = {
+                  viewMode = SessionViewMode.Grid
+                  onViewModeChanged(SessionViewMode.Grid)
+                }) {
+                  Text(
+                    text = "Grid",
+                    color = if (viewMode == SessionViewMode.Grid) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                  )
+                }
+                TextButton(onClick = {
+                  viewMode = SessionViewMode.LlmUsage
+                  onViewModeChanged(SessionViewMode.LlmUsage)
+                }) {
+                  Text(
+                    text = "LLM Usage",
+                    color = if (viewMode == SessionViewMode.LlmUsage) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                  )
+                }
+                TextButton(onClick = {
+                  viewMode = SessionViewMode.Recording
+                  onViewModeChanged(SessionViewMode.Recording)
+                }) {
+                  Text(
+                    text = "Recording",
+                    color = if (viewMode == SessionViewMode.Recording) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
                   )
                 }
               }
-              // Checkbox(checked = alwaysAtBottom, onCheckedChange = { alwaysAtBottom = it }, enabled = details.session.latestStatus.inProgress)
-              TextButton(onClick = { viewMode = SessionViewMode.List }) {
-                Text(
-                  text = "List",
-                  color = if (viewMode == SessionViewMode.List) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                )
-              }
-              TextButton(onClick = { viewMode = SessionViewMode.Grid }) {
-                Text(
-                  text = "Grid",
-                  color = if (viewMode == SessionViewMode.Grid) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                )
-              }
-              TextButton(onClick = { viewMode = SessionViewMode.LlmUsage }) {
-                Text(
-                  text = "LLM Usage",
-                  color = if (viewMode == SessionViewMode.LlmUsage) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                )
-              }
-              TextButton(onClick = { viewMode = SessionViewMode.Recording }) {
-                Text(
-                  text = "Recording",
-                  color = if (viewMode == SessionViewMode.Recording) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                )
-              }
-            }
-            if (viewMode == SessionViewMode.Grid || viewMode == SessionViewMode.List) {
-              Spacer(modifier = Modifier.width(16.dp))
-              Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                  .background(
-                    MaterialTheme.colorScheme.surface,
-                    shape = RoundedCornerShape(8.dp)
-                  )
-                  .padding(2.dp)
-              ) {
-                IconButton(
-                  onClick = { zoomOffset++ },
-                  enabled = cardsPerRow < maxCards
+              if (viewMode == SessionViewMode.Grid || viewMode == SessionViewMode.List) {
+                Spacer(modifier = Modifier.width(16.dp))
+                Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  modifier = Modifier
+                    .background(
+                      MaterialTheme.colorScheme.surface,
+                      shape = RoundedCornerShape(8.dp)
+                    )
+                    .padding(2.dp)
                 ) {
-                  Icon(Icons.Outlined.ZoomOut, contentDescription = "Increase cards per row")
+                  IconButton(
+                    onClick = {
+                      zoomOffset++
+                      onZoomOffsetChanged(zoomOffset)
+                    },
+                    enabled = cardsPerRow < maxCards
+                  ) {
+                    Icon(
+                      Icons.Outlined.ZoomOut, contentDescription = "Smaller cards (more per row)"
+                    )
+                  }
+                  IconButton(
+                    onClick = {
+                      zoomOffset--
+                      onZoomOffsetChanged(zoomOffset)
+                    },
+                    enabled = cardsPerRow > 1
+                  ) {
+                    Icon(Icons.Outlined.ZoomIn, contentDescription = "Larger cards (fewer per row)")
+                  }
                 }
-                IconButton(
-                  onClick = { zoomOffset-- },
-                  enabled = cardsPerRow > 1
+                Spacer(modifier = Modifier.width(8.dp))
+                Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  modifier = Modifier
+                    .background(
+                      MaterialTheme.colorScheme.surface,
+                      shape = RoundedCornerShape(8.dp)
+                    )
+                    .padding(2.dp)
                 ) {
-                  Icon(Icons.Outlined.ZoomIn, contentDescription = "Decrease cards per row")
+                  IconButton(
+                    onClick = {
+                      fontSizeScale = (fontSizeScale - 0.1f).coerceAtLeast(0.5f)
+                      onFontScaleChanged(fontSizeScale)
+                    },
+                    enabled = fontSizeScale > 0.5f
+                  ) {
+                    Icon(Icons.Outlined.TextDecrease, contentDescription = "Decrease font size")
+                  }
+                  IconButton(
+                    onClick = {
+                      fontSizeScale = (fontSizeScale + 0.1f).coerceAtMost(2f)
+                      onFontScaleChanged(fontSizeScale)
+                    },
+                    enabled = fontSizeScale < 2f
+                  ) {
+                    Icon(Icons.Outlined.TextIncrease, contentDescription = "Increase font size")
+                  }
                 }
               }
             }
           }
-        }
 
-        // Session summary item
-        SessionSummaryRow(
-          status = sessionDetail.overallStatus,
-          deviceName = sessionDetail.deviceName,
-          deviceType = sessionDetail.deviceType,
-          totalDurationMs = if (sessionDetail.logs.isNotEmpty()) {
-            val firstLog = sessionDetail.logs.minByOrNull { it.timestamp }
-            val lastLog = sessionDetail.logs.maxByOrNull { it.timestamp }
-            if (firstLog != null && lastLog != null) {
-              lastLog.timestamp.toEpochMilliseconds() - firstLog.timestamp.toEpochMilliseconds()
-            } else null
-          } else null
-        )
+          // Test Information Section
+          val testTitle = sessionDetail.session.trailConfig?.title
+          val testDescription = sessionDetail.session.trailConfig?.description
+          val testClass = sessionDetail.session.testClass
+          val testName = sessionDetail.session.testName
 
-        // Spacer item
-        Spacer(modifier = Modifier.height(16.dp))
+          if (testTitle != null || testDescription != null || testClass != null || testName != null) {
+            Spacer(modifier = Modifier.height(16.dp))
+            Column(
+              modifier = Modifier
+                .fillMaxWidth()
+                .background(
+                  MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                  shape = RoundedCornerShape(8.dp)
+                )
+                .padding(16.dp)
+            ) {
+              if (testTitle != null) {
+                SelectableText(
+                  text = testTitle,
+                  style = MaterialTheme.typography.titleLarge,
+                  fontWeight = FontWeight.Bold,
+                  color = MaterialTheme.colorScheme.primary
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+              }
 
-        Column(
-          modifier = Modifier.fillMaxSize()
-        ) {
-          when (viewMode) {
-            SessionViewMode.Grid -> {
-              LazyVerticalGrid(
-                columns = Adaptive(minSize = cardSize),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                state = gridState,
-                modifier = Modifier.fillMaxSize()
-              ) {
-                // Log items
-                gridItems(sessionDetail.logs) { log ->
-                  LogCard(
-                    log = log,
-                    sessionId = sessionDetail.session.sessionId,
-                    sessionStartTime = sessionDetail.session.timestamp,
-                    toMaestroYaml = toMaestroYaml,
-                    toTrailblazeYaml = toTrailblazeYaml,
-                    imageLoader = imageLoader,
-                    cardSize = cardSize,
-                    showDetails = { onShowDetails(log) },
-                    showInspectUI = {
-                      if (log is TrailblazeLog.TrailblazeLlmRequestLog) {
-                        onShowInspectUI(log)
-                      }
-                    },
-                    onShowScreenshotModal = onShowScreenshotModal
-                  )
-                }
+              if (testDescription != null) {
+                SelectableText(
+                  text = testDescription,
+                  style = MaterialTheme.typography.bodyLarge,
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+              }
+
+              if (testClass != null && testName != null) {
+                SelectableText(
+                  text = "$testClass::$testName",
+                  style = MaterialTheme.typography.bodyMedium,
+                  fontWeight = FontWeight.Medium,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
               }
             }
+          }
 
-            SessionViewMode.List -> {
-              LazyVerticalGrid(
-                columns = Fixed(1),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalArrangement = Arrangement.spacedBy(0.dp),
-                state = gridState,
-                modifier = Modifier.fillMaxSize()
-              ) {
-                val groupedLogs = LogUtils.groupLogsByLlmResponseId(sessionDetail.logs)
-                gridItems(groupedLogs) { groupedLog ->
-                  Column {
-                    when (groupedLog) {
-                      is GroupedLog.Single -> {
-                        LogListRow(
-                          log = groupedLog.log,
-                          sessionId = sessionDetail.session.sessionId,
-                          sessionStartTime = sessionDetail.session.timestamp,
-                          imageLoader = imageLoader,
-                          showDetails = { onShowDetails(groupedLog.log) }
-                        )
-                      }
+          // Session summary item
+          SessionSummaryRow(
+            status = sessionDetail.overallStatus,
+            deviceName = sessionDetail.deviceName,
+            deviceType = sessionDetail.deviceType,
+            totalDurationMs = if (sessionDetail.logs.isNotEmpty()) {
+              val firstLog = sessionDetail.logs.minByOrNull { it.timestamp }
+              val lastLog = sessionDetail.logs.maxByOrNull { it.timestamp }
+              if (firstLog != null && lastLog != null) {
+                lastLog.timestamp.toEpochMilliseconds() - firstLog.timestamp.toEpochMilliseconds()
+              } else null
+            } else null,
+            trailConfig = sessionDetail.session.trailConfig,
+          )
 
-                      is GroupedLog.Group -> {
-                        LogGroupRow(
-                          group = groupedLog,
-                          sessionId = sessionDetail.session.sessionId,
-                          sessionStartTime = sessionDetail.session.timestamp,
-                          toMaestroYaml = toMaestroYaml,
-                          toTrailblazeYaml = toTrailblazeYaml,
-                          imageLoader = imageLoader,
-                          cardSize = cardSize,
-                          showDetails = { log -> onShowDetails(log) },
-                          showInspectUI = { log ->
-                            if (log is TrailblazeLog.TrailblazeLlmRequestLog) {
-                              onShowInspectUI(log)
-                            }
-                          },
-                          onShowScreenshotModal = onShowScreenshotModal
-                        )
-                      }
-                    }
-                    if (groupedLog != groupedLogs.last()) {
-                      Box(
-                        modifier = Modifier
-                          .fillMaxWidth()
-                          .height(1.dp)
-                          .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.13f))
-                      )
-                    }
-                  }
-                }
-              }
-            }
+          // Spacer item
+          Spacer(modifier = Modifier.height(16.dp))
 
-            SessionViewMode.Recording -> {
-              LazyVerticalGrid(
-                columns = Fixed(1),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                state = gridState,
-                modifier = Modifier.fillMaxSize()
-              ) {
-                item {
-                  Column(modifier = Modifier.padding(12.dp)) {
-                    Row(
-                      modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 16.dp),
-                      verticalAlignment = Alignment.CenterVertically,
-                      horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                      Text(
-                        text = "Session Recording",
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.Bold,
-                      )
-                      val clipboardManager = LocalClipboardManager.current
-                      Button(
-                        onClick = {
-                          clipboardManager.setText(AnnotatedString(generateRecordingYaml()))
+          Column(
+            modifier = Modifier.fillMaxSize()
+          ) {
+            when (viewMode) {
+              SessionViewMode.Grid -> {
+                LazyVerticalGrid(
+                  columns = Adaptive(minSize = cardSize),
+                  horizontalArrangement = Arrangement.spacedBy(12.dp),
+                  verticalArrangement = Arrangement.spacedBy(12.dp),
+                  state = gridState,
+                  modifier = Modifier.fillMaxSize()
+                ) {
+                  // Log items
+                  gridItems(sessionDetail.logs) { log ->
+                    LogCard(
+                      log = log,
+                      sessionId = sessionDetail.session.sessionId,
+                      sessionStartTime = sessionDetail.session.timestamp,
+                      toMaestroYaml = toMaestroYaml,
+                      toTrailblazeYaml = toTrailblazeYaml,
+                      imageLoader = imageLoader,
+                      cardSize = cardSize,
+                      showDetails = { onShowDetails(log) },
+                      showInspectUI = {
+                        if (log is TrailblazeLog.TrailblazeLlmRequestLog) {
+                          onShowInspectUI(log)
                         }
-                      ) {
-                        Text("Copy Yaml")
-                      }
-                    }
-                    CodeBlock(text = generateRecordingYaml())
+                      },
+                      showChatHistory = {
+                        if (log is TrailblazeLog.TrailblazeLlmRequestLog) {
+                          onShowChatHistory(log)
+                        }
+                      },
+                      onShowScreenshotModal = onShowScreenshotModal
+                    )
                   }
                 }
               }
-            }
 
-            SessionViewMode.LlmUsage -> {
-              val llmSessionUsageAndCost: LlmSessionUsageAndCost? = sessionDetail.logs.computeUsageSummary()
-              LlmUsageComposable(llmSessionUsageAndCost, gridState)
+              SessionViewMode.List -> {
+                if (isLoadingGroupedLogs) {
+                  Column(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally
+                  ) {
+                    Text(text = "Loading...")
+                  }
+                } else {
+                  LazyVerticalGrid(
+                    columns = Fixed(1),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(0.dp),
+                    state = gridState,
+                    modifier = Modifier.fillMaxSize()
+                  ) {
+                    gridItems(groupedLogs) { groupedLog ->
+                      Column {
+                        when (groupedLog) {
+                          is GroupedLog.Single -> {
+                            LogListRow(
+                              log = groupedLog.log,
+                              sessionId = sessionDetail.session.sessionId,
+                              sessionStartTime = sessionDetail.session.timestamp,
+                              imageLoader = imageLoader,
+                              showDetails = { onShowDetails(groupedLog.log) }
+                            )
+                          }
+
+                          is GroupedLog.Group -> {
+                            LogGroupRow(
+                              group = groupedLog,
+                              sessionId = sessionDetail.session.sessionId,
+                              sessionStartTime = sessionDetail.session.timestamp,
+                              toMaestroYaml = toMaestroYaml,
+                              toTrailblazeYaml = toTrailblazeYaml,
+                              imageLoader = imageLoader,
+                              cardSize = cardSize,
+                              showDetails = { log -> onShowDetails(log) },
+                              showInspectUI = { log ->
+                                if (log is TrailblazeLog.TrailblazeLlmRequestLog) {
+                                  onShowInspectUI(log)
+                                }
+                              },
+                              showChatHistory = { log ->
+                                if (log is TrailblazeLog.TrailblazeLlmRequestLog) {
+                                  onShowChatHistory(log)
+                                }
+                              },
+                              onShowScreenshotModal = onShowScreenshotModal
+                            )
+                          }
+                        }
+                        if (groupedLog != groupedLogs.last()) {
+                          Box(
+                            modifier = Modifier
+                              .fillMaxWidth()
+                              .height(1.dp)
+                              .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.13f))
+                          )
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+
+              SessionViewMode.Recording -> {
+                if (isLoadingRecordingYaml) {
+                  Column(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally
+                  ) {
+                    Text(text = "Loading...")
+                  }
+                } else {
+                  LazyVerticalGrid(
+                    columns = Fixed(1),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    state = gridState,
+                    modifier = Modifier.fillMaxSize()
+                  ) {
+                    item {
+                      Column(modifier = Modifier.padding(12.dp)) {
+                        Row(
+                          modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 16.dp),
+                          verticalAlignment = Alignment.CenterVertically,
+                          horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                          Text(
+                            text = "Session Recording",
+                            style = MaterialTheme.typography.headlineSmall.copy(
+                              fontSize = MaterialTheme.typography.headlineSmall.fontSize * fontSizeScale
+                            ),
+                            fontWeight = FontWeight.Bold,
+                          )
+                          val clipboardManager = LocalClipboardManager.current
+                          Button(
+                            onClick = {
+                              clipboardManager.setText(AnnotatedString(recordingYamlCache ?: ""))
+                            }
+                          ) {
+                            Text("Copy Yaml")
+                          }
+                        }
+                        CodeBlock(
+                          text = recordingYamlCache ?: "",
+                          textStyle = MaterialTheme.typography.labelSmall.copy(
+                            fontSize = MaterialTheme.typography.labelSmall.fontSize * fontSizeScale
+                          )
+                        )
+                      }
+                    }
+                  }
+                }
+              }
+
+              SessionViewMode.LlmUsage -> {
+                LlmUsageComposable(llmUsageSummary, gridState)
+              }
             }
           }
         }

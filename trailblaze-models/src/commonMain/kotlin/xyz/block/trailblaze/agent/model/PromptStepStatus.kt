@@ -7,24 +7,29 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.datetime.Clock
 import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.api.AgentMessages.toContentString
+import xyz.block.trailblaze.api.ScreenState
+import xyz.block.trailblaze.logs.model.TaskId
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.yaml.PromptStep
-import kotlin.uuid.ExperimentalUuidApi
-import kotlin.uuid.Uuid
 
 data class PromptStepStatus(
   val promptStep: PromptStep,
   val llmStatusChecks: Boolean = true,
+  private val koogLlmResponseHistory: MutableList<Message> = mutableListOf(),
+  private val screenStateProvider: () -> ScreenState,
 ) {
-  @OptIn(ExperimentalUuidApi::class)
-  val taskId = Uuid.random().toString()
-  private val koogLlmResponseHistory = mutableListOf<Message>()
+  val taskId = TaskId.generate()
 
   fun getLimitedHistory(): List<Message> = koogLlmResponseHistory.takeLast(5)
 
   private fun getHistorySize() = koogLlmResponseHistory.size
 
-  private val taskCreatedTimestamp = Clock.System.now()
+  var currentStep: Int = 0
+    private set
+  lateinit var currentScreenState: ScreenState
+    private set
+
+  val taskCreatedTimestamp = Clock.System.now()
   val currentStatus = MutableStateFlow<AgentTaskStatus>(
     AgentTaskStatus.InProgress(
       statusData = AgentTaskStatusData(
@@ -89,13 +94,10 @@ data class PromptStepStatus(
     )
   }
 
-  fun addEmptyToolCallToChatHistory(
-    llmResponseContent: String?,
-    result: TrailblazeToolResult.Error.EmptyToolCall,
-  ) {
+  fun handleEmptyToolCall(llmResponseContent: String?) {
     addCompletedToolCallToChatHistory(
       llmResponseContent = llmResponseContent,
-      commandResult = result,
+      commandResult = TrailblazeToolResult.Error.EmptyToolCall,
       toolName = null,
       toolArgs = null,
     )
@@ -125,5 +127,10 @@ data class PromptStepStatus(
       ),
       llmExplanation = "The objective failed to complete",
     )
+  }
+
+  fun prepareNextStep() {
+    currentStep++
+    currentScreenState = screenStateProvider()
   }
 }

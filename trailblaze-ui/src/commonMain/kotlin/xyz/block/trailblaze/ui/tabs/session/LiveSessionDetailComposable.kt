@@ -12,6 +12,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -20,6 +21,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionInfo
@@ -31,8 +36,8 @@ import xyz.block.trailblaze.ui.composables.ScreenshotImageModal
 import xyz.block.trailblaze.ui.images.ImageLoader
 import xyz.block.trailblaze.ui.images.NetworkImageLoader
 import xyz.block.trailblaze.ui.tabs.session.group.LogDetailsDialog
+import xyz.block.trailblaze.ui.tabs.session.group.ChatHistoryDialog
 import xyz.block.trailblaze.ui.tabs.session.models.SessionDetail
-
 
 @Composable
 fun LiveSessionDetailComposable(
@@ -43,12 +48,21 @@ fun LiveSessionDetailComposable(
   generateRecordingYaml: () -> String,
   onBackClick: () -> Unit,
   imageLoader: ImageLoader = NetworkImageLoader(),
+  // Persistent UI state
+  initialZoomOffset: Int = 0,
+  initialFontScale: Float = 1f,
+  initialViewMode: SessionViewMode = SessionViewMode.List,
+  onZoomOffsetChanged: (Int) -> Unit = {},
+  onFontScaleChanged: (Float) -> Unit = {},
+  onViewModeChanged: (SessionViewMode) -> Unit = {},
 ) {
   // Modal state at the TOP level - this is the root
   var showDetailsDialog by remember { mutableStateOf(false) }
   var showInspectUIDialog by remember { mutableStateOf(false) }
+  var showChatHistoryDialog by remember { mutableStateOf(false) }
   var currentLog by remember { mutableStateOf<TrailblazeLog?>(null) }
   var currentLlmLog by remember { mutableStateOf<TrailblazeLog.TrailblazeLlmRequestLog?>(null) }
+  var currentChatHistoryLog by remember { mutableStateOf<TrailblazeLog.TrailblazeLlmRequestLog?>(null) }
   
   // Screenshot modal state
   var showScreenshotModal by remember { mutableStateOf(false) }
@@ -59,7 +73,14 @@ fun LiveSessionDetailComposable(
   var modalClickY by remember { mutableStateOf<Int?>(null) }
 
   var logs by remember(session.sessionId) {
-    mutableStateOf(sessionDataProvider.getLogsForSession(session.sessionId))
+    mutableStateOf(emptyList<TrailblazeLog>())
+  }
+
+  // Load initial logs asynchronously
+  LaunchedEffect(session.sessionId) {
+    withContext(Dispatchers.Default) {
+      logs = sessionDataProvider.getLogsForSession(session.sessionId)
+    }
   }
 
   DisposableEffect(sessionDataProvider, session.sessionId) {
@@ -67,15 +88,24 @@ fun LiveSessionDetailComposable(
       override val trailblazeSessionId: String = session.sessionId
 
       override fun onSessionStarted() {
-        logs = sessionDataProvider.getLogsForSession(session.sessionId)
+        CoroutineScope(Dispatchers.Default).launch {
+          val newLogs = sessionDataProvider.getLogsForSession(session.sessionId)
+          logs = newLogs
+        }
       }
 
       override fun onUpdate(message: String) {
-        logs = sessionDataProvider.getLogsForSession(session.sessionId)
+        CoroutineScope(Dispatchers.Default).launch {
+          val newLogs = sessionDataProvider.getLogsForSession(session.sessionId)
+          logs = newLogs
+        }
       }
 
       override fun onSessionEnded() {
-        logs = sessionDataProvider.getLogsForSession(session.sessionId)
+        CoroutineScope(Dispatchers.Default).launch {
+          val newLogs = sessionDataProvider.getLogsForSession(session.sessionId)
+          logs = newLogs
+        }
       }
     }
 
@@ -136,6 +166,11 @@ fun LiveSessionDetailComposable(
     showInspectUIDialog = true
   }
 
+  val handleShowChatHistory: (TrailblazeLog.TrailblazeLlmRequestLog) -> Unit = { log ->
+    currentChatHistoryLog = log
+    showChatHistoryDialog = true
+  }
+
   val handleShowScreenshotModal: (Any?, Int, Int, Int?, Int?) -> Unit = { imageModel, deviceWidth, deviceHeight, clickX, clickY ->
     modalImageModel = imageModel
     modalDeviceWidth = deviceWidth
@@ -157,7 +192,14 @@ fun LiveSessionDetailComposable(
       imageLoader = imageLoader,
       onShowDetails = handleShowDetails,
       onShowInspectUI = handleShowInspectUI,
-      onShowScreenshotModal = handleShowScreenshotModal
+      onShowChatHistory = handleShowChatHistory,
+      onShowScreenshotModal = handleShowScreenshotModal,
+      initialZoomOffset = initialZoomOffset,
+      initialFontScale = initialFontScale,
+      initialViewMode = initialViewMode,
+      onZoomOffsetChanged = onZoomOffsetChanged,
+      onFontScaleChanged = onFontScaleChanged,
+      onViewModeChanged = onViewModeChanged,
     )
 
     // Modal dialogs as separate children with high zIndex
@@ -220,6 +262,23 @@ fun LiveSessionDetailComposable(
             deviceHeight = currentLlmLog!!.deviceHeight,
           )
         }
+      }
+    }
+
+    if (showChatHistoryDialog && currentChatHistoryLog != null) {
+      FullScreenModalOverlay(
+        onDismiss = {
+          showChatHistoryDialog = false
+          currentChatHistoryLog = null
+        }
+      ) {
+        ChatHistoryDialog(
+          log = currentChatHistoryLog!!,
+          onDismiss = {
+            showChatHistoryDialog = false
+            currentChatHistoryLog = null
+          }
+        )
       }
     }
 

@@ -126,11 +126,14 @@ class TrailblazeMcpServer(
 
         println("Executing tool: \\${koogTool.descriptor.name} with arguments: \\$koogToolArgs")
 
-        @OptIn(InternalAgentToolsApi::class)
-        val toolResponse: ToolResult = koogTool.execute(
-          args = koogToolArgs,
-          enabler = McpDirectToolCalls,
-        )
+        // Execute tool in background thread to prevent UI blocking
+        val toolResponse: ToolResult = withContext(Dispatchers.IO) {
+          @OptIn(InternalAgentToolsApi::class)
+          koogTool.execute(
+            args = koogToolArgs,
+            enabler = McpDirectToolCalls,
+          )
+        }
 
         val toolResponseMessage = toolResponse.toStringDefault()
         println("Tool result toolResponseMessage: \\$toolResponseMessage")
@@ -202,6 +205,11 @@ class TrailblazeMcpServer(
               mcpServer = mcpSseServer,
               mcpSseSessionId = mcpSseSessionId,
             )
+
+            // Handle unknown/unsupported notifications gracefully
+            mcpSseServer.fallbackNotificationHandler = { notification ->
+              println("Received unhandled notification: ${notification.method}")
+            }
 
             mcpSseServer.onClose {
               println("Server closed")

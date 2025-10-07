@@ -2,6 +2,7 @@ package xyz.block.trailblaze.logs.model
 
 import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
+import xyz.block.trailblaze.yaml.TrailConfig
 
 @Serializable
 sealed interface SessionStatus {
@@ -11,9 +12,11 @@ sealed interface SessionStatus {
 
   @Serializable
   data class Started(
+    val trailConfig: TrailConfig?,
     val testMethodName: String,
     val testClassName: String,
     val trailblazeDeviceInfo: TrailblazeDeviceInfo,
+    val rawYaml: String? = null,
   ) : SessionStatus
 
   @Serializable
@@ -31,6 +34,12 @@ sealed interface SessionStatus {
     data class Failed(
       override val durationMs: Long,
       val exceptionMessage: String?,
+    ) : Ended
+
+    @Serializable
+    data class Cancelled(
+      override val durationMs: Long,
+      val cancellationMessage: String?,
     ) : Ended
   }
 }

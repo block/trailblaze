@@ -3,25 +3,25 @@
 
 package xyz.block.trailblaze.desktop
 
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.DelicateCoroutinesApi
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.launch
+import xyz.block.trailblaze.host.TrailblazeHostYamlRunner
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
 import xyz.block.trailblaze.llm.providers.OllamaTrailblazeLlmModelList
 import xyz.block.trailblaze.llm.providers.OpenAITrailblazeLlmModelList
 import xyz.block.trailblaze.logs.server.TrailblazeMcpServer
 import xyz.block.trailblaze.mcp.utils.JvmLLMProvidersUtil.getAvailableTrailblazeLlmProviders
-import xyz.block.trailblaze.mcp.utils.TargetTestApp
+import xyz.block.trailblaze.model.TargetTestApp
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
+import xyz.block.trailblaze.ui.DeviceManager
 import xyz.block.trailblaze.ui.MainTrailblazeApp
 import xyz.block.trailblaze.ui.TrailblazeSettingsRepo
-import xyz.block.trailblaze.ui.model.TrailblazeAppTab
-import xyz.block.trailblaze.ui.model.TrailblazeRoute
 import xyz.block.trailblaze.ui.models.TrailblazeServerState
-import xyz.block.trailblaze.ui.tabs.sessions.SessionsTabComposableJvm
-import xyz.block.trailblaze.ui.tabs.sessions.YamlTabComposable
+import xyz.block.trailblaze.ui.yaml.DesktopYamlRunner
 import java.io.File
 
 val logsDir = File("../logs")
@@ -54,26 +54,29 @@ fun main() {
 
   val availableModelLists = modelLists.filter { availableTrailblazeLlmProviders.contains(it.provider) }.toSet()
 
+  val deviceManager = DeviceManager(targetDeviceFilter = { it })
+
+  val targetTestApp = TargetTestApp.DEFAULT_ANDROID_ON_DEVICE
+  val yamlRunner = DesktopYamlRunner(targetTestApp, onRunHostYaml = { runOnHostParams ->
+    CoroutineScope(Dispatchers.IO).launch {
+      TrailblazeHostYamlRunner.runHostYaml(
+        runOnHostParams = runOnHostParams,
+        allAndroidTargetTestApps = listOf(targetTestApp),
+        hostAppTarget = null,
+      )
+    }
+  })
+
   MainTrailblazeApp(
     trailblazeSavedSettingsRepo = trailblazeSavedSettingsRepo,
-    logsDir = logsDir,
+    logsRepo = logsRepo,
     trailblazeMcpServerProvider = { server },
+    targetTestApp = targetTestApp,
+    customEnvVarNames = emptyList(),
   ).runTrailblazeApp(
-    listOf(
-      TrailblazeAppTab(
-        route = TrailblazeRoute.Sessions,
-      ) {
-        SessionsTabComposableJvm(logsRepo)
-      },
-      TrailblazeAppTab(
-        route = TrailblazeRoute.YamlRoute,
-      ) {
-        val serverState by trailblazeSavedSettingsRepo.serverStateFlow.collectAsState()
-        YamlTabComposable(TargetTestApp.DEFAULT, serverState, availableModelLists) { newState ->
-          trailblazeSavedSettingsRepo.serverStateFlow.value = newState
-        }
-      },
-    ),
+    customTabs = listOf(),
     availableModelLists = availableModelLists,
+    deviceManager = deviceManager,
+    yamlRunner = yamlRunner,
   )
 }

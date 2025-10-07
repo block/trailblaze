@@ -63,6 +63,7 @@ fun main(args: Array<String>) {
     // interactive
     // Parse flags
     TrailblazeLogger.sendStartLog(
+      trailConfig = null,
       className = INTERACTIVE_NAME,
       methodName = INTERACTIVE_NAME,
       trailblazeDeviceInfo = trailblazeDeviceInfoProvider(),

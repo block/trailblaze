@@ -9,6 +9,7 @@ import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 import kotlin.time.Duration.Companion.microseconds
 
+@OptIn(kotlin.time.ExperimentalTime::class)
 object InstantMicrosSerializer : KSerializer<Instant> {
   override val descriptor: SerialDescriptor =
     PrimitiveSerialDescriptor("InstantMicros", PrimitiveKind.LONG)

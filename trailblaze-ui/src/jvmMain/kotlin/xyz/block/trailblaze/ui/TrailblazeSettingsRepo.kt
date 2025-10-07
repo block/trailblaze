@@ -10,6 +10,7 @@ import kotlinx.serialization.json.Json
 import xyz.block.trailblaze.logs.client.TrailblazeJson
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.ui.models.TrailblazeServerState
+import xyz.block.trailblaze.ui.tabs.session.SessionViewMode
 import java.io.File
 import kotlin.reflect.KClass
 
@@ -43,6 +44,11 @@ class TrailblazeSettingsRepo(
     trailblazeJson.decodeFromString(
       TrailblazeServerState.SavedTrailblazeAppConfig.serializer(),
       settingsFile.readText(),
+    ).copy(
+      // Clear session-specific state on app restart
+      currentSessionId = null,
+      currentSessionViewMode = SessionViewMode.DEFAULT_VIEW_MODE,
+      lastSelectedTestRailTestCaseId = null,
     )
   } catch (e: Exception) {
     println("Error loading settings, using default: ${e.message}")

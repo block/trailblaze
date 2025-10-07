@@ -10,6 +10,8 @@ import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
+import xyz.block.trailblaze.logs.model.TraceId
+import xyz.block.trailblaze.logs.model.TraceId.Companion.TraceOrigin
 import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
@@ -18,7 +20,6 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.commands.memory.MemoryTrailblazeTool
 import xyz.block.trailblaze.toolcalls.getToolNameFromAnnotation
 import xyz.block.trailblaze.utils.ElementComparator
-import kotlin.random.Random
 
 /**
  * Abstract class for Trailblaze agents that handle Maestro commands.
@@ -30,7 +31,7 @@ abstract class MaestroTrailblazeAgent : TrailblazeAgent {
 
   protected abstract suspend fun executeMaestroCommands(
     commands: List<Command>,
-    llmResponseId: String?,
+    traceId: TraceId?,
   ): TrailblazeToolResult
 
   val memory = AgentMemory()
@@ -43,22 +44,22 @@ abstract class MaestroTrailblazeAgent : TrailblazeAgent {
   @Deprecated("Prefer the suspend version of this function.")
   fun runMaestroCommandsBlocking(
     maestroCommands: List<Command>,
-    llmResponseId: String?,
+    traceId: TraceId?,
   ): TrailblazeToolResult = runBlocking {
     runMaestroCommands(
       maestroCommands = maestroCommands,
-      llmResponseId = llmResponseId,
+      traceId = traceId,
     )
   }
 
   suspend fun runMaestroCommands(
     maestroCommands: List<Command>,
-    llmResponseId: String?,
+    traceId: TraceId?,
   ): TrailblazeToolResult {
     maestroCommands.forEach { command ->
       val result = executeMaestroCommands(
         commands = listOf(command),
-        llmResponseId = llmResponseId,
+        traceId = traceId,
       )
       if (result != TrailblazeToolResult.Success) {
         // Exit early if any command fails
@@ -70,17 +71,14 @@ abstract class MaestroTrailblazeAgent : TrailblazeAgent {
 
   override fun runTrailblazeTools(
     tools: List<TrailblazeTool>,
-    llmResponseId: String?,
+    traceId: TraceId?,
     screenState: ScreenState?,
     elementComparator: ElementComparator,
   ): Pair<List<TrailblazeTool>, TrailblazeToolResult> {
-    val toolChainId = generateIdIfNull(
-      prefix = "tools",
-      llmResponseId = llmResponseId,
-    )
+    val traceId = traceId ?: TraceId.generate(TraceOrigin.TOOL)
     val trailblazeExecutionContext = TrailblazeToolExecutionContext(
       screenState = screenState,
-      llmResponseId = toolChainId,
+      traceId = traceId,
       trailblazeAgent = this,
     )
 
@@ -100,7 +98,7 @@ abstract class MaestroTrailblazeAgent : TrailblazeAgent {
           val executableTools = trailblazeTool.toExecutableTrailblazeTools(trailblazeExecutionContext)
           logDelegatingTrailblazeTool(
             trailblazeTool = trailblazeTool,
-            llmResponseId = toolChainId,
+            traceId = traceId,
             executableTools = executableTools,
           )
           for (mappedTool in executableTools) {
@@ -173,7 +171,7 @@ abstract class MaestroTrailblazeAgent : TrailblazeAgent {
       successful = trailblazeToolResult == TrailblazeToolResult.Success,
       durationMs = Clock.System.now().toEpochMilliseconds() - timeBeforeToolExecution.toEpochMilliseconds(),
       timestamp = timeBeforeToolExecution,
-      llmResponseId = trailblazeExecutionContext.llmResponseId,
+      traceId = trailblazeExecutionContext.traceId,
       session = TrailblazeLogger.getCurrentSessionId(),
     )
     val toolLogJson = TrailblazeJsonInstance.encodeToString(toolLog)
@@ -183,7 +181,7 @@ abstract class MaestroTrailblazeAgent : TrailblazeAgent {
 
   private fun logDelegatingTrailblazeTool(
     trailblazeTool: DelegatingTrailblazeTool,
-    llmResponseId: String?,
+    traceId: TraceId?,
     executableTools: List<ExecutableTrailblazeTool>,
   ) {
     TrailblazeLogger.log(
@@ -192,21 +190,9 @@ abstract class MaestroTrailblazeAgent : TrailblazeAgent {
         toolName = trailblazeTool.getToolNameFromAnnotation(),
         executableTools = executableTools,
         session = TrailblazeLogger.getCurrentSessionId(),
-        llmResponseId = llmResponseId,
+        traceId = traceId,
         timestamp = Clock.System.now(),
       ),
     )
-  }
-
-  companion object {
-    /**
-     * Generates a unique ID if no ID is provided.
-     */
-    fun generateIdIfNull(prefix: String?, llmResponseId: String?): String = llmResponseId ?: buildString {
-      prefix?.let {
-        appendLine("$prefix-")
-      }
-      appendLine(Random.nextLong().toString())
-    }
   }
 }

@@ -1,7 +1,10 @@
 package xyz.block.trailblaze.devices
 
-enum class TrailblazeDevicePlatform {
-  ANDROID,
-  IOS,
-  WEB,
+/**
+ * Represents a supported Platform
+ */
+enum class TrailblazeDevicePlatform(val displayName: String) {
+  ANDROID("Android"),
+  IOS("iOS"),
+  WEB("Web Browser"),
 }

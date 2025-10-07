@@ -11,6 +11,6 @@ abstract class MapsToMaestroCommands : ExecutableTrailblazeTool {
 
   override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult = toolExecutionContext.trailblazeAgent.runMaestroCommands(
     maestroCommands = toMaestroCommands(toolExecutionContext.trailblazeAgent.memory),
-    llmResponseId = toolExecutionContext.llmResponseId,
+    traceId = toolExecutionContext.traceId,
   )
 }

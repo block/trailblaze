@@ -1,7 +1,7 @@
 ## Tool `tapOnElementByNodeId`
 
 ## Description
-Provide the nodeId of the element you want to tap on in the nodeId parameter.
+Provide the nodeId of the element you want to tap/click on in the nodeId parameter.
 
 ### Command Class
 `xyz.block.trailblaze.toolcalls.commands.TapOnElementByNodeIdTrailblazeTool`

@@ -12,11 +12,9 @@ import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.rules.TrailblazeLoggingRule
 
 class TrailblazeAndroidLoggingRule(
-  sendStartAndEndLogs: Boolean = true,
   /** Override the default device classifiers */
   trailblazeDeviceClassifiersProvider: TrailblazeDeviceClassifiersProvider? = null,
 ) : TrailblazeLoggingRule(
-  sendStartAndEndLogs = sendStartAndEndLogs,
   logsBaseUrl = InstrumentationArgUtil.logsEndpoint(),
   writeLogToDisk = { currentTestName: String, log: TrailblazeLog ->
     try {

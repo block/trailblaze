@@ -4,8 +4,10 @@ import ai.koog.agents.core.tools.ToolDescriptor
 import ai.koog.prompt.dsl.ModerationResult
 import ai.koog.prompt.dsl.Prompt
 import ai.koog.prompt.executor.clients.LLMClient
+import ai.koog.prompt.executor.model.LLMChoice
 import ai.koog.prompt.llm.LLModel
 import ai.koog.prompt.message.Message
+import ai.koog.prompt.streaming.StreamFrame
 import kotlinx.coroutines.flow.Flow
 import xyz.block.trailblaze.tracing.TrailblazeTracer.traceRecorder
 
@@ -28,15 +30,17 @@ class TracingLlmClient(private val delegate: LLMClient) : LLMClient {
     )
   }
 
+  override suspend fun executeMultipleChoices(
+    prompt: Prompt,
+    model: LLModel,
+    tools: List<ToolDescriptor>,
+  ): List<LLMChoice> = delegate.executeMultipleChoices(prompt, model, tools)
+
   override fun executeStreaming(
     prompt: Prompt,
     model: LLModel,
-  ): Flow<String> = traceLlmClient("executeStreaming") {
-    delegate.executeStreaming(
-      prompt = prompt,
-      model = model,
-    )
-  }
+    tools: List<ToolDescriptor>,
+  ): Flow<StreamFrame> = delegate.executeStreaming(prompt, model, tools)
 
   override suspend fun moderate(
     prompt: Prompt,

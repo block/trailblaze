@@ -3,21 +3,15 @@ package xyz.block.trailblaze.host.devices
 import maestro.Maestro
 import maestro.device.Device
 import maestro.device.DeviceService
-import maestro.device.Platform
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.host.screenstate.toTrailblazeDevicePlatform
 
 object TrailblazeDeviceService {
 
-  private fun Platform.toTrailblazeDeviceType(): TrailblazeDevicePlatform = when (this) {
-    Platform.ANDROID -> TrailblazeDevicePlatform.ANDROID
-    Platform.IOS -> TrailblazeDevicePlatform.IOS
-    Platform.WEB -> TrailblazeDevicePlatform.WEB
-  }
-
   fun getConnectedIosDevice(): TrailblazeConnectedDevice? {
     val connectedDevices: List<Device.Connected> = DeviceService.listConnectedDevices()
-      .filter { it.platform.toTrailblazeDeviceType() == TrailblazeDevicePlatform.IOS }
+      .filter { it.platform.toTrailblazeDevicePlatform() == TrailblazeDevicePlatform.IOS }
     val connectedDevice = connectedDevices.firstOrNull() ?: return null
     val iosDriver: Maestro = HostIosDriverFactory.createIOS(
       deviceId = connectedDevice.instanceId,
@@ -35,7 +29,7 @@ object TrailblazeDeviceService {
 
   fun getConnectedHostAndroidDevice(): TrailblazeConnectedDevice? {
     val connectedDevices: List<Device.Connected> = DeviceService.listConnectedDevices()
-      .filter { it.platform.toTrailblazeDeviceType() == TrailblazeDevicePlatform.ANDROID }
+      .filter { it.platform.toTrailblazeDevicePlatform() == TrailblazeDevicePlatform.ANDROID }
     val connectedDevice = connectedDevices.firstOrNull() ?: return null
     val androidDriver: Maestro = HostAndroidDriverFactory.createAndroid(
       instanceId = connectedDevice.instanceId,

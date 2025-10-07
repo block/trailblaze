@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Card
@@ -56,6 +57,7 @@ fun LogCard(
   imageLoader: ImageLoader = NetworkImageLoader(),
   showDetails: (() -> Unit)? = null,
   showInspectUI: (() -> Unit)? = null,
+  showChatHistory: (() -> Unit)? = null,
   cardSize: androidx.compose.ui.unit.Dp? = null,
   onShowScreenshotModal: (imageModel: Any?, deviceWidth: Int, deviceHeight: Int, clickX: Int?, clickY: Int?) -> Unit = { _, _, _, _, _ -> },
 ) {
@@ -250,6 +252,24 @@ fun LogCard(
               }
             }
 
+            // Add Chat History button for LLM Request logs
+            if (log is TrailblazeLog.TrailblazeLlmRequestLog && showChatHistory != null) {
+              IconButton(
+                onClick = { showChatHistory.invoke() },
+                modifier = Modifier.size(24.dp)
+              ) {
+                Icon(
+                  imageVector = Icons.AutoMirrored.Filled.Chat,
+                  contentDescription = "Chat History",
+                  modifier = Modifier.size(16.dp),
+                  tint = if (isSystemInDarkTheme())
+                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
+                  else
+                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                )
+              }
+            }
+
             // Info icon always on the right
             IconButton(
               onClick = { showDetails?.invoke() },
@@ -277,7 +297,7 @@ fun LogCard(
 @Composable
 fun DetailSection(title: String, content: @Composable () -> Unit) {
   Column {
-    Text(
+    SelectableText(
       text = title,
       style = MaterialTheme.typography.titleLarge,
       fontWeight = FontWeight.Bold,
