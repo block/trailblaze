@@ -16,6 +16,7 @@ import xcuitest.XCTestDriverClient
 import xcuitest.installer.Context
 import xcuitest.installer.LocalXCTestInstaller
 import xcuitest.installer.LocalXCTestInstaller.IOSDriverConfig
+import java.net.ServerSocket
 import java.nio.file.Paths
 import java.util.concurrent.TimeUnit
 import kotlin.io.path.pathString
@@ -32,6 +33,32 @@ internal object HostIosDriverFactory {
 
   @Volatile
   private var hasPerformedInitialCleanup = false
+
+  private fun waitForPortRelease(
+    port: Int,
+    timeoutMs: Long,
+  ): Boolean {
+    val startTime = System.currentTimeMillis()
+    var attempts = 0
+    while (System.currentTimeMillis() - startTime < timeoutMs) {
+      try {
+        ServerSocket(port).close()
+        println("Port $port successfully released after ${System.currentTimeMillis() - startTime}ms")
+        return true
+      } catch (e: Exception) {
+        attempts++
+        if (attempts % 10 == 0) {
+          println(
+            "Still waiting for port $port to be released... " +
+              "(${System.currentTimeMillis() - startTime}ms elapsed)",
+          )
+        }
+        Thread.sleep(100)
+      }
+    }
+    println("Warning: Port $port may still be in use after ${timeoutMs}ms timeout")
+    return false
+  }
 
   fun createIOS(
     deviceId: String,
@@ -62,6 +89,7 @@ internal object HostIosDriverFactory {
       hasPerformedInitialCleanup = true
     } else {
       println("Skipping process cleanup - reusing connection within same JVM session")
+      waitForPortRelease(port = targetPort, timeoutMs = 5000)
     }
 
     val iOSDeviceType = when (deviceType) {

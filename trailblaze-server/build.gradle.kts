@@ -33,7 +33,6 @@ dependencies {
   implementation(libs.ktor.client.logging)
   implementation(libs.ktor.server.content.negotiation)
   implementation(libs.ktor.server.cors)
-  implementation(libs.ktor.server.websockets)
   implementation(libs.ktor.serialization.kotlinx.json)
   implementation(libs.coroutines)
   implementation(libs.koog.agents.tools)
@@ -41,7 +40,6 @@ dependencies {
   implementation(libs.ktor.http)
   implementation(libs.ktor.serialization)
   implementation(libs.ktor.utils)
-  implementation(libs.ktor.websockets)
   implementation(libs.kotlinx.serialization.core)
   implementation(libs.kotlinx.serialization.json)
   implementation(libs.maestro.orchestra.models) { isTransitive = false }

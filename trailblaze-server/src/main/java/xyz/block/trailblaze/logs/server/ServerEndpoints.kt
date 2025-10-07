@@ -12,7 +12,6 @@ import io.ktor.server.request.uri
 import io.ktor.server.response.respond
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
-import io.ktor.server.websocket.WebSockets
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.server.endpoints.AgentLogEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.DeleteLogsEndpoint
@@ -20,7 +19,6 @@ import xyz.block.trailblaze.logs.server.endpoints.GetEndpointSessionDetail
 import xyz.block.trailblaze.logs.server.endpoints.HomeEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.LogScreenshotPostEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.PingEndpoint
-import xyz.block.trailblaze.logs.server.endpoints.RealtimeWebsocketEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.ReverseProxyEndpoint
 import xyz.block.trailblaze.report.utils.LogsRepo
 import kotlin.io.encoding.ExperimentalEncodingApi
@@ -32,7 +30,6 @@ object ServerEndpoints {
 
   @OptIn(ExperimentalEncodingApi::class)
   fun Application.logsServerKtorEndpoints(logsRepo: LogsRepo) {
-    install(WebSockets)
     install(ContentNegotiation) {
       json(TrailblazeJsonInstance)
     }
@@ -40,7 +37,6 @@ object ServerEndpoints {
       anyHost()
     }
     routing {
-      RealtimeWebsocketEndpoint.register(this, logsRepo)
       HomeEndpoint.register(this, logsRepo)
       PingEndpoint.register(this)
       GetEndpointSessionDetail.register(this, logsRepo)

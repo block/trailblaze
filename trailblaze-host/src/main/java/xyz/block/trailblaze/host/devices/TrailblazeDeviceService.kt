@@ -16,7 +16,7 @@ object TrailblazeDeviceService {
     val iosDriver: Maestro = HostIosDriverFactory.createIOS(
       deviceId = connectedDevice.instanceId,
       openDriver = true,
-      reinstallDriver = true,
+      reinstallDriver = false,
       deviceType = connectedDevice.deviceType,
       driverHostPort = null,
       platformConfiguration = null,

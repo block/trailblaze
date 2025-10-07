@@ -44,7 +44,13 @@ class MaestroHostRunnerImpl(
     connectedDevice.loggingDriver
   }
 
+  companion object {
+    var callCount = 0
+  }
+
   override val screenStateProvider: () -> ScreenState = {
+    callCount++
+    println("screenStateProvider call count: $callCount")
     HostMaestroDriverScreenState(
       maestroDriver = loggingDriver,
       setOfMarkEnabled = setOfMarkEnabled,
