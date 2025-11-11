@@ -18,17 +18,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Laptop
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExposedDropdownMenuBox
-import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
@@ -51,33 +45,27 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.llm.TrailblazeLlmModelList
 import xyz.block.trailblaze.llm.providers.OpenAITrailblazeLlmModelList
-import xyz.block.trailblaze.mcp.models.DeviceConnectionStatus
-import xyz.block.trailblaze.model.TargetTestApp
-import xyz.block.trailblaze.ui.DeviceManager
+import xyz.block.trailblaze.model.DesktopAppRunYamlParams
+import xyz.block.trailblaze.model.DeviceConnectionStatus
+import xyz.block.trailblaze.ui.TrailblazeDeviceManager
+import xyz.block.trailblaze.ui.TrailblazeSettingsRepo
 import xyz.block.trailblaze.ui.composables.DeviceSelectionDialog
 import xyz.block.trailblaze.ui.composables.SelectableText
-import xyz.block.trailblaze.ui.composables.getIcon
-import xyz.block.trailblaze.ui.models.TrailblazeServerState
-import xyz.block.trailblaze.ui.yaml.DesktopYamlRunner
 
 @Composable
 fun YamlTabComposable(
-  targetTestApp: TargetTestApp,
-  serverState: TrailblazeServerState,
   availableLlmModelLists: Set<TrailblazeLlmModelList>,
-  updateState: (TrailblazeServerState) -> Unit,
-  deviceManager: DeviceManager,
-  yamlRunner: DesktopYamlRunner,
+  trailblazeSettingsRepo: TrailblazeSettingsRepo,
+  deviceManager: TrailblazeDeviceManager,
+  yamlRunner: (DesktopAppRunYamlParams) -> Unit,
 ) {
+  val serverState by trailblazeSettingsRepo.serverStateFlow.collectAsState()
   val yamlContent = serverState.appConfig.yamlContent
-
-  val deviceState by deviceManager.deviceStateFlow.collectAsState()
-  val availableDevices = deviceState.availableDevices
-  val isLoadingDevices = deviceState.isLoading
 
   var isRunning by remember { mutableStateOf(false) }
   var progressMessages by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -94,13 +82,11 @@ fun YamlTabComposable(
     if (localYamlContent != yamlContent) {
       delay(500) // 500ms debounce
       if (localYamlContent != yamlContent) { // Check again after delay
-        updateState(
-          serverState.copy(
-            appConfig = serverState.appConfig.copy(
-              yamlContent = localYamlContent
-            )
+        trailblazeSettingsRepo.updateAppConfig { appConfig ->
+          appConfig.copy(
+            yamlContent = localYamlContent
           )
-        )
+        }
       }
     }
   }
@@ -206,10 +192,17 @@ fun YamlTabComposable(
 
             Spacer(modifier = Modifier.height(8.dp))
 
+            val scrollState = rememberScrollState()
+
+            // Auto-scroll to bottom when messages change
+            LaunchedEffect(progressMessages.size) {
+              scrollState.animateScrollTo(scrollState.maxValue)
+            }
+
             Box(
               modifier = Modifier
                 .fillMaxSize()
-                .verticalScroll(rememberScrollState())
+                .verticalScroll(scrollState)
             ) {
               Column {
                 progressMessages.forEach { message ->
@@ -338,31 +331,35 @@ fun YamlTabComposable(
     // Device Selection Dialog
     if (showDeviceSelectionDialog) {
       DeviceSelectionDialog(
-        availableDevices = availableDevices,
-        isLoadingDevices = isLoadingDevices,
-        onRefreshDevices = { deviceManager.loadDevices() },
-        lastSelectedDeviceInstanceIds = serverState.appConfig.lastSelectedDeviceInstanceIds,
+        deviceManager = deviceManager,
+        settingsRepo = trailblazeSettingsRepo,
         onSelectionChanged = { selectedDeviceInstanceIds ->
           // Save selections immediately as they change
-          updateState(
-            serverState.copy(
-              appConfig = serverState.appConfig.copy(
-                lastSelectedDeviceInstanceIds = selectedDeviceInstanceIds
-              )
+          trailblazeSettingsRepo.updateAppConfig { appConfig ->
+            appConfig.copy(
+              lastSelectedDeviceInstanceIds = selectedDeviceInstanceIds
             )
-          )
+          }
         },
-        onRunTests = { selectedDevices ->
+        onDismiss = {
           showDeviceSelectionDialog = false
-
-          // Save selected device IDs
-          updateState(
+        },
+        onSessionClick = { sessionId ->
+          // Navigate to the session details by updating the state
+          trailblazeSettingsRepo.updateState {
             serverState.copy(
-              appConfig = serverState.appConfig.copy(
-                lastSelectedDeviceInstanceIds = selectedDevices.map { it.instanceId }
-              )
+              appConfig = serverState.appConfig.copy(currentSessionId = sessionId)
             )
-          )
+          }
+        },
+        onRunTests = { selectedDevices: List<TrailblazeConnectedDeviceSummary>, forceStopApp: Boolean ->
+          showDeviceSelectionDialog = false
+          trailblazeSettingsRepo.updateAppConfig { appConfig ->
+            // Save selected device IDs
+            appConfig.copy(
+              lastSelectedDeviceInstanceIds = selectedDevices.map { it.instanceId }
+            )
+          }
 
           coroutineScope.launch {
             isRunning = true
@@ -374,6 +371,7 @@ fun YamlTabComposable(
               yaml = yamlContent,
               trailblazeLlmModel = selectedTrailblazeLlmModel,
               useRecordedSteps = true,
+              targetAppName = serverState.appConfig.selectedTargetAppName
             )
 
             val onProgressMessage: (String) -> Unit = { message ->
@@ -384,10 +382,20 @@ fun YamlTabComposable(
               connectionStatus = status
             }
 
+            val targetTestApp = deviceManager.getCurrentSelectedTargetApp()
             // Run on each selected device
             selectedDevices.forEach { device ->
               try {
-                yamlRunner.runYaml(device, runYamlRequest, onProgressMessage, onConnectionStatus)
+                yamlRunner(
+                  DesktopAppRunYamlParams(
+                    device = device,
+                    forceStopTargetApp = forceStopApp,
+                    runYamlRequest = runYamlRequest,
+                    onProgressMessage = onProgressMessage,
+                    onConnectionStatus = onConnectionStatus,
+                    targetTestApp = targetTestApp
+                  )
+                )
               } catch (e: Exception) {
                 onProgressMessage("Error on device ${device.instanceId}: ${e.message}")
               }
@@ -396,8 +404,6 @@ fun YamlTabComposable(
             isRunning = false
           }
         },
-        onDismiss = { showDeviceSelectionDialog = false },
-        allowMultipleSelection = true
       )
     }
   }

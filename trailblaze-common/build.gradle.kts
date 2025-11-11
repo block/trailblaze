@@ -13,16 +13,19 @@ dependencies {
   api(libs.kotlinx.serialization.json)
   api(libs.coroutines)
   api(libs.junit)
+  api(libs.kaml)
   api(libs.okio)
   api(libs.koog.agents.tools)
   api(libs.ktor.client.core)
   api(libs.maestro.orchestra.models) { isTransitive = false }
   api(libs.maestro.client) { isTransitive = false }
+  api(libs.maestro.utils) { isTransitive = false }
 
   implementation(project(":trailblaze-tracing"))
 
   implementation(libs.exp4j)
   implementation(libs.gson)
+  implementation(libs.koog.prompt.model)
   implementation(libs.kotlinx.serialization.core)
   implementation(libs.ktor.client.logging)
   implementation(libs.ktor.client.okhttp)
@@ -30,8 +33,8 @@ dependencies {
   implementation(libs.ktor.utils)
   implementation(libs.kotlin.reflect)
   implementation(libs.maestro.orchestra) { isTransitive = false }
+  implementation(libs.maestro.utils) { isTransitive = false }
   implementation(libs.snakeyaml)
-  implementation(libs.koog.prompt.model)
 
   runtimeOnly(libs.jackson.dataformat.yaml)
   runtimeOnly(libs.jackson.module.kotlin)

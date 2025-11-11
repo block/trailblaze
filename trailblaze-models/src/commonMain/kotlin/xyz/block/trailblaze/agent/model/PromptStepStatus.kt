@@ -68,6 +68,50 @@ data class PromptStepStatus(
     }
   }
 
+  /**
+   * Overload for handling multiple tool names (used for delegating tools that execute multiple actual tools)
+   */
+  fun addCompletedToolCallToChatHistory(
+    commandResult: TrailblazeToolResult,
+    llmResponseContent: String?,
+    toolNames: List<String>,
+    toolArgs: JsonObject?,
+  ) {
+    llmResponseContent?.let { llmContent ->
+      addAssistantMessageToChatHistory(
+        llmContent = llmContent,
+      )
+    }
+    if (toolNames.isNotEmpty() && toolArgs != null) {
+      addToolExecutionResultUserMessageToChatHistory(
+        commandResult = commandResult,
+        toolNames = toolNames,
+        toolArgs = toolArgs,
+      )
+    }
+  }
+
+  /**
+   * Overload for handling multiple tools with their individual arguments (used for delegating tools)
+   */
+  fun addCompletedToolCallToChatHistory(
+    commandResult: TrailblazeToolResult,
+    llmResponseContent: String?,
+    toolsWithArgs: List<Pair<String, JsonObject>>,
+  ) {
+    llmResponseContent?.let { llmContent ->
+      addAssistantMessageToChatHistory(
+        llmContent = llmContent,
+      )
+    }
+    if (toolsWithArgs.isNotEmpty()) {
+      addToolExecutionResultUserMessageToChatHistory(
+        commandResult = commandResult,
+        toolsWithArgs = toolsWithArgs,
+      )
+    }
+  }
+
   private fun addToolExecutionResultUserMessageToChatHistory(
     commandResult: TrailblazeToolResult,
     toolName: String,
@@ -76,6 +120,44 @@ data class PromptStepStatus(
     val contentString = commandResult.toContentString(
       toolName = toolName,
       toolArgs = toolArgs,
+    )
+    koogLlmResponseHistory.add(
+      Message.User(
+        content = contentString,
+        metaInfo = RequestMetaInfo.create(Clock.System),
+      ),
+    )
+  }
+
+  /**
+   * Overload for handling multiple tool names (used for delegating tools)
+   */
+  private fun addToolExecutionResultUserMessageToChatHistory(
+    commandResult: TrailblazeToolResult,
+    toolNames: List<String>,
+    toolArgs: JsonObject,
+  ) {
+    val contentString = commandResult.toContentString(
+      toolNames = toolNames,
+      toolArgs = toolArgs,
+    )
+    koogLlmResponseHistory.add(
+      Message.User(
+        content = contentString,
+        metaInfo = RequestMetaInfo.create(Clock.System),
+      ),
+    )
+  }
+
+  /**
+   * Overload for handling multiple tools with their individual arguments
+   */
+  private fun addToolExecutionResultUserMessageToChatHistory(
+    commandResult: TrailblazeToolResult,
+    toolsWithArgs: List<Pair<String, JsonObject>>,
+  ) {
+    val contentString = commandResult.toContentString(
+      toolsWithArgs = toolsWithArgs,
     )
     koogLlmResponseHistory.add(
       Message.User(
@@ -103,7 +185,7 @@ data class PromptStepStatus(
     )
   }
 
-  fun markAsComplete() {
+  fun markAsComplete(llmExplanation: String = "All objectives completed successfully") {
     currentStatus.value = AgentTaskStatus.Success.ObjectiveComplete(
       statusData = AgentTaskStatusData(
         prompt = promptStep.prompt,
@@ -112,11 +194,11 @@ data class PromptStepStatus(
         totalDurationMs = Clock.System.now().epochSeconds - taskCreatedTimestamp.epochSeconds,
         taskId = taskId,
       ),
-      llmExplanation = "All objectives completed successfully",
+      llmExplanation = llmExplanation,
     )
   }
 
-  fun markAsFailed() {
+  fun markAsFailed(llmExplanation: String = "The objective failed to complete") {
     currentStatus.value = AgentTaskStatus.Failure.ObjectiveFailed(
       statusData = AgentTaskStatusData(
         prompt = promptStep.prompt,
@@ -125,7 +207,7 @@ data class PromptStepStatus(
         totalDurationMs = Clock.System.now().toEpochMilliseconds() - taskCreatedTimestamp.toEpochMilliseconds(),
         taskId = taskId,
       ),
-      llmExplanation = "The objective failed to complete",
+      llmExplanation = llmExplanation,
     )
   }
 

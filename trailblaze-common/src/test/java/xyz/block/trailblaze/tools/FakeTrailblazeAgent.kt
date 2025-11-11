@@ -3,6 +3,7 @@ package xyz.block.trailblaze.tools
 import maestro.orchestra.Command
 import xyz.block.trailblaze.MaestroTrailblazeAgent
 import xyz.block.trailblaze.api.ScreenState
+import xyz.block.trailblaze.api.TrailblazeAgent
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
@@ -19,7 +20,7 @@ class FakeTrailblazeAgent : MaestroTrailblazeAgent() {
     traceId: TraceId?,
     screenState: ScreenState?,
     elementComparator: ElementComparator,
-  ): Pair<List<TrailblazeTool>, TrailblazeToolResult> {
+  ): TrailblazeAgent.RunTrailblazeToolsResult {
     error("FakeTrailblazeAgent does not have an implementation for runTrailblazeTools()")
   }
 }

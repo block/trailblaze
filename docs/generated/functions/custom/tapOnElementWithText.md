@@ -1,12 +1,12 @@
 ## Tool `tapOnElementWithText`
 
 ## Description
-Invoking this function will trigger a tap/click on the provided text. Ensure that you provide the
-entire string to this function to streamline finding the corresponding view.
+Invoking this function will trigger a tap/click on an element containing the provided text. 
+The text does not need to be an exact match - it will find elements where the provided text 
+appears anywhere within the element's text.
 
-The text argument is required. Only provide additional fields if the text provided exactly
-matches elsewhere on the screen. In this case the additional fields will be used to identify
-the specific view to tap on.
+The text argument is required. Only provide additional fields if multiple elements contain the same text.
+In this case the additional fields will be used to identify the specific view to tap on.
 
 NOTE:
 - This will only work if the item is actually visible in the screenshot, even if the item is in the view hierarchy.

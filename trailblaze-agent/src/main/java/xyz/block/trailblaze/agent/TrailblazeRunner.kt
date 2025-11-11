@@ -8,15 +8,19 @@ import kotlinx.datetime.Clock
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.agent.model.AgentTaskStatus.Failure.MaxCallsLimitReached
 import xyz.block.trailblaze.agent.model.AgentTaskStatusData
+import xyz.block.trailblaze.agent.model.PromptRecordingResult
 import xyz.block.trailblaze.agent.model.PromptStepStatus
+import xyz.block.trailblaze.agent.util.toLlmResponseHistory
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TestAgentRunner
 import xyz.block.trailblaze.api.TrailblazeAgent
+import xyz.block.trailblaze.exception.TrailblazeSessionCancelledException
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.logs.model.TraceId.Companion.TraceOrigin
+import xyz.block.trailblaze.session.TrailblazeSessionManager
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.util.TemplatingUtil
 import xyz.block.trailblaze.yaml.DirectionStep
@@ -30,6 +34,8 @@ class TrailblazeRunner(
   val trailblazeLlmModel: TrailblazeLlmModel,
   private val maxSteps: Int = 50,
   private val trailblazeToolRepo: TrailblazeToolRepo,
+  val trailblazeLogger: TrailblazeLogger,
+  val sessionManager: TrailblazeSessionManager = TrailblazeSessionManager(),
   systemPromptTemplate: String? = null,
   userObjectiveTemplate: String = defaultUserObjective,
   userMessageTemplate: String = defaultUserMessage,
@@ -69,6 +75,13 @@ class TrailblazeRunner(
     llmClientHelper.setForceStepStatusUpdate(false)
     val stepToolStrategy = prompt.getToolStrategy()
     do {
+      // Check if session has been cancelled before making next LLM call
+      val isCancelled = isSessionCancelled()
+      if (isCancelled) {
+        stepStatus.markAsFailed()
+        throw TrailblazeSessionCancelledException()
+      }
+
       stepStatus.prepareNextStep()
       val requestStartTimeMs = Clock.System.now()
 
@@ -93,7 +106,7 @@ class TrailblazeRunner(
         )
       }
 
-      TrailblazeLogger.logLlmRequest(
+      trailblazeLogger.logLlmRequest(
         koogLlmRequestMessages = koogLlmRequestMessages,
         stepStatus = stepStatus,
         response = koogLlmResponseMessages,
@@ -120,22 +133,42 @@ class TrailblazeRunner(
     return stepStatus.currentStatus.value
   }
 
+  /**
+   * Check if the current session has been cancelled.
+   * The session manager is the single source of truth for cancellation state.
+   */
+  private fun isSessionCancelled(): Boolean = sessionManager.isCurrentSessionCancelled()
+
+  override fun recover(
+    promptStep: PromptStep,
+    recordingResult: PromptRecordingResult.Failure,
+  ): AgentTaskStatus {
+    trailblazeLogger.logAttemptAiFallback(promptStep, recordingResult)
+    val calculatedHistory = recordingResult.toLlmResponseHistory()
+    val reconstructedStepStatus = PromptStepStatus(
+      promptStep = promptStep,
+      koogLlmResponseHistory = calculatedHistory,
+      screenStateProvider = screenStateProvider,
+    )
+    return run(promptStep, reconstructedStepStatus)
+  }
+
   private fun logObjectiveStart(prompt: PromptStep) {
-    TrailblazeLogger.log(
+    trailblazeLogger.log(
       TrailblazeLog.ObjectiveStartLog(
         promptStep = prompt,
-        session = TrailblazeLogger.getCurrentSessionId(),
+        session = trailblazeLogger.getCurrentSessionId(),
         timestamp = Clock.System.now(),
       ),
     )
   }
 
   private fun logObjectiveComplete(stepStatus: PromptStepStatus) {
-    TrailblazeLogger.log(
+    trailblazeLogger.log(
       TrailblazeLog.ObjectiveCompleteLog(
         promptStep = stepStatus.promptStep,
         objectiveResult = stepStatus.currentStatus.value,
-        session = TrailblazeLogger.getCurrentSessionId(),
+        session = trailblazeLogger.getCurrentSessionId(),
         timestamp = Clock.System.now(),
       ),
     )

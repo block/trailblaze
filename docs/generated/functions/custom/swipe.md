@@ -2,6 +2,7 @@
 
 ## Description
 Swipes the screen in the specified direction. This is useful for navigating through long lists or pages.
+The start and end points are automatically calculated based on the direction and screen dimensions.
 
 ### Command Class
 `xyz.block.trailblaze.toolcalls.commands.SwipeTrailblazeTool`

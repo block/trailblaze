@@ -26,6 +26,12 @@ data class ObjectiveStatusTrailblazeTool(
   @LLMDescription("A message explaining what was accomplished or the current progress for this specific objective item")
   val explanation: String,
 
-  @LLMDescription("Status of this specific objective item: 'in_progress' (continuing with this same item), 'completed' (move to next item), or 'failed'")
-  val status: String,
+  @LLMDescription("Status of this specific objective item: 'IN_PROGRESS' (continuing with this same item), 'COMPLETED' (move to next item), or 'FAILED'")
+  val status: Status,
 ) : TrailblazeTool
+
+enum class Status {
+  IN_PROGRESS,
+  COMPLETED,
+  FAILED,
+}

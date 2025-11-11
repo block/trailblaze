@@ -1,0 +1,46 @@
+package xyz.block.trailblaze.ui.tabs.devices
+
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import xyz.block.trailblaze.ui.TrailblazeDeviceManager
+import xyz.block.trailblaze.ui.TrailblazeSettingsRepo
+import xyz.block.trailblaze.ui.composables.DeviceConfigurationContent
+
+@Composable
+fun DevicesTabComposable(
+  deviceManager: TrailblazeDeviceManager,
+  trailblazeSavedSettingsRepo: TrailblazeSettingsRepo,
+  onNavigateToSessions: (() -> Unit)? = null,
+) {
+  val serverState by trailblazeSavedSettingsRepo.serverStateFlow.collectAsState()
+
+  Column(
+    modifier = Modifier
+      .fillMaxSize()
+      .padding(16.dp)
+  ) {
+    DeviceConfigurationContent(
+      settingsRepo = trailblazeSavedSettingsRepo,
+      deviceManager = deviceManager,
+      allowMultipleSelection = true,
+      showRefreshButton = true,
+      autoRefreshOnLoad = true,
+      onSessionClick = { sessionId ->
+        // Navigate to the session details by updating the state
+        trailblazeSavedSettingsRepo.updateState {
+          serverState.copy(
+            appConfig = serverState.appConfig.copy(currentSessionId = sessionId)
+          )
+        }
+        // Switch to Sessions tab if callback is provided
+        onNavigateToSessions?.invoke()
+      }
+    )
+  }
+}

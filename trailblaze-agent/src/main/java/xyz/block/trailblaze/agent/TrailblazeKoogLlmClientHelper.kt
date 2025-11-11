@@ -13,8 +13,10 @@ import ai.koog.prompt.message.RequestMetaInfo
 import ai.koog.prompt.params.LLMParams
 import kotlinx.coroutines.delay
 import kotlinx.datetime.Clock
+import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
 import xyz.block.trailblaze.MaestroTrailblazeAgent
 import xyz.block.trailblaze.agent.model.PromptStepStatus
 import xyz.block.trailblaze.api.TrailblazeAgent
@@ -27,9 +29,20 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.Status
+import xyz.block.trailblaze.toolcalls.getToolNameFromAnnotation
 import xyz.block.trailblaze.util.TemplatingUtil
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
+
+/**
+ * Data class to hold the result of tool execution along with the actual tools that were executed.
+ * This is necessary for delegating tools where the LLM calls one tool but it delegates to others.
+ */
+data class ToolExecutionResult(
+  val result: TrailblazeToolResult,
+  val executedTools: List<TrailblazeTool>,
+)
 
 class TrailblazeKoogLlmClientHelper(
   var systemPromptTemplate: String,
@@ -64,28 +77,36 @@ class TrailblazeKoogLlmClientHelper(
     traceId: TraceId,
     step: PromptStepStatus,
     agent: TrailblazeAgent,
-  ): TrailblazeToolResult = when (trailblazeTool) {
+  ): ToolExecutionResult = when (trailblazeTool) {
     is ObjectiveStatusTrailblazeTool -> {
       setForceStepStatusUpdate(false)
+
       when (trailblazeTool.status) {
-        "in_progress" -> TrailblazeToolResult.Success
-        "failed" -> {
-          step.markAsFailed()
+        Status.IN_PROGRESS -> ToolExecutionResult(
+          result = TrailblazeToolResult.Success,
+          executedTools = listOf(trailblazeTool),
+        )
+        Status.FAILED -> {
+          step.markAsFailed(llmExplanation = trailblazeTool.explanation)
           // Using objective to determine when we're done, not the tool result
-          TrailblazeToolResult.Success
+          ToolExecutionResult(
+            result = TrailblazeToolResult.Success,
+            executedTools = listOf(trailblazeTool),
+          )
         }
 
-        "completed" -> {
-          step.markAsComplete()
-          TrailblazeToolResult.Success
+        Status.COMPLETED -> {
+          step.markAsComplete(llmExplanation = trailblazeTool.explanation)
+          ToolExecutionResult(
+            result = TrailblazeToolResult.Success,
+            executedTools = listOf(trailblazeTool),
+          )
         }
-
-        else -> TrailblazeToolResult.Error.UnknownTrailblazeTool(trailblazeTool)
       }
     }
 
     else -> {
-      val (updatedTools, trailblazeToolResult) = agent.runTrailblazeTools(
+      val runTrailblazeToolsResult: TrailblazeAgent.RunTrailblazeToolsResult = agent.runTrailblazeTools(
         tools = listOf(trailblazeTool),
         traceId = traceId,
         screenState = step.currentScreenState,
@@ -93,7 +114,12 @@ class TrailblazeKoogLlmClientHelper(
       )
       setForceStepStatusUpdate(true)
       println("\u001B[33m\n[ACTION_TAKEN] Tool executed: ${trailblazeTool.javaClass.simpleName}\u001B[0m")
-      trailblazeToolResult
+
+      // Return both the result and the executed tools (which may differ for delegating tools)
+      ToolExecutionResult(
+        result = runTrailblazeToolsResult.result,
+        executedTools = runTrailblazeToolsResult.executedTools,
+      )
     }
   }
 
@@ -129,7 +155,7 @@ class TrailblazeKoogLlmClientHelper(
       JsonObject.serializer(),
       tool.content,
     )
-    val trailblazeToolResult = try {
+    val toolExecutionResult = try {
       val trailblazeTool = toolRegistry.getTrailblazeToolFromToolRegistry(
         toolName = toolName,
         toolArgs = toolArgs,
@@ -141,17 +167,49 @@ class TrailblazeKoogLlmClientHelper(
         agent = agent,
       )
     } catch (e: Exception) {
-      TrailblazeToolResult.Error.ExceptionThrown.fromThrowable(
-        throwable = e,
-        trailblazeTool = null,
+      ToolExecutionResult(
+        result = TrailblazeToolResult.Error.ExceptionThrown.fromThrowable(
+          throwable = e,
+          trailblazeTool = null,
+        ),
+        executedTools = emptyList(),
       )
+    }
+
+    // Use the actual executed tool names and arguments instead of the LLM's tool call
+    // This is important for delegating tools like tapOnElementByNodeId which delegate to other tools
+    val actualToolNamesExecuted = toolExecutionResult.executedTools.map { it.getToolNameFromAnnotation() }
+
+    // Serialize each executed tool to get its actual arguments
+    val executedToolsWithArgs = toolExecutionResult.executedTools.map { executedTool ->
+      // Serialize the tool to JSON string, then parse back to JsonObject to extract its arguments
+      val serializedToolJson = TrailblazeJsonInstance.encodeToString<TrailblazeTool>(executedTool)
+      val toolJsonObject = TrailblazeJsonInstance.decodeFromString<JsonObject>(
+        JsonObject.serializer(),
+        serializedToolJson,
+      )
+
+      // Handle OtherTrailblazeTool wrapper - extract the "raw" field if present
+      val actualArgs = if (toolJsonObject["class"]?.toString()?.contains("OtherTrailblazeTool") == true) {
+        // For OtherTrailblazeTool, use the "raw" field which contains the actual tool parameters
+        toolJsonObject["raw"]?.jsonObject ?: toolJsonObject
+      } else {
+        toolJsonObject
+      }
+
+      // Remove the polymorphic type discriminator fields to flatten the message
+      // Keep only the actual tool parameters that the LLM should see
+      val flattenedArgs = actualArgs.filterKeys { key ->
+        key != "type" && key != "class" && key != "@class" && key != "toolName"
+      }.let { JsonObject(it) }
+
+      executedTool.getToolNameFromAnnotation() to flattenedArgs
     }
 
     step.addCompletedToolCallToChatHistory(
       llmResponseContent = llmMessage,
-      toolName = toolName,
-      toolArgs = toolArgs,
-      commandResult = trailblazeToolResult,
+      toolsWithArgs = executedToolsWithArgs,
+      commandResult = toolExecutionResult.result,
     )
   }
 

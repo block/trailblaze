@@ -15,7 +15,7 @@ interface TrailblazeLlmModelList {
  *  https://platform.openai.com/docs/pricing
  */
 @Serializable
-class TrailblazeLlmModel(
+data class TrailblazeLlmModel(
   val trailblazeLlmProvider: TrailblazeLlmProvider,
   val modelId: String,
   val inputCostPerOneMillionTokens: Double,

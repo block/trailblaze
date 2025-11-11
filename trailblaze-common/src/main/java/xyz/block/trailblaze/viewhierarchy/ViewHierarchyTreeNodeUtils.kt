@@ -1,9 +1,11 @@
 package xyz.block.trailblaze.viewhierarchy
 
 import maestro.DeviceInfo
+import maestro.Platform
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.viewhierarchy.ViewHierarchyFilter.Companion.collectAllClickableAndEnabledElements
+import xyz.block.trailblaze.viewhierarchy.ViewHierarchyFilter.Companion.collectIOSElements
 import xyz.block.trailblaze.viewhierarchy.ViewHierarchyFilter.Companion.filterOutOfBounds
 
 object ViewHierarchyTreeNodeUtils {
@@ -20,8 +22,12 @@ object ViewHierarchyTreeNodeUtils {
       height = deviceInfo.heightPixels,
     ) ?: throw TrailblazeException("Error filtering view hierarchy: no elements in bounds")
 
-    // Use flat clickable+enabled extraction instead of optimizer
-    val clickableNodes: List<ViewHierarchyTreeNode> = treeNodesInBounds.collectAllClickableAndEnabledElements()
+    // Filter based on platform
+    val clickableNodes = if (deviceInfo.platform == Platform.IOS) {
+      treeNodesInBounds.collectIOSElements()
+    } else {
+      treeNodesInBounds.collectAllClickableAndEnabledElements()
+    }
 
     return clickableNodes
   }

@@ -1,13 +1,12 @@
 ## Tool `scrollUntilTextIsVisible`
 
 ## Description
-Scrolls the screen in the specified direction until an element with the provided text becomes visible
-in the view hierarchy. Ensure that you provide the entire string to this function to streamline finding 
-the corresponding view.
+Scrolls the screen in the specified direction until an element containing the provided text becomes visible
+in the view hierarchy. The text does not need to be an exact match - it will find elements where the 
+provided text appears anywhere within the element's text.
 
-The text argument is required. Only provide additional fields if the text provided exactly
-matches elsewhere on the screen. In this case the additional fields will be used to identify
-the specific view to expect to be visible while scrolling.
+The text argument is required. Only provide additional fields if multiple elements contain the same text.
+In this case the additional fields will be used to identify the specific view to expect to be visible while scrolling.
 
 ### Command Class
 `xyz.block.trailblaze.toolcalls.commands.ScrollUntilTextIsVisibleTrailblazeTool`
@@ -19,8 +18,12 @@ the specific view to expect to be visible while scrolling.
 NOTE:
 - The text can be a regular expression.
 - If more than one view matches the text, other optional properties are required to disambiguate.
-- `direction`: `Enum(entries=[UP, DOWN, RIGHT, LEFT])`
-  Valid values: UP, DOWN, LEFT, RIGHT. If not provided, it will start scrolling towards the bottom of the screen (DOWN value).
+- `direction`: `[
+  "UP",
+  "DOWN",
+  "RIGHT",
+  "LEFT"
+]`
 
 ### Optional Parameters
 - `index`: `Integer`

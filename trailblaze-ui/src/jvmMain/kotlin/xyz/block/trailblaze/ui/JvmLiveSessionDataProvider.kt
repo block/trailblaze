@@ -1,11 +1,17 @@
 package xyz.block.trailblaze.ui
 
+import io.ktor.client.request.post
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.datetime.Clock
+import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.http.TrailblazeHttpClientFactory
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionInfo
+import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.ui.tabs.session.LiveSessionDataProvider
 import xyz.block.trailblaze.ui.tabs.session.SessionListListener
@@ -17,7 +23,10 @@ import xyz.block.trailblaze.report.utils.TrailblazeSessionListener as ReportTrai
 /**
  * JVM adapter that makes LogsRepo compatible with LiveSessionDataProvider
  */
-class JvmLiveSessionDataProvider(private val logsRepo: LogsRepo) : LiveSessionDataProvider {
+class JvmLiveSessionDataProvider(
+  private val logsRepo: LogsRepo,
+  private val deviceManager: TrailblazeDeviceManager? = null,
+) : LiveSessionDataProvider {
 
   // Use background scope for potentially blocking operations
   private val backgroundScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -30,7 +39,6 @@ class JvmLiveSessionDataProvider(private val logsRepo: LogsRepo) : LiveSessionDa
     return try {
       logsRepo.getSessionIds()
     } catch (e: Exception) {
-      println("Error getting session IDs: ${e.message}")
       emptyList()
     }
   }
@@ -39,7 +47,6 @@ class JvmLiveSessionDataProvider(private val logsRepo: LogsRepo) : LiveSessionDa
     return try {
       getSessionIds().mapNotNull { getSessionInfo(it) }
     } catch (e: Exception) {
-      println("Error getting sessions: ${e.message}")
       emptyList()
     }
   }
@@ -48,7 +55,6 @@ class JvmLiveSessionDataProvider(private val logsRepo: LogsRepo) : LiveSessionDa
     return try {
       logsRepo.getSessionInfo(sessionId)
     } catch (e: Exception) {
-      println("Error getting session info for $sessionId: ${e.message}")
       null
     }
   }
@@ -57,7 +63,6 @@ class JvmLiveSessionDataProvider(private val logsRepo: LogsRepo) : LiveSessionDa
     return try {
       logsRepo.getCachedLogsForSession(sessionId)
     } catch (e: Exception) {
-      println("Error getting logs for session $sessionId: ${e.message}")
       emptyList()
     }
   }
@@ -71,7 +76,7 @@ class JvmLiveSessionDataProvider(private val logsRepo: LogsRepo) : LiveSessionDa
             try {
               listener.onSessionAdded(sessionId)
             } catch (e: Exception) {
-              println("Error in session added listener for $sessionId: ${e.message}")
+              // Ignore listener errors
             }
           }
         }
@@ -81,7 +86,7 @@ class JvmLiveSessionDataProvider(private val logsRepo: LogsRepo) : LiveSessionDa
             try {
               listener.onSessionRemoved(sessionId)
             } catch (e: Exception) {
-              println("Error in session removed listener for $sessionId: ${e.message}")
+              // Ignore listener errors
             }
           }
         }
@@ -89,7 +94,7 @@ class JvmLiveSessionDataProvider(private val logsRepo: LogsRepo) : LiveSessionDa
       sessionListenerAdapters[listener] = adapter
       logsRepo.addSessionListListener(adapter)
     } catch (e: Exception) {
-      println("Error adding session list listener: ${e.message}")
+      // Ignore listener registration errors
     }
   }
 
@@ -100,7 +105,7 @@ class JvmLiveSessionDataProvider(private val logsRepo: LogsRepo) : LiveSessionDa
         sessionListenerAdapters.remove(listener)
       }
     } catch (e: Exception) {
-      println("Error removing session list listener: ${e.message}")
+      // Ignore listener removal errors
     }
   }
 
@@ -114,7 +119,7 @@ class JvmLiveSessionDataProvider(private val logsRepo: LogsRepo) : LiveSessionDa
             try {
               listener.onSessionStarted()
             } catch (e: Exception) {
-              println("Error in session started listener for ${listener.trailblazeSessionId}: ${e.message}")
+              // Ignore listener errors
             }
           }
         }
@@ -124,7 +129,7 @@ class JvmLiveSessionDataProvider(private val logsRepo: LogsRepo) : LiveSessionDa
             try {
               listener.onUpdate(message)
             } catch (e: Exception) {
-              println("Error in session update listener for ${listener.trailblazeSessionId}: ${e.message}")
+              // Ignore listener errors
             }
           }
         }
@@ -136,7 +141,7 @@ class JvmLiveSessionDataProvider(private val logsRepo: LogsRepo) : LiveSessionDa
               // Clean up adapter when session ends
               trailblazeSessionAdapters.remove(listener)
             } catch (e: Exception) {
-              println("Error in session ended listener for ${listener.trailblazeSessionId}: ${e.message}")
+              // Ignore listener errors
             }
           }
         }
@@ -145,7 +150,7 @@ class JvmLiveSessionDataProvider(private val logsRepo: LogsRepo) : LiveSessionDa
       trailblazeSessionAdapters[listener] = adapter
       logsRepo.startWatchingTrailblazeSession(adapter)
     } catch (e: Exception) {
-      println("Error starting to watch trailblaze session ${listener.trailblazeSessionId}: ${e.message}")
+      // Ignore session watch errors
     }
   }
 
@@ -157,7 +162,61 @@ class JvmLiveSessionDataProvider(private val logsRepo: LogsRepo) : LiveSessionDa
         adapter.trailblazeSessionId == sessionId
       }
     } catch (e: Exception) {
-      println("Error stopping watch for session $sessionId: ${e.message}")
+      // Ignore stop watching errors
+    }
+  }
+
+  override suspend fun cancelSession(sessionId: String): Boolean {
+    return try {
+      // Get logs to check session status
+      val logs = logsRepo.getLogsForSession(sessionId)
+      val latestStatus = logs
+        .filterIsInstance<TrailblazeLog.TrailblazeSessionStatusChangeLog>()
+        .lastOrNull()?.sessionStatus
+
+      if (latestStatus !is SessionStatus.Started) {
+        return false
+      }
+
+      // Check if this is an on-device session
+      val driverType = latestStatus.trailblazeDeviceInfo?.trailblazeDriverType
+      val isOnDevice = driverType == TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION
+
+      if (isOnDevice) {
+        // For on-device tests, send cancel request to the device's RPC server
+        withContext(Dispatchers.IO) {
+          try {
+            val devicePort = 52526 // TODO: Get from session metadata
+            val cancelUrl = "http://localhost:$devicePort/cancel"
+            val httpClient = TrailblazeHttpClientFactory.createDefaultHttpClient(10L)
+            val response = httpClient.post(cancelUrl)
+            httpClient.close()
+          } catch (e: Exception) {
+            e.printStackTrace()
+            return@withContext false
+          }
+        }
+      } else {
+        // For host tests, cancel through the device manager's session manager
+        deviceManager?.let { manager ->
+          // Find the device running this session
+          val deviceSessionInfo = manager.deviceStateFlow.value.activeSessionsByDevice.values
+            .firstOrNull { it.sessionId == sessionId }
+
+          if (deviceSessionInfo != null) {
+            manager.cancelSession(deviceSessionInfo.deviceInstanceId)
+          } else {
+            return false
+          }
+        } ?: run {
+          return false
+        }
+      }
+
+      true
+    } catch (e: Exception) {
+      e.printStackTrace()
+      false
     }
   }
 }

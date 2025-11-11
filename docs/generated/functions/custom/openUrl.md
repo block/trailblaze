@@ -1,7 +1,7 @@
 ## Tool `openUrl`
 
 ## Description
-Open's the browser to the provided url.
+Opens the browser to the provided url.
 
 ### Command Class
 `xyz.block.trailblaze.toolcalls.commands.OpenUrlTrailblazeTool`
@@ -9,6 +9,7 @@ Open's the browser to the provided url.
 ### Registered `OpenUrlTrailblazeTool` in `ToolRegistry`
 ### Required Parameters
 - `url`: `String`
+  The URL to open that starts with https
 
 
 

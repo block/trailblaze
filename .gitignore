@@ -41,5 +41,9 @@ local.settings.gradle
 
 # Trailblaze Logs
 /logs/
+/trailblaze-logs/
 /kotlin-js-store/yarn.lock
 /.idea/vcs.xml
+
+# Generated Kotlin JS Config Files
+/kotlin-js-store/

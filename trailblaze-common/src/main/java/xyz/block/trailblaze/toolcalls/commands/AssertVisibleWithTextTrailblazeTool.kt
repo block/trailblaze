@@ -23,6 +23,7 @@ NOTE:
 - Use this tool whenever an objective begins with the word expect, verify, confirm, or assert (case-insensitive).
 """,
 )
+@Deprecated("Use [AssertVisibleByNodeIdTrailblazeTool] or [AssertVisibleBySelectorTrailblazeTool].")
 data class AssertVisibleWithTextTrailblazeTool(
   @LLMDescription(REQUIRED_TEXT_DESCRIPTION)
   val text: String,

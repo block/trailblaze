@@ -1,6 +1,5 @@
 package xyz.block.trailblaze.logs.client.temp
 
-import ai.koog.agents.core.tools.ToolDescriptor
 import kotlinx.serialization.InternalSerializationApi
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.encoding.Decoder
@@ -15,11 +14,12 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.serializer
+import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import kotlin.reflect.KClass
 
 @OptIn(InternalSerializationApi::class)
-class OtherTrailblazeToolSerializer(private val allToolClasses: Map<ToolDescriptor, KClass<out TrailblazeTool>>) : KSerializer<TrailblazeTool> {
+class OtherTrailblazeToolSerializer(private val allToolClasses: Map<ToolName, KClass<out TrailblazeTool>>) : KSerializer<TrailblazeTool> {
   override val descriptor = OtherTrailblazeTool.serializer().descriptor
 
   private val lenientJson = Json {
@@ -37,7 +37,7 @@ class OtherTrailblazeToolSerializer(private val allToolClasses: Map<ToolDescript
     val className = jsonObject["class"]?.jsonPrimitive?.contentOrNull
     val toolName = jsonObject["toolName"]?.jsonPrimitive?.contentOrNull
     val toolClassOnClasspath: KClass<out TrailblazeTool>? = if (toolName != null) {
-      allToolClasses.entries.firstOrNull { it.key.name == toolName }?.value
+      allToolClasses.entries.firstOrNull { it.key.toolName == toolName }?.value
     } else {
       allToolClasses.entries.firstOrNull { it.value.qualifiedName == className }?.value
     }
@@ -67,7 +67,7 @@ class OtherTrailblazeToolSerializer(private val allToolClasses: Map<ToolDescript
 
     val valueClass = value::class
     val standardSerializer = value::class.serializer() as? KSerializer<TrailblazeTool>
-    val toolName = allToolClasses.entries.firstOrNull { valueClass.qualifiedName == it.value.qualifiedName }?.key?.name
+    val toolName = allToolClasses.entries.firstOrNull { valueClass.qualifiedName == it.value.qualifiedName }?.key?.toolName
     val otherTrailblazeToolData: OtherTrailblazeTool = value as? OtherTrailblazeTool
       ?: if (standardSerializer != null && toolName != null) {
         val objJson = lenientJson.encodeToString(standardSerializer, value)

@@ -50,6 +50,15 @@ object MaestroYamlSerializer {
     val mapProps: Map<String, Map<String, String>> = emptyMap(),
     val stringList: List<String> = emptyList(),
     val mapToStringList: Map<String, List<String>> = emptyMap(),
+    val nestedSelectorProps: Map<String, ElementSelectorData> = emptyMap(),
+    val nestedListSelectorProps: Map<String, List<ElementSelectorData>> = emptyMap(),
+  )
+
+  @Serializable
+  data class ElementSelectorData(
+    val stringProps: Map<String, String> = emptyMap(),
+    val nestedSelectorProps: Map<String, ElementSelectorData> = emptyMap(),
+    val nestedListSelectorProps: Map<String, List<ElementSelectorData>> = emptyMap(),
   )
 
   private fun extractStringProperties(obj: Any): Map<String, String> {
@@ -87,30 +96,38 @@ object MaestroYamlSerializer {
     }
   }
 
-  private fun extractMapProperties(obj: Any): Map<String, Map<String, String>> = when (obj) {
-    is ElementSelector -> parseElementSelectorMaps(obj)
+  private fun extractNestedSelectorProperties(obj: Any): Map<String, ElementSelectorData> = when (obj) {
+    is ElementSelector -> {
+      mutableMapOf<String, ElementSelectorData>().apply {
+        obj.below?.let { put("below", elementSelectorToData(it)) }
+        obj.above?.let { put("above", elementSelectorToData(it)) }
+        obj.leftOf?.let { put("leftOf", elementSelectorToData(it)) }
+        obj.rightOf?.let { put("rightOf", elementSelectorToData(it)) }
+        obj.containsChild?.let { put("containsChild", elementSelectorToData(it)) }
+        obj.childOf?.let { put("childOf", elementSelectorToData(it)) }
+      }
+    }
+
     else -> mapOf()
   }
 
-  // This function parses the map selectors, basically any field that contains another element selector
-  // For now just parse the string properties, we may need to support the full map later.
-  private fun parseElementSelectorMaps(selector: ElementSelector): Map<String, Map<String, String>> {
-    val props = mutableMapOf<String, Map<String, String>>()
-    // UNHANDLED
-    //  point: 50%, 50%  # (optional) Relative position on screen. "50%, 50%" is the middle of screen
-    //  point: 50, 75    # (optional) Exact coordinates on screen. x:50 y:50, in pixels
+  private fun extractNestedListSelectorProperties(obj: Any): Map<String, List<ElementSelectorData>> = when (obj) {
+    is ElementSelector -> {
+      mutableMapOf<String, List<ElementSelectorData>>().apply {
+        obj.containsDescendants?.let { descendants ->
+          put("containsDescendants", descendants.map { elementSelectorToData(it) })
+        }
+      }
+    }
 
-    // UNHANDLED
-    // val traits: List<ElementTrait>? = null,
-    selector.below?.let { props["below"] = extractStringProperties(selector.below!!) }
-    selector.above?.let { props["above"] = extractStringProperties(selector.above!!) }
-    selector.leftOf?.let { props["leftOf"] = extractStringProperties(selector.leftOf!!) }
-    selector.rightOf?.let { props["rightOf"] = extractStringProperties(selector.rightOf!!) }
-    selector.containsChild?.let { props["containsChild"] = extractStringProperties(selector.containsChild!!) }
-    selector.containsDescendants?.let { props["containsDescendants"] = extractStringProperties(selector.containsDescendants!!) }
-    selector.childOf?.let { props["childOf"] = extractStringProperties(selector.childOf!!) }
-    return props
+    else -> mapOf()
   }
+
+  private fun elementSelectorToData(selector: ElementSelector): ElementSelectorData = ElementSelectorData(
+    stringProps = extractStringProperties(selector),
+    nestedSelectorProps = extractNestedSelectorProperties(selector),
+    nestedListSelectorProps = extractNestedListSelectorProperties(selector),
+  )
 
   private fun createTapOnCommand(
     command: Command,
@@ -162,6 +179,14 @@ object MaestroYamlSerializer {
           tapRepeat?.repeat?.let { put("repeat", it.toString()) }
           tapRepeat?.delay?.let { put("delay", it.toString()) }
         }
+      },
+      nestedSelectorProps = when (command) {
+        is TapOnElementCommand -> extractNestedSelectorProperties(command.selector)
+        else -> emptyMap()
+      },
+      nestedListSelectorProps = when (command) {
+        is TapOnElementCommand -> extractNestedListSelectorProperties(command.selector)
+        else -> emptyMap()
       },
     )
   }
@@ -254,6 +279,8 @@ object MaestroYamlSerializer {
         stringProps = mutableMapOf<String, String>().apply {
           putAll(extractStringProperties(command.selector))
         },
+        nestedSelectorProps = extractNestedSelectorProperties(command.selector),
+        nestedListSelectorProps = extractNestedListSelectorProperties(command.selector),
       )
     }
     // COMPLETE
@@ -290,15 +317,13 @@ object MaestroYamlSerializer {
             command.endPoint?.let { put("end", "${it.x},${it.y}") }
           }
         },
-        mapProps = mutableMapOf<String, Map<String, String>>().apply {
-          command.elementSelector?.let { selector ->
-
-            if (command.direction == null) {
-              error("Direction is required when specifying a 'from' element")
-            }
-            put("from", extractStringProperties(selector))
+        nestedSelectorProps = mutableMapOf<String, ElementSelectorData>().apply {
+          // Only include 'from' element when both elementSelector and direction are present
+          if (command.elementSelector != null && command.direction != null) {
+            put("from", elementSelectorToData(command.elementSelector!!))
           }
         },
+        nestedListSelectorProps = emptyMap(),
       )
     }
     // COMPLETE
@@ -392,12 +417,18 @@ object MaestroYamlSerializer {
           InputRandomType.NUMBER -> "inputRandomNumber"
           InputRandomType.TEXT_EMAIL_ADDRESS -> "inputRandomEmail"
           InputRandomType.TEXT_PERSON_NAME -> "inputRandomPersonName"
+          InputRandomType.TEXT_CITY_NAME -> "inputRandomCityName"
+          InputRandomType.TEXT_COUNTRY_NAME -> "inputRandomCountryName"
+          InputRandomType.TEXT_COLOR -> "inputRandomColorName"
           InputRandomType.TEXT,
           null,
           -> "inputRandomText"
         },
         stringProps = mutableMapOf<String, String>().apply {
           when (command.inputType) {
+            InputRandomType.TEXT_CITY_NAME,
+            InputRandomType.TEXT_COUNTRY_NAME,
+            InputRandomType.TEXT_COLOR,
             InputRandomType.TEXT_EMAIL_ADDRESS,
             InputRandomType.TEXT_PERSON_NAME,
             -> {
@@ -440,9 +471,11 @@ object MaestroYamlSerializer {
             put("visibilityPercentage", command.visibilityPercentage.toString())
           }
         },
-        mapProps = mutableMapOf<String, Map<String, String>>().apply {
-          put("element", extractStringProperties(command.selector))
+        nestedSelectorProps = mutableMapOf<String, ElementSelectorData>().apply {
+          // Put the element selector under "element" key as per Maestro documentation
+          put("element", elementSelectorToData(command.selector))
         },
+        nestedListSelectorProps = emptyMap(),
       )
     }
 
@@ -498,7 +531,8 @@ object MaestroYamlSerializer {
         putAll(extractStringProperties(condition.visible!!))
         timeout?.let { put("timeout", it.toString()) }
       },
-      mapProps = extractMapProperties(condition.visible!!),
+      nestedSelectorProps = extractNestedSelectorProperties(condition.visible!!),
+      nestedListSelectorProps = extractNestedListSelectorProperties(condition.visible!!),
     )
   } else if (condition.notVisible != null) {
     MaestroCommandYamlNode(
@@ -507,7 +541,8 @@ object MaestroYamlSerializer {
         putAll(extractStringProperties(condition.notVisible!!))
         timeout?.let { put("timeout", it.toString()) }
       },
-      mapProps = extractMapProperties(condition.notVisible!!),
+      nestedSelectorProps = extractNestedSelectorProperties(condition.notVisible!!),
+      nestedListSelectorProps = extractNestedListSelectorProperties(condition.notVisible!!),
     )
   } else if (condition.scriptCondition != null) {
     MaestroCommandYamlNode(
@@ -527,6 +562,36 @@ object MaestroYamlSerializer {
       value
     } else {
       "|\n" + lines.joinToString("\n") { line -> indent(1, line) }
+    }
+  }
+
+  private fun renderElementSelectorDataAsListItem(
+    selectorData: ElementSelectorData,
+    tabs: Int,
+    yamlStringBuilder: StringBuilder,
+  ) {
+    yamlStringBuilder.appendLine(indent(tabs, "-"))
+    renderElementSelectorData(selectorData, tabs + 1, yamlStringBuilder)
+  }
+
+  private fun renderElementSelectorData(
+    selectorData: ElementSelectorData,
+    tabs: Int,
+    yamlStringBuilder: StringBuilder,
+  ) {
+    selectorData.stringProps.forEach { (key, value) ->
+      yamlStringBuilder.appendLine(indent(tabs, "$key: $value"))
+    }
+    selectorData.nestedSelectorProps.forEach { (key, value) ->
+      yamlStringBuilder.appendLine(indent(tabs, "$key:"))
+      renderElementSelectorData(value, tabs + 1, yamlStringBuilder)
+    }
+    selectorData.nestedListSelectorProps.forEach { (key, values) ->
+      yamlStringBuilder.appendLine(indent(tabs, "$key:"))
+      values.forEach { value ->
+        yamlStringBuilder.appendLine(indent(tabs + 1, "-"))
+        renderElementSelectorData(value, tabs + 2, yamlStringBuilder)
+      }
     }
   }
 
@@ -556,7 +621,7 @@ object MaestroYamlSerializer {
       }
       entries.forEach { commandNode: MaestroCommandYamlNode ->
         var tabs = 0
-        if (commandNode.stringProps.isNotEmpty() || commandNode.stringList.isNotEmpty() || commandNode.mapProps.isNotEmpty()) {
+        if (commandNode.stringProps.isNotEmpty() || commandNode.stringList.isNotEmpty() || commandNode.mapProps.isNotEmpty() || commandNode.nestedSelectorProps.isNotEmpty() || commandNode.nestedListSelectorProps.isNotEmpty()) {
           appendLine(indent(tabs, "- ${commandNode.type}:"))
         } else {
           appendLine(indent(tabs, "- ${commandNode.type}"))
@@ -584,6 +649,25 @@ object MaestroYamlSerializer {
             appendLine(indent(tabs, "$key: $value"))
           }
           tabs--
+        }
+        if (commandNode.nestedSelectorProps.isNotEmpty()) {
+          commandNode.nestedSelectorProps.forEach { (key, value: ElementSelectorData) ->
+            appendLine(indent(tabs, "$key:"))
+            tabs++
+            renderElementSelectorData(value, tabs, this)
+            tabs--
+          }
+        }
+        if (commandNode.nestedListSelectorProps.isNotEmpty()) {
+          commandNode.nestedListSelectorProps.forEach { (key, value: List<ElementSelectorData>) ->
+            appendLine(indent(tabs, "$key:"))
+            tabs++
+            value.forEach { selectorData ->
+              appendLine(indent(tabs + 1, "-"))
+              renderElementSelectorData(selectorData, tabs + 2, this)
+            }
+            tabs--
+          }
         }
         tabs--
       }

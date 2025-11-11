@@ -31,7 +31,13 @@ object Ext {
     error(e)
   }
 
-  fun TreeNode.toViewHierarchyTreeNode(currDepth: Int = 0): ViewHierarchyTreeNode? {
+  fun List<JsonObject>.asMaestroCommands(): List<Command> = this.mapNotNull { it.asMaestroCommand() }
+
+  fun List<Command>.asJsonObjects(): List<JsonObject> = this.map { it.asJsonObject() }
+
+  fun Command.asJsonObject(): JsonObject = MaestroCommand(this).asJsonObject()
+
+  fun TreeNode.toViewHierarchyTreeNode(): ViewHierarchyTreeNode? {
     data class UIElementBounds(
       val x: Int,
       val y: Int,
@@ -73,25 +79,25 @@ object Ext {
       null
     } else {
       return ViewHierarchyTreeNode(
-        children = children.mapNotNull {
-          it.toViewHierarchyTreeNode(currDepth + 1)
-        },
-        clickable = clickable ?: false,
-        enabled = enabled ?: false,
-        focused = focused ?: false,
-        checked = checked ?: false,
-        selected = selected ?: false,
-        ignoreBoundsFiltering = getAttributeIfNotBlank("ignoreBoundsFiltering") == "true",
-        scrollable = getAttributeIfNotBlank("scrollable") == "true",
-        focusable = getAttributeIfNotBlank("focusable") == "true",
-        password = getAttributeIfNotBlank("password") == "true",
-        text = getAttributeIfNotBlank("text"),
-        resourceId = getAttributeIfNotBlank("resource-id"),
         accessibilityText = getAttributeIfNotBlank("accessibilityText"),
+        centerPoint = bounds?.let { "${it.centerX},${it.centerY}" },
+        checked = checked ?: false,
+        children = children.mapNotNull {
+          it.toViewHierarchyTreeNode()
+        },
         className = getAttributeIfNotBlank("class"),
         dimensions = bounds?.let { "${it.width}x${it.height}" },
-        centerPoint = bounds?.let { "${it.centerX},${it.centerY}" },
-        depth = currDepth,
+        clickable = clickable ?: false,
+        enabled = enabled ?: false,
+        focusable = getAttributeIfNotBlank("focusable") == "true",
+        focused = focused ?: false,
+        hintText = getAttributeIfNotBlank("hintText"),
+        ignoreBoundsFiltering = getAttributeIfNotBlank("ignoreBoundsFiltering") == "true",
+        password = getAttributeIfNotBlank("password") == "true",
+        scrollable = getAttributeIfNotBlank("scrollable") == "true",
+        selected = selected ?: false,
+        resourceId = getAttributeIfNotBlank("resource-id"),
+        text = getAttributeIfNotBlank("text"),
       )
     }
   }

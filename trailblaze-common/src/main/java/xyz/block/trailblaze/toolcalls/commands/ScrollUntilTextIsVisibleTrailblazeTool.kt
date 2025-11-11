@@ -10,18 +10,18 @@ import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.toolcalls.MapsToMaestroCommands
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeTools.REQUIRED_TEXT_DESCRIPTION
+import kotlin.text.Regex
 
 @Serializable
 @TrailblazeToolClass("scrollUntilTextIsVisible")
 @LLMDescription(
   """
-Scrolls the screen in the specified direction until an element with the provided text becomes visible
-in the view hierarchy. Ensure that you provide the entire string to this function to streamline finding 
-the corresponding view.
+Scrolls the screen in the specified direction until an element containing the provided text becomes visible
+in the view hierarchy. The text does not need to be an exact match - it will find elements where the 
+provided text appears anywhere within the element's text.
 
-The text argument is required. Only provide additional fields if the text provided exactly
-matches elsewhere on the screen. In this case the additional fields will be used to identify
-the specific view to expect to be visible while scrolling.
+The text argument is required. Only provide additional fields if multiple elements contain the same text.
+In this case the additional fields will be used to identify the specific view to expect to be visible while scrolling.
 """,
 )
 class ScrollUntilTextIsVisibleTrailblazeTool(
@@ -43,7 +43,7 @@ class ScrollUntilTextIsVisibleTrailblazeTool(
   override fun toMaestroCommands(memory: AgentMemory): List<Command> = listOf(
     ScrollUntilVisibleCommand(
       selector = ElementSelector(
-        textRegex = memory.interpolateVariables(text),
+        textRegex = ".*${Regex.escape(memory.interpolateVariables(text))}.*",
         idRegex = id,
         index = if (index == 0) null else index.toString(),
         enabled = enabled,

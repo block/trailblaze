@@ -14,7 +14,7 @@ import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.report.utils.TrailblazeSessionListener
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
-import xyz.block.trailblaze.toolcalls.toKoogToolDescriptor
+import xyz.block.trailblaze.toolcalls.toolName
 import xyz.block.trailblaze.yaml.DirectionStep
 
 // --- Koog ToolSets ---
@@ -24,28 +24,29 @@ class HostDeviceToolSet(
   private val sessionContext: TrailblazeMcpSseSessionContext?,
   private val logsRepo: LogsRepo,
   private val hostOpenAiRunnerProvider: () -> TrailblazeRunner,
+  private val trailblazeLogger: TrailblazeLogger,
 ) : ToolSet {
   val ioScope = CoroutineScope(Dispatchers.IO)
 
   //  @Tool
   @LLMDescription("Provides a list of all available Trailblaze ToolSets that can be used on the host device.")
-  fun listToolSets(): String = "Available ToolSets: ${TrailblazeToolSet.AllBuiltInTrailblazeToolSets.filter { it?.name != null }.map { it.name }}"
+  fun listToolSets(): String = "Available ToolSets: ${TrailblazeToolSet.AllDefaultTrailblazeToolSets.map { it.name }}"
 
   //  @Tool
   @LLMDescription("Selects a set of Trailblaze tools to use for the current session.  This will only accept tools that are available in the listToolSets call.")
   fun selectToolsets(requestedToolSetNames: List<String>): String {
     val matchingToolSets =
-      TrailblazeToolSet.AllBuiltInTrailblazeToolSets.filter { it?.name != null }
+      TrailblazeToolSet.AllDefaultTrailblazeToolSets
         .filter { requestedToolSetNames.contains(it.name) }
     toolRepo.removeAllTrailblazeTools()
     matchingToolSets.forEach {
-      toolRepo.addTrailblazeTools(it)
+      toolRepo.addTrailblazeToolSet(it)
     }
     return buildString {
       appendLine("Selected ToolSets: ${matchingToolSets.joinToString("\n") { it.name }}")
       appendLine(
         "With the following tools: ${
-          matchingToolSets.flatMap { it.asTools() }.map { it.toKoogToolDescriptor().name }
+          matchingToolSets.flatMap { it.asTools() }.map { it.toolName().toolName }
         }",
       )
     }
@@ -67,7 +68,7 @@ class HostDeviceToolSet(
       println("Executing prompt for session: $sessionId")
       progressJob = ioScope.launch {
         logsRepo.startWatchingTrailblazeSession(object : TrailblazeSessionListener {
-          override val trailblazeSessionId: String = TrailblazeLogger.getCurrentSessionId()
+          override val trailblazeSessionId: String = trailblazeLogger.getCurrentSessionId()
 
           override fun onSessionStarted() {
             sessionContext.sendIndeterminateProgressMessage("Session Started for session $sessionId")

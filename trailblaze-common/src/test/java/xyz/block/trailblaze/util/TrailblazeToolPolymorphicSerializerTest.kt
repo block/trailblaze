@@ -13,7 +13,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.toolcalls.commands.TapOnElementByNodeIdTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.WaitForIdleSyncTrailblazeTool
-import xyz.block.trailblaze.toolcalls.toKoogToolDescriptor
+import xyz.block.trailblaze.toolcalls.toolName
 import kotlin.test.assertEquals
 
 @LLMDescription("A custom tool for tests")
@@ -31,6 +31,7 @@ class TrailblazeToolPolymorphicSerializerTest {
         nodeId = 5,
         longPress = false,
         reason = "The Reason",
+        relativelyPositionedViews = emptyList(),
       ),
     )
     val normalJson = TrailblazeJsonInstance.encodeToString<List<TrailblazeTool>>(trailblazeTools)
@@ -45,6 +46,7 @@ class TrailblazeToolPolymorphicSerializerTest {
         nodeId = 5,
         longPress = false,
         reason = "The Reason",
+        relativelyPositionedViews = emptyList(),
       ),
     )
 
@@ -67,13 +69,14 @@ class TrailblazeToolPolymorphicSerializerTest {
         nodeId = 5,
         longPress = false,
         reason = "The Reason",
+        relativelyPositionedViews = emptyList(),
       ),
       OtherTrailblazeTool(toolName = "someTool", raw = JsonObject(mapOf("someKey" to JsonPrimitive("someValue")))),
       TestTrailblazeTool(10, 10),
     )
     val jsonInstance = TrailblazeJson.createTrailblazeJsonInstance(
-      TrailblazeToolSet.AllBuiltInTrailblazeToolsByKoogToolDescriptor + mapOf(
-        TestTrailblazeTool::class.toKoogToolDescriptor() to TestTrailblazeTool::class,
+      TrailblazeToolSet.AllBuiltInTrailblazeToolsForSerializationByToolName + mapOf(
+        TestTrailblazeTool::class.toolName() to TestTrailblazeTool::class,
       ),
     )
     val encoded = jsonInstance.encodeToString<List<TrailblazeTool>>(expectedTrailblazeTools)

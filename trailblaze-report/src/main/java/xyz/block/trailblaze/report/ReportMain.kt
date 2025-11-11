@@ -95,13 +95,11 @@ fun movePngsToSessionDirs(logsDir: File) {
   val pngFilesInLogsDir = logsDir.listFiles()?.filter { it.extension == "png" } ?: emptyList()
   pngFilesInLogsDir.forEach { pngFile ->
     try {
-      val fileName = pngFile.name
+      // Filename format is: {sessionId}_{timestamp}.png
+      // We need to extract everything before the last underscore (which is the timestamp)
+      val sessionId = pngFile.nameWithoutExtension.substringBeforeLast("_")
 
-      val sessionId = fileName.substringBefore("_").takeIf { it.isNotEmpty() }
-        ?: fileName.substringBefore("-").takeIf { it.isNotEmpty() }
-        ?: fileName.substringBefore(".").takeIf { it != fileName }
-
-      if (sessionId != null && sessionId.isNotEmpty()) {
+      if (sessionId.isNotEmpty()) {
         val sessionDir = File(logsDir, sessionId)
         sessionDir.mkdirs()
 

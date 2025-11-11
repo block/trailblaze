@@ -20,6 +20,7 @@ fun LiveSessionListComposable(
   sessionClicked: (SessionInfo) -> Unit = {},
   deleteSession: (SessionInfo) -> Unit,
   clearAllLogs: () -> Unit,
+  openLogsFolder: ((SessionInfo) -> Unit)? = null,
 ) {
   var sessions by remember {
     mutableStateOf(emptyList<SessionInfo>())
@@ -42,13 +43,10 @@ fun LiveSessionListComposable(
         CoroutineScope(Dispatchers.Default).launch {
           val sessionInfo = sessionDataProvider.getSessionInfo(sessionId)
 
-          // Only reload all sessions if we successfully got the new session info
+          // Only update if we successfully got the new session info
           if (sessionInfo != null) {
-            val sessionIds = sessionDataProvider.getSessionIds()
-            val updatedSessions = sessionIds.mapNotNull { id ->
-              sessionDataProvider.getSessionInfo(id)
-            }
-            sessions = updatedSessions
+            // Add the new session to the existing list instead of reloading everything
+            sessions = sessions + sessionInfo
           }
         }
       }
@@ -70,5 +68,6 @@ fun LiveSessionListComposable(
     sessionClicked = sessionClicked,
     deleteSession = deleteSession,
     clearAllLogs = clearAllLogs,
+    openLogsFolder = openLogsFolder,
   )
 }

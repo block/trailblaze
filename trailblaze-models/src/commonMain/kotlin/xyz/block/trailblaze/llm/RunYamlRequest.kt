@@ -9,6 +9,7 @@ import kotlinx.serialization.Serializable
 data class RunYamlRequest(
   val testName: String,
   val yaml: String,
+  val targetAppName: String?,
   val useRecordedSteps: Boolean,
   val trailblazeLlmModel: TrailblazeLlmModel,
 )

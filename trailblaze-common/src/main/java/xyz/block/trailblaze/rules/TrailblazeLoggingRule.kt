@@ -8,7 +8,8 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.http.TrailblazeHttpClientFactory
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogServerClient
-import xyz.block.trailblaze.logs.client.TrailblazeLogger
+import xyz.block.trailblaze.logs.client.TrailblazeLoggerInstance
+import xyz.block.trailblaze.session.TrailblazeSessionManager
 import xyz.block.trailblaze.tracing.TrailblazeTracer
 
 /**
@@ -19,9 +20,15 @@ abstract class TrailblazeLoggingRule(
   private val writeLogToDisk: ((currentTestName: String, log: TrailblazeLog) -> Unit) = { _, _ -> },
   private val writeScreenshotToDisk: ((sessionId: String, fileName: String, bytes: ByteArray) -> Unit) = { _, _, _ -> },
   private val writeTraceToDisk: ((sessionId: String, json: String) -> Unit) = { _, _ -> },
+  val sessionManager: TrailblazeSessionManager = TrailblazeSessionManager(),
 ) : SimpleTestRule() {
 
   abstract val trailblazeDeviceInfoProvider: () -> TrailblazeDeviceInfo
+
+  /**
+   * Logger instance for this test run
+   */
+  val trailblazeLogger = TrailblazeLoggerInstance
 
   val trailblazeLogServerClient by lazy {
     TrailblazeLogServerClient(
@@ -49,7 +56,8 @@ abstract class TrailblazeLoggingRule(
 
   override fun ruleCreation(description: Description) {
     this.description = description
-    TrailblazeLogger.startSession("${description.testClass.canonicalName}_${description.methodName}")
+    trailblazeLogger.startSession("${description.testClass.canonicalName}_${description.methodName}")
+    sessionManager.startSession(trailblazeLogger.getCurrentSessionId())
     subscribeToLoggingEventsAndSendToServer()
   }
 
@@ -59,18 +67,19 @@ abstract class TrailblazeLoggingRule(
   }
 
   override fun afterTestExecution(description: Description, result: Result<Nothing?>) {
-    TrailblazeLogger.sendEndLog(result.isSuccess, result.exceptionOrNull())
+    trailblazeLogger.sendEndLog(result.isSuccess, result.exceptionOrNull())
     exportTraces()
+    sessionManager.endSession()
   }
 
   private fun exportTraces() {
     val traceEventsJson = TrailblazeTracer.exportJson()
-    writeTraceToDisk(TrailblazeLogger.getCurrentSessionId(), traceEventsJson)
+    writeTraceToDisk(trailblazeLogger.getCurrentSessionId(), traceEventsJson)
   }
 
   fun subscribeToLoggingEventsAndSendToServer() {
-    TrailblazeLogger.setLogScreenshotListener { screenshotBytes ->
-      val sessionId = TrailblazeLogger.getCurrentSessionId()
+    trailblazeLogger.setLogScreenshotListener { screenshotBytes ->
+      val sessionId = trailblazeLogger.getCurrentSessionId()
       val screenshotFileName = "${sessionId}_${Clock.System.now().toEpochMilliseconds()}.png"
       // Send Log
       runBlocking(Dispatchers.IO) {
@@ -89,8 +98,8 @@ abstract class TrailblazeLoggingRule(
       }
       screenshotFileName
     }
-    TrailblazeLogger.setLogListener { log: TrailblazeLog ->
-      val sessionId = TrailblazeLogger.getCurrentSessionId()
+    trailblazeLogger.setLogListener { log: TrailblazeLog ->
+      val sessionId = trailblazeLogger.getCurrentSessionId()
       // Send Log
       runBlocking(Dispatchers.IO) {
         if (isServerAvailable) {

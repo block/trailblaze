@@ -49,7 +49,6 @@ dependencies {
 
   implementation(project(":trailblaze-agent"))
   implementation(project(":trailblaze-tracing"))
-  implementation(project(":trailblaze-yaml"))
   implementation(libs.ktor.client.core.jvm)
   implementation(libs.maestro.orchestra) { isTransitive = false }
   implementation(libs.androidx.test.monitor)

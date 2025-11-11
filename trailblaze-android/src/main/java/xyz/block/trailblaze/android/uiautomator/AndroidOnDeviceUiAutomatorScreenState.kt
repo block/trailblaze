@@ -57,7 +57,11 @@ class AndroidOnDeviceUiAutomatorScreenState(
 
       // Filter the view hierarchy if needed
       val vh1Filtered = if (filterViewHierarchy) {
-        val viewHierarchyFilter = ViewHierarchyFilter(screenHeight = deviceHeight, screenWidth = deviceWidth)
+        val viewHierarchyFilter = ViewHierarchyFilter.create(
+          screenHeight = deviceHeight,
+          screenWidth = deviceWidth,
+          platform = TrailblazeDevicePlatform.ANDROID,
+        )
         viewHierarchyFilter.filterInteractableViewHierarchyTreeNodes(vh1Original)
       } else {
         vh1Original

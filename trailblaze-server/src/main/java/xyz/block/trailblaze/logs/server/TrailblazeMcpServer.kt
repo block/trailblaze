@@ -26,6 +26,7 @@ import io.modelcontextprotocol.kotlin.sdk.ServerCapabilities
 import io.modelcontextprotocol.kotlin.sdk.TextContent
 import io.modelcontextprotocol.kotlin.sdk.server.Server
 import io.modelcontextprotocol.kotlin.sdk.server.ServerOptions
+import io.modelcontextprotocol.kotlin.sdk.server.ServerSession
 import io.modelcontextprotocol.kotlin.sdk.server.SseServerTransport
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -40,12 +41,14 @@ import xyz.block.trailblaze.mcp.models.McpSseSessionId
 import xyz.block.trailblaze.mcp.newtools.AndroidOnDeviceToolSet
 import xyz.block.trailblaze.mcp.utils.KoogToMcpExt.toJSONSchema
 import xyz.block.trailblaze.mcp.utils.McpDirectToolCalls
+import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
 import java.util.concurrent.ConcurrentHashMap
 
 class TrailblazeMcpServer(
   val logsRepo: LogsRepo,
   val isOnDeviceMode: () -> Boolean,
+  val targetTestAppProvider: () -> TrailblazeHostAppTarget,
   val additionalToolsProvider: (TrailblazeMcpSseSessionContext, Server) -> ToolRegistry = { _, _ -> ToolRegistry {} },
 ) {
 
@@ -54,10 +57,11 @@ class TrailblazeMcpServer(
 
   var hostMcpToolRegistry = ToolRegistry.Companion {}
 
-  fun setSessionContext(mcpSseSessionId: McpSseSessionId, server: Server) {
+  fun setSessionContext(mcpSseSessionId: McpSseSessionId, server: Server, serverSession: ServerSession) {
     // Create session context for this session
     val sessionContext = TrailblazeMcpSseSessionContext(
       mcpServer = server,
+      mcpServerSession = serverSession,
       mcpSseSessionId = mcpSseSessionId,
     )
     sessionContexts[mcpSseSessionId] = sessionContext
@@ -172,13 +176,17 @@ class TrailblazeMcpServer(
         sse("/sse") {
           val sseServerSession = this
           withContext(Dispatchers.IO) {
-            val mcpSseServer = configureMcpServer()
+            val mcpSseServer: Server = configureMcpServer()
             val transport = SseServerTransport("/message", sseServerSession)
             val mcpSseSessionId = McpSseSessionId(transport.sessionId)
             println("NEW SSE Connection ${sseServerSession.call.request.queryString()} ${sseServerSession.call.request.headers.toMap()} $mcpSseSessionId")
             // For SSE, you can also add prompts/tools/resources if needed:
             // server.addTool(...), server.addPrompt(...), server.addResource(...)
-            setSessionContext(mcpSseSessionId, mcpSseServer)
+
+            // Connect returns ServerSession in 0.7.3
+            val mcpServerSession = mcpSseServer.connect(transport)
+
+            setSessionContext(mcpSseSessionId, mcpSseServer, mcpServerSession)
 
             val initialToolRegistry = ToolRegistry.Companion {
               if (isOnDeviceMode()) {
@@ -192,6 +200,7 @@ class TrailblazeMcpServer(
                         mcpSseSessionId = mcpSseSessionId,
                       )
                     },
+                    targetTestAppProvider = targetTestAppProvider,
                   ).asTools(TrailblazeJsonInstance),
                 )
               }
@@ -206,25 +215,18 @@ class TrailblazeMcpServer(
               mcpSseSessionId = mcpSseSessionId,
             )
 
-            // Handle unknown/unsupported notifications gracefully
-            mcpSseServer.fallbackNotificationHandler = { notification ->
-              println("Received unhandled notification: ${notification.method}")
-            }
-
             mcpSseServer.onClose {
               println("Server closed")
-              sessionContexts.remove(McpSseSessionId(transport.sessionId)) // Clear session context for this session
+              sessionContexts.remove(mcpSseSessionId) // Clear session context for this session
             }
-
-            mcpSseServer.connect(transport)
           }
         }
         post("/message") {
           val sessionId: String = call.request.queryParameters["sessionId"]!!
           println("Received Message for Session $sessionId")
 
-          val mcpServer = sessionContexts[McpSseSessionId(sessionId)]?.mcpServer
-          val sseServerTransport = mcpServer?.transport as? SseServerTransport
+          val sessionContext = sessionContexts[McpSseSessionId(sessionId)]
+          val sseServerTransport = sessionContext?.mcpServerSession?.transport as? SseServerTransport
           if (sseServerTransport == null) {
             call.respond(HttpStatusCode.Companion.NotFound, "Session not found")
             return@post

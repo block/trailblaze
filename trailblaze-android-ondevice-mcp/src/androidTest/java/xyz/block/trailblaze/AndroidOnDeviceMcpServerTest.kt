@@ -23,7 +23,7 @@ class AndroidOnDeviceMcpServerTest {
   val trailblazeLoggingRule = TrailblazeAndroidLoggingRule()
 
   @Test
-  fun mcpServer() {
+  fun startServer() {
     OnDeviceRpcServerUtils(
       runTrailblazeYaml = { runYamlRequest ->
         handleRunRequest(runYamlRequest)

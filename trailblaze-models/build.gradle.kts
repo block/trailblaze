@@ -29,11 +29,13 @@ kotlin {
   sourceSets {
     commonMain.dependencies {
       implementation(libs.coroutines)
+      implementation(libs.kaml)
       implementation(libs.koog.agents.tools)
       implementation(libs.koog.prompt.model)
       implementation(libs.koog.prompt.executor.clients)
       implementation(libs.koog.prompt.executor.llms)
       implementation(libs.kotlinx.datetime)
+      implementation(libs.kotlin.reflect)
       implementation(libs.kotlinx.serialization.core)
     }
   }

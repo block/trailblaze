@@ -89,6 +89,11 @@ class TrailblazeElementComparator(
     }
   }
 
+  private object BooleanAssertionTrailblazeToolSet : TrailblazeToolSet(
+    name = "Boolean Assertion",
+    toolClasses = setOf(BooleanAssertionTrailblazeTool::class),
+  )
+
   /**
    * Evaluates a statement about the UI and returns a boolean result with explanation.
    */
@@ -106,12 +111,7 @@ class TrailblazeElementComparator(
       """.trimIndent(),
     )
 
-    val booleanAssertionToolRepo = TrailblazeToolRepo(
-      TrailblazeToolSet.DynamicTrailblazeToolSet(
-        "Boolean Assertion",
-        setOf(BooleanAssertionTrailblazeTool::class),
-      ),
-    )
+    val booleanAssertionToolRepo = TrailblazeToolRepo(BooleanAssertionTrailblazeToolSet)
     val koogRequestData = KoogLlmRequestData(
       messages = koogAiRequestMessages,
       toolDescriptors = booleanAssertionToolRepo.getCurrentToolDescriptors(),
@@ -144,6 +144,11 @@ class TrailblazeElementComparator(
     }
   }
 
+  private object StringEvaluationTrailblazeToolSet : TrailblazeToolSet(
+    name = "String Evaluation",
+    toolClasses = setOf(StringEvaluationTrailblazeTool::class),
+  )
+
   /**
    * Evaluates a prompt and returns a descriptive string response with explanation.
    */
@@ -161,12 +166,7 @@ class TrailblazeElementComparator(
       """.trimIndent(),
     )
 
-    val evaluationToolRepo = TrailblazeToolRepo(
-      TrailblazeToolSet.DynamicTrailblazeToolSet(
-        "String Evaluation",
-        setOf(StringEvaluationTrailblazeTool::class),
-      ),
-    )
+    val evaluationToolRepo = TrailblazeToolRepo(StringEvaluationTrailblazeToolSet)
 
     val koogLlmChatResponse: List<Message.Response> = runBlocking {
       koogLlmClientHelper.callLlm(
@@ -219,6 +219,11 @@ class TrailblazeElementComparator(
    */
   override fun extractNumberFromString(input: String): Double? = getNumberFromString(input)
 
+  private object ElementRetrieverTrailblazeToolSet : TrailblazeToolSet(
+    name = "Element Retriever",
+    toolClasses = setOf(ElementRetrieverTrailblazeTool::class),
+  )
+
   /**
    * Uses LLM to identify the best locator for an element based on description.
    */
@@ -257,12 +262,7 @@ class TrailblazeElementComparator(
       )
     }
 
-    val elementRetrieverToolRepo = TrailblazeToolRepo(
-      TrailblazeToolSet.DynamicTrailblazeToolSet(
-        "Element Retriever",
-        setOf(ElementRetrieverTrailblazeTool::class),
-      ),
-    )
+    val elementRetrieverToolRepo = TrailblazeToolRepo(ElementRetrieverTrailblazeToolSet)
     val koogLlmChatResponse: List<Message.Response> = runBlocking {
       koogLlmClientHelper.callLlm(
         KoogLlmRequestData(

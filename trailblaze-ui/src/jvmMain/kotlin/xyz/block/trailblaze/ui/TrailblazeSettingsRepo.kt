@@ -1,6 +1,5 @@
 package xyz.block.trailblaze.ui
 
-import ai.koog.agents.core.tools.ToolDescriptor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -8,20 +7,19 @@ import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import xyz.block.trailblaze.logs.client.TrailblazeJson
-import xyz.block.trailblaze.toolcalls.TrailblazeTool
+import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.ui.models.TrailblazeServerState
+import xyz.block.trailblaze.ui.models.TrailblazeServerState.SavedTrailblazeAppConfig
 import xyz.block.trailblaze.ui.tabs.session.SessionViewMode
 import java.io.File
-import kotlin.reflect.KClass
 
 class TrailblazeSettingsRepo(
-  private val settingsFile: File = File("build/trailblaze-settings.json"),
-  private val initialConfig: TrailblazeServerState.SavedTrailblazeAppConfig,
-  private val allToolClasses: Map<ToolDescriptor, KClass<out TrailblazeTool>>,
+  val settingsFile: File = File("build/trailblaze-settings.json"),
+  private val initialConfig: SavedTrailblazeAppConfig,
 ) {
-  private val trailblazeJson: Json = TrailblazeJson.createTrailblazeJsonInstance(allToolClasses)
+  private val trailblazeJson: Json = TrailblazeJson.defaultWithoutToolsInstance
 
-  fun saveConfig(trailblazeSettings: TrailblazeServerState.SavedTrailblazeAppConfig) {
+  fun saveConfig(trailblazeSettings: SavedTrailblazeAppConfig) {
     println(
       "Saving Settings to: ${settingsFile.absolutePath}\n ${
         trailblazeJson.encodeToString(
@@ -31,18 +29,18 @@ class TrailblazeSettingsRepo(
     )
     settingsFile.writeText(
       trailblazeJson.encodeToString(
-        TrailblazeServerState.SavedTrailblazeAppConfig.serializer(),
+        SavedTrailblazeAppConfig.serializer(),
         trailblazeSettings,
       ),
     )
   }
 
   fun load(
-    initialConfig: TrailblazeServerState.SavedTrailblazeAppConfig,
-  ): TrailblazeServerState.SavedTrailblazeAppConfig = try {
+    initialConfig: SavedTrailblazeAppConfig,
+  ): SavedTrailblazeAppConfig = try {
     println("Loading Settings from: ${settingsFile.absolutePath}")
     trailblazeJson.decodeFromString(
-      TrailblazeServerState.SavedTrailblazeAppConfig.serializer(),
+      SavedTrailblazeAppConfig.serializer(),
       settingsFile.readText(),
     ).copy(
       // Clear session-specific state on app restart
@@ -57,6 +55,22 @@ class TrailblazeSettingsRepo(
     }
   }.also {
     println("Loaded settings: $it")
+  }
+
+  fun updateState(stateUpdater: (TrailblazeServerState) -> TrailblazeServerState) {
+    serverStateFlow.value = stateUpdater(serverStateFlow.value)
+  }
+
+  fun updateAppConfig(appConfigUpdater: (SavedTrailblazeAppConfig) -> SavedTrailblazeAppConfig) {
+    updateState { currentState: TrailblazeServerState ->
+      currentState.copy(appConfig = appConfigUpdater(currentState.appConfig))
+    }
+  }
+
+  fun targetAppSelected(targetApp: TrailblazeHostAppTarget) {
+    updateAppConfig { appConfig: SavedTrailblazeAppConfig ->
+      appConfig.copy(selectedTargetAppName = targetApp.name)
+    }
   }
 
   val serverStateFlow = MutableStateFlow(

@@ -5,6 +5,7 @@ import ai.koog.prompt.dsl.ModerationResult
 import ai.koog.prompt.dsl.Prompt
 import ai.koog.prompt.executor.clients.LLMClient
 import ai.koog.prompt.executor.model.LLMChoice
+import ai.koog.prompt.llm.LLMProvider
 import ai.koog.prompt.llm.LLModel
 import ai.koog.prompt.message.Message
 import ai.koog.prompt.streaming.StreamFrame
@@ -16,7 +17,17 @@ import xyz.block.trailblaze.tracing.TrailblazeTracer.traceRecorder
  */
 class TracingLlmClient(private val delegate: LLMClient) : LLMClient {
 
-  private inline fun <T> traceLlmClient(name: String, block: () -> T): T = traceRecorder.trace(name, "LlmClient", emptyMap(), block)
+  /** Wraps the execution of the block with tracing. */
+  private inline fun <T> traceLlmClient(name: String, block: () -> T): T = traceRecorder.trace(
+    name = name,
+    cat = "LlmClient",
+    args = emptyMap(),
+    block = block,
+  )
+
+  override fun llmProvider(): LLMProvider = traceLlmClient(name = "llmProvider") {
+    delegate.llmProvider()
+  }
 
   override suspend fun execute(
     prompt: Prompt,
@@ -34,13 +45,17 @@ class TracingLlmClient(private val delegate: LLMClient) : LLMClient {
     prompt: Prompt,
     model: LLModel,
     tools: List<ToolDescriptor>,
-  ): List<LLMChoice> = delegate.executeMultipleChoices(prompt, model, tools)
+  ): List<LLMChoice> = traceLlmClient("executeMultipleChoices") {
+    delegate.executeMultipleChoices(prompt, model, tools)
+  }
 
   override fun executeStreaming(
     prompt: Prompt,
     model: LLModel,
     tools: List<ToolDescriptor>,
-  ): Flow<StreamFrame> = delegate.executeStreaming(prompt, model, tools)
+  ): Flow<StreamFrame> = traceLlmClient("executeStreaming") {
+    delegate.executeStreaming(prompt, model, tools)
+  }
 
   override suspend fun moderate(
     prompt: Prompt,

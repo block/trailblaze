@@ -15,16 +15,18 @@ import xyz.block.trailblaze.api.MaestroDriverActionType
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
+import xyz.block.trailblaze.logs.client.TrailblazeLoggerInstance
 import xyz.block.trailblaze.tracing.TrailblazeTracer.traceRecorder
 import java.io.File
 import kotlin.system.measureTimeMillis
 
 /**
- * This is a delegate Maestro [Driver] that logs all actions to the [TrailblazeLogger].
+ * This is a delegate Maestro [Driver] that logs all actions to the [TrailblazeLoggerInstance].
  */
 class LoggingDriver(
   private val delegate: Driver,
   private val screenStateProvider: () -> ScreenState,
+  private val trailblazeLogger: TrailblazeLogger,
 ) : Driver {
 
   private inline fun <T> traceMaestroDriver(name: String, block: () -> T): T = traceRecorder.trace(name, "MaestroDriver", emptyMap(), block = {
@@ -51,15 +53,15 @@ class LoggingDriver(
         block()
       }
     }
-    val screenshotFilename = screenState.screenshotBytes?.let { TrailblazeLogger.logScreenshot(it) }
-    TrailblazeLogger.log(
+    val screenshotFilename = screenState.screenshotBytes?.let { trailblazeLogger.logScreenshot(it) }
+    trailblazeLogger.log(
       TrailblazeLog.MaestroDriverLog(
         viewHierarchy = screenState.viewHierarchy,
         screenshotFile = screenshotFilename,
         action = action,
         durationMs = executionTimeMs,
         timestamp = startTime,
-        session = TrailblazeLogger.getCurrentSessionId(),
+        session = trailblazeLogger.getCurrentSessionId(),
         deviceWidth = screenState.deviceWidth,
         deviceHeight = screenState.deviceHeight,
       ),
@@ -74,14 +76,14 @@ class LoggingDriver(
         block()
       }
     }
-    TrailblazeLogger.log(
+    trailblazeLogger.log(
       TrailblazeLog.MaestroDriverLog(
         viewHierarchy = null,
         screenshotFile = null,
         action = action,
         durationMs = executionTimeMs,
         timestamp = startTime,
-        session = TrailblazeLogger.getCurrentSessionId(),
+        session = trailblazeLogger.getCurrentSessionId(),
         deviceWidth = deviceInfo.widthPixels,
         deviceHeight = deviceInfo.heightPixels,
       ),

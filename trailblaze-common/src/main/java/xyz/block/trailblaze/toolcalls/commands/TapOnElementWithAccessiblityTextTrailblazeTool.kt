@@ -26,6 +26,7 @@ provided exactly matches elsewhere on the screen. In this case the additional fi
 used to identify the specific view to tap on.
       """,
 )
+@Deprecated("Use [TapOnElementByNodeIdTrailblazeTool] or [TapOnByElementSelector].")
 data class TapOnElementWithAccessiblityTextTrailblazeTool(
   @LLMDescription(REQUIRED_ACCESSIBILITY_TEXT_DESCRIPTION) val accessibilityText: String,
   val id: String? = null,

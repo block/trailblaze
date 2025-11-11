@@ -12,4 +12,10 @@ interface LiveSessionDataProvider {
   fun removeSessionListListener(listener: SessionListListener)
   fun startWatchingTrailblazeSession(listener: TrailblazeSessionListener)
   fun stopWatching(sessionId: String)
+
+  /**
+   * Cancel an active session.
+   * Writes a cancellation log to gracefully end the session.
+   */
+  suspend fun cancelSession(sessionId: String): Boolean
 }

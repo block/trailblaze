@@ -15,6 +15,14 @@ tasks.named<JavaExec>("run") {
   standardInput = System.`in`
 }
 
+tasks.withType<Tar> {
+  duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
+tasks.withType<Zip> {
+  duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
 dependencies {
   api(project(":trailblaze-agent"))
 
@@ -30,12 +38,14 @@ dependencies {
   api(libs.ktor.client.okhttp)
   api(libs.slf4j.api)
 
+  implementation(project(":trailblaze-common"))
   implementation(project(":trailblaze-report"))
   implementation(project(":trailblaze-server"))
-  implementation(project(":trailblaze-yaml"))
+  implementation(project(":trailblaze-ui"))
 
   implementation(libs.ktor.client.logging)
   implementation(libs.koog.prompt.executor.openai)
+  implementation(libs.koog.prompt.executor.ollama)
   implementation(libs.koog.agents.tools)
   implementation(libs.mcp.sdk)
   implementation(libs.playwright)

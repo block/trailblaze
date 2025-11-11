@@ -9,6 +9,15 @@ sealed interface PromptStep {
   val recording: ToolRecording?
 }
 
+fun PromptStep.toDetailedString() {
+  buildString {
+    appendLine("Type: ${this::class.simpleName}")
+    appendLine("Prompt: $prompt")
+    appendLine("Recordable: $recordable")
+    appendLine("Recording: $recording")
+  }
+}
+
 @Serializable
 data class DirectionStep(
   val step: String,

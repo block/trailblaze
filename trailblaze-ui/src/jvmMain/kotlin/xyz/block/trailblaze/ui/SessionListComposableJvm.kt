@@ -14,6 +14,9 @@ fun createLogsFileSystemImageLoader(logsDir: File): ImageLoader {
 /**
  * Helper function to create a JvmLiveSessionDataProvider from LogsRepo
  */
-fun createLiveSessionDataProviderJvm(logsRepo: LogsRepo): LiveSessionDataProvider {
-  return JvmLiveSessionDataProvider(logsRepo)
+fun createLiveSessionDataProviderJvm(
+  logsRepo: LogsRepo,
+  deviceManager: TrailblazeDeviceManager? = null,
+): LiveSessionDataProvider {
+  return JvmLiveSessionDataProvider(logsRepo, deviceManager)
 }

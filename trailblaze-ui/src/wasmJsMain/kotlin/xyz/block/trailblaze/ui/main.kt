@@ -19,21 +19,22 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.ComposeViewport
 import kotlinx.browser.document
 import kotlinx.browser.window
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.logs.TrailblazeLogsDataProvider
+import xyz.block.trailblaze.logs.client.TrailblazeJson
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.ui.composables.FullScreenModalOverlay
 import xyz.block.trailblaze.ui.composables.ScreenshotImageModal
 import xyz.block.trailblaze.ui.tabs.session.SessionDetailComposable
 import xyz.block.trailblaze.ui.tabs.session.SessionListComposable
-import xyz.block.trailblaze.ui.tabs.session.group.LogDetailsDialog
 import xyz.block.trailblaze.ui.tabs.session.group.ChatHistoryDialog
+import xyz.block.trailblaze.ui.tabs.session.group.LogDetailsDialog
 import xyz.block.trailblaze.ui.tabs.session.models.SessionDetail
 
 // Central data provider instance
@@ -136,6 +137,7 @@ fun SessionListView(
     sessionClicked = onSessionClick,
     deleteSession = deleteSession,
     clearAllLogs = null,
+    openLogsFolder = null,
   )
 }
 
@@ -157,9 +159,9 @@ fun WasmSessionDetailView(
   var showInspectUIDialog by remember { mutableStateOf(false) }
   var showChatHistoryDialog by remember { mutableStateOf(false) }
   var currentLog by remember { mutableStateOf<TrailblazeLog?>(null) }
-  var currentLlmLog by remember { mutableStateOf<TrailblazeLog.TrailblazeLlmRequestLog?>(null) }
+  var currentInspectorLog by remember { mutableStateOf<TrailblazeLog?>(null) }
   var currentChatHistoryLog by remember { mutableStateOf<TrailblazeLog.TrailblazeLlmRequestLog?>(null) }
-  
+
   // Screenshot modal state
   var showScreenshotModal by remember { mutableStateOf(false) }
   var modalImageModel by remember { mutableStateOf<Any?>(null) }
@@ -167,6 +169,11 @@ fun WasmSessionDetailView(
   var modalDeviceHeight by remember { mutableStateOf(0) }
   var modalClickX by remember { mutableStateOf<Int?>(null) }
   var modalClickY by remember { mutableStateOf<Int?>(null) }
+  var modalAction by remember {
+    mutableStateOf<xyz.block.trailblaze.api.MaestroDriverActionType?>(
+      null
+    )
+  }
 
   LaunchedEffect(sessionName) {
     try {
@@ -206,21 +213,33 @@ fun WasmSessionDetailView(
           showDetailsDialog = true
         },
         onShowInspectUI = { log ->
-          currentLlmLog = log
+          currentInspectorLog = log
           showInspectUIDialog = true
         },
         onShowChatHistory = { log ->
           currentChatHistoryLog = log
           showChatHistoryDialog = true
         },
-        onShowScreenshotModal = { imageModel, deviceWidth, deviceHeight, clickX, clickY ->
+        onShowScreenshotModal = { imageModel, deviceWidth, deviceHeight, clickX, clickY, action ->
           modalImageModel = imageModel
           modalDeviceWidth = deviceWidth
           modalDeviceHeight = deviceHeight
           modalClickX = clickX
           modalClickY = clickY
+          modalAction = action
           showScreenshotModal = true
-        }
+        },
+        onDeleteSession = {
+          // No-op for WASM - read-only static version
+        },
+        onExportToRepo = { yamlContent ->
+          println("Export to repo is not supported in WASM. Please use the desktop version.")
+          println("YAML content:\n$yamlContent")
+        },
+        onOpenLogsFolder = {
+          // No-op for WASM - can't open file system folders in browser
+        },
+        exportFeatureEnabled = false, // Export feature not supported in WASM
       )
 
       // Modal dialogs
@@ -241,47 +260,68 @@ fun WasmSessionDetailView(
         }
       }
 
-      if (showInspectUIDialog && currentLlmLog != null) {
+      if (showInspectUIDialog && currentInspectorLog != null) {
         FullScreenModalOverlay(
           onDismiss = {
             showInspectUIDialog = false
-            currentLlmLog = null
+            currentInspectorLog = null
           }
         ) {
-          Column(
-            modifier = Modifier.fillMaxSize()
-          ) {
-            // Header with close button
-            Row(
-              modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-              horizontalArrangement = Arrangement.SpaceBetween,
-              verticalAlignment = Alignment.CenterVertically
-            ) {
-              Text(
-                text = "UI Inspector",
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold
-              )
-              Button(
-                onClick = {
-                  showInspectUIDialog = false
-                  currentLlmLog = null
-                }
-              ) {
-                Text("Close")
+          // State for UI Inspector controls
+          var showRawJson by remember { mutableStateOf(false) }
+          var fontScale by remember { mutableStateOf(1f) }
+
+          // Inspector content
+          val inspectorLog = currentInspectorLog
+          if (inspectorLog != null) {
+            var viewHierarchy: xyz.block.trailblaze.api.ViewHierarchyTreeNode? = null
+            var imageUrl: String? = null
+            var deviceWidth = 0
+            var deviceHeight = 0
+
+            when (inspectorLog) {
+              is TrailblazeLog.TrailblazeLlmRequestLog -> {
+                viewHierarchy = inspectorLog.viewHierarchy
+                imageUrl = inspectorLog.screenshotFile
+                deviceWidth = inspectorLog.deviceWidth
+                deviceHeight = inspectorLog.deviceHeight
+              }
+
+              is TrailblazeLog.MaestroDriverLog -> {
+                viewHierarchy = inspectorLog.viewHierarchy
+                imageUrl = inspectorLog.screenshotFile
+                deviceWidth = inspectorLog.deviceWidth
+                deviceHeight = inspectorLog.deviceHeight
+              }
+
+              else -> {
+                // Other log types don't have view hierarchy data
               }
             }
 
-            // Inspector content
-            InspectViewHierarchyScreenComposable(
-              sessionId = sessionName,
-              viewHierarchy = currentLlmLog!!.viewHierarchy,
-              imageUrl = currentLlmLog!!.screenshotFile,
-              deviceWidth = currentLlmLog!!.deviceWidth,
-              deviceHeight = currentLlmLog!!.deviceHeight,
-            )
+            if (viewHierarchy != null) {
+              InspectViewHierarchyScreenComposable(
+                sessionId = sessionName,
+                viewHierarchy = viewHierarchy,
+                imageUrl = imageUrl,
+                deviceWidth = deviceWidth,
+                deviceHeight = deviceHeight,
+                showRawJson = showRawJson,
+                fontScale = fontScale,
+                onShowRawJsonChanged = { showRawJson = it },
+                onFontScaleChanged = { fontScale = it },
+                onClose = {
+                  showInspectUIDialog = false
+                  currentInspectorLog = null
+                }
+              )
+            } else {
+              Text(
+                text = "No view hierarchy data available for this log",
+                modifier = Modifier.padding(16.dp),
+                style = MaterialTheme.typography.bodyLarge,
+              )
+            }
           }
         }
       }
@@ -311,11 +351,13 @@ fun WasmSessionDetailView(
           deviceHeight = modalDeviceHeight,
           clickX = modalClickX,
           clickY = modalClickY,
+          action = modalAction,
           onDismiss = {
             showScreenshotModal = false
             modalImageModel = null
             modalClickX = null
             modalClickY = null
+            modalAction = null
           }
         )
       }

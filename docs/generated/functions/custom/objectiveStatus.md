@@ -19,8 +19,11 @@ This allows the system to track progress through individual items in the objecti
   The text description of the current objective item you're reporting on (copy exactly from the objective list)
 - `explanation`: `String`
   A message explaining what was accomplished or the current progress for this specific objective item
-- `status`: `String`
-  Status of this specific objective item: 'in_progress' (continuing with this same item), 'completed' (move to next item), or 'failed'
+- `status`: `[
+  "IN_PROGRESS",
+  "COMPLETED",
+  "FAILED"
+]`
 
 
 

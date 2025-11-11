@@ -14,6 +14,35 @@ Assert that the element with the given nodeId is visible on the screen. This wil
 ### Optional Parameters
 - `reason`: `String`
   Reasoning on why this element was chosen. Do NOT restate the nodeId.
+- `relativelyPositionedViews`: `{
+  "itemsType": {
+    "properties": [
+      {
+        "name": "otherNodeId",
+        "description": "otherNodeId",
+        "type": {
+          "name": "INT"
+        }
+      },
+      {
+        "name": "position",
+        "description": "position",
+        "type": {
+          "entries": [
+            "LEFT_OF",
+            "RIGHT_OF",
+            "ABOVE",
+            "BELOW"
+          ],
+          "name": "ENUM"
+        }
+      }
+    ],
+    "requiredProperties": [],
+    "name": "OBJECT"
+  },
+  "name": "ARRAY"
+}`
 
 
 

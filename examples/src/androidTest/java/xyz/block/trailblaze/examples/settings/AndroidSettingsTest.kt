@@ -13,7 +13,7 @@ class AndroidSettingsTest {
   val trailblazeRule = ExamplesAndroidTrailblazeRuleOpenAiTrailblazeRule()
 
   @Test
-  fun almostBecomeADeveloperAi() {
+  fun becomeADeveloperAi() {
     trailblazeRule.run(
       """
 - maestro:
@@ -21,35 +21,46 @@ class AndroidSettingsTest {
       appId: com.android.settings
       stopApp: true
 - prompts:
-  - step: Open the "About emulated device" section of the Settings app
-  - step: Tap on "Build number" 6 times.
+    - step: Open the "System" section of the Settings app
+    - step: Tap on the "about device" section.
+    - step: Find the "Build number" and tap on it 7 times.
       """.trimIndent(),
     )
   }
 
   @Test
-  fun almostBecomeADeveloperRecorded() {
+  fun becomeADeveloperMaestroYaml() {
     trailblazeRule.run(
       """
+
 - maestro:
   - launchApp:
       appId: com.android.settings
       stopApp: true
 - prompts:
-  - step: Open the "About emulated device" section of the Settings app
+  - step: Open the "System" section of the Settings app
     recording:
       tools:
       - scrollUntilTextIsVisible:
-          text: About emulated device
+          text: System
           direction: DOWN
       - tapOnElementWithText:
-          text: About emulated device
-  - step: Tap on "Build number" 6 times.
+          text: System
+  - step: Tap on the "about device" section.
     recording:
       tools:
+      - tapOnElementWithAccessibilityText:
+          accessibilityText: Back
+  - step: Find the "Build number" and tap on it 7 times.
+    recording:
+      tools:
+      - tapOnElementWithText:
+          text: About emulated device
       - scrollUntilTextIsVisible:
           text: Build number
           direction: DOWN
+      - tapOnElementWithText:
+          text: Build number
       - tapOnElementWithText:
           text: Build number
       - tapOnElementWithText:

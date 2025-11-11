@@ -57,8 +57,6 @@ kotlin {
       implementation(compose.components.resources)
       implementation(compose.components.uiToolingPreview)
       implementation(libs.material.icons.extended)
-      implementation(libs.androidx.lifecycle.viewmodel)
-      implementation(libs.androidx.lifecycle.runtimeCompose)
       implementation(libs.kotlinx.serialization.core)
       implementation(libs.kotlinx.serialization.json)
       implementation(libs.kotlinx.datetime)
@@ -81,7 +79,6 @@ kotlin {
     jvmMain.dependencies {
       implementation(project(":trailblaze-models"))
       implementation(project(":trailblaze-common"))
-      implementation(project(":trailblaze-host"))
       implementation(project(":trailblaze-server"))
       implementation(project(":trailblaze-report"))
       implementation(libs.ktor.server.core)

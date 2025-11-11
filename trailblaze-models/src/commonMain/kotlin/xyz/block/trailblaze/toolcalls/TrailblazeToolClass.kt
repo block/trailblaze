@@ -4,4 +4,6 @@ package xyz.block.trailblaze.toolcalls
 @Retention(AnnotationRetention.RUNTIME)
 annotation class TrailblazeToolClass(
   val name: String,
+  val isForLlm: Boolean = true,
+  val isRecordable: Boolean = true,
 )

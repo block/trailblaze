@@ -24,7 +24,6 @@ dependencies {
   implementation(project(":trailblaze-models"))
   implementation(project(":trailblaze-common"))
   implementation(project(":trailblaze-report"))
-  implementation(project(":trailblaze-yaml"))
 
   implementation(libs.okhttp)
   implementation(libs.ktor.server.core.jvm)

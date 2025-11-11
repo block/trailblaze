@@ -41,6 +41,31 @@ sealed interface SessionStatus {
       override val durationMs: Long,
       val cancellationMessage: String?,
     ) : Ended
+
+    /**
+     * Session succeeded but required AI fallback after recording failures
+     */
+    @Serializable
+    data class SucceededWithFallback(
+      override val durationMs: Long,
+      val usedFallback: Boolean = true,
+    ) : Ended
+
+    /**
+     * Session failed after attempting AI fallback following recording failures
+     */
+    @Serializable
+    data class FailedWithFallback(
+      override val durationMs: Long,
+      val exceptionMessage: String?,
+      val usedFallback: Boolean = true,
+    ) : Ended
+
+    @Serializable
+    data class TimeoutReached(
+      override val durationMs: Long,
+      val message: String?,
+    ) : Ended
   }
 }
 

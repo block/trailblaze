@@ -33,17 +33,21 @@ class TrailblazeToolRepo(
     tools(getRegisteredTrailblazeTools().toKoogTools(trailblazeToolContextProvider))
   }
 
-  fun addTrailblazeTools(trailblazeToolSet: TrailblazeToolSet) = synchronized(registeredTrailblazeToolClasses) {
-    addTrailblazeTools(*trailblazeToolSet.asTools().toTypedArray())
-  }
-
-  fun addTrailblazeTools(vararg trailblazeTool: KClass<out TrailblazeTool>) = synchronized(registeredTrailblazeToolClasses) {
+  private fun addTrailblazeTools(vararg trailblazeTool: KClass<out TrailblazeTool>) = synchronized(registeredTrailblazeToolClasses) {
     trailblazeTool.forEach { tool ->
       if (!tool.hasSerializableAnnotation()) {
         throw IllegalArgumentException("Class ${tool.qualifiedName} is not serializable. Please add @Serializable from the Kotlin Serialization library.")
       }
-      registeredTrailblazeToolClasses.add(tool)
+      if (tool.toKoogToolDescriptor() != null) {
+        registeredTrailblazeToolClasses.add(tool)
+      } else {
+        println("Class ${tool.qualifiedName} (${tool.toolName().toolName}) cannot be used by the LLM.  It was not registered.")
+      }
     }
+  }
+
+  fun addTrailblazeToolSet(trailblazeToolSet: TrailblazeToolSet) = synchronized(registeredTrailblazeToolClasses) {
+    addTrailblazeTools(*trailblazeToolSet.asTools().toTypedArray())
   }
 
   fun removeTrailblazeTools(vararg trailblazeToolArgs: KClass<out TrailblazeTool>) = synchronized(registeredTrailblazeToolClasses) {
@@ -67,10 +71,10 @@ class TrailblazeToolRepo(
     toolName: String,
     /** The JSON string of the tool arguments. */
     toolContent: String,
-  ): TrailblazeTool? {
+  ): TrailblazeTool {
     val trailblazeToolClass: KClass<out TrailblazeTool> =
       registeredTrailblazeToolClasses.firstOrNull { toolKClass ->
-        toolKClass.toKoogToolDescriptor().name == toolName
+        toolKClass.toKoogToolDescriptor()?.name == toolName
       } ?: error(
         buildString {
           appendLine("Could not find Trailblaze tool class for name: $toolName.")
@@ -82,20 +86,21 @@ class TrailblazeToolRepo(
     return TrailblazeJsonInstance.decodeFromString(trailblazeToolClass.serializer(), toolContent)
   }
 
-  fun getCurrentToolDescriptors(): List<ToolDescriptor> = registeredTrailblazeToolClasses.map { toolClass ->
+  fun getCurrentToolDescriptors(): List<ToolDescriptor> = registeredTrailblazeToolClasses.mapNotNull { toolClass ->
     toolClass.toKoogToolDescriptor()
   }
 
   // When running - verify: only provide the assertion tools and the objective status tool
   // If you don't provide the objective status tool then the agent cannot complete the step
-  private val assertionTools = TrailblazeToolSet.AssertByPropertyToolSet.tools +
+  // Use node-based assertion tool (DelegatingTrailblazeTool) for Set of Mark mode
+  private val verifyTools = TrailblazeToolSet.VerifyToolSet.toolClasses +
     ObjectiveStatusTrailblazeTool::class
 
   // This function returns different tool descriptors based on the type of prompt step passed in.
   // The DirectionStep returns all registered trailblaze tool classes, while the VerificationStep
-  // will only return the assert by property tool set.
+  // will return a subset of the assert tool set.
   fun getToolDescriptorsForStep(promptStep: PromptStep): List<ToolDescriptor> = when (promptStep) {
     is DirectionStep -> getCurrentToolDescriptors()
-    is VerificationStep -> assertionTools.map { it.toKoogToolDescriptor() }
+    is VerificationStep -> verifyTools.mapNotNull { it.toKoogToolDescriptor() }
   }
 }

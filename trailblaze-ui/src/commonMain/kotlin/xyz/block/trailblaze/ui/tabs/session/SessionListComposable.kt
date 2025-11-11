@@ -13,9 +13,14 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.FilterList
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.Upload
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Card
@@ -76,6 +81,13 @@ fun SessionListComposable(
   sessionClicked: (SessionInfo) -> Unit,
   deleteSession: ((SessionInfo) -> Unit)?,
   clearAllLogs: (() -> Unit)?,
+  onRefresh: (() -> Unit)? = null,
+  refreshIntervalMs: Long = 2_000,
+  openLogsFolder: ((SessionInfo) -> Unit)? = null,
+  openLogsFolderRoot: (() -> Unit)? = null,
+  onExportSession: ((SessionInfo) -> Unit)? = null,
+  onImportSession: ((Any) -> Unit)? = null,
+  importedSessionIds: Set<String> = emptySet(),
 ) {
   // Filter states
   var selectedPriorities by remember { mutableStateOf(setOf<String>()) }
@@ -87,7 +99,8 @@ fun SessionListComposable(
 
   // Collect all unique values for filters
   val allPriorities = sessions.mapNotNull { it.trailConfig?.priority }.distinct().sorted()
-  val allStatuses = listOf("In Progress", "Succeeded", "Failed")
+  val allStatuses =
+    listOf("In Progress", "Succeeded", "Succeeded (Fallback)", "Failed", "Failed (Fallback)", "Timeout")
   val allPlatforms =
     sessions.mapNotNull { it.trailblazeDeviceInfo?.platform?.name }.distinct().sorted()
   val allClassifiers =
@@ -99,11 +112,19 @@ fun SessionListComposable(
       session.trailConfig?.priority?.let { it in selectedPriorities } == true ||
       (session.trailConfig?.priority == null && selectedPriorities.isEmpty())
 
-    val statusMatch = selectedStatuses.isEmpty() || when {
-      session.latestStatus is SessionStatus.Started && "In Progress" in selectedStatuses -> true
-      session.latestStatus is SessionStatus.Ended.Succeeded && "Succeeded" in selectedStatuses -> true
-      session.latestStatus is SessionStatus.Ended.Failed && "Failed" in selectedStatuses -> true
-      else -> false
+    val statusMatch = if (selectedStatuses.isEmpty()) {
+      true
+    } else {
+      when (val status = session.latestStatus) {
+        is SessionStatus.Started -> "In Progress" in selectedStatuses
+        is SessionStatus.Ended.Succeeded -> "Succeeded" in selectedStatuses
+        is SessionStatus.Ended.SucceededWithFallback -> "Succeeded (Fallback)" in selectedStatuses
+        is SessionStatus.Ended.Failed -> "Failed" in selectedStatuses
+        is SessionStatus.Ended.FailedWithFallback -> "Failed (Fallback)" in selectedStatuses
+        is SessionStatus.Ended.TimeoutReached -> "Timeout" in selectedStatuses
+        is SessionStatus.Ended.Cancelled -> false // Cancelled not in filter options
+        SessionStatus.Unknown -> false
+      }
     }
 
     val platformMatch = selectedPlatforms.isEmpty() ||
@@ -115,14 +136,16 @@ fun SessionListComposable(
     // Keyword search - match against display name and description (case-insensitive)
     val keywordMatch = searchKeyword.isEmpty() ||
       session.displayName.contains(searchKeyword, ignoreCase = true) ||
-      (session.trailConfig?.description?.contains(searchKeyword, ignoreCase = true) == true) ||
-      (session.trailConfig?.id?.contains(searchKeyword, ignoreCase = true) == true) ||
-      (session.testClass?.contains(searchKeyword, ignoreCase = true) == true) ||
-      (session.testName?.contains(searchKeyword, ignoreCase = true) == true)
+      session.trailConfig?.description?.contains(searchKeyword, ignoreCase = true) == true ||
+      session.trailConfig?.id?.contains(searchKeyword, ignoreCase = true) == true ||
+      session.testClass?.contains(searchKeyword, ignoreCase = true) == true ||
+      session.testName?.contains(searchKeyword, ignoreCase = true) == true ||
+      session.trailConfig?.title?.contains(searchKeyword, ignoreCase = true) == true
 
     priorityMatch && statusMatch && platformMatch && classifierMatch && keywordMatch
   }
 
+  // Wrap content in a key that changes with the tick to ensure subtree recomposes periodically
   Column {
     Row(
       modifier = Modifier.fillMaxWidth(),
@@ -149,6 +172,24 @@ fun SessionListComposable(
             onDismissRequest = { expanded = false },
           ) {
             DropdownMenuItem(
+              leadingIcon = {
+                Icon(
+                  Icons.Default.Folder, contentDescription = "Open Logs Folder"
+                )
+              },
+              text = { Text("Open Logs Folder") },
+              enabled = openLogsFolderRoot != null,
+              onClick = {
+                openLogsFolderRoot?.invoke()
+                expanded = false
+              }
+            )
+            DropdownMenuItem(
+              leadingIcon = {
+                Icon(
+                  Icons.Default.DeleteSweep, contentDescription = "Clear All Logs"
+                )
+              },
               text = { Text("Clear All Logs") },
               enabled = clearAllLogs != null,
               onClick = {
@@ -156,6 +197,20 @@ fun SessionListComposable(
                 expanded = false
               }
             )
+            if (onImportSession != null) {
+              DropdownMenuItem(
+                leadingIcon = {
+                  Icon(
+                    Icons.Default.Upload, contentDescription = "Import Session"
+                  )
+                },
+                text = { Text("Import Session") },
+                onClick = {
+                  onImportSession.invoke(Unit)
+                  expanded = false
+                }
+              )
+            }
           }
         }
       }
@@ -391,6 +446,24 @@ fun SessionListComposable(
                       }
                     }
 
+                    // Show imported badge if session was imported
+                    if (session.sessionId in importedSessionIds) {
+                      AssistChip(
+                        onClick = { },
+                        colors = AssistChipDefaults.assistChipColors(
+                          containerColor = MaterialTheme.colorScheme.tertiaryContainer,
+                          labelColor = MaterialTheme.colorScheme.onTertiaryContainer
+                        ),
+                        label = {
+                          Text(
+                            text = "IMPORTED",
+                            style = MaterialTheme.typography.labelSmall
+                          )
+                        },
+                        modifier = Modifier.padding(end = 4.dp, bottom = 2.dp)
+                      )
+                    }
+
                     // Device info after metadata
                     session.trailblazeDeviceInfo?.let { trailblazeDeviceInfo ->
                       AssistChip(
@@ -440,31 +513,76 @@ fun SessionListComposable(
                     status = session.latestStatus
                   )
 
-                  var sessionListItemDropdownShowing by remember { mutableStateOf(false) }
-                  Box {
-                    IconButton(onClick = { sessionListItemDropdownShowing = true }) {
-                      Icon(
-                        imageVector = Icons.Filled.MoreVert,
-                        contentDescription = "More Options"
-                      )
-                    }
-                    DropdownMenu(
-                      expanded = sessionListItemDropdownShowing,
-                      onDismissRequest = { sessionListItemDropdownShowing = false },
-                    ) {
-                      DropdownMenuItem(
-                        leadingIcon = {
-                          Icon(
-                            Icons.Default.Delete, contentDescription = "Delete Session"
+                  // Only show menu if at least one action is available
+                  if (deleteSession != null || openLogsFolder != null) {
+                    var sessionListItemDropdownShowing by remember { mutableStateOf(false) }
+                    Box {
+                      IconButton(onClick = { sessionListItemDropdownShowing = true }) {
+                        Icon(
+                          imageVector = Icons.Filled.MoreVert,
+                          contentDescription = "More Options"
+                        )
+                      }
+                      DropdownMenu(
+                        expanded = sessionListItemDropdownShowing,
+                        onDismissRequest = { sessionListItemDropdownShowing = false },
+                      ) {
+                        DropdownMenuItem(
+                          leadingIcon = {
+                            Icon(
+                              Icons.AutoMirrored.Filled.OpenInNew,
+                              contentDescription = "Open Session"
+                            )
+                          },
+                          text = { Text("Open Session") },
+                          onClick = {
+                            sessionClicked(session)
+                            sessionListItemDropdownShowing = false
+                          }
+                        )
+                        if (openLogsFolder != null) {
+                          DropdownMenuItem(
+                            leadingIcon = {
+                              Icon(
+                                Icons.Default.Folder, contentDescription = "Open Logs Folder"
+                              )
+                            },
+                            text = { Text("Open Logs Folder") },
+                            onClick = {
+                              openLogsFolder.invoke(session)
+                              sessionListItemDropdownShowing = false
+                            }
                           )
-                        },
-                        text = { Text("Delete Session") },
-                        enabled = deleteSession != null,
-                        onClick = {
-                          deleteSession?.invoke(session)
-                          sessionListItemDropdownShowing = false
                         }
-                      )
+                        if (deleteSession != null) {
+                          DropdownMenuItem(
+                            leadingIcon = {
+                              Icon(
+                                Icons.Default.Delete, contentDescription = "Delete Session"
+                              )
+                            },
+                            text = { Text("Delete Session") },
+                            onClick = {
+                              deleteSession.invoke(session)
+                              sessionListItemDropdownShowing = false
+                            }
+                          )
+                        }
+                        if (onExportSession != null) {
+                          DropdownMenuItem(
+                            leadingIcon = {
+                              Icon(
+                                Icons.Default.Save, contentDescription = "Export Session"
+                              )
+                            },
+                            text = { Text("Export Session") },
+                            onClick = {
+                              onExportSession.invoke(session)
+                              sessionListItemDropdownShowing = false
+                            }
+                          )
+                        }
+                      }
                     }
                   }
                 }

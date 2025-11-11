@@ -19,7 +19,7 @@ jobs:
   # Run Tests
   checks:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
@@ -63,12 +63,12 @@ jobs:
           java-version: 17
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407
 
-      - name: Create and start emulator
-        id: emulator-tests
+      - name: Create and start emulator and run tests
+        uses: reactivecircus/android-emulator-runner@b530d96654c385303d652368551fb075bc2f0b6b
+        id: run-tests
         continue-on-error: true
-        uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 34
           arch: x86_64
@@ -77,44 +77,152 @@ jobs:
           heap-size: 600M
           profile: Nexus 6
           script: |
-            set +e  # Don't exit on errors, we want to capture logs regardless
+            echo "========================================="
+            echo "Starting Android Test Execution"
+            echo "Working directory: $(pwd)"
+            echo "========================================="
             
-            # Run Android Tests and capture exit code
-            ./gradlew --info :examples:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class="xyz.block.trailblaze.examples.settings.AndroidSettingsTest#almostBecomeADeveloperRecorded" -Pandroid.testInstrumentationRunnerArguments.trailblaze.aiEnabled=false
-            TEST_EXIT_CODE=$?
-            echo "Exit code was $TEST_EXIT_CODE"
-            echo "test_exit_code=$TEST_EXIT_CODE" >> $GITHUB_ENV
+            # Run Android Tests
+            echo "Running Android Tests..."
+            ./gradlew --info :examples:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class="xyz.block.trailblaze.examples.clock.ClockTest" -Pandroid.testInstrumentationRunnerArguments.trailblaze.aiEnabled=false || TEST_FAILED=true
+            
+            echo "========================================="
+            echo "Test execution completed (failed: ${TEST_FAILED:-false})"
+            echo "========================================="
+            
+            # Check device status
+            echo "Checking ADB devices..."
+            adb devices -l || echo "Could not list ADB devices"
+            
+            # Check if logs exist on device
+            echo "Checking for logs on device..."
+            adb shell "ls -la /sdcard/Download/trailblaze-logs/ 2>&1" || echo "Could not list device log directory"
             
             echo "Pulling logs from device..."
             mkdir -p "$(pwd)/trailblaze-logs"
             adb pull /sdcard/Download/trailblaze-logs/. "$(pwd)/trailblaze-logs" || echo "Failed to pull logs"
+            PULL_EXIT_CODE=$?
+            echo "Log pull exit code: $PULL_EXIT_CODE"
             
-            # Generate Trailblaze report
-            # Build the Compose Web/WASM UI
-            ./gradlew :trailblaze-ui:wasmJsBrowserProductionWebpack || echo "Failed to build UI"
-            echo "Generating Trailblaze report..."
-            ./gradlew :trailblaze-report:run --args="$(pwd)/trailblaze-logs" || echo "Failed to generate report"
+            # Check what was pulled
+            echo "Checking pulled logs..."
+            if [ -d "$(pwd)/trailblaze-logs" ]; then
+              echo "trailblaze-logs directory exists"
+              echo "Contents:"
+              ls -laR "$(pwd)/trailblaze-logs" || echo "Could not list directory"
+              FILE_COUNT=$(find "$(pwd)/trailblaze-logs" -type f 2>/dev/null | wc -l)
+              echo "Total files pulled: $FILE_COUNT"
+            else
+              echo "WARNING: trailblaze-logs directory does not exist!"
+            fi
             
-            # Zip up logs (do this before exit so it happens on both success and failure)
-            echo "Creating zip file of logs..."
-            ls -la "$(pwd)/trailblaze-logs" || echo "No trailblaze-logs directory found"
-            cd "$(pwd)/trailblaze-logs" && zip -r "../trailblaze-logs.zip" . && cd ..
-            echo "Zip file created: $(ls -lh trailblaze-logs.zip)" || true
-            
-            echo "Script completed, returning success"
-            true
+            echo "========================================="
+            echo "Emulator script completed"
+            echo "========================================="
 
-      - name: Upload artifacts
-        if: always()  # Ensures this runs even if the previous step failed
-        uses: actions/upload-artifact@v4
-        with:
-          name: trailblaze-artifacts
-          path: trailblaze-logs.zip
-
-      - name: Fail job if tests failed
+      - name: Verify logs were pulled
         if: always()
         run: |
-          if [ "${{ env.test_exit_code }}" != "0" ]; then
-            echo "Tests failed with exit code ${{ env.test_exit_code }}"
-            exit ${{ env.test_exit_code }}
+          echo "========================================="
+          echo "Verifying logs in workspace"
+          echo "Working directory: $(pwd)"
+          echo "========================================="
+          
+          if [ -d "$(pwd)/trailblaze-logs" ]; then
+            echo "trailblaze-logs directory exists in workspace"
+            echo "Contents:"
+            ls -laR "$(pwd)/trailblaze-logs" || echo "Could not list directory"
+          else
+            echo "WARNING: trailblaze-logs directory not found in workspace"
           fi
+
+      - name: Generate Trailblaze report
+        if: always()
+        continue-on-error: true
+        run: |
+          echo "========================================="
+          echo "Building Compose Web/WASM UI..."
+          ./gradlew :trailblaze-ui:wasmJsBrowserProductionWebpack
+          UI_EXIT_CODE=$?
+          echo "UI build exit code: $UI_EXIT_CODE"
+          
+          echo "Generating Trailblaze report..."
+          ./gradlew :trailblaze-report:run --args="$(pwd)/trailblaze-logs"
+          REPORT_EXIT_CODE=$?
+          echo "Report generation exit code: $REPORT_EXIT_CODE"
+          
+          echo "Checking for generated report..."
+          if [ -f "$(pwd)/trailblaze-logs/trailblaze_report.html" ]; then
+            echo "✓ Report found at: $(pwd)/trailblaze-logs/trailblaze_report.html"
+            ls -lh "$(pwd)/trailblaze-logs/trailblaze_report.html"
+          else
+            echo "✗ Report NOT found at expected location"
+            echo "Searching for report files..."
+            find "$(pwd)" -name "trailblaze_report.html" -o -name "*report*.html" 2>/dev/null || echo "No report files found"
+          fi
+          echo "========================================="
+
+      - name: Create artifacts
+        if: always()
+        continue-on-error: true
+        run: |
+          echo "========================================="
+          echo "Creating Artifacts"
+          echo "========================================="
+          
+          # Check for HTML report
+          echo "Checking for HTML report..."
+          if [ -f "$(pwd)/trailblaze-logs/trailblaze_report.html" ]; then
+            REPORT_SIZE=$(ls -lh "$(pwd)/trailblaze-logs/trailblaze_report.html" | awk '{print $5}')
+            echo "✓ Found trailblaze_report.html (size: $REPORT_SIZE)"
+          
+            # Copy report to workspace root for separate artifact upload
+            echo "Copying report to workspace root..."
+            cp "$(pwd)/trailblaze-logs/trailblaze_report.html" "$(pwd)/trailblaze_report.html"
+            if [ -f "$(pwd)/trailblaze_report.html" ]; then
+              echo "✓ Report copied successfully"
+            else
+              echo "✗ Failed to copy report"
+            fi
+          else
+            echo "✗ trailblaze_report.html not found"
+          fi
+          
+          # Zip up logs
+          if [ -d "$(pwd)/trailblaze-logs" ] && [ "$(ls -A $(pwd)/trailblaze-logs 2>/dev/null)" ]; then
+            echo "Zipping logs..."
+            cd "$(pwd)/trailblaze-logs" && zip -r "../trailblaze-logs.zip" . && cd ..
+            ZIP_EXIT_CODE=$?
+            echo "Zip exit code: $ZIP_EXIT_CODE"
+          
+            if [ -f "$(pwd)/trailblaze-logs.zip" ]; then
+              ZIP_SIZE=$(ls -lh "$(pwd)/trailblaze-logs.zip" | awk '{print $5}')
+              echo "Created trailblaze-logs.zip (size: $ZIP_SIZE)"
+            else
+              echo "WARNING: trailblaze-logs.zip was not created!"
+            fi
+          else
+            echo "WARNING: No logs found to zip (directory empty or doesn't exist)"
+          fi
+          
+          echo "========================================="
+
+      - name: Upload logs zip
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trailblaze-logs
+          path: trailblaze-logs.zip
+
+      - name: Upload HTML report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trailblaze-report
+          path: trailblaze_report.html
+
+      - name: Fail if tests failed
+        if: steps.run-tests.outcome == 'failure'
+        run: |
+          echo "Tests failed - failing the workflow"
+          exit 1

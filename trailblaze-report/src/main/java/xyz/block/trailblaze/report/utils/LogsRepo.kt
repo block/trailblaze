@@ -4,6 +4,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.datetime.Clock
 import xyz.block.trailblaze.logs.TrailblazeLogsDataProvider
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
@@ -11,8 +12,11 @@ import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.report.utils.TrailblazeYamlSessionRecording.generateRecordedYaml
 import java.io.File
+import kotlin.time.Duration.Companion.milliseconds
 
 private typealias TrailblazeSessionId = String
+
+const val DEFAULT_TIMEOUT = 120000L
 
 class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
 
@@ -328,6 +332,54 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
       .maxByOrNull { it.first }
       ?.second
 
+    // Check if session is abandoned (in progress but >2 mins since last activity)
+    if (sessionStartedLog != null && lastSessionStatusLog != null) {
+      val lastStatus = lastSessionStatusLog.sessionStatus
+
+      // Only check for abandonment if session is still in Started state
+      if (lastStatus is SessionStatus.Started) {
+        val currentTimeMs = Clock.System.now().toEpochMilliseconds()
+
+        // Find the most recent log of any type to determine last activity
+        val allLogs = getLogsForSession(sessionId)
+        val mostRecentLog = allLogs.maxByOrNull { it.timestamp.toEpochMilliseconds() }
+
+        if (mostRecentLog != null) {
+          val timeSinceLastActivity = currentTimeMs - mostRecentLog.timestamp.toEpochMilliseconds()
+          val twoMinutesMs = DEFAULT_TIMEOUT
+
+          if (timeSinceLastActivity > twoMinutesMs) {
+            // Session is abandoned - generate a fake end log
+            val abandonedTimestamp = kotlinx.datetime.Instant.fromEpochMilliseconds(
+              mostRecentLog.timestamp.toEpochMilliseconds() + twoMinutesMs,
+            )
+            val durationMs = abandonedTimestamp.toEpochMilliseconds() - sessionStartedLog.timestamp.toEpochMilliseconds()
+
+            val abandonedLog = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+              sessionStatus = SessionStatus.Ended.TimeoutReached(
+                durationMs = durationMs,
+                message = "Session was abandoned after ${timeSinceLastActivity.milliseconds.inWholeMinutes} minutes of inactivity",
+              ),
+              session = sessionId,
+              timestamp = abandonedTimestamp,
+            )
+
+            // Return session info with Abandoned status
+            val startedStatus: SessionStatus.Started = sessionStartedLog.sessionStatus as SessionStatus.Started
+            return SessionInfo(
+              sessionId = sessionStartedLog.session,
+              timestamp = sessionStartedLog.timestamp,
+              latestStatus = abandonedLog.sessionStatus,
+              testName = startedStatus.testMethodName,
+              testClass = startedStatus.testClassName,
+              trailblazeDeviceInfo = startedStatus.trailblazeDeviceInfo,
+              trailConfig = startedStatus.trailConfig,
+            )
+          }
+        }
+      }
+    }
+
     return if (sessionStartedLog != null && lastSessionStatusLog != null) {
       val startedStatus: SessionStatus.Started = sessionStartedLog.sessionStatus as SessionStatus.Started
       SessionInfo(
@@ -363,7 +415,7 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
   fun saveLogToDisk(logEvent: TrailblazeLog): File {
     val logCount = getNextLogCountForSession(logEvent.session)
     val jsonLogFilename = File(
-      getSessionDir(logEvent.session),
+      getSessionDir(session = logEvent.session),
       "${formatNumber(logCount)}_${logEvent::class.java.simpleName}.json",
     )
     jsonLogFilename.writeText(

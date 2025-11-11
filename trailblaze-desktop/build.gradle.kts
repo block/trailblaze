@@ -22,6 +22,7 @@ dependencies {
   implementation(compose.foundation)
   implementation(compose.material3)
   implementation(compose.components.resources)
+  implementation(libs.koog.prompt.executor.clients)
 }
 
 compose.desktop {

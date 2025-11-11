@@ -37,6 +37,7 @@ import xyz.block.trailblaze.ui.tabs.session.models.GroupedLog
 import xyz.block.trailblaze.ui.theme.isDarkTheme
 import xyz.block.trailblaze.ui.utils.FormattingUtils.formatDuration
 import xyz.block.trailblaze.ui.utils.LogUtils.logIndentLevel
+import xyz.block.trailblaze.api.MaestroDriverActionType
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun LogGroupRow(
@@ -50,7 +51,7 @@ fun LogGroupRow(
   showDetails: ((TrailblazeLog) -> Unit)? = null,
   showInspectUI: ((TrailblazeLog) -> Unit)? = null,
   showChatHistory: ((TrailblazeLog) -> Unit)? = null,
-  onShowScreenshotModal: (imageModel: Any?, deviceWidth: Int, deviceHeight: Int, clickX: Int?, clickY: Int?) -> Unit = { _, _, _, _, _ -> },
+  onShowScreenshotModal: (imageModel: Any?, deviceWidth: Int, deviceHeight: Int, clickX: Int?, clickY: Int?, action: MaestroDriverActionType?) -> Unit = { _, _, _, _, _, _ -> },
 ) {
   val firstLog = group.logs.first()
   val indent = logIndentLevel(firstLog)
@@ -111,11 +112,7 @@ fun LogGroupRow(
               imageLoader = imageLoader,
               cardSize = cardSize,
               showDetails = { showDetails?.invoke(log) },
-              showInspectUI = { 
-                if (log is TrailblazeLog.TrailblazeLlmRequestLog) {
-                  showInspectUI?.invoke(log) 
-                }
-              },
+              showInspectUI = { showInspectUI?.invoke(log) },
               showChatHistory = { showChatHistory?.invoke(log) },
               onShowScreenshotModal = onShowScreenshotModal
             )

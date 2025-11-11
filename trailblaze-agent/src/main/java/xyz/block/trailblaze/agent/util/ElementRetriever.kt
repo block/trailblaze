@@ -39,7 +39,7 @@ object ElementRetriever {
 
     return if (index < nodes.size) {
       val node = nodes[index]
-      println("$TAG: Using node at index $index with resourceId: ${node.resourceId}, text: ${node.text}, accessibilityText: ${node.accessibilityText}")
+      println("$TAG: Using node at index $index with resourceId: ${node.resourceId}, text: ${node.text}, hintText: ${node.hintText}, accessibilityText: ${node.accessibilityText}")
       extractTextFromNode(node) ?: "No text found for resource ID: $resourceId at index $index"
     } else {
       println("$TAG: Index $index out of bounds for resource ID: $resourceId (max index: ${nodes.size - 1})")
@@ -134,14 +134,10 @@ object ElementRetriever {
    * Extract text from a node, preferring text attribute and falling back to content description
    */
   private fun extractTextFromNode(node: ViewHierarchyTreeNode): String? {
-    // Try text first
-    val nodeText = node.text
-    if (nodeText != null && nodeText.isNotEmpty()) {
-      return nodeText
-    }
+    fun nullIfEmpty(str: String?): String? = if (str.isNullOrEmpty()) null else str
 
-    // Fall back to content description
-    val nodeContentDesc = node.accessibilityText
-    return nodeContentDesc
+    // Maestro checks in this order: text, hintText, accessibilityText
+    // Source: https://github.com/mobile-dev-inc/Maestro/blob/9e0cf33b8c5eedc23d278083069f79778050e53b/maestro-client/src/main/java/maestro/Filters.kt#L61-L98
+    return nullIfEmpty(node.text) ?: nullIfEmpty(node.hintText) ?: nullIfEmpty(node.accessibilityText)
   }
 }

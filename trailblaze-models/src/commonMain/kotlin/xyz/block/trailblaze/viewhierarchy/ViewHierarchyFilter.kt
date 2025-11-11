@@ -1,20 +1,23 @@
 package xyz.block.trailblaze.viewhierarchy
 
+import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 
 /**
  * ViewHierarchyFilter provides functionality to filter view hierarchy elements
  * to only those that are visible and interactable, reducing the size of data
  * sent to the LLM.
  */
-class ViewHierarchyFilter(
-  private val screenWidth: Int,
-  private val screenHeight: Int,
+abstract class ViewHierarchyFilter(
+  protected val screenWidth: Int,
+  protected val screenHeight: Int,
 ) {
 
   /**
    * Bounds represents the rectangular bounds of a UI element.
    */
+  @Serializable
   data class Bounds(
     val x1: Int,
     val y1: Int,
@@ -44,22 +47,25 @@ class ViewHierarchyFilter(
    * @param viewHierarchy The original view hierarchy
    * @return Filtered view hierarchy with only interactable elements
    */
-  fun filterInteractableViewHierarchyTreeNodes(viewHierarchy: ViewHierarchyTreeNode): ViewHierarchyTreeNode {
-    // Extract screen bounds from the root node or use provided dimensions
-    val rootBounds = viewHierarchy.bounds ?: Bounds(
-      x1 = 0,
-      y1 = 0,
-      x2 = screenWidth,
-      y2 = screenHeight,
-    )
+  abstract fun filterInteractableViewHierarchyTreeNodes(viewHierarchy: ViewHierarchyTreeNode): ViewHierarchyTreeNode
 
-    // Find visible elements
-    val visibleViewHierarchyTreeNodes: List<ViewHierarchyTreeNode> =
-      findVisibleViewHierarchyTreeNodes(viewHierarchy.aggregate(), rootBounds)
+  /**
+   * Find elements that are visible on screen using platform-specific logic.
+   */
+  protected abstract fun findVisibleViewHierarchyTreeNodes(
+    elements: List<ViewHierarchyTreeNode>,
+    screenBounds: Bounds,
+  ): List<ViewHierarchyTreeNode>
 
-    // Find interactable elements among visible ones
+  /**
+   * Common implementation to create the filtered view hierarchy root node.
+   */
+  protected fun createFilteredRoot(
+    viewHierarchy: ViewHierarchyTreeNode,
+    visibleElements: List<ViewHierarchyTreeNode>,
+  ): ViewHierarchyTreeNode {
     val interactableViewHierarchyTreeNodes: List<ViewHierarchyTreeNode> =
-      findInteractableViewHierarchyTreeNodes(visibleViewHierarchyTreeNodes)
+      findInteractableViewHierarchyTreeNodes(visibleElements)
 
     return ViewHierarchyTreeNode(
       children = interactableViewHierarchyTreeNodes,
@@ -68,7 +74,42 @@ class ViewHierarchyFilter(
     )
   }
 
+  /**
+   * Check if two bounds rectangles overlap.
+   */
+  protected fun boundsOverlap(
+    left1: Int,
+    top1: Int,
+    right1: Int,
+    bottom1: Int,
+    left2: Int,
+    top2: Int,
+    right2: Int,
+    bottom2: Int,
+  ): Boolean {
+    // No overlap if one rectangle is to the left of the other
+    if (right1 <= left2 || right2 <= left1) return false
+
+    // No overlap if one rectangle is above the other
+    if (bottom1 <= top2 || bottom2 <= top1) return false
+
+    return true
+  }
+
   companion object {
+
+    /**
+     * Factory method to create platform-specific ViewHierarchyFilter instances.
+     */
+    fun create(
+      screenWidth: Int,
+      screenHeight: Int,
+      platform: TrailblazeDevicePlatform,
+    ): ViewHierarchyFilter = when (platform) {
+      TrailblazeDevicePlatform.ANDROID -> AndroidViewHierarchyFilter(screenWidth, screenHeight)
+      TrailblazeDevicePlatform.IOS -> IosViewHierarchyFilter(screenWidth, screenHeight)
+      TrailblazeDevicePlatform.WEB -> WebViewHierarchyFilter(screenWidth, screenHeight)
+    }
 
     /**
      * Find elements that can be interacted with.
@@ -83,13 +124,15 @@ class ViewHierarchyFilter(
       // Sort interactable elements by priority:
       // 1. ViewHierarchyTreeNodes with text
       // 2. ViewHierarchyTreeNodes with resource ID
-      // 3. ViewHierarchyTreeNodes with accessibility text
-      // 4. Everything else
+      // 3. ViewHierarchyTreeNodes with hint text
+      // 4. ViewHierarchyTreeNodes with accessibility text
+      // 5. Everything else
       interactable.sortWith(
         compareBy(
           { it -> it.text?.isNotEmpty() != true }, // Text elements first
           { it -> it.resourceId?.isNotEmpty() != true }, // Resource ID elements second
-          { it -> it.accessibilityText?.isNotEmpty() != true }, // Accessibility text elements third
+          { it -> it.hintText?.isNotEmpty() != true }, // Hint text elements third
+          { it -> it.accessibilityText?.isNotEmpty() != true }, // Accessibility text elements fourth
           { true }, // Everything else last
         ),
       )
@@ -112,6 +155,10 @@ class ViewHierarchyFilter(
         if (elem.text?.isNotEmpty() == true) {
           return true
         }
+        // Include elements with hint text
+        if (elem.hintText?.isNotEmpty() == true) {
+          return true
+        }
         // Include elements with accessibility text
         if (elem.accessibilityText?.isNotEmpty() == true) {
           return true
@@ -124,7 +171,7 @@ class ViewHierarchyFilter(
     /**
      * Check if two bounds rectangles overlap.
      */
-    private fun boundsOverlap(
+    protected fun boundsOverlap(
       left1: Int,
       top1: Int,
       right1: Int,
@@ -141,109 +188,6 @@ class ViewHierarchyFilter(
       if (bottom1 <= top2 || bottom2 <= top1) return false
 
       return true
-    }
-
-    /**
-     * Find elements that are visible on screen.
-     */
-    private fun findVisibleViewHierarchyTreeNodes(
-      elements: List<ViewHierarchyTreeNode>,
-      screenBounds: Bounds,
-    ): List<ViewHierarchyTreeNode> {
-      // First pass: find all overlays and sort them by z-index (top to bottom)
-      val overlays = elements
-        .filter { elem ->
-          val bool = elem.isOverlay()
-          bool
-        }.sortedBy { it.bounds?.y1 }
-
-      // Start with all elements that are in bounds
-      var candidates = elements
-        .filter { elem ->
-          elem.bounds != null && screenBounds.contains(elem.bounds)
-        }.toMutableList()
-
-      // For each overlay, process elements
-      for (i in overlays.indices) {
-        val overlay = overlays[i]
-        val remaining = mutableListOf<ViewHierarchyTreeNode>()
-
-        for (elem in candidates) {
-          // Skip processing if element is part of system UI
-          if (elem.resourceId?.lowercase()?.contains("systemui") == true) {
-            remaining.add(elem)
-            continue
-          }
-
-          // Keep elements that are part of this overlay or any overlay above it
-          var isOverlayViewHierarchyTreeNode = false
-          for (aboveOverlay in overlays.subList(i, overlays.size)) {
-            if (elem.resourceId == aboveOverlay.resourceId ||
-              elem.containerId == aboveOverlay.resourceId ||
-              (
-                elem.containerId != null &&
-                  aboveOverlay.resourceId != null &&
-                  aboveOverlay.resourceId.isNotEmpty() &&
-                  elem.containerId!!.contains(aboveOverlay.resourceId)
-                )
-            ) {
-              isOverlayViewHierarchyTreeNode = true
-              break
-            }
-          }
-
-          if (isOverlayViewHierarchyTreeNode) {
-            remaining.add(elem)
-            continue
-          }
-
-          // If element is above all overlays, keep it
-          if (elem.bounds != null &&
-            overlays.subList(i, overlays.size).all { o ->
-              elem.bounds.y2 == (o.bounds?.y1 ?: 0)
-            }
-          ) {
-            remaining.add(elem)
-            continue
-          }
-
-          // For sheet containers, be strict - if element overlaps, remove it
-          if ((overlay.resourceId?.lowercase()?.contains("sheet_container") == true) &&
-            !overlay.resourceId.lowercase().contains("root")
-          ) {
-            // Check if element is part of the overlay
-            if (elem.containerId == overlay.resourceId ||
-              elem.resourceId == overlay.resourceId
-            ) {
-              remaining.add(elem)
-              continue
-            }
-
-            if (elem.bounds != null &&
-              overlay.bounds != null &&
-              boundsOverlap(
-                elem.bounds.x1,
-                elem.bounds.y1,
-                elem.bounds.x2,
-                elem.bounds.y2,
-                overlay.bounds.x1,
-                overlay.bounds.y1,
-                overlay.bounds.x2,
-                overlay.bounds.y2,
-              )
-            ) {
-              continue
-            }
-          }
-
-          // If we get here, keep the element
-          remaining.add(elem)
-        }
-
-        candidates = remaining
-      }
-
-      return candidates
     }
 
     /**
@@ -267,23 +211,6 @@ class ViewHierarchyFilter(
       val totalArea = bounds.width * bounds.height
 
       return visibleArea.toDouble() / totalArea.toDouble()
-    }
-
-    /**
-     * Check if an element is an overlay like sheet, modal, drawer, etc.
-     * Simplified to rely entirely on the FrameLayout class.
-     */
-    private fun ViewHierarchyTreeNode.isOverlay(): Boolean {
-      val element = this
-      // Skip system UI elements or root/content containers
-      val isRootOrSystemOrContent = listOf("root", "system", "content").any { keyword ->
-        element.resourceId?.lowercase()?.contains(keyword) ?: false
-      }
-      if (isRootOrSystemOrContent) {
-        return false
-      }
-      // Consider FrameLayout as an overlay
-      return element.className?.contains("FrameLayout") ?: false
     }
 
     /**
@@ -317,6 +244,7 @@ class ViewHierarchyFilter(
     private fun ViewHierarchyTreeNode.hasMeaningfulAttributes(): Boolean = with(this) {
       listOf(
         text,
+        hintText,
         accessibilityText,
       ).any {
         it?.isNotBlank() == true
@@ -334,10 +262,10 @@ class ViewHierarchyFilter(
           resourceId.contains("status_bar_container") || resourceId.contains("status_bar_launch_animation_container")
         !hasNotNeededId
       }
-      val isVisibleRectView = this.bounds?.let {
-        it.width == 0 && it.height == 0
+      val isZeroSizeView = this.bounds?.let {
+        it.width == 0 || it.height == 0
       } ?: false
-      return isOkResourceId && isVisibleRectView
+      return isOkResourceId && !isZeroSizeView
     }
 
     /**
@@ -418,14 +346,26 @@ class ViewHierarchyFilter(
     }
 
     /**
-     * Recursively collect all optimized nodes (including all promoted children at every level)
+     * Collects all elements with meaningful content for iOS platform.
+     * Includes elements with text, hint text, accessibility text, clickable elements, resource IDs, or focusable elements.
      */
-    private fun collectAllOptimizedNodes(
-      result: OptimizationResult,
-      viewHierarchy: ViewHierarchyTreeNode,
-    ): List<ViewHierarchyTreeNode> = result.node?.let { listOf(it) }
-      ?: result.promotedChildren.flatMap { child ->
-        collectAllOptimizedNodes(child.optimizeTree(false, viewHierarchy), viewHierarchy)
-      }
+    fun ViewHierarchyTreeNode.collectIOSElements(): List<ViewHierarchyTreeNode> = this.aggregate().filter { node ->
+      node.enabled &&
+        node.bounds != null &&
+        (
+          // Include nodes with text content
+          !node.text.isNullOrBlank() ||
+            // Include nodes with hint text
+            !node.hintText.isNullOrBlank() ||
+            // Include nodes with accessibility text
+            !node.accessibilityText.isNullOrBlank() ||
+            // Include clickable nodes (even if not many on iOS)
+            node.clickable ||
+            // Include nodes with resource IDs
+            !node.resourceId.isNullOrBlank() ||
+            // Include focusable elements
+            node.focusable
+          )
+    }
   }
 }

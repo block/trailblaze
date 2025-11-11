@@ -3,6 +3,7 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 plugins {
   alias(libs.plugins.kotlin.jvm)
   alias(libs.plugins.dagp)
+  alias(libs.plugins.kotlin.serialization)
   application
 }
 
@@ -22,4 +23,5 @@ dependencies {
   implementation(project(":trailblaze-common"))
   runtimeOnly(libs.kotlin.reflect)
   implementation(libs.koog.agents.tools)
+  implementation(libs.gson)
 }

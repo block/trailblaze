@@ -20,6 +20,7 @@ import xyz.block.trailblaze.host.screenstate.HostMaestroDriverScreenState
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.model.TraceId
+import xyz.block.trailblaze.maestro.AssertionLogger
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.utils.Ext.asJsonObject
 import java.io.File
@@ -27,6 +28,7 @@ import java.io.File
 class MaestroHostRunnerImpl(
   requestedPlatform: TrailblazeDevicePlatform? = null,
   setOfMarkEnabled: Boolean = true,
+  val trailblazeLogger: TrailblazeLogger,
 ) : MaestroHostRunner {
   val connectedDevice: TrailblazeConnectedDevice by lazy {
     if (requestedPlatform == null) {
@@ -41,7 +43,7 @@ class MaestroHostRunnerImpl(
   val connectedTrailblazeDriverType: TrailblazeDriverType = connectedDevice.trailblazeDriverType
 
   val loggingDriver: LoggingDriver by lazy {
-    connectedDevice.loggingDriver
+    connectedDevice.getLoggingDriver(trailblazeLogger)
   }
 
   companion object {
@@ -93,12 +95,19 @@ class MaestroHostRunnerImpl(
     commands: List<MaestroCommand>,
     traceId: TraceId?,
   ): TrailblazeToolResult {
+    // Create assertion logger for visualization
+    val assertionLogger = AssertionLogger(Maestro(loggingDriver), screenStateProvider, trailblazeLogger)
+
     commands.forEach { maestroCommand ->
       val startTime = Clock.System.now()
       var result: TrailblazeToolResult = TrailblazeToolResult.Success
 
       Orchestra(
         maestro = Maestro(loggingDriver),
+        onCommandStart = { index: Int, command: MaestroCommand ->
+          // Log assertion commands for visualization
+          assertionLogger.logAssertionCommand(command)
+        },
         onCommandFailed = { index: Int, maestroCommand: MaestroCommand, throwable: Throwable ->
           val commandJson = maestroCommand.asJsonObject()
           result = TrailblazeToolResult.Error.MaestroValidationError(
@@ -112,7 +121,7 @@ class MaestroHostRunnerImpl(
         runBlocking { orchestra.runFlow(listOf(maestroCommand)) }
       }
 
-      TrailblazeLogger.log(
+      trailblazeLogger.log(
         TrailblazeLog.MaestroCommandLog(
           maestroCommandJsonObj = maestroCommand.asJsonObject(),
           trailblazeToolResult = result,
@@ -120,7 +129,7 @@ class MaestroHostRunnerImpl(
           durationMs = Clock.System.now().toEpochMilliseconds() - startTime.toEpochMilliseconds(),
           traceId = traceId,
           successful = result is TrailblazeToolResult.Success,
-          session = TrailblazeLogger.getCurrentSessionId(),
+          session = trailblazeLogger.getCurrentSessionId(),
         ),
       )
       if (result != TrailblazeToolResult.Success) {

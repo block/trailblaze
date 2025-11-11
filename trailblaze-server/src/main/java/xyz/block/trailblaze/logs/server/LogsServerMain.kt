@@ -1,7 +1,8 @@
 package xyz.block.trailblaze.logs.server
 
-import xyz.block.trailblaze.report.utils.GitUtils
+import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
+import xyz.block.trailblaze.util.GitUtils
 import java.io.File
 
 fun main(args: Array<String>) {
@@ -23,7 +24,11 @@ fun main(args: Array<String>) {
   println("Running the logs-server is NOT required, but extremely helpful for debugging local usage.")
   println("Open http://localhost:52525 in your browser to view the trailblaze logs.")
   println("NOTE: Gradle will continue to say 'EXECUTING' until you stop the server.")
-  TrailblazeMcpServer(logsRepo, isOnDeviceMode = { true }).startSseMcpServer(
+  TrailblazeMcpServer(
+    logsRepo = logsRepo,
+    isOnDeviceMode = { true },
+    targetTestAppProvider = { TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget },
+  ).startSseMcpServer(
     port = port,
     wait = true,
   )

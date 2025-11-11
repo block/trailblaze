@@ -1,5 +1,8 @@
 package xyz.block.trailblaze.ui.tabs.session
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -7,6 +10,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -17,8 +22,17 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusTarget
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CoroutineScope
@@ -35,9 +49,10 @@ import xyz.block.trailblaze.ui.composables.FullScreenModalOverlay
 import xyz.block.trailblaze.ui.composables.ScreenshotImageModal
 import xyz.block.trailblaze.ui.images.ImageLoader
 import xyz.block.trailblaze.ui.images.NetworkImageLoader
-import xyz.block.trailblaze.ui.tabs.session.group.LogDetailsDialog
 import xyz.block.trailblaze.ui.tabs.session.group.ChatHistoryDialog
+import xyz.block.trailblaze.ui.tabs.session.group.LogDetailsDialog
 import xyz.block.trailblaze.ui.tabs.session.models.SessionDetail
+import xyz.block.trailblaze.ui.models.TrailblazeServerState
 
 @Composable
 fun LiveSessionDetailComposable(
@@ -48,6 +63,9 @@ fun LiveSessionDetailComposable(
   generateRecordingYaml: () -> String,
   onBackClick: () -> Unit,
   imageLoader: ImageLoader = NetworkImageLoader(),
+  onDeleteSession: () -> Unit = {},
+  onOpenLogsFolder: () -> Unit = {},
+  onExportSession: () -> Unit = {},
   // Persistent UI state
   initialZoomOffset: Int = 0,
   initialFontScale: Float = 1f,
@@ -55,15 +73,26 @@ fun LiveSessionDetailComposable(
   onZoomOffsetChanged: (Int) -> Unit = {},
   onFontScaleChanged: (Float) -> Unit = {},
   onViewModeChanged: (SessionViewMode) -> Unit = {},
+  onExportToRepo: (String) -> Unit = {},
+  exportFeatureEnabled: Boolean = false,
+  // UI Inspector settings
+  initialInspectorScreenshotWidth: Int = TrailblazeServerState.DEFAULT_UI_INSPECTOR_SCREENSHOT_WIDTH,
+  initialInspectorDetailsWidth: Int = TrailblazeServerState.DEFAULT_UI_INSPECTOR_DETAILS_WIDTH,
+  initialInspectorHierarchyWidth: Int = TrailblazeServerState.DEFAULT_UI_INSPECTOR_HIERARCHY_WIDTH,
+  initialInspectorFontScale: Float = TrailblazeServerState.DEFAULT_UI_INSPECTOR_FONT_SCALE,
+  onInspectorScreenshotWidthChanged: (Int) -> Unit = {},
+  onInspectorDetailsWidthChanged: (Int) -> Unit = {},
+  onInspectorHierarchyWidthChanged: (Int) -> Unit = {},
+  onInspectorFontScaleChanged: (Float) -> Unit = {},
 ) {
   // Modal state at the TOP level - this is the root
   var showDetailsDialog by remember { mutableStateOf(false) }
   var showInspectUIDialog by remember { mutableStateOf(false) }
   var showChatHistoryDialog by remember { mutableStateOf(false) }
   var currentLog by remember { mutableStateOf<TrailblazeLog?>(null) }
-  var currentLlmLog by remember { mutableStateOf<TrailblazeLog.TrailblazeLlmRequestLog?>(null) }
+  var currentInspectorLog by remember { mutableStateOf<TrailblazeLog?>(null) }
   var currentChatHistoryLog by remember { mutableStateOf<TrailblazeLog.TrailblazeLlmRequestLog?>(null) }
-  
+
   // Screenshot modal state
   var showScreenshotModal by remember { mutableStateOf(false) }
   var modalImageModel by remember { mutableStateOf<Any?>(null) }
@@ -71,6 +100,16 @@ fun LiveSessionDetailComposable(
   var modalDeviceHeight by remember { mutableStateOf(0) }
   var modalClickX by remember { mutableStateOf<Int?>(null) }
   var modalClickY by remember { mutableStateOf<Int?>(null) }
+  var modalAction by remember {
+    mutableStateOf<xyz.block.trailblaze.api.MaestroDriverActionType?>(
+      null
+    )
+  }
+
+  // Cancellation state
+  var isCancelling by remember { mutableStateOf(false) }
+  var showCancelConfirmation by remember { mutableStateOf(false) }
+  var cancellationError by remember { mutableStateOf<String?>(null) }
 
   var logs by remember(session.sessionId) {
     mutableStateOf(emptyList<TrailblazeLog>())
@@ -105,6 +144,7 @@ fun LiveSessionDetailComposable(
         CoroutineScope(Dispatchers.Default).launch {
           val newLogs = sessionDataProvider.getLogsForSession(session.sessionId)
           logs = newLogs
+          isCancelling = false  // Reset cancelling state when session ends
         }
       }
     }
@@ -116,12 +156,10 @@ fun LiveSessionDetailComposable(
     }
   }
 
-  val sessionDetail = remember(logs) {
-    val overallStatus = logs
-      .filterIsInstance<TrailblazeLog.TrailblazeSessionStatusChangeLog>()
-      .lastOrNull()?.sessionStatus
-
-    val inProgress = overallStatus == null || overallStatus is SessionStatus.Started
+  val sessionDetail = remember(logs, session) {
+    // Use the session's latestStatus which already includes timeout detection from getSessionInfo()
+    val overallStatus = session.latestStatus
+    val inProgress = overallStatus is SessionStatus.Started
 
     val firstLogWithDeviceInfo = logs.firstOrNull { log ->
       when (log) {
@@ -161,8 +199,8 @@ fun LiveSessionDetailComposable(
     showDetailsDialog = true
   }
 
-  val handleShowInspectUI: (TrailblazeLog.TrailblazeLlmRequestLog) -> Unit = { log ->
-    currentLlmLog = log
+  val handleShowInspectUI: (TrailblazeLog) -> Unit = { log ->
+    currentInspectorLog = log
     showInspectUIDialog = true
   }
 
@@ -171,17 +209,106 @@ fun LiveSessionDetailComposable(
     showChatHistoryDialog = true
   }
 
-  val handleShowScreenshotModal: (Any?, Int, Int, Int?, Int?) -> Unit = { imageModel, deviceWidth, deviceHeight, clickX, clickY ->
-    modalImageModel = imageModel
-    modalDeviceWidth = deviceWidth
-    modalDeviceHeight = deviceHeight
-    modalClickX = clickX
-    modalClickY = clickY
-    showScreenshotModal = true
+  val handleShowScreenshotModal: (Any?, Int, Int, Int?, Int?, xyz.block.trailblaze.api.MaestroDriverActionType?) -> Unit =
+    { imageModel, deviceWidth, deviceHeight, clickX, clickY, action ->
+      modalImageModel = imageModel
+      modalDeviceWidth = deviceWidth
+      modalDeviceHeight = deviceHeight
+      modalClickX = clickX
+      modalClickY = clickY
+      modalAction = action
+      showScreenshotModal = true
+    }
+
+  val onCancelSession: () -> Unit = {
+    showCancelConfirmation = true
+  }
+
+  val handleConfirmCancel: () -> Unit = {
+    showCancelConfirmation = false
+    isCancelling = true
+    cancellationError = null
+
+    CoroutineScope(Dispatchers.Default).launch {
+      try {
+        val result = sessionDataProvider.cancelSession(session.sessionId)
+        if (!result) {
+          cancellationError = "Failed to cancel session. Check console for details."
+        }
+        // Session end will be detected by the listener and UI will update
+      } catch (e: Exception) {
+        cancellationError = "Error cancelling session: ${e.message}"
+        isCancelling = false
+      }
+    }
   }
 
   // Root Box that contains everything - main content AND modals
-  Box(modifier = Modifier.fillMaxSize()) {
+  val focusRequester = remember { FocusRequester() }
+
+  // Request focus whenever modals close
+  LaunchedEffect(
+    showDetailsDialog, showInspectUIDialog, showChatHistoryDialog, showScreenshotModal,
+    showCancelConfirmation
+  ) {
+    // If all modals are closed, request focus
+    if (!showDetailsDialog && !showInspectUIDialog && !showChatHistoryDialog && !showScreenshotModal && !showCancelConfirmation) {
+      focusRequester.requestFocus()
+    }
+  }
+
+  Box(
+    modifier = Modifier
+      .fillMaxSize()
+      .focusRequester(focusRequester)
+      .focusTarget()
+      .onPreviewKeyEvent { keyEvent ->
+        if (keyEvent.type == KeyEventType.KeyDown && keyEvent.key == Key.Escape) {
+          // Check if any modal is open and close it first
+          when {
+            showDetailsDialog -> {
+              showDetailsDialog = false
+              currentLog = null
+              true
+            }
+
+            showInspectUIDialog -> {
+              showInspectUIDialog = false
+              currentInspectorLog = null
+              true
+            }
+
+            showChatHistoryDialog -> {
+              showChatHistoryDialog = false
+              currentChatHistoryLog = null
+              true
+            }
+
+            showScreenshotModal -> {
+              showScreenshotModal = false
+              modalImageModel = null
+              modalClickX = null
+              modalClickY = null
+              modalAction = null
+              true
+            }
+
+            showCancelConfirmation -> {
+              showCancelConfirmation = false
+              true
+            }
+
+            else -> {
+              // No modals open, go back to session list
+              onBackClick()
+              true
+            }
+          }
+        } else {
+          false
+        }
+      }
+  ) {
     // Main content
     SessionDetailComposable(
       sessionDetail = sessionDetail,
@@ -200,6 +327,21 @@ fun LiveSessionDetailComposable(
       onZoomOffsetChanged = onZoomOffsetChanged,
       onFontScaleChanged = onFontScaleChanged,
       onViewModeChanged = onViewModeChanged,
+      onExportToRepo = onExportToRepo,
+      exportFeatureEnabled = exportFeatureEnabled,
+      onCancelSession = onCancelSession,
+      onDeleteSession = onDeleteSession,
+      isCancelling = isCancelling,
+      initialInspectorScreenshotWidth = initialInspectorScreenshotWidth,
+      initialInspectorDetailsWidth = initialInspectorDetailsWidth,
+      initialInspectorHierarchyWidth = initialInspectorHierarchyWidth,
+      initialInspectorFontScale = initialInspectorFontScale,
+      onInspectorScreenshotWidthChanged = onInspectorScreenshotWidthChanged,
+      onInspectorDetailsWidthChanged = onInspectorDetailsWidthChanged,
+      onInspectorHierarchyWidthChanged = onInspectorHierarchyWidthChanged,
+      onInspectorFontScaleChanged = onInspectorFontScaleChanged,
+      onOpenLogsFolder = onOpenLogsFolder,
+      onExportSession = onExportSession,
     )
 
     // Modal dialogs as separate children with high zIndex
@@ -220,47 +362,73 @@ fun LiveSessionDetailComposable(
       }
     }
 
-    if (showInspectUIDialog && currentLlmLog != null) {
+    if (showInspectUIDialog && currentInspectorLog != null) {
       FullScreenModalOverlay(
         onDismiss = {
           showInspectUIDialog = false
-          currentLlmLog = null
+          currentInspectorLog = null
         }
       ) {
-        Column(
-          modifier = Modifier.fillMaxSize()
-        ) {
-          // Header with close button
-          Row(
-            modifier = Modifier
-              .fillMaxWidth()
-              .padding(16.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-          ) {
-            Text(
-              text = "UI Inspector",
-              style = MaterialTheme.typography.headlineSmall,
-              fontWeight = FontWeight.Bold
-            )
-            Button(
-              onClick = {
-                showInspectUIDialog = false
-                currentLlmLog = null
-              }
-            ) {
-              Text("Close")
+        val inspectorLog = currentInspectorLog
+        if (inspectorLog != null) {
+          var viewHierarchy: xyz.block.trailblaze.api.ViewHierarchyTreeNode? = null
+          var imageUrl: String? = null
+          var deviceWidth = 0
+          var deviceHeight = 0
+
+          when (inspectorLog) {
+            is TrailblazeLog.TrailblazeLlmRequestLog -> {
+              viewHierarchy = inspectorLog.viewHierarchy
+              imageUrl = inspectorLog.screenshotFile
+              deviceWidth = inspectorLog.deviceWidth
+              deviceHeight = inspectorLog.deviceHeight
+            }
+            is TrailblazeLog.MaestroDriverLog -> {
+              viewHierarchy = inspectorLog.viewHierarchy
+              imageUrl = inspectorLog.screenshotFile
+              deviceWidth = inspectorLog.deviceWidth
+              deviceHeight = inspectorLog.deviceHeight
+            }
+
+            else -> {
+              // Other log types don't have view hierarchy data
             }
           }
 
-          // Inspector content
-          InspectViewHierarchyScreenComposable(
-            sessionId = session.sessionId,
-            viewHierarchy = currentLlmLog!!.viewHierarchy,
-            imageUrl = currentLlmLog!!.screenshotFile,
-            deviceWidth = currentLlmLog!!.deviceWidth,
-            deviceHeight = currentLlmLog!!.deviceHeight,
-          )
+          if (viewHierarchy != null) {
+            var showRawJson by remember { mutableStateOf(false) }
+            var fontScale by remember { mutableStateOf(initialInspectorFontScale) }
+            InspectViewHierarchyScreenComposable(
+              sessionId = session.sessionId,
+              viewHierarchy = viewHierarchy,
+              imageUrl = imageUrl,
+              deviceWidth = deviceWidth,
+              deviceHeight = deviceHeight,
+              initialScreenshotWidth = initialInspectorScreenshotWidth,
+              initialDetailsWidth = initialInspectorDetailsWidth,
+              initialHierarchyWidth = initialInspectorHierarchyWidth,
+              showRawJson = showRawJson,
+              fontScale = fontScale,
+              onScreenshotWidthChanged = onInspectorScreenshotWidthChanged,
+              onDetailsWidthChanged = onInspectorDetailsWidthChanged,
+              onHierarchyWidthChanged = onInspectorHierarchyWidthChanged,
+              onFontScaleChanged = { newScale ->
+                fontScale = newScale
+                onInspectorFontScaleChanged(newScale)
+              },
+              onShowRawJsonChanged = { showRawJson = it },
+              onClose = {
+                showInspectUIDialog = false
+                currentInspectorLog = null
+              }
+            )
+          } else {
+            Text(
+              text = "No view hierarchy data available for this log",
+              modifier = Modifier.padding(16.dp),
+              style = MaterialTheme.typography.bodyLarge,
+            )
+          }
         }
       }
     }
@@ -290,13 +458,104 @@ fun LiveSessionDetailComposable(
         deviceHeight = modalDeviceHeight,
         clickX = modalClickX,
         clickY = modalClickY,
+        action = modalAction,
         onDismiss = {
           showScreenshotModal = false
           modalImageModel = null
           modalClickX = null
           modalClickY = null
+          modalAction = null
         }
       )
+    }
+
+    if (showCancelConfirmation) {
+      Box(
+        modifier = Modifier
+          .fillMaxSize()
+          .background(androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.5f))
+          .clickable(
+            interactionSource = remember { MutableInteractionSource() },
+            indication = null
+          ) {
+            showCancelConfirmation = false
+          },
+        contentAlignment = Alignment.Center
+      ) {
+        androidx.compose.material3.Card(
+          modifier = Modifier
+            .width(400.dp)
+            .clickable(
+              interactionSource = remember { MutableInteractionSource() },
+              indication = null
+            ) {
+              // Prevent clicks from propagating to the background
+            },
+          colors = androidx.compose.material3.CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+          ),
+          elevation = androidx.compose.material3.CardDefaults.cardElevation(
+            defaultElevation = 8.dp
+          ),
+          shape = RoundedCornerShape(16.dp)
+        ) {
+          Column(
+            modifier = Modifier
+              .padding(32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+          ) {
+            Text(
+              text = "Cancel Session?",
+              style = MaterialTheme.typography.headlineSmall,
+              fontWeight = FontWeight.Bold
+            )
+
+            Text(
+              text = "Are you sure you want to cancel this active session? All ongoing requests will be stopped.",
+              style = MaterialTheme.typography.bodyMedium,
+              color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Row(
+              horizontalArrangement = Arrangement.spacedBy(12.dp),
+              modifier = Modifier.fillMaxWidth()
+            ) {
+              Button(
+                onClick = {
+                  showCancelConfirmation = false
+                },
+                modifier = Modifier.weight(1f),
+                colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                  containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                  contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                )
+              ) {
+                Text("Keep Running")
+              }
+
+              Button(
+                onClick = handleConfirmCancel,
+                modifier = Modifier.weight(1f),
+                colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                  containerColor = MaterialTheme.colorScheme.error
+                ),
+                enabled = !isCancelling
+              ) {
+                Text(if (isCancelling) "Cancelling..." else "Yes, Cancel")
+              }
+            }
+
+            if (cancellationError != null) {
+              Text(
+                text = "⚠️ $cancellationError",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error
+              )
+            }
+          }
+        }
+      }
     }
   }
 }

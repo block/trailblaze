@@ -1,7 +1,9 @@
 package xyz.block.trailblaze.toolcalls
 
+import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.toolcalls.commands.AssertNotVisibleWithTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleByNodeIdTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.AssertVisibleBySelectorTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleWithAccessibilityTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleWithResourceIdTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleWithTextTrailblazeTool
@@ -11,13 +13,14 @@ import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.LaunchAppTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.LongPressElementWithAccessibilityTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.LongPressOnElementWithTextTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.LongPressOnPointTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.NetworkConnectionTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.OpenUrlTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.PressBackTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.ScrollUntilTextIsVisibleTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.SwipeTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.SwipeWithRelativeCoordinatesTool
+import xyz.block.trailblaze.toolcalls.commands.TapOnByElementSelector
 import xyz.block.trailblaze.toolcalls.commands.TapOnElementByNodeIdTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnElementWithAccessiblityTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnElementWithTextTrailblazeTool
@@ -35,85 +38,106 @@ import kotlin.reflect.KClass
 
 @Suppress("ktlint:standard:property-naming")
 abstract class TrailblazeToolSet(
-  val tools: Set<KClass<out TrailblazeTool>>,
   open val name: String = this::class.annotations
     .filterIsInstance<TrailblazeToolSetClass>()
-    .firstOrNull()?.description ?: this::class.simpleName ?: error("A a @TrailblazeToolSetClass annotation"),
+    .firstOrNull()?.description ?: this::class.simpleName ?: error("Add a @TrailblazeToolSetClass annotation"),
+  val toolClasses: Set<KClass<out TrailblazeTool>>,
+  val supportedDriverTypes: Set<TrailblazeDriverType>? = null,
 ) {
 
   // Provide a way to add multiple tool sets together
-  operator fun plus(otherToolSet: TrailblazeToolSet): TrailblazeToolSet = DynamicToolSet(tools = this.tools + otherToolSet.tools)
+  operator fun plus(otherToolSet: TrailblazeToolSet): TrailblazeToolSet = DynamicToolSet(toolClasses = this.toolClasses + otherToolSet.toolClasses)
 
-  fun asTools(): Set<KClass<out TrailblazeTool>> = tools
+  fun asTools(): Set<KClass<out TrailblazeTool>> = toolClasses
 
   companion object {
 
-    val defaultUiTools = setOf<KClass<out TrailblazeTool>>(
-      HideKeyboardTrailblazeTool::class,
-      InputTextTrailblazeTool::class,
-      ObjectiveStatusTrailblazeTool::class,
-      EraseTextTrailblazeTool::class,
-      PressBackTrailblazeTool::class,
-      SwipeTrailblazeTool::class,
-      WaitForIdleSyncTrailblazeTool::class,
-      LaunchAppTrailblazeTool::class,
-      AssertVisibleByNodeIdTrailblazeTool::class,
-      NetworkConnectionTrailblazeTool::class,
-      ScrollUntilTextIsVisibleTrailblazeTool::class,
-      OpenUrlTrailblazeTool::class,
+    private object DefaultUiTrailblazeToolSet : TrailblazeToolSet(
+      name = "Default UI Tools",
+      toolClasses = setOf(
+        AssertVisibleByNodeIdTrailblazeTool::class,
+        AssertNotVisibleWithTextTrailblazeTool::class,
+        EraseTextTrailblazeTool::class,
+        HideKeyboardTrailblazeTool::class,
+        InputTextTrailblazeTool::class,
+        LaunchAppTrailblazeTool::class,
+        NetworkConnectionTrailblazeTool::class,
+        ObjectiveStatusTrailblazeTool::class,
+        OpenUrlTrailblazeTool::class,
+        PressBackTrailblazeTool::class,
+        ScrollUntilTextIsVisibleTrailblazeTool::class,
+        SwipeTrailblazeTool::class,
+        WaitForIdleSyncTrailblazeTool::class,
+      ),
     )
 
-    val SetOfMarkTrailblazeToolSet = DynamicTrailblazeToolSet(
-      tools = mutableSetOf<KClass<out TrailblazeTool>>().apply {
-        addAll(defaultUiTools)
-        addAll(setOf(TapOnElementByNodeIdTrailblazeTool::class))
-      },
+    val DefaultSetOfMarkTrailblazeToolSet = DynamicTrailblazeToolSet(
       name = "Set of Mark Ui Interactions (For Recording) - Do Not Combine with Device Control",
+      toolClasses = DefaultUiTrailblazeToolSet.toolClasses + TapOnElementByNodeIdTrailblazeTool::class,
     )
 
     val DeviceControlTrailblazeToolSet = DynamicTrailblazeToolSet(
-      tools = mutableSetOf<KClass<out TrailblazeTool>>().apply {
-        addAll(defaultUiTools)
-        addAll(
-          setOf(
-            TapOnPointTrailblazeTool::class,
-            LongPressOnPointTrailblazeTool::class,
-          ),
-        )
-      },
-      name = "Device Control Ui Interactions - Do Not Combine with Set of Mark",
+      name = "Non-recordable x,y Device Control Ui Interactions - Do Not Combine with Set of Mark",
+      toolClasses = DefaultUiTrailblazeToolSet.toolClasses + TapOnPointTrailblazeTool::class,
     )
 
     fun getSetOfMarkToolSet(setOfMarkEnabled: Boolean): TrailblazeToolSet = if (setOfMarkEnabled) {
-      SetOfMarkTrailblazeToolSet
+      DefaultSetOfMarkTrailblazeToolSet
     } else {
       DeviceControlTrailblazeToolSet
     }
 
-    val AllBuiltInTrailblazeToolSets: Set<TrailblazeToolSet> = setOf(
+    fun getLlmToolSet(setOfMarkEnabled: Boolean): TrailblazeToolSet = DynamicTrailblazeToolSet(
+      name = if (setOfMarkEnabled) "Set-of-Mark LLM Tools" else "Device Control LLM Tools",
+      toolClasses = getSetOfMarkToolSet(setOfMarkEnabled).toolClasses +
+        RememberTrailblazeToolSet.toolClasses +
+        VerifyToolSet.toolClasses,
+    )
+
+    val AllDefaultTrailblazeToolSets: Set<TrailblazeToolSet> = setOf(
       DeviceControlTrailblazeToolSet,
-      InteractWithElementsByPropertyToolSet,
-      AssertByPropertyToolSet,
-      SetOfMarkTrailblazeToolSet,
       RememberTrailblazeToolSet,
+      DefaultSetOfMarkTrailblazeToolSet,
+      VerifyToolSet,
     ).also {
       println("All Built In Trailblaze Tool Sets: $it")
     }
 
-    val AllBuiltInTrailblazeTools: Set<KClass<out TrailblazeTool>> =
-      AllBuiltInTrailblazeToolSets.flatMap { it.asTools() }.toSet()
+    val NonLlmTrailblazeTools: Set<KClass<out TrailblazeTool>> = setOf(
+      // Used by recordings, but shouldn't be registered directly to the LLM
+      AssertVisibleBySelectorTrailblazeTool::class,
+      TapOnByElementSelector::class,
+      SwipeWithRelativeCoordinatesTool::class,
 
-    val AllBuiltInTrailblazeToolsByKoogToolDescriptor = AllBuiltInTrailblazeTools
-      .associateBy { it.toKoogToolDescriptor() }
+      // Deprecated Tools - Tap On by Property
+      LongPressOnElementWithTextTrailblazeTool::class,
+      LongPressElementWithAccessibilityTextTrailblazeTool::class,
+      TapOnElementWithTextTrailblazeTool::class,
+      TapOnElementWithAccessiblityTextTrailblazeTool::class,
+
+      // Deprecated Tools - Assert Visible by Property
+      AssertVisibleWithTextTrailblazeTool::class,
+      AssertVisibleWithAccessibilityTextTrailblazeTool::class,
+      AssertVisibleWithResourceIdTrailblazeTool::class,
+    )
+
+    val DefaultLlmTrailblazeTools: Set<KClass<out TrailblazeTool>> =
+      AllDefaultTrailblazeToolSets.flatMap { it.asTools() }.toSet()
+
+    val AllBuiltInTrailblazeToolsForSerialization: Set<KClass<out TrailblazeTool>> =
+      DefaultLlmTrailblazeTools + NonLlmTrailblazeTools
+
+    val AllBuiltInTrailblazeToolsForSerializationByToolName = AllBuiltInTrailblazeToolsForSerialization
+      .associateBy { it.toolName() }
   }
 
   class DynamicTrailblazeToolSet(
     override val name: String,
-    tools: Set<KClass<out TrailblazeTool>>,
-  ) : TrailblazeToolSet(tools)
+    toolClasses: Set<KClass<out TrailblazeTool>>,
+  ) : TrailblazeToolSet(name = name, toolClasses = toolClasses)
 
   object RememberTrailblazeToolSet : TrailblazeToolSet(
-    tools = setOf(
+    toolClasses = setOf(
       AssertEqualsTrailblazeTool::class,
       AssertMathTrailblazeTool::class,
       AssertNotEqualsTrailblazeTool::class,
@@ -125,26 +149,20 @@ abstract class TrailblazeToolSet(
     ),
   )
 
-  @TrailblazeToolSetClass("TapOn By Property Toolset")
-  object InteractWithElementsByPropertyToolSet : TrailblazeToolSet(
-    tools = setOf(
-      LongPressOnElementWithTextTrailblazeTool::class,
-      LongPressElementWithAccessibilityTextTrailblazeTool::class,
-      TapOnElementWithTextTrailblazeTool::class,
-      TapOnElementWithAccessiblityTextTrailblazeTool::class,
-    ),
-  )
-
-  @TrailblazeToolSetClass("Assert By Property Toolset")
-  object AssertByPropertyToolSet : TrailblazeToolSet(
-    tools = setOf(
-      AssertVisibleWithTextTrailblazeTool::class,
-      AssertVisibleWithAccessibilityTextTrailblazeTool::class,
-      AssertVisibleWithResourceIdTrailblazeTool::class,
+  @TrailblazeToolSetClass("Verify Toolset")
+  object VerifyToolSet : TrailblazeToolSet(
+    toolClasses = setOf(
+      AssertVisibleByNodeIdTrailblazeTool::class,
       AssertNotVisibleWithTextTrailblazeTool::class,
     ),
   )
 
   @TrailblazeToolSetClass("Toolset meant for combining multiple sets together")
-  class DynamicToolSet(tools: Set<KClass<out TrailblazeTool>>) : TrailblazeToolSet(tools)
+  class DynamicToolSet(
+    toolClasses: Set<KClass<out TrailblazeTool>>,
+    name: String = "Dynamic Toolset",
+  ) : TrailblazeToolSet(
+    name = name,
+    toolClasses = toolClasses,
+  )
 }

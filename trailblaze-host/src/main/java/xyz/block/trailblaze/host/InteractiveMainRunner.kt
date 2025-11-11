@@ -6,6 +6,8 @@ import xyz.block.trailblaze.agent.TrailblazeRunner
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.api.JvmOpenAiApiKeyUtil
 import xyz.block.trailblaze.llm.providers.OpenAITrailblazeLlmModelList
+import xyz.block.trailblaze.logs.client.TrailblazeLogger
+import xyz.block.trailblaze.session.TrailblazeSessionManager
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.yaml.DirectionStep
@@ -13,6 +15,7 @@ import xyz.block.trailblaze.yaml.DirectionStep
 class InteractiveMainRunner(
   private val filterViewHierarchy: Boolean = true,
   private val setOfMarkEnabled: Boolean = true,
+  private val trailblazeLogger: TrailblazeLogger,
 ) {
 
   init {
@@ -25,8 +28,12 @@ class InteractiveMainRunner(
   val hostMaestroAgent by lazy {
     val hostRunner = MaestroHostRunnerImpl(
       setOfMarkEnabled = setOfMarkEnabled,
+      trailblazeLogger = trailblazeLogger,
     )
-    HostMaestroTrailblazeAgent(maestroHostRunner = hostRunner)
+    HostMaestroTrailblazeAgent(
+      maestroHostRunner = hostRunner,
+      trailblazeLogger = trailblazeLogger,
+    )
   }
 
   // Create the tool repo with the correct flags
@@ -46,12 +53,15 @@ class InteractiveMainRunner(
   // Create OpenAI agent runner for this specific run
   val openAiRunner by lazy {
     // Create the runner
+    val sessionManager = TrailblazeSessionManager()
     val runner = TrailblazeRunner(
       screenStateProvider = hostMaestroAgent.maestroHostRunner.screenStateProvider,
       agent = hostMaestroAgent,
       trailblazeLlmModel = trailblazeLlmModel,
       llmClient = llmClient,
       trailblazeToolRepo = toolRepo,
+      trailblazeLogger = trailblazeLogger,
+      sessionManager = sessionManager,
     )
     runner
   }

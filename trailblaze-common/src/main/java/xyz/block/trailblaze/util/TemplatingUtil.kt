@@ -10,6 +10,11 @@ object TemplatingUtil {
   }
 
   /**
+   * Determine if a resource exists
+   */
+  fun doesResourceExist(resourcePath: String): Boolean = object {}.javaClass.classLoader.getResource(resourcePath) != null
+
+  /**
    * Reads a resource file from the classpath, replaces variables in the template with values from the map,
    */
   fun renderTemplate(template: String, values: Map<String, String> = mapOf()): String = replaceVariables(template, values)

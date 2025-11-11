@@ -1,9 +1,12 @@
 package xyz.block.trailblaze.docs
 
 import ai.koog.agents.core.tools.ToolParameterDescriptor
+import ai.koog.agents.core.tools.ToolParameterType
+import com.google.gson.GsonBuilder
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.toolcalls.toKoogToolDescriptor
+import xyz.block.trailblaze.toolcalls.toolName
 import java.io.File
 import kotlin.reflect.KClass
 
@@ -15,11 +18,37 @@ class DocsGenerator(
   private val generatedFunctionsDocsDir: File,
 ) {
 
-  fun paramsString(params: List<ToolParameterDescriptor>): String = buildString {
+  fun paramsString(params: List<ToolParameterDescriptor>, indent: Int = 0): String = buildString {
+    val indentChars = "  ".repeat(indent)
     params.forEach { param ->
-      appendLine("- `${param.name}`: `${param.type}`")
-      if (param.description.isNotBlank()) {
-        appendLine("  " + param.description)
+      val paramType = param.type
+      when (paramType) {
+        is ToolParameterType.Enum -> {
+          appendLine("$indentChars- `${param.name}`: `${gson.toJson(paramType.entries)}`")
+        }
+
+        is ToolParameterType.List -> {
+          appendLine("$indentChars- `${param.name}`: `${gson.toJson(paramType)}`")
+        }
+
+        is ToolParameterType.Object -> {
+          appendLine("$indentChars- `${param.name}`: ")
+          appendLine(
+            paramsString(paramType.properties, indent + 2).lines().joinToString("\n") {
+              indentChars + indentChars + it
+            },
+          )
+        }
+
+        ToolParameterType.Boolean,
+        ToolParameterType.Float,
+        ToolParameterType.Integer,
+        ToolParameterType.String -> {
+          appendLine("- `${param.name}`: `${paramType}`")
+          if (param.description.isNotBlank() && (param.description != param.name)) {
+            appendLine("  " + param.description)
+          }
+        }
       }
     }
   }
@@ -27,7 +56,7 @@ class DocsGenerator(
   fun createPageForCommand(
     toolKClass: KClass<out TrailblazeTool>,
   ) {
-    val toolDescriptor = toolKClass.toKoogToolDescriptor()
+    val toolDescriptor = toolKClass.toKoogToolDescriptor() ?: return // Skip any null descriptors
 
     val pagePath = "custom/${toolDescriptor.name}.md"
 
@@ -65,15 +94,15 @@ $THIS_DOC_IS_GENERATED_MESSAGE
   }
 
   fun generate() {
-    TrailblazeToolSet.AllBuiltInTrailblazeTools
+    TrailblazeToolSet.AllBuiltInTrailblazeToolsForSerialization
       .forEach { toolClass: KClass<out TrailblazeTool> ->
         createPageForCommand(toolClass)
       }
-    createFunctionsIndexPage(TrailblazeToolSet.AllBuiltInTrailblazeToolSets)
+    createFunctionsIndexPage(TrailblazeToolSet.AllDefaultTrailblazeToolSets)
   }
 
   private fun createFunctionsIndexPage(toolSets: Set<TrailblazeToolSet>) {
-    val map = toolSets.associate { it.name to it.tools.map { it.toKoogToolDescriptor().name }.toSet() }
+    val map = toolSets.associate { it.name to it.toolClasses.map { it.toolName().toolName }.toSet() }
 
     File(generatedDir, "TOOLS.md").also { file ->
       val text = buildString {
@@ -96,6 +125,9 @@ ${trailblazeToolNames.sorted().joinToString(separator = "\n") { "- [$it](functio
   }
 
   companion object {
+    private val gson by lazy {
+      GsonBuilder().setPrettyPrinting().create()
+    }
     val THIS_DOC_IS_GENERATED_MESSAGE = """
 <hr/>
 

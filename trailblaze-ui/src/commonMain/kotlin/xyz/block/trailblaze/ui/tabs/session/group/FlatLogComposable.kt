@@ -1,26 +1,45 @@
 package xyz.block.trailblaze.ui.tabs.session.group
 
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Timer
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import kotlinx.serialization.json.Json
+import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.logs.client.TrailblazeJson
 import xyz.block.trailblaze.logs.client.TrailblazeLog
+import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.ui.composables.CodeBlock
 import xyz.block.trailblaze.ui.tabs.session.DetailSection
 import xyz.block.trailblaze.ui.utils.FormattingUtils.formatDuration
+import xyz.block.trailblaze.yaml.toDetailedString
 
 
 // Simplified flat detail composables that don't use nested Column layouts
 
 @Composable
-fun LlmRequestDetailsFlat(log: TrailblazeLog.TrailblazeLlmRequestLog) {
+fun LlmRequestDetailsFlat(
+  log: TrailblazeLog.TrailblazeLlmRequestLog,
+) {
   Column(modifier = Modifier.padding(horizontal = 16.dp)) {
     DetailSection("LLM Response & Actions") {
       log.llmResponse.forEach { response ->
@@ -106,10 +125,90 @@ fun AgentTaskStatusDetailsFlat(log: TrailblazeLog.TrailblazeAgentTaskStatusChang
 
 @Composable
 fun SessionStatusDetailsFlat(log: TrailblazeLog.TrailblazeSessionStatusChangeLog) {
+  val (icon, color, label) = getSessionStatusIconAndColor(log.sessionStatus)
+
+  // Extract failure and cancellation messages
+  val failureMessage = when (val status = log.sessionStatus) {
+    is SessionStatus.Ended.Failed -> status.exceptionMessage
+    is SessionStatus.Ended.FailedWithFallback -> status.exceptionMessage
+    else -> null
+  }
+
+  val cancellationMessage = when (val status = log.sessionStatus) {
+    is SessionStatus.Ended.Cancelled -> status.cancellationMessage
+    else -> null
+  }
+
   Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+    // Show status indicator with icon and label
+    Row(
+      verticalAlignment = Alignment.CenterVertically,
+      modifier = Modifier.padding(bottom = 8.dp)
+    ) {
+      Icon(
+        imageVector = icon,
+        contentDescription = label,
+        tint = color,
+        modifier = Modifier.size(24.dp)
+      )
+      Spacer(modifier = Modifier.width(8.dp))
+      Text(
+        text = label,
+        style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.Bold,
+        color = color
+      )
+    }
+
+    // Show failure reason prominently if present
+    if (failureMessage != null) {
+      DetailSection("Failure Reason") {
+        CodeBlock(failureMessage)
+      }
+    }
+
+    // Show cancellation reason prominently if present
+    if (cancellationMessage != null) {
+      DetailSection("Cancellation Reason") {
+        CodeBlock(cancellationMessage)
+      }
+    }
+
     DetailSection("Session Status") {
       CodeBlock(log.sessionStatus.toString())
     }
+  }
+}
+
+/**
+ * Returns icon, color, and label for a given session status
+ */
+private fun getSessionStatusIconAndColor(status: SessionStatus): Triple<ImageVector, Color, String> {
+  return when (status) {
+    is SessionStatus.Started -> Triple(Icons.Filled.PlayArrow, Color(0xFF2196F3), "Session Started")
+    is SessionStatus.Ended.Succeeded -> Triple(
+      Icons.Filled.CheckCircle, Color(0xFF28A745), "Session Succeeded"
+    )
+
+    is SessionStatus.Ended.Failed -> Triple(Icons.Filled.Close, Color(0xFFDC3545), "Session Failed")
+    is SessionStatus.Ended.Cancelled -> Triple(
+      Icons.Filled.Close, Color(0xFFFFC107), "Session Cancelled"
+    )
+
+    is SessionStatus.Ended.SucceededWithFallback -> Triple(
+      Icons.Filled.Warning, Color(0xFF28A745), "Session Succeeded (with AI Fallback)"
+    )
+
+    is SessionStatus.Ended.FailedWithFallback -> Triple(
+      Icons.Filled.Warning, Color(0xFFDC3545), "Session Failed (with AI Fallback)"
+    )
+
+    is SessionStatus.Unknown -> Triple(Icons.Filled.Warning, Color.Gray, "Unknown Status")
+    is SessionStatus.Ended.TimeoutReached -> Triple(
+      first = Icons.Filled.Timer,
+      second = Color(0xFFFF7F00),
+      third = "Timed Out",
+    )
   }
 }
 
@@ -124,15 +223,83 @@ fun ObjectiveStartDetailsFlat(log: TrailblazeLog.ObjectiveStartLog) {
 
 @Composable
 fun ObjectiveCompleteDetailsFlat(log: TrailblazeLog.ObjectiveCompleteLog) {
+  val isSuccess = log.objectiveResult is AgentTaskStatus.Success.ObjectiveComplete
+  val statusText = when (log.objectiveResult) {
+    is AgentTaskStatus.Success.ObjectiveComplete -> "Success"
+    else -> "Failed"
+  }
+  val statusColor = when (statusText) {
+    "Success" -> Color(0xFF28A745)
+    else -> Color(0xFFDC3545)
+  }
+
+  // Extract the LLM explanation
+  val llmExplanation = when (val result = log.objectiveResult) {
+    is AgentTaskStatus.Success.ObjectiveComplete -> result.llmExplanation
+    is AgentTaskStatus.Failure.ObjectiveFailed -> result.llmExplanation
+    else -> null
+  }
+
   Column(modifier = Modifier.padding(horizontal = 16.dp)) {
-    DetailSection("Objective Complete") {
+    // Status indicator at the top
+    Row(
+      verticalAlignment = Alignment.CenterVertically,
+      modifier = Modifier.padding(bottom = 8.dp)
+    ) {
+      Icon(
+        imageVector = if (statusText=="Success") Icons.Filled.CheckCircle else Icons.Filled.Close,
+        contentDescription = statusText,
+        tint = statusColor,
+        modifier = Modifier.size(24.dp)
+      )
+      Spacer(modifier = Modifier.width(8.dp))
+      Text(
+        text = "Objective $statusText",
+        style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.Bold,
+        color = statusColor
+      )
+    }
+
+    // Display LLM Explanation prominently
+    if (llmExplanation != null) {
+      DetailSection("LLM Explanation") {
+        CodeBlock(llmExplanation)
+      }
+    }
+
+    DetailSection("Prompt") {
+      CodeBlock(log.objectiveResult.statusData.prompt)
+    }
+
+    DetailSection("Objective Complete (Full Details)") {
       CodeBlock(TrailblazeJson.defaultWithoutToolsInstance.encodeToString(log))
     }
+
     DetailSection("Result") {
       CodeBlock(log.objectiveResult.toString())
     }
+  }
+}
+
+@Composable
+fun AttemptAiFallbackFlat(
+  log: TrailblazeLog.AttemptAiFallbackLog,
+) {
+  Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+    DetailSection("Objective Complete") {
+      CodeBlock(
+        text = buildString {
+          appendLine("Prompt Step: " + log.promptStep.toDetailedString())
+          appendLine("Recording Result: " + log.recordingResult)
+        }
+      )
+    }
+    DetailSection("Recording Result") {
+      CodeBlock(log.recordingResult.toString())
+    }
     DetailSection("Prompt") {
-      CodeBlock(log.objectiveResult.statusData.prompt)
+      CodeBlock(log.promptStep.prompt)
     }
   }
 }

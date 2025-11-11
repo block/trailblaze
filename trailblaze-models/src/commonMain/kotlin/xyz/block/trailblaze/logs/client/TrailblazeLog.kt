@@ -5,6 +5,7 @@ import kotlinx.datetime.Instant
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
+import xyz.block.trailblaze.agent.model.PromptRecordingResult
 import xyz.block.trailblaze.api.MaestroDriverActionType
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
@@ -146,6 +147,15 @@ sealed interface TrailblazeLog {
     val objectiveResult: AgentTaskStatus,
     override val session: String,
     override val timestamp: Instant,
+  ) : TrailblazeLog,
+    HasPromptStep
+
+  @Serializable
+  data class AttemptAiFallbackLog(
+    override val promptStep: PromptStep,
+    override val session: String,
+    override val timestamp: Instant,
+    val recordingResult: PromptRecordingResult.Failure,
   ) : TrailblazeLog,
     HasPromptStep
 }

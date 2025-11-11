@@ -23,6 +23,7 @@ class McpTestCasesToolSet(
   private val logsRepo: LogsRepo,
   private val openAiRunnerProvider: () -> TrailblazeRunner,
   private val typesafeYamlExecutor: (String) -> Unit,
+  private val trailblazeLogger: TrailblazeLogger,
 ) : ToolSet {
 
   val testCasesDirectory: String = File("../").canonicalPath
@@ -67,7 +68,7 @@ class McpTestCasesToolSet(
       println("Executing prompt for session: $mcpSseSessionId")
       ioScope.launch {
         logsRepo.startWatchingTrailblazeSession(object : TrailblazeSessionListener {
-          override val trailblazeSessionId: String = TrailblazeLogger.getCurrentSessionId()
+          override val trailblazeSessionId: String = trailblazeLogger.getCurrentSessionId()
 
           var progress = 0
           override fun onSessionStarted() {

@@ -1,5 +1,7 @@
 package xyz.block.trailblaze.host.setofmark
 
+import maestro.DeviceInfo
+import maestro.Platform
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.viewhierarchy.ViewHierarchyFilter
 import java.awt.AlphaComposite
@@ -13,9 +15,13 @@ import java.io.ByteArrayOutputStream
 import javax.imageio.IIOImage
 import javax.imageio.ImageIO
 import javax.imageio.ImageWriteParam
+import kotlin.math.round
 
 /** https://github.com/takahirom/arbigent/blob/5871d8a92a499423b00c1c5c280a55be9e5561cd/arbigent-core/src/main/java/io/github/takahirom/arbigent/ArbigentCanvas.kt */
-class HostCanvasSetOfMark(private val bufferedImage: BufferedImage) {
+class HostCanvasSetOfMark(
+  private val bufferedImage: BufferedImage,
+  private val deviceInfo: DeviceInfo? = null,
+) {
 
   enum class CompositeMode {
     SrcOver,
@@ -40,6 +46,55 @@ class HostCanvasSetOfMark(private val bufferedImage: BufferedImage) {
     const val BOX_OUTLINE_THICKNESS = 2.0f
   }
 
+  /**
+   * For iOS, scale coordinates from logical points to physical pixels.
+   * iOS provides view hierarchy coordinates in logical points (e.g., 375x667)
+   * but screenshots are in physical pixels (e.g., 750x1334).
+   */
+  private fun scaleCoordinateForPlatform(coordinate: Int): Int = if (deviceInfo?.platform == Platform.IOS) {
+    (coordinate * getScaleFactorForPlatform()).toInt()
+  } else {
+    coordinate
+  }
+
+  /**
+   * Get the integer scale factor for iOS coordinate scaling.
+   * Validates that X and Y scale factors are consistent.
+   */
+  private fun getScaleFactorForPlatform(): Int = if (deviceInfo?.platform == Platform.IOS) {
+    val scaleX = bufferedImage.width.toFloat() / deviceInfo?.widthGrid?.toFloat()!!
+    val scaleY = bufferedImage.height.toFloat() / deviceInfo?.heightGrid?.toFloat()!!
+
+    // Round to nearest integer
+    val roundedScaleX = round(scaleX).toInt()
+    val roundedScaleY = round(scaleY).toInt()
+
+    // Validate that both scales are the same
+    if (roundedScaleX != roundedScaleY) {
+      println(
+        "Warning: iOS scale factors differ - X: $scaleX ($roundedScaleX), Y: $scaleY ($roundedScaleY). Using X scale.",
+      )
+    }
+
+    roundedScaleX
+  } else {
+    1
+  }
+
+  /**
+   * Scale bounds coordinates for iOS coordinate system mismatch
+   */
+  private fun scaleBoundsForPlatform(bounds: ViewHierarchyFilter.Bounds): ViewHierarchyFilter.Bounds = if (deviceInfo?.platform == Platform.IOS) {
+    ViewHierarchyFilter.Bounds(
+      x1 = scaleCoordinateForPlatform(bounds.x1),
+      y1 = scaleCoordinateForPlatform(bounds.y1),
+      x2 = scaleCoordinateForPlatform(bounds.x2),
+      y2 = scaleCoordinateForPlatform(bounds.y2),
+    )
+  } else {
+    bounds
+  }
+
   fun drawImage(image: BufferedImage, multiply: Double, compositeMode: CompositeMode = CompositeMode.SrcOver) {
     bufferedImage.graphics { graphics2D ->
       graphics2D.setComposite(
@@ -60,22 +115,31 @@ class HostCanvasSetOfMark(private val bufferedImage: BufferedImage) {
   }
 
   fun draw(elements: List<ViewHierarchyTreeNode>) {
+    if (deviceInfo?.platform == Platform.IOS) {
+      val scaleX = bufferedImage.width.toFloat() / deviceInfo?.widthGrid?.toFloat()!!
+      val scaleY = bufferedImage.height.toFloat() / deviceInfo?.heightGrid?.toFloat()!!
+    }
+
     bufferedImage.graphics { graphics2D ->
       elements.forEachIndexed { index, element ->
         val bounds = element.bounds ?: return@forEachIndexed
-        val text = index.toString()
+
+        // Scale bounds for iOS coordinate system
+        val scaledBounds = scaleBoundsForPlatform(bounds)
+
+        val text = element.nodeId.toString()
         val color = Color(colors[index % colors.size])
-        drawRectOutline(bounds, color)
+        drawRectOutline(scaledBounds, color)
 
         val (rawBoxWidth, rawBoxHeight) = textCalc(listOf(text))
         val textPadding = 5
         val boxWidth = rawBoxWidth + textPadding * 2
         val boxHeight = rawBoxHeight + textPadding * 2
         val bottomRightTextRect = ViewHierarchyFilter.Bounds(
-          bounds.x2 - boxWidth,
-          bounds.y2 - boxHeight,
-          bounds.x2,
-          bounds.y2,
+          scaledBounds.x2 - boxWidth,
+          scaledBounds.y2 - boxHeight,
+          scaledBounds.x2,
+          scaledBounds.y2,
         )
         drawRect(bottomRightTextRect, color)
         drawText(
@@ -94,14 +158,16 @@ class HostCanvasSetOfMark(private val bufferedImage: BufferedImage) {
         .filter { it.bounds != null }
         .forEach { viewHierarchyNode ->
           val bounds = viewHierarchyNode.bounds!!
+          // Scale bounds for iOS coordinate system
+          val scaledBounds = scaleBoundsForPlatform(bounds)
           val text = viewHierarchyNode.nodeId.toString()
           val color = Color(colors[viewHierarchyNode.nodeId.toInt() % colors.size])
 
           drawRectOutline(
-            topLeftX = bounds.x1,
-            topLeftY = bounds.y1,
-            width = bounds.width,
-            height = bounds.height,
+            topLeftX = scaledBounds.x1,
+            topLeftY = scaledBounds.y1,
+            width = scaledBounds.width,
+            height = scaledBounds.height,
             color = color,
           )
 
@@ -111,16 +177,16 @@ class HostCanvasSetOfMark(private val bufferedImage: BufferedImage) {
           val textBoxHeight = textHeight + (textPadding * 2)
 
           drawRect(
-            topLeftX = bounds.x1 + bounds.width - textBoxWidth,
-            topLeftY = bounds.y1 + bounds.height - textBoxHeight,
+            topLeftX = scaledBounds.x1 + scaledBounds.width - textBoxWidth,
+            topLeftY = scaledBounds.y1 + scaledBounds.height - textBoxHeight,
             width = textBoxWidth,
             height = textBoxHeight,
             color = color,
           )
 
           drawText(
-            (bounds.x1 + bounds.width - textBoxWidth + textPadding).toFloat(),
-            (bounds.y1 + bounds.height - textPadding).toFloat(),
+            (scaledBounds.x1 + scaledBounds.width - textBoxWidth + textPadding).toFloat(),
+            (scaledBounds.y1 + scaledBounds.height - textPadding).toFloat(),
             listOf(text),
             Color.WHITE,
           )

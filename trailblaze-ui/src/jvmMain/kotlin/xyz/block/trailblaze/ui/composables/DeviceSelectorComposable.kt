@@ -24,7 +24,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import xyz.block.trailblaze.ui.DeviceManager
+import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 
 /**
  * A reusable device selector composable that works with a shared DeviceManager.
@@ -37,7 +37,7 @@ import xyz.block.trailblaze.ui.DeviceManager
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DeviceSelectorComposable(
-  deviceManager: DeviceManager,
+  deviceManager: TrailblazeDeviceManager,
   enabled: Boolean = true,
   onDeviceSelected: (() -> Unit)? = null,
 ) {

@@ -8,20 +8,166 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.key
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
+import xyz.block.trailblaze.api.HasClickCoordinates
+import xyz.block.trailblaze.api.MaestroDriverActionType
 import xyz.block.trailblaze.ui.images.ImageLoader
 import xyz.block.trailblaze.ui.images.NetworkImageLoader
+
+/**
+ * Shared composable for rendering screenshot annotations consistently
+ */
+@Composable
+fun ScreenshotAnnotation(
+  centerX: Dp,
+  centerY: Dp,
+  maxWidth: Dp,
+  maxHeight: Dp,
+  action: MaestroDriverActionType? = null,
+  modifier: Modifier = Modifier
+) {
+  if (action is MaestroDriverActionType.AssertCondition) {
+    val checkSize = 20.dp
+    val backgroundSize = 28.dp
+
+    // For notVisible assertions, show the check mark in upper corner
+    if (!action.isVisible && action.textToDisplay != null) {
+      // Position check mark in upper corner
+      Box(
+        modifier = Modifier
+          .size(backgroundSize)
+          .offset(
+            x = 8.dp, // Position near left edge
+            y = 8.dp  // Position at top
+          )
+          .border(
+            2.dp, Color.Green.copy(alpha = 0.6f), shape = CircleShape
+          ) // Translucent border only
+      ) {
+        // Transparent checkmark icon
+        Icon(
+          imageVector = Icons.Filled.Check,
+          contentDescription = "Assertion Success",
+          modifier = Modifier
+            .size(checkSize)
+            .align(Alignment.Center),
+          tint = Color.Green.copy(alpha = 0.7f) // Translucent check mark
+        )
+      }
+
+      // Text label for not found item
+      Box(
+        modifier = Modifier
+          .offset(
+            x = 8.dp + backgroundSize + 4.dp, // Position next to the check mark
+            y = 8.dp + (backgroundSize / 2) - 8.dp  // Vertically centered with check mark
+          )
+          .background(
+            Color.White.copy(alpha = 0.15f), shape = RoundedCornerShape(6.dp)
+          ) // Very transparent background
+          .border(1.dp, Color.Green.copy(alpha = 0.7f), shape = RoundedCornerShape(6.dp))
+      ) {
+        Text(
+          text = "\"${action.textToDisplay}\" not found",
+          modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+          fontSize = 11.sp,
+          fontWeight = FontWeight.Medium,
+          color = Color.Black,
+          textAlign = TextAlign.Center
+        )
+      }
+    } else {
+      // Visible assertions - show at click location with transparent circle background
+      Box(
+        modifier = Modifier
+          .size(backgroundSize)
+          .offset(
+            x = centerX - (backgroundSize / 2),
+            y = centerY - (backgroundSize / 2)
+          )
+          .border(
+            2.dp, Color.Green.copy(alpha = 0.6f), shape = CircleShape
+          ) // Translucent border only, no background fill
+      ) {
+        // Transparent checkmark icon
+        Icon(
+          imageVector = Icons.Filled.Check,
+          contentDescription = "Assertion Success",
+          modifier = Modifier
+            .size(checkSize)
+            .align(Alignment.Center),
+          tint = Color.Green.copy(alpha = 0.7f) // Translucent check mark
+        )
+      }
+    }
+  } else {
+    // Transparent red crosshairs with circle background
+    val crosshairSize = 16.dp
+    val backgroundSize = 24.dp
+    val crosshairThickness = 2.dp
+
+    // Circle with transparent background and translucent border
+    Box(
+      modifier = Modifier
+        .size(backgroundSize)
+        .offset(
+          x = centerX - (backgroundSize / 2),
+          y = centerY - (backgroundSize / 2)
+        )
+        .border(
+          2.dp, Color.Red.copy(alpha = 0.6f), shape = CircleShape
+        ) // Translucent border only, no background fill
+    ) {
+      // Translucent crosshairs
+      Box(
+        modifier = Modifier
+          .size(crosshairSize)
+          .align(Alignment.Center)
+      ) {
+        // Vertical line
+        Box(
+          modifier = Modifier
+            .width(crosshairThickness)
+            .height(crosshairSize)
+            .align(Alignment.Center)
+            .background(Color.Red.copy(alpha = 0.7f)) // Translucent red
+        )
+        // Horizontal line
+        Box(
+          modifier = Modifier
+            .width(crosshairSize)
+            .height(crosshairThickness)
+            .align(Alignment.Center)
+            .background(Color.Red.copy(alpha = 0.7f)) // Translucent red
+        )
+      }
+    }
+  }
+}
 
 @Composable
 fun ScreenshotImage(
@@ -31,6 +177,7 @@ fun ScreenshotImage(
   deviceHeight: Int,
   clickX: Int? = null,
   clickY: Int? = null,
+  action: MaestroDriverActionType? = null,
   modifier: Modifier = Modifier,
   imageLoader: ImageLoader = NetworkImageLoader(),
   forceHighQuality: Boolean = false,
@@ -65,23 +212,16 @@ fun ScreenshotImage(
       if (clickX != null && clickY != null && deviceWidth > 0 && deviceHeight > 0) {
         val xRatio = clickX.coerceAtLeast(0).toFloat() / deviceWidth.toFloat()
         val yRatio = clickY.coerceAtLeast(0).toFloat() / deviceHeight.toFloat()
-        val dotSize = 15.dp
-        // Compute center point offsets in Dp using available space
+        // Compute center point using available space
         val centerX = maxWidth * xRatio
         val centerY = maxHeight * yRatio
-        val offsetX = centerX - (dotSize / 2)
-        val offsetY = centerY - (dotSize / 2)
 
-        // Red dot (behind) with black outline
-        Box(
-          modifier = Modifier
-            .size(dotSize)
-            .offset(
-              x = offsetX.coerceIn(0.dp, maxWidth - dotSize),
-              y = offsetY.coerceIn(0.dp, maxHeight - dotSize)
-            )
-            .background(Color.Red, shape = CircleShape)
-            .border(width = 3.dp, color = Color.White, shape = CircleShape)
+        ScreenshotAnnotation(
+          centerX = centerX,
+          centerY = centerY,
+          maxWidth = maxWidth,
+          maxHeight = maxHeight,
+          action = action
         )
       }
     }
@@ -96,6 +236,7 @@ fun ScreenshotImageModal(
   deviceHeight: Int,
   clickX: Int?,
   clickY: Int?,
+  action: MaestroDriverActionType? = null,
   onDismiss: () -> Unit,
 ) {
   FullScreenModalOverlay(onDismiss = onDismiss) {
@@ -105,6 +246,7 @@ fun ScreenshotImageModal(
       deviceHeight = deviceHeight,
       clickX = clickX,
       clickY = clickY,
+      action = action,
       onDismiss = onDismiss
     )
   }

@@ -6,12 +6,13 @@ import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.host.rules.HostTrailblazeLoggingRule
 import xyz.block.trailblaze.host.screenstate.HostMaestroDriverScreenState
+import xyz.block.trailblaze.host.screenstate.toTrailblazeDevicePlatform
 import xyz.block.trailblaze.host.setofmark.HostCanvasSetOfMark
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
-import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.server.TrailblazeMcpServer
-import xyz.block.trailblaze.report.utils.GitUtils
+import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
+import xyz.block.trailblaze.util.GitUtils
 import xyz.block.trailblaze.viewhierarchy.ViewHierarchyFilter
 import xyz.block.trailblaze.viewhierarchy.ViewHierarchyTreeNodeUtils
 import java.io.File
@@ -28,25 +29,28 @@ private val logsRepo = LogsRepo(logsDir)
 
 fun main(args: Array<String>) {
   runBlocking {
-    TrailblazeLogger.startSession(INTERACTIVE_NAME)
-
-    val hostRunner = MaestroHostRunnerImpl()
-
-    val trailblazeDeviceInfoProvider = {
-      TrailblazeDeviceInfo(
-        trailblazeDriverType = hostRunner.connectedTrailblazeDriverType,
-        widthPixels = hostRunner.connectedDevice.initialMaestroDeviceInfo.widthPixels,
-        heightPixels = hostRunner.connectedDevice.initialMaestroDeviceInfo.heightPixels,
-      )
-    }
-
     val trailblazeLoggingRule = HostTrailblazeLoggingRule(
-      trailblazeDeviceInfoProvider = trailblazeDeviceInfoProvider,
+      trailblazeDeviceInfoProvider = {
+        // This will be set properly after hostRunner is initialized
+        TrailblazeDeviceInfo(
+          trailblazeDriverType = xyz.block.trailblaze.devices.TrailblazeDriverType.ANDROID_HOST,
+          widthPixels = 0,
+          heightPixels = 0,
+        )
+      },
     )
+
+    // Create the logger instance for this interactive session
+    trailblazeLoggingRule.trailblazeLogger.startSession(INTERACTIVE_NAME)
+
+    // Use the logger from logging rule
+    val hostRunner = MaestroHostRunnerImpl(trailblazeLogger = trailblazeLoggingRule.trailblazeLogger)
+
     if (!trailblazeLoggingRule.trailblazeLogServerClient.isServerRunning()) {
       TrailblazeMcpServer(
         logsRepo,
         isOnDeviceMode = { false },
+        targetTestAppProvider = { TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget },
       ).startSseMcpServer(52525, false)
       Thread.sleep(1000)
     }
@@ -62,18 +66,23 @@ fun main(args: Array<String>) {
 
     // interactive
     // Parse flags
-    TrailblazeLogger.sendStartLog(
+    trailblazeLoggingRule.trailblazeLogger.sendStartLog(
       trailConfig = null,
       className = INTERACTIVE_NAME,
       methodName = INTERACTIVE_NAME,
-      trailblazeDeviceInfo = trailblazeDeviceInfoProvider(),
+      trailblazeDeviceInfo = TrailblazeDeviceInfo(
+        trailblazeDriverType = hostRunner.connectedTrailblazeDriverType,
+        widthPixels = hostRunner.connectedDevice.initialMaestroDeviceInfo.widthPixels,
+        heightPixels = hostRunner.connectedDevice.initialMaestroDeviceInfo.heightPixels,
+      ),
     )
     InteractiveMainRunner(
       filterViewHierarchy = true,
       setOfMarkEnabled = true,
+      trailblazeLogger = trailblazeLoggingRule.trailblazeLogger,
     ).run()
     // Interactive mode always exits with success
-    TrailblazeLogger.sendEndLog(true)
+    trailblazeLoggingRule.trailblazeLogger.sendEndLog(true)
     exitProcess(EXIT_CODE_SUCCESS)
   }
 }
@@ -82,13 +91,14 @@ private fun runPrintFilteredHierarchy(driver: Driver) {
   // Get the screen state with the host driver
   val screenState = HostMaestroDriverScreenState(
     maestroDriver = driver,
-    setOfMarkEnabled = false,
+    setOfMarkEnabled = true,
   )
 
   // Filter the view hierarchy using ViewHierarchyFilter
-  val filter = ViewHierarchyFilter(
+  val filter = ViewHierarchyFilter.create(
     screenHeight = screenState.deviceHeight,
     screenWidth = screenState.deviceWidth,
+    platform = driver.deviceInfo().platform.toTrailblazeDevicePlatform(),
   )
   val filteredHierarchy = filter.filterInteractableViewHierarchyTreeNodes(screenState.viewHierarchy)
 
@@ -109,7 +119,7 @@ private fun runPrintFilteredHierarchy(driver: Driver) {
   }
   val originalScreenshotBytes = screenState.screenshotBytes
   val bufferedImage = ImageIO.read(java.io.ByteArrayInputStream(originalScreenshotBytes))
-  val canvas = HostCanvasSetOfMark(bufferedImage)
+  val canvas = HostCanvasSetOfMark(bufferedImage, deviceInfo)
   canvas.draw(elementList)
   val outputBytes = canvas.toByteArray()
   val outputFile = File("filtered_hierarchy_setofmark.jpg")
@@ -140,11 +150,11 @@ private fun runUnfilteredHierarchyCommon(
   }
   val screenState = HostMaestroDriverScreenState(
     maestroDriver = driver,
-    setOfMarkEnabled = false,
+    setOfMarkEnabled = true,
   )
   val originalScreenshotBytes = screenState.screenshotBytes
   val bufferedImage = ImageIO.read(java.io.ByteArrayInputStream(originalScreenshotBytes))
-  val canvas = HostCanvasSetOfMark(bufferedImage)
+  val canvas = HostCanvasSetOfMark(bufferedImage, deviceInfo)
   canvas.draw(elementList)
   val outputBytes = canvas.toByteArray()
   val outputFile = File(outputFileName)
@@ -156,7 +166,7 @@ private fun runUnfilteredHierarchyCommon(
 private fun runPrintUnfilteredHierarchy(
   driver: Driver,
 ) {
-  val screenState = HostMaestroDriverScreenState(driver, false)
+  val screenState = HostMaestroDriverScreenState(driver, true)
   val unfilteredHierarchy = screenState.viewHierarchy
   runUnfilteredHierarchyCommon(
     driver = driver,

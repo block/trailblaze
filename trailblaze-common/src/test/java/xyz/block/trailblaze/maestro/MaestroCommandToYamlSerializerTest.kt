@@ -13,6 +13,7 @@ import maestro.orchestra.AssertConditionCommand
 import maestro.orchestra.ClearKeychainCommand
 import maestro.orchestra.Command
 import maestro.orchestra.Condition
+import maestro.orchestra.CopyTextFromCommand
 import maestro.orchestra.ElementSelector
 import maestro.orchestra.EraseTextCommand
 import maestro.orchestra.InputRandomCommand
@@ -115,12 +116,133 @@ class MaestroCommandToYamlSerializerTest {
   }
 
   @Test
+  fun `swipeCommand elementSelector with relative selectors`() {
+    SwipeCommand(
+      elementSelector = ElementSelector(
+        textRegex = "Swipe Element",
+        enabled = true,
+        below = ElementSelector(
+          idRegex = "above_element",
+          textRegex = "Above Text",
+        ),
+        containsChild = ElementSelector(
+          textRegex = "Child Text",
+          checked = true,
+        ),
+        containsDescendants = listOf(
+          ElementSelector(
+            textRegex = "Descendant 1",
+          ),
+          ElementSelector(
+            idRegex = "descendant_2",
+            enabled = false,
+          ),
+        ),
+      ),
+      direction = SwipeDirection.UP,
+    ).also { command ->
+      convertCommandsToYamlAndParseAndCompare(
+        commandToSerialize = command,
+        expected = command,
+      )
+    }
+  }
+
+  @Test
+  fun `swipeCommand with elementSelector but no direction uses coordinates`() {
+    SwipeCommand(
+      elementSelector = ElementSelector(
+        textRegex = "Ignored Element",
+      ),
+      startRelative = "10%,20%",
+      endRelative = "90%,80%",
+      duration = 500,
+    ).also { command ->
+      convertCommandsToYamlAndParseAndCompare(
+        commandToSerialize = command,
+        expected = command.copy(elementSelector = null),
+      )
+    }
+  }
+
+  @Test
   fun tapOnElementCommand() {
     TapOnElementCommand(
       selector = ElementSelector(
         textRegex = "John Appleseed",
         enabled = true,
         focused = true,
+      ),
+    ).also { command ->
+      convertCommandsToYamlAndParseAndCompare(
+        commandToSerialize = command,
+        expected = command.copy(
+          retryIfNoChange = false, // Default Value
+          waitUntilVisible = false, // Default Value
+          longPress = false, // Default Value
+        ),
+      )
+    }
+  }
+
+  @Test
+  fun tapOnElementCommandWithSelectors() {
+    TapOnElementCommand(
+      selector = ElementSelector(
+        textRegex = "John Appleseed",
+        enabled = true,
+        focused = true,
+        childOf = ElementSelector(
+          idRegex = "some_id",
+          textRegex = "some_child_text",
+          enabled = true,
+        ),
+        containsChild = ElementSelector(
+          idRegex = "some_id",
+          textRegex = "some_text",
+        ),
+        above = ElementSelector(
+          idRegex = "some_id",
+          selected = true,
+          textRegex = "some_above_text",
+        ),
+        below = ElementSelector(
+          idRegex = "some_id",
+          textRegex = "some_below_text",
+          enabled = true,
+        ),
+        leftOf = ElementSelector(
+          idRegex = "some_id",
+          textRegex = "some_left_text",
+          leftOf = ElementSelector(
+            idRegex = "some_id",
+            textRegex = "some_left_text",
+            enabled = false,
+          ),
+        ),
+        rightOf = ElementSelector(
+          idRegex = "some_id",
+          textRegex = "some_right_text",
+          enabled = false,
+        ),
+        containsDescendants = listOf(
+          ElementSelector(
+            textRegex = "some_text1",
+          ),
+          ElementSelector(
+            textRegex = "some_text2",
+            checked = true,
+            rightOf = ElementSelector(
+              idRegex = "some_id",
+              textRegex = "some_left_text",
+              leftOf = ElementSelector(
+                idRegex = "some_id",
+                textRegex = "some_left_text",
+                enabled = false,
+              ),
+            ),
+          ),
+        ),
       ),
     ).also { command ->
       convertCommandsToYamlAndParseAndCompare(
@@ -220,6 +342,37 @@ class MaestroCommandToYamlSerializerTest {
       direction = ScrollDirection.DOWN,
       visibilityPercentage = 50,
       centerElement = false,
+    ).also { command ->
+      convertCommandsToYamlAndParseAndCompare(
+        commandToSerialize = command,
+        expected = command,
+      )
+    }
+  }
+
+  @Test
+  fun `scrollUntilVisibleCommand with relative selectors`() {
+    ScrollUntilVisibleCommand(
+      selector = ElementSelector(
+        textRegex = "Target Element",
+        enabled = true,
+        childOf = ElementSelector(
+          idRegex = "parent_container",
+          enabled = true,
+        ),
+        above = ElementSelector(
+          textRegex = "Element Below",
+          selected = true,
+        ),
+        containsDescendants = listOf(
+          ElementSelector(
+            textRegex = "Child Text",
+          ),
+        ),
+      ),
+      direction = ScrollDirection.DOWN,
+      visibilityPercentage = 75,
+      centerElement = true,
     ).also { command ->
       convertCommandsToYamlAndParseAndCompare(
         commandToSerialize = command,
@@ -367,6 +520,35 @@ class MaestroCommandToYamlSerializerTest {
   }
 
   @Test
+  fun `copyTextFromCommand with relative selectors`() {
+    CopyTextFromCommand(
+      selector = ElementSelector(
+        textRegex = "Copy This Text",
+        focused = true,
+        rightOf = ElementSelector(
+          idRegex = "left_element",
+          textRegex = "Left Element",
+        ),
+        containsChild = ElementSelector(
+          textRegex = "Has Child",
+          checked = true,
+        ),
+        containsDescendants = listOf(
+          ElementSelector(
+            textRegex = "Descendant Text",
+            enabled = true,
+          ),
+        ),
+      ),
+    ).also { command ->
+      convertCommandsToYamlAndParseAndCompare(
+        commandToSerialize = command,
+        expected = command,
+      )
+    }
+  }
+
+  @Test
   fun assertCommand() {
     AssertCommand(
       visible = ElementSelector(
@@ -389,12 +571,115 @@ class MaestroCommandToYamlSerializerTest {
   }
 
   @Test
+  fun `assertCommand with relative selectors`() {
+    AssertCommand(
+      visible = ElementSelector(
+        textRegex = "Assert This",
+        index = "1",
+        enabled = true,
+        above = ElementSelector(
+          idRegex = "below_element",
+          textRegex = "Below Text",
+          containsChild = ElementSelector(
+            textRegex = "Nested Child",
+            checked = true,
+          ),
+        ),
+        containsDescendants = listOf(
+          ElementSelector(
+            textRegex = "List Item 1",
+          ),
+          ElementSelector(
+            textRegex = "List Item 2",
+            selected = true,
+          ),
+        ),
+      ),
+    ).also { command ->
+      convertCommandsToYamlAndParseAndCompare(
+        commandToSerialize = command,
+        expected = AssertConditionCommand(
+          condition = Condition(
+            visible = command.visible,
+            notVisible = command.notVisible,
+          ),
+        ),
+      )
+    }
+  }
+
+  @Test
   fun assertConditionCommand() {
     AssertConditionCommand(
       condition = Condition(
         notVisible = ElementSelector(
           idRegex = "the_id",
           selected = true,
+        ),
+      ),
+    ).also { command ->
+      convertCommandsToYamlAndParseAndCompare(
+        commandToSerialize = command,
+        expected = command,
+      )
+    }
+  }
+
+  @Test
+  fun `assertConditionCommand with complex relative selectors`() {
+    AssertConditionCommand(
+      condition = Condition(
+        visible = ElementSelector(
+          textRegex = "Visible Element",
+          enabled = true,
+          leftOf = ElementSelector(
+            idRegex = "right_element",
+            selected = true,
+            above = ElementSelector(
+              textRegex = "Nested Above",
+              checked = false,
+            ),
+          ),
+          containsDescendants = listOf(
+            ElementSelector(
+              textRegex = "First Descendant",
+              enabled = true,
+            ),
+            ElementSelector(
+              idRegex = "second_descendant",
+              focused = true,
+              rightOf = ElementSelector(
+                textRegex = "Left of Second",
+              ),
+            ),
+          ),
+        ),
+      ),
+    ).also { command ->
+      convertCommandsToYamlAndParseAndCompare(
+        commandToSerialize = command,
+        expected = command,
+      )
+    }
+  }
+
+  @Test
+  fun `assertConditionCommand notVisible with relative selectors`() {
+    AssertConditionCommand(
+      condition = Condition(
+        notVisible = ElementSelector(
+          idRegex = "hidden_element",
+          enabled = false,
+          below = ElementSelector(
+            textRegex = "Above Element",
+            selected = true,
+          ),
+          childOf = ElementSelector(
+            idRegex = "parent_container",
+            containsChild = ElementSelector(
+              textRegex = "Sibling Element",
+            ),
+          ),
         ),
       ),
     ).also { command ->

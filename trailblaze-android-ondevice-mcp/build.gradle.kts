@@ -44,6 +44,7 @@ android {
 }
 
 dependencies {
+  implementation(project(":trailblaze-common"))
   implementation(project(":trailblaze-android"))
   implementation(project(":trailblaze-agent"))
   implementation(project(":trailblaze-server"))

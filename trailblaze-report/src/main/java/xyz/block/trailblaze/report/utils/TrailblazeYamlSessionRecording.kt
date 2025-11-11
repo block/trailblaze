@@ -7,7 +7,6 @@ import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
-import xyz.block.trailblaze.utils.Ext.asMaestroCommand
 import xyz.block.trailblaze.yaml.DirectionStep
 import xyz.block.trailblaze.yaml.TrailblazeYaml
 import xyz.block.trailblaze.yaml.VerificationStep
@@ -22,21 +21,28 @@ object TrailblazeYamlSessionRecording {
   /*
 * This function will take the list of trailblaze logs and generate the recorded yaml output
    */
-  fun List<TrailblazeLog>.generateRecordedYaml(): String {
+  fun List<TrailblazeLog>.generateRecordedYaml(sessionTrailConfig: xyz.block.trailblaze.yaml.TrailConfig? = null): String {
     return try {
       val logs = this
       val trailblazeYaml = TrailblazeYaml(
-        TrailblazeToolSet.AllBuiltInTrailblazeTools,
+        TrailblazeToolSet.AllBuiltInTrailblazeToolsForSerialization,
       )
       val trailblazeYamlBuilder = TrailblazeYamlBuilder()
       var currentLogIndex = 0
 
-      // If the session is not done then do not try to parse a recording
-      if (!logs.isSessionEnded()) {
-        return "Session still in progress, cannot generate a recording until the test is complete"
-      }
-
       with(trailblazeYamlBuilder) {
+        // Add config first if provided
+        if (sessionTrailConfig != null) {
+          config(
+            id = sessionTrailConfig.id,
+            title = sessionTrailConfig.title,
+            priority = sessionTrailConfig.priority,
+            context = sessionTrailConfig.context,
+            description = sessionTrailConfig.description,
+            metadata = sessionTrailConfig.metadata,
+          )
+        }
+
         while (currentLogIndex < size) {
           val currentLog = logs[currentLogIndex]
           println("### have current log ${currentLog::class}")
@@ -105,7 +111,7 @@ object TrailblazeYamlSessionRecording {
             }
 
             is TrailblazeLog.MaestroCommandLog -> {
-              maestro(listOf(currentLog.maestroCommandJsonObj.asMaestroCommand()!!))
+              maestro(listOf(currentLog.maestroCommandJsonObj))
             }
 
             else -> {

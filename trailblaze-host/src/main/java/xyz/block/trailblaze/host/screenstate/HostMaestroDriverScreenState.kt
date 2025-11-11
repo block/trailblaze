@@ -10,6 +10,7 @@ import xyz.block.trailblaze.api.ViewHierarchyTreeNode.Companion.relabelWithFresh
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.host.setofmark.HostCanvasSetOfMark
 import xyz.block.trailblaze.utils.Ext.toViewHierarchyTreeNode
+import xyz.block.trailblaze.viewhierarchy.ViewHierarchyFilter
 import xyz.block.trailblaze.viewhierarchy.ViewHierarchyTreeNodeUtils
 import java.awt.image.BufferedImage
 import java.io.ByteArrayInputStream
@@ -21,6 +22,7 @@ import javax.imageio.ImageIO
 class HostMaestroDriverScreenState(
   maestroDriver: Driver,
   private val setOfMarkEnabled: Boolean,
+  private val filterViewHierarchy: Boolean = true,
   maxAttempts: Int = 10,
 ) : ScreenState {
 
@@ -38,7 +40,8 @@ class HostMaestroDriverScreenState(
   private var matched = false
   private var attempts = 0
   private var stableRelabeledViewHierarchy: ViewHierarchyTreeNode? = null
-  private var stableScreenshotBytes: ByteArray? = null
+  private var stableFilteredViewHierarchy: ViewHierarchyTreeNode? = null
+  private var stableRawScreenshotBytes: ByteArray? = null
   private var stableBufferedImage: BufferedImage? = null
 
   init {
@@ -49,9 +52,24 @@ class HostMaestroDriverScreenState(
         ?.toViewHierarchyTreeNode()
 
       // Relabel for drawing and returning
-      val vh1Labelled = vh1?.relabelWithFreshIds()
+      stableRelabeledViewHierarchy = vh1?.relabelWithFreshIds()
 
-      // Take the screenshot (for set of mark, relabel only for drawing)
+      // Filter the view hierarchy if needed
+      stableFilteredViewHierarchy =
+        if (filterViewHierarchy && stableRelabeledViewHierarchy != null) {
+          val viewHierarchyFilter = ViewHierarchyFilter.create(
+            screenWidth = deviceWidth,
+            screenHeight = deviceHeight,
+            platform = deviceInfo.platform.toTrailblazeDevicePlatform(),
+          )
+          viewHierarchyFilter.filterInteractableViewHierarchyTreeNodes(
+            stableRelabeledViewHierarchy!!,
+          )
+        } else {
+          stableRelabeledViewHierarchy
+        }
+
+      // Take the screenshot (raw, without set of mark)
       val sink = Buffer()
       maestroDriver.takeScreenshot(sink, compressed = false)
       val screenshotBytes = sink.readByteArray()
@@ -64,8 +82,7 @@ class HostMaestroDriverScreenState(
         .filterOutOfBounds(width = deviceWidth, height = deviceHeight)
         ?.toViewHierarchyTreeNode()
 
-      stableRelabeledViewHierarchy = vh1Labelled
-      stableScreenshotBytes = screenshotBytes
+      stableRawScreenshotBytes = screenshotBytes
       stableBufferedImage = bufferedImage
 
       if (vh1 == vh2) {
@@ -82,25 +99,39 @@ class HostMaestroDriverScreenState(
   override val viewHierarchyOriginal: ViewHierarchyTreeNode = stableRelabeledViewHierarchy
     ?: throw IllegalStateException("Failed to get stable view hierarchy from Maestro driver after $maxAttempts attempts.")
 
-  override val viewHierarchy: ViewHierarchyTreeNode = stableRelabeledViewHierarchy
+  override val viewHierarchy: ViewHierarchyTreeNode = stableFilteredViewHierarchy
     ?: throw IllegalStateException("Failed to get stable view hierarchy from Maestro driver after $maxAttempts attempts.")
 
   override val trailblazeDevicePlatform: TrailblazeDevicePlatform = deviceInfo.platform.toTrailblazeDevicePlatform()
 
-  val screenshotModifier = { viewHierarchy: ViewHierarchyTreeNode, byteArray: ByteArray, bufferedImage: BufferedImage ->
+  /**
+   * Returns screenshot bytes with set of mark annotations applied if enabled.
+   * This matches the device-side behavior where set of mark is applied based on the setOfMarkEnabled flag.
+   * Uses the filtered view hierarchy for set of mark annotations.
+   */
+  private fun computeScreenshotBytes(): ByteArray? {
+    val rawBytes = stableRawScreenshotBytes ?: return null
+    val bufferedImage = stableBufferedImage ?: return null
+
     if (!setOfMarkEnabled) {
-      byteArray
-    } else {
-      val elementList = ViewHierarchyTreeNodeUtils.from(
-        viewHierarchy,
-        deviceInfo,
-      )
-      val canvas = HostCanvasSetOfMark(bufferedImage)
-      canvas.draw(elementList)
-      canvas.toByteArray()
+      return rawBytes
     }
+
+    val elementList = ViewHierarchyTreeNodeUtils.from(
+      viewHierarchy, // Use filtered hierarchy for set of mark
+      deviceInfo,
+    )
+
+    val canvas = HostCanvasSetOfMark(bufferedImage, deviceInfo)
+    canvas.draw(elementList)
+    val result = canvas.toByteArray()
+
+    return result
   }
-  override val screenshotBytes: ByteArray? = stableScreenshotBytes?.let {
-    screenshotModifier(viewHierarchy, it, stableBufferedImage!!)
-  }
+
+  /**
+   * The screenshotBytes property returns screenshots with or without set of mark annotations
+   * based on the setOfMarkEnabled flag, matching the device-side behavior.
+   */
+  override val screenshotBytes: ByteArray? = computeScreenshotBytes()
 }

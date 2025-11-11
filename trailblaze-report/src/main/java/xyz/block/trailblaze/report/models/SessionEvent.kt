@@ -2,6 +2,7 @@ package xyz.block.trailblaze.report.models
 
 import kotlinx.datetime.Instant
 import kotlinx.serialization.Serializable
+import xyz.block.trailblaze.agent.model.PromptRecordingResult
 import xyz.block.trailblaze.logs.model.HasScreenshot
 
 @Serializable
@@ -76,4 +77,13 @@ sealed interface SessionEvent {
     override val timestamp: Instant,
   ) : SessionEvent,
     HasScreenshot
+
+  @Serializable
+  data class AttemptAiFallback(
+    val details: String,
+    val recordingResult: PromptRecordingResult.Failure,
+    override val timestamp: Instant,
+    override val elapsedTimeMs: Long,
+    override val durationMs: Long = 0,
+  ) : SessionEvent
 }

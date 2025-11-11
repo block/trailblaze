@@ -15,9 +15,9 @@ import xyz.block.trailblaze.host.mcp.host.newtools.HostDeviceToolSet
 import xyz.block.trailblaze.host.rules.HostTrailblazeLoggingRule
 import xyz.block.trailblaze.llm.providers.OpenAITrailblazeLlmModelList
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
-import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.server.TrailblazeMcpServer
 import xyz.block.trailblaze.mcp.TrailblazeMcpSseSessionContext
+import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
@@ -26,9 +26,25 @@ class TrailblazeHostMcpServer(
   val logsRepo: LogsRepo,
   val isOnDeviceMode: () -> Boolean,
 ) {
+  val loggingRule = HostTrailblazeLoggingRule(
+    trailblazeDeviceInfoProvider = {
+      // Placeholder until hostRunner is initialized
+      TrailblazeDeviceInfo(
+        trailblazeDriverType = xyz.block.trailblaze.devices.TrailblazeDriverType.ANDROID_HOST,
+        widthPixels = 0,
+        heightPixels = 0,
+      )
+    },
+  ).apply {
+    CoroutineScope(Dispatchers.IO).launch {
+      subscribeToLoggingEventsAndSendToServer()
+    }
+  }
+
   val hostRunner by lazy {
     MaestroHostRunnerImpl(
       setOfMarkEnabled = true,
+      trailblazeLogger = loggingRule.trailblazeLogger,
     )
   }
 
@@ -42,16 +58,8 @@ class TrailblazeHostMcpServer(
     }
   }
 
-  val loggingRule = HostTrailblazeLoggingRule(
-    trailblazeDeviceInfoProvider = trailblazeDeviceInfoProvider,
-  ).apply {
-    CoroutineScope(Dispatchers.IO).launch {
-      subscribeToLoggingEventsAndSendToServer()
-    }
-  }
-
   val hostMaestroAgent: HostMaestroTrailblazeAgent by lazy {
-    TrailblazeLogger.sendStartLog(
+    loggingRule.trailblazeLogger.sendStartLog(
       trailConfig = null,
       className = "TrailblazeHostMcpServer",
       methodName = "TrailblazeHostMcpServer",
@@ -60,6 +68,7 @@ class TrailblazeHostMcpServer(
 
     HostMaestroTrailblazeAgent(
       maestroHostRunner = hostRunner,
+      trailblazeLogger = loggingRule.trailblazeLogger,
     )
   }
 
@@ -76,12 +85,15 @@ class TrailblazeHostMcpServer(
       llmClient = OpenAILLMClient(JvmOpenAiApiKeyUtil.getApiKeyFromEnv()),
       trailblazeLlmModel = OpenAITrailblazeLlmModelList.OPENAI_GPT_4_1,
       trailblazeToolRepo = hostToolRepo,
+      trailblazeLogger = loggingRule.trailblazeLogger,
+      sessionManager = loggingRule.sessionManager,
     )
   }
 
   val trailblazeMcpServer = TrailblazeMcpServer(
     logsRepo = logsRepo,
     isOnDeviceMode = { isOnDeviceMode() },
+    targetTestAppProvider = { TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget },
   ) { context: TrailblazeMcpSseSessionContext, server ->
     // Provide additional tools to the MCP server
     ToolRegistry {
@@ -91,6 +103,7 @@ class TrailblazeHostMcpServer(
           logsRepo = logsRepo,
           hostOpenAiRunnerProvider = { hostOpenAiRunner },
           toolRepo = hostToolRepo,
+          trailblazeLogger = loggingRule.trailblazeLogger,
         ).asTools(TrailblazeJsonInstance),
       )
     }

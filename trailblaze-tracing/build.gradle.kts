@@ -13,6 +13,9 @@ plugins {
 android {
   namespace = "xyz.block.trailblaze.tracing"
   compileSdk = 35
+  defaultConfig {
+    minSdk = 26
+  }
   lint {
     abortOnError = false
   }

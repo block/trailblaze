@@ -20,7 +20,6 @@
 package xyz.block.trailblaze.android.maestro.orchestra
 
 import kotlinx.coroutines.isActive
-import maestro.Driver
 import maestro.ElementFilter
 import maestro.Filters
 import maestro.Filters.asFilter
@@ -41,10 +40,12 @@ import maestro.orchestra.ClearStateCommand
 import maestro.orchestra.CompositeCommand
 import maestro.orchestra.Condition
 import maestro.orchestra.CopyTextFromCommand
+import maestro.orchestra.DefaultFlowController
 import maestro.orchestra.DefineVariablesCommand
 import maestro.orchestra.ElementSelector
 import maestro.orchestra.EraseTextCommand
 import maestro.orchestra.EvalScriptCommand
+import maestro.orchestra.FlowController
 import maestro.orchestra.HideKeyboardCommand
 import maestro.orchestra.InputRandomCommand
 import maestro.orchestra.InputTextCommand
@@ -88,8 +89,6 @@ import maestro.utils.MaestroTimer
 import maestro.utils.NoopInsights
 import maestro.utils.StringUtils.toRegexSafe
 import okhttp3.OkHttpClient
-import okio.Buffer
-import okio.Sink
 import okio.buffer
 import okio.sink
 import org.slf4j.LoggerFactory
@@ -99,55 +98,10 @@ import java.lang.Long.max
 import java.nio.file.Path
 import kotlin.coroutines.coroutineContext
 
-// TODO(bartkepacia): Use this in onCommandGeneratedOutput.
-//  Caveat:
-//    Large files should not be held in memory, instead they should be directly written to a Buffer
-//    that is streamed to disk.
-//  Idea:
-//    Orchestra should expose a callback like "onResourceRequested: (Command, CommandOutputType)"
-sealed class CommandOutput {
-  data class Screenshot(val screenshot: Buffer) : CommandOutput()
-  data class ScreenRecording(val screenRecording: Buffer) : CommandOutput()
-}
-
-interface FlowController {
-  suspend fun waitIfPaused()
-  fun pause()
-  fun resume()
-  val isPaused: Boolean
-}
-
-class DefaultFlowController : FlowController {
-  private var _isPaused = false
-
-  override suspend fun waitIfPaused() {
-    while (_isPaused) {
-      if (!coroutineContext.isActive) {
-        break
-      }
-      Thread.sleep(500)
-    }
-  }
-
-  override fun pause() {
-    _isPaused = true
-  }
-
-  override fun resume() {
-    _isPaused = false
-  }
-
-  override val isPaused: Boolean get() = _isPaused
-}
-
 /**
- * Orchestra translates high-level Maestro commands into method calls on the [Maestro] object.
- * It's the glue between the CLI and platform-specific [Driver]s (encapsulated in the [Maestro] object).
- * It's one of the core classes in this codebase.
- *
- * Orchestra should not know about:
- *  - Specific platforms where tests can be executed, such as Android, iOS, or the web.
- *  - File systems. It should instead write to [Sink]s that it requests from the caller.
+ * Last Update from Maestro v2.0.6
+ * https://github.com/mobile-dev-inc/Maestro/blob/v2.0.6/maestro-orchestra/src/main/java/maestro/orchestra/Orchestra.kt
+ * SEE THE README.md in this package for details on modifications from OSS version
  */
 class Orchestra(
   private val maestro: Maestro,
@@ -320,7 +274,10 @@ class Orchestra(
   /**
    * Returns true if the command mutated device state (i.e. interacted with the device), false otherwise.
    */
-  private suspend fun executeCommand(maestroCommand: MaestroCommand, config: MaestroConfig?): Boolean {
+  private suspend fun executeCommand(
+    maestroCommand: MaestroCommand,
+    config: MaestroConfig?,
+  ): Boolean {
     val command = maestroCommand.asCommand()
 
     if (!coroutineContext.isActive) {
@@ -536,7 +493,7 @@ class Orchestra(
           return true
         }
       } catch (ignored: MaestroException.ElementNotFound) {
-        logger.error("Error: $ignored")
+        logger.warn("Error: $ignored")
       }
       maestro.swipeFromCenter(
         direction,
@@ -605,7 +562,7 @@ class Orchestra(
       numberOfRuns = 0,
     )
 
-    var mutatiing = false
+    var mutating = false
 
     val checkCondition: () -> Boolean = {
       command.condition
@@ -619,7 +576,7 @@ class Orchestra(
       }
 
       val mutated = runSubFlow(command.commands, config, null)
-      mutatiing = mutatiing || mutated
+      mutating = mutating || mutated
       counter++
 
       metadata = metadata.copy(
@@ -632,10 +589,13 @@ class Orchestra(
       throw CommandSkipped
     }
 
-    return mutatiing
+    return mutating
   }
 
-  private suspend fun retryCommand(command: RetryCommand, config: MaestroConfig?): Boolean {
+  private suspend fun retryCommand(
+    command: RetryCommand,
+    config: MaestroConfig?,
+  ): Boolean {
     val maxRetries = (command.maxRetries?.toIntOrNull() ?: 1).coerceAtMost(MAX_RETRIES_ALLOWED)
 
     var attempt = 0
@@ -678,7 +638,10 @@ class Orchestra(
     }
   }
 
-  private suspend fun runFlowCommand(command: RunFlowCommand, config: MaestroConfig?): Boolean = if (evaluateCondition(command.condition, command.optional)) {
+  private suspend fun runFlowCommand(
+    command: RunFlowCommand,
+    config: MaestroConfig?,
+  ): Boolean = if (evaluateCondition(command.condition, command.optional)) {
     runSubFlow(command.commands, config, command.config)
   } else {
     throw CommandSkipped
@@ -695,42 +658,6 @@ class Orchestra(
 
     condition.platform?.let {
       if (it != maestro.cachedDeviceInfo.platform) {
-        return false
-      }
-    }
-
-    condition.visible?.let {
-      try {
-        findElement(
-          selector = it,
-          timeoutMs = adjustedToLatestInteraction(timeoutMs ?: optionalLookupTimeoutMs),
-          optional = commandOptional,
-        )
-      } catch (ignored: MaestroException.ElementNotFound) {
-        return false
-      }
-    }
-
-    condition.notVisible?.let {
-      val result = MaestroTimer.withTimeout(adjustedToLatestInteraction(timeoutMs ?: optionalLookupTimeoutMs)) {
-        try {
-          findElement(
-            selector = it,
-            timeoutMs = 500L,
-            optional = commandOptional,
-          )
-
-          // If we got to that point, the element is still visible.
-          // Returning null to keep waiting.
-          null
-        } catch (ignored: MaestroException.ElementNotFound) {
-          // Element was not visible, as we expected
-          true
-        }
-      }
-
-      // Element was actually visible
-      if (result != true) {
         return false
       }
     }
@@ -759,10 +686,49 @@ class Orchestra(
       }
     }
 
+    condition.visible?.let {
+      try {
+        findElement(
+          selector = it,
+          timeoutMs = adjustedToLatestInteraction(timeoutMs ?: optionalLookupTimeoutMs),
+          optional = commandOptional,
+        )
+      } catch (_: MaestroException.ElementNotFound) {
+        return false
+      }
+    }
+
+    condition.notVisible?.let {
+      val result = MaestroTimer.withTimeout(adjustedToLatestInteraction(timeoutMs ?: optionalLookupTimeoutMs)) {
+        try {
+          findElement(
+            selector = it,
+            timeoutMs = 500L,
+            optional = commandOptional,
+          )
+
+          // If we got to that point, the element is still visible.
+          // Returning null to keep waiting.
+          null
+        } catch (ignored: MaestroException.ElementNotFound) {
+          // Element was not visible, as we expected
+          true
+        }
+      }
+
+      // Element was actually visible
+      if (result != true) {
+        return false
+      }
+    }
+
     return true
   }
 
-  private suspend fun executeSubflowCommands(commands: List<MaestroCommand>, config: MaestroConfig?): Boolean {
+  private suspend fun executeSubflowCommands(
+    commands: List<MaestroCommand>,
+    config: MaestroConfig?,
+  ): Boolean {
     jsEngine.enterScope()
 
     return try {
@@ -893,7 +859,10 @@ class Orchestra(
     return true
   }
 
-  private fun openLinkCommand(command: OpenLinkCommand, config: MaestroConfig?): Boolean {
+  private fun openLinkCommand(
+    command: OpenLinkCommand,
+    config: MaestroConfig?,
+  ): Boolean {
     maestro.openLink(command.link, config?.appId, command.autoVerify ?: false, command.browser ?: false)
 
     return true
@@ -967,16 +936,32 @@ class Orchestra(
   ): Boolean {
     val result = findElement(command.selector, optional = command.optional)
 
-    maestro.tap(
-      element = result.element,
-      initialHierarchy = result.hierarchy,
-      retryIfNoChange = retryIfNoChange,
-      waitUntilVisible = waitUntilVisible,
-      longPress = command.longPress ?: false,
-      appId = config?.appId,
-      tapRepeat = command.repeat,
-      waitToSettleTimeoutMs = command.waitToSettleTimeoutMs,
-    )
+    // Handle element-relative tap if specified
+    val relativePoint = command.relativePoint
+    if (relativePoint != null) {
+      val tapPoint = calculateElementRelativePoint(result.element, relativePoint)
+
+      maestro.tap(
+        x = tapPoint.x,
+        y = tapPoint.y,
+        retryIfNoChange = retryIfNoChange,
+        longPress = command.longPress ?: false,
+        tapRepeat = command.repeat,
+        waitToSettleTimeoutMs = command.waitToSettleTimeoutMs,
+      )
+    } else {
+      // Default behavior: tap at element center
+      maestro.tap(
+        element = result.element,
+        initialHierarchy = result.hierarchy,
+        retryIfNoChange = retryIfNoChange,
+        waitUntilVisible = waitUntilVisible,
+        longPress = command.longPress ?: false,
+        appId = config?.appId,
+        tapRepeat = command.repeat,
+        waitToSettleTimeoutMs = command.waitToSettleTimeoutMs,
+      )
+    }
 
     return true
   }
@@ -1126,29 +1111,25 @@ class Orchestra(
   private fun buildFilter(
     selector: ElementSelector,
   ): FilterWithDescription {
-    val filters = mutableListOf<ElementFilter>()
+    val basicFilters = mutableListOf<ElementFilter>()
+    val relativeFilters = mutableListOf<ElementFilter>()
     val descriptions = mutableListOf<String>()
 
     selector.textRegex
       ?.let {
         descriptions += "Text matching regex: $it"
-        filters += Filters.deepestMatchingElement(
-          Filters.textMatches(it.toRegexSafe(REGEX_OPTIONS)),
-        )
+        basicFilters += Filters.textMatches(it.toRegexSafe(REGEX_OPTIONS))
       }
 
     selector.idRegex
       ?.let {
         descriptions += "Id matching regex: $it"
-        filters += Filters.deepestMatchingElement(
-          Filters.idMatches(it.toRegexSafe(REGEX_OPTIONS)),
-        )
+        basicFilters += Filters.idMatches(it.toRegexSafe(REGEX_OPTIONS))
       }
-
     selector.size
       ?.let {
         descriptions += "Size: $it"
-        filters += Filters.sizeMatches(
+        basicFilters += Filters.sizeMatches(
           width = it.width,
           height = it.height,
           tolerance = it.tolerance,
@@ -1158,38 +1139,38 @@ class Orchestra(
     selector.below
       ?.let {
         descriptions += "Below: ${it.description()}"
-        filters += Filters.below(buildFilter(it).filterFunc)
+        relativeFilters += Filters.below(buildFilter(it).filterFunc)
       }
 
     selector.above
       ?.let {
         descriptions += "Above: ${it.description()}"
-        filters += Filters.above(buildFilter(it).filterFunc)
+        relativeFilters += Filters.above(buildFilter(it).filterFunc)
       }
 
     selector.leftOf
       ?.let {
         descriptions += "Left of: ${it.description()}"
-        filters += Filters.leftOf(buildFilter(it).filterFunc)
+        relativeFilters += Filters.leftOf(buildFilter(it).filterFunc)
       }
 
     selector.rightOf
       ?.let {
         descriptions += "Right of: ${it.description()}"
-        filters += Filters.rightOf(buildFilter(it).filterFunc)
+        relativeFilters += Filters.rightOf(buildFilter(it).filterFunc)
       }
 
     selector.containsChild
       ?.let {
         descriptions += "Contains child: ${it.description()}"
-        filters += Filters.containsChild(findElement(it, optional = false).element).asFilter()
+        relativeFilters += Filters.containsChild(findElement(it, optional = false).element).asFilter()
       }
 
     selector.containsDescendants
       ?.let { descendantSelectors ->
         val descendantDescriptions = descendantSelectors.joinToString("; ") { it.description() }
         descriptions += "Contains descendants: $descendantDescriptions"
-        filters += Filters.containsDescendants(descendantSelectors.map { buildFilter(it).filterFunc })
+        relativeFilters += Filters.containsDescendants(descendantSelectors.map { buildFilter(it).filterFunc })
       }
 
     selector.traits
@@ -1198,7 +1179,7 @@ class Orchestra(
       }
       ?.forEach { (description, filter) ->
         descriptions += description
-        filters += filter
+        basicFilters += filter
       }
 
     selector.enabled
@@ -1208,7 +1189,7 @@ class Orchestra(
         } else {
           "Disabled"
         }
-        filters += Filters.enabled(it)
+        basicFilters += Filters.enabled(it)
       }
 
     selector.selected
@@ -1218,7 +1199,7 @@ class Orchestra(
         } else {
           "Not selected"
         }
-        filters += Filters.selected(it)
+        basicFilters += Filters.selected(it)
       }
 
     selector.checked
@@ -1228,7 +1209,7 @@ class Orchestra(
         } else {
           "Not checked"
         }
-        filters += Filters.checked(it)
+        basicFilters += Filters.checked(it)
       }
 
     selector.focused
@@ -1238,16 +1219,25 @@ class Orchestra(
         } else {
           "Not focused"
         }
-        filters += Filters.focused(it)
+        basicFilters += Filters.focused(it)
       }
 
     selector.css
       ?.let {
         descriptions += "CSS: $it"
-        filters += Filters.css(maestro, it)
+        basicFilters += Filters.css(maestro, it)
       }
 
-    var resultFilter = Filters.intersect(filters)
+    // Apply deepestMatchingElement only to basic filters, then intersect with relative filters
+    val basicFilter = if (basicFilters.isNotEmpty()) {
+      Filters.deepestMatchingElement(Filters.intersect(basicFilters))
+    } else {
+      { nodes -> nodes } // Identity filter if no basic filters
+    }
+
+    val allFilters = listOf(basicFilter) + relativeFilters
+    var resultFilter = Filters.intersect(allFilters)
+
     resultFilter = selector.index
       ?.toDouble()
       ?.toInt()
@@ -1340,7 +1330,10 @@ class Orchestra(
     return true
   }
 
-  private suspend fun executeDefineVariablesCommands(commands: List<MaestroCommand>, config: MaestroConfig?) {
+  private suspend fun executeDefineVariablesCommands(
+    commands: List<MaestroCommand>,
+    config: MaestroConfig?,
+  ) {
     commands.filter { it.asCommand() is DefineVariablesCommand }.takeIf { it.isNotEmpty() }?.let {
       executeCommands(
         commands = it,

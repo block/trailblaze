@@ -36,18 +36,22 @@ data class ViewHierarchyTreeNode(
   val className: String? = null,
   val clickable: Boolean = false,
   val dimensions: String? = null,
-  val enabled: Boolean = false,
+  val enabled: Boolean = true,
   val focusable: Boolean = false,
   val focused: Boolean = false,
+  val hintText: String? = null,
   val ignoreBoundsFiltering: Boolean = false,
   val password: Boolean = false,
   val resourceId: String? = null,
   val scrollable: Boolean = false,
   val selected: Boolean = false,
   val text: String? = null,
-  val depth: Int = 0,
-  var containerId: String? = null,
 ) {
+
+  /**
+   * See: https://github.com/mobile-dev-inc/Maestro/blob/42ae01049fc1e3466ad4ba45414b7bb25a19c899/maestro-orchestra/src/main/java/maestro/orchestra/Orchestra.kt#L1440-L1448
+   */
+  fun resolveMaestroText(): String? = text ?: hintText ?: accessibilityText
 
   fun aggregate(): List<ViewHierarchyTreeNode> = listOf(this) + children.flatMap { it.aggregate() }
 
@@ -119,5 +123,91 @@ data class ViewHierarchyTreeNode(
       )
       return relabel(this)
     }
+  }
+
+  /**
+   * Recursively compares equality with tolerance for dimension rounding errors.
+   * Due to integer rounding when computing centerPoint from dimensions (divide by 2),
+   * we allow a small tolerance (1-2 pixels) in dimension comparison.
+   *
+   * First tries exact equality (fast path), then falls back to lenient recursive comparison.
+   */
+  fun compareEqualityBasedOnBoundsNotDimensions(
+    otherNode: ViewHierarchyTreeNode,
+    boundsTolerance: Int = 2,
+  ): Boolean {
+    // Try exact equality first (fast path using data class ==)
+    if (this == otherNode) {
+      return true
+    }
+
+    // If exact equality fails, try lenient dimension comparison
+    // Compare structure without dimensions
+    val thisWithoutDims = this.copy(dimensions = null)
+    val otherWithoutDims = otherNode.copy(dimensions = null)
+
+    // Compare everything except dimensions and children (we'll check children recursively)
+    if (thisWithoutDims.copy(children = emptyList()) != otherWithoutDims.copy(children = emptyList())) {
+      return false
+    }
+
+    // Check dimensions are within tolerance
+    val thisBounds = this.bounds
+    val otherBounds = otherNode.bounds
+
+    if (thisBounds != null && otherBounds != null) {
+      // Both have bounds, check tolerance
+      if (kotlin.math.abs(thisBounds.x1 - otherBounds.x1) > boundsTolerance ||
+        kotlin.math.abs(thisBounds.y1 - otherBounds.y1) > boundsTolerance ||
+        kotlin.math.abs(thisBounds.x2 - otherBounds.x2) > boundsTolerance ||
+        kotlin.math.abs(thisBounds.y2 - otherBounds.y2) > boundsTolerance
+      ) {
+        return false
+      }
+    } else if ((thisBounds == null) != (otherBounds == null)) {
+      // One has bounds, one doesn't
+      return false
+    }
+
+    // Recursively compare children with same tolerance
+    if (this.children.size != otherNode.children.size) {
+      return false
+    }
+
+    return this.children.zip(otherNode.children).all { (child, otherChild) ->
+      child.compareEqualityBasedOnBoundsNotDimensions(otherChild, boundsTolerance)
+    }
+  }
+
+  /**
+   * Applies a transformation function recursively to this node and all its children.
+   * The transformation is applied depth-first, transforming children before parents.
+   *
+   * @param transform A function that takes a ViewHierarchyTreeNode and returns a transformed version
+   * @return A new ViewHierarchyTreeNode with the transformation applied recursively
+   */
+  private fun deepTransform(transform: (ViewHierarchyTreeNode) -> ViewHierarchyTreeNode): ViewHierarchyTreeNode {
+    val transformedChildren = children.map { it.deepTransform(transform) }
+    val nodeWithTransformedChildren = this.copy(children = transformedChildren)
+    return transform(nodeWithTransformedChildren)
+  }
+
+  /**
+   * Returns a deep copy of this ViewHierarchyTreeNode without dimensions property.
+   * This is applied recursively to all children as well.
+   * Useful for comparisons where dimensions might have rounding errors.
+   */
+  fun deepCopyWithoutDimensions(): ViewHierarchyTreeNode = deepTransform { node -> node.copy(dimensions = null) }
+
+  /**
+   * Relabels the tree with new nodeIds using a shared atomic incrementer.
+   * Returns a new tree with the same structure and data, but fresh nodeIds.
+   */
+  fun clearAllNodeIdsForThisAndAllChildren(): ViewHierarchyTreeNode {
+    fun relabel(node: ViewHierarchyTreeNode): ViewHierarchyTreeNode = node.copy(
+      nodeId = 1L,
+      children = node.children.map { relabel(it) },
+    )
+    return relabel(this)
   }
 }

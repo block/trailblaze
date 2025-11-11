@@ -68,6 +68,7 @@ data class SessionSummary(
             is TrailblazeLog.TrailblazeSessionStatusChangeLog,
             is TrailblazeLog.ObjectiveStartLog,
             is TrailblazeLog.ObjectiveCompleteLog,
+            is TrailblazeLog.AttemptAiFallbackLog,
             -> it
           }
         }.sortedBy { it.timestamp }
@@ -175,7 +176,10 @@ data class SessionSummary(
             is TrailblazeLog.MaestroCommandLog -> SessionEvent.MaestroCommand(
               timestamp = log.timestamp,
               durationMs = log.durationMs,
-              code = MaestroYamlSerializer.toYaml(listOf(log.maestroCommandJsonObj.asMaestroCommand()!!), false),
+              code = MaestroYamlSerializer.toYaml(
+                listOf(log.maestroCommandJsonObj.asMaestroCommand()!!),
+                false,
+              ),
               elapsedTimeMs = log.timestamp.toEpochMilliseconds() - sessionStartTimestamp.toEpochMilliseconds(),
             )
 
@@ -195,6 +199,13 @@ data class SessionSummary(
 
             is TrailblazeLog.TrailblazeSessionStatusChangeLog -> SessionEvent.SessionStatusChanged(
               details = log.sessionStatus::class.java.simpleName,
+              timestamp = log.timestamp,
+              elapsedTimeMs = log.timestamp.toEpochMilliseconds() - sessionStartTimestamp.toEpochMilliseconds(),
+            )
+
+            is TrailblazeLog.AttemptAiFallbackLog -> SessionEvent.AttemptAiFallback(
+              details = "Recording failed, attempting AI fallback",
+              recordingResult = log.recordingResult,
               timestamp = log.timestamp,
               elapsedTimeMs = log.timestamp.toEpochMilliseconds() - sessionStartTimestamp.toEpochMilliseconds(),
             )

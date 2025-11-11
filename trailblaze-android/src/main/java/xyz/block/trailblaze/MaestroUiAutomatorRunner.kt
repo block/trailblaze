@@ -16,6 +16,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.logs.model.TraceId.Companion.TraceOrigin
+import xyz.block.trailblaze.maestro.AssertionLogger
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.utils.Ext.asJsonObject
 
@@ -27,53 +28,70 @@ object MaestroUiAutomatorRunner {
   suspend fun runCommands(
     commands: List<Command>,
     traceId: TraceId?,
+    trailblazeLogger: TrailblazeLogger,
   ): TrailblazeToolResult = runMaestroCommands(
     commands = commands.filterNot { it is ApplyConfigurationCommand }.map { MaestroCommand(it) },
     traceId = traceId,
+    trailblazeLogger = trailblazeLogger,
   )
 
   fun runCommandsBlocking(
     commands: List<Command>,
     traceId: TraceId?,
+    trailblazeLogger: TrailblazeLogger,
   ): TrailblazeToolResult = runBlocking {
     runCommands(
       commands = commands,
       traceId = traceId,
+      trailblazeLogger = trailblazeLogger,
     )
   }
 
   suspend fun runCommand(
     traceId: TraceId?,
+    trailblazeLogger: TrailblazeLogger,
     vararg command: Command,
   ): TrailblazeToolResult = runCommands(
     commands = command.toList(),
     traceId = traceId,
-  )
-
-  private val maestro = Maestro(
-    driver = LoggingDriver(
-      delegate = MaestroAndroidUiAutomatorDriver(),
-      screenStateProvider = {
-        AndroidOnDeviceUiAutomatorScreenState(
-          setOfMarkEnabled = false, // We don't need this unless it's an LLM Request that requires it
-        )
-      },
-    ),
+    trailblazeLogger = trailblazeLogger,
   )
 
   private suspend fun runMaestroCommands(
     commands: List<MaestroCommand>,
     traceId: TraceId?,
+    trailblazeLogger: TrailblazeLogger,
   ): TrailblazeToolResult {
     val traceId = traceId ?: TraceId.generate(TraceOrigin.MAESTRO)
 
-    commands.forEach { maestroCommand ->
+    val screenStateProvider = {
+      AndroidOnDeviceUiAutomatorScreenState(
+        setOfMarkEnabled = false, // We don't need this unless it's an LLM Request that requires it
+      )
+    }
+
+    val maestro = Maestro(
+      driver = LoggingDriver(
+        delegate = MaestroAndroidUiAutomatorDriver(),
+        screenStateProvider = screenStateProvider,
+        trailblazeLogger = trailblazeLogger,
+      ),
+    )
+
+    // Create assertion logger for visualization
+    val assertionLogger = AssertionLogger(maestro, screenStateProvider, trailblazeLogger)
+
+    commands.forEach { maestroCommand: MaestroCommand ->
       val maestroCommandJsonObj = maestroCommand.asJsonObject()
       val startTime = Clock.System.now()
       // Run Flow
       var result: TrailblazeToolResult = TrailblazeToolResult.Success
       val runSuccess: Boolean = Orchestra(
         maestro = maestro,
+        onCommandStart = { index: Int, command: MaestroCommand ->
+          // Log assertion commands for visualization
+          assertionLogger.logAssertionCommand(command)
+        },
         onCommandFailed = { index: Int, maestroCommand: MaestroCommand, throwable: Throwable ->
           val commandJson = TrailblazeJsonInstance.encodeToString(maestroCommand.asJsonObject())
           result = TrailblazeToolResult.Error.MaestroValidationError(
@@ -84,7 +102,7 @@ object MaestroUiAutomatorRunner {
         },
       ).runFlow(listOf(maestroCommand))
 
-      TrailblazeLogger.log(
+      trailblazeLogger.log(
         TrailblazeLog.MaestroCommandLog(
           maestroCommandJsonObj = maestroCommandJsonObj,
           trailblazeToolResult = result,
@@ -92,7 +110,7 @@ object MaestroUiAutomatorRunner {
           durationMs = Clock.System.now().toEpochMilliseconds() - startTime.toEpochMilliseconds(),
           traceId = traceId,
           successful = result is TrailblazeToolResult.Success,
-          session = TrailblazeLogger.getCurrentSessionId(),
+          session = trailblazeLogger.getCurrentSessionId(),
         ),
       )
 

@@ -2,6 +2,8 @@ package xyz.block.trailblaze.android.maestro
 
 import android.bluetooth.BluetoothManager
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.net.wifi.WifiManager
 import android.telephony.TelephonyManager
 import android.util.Log
@@ -190,7 +192,32 @@ internal class MaestroAndroidUiAutomatorDriver : Driver {
     autoVerify: Boolean,
     browser: Boolean,
   ) {
-    error("Unsupported Maestro Driver Call to ${this::class.simpleName}::openLink $link, $appId, $autoVerify, $browser")
+    withInstrumentation {
+      val intent = Intent(Intent.ACTION_VIEW, Uri.parse(link)).apply {
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        addCategory(Intent.CATEGORY_BROWSABLE)
+
+        if (browser) {
+          // Force browser usage
+          addCategory(Intent.CATEGORY_APP_BROWSER)
+        }
+
+        // Set specific app if provided
+        appId?.let { setPackage(it) }
+      }
+
+      try {
+        context.startActivity(intent)
+
+        // If a specific app was requested, verify it's in foreground
+        appId?.let {
+          AdbCommandUtil.waitUntilAppInForeground(it)
+        }
+      } catch (e: Exception) {
+        Log.e("Maestro", "Failed to open link: $link", e)
+        throw e
+      }
+    }
   }
 
   override fun pressKey(code: KeyCode) {
@@ -238,14 +265,14 @@ internal class MaestroAndroidUiAutomatorDriver : Driver {
   override fun scrollVertical() {
     withUiDevice {
       val xPos = displayWidth / 2
-      val startY = (displayHeight * 0.9).toInt()
+      val startY = (displayHeight * 0.5).toInt()
       val endY = (displayHeight * 0.1).toInt()
       swipe(
         xPos,
         startY,
         xPos,
         endY,
-        50,
+        400,
       )
     }
   }
@@ -294,6 +321,12 @@ internal class MaestroAndroidUiAutomatorDriver : Driver {
     }
   }
 
+  /**
+   * Swipes on a specific element in the given direction.
+   *
+   * Note: SwipeTrailblazeTool does not use this method - it uses relative coordinates instead.
+   * This is still required by the Driver interface and may be used by other callers.
+   */
   override fun swipe(elementPoint: Point, direction: SwipeDirection, durationMs: Long) {
     println("swipe $elementPoint, $direction, $durationMs")
     val deviceInfo = deviceInfo()
@@ -323,6 +356,12 @@ internal class MaestroAndroidUiAutomatorDriver : Driver {
     }
   }
 
+  /**
+   * Swipes the screen in the given direction from center.
+   *
+   * Note: SwipeTrailblazeTool does not use this method - it uses relative coordinates instead.
+   * This is still required by the Driver interface and may be used by other callers.
+   */
   override fun swipe(swipeDirection: SwipeDirection, durationMs: Long) {
     val deviceInfo = deviceInfo()
     when (swipeDirection) {
@@ -330,7 +369,7 @@ internal class MaestroAndroidUiAutomatorDriver : Driver {
         val startX = (deviceInfo.widthGrid * 0.5f).toInt()
         val startY = (deviceInfo.heightGrid * 0.5f).toInt()
         val endX = (deviceInfo.widthGrid * 0.5f).toInt()
-        val endY = (deviceInfo.heightGrid * 0.1f).toInt()
+        val endY = (deviceInfo.heightGrid * 0.3f).toInt()
         directionalSwipe(
           durationMs,
           Point(startX, startY),
@@ -340,9 +379,9 @@ internal class MaestroAndroidUiAutomatorDriver : Driver {
 
       SwipeDirection.DOWN -> {
         val startX = (deviceInfo.widthGrid * 0.5f).toInt()
-        val startY = (deviceInfo.heightGrid * 0.2f).toInt()
+        val startY = (deviceInfo.heightGrid * 0.5f).toInt()
         val endX = (deviceInfo.widthGrid * 0.5f).toInt()
-        val endY = (deviceInfo.heightGrid * 0.9f).toInt()
+        val endY = (deviceInfo.heightGrid * 0.7f).toInt()
         directionalSwipe(
           durationMs,
           Point(startX, startY),

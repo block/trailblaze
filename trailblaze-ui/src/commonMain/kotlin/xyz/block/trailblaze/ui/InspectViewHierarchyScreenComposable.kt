@@ -4,6 +4,8 @@ package xyz.block.trailblaze.ui
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,11 +21,19 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.background
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.TextDecrease
+import androidx.compose.material.icons.outlined.TextIncrease
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -40,15 +50,23 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.onPointerEvent
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import coil3.compose.AsyncImage
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.ui.images.ImageLoader
 import xyz.block.trailblaze.viewhierarchy.ViewHierarchyFilter
 import xyz.block.trailblaze.ui.composables.SelectableText
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.encodeToString
+import xyz.block.trailblaze.ui.models.TrailblazeServerState
 
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
@@ -58,73 +76,273 @@ fun InspectViewHierarchyScreenComposable(
   imageUrl: String?,
   deviceWidth: Int,
   deviceHeight: Int,
+  // Column widths and font scale with persistence
+  initialScreenshotWidth: Int = TrailblazeServerState.DEFAULT_UI_INSPECTOR_SCREENSHOT_WIDTH,
+  initialDetailsWidth: Int = TrailblazeServerState.DEFAULT_UI_INSPECTOR_DETAILS_WIDTH,
+  initialHierarchyWidth: Int = TrailblazeServerState.DEFAULT_UI_INSPECTOR_HIERARCHY_WIDTH,
+  showRawJson: Boolean = false,
+  fontScale: Float = 1f,
+  onScreenshotWidthChanged: (Int) -> Unit = {},
+  onDetailsWidthChanged: (Int) -> Unit = {},
+  onHierarchyWidthChanged: (Int) -> Unit = {},
+  onFontScaleChanged: (Float) -> Unit = {},
+  onShowRawJsonChanged: (Boolean) -> Unit = {},
+  onClose: () -> Unit = {},
 ) {
   var selectedNode by remember { mutableStateOf<ViewHierarchyTreeNode?>(null) }
   var hoveredNode by remember { mutableStateOf<ViewHierarchyTreeNode?>(null) }
 
-  val imageLoader = remember { createLogsFileSystemImageLoader() }
+  // Column widths in dp
+  var screenshotWidth by remember { mutableStateOf(initialScreenshotWidth.dp) }
+  var detailsWidth by remember { mutableStateOf(initialDetailsWidth.dp) }
+  var hierarchyWidth by remember { mutableStateOf(initialHierarchyWidth.dp) }
 
-  Row(
-    modifier = Modifier
-      .fillMaxSize()
-      .padding(16.dp)
-  ) {
-    // Main content area with screenshot and overlays
-    Box(
+  val imageLoader = remember { createLogsFileSystemImageLoader() }
+  val density = LocalDensity.current
+
+  Column(modifier = Modifier.fillMaxSize()) {
+    // Header with close button and controls
+    Row(
       modifier = Modifier
-        .weight(0.7f)
-        .fillMaxHeight()
+        .fillMaxWidth()
+        .padding(16.dp),
+      horizontalArrangement = Arrangement.SpaceBetween,
+      verticalAlignment = Alignment.CenterVertically
     ) {
-      Card(
-        modifier = Modifier.fillMaxSize(),
-        colors = CardDefaults.cardColors(
-          containerColor = MaterialTheme.colorScheme.surfaceVariant
-        )
+      Text(
+        text = "UI Inspector",
+        style = MaterialTheme.typography.headlineSmall,
+        fontWeight = FontWeight.Bold
+      )
+
+      Row(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
       ) {
-        Box(
+        // Font size controls
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
           modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp),
-          contentAlignment = Alignment.Center
+            .background(
+              MaterialTheme.colorScheme.surfaceVariant,
+              shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
+            )
+            .padding(2.dp)
         ) {
-          if (imageUrl != null) {
-            ViewHierarchyInspector(
-              sessionId = sessionId,
-              screenshotFile = imageUrl,
-              viewHierarchy = viewHierarchy,
-              deviceWidth = deviceWidth,
-              deviceHeight = deviceHeight,
-              selectedNode = selectedNode,
-              hoveredNode = hoveredNode,
-              onNodeSelected = { selectedNode = it },
-              onNodeHovered = { hoveredNode = it },
-              imageLoader = imageLoader
-            )
-          } else {
-            Text(
-              text = "No screenshot available",
-              style = MaterialTheme.typography.bodyLarge,
-              color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+          IconButton(
+            onClick = {
+              val newScale = (fontScale - 0.1f).coerceAtLeast(0.5f)
+              onFontScaleChanged(newScale)
+            },
+            enabled = fontScale > 0.5f
+          ) {
+            Icon(Icons.Outlined.TextDecrease, contentDescription = "Decrease font size")
           }
+          IconButton(
+            onClick = {
+              val newScale = (fontScale + 0.1f).coerceAtMost(2f)
+              onFontScaleChanged(newScale)
+            },
+            enabled = fontScale < 2f
+          ) {
+            Icon(Icons.Outlined.TextIncrease, contentDescription = "Increase font size")
+          }
+        }
+
+        // Toggle button
+        Button(
+          onClick = { onShowRawJsonChanged(!showRawJson) },
+          colors = ButtonDefaults.buttonColors(
+            containerColor = MaterialTheme.colorScheme.primary
+          )
+        ) {
+          Text(text = if (showRawJson) "Show Tree" else "Show JSON")
+        }
+
+        Button(onClick = onClose) {
+          Text("Close")
         }
       }
     }
 
-    Spacer(modifier = Modifier.width(16.dp))
-
-    // Side panel with node details
-    Card(
+    // Main content row with panels
+    Row(
       modifier = Modifier
-        .width(350.dp)
-        .fillMaxHeight(),
-      colors = CardDefaults.cardColors(
-        containerColor = MaterialTheme.colorScheme.surface
-      )
+        .fillMaxSize()
+        .padding(16.dp)
     ) {
-      NodeDetailsPanel(
-        selectedNode = selectedNode ?: hoveredNode,
-        modifier = Modifier.fillMaxSize()
+      // Left: Screenshot panel with overlays
+      Box(
+        modifier = Modifier
+          .width(screenshotWidth)
+          .fillMaxHeight()
+      ) {
+        Card(
+          modifier = Modifier.fillMaxSize(),
+          colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant
+          )
+        ) {
+          Box(
+            modifier = Modifier
+              .fillMaxSize()
+              .padding(16.dp),
+            contentAlignment = Alignment.Center
+          ) {
+            if (imageUrl != null) {
+              ViewHierarchyInspector(
+                sessionId = sessionId,
+                screenshotFile = imageUrl,
+                viewHierarchy = viewHierarchy,
+                deviceWidth = deviceWidth,
+                deviceHeight = deviceHeight,
+                selectedNode = selectedNode,
+                hoveredNode = hoveredNode,
+                onNodeSelected = { selectedNode = it },
+                onNodeHovered = { hoveredNode = it },
+                imageLoader = imageLoader
+              )
+            } else {
+              Text(
+                text = "No screenshot available",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+              )
+            }
+          }
+        }
+      }
+
+      // Resizer between screenshot and details
+      Box(
+        modifier = Modifier
+          .width(8.dp)
+          .fillMaxHeight()
+          .pointerInput(Unit) {
+            detectHorizontalDragGestures { change, dragAmount ->
+              change.consume()
+              val newWidth = screenshotWidth + with(density) { dragAmount.toDp() }
+              screenshotWidth = newWidth.coerceIn(300.dp, 1200.dp)
+              onScreenshotWidthChanged(screenshotWidth.value.toInt())
+            }
+          }
+          .background(MaterialTheme.colorScheme.outlineVariant)
+      )
+
+      // Middle: Element details panel
+      Box(
+        modifier = Modifier
+          .width(detailsWidth)
+          .fillMaxHeight()
+      ) {
+        Card(
+          modifier = Modifier.fillMaxSize(),
+          colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+          )
+        ) {
+          NodeDetailsPanel(
+            selectedNode = selectedNode ?: hoveredNode,
+            fontScale = fontScale,
+            modifier = Modifier.fillMaxSize()
+          )
+        }
+      }
+
+      // Resizer between details and hierarchy
+      Box(
+        modifier = Modifier
+          .width(8.dp)
+          .fillMaxHeight()
+          .pointerInput(Unit) {
+            detectHorizontalDragGestures { change, dragAmount ->
+              change.consume()
+              val newWidth = detailsWidth + with(density) { dragAmount.toDp() }
+              detailsWidth = newWidth.coerceIn(250.dp, 800.dp)
+              onDetailsWidthChanged(detailsWidth.value.toInt())
+            }
+          }
+          .background(MaterialTheme.colorScheme.outlineVariant)
+      )
+
+      // Right: View hierarchy panel
+      Box(
+        modifier = Modifier
+          .width(hierarchyWidth)
+          .fillMaxHeight()
+      ) {
+        Card(
+          modifier = Modifier.fillMaxSize(),
+          colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+          )
+        ) {
+          Column(modifier = Modifier.fillMaxSize()) {
+            // Title for the panel with copy button
+            Row(
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+              horizontalArrangement = Arrangement.SpaceBetween,
+              verticalAlignment = Alignment.CenterVertically
+            ) {
+              Text(
+                text = if (showRawJson) "Raw JSON" else "View Hierarchy",
+                style = MaterialTheme.typography.headlineSmall.copy(
+                  fontSize = MaterialTheme.typography.headlineSmall.fontSize * fontScale
+                ),
+                fontWeight = FontWeight.Bold
+              )
+              
+              // Copy button
+              val clipboardManager = LocalClipboardManager.current
+              Button(
+                onClick = {
+                  val jsonString = Json { prettyPrint = true }.encodeToString(viewHierarchy)
+                  clipboardManager.setText(AnnotatedString(jsonString))
+                }
+              ) {
+                Text("Copy View Hierarchy")
+              }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            if (showRawJson) {
+              RawJsonPanel(
+                viewHierarchy = viewHierarchy,
+                fontScale = fontScale,
+                modifier = Modifier.weight(1f).fillMaxWidth()
+              )
+            } else {
+              ViewHierarchyTreePanel(
+                viewHierarchy = viewHierarchy,
+                selectedNode = selectedNode,
+                onNodeSelected = { selectedNode = it },
+                fontScale = fontScale,
+                modifier = Modifier
+                  .weight(1f)
+                  .fillMaxWidth()
+              )
+            }
+          }
+        }
+      }
+
+      // Resizer for hierarchy panel width
+      Box(
+        modifier = Modifier
+          .width(8.dp)
+          .fillMaxHeight()
+          .pointerInput(Unit) {
+            detectHorizontalDragGestures { change, dragAmount ->
+              change.consume()
+              val newWidth = hierarchyWidth + with(density) { dragAmount.toDp() }
+              hierarchyWidth = newWidth.coerceIn(350.dp, 1000.dp)
+              onHierarchyWidthChanged(hierarchyWidth.value.toInt())
+            }
+          }
+          .background(MaterialTheme.colorScheme.outlineVariant)
       )
     }
   }
@@ -290,8 +508,129 @@ private fun DrawScope.drawNodeOverlay(
 }
 
 @Composable
+private fun ViewHierarchyTreePanel(
+  viewHierarchy: ViewHierarchyTreeNode,
+  selectedNode: ViewHierarchyTreeNode?,
+  onNodeSelected: (ViewHierarchyTreeNode) -> Unit,
+  fontScale: Float,
+  modifier: Modifier = Modifier,
+) {
+  Box(
+    modifier = modifier
+  ) {
+    Column(
+      modifier = Modifier
+        .verticalScroll(rememberScrollState())
+        .horizontalScroll(rememberScrollState())
+        .padding(16.dp)
+    ) {
+      ViewHierarchyTreeItem(viewHierarchy, selectedNode, onNodeSelected, fontScale = fontScale)
+    }
+  }
+}
+
+@Composable
+private fun RawJsonPanel(
+  viewHierarchy: ViewHierarchyTreeNode,
+  fontScale: Float,
+  modifier: Modifier = Modifier,
+) {
+  val jsonString = remember(viewHierarchy) {
+    Json { prettyPrint = true }.encodeToString(viewHierarchy)
+  }
+  Box(
+    modifier = modifier
+  ) {
+    Box(
+      modifier = Modifier
+        .verticalScroll(rememberScrollState())
+        .horizontalScroll(rememberScrollState())
+        .padding(16.dp)
+    ) {
+      SelectableText(
+        text = jsonString,
+        style = MaterialTheme.typography.bodySmall.copy(
+          fontSize = MaterialTheme.typography.bodySmall.fontSize * fontScale,
+          fontFamily = FontFamily.Monospace
+        ),
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+      )
+    }
+  }
+}
+
+@Composable
+private fun ViewHierarchyTreeItem(
+  node: ViewHierarchyTreeNode,
+  selectedNode: ViewHierarchyTreeNode?,
+  onNodeSelected: (ViewHierarchyTreeNode) -> Unit,
+  fontScale: Float,
+  modifier: Modifier = Modifier,
+  level: Int = 0,
+) {
+  Column(modifier = modifier) {
+    // Current node
+    Row(
+      modifier = Modifier
+        .fillMaxWidth()
+        .clickable { onNodeSelected(node) }
+        .padding(start = (level * 16).dp, top = 4.dp, bottom = 4.dp),
+      verticalAlignment = Alignment.CenterVertically
+    ) {
+      // Node ID
+      Text(
+        text = "${node.nodeId}",
+        style = MaterialTheme.typography.labelMedium.copy(
+          fontSize = MaterialTheme.typography.labelMedium.fontSize * fontScale,
+          fontFamily = FontFamily.Monospace
+        ),
+        fontWeight = if (node == selectedNode) FontWeight.Bold else FontWeight.Normal,
+        color = if (node == selectedNode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+      )
+
+      Spacer(modifier = Modifier.width(8.dp))
+
+      // Display the most relevant text information
+      val displayText = when {
+        !node.text.isNullOrBlank() -> "\"${node.text}\""
+        !node.accessibilityText.isNullOrBlank() -> "[${node.accessibilityText}]"
+        !node.resourceId.isNullOrBlank() -> "#${node.resourceId}"
+        !node.className.isNullOrBlank() -> "<${
+          node.className?.split(".")
+            ?.lastOrNull() ?: node.className
+        }>"
+
+        else -> "(empty)"
+      }
+
+      Text(
+        text = displayText,
+        style = MaterialTheme.typography.bodySmall.copy(
+          fontSize = MaterialTheme.typography.bodySmall.fontSize * fontScale,
+          fontFamily = FontFamily.Monospace
+        ),
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        softWrap = false
+      )
+    }
+
+    // Children nodes recursively
+    node.children.forEach { child ->
+      ViewHierarchyTreeItem(
+        node = child,
+        selectedNode = selectedNode,
+        onNodeSelected = onNodeSelected,
+        fontScale = fontScale,
+        level = level + 1
+      )
+    }
+  }
+}
+
+@Composable
 private fun NodeDetailsPanel(
   selectedNode: ViewHierarchyTreeNode?,
+  fontScale: Float,
   modifier: Modifier = Modifier,
 ) {
   Column(
@@ -300,7 +639,9 @@ private fun NodeDetailsPanel(
   ) {
     Text(
       text = "Element Details",
-      style = MaterialTheme.typography.headlineSmall,
+      style = MaterialTheme.typography.headlineSmall.copy(
+        fontSize = MaterialTheme.typography.headlineSmall.fontSize * fontScale
+      ),
       fontWeight = FontWeight.Bold
     )
 
@@ -310,58 +651,104 @@ private fun NodeDetailsPanel(
       Column(
         modifier = Modifier.verticalScroll(rememberScrollState())
       ) {
-        DetailRow("Node ID", selectedNode.nodeId.toString())
+        DetailRow(
+          label = "Node ID",
+          value = selectedNode.nodeId.toString(),
+          fontScale = fontScale
+        )
 
         if (!selectedNode.text.isNullOrBlank()) {
-          DetailRow("Text", selectedNode.text!!)
+          DetailRow(
+            label = "Text",
+            value = selectedNode.text!!,
+            fontScale = fontScale
+          )
+        }
+
+        if (!selectedNode.hintText.isNullOrBlank()) {
+          DetailRow(
+            label = "Hint",
+            value = selectedNode.hintText!!,
+            fontScale = fontScale
+          )
         }
 
         if (!selectedNode.accessibilityText.isNullOrBlank()) {
-          DetailRow("Content Description", selectedNode.accessibilityText!!)
+          DetailRow(
+            label = "Content Description",
+            value = selectedNode.accessibilityText!!,
+            fontScale = fontScale
+          )
         }
 
         selectedNode.resourceId?.let {
-          DetailRow("Resource ID", it)
+          DetailRow(
+            label = "Resource ID",
+            value = it,
+            fontScale = fontScale
+          )
         }
 
         selectedNode.className?.let {
-          DetailRow("Class", it)
+          DetailRow(
+            label = "Class",
+            value = it,
+            fontScale = fontScale
+          )
         }
 
         selectedNode.bounds?.let { bounds ->
-          DetailRow("Bounds", "${bounds.x1},${bounds.y1} - ${bounds.x2},${bounds.y2}")
-          DetailRow("Size", "${bounds.width}x${bounds.height}")
-          DetailRow("Center", "${bounds.centerX},${bounds.centerY}")
+          DetailRow(
+            label = "Bounds",
+            value = "${bounds.x1},${bounds.y1} - ${bounds.x2},${bounds.y2}",
+            fontScale = fontScale
+          )
+          DetailRow(
+            label = "Size",
+            value = "${bounds.width}x${bounds.height}",
+            fontScale = fontScale
+          )
+          DetailRow(
+            label = "Center",
+            value = "${bounds.centerX},${bounds.centerY}",
+            fontScale = fontScale
+          )
         }
 
         Spacer(modifier = Modifier.height(8.dp))
         Text(
           text = "Properties",
-          style = MaterialTheme.typography.titleMedium,
+          style = MaterialTheme.typography.titleMedium.copy(
+            fontSize = MaterialTheme.typography.titleMedium.fontSize * fontScale
+          ),
           fontWeight = FontWeight.SemiBold
         )
         Spacer(modifier = Modifier.height(8.dp))
 
-        PropertiesGrid(selectedNode)
+        PropertiesGrid(selectedNode, fontScale)
 
         if (selectedNode.children.isNotEmpty()) {
           Spacer(modifier = Modifier.height(16.dp))
           Text(
             text = "Children (${selectedNode.children.size})",
-            style = MaterialTheme.typography.titleMedium,
+            style = MaterialTheme.typography.titleMedium.copy(
+              fontSize = MaterialTheme.typography.titleMedium.fontSize * fontScale
+            ),
             fontWeight = FontWeight.SemiBold
           )
           Spacer(modifier = Modifier.height(8.dp))
 
           selectedNode.children.forEach { child ->
-            ChildNodeItem(child)
+            ChildNodeItem(child, fontScale)
           }
         }
       }
     } else {
       Text(
         text = "Hover or click on an element in the screenshot to see its details.",
-        style = MaterialTheme.typography.bodyMedium,
+        style = MaterialTheme.typography.bodyMedium.copy(
+          fontSize = MaterialTheme.typography.bodyMedium.fontSize * fontScale
+        ),
         color = MaterialTheme.colorScheme.onSurfaceVariant
       )
     }
@@ -372,25 +759,33 @@ private fun NodeDetailsPanel(
 private fun DetailRow(
   label: String,
   value: String,
+  fontScale: Float,
   modifier: Modifier = Modifier,
 ) {
   Column(modifier = modifier.fillMaxWidth()) {
     Text(
       text = label,
-      style = MaterialTheme.typography.labelMedium,
+      style = MaterialTheme.typography.labelMedium.copy(
+        fontSize = MaterialTheme.typography.labelMedium.fontSize * fontScale
+      ),
       color = MaterialTheme.colorScheme.primary,
       fontWeight = FontWeight.Medium
     )
     SelectableText(
       text = value,
-      style = MaterialTheme.typography.bodyMedium,
+      style = MaterialTheme.typography.bodyMedium.copy(
+        fontSize = MaterialTheme.typography.bodyMedium.fontSize * fontScale
+      ),
       modifier = Modifier.padding(start = 8.dp, bottom = 8.dp)
     )
   }
 }
 
 @Composable
-private fun PropertiesGrid(node: ViewHierarchyTreeNode) {
+private fun PropertiesGrid(
+  node: ViewHierarchyTreeNode,
+  fontScale: Float
+) {
   val properties = listOf(
     "Clickable" to node.clickable,
     "Enabled" to node.enabled,
@@ -416,7 +811,9 @@ private fun PropertiesGrid(node: ViewHierarchyTreeNode) {
           Text(
             text = property,
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-            style = MaterialTheme.typography.labelSmall,
+            style = MaterialTheme.typography.labelSmall.copy(
+              fontSize = MaterialTheme.typography.labelSmall.fontSize * fontScale
+            ),
             color = MaterialTheme.colorScheme.primary
           )
         }
@@ -425,14 +822,19 @@ private fun PropertiesGrid(node: ViewHierarchyTreeNode) {
   } else {
     Text(
       text = "No active properties",
-      style = MaterialTheme.typography.bodySmall,
+      style = MaterialTheme.typography.bodySmall.copy(
+        fontSize = MaterialTheme.typography.bodySmall.fontSize * fontScale
+      ),
       color = MaterialTheme.colorScheme.onSurfaceVariant
     )
   }
 }
 
 @Composable
-private fun ChildNodeItem(child: ViewHierarchyTreeNode) {
+private fun ChildNodeItem(
+  child: ViewHierarchyTreeNode,
+  fontScale: Float
+) {
   Card(
     modifier = Modifier
       .fillMaxWidth()
@@ -451,13 +853,17 @@ private fun ChildNodeItem(child: ViewHierarchyTreeNode) {
       ) {
         Text(
           text = "ID: ${child.nodeId}",
-          style = MaterialTheme.typography.labelMedium,
+          style = MaterialTheme.typography.labelMedium.copy(
+            fontSize = MaterialTheme.typography.labelMedium.fontSize * fontScale
+          ),
           fontWeight = FontWeight.Medium
         )
         if (child.children.isNotEmpty()) {
           Text(
             text = "${child.children.size} children",
-            style = MaterialTheme.typography.labelSmall,
+            style = MaterialTheme.typography.labelSmall.copy(
+              fontSize = MaterialTheme.typography.labelSmall.fontSize * fontScale
+            ),
             color = MaterialTheme.colorScheme.onSurfaceVariant
           )
         }
@@ -466,14 +872,18 @@ private fun ChildNodeItem(child: ViewHierarchyTreeNode) {
       if (!child.text.isNullOrBlank()) {
         Text(
           text = child.text!!,
-          style = MaterialTheme.typography.bodySmall,
+          style = MaterialTheme.typography.bodySmall.copy(
+            fontSize = MaterialTheme.typography.bodySmall.fontSize * fontScale
+          ),
           color = MaterialTheme.colorScheme.onSurfaceVariant,
           maxLines = 1
         )
       } else if (!child.className.isNullOrEmpty()) {
         Text(
           text = child.className!!,
-          style = MaterialTheme.typography.bodySmall,
+          style = MaterialTheme.typography.bodySmall.copy(
+            fontSize = MaterialTheme.typography.bodySmall.fontSize * fontScale
+          ),
           color = MaterialTheme.colorScheme.onSurfaceVariant,
           maxLines = 1
         )

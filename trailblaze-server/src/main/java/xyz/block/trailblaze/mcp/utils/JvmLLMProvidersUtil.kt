@@ -2,8 +2,9 @@ package xyz.block.trailblaze.mcp.utils
 
 import xyz.block.trailblaze.llm.TrailblazeLlmModelList
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
-import xyz.block.trailblaze.mcp.utils.HostAdbCommandUtils.createProcessBuilder
-import xyz.block.trailblaze.mcp.utils.HostAdbCommandUtils.runProcess
+import xyz.block.trailblaze.util.CommandProcessResult
+import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils.createProcessBuilder
+import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils.runProcess
 
 object JvmLLMProvidersUtil {
 
@@ -23,7 +24,9 @@ object JvmLLMProvidersUtil {
 
       TrailblazeLlmProvider.OLLAMA -> {
         try {
-          val processSystemOutput: CommandProcessResult = createProcessBuilder(listOf("ollama", "-v")).runProcess {
+          val processSystemOutput: CommandProcessResult = createProcessBuilder(
+            listOf("ollama", "-v"),
+          ).runProcess {
             println(it)
           }
           println("Ollama Found.  ${processSystemOutput.fullOutput}")

@@ -10,6 +10,7 @@ import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
+import xyz.block.trailblaze.logs.client.TrailblazeLoggerInstance
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.logs.model.TraceId.Companion.TraceOrigin
 import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
@@ -27,7 +28,9 @@ import xyz.block.trailblaze.utils.ElementComparator
  *
  * This is abstract because there can be both on-device and host implementations of this agent.
  */
-abstract class MaestroTrailblazeAgent : TrailblazeAgent {
+abstract class MaestroTrailblazeAgent(
+  val trailblazeLogger: TrailblazeLogger = TrailblazeLoggerInstance,
+) : TrailblazeAgent {
 
   protected abstract suspend fun executeMaestroCommands(
     commands: List<Command>,
@@ -74,7 +77,7 @@ abstract class MaestroTrailblazeAgent : TrailblazeAgent {
     traceId: TraceId?,
     screenState: ScreenState?,
     elementComparator: ElementComparator,
-  ): Pair<List<TrailblazeTool>, TrailblazeToolResult> {
+  ): TrailblazeAgent.RunTrailblazeToolsResult {
     val traceId = traceId ?: TraceId.generate(TraceOrigin.TOOL)
     val trailblazeExecutionContext = TrailblazeToolExecutionContext(
       screenState = screenState,
@@ -90,23 +93,26 @@ abstract class MaestroTrailblazeAgent : TrailblazeAgent {
           val result = handleExecutableToolBlocking(trailblazeTool, trailblazeExecutionContext)
           if (result != TrailblazeToolResult.Success) {
             // Exit early if any tool execution fails
-            return toolsExecuted to result
+            return TrailblazeAgent.RunTrailblazeToolsResult(inputTools = toolsExecuted, executedTools = toolsExecuted, result = result)
           }
         }
 
         is DelegatingTrailblazeTool -> {
-          val executableTools = trailblazeTool.toExecutableTrailblazeTools(trailblazeExecutionContext)
+          val mappedExecutableTools = trailblazeTool.toExecutableTrailblazeTools(trailblazeExecutionContext)
           logDelegatingTrailblazeTool(
             trailblazeTool = trailblazeTool,
             traceId = traceId,
-            executableTools = executableTools,
+            executableTools = mappedExecutableTools,
           )
-          for (mappedTool in executableTools) {
+
+          val originalTools = listOf(trailblazeTool)
+
+          for (mappedTool in mappedExecutableTools) {
             toolsExecuted.add(mappedTool)
             val result = handleExecutableToolBlocking(mappedTool, trailblazeExecutionContext)
             if (result != TrailblazeToolResult.Success) {
               // Exit early if any tool execution fails
-              return toolsExecuted to result
+              return TrailblazeAgent.RunTrailblazeToolsResult(inputTools = originalTools, executedTools = toolsExecuted, result = result)
             }
           }
         }
@@ -130,7 +136,11 @@ abstract class MaestroTrailblazeAgent : TrailblazeAgent {
         )
       }
     }
-    return toolsExecuted to TrailblazeToolResult.Success
+    return TrailblazeAgent.RunTrailblazeToolsResult(
+      inputTools = toolsExecuted,
+      executedTools = toolsExecuted,
+      result = TrailblazeToolResult.Success,
+    )
   }
 
   @Deprecated("Starting in Maestro 2.0.0 their api uses a suspend function. Prefer that implementation.")
@@ -172,11 +182,11 @@ abstract class MaestroTrailblazeAgent : TrailblazeAgent {
       durationMs = Clock.System.now().toEpochMilliseconds() - timeBeforeToolExecution.toEpochMilliseconds(),
       timestamp = timeBeforeToolExecution,
       traceId = trailblazeExecutionContext.traceId,
-      session = TrailblazeLogger.getCurrentSessionId(),
+      session = trailblazeLogger.getCurrentSessionId(),
     )
     val toolLogJson = TrailblazeJsonInstance.encodeToString(toolLog)
     println("toolLogJson: $toolLogJson")
-    TrailblazeLogger.log(toolLog)
+    trailblazeLogger.log(toolLog)
   }
 
   private fun logDelegatingTrailblazeTool(
@@ -184,12 +194,12 @@ abstract class MaestroTrailblazeAgent : TrailblazeAgent {
     traceId: TraceId?,
     executableTools: List<ExecutableTrailblazeTool>,
   ) {
-    TrailblazeLogger.log(
+    trailblazeLogger.log(
       TrailblazeLog.DelegatingTrailblazeToolLog(
         trailblazeTool = trailblazeTool,
         toolName = trailblazeTool.getToolNameFromAnnotation(),
         executableTools = executableTools,
-        session = TrailblazeLogger.getCurrentSessionId(),
+        session = trailblazeLogger.getCurrentSessionId(),
         traceId = traceId,
         timestamp = Clock.System.now(),
       ),

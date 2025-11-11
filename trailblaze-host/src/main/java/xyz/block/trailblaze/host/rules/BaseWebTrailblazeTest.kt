@@ -1,10 +1,10 @@
 package xyz.block.trailblaze.host.rules
 
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.host.rules.TrailblazeHostLlmConfig.DEFAULT_TRAILBLAZE_LLM_MODEL
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.toolcalls.commands.HideKeyboardTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.LongPressOnPointTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnPointTrailblazeTool
 import kotlin.reflect.KClass
 
@@ -13,14 +13,13 @@ abstract class BaseWebTrailblazeTest :
     trailblazeDriverType = TrailblazeDriverType.WEB_PLAYWRIGHT_HOST,
     setOfMarkEnabled = false,
     trailblazeToolSet = TrailblazeToolSet.DynamicTrailblazeToolSet(
-      tools = mutableSetOf<KClass<out TrailblazeTool>>().apply {
-        addAll(TrailblazeToolSet.SetOfMarkTrailblazeToolSet.tools)
+      toolClasses = mutableSetOf<KClass<out TrailblazeTool>>().apply {
+        addAll(TrailblazeToolSet.DefaultSetOfMarkTrailblazeToolSet.toolClasses)
 
         // We want to avoid tapping on X/Y coordinates for higher recording quality.
         removeAll(
           setOf(
             TapOnPointTrailblazeTool::class,
-            LongPressOnPointTrailblazeTool::class,
           ),
         )
         // Hiding the Keyboard isn't applicable on Web
@@ -28,6 +27,7 @@ abstract class BaseWebTrailblazeTest :
       },
       name = "Device Control Ui Interactions - Do Not Combine with Set of Mark",
     ),
+    trailblazeLlmModel = DEFAULT_TRAILBLAZE_LLM_MODEL,
     systemPromptTemplate = """
 You are an assistant managing a web browser.
 You will autonomously complete complex tasks and report back when done.
@@ -75,4 +75,8 @@ or state.
 - Always use the accessibility text when interacting with Icons on the screen. Attempting to tap on them as an individual letter or symbol will not work.
 - Always use the close or back icons in the app to navigate vs using the device back button. The back button should only be used if there are no other.
     """.trimIndent(),
-  )
+  ) {
+  override fun ensureTargetAppIsStopped() {
+    // Not relevant on web at this point
+  }
+}

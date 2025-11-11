@@ -22,12 +22,20 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MoveDown
+import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.outlined.TextDecrease
 import androidx.compose.material.icons.outlined.TextIncrease
 import androidx.compose.material.icons.outlined.ZoomIn
 import androidx.compose.material.icons.outlined.ZoomOut
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconToggleButton
@@ -44,6 +52,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusTarget
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -62,6 +78,7 @@ import xyz.block.trailblaze.ui.composables.CodeBlock
 import xyz.block.trailblaze.ui.composables.SelectableText
 import xyz.block.trailblaze.ui.images.ImageLoader
 import xyz.block.trailblaze.ui.images.NetworkImageLoader
+import xyz.block.trailblaze.ui.models.TrailblazeServerState
 import xyz.block.trailblaze.ui.tabs.session.group.LogGroupRow
 import xyz.block.trailblaze.ui.tabs.session.models.GroupedLog
 import xyz.block.trailblaze.ui.tabs.session.models.SessionDetail
@@ -85,9 +102,15 @@ fun SessionDetailComposable(
   imageLoader: ImageLoader = NetworkImageLoader(),
   // Modal callbacks
   onShowDetails: (TrailblazeLog) -> Unit = {},
-  onShowInspectUI: (TrailblazeLog.TrailblazeLlmRequestLog) -> Unit = {},
+  onShowInspectUI: (TrailblazeLog) -> Unit = {},
   onShowChatHistory: (TrailblazeLog.TrailblazeLlmRequestLog) -> Unit = {},
-  onShowScreenshotModal: (imageModel: Any?, deviceWidth: Int, deviceHeight: Int, clickX: Int?, clickY: Int?) -> Unit = { _, _, _, _, _ -> },
+  onShowScreenshotModal: (imageModel: Any?, deviceWidth: Int, deviceHeight: Int, clickX: Int?, clickY: Int?, action: xyz.block.trailblaze.api.MaestroDriverActionType?) -> Unit = { _, _, _, _, _, _ -> },
+  // Session control
+  onCancelSession: () -> Unit = {},
+  onDeleteSession: () -> Unit = {},
+  onOpenLogsFolder: () -> Unit = {},
+  onExportSession: () -> Unit = {},
+  isCancelling: Boolean = false,
   // Persistent UI state
   initialZoomOffset: Int = 0,
   initialFontScale: Float = 1f,
@@ -95,6 +118,17 @@ fun SessionDetailComposable(
   onZoomOffsetChanged: (Int) -> Unit = {},
   onFontScaleChanged: (Float) -> Unit = {},
   onViewModeChanged: (SessionViewMode) -> Unit = {},
+  onExportToRepo: (String) -> Unit = {},
+  exportFeatureEnabled: Boolean = false,
+  // UI Inspector settings
+  initialInspectorScreenshotWidth: Int = TrailblazeServerState.DEFAULT_UI_INSPECTOR_SCREENSHOT_WIDTH,
+  initialInspectorDetailsWidth: Int = TrailblazeServerState.DEFAULT_UI_INSPECTOR_DETAILS_WIDTH,
+  initialInspectorHierarchyWidth: Int = TrailblazeServerState.DEFAULT_UI_INSPECTOR_HIERARCHY_WIDTH,
+  initialInspectorFontScale: Float = TrailblazeServerState.DEFAULT_UI_INSPECTOR_FONT_SCALE,
+  onInspectorScreenshotWidthChanged: (Int) -> Unit = {},
+  onInspectorDetailsWidthChanged: (Int) -> Unit = {},
+  onInspectorHierarchyWidthChanged: (Int) -> Unit = {},
+  onInspectorFontScaleChanged: (Float) -> Unit = {},
 ) {
   if (sessionDetail.logs.isEmpty()) {
     Column(
@@ -123,6 +157,101 @@ fun SessionDetailComposable(
             fontWeight = FontWeight.Bold,
           )
         }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+          if (sessionDetail.session.latestStatus.inProgress) {
+            Button(onClick = onCancelSession, enabled = !isCancelling) {
+              if (isCancelling) {
+                Text("Cancelling...")
+              } else {
+                Text("Cancel Session")
+              }
+            }
+          } else {
+            var showDeleteConfirmation by remember { mutableStateOf(false) }
+            var showMoreMenu by remember { mutableStateOf(false) }
+            Box {
+              IconButton(onClick = { showMoreMenu = !showMoreMenu }) {
+                Icon(
+                  imageVector = Icons.Default.MoreVert,
+                  contentDescription = "More options",
+                  modifier = Modifier.size(18.dp)
+                )
+              }
+              DropdownMenu(
+                expanded = showMoreMenu,
+                onDismissRequest = { showMoreMenu = false }
+              ) {
+                DropdownMenuItem(
+                  leadingIcon = {
+                    Icon(
+                      imageVector = Icons.Default.Folder,
+                      contentDescription = "Open Logs Folder"
+                    )
+                  },
+                  text = { Text("Open Logs Folder") },
+                  onClick = {
+                    onOpenLogsFolder()
+                    showMoreMenu = false
+                  }
+                )
+                DropdownMenuItem(
+                  leadingIcon = {
+                    Icon(
+                      imageVector = Icons.Default.Save,
+                      contentDescription = "Export Session"
+                    )
+                  },
+                  text = { Text("Export Session") },
+                  onClick = {
+                    onExportSession()
+                    showMoreMenu = false
+                  }
+                )
+                DropdownMenuItem(
+                  leadingIcon = {
+                    Icon(
+                      imageVector = Icons.Default.Delete,
+                      contentDescription = "Delete Session"
+                    )
+                  },
+                  text = { Text("Delete Session") },
+                  onClick = {
+                    showDeleteConfirmation = true
+                    showMoreMenu = false
+                  }
+                )
+              }
+            }
+            if (showDeleteConfirmation) {
+              androidx.compose.material3.AlertDialog(
+                onDismissRequest = { showDeleteConfirmation = false },
+                title = { Text("Delete Session?") },
+                text = {
+                  Text(
+                    "Are you sure you want to delete this session? This action cannot be undone."
+                  )
+                },
+                confirmButton = {
+                  androidx.compose.material3.TextButton(
+                    onClick = {
+                      showDeleteConfirmation = false
+                      onDeleteSession()
+                    }
+                  ) {
+                    Text("Delete")
+                  }
+                },
+                dismissButton = {
+                  androidx.compose.material3.TextButton(
+                    onClick = { showDeleteConfirmation = false }
+                  ) {
+                    Text("Cancel")
+                  }
+                }
+              )
+            }
+          }
+        }
       }
 
       Spacer(modifier = Modifier.height(16.dp))
@@ -132,11 +261,26 @@ fun SessionDetailComposable(
         modifier = Modifier.padding(16.dp),
         style = MaterialTheme.typography.bodyLarge,
       )
+
+      Spacer(modifier = Modifier.height(16.dp))
+
+      Row {
+        Button(onClick = onOpenLogsFolder) {
+          Icon(
+            imageVector = Icons.Default.Folder,
+            contentDescription = "Open Logs Folder",
+            modifier = Modifier.size(18.dp)
+          )
+          Spacer(modifier = Modifier.width(8.dp))
+          Text("Open")
+        }
+      }
     }
   } else {
     val gridState = rememberLazyGridState()
     var viewMode by remember { mutableStateOf(initialViewMode) }
     var alwaysAtBottom by remember { mutableStateOf(sessionDetail.session.latestStatus.inProgress) }
+    var showDeleteConfirmation by remember { mutableStateOf(false) }
 
     // Pre-compute heavy operations in background threads and cache results
     var groupedLogs by remember { mutableStateOf<List<GroupedLog>>(emptyList()) }
@@ -164,7 +308,8 @@ fun SessionDetailComposable(
     }
 
     // Background computation for recording YAML (used in Recording view)
-    LaunchedEffect(sessionDetail.logs) {
+    // Refresh if logs change or session status changes
+    LaunchedEffect(sessionDetail.logs, sessionDetail.session.latestStatus.inProgress) {
       isLoadingRecordingYaml = true
       withContext(Dispatchers.Default) {
         val computedYaml = generateRecordingYaml()
@@ -179,7 +324,17 @@ fun SessionDetailComposable(
       }
     }
 
-    BoxWithConstraints(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+    val focusRequester = remember { FocusRequester() }
+    BoxWithConstraints(
+      modifier = Modifier
+        .fillMaxSize()
+        .padding(16.dp)
+        .focusRequester(focusRequester)
+        .focusTarget()
+    ) {
+      LaunchedEffect(Unit) {
+        focusRequester.requestFocus()
+      }
       // Use the actual spacing from LazyVerticalGrid (12.dp)
       val gridSpacing = 12.dp
       val minCardWidth = 160.dp
@@ -280,18 +435,30 @@ fun SessionDetailComposable(
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
               // View mode toggle
-              Row(verticalAlignment = Alignment.CenterVertically) {
-                if (sessionDetail.session.latestStatus.inProgress) {
-                  IconToggleButton(
-                    checked = alwaysAtBottom, onCheckedChange = { alwaysAtBottom = it }) {
-                    Icon(
-                      imageVector = Icons.Default.MoveDown,
-                      contentDescription = "Toggle always at bottom",
-                      modifier = Modifier.size(24.dp)
-                    )
-                  }
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(end = 8.dp)
+              ) {
+                // Auto-scroll toggle - always visible for all view modes
+                Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  modifier = Modifier.padding(end = 8.dp)
+                ) {
+                  Checkbox(
+                    checked = alwaysAtBottom,
+                    onCheckedChange = { alwaysAtBottom = it }
+                  )
+                  Icon(
+                    imageVector = Icons.Default.MoveDown,
+                    contentDescription = "Toggle auto-scroll to bottom",
+                    modifier = Modifier.size(18.dp)
+                  )
+                  Text(
+                    text = "Auto-scroll",
+                    modifier = Modifier.padding(start = 4.dp),
+                    style = MaterialTheme.typography.bodyMedium
+                  )
                 }
-                // Checkbox(checked = alwaysAtBottom, onCheckedChange = { alwaysAtBottom = it }, enabled = details.session.latestStatus.inProgress)
                 TextButton(onClick = {
                   viewMode = SessionViewMode.List
                   onViewModeChanged(SessionViewMode.List)
@@ -326,6 +493,107 @@ fun SessionDetailComposable(
                   Text(
                     text = "Recording",
                     color = if (viewMode == SessionViewMode.Recording) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                  )
+                }
+              }
+              // Cancel Session button for active sessions
+              if (sessionDetail.session.latestStatus.inProgress) {
+                Spacer(modifier = Modifier.width(16.dp))
+                Button(
+                  onClick = onCancelSession,
+                  enabled = !isCancelling,
+                  colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.error
+                  )
+                ) {
+                  if (isCancelling) {
+                    Text("Cancelling...")
+                  } else {
+                    Text("Cancel Session")
+                  }
+                }
+              } else {
+                var showDeleteConfirmation by remember { mutableStateOf(false) }
+                var showMoreMenu by remember { mutableStateOf(false) }
+                Box {
+                  IconButton(onClick = { showMoreMenu = !showMoreMenu }) {
+                    Icon(
+                      imageVector = Icons.Default.MoreVert,
+                      contentDescription = "More options",
+                      modifier = Modifier.size(18.dp)
+                    )
+                  }
+                  DropdownMenu(
+                    expanded = showMoreMenu,
+                    onDismissRequest = { showMoreMenu = false }
+                  ) {
+                    DropdownMenuItem(
+                      leadingIcon = {
+                        Icon(
+                          imageVector = Icons.Default.Folder,
+                          contentDescription = "Open Logs Folder"
+                        )
+                      },
+                      text = { Text("Open Logs Folder") },
+                      onClick = {
+                        onOpenLogsFolder()
+                        showMoreMenu = false
+                      }
+                    )
+                    DropdownMenuItem(
+                      leadingIcon = {
+                        Icon(
+                          imageVector = Icons.Default.Save,
+                          contentDescription = "Export Session"
+                        )
+                      },
+                      text = { Text("Export Session") },
+                      onClick = {
+                        onExportSession()
+                        showMoreMenu = false
+                      }
+                    )
+                    DropdownMenuItem(
+                      leadingIcon = {
+                        Icon(
+                          imageVector = Icons.Default.Delete,
+                          contentDescription = "Delete Session"
+                        )
+                      },
+                      text = { Text("Delete Session") },
+                      onClick = {
+                        showDeleteConfirmation = true
+                        showMoreMenu = false
+                      }
+                    )
+                  }
+                }
+                if (showDeleteConfirmation) {
+                  androidx.compose.material3.AlertDialog(
+                    onDismissRequest = { showDeleteConfirmation = false },
+                    title = { Text("Delete Session?") },
+                    text = {
+                      Text(
+                        "Are you sure you want to delete this session? This action cannot be undone."
+                      )
+                    },
+                    confirmButton = {
+                      androidx.compose.material3.TextButton(
+                        onClick = {
+                          showDeleteConfirmation = false
+                          onDeleteSession()
+                        }
+                      ) {
+                        Text("Delete")
+                      }
+                    },
+                    dismissButton = {
+                      androidx.compose.material3.TextButton(
+                        onClick = { showDeleteConfirmation = false }
+                      ) {
+                        Text("Cancel")
+                      }
+                    }
                   )
                 }
               }
@@ -453,6 +721,7 @@ fun SessionDetailComposable(
               } else null
             } else null,
             trailConfig = sessionDetail.session.trailConfig,
+            sessionInfo = sessionDetail.session,
           )
 
           // Spacer item
@@ -481,15 +750,11 @@ fun SessionDetailComposable(
                       imageLoader = imageLoader,
                       cardSize = cardSize,
                       showDetails = { onShowDetails(log) },
-                      showInspectUI = {
-                        if (log is TrailblazeLog.TrailblazeLlmRequestLog) {
-                          onShowInspectUI(log)
-                        }
-                      },
+                      showInspectUI = { onShowInspectUI(log) },
                       showChatHistory = {
-                        if (log is TrailblazeLog.TrailblazeLlmRequestLog) {
-                          onShowChatHistory(log)
-                        }
+                        if (log is TrailblazeLog.TrailblazeLlmRequestLog) onShowChatHistory(
+                          log
+                        )
                       },
                       onShowScreenshotModal = onShowScreenshotModal
                     )
@@ -523,7 +788,28 @@ fun SessionDetailComposable(
                               sessionId = sessionDetail.session.sessionId,
                               sessionStartTime = sessionDetail.session.timestamp,
                               imageLoader = imageLoader,
-                              showDetails = { onShowDetails(groupedLog.log) }
+                              showDetails = { onShowDetails(groupedLog.log) },
+                              cardSize = cardSize,
+                              showInspectUI = when (groupedLog.log) {
+                                is TrailblazeLog.TrailblazeLlmRequestLog -> {
+                                  { onShowInspectUI(groupedLog.log) }
+                                }
+                                is TrailblazeLog.MaestroDriverLog -> {
+                                  if (groupedLog.log.viewHierarchy != null) {
+                                    { onShowInspectUI(groupedLog.log) }
+                                  } else null
+                                }
+
+                                else -> null
+                              },
+                              showChatHistory = when (groupedLog.log) {
+                                is TrailblazeLog.TrailblazeLlmRequestLog -> {
+                                  { onShowChatHistory(groupedLog.log) }
+                                }
+
+                                else -> null
+                              },
+                              onShowScreenshotModal = onShowScreenshotModal
                             )
                           }
 
@@ -537,15 +823,11 @@ fun SessionDetailComposable(
                               imageLoader = imageLoader,
                               cardSize = cardSize,
                               showDetails = { log -> onShowDetails(log) },
-                              showInspectUI = { log ->
-                                if (log is TrailblazeLog.TrailblazeLlmRequestLog) {
-                                  onShowInspectUI(log)
-                                }
-                              },
+                              showInspectUI = { log -> onShowInspectUI(log) },
                               showChatHistory = { log ->
-                                if (log is TrailblazeLog.TrailblazeLlmRequestLog) {
-                                  onShowChatHistory(log)
-                                }
+                                if (log is TrailblazeLog.TrailblazeLlmRequestLog) onShowChatHistory(
+                                  log
+                                )
                               },
                               onShowScreenshotModal = onShowScreenshotModal
                             )
@@ -599,14 +881,55 @@ fun SessionDetailComposable(
                             fontWeight = FontWeight.Bold,
                           )
                           val clipboardManager = LocalClipboardManager.current
-                          Button(
-                            onClick = {
-                              clipboardManager.setText(AnnotatedString(recordingYamlCache ?: ""))
+                          Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(
+                              onClick = {
+                                clipboardManager.setText(AnnotatedString(recordingYamlCache ?: ""))
+                              }
+                            ) {
+                              Text("Copy Yaml")
                             }
-                          ) {
-                            Text("Copy Yaml")
+                            if (exportFeatureEnabled) {
+                              Button(
+                                onClick = {
+                                  onExportToRepo(recordingYamlCache ?: "")
+                                }
+                              ) {
+                                Text("Export to Repo")
+                              }
+                            }
                           }
                         }
+                        
+                        // Show warning if session is still in progress
+                        if (sessionDetail.session.latestStatus.inProgress) {
+                          Box(
+                            modifier = Modifier
+                              .fillMaxWidth()
+                              .background(
+                                MaterialTheme.colorScheme.tertiaryContainer,
+                                shape = RoundedCornerShape(8.dp)
+                              )
+                              .padding(16.dp)
+                              .padding(bottom = 16.dp)
+                          ) {
+                            Column {
+                              Text(
+                                text = "⚠️  Session In Progress",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onTertiaryContainer
+                              )
+                              Spacer(modifier = Modifier.height(4.dp))
+                              Text(
+                                text = "This recording is incomplete and will update automatically as new logs arrive.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onTertiaryContainer
+                              )
+                            }
+                          }
+                        }
+                        
                         CodeBlock(
                           text = recordingYamlCache ?: "",
                           textStyle = MaterialTheme.typography.labelSmall.copy(

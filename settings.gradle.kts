@@ -30,5 +30,4 @@ include(
   ":trailblaze-report",
   ":trailblaze-server",
   ":trailblaze-tracing",
-  ":trailblaze-yaml",
 )

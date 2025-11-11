@@ -1,44 +1,49 @@
 package xyz.block.trailblaze.host.rules
 
-import ai.koog.prompt.executor.clients.LLMClient
-import ai.koog.prompt.executor.clients.openai.OpenAILLMClient
 import org.junit.Rule
+import xyz.block.trailblaze.TrailblazeYamlUtil
 import xyz.block.trailblaze.agent.TrailblazeElementComparator
 import xyz.block.trailblaze.agent.TrailblazeRunner
-import xyz.block.trailblaze.api.JvmOpenAiApiKeyUtil
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.host.HostMaestroTrailblazeAgent
 import xyz.block.trailblaze.host.MaestroHostRunnerImpl
 import xyz.block.trailblaze.host.devices.TrailblazeHostDeviceClassifier
+import xyz.block.trailblaze.host.rules.TrailblazeHostLlmConfig.DEFAULT_TRAILBLAZE_LLM_MODEL
+import xyz.block.trailblaze.http.DynamicLlmClient
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
-import xyz.block.trailblaze.llm.providers.OpenAITrailblazeLlmModelList
-import xyz.block.trailblaze.logs.client.TrailblazeLogger
-import xyz.block.trailblaze.rules.TestStackTraceUtil
 import xyz.block.trailblaze.rules.TrailblazeLoggingRule
 import xyz.block.trailblaze.rules.TrailblazeRunnerUtil
+import xyz.block.trailblaze.session.TrailblazeSessionManager
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.util.TemplatingUtil
+import xyz.block.trailblaze.utils.Ext.asMaestroCommands
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.TrailblazeYaml
 import kotlin.reflect.KClass
 
 abstract class BaseHostTrailblazeTest(
   trailblazeDriverType: TrailblazeDriverType,
+  val trailblazeLlmModel: TrailblazeLlmModel = DEFAULT_TRAILBLAZE_LLM_MODEL,
+  val dynamicLlmClient: DynamicLlmClient = TrailblazeHostDynamicLlmClientProvider(
+    trailblazeLlmModel = trailblazeLlmModel,
+    trailblazeDynamicLlmTokenProvider = TrailblazeHostDynamicLlmTokenProvider,
+  ),
   setOfMarkEnabled: Boolean = true,
   systemPromptTemplate: String? = null,
   trailblazeToolSet: TrailblazeToolSet? = null,
   customToolClasses: Set<KClass<out TrailblazeTool>> = setOf(),
+  val sessionManager: TrailblazeSessionManager = TrailblazeSessionManager(),
 ) {
-
   val hostRunner by lazy {
     MaestroHostRunnerImpl(
       requestedPlatform = trailblazeDriverType.platform,
       setOfMarkEnabled = setOfMarkEnabled,
+      trailblazeLogger = loggingRule.trailblazeLogger,
     )
   }
 
@@ -63,24 +68,22 @@ abstract class BaseHostTrailblazeTest(
   @get:Rule
   val loggingRule: TrailblazeLoggingRule = HostTrailblazeLoggingRule(
     trailblazeDeviceInfoProvider = { trailblazeDeviceInfo },
+    sessionManager = sessionManager,
   )
 
   val trailblazeAgent by lazy {
     HostMaestroTrailblazeAgent(
       maestroHostRunner = hostRunner,
+      trailblazeLogger = loggingRule.trailblazeLogger,
     )
   }
-
-  val llmClient: LLMClient = OpenAILLMClient(JvmOpenAiApiKeyUtil.getApiKeyFromEnv())
-
-  val trailblazeLlmModel: TrailblazeLlmModel = OpenAITrailblazeLlmModelList.OPENAI_GPT_4_1
 
   val toolRepo = TrailblazeToolRepo(
     TrailblazeToolSet.DynamicTrailblazeToolSet(
       "Dynamic Initial Tool Set",
       (
-        trailblazeToolSet?.tools
-          ?: TrailblazeToolSet.getSetOfMarkToolSet(setOfMarkEnabled).tools
+        trailblazeToolSet?.toolClasses
+          ?: TrailblazeToolSet.getSetOfMarkToolSet(setOfMarkEnabled).toolClasses
         ) + customToolClasses,
     ),
   )
@@ -89,16 +92,18 @@ abstract class BaseHostTrailblazeTest(
     TrailblazeRunner(
       screenStateProvider = hostRunner.screenStateProvider,
       agent = trailblazeAgent,
-      llmClient = llmClient,
+      llmClient = dynamicLlmClient.createLlmClient(),
       trailblazeLlmModel = trailblazeLlmModel,
       trailblazeToolRepo = toolRepo,
       systemPromptTemplate = systemPromptTemplate,
+      trailblazeLogger = loggingRule.trailblazeLogger,
+      sessionManager = sessionManager,
     )
   }
 
   private val elementComparator = TrailblazeElementComparator(
     screenStateProvider = hostRunner.screenStateProvider,
-    llmClient = llmClient,
+    llmClient = dynamicLlmClient.createLlmClient(),
     trailblazeLlmModel = trailblazeLlmModel,
     toolRepo = toolRepo,
   )
@@ -116,17 +121,23 @@ abstract class BaseHostTrailblazeTest(
         screenState = hostRunner.screenStateProvider(),
         elementComparator = elementComparator,
       )
-      when (val toolResult = result.second) {
+      when (val toolResult = result.result) {
         is TrailblazeToolResult.Success -> toolResult
         is TrailblazeToolResult.Error -> throw TrailblazeException(toolResult.errorMessage)
       }
     },
+    trailblazeLogger = loggingRule.trailblazeLogger,
+    sessionManager = sessionManager,
   )
 
   private fun runTrail(trailItems: List<TrailYamlItem>, useRecordedSteps: Boolean) {
     for (item in trailItems) {
       val itemResult = when (item) {
-        is TrailYamlItem.MaestroTrailItem -> hostRunner.runMaestroCommands(item.maestro.maestroCommands, null)
+        is TrailYamlItem.MaestroTrailItem -> hostRunner.runMaestroCommands(
+          item.maestro.maestroCommands.asMaestroCommands(),
+          null,
+        )
+
         is TrailYamlItem.PromptsTrailItem -> trailblazeRunnerUtil.runPrompt(item.promptSteps, useRecordedSteps)
         is TrailYamlItem.ToolTrailItem -> trailblazeRunnerUtil.runTrailblazeTool(item.tools.map { it.trailblazeTool })
         is TrailYamlItem.ConfigTrailItem -> item.config.context?.let { trailblazeRunner.appendToSystemPrompt(it) }
@@ -150,7 +161,7 @@ abstract class BaseHostTrailblazeTest(
     }
     val trailItems: List<TrailYamlItem> = trailblazeYaml.decodeTrail(yaml)
     val trailConfig = trailblazeYaml.extractTrailConfig(trailItems)
-    TrailblazeLogger.sendStartLog(
+    loggingRule.trailblazeLogger.sendStartLog(
       trailConfig = trailConfig,
       className = loggingRule.description?.className ?: this::class.java.simpleName,
       methodName = loggingRule.description?.methodName ?: "run",
@@ -160,19 +171,15 @@ abstract class BaseHostTrailblazeTest(
     return runTrail(trailItems, useRecordedSteps)
   }
 
-  protected fun runFromResource(
+  fun runFromResource(
+    path: String = TrailblazeYamlUtil.calculateTrailblazeYamlAssetPathFromStackTrace(
+      TemplatingUtil::doesResourceExist,
+    ),
     forceStopApp: Boolean = true,
     useRecordedSteps: Boolean = true,
   ) {
-    val testMethodInfo = TestStackTraceUtil.getJUnit4TestMethodFromCurrentStacktrace()
-
-    val possiblePaths = listOf(
-      "trails/${testMethodInfo.simpleClassName}/${testMethodInfo.methodName}.trail.yaml",
-      "trails/${testMethodInfo.packageName}/${testMethodInfo.simpleClassName}/${testMethodInfo.methodName}.trail.yaml",
-    )
-    val trailYamlFromResource: String = possiblePaths.firstNotNullOfOrNull { resourcePath ->
-      TemplatingUtil.getResourceAsText(resourcePath)
-    } ?: error("No YAML found for at $possiblePaths")
+    val trailYamlFromResource: String = TemplatingUtil.getResourceAsText(path)
+      ?: error("No YAML resource found at $path")
     runTrailblazeYaml(
       yaml = trailYamlFromResource,
       forceStopApp = forceStopApp,

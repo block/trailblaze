@@ -11,17 +11,17 @@ import xyz.block.trailblaze.mcp.TrailblazeMcpSseSessionContext
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRpc
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.models.McpPromptRequestData
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.models.SelectToolSet
-import xyz.block.trailblaze.mcp.models.DeviceConnectionStatus
-import xyz.block.trailblaze.mcp.utils.DeviceConnectUtils
-import xyz.block.trailblaze.mcp.utils.DeviceConnectUtils.connectToInstrumentationAndInstallAppIfNotAvailable
-import xyz.block.trailblaze.mcp.utils.DeviceConnectUtils.getAdbDevices
-import xyz.block.trailblaze.model.TargetTestApp
+import xyz.block.trailblaze.model.DeviceConnectionStatus
+import xyz.block.trailblaze.model.TrailblazeHostAppTarget
+import xyz.block.trailblaze.util.AndroidHostAdbUtils
+import xyz.block.trailblaze.util.HostAndroidDeviceConnectUtils
 
 // --- Koog ToolSets ---
 @Suppress("unused")
 class AndroidOnDeviceToolSet(
   private val sessionContext: TrailblazeMcpSseSessionContext?,
   private val toolRegistryUpdated: (ToolRegistry) -> Unit,
+  private val targetTestAppProvider: () -> TrailblazeHostAppTarget,
 ) : ToolSet {
 
   companion object {
@@ -29,12 +29,14 @@ class AndroidOnDeviceToolSet(
   }
 
   // Store active connection processes and their status
-  private var activeAdbOnDeviceConnections: DeviceConnectionStatus = DeviceConnectionStatus.NoConnection()
+  private var activeAdbOnDeviceConnections: DeviceConnectionStatus = DeviceConnectionStatus.NoConnection(
+    deviceId = null,
+  )
 
   @LLMDescription("Connect to the attached device using Trailblaze.")
   @Tool
   fun connectDevice(): String {
-    val connectionStatus = runBlocking { connectDeviceInternal() }
+    val connectionStatus = runBlocking { connectDeviceInternal(targetTestAppProvider()) }
     return when (connectionStatus) {
       is DeviceConnectionStatus.ConnectionFailure -> {
         "Connection failed: ${connectionStatus.errorMessage}"
@@ -51,26 +53,29 @@ class AndroidOnDeviceToolSet(
     }
   }
 
-  suspend fun connectDeviceInternal(): DeviceConnectionStatus {
+  suspend fun connectDeviceInternal(targetTestApp: TrailblazeHostAppTarget): DeviceConnectionStatus {
     if (isThereAnActiveConnection()) {
       return getActiveConnection() ?: error("No active connection")
     }
 
-    val adbDevices = getAdbDevices()
+    val adbDevices = HostAndroidDeviceConnectUtils.getAdbDevices()
     if (adbDevices.isEmpty()) {
       return DeviceConnectionStatus.ConnectionFailure(
-        "No devices found. Please ensure your device is connected and ADB is running.",
+        errorMessage = "No devices found. Please ensure your device is connected and ADB is running.",
+        deviceId = null,
       )
     }
     if (adbDevices.size > 1) {
       return DeviceConnectionStatus.ConnectionFailure(
         "Multiple devices found. Please specify a device ID to connect to.  Available Devices: ${adbDevices.joinToString { it.id }}.",
+        deviceId = null,
       )
     }
 
     if (sessionContext == null) {
       return DeviceConnectionStatus.ConnectionFailure(
         "Error: Session context is null. Cannot send progress messages.",
+        deviceId = adbDevices.first().id,
       )
     }
 
@@ -82,13 +87,12 @@ class AndroidOnDeviceToolSet(
       sessionContext.sendIndeterminateProgressMessage(
         "Starting connection process for device: ${device.name} ($deviceId)",
       )
-      val deviceConnectionStatus: DeviceConnectionStatus = runBlocking {
-        connectToInstrumentationAndInstallAppIfNotAvailable(
+      val deviceConnectionStatus: DeviceConnectionStatus =
+        HostAndroidDeviceConnectUtils.connectToInstrumentationAndInstallAppIfNotAvailable(
           sendProgressMessage = { sessionContext.sendIndeterminateProgressMessage(it) },
           deviceId = deviceId,
-          targetTestApp = TargetTestApp.DEFAULT_ANDROID_ON_DEVICE,
+          trailblazeOnDeviceInstrumentationTarget = targetTestApp.getTrailblazeOnDeviceInstrumentationTarget(),
         )
-      }
 
       return deviceConnectionStatus
     } catch (e: Exception) {
@@ -98,7 +102,8 @@ class AndroidOnDeviceToolSet(
         errorMessage,
       )
       DeviceConnectionStatus.ConnectionFailure(
-        errorMessage,
+        errorMessage = errorMessage,
+        deviceId = deviceId,
       )
     }
   }
@@ -220,7 +225,7 @@ The prompt/action/request will be sent to the mobile device to be run.
     )
     // This tool sends a prompt to the local server running on port 52526
     try {
-      DeviceConnectUtils.adbPortForward(deviceId, ON_DEVICE_ANDROID_MCP_SERVER_PORT)
+      AndroidHostAdbUtils.adbPortForward(deviceId, ON_DEVICE_ANDROID_MCP_SERVER_PORT)
     } catch (e: Exception) {
       return "Failed to set up port forwarding for device $deviceId on port $ON_DEVICE_ANDROID_MCP_SERVER_PORT. Error: ${e.message}"
     }

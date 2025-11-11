@@ -1,0 +1,53 @@
+- prompts:
+    - step: Launch the Clock app (com.android.deskclock) into a clean state
+      recording:
+        tools:
+          - launchApp:
+              appId: com.android.deskclock
+          - tapOnElementBySelector:
+              reason: Go to the alarm section.
+              selector:
+                textRegex: ALARM
+    - step: Add a new alarm for 7:30 AM
+      recording:
+        tools:
+          - tapOnElementBySelector:
+              reason: To add a new alarm, tap the 'Add alarm' button (red + icon) at the bottom center of the screen.
+              selector:
+                textRegex: Add alarm
+                idRegex: com.android.deskclock:id/fab
+          - tapOnElementBySelector:
+              reason: Set the hour to 7 for the alarm using the clock dial.
+              selector:
+                textRegex: "^7$"
+          - tapOnElementBySelector:
+              reason: Set the minutes to 30 for the alarm by tapping on the '30' minute mark on the clock dial.
+              selector:
+                textRegex: "^30$"
+          - tapOnElementBySelector:
+              reason: Tap AM radio button to switch time to AM, as the displayed time is currently on PM.
+              selector:
+                textRegex: AM
+                idRegex: android:id/am_label
+          - tapOnElementBySelector:
+              reason: To save and confirm the new alarm set at 7:30 AM, tap the 'OK' button on the time picker dialog.
+              selector:
+                textRegex: OK
+                idRegex: android:id/button1
+    - step: After it's been added, turn it off
+      recording:
+        tools:
+          - tapOnElementBySelector:
+              reason: Turning off the active alarm which is currently set ON at 7:30 AM by toggling the switch at nodeId 30
+              selector:
+                textRegex: ON
+                idRegex: com.android.deskclock:id/onoff
+                checked: true
+    - step: Delete the alarm
+      recording:
+        tools:
+          - tapOnElementBySelector:
+              reason: Tap the visible 'Delete' button to delete the currently selected 7:30 AM alarm.
+              selector:
+                textRegex: Delete
+                idRegex: com.android.deskclock:id/delete

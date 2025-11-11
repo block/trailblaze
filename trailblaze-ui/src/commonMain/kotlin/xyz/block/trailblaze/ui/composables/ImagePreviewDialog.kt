@@ -44,6 +44,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
+import xyz.block.trailblaze.api.MaestroDriverActionType
 
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
@@ -53,6 +54,7 @@ fun ImagePreviewDialog(
   deviceHeight: Int,
   clickX: Int? = null,
   clickY: Int? = null,
+  action: MaestroDriverActionType? = null,
   onDismiss: () -> Unit,
 ) {
   // Zoom and pan state
@@ -226,22 +228,17 @@ fun ImagePreviewDialog(
             if (clickX != null && clickY != null && deviceWidth > 0 && deviceHeight > 0) {
               val xRatio = clickX.coerceAtLeast(0).toFloat() / deviceWidth.toFloat()
               val yRatio = clickY.coerceAtLeast(0).toFloat() / deviceHeight.toFloat()
-              val dotSize = 18.dp
 
               // Calculate click point position using the exact display dimensions
-              val clickPointX = finalWidth * xRatio - (dotSize / 2)
-              val clickPointY = finalHeight * yRatio - (dotSize / 2)
+              val centerX = finalWidth * xRatio
+              val centerY = finalHeight * yRatio
 
-              // Red dot with white outline
-              Box(
-                modifier = Modifier
-                  .size(dotSize)
-                  .offset(
-                    x = clickPointX.coerceIn(0.dp, finalWidth - dotSize),
-                    y = clickPointY.coerceIn(0.dp, finalHeight - dotSize)
-                  )
-                  .background(Color.Red, shape = CircleShape)
-                  .border(width = 3.dp, color = Color.White, shape = CircleShape)
+              ScreenshotAnnotation(
+                centerX = centerX,
+                centerY = centerY,
+                maxWidth = finalWidth,
+                maxHeight = finalHeight,
+                action = action
               )
             }
           }

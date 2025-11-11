@@ -20,11 +20,20 @@ fun StatusBadge(
     is SessionStatus.Ended.Cancelled -> true
     else -> false
   }
+
+  fun SessionStatus.isTimeout(): Boolean = when (this) {
+    is SessionStatus.Ended.TimeoutReached -> true
+    else -> false
+  }
+
   fun SessionStatus.isSuccess(): Boolean = when (this) {
     is SessionStatus.Started -> false
     is SessionStatus.Ended.Succeeded -> true
+    is SessionStatus.Ended.SucceededWithFallback -> true
     is SessionStatus.Ended.Failed -> false
+    is SessionStatus.Ended.FailedWithFallback -> false
     is SessionStatus.Ended.Cancelled -> false
+    is SessionStatus.Ended.TimeoutReached -> false
     SessionStatus.Unknown -> false
   }
 
@@ -35,11 +44,28 @@ fun StatusBadge(
       Color(0xFF856404)  // Dark amber text
     )
 
+    status.isTimeout() -> Triple(
+      "Timeout",
+      Color(0xFFFFE5CC), // Light orange background
+      Color(0xFFCC5500)  // Dark orange text
+    )
 
     status.isCancelled() -> Triple(
       "Cancelled",
       Color(0xFFFFE5CC), // Light orange background - more orange than amber
       Color(0xFFCC5500)  // Dark orange text - more orange than amber
+    )
+
+    status is SessionStatus.Ended.SucceededWithFallback -> Triple(
+      "Succeeded (Fallback)",
+      Color(0xFFE8F4F8), // Light blue-green background - different from regular success
+      Color(0xFF0C5460)  // Dark blue-green text - indicates fallback was used
+    )
+
+    status is SessionStatus.Ended.FailedWithFallback -> Triple(
+      "Failed (Fallback)",
+      Color(0xFFF4E8F8), // Light purple background - different from regular failure  
+      Color(0xFF5C0C60)  // Dark purple text - indicates fallback was attempted
     )
 
     status.isSuccess() -> Triple(

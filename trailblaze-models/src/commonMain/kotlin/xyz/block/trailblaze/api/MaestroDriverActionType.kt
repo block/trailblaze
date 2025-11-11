@@ -15,6 +15,7 @@ enum class AgentActionType {
   KILL_APP,
   BACK_PRESS,
   ADD_MEDIA,
+  ASSERT_CONDITION,
 }
 
 interface HasClickCoordinates {
@@ -33,6 +34,18 @@ sealed interface MaestroDriverActionType {
   @Serializable
   data class AddMedia(val mediaFiles: List<String>) : MaestroDriverActionType {
     override val type = AgentActionType.ADD_MEDIA
+  }
+
+  @Serializable
+  data class AssertCondition(
+    val conditionDescription: String,
+    override val x: Int,
+    override val y: Int,
+    val isVisible: Boolean, // true = assertVisible, false = assertNotVisible
+    val textToDisplay: String? = null, // For notVisible assertions, what text we confirmed is NOT there
+  ) : MaestroDriverActionType,
+    HasClickCoordinates {
+    override val type = AgentActionType.ASSERT_CONDITION
   }
 
   @Serializable

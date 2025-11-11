@@ -11,9 +11,12 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 @Serializable
 @TrailblazeToolClass("openUrl")
 @LLMDescription(
-  """Open's the browser to the provided url.""",
+  """
+    Opens the browser to the provided url.
+    """,
 )
 data class OpenUrlTrailblazeTool(
+  @LLMDescription("The URL to open that starts with https")
   val url: String,
 ) : MapsToMaestroCommands() {
   override fun toMaestroCommands(memory: AgentMemory): List<Command> = listOf(
