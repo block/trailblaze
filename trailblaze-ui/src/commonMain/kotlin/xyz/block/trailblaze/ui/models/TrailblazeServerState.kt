@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.ui.models
 
 import kotlinx.serialization.Serializable
+import xyz.block.trailblaze.llm.providers.OpenAITrailblazeLlmModelList
 
 @Serializable
 data class TrailblazeServerState(
@@ -8,7 +9,6 @@ data class TrailblazeServerState(
 ) {
   @Serializable
   data class SavedTrailblazeAppConfig(
-    val hostModeEnabled: Boolean = false,
     val autoLaunchGoose: Boolean = false,
     val alwaysOnTop: Boolean = false,
     val serverPort: Int = HTTP_PORT,
@@ -21,10 +21,8 @@ data class TrailblazeServerState(
     val lastSelectedTargetAppName: String? = null,
     val selectedTargetAppName: String? = null,
     val themeMode: ThemeMode = ThemeMode.System,
-    val availableFeatures: AvailableFeatures,
-    val experimentalFeatures: ExperimentalFeatures = ExperimentalFeatures(),
-    val llmProvider: String = "openai", // Default to OpenAI provider
-    val llmModel: String = "gpt-4.1", // Default to GPT-4.1 model
+    val llmProvider: String = DEFAULT_DESKTOP_APP_MODEL_LLM_MODEL.trailblazeLlmProvider.id,
+    val llmModel: String = DEFAULT_DESKTOP_APP_MODEL_LLM_MODEL.modelId, // Default to GPT-4.1 model
     val yamlContent: String = """
 - prompts:
     - step: click back
@@ -46,15 +44,11 @@ data class TrailblazeServerState(
     val windowWidth: Int? = null,
     val windowHeight: Int? = null,
   ) {
-    @Serializable
-    data class AvailableFeatures(
-      val hostMode: Boolean,
-    )
 
-    @Serializable
-    data class ExperimentalFeatures(
-      val exportToRepoEnabled: Boolean = false,
-    )
+    companion object {
+      /** Centralized definition of our default LLM model for the desktop app */
+      private val DEFAULT_DESKTOP_APP_MODEL_LLM_MODEL = OpenAITrailblazeLlmModelList.OPENAI_GPT_4_1
+    }
   }
 
   @Serializable

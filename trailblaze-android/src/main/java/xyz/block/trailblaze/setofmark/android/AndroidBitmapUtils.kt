@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.setofmark.android
 
 import android.graphics.Bitmap
+import xyz.block.trailblaze.api.TrailblazeImageFormat
 import java.io.ByteArrayOutputStream
 
 object AndroidBitmapUtils {
@@ -16,19 +17,42 @@ object AndroidBitmapUtils {
     }
   }
 
+  /**
+   * Converts a Bitmap to a byte array using ScreenshotScalingConfig format settings.
+   */
+  fun Bitmap.toByteArray(
+    format: TrailblazeImageFormat,
+    compressionQuality: Float,
+  ): ByteArray {
+    val androidFormat = when (format) {
+      TrailblazeImageFormat.PNG -> Bitmap.CompressFormat.PNG
+      TrailblazeImageFormat.JPEG -> Bitmap.CompressFormat.JPEG
+    }
+    // Android quality is 0-100, our config is 0.0-1.0
+    val androidQuality = (compressionQuality * 100).toInt().coerceIn(0, 100)
+    return toByteArray(androidFormat, androidQuality)
+  }
+
   fun Bitmap.scale(
     scale: Float,
-  ): Bitmap = if (scale == 1f) {
-    this // No need to scale
-  } else {
+  ): Bitmap {
+    if (scale == 1f) {
+      return this // No need to scale
+    }
+    val newWidth = (width * scale).toInt()
+    val newHeight = (height * scale).toInt()
+    // Avoid unnecessary scaling if dimensions do not change
+    if (newWidth == width && newHeight == height) {
+      return this
+    }
     val scaledBitmap = Bitmap.createScaledBitmap(
       this,
-      (width * scale).toInt(),
-      (height * scale).toInt(),
+      newWidth,
+      newHeight,
       true,
     )
     this.recycle() // Recycle the original bitmap to free up memory
-    scaledBitmap
+    return scaledBitmap
   }
 
   fun Bitmap.scale(
@@ -41,15 +65,16 @@ object AndroidBitmapUtils {
     val imageLong = maxOf(width, height)
     val imageShort = minOf(width, height)
 
-    // Only scale down, not up
-    return if (imageLong <= targetLong && imageShort <= targetShort) {
-      this
-    } else {
-      val scaleLong = targetLong.toFloat() / imageLong
-      val scaleShort = targetShort.toFloat() / imageShort
-      val scaleAmount = minOf(scaleLong, scaleShort)
-
-      this.scale(scaleAmount)
+    // Only scale down if image exceeds bounds
+    if (imageLong <= targetLong && imageShort <= targetShort) {
+      return this // Already fits, no scaling needed
     }
+
+    // Calculate scale factors for both dimensions
+    val scaleLong = targetLong.toFloat() / imageLong
+    val scaleShort = targetShort.toFloat() / imageShort
+    val scaleAmount = minOf(scaleLong, scaleShort)
+
+    return this.scale(scaleAmount)
   }
 }

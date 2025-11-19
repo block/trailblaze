@@ -40,14 +40,20 @@ import xyz.block.trailblaze.mcp.TrailblazeMcpSseSessionContext
 import xyz.block.trailblaze.mcp.models.McpSseSessionId
 import xyz.block.trailblaze.mcp.newtools.AndroidOnDeviceToolSet
 import xyz.block.trailblaze.mcp.utils.KoogToMcpExt.toJSONSchema
-import xyz.block.trailblaze.mcp.utils.McpDirectToolCalls
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.Boolean
+import kotlin.Int
+import kotlin.OptIn
+import kotlin.String
+import kotlin.Suppress
+import kotlin.invoke
+import kotlin.let
 
 class TrailblazeMcpServer(
   val logsRepo: LogsRepo,
-  val isOnDeviceMode: () -> Boolean,
+  val isOnDeviceTarget: Boolean = false,
   val targetTestAppProvider: () -> TrailblazeHostAppTarget,
   val additionalToolsProvider: (TrailblazeMcpSseSessionContext, Server) -> ToolRegistry = { _, _ -> ToolRegistry {} },
 ) {
@@ -128,22 +134,19 @@ class TrailblazeMcpServer(
         val koogToolArgs: ToolArgs =
           TrailblazeJsonInstance.decodeFromJsonElement(koogTool.argsSerializer, request.arguments)
 
-        println("Executing tool: \\${koogTool.descriptor.name} with arguments: \\$koogToolArgs")
+        println("Executing tool: ${koogTool.descriptor.name} with arguments: $koogToolArgs")
 
         // Execute tool in background thread to prevent UI blocking
         val toolResponse: ToolResult = withContext(Dispatchers.IO) {
           @OptIn(InternalAgentToolsApi::class)
-          koogTool.execute(
-            args = koogToolArgs,
-            enabler = McpDirectToolCalls,
-          )
+          koogTool.executeUnsafe(args = koogToolArgs)
         }
 
         val toolResponseMessage = toolResponse.toStringDefault()
-        println("Tool result toolResponseMessage: \\$toolResponseMessage")
+        println("Tool result toolResponseMessage: $toolResponseMessage")
 
         CallToolResult(
-          mutableListOf(
+          content = mutableListOf(
             TextContent(toolResponseMessage),
           ),
         )
@@ -189,7 +192,7 @@ class TrailblazeMcpServer(
             setSessionContext(mcpSseSessionId, mcpSseServer, mcpServerSession)
 
             val initialToolRegistry = ToolRegistry.Companion {
-              if (isOnDeviceMode()) {
+              if (isOnDeviceTarget) {
                 tools(
                   AndroidOnDeviceToolSet(
                     sessionContext = getSessionContext(mcpSseSessionId),

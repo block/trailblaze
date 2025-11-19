@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.ui.tabs.session
 
 import LlmUsageComposable
+import androidx.compose.foundation.VerticalScrollbar
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -8,6 +9,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -18,6 +20,7 @@ import androidx.compose.foundation.lazy.grid.GridCells.Adaptive
 import androidx.compose.foundation.lazy.grid.GridCells.Fixed
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.rememberScrollbarAdapter
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -74,8 +77,10 @@ import xyz.block.trailblaze.llm.LlmUsageAndCostExt.computeUsageSummary
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.inProgress
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
+import xyz.block.trailblaze.ui.Platform
 import xyz.block.trailblaze.ui.composables.CodeBlock
 import xyz.block.trailblaze.ui.composables.SelectableText
+import xyz.block.trailblaze.ui.getPlatform
 import xyz.block.trailblaze.ui.images.ImageLoader
 import xyz.block.trailblaze.ui.images.NetworkImageLoader
 import xyz.block.trailblaze.ui.models.TrailblazeServerState
@@ -118,17 +123,8 @@ fun SessionDetailComposable(
   onZoomOffsetChanged: (Int) -> Unit = {},
   onFontScaleChanged: (Float) -> Unit = {},
   onViewModeChanged: (SessionViewMode) -> Unit = {},
-  onExportToRepo: (String) -> Unit = {},
-  exportFeatureEnabled: Boolean = false,
-  // UI Inspector settings
-  initialInspectorScreenshotWidth: Int = TrailblazeServerState.DEFAULT_UI_INSPECTOR_SCREENSHOT_WIDTH,
-  initialInspectorDetailsWidth: Int = TrailblazeServerState.DEFAULT_UI_INSPECTOR_DETAILS_WIDTH,
-  initialInspectorHierarchyWidth: Int = TrailblazeServerState.DEFAULT_UI_INSPECTOR_HIERARCHY_WIDTH,
-  initialInspectorFontScale: Float = TrailblazeServerState.DEFAULT_UI_INSPECTOR_FONT_SCALE,
-  onInspectorScreenshotWidthChanged: (Int) -> Unit = {},
-  onInspectorDetailsWidthChanged: (Int) -> Unit = {},
-  onInspectorHierarchyWidthChanged: (Int) -> Unit = {},
-  onInspectorFontScaleChanged: (Float) -> Unit = {},
+  // Platform-specific: Open log file in Finder/Explorer
+  onOpenInFinder: ((TrailblazeLog) -> Unit)? = null,
 ) {
   if (sessionDetail.logs.isEmpty()) {
     Column(
@@ -395,7 +391,7 @@ fun SessionDetailComposable(
         optimalCardsPerRow + zoomOffset
       }
 
-      // Calculate actual cards per row, clamped to valid range  
+      // Calculate actual cards per row, clamped to valid range
       val cardsPerRow = autoCardsPerRow.coerceIn(1, maxCards)
 
       // Calculate actual card size based on selected cards per row
@@ -408,17 +404,18 @@ fun SessionDetailComposable(
         (maxWidth - (gridSpacing * (cardsPerRow - 1))) / cardsPerRow
       }
 
-      Column(modifier = Modifier.fillMaxSize()) {
-        CompositionLocalProvider(LocalFontScale provides fontSizeScale) {
-          // Header item
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-          ) {
+      Box(modifier = Modifier.fillMaxSize()) {
+        Column(modifier = Modifier.fillMaxSize()) {
+          CompositionLocalProvider(LocalFontScale provides fontSizeScale) {
+            // Header item
             Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.SpaceBetween,
               verticalAlignment = Alignment.CenterVertically
             ) {
+              Row(
+                verticalAlignment = Alignment.CenterVertically
+              ) {
               IconButton(onClick = onBackClick) {
                 Icon(
                   imageVector = Icons.AutoMirrored.Filled.ArrowBack,
@@ -439,25 +436,27 @@ fun SessionDetailComposable(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.padding(end = 8.dp)
               ) {
-                // Auto-scroll toggle - always visible for all view modes
                 Row(
                   verticalAlignment = Alignment.CenterVertically,
                   modifier = Modifier.padding(end = 8.dp)
                 ) {
-                  Checkbox(
-                    checked = alwaysAtBottom,
-                    onCheckedChange = { alwaysAtBottom = it }
-                  )
-                  Icon(
-                    imageVector = Icons.Default.MoveDown,
-                    contentDescription = "Toggle auto-scroll to bottom",
-                    modifier = Modifier.size(18.dp)
-                  )
-                  Text(
-                    text = "Auto-scroll",
-                    modifier = Modifier.padding(start = 4.dp),
-                    style = MaterialTheme.typography.bodyMedium
-                  )
+                    if (getPlatform() == Platform.JVM) {
+                        // Auto-scroll toggle - always visible for all view modes
+                        Checkbox(
+                            checked = alwaysAtBottom,
+                            onCheckedChange = { alwaysAtBottom = it }
+                        )
+                        Icon(
+                            imageVector = Icons.Default.MoveDown,
+                            contentDescription = "Toggle auto-scroll to bottom",
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Text(
+                            text = "Auto-scroll",
+                            modifier = Modifier.padding(start = 4.dp),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
                 }
                 TextButton(onClick = {
                   viewMode = SessionViewMode.List
@@ -756,7 +755,8 @@ fun SessionDetailComposable(
                           log
                         )
                       },
-                      onShowScreenshotModal = onShowScreenshotModal
+                      onShowScreenshotModal = onShowScreenshotModal,
+                      onOpenInFinder = { onOpenInFinder?.invoke(log) }
                     )
                   }
                 }
@@ -809,7 +809,10 @@ fun SessionDetailComposable(
 
                                 else -> null
                               },
-                              onShowScreenshotModal = onShowScreenshotModal
+                              onShowScreenshotModal = onShowScreenshotModal,
+                              onOpenInFinder = if (onOpenInFinder != null) {
+                                { onOpenInFinder.invoke(groupedLog.log) }
+                              } else null
                             )
                           }
 
@@ -829,7 +832,8 @@ fun SessionDetailComposable(
                                   log
                                 )
                               },
-                              onShowScreenshotModal = onShowScreenshotModal
+                              onShowScreenshotModal = onShowScreenshotModal,
+                              onOpenInFinder = onOpenInFinder
                             )
                           }
                         }
@@ -889,18 +893,9 @@ fun SessionDetailComposable(
                             ) {
                               Text("Copy Yaml")
                             }
-                            if (exportFeatureEnabled) {
-                              Button(
-                                onClick = {
-                                  onExportToRepo(recordingYamlCache ?: "")
-                                }
-                              ) {
-                                Text("Export to Repo")
-                              }
-                            }
                           }
                         }
-                        
+
                         // Show warning if session is still in progress
                         if (sessionDetail.session.latestStatus.inProgress) {
                           Box(
@@ -929,7 +924,7 @@ fun SessionDetailComposable(
                             }
                           }
                         }
-                        
+
                         CodeBlock(
                           text = recordingYamlCache ?: "",
                           textStyle = MaterialTheme.typography.labelSmall.copy(
@@ -948,6 +943,15 @@ fun SessionDetailComposable(
             }
           }
         }
+      }
+        // VerticalScrollbar always visible, mapped to gridState
+        VerticalScrollbar(
+          adapter = rememberScrollbarAdapter(gridState),
+          modifier = Modifier
+            .align(Alignment.CenterEnd)
+            .fillMaxHeight()
+            .padding(end = 2.dp)
+        )
       }
     }
   }

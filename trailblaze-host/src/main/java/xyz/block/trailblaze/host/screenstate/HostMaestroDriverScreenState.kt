@@ -5,10 +5,13 @@ import maestro.Driver
 import maestro.filterOutOfBounds
 import okio.Buffer
 import xyz.block.trailblaze.api.ScreenState
+import xyz.block.trailblaze.api.ScreenshotScalingConfig
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode.Companion.relabelWithFreshIds
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.host.setofmark.HostCanvasSetOfMark
+import xyz.block.trailblaze.host.util.BufferedImageUtils.scale
+import xyz.block.trailblaze.host.util.BufferedImageUtils.toByteArray
 import xyz.block.trailblaze.utils.Ext.toViewHierarchyTreeNode
 import xyz.block.trailblaze.viewhierarchy.ViewHierarchyFilter
 import xyz.block.trailblaze.viewhierarchy.ViewHierarchyTreeNodeUtils
@@ -23,15 +26,9 @@ class HostMaestroDriverScreenState(
   maestroDriver: Driver,
   private val setOfMarkEnabled: Boolean,
   private val filterViewHierarchy: Boolean = true,
+  private val screenshotScalingConfig: ScreenshotScalingConfig? = ScreenshotScalingConfig.DEFAULT,
   maxAttempts: Int = 10,
 ) : ScreenState {
-
-  companion object {
-    fun ByteArray.computedImageSizeJvm(): Pair<Int, Int> {
-      val image = ImageIO.read(ByteArrayInputStream(this))
-      return image.width to image.height
-    }
-  }
 
   private val deviceInfo: DeviceInfo = maestroDriver.deviceInfo()
   override val deviceWidth: Int = deviceInfo.widthGrid
@@ -108,25 +105,45 @@ class HostMaestroDriverScreenState(
    * Returns screenshot bytes with set of mark annotations applied if enabled.
    * This matches the device-side behavior where set of mark is applied based on the setOfMarkEnabled flag.
    * Uses the filtered view hierarchy for set of mark annotations.
+   * Applies scaling if screenshotScalingConfig is specified.
    */
   private fun computeScreenshotBytes(): ByteArray? {
-    val rawBytes = stableRawScreenshotBytes ?: return null
     val bufferedImage = stableBufferedImage ?: return null
 
-    if (!setOfMarkEnabled) {
-      return rawBytes
+    // Apply set of mark if enabled
+    val imageWithSetOfMark = if (setOfMarkEnabled) {
+      val elementList = ViewHierarchyTreeNodeUtils.from(
+        viewHierarchy, // Use filtered hierarchy for set of mark
+        deviceInfo,
+      )
+
+      val canvas = HostCanvasSetOfMark(bufferedImage, deviceInfo)
+      canvas.draw(elementList)
+      bufferedImage // Canvas draws directly on the bufferedImage
+    } else {
+      bufferedImage
     }
 
-    val elementList = ViewHierarchyTreeNodeUtils.from(
-      viewHierarchy, // Use filtered hierarchy for set of mark
-      deviceInfo,
-    )
+    // Apply scaling if config is specified
+    val scaledImage = if (screenshotScalingConfig != null) {
+      imageWithSetOfMark.scale(
+        maxDim1 = screenshotScalingConfig.maxDimension1,
+        maxDim2 = screenshotScalingConfig.maxDimension2,
+      )
+    } else {
+      imageWithSetOfMark
+    }
 
-    val canvas = HostCanvasSetOfMark(bufferedImage, deviceInfo)
-    canvas.draw(elementList)
-    val result = canvas.toByteArray()
-
-    return result
+    // Convert to byte array with format and quality from config
+    return if (screenshotScalingConfig != null) {
+      scaledImage.toByteArray(
+        format = screenshotScalingConfig.imageFormat,
+        compressionQuality = screenshotScalingConfig.compressionQuality,
+      )
+    } else {
+      // Default to PNG when no config is provided
+      scaledImage.toByteArray()
+    }
   }
 
   /**

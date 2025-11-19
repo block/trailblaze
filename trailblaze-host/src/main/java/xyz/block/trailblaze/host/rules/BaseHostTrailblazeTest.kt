@@ -101,34 +101,38 @@ abstract class BaseHostTrailblazeTest(
     )
   }
 
-  private val elementComparator = TrailblazeElementComparator(
-    screenStateProvider = hostRunner.screenStateProvider,
-    llmClient = dynamicLlmClient.createLlmClient(),
-    trailblazeLlmModel = trailblazeLlmModel,
-    toolRepo = toolRepo,
-  )
+  private val elementComparator by lazy {
+    TrailblazeElementComparator(
+      screenStateProvider = hostRunner.screenStateProvider,
+      llmClient = dynamicLlmClient.createLlmClient(),
+      trailblazeLlmModel = trailblazeLlmModel,
+      toolRepo = toolRepo,
+    )
+  }
 
   private val trailblazeYaml = TrailblazeYaml(
     customTrailblazeToolClasses = customToolClasses,
   )
 
-  private val trailblazeRunnerUtil = TrailblazeRunnerUtil(
-    trailblazeRunner = trailblazeRunner,
-    runTrailblazeTool = { trailblazeTools: List<TrailblazeTool> ->
-      val result = trailblazeRunner.agent.runTrailblazeTools(
-        trailblazeTools,
-        null,
-        screenState = hostRunner.screenStateProvider(),
-        elementComparator = elementComparator,
-      )
-      when (val toolResult = result.result) {
-        is TrailblazeToolResult.Success -> toolResult
-        is TrailblazeToolResult.Error -> throw TrailblazeException(toolResult.errorMessage)
-      }
-    },
-    trailblazeLogger = loggingRule.trailblazeLogger,
-    sessionManager = sessionManager,
-  )
+  private val trailblazeRunnerUtil by lazy {
+    TrailblazeRunnerUtil(
+      trailblazeRunner = trailblazeRunner,
+      runTrailblazeTool = { trailblazeTools: List<TrailblazeTool> ->
+        val result = trailblazeRunner.agent.runTrailblazeTools(
+          trailblazeTools,
+          null,
+          screenState = hostRunner.screenStateProvider(),
+          elementComparator = elementComparator,
+        )
+        when (val toolResult = result.result) {
+          is TrailblazeToolResult.Success -> toolResult
+          is TrailblazeToolResult.Error -> throw TrailblazeException(toolResult.errorMessage)
+        }
+      },
+      trailblazeLogger = loggingRule.trailblazeLogger,
+      sessionManager = sessionManager,
+    )
+  }
 
   private fun runTrail(trailItems: List<TrailYamlItem>, useRecordedSteps: Boolean) {
     for (item in trailItems) {
@@ -163,7 +167,9 @@ abstract class BaseHostTrailblazeTest(
     val trailConfig = trailblazeYaml.extractTrailConfig(trailItems)
     loggingRule.trailblazeLogger.sendStartLog(
       trailConfig = trailConfig,
-      className = loggingRule.description?.className ?: this::class.java.simpleName,
+      className = loggingRule.description?.className
+        ?: this::class.java.simpleName.takeIf { it.isNotEmpty() }
+        ?: "BaseHostTrailblazeTest",
       methodName = loggingRule.description?.methodName ?: "run",
       trailblazeDeviceInfo = loggingRule.trailblazeDeviceInfoProvider(),
       rawYaml = yaml,

@@ -43,6 +43,7 @@ sealed interface MaestroDriverActionType {
     override val y: Int,
     val isVisible: Boolean, // true = assertVisible, false = assertNotVisible
     val textToDisplay: String? = null, // For notVisible assertions, what text we confirmed is NOT there
+    val succeeded: Boolean = true, // true if the assertion succeeded
   ) : MaestroDriverActionType,
     HasClickCoordinates {
     override val type = AgentActionType.ASSERT_CONDITION

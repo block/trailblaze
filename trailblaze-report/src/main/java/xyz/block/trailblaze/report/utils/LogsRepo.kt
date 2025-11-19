@@ -374,6 +374,7 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
               testClass = startedStatus.testClassName,
               trailblazeDeviceInfo = startedStatus.trailblazeDeviceInfo,
               trailConfig = startedStatus.trailConfig,
+              durationMs = durationMs,
             )
           }
         }
@@ -382,6 +383,7 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
 
     return if (sessionStartedLog != null && lastSessionStatusLog != null) {
       val startedStatus: SessionStatus.Started = sessionStartedLog.sessionStatus as SessionStatus.Started
+      val durationMs = lastSessionStatusLog.timestamp.toEpochMilliseconds() - sessionStartedLog.timestamp.toEpochMilliseconds()
       SessionInfo(
         sessionId = sessionStartedLog.session,
         timestamp = sessionStartedLog.timestamp,
@@ -390,6 +392,7 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
         testClass = startedStatus.testClassName,
         trailblazeDeviceInfo = startedStatus.trailblazeDeviceInfo,
         trailConfig = startedStatus.trailConfig,
+        durationMs = durationMs,
       )
     } else {
       null
@@ -436,12 +439,49 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
   }
 
   /**
-   * Returns a list of PNG image files for the given session.
+   * Returns a list of image files (PNG and JPEG) for the given session.
    */
   fun getImagesForSession(sessionId: String): List<File> {
     val sessionDir = File(logsDir, sessionId)
     if (!sessionDir.exists()) return emptyList()
-    return sessionDir.listFiles()?.filter { it.extension == "png" }?.sortedBy { it.name }
+    return sessionDir.listFiles()?.filter {
+      it.extension == "png" || it.extension == "jpg" || it.extension == "jpeg"
+    }?.sortedBy { it.name }
       ?: emptyList()
+  }
+
+  /**
+   * Finds the log file on disk for a specific TrailblazeLog.
+   * Returns the file if found, or null if not found.
+   *
+   * The log file is identified by matching the session ID and log class simple name.
+   * Since multiple logs of the same type can exist, we match by timestamp as well.
+   */
+  fun findLogFile(log: TrailblazeLog): File? {
+    val sessionDir = File(logsDir, log.session)
+    if (!sessionDir.exists()) return null
+
+    val logClassName = log::class.java.simpleName
+    val logFiles = sessionDir.listFiles()?.filter { file ->
+      file.extension == "json" && file.name.endsWith("_$logClassName.json")
+    } ?: return null
+
+    // Parse each matching file to find the one with the exact timestamp
+    for (file in logFiles) {
+      try {
+        val parsedLog = parseTrailblazeLogFromFile(file)
+        if (parsedLog != null &&
+          parsedLog.timestamp == log.timestamp &&
+          parsedLog::class.java.simpleName == logClassName
+        ) {
+          return file
+        }
+      } catch (e: Exception) {
+        // Continue searching if this file can't be parsed
+        continue
+      }
+    }
+
+    return null
   }
 }

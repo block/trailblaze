@@ -8,41 +8,109 @@ import xyz.block.trailblaze.report.models.LogsSummary
 import xyz.block.trailblaze.report.utils.LogsRepo
 import java.io.File
 
-fun main(args: Array<String>) {
-  val logsDir = File(args[0])
-  println("logsDir: ${logsDir.canonicalPath}")
-  val logsRepo = LogsRepo(logsDir)
+class GenerateReportCliCommand :
+  SimpleCliCommand(
+    name = "generate-report",
+  ) {
 
-  // Move the files into session directories.  This is needed after an adb pull
-  moveJsonFilesToSessionDirs(logsDir)
-  movePngsToSessionDirs(logsDir)
+  private val logsDirArg = FileArgument(
+    name = "logs-dir",
+    help = "Directory containing Trailblaze log files",
+    mustExist = true,
+    canBeFile = false,
+    mustBeReadable = true,
+  )
 
-  val standaloneFileReport = true
-  val logsSummaryEvents = renderSummary(logsRepo, standaloneFileReport)
-  val logsSummaryJson = TrailblazeJsonInstance.encodeToString(LogsSummary.serializer(), logsSummaryEvents)
-  val summaryJsonFile = File(logsDir, "summary.json")
-  summaryJsonFile.writeText(logsSummaryJson)
+  private val useRelativeImageUrlsFlag = FlagOption(
+    longName = "use-relative-image-urls",
+    help = "Use relative URLs for images (e.g., for Buildkite artifacts). When enabled, images are not embedded in HTML.",
+    default = false,
+  )
 
-  val trailblazeReportHtmlFile = File(logsDir, "trailblaze_report.html")
-  println("file://${trailblazeReportHtmlFile.absolutePath}")
+  private val logsDir: File get() = logsDirArg.value
+  private val useRelativeImageUrls: Boolean get() = useRelativeImageUrlsFlag.value
 
-  val isInternal = File(logsRepo.logsDir.parentFile, "opensource").exists()
+  override fun parseArgs(args: Array<String>) {
+    val positionalArgs = mutableListOf<String>()
 
-  val trailblazeUiProjectDir = if (isInternal) {
-    File(logsRepo.logsDir.parentFile, "opensource/trailblaze-ui")
-  } else {
-    File(logsRepo.logsDir.parentFile, "trailblaze-ui")
-  }.also {
-    println("Using project directory: ${it.canonicalPath}")
+    var i = 0
+    while (i < args.size) {
+      val arg = args[i]
+      when {
+        useRelativeImageUrlsFlag.matches(arg) -> useRelativeImageUrlsFlag.set()
+        arg.startsWith("--") -> parseError("Unknown option: $arg")
+        else -> positionalArgs.add(arg)
+      }
+      i++
+    }
+
+    if (positionalArgs.isEmpty()) {
+      parseError("Missing required argument: logs-dir")
+    }
+
+    if (positionalArgs.size > 1) {
+      parseError("Too many arguments")
+    }
+
+    try {
+      logsDirArg.parse(positionalArgs[0])
+    } catch (e: IllegalStateException) {
+      parseError(e.message ?: "Invalid argument")
+    }
   }
 
-  WasmReport.generate(
-    logsRepo = logsRepo,
-    trailblazeUiProjectDir = trailblazeUiProjectDir,
-    outputFile = trailblazeReportHtmlFile,
-    reportTemplateFile = File(logsRepo.logsDir.parentFile, "trailblaze_report_template.html"),
-  )
+  override fun printUsage() {
+    System.err.println("Usage: generate-report ${logsDirArg.getUsage()} ${useRelativeImageUrlsFlag.getUsage()}")
+    System.err.println()
+    System.err.println("Generate Trailblaze HTML report from logs directory")
+    System.err.println()
+    System.err.println("Arguments:")
+    System.err.println("  ${logsDirArg.getUsage()}  ${logsDirArg.getHelp()}")
+    System.err.println()
+    System.err.println("Options:")
+    System.err.println("  ${useRelativeImageUrlsFlag.getUsage()}  ${useRelativeImageUrlsFlag.getHelp()}")
+  }
+
+  override fun run() {
+    println("logsDir: ${logsDir.canonicalPath}")
+    println("useRelativeImageUrls: $useRelativeImageUrls")
+
+    val logsRepo = LogsRepo(logsDir)
+
+    // Move the files into session directories.  This is needed after an adb pull
+    moveJsonFilesToSessionDirs(logsDir)
+    movePngsToSessionDirs(logsDir)
+
+    val standaloneFileReport = true
+    val logsSummaryEvents = renderSummary(logsRepo, standaloneFileReport)
+    val logsSummaryJson = TrailblazeJsonInstance.encodeToString(LogsSummary.serializer(), logsSummaryEvents)
+    val summaryJsonFile = File(logsDir, "summary.json")
+    summaryJsonFile.writeText(logsSummaryJson)
+
+    val trailblazeReportHtmlFile = File(logsDir, "trailblaze_report.html")
+    println("file://${trailblazeReportHtmlFile.absolutePath}")
+
+    val isInternal = File(logsRepo.logsDir.parentFile, "opensource").exists()
+
+    val trailblazeUiProjectDir = if (isInternal) {
+      File(logsRepo.logsDir.parentFile, "opensource/trailblaze-ui")
+    } else {
+      File(logsRepo.logsDir.parentFile, "trailblaze-ui")
+    }.also {
+      println("Using project directory: ${it.canonicalPath}")
+    }
+
+    WasmReport.generate(
+      logsRepo = logsRepo,
+      trailblazeUiProjectDir = trailblazeUiProjectDir,
+      outputFile = trailblazeReportHtmlFile,
+      reportTemplateFile = File(logsRepo.logsDir.parentFile, "trailblaze_report_template.html"),
+      useRelativeImageUrls = useRelativeImageUrls,
+    )
+  }
 }
+
+fun main(args: Array<String>) = GenerateReportCliCommand().main(args)
 
 fun moveJsonFilesToSessionDirs(logsDir: File) {
   val jsonFilesInLogsDir = logsDir.listFiles()?.filter { it.extension == "json" } ?: emptyList()

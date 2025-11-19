@@ -84,8 +84,8 @@ internal object HostIosDriverFactory {
     if (!hasPerformedInitialCleanup) {
       println("Performing initial cleanup for fresh JVM - killing stale processes on port $targetPort")
       killProcessesUsingPort(targetPort)
-      // Give the system a moment to fully release the port after killing processes
-      Thread.sleep(1000)
+      // Give the system more time to fully release the port after killing processes
+      Thread.sleep(2000)
       hasPerformedInitialCleanup = true
     } else {
       println("Skipping process cleanup - reusing connection within same JVM session")
@@ -178,6 +178,16 @@ internal object HostIosDriverFactory {
       openDriver = openDriver || xcTestDevice.isShutdown(),
     )
 
+    // Wait for driver to be ready with retry logic
+    // The first test often fails because the XCUITest driver needs time to fully start
+    if (openDriver) {
+      println("Waiting for XCUITest driver to be ready on port $targetPort...")
+      val driverReady = waitForDriverReady(defaultXctestHost, targetPort, maxRetries = 3, initialDelayMs = 1000)
+      if (!driverReady) {
+        println("Warning: XCUITest driver may not be fully ready, but proceeding anyway")
+      }
+    }
+
     // Cache the driver for reuse
     cachedMaestro = maestro
     cachedDeviceId = deviceId
@@ -185,6 +195,37 @@ internal object HostIosDriverFactory {
 
     println("Created new iOS driver for device $deviceId on port $targetPort")
     return maestro
+  }
+
+  private fun waitForDriverReady(
+    host: String,
+    port: Int,
+    maxRetries: Int = 3,
+    initialDelayMs: Long = 1000,
+  ): Boolean {
+    var currentDelay = initialDelayMs
+    for (attempt in 1..maxRetries) {
+      try {
+        // Try to establish a connection to the XCUITest server
+        java.net.Socket(host, port).use { socket ->
+          println("XCUITest driver is ready on port $port after $attempt attempt(s)")
+          return true
+        }
+      } catch (e: Exception) {
+        if (attempt < maxRetries) {
+          println(
+            "XCUITest driver not ready yet on port $port (attempt $attempt/$maxRetries), " +
+              "waiting ${currentDelay}ms before retry...",
+          )
+          Thread.sleep(currentDelay)
+          // Exponential backoff with max delay of 3 seconds
+          currentDelay = minOf(currentDelay * 2, 3000)
+        } else {
+          println("XCUITest driver failed to respond after $maxRetries attempts: ${e.message}")
+        }
+      }
+    }
+    return false
   }
 
   private fun killProcessesUsingPort(port: Int) {

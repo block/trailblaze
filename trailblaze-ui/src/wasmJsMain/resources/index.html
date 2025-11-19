@@ -15,15 +15,272 @@
     </style>
     <script>
         console.log("Trailblaze UI loaded");
-        window.getTrailblazeReportJsonFromBrowser = function (key, callback) {
-            console.log("getTrailblazeReportJsonFromBrowser called with key: " + key);
-            let value = window.trailblaze_report[key];
-            window.trailblaze_report[key] = null;
-            console.log(value);
-            let json = JSON.stringify(value)
-            callback(json);
+
+        // Decompress GZIP base64 string data (returns JSON string, not parsed object)
+        async function decompressString(base64Data) {
+            if (!base64Data) return null;
+
+            // Decode base64 to binary
+            const binaryString = atob(base64Data);
+            const compressedBytes = new Uint8Array(binaryString.length);
+            for (let i = 0; i < binaryString.length; i++) {
+                compressedBytes[i] = binaryString.charCodeAt(i);
+            }
+
+            // Decompress using DecompressionStream
+            if (typeof DecompressionStream !== 'undefined') {
+                const ds = new DecompressionStream('gzip');
+                const writer = ds.writable.getWriter();
+                writer.write(compressedBytes);
+                writer.close();
+
+                const decompressedBuffer = await new Response(ds.readable).arrayBuffer();
+                const decompressedText = new TextDecoder().decode(decompressedBuffer);
+                return decompressedText;  // Return the JSON string, not parsed
+            } else {
+                throw new Error('DecompressionStream not supported');
+            }
         }
+
+        // Decompress GZIP base64 binary data (returns base64 string of decompressed bytes)
+        async function decompressBinaryToBase64(base64Data) {
+            if (!base64Data) return null;
+
+            // Decode base64 to binary
+            const binaryString = atob(base64Data);
+            const compressedBytes = new Uint8Array(binaryString.length);
+            for (let i = 0; i < binaryString.length; i++) {
+                compressedBytes[i] = binaryString.charCodeAt(i);
+            }
+
+            // Decompress using DecompressionStream
+            if (typeof DecompressionStream !== 'undefined') {
+                const ds = new DecompressionStream('gzip');
+                const writer = ds.writable.getWriter();
+                writer.write(compressedBytes);
+                writer.close();
+
+                const decompressedBuffer = await new Response(ds.readable).arrayBuffer();
+                const decompressedBytes = new Uint8Array(decompressedBuffer);
+
+                // Convert back to base64
+                let binary = '';
+                for (let i = 0; i < decompressedBytes.length; i++) {
+                    binary += String.fromCharCode(decompressedBytes[i]);
+                }
+                return btoa(binary);
+            } else {
+                throw new Error('DecompressionStream not supported');
+            }
+        }
+
+        // Initialize decompressed data cache
         window.trailblaze_report = {};
+        window.trailblaze_report_decompression_in_progress = {};
+
+        // Lazy decompression on first access - supports hierarchical keys like "session/SESSION_ID/logs"
+        window.getTrailblazeReportJsonFromBrowser = async function (key, callback) {
+            console.log("getTrailblazeReportJsonFromBrowser called with key: " + key);
+
+            // Check if already decompressed
+            if (window.trailblaze_report[key] !== undefined) {
+                let value = window.trailblaze_report[key];
+                window.trailblaze_report[key] = null;
+                console.log("Found pre-decompressed value for " + key + ":", value);
+                let json = JSON.stringify(value);
+                console.log("JSON string length:", json.length);
+                callback(json);
+                return;
+            }
+
+            // Check if decompression is in progress
+            if (window.trailblaze_report_decompression_in_progress[key]) {
+                await window.trailblaze_report_decompression_in_progress[key];
+                let value = window.trailblaze_report[key];
+                window.trailblaze_report[key] = null;
+                console.log(value);
+                let json = JSON.stringify(value);
+                callback(json);
+                return;
+            }
+
+            // Try to find compressed data - support both flat and hierarchical keys
+            let compressedData = null;
+
+            // Direct lookup for flat keys (sessions, session_detail, session_yaml)
+            // Skip if the key is explicitly null (legacy fields removed)
+            if (window.trailblaze_report_compressed &&
+                window.trailblaze_report_compressed[key] !== null &&
+                window.trailblaze_report_compressed[key] !== undefined) {
+                compressedData = window.trailblaze_report_compressed[key];
+            }
+            // Hierarchical lookup for per-session keys (session/SESSION_ID/logs, session/SESSION_ID/yaml)
+            else if (key.startsWith('session/')) {
+                const parts = key.split('/');
+                if (parts.length === 3) {
+                    const sessionId = parts[1];
+                    const dataType = parts[2]; // 'logs' or 'yaml'
+
+                    // Try to load from chunk if not already in memory
+                    if (dataType === 'logs') {
+                        compressedData = window.trailblaze_report_compressed.per_session_logs[sessionId];
+                        if (!compressedData && window.loadChunkById) {
+                            const chunkId = 'chunk-logs-' + sessionId.replace(/\//g, '-');
+                            compressedData = window.loadChunkById(chunkId);
+                        }
+                    } else if (dataType === 'yaml') {
+                        compressedData = window.trailblaze_report_compressed.per_session_yaml[sessionId];
+                        if (!compressedData && window.loadChunkById) {
+                            const chunkId = 'chunk-yaml-' + sessionId.replace(/\//g, '-');
+                            compressedData = window.loadChunkById(chunkId);
+                        }
+                    }
+                }
+            }
+
+            // Decompress the data if found
+            if (compressedData) {
+                console.log("Decompressing " + key + "...");
+                console.log("Compressed data length:", compressedData.length);
+                const compressionPromise = decompressString(compressedData)
+                    .then(jsonString => {
+                        console.log("Decompressed string length for " + key + ":", jsonString.length);
+                        console.log("First 200 chars:", jsonString.substring(0, 200));
+                        // All data is stored as JSON - parse it to verify it's valid
+                        const value = JSON.parse(jsonString);
+                        console.log("Parsed value type:", typeof value, "Array?", Array.isArray(value));
+                        if (Array.isArray(value)) {
+                            console.log("Array length:", value.length);
+                        }
+                        window.trailblaze_report[key] = value;
+                        delete window.trailblaze_report_decompression_in_progress[key];
+                        console.log(key + " decompressed successfully");
+
+                        // Free memory: delete compressed source after decompression
+                        if (key.startsWith('session/')) {
+                            const parts = key.split('/');
+                            const sessionId = parts[1];
+                            const dataType = parts[2];
+                            if (dataType === 'logs' && window.trailblaze_report_compressed.per_session_logs) {
+                                delete window.trailblaze_report_compressed.per_session_logs[sessionId];
+                            } else if (dataType === 'yaml' && window.trailblaze_report_compressed.per_session_yaml) {
+                                delete window.trailblaze_report_compressed.per_session_yaml[sessionId];
+                            }
+                        }
+
+                        return jsonString;  // Return the JSON string as-is
+                    })
+                    .catch(error => {
+                        console.error("Failed to decompress " + key + ":", error);
+                        delete window.trailblaze_report_decompression_in_progress[key];
+                        throw error;
+                    });
+
+                window.trailblaze_report_decompression_in_progress[key] = compressionPromise;
+
+                const jsonString = await compressionPromise;
+                console.log("About to callback with JSON string length:", jsonString.length);
+                window.trailblaze_report[key] = null;  // Clear after use
+                callback(jsonString);  // Pass the JSON string directly
+            } else {
+                console.error("No compressed data found for key: " + key);
+                console.error("Available compressed keys:", Object.keys(window.trailblaze_report_compressed || {}));
+                callback("{}");
+            }
+        }
+
+        window.trailblaze_report_compressed = {};
+
+        // Track in-progress decompressions to avoid duplicate work
+        const decompressingImages = new Map();
+
+        // Low-level image decompression (no caching - that's handled in Kotlin/WASM)
+        window.decompressImageCallback = function (imageKey, callback) {
+            if (!imageKey) {
+                callback(null);
+                return;
+            }
+
+            // Check if it's a remote URL - pass through unchanged
+            if (imageKey.startsWith('http://') || imageKey.startsWith('https://')) {
+                console.log('🌐 Remote URL detected, passing through:', imageKey);
+                callback(imageKey);
+                return;
+            }
+
+            // Check if already decompressing (avoid duplicate work)
+            if (decompressingImages.has(imageKey)) {
+                console.log('⏳ Image decompression in progress, queuing callback:', imageKey);
+                decompressingImages.get(imageKey).push(callback);
+                return;
+            }
+
+            // Start decompression
+            decompressingImages.set(imageKey, [callback]);
+
+            // Helper function to actually load the image
+            const loadImage = () => {
+                // Look up from compressed images
+                if (!window.trailblaze_report_compressed || !window.trailblaze_report_compressed.images) {
+                    console.warn('No compressed images found');
+                    const callbacks = decompressingImages.get(imageKey);
+                    callbacks.forEach(cb => cb(null));
+                    decompressingImages.delete(imageKey);
+                    return;
+                }
+
+                let compressedImage = window.trailblaze_report_compressed.images[imageKey];
+
+                // Try to load from chunk if not in memory
+                if (!compressedImage && window.loadChunkById) {
+                    const chunkId = 'chunk-image-' + imageKey.replace(/\//g, '-').replace(/\./g, '-').replace(/_/g, '-');
+                    compressedImage = window.loadChunkById(chunkId);
+                }
+
+                if (!compressedImage) {
+                    console.warn('Image not found:', imageKey);
+                    const callbacks = decompressingImages.get(imageKey);
+                    callbacks.forEach(cb => cb(null));
+                    decompressingImages.delete(imageKey);
+                    return;
+                }
+
+                // Decompress the image (GZIP → raw bytes → base64)
+                decompressBinaryToBase64(compressedImage).then(base64Data => {
+                    const format = imageKey.endsWith('.png') ? 'png' : 'jpeg';
+                    const dataUrl = `data:image/${format};base64,${base64Data}`;
+
+                    // Free memory: delete compressed source after decompression
+                    delete window.trailblaze_report_compressed.images[imageKey];
+
+                    // Call all pending callbacks
+                    const callbacks = decompressingImages.get(imageKey);
+                    callbacks.forEach(cb => cb(dataUrl));
+                    decompressingImages.delete(imageKey);
+                }).catch(error => {
+                    console.error('❌ Failed to decompress image:', imageKey, error);
+                    const callbacks = decompressingImages.get(imageKey);
+                    callbacks.forEach(cb => cb(null));
+                    decompressingImages.delete(imageKey);
+                });
+            };
+
+            // Wait for chunks to be ready if they aren't yet
+            if (!window.chunksReady) {
+                console.log('⏳ Waiting for chunks to be ready before loading image:', imageKey);
+                window.onChunksReady = window.onChunksReady || (() => {
+                });
+                const originalOnChunksReady = window.onChunksReady;
+                window.onChunksReady = () => {
+                    originalOnChunksReady();
+                    loadImage();
+                };
+                return;
+            }
+
+            // Chunks are ready, load immediately
+            loadImage();
+        };
     </script>
     <script type="application/javascript" src="composeApp.js"></script>
 </head>

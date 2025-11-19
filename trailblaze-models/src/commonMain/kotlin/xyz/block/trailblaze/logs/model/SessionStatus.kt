@@ -66,6 +66,16 @@ sealed interface SessionStatus {
       override val durationMs: Long,
       val message: String?,
     ) : Ended
+
+    /**
+     * Session failed due to reaching the maximum number of LLM calls allowed per objective
+     */
+    @Serializable
+    data class MaxCallsLimitReached(
+      override val durationMs: Long,
+      val maxCalls: Int,
+      val objectivePrompt: String,
+    ) : Ended
   }
 }
 

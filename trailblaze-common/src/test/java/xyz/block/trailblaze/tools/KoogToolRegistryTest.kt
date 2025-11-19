@@ -1,6 +1,5 @@
 package xyz.block.trailblaze.tools
 
-import ai.koog.agents.core.tools.DirectToolCallsEnabler
 import ai.koog.agents.core.tools.annotations.InternalAgentToolsApi
 import kotlinx.coroutines.runBlocking
 import org.junit.Test
@@ -11,8 +10,6 @@ import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
 
 @OptIn(InternalAgentToolsApi::class)
 class KoogToolRegistryTest {
-
-  object MyEnabler : DirectToolCallsEnabler
 
   @Test
   fun test() {
@@ -35,10 +32,7 @@ class KoogToolRegistryTest {
     println("descriptor: ${inputTextTool.descriptor}")
     val trailblazeToolArgs = InputTextTrailblazeTool("hello world")
     val result = runBlocking {
-      inputTextTool.executeUnsafe(
-        args = trailblazeToolArgs,
-        enabler = MyEnabler,
-      )
+      inputTextTool.executeUnsafe(args = trailblazeToolArgs)
     }
     println("Result: $result")
     println("InputTextTool args: $trailblazeToolArgs")

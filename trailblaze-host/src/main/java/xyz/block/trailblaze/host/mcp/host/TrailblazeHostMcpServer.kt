@@ -24,7 +24,6 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 
 class TrailblazeHostMcpServer(
   val logsRepo: LogsRepo,
-  val isOnDeviceMode: () -> Boolean,
 ) {
   val loggingRule = HostTrailblazeLoggingRule(
     trailblazeDeviceInfoProvider = {
@@ -92,7 +91,6 @@ class TrailblazeHostMcpServer(
 
   val trailblazeMcpServer = TrailblazeMcpServer(
     logsRepo = logsRepo,
-    isOnDeviceMode = { isOnDeviceMode() },
     targetTestAppProvider = { TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget },
   ) { context: TrailblazeMcpSseSessionContext, server ->
     // Provide additional tools to the MCP server

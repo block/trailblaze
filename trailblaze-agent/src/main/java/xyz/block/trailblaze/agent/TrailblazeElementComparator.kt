@@ -1,8 +1,8 @@
 package xyz.block.trailblaze.agent
 
 import ai.koog.prompt.executor.clients.LLMClient
-import ai.koog.prompt.message.Attachment
 import ai.koog.prompt.message.AttachmentContent
+import ai.koog.prompt.message.ContentPart
 import ai.koog.prompt.message.Message
 import ai.koog.prompt.message.RequestMetaInfo
 import ai.koog.prompt.params.LLMParams
@@ -10,6 +10,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
 import kotlinx.serialization.json.Json
 import xyz.block.trailblaze.agent.util.ElementRetriever
+import xyz.block.trailblaze.api.ImageFormatDetector
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
@@ -240,24 +241,28 @@ class TrailblazeElementComparator(
       )
       add(
         Message.User(
-          content = TemplatingUtil.renderTemplate(
-            template = userPromptTemplate,
-            values = mapOf(
-              "identifier" to prompt,
-              "view_hierarchy" to viewHierarchyJson,
-            ),
-          ),
-          metaInfo = RequestMetaInfo.create(Clock.System),
-          attachments = buildList {
+          parts = buildList {
+            add(
+              ContentPart.Text(
+                TemplatingUtil.renderTemplate(
+                  template = userPromptTemplate,
+                  values = mapOf(
+                    "identifier" to prompt,
+                    "view_hierarchy" to viewHierarchyJson,
+                  ),
+                ),
+              ),
+            )
             screenState.screenshotBytes?.let { screenshotBytes ->
               add(
-                Attachment.Image(
+                ContentPart.Image(
                   AttachmentContent.Binary.Bytes(screenshotBytes),
-                  format = "png",
+                  format = ImageFormatDetector.detectFormat(screenshotBytes).fileExtension,
                 ),
               )
             }
           },
+          metaInfo = RequestMetaInfo.create(Clock.System),
         ),
       )
     }
@@ -319,18 +324,20 @@ class TrailblazeElementComparator(
     )
     add(
       Message.User(
-        content = "Evaluate this on the current screen: $prompt",
-        metaInfo = RequestMetaInfo.create(Clock.System),
-        attachments = buildList {
+        parts = buildList {
+          add(
+            ContentPart.Text("Evaluate this on the current screen: $prompt"),
+          )
           screenState.screenshotBytes?.let { screenshotBytes ->
             add(
-              Attachment.Image(
+              ContentPart.Image(
                 AttachmentContent.Binary.Bytes(screenshotBytes),
-                format = "png",
+                format = ImageFormatDetector.detectFormat(screenshotBytes).fileExtension,
               ),
             )
           }
         },
+        metaInfo = RequestMetaInfo.create(Clock.System),
       ),
     )
   }

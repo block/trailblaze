@@ -4,6 +4,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
 import org.junit.runner.Description
+import xyz.block.trailblaze.api.ImageFormatDetector
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.http.TrailblazeHttpClientFactory
 import xyz.block.trailblaze.logs.client.TrailblazeLog
@@ -67,7 +68,12 @@ abstract class TrailblazeLoggingRule(
   }
 
   override fun afterTestExecution(description: Description, result: Result<Nothing?>) {
-    trailblazeLogger.sendEndLog(result.isSuccess, result.exceptionOrNull())
+    // Use consolidated method that checks session manager for max calls limit
+    trailblazeLogger.sendSessionEndLog(
+      sessionManager = sessionManager,
+      isSuccess = result.isSuccess,
+      exception = result.exceptionOrNull(),
+    )
     exportTraces()
     sessionManager.endSession()
   }
@@ -80,7 +86,8 @@ abstract class TrailblazeLoggingRule(
   fun subscribeToLoggingEventsAndSendToServer() {
     trailblazeLogger.setLogScreenshotListener { screenshotBytes ->
       val sessionId = trailblazeLogger.getCurrentSessionId()
-      val screenshotFileName = "${sessionId}_${Clock.System.now().toEpochMilliseconds()}.png"
+      val imageFormat = ImageFormatDetector.detectFormat(screenshotBytes)
+      val screenshotFileName = "${sessionId}_${Clock.System.now().toEpochMilliseconds()}.${imageFormat.fileExtension}"
       // Send Log
       runBlocking(Dispatchers.IO) {
         if (isServerAvailable) {

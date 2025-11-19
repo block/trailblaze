@@ -1,15 +1,15 @@
 package xyz.block.trailblaze.maestro
 
-import maestro.Filters
 import maestro.Maestro
 import maestro.orchestra.AssertConditionCommand
 import maestro.orchestra.MaestroCommand
-import maestro.utils.StringUtils.toRegexSafe
 import org.slf4j.LoggerFactory
 import xyz.block.trailblaze.api.MaestroDriverActionType
 import xyz.block.trailblaze.api.ScreenState
+import xyz.block.trailblaze.api.TrailblazeElementSelector
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
+import xyz.block.trailblaze.viewmatcher.TapSelectorV2
 
 /**
  * Handles logging of assertion commands for visualization purposes.
@@ -25,9 +25,26 @@ class AssertionLogger(
   private val logger = LoggerFactory.getLogger(AssertionLogger::class.java)
 
   /**
-   * Handles logging for assertion commands. Should be called before the command is executed.
+   * Handles logging for successful assertion commands. Should be called after the command succeeds.
    */
-  fun logAssertionCommand(command: MaestroCommand) {
+  fun logSuccessfulAssertionCommand(command: MaestroCommand) {
+    logAssertionCommandInternal(command, succeeded = true)
+  }
+
+  /**
+   * Handles logging for failed assertion commands. Should be called after the command fails.
+   */
+  fun logFailedAssertionCommand(command: MaestroCommand) {
+    logAssertionCommandInternal(command, succeeded = false)
+  }
+
+  /**
+   * Internal method to log assertion commands with success/failure status.
+   */
+  private fun logAssertionCommandInternal(
+    command: MaestroCommand,
+    succeeded: Boolean,
+  ) {
     val assertCommand = command.asCommand() as? AssertConditionCommand ?: return
 
     try {
@@ -46,13 +63,22 @@ class AssertionLogger(
 
         try {
           if (isVisibleAssertion) {
-            // For visible assertions, try to find the element and get its bounds
-            assertCommand.condition?.visible?.let { selector ->
-              val element = findElementSafely(selector)?.element
-              element?.bounds?.let { bounds ->
-                // Calculate center point of the element
-                elementCenterX = (bounds.x + bounds.width / 2)
-                elementCenterY = (bounds.y + bounds.height / 2)
+            // For visible assertions, try to find the element using our selector-based approach
+            assertCommand.condition?.visible?.let { maestroSelector ->
+              val trailblazeSelector = convertMaestroSelectorToTrailblaze(maestroSelector)
+
+              // Use the official selector-based coordinate finding
+              val coordinates = TapSelectorV2.findNodeCenterUsingSelector(
+                root = screenState.viewHierarchy,
+                selector = trailblazeSelector,
+                trailblazeDevicePlatform = screenState.trailblazeDevicePlatform,
+                widthPixels = screenState.deviceWidth,
+                heightPixels = screenState.deviceHeight,
+              )
+
+              coordinates?.let { (x, y) ->
+                elementCenterX = x
+                elementCenterY = y
               }
             }
           } else if (isNotVisibleAssertion) {
@@ -67,6 +93,13 @@ class AssertionLogger(
           logger.debug("Could not find element for assertion visualization: ${e.message}")
         }
 
+        // For failed assertions, extract the text that was expected to be visible
+        if (!succeeded && isVisibleAssertion) {
+          assertCommand.condition?.visible?.let { selector ->
+            textToDisplay = selector.textRegex ?: selector.idRegex?.let { "id: $it" } ?: "element"
+          }
+        }
+
         val screenshotFilename =
           screenState.screenshotBytes?.let { trailblazeLogger.logScreenshot(it) }
         trailblazeLogger.log(
@@ -79,6 +112,7 @@ class AssertionLogger(
               y = elementCenterY,
               isVisible = isVisibleAssertion,
               textToDisplay = textToDisplay,
+              succeeded = succeeded,
             ),
             durationMs = 0,
             timestamp = kotlinx.datetime.Clock.System.now(),
@@ -94,52 +128,27 @@ class AssertionLogger(
   }
 
   /**
-   * Safely finds an element without throwing exceptions that would interrupt the flow.
+   * Converts a Maestro ElementSelector to a TrailblazeElementSelector.
+   * This is a simplified conversion that handles the most common selector properties.
    */
-  private fun findElementSafely(selector: maestro.orchestra.ElementSelector): maestro.FindElementResult? = try {
-    maestro.findElementWithTimeout(
-      timeoutMs = 500,
-      filter = buildFilterForSelector(selector),
-    )
-  } catch (e: Exception) {
-    logger.debug("Element not found during assertion logging: ${e.message}")
-    null
-  }
-
-  /**
-   * Builds a filter from an ElementSelector - simplified version for logging purposes.
-   */
-  private fun buildFilterForSelector(selector: maestro.orchestra.ElementSelector): maestro.ElementFilter {
-    val filters = mutableListOf<maestro.ElementFilter>()
-
-    selector.textRegex?.let {
-      filters += Filters.deepestMatchingElement(
-        Filters.textMatches(it.toRegexSafe(REGEX_OPTIONS)),
+  private fun convertMaestroSelectorToTrailblaze(maestroSelector: maestro.orchestra.ElementSelector): TrailblazeElementSelector = TrailblazeElementSelector(
+    textRegex = maestroSelector.textRegex,
+    idRegex = maestroSelector.idRegex,
+    index = maestroSelector.index,
+    enabled = maestroSelector.enabled,
+    selected = maestroSelector.selected,
+    checked = maestroSelector.checked,
+    focused = maestroSelector.focused,
+    below = maestroSelector.below?.let { convertMaestroSelectorToTrailblaze(it) },
+    above = maestroSelector.above?.let { convertMaestroSelectorToTrailblaze(it) },
+    leftOf = maestroSelector.leftOf?.let { convertMaestroSelectorToTrailblaze(it) },
+    rightOf = maestroSelector.rightOf?.let { convertMaestroSelectorToTrailblaze(it) },
+    containsChild = maestroSelector.containsChild?.let { convertMaestroSelectorToTrailblaze(it) },
+    containsDescendants = maestroSelector.containsDescendants?.map {
+      convertMaestroSelectorToTrailblaze(
+        it,
       )
-    }
-
-    selector.idRegex?.let {
-      filters += Filters.deepestMatchingElement(
-        Filters.idMatches(it.toRegexSafe(REGEX_OPTIONS)),
-      )
-    }
-
-    var resultFilter = Filters.intersect(filters)
-    resultFilter = selector.index?.toDouble()?.toInt()?.let {
-      Filters.compose(
-        resultFilter,
-        Filters.index(it),
-      )
-    } ?: Filters.compose(
-      resultFilter,
-      Filters.clickableFirst(),
-    )
-
-    return resultFilter
-  }
-
-  companion object {
-    val REGEX_OPTIONS =
-      setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL, RegexOption.MULTILINE)
-  }
+    },
+    childOf = maestroSelector.childOf?.let { convertMaestroSelectorToTrailblaze(it) },
+  )
 }

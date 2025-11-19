@@ -240,6 +240,15 @@ fun ImagePreviewDialog(
                 maxHeight = finalHeight,
                 action = action
               )
+            } else if (action is MaestroDriverActionType.Swipe) {
+              // For swipe gestures, always show annotation in center even without click coordinates
+              ScreenshotAnnotation(
+                centerX = finalWidth / 2,
+                centerY = finalHeight / 2,
+                maxWidth = finalWidth,
+                maxHeight = finalHeight,
+                action = action
+              )
             }
           }
         }

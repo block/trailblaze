@@ -52,6 +52,7 @@ fun LogGroupRow(
   showInspectUI: ((TrailblazeLog) -> Unit)? = null,
   showChatHistory: ((TrailblazeLog) -> Unit)? = null,
   onShowScreenshotModal: (imageModel: Any?, deviceWidth: Int, deviceHeight: Int, clickX: Int?, clickY: Int?, action: MaestroDriverActionType?) -> Unit = { _, _, _, _, _, _ -> },
+  onOpenInFinder: ((TrailblazeLog) -> Unit)? = null,
 ) {
   val firstLog = group.logs.first()
   val indent = logIndentLevel(firstLog)
@@ -114,7 +115,8 @@ fun LogGroupRow(
               showDetails = { showDetails?.invoke(log) },
               showInspectUI = { showInspectUI?.invoke(log) },
               showChatHistory = { showChatHistory?.invoke(log) },
-              onShowScreenshotModal = onShowScreenshotModal
+              onShowScreenshotModal = onShowScreenshotModal,
+              onOpenInFinder = { onOpenInFinder?.invoke(log) }
             )
           }
         }

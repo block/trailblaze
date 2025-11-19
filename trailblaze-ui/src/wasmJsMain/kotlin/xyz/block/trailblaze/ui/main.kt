@@ -1,13 +1,13 @@
 package xyz.block.trailblaze.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -23,10 +23,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.ComposeViewport
 import kotlinx.browser.document
 import kotlinx.browser.window
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.logs.TrailblazeLogsDataProvider
-import xyz.block.trailblaze.logs.client.TrailblazeJson
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.ui.composables.FullScreenModalOverlay
@@ -120,25 +118,75 @@ fun SessionListView(
     try {
       isLoading = true
       errorMessage = null
+
+      val startTime = window.performance.now()
+      println("📋 [${startTime.toInt()}ms] Loading session list...")
+
       val sessionNames = dataProvider.getSessionIdsAsync()
+      val namesEndTime = window.performance.now()
+      println("📝 [${namesEndTime.toInt()}ms] Got ${sessionNames.size} session IDs in ${(namesEndTime - startTime).toInt()}ms")
+
+      val infoStartTime = window.performance.now()
       sessions = sessionNames.mapNotNull { sessionName ->
         dataProvider.getSessionInfoAsync(sessionName)
       }
+      val infoEndTime = window.performance.now()
+      println("✅ [${infoEndTime.toInt()}ms] Loaded ${sessions.size} session infos in ${(infoEndTime - infoStartTime).toInt()}ms")
+      println("🎉 [${infoEndTime.toInt()}ms] Total session list load time: ${(infoEndTime - startTime).toInt()}ms")
     } catch (e: Exception) {
       errorMessage = "Failed to load sessions: ${e.message}"
+      println("❌ Error loading sessions: ${e.message}")
       sessions = emptyList()
     } finally {
       isLoading = false
     }
   }
 
-  SessionListComposable(
-    sessions = sessions,
-    sessionClicked = onSessionClick,
-    deleteSession = deleteSession,
-    clearAllLogs = null,
-    openLogsFolder = null,
-  )
+  if (isLoading) {
+    Box(
+      modifier = Modifier.fillMaxSize(),
+      contentAlignment = Alignment.Center
+    ) {
+      Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+      ) {
+        Text(
+          text = "Loading sessions...",
+          style = MaterialTheme.typography.headlineSmall,
+          modifier = Modifier.padding(16.dp)
+        )
+      }
+    }
+  } else if (errorMessage != null) {
+    Box(
+      modifier = Modifier.fillMaxSize(),
+      contentAlignment = Alignment.Center
+    ) {
+      Column(
+        horizontalAlignment = Alignment.CenterHorizontally
+      ) {
+        Text(
+          text = "Error loading sessions",
+          style = MaterialTheme.typography.headlineSmall
+        )
+        Text(
+          text = errorMessage!!,
+          style = MaterialTheme.typography.bodyMedium,
+          color = MaterialTheme.colorScheme.error,
+          modifier = Modifier.padding(top = 8.dp)
+        )
+      }
+    }
+  } else {
+    SessionListComposable(
+      sessions = sessions,
+      sessionClicked = onSessionClick,
+      deleteSession = deleteSession,
+      clearAllLogs = null,
+      openLogsFolder = null,
+    )
+  }
 }
 
 @Composable
@@ -148,11 +196,13 @@ fun WasmSessionDetailView(
   sessionName: String,
   onBackClick: () -> Unit,
 ) {
-  var logs by remember { mutableStateOf<List<TrailblazeLog>>(emptyList()) }
-  var isLoading by remember { mutableStateOf(true) }
-  var errorMessage by remember { mutableStateOf<String?>(null) }
-  var sessionInfo by remember { mutableStateOf<SessionInfo?>(null) }
-  var recordingYaml by remember { mutableStateOf<String?>(null) }
+  // Key all state by sessionName to ensure it resets when navigating between sessions
+  var logs by remember(sessionName) { mutableStateOf<List<TrailblazeLog>>(emptyList()) }
+  var isLoading by remember(sessionName) { mutableStateOf(true) }
+  var errorMessage by remember(sessionName) { mutableStateOf<String?>(null) }
+  var sessionInfo by remember(sessionName) { mutableStateOf<SessionInfo?>(null) }
+  // Recording YAML state (pre-loaded from chunks)
+  var recordingYaml by remember(sessionName) { mutableStateOf<String?>(null) }
 
   // Modal state
   var showDetailsDialog by remember { mutableStateOf(false) }
@@ -179,24 +229,58 @@ fun WasmSessionDetailView(
     try {
       isLoading = true
       errorMessage = null
-      val fetchedLogs: List<TrailblazeLog> = dataProvider.getLogsForSessionAsync(sessionName)
-      logs = fetchedLogs
-      sessionInfo = dataProvider.getSessionInfoAsync(sessionName)
 
-      // Precompute the recording YAML
+      val startTime = window.performance.now()
+      println("📥 [${startTime.toInt()}ms] Starting to load session: $sessionName")
+
+      // Load session info first (from lightweight map, should be fast)
+      val infoStartTime = window.performance.now()
+      sessionInfo = dataProvider.getSessionInfoAsync(sessionName)
+      val infoEndTime = window.performance.now()
+      println("📋 [${infoEndTime.toInt()}ms] Session info loaded in ${(infoEndTime - infoStartTime).toInt()}ms")
+
+      // Now load logs (this is the heavy operation)
+      val logsStartTime = window.performance.now()
+      val fetchedLogs: List<TrailblazeLog> = dataProvider.getLogsForSessionAsync(sessionName)
+      val logsEndTime = window.performance.now()
+      println("📦 [${logsEndTime.toInt()}ms] Fetched ${fetchedLogs.size} logs in ${(logsEndTime - logsStartTime).toInt()}ms")
+
+      // Don't resolve screenshots immediately - they'll be loaded on-demand when rendered
+      // This significantly speeds up initial page load
+      logs = fetchedLogs
+
+      // Load pre-generated recording YAML from chunks
+      val yamlStartTime = window.performance.now()
       try {
         recordingYaml = dataProvider.getSessionRecordingYaml(sessionName)
+        val yamlEndTime = window.performance.now()
+        println("📝 [${yamlEndTime.toInt()}ms] Recording YAML loaded in ${(yamlEndTime - yamlStartTime).toInt()}ms")
       } catch (e: Exception) {
-        recordingYaml = "# Error generating YAML: ${e.message}"
+        println("⚠️ Failed to load recording YAML: ${e.message}")
+        recordingYaml =
+          "# Error loading YAML: ${e.message}\n# YAML is pre-generated on the JVM and should be available in chunks."
       }
+
+      val totalTime = window.performance.now() - startTime
+      println(
+        "✅ [${
+          window.performance.now().toInt()
+        }ms] Total loading time: ${totalTime.toInt()}ms"
+      )
     } catch (e: Exception) {
       errorMessage = "Failed to load logs: ${e.message}"
+      println("❌ Error loading session: ${e.message}")
+      e.printStackTrace()
     } finally {
       isLoading = false
     }
   }
 
-  if (sessionInfo != null) {
+  // Show UI as soon as we have data
+  if (sessionInfo != null && logs.isNotEmpty()) {
+    val renderStartTime = window.performance.now()
+    println("🎨 [${renderStartTime.toInt()}ms] Starting to render SessionDetailComposable with ${logs.size} logs")
+
     Box(modifier = Modifier.fillMaxSize()) {
       SessionDetailComposable(
         sessionDetail = SessionDetail(
@@ -206,7 +290,8 @@ fun WasmSessionDetailView(
         toMaestroYaml = toMaestroYaml,
         onBackClick = onBackClick,
         generateRecordingYaml = {
-          recordingYaml ?: "# Loading YAML..."
+          // Return the pre-loaded YAML from chunks (already loaded in LaunchedEffect above)
+          recordingYaml ?: "# YAML not loaded yet..."
         },
         onShowDetails = { log ->
           currentLog = log
@@ -232,14 +317,9 @@ fun WasmSessionDetailView(
         onDeleteSession = {
           // No-op for WASM - read-only static version
         },
-        onExportToRepo = { yamlContent ->
-          println("Export to repo is not supported in WASM. Please use the desktop version.")
-          println("YAML content:\n$yamlContent")
-        },
         onOpenLogsFolder = {
           // No-op for WASM - can't open file system folders in browser
         },
-        exportFeatureEnabled = false, // Export feature not supported in WASM
       )
 
       // Modal dialogs
@@ -261,66 +341,127 @@ fun WasmSessionDetailView(
       }
 
       if (showInspectUIDialog && currentInspectorLog != null) {
-        FullScreenModalOverlay(
-          onDismiss = {
-            showInspectUIDialog = false
-            currentInspectorLog = null
+        // Pre-resolve the image BEFORE showing the modal
+        val inspectorLog = currentInspectorLog
+        var imageUrl: String? = null
+
+        when (inspectorLog) {
+          is TrailblazeLog.TrailblazeLlmRequestLog -> {
+            imageUrl = inspectorLog.screenshotFile
           }
-        ) {
-          // State for UI Inspector controls
-          var showRawJson by remember { mutableStateOf(false) }
-          var fontScale by remember { mutableStateOf(1f) }
 
-          // Inspector content
-          val inspectorLog = currentInspectorLog
-          if (inspectorLog != null) {
-            var viewHierarchy: xyz.block.trailblaze.api.ViewHierarchyTreeNode? = null
-            var imageUrl: String? = null
-            var deviceWidth = 0
-            var deviceHeight = 0
+          is TrailblazeLog.MaestroDriverLog -> {
+            imageUrl = inspectorLog.screenshotFile
+          }
 
-            when (inspectorLog) {
-              is TrailblazeLog.TrailblazeLlmRequestLog -> {
-                viewHierarchy = inspectorLog.viewHierarchy
-                imageUrl = inspectorLog.screenshotFile
-                deviceWidth = inspectorLog.deviceWidth
-                deviceHeight = inspectorLog.deviceHeight
+          else -> {}
+        }
+
+        // Pre-load the image before showing the inspector
+        val imageLoader = remember { xyz.block.trailblaze.ui.images.NetworkImageLoader() }
+        val preloadedImageModel = xyz.block.trailblaze.ui.resolveImageModel(sessionName, imageUrl, imageLoader)
+
+        // Only show the modal once the image is loaded
+        if (preloadedImageModel != null) {
+          FullScreenModalOverlay(
+            onDismiss = {
+              showInspectUIDialog = false
+              currentInspectorLog = null
+            }
+          ) {
+            // State for UI Inspector controls
+            var showRawJson by remember { mutableStateOf(false) }
+            var fontScale by remember { mutableStateOf(1f) }
+
+            // Inspector content
+            if (inspectorLog != null) {
+              var viewHierarchy: xyz.block.trailblaze.api.ViewHierarchyTreeNode? = null
+              var deviceWidth = 0
+              var deviceHeight = 0
+
+              when (inspectorLog) {
+                is TrailblazeLog.TrailblazeLlmRequestLog -> {
+                  viewHierarchy = inspectorLog.viewHierarchy
+                  deviceWidth = inspectorLog.deviceWidth
+                  deviceHeight = inspectorLog.deviceHeight
+                }
+
+                is TrailblazeLog.MaestroDriverLog -> {
+                  viewHierarchy = inspectorLog.viewHierarchy
+                  deviceWidth = inspectorLog.deviceWidth
+                  deviceHeight = inspectorLog.deviceHeight
+                }
+
+                else -> {
+                  // Other log types don't have view hierarchy data
+                }
               }
 
-              is TrailblazeLog.MaestroDriverLog -> {
-                viewHierarchy = inspectorLog.viewHierarchy
-                imageUrl = inspectorLog.screenshotFile
-                deviceWidth = inspectorLog.deviceWidth
-                deviceHeight = inspectorLog.deviceHeight
-              }
+              if (viewHierarchy != null) {
+                // Extract filtered hierarchy if available
+                val viewHierarchyFiltered = when (inspectorLog) {
+                  is TrailblazeLog.TrailblazeLlmRequestLog -> inspectorLog.viewHierarchyFiltered
+                  else -> null
+                }
 
-              else -> {
-                // Other log types don't have view hierarchy data
+                // Create a custom image loader that ALWAYS returns the pre-loaded image
+                val staticImageLoader = remember(preloadedImageModel) {
+                  object : xyz.block.trailblaze.ui.images.ImageLoader {
+                    override fun getImageModel(sessionId: String, screenshotFile: String?): Any? {
+                      return preloadedImageModel
+                    }
+                  }
+                }
+
+                InspectViewHierarchyScreenComposable(
+                  sessionId = sessionName,
+                  viewHierarchy = viewHierarchy,
+                  viewHierarchyFiltered = viewHierarchyFiltered,
+                  imageUrl = imageUrl,
+                  deviceWidth = deviceWidth,
+                  deviceHeight = deviceHeight,
+                  imageLoader = staticImageLoader,
+                  showRawJson = showRawJson,
+                  fontScale = fontScale,
+                  onShowRawJsonChanged = { showRawJson = it },
+                  onFontScaleChanged = { fontScale = it },
+                  onClose = {
+                    showInspectUIDialog = false
+                    currentInspectorLog = null
+                  }
+                )
+              } else {
+                Text(
+                  text = "No view hierarchy data available for this log",
+                  modifier = Modifier.padding(16.dp),
+                  style = MaterialTheme.typography.bodyLarge,
+                )
               }
             }
-
-            if (viewHierarchy != null) {
-              InspectViewHierarchyScreenComposable(
-                sessionId = sessionName,
-                viewHierarchy = viewHierarchy,
-                imageUrl = imageUrl,
-                deviceWidth = deviceWidth,
-                deviceHeight = deviceHeight,
-                showRawJson = showRawJson,
-                fontScale = fontScale,
-                onShowRawJsonChanged = { showRawJson = it },
-                onFontScaleChanged = { fontScale = it },
-                onClose = {
-                  showInspectUIDialog = false
-                  currentInspectorLog = null
-                }
+          }
+        } else {
+          // Show loading overlay while image is being resolved
+          Box(
+            modifier = Modifier
+              .fillMaxSize()
+              .background(androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.5f)),
+            contentAlignment = Alignment.Center
+          ) {
+            Card(
+              colors = androidx.compose.material3.CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surface
               )
-            } else {
-              Text(
-                text = "No view hierarchy data available for this log",
-                modifier = Modifier.padding(16.dp),
-                style = MaterialTheme.typography.bodyLarge,
-              )
+            ) {
+              Column(
+                modifier = Modifier.padding(32.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+              ) {
+                Text(
+                  text = "Loading UI Inspector...",
+                  style = MaterialTheme.typography.headlineSmall
+                )
+              }
             }
           }
         }
@@ -363,8 +504,50 @@ fun WasmSessionDetailView(
       }
     }
   } else if (isLoading) {
-    // Optionally, show a loading indicator while sessionInfo is being determined
+    // Show a loading indicator while data is being loaded
+    Box(
+      modifier = Modifier.fillMaxSize(),
+      contentAlignment = Alignment.Center
+    ) {
+      Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+      ) {
+        Text(
+          text = "Loading session...",
+          style = MaterialTheme.typography.headlineSmall,
+          modifier = Modifier.padding(16.dp)
+        )
+      }
+    }
   } else {
     // Handle case where sessionInfo could not be determined (e.g. no logs)
+    Box(
+      modifier = Modifier.fillMaxSize(),
+      contentAlignment = Alignment.Center
+    ) {
+      Column(
+        horizontalAlignment = Alignment.CenterHorizontally
+      ) {
+        Text(
+          text = "Failed to load session",
+          style = MaterialTheme.typography.headlineSmall
+        )
+        if (errorMessage != null) {
+          Text(
+            text = errorMessage!!,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.error,
+            modifier = Modifier.padding(top = 8.dp)
+          )
+        }
+        Button(
+          onClick = onBackClick,
+          modifier = Modifier.padding(top = 16.dp)
+        ) {
+          Text("Go Back")
+        }
+      }
+    }
   }
 }

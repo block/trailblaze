@@ -14,8 +14,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
@@ -62,6 +64,7 @@ fun LogListRow(
   showChatHistory: (() -> Unit)? = null,
   cardSize: androidx.compose.ui.unit.Dp? = null,
   onShowScreenshotModal: (imageModel: Any?, deviceWidth: Int, deviceHeight: Int, clickX: Int?, clickY: Int?, action: xyz.block.trailblaze.api.MaestroDriverActionType?) -> Unit = { _, _, _, _, _, _ -> },
+  onOpenInFinder: (() -> Unit)? = null,
 ) {
   val elapsedTimeMs = log.timestamp.toEpochMilliseconds() - sessionStartTime.toEpochMilliseconds()
 
@@ -210,6 +213,15 @@ fun LogListRow(
               Icon(
                 imageVector = Icons.Filled.Search,
                 contentDescription = "Inspect UI",
+                modifier = Modifier.size(18.dp)
+              )
+            }
+          }
+          if (onOpenInFinder != null) {
+            IconButton(onClick = { onOpenInFinder.invoke() }) {
+              Icon(
+                imageVector = Icons.Filled.Folder,
+                contentDescription = "Open in Finder",
                 modifier = Modifier.size(18.dp)
               )
             }
@@ -555,6 +567,21 @@ fun LogListRow(
                       tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                     )
                   }
+
+                  // Open in Finder button comes last (rightmost)
+                  if (onOpenInFinder != null) {
+                    IconButton(
+                      onClick = { onOpenInFinder.invoke() },
+                      modifier = Modifier.size(24.dp)
+                    ) {
+                      Icon(
+                        imageVector = Icons.Filled.Folder,
+                        contentDescription = "Open in Finder",
+                        modifier = Modifier.size(16.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                      )
+                    }
+                  }
                 }
               }
             }
@@ -588,6 +615,11 @@ private fun getSessionStatusIconAndColor(status: SessionStatus): Triple<ImageVec
       second = Color(0xFFFF7F00),
       third = "Timed Out",
     )
+    is SessionStatus.Ended.MaxCallsLimitReached -> Triple(
+      first = Icons.Filled.Block,
+      second = Color(0xFFDC3545),
+      third = "Max LLM Calls Limit",
+    )
   }
 }
 
@@ -601,5 +633,6 @@ private fun getSessionStatusLabel(status: SessionStatus): String {
     is SessionStatus.Ended.FailedWithFallback -> "Session Failed (with AI Fallback)"
     is SessionStatus.Unknown -> "Unknown Status"
     is SessionStatus.Ended.TimeoutReached -> "Timeout Reached"
+    is SessionStatus.Ended.MaxCallsLimitReached -> "Max LLM Calls Limit Reached"
   }
 }

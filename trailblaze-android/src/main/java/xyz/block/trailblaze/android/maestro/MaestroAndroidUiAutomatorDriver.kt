@@ -36,7 +36,8 @@ import java.io.File
 /**
  * This is Trailblaze's Maestro on-device driver implementation for Android using UiAutomator.
  */
-internal class MaestroAndroidUiAutomatorDriver : Driver {
+object MaestroAndroidUiAutomatorDriver : Driver {
+  var fastTyping: Boolean = true
 
   override fun addMedia(mediaFiles: List<File>) {
     error("Unsupported Maestro Driver Call to ${this::class.simpleName}::addMedia $mediaFiles")
@@ -95,9 +96,13 @@ internal class MaestroAndroidUiAutomatorDriver : Driver {
   }
 
   override fun inputText(text: String) {
-    InstrumentationUtil.inputTextFast(text)
-    if (isKeyboardVisible()) {
-      hideKeyboard()
+    if (fastTyping) {
+      InstrumentationUtil.inputTextFast(text)
+      if (isKeyboardVisible()) {
+        hideKeyboard()
+      }
+    } else {
+      InstrumentationUtil.inputTextByTyping(text)
     }
   }
 

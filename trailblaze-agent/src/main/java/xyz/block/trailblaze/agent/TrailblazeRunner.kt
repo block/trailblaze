@@ -6,7 +6,7 @@ import ai.koog.prompt.params.LLMParams
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
-import xyz.block.trailblaze.agent.model.AgentTaskStatus.Failure.MaxCallsLimitReached
+import xyz.block.trailblaze.agent.model.AgentTaskStatus.Success.ObjectiveComplete
 import xyz.block.trailblaze.agent.model.AgentTaskStatusData
 import xyz.block.trailblaze.agent.model.PromptRecordingResult
 import xyz.block.trailblaze.agent.model.PromptStepStatus
@@ -14,6 +14,8 @@ import xyz.block.trailblaze.agent.util.toLlmResponseHistory
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TestAgentRunner
 import xyz.block.trailblaze.api.TrailblazeAgent
+import xyz.block.trailblaze.exception.MaxCallsLimitReachedException
+import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.exception.TrailblazeSessionCancelledException
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.logs.client.TrailblazeLog
@@ -125,7 +127,24 @@ class TrailblazeRunner(
       )
 
       if (stepStatus.currentStep >= maxSteps) {
-        return MaxCallsLimitReached(stepStatus.toAgentTaskStatus())
+        // Mark in session manager that max calls limit was reached
+        sessionManager.markMaxCallsLimitReached(
+          maxCalls = maxSteps,
+          objectivePrompt = stepStatus.promptStep.prompt,
+        )
+        // Create exception for logging and throwing
+        val exception = MaxCallsLimitReachedException(
+          maxCalls = maxSteps,
+          objectivePrompt = stepStatus.promptStep.prompt,
+        )
+        // Send end log immediately since this is a terminal condition
+        trailblazeLogger.sendSessionEndLog(
+          sessionManager = sessionManager,
+          isSuccess = false,
+          exception = exception,
+        )
+        // Throw terminal exception to halt execution
+        throw exception
       }
     } while (!stepStatus.isFinished())
 
@@ -151,6 +170,33 @@ class TrailblazeRunner(
       screenStateProvider = screenStateProvider,
     )
     return run(promptStep, reconstructedStepStatus)
+  }
+
+  /**
+   * Runs a prompt step with AI and handles the result by throwing appropriate exceptions.
+   * This centralizes the logic for converting AgentTaskStatus to exceptions.
+   *
+   * Note: MaxCallsLimitReachedException is thrown directly in the run() method when the limit is reached,
+   * so it will never be returned as a status from this method.
+   *
+   * @param prompt The prompt step to run
+   * @param recordingResult If provided, will attempt recovery from a failed recording; otherwise runs normally
+   * @throws TrailblazeException if the prompt fails
+   */
+  fun runAndHandleStatus(
+    prompt: PromptStep,
+    recordingResult: PromptRecordingResult.Failure? = null,
+  ) {
+    val status = if (recordingResult != null) {
+      recover(prompt, recordingResult)
+    } else {
+      run(prompt)
+    }
+
+    when (status) {
+      is ObjectiveComplete -> return
+      else -> throw TrailblazeException("Failed to successfully run prompt with AI $prompt")
+    }
   }
 
   private fun logObjectiveStart(prompt: PromptStep) {

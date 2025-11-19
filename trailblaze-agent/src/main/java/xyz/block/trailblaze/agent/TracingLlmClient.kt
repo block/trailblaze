@@ -66,4 +66,8 @@ class TracingLlmClient(private val delegate: LLMClient) : LLMClient {
       model = model,
     )
   }
+
+  override fun close() = traceLlmClient("close") {
+    delegate.close()
+  }
 }

@@ -35,6 +35,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -73,9 +74,11 @@ import xyz.block.trailblaze.ui.models.TrailblazeServerState
 fun InspectViewHierarchyScreenComposable(
   sessionId: String,
   viewHierarchy: ViewHierarchyTreeNode,
+  viewHierarchyFiltered: ViewHierarchyTreeNode? = null,
   imageUrl: String?,
   deviceWidth: Int,
   deviceHeight: Int,
+  imageLoader: ImageLoader,
   // Column widths and font scale with persistence
   initialScreenshotWidth: Int = TrailblazeServerState.DEFAULT_UI_INSPECTOR_SCREENSHOT_WIDTH,
   initialDetailsWidth: Int = TrailblazeServerState.DEFAULT_UI_INSPECTOR_DETAILS_WIDTH,
@@ -91,13 +94,34 @@ fun InspectViewHierarchyScreenComposable(
 ) {
   var selectedNode by remember { mutableStateOf<ViewHierarchyTreeNode?>(null) }
   var hoveredNode by remember { mutableStateOf<ViewHierarchyTreeNode?>(null) }
+  var showFilteredHierarchy by remember { mutableStateOf(false) }
+
+  // Calculate counts once - use unique node IDs to avoid counting duplicates
+  val viewHierarchyCount = remember(viewHierarchy) {
+    viewHierarchy.aggregate().size
+  }
+  val viewHierarchyFilteredCount = remember(viewHierarchyFiltered) {
+    viewHierarchyFiltered?.aggregate()?.size
+  }
+
+  // Use filtered hierarchy if toggled on and available, otherwise use unfiltered
+  val activeHierarchy = if (showFilteredHierarchy && viewHierarchyFiltered != null) {
+    viewHierarchyFiltered
+  } else {
+    viewHierarchy
+  }
+
+  // Reset selected and hovered nodes when switching hierarchies
+  LaunchedEffect(activeHierarchy) {
+    selectedNode = null
+    hoveredNode = null
+  }
 
   // Column widths in dp
   var screenshotWidth by remember { mutableStateOf(initialScreenshotWidth.dp) }
   var detailsWidth by remember { mutableStateOf(initialDetailsWidth.dp) }
   var hierarchyWidth by remember { mutableStateOf(initialHierarchyWidth.dp) }
 
-  val imageLoader = remember { createLogsFileSystemImageLoader() }
   val density = LocalDensity.current
 
   Column(modifier = Modifier.fillMaxSize()) {
@@ -119,6 +143,28 @@ fun InspectViewHierarchyScreenComposable(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically
       ) {
+        // Filter toggle button (only show if filtered hierarchy is available)
+        if (viewHierarchyFiltered != null) {
+          Button(
+            onClick = { showFilteredHierarchy = !showFilteredHierarchy },
+            colors = ButtonDefaults.buttonColors(
+              containerColor = if (showFilteredHierarchy) {
+                MaterialTheme.colorScheme.secondary
+              } else {
+                MaterialTheme.colorScheme.tertiary
+              }
+            )
+          ) {
+            Text(
+              text = if (showFilteredHierarchy) {
+                "Filtered ($viewHierarchyFilteredCount nodes)"
+              } else {
+                "Unfiltered ($viewHierarchyCount nodes)"
+              }
+            )
+          }
+        }
+
         // Font size controls
         Row(
           verticalAlignment = Alignment.CenterVertically,
@@ -193,7 +239,7 @@ fun InspectViewHierarchyScreenComposable(
               ViewHierarchyInspector(
                 sessionId = sessionId,
                 screenshotFile = imageUrl,
-                viewHierarchy = viewHierarchy,
+                viewHierarchy = activeHierarchy,
                 deviceWidth = deviceWidth,
                 deviceHeight = deviceHeight,
                 selectedNode = selectedNode,
@@ -293,12 +339,12 @@ fun InspectViewHierarchyScreenComposable(
                 ),
                 fontWeight = FontWeight.Bold
               )
-              
+
               // Copy button
               val clipboardManager = LocalClipboardManager.current
               Button(
                 onClick = {
-                  val jsonString = Json { prettyPrint = true }.encodeToString(viewHierarchy)
+                  val jsonString = Json { prettyPrint = true }.encodeToString(activeHierarchy)
                   clipboardManager.setText(AnnotatedString(jsonString))
                 }
               ) {
@@ -310,13 +356,13 @@ fun InspectViewHierarchyScreenComposable(
 
             if (showRawJson) {
               RawJsonPanel(
-                viewHierarchy = viewHierarchy,
+                viewHierarchy = activeHierarchy,
                 fontScale = fontScale,
                 modifier = Modifier.weight(1f).fillMaxWidth()
               )
             } else {
               ViewHierarchyTreePanel(
-                viewHierarchy = viewHierarchy,
+                viewHierarchy = activeHierarchy,
                 selectedNode = selectedNode,
                 onNodeSelected = { selectedNode = it },
                 fontScale = fontScale,
@@ -346,6 +392,37 @@ fun InspectViewHierarchyScreenComposable(
       )
     }
   }
+
+  // Debug: Print node counts and check for duplicates
+  LaunchedEffect(viewHierarchy, viewHierarchyFiltered) {
+    println("=== View Hierarchy Debug ===")
+    println("Main hierarchy node count: $viewHierarchyCount")
+    println("Alt hierarchy node count: $viewHierarchyFilteredCount")
+
+    // Check for duplicate node IDs in each hierarchy
+    val mainNodes = viewHierarchy.aggregate()
+    val mainNodeIds = mainNodes.map { it.nodeId }
+    val mainDuplicates = mainNodeIds.groupingBy { it }.eachCount().filter { it.value > 1 }
+    if (mainDuplicates.isNotEmpty()) {
+      println("WARNING: Main hierarchy has duplicate node IDs: $mainDuplicates")
+    }
+
+    viewHierarchyFiltered?.let { filtered ->
+      val filteredNodes = filtered.aggregate()
+      val filteredNodeIds = filteredNodes.map { it.nodeId }
+      val filteredDuplicates = filteredNodeIds.groupingBy { it }.eachCount().filter { it.value > 1 }
+      if (filteredDuplicates.isNotEmpty()) {
+        println("WARNING: Alt hierarchy has duplicate node IDs: $filteredDuplicates")
+      }
+
+      // Show unique node count
+      val uniqueCount = filteredNodeIds.toSet().size
+      println(
+        "Alt hierarchy unique node count: $uniqueCount (total including duplicates: ${filteredNodeIds.size})"
+      )
+    }
+    println("===========================")
+  }
 }
 
 @OptIn(ExperimentalComposeUiApi::class)
@@ -364,7 +441,10 @@ private fun ViewHierarchyInspector(
 ) {
   val density = LocalDensity.current
   val allNodes = remember(viewHierarchy) { viewHierarchy.aggregate() }
-  val imageModel = remember(sessionId, screenshotFile) {
+
+  // Get the image model directly from imageLoader (pre-loaded for WASM, direct for JVM)
+  // This is cached and won't change, preventing flickering
+  val imageModel = remember(sessionId, screenshotFile, imageLoader) {
     imageLoader.getImageModel(sessionId, screenshotFile)
   }
 
@@ -459,6 +539,11 @@ private fun DrawScope.drawNodeOverlay(
   isHovered: Boolean,
   node: ViewHierarchyTreeNode,
 ) {
+  // Only draw overlay if the node is selected or hovered
+  if (!isSelected && !isHovered) {
+    return
+  }
+
   val left = bounds.x1 * scaleX
   val top = bounds.y1 * scaleY
   val right = bounds.x2 * scaleX
@@ -468,7 +553,7 @@ private fun DrawScope.drawNodeOverlay(
   val strokeColor = when {
     isSelected -> Color(0xFF2196F3)  // Blue for selected
     isHovered -> Color(0xFF4CAF50)   // Green for hovered
-    else -> Color(0xFF9E9E9E)        // Gray for normal
+    else -> Color(0xFF9E9E9E)        // Gray for normal (fallback, shouldn't reach here)
   }
 
   val strokeWidth = when {

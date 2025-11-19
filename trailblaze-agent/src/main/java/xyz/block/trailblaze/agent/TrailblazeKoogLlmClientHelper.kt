@@ -6,19 +6,19 @@ import ai.koog.agents.core.tools.ToolResult
 import ai.koog.prompt.dsl.Prompt
 import ai.koog.prompt.executor.clients.LLMClient
 import ai.koog.prompt.llm.LLMCapability
-import ai.koog.prompt.message.Attachment
 import ai.koog.prompt.message.AttachmentContent
+import ai.koog.prompt.message.ContentPart
 import ai.koog.prompt.message.Message
 import ai.koog.prompt.message.RequestMetaInfo
 import ai.koog.prompt.params.LLMParams
 import kotlinx.coroutines.delay
 import kotlinx.datetime.Clock
-import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import xyz.block.trailblaze.MaestroTrailblazeAgent
 import xyz.block.trailblaze.agent.model.PromptStepStatus
+import xyz.block.trailblaze.api.ImageFormatDetector
 import xyz.block.trailblaze.api.TrailblazeAgent
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
@@ -300,13 +300,17 @@ class TrailblazeKoogLlmClientHelper(
     )
     add(
       Message.User(
-        content = TemplatingUtil.renderTemplate(
-          template = userMessageTemplate,
-          values = mapOf(
-            "view_hierarchy" to viewHierarchyJson,
-          ),
-        ),
-        attachments = buildList {
+        parts = buildList {
+          add(
+            ContentPart.Text(
+              text = TemplatingUtil.renderTemplate(
+                template = userMessageTemplate,
+                values = mapOf(
+                  "view_hierarchy" to viewHierarchyJson,
+                ),
+              ),
+            ),
+          )
           val screenshotBytes = stepStatus.currentScreenState.screenshotBytes
           if (screenshotBytes != null &&
             screenshotBytes.isNotEmpty() &&
@@ -315,9 +319,9 @@ class TrailblazeKoogLlmClientHelper(
             )
           ) {
             add(
-              Attachment.Image(
-                AttachmentContent.Binary.Bytes(screenshotBytes),
-                format = "png",
+              ContentPart.Image(
+                content = AttachmentContent.Binary.Bytes(screenshotBytes),
+                format = ImageFormatDetector.detectFormat(screenshotBytes).fileExtension,
               ),
             )
           }

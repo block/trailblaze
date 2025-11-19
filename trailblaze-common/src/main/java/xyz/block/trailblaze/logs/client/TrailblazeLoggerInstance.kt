@@ -1,10 +1,9 @@
 package xyz.block.trailblaze.logs.client
 
 import ai.koog.agents.core.tools.ToolDescriptor
-import ai.koog.prompt.message.Attachment
 import ai.koog.prompt.message.AttachmentContent
+import ai.koog.prompt.message.ContentPart
 import ai.koog.prompt.message.Message
-import ai.koog.prompt.message.Message.WithAttachments
 import kotlinx.datetime.Clock
 import kotlinx.datetime.Instant
 import kotlinx.serialization.json.JsonObject
@@ -16,6 +15,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeLog.TrailblazeLlmRequestLog.To
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.logs.model.TrailblazeLlmMessage
+import xyz.block.trailblaze.session.TrailblazeSessionManager
 import xyz.block.trailblaze.yaml.TrailConfig
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -136,6 +136,7 @@ abstract class TrailblazeLogger {
       TrailblazeLog.TrailblazeLlmRequestLog(
         agentTaskStatus = stepStatus.currentStatus.value,
         viewHierarchy = stepStatus.currentScreenState.viewHierarchyOriginal,
+        viewHierarchyFiltered = stepStatus.currentScreenState.viewHierarchy,
         instructions = stepStatus.promptStep.prompt,
         trailblazeLlmModel = trailblazeLlmModel,
         llmMessages = (koogLlmRequestMessages + response).toTrailblazeLlmMessages(),
@@ -257,13 +258,18 @@ abstract class TrailblazeLogger {
    * This method automatically determines whether to use fallback-aware statuses
    * based on the current fallback usage.
    */
-  fun sendEndLog(isSuccess: Boolean, exception: Throwable? = null) {
-    val durationMs = Clock.System.now().toEpochMilliseconds() - sessionStartTime.toEpochMilliseconds()
+  fun sendEndLog(
+    isSuccess: Boolean,
+    exception: Throwable? = null,
+  ) {
+    val durationMs =
+      Clock.System.now().toEpochMilliseconds() - sessionStartTime.toEpochMilliseconds()
 
     val endedStatus = when {
       isSuccess && sessionFallbackUsed -> SessionStatus.Ended.SucceededWithFallback(
         durationMs = durationMs,
       )
+
       !isSuccess && sessionFallbackUsed -> SessionStatus.Ended.FailedWithFallback(
         durationMs = durationMs,
         exceptionMessage = buildString {
@@ -271,6 +277,7 @@ abstract class TrailblazeLogger {
           appendLine(exception?.stackTraceToString())
         },
       )
+
       isSuccess -> SessionStatus.Ended.Succeeded(
         durationMs = durationMs,
       )
@@ -284,6 +291,38 @@ abstract class TrailblazeLogger {
       )
     }
     sendEndLog(endedStatus)
+  }
+
+  /**
+   * Sends the appropriate session end log based on the session manager state.
+   * This is the single consolidated method that checks if max calls limit was reached
+   * and sends the appropriate log. Use this method to avoid duplicating if-else logic.
+   *
+   * @param sessionManager The session manager to check for max calls limit status
+   * @param isSuccess Whether the session completed successfully
+   * @param exception Optional exception if the session failed
+   */
+  fun sendSessionEndLog(
+    sessionManager: TrailblazeSessionManager,
+    isSuccess: Boolean,
+    exception: Throwable? = null,
+  ) {
+    val maxCallsLimitInfo = sessionManager.getMaxCallsLimitInfo()
+    if (maxCallsLimitInfo != null) {
+      // Max calls limit was reached - send specific log
+      val durationMs =
+        Clock.System.now().toEpochMilliseconds() - sessionStartTime.toEpochMilliseconds()
+      sendEndLog(
+        SessionStatus.Ended.MaxCallsLimitReached(
+          durationMs = durationMs,
+          maxCalls = maxCallsLimitInfo.maxCalls,
+          objectivePrompt = maxCallsLimitInfo.objectivePrompt,
+        ),
+      )
+    } else {
+      // Normal success/failure - use standard end log
+      sendEndLog(isSuccess, exception)
+    }
   }
 
   /**
@@ -309,16 +348,17 @@ abstract class TrailblazeLogger {
           role = messageFromHistory.role.name.lowercase(),
           message = buildString {
             appendLine(messageFromHistory.content)
-            if (messageFromHistory is WithAttachments) {
+            if (messageFromHistory.hasAttachments()) {
               appendLine("")
-              if (messageFromHistory.attachments.isNotEmpty()) {
+              val attachments = messageFromHistory.parts.filterIsInstance<ContentPart.Attachment>()
+              if (attachments.isNotEmpty()) {
                 appendLine("Attachments:")
-                messageFromHistory.attachments.forEach { attachment ->
+                attachments.forEach { attachment ->
                   val attachmentType = when (attachment) {
-                    is Attachment.Audio -> "Audio"
-                    is Attachment.File -> "File"
-                    is Attachment.Image -> "Image"
-                    is Attachment.Video -> "Video"
+                    is ContentPart.Audio -> "Audio"
+                    is ContentPart.File -> "File"
+                    is ContentPart.Image -> "Image"
+                    is ContentPart.Video -> "Video"
                   }
 
                   val attachmentContentKind = when (val attachmentContent = attachment.content) {

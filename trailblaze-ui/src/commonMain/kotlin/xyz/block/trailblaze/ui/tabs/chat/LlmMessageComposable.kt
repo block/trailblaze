@@ -69,7 +69,7 @@ fun LlmMessageComposable(message: TrailblazeLlmMessage) {
 
   // Clean up message content
   val cleanedMessage = message.message
-    ?.replace("data:image/png;base64,[A-Za-z0-9+/=]+".toRegex(), "[🖼️ Screenshot attached]")
+      ?.replace("data:image/(png|jpeg);base64,[A-Za-z0-9+/=]+".toRegex(), "[🖼️ Screenshot attached]")
     ?: ""
 
   // ChatGPT-style layout: User messages on the right, others on the left

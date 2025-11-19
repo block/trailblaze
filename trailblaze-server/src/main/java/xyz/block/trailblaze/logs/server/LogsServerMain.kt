@@ -26,7 +26,6 @@ fun main(args: Array<String>) {
   println("NOTE: Gradle will continue to say 'EXECUTING' until you stop the server.")
   TrailblazeMcpServer(
     logsRepo = logsRepo,
-    isOnDeviceMode = { true },
     targetTestAppProvider = { TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget },
   ).startSseMcpServer(
     port = port,

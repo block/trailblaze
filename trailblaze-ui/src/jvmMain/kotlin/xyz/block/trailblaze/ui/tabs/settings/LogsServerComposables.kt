@@ -159,32 +159,6 @@ object LogsServerComposables {
 
                       Spacer(modifier = Modifier.height(8.dp))
 
-                      if (serverState.appConfig.availableFeatures.hostMode) {
-                        Row(
-                          modifier = Modifier.fillMaxWidth(),
-                          horizontalArrangement = Arrangement.SpaceBetween,
-                          verticalAlignment = Alignment.CenterVertically
-                        ) {
-                          Column(modifier = Modifier.weight(1f)) {
-                            SelectableText("Host Mode", style = MaterialTheme.typography.bodyMedium)
-                            SelectableText(
-                              "Enable iOS support",
-                              style = MaterialTheme.typography.bodySmall,
-                              color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                          }
-                          Switch(
-                            checked = serverState.appConfig.hostModeEnabled,
-                            onCheckedChange = { checkedValue ->
-                              trailblazeSettingsRepo.updateAppConfig {
-                                it.copy(hostModeEnabled = checkedValue)
-                              }
-                            },
-                          )
-                        }
-                        Spacer(modifier = Modifier.height(8.dp))
-                      }
-
                       Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -434,56 +408,6 @@ object LogsServerComposables {
                         Button(onClick = openDesktopAppPreferencesFile) {
                           Text("Open Desktop App Preferences File")
                         }
-                      }
-                    }
-                  }
-                }
-
-                // Experimental Features
-                item {
-                  OutlinedCard(modifier = Modifier.fillMaxWidth()) {
-                    Column(
-                      modifier = Modifier.padding(20.dp),
-                      verticalArrangement = Arrangement.spacedBy(16.dp)
-                    ) {
-                      SelectableText(
-                        "Experimental Features", style = MaterialTheme.typography.titleMedium
-                      )
-                      SelectableText(
-                        "⚠️  These features are experimental and may change or be removed in future versions.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                      )
-
-                      Spacer(modifier = Modifier.height(8.dp))
-
-                      Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                      ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                          SelectableText(
-                            "Export to Repo", style = MaterialTheme.typography.bodyMedium
-                          )
-                          SelectableText(
-                            "Enable exporting session recordings to repository",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                          )
-                        }
-                        Switch(
-                          checked = serverState.appConfig.experimentalFeatures.exportToRepoEnabled,
-                          onCheckedChange = { checkedValue ->
-                            trailblazeSettingsRepo.updateAppConfig { currAppConfig: TrailblazeServerState.SavedTrailblazeAppConfig ->
-                              currAppConfig.copy(
-                                experimentalFeatures = currAppConfig.experimentalFeatures.copy(
-                                  exportToRepoEnabled = checkedValue
-                                )
-                              )
-                            }
-                          },
-                        )
                       }
                     }
                   }

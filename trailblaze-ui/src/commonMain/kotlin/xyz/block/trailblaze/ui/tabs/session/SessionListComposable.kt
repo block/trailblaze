@@ -100,7 +100,8 @@ fun SessionListComposable(
   // Collect all unique values for filters
   val allPriorities = sessions.mapNotNull { it.trailConfig?.priority }.distinct().sorted()
   val allStatuses =
-    listOf("In Progress", "Succeeded", "Succeeded (Fallback)", "Failed", "Failed (Fallback)", "Timeout")
+    listOf("In Progress", "Succeeded", "Succeeded (Fallback)", "Failed", "Failed (Fallback)", "Timeout",
+      "Max Calls Limit")
   val allPlatforms =
     sessions.mapNotNull { it.trailblazeDeviceInfo?.platform?.name }.distinct().sorted()
   val allClassifiers =
@@ -122,6 +123,7 @@ fun SessionListComposable(
         is SessionStatus.Ended.Failed -> "Failed" in selectedStatuses
         is SessionStatus.Ended.FailedWithFallback -> "Failed (Fallback)" in selectedStatuses
         is SessionStatus.Ended.TimeoutReached -> "Timeout" in selectedStatuses
+        is SessionStatus.Ended.MaxCallsLimitReached -> "Max Calls Limit" in selectedStatuses
         is SessionStatus.Ended.Cancelled -> false // Cancelled not in filter options
         SessionStatus.Unknown -> false
       }

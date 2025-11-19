@@ -17,8 +17,6 @@ import xyz.block.trailblaze.logs.model.SessionStatus.Ended
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.util.AndroidHostAdbUtils
 import xyz.block.trailblaze.util.HostAndroidDeviceConnectUtils
-import xyz.block.trailblaze.yaml.TrailConfig
-import xyz.block.trailblaze.yaml.TrailblazeYaml
 
 object TrailblazeHostYamlRunner {
   // Store jobs per device instance ID to support multiple concurrent device tests
@@ -137,20 +135,6 @@ object TrailblazeHostYamlRunner {
       // Start session via device manager (handles session manager + state updates)
       deviceManager.startSession(deviceId, trailblazeLogger.getCurrentSessionId())
 
-      // Extract TrailConfig from yaml
-      val trailConfig: TrailConfig? = try {
-        TrailblazeYaml().extractTrailConfig(runYamlRequest.yaml)
-      } catch (e: Exception) {
-        null
-      }
-
-      trailblazeLogger.sendStartLog(
-        trailConfig = trailConfig,
-        className = testName,
-        methodName = testName,
-        trailblazeDeviceInfo = hostTbRunner.trailblazeDeviceInfo,
-      )
-
       onProgressMessage("Connecting to ${device.platform} device...")
 
       try {
@@ -160,9 +144,7 @@ object TrailblazeHostYamlRunner {
           forceStopApp = runOnHostParams.forceStopTargetApp,
         )
         onProgressMessage("Test execution completed successfully")
-        trailblazeLogger.sendEndLog(
-          isSuccess = true,
-        )
+        trailblazeLogger.sendSessionEndLog(sessionManager, isSuccess = true)
       } catch (e: TrailblazeSessionCancelledException) {
         // Handle Trailblaze session cancellation - user cancelled via UI
         onProgressMessage("Test session cancelled")
@@ -186,10 +168,7 @@ object TrailblazeHostYamlRunner {
         throw e
       } catch (e: Exception) {
         onProgressMessage("Test execution failed: ${e.message}")
-        trailblazeLogger.sendEndLog(
-          isSuccess = false,
-          exception = e,
-        )
+        trailblazeLogger.sendSessionEndLog(sessionManager, isSuccess = false, exception = e)
       } finally {
         // End session via device manager (handles session manager + state updates)
         deviceManager.endSession(deviceId)

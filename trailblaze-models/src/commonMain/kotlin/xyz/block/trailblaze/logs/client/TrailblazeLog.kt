@@ -48,6 +48,7 @@ sealed interface TrailblazeLog {
   data class TrailblazeLlmRequestLog(
     override val agentTaskStatus: AgentTaskStatus,
     val viewHierarchy: ViewHierarchyTreeNode,
+    val viewHierarchyFiltered: ViewHierarchyTreeNode? = null,
     val instructions: String,
     val trailblazeLlmModel: TrailblazeLlmModel,
     val llmMessages: List<TrailblazeLlmMessage>,

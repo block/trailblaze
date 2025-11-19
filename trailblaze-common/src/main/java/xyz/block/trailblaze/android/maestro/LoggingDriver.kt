@@ -203,12 +203,42 @@ class LoggingDriver(
     delegate.stopApp(appId)
   }
 
-  override fun swipe(start: Point, end: Point, durationMs: Long) = traceMaestroDriver("swipe") {
+  override fun swipe(
+    start: Point,
+    end: Point,
+    durationMs: Long,
+  ) = logActionWithScreenshot(
+    MaestroDriverActionType.Swipe(
+      direction = inferSwipeDirection(start, end),
+      durationMs = durationMs,
+    ),
+  ) {
     delegate.swipe(
       start = start,
       end = end,
       durationMs = durationMs,
     )
+  }
+
+  /**
+   * Infers the primary swipe direction from start and end points.
+   * Used for logging when direction is not explicitly provided.
+   */
+  private fun inferSwipeDirection(
+    start: Point,
+    end: Point,
+  ): String {
+    val deltaX = end.x - start.x
+    val deltaY = end.y - start.y
+
+    // Determine primary direction based on which axis has larger movement
+    return if (kotlin.math.abs(deltaX) > kotlin.math.abs(deltaY)) {
+      // Horizontal swipe
+      if (deltaX > 0) "RIGHT" else "LEFT"
+    } else {
+      // Vertical swipe
+      if (deltaY > 0) "DOWN" else "UP"
+    }
   }
 
   override fun swipe(elementPoint: Point, direction: SwipeDirection, durationMs: Long) = logActionWithScreenshot(MaestroDriverActionType.Swipe(direction.name, durationMs)) {

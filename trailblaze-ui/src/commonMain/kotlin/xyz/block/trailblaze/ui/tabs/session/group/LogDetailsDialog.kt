@@ -13,6 +13,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.PlayArrow
@@ -240,6 +241,11 @@ private fun getSessionStatusIconAndColor(status: SessionStatus): Triple<ImageVec
       first = Icons.Filled.Timer,
       second = Color(0xFFFF7F00),
       third = "Timed Out",
+    )
+    is SessionStatus.Ended.MaxCallsLimitReached -> Triple(
+      first = Icons.Filled.Block,
+      second = Color(0xFFDC3545),
+      third = "Max LLM Calls Limit Reached",
     )
   }
 }

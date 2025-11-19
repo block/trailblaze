@@ -60,6 +60,43 @@ object TapSelectorV2 {
       ?: tryWithIndex(context)
   }
 
+  /**
+   * Finds a node using a selector and returns its center coordinates.
+   * This is the public API for using selectors to locate elements.
+   *
+   * @return Pair of (centerX, centerY) if the selector finds exactly one match, null otherwise
+   */
+  fun findNodeCenterUsingSelector(
+    root: ViewHierarchyTreeNode,
+    selector: TrailblazeElementSelector,
+    trailblazeDevicePlatform: TrailblazeDevicePlatform,
+    widthPixels: Int,
+    heightPixels: Int,
+  ): Pair<Int, Int>? {
+    val matches = ElementMatcherUsingMaestro.getMatchingElementsFromSelector(
+      rootTreeNode = root,
+      trailblazeElementSelector = selector,
+      trailblazeDevicePlatform = trailblazeDevicePlatform,
+      widthPixels = widthPixels,
+      heightPixels = heightPixels,
+    )
+
+    return when (matches) {
+      is ElementMatches.SingleMatch -> {
+        val bounds = matches.viewHierarchyTreeNode.bounds
+        if (bounds != null) {
+          val centerX = (bounds.x1 + bounds.x2) / 2
+          val centerY = (bounds.y1 + bounds.y2) / 2
+          Pair(centerX, centerY)
+        } else {
+          null
+        }
+      }
+
+      else -> null
+    }
+  }
+
   private data class SelectorSearchContext(
     val root: ViewHierarchyTreeNode,
     val target: ViewHierarchyTreeNode,

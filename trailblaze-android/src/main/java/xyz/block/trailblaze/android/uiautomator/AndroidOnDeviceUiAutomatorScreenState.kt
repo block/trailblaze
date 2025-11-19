@@ -9,6 +9,7 @@ import xyz.block.trailblaze.InstrumentationUtil.withUiAutomation
 import xyz.block.trailblaze.InstrumentationUtil.withUiDevice
 import xyz.block.trailblaze.android.MaestroUiAutomatorXmlParser
 import xyz.block.trailblaze.api.ScreenState
+import xyz.block.trailblaze.api.ScreenshotScalingConfig
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode.Companion.relabelWithFreshIds
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
@@ -25,8 +26,7 @@ import java.io.ByteArrayOutputStream
  */
 class AndroidOnDeviceUiAutomatorScreenState(
   filterViewHierarchy: Boolean = false,
-  maxDimension1: Int? = 1024,
-  maxDimension2: Int? = 512,
+  screenshotScalingConfig: ScreenshotScalingConfig = ScreenshotScalingConfig.DEFAULT,
   private val setOfMarkEnabled: Boolean = true,
   maxAttempts: Int = 1,
   includeScreenshot: Boolean = true,
@@ -68,7 +68,7 @@ class AndroidOnDeviceUiAutomatorScreenState(
       }
 
       val screenshot = if (includeScreenshot) {
-        getScreenshot(vh1Filtered, maxDimension1, maxDimension2)
+        getScreenshot(vh1Filtered, screenshotScalingConfig)
       } else {
         null
       }
@@ -188,18 +188,17 @@ class AndroidOnDeviceUiAutomatorScreenState(
 
   private fun getScreenshot(
     viewHierarchy: ViewHierarchyTreeNode?,
-    maxDimension1: Int?,
-    maxDimension2: Int?,
+    screenshotScalingConfig: ScreenshotScalingConfig?,
   ): ByteArray? {
     val screenshotBitmap = takeScreenshot(
       viewHierarchy = viewHierarchy,
       setOfMarkEnabled = setOfMarkEnabled,
     )
     if (screenshotBitmap != null) {
-      val scaledBitmap = if (maxDimension1 != null && maxDimension2 != null) {
+      val scaledBitmap = if (screenshotScalingConfig != null) {
         screenshotBitmap.scale(
-          maxDim1 = maxDimension1,
-          maxDim2 = maxDimension2,
+          maxDim1 = screenshotScalingConfig.maxDimension1,
+          maxDim2 = screenshotScalingConfig.maxDimension2,
         )
       } else {
         screenshotBitmap

@@ -207,19 +207,14 @@ jobs:
           
           echo "========================================="
 
-      - name: Upload logs zip
-        if: always()
+      - name: Upload artifacts
+        if: always()  # Ensures this runs even if the previous step failed
         uses: actions/upload-artifact@v4
         with:
-          name: trailblaze-logs
-          path: trailblaze-logs.zip
-
-      - name: Upload HTML report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: trailblaze-report
-          path: trailblaze_report.html
+          name: trailblaze-artifacts
+          path: |
+            trailblaze-logs.zip
+            trailblaze_report.html
 
       - name: Fail if tests failed
         if: steps.run-tests.outcome == 'failure'

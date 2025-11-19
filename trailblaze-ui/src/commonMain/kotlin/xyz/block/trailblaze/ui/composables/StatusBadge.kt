@@ -26,6 +26,11 @@ fun StatusBadge(
     else -> false
   }
 
+  fun SessionStatus.isMaxCallsLimitReached(): Boolean = when (this) {
+    is SessionStatus.Ended.MaxCallsLimitReached -> true
+    else -> false
+  }
+
   fun SessionStatus.isSuccess(): Boolean = when (this) {
     is SessionStatus.Started -> false
     is SessionStatus.Ended.Succeeded -> true
@@ -34,6 +39,7 @@ fun StatusBadge(
     is SessionStatus.Ended.FailedWithFallback -> false
     is SessionStatus.Ended.Cancelled -> false
     is SessionStatus.Ended.TimeoutReached -> false
+    is SessionStatus.Ended.MaxCallsLimitReached -> false
     SessionStatus.Unknown -> false
   }
 
@@ -48,6 +54,12 @@ fun StatusBadge(
       "Timeout",
       Color(0xFFFFE5CC), // Light orange background
       Color(0xFFCC5500)  // Dark orange text
+    )
+
+    status.isMaxCallsLimitReached() -> Triple(
+      "Max Calls Limit",
+      Color(0xFFF8D7DA), // Light red background
+      Color(0xFF721C24)  // Dark red text
     )
 
     status.isCancelled() -> Triple(

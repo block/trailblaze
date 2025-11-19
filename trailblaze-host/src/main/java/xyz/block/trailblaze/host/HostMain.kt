@@ -49,7 +49,6 @@ fun main(args: Array<String>) {
     if (!trailblazeLoggingRule.trailblazeLogServerClient.isServerRunning()) {
       TrailblazeMcpServer(
         logsRepo,
-        isOnDeviceMode = { false },
         targetTestAppProvider = { TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget },
       ).startSseMcpServer(52525, false)
       Thread.sleep(1000)

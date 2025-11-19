@@ -1,7 +1,6 @@
 package xyz.block.trailblaze.host
 
 import kotlinx.coroutines.runBlocking
-import kotlinx.datetime.Clock
 import maestro.Maestro
 import maestro.orchestra.Command
 import maestro.orchestra.MaestroCommand
@@ -17,12 +16,10 @@ import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.host.devices.TrailblazeConnectedDevice
 import xyz.block.trailblaze.host.devices.TrailblazeDeviceService
 import xyz.block.trailblaze.host.screenstate.HostMaestroDriverScreenState
-import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.model.TraceId
-import xyz.block.trailblaze.maestro.AssertionLogger
+import xyz.block.trailblaze.maestro.OrchestraRunner
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
-import xyz.block.trailblaze.utils.Ext.asJsonObject
 import java.io.File
 
 class MaestroHostRunnerImpl(
@@ -95,47 +92,28 @@ class MaestroHostRunnerImpl(
     commands: List<MaestroCommand>,
     traceId: TraceId?,
   ): TrailblazeToolResult {
-    // Create assertion logger for visualization
-    val assertionLogger = AssertionLogger(Maestro(loggingDriver), screenStateProvider, trailblazeLogger)
-
-    commands.forEach { maestroCommand ->
-      val startTime = Clock.System.now()
-      var result: TrailblazeToolResult = TrailblazeToolResult.Success
-
-      Orchestra(
+    // Use OrchestraRunner to execute commands with standardized callbacks
+    return runBlocking {
+      OrchestraRunner.runCommands(
         maestro = Maestro(loggingDriver),
-        onCommandStart = { index: Int, command: MaestroCommand ->
-          // Log assertion commands for visualization
-          assertionLogger.logAssertionCommand(command)
+        commands = commands,
+        traceId = traceId,
+        trailblazeLogger = trailblazeLogger,
+        screenStateProvider = screenStateProvider,
+        orchestraFactory = { callbacks ->
+          // Create Orchestra executor with standardized callbacks
+          object : OrchestraRunner.OrchestraExecutor {
+            override suspend fun execute(commands: List<MaestroCommand>): Boolean = Orchestra(
+              maestro = Maestro(loggingDriver),
+              onCommandComplete = callbacks.onCommandComplete,
+              onCommandFailed = { index, command, throwable ->
+                callbacks.onCommandFailed(index, command, throwable)
+                Orchestra.ErrorResolution.FAIL
+              },
+            ).runFlow(commands)
+          }
         },
-        onCommandFailed = { index: Int, maestroCommand: MaestroCommand, throwable: Throwable ->
-          val commandJson = maestroCommand.asJsonObject()
-          result = TrailblazeToolResult.Error.MaestroValidationError(
-            commandJsonObject = commandJson,
-            errorMessage = "Failed to run command: $commandJson.  Error: ${throwable.message}",
-          )
-          Orchestra.ErrorResolution.FAIL
-        },
-      ).also { orchestra ->
-        // TODO runBlocking
-        runBlocking { orchestra.runFlow(listOf(maestroCommand)) }
-      }
-
-      trailblazeLogger.log(
-        TrailblazeLog.MaestroCommandLog(
-          maestroCommandJsonObj = maestroCommand.asJsonObject(),
-          trailblazeToolResult = result,
-          timestamp = startTime,
-          durationMs = Clock.System.now().toEpochMilliseconds() - startTime.toEpochMilliseconds(),
-          traceId = traceId,
-          successful = result is TrailblazeToolResult.Success,
-          session = trailblazeLogger.getCurrentSessionId(),
-        ),
       )
-      if (result != TrailblazeToolResult.Success) {
-        return result
-      }
     }
-    return TrailblazeToolResult.Success
   }
 }

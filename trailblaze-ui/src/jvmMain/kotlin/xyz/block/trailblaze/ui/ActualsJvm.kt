@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.ui
 
+import androidx.compose.runtime.Composable
 import xyz.block.trailblaze.ui.images.ImageLoader
 import java.io.File
 
@@ -27,4 +28,10 @@ actual fun getCurrentUrl(): String? {
 
 actual fun getPlatform(): Platform {
   return Platform.JVM
+}
+
+@Composable
+actual fun resolveImageModel(sessionId: String, screenshotFile: String?, imageLoader: ImageLoader): Any? {
+  // On JVM, images are loaded via file URLs - no lazy loading needed
+  return imageLoader.getImageModel(sessionId, screenshotFile)
 }

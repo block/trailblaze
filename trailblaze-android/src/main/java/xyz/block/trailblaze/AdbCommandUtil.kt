@@ -189,6 +189,28 @@ object AdbCommandUtil {
   }
 
   /**
+   * Disable gesture navigation and enable 3-button navigation.
+   * This prevents swipe gestures from accidentally navigating back to the home screen.
+   *
+   * Navigation modes:
+   * - 0 = 3-button navigation (traditional)
+   * - 1 = 2-button navigation (deprecated)
+   * - 2 = Gesture navigation (fully gestural)
+   */
+  fun enableThreeButtonNavigation() {
+    execShellCommand("settings put secure navigation_mode 0")
+    execShellCommand("settings put global policy_control immersive.navigation=*")
+  }
+
+  /**
+   * Re-enable gesture navigation (default on modern Android versions).
+   */
+  fun enableGestureNavigation() {
+    execShellCommand("cmd overlay enable com.android.internal.systemui.navbar.gestural")
+    execShellCommand("settings put secure navigation_mode 2")
+  }
+
+  /**
    * Wait for app to not be in the foreground
    */
   fun waitUntilAppNotInForeground(

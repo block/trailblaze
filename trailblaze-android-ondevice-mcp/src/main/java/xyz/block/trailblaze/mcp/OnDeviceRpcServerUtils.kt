@@ -21,16 +21,13 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
-import xyz.block.trailblaze.android.AndroidTrailblazeDeviceInfoUtil
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifiersProvider
-import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeLoggerInstance
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.session.TrailblazeSessionManager
-import xyz.block.trailblaze.util.toPascalCaseIdentifier
 import xyz.block.trailblaze.util.toSnakeCaseIdentifier
 import xyz.block.trailblaze.util.toSnakeCaseWithId
 import xyz.block.trailblaze.yaml.TrailblazeYaml
@@ -101,21 +98,15 @@ class OnDeviceRpcServerUtils(
               }
             }
 
-            // Extract TrailConfig from yaml
+            // Extract config values for session naming
             val trailConfig = try {
               TrailblazeYaml().extractTrailConfig(runYamlRequest.yaml)
             } catch (e: Exception) {
               null
             }
 
-            // Extract config values
             val configTitle = trailConfig?.title
             val configId = trailConfig?.id
-
-            // Generate proper class and method names from config
-            val className = trailConfig?.metadata?.get("testClassName")
-              ?: trailConfig?.metadata?.get("testSectionName")?.let { toPascalCaseIdentifier(it) }
-              ?: toPascalCaseIdentifier(runYamlRequest.testName)
 
             val methodName = if (configTitle != null && configId != null) {
               toSnakeCaseWithId(configTitle, configId)
@@ -128,25 +119,14 @@ class OnDeviceRpcServerUtils(
 
             sessionManager.startSession(methodName)
 
-            trailblazeLogger.sendStartLog(
-              trailConfig = trailConfig,
-              className = className,
-              methodName = methodName,
-              trailblazeDeviceInfo = AndroidTrailblazeDeviceInfoUtil.collectCurrentDeviceInfo(
-                trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
-                trailblazeDeviceClassifiersProvider = trailblazeDeviceClassifiersProvider,
-              ),
-              rawYaml = runYamlRequest.yaml,
-            )
-
             // Launch the job in the background scope so it doesn't block the response
             currPromptJob = backgroundScope.launch {
               try {
                 runTrailblazeYaml(runYamlRequest)
-                trailblazeLogger.sendEndLog(true)
+                trailblazeLogger.sendSessionEndLog(sessionManager, isSuccess = true)
               } catch (e: Exception) {
                 e.printStackTrace()
-                trailblazeLogger.sendEndLog(false, e)
+                trailblazeLogger.sendSessionEndLog(sessionManager, isSuccess = false, exception = e)
               } finally {
                 sessionManager.endSession()
               }

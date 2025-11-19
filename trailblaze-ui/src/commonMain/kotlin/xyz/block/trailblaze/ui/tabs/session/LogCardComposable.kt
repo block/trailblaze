@@ -16,12 +16,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -64,6 +66,7 @@ fun LogCard(
   showChatHistory: (() -> Unit)? = null,
   cardSize: androidx.compose.ui.unit.Dp? = null,
   onShowScreenshotModal: (imageModel: Any?, deviceWidth: Int, deviceHeight: Int, clickX: Int?, clickY: Int?, action: MaestroDriverActionType?) -> Unit = { _, _, _, _, _, _ -> },
+  onOpenInFinder: (() -> Unit)? = null,
 ) {
 
   val elapsedTimeMs = log.timestamp.toEpochMilliseconds() - sessionStartTime.toEpochMilliseconds()
@@ -443,7 +446,7 @@ fun LogCard(
               }
             }
 
-            // Info icon always on the right
+            // Info icon
             IconButton(
               onClick = { showDetails?.invoke() },
               modifier = Modifier.size(24.dp)
@@ -457,6 +460,24 @@ fun LogCard(
                 else
                   MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
               )
+            }
+
+            // Open in Finder button comes last (rightmost)
+            if (onOpenInFinder != null) {
+              IconButton(
+                onClick = { onOpenInFinder.invoke() },
+                modifier = Modifier.size(24.dp)
+              ) {
+                Icon(
+                  imageVector = Icons.Filled.Folder,
+                  contentDescription = "Open in Finder",
+                  modifier = Modifier.size(16.dp),
+                  tint = if (isSystemInDarkTheme())
+                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
+                  else
+                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                )
+              }
             }
           }
         }
@@ -490,6 +511,11 @@ private fun getSessionStatusIconAndColor(status: SessionStatus): Triple<ImageVec
       first = Icons.Filled.Timer,
       second = Color(0xFFFF7F00),
       third = "Timed Out",
+    )
+    is SessionStatus.Ended.MaxCallsLimitReached -> Triple(
+      first = Icons.Filled.Block,
+      second = Color(0xFFDC3545),
+      third = "Max LLM Calls Limit Reached",
     )
   }
 }

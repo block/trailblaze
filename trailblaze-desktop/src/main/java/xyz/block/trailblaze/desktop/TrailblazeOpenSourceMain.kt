@@ -54,18 +54,11 @@ private val AVAILABLE_MODEL_LISTS = ALL_MODEL_LISTS.filter {
 fun main() {
   val targetTestApp: TrailblazeHostAppTarget = TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget
   val trailblazeSavedSettingsRepo = TrailblazeSettingsRepo(
-    initialConfig = TrailblazeServerState.SavedTrailblazeAppConfig(
-      availableFeatures = TrailblazeServerState.SavedTrailblazeAppConfig.AvailableFeatures(
-        hostMode = false,
-      ),
-    ),
+    initialConfig = TrailblazeServerState.SavedTrailblazeAppConfig(),
   )
   val server = TrailblazeMcpServer(
     logsRepo = logsRepo,
     targetTestAppProvider = { targetTestApp },
-    isOnDeviceMode = {
-      !trailblazeSavedSettingsRepo.serverStateFlow.value.appConfig.availableFeatures.hostMode
-    },
   )
 
   val deviceManager = TrailblazeDeviceManager(

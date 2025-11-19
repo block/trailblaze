@@ -73,8 +73,6 @@ fun LiveSessionDetailComposable(
   onZoomOffsetChanged: (Int) -> Unit = {},
   onFontScaleChanged: (Float) -> Unit = {},
   onViewModeChanged: (SessionViewMode) -> Unit = {},
-  onExportToRepo: (String) -> Unit = {},
-  exportFeatureEnabled: Boolean = false,
   // UI Inspector settings
   initialInspectorScreenshotWidth: Int = TrailblazeServerState.DEFAULT_UI_INSPECTOR_SCREENSHOT_WIDTH,
   initialInspectorDetailsWidth: Int = TrailblazeServerState.DEFAULT_UI_INSPECTOR_DETAILS_WIDTH,
@@ -84,6 +82,8 @@ fun LiveSessionDetailComposable(
   onInspectorDetailsWidthChanged: (Int) -> Unit = {},
   onInspectorHierarchyWidthChanged: (Int) -> Unit = {},
   onInspectorFontScaleChanged: (Float) -> Unit = {},
+  // Platform-specific: Open log file in Finder/Explorer
+  onOpenInFinder: ((TrailblazeLog) -> Unit)? = null,
 ) {
   // Modal state at the TOP level - this is the root
   var showDetailsDialog by remember { mutableStateOf(false) }
@@ -327,21 +327,12 @@ fun LiveSessionDetailComposable(
       onZoomOffsetChanged = onZoomOffsetChanged,
       onFontScaleChanged = onFontScaleChanged,
       onViewModeChanged = onViewModeChanged,
-      onExportToRepo = onExportToRepo,
-      exportFeatureEnabled = exportFeatureEnabled,
       onCancelSession = onCancelSession,
       onDeleteSession = onDeleteSession,
       isCancelling = isCancelling,
-      initialInspectorScreenshotWidth = initialInspectorScreenshotWidth,
-      initialInspectorDetailsWidth = initialInspectorDetailsWidth,
-      initialInspectorHierarchyWidth = initialInspectorHierarchyWidth,
-      initialInspectorFontScale = initialInspectorFontScale,
-      onInspectorScreenshotWidthChanged = onInspectorScreenshotWidthChanged,
-      onInspectorDetailsWidthChanged = onInspectorDetailsWidthChanged,
-      onInspectorHierarchyWidthChanged = onInspectorHierarchyWidthChanged,
-      onInspectorFontScaleChanged = onInspectorFontScaleChanged,
       onOpenLogsFolder = onOpenLogsFolder,
       onExportSession = onExportSession,
+      onOpenInFinder = onOpenInFinder,
     )
 
     // Modal dialogs as separate children with high zIndex
@@ -372,6 +363,7 @@ fun LiveSessionDetailComposable(
         val inspectorLog = currentInspectorLog
         if (inspectorLog != null) {
           var viewHierarchy: xyz.block.trailblaze.api.ViewHierarchyTreeNode? = null
+          var viewHierarchyFiltered: xyz.block.trailblaze.api.ViewHierarchyTreeNode? = null
           var imageUrl: String? = null
           var deviceWidth = 0
           var deviceHeight = 0
@@ -379,6 +371,7 @@ fun LiveSessionDetailComposable(
           when (inspectorLog) {
             is TrailblazeLog.TrailblazeLlmRequestLog -> {
               viewHierarchy = inspectorLog.viewHierarchy
+              viewHierarchyFiltered = inspectorLog.viewHierarchyFiltered
               imageUrl = inspectorLog.screenshotFile
               deviceWidth = inspectorLog.deviceWidth
               deviceHeight = inspectorLog.deviceHeight
@@ -398,12 +391,15 @@ fun LiveSessionDetailComposable(
           if (viewHierarchy != null) {
             var showRawJson by remember { mutableStateOf(false) }
             var fontScale by remember { mutableStateOf(initialInspectorFontScale) }
+
             InspectViewHierarchyScreenComposable(
               sessionId = session.sessionId,
               viewHierarchy = viewHierarchy,
+              viewHierarchyFiltered = viewHierarchyFiltered,
               imageUrl = imageUrl,
               deviceWidth = deviceWidth,
               deviceHeight = deviceHeight,
+              imageLoader = imageLoader,
               initialScreenshotWidth = initialInspectorScreenshotWidth,
               initialDetailsWidth = initialInspectorDetailsWidth,
               initialHierarchyWidth = initialInspectorHierarchyWidth,

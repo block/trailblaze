@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.PlayArrow
@@ -127,7 +128,7 @@ fun AgentTaskStatusDetailsFlat(log: TrailblazeLog.TrailblazeAgentTaskStatusChang
 fun SessionStatusDetailsFlat(log: TrailblazeLog.TrailblazeSessionStatusChangeLog) {
   val (icon, color, label) = getSessionStatusIconAndColor(log.sessionStatus)
 
-  // Extract failure and cancellation messages
+  // Extract failure, cancellation, and max calls messages
   val failureMessage = when (val status = log.sessionStatus) {
     is SessionStatus.Ended.Failed -> status.exceptionMessage
     is SessionStatus.Ended.FailedWithFallback -> status.exceptionMessage
@@ -136,6 +137,18 @@ fun SessionStatusDetailsFlat(log: TrailblazeLog.TrailblazeSessionStatusChangeLog
 
   val cancellationMessage = when (val status = log.sessionStatus) {
     is SessionStatus.Ended.Cancelled -> status.cancellationMessage
+    else -> null
+  }
+
+  val maxCallsMessage = when (val status = log.sessionStatus) {
+    is SessionStatus.Ended.MaxCallsLimitReached -> buildString {
+      appendLine(
+        "The agent reached the maximum number of LLM calls (${status.maxCalls}) allowed per objective."
+      )
+      appendLine()
+      appendLine("Objective prompt:")
+      appendLine(status.objectivePrompt)
+    }
     else -> null
   }
 
@@ -174,6 +187,13 @@ fun SessionStatusDetailsFlat(log: TrailblazeLog.TrailblazeSessionStatusChangeLog
       }
     }
 
+    // Show max calls limit information prominently if present
+    if (maxCallsMessage != null) {
+      DetailSection("Max LLM Calls Limit Reached") {
+        CodeBlock(maxCallsMessage)
+      }
+    }
+
     DetailSection("Session Status") {
       CodeBlock(log.sessionStatus.toString())
     }
@@ -208,6 +228,11 @@ private fun getSessionStatusIconAndColor(status: SessionStatus): Triple<ImageVec
       first = Icons.Filled.Timer,
       second = Color(0xFFFF7F00),
       third = "Timed Out",
+    )
+    is SessionStatus.Ended.MaxCallsLimitReached -> Triple(
+      first = Icons.Filled.Block,
+      second = Color(0xFFDC3545),
+      third = "Max LLM Calls Limit Reached",
     )
   }
 }

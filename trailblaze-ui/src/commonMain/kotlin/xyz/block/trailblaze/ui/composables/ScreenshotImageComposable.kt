@@ -3,10 +3,15 @@ package xyz.block.trailblaze.ui.composables
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -17,7 +22,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.key
@@ -54,54 +58,75 @@ fun ScreenshotAnnotation(
     val checkSize = 20.dp
     val backgroundSize = 28.dp
 
-    // For notVisible assertions, show the check mark in upper corner
-    if (!action.isVisible && action.textToDisplay != null) {
-      // Position check mark in upper corner
+    // Handle failed assertions
+    if (!action.succeeded) {
+      // Red border around the entire screen for failed assertions
       Box(
         modifier = Modifier
-          .size(backgroundSize)
-          .offset(
-            x = 8.dp, // Position near left edge
-            y = 8.dp  // Position at top
-          )
+          .fillMaxSize()
           .border(
-            2.dp, Color.Green.copy(alpha = 0.6f), shape = CircleShape
-          ) // Translucent border only
-      ) {
-        // Transparent checkmark icon
-        Icon(
-          imageVector = Icons.Filled.Check,
-          contentDescription = "Assertion Success",
-          modifier = Modifier
-            .size(checkSize)
-            .align(Alignment.Center),
-          tint = Color.Green.copy(alpha = 0.7f) // Translucent check mark
-        )
-      }
+            4.dp, Color.Red.copy(alpha = 0.7f), shape = RoundedCornerShape(0.dp)
+          )
+      )
 
-      // Text label for not found item
+      // Text label for failed assertion - positioned in center
+      if (action.textToDisplay != null) {
+        Box(
+          modifier = Modifier
+            .fillMaxSize(),
+          contentAlignment = Alignment.Center
+        ) {
+          Box(
+            modifier = Modifier
+              .border(2.dp, Color.Red.copy(alpha = 0.7f), shape = RoundedCornerShape(6.dp))
+              .padding(horizontal = 12.dp, vertical = 8.dp)
+          ) {
+            Text(
+              text = "Expected \"${action.textToDisplay}\" not found",
+              fontSize = 12.sp,
+              fontWeight = FontWeight.Bold,
+              color = Color.Red.copy(alpha = 0.9f),
+              textAlign = TextAlign.Center
+            )
+          }
+        }
+      }
+    } else if (!action.isVisible && action.textToDisplay != null) {
+      // For notVisible assertions (successful), show green border around entire screen
+      // Green border around the entire screen
       Box(
         modifier = Modifier
-          .offset(
-            x = 8.dp + backgroundSize + 4.dp, // Position next to the check mark
-            y = 8.dp + (backgroundSize / 2) - 8.dp  // Vertically centered with check mark
+          .fillMaxSize()
+          .border(
+            4.dp, Color.Green.copy(alpha = 0.7f), shape = RoundedCornerShape(0.dp)
           )
-          .background(
-            Color.White.copy(alpha = 0.15f), shape = RoundedCornerShape(6.dp)
-          ) // Very transparent background
-          .border(1.dp, Color.Green.copy(alpha = 0.7f), shape = RoundedCornerShape(6.dp))
+      )
+
+      // Text label for not found item - positioned in center
+      Box(
+        modifier = Modifier
+          .fillMaxSize(),
+        contentAlignment = Alignment.Center
       ) {
-        Text(
-          text = "\"${action.textToDisplay}\" not found",
-          modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-          fontSize = 11.sp,
-          fontWeight = FontWeight.Medium,
-          color = Color.Black,
-          textAlign = TextAlign.Center
-        )
+        Box(
+          modifier = Modifier
+            .background(
+              Color.Transparent, shape = RoundedCornerShape(6.dp)
+            )
+            .border(1.dp, Color.Green.copy(alpha = 0.7f), shape = RoundedCornerShape(6.dp))
+            .padding(horizontal = 8.dp, vertical = 4.dp)
+        ) {
+          Text(
+            text = "\"${action.textToDisplay}\" not found",
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Medium,
+            color = Color.Black,
+            textAlign = TextAlign.Center
+          )
+        }
       }
     } else {
-      // Visible assertions - show at click location with transparent circle background
+      // Visible assertions (successful) - show at click location with transparent circle background
       Box(
         modifier = Modifier
           .size(backgroundSize)
@@ -111,7 +136,7 @@ fun ScreenshotAnnotation(
           )
           .border(
             2.dp, Color.Green.copy(alpha = 0.6f), shape = CircleShape
-          ) // Translucent border only, no background fill
+          )
       ) {
         // Transparent checkmark icon
         Icon(
@@ -120,12 +145,45 @@ fun ScreenshotAnnotation(
           modifier = Modifier
             .size(checkSize)
             .align(Alignment.Center),
-          tint = Color.Green.copy(alpha = 0.7f) // Translucent check mark
+          tint = Color.Green.copy(alpha = 0.7f)
         )
       }
     }
+  } else if (action is MaestroDriverActionType.Swipe) {
+    // Swipe gesture visualization - simple arrow matching the style of assertion checkmark
+    val arrowSize = 28.dp
+    val backgroundSize = 40.dp
+
+    // Determine arrow symbol based on direction
+    val arrowSymbol = when (action.direction.uppercase()) {
+      "UP" -> "↑"
+      "DOWN" -> "↓"
+      "LEFT" -> "←"
+      "RIGHT" -> "→"
+      else -> error("Invalid swipe direction: ${action.direction}")
+    }
+
+    Box(
+      modifier = Modifier
+        .size(backgroundSize)
+        .offset(
+          x = (maxWidth / 2) - (backgroundSize / 2),
+          y = (maxHeight / 2) - (backgroundSize / 2)
+        )
+        .border(
+          2.dp, Color.Blue.copy(alpha = 0.6f), shape = CircleShape
+        )
+    ) {
+      Text(
+        text = arrowSymbol,
+        fontSize = 28.sp,
+        fontWeight = FontWeight.Bold,
+        color = Color.Blue.copy(alpha = 0.7f),
+        modifier = Modifier.align(Alignment.Center)
+      )
+    }
   } else {
-    // Transparent red crosshairs with circle background
+    // Transparent red crosshairs with circle background for other action types
     val crosshairSize = 16.dp
     val backgroundSize = 24.dp
     val crosshairThickness = 2.dp
@@ -183,7 +241,8 @@ fun ScreenshotImage(
   forceHighQuality: Boolean = false,
   onImageClick: ((imageModel: Any?, deviceWidth: Int, deviceHeight: Int, clickX: Int?, clickY: Int?) -> Unit)? = null,
 ) {
-  val imageModel = imageLoader.getImageModel(sessionId, screenshotFile)
+    // Use platform-specific image resolution (lazy loading on WASM, direct loading on JVM)
+    val imageModel = xyz.block.trailblaze.ui.resolveImageModel(sessionId, screenshotFile, imageLoader)
 
   if (imageModel != null) {
     BoxWithConstraints(
@@ -223,9 +282,18 @@ fun ScreenshotImage(
           maxHeight = maxHeight,
           action = action
         )
+      } else if (action is MaestroDriverActionType.Swipe) {
+        // For swipe gestures, always show annotation in center even without click coordinates
+        ScreenshotAnnotation(
+          centerX = maxWidth / 2,
+          centerY = maxHeight / 2,
+          maxWidth = maxWidth,
+          maxHeight = maxHeight,
+          action = action
+        )
       }
-    }
 
+    }
   }
 }
 

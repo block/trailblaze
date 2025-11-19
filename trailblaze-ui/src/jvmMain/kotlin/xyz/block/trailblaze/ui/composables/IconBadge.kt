@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.PlayArrow
@@ -81,6 +82,8 @@ fun SessionStatusIconBadge(
     is SessionStatus.Ended.Failed,
     is SessionStatus.Ended.FailedWithFallback,
     is SessionStatus.Ended.TimeoutReached -> Icons.Filled.Close to MaterialTheme.colorScheme.error
+
+    is SessionStatus.Ended.MaxCallsLimitReached -> Icons.Filled.Block to MaterialTheme.colorScheme.error
 
     is SessionStatus.Ended.Cancelled -> Icons.Filled.Warning to Color(0xFFFFA726) // Orange
     is SessionStatus.Unknown -> return // Don't show badge for unknown status

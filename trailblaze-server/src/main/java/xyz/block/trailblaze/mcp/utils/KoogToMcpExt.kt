@@ -1,13 +1,13 @@
 package xyz.block.trailblaze.mcp.utils
 
 import ai.koog.agents.core.tools.ToolDescriptor
+import ai.koog.agents.core.tools.ToolParameterDescriptor
 import ai.koog.agents.core.tools.ToolParameterType
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
 
 object KoogToMcpExt {
 
@@ -32,19 +32,19 @@ object KoogToMcpExt {
       description: String? = null,
     ): JsonObject = buildJsonObject {
       when (type) {
-        is ToolParameterType.String -> put("type", "string")
-        is ToolParameterType.Integer -> put("type", "integer")
-        is ToolParameterType.Float -> put("type", "number")
-        is ToolParameterType.Boolean -> put("type", "boolean")
+        is ToolParameterType.String -> put("type", JsonPrimitive("string"))
+        is ToolParameterType.Integer -> put("type", JsonPrimitive("integer"))
+        is ToolParameterType.Float -> put("type", JsonPrimitive("number"))
+        is ToolParameterType.Boolean -> put("type", JsonPrimitive("boolean"))
         is ToolParameterType.Enum -> {
           // Assuming the enum entries expose a 'name' property.
           val enumValues = type.entries.map { JsonPrimitive(it) }
-          put("type", "string")
+          put("type", JsonPrimitive("string"))
           put("enum", JsonArray(enumValues))
         }
 
         is ToolParameterType.List -> {
-          put("type", "array")
+          put("type", JsonPrimitive("array"))
           put("items", toolParameterToSchema(type.itemsType))
         }
 
@@ -58,12 +58,26 @@ object KoogToMcpExt {
                   property.name,
                   buildJsonObject {
                     toolParameterToSchema(property.type, property.description)
-                    put("description", property.description)
+                    put("description", JsonPrimitive(property.description))
                   },
                 )
               }
             },
           )
+        }
+
+        is ToolParameterType.AnyOf -> {
+          // For AnyOf types, create an array of schemas for each possible type
+          val anyOfTypes = type.types.map { toolParameterDescriptor: ToolParameterDescriptor ->
+            toolParameterToSchema(
+              type = toolParameterDescriptor.type,
+            )
+          }
+          put("anyOf", JsonArray(anyOfTypes))
+        }
+
+        is ToolParameterType.Null -> {
+          put("type", JsonPrimitive("null"))
         }
       }
 
