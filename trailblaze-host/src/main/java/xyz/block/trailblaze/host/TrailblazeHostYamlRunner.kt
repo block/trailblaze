@@ -74,6 +74,7 @@ object TrailblazeHostYamlRunner {
       dynamicLlmClient = dynamicLlmClient,
       trailblazeLlmModel = runOnHostParams.runYamlRequest.trailblazeLlmModel,
       sessionManager = sessionManager,
+      config = runOnHostParams.runYamlRequest.config,
     ) {
       override fun ensureTargetAppIsStopped() {
         runOnHostParams.targetTestApp

@@ -4,41 +4,32 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.buffer
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 import java.io.File
 import java.nio.file.ClosedWatchServiceException
 import java.nio.file.FileSystems
 import java.nio.file.Path
 import java.nio.file.Paths
-import java.nio.file.StandardWatchEventKinds
-import java.nio.file.WatchEvent
 import java.nio.file.WatchService
 import kotlin.concurrent.thread
 import kotlin.io.path.name
 
 class FileWatchService(
   private val dirToWatch: File,
-  private val onFileChange: (ChangeType, File) -> Unit,
   private val debounceDelayMs: Long = 500L, // Debounce changes within 500ms
   private val maxEventsPerSecond: Int = 10, // Circuit breaker: max 10 events per second
 ) {
-  private val eventTypes: List<ChangeType> = listOf(
-    ChangeType.CREATE,
-    ChangeType.DELETE,
-    ChangeType.MODIFY,
+  private val eventTypes: List<FileChangeEvent.ChangeType> = listOf(
+    FileChangeEvent.ChangeType.CREATE,
+    FileChangeEvent.ChangeType.DELETE,
+    FileChangeEvent.ChangeType.MODIFY,
   )
-
-  enum class ChangeType(val watchEventKind: WatchEvent.Kind<Path>) {
-    CREATE(StandardWatchEventKinds.ENTRY_CREATE),
-    DELETE(StandardWatchEventKinds.ENTRY_DELETE),
-    MODIFY(StandardWatchEventKinds.ENTRY_MODIFY),
-    ;
-
-    companion object {
-      fun fromWatchEventKind(watchEventKind: WatchEvent.Kind<out Any>): ChangeType = ChangeType.entries.first { it.watchEventKind == watchEventKind }
-    }
-  }
 
   // Path to the directory to watch
   val path: Path = Paths.get(dirToWatch.canonicalPath)
@@ -49,25 +40,40 @@ class FileWatchService(
   // Thread for running the watch loop
   private var watchThread: Thread? = null
 
-  // Coroutine scope for debouncing
-  private val debounceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+  // Coroutine scope for debouncing - use Default for CPU-bound work, not IO for file system events
+  private val debounceScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
   // Track pending events for debouncing
-  private val pendingEvents = mutableMapOf<String, Pair<ChangeType, File>>()
+  private val pendingEvents = mutableMapOf<String, Pair<FileChangeEvent.ChangeType, File>>()
 
   // Circuit breaker for rate limiting
   private var eventCount = 0
   private var lastResetTime = System.currentTimeMillis()
 
-  private fun shouldIgnoreFile(file: File): Boolean {
-    val fileName = file.name.lowercase()
+  // Channel for file change events
+  private val fileChangeChannel = Channel<FileChangeEvent>(Channel.UNLIMITED)
 
-    // Ignore directories that start with special characters
-    if (file.isDirectory && fileName.isNotEmpty() && !fileName[0].isLetterOrDigit()) {
+  // Flow of file change events - process on IO dispatcher to avoid blocking
+  val fileChanges: Flow<FileChangeEvent> = fileChangeChannel
+    .receiveAsFlow()
+    .flowOn(Dispatchers.IO)
+    .buffer(Channel.UNLIMITED)
+
+  private fun shouldIgnoreFile(fileName: String): Boolean {
+    val fileNameLower = fileName.lowercase()
+
+    // Ignore files that start with a dot (hidden files on Unix)
+    if (fileNameLower.startsWith(".")) {
       return true
     }
 
-    return file.isHidden
+    // Ignore directories that start with special characters
+    // Note: We can't check if it's a directory without I/O, but the filename pattern is good enough
+    if (fileNameLower.isNotEmpty() && !fileNameLower[0].isLetterOrDigit() && fileNameLower[0] != '_') {
+      return true
+    }
+
+    return false
   }
 
   private fun isWithinRateLimit(): Boolean {
@@ -86,7 +92,8 @@ class FileWatchService(
     watchThread?.interrupt()
     watchThread = null
     debounceScope.cancel()
-    println("Stopped watching directory: $path")
+    fileChangeChannel.close()
+    println("[FileWatchService] Stopped watching: $path")
   }
 
   fun startWatching() {
@@ -96,7 +103,7 @@ class FileWatchService(
       eventTypes.map { it.watchEventKind }.toTypedArray(),
     )
 
-    println("Watching directory: $path")
+    println("[FileWatchService] Started watching: $path (debounce: ${debounceDelayMs}ms, maxEvents: $maxEventsPerSecond/s)")
 
     // Start the watch loop in a background thread
     watchThread = thread(name = "FileWatcher-${dirToWatch.name}") {
@@ -111,21 +118,23 @@ class FileWatchService(
             val kind = event.kind()
             // The filename is the context of the event
             val filename = event.context() as Path
+            val fileName = filename.name
 
-            val realChangedFile = File(path.toFile(), filename.name)
-
-            // Apply filtering and rate limiting
-            if (shouldIgnoreFile(realChangedFile)) {
+            // Apply filtering based on filename (no I/O)
+            if (shouldIgnoreFile(fileName)) {
               continue // Skip ignored files
             }
 
             if (!isWithinRateLimit()) {
-              println("Rate limit exceeded for file watcher in $dirToWatch, skipping event for ${realChangedFile.name}")
+              println("[FileWatchService] Rate limit exceeded ($maxEventsPerSecond/s) for $dirToWatch, skipping: $fileName")
               continue
             }
 
             eventCount++
-            val changeType = ChangeType.fromWatchEventKind(kind)
+            val changeType = FileChangeEvent.ChangeType.fromWatchEventKind(kind)
+
+            // Construct the full file path only after filtering
+            val realChangedFile = File(path.toFile(), fileName)
 
             // Debounce events for the same file
             debounceFileEvent(realChangedFile, changeType)
@@ -144,13 +153,13 @@ class FileWatchService(
         // Thread was interrupted, exit gracefully
         Thread.currentThread().interrupt()
       } catch (e: Exception) {
-        println("Error in file watcher for $dirToWatch: ${e.message}")
+        println("[FileWatchService] Error in watch loop for $dirToWatch: ${e.message}")
         e.printStackTrace()
       }
     }
   }
 
-  private fun debounceFileEvent(file: File, changeType: ChangeType) {
+  private fun debounceFileEvent(file: File, changeType: FileChangeEvent.ChangeType) {
     val fileKey = file.absolutePath
 
     synchronized(pendingEvents) {
@@ -167,10 +176,11 @@ class FileWatchService(
 
       eventToProcess?.let { (debouncedChangeType, debouncedFile) ->
         try {
-          println("File Changed in $dirToWatch! $debouncedChangeType ${debouncedFile.canonicalPath}")
-          onFileChange(debouncedChangeType, debouncedFile)
+          // Use absolutePath instead of canonicalPath to avoid expensive filesystem I/O
+          println("[FileWatchService] Emitting event: $debouncedChangeType ${debouncedFile.name} (${debouncedFile.absolutePath})")
+          fileChangeChannel.send(FileChangeEvent(debouncedChangeType, debouncedFile))
         } catch (e: Exception) {
-          println("Error processing file change event for ${debouncedFile.absolutePath}: ${e.message}")
+          println("[FileWatchService] Error emitting event for ${debouncedFile.absolutePath}: ${e.message}")
           e.printStackTrace()
         }
       }

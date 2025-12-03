@@ -69,10 +69,7 @@ object AndroidTrailblazeDeviceInfoUtil {
 
   fun getConsumerAndroidClassifiers(): List<String> = buildList {
     add(getDeviceCategoryClassifier())
-    add(getApiLevelClassifier())
   }
-
-  private fun getApiLevelClassifier(): String = "api-${Build.VERSION.SDK_INT}"
 
   private fun getDeviceCategoryClassifier(): String = getConsumerAndroidDeviceCategory().classifier
 }

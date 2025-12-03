@@ -7,11 +7,12 @@ import maestro.orchestra.Command
 import maestro.orchestra.ElementSelector
 import maestro.orchestra.SwipeCommand
 import xyz.block.trailblaze.AgentMemory
-import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.MapsToMaestroCommands
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
+import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 
 @Serializable
 @TrailblazeToolClass("swipe")
@@ -22,20 +23,21 @@ The start and end points are automatically calculated based on the direction and
     """,
 )
 class SwipeTrailblazeTool(
-  @LLMDescription("Valid values: UP, DOWN, LEFT, RIGHT")
-  val direction: String,
-  @LLMDescription(
+  @param:LLMDescription("The direction to swipe. Default is 'DOWN'.")
+  val direction: SwipeDirection = SwipeDirection.DOWN,
+  @param:LLMDescription(
     """
 The text value to swipe on. If not provided, the swipe will be performed on the center of the screen.
   """,
   )
   val swipeOnElementText: String? = null,
-) : DelegatingTrailblazeTool {
+) : ExecutableTrailblazeTool {
 
-  override fun toExecutableTrailblazeTools(executionContext: TrailblazeToolExecutionContext): List<ExecutableTrailblazeTool> {
-    // Calculate start and end coordinates based on direction
-    // These percentages match the logic in MaestroAndroidUiAutomatorDriver
-    val (startRelative, endRelative) = when (SwipeDirection.valueOf(direction)) {
+  override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult {
+    val memory = toolExecutionContext.trailblazeAgent.memory
+    val devicePlatform = toolExecutionContext.screenState?.trailblazeDevicePlatform
+
+    val (startRelative, endRelative) = when (direction) {
       SwipeDirection.UP -> {
         // Start at center, move up to 40% height
         "50%,50%" to "50%,30%"
@@ -61,12 +63,30 @@ The text value to swipe on. If not provided, the swipe will be performed on the 
       "SwipeTrailblazeTool delegating: direction=$direction, startRelative=$startRelative, endRelative=$endRelative, swipeOnElementText=$swipeOnElementText",
     )
 
-    return listOf(
-      SwipeWithRelativeCoordinatesTool(
-        startRelative = startRelative,
-        endRelative = endRelative,
-        swipeOnElementText = swipeOnElementText,
-      ),
+    val maestroCommands = when (devicePlatform) {
+      TrailblazeDevicePlatform.IOS -> {
+        // This is a temporary workaround to Support previous logic (TBZ-287)
+        SwipeWithRelativeCoordinatesTool(
+          startRelative = startRelative,
+          endRelative = endRelative,
+          swipeOnElementText = swipeOnElementText,
+        ).toMaestroCommands(memory)
+      }
+
+      else -> listOf(
+        SwipeCommand(
+          elementSelector = swipeOnElementText?.let {
+            ElementSelector(
+              textRegex = swipeOnElementText,
+            )
+          },
+          direction = direction,
+        ),
+      )
+    }
+    return toolExecutionContext.trailblazeAgent.runMaestroCommands(
+      maestroCommands = maestroCommands,
+      traceId = toolExecutionContext.traceId,
     )
   }
 }
@@ -78,6 +98,7 @@ The text value to swipe on. If not provided, the swipe will be performed on the 
  * ----- DO NOT GIVE THIS TOOL TO THE LLM -----
  * This is a tool that should be delegated to, not registered to the LLM.
  */
+@Deprecated("This is only being used by a few handwritten tests and may go away in the future.")
 @Serializable
 @TrailblazeToolClass(
   name = "swipeWithRelativeCoordinates",
@@ -93,17 +114,12 @@ data class SwipeWithRelativeCoordinatesTool(
     val command = SwipeCommand(
       startRelative = startRelative,
       endRelative = endRelative,
-    ).let {
-      if (swipeOnElementText != null) {
-        it.copy(
-          elementSelector = ElementSelector(
-            textRegex = swipeOnElementText,
-          ),
+      elementSelector = swipeOnElementText?.let {
+        ElementSelector(
+          textRegex = swipeOnElementText,
         )
-      } else {
-        it
-      }
-    }
+      },
+    )
 
     println(
       "SwipeWithRelativeCoordinatesTool creating Maestro SwipeCommand: startRelative=$startRelative, endRelative=$endRelative, elementSelector=${command.elementSelector}",

@@ -52,6 +52,7 @@ import xyz.block.trailblaze.llm.TrailblazeLlmModelList
 import xyz.block.trailblaze.llm.providers.OpenAITrailblazeLlmModelList
 import xyz.block.trailblaze.model.DesktopAppRunYamlParams
 import xyz.block.trailblaze.model.DeviceConnectionStatus
+import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.ui.TrailblazeSettingsRepo
 import xyz.block.trailblaze.ui.composables.DeviceSelectionDialog
@@ -63,6 +64,7 @@ fun YamlTabComposable(
   trailblazeSettingsRepo: TrailblazeSettingsRepo,
   deviceManager: TrailblazeDeviceManager,
   yamlRunner: (DesktopAppRunYamlParams) -> Unit,
+  additionalInstrumentationArgs: (suspend () -> Map<String, String>),
 ) {
   val serverState by trailblazeSettingsRepo.serverStateFlow.collectAsState()
   val yamlContent = serverState.appConfig.yamlContent
@@ -366,17 +368,23 @@ fun YamlTabComposable(
             progressMessages = emptyList()
             connectionStatus = null
 
+            val onProgressMessage: (String) -> Unit = { message ->
+              progressMessages = progressMessages + message
+            }
+
+            val setOfMarkEnabledConfig = serverState.appConfig.setOfMarkEnabled
+            onProgressMessage(
+              "Set of Mark: ${if (setOfMarkEnabledConfig) "ENABLED" else "DISABLED"}"
+            )
+
             val runYamlRequest = RunYamlRequest(
               testName = "Yaml",
               yaml = yamlContent,
               trailblazeLlmModel = selectedTrailblazeLlmModel,
               useRecordedSteps = true,
-              targetAppName = serverState.appConfig.selectedTargetAppName
+              targetAppName = serverState.appConfig.selectedTargetAppName,
+              config = TrailblazeConfig(setOfMarkEnabled = setOfMarkEnabledConfig)
             )
-
-            val onProgressMessage: (String) -> Unit = { message ->
-              progressMessages = progressMessages + message
-            }
 
             val onConnectionStatus: (DeviceConnectionStatus) -> Unit = { status ->
               connectionStatus = status
@@ -393,7 +401,8 @@ fun YamlTabComposable(
                     runYamlRequest = runYamlRequest,
                     onProgressMessage = onProgressMessage,
                     onConnectionStatus = onConnectionStatus,
-                    targetTestApp = targetTestApp
+                    targetTestApp = targetTestApp,
+                    additionalInstrumentationArgs = additionalInstrumentationArgs
                   )
                 )
               } catch (e: Exception) {

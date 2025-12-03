@@ -26,9 +26,11 @@ import xyz.block.trailblaze.report.utils.TrailblazeYamlSessionRecording.generate
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.ui.createLiveSessionDataProviderJvm
 import xyz.block.trailblaze.ui.models.TrailblazeServerState
-import xyz.block.trailblaze.ui.tabs.session.LiveSessionDetailComposable
+import xyz.block.trailblaze.ui.recordings.RecordedTrailsRepo
+import xyz.block.trailblaze.ui.tabs.session.LiveSessionDetailComposableWithSelectorSupport
 import xyz.block.trailblaze.ui.tabs.session.SessionListComposable
 import xyz.block.trailblaze.ui.tabs.session.SessionViewMode
+import xyz.block.trailblaze.ui.tabs.testresults.TestResultsComposableJvm
 import java.awt.Desktop
 import java.io.File
 import javax.swing.JFileChooser
@@ -42,6 +44,7 @@ fun SessionsTabComposableJvm(
   serverState: TrailblazeServerState,
   updateState: (TrailblazeServerState) -> Unit,
   deviceManager: xyz.block.trailblaze.ui.TrailblazeDeviceManager? = null,
+  recordedTrailsRepo: RecordedTrailsRepo,
 ) {
   val liveSessionDataProvider = remember(logsRepo, deviceManager) {
     createLiveSessionDataProviderJvm(logsRepo, deviceManager)
@@ -113,7 +116,9 @@ fun SessionsTabComposableJvm(
   val coroutineScope = rememberCoroutineScope()
 
   if (selectedSession == null) {
+
     SessionListComposable(
+      testResultsSummaryView = { TestResultsComposableJvm(logsRepo) },
       sessions = sessions,
       importedSessionIds = importedSessionIds,
       sessionClicked = { session ->
@@ -198,31 +203,15 @@ fun SessionsTabComposableJvm(
       },
     )
   } else {
-    LiveSessionDetailComposable(
+    LiveSessionDetailComposableWithSelectorSupport(
       sessionDataProvider = liveSessionDataProvider,
+      imageLoader = xyz.block.trailblaze.ui.createLogsFileSystemImageLoader(),
       toMaestroYaml = { jsonObject: JsonObject -> TemplateHelpers.asMaestroYaml(jsonObject) },
       toTrailblazeYaml = TemplateHelpers::asTrailblazeYaml,
       generateRecordingYaml = {
         val logs = liveSessionDataProvider.getLogsForSession(selectedSession.sessionId)
         val yamlContent = logs.generateRecordedYaml(selectedSession.trailConfig)
-
-        // Add TestRail comment header at the top if test ID is available
-        val testId = selectedSession.trailConfig?.id
-        val testSuiteId = selectedSession.trailConfig?.metadata?.get("testSuiteId")
-
-        if (testId != null) {
-          buildString {
-            appendLine("# Test Case: https://square.testrail.com/index.php?/cases/view/$testId")
-            if (testSuiteId != null) {
-              appendLine(
-                "# Test Suite: https://square.testrail.com/index.php?/suites/view/$testSuiteId"
-              )
-            }
-            append(yamlContent)
-          }
-        } else {
-          yamlContent
-        }
+        yamlContent
       },
       session = selectedSession,
       initialZoomOffset = serverState.appConfig.sessionDetailZoomOffset,
@@ -289,6 +278,9 @@ fun SessionsTabComposableJvm(
           TrailblazeDesktopUtil.revealFileInFinder(logFile)
         }
       },
+      onRevealRecordingInFinder = { filePath ->
+        TrailblazeDesktopUtil.revealFileInFinder(File(filePath))
+      },
       onExportSession = {
         coroutineScope.launch {
           withContext(Dispatchers.IO) {
@@ -297,28 +289,21 @@ fun SessionsTabComposableJvm(
           }
         }
       },
-      initialInspectorScreenshotWidth = serverState.appConfig.uiInspectorScreenshotWidth,
-      initialInspectorDetailsWidth = serverState.appConfig.uiInspectorDetailsWidth,
-      initialInspectorHierarchyWidth = serverState.appConfig.uiInspectorHierarchyWidth,
+      inspectorScreenshotWidth = serverState.appConfig.uiInspectorScreenshotWidth,
+      inspectorDetailsWeight = serverState.appConfig.uiInspectorDetailsWeight,
+      inspectorHierarchyWeight = serverState.appConfig.uiInspectorHierarchyWeight,
       initialInspectorFontScale = serverState.appConfig.uiInspectorFontScale,
-      onInspectorScreenshotWidthChanged = { newWidth ->
+      onInspectorDetailsWeightChanged = { newWeight ->
         updateState(
           serverState.copy(
-            appConfig = serverState.appConfig.copy(uiInspectorScreenshotWidth = newWidth)
+            appConfig = serverState.appConfig.copy(uiInspectorDetailsWeight = newWeight)
           )
         )
       },
-      onInspectorDetailsWidthChanged = { newWidth ->
+      onInspectorHierarchyWeightChanged = { newWeight ->
         updateState(
           serverState.copy(
-            appConfig = serverState.appConfig.copy(uiInspectorDetailsWidth = newWidth)
-          )
-        )
-      },
-      onInspectorHierarchyWidthChanged = { newWidth ->
-        updateState(
-          serverState.copy(
-            appConfig = serverState.appConfig.copy(uiInspectorHierarchyWidth = newWidth)
+            appConfig = serverState.appConfig.copy(uiInspectorHierarchyWeight = newWeight)
           )
         )
       },
@@ -329,6 +314,7 @@ fun SessionsTabComposableJvm(
           )
         )
       },
+      recordedTrailsRepo = recordedTrailsRepo,
     )
   }
 

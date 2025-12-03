@@ -1,4 +1,4 @@
-package xyz.block.trailblaze.viewmatcher
+package xyz.block.trailblaze.viewmatcher.matching
 
 import maestro.DeviceInfo
 import maestro.Maestro
@@ -9,6 +9,9 @@ import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.host.screenstate.toMaestroPlatform
 import xyz.block.trailblaze.toolcalls.commands.TrailblazeElementSelectorExt.toMaestroElementSelector
+import xyz.block.trailblaze.tracing.TrailblazeTracer
+import xyz.block.trailblaze.viewmatcher.models.ElementMatches
+import xyz.block.trailblaze.yaml.TrailblazeYaml
 import kotlin.reflect.full.memberFunctions
 import kotlin.reflect.jvm.isAccessible
 
@@ -43,15 +46,6 @@ object ElementMatcherUsingMaestro {
     ?.also { it.isAccessible = true }
     ?: throw IllegalStateException("Could not find findElementViewHierarchy method")
 
-  fun ViewHierarchyTreeNode.asTrailblazeElementSelector(): TrailblazeElementSelector = TrailblazeElementSelector(
-    textRegex = resolveMaestroText()?.takeIf { it.isNotBlank() },
-    idRegex = resourceId?.takeIf { it.isNotBlank() },
-    enabled = enabled.takeIf { !it },
-    selected = selected.takeIf { it },
-    checked = checked.takeIf { it },
-    focused = focused.takeIf { it },
-  )
-
   /**
    * Gets all matching elements in the exact order that Orchestra/Maestro would match them
    */
@@ -61,7 +55,16 @@ object ElementMatcherUsingMaestro {
     trailblazeDevicePlatform: TrailblazeDevicePlatform,
     widthPixels: Int,
     heightPixels: Int,
-  ): ElementMatches {
+  ): ElementMatches = TrailblazeTracer.trace(
+    "getMatchingElementsFromSelector",
+    this::class.simpleName!!,
+    mapOf(
+      "trailblazeElementSelector" to TrailblazeYaml.defaultYamlInstance.encodeToString(
+        TrailblazeElementSelector.serializer(),
+        trailblazeElementSelector,
+      ),
+    ),
+  ) {
     val maestroRootTreeNode = rootTreeNode.asTreeNode()
     val viewHierarchy = ViewHierarchy(maestroRootTreeNode)
     val maestro = Maestro(
@@ -91,14 +94,18 @@ object ElementMatcherUsingMaestro {
     } else {
       viewHierarchy
     }
-
-    val computedFilterWithDescription = buildFilterMethod.call(orchestra, elementSelector) as FilterWithDescription
-    val allElements = searchHierarchy.aggregate()
-    val matchingNodes = computedFilterWithDescription.filterFunc(allElements)
-    return when (matchingNodes.size) {
-      0 -> ElementMatches.NoMatches(trailblazeElementSelector)
-      1 -> ElementMatches.SingleMatch(matchingNodes.first(), trailblazeElementSelector)
-      else -> ElementMatches.MultipleMatches(matchingNodes, trailblazeElementSelector)
+    return try {
+      val computedFilterWithDescription =
+        buildFilterMethod.call(orchestra, elementSelector) as FilterWithDescription
+      val allElements = searchHierarchy.aggregate()
+      val matchingNodes = computedFilterWithDescription.filterFunc(allElements)
+      when (matchingNodes.size) {
+        0 -> ElementMatches.NoMatches(trailblazeElementSelector)
+        1 -> ElementMatches.SingleMatch(matchingNodes.first(), trailblazeElementSelector)
+        else -> ElementMatches.MultipleMatches(matchingNodes, trailblazeElementSelector)
+      }
+    } catch (e: Exception) {
+      throw RuntimeException("Exception thrown while using selector $trailblazeElementSelector", e)
     }
   }
 }

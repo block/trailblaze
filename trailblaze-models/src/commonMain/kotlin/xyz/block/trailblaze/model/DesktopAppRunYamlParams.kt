@@ -10,4 +10,5 @@ class DesktopAppRunYamlParams(
   val targetTestApp: TrailblazeHostAppTarget?,
   val onProgressMessage: (String) -> Unit,
   val onConnectionStatus: (DeviceConnectionStatus) -> Unit,
+  val additionalInstrumentationArgs: (suspend () -> Map<String, String>),
 )

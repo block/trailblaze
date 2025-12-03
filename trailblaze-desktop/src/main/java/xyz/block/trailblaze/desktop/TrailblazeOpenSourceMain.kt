@@ -26,6 +26,7 @@ import xyz.block.trailblaze.mcp.utils.JvmLLMProvidersUtil.getAvailableTrailblaze
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.ui.MainTrailblazeApp
+import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.ui.TrailblazeSettingsRepo
 import xyz.block.trailblaze.ui.models.AppIconProvider
@@ -33,8 +34,18 @@ import xyz.block.trailblaze.ui.models.TrailblazeServerState
 import xyz.block.trailblaze.util.AndroidHostAdbUtils
 import java.io.File
 
-val logsDir = File("../logs")
+private val appDataDir = File(TrailblazeDesktopUtil.getDefaultAppDataDirectory()).apply { mkdirs() }
 
+private val trailblazeSettingsRepo = TrailblazeSettingsRepo(
+  settingsFile = File(appDataDir, TrailblazeDesktopUtil.SETTINGS_FILENAME),
+  initialConfig = TrailblazeServerState.SavedTrailblazeAppConfig(),
+)
+
+val logsDir = File(
+  TrailblazeDesktopUtil.getEffectiveLogsDirectory(
+    trailblazeSettingsRepo.serverStateFlow.value.appConfig,
+  ),
+).apply { mkdirs() }
 val logsRepo = LogsRepo(logsDir)
 
 /** All supported LLM model lists for open source host mode. */
@@ -53,9 +64,6 @@ private val AVAILABLE_MODEL_LISTS = ALL_MODEL_LISTS.filter {
 @OptIn(DelicateCoroutinesApi::class, ExperimentalCoroutinesApi::class)
 fun main() {
   val targetTestApp: TrailblazeHostAppTarget = TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget
-  val trailblazeSavedSettingsRepo = TrailblazeSettingsRepo(
-    initialConfig = TrailblazeServerState.SavedTrailblazeAppConfig(),
-  )
   val server = TrailblazeMcpServer(
     logsRepo = logsRepo,
     targetTestAppProvider = { targetTestApp },
@@ -65,7 +73,8 @@ fun main() {
     supportedDrivers = TrailblazeDriverType.entries.toSet(),
     appTargets = setOf(targetTestApp),
     appIconProvider = AppIconProvider.DefaultAppIconProvider,
-    settingsRepo = trailblazeSavedSettingsRepo,
+    settingsRepo = trailblazeSettingsRepo,
+    trailblazeHostAppTarget = TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget,
     getInstalledAppIds = { connectedMaestroDevice: Device.Connected ->
       when (connectedMaestroDevice.platform) {
         Platform.ANDROID -> AndroidHostAdbUtils.listInstalledPackages(
@@ -84,18 +93,29 @@ fun main() {
     startPollingDeviceStatus()
   }
 
+  val trailsDir = File(
+    TrailblazeDesktopUtil.getEffectiveTrailsDirectory(
+      trailblazeSettingsRepo.serverStateFlow.value.appConfig,
+    ),
+  ).apply { mkdirs() }
+  val recordedTrailsRepo = xyz.block.trailblaze.ui.recordings.RecordedTrailsRepoJvm(trailsDirectory = trailsDir)
+
   MainTrailblazeApp(
-    trailblazeSavedSettingsRepo = trailblazeSavedSettingsRepo,
+    trailblazeSavedSettingsRepo = trailblazeSettingsRepo,
     logsRepo = logsRepo,
+    recordedTrailsRepo = recordedTrailsRepo,
     trailblazeMcpServerProvider = { server },
     customEnvVarNames = emptyList(),
   ).runTrailblazeApp(
     customTabs = listOf(),
     availableModelLists = AVAILABLE_MODEL_LISTS,
     deviceManager = deviceManager,
+    additionalInstrumentationArgs = { emptyMap() },
+    globalSettingsContent = { },
     yamlRunner = { desktopRunYamlParams ->
       CoroutineScope(Dispatchers.IO).launch {
         DesktopYamlRunner(
+          trailblazeHostAppTarget = TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget,
           onRunHostYaml = { runOnHostParams: RunOnHostParams ->
             CoroutineScope(Dispatchers.IO).launch {
               TrailblazeHostYamlRunner.runHostYaml(

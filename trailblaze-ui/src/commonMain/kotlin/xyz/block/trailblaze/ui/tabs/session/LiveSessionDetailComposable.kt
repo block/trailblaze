@@ -22,7 +22,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -49,10 +48,11 @@ import xyz.block.trailblaze.ui.composables.FullScreenModalOverlay
 import xyz.block.trailblaze.ui.composables.ScreenshotImageModal
 import xyz.block.trailblaze.ui.images.ImageLoader
 import xyz.block.trailblaze.ui.images.NetworkImageLoader
+import xyz.block.trailblaze.ui.models.TrailblazeServerState
+import xyz.block.trailblaze.ui.recordings.RecordedTrailsRepo
 import xyz.block.trailblaze.ui.tabs.session.group.ChatHistoryDialog
 import xyz.block.trailblaze.ui.tabs.session.group.LogDetailsDialog
 import xyz.block.trailblaze.ui.tabs.session.models.SessionDetail
-import xyz.block.trailblaze.ui.models.TrailblazeServerState
 
 @Composable
 fun LiveSessionDetailComposable(
@@ -74,16 +74,23 @@ fun LiveSessionDetailComposable(
   onFontScaleChanged: (Float) -> Unit = {},
   onViewModeChanged: (SessionViewMode) -> Unit = {},
   // UI Inspector settings
-  initialInspectorScreenshotWidth: Int = TrailblazeServerState.DEFAULT_UI_INSPECTOR_SCREENSHOT_WIDTH,
-  initialInspectorDetailsWidth: Int = TrailblazeServerState.DEFAULT_UI_INSPECTOR_DETAILS_WIDTH,
-  initialInspectorHierarchyWidth: Int = TrailblazeServerState.DEFAULT_UI_INSPECTOR_HIERARCHY_WIDTH,
+  inspectorScreenshotWidth: Int = TrailblazeServerState.DEFAULT_UI_INSPECTOR_SCREENSHOT_WIDTH,
+  inspectorDetailsWeight: Float = 1f,
+  inspectorHierarchyWeight: Float = 1f,
   initialInspectorFontScale: Float = TrailblazeServerState.DEFAULT_UI_INSPECTOR_FONT_SCALE,
-  onInspectorScreenshotWidthChanged: (Int) -> Unit = {},
-  onInspectorDetailsWidthChanged: (Int) -> Unit = {},
-  onInspectorHierarchyWidthChanged: (Int) -> Unit = {},
+  onInspectorDetailsWeightChanged: (Float) -> Unit = {},
+  onInspectorHierarchyWeightChanged: (Float) -> Unit = {},
   onInspectorFontScaleChanged: (Float) -> Unit = {},
   // Platform-specific: Open log file in Finder/Explorer
   onOpenInFinder: ((TrailblazeLog) -> Unit)? = null,
+  // Platform-specific: Reveal recording file in Finder/Explorer
+  onRevealRecordingInFinder: ((String) -> Unit)? = null,
+  // Platform-specific: Compute selector analysis for a node (JVM only)
+  computeSelectorOptions: ((xyz.block.trailblaze.api.ViewHierarchyTreeNode) -> xyz.block.trailblaze.ui.SelectorAnalysisResult)? = null,
+  // Platform-specific: Factory to create selector compute functions for a given log (JVM only)
+  createSelectorFunctionForLog: ((TrailblazeLog) -> ((xyz.block.trailblaze.api.ViewHierarchyTreeNode) -> xyz.block.trailblaze.ui.SelectorAnalysisResult)?)? = null,
+  // Recordings
+  recordedTrailsRepo: RecordedTrailsRepo? = null,
 ) {
   // Modal state at the TOP level - this is the root
   var showDetailsDialog by remember { mutableStateOf(false) }
@@ -333,6 +340,8 @@ fun LiveSessionDetailComposable(
       onOpenLogsFolder = onOpenLogsFolder,
       onExportSession = onExportSession,
       onOpenInFinder = onOpenInFinder,
+      onRevealRecordingInFinder = onRevealRecordingInFinder,
+      recordedTrailsRepo = recordedTrailsRepo,
     )
 
     // Modal dialogs as separate children with high zIndex
@@ -392,6 +401,12 @@ fun LiveSessionDetailComposable(
             var showRawJson by remember { mutableStateOf(false) }
             var fontScale by remember { mutableStateOf(initialInspectorFontScale) }
 
+            // IMPORTANT: Create selector compute function for THIS specific log
+            // Key on inspectorLog to recreate when viewing a different log
+            val logSpecificComputeSelectorOptions = remember(inspectorLog) {
+              createSelectorFunctionForLog?.invoke(inspectorLog)
+            }
+
             InspectViewHierarchyScreenComposable(
               sessionId = session.sessionId,
               viewHierarchy = viewHierarchy,
@@ -400,14 +415,13 @@ fun LiveSessionDetailComposable(
               deviceWidth = deviceWidth,
               deviceHeight = deviceHeight,
               imageLoader = imageLoader,
-              initialScreenshotWidth = initialInspectorScreenshotWidth,
-              initialDetailsWidth = initialInspectorDetailsWidth,
-              initialHierarchyWidth = initialInspectorHierarchyWidth,
+              screenshotWidth = inspectorScreenshotWidth,
+              detailsWeight = inspectorDetailsWeight,
+              hierarchyWeight = inspectorHierarchyWeight,
               showRawJson = showRawJson,
               fontScale = fontScale,
-              onScreenshotWidthChanged = onInspectorScreenshotWidthChanged,
-              onDetailsWidthChanged = onInspectorDetailsWidthChanged,
-              onHierarchyWidthChanged = onInspectorHierarchyWidthChanged,
+              onDetailsWeightChanged = onInspectorDetailsWeightChanged,
+              onHierarchyWeightChanged = onInspectorHierarchyWeightChanged,
               onFontScaleChanged = { newScale ->
                 fontScale = newScale
                 onInspectorFontScaleChanged(newScale)
@@ -416,7 +430,8 @@ fun LiveSessionDetailComposable(
               onClose = {
                 showInspectUIDialog = false
                 currentInspectorLog = null
-              }
+              },
+              computeSelectorOptions = logSpecificComputeSelectorOptions
             )
           } else {
             Text(

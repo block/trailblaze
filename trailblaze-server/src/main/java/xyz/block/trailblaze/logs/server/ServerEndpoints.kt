@@ -29,7 +29,10 @@ import kotlin.io.encoding.ExperimentalEncodingApi
 object ServerEndpoints {
 
   @OptIn(ExperimentalEncodingApi::class)
-  fun Application.logsServerKtorEndpoints(logsRepo: LogsRepo) {
+  fun Application.logsServerKtorEndpoints(
+    logsRepo: LogsRepo,
+    homeCallbackHandler: ((parameters: Map<String, List<String>>) -> Result<String>)? = null,
+  ) {
     install(ContentNegotiation) {
       json(TrailblazeJsonInstance)
     }
@@ -37,7 +40,7 @@ object ServerEndpoints {
       anyHost()
     }
     routing {
-      HomeEndpoint.register(this, logsRepo)
+      HomeEndpoint.register(routing = this, logsRepo = logsRepo, homeCallbackHandler = homeCallbackHandler)
       PingEndpoint.register(this)
       GetEndpointSessionDetail.register(this, logsRepo)
       AgentLogEndpoint.register(this, logsRepo)

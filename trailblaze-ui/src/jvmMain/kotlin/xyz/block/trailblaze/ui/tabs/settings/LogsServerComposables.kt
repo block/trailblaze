@@ -3,6 +3,7 @@ package xyz.block.trailblaze.ui.tabs.settings
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -25,20 +26,28 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import org.jetbrains.compose.ui.tooling.preview.Preview
+import java.io.File
+import javax.swing.JFileChooser
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.llm.TrailblazeLlmModelList
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
 import xyz.block.trailblaze.llm.providers.OpenAITrailblazeLlmModelList
+import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.ui.TrailblazeSettingsRepo
 import xyz.block.trailblaze.ui.composables.SelectableText
 import xyz.block.trailblaze.ui.models.TrailblazeServerState
@@ -57,10 +66,12 @@ object LogsServerComposables {
     openDesktopAppPreferencesFile: () -> Unit,
     openGoose: () -> Unit,
     additionalContent: @Composable () -> Unit,
+    globalSettingsContent: @Composable ColumnScope.(serverState: TrailblazeServerState) -> Unit,
     environmentVariableProvider: (String) -> String? = { null },
   ) {
 
     val serverState: TrailblazeServerState by trailblazeSettingsRepo.serverStateFlow.collectAsState()
+
     MaterialTheme {
       Surface(
         modifier = Modifier
@@ -225,6 +236,29 @@ object LogsServerComposables {
                         "Language Model Settings", style = MaterialTheme.typography.titleMedium
                       )
 
+                      // Set of Mark Toggle
+                      Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                      ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                          SelectableText(
+                            "Enable Set of Mark", style = MaterialTheme.typography.bodyMedium
+                          )
+                        }
+                        Switch(
+                          checked = serverState.appConfig.setOfMarkEnabled,
+                          onCheckedChange = { checkedValue ->
+                            trailblazeSettingsRepo.updateAppConfig {
+                              it.copy(setOfMarkEnabled = checkedValue)
+                            }
+                          },
+                        )
+                      }
+
+                      Spacer(modifier = Modifier.height(8.dp))
+
                       // LLM Provider and Model Selection
                       var showLlmProviderMenu by remember { mutableStateOf(false) }
                       var showLlmModelMenu by remember { mutableStateOf(false) }
@@ -340,11 +374,30 @@ object LogsServerComposables {
                   }
                 }
 
+                // Global Settings (Databricks OAuth)
+                item {
+                  OutlinedCard(modifier = Modifier.fillMaxWidth()) {
+                    Column(
+                      modifier = Modifier.padding(20.dp),
+                      verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                      SelectableText(
+                        "Global Settings", style = MaterialTheme.typography.titleMedium
+                      )
+
+                      Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                      ) {
+                        globalSettingsContent(serverState)
+                      }
+                    }
+                  }
+                }
+
                 // Environment variables section
                 item {
-                  val envVariableNames = listOf(
-                    "OPENAI_API_KEY",
-                  ) + customEnvVariableNames
+                  val envVariableNames = (listOf("OPENAI_API_KEY") + customEnvVariableNames)
 
                   OutlinedCard(modifier = Modifier.fillMaxWidth()) {
                     Column(
@@ -358,8 +411,14 @@ object LogsServerComposables {
                       Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         envVariableNames.forEach { name ->
                           val value = environmentVariableProvider(name)
-                          val maskedValue =
-                            if (value.isNullOrBlank()) "Not set" else "•••••" + value.takeLast(4)
+
+                          val displayValue = if (!value.isNullOrBlank()) {
+                            "•••••" + value.takeLast(4)
+                          } else {
+                            "Not set"
+                          }
+
+                          val hasValue = !value.isNullOrBlank()
 
                           Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -371,12 +430,13 @@ object LogsServerComposables {
                               style = MaterialTheme.typography.bodyMedium,
                               modifier = Modifier.weight(1f)
                             )
+
                             SelectableText(
-                              text = maskedValue,
-                              color = if (value.isNullOrBlank())
-                                MaterialTheme.colorScheme.error
+                              text = displayValue,
+                              color = if (hasValue)
+                                MaterialTheme.colorScheme.onSurfaceVariant
                               else
-                                MaterialTheme.colorScheme.onSurfaceVariant,
+                                MaterialTheme.colorScheme.error,
                               style = MaterialTheme.typography.bodyMedium
                             )
                           }
@@ -386,27 +446,261 @@ object LogsServerComposables {
 
                     HorizontalDivider()
 
-                    SelectableText(
-                      text = "💡 Tip: If you change environment variables, restart the app to apply changes.",
-                      color = MaterialTheme.colorScheme.onSurfaceVariant,
-                      style = MaterialTheme.typography.bodySmall
-                    )
+                    Column(
+                      modifier = Modifier.padding(20.dp),
+                      verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                      SelectableText(
+                        text = "💡 Tip: If you change environment variables, restart the app to apply changes.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall
+                      )
+                    }
                   }
                 }
 
-                // Utilities
+                // Advanced Configuration
                 item {
                   OutlinedCard(modifier = Modifier.fillMaxWidth()) {
                     Column(
                       modifier = Modifier.padding(20.dp),
                       verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
-                      SelectableText("Utilities", style = MaterialTheme.typography.titleMedium)
-                      Row {
-                        Button(onClick = openLogsFolder) { Text("View Logs Folder") }
-                        Spacer(modifier = Modifier.width(8.dp))
+                      SelectableText("Advanced Configuration", style = MaterialTheme.typography.titleMedium)
+
+                      // Logs Directory Configuration
+                      Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                      ) {
+                        SelectableText("Logs Directory", style = MaterialTheme.typography.bodyMedium)
+
+                        // Compute the effective logs directory location
+                        val effectiveLogsDirectory = remember(serverState.appConfig) {
+                          TrailblazeDesktopUtil.getEffectiveLogsDirectory(serverState.appConfig)
+                        }
+
+                        SelectableText(
+                          text = if (serverState.appConfig.logsDirectory != null) {
+                            effectiveLogsDirectory
+                          } else {
+                            "Using default location ($effectiveLogsDirectory)"
+                          },
+                          style = MaterialTheme.typography.bodySmall,
+                          color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                          Button(onClick = openLogsFolder) {
+                            Text("Open Logs Folder in Finder")
+                          }
+                          Button(onClick = {
+                            // Determine the starting directory for the file chooser
+                            val effectiveLogsDir =
+                              TrailblazeDesktopUtil.getEffectiveLogsDirectory(serverState.appConfig)
+                            val startingDir = File(effectiveLogsDir)
+
+                            val fileChooser = JFileChooser().apply {
+                              fileSelectionMode = JFileChooser.DIRECTORIES_ONLY
+                              dialogTitle = "Select Logs Directory"
+                              // Set to current directory or its parent if it doesn't exist
+                              currentDirectory = if (startingDir.exists()) startingDir else startingDir.parentFile
+                            }
+                            val result = fileChooser.showOpenDialog(null)
+                            if (result == JFileChooser.APPROVE_OPTION) {
+                              val selectedDir = fileChooser.selectedFile.absolutePath
+                              trailblazeSettingsRepo.updateAppConfig {
+                                it.copy(logsDirectory = selectedDir)
+                              }
+                            }
+                          }) {
+                            Text("Change Location")
+                          }
+
+                          if (serverState.appConfig.logsDirectory != null) {
+                            Button(onClick = {
+                              trailblazeSettingsRepo.updateAppConfig {
+                                it.copy(logsDirectory = null)
+                              }
+                            }) {
+                              Text("Reset to Default")
+                            }
+                          }
+                        }
+                        SelectableText(
+                          text = "⚠️ Changing the logs directory requires restarting the app",
+                          color = MaterialTheme.colorScheme.onSurfaceVariant,
+                          style = MaterialTheme.typography.bodySmall
+                        )
+                      }
+
+                      Spacer(modifier = Modifier.height(8.dp))
+
+                      // Root App Data Directory Configuration
+                      Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                      ) {
+                        SelectableText("Root App Data Directory", style = MaterialTheme.typography.bodyMedium)
+
+                        // Compute the effective app data directory location
+                        val effectiveAppDataDirectory = remember(serverState.appConfig) {
+                          TrailblazeDesktopUtil.getEffectiveAppDataDirectory(serverState.appConfig)
+                        }
+
+                        SelectableText(
+                          text = if (serverState.appConfig.appDataDirectory != null) {
+                            effectiveAppDataDirectory
+                          } else {
+                            "Using default location ($effectiveAppDataDirectory)"
+                          },
+                          style = MaterialTheme.typography.bodySmall,
+                          color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                          Button(onClick = {
+                            // Determine the starting directory
+                            val effectiveAppDataDir =
+                              TrailblazeDesktopUtil.getEffectiveAppDataDirectory(serverState.appConfig)
+                            val startingDir = File(effectiveAppDataDir)
+
+                            // Open the directory in file browser
+                            if (startingDir.exists()) {
+                              TrailblazeDesktopUtil.openInFileBrowser(startingDir)
+                            } else {
+                              startingDir.mkdirs()
+                              TrailblazeDesktopUtil.openInFileBrowser(startingDir)
+                            }
+                          }) {
+                            Text("Open App Data Folder in Finder")
+                          }
+                          Button(onClick = {
+                            // Determine the starting directory
+                            val effectiveAppDataDir =
+                              TrailblazeDesktopUtil.getEffectiveAppDataDirectory(serverState.appConfig)
+                            val startingDir = File(effectiveAppDataDir)
+
+                            val fileChooser = JFileChooser().apply {
+                              fileSelectionMode = JFileChooser.DIRECTORIES_ONLY
+                              dialogTitle = "Select Root App Data Directory"
+                              currentDirectory = if (startingDir.exists()) startingDir else startingDir.parentFile
+                            }
+                            val result = fileChooser.showOpenDialog(null)
+                            if (result == JFileChooser.APPROVE_OPTION) {
+                              val selectedDir = fileChooser.selectedFile.absolutePath
+                              trailblazeSettingsRepo.updateAppConfig {
+                                it.copy(appDataDirectory = selectedDir)
+                              }
+                            }
+                          }) {
+                            Text("Change Location")
+                          }
+
+                          if (serverState.appConfig.appDataDirectory != null) {
+                            Button(onClick = {
+                              trailblazeSettingsRepo.updateAppConfig {
+                                it.copy(appDataDirectory = null)
+                              }
+                            }) {
+                              Text("Reset to Default")
+                            }
+                          }
+                        }
+                        SelectableText(
+                          text = "⚠️ Changing the root app data directory requires restarting the app",
+                          color = MaterialTheme.colorScheme.onSurfaceVariant,
+                          style = MaterialTheme.typography.bodySmall
+                        )
+                      }
+
+                      Spacer(modifier = Modifier.height(8.dp))
+
+                      // Trails Directory Configuration
+                      Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                      ) {
+                        SelectableText("Trails Directory", style = MaterialTheme.typography.bodyMedium)
+
+                        // Compute the effective trails directory location
+                        val effectiveTrailsDirectory = remember(serverState.appConfig) {
+                          TrailblazeDesktopUtil.getEffectiveTrailsDirectory(serverState.appConfig)
+                        }
+
+                        SelectableText(
+                          text = if (serverState.appConfig.trailsDirectory != null) {
+                            effectiveTrailsDirectory
+                          } else {
+                            "Using default location ($effectiveTrailsDirectory)"
+                          },
+                          style = MaterialTheme.typography.bodySmall,
+                          color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                          Button(onClick = {
+                            // Determine the starting directory for the file chooser
+                            val effectiveTrailsDir =
+                              TrailblazeDesktopUtil.getEffectiveTrailsDirectory(serverState.appConfig)
+                            val startingDir = File(effectiveTrailsDir)
+
+                            // Open the directory in file browser
+                            if (startingDir.exists()) {
+                              TrailblazeDesktopUtil.openInFileBrowser(startingDir)
+                            } else {
+                              startingDir.mkdirs()
+                              TrailblazeDesktopUtil.openInFileBrowser(startingDir)
+                            }
+                          }) {
+                            Text("Open Trails Folder in Finder")
+                          }
+                          Button(onClick = {
+                            // Determine the starting directory for the file chooser
+                            val effectiveTrailsDir =
+                              TrailblazeDesktopUtil.getEffectiveTrailsDirectory(serverState.appConfig)
+                            val startingDir = File(effectiveTrailsDir)
+
+                            val fileChooser = JFileChooser().apply {
+                              fileSelectionMode = JFileChooser.DIRECTORIES_ONLY
+                              dialogTitle = "Select Trails Directory"
+                              currentDirectory = if (startingDir.exists()) startingDir else startingDir.parentFile
+                            }
+                            val result = fileChooser.showOpenDialog(null)
+                            if (result == JFileChooser.APPROVE_OPTION) {
+                              val selectedDir = fileChooser.selectedFile.absolutePath
+                              trailblazeSettingsRepo.updateAppConfig {
+                                it.copy(trailsDirectory = selectedDir)
+                              }
+                            }
+                          }) {
+                            Text("Change Location")
+                          }
+
+                          if (serverState.appConfig.trailsDirectory != null) {
+                            Button(onClick = {
+                              trailblazeSettingsRepo.updateAppConfig {
+                                it.copy(trailsDirectory = null)
+                              }
+                            }) {
+                              Text("Reset to Default")
+                            }
+                          }
+                        }
+                        SelectableText(
+                          text = "⚠️ Changing the trails directory requires restarting the app",
+                          color = MaterialTheme.colorScheme.onSurfaceVariant,
+                          style = MaterialTheme.typography.bodySmall
+                        )
+                      }
+
+                      Spacer(modifier = Modifier.height(8.dp))
+
+                      // Preferences File
+                      Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                      ) {
+                        SelectableText("Preferences File", style = MaterialTheme.typography.bodyMedium)
                         Button(onClick = openDesktopAppPreferencesFile) {
-                          Text("Open Desktop App Preferences File")
+                          Text("Open Preferences in Finder")
                         }
                       }
                     }

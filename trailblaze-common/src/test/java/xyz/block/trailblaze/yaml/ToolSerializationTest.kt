@@ -3,6 +3,7 @@ package xyz.block.trailblaze.yaml
 import assertk.assertThat
 import assertk.assertions.isEqualTo
 import assertk.assertions.isInstanceOf
+import maestro.SwipeDirection
 import org.junit.Test
 import xyz.block.trailblaze.toolcalls.commands.EraseTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.HideKeyboardTrailblazeTool
@@ -12,6 +13,8 @@ import xyz.block.trailblaze.toolcalls.commands.LaunchAppTrailblazeTool.LaunchMod
 import xyz.block.trailblaze.toolcalls.commands.LongPressElementWithAccessibilityTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.LongPressOnElementWithTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.PressBackTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.PressKeyTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.PressKeyTrailblazeTool.PressKeyCode
 import xyz.block.trailblaze.toolcalls.commands.SwipeTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnElementWithAccessiblityTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnElementWithTextTrailblazeTool
@@ -300,6 +303,52 @@ class ToolSerializationTest {
   }
 
   @Test
+  fun deserializePressKeyEnterTool() {
+    val yaml = """
+- tools:
+    - pressKey:
+        keyCode: ENTER
+    """.trimIndent()
+
+    val trailItems = trailblazeYaml.decodeTrail(yaml)
+    with(trailItems) {
+      assertThat(size).isEqualTo(1)
+      with(get(0) as TrailYamlItem.ToolTrailItem) {
+        assertThat(tools.size).isEqualTo(1)
+        assertThat(tools[0]).isEqualTo(
+          TrailblazeToolYamlWrapper(
+            name = "pressKey",
+            trailblazeTool = PressKeyTrailblazeTool(keyCode = PressKeyCode.ENTER),
+          ),
+        )
+      }
+    }
+  }
+
+  @Test
+  fun deserializePressKeyHomeTool() {
+    val yaml = """
+- tools:
+    - pressKey:
+        keyCode: HOME
+    """.trimIndent()
+
+    val trailItems = trailblazeYaml.decodeTrail(yaml)
+    with(trailItems) {
+      assertThat(size).isEqualTo(1)
+      with(get(0) as TrailYamlItem.ToolTrailItem) {
+        assertThat(tools.size).isEqualTo(1)
+        assertThat(tools[0]).isEqualTo(
+          TrailblazeToolYamlWrapper(
+            name = "pressKey",
+            trailblazeTool = PressKeyTrailblazeTool(keyCode = PressKeyCode.HOME),
+          ),
+        )
+      }
+    }
+  }
+
+  @Test
   fun deserializeSwipeUpTool() {
     val yaml = """
 - tools:
@@ -315,7 +364,7 @@ class ToolSerializationTest {
         TrailblazeToolYamlWrapper(
           name = "swipe",
           trailblazeTool = SwipeTrailblazeTool(
-            direction = "UP",
+            direction = SwipeDirection.UP,
           ),
         )
       }
@@ -338,7 +387,7 @@ class ToolSerializationTest {
         TrailblazeToolYamlWrapper(
           name = "swipe",
           trailblazeTool = SwipeTrailblazeTool(
-            direction = "DOWN",
+            direction = SwipeDirection.DOWN,
           ),
         )
       }
@@ -361,7 +410,7 @@ class ToolSerializationTest {
         TrailblazeToolYamlWrapper(
           name = "swipe",
           trailblazeTool = SwipeTrailblazeTool(
-            direction = "LEFT",
+            direction = SwipeDirection.LEFT,
           ),
         )
       }
@@ -384,7 +433,7 @@ class ToolSerializationTest {
         TrailblazeToolYamlWrapper(
           name = "swipe",
           trailblazeTool = SwipeTrailblazeTool(
-            direction = "RIGHT",
+            direction = SwipeDirection.RIGHT,
           ),
         )
       }
@@ -408,7 +457,7 @@ class ToolSerializationTest {
         TrailblazeToolYamlWrapper(
           name = "swipe",
           trailblazeTool = SwipeTrailblazeTool(
-            direction = "UP",
+            direction = SwipeDirection.UP,
             swipeOnElementText = "Text",
           ),
         )
@@ -433,7 +482,7 @@ class ToolSerializationTest {
         TrailblazeToolYamlWrapper(
           name = "swipe",
           trailblazeTool = SwipeTrailblazeTool(
-            direction = "DOWN",
+            direction = SwipeDirection.DOWN,
             swipeOnElementText = "Text",
           ),
         )
@@ -458,7 +507,7 @@ class ToolSerializationTest {
         TrailblazeToolYamlWrapper(
           name = "swipe",
           trailblazeTool = SwipeTrailblazeTool(
-            direction = "LEFT",
+            direction = SwipeDirection.LEFT,
             swipeOnElementText = "Text",
           ),
         )
@@ -483,7 +532,7 @@ class ToolSerializationTest {
         TrailblazeToolYamlWrapper(
           name = "swipe",
           trailblazeTool = SwipeTrailblazeTool(
-            direction = "RIGHT",
+            direction = SwipeDirection.RIGHT,
             swipeOnElementText = "Text",
           ),
         )

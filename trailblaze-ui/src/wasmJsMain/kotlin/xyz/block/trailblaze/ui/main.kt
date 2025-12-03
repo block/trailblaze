@@ -27,6 +27,7 @@ import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.logs.TrailblazeLogsDataProvider
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionInfo
+import xyz.block.trailblaze.logs.model.getSessionInfo
 import xyz.block.trailblaze.ui.composables.FullScreenModalOverlay
 import xyz.block.trailblaze.ui.composables.ScreenshotImageModal
 import xyz.block.trailblaze.ui.tabs.session.SessionDetailComposable
@@ -34,6 +35,7 @@ import xyz.block.trailblaze.ui.tabs.session.SessionListComposable
 import xyz.block.trailblaze.ui.tabs.session.group.ChatHistoryDialog
 import xyz.block.trailblaze.ui.tabs.session.group.LogDetailsDialog
 import xyz.block.trailblaze.ui.tabs.session.models.SessionDetail
+import xyz.block.trailblaze.ui.tabs.testresults.TestResultsComposable
 
 // Central data provider instance
 private val dataProvider: TrailblazeLogsDataProvider = InlinedDataLoader
@@ -79,7 +81,7 @@ fun TrailblazeApp() {
 
     else -> {
       println("SessionListView with dataProvider: $dataProvider")
-      SessionListView(
+      SessionListViewLoader(
         dataProvider = dataProvider,
         onSessionClick = { session ->
           navigateToSession(session.sessionId)
@@ -104,13 +106,17 @@ fun navigateToSession(sessionName: String) {
   window.location.hash = "session/$sessionName"
 }
 
+/**
+ * Loader composable for WASM that fetches data from the data provider
+ * and passes it to SessionListView
+ */
 @Composable
-fun SessionListView(
+fun SessionListViewLoader(
   dataProvider: TrailblazeLogsDataProvider,
   onSessionClick: (SessionInfo) -> Unit,
   deleteSession: ((SessionInfo) -> Unit)? = null,
 ) {
-  var sessions by remember { mutableStateOf<List<SessionInfo>>(emptyList()) }
+  var sessionLogsMap by remember { mutableStateOf<Map<String, List<TrailblazeLog>>?>(null) }
   var isLoading by remember { mutableStateOf(true) }
   var errorMessage by remember { mutableStateOf<String?>(null) }
 
@@ -127,16 +133,22 @@ fun SessionListView(
       println("📝 [${namesEndTime.toInt()}ms] Got ${sessionNames.size} session IDs in ${(namesEndTime - startTime).toInt()}ms")
 
       val infoStartTime = window.performance.now()
-      sessions = sessionNames.mapNotNull { sessionName ->
-        dataProvider.getSessionInfoAsync(sessionName)
+      val logsMap = mutableMapOf<String, List<TrailblazeLog>>()
+      sessionNames.forEach { sessionName ->
+        val logs = dataProvider.getLogsForSessionAsync(sessionName)
+        if (logs.isNotEmpty()) {
+          logsMap[sessionName] = logs
+        }
       }
+      sessionLogsMap = logsMap
+
       val infoEndTime = window.performance.now()
-      println("✅ [${infoEndTime.toInt()}ms] Loaded ${sessions.size} session infos in ${(infoEndTime - infoStartTime).toInt()}ms")
+      println("✅ [${infoEndTime.toInt()}ms] Loaded ${logsMap.size} sessions in ${(infoEndTime - infoStartTime).toInt()}ms")
       println("🎉 [${infoEndTime.toInt()}ms] Total session list load time: ${(infoEndTime - startTime).toInt()}ms")
     } catch (e: Exception) {
       errorMessage = "Failed to load sessions: ${e.message}"
       println("❌ Error loading sessions: ${e.message}")
-      sessions = emptyList()
+      sessionLogsMap = emptyMap()
     } finally {
       isLoading = false
     }
@@ -178,13 +190,47 @@ fun SessionListView(
         )
       }
     }
-  } else {
+  } else if (sessionLogsMap != null) {
+    SessionListView(
+      sessionLogsMap = sessionLogsMap!!,
+      onSessionClick = onSessionClick,
+      deleteSession = deleteSession,
+    )
+  }
+}
+
+/**
+ * Refactored SessionListView that accepts data directly (can be moved to commonMain)
+ */
+@Composable
+fun SessionListView(
+  sessionLogsMap: Map<String, List<TrailblazeLog>>,
+  onSessionClick: (SessionInfo) -> Unit,
+  deleteSession: ((SessionInfo) -> Unit)? = null,
+) {
+  val sessions = remember(sessionLogsMap) {
+    sessionLogsMap.entries
+      .mapNotNull { (sessionId, logs) ->
+        if (logs.isNotEmpty()) {
+          logs.getSessionInfo()
+        } else {
+          null
+        }
+      }
+      .sortedByDescending { it.timestamp }
+  }
+
+  // Use the common composable with the loaded data
+  Column(
+    modifier = Modifier.fillMaxSize()
+  ) {
     SessionListComposable(
       sessions = sessions,
       sessionClicked = onSessionClick,
       deleteSession = deleteSession,
       clearAllLogs = null,
       openLogsFolder = null,
+      testResultsSummaryView = { TestResultsComposable(sessionLogsMap = sessionLogsMap) },
     )
   }
 }

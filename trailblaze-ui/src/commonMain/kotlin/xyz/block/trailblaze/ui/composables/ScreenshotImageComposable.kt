@@ -3,23 +3,22 @@ package xyz.block.trailblaze.ui.composables
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.ArrowForward
+import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -37,7 +36,6 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
-import xyz.block.trailblaze.api.HasClickCoordinates
 import xyz.block.trailblaze.api.MaestroDriverActionType
 import xyz.block.trailblaze.ui.images.ImageLoader
 import xyz.block.trailblaze.ui.images.NetworkImageLoader
@@ -52,7 +50,6 @@ fun ScreenshotAnnotation(
   maxWidth: Dp,
   maxHeight: Dp,
   action: MaestroDriverActionType? = null,
-  modifier: Modifier = Modifier
 ) {
   if (action is MaestroDriverActionType.AssertCondition) {
     val checkSize = 20.dp
@@ -154,12 +151,12 @@ fun ScreenshotAnnotation(
     val arrowSize = 28.dp
     val backgroundSize = 40.dp
 
-    // Determine arrow symbol based on direction
-    val arrowSymbol = when (action.direction.uppercase()) {
-      "UP" -> "↑"
-      "DOWN" -> "↓"
-      "LEFT" -> "←"
-      "RIGHT" -> "→"
+    // Determine arrow icon based on direction
+    val arrowIcon = when (action.direction.uppercase()) {
+      "UP" -> Icons.Filled.ArrowUpward
+      "DOWN" -> Icons.Filled.ArrowDownward
+      "LEFT" -> Icons.Filled.ArrowBack
+      "RIGHT" -> Icons.Filled.ArrowForward
       else -> error("Invalid swipe direction: ${action.direction}")
     }
 
@@ -174,12 +171,13 @@ fun ScreenshotAnnotation(
           2.dp, Color.Blue.copy(alpha = 0.6f), shape = CircleShape
         )
     ) {
-      Text(
-        text = arrowSymbol,
-        fontSize = 28.sp,
-        fontWeight = FontWeight.Bold,
-        color = Color.Blue.copy(alpha = 0.7f),
-        modifier = Modifier.align(Alignment.Center)
+      Icon(
+        imageVector = arrowIcon,
+        contentDescription = "Swipe ${action.direction}",
+        modifier = Modifier
+          .size(arrowSize)
+          .align(Alignment.Center),
+        tint = Color.Blue.copy(alpha = 0.7f)
       )
     }
   } else {

@@ -45,6 +45,7 @@ jobs:
 
     steps:
       - name: Enable KVM group perms
+        shell: bash
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
@@ -100,28 +101,18 @@ jobs:
             
             echo "Pulling logs from device..."
             mkdir -p "$(pwd)/trailblaze-logs"
-            adb pull /sdcard/Download/trailblaze-logs/. "$(pwd)/trailblaze-logs" || echo "Failed to pull logs"
-            PULL_EXIT_CODE=$?
-            echo "Log pull exit code: $PULL_EXIT_CODE"
+            adb pull /sdcard/Download/trailblaze-logs/. "$(pwd)/trailblaze-logs" && echo "Log pull succeeded" || echo "Failed to pull logs"
             
             # Check what was pulled
             echo "Checking pulled logs..."
-            if [ -d "$(pwd)/trailblaze-logs" ]; then
-              echo "trailblaze-logs directory exists"
-              echo "Contents:"
-              ls -laR "$(pwd)/trailblaze-logs" || echo "Could not list directory"
-              FILE_COUNT=$(find "$(pwd)/trailblaze-logs" -type f 2>/dev/null | wc -l)
-              echo "Total files pulled: $FILE_COUNT"
-            else
-              echo "WARNING: trailblaze-logs directory does not exist!"
-            fi
-            
-            echo "========================================="
+            [ -d "$(pwd)/trailblaze-logs" ] || { echo "WARNING: trailblaze-logs directory does not exist!"; exit 0; }
+            ls -laR "$(pwd)/trailblaze-logs"
+            echo "Total files pulled: $(find "$(pwd)/trailblaze-logs" -type f 2>/dev/null | wc -l)"
             echo "Emulator script completed"
-            echo "========================================="
 
       - name: Verify logs were pulled
         if: always()
+        shell: bash
         run: |
           echo "========================================="
           echo "Verifying logs in workspace"
@@ -139,6 +130,7 @@ jobs:
       - name: Generate Trailblaze report
         if: always()
         continue-on-error: true
+        shell: bash
         run: |
           echo "========================================="
           echo "Building Compose Web/WASM UI..."
@@ -165,6 +157,7 @@ jobs:
       - name: Create artifacts
         if: always()
         continue-on-error: true
+        shell: bash
         run: |
           echo "========================================="
           echo "Creating Artifacts"
@@ -218,6 +211,7 @@ jobs:
 
       - name: Fail if tests failed
         if: steps.run-tests.outcome == 'failure'
+        shell: bash
         run: |
           echo "Tests failed - failing the workflow"
           exit 1

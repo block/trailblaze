@@ -23,6 +23,7 @@ data class TrailblazeServerState(
     val themeMode: ThemeMode = ThemeMode.System,
     val llmProvider: String = DEFAULT_DESKTOP_APP_MODEL_LLM_MODEL.trailblazeLlmProvider.id,
     val llmModel: String = DEFAULT_DESKTOP_APP_MODEL_LLM_MODEL.modelId, // Default to GPT-4.1 model
+    val setOfMarkEnabled: Boolean = true,
     val yamlContent: String = """
 - prompts:
     - step: click back
@@ -35,14 +36,20 @@ data class TrailblazeServerState(
     val currentSessionViewMode: String = "List", // Current view mode (List/Grid/LlmUsage/Recording)
     // UI Inspector preferences
     val uiInspectorScreenshotWidth: Int = DEFAULT_UI_INSPECTOR_SCREENSHOT_WIDTH,
-    val uiInspectorDetailsWidth: Int = DEFAULT_UI_INSPECTOR_DETAILS_WIDTH,
-    val uiInspectorHierarchyWidth: Int = DEFAULT_UI_INSPECTOR_HIERARCHY_WIDTH,
+    val uiInspectorDetailsWeight: Float = DEFAULT_UI_INSPECTOR_DETAILS_WEIGHT,
+    val uiInspectorHierarchyWeight: Float = DEFAULT_UI_INSPECTOR_HIERARCHY_WEIGHT,
     val uiInspectorFontScale: Float = DEFAULT_UI_INSPECTOR_FONT_SCALE,
     // Window position and size
     val windowX: Int? = null,
     val windowY: Int? = null,
     val windowWidth: Int? = null,
     val windowHeight: Int? = null,
+    // Logs directory path (null means use default: ~/.trailblaze/logs)
+    val logsDirectory: String? = null,
+    // Trails directory path (null means use default: ~/.trailblaze/trails)
+    val trailsDirectory: String? = null,
+    // Root app data directory path (null means use default: ~/.trailblaze)
+    val appDataDirectory: String? = null,
   ) {
 
     companion object {
@@ -61,19 +68,21 @@ data class TrailblazeServerState(
   companion object {
     const val HTTP_PORT = 52525
 
-    // UI Inspector default panel dimensions (in dp)
+    // UI Inspector default panel dimensions
     // UI Inspector is opened by clicking on LLM request screenshots to debug what the LLM "saw".
     // These values provide a balanced initial layout for the three-panel inspection interface.
-    // Users can adjust panel widths by dragging resizers, and their preferences are persisted.
+    // The screenshot panel has a fixed width, while details and hierarchy panels use weight ratios
+    // to automatically fill remaining space. Users can adjust the weight ratio by dragging the
+    // resizer between details and hierarchy panels, and their preferences are persisted.
 
-    // Default width for screenshot panel showing app UI with overlays
+    // Default width for screenshot panel showing app UI with overlays (fixed, in dp)
     const val DEFAULT_UI_INSPECTOR_SCREENSHOT_WIDTH = 600
 
-    // Default width for details panel showing element properties
-    const val DEFAULT_UI_INSPECTOR_DETAILS_WIDTH = 350
+    // Default weight for details panel showing element properties (relative to hierarchy)
+    const val DEFAULT_UI_INSPECTOR_DETAILS_WEIGHT = 1f
 
-    // Default width for hierarchy panel showing UI element tree
-    const val DEFAULT_UI_INSPECTOR_HIERARCHY_WIDTH = 450
+    // Default weight for hierarchy panel showing UI element tree (relative to details)
+    const val DEFAULT_UI_INSPECTOR_HIERARCHY_WEIGHT = 1f
 
     // Default font scale (1.0 = 100%, adjustable from 0.5 to 2.0)
     const val DEFAULT_UI_INSPECTOR_FONT_SCALE = 1f

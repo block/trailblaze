@@ -14,6 +14,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.filled.Assessment
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.FilterList
@@ -24,7 +26,6 @@ import androidx.compose.material.icons.filled.Upload
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Card
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
@@ -49,9 +50,9 @@ import kotlinx.datetime.toLocalDateTime
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.logs.model.SessionStatus
+import xyz.block.trailblaze.ui.composables.FullScreenModalOverlay
 import xyz.block.trailblaze.ui.composables.SelectableText
 import xyz.block.trailblaze.ui.composables.StatusBadge
-import xyz.block.trailblaze.ui.composables.getIcon
 import xyz.block.trailblaze.ui.icons.Android
 import xyz.block.trailblaze.ui.icons.Apple
 import xyz.block.trailblaze.ui.icons.BrowserChrome
@@ -78,6 +79,7 @@ fun getDeviceChipColors() = AssistChipDefaults.assistChipColors(
 @Composable
 fun SessionListComposable(
   sessions: List<SessionInfo>,
+  testResultsSummaryView: @Composable () -> Unit,
   sessionClicked: (SessionInfo) -> Unit,
   deleteSession: ((SessionInfo) -> Unit)?,
   clearAllLogs: (() -> Unit)?,
@@ -96,12 +98,15 @@ fun SessionListComposable(
   var selectedClassifiers by remember { mutableStateOf(setOf<String>()) }
   var showFilters by remember { mutableStateOf(false) }
   var searchKeyword by remember { mutableStateOf("") }
+  var showTestResults by remember { mutableStateOf(false) }
 
   // Collect all unique values for filters
   val allPriorities = sessions.mapNotNull { it.trailConfig?.priority }.distinct().sorted()
   val allStatuses =
-    listOf("In Progress", "Succeeded", "Succeeded (Fallback)", "Failed", "Failed (Fallback)", "Timeout",
-      "Max Calls Limit")
+    listOf(
+      "In Progress", "Succeeded", "Succeeded (Fallback)", "Failed", "Failed (Fallback)", "Timeout",
+      "Max Calls Limit"
+    )
   val allPlatforms =
     sessions.mapNotNull { it.trailblazeDeviceInfo?.platform?.name }.distinct().sorted()
   val allClassifiers =
@@ -110,8 +115,8 @@ fun SessionListComposable(
   // Filter sessions
   val filteredSessions = sessions.filter { session ->
     val priorityMatch = selectedPriorities.isEmpty() ||
-      session.trailConfig?.priority?.let { it in selectedPriorities } == true ||
-      (session.trailConfig?.priority == null && selectedPriorities.isEmpty())
+        session.trailConfig?.priority?.let { it in selectedPriorities } == true ||
+        (session.trailConfig?.priority == null && selectedPriorities.isEmpty())
 
     val statusMatch = if (selectedStatuses.isEmpty()) {
       true
@@ -130,459 +135,473 @@ fun SessionListComposable(
     }
 
     val platformMatch = selectedPlatforms.isEmpty() ||
-      session.trailblazeDeviceInfo?.platform?.name?.let { it in selectedPlatforms } == true
+        session.trailblazeDeviceInfo?.platform?.name?.let { it in selectedPlatforms } == true
 
     val classifierMatch = selectedClassifiers.isEmpty() ||
-      session.trailblazeDeviceInfo?.classifiers?.any { it in selectedClassifiers } == true
+        session.trailblazeDeviceInfo?.classifiers?.any { it in selectedClassifiers } == true
 
     // Keyword search - match against display name and description (case-insensitive)
     val keywordMatch = searchKeyword.isEmpty() ||
-      session.displayName.contains(searchKeyword, ignoreCase = true) ||
-      session.trailConfig?.description?.contains(searchKeyword, ignoreCase = true) == true ||
-      session.trailConfig?.id?.contains(searchKeyword, ignoreCase = true) == true ||
-      session.testClass?.contains(searchKeyword, ignoreCase = true) == true ||
-      session.testName?.contains(searchKeyword, ignoreCase = true) == true ||
-      session.trailConfig?.title?.contains(searchKeyword, ignoreCase = true) == true
+        session.displayName.contains(searchKeyword, ignoreCase = true) ||
+        session.trailConfig?.description?.contains(searchKeyword, ignoreCase = true) == true ||
+        session.trailConfig?.id?.contains(searchKeyword, ignoreCase = true) == true ||
+        session.testClass?.contains(searchKeyword, ignoreCase = true) == true ||
+        session.testName?.contains(searchKeyword, ignoreCase = true) == true ||
+        session.trailConfig?.title?.contains(searchKeyword, ignoreCase = true) == true
 
     priorityMatch && statusMatch && platformMatch && classifierMatch && keywordMatch
   }
 
   // Wrap content in a key that changes with the tick to ensure subtree recomposes periodically
-  Column {
-    Row(
-      modifier = Modifier.fillMaxWidth(),
-      horizontalArrangement = Arrangement.SpaceBetween,
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
-      SelectableText(
-        "List of Trailblaze Sessions",
-        modifier = Modifier.padding(8.dp),
-        style = MaterialTheme.typography.headlineSmall,
-      )
+  Box {
+    Column {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        SelectableText(
+          "Trailblaze Sessions",
+          modifier = Modifier.padding(8.dp),
+          style = MaterialTheme.typography.headlineSmall,
+        )
 
-      Row {
-        var expanded by remember { mutableStateOf(false) }
-        Box {
-          IconButton(onClick = { expanded = true }) {
-            Icon(
-              imageVector = Icons.Filled.MoreVert,
-              contentDescription = "More Options"
-            )
-          }
-          DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false },
-          ) {
-            DropdownMenuItem(
-              leadingIcon = {
-                Icon(
-                  Icons.Default.Folder, contentDescription = "Open Logs Folder"
-                )
-              },
-              text = { Text("Open Logs Folder") },
-              enabled = openLogsFolderRoot != null,
-              onClick = {
-                openLogsFolderRoot?.invoke()
-                expanded = false
-              }
-            )
-            DropdownMenuItem(
-              leadingIcon = {
-                Icon(
-                  Icons.Default.DeleteSweep, contentDescription = "Clear All Logs"
-                )
-              },
-              text = { Text("Clear All Logs") },
-              enabled = clearAllLogs != null,
-              onClick = {
-                clearAllLogs?.invoke()
-                expanded = false
-              }
-            )
-            if (onImportSession != null) {
+        Row {
+          var expanded by remember { mutableStateOf(false) }
+          Box {
+            IconButton(onClick = { expanded = true }) {
+              Icon(
+                imageVector = Icons.Filled.MoreVert,
+                contentDescription = "More Options"
+              )
+            }
+            DropdownMenu(
+              expanded = expanded,
+              onDismissRequest = { expanded = false },
+            ) {
               DropdownMenuItem(
                 leadingIcon = {
                   Icon(
-                    Icons.Default.Upload, contentDescription = "Import Session"
+                    Icons.Default.Assessment, contentDescription = "Show Test Results"
                   )
                 },
-                text = { Text("Import Session") },
+                text = { Text("Show Test Results") },
                 onClick = {
-                  onImportSession.invoke(Unit)
+                  showTestResults = true
                   expanded = false
                 }
               )
-            }
-          }
-        }
-      }
-    }
-
-    // Search bar and Filters button
-    Row(
-      modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
-      horizontalArrangement = Arrangement.spacedBy(8.dp),
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
-      OutlinedTextField(
-        value = searchKeyword,
-        onValueChange = { searchKeyword = it },
-        label = { Text("Search sessions...") },
-        placeholder = { Text("Filter by name or description") },
-        modifier = Modifier.weight(1f),
-        singleLine = true
-      )
-
-      OutlinedButton(
-        onClick = { showFilters = !showFilters }
-      ) {
-        Icon(
-          Icons.Default.FilterList, contentDescription = "Filters",
-          modifier = Modifier.size(16.dp)
-        )
-        Spacer(modifier = Modifier.width(4.dp))
-        Text("Filters")
-      }
-    }
-
-    // Filter section
-    if (showFilters) {
-      Card(
-        modifier = Modifier.fillMaxWidth().padding(8.dp)
-      ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-          Text("Filters", style = MaterialTheme.typography.headlineSmall)
-          Spacer(modifier = Modifier.height(12.dp))
-
-          // Priority filters
-          if (allPriorities.isNotEmpty()) {
-            Text("Priority", style = MaterialTheme.typography.labelLarge)
-            Row(modifier = Modifier.padding(vertical = 8.dp)) {
-              allPriorities.forEach { priority ->
-                FilterChip(
-                  onClick = {
-                    selectedPriorities = if (priority in selectedPriorities) {
-                      selectedPriorities - priority
-                    } else {
-                      selectedPriorities + priority
-                    }
-                  },
-                  label = { Text(priority) },
-                  selected = priority in selectedPriorities,
-                  modifier = Modifier.padding(end = 4.dp)
-                )
-              }
-            }
-          }
-
-          // Status filters
-          Text("Status", style = MaterialTheme.typography.labelLarge)
-          Row(modifier = Modifier.padding(vertical = 8.dp)) {
-            allStatuses.forEach { status ->
-              FilterChip(
-                onClick = {
-                  selectedStatuses = if (status in selectedStatuses) {
-                    selectedStatuses - status
-                  } else {
-                    selectedStatuses + status
-                  }
-                },
-                label = { Text(status) },
-                selected = status in selectedStatuses,
-                modifier = Modifier.padding(end = 4.dp)
-              )
-            }
-          }
-
-          // Platform filters
-          if (allPlatforms.isNotEmpty()) {
-            Text("Platform", style = MaterialTheme.typography.labelLarge)
-            Row(modifier = Modifier.padding(vertical = 8.dp)) {
-              allPlatforms.forEach { platform ->
-                FilterChip(
-                  onClick = {
-                    selectedPlatforms = if (platform in selectedPlatforms) {
-                      selectedPlatforms - platform
-                    } else {
-                      selectedPlatforms + platform
-                    }
-                  },
-                  label = { Text(platform) },
-                  selected = platform in selectedPlatforms,
-                  modifier = Modifier.padding(end = 4.dp)
-                )
-              }
-            }
-          }
-
-          // Classifier filters
-          if (allClassifiers.isNotEmpty()) {
-            Text("Classifiers", style = MaterialTheme.typography.labelLarge)
-            Row(modifier = Modifier.padding(vertical = 8.dp)) {
-              allClassifiers.forEach { classifier ->
-                FilterChip(
-                  onClick = {
-                    selectedClassifiers = if (classifier in selectedClassifiers) {
-                      selectedClassifiers - classifier
-                    } else {
-                      selectedClassifiers + classifier
-                    }
-                  },
-                  label = { Text(classifier) },
-                  selected = classifier in selectedClassifiers,
-                  modifier = Modifier.padding(end = 4.dp)
-                )
-              }
-            }
-          }
-
-          // Clear filters button
-          if (selectedPriorities.isNotEmpty() || selectedStatuses.isNotEmpty() || selectedPlatforms.isNotEmpty() || selectedClassifiers.isNotEmpty() || searchKeyword.isNotEmpty()) {
-            OutlinedButton(
-              onClick = {
-                selectedPriorities = emptySet()
-                selectedStatuses = emptySet()
-                selectedPlatforms = emptySet()
-                selectedClassifiers = emptySet()
-                searchKeyword = ""
-              },
-              modifier = Modifier.padding(top = 8.dp)
-            ) {
-              Text("Clear All Filters")
-            }
-          }
-        }
-      }
-    }
-
-    val groupedSessions: Map<LocalDate, List<SessionInfo>> = filteredSessions.groupBy {
-      it.timestamp.toLocalDateTime(TimeZone.currentSystemDefault()).date
-    }
-
-    LazyColumn(
-      modifier = Modifier.padding(start = 8.dp, end = 8.dp),
-    ) {
-      groupedSessions.toList().sortedByDescending { it.first }.forEach { (date, sessionsForDay) ->
-        item {
-          Text(
-            text = date.toString(), // Consider a more friendly format
-            style = MaterialTheme.typography.headlineMedium,
-            modifier = Modifier.padding(vertical = 8.dp)
-          )
-        }
-
-        items(sessionsForDay.sortedByDescending { it.timestamp }) { session: SessionInfo ->
-          Card(
-            modifier = Modifier.padding(bottom = 8.dp).fillMaxWidth(),
-            onClick = {
-              sessionClicked(session)
-            },
-          ) {
-            Column {
-              Row(
-                modifier = Modifier.padding(8.dp).fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.Top,
-              ) {
-                val time = session.timestamp.toLocalDateTime(TimeZone.currentSystemDefault()).time
-                Column(modifier = Modifier.weight(1f)) {
-                  // First row: Time and test class/method name
-                  val timeString = "${time.hour.toString().padStart(2, '0')}:${
-                    time.minute.toString()
-                      .padStart(2, '0')
-                  }"
-
-                  SelectableText(
-                    text = "$timeString - ${
-                      session.testClass?.substringAfterLast(
-                        "."
-                      ) ?: ""
-                    }${if (session.testName != null) "::${session.testName}" else ""}",
-                    modifier = Modifier.padding(bottom = 2.dp),
+              DropdownMenuItem(
+                leadingIcon = {
+                  Icon(
+                    Icons.Default.Folder, contentDescription = "Open Logs Folder"
                   )
-
-                  // Second row: Title (if available)
-                  session.trailConfig?.title?.let { title ->
-                    SelectableText(
-                      text = title,
-                      style = MaterialTheme.typography.bodyMedium,
-                      fontWeight = FontWeight.Bold,
-                      color = MaterialTheme.colorScheme.onSurfaceVariant,
-                      modifier = Modifier.padding(bottom = 4.dp),
+                },
+                text = { Text("Open Logs Folder") },
+                enabled = openLogsFolderRoot != null,
+                onClick = {
+                  openLogsFolderRoot?.invoke()
+                  expanded = false
+                }
+              )
+              DropdownMenuItem(
+                leadingIcon = {
+                  Icon(
+                    Icons.Default.DeleteSweep, contentDescription = "Clear All Logs"
+                  )
+                },
+                text = { Text("Clear All Logs") },
+                enabled = clearAllLogs != null,
+                onClick = {
+                  clearAllLogs?.invoke()
+                  expanded = false
+                }
+              )
+              if (onImportSession != null) {
+                DropdownMenuItem(
+                  leadingIcon = {
+                    Icon(
+                      Icons.Default.Upload, contentDescription = "Import Session"
                     )
+                  },
+                  text = { Text("Import Session") },
+                  onClick = {
+                    onImportSession.invoke(Unit)
+                    expanded = false
                   }
+                )
+              }
+            }
+          }
+        }
+      }
 
-                  // Combined device info and metadata row
-                  Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.Start
-                  ) {
-                    // Metadata (ID, priority) first
-                    session.trailConfig?.let { metadata ->
-                      metadata.id?.let { id ->
-                        AssistChip(
-                          onClick = { },
-                          colors = getIdChipColors(),
-                          label = {
-                            Text(
-                              text = "ID: $id",
-                              style = MaterialTheme.typography.labelSmall
-                            )
-                          },
-                          modifier = Modifier.padding(end = 4.dp, bottom = 2.dp)
-                        )
-                      }
+      // Search bar and Filters button
+      Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        OutlinedTextField(
+          value = searchKeyword,
+          onValueChange = { searchKeyword = it },
+          label = { Text("Search sessions...") },
+          placeholder = { Text("Filter by name or description") },
+          modifier = Modifier.weight(1f),
+          singleLine = true
+        )
 
-                      metadata.priority?.let { priority ->
-                        AssistChip(
-                          onClick = { },
-                          colors = getPriorityChipColors(),
-                          label = {
-                            Text(
-                              text = "P: $priority",
-                              style = MaterialTheme.typography.labelSmall
-                            )
-                          },
-                          modifier = Modifier.padding(end = 4.dp, bottom = 2.dp)
-                        )
+        OutlinedButton(
+          onClick = { showFilters = !showFilters }
+        ) {
+          Icon(
+            Icons.Default.FilterList, contentDescription = "Filters",
+            modifier = Modifier.size(16.dp)
+          )
+          Spacer(modifier = Modifier.width(4.dp))
+          Text("Filters")
+        }
+      }
+
+      // Filter section
+      if (showFilters) {
+        Card(
+          modifier = Modifier.fillMaxWidth().padding(8.dp)
+        ) {
+          Column(modifier = Modifier.padding(16.dp)) {
+            Text("Filters", style = MaterialTheme.typography.headlineSmall)
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Priority filters
+            if (allPriorities.isNotEmpty()) {
+              Text("Priority", style = MaterialTheme.typography.labelLarge)
+              Row(modifier = Modifier.padding(vertical = 8.dp)) {
+                allPriorities.forEach { priority ->
+                  FilterChip(
+                    onClick = {
+                      selectedPriorities = if (priority in selectedPriorities) {
+                        selectedPriorities - priority
+                      } else {
+                        selectedPriorities + priority
                       }
+                    },
+                    label = { Text(priority) },
+                    selected = priority in selectedPriorities,
+                    modifier = Modifier.padding(end = 4.dp)
+                  )
+                }
+              }
+            }
+
+            // Status filters
+            Text("Status", style = MaterialTheme.typography.labelLarge)
+            Row(modifier = Modifier.padding(vertical = 8.dp)) {
+              allStatuses.forEach { status ->
+                FilterChip(
+                  onClick = {
+                    selectedStatuses = if (status in selectedStatuses) {
+                      selectedStatuses - status
+                    } else {
+                      selectedStatuses + status
                     }
+                  },
+                  label = { Text(status) },
+                  selected = status in selectedStatuses,
+                  modifier = Modifier.padding(end = 4.dp)
+                )
+              }
+            }
 
-                    // Show imported badge if session was imported
-                    if (session.sessionId in importedSessionIds) {
-                      AssistChip(
-                        onClick = { },
-                        colors = AssistChipDefaults.assistChipColors(
-                          containerColor = MaterialTheme.colorScheme.tertiaryContainer,
-                          labelColor = MaterialTheme.colorScheme.onTertiaryContainer
-                        ),
-                        label = {
-                          Text(
-                            text = "IMPORTED",
-                            style = MaterialTheme.typography.labelSmall
-                          )
-                        },
-                        modifier = Modifier.padding(end = 4.dp, bottom = 2.dp)
+            // Platform filters
+            if (allPlatforms.isNotEmpty()) {
+              Text("Platform", style = MaterialTheme.typography.labelLarge)
+              Row(modifier = Modifier.padding(vertical = 8.dp)) {
+                allPlatforms.forEach { platform ->
+                  FilterChip(
+                    onClick = {
+                      selectedPlatforms = if (platform in selectedPlatforms) {
+                        selectedPlatforms - platform
+                      } else {
+                        selectedPlatforms + platform
+                      }
+                    },
+                    label = { Text(platform) },
+                    selected = platform in selectedPlatforms,
+                    modifier = Modifier.padding(end = 4.dp)
+                  )
+                }
+              }
+            }
+
+            // Classifier filters
+            if (allClassifiers.isNotEmpty()) {
+              Text("Classifiers", style = MaterialTheme.typography.labelLarge)
+              Row(modifier = Modifier.padding(vertical = 8.dp)) {
+                allClassifiers.forEach { classifier ->
+                  FilterChip(
+                    onClick = {
+                      selectedClassifiers = if (classifier in selectedClassifiers) {
+                        selectedClassifiers - classifier
+                      } else {
+                        selectedClassifiers + classifier
+                      }
+                    },
+                    label = { Text(classifier) },
+                    selected = classifier in selectedClassifiers,
+                    modifier = Modifier.padding(end = 4.dp)
+                  )
+                }
+              }
+            }
+
+            // Clear filters button
+            if (selectedPriorities.isNotEmpty() || selectedStatuses.isNotEmpty() || selectedPlatforms.isNotEmpty() || selectedClassifiers.isNotEmpty() || searchKeyword.isNotEmpty()) {
+              OutlinedButton(
+                onClick = {
+                  selectedPriorities = emptySet()
+                  selectedStatuses = emptySet()
+                  selectedPlatforms = emptySet()
+                  selectedClassifiers = emptySet()
+                  searchKeyword = ""
+                },
+                modifier = Modifier.padding(top = 8.dp)
+              ) {
+                Text("Clear All Filters")
+              }
+            }
+          }
+        }
+      }
+
+      val groupedSessions: Map<LocalDate, List<SessionInfo>> = filteredSessions.groupBy {
+        it.timestamp.toLocalDateTime(TimeZone.currentSystemDefault()).date
+      }
+
+      LazyColumn(
+        modifier = Modifier.padding(start = 8.dp, end = 8.dp),
+      ) {
+        groupedSessions.toList().sortedByDescending { it.first }.forEach { (date, sessionsForDay) ->
+          item {
+            Text(
+              text = date.toString(), // Consider a more friendly format
+              style = MaterialTheme.typography.headlineMedium,
+              modifier = Modifier.padding(vertical = 8.dp)
+            )
+          }
+
+          items(sessionsForDay.sortedByDescending { it.timestamp }) { session: SessionInfo ->
+            Card(
+              modifier = Modifier.padding(bottom = 8.dp).fillMaxWidth(),
+              onClick = {
+                sessionClicked(session)
+              },
+            ) {
+              Column {
+                Row(
+                  modifier = Modifier.padding(8.dp).fillMaxWidth(),
+                  horizontalArrangement = Arrangement.SpaceBetween,
+                  verticalAlignment = Alignment.Top,
+                ) {
+                  val time = session.timestamp.toLocalDateTime(TimeZone.currentSystemDefault()).time
+                  Column(modifier = Modifier.weight(1f)) {
+                    // First row: Time and test class/method name
+                    val timeString = "${time.hour.toString().padStart(2, '0')}:${
+                      time.minute.toString()
+                        .padStart(2, '0')
+                    }"
+
+                    SelectableText(
+                      text = "$timeString - ${
+                        session.testClass?.substringAfterLast(
+                          "."
+                        ) ?: ""
+                      }${if (session.testName != null) "::${session.testName}" else ""}",
+                      modifier = Modifier.padding(bottom = 2.dp),
+                    )
+
+                    // Second row: Title (if available)
+                    session.trailConfig?.title?.let { title ->
+                      SelectableText(
+                        text = title,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(bottom = 4.dp),
                       )
                     }
 
-                    // Device info after metadata
-                    session.trailblazeDeviceInfo?.let { trailblazeDeviceInfo ->
-                      AssistChip(
-                        onClick = { },
-                        colors = getDeviceChipColors(),
-                        label = {
-                          Icon(
-                            imageVector = when (trailblazeDeviceInfo.platform) {
-                              TrailblazeDevicePlatform.ANDROID -> Android
-                              TrailblazeDevicePlatform.IOS -> Apple
-                              TrailblazeDevicePlatform.WEB -> BrowserChrome
+                    // Combined device info and metadata row
+                    Row(
+                      modifier = Modifier.fillMaxWidth(),
+                      horizontalArrangement = Arrangement.Start
+                    ) {
+                      // Metadata (ID, priority) first
+                      session.trailConfig?.let { metadata ->
+                        metadata.id?.let { id ->
+                          AssistChip(
+                            onClick = { },
+                            colors = getIdChipColors(),
+                            label = {
+                              Text(
+                                text = "ID: $id",
+                                style = MaterialTheme.typography.labelSmall
+                              )
                             },
-                            contentDescription = "Device Platform",
-                            modifier = Modifier.size(12.dp)
+                            modifier = Modifier.padding(end = 4.dp, bottom = 2.dp)
                           )
-                          Spacer(modifier = Modifier.width(4.dp))
-                          Text(
-                            text = trailblazeDeviceInfo.platform.name.lowercase(),
-                            style = MaterialTheme.typography.labelSmall
-                          )
-                        },
-                        modifier = Modifier.padding(end = 4.dp, bottom = 2.dp)
-                      )
+                        }
 
-                      trailblazeDeviceInfo.classifiers.forEach { classifier ->
+                        metadata.priority?.let { priority ->
+                          AssistChip(
+                            onClick = { },
+                            colors = getPriorityChipColors(),
+                            label = {
+                              Text(
+                                text = "P: $priority",
+                                style = MaterialTheme.typography.labelSmall
+                              )
+                            },
+                            modifier = Modifier.padding(end = 4.dp, bottom = 2.dp)
+                          )
+                        }
+                      }
+
+                      // Show imported badge if session was imported
+                      if (session.sessionId in importedSessionIds) {
+                        AssistChip(
+                          onClick = { },
+                          colors = AssistChipDefaults.assistChipColors(
+                            containerColor = MaterialTheme.colorScheme.tertiaryContainer,
+                            labelColor = MaterialTheme.colorScheme.onTertiaryContainer
+                          ),
+                          label = {
+                            Text(
+                              text = "IMPORTED",
+                              style = MaterialTheme.typography.labelSmall
+                            )
+                          },
+                          modifier = Modifier.padding(end = 4.dp, bottom = 2.dp)
+                        )
+                      }
+
+                      // Device info after metadata
+                      session.trailblazeDeviceInfo?.let { trailblazeDeviceInfo ->
                         AssistChip(
                           onClick = { },
                           colors = getDeviceChipColors(),
                           label = {
+                            Icon(
+                              imageVector = when (trailblazeDeviceInfo.platform) {
+                                TrailblazeDevicePlatform.ANDROID -> Android
+                                TrailblazeDevicePlatform.IOS -> Apple
+                                TrailblazeDevicePlatform.WEB -> BrowserChrome
+                              },
+                              contentDescription = "Device Platform",
+                              modifier = Modifier.size(12.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
                             Text(
-                              text = classifier.lowercase(),
+                              text = trailblazeDeviceInfo.platform.name.lowercase(),
                               style = MaterialTheme.typography.labelSmall
                             )
                           },
                           modifier = Modifier.padding(end = 4.dp, bottom = 2.dp)
                         )
+
+                        trailblazeDeviceInfo.classifiers.forEach { classifier ->
+                          AssistChip(
+                            onClick = { },
+                            colors = getDeviceChipColors(),
+                            label = {
+                              Text(
+                                text = classifier.lowercase(),
+                                style = MaterialTheme.typography.labelSmall
+                              )
+                            },
+                            modifier = Modifier.padding(end = 4.dp, bottom = 2.dp)
+                          )
+                        }
                       }
                     }
                   }
-                }
 
-                // Status and menu on the right
-                Row(
-                  verticalAlignment = Alignment.CenterVertically
-                ) {
-                  StatusBadge(
-                    status = session.latestStatus
-                  )
+                  // Status and menu on the right
+                  Row(
+                    verticalAlignment = Alignment.CenterVertically
+                  ) {
+                    StatusBadge(
+                      status = session.latestStatus
+                    )
 
-                  // Only show menu if at least one action is available
-                  if (deleteSession != null || openLogsFolder != null) {
-                    var sessionListItemDropdownShowing by remember { mutableStateOf(false) }
-                    Box {
-                      IconButton(onClick = { sessionListItemDropdownShowing = true }) {
-                        Icon(
-                          imageVector = Icons.Filled.MoreVert,
-                          contentDescription = "More Options"
-                        )
-                      }
-                      DropdownMenu(
-                        expanded = sessionListItemDropdownShowing,
-                        onDismissRequest = { sessionListItemDropdownShowing = false },
-                      ) {
-                        DropdownMenuItem(
-                          leadingIcon = {
-                            Icon(
-                              Icons.AutoMirrored.Filled.OpenInNew,
-                              contentDescription = "Open Session"
+                    // Only show menu if at least one action is available
+                    if (deleteSession != null || openLogsFolder != null) {
+                      var sessionListItemDropdownShowing by remember { mutableStateOf(false) }
+                      Box {
+                        IconButton(onClick = { sessionListItemDropdownShowing = true }) {
+                          Icon(
+                            imageVector = Icons.Filled.MoreVert,
+                            contentDescription = "More Options"
+                          )
+                        }
+                        DropdownMenu(
+                          expanded = sessionListItemDropdownShowing,
+                          onDismissRequest = { sessionListItemDropdownShowing = false },
+                        ) {
+                          DropdownMenuItem(
+                            leadingIcon = {
+                              Icon(
+                                Icons.AutoMirrored.Filled.OpenInNew,
+                                contentDescription = "Open Session"
+                              )
+                            },
+                            text = { Text("Open Session") },
+                            onClick = {
+                              sessionClicked(session)
+                              sessionListItemDropdownShowing = false
+                            }
+                          )
+                          if (openLogsFolder != null) {
+                            DropdownMenuItem(
+                              leadingIcon = {
+                                Icon(
+                                  Icons.Default.Folder, contentDescription = "Open Logs Folder"
+                                )
+                              },
+                              text = { Text("Open Logs Folder") },
+                              onClick = {
+                                openLogsFolder.invoke(session)
+                                sessionListItemDropdownShowing = false
+                              }
                             )
-                          },
-                          text = { Text("Open Session") },
-                          onClick = {
-                            sessionClicked(session)
-                            sessionListItemDropdownShowing = false
                           }
-                        )
-                        if (openLogsFolder != null) {
-                          DropdownMenuItem(
-                            leadingIcon = {
-                              Icon(
-                                Icons.Default.Folder, contentDescription = "Open Logs Folder"
-                              )
-                            },
-                            text = { Text("Open Logs Folder") },
-                            onClick = {
-                              openLogsFolder.invoke(session)
-                              sessionListItemDropdownShowing = false
-                            }
-                          )
-                        }
-                        if (deleteSession != null) {
-                          DropdownMenuItem(
-                            leadingIcon = {
-                              Icon(
-                                Icons.Default.Delete, contentDescription = "Delete Session"
-                              )
-                            },
-                            text = { Text("Delete Session") },
-                            onClick = {
-                              deleteSession.invoke(session)
-                              sessionListItemDropdownShowing = false
-                            }
-                          )
-                        }
-                        if (onExportSession != null) {
-                          DropdownMenuItem(
-                            leadingIcon = {
-                              Icon(
-                                Icons.Default.Save, contentDescription = "Export Session"
-                              )
-                            },
-                            text = { Text("Export Session") },
-                            onClick = {
-                              onExportSession.invoke(session)
-                              sessionListItemDropdownShowing = false
-                            }
-                          )
+                          if (deleteSession != null) {
+                            DropdownMenuItem(
+                              leadingIcon = {
+                                Icon(
+                                  Icons.Default.Delete, contentDescription = "Delete Session"
+                                )
+                              },
+                              text = { Text("Delete Session") },
+                              onClick = {
+                                deleteSession.invoke(session)
+                                sessionListItemDropdownShowing = false
+                              }
+                            )
+                          }
+                          if (onExportSession != null) {
+                            DropdownMenuItem(
+                              leadingIcon = {
+                                Icon(
+                                  Icons.Default.Save, contentDescription = "Export Session"
+                                )
+                              },
+                              text = { Text("Export Session") },
+                              onClick = {
+                                onExportSession.invoke(session)
+                                sessionListItemDropdownShowing = false
+                              }
+                            )
+                          }
                         }
                       }
                     }
@@ -591,6 +610,34 @@ fun SessionListComposable(
               }
             }
           }
+        }
+      }
+    }
+
+    // Show test results in a modal overlay when requested
+    if (showTestResults) {
+      FullScreenModalOverlay(
+        onDismiss = { showTestResults = false }
+      ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+          ) {
+            Text(
+              "Test Results",
+              style = MaterialTheme.typography.headlineMedium
+            )
+            IconButton(onClick = { showTestResults = false }) {
+              Icon(
+                imageVector = Icons.Default.Close,
+                contentDescription = "Close"
+              )
+            }
+          }
+          Spacer(modifier = Modifier.height(16.dp))
+          testResultsSummaryView()
         }
       }
     }

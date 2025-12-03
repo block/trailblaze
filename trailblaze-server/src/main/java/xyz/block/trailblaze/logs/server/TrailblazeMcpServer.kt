@@ -43,21 +43,14 @@ import xyz.block.trailblaze.mcp.utils.KoogToMcpExt.toJSONSchema
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
 import java.util.concurrent.ConcurrentHashMap
-import kotlin.Boolean
-import kotlin.Int
-import kotlin.OptIn
-import kotlin.String
-import kotlin.Suppress
-import kotlin.invoke
-import kotlin.let
 
 class TrailblazeMcpServer(
   val logsRepo: LogsRepo,
   val isOnDeviceTarget: Boolean = false,
   val targetTestAppProvider: () -> TrailblazeHostAppTarget,
+  val homeCallbackHandler: ((parameters: Map<String, List<String>>) -> Result<String>)? = null,
   val additionalToolsProvider: (TrailblazeMcpSseSessionContext, Server) -> ToolRegistry = { _, _ -> ToolRegistry {} },
 ) {
-
   // Per-session progress token tracking (multiplatform compatible)
   private val sessionContexts = ConcurrentHashMap<McpSseSessionId, TrailblazeMcpSseSessionContext>()
 
@@ -173,7 +166,7 @@ class TrailblazeMcpServer(
         )
       },
     ) {
-      logsServerKtorEndpoints(logsRepo)
+      logsServerKtorEndpoints(logsRepo, homeCallbackHandler = homeCallbackHandler)
       install(SSE)
       routing {
         sse("/sse") {
@@ -231,7 +224,7 @@ class TrailblazeMcpServer(
           val sessionContext = sessionContexts[McpSseSessionId(sessionId)]
           val sseServerTransport = sessionContext?.mcpServerSession?.transport as? SseServerTransport
           if (sseServerTransport == null) {
-            call.respond(HttpStatusCode.Companion.NotFound, "Session not found")
+            call.respond(HttpStatusCode.NotFound, "Session not found")
             return@post
           }
           withContext(Dispatchers.IO) {

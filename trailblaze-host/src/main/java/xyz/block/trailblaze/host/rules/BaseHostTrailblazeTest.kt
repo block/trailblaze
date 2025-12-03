@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.host.rules
 
 import org.junit.Rule
+import org.junit.rules.RuleChain
 import xyz.block.trailblaze.TrailblazeYamlUtil
 import xyz.block.trailblaze.agent.TrailblazeElementComparator
 import xyz.block.trailblaze.agent.TrailblazeRunner
@@ -13,6 +14,8 @@ import xyz.block.trailblaze.host.devices.TrailblazeHostDeviceClassifier
 import xyz.block.trailblaze.host.rules.TrailblazeHostLlmConfig.DEFAULT_TRAILBLAZE_LLM_MODEL
 import xyz.block.trailblaze.http.DynamicLlmClient
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
+import xyz.block.trailblaze.model.TrailblazeConfig
+import xyz.block.trailblaze.rules.RetryRule
 import xyz.block.trailblaze.rules.TrailblazeLoggingRule
 import xyz.block.trailblaze.rules.TrailblazeRunnerUtil
 import xyz.block.trailblaze.session.TrailblazeSessionManager
@@ -28,21 +31,23 @@ import kotlin.reflect.KClass
 
 abstract class BaseHostTrailblazeTest(
   trailblazeDriverType: TrailblazeDriverType,
+  val config: TrailblazeConfig = TrailblazeConfig.DEFAULT,
   val trailblazeLlmModel: TrailblazeLlmModel = DEFAULT_TRAILBLAZE_LLM_MODEL,
   val dynamicLlmClient: DynamicLlmClient = TrailblazeHostDynamicLlmClientProvider(
     trailblazeLlmModel = trailblazeLlmModel,
     trailblazeDynamicLlmTokenProvider = TrailblazeHostDynamicLlmTokenProvider,
   ),
-  setOfMarkEnabled: Boolean = true,
   systemPromptTemplate: String? = null,
   trailblazeToolSet: TrailblazeToolSet? = null,
   customToolClasses: Set<KClass<out TrailblazeTool>> = setOf(),
   val sessionManager: TrailblazeSessionManager = TrailblazeSessionManager(),
+  maxRetries: Int = 0,
 ) {
+
   val hostRunner by lazy {
     MaestroHostRunnerImpl(
       requestedPlatform = trailblazeDriverType.platform,
-      setOfMarkEnabled = setOfMarkEnabled,
+      setOfMarkEnabled = config.setOfMarkEnabled,
       trailblazeLogger = loggingRule.trailblazeLogger,
     )
   }
@@ -65,11 +70,31 @@ abstract class BaseHostTrailblazeTest(
     )
   }
 
-  @get:Rule
   val loggingRule: TrailblazeLoggingRule = HostTrailblazeLoggingRule(
     trailblazeDeviceInfoProvider = { trailblazeDeviceInfo },
     sessionManager = sessionManager,
   )
+
+  /**
+   * RuleChain ensures RetryRule is the outermost rule, wrapping all other rules.
+   * This allows the retry logic to properly retry the entire test including all rule setup/teardown.
+   *
+   * IMPORTANT: When a retry occurs, the test instance is NOT re-instantiated.
+   * - The same test instance is reused across retry attempts
+   * - Instance variables persist across retries (not reset)
+   * - Rules in the chain (like loggingRule) ARE re-executed on each retry
+   *
+   * This works well for our tests because:
+   * - We test external state (iOS app, device) not internal test state
+   * - Each test method calls ensureTargetAppIsStopped() which cleans up app state
+   * - The lazy properties (hostRunner, trailblazeAgent) are fine to persist
+   *
+   * See [RetryRule] documentation for full details on retry behavior.
+   */
+  @get:Rule
+  val ruleChain: RuleChain = RuleChain
+    .outerRule(RetryRule(maxRetries = maxRetries))
+    .around(loggingRule)
 
   val trailblazeAgent by lazy {
     HostMaestroTrailblazeAgent(
@@ -83,7 +108,7 @@ abstract class BaseHostTrailblazeTest(
       "Dynamic Initial Tool Set",
       (
         trailblazeToolSet?.toolClasses
-          ?: TrailblazeToolSet.getSetOfMarkToolSet(setOfMarkEnabled).toolClasses
+          ?: TrailblazeToolSet.getLlmToolSet(config.setOfMarkEnabled).toolClasses
         ) + customToolClasses,
     ),
   )

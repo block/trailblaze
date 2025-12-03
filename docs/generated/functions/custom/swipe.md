@@ -8,11 +8,13 @@ The start and end points are automatically calculated based on the direction and
 `xyz.block.trailblaze.toolcalls.commands.SwipeTrailblazeTool`
 
 ### Registered `SwipeTrailblazeTool` in `ToolRegistry`
-### Required Parameters
-- `direction`: `String`
-  Valid values: UP, DOWN, LEFT, RIGHT
-
 ### Optional Parameters
+- `direction`: `[
+  "UP",
+  "DOWN",
+  "RIGHT",
+  "LEFT"
+]`
 - `swipeOnElementText`: `String`
   The text value to swipe on. If not provided, the swipe will be performed on the center of the screen.
 

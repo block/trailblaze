@@ -13,7 +13,7 @@ data class TrailblazeOnDeviceInstrumentationTarget(
   companion object {
     val DEFAULT_ANDROID_ON_DEVICE = TrailblazeOnDeviceInstrumentationTarget(
       testAppId = "xyz.block.trailblaze.runner",
-      fqTestName = "xyz.block.trailblaze.AndroidOnDeviceMcpServerTest",
+      fqTestName = "xyz.block.trailblaze.AndroidStandaloneServerTest",
       gradleInstallAndroidTestCommand = ":trailblaze-android-ondevice-mcp:installDebugAndroidTest",
     )
   }

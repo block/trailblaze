@@ -7,8 +7,57 @@ import java.net.URI
 import javax.imageio.ImageIO
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
+import xyz.block.trailblaze.ui.models.TrailblazeServerState
 
 object TrailblazeDesktopUtil {
+
+  /**
+   * The filename for Trailblaze settings.
+   */
+  const val SETTINGS_FILENAME = "trailblaze-settings.json"
+
+  /**
+   * Gets the default app data directory path.
+   * @return The default app data directory: ~/.trailblaze
+   */
+  fun getDefaultAppDataDirectory(): String {
+    return "${System.getProperty("user.home")}/.trailblaze"
+  }
+
+  /**
+   * Gets the settings file in the default app data directory.
+   * @return The settings file
+   */
+  fun getDefaultSettingsFile(): File {
+    return File(getDefaultAppDataDirectory(), SETTINGS_FILENAME)
+  }
+
+  /**
+   * Gets the effective app data directory based on the app config.
+   * @param appConfig The current app configuration
+   * @return The effective app data directory (configured or default)
+   */
+  fun getEffectiveAppDataDirectory(appConfig: TrailblazeServerState.SavedTrailblazeAppConfig): String {
+    return appConfig.appDataDirectory ?: getDefaultAppDataDirectory()
+  }
+
+  /**
+   * Gets the effective logs directory based on the app config.
+   * @param appConfig The current app configuration
+   * @return The effective logs directory (configured or default relative to app data directory)
+   */
+  fun getEffectiveLogsDirectory(appConfig: TrailblazeServerState.SavedTrailblazeAppConfig): String {
+    return appConfig.logsDirectory ?: "${getEffectiveAppDataDirectory(appConfig)}/logs"
+  }
+
+  /**
+   * Gets the effective trails directory based on the app config.
+   * @param appConfig The current app configuration
+   * @return The effective trails directory (configured or default relative to app data directory)
+   */
+  fun getEffectiveTrailsDirectory(appConfig: TrailblazeServerState.SavedTrailblazeAppConfig): String {
+    return appConfig.trailsDirectory ?: "${getEffectiveAppDataDirectory(appConfig)}/trails"
+  }
   /**
    * Sets the taskbar icon for macOS.
    *

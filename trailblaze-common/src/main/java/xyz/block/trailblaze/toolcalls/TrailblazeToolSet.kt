@@ -17,6 +17,7 @@ import xyz.block.trailblaze.toolcalls.commands.NetworkConnectionTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.OpenUrlTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.PressBackTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.PressKeyTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.ScrollUntilTextIsVisibleTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.SwipeTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.SwipeWithRelativeCoordinatesTool
@@ -65,6 +66,7 @@ abstract class TrailblazeToolSet(
         ObjectiveStatusTrailblazeTool::class,
         OpenUrlTrailblazeTool::class,
         PressBackTrailblazeTool::class,
+        PressKeyTrailblazeTool::class,
         ScrollUntilTextIsVisibleTrailblazeTool::class,
         SwipeTrailblazeTool::class,
         WaitForIdleSyncTrailblazeTool::class,

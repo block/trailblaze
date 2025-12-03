@@ -14,28 +14,23 @@ In this case the additional fields will be used to identify the specific view to
 ### Registered `ScrollUntilTextIsVisibleTrailblazeTool` in `ToolRegistry`
 ### Required Parameters
 - `text`: `String`
-  The text to match on. This is required.
-NOTE:
-- The text can be a regular expression.
-- If more than one view matches the text, other optional properties are required to disambiguate.
+  Text to search for while scrolling.
+
+### Optional Parameters
+- `id`: `String`
+  The element id to scroll until. REQUIRED: 'text' and/or 'id' parameter.
+- `index`: `Integer`
+  A 0-based index to disambiguate multiple views with the same text. Default is '0'.
 - `direction`: `[
   "UP",
   "DOWN",
   "RIGHT",
   "LEFT"
 ]`
-
-### Optional Parameters
-- `index`: `Integer`
-  0-based index of the view to select among those that match all other criteria.
-- `id`: `String`
-  Regex for selecting the view by id. This is helpful to disambiguate when multiple views have the same text.
 - `visibilityPercentage`: `Integer`
-  Percentage of element visible in viewport.
+  Percentage of element visible in viewport. Default is '100'.
 - `centerElement`: `Boolean`
-  Boolean to determine if it will attempt to stop scrolling when the element is closer to the screen center.
-- `enabled`: `Boolean`
-- `selected`: `Boolean`
+  If it will attempt to stop scrolling when the element is closer to the screen center. Default is 'false'.
 
 
 

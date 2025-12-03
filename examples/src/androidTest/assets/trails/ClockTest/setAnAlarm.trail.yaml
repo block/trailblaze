@@ -1,36 +1,37 @@
 - prompts:
-    - step: Launch the Clock app (com.android.deskclock) into a clean state
+    - step: Reinstall and launch the Clock app (com.android.deskclock)
       recording:
         tools:
           - launchApp:
               appId: com.android.deskclock
-          - tapOnElementBySelector:
-              reason: Go to the alarm section.
-              selector:
-                textRegex: ALARM
     - step: Add a new alarm for 7:30 AM
       recording:
         tools:
           - tapOnElementBySelector:
-              reason: To add a new alarm, tap the 'Add alarm' button (red + icon) at the bottom center of the screen.
+              reason: Switch to the ALARM tab before adding a new alarm.
+              selector:
+                textRegex: ALARM
+                idRegex: android:id/text1
+          - tapOnElementBySelector:
+              reason: To add a new alarm, I need to tap on the 'Add alarm' button, which is visually represented by the plus icon at the bottom center of the screen.
               selector:
                 textRegex: Add alarm
                 idRegex: com.android.deskclock:id/fab
           - tapOnElementBySelector:
-              reason: Set the hour to 7 for the alarm using the clock dial.
+              reason: Select 7 as the hour for the alarm on the radial time picker to set the alarm hour to 7.
               selector:
-                textRegex: "^7$"
+                textRegex: "7"
           - tapOnElementBySelector:
-              reason: Set the minutes to 30 for the alarm by tapping on the '30' minute mark on the clock dial.
+              reason: Choose 30 as the minute for the alarm, as required by the objective.
               selector:
-                textRegex: "^30$"
+                textRegex: "30"
           - tapOnElementBySelector:
-              reason: Tap AM radio button to switch time to AM, as the displayed time is currently on PM.
+              reason: Confirm setting the alarm for 7:30 AM by tapping the 'AM' radio button (currently 'PM' is selected).
               selector:
                 textRegex: AM
                 idRegex: android:id/am_label
           - tapOnElementBySelector:
-              reason: To save and confirm the new alarm set at 7:30 AM, tap the 'OK' button on the time picker dialog.
+              reason: To finalize adding the new alarm for 7:30 AM, I need to confirm the selected time by tapping the 'OK' button.
               selector:
                 textRegex: OK
                 idRegex: android:id/button1
@@ -38,16 +39,27 @@
       recording:
         tools:
           - tapOnElementBySelector:
-              reason: Turning off the active alarm which is currently set ON at 7:30 AM by toggling the switch at nodeId 30
+              reason: To decline notification permissions for the Clock app as the task requests to turn it off after being added.
               selector:
-                textRegex: ON
+                textRegex: DON’T ALLOW
+                idRegex: com.android.permissioncontroller:id/permission_deny_button
+          - tapOnElementBySelector:
+              reason: To turn off the alarm added for 7:30 AM as required by the objective.
+              selector:
                 idRegex: com.android.deskclock:id/onoff
                 checked: true
     - step: Delete the alarm
       recording:
         tools:
           - tapOnElementBySelector:
-              reason: Tap the visible 'Delete' button to delete the currently selected 7:30 AM alarm.
+              reason: To expand the 7:30 AM alarm and access alarm management options such as delete.
+              selector:
+                textRegex: Expand alarm
+                idRegex: com.android.deskclock:id/arrow
+                childOf:
+                  textRegex: 7:30 AM Alarm
+          - tapOnElementBySelector:
+              reason: To delete the 7:30 AM alarm as instructed.
               selector:
                 textRegex: Delete
                 idRegex: com.android.deskclock:id/delete

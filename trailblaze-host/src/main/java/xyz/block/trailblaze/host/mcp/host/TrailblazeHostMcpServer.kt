@@ -24,6 +24,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 
 class TrailblazeHostMcpServer(
   val logsRepo: LogsRepo,
+  val homeCallbackHandler: ((parameters: Map<String, List<String>>) -> Result<String>)? = null,
 ) {
   val loggingRule = HostTrailblazeLoggingRule(
     trailblazeDeviceInfoProvider = {
@@ -92,6 +93,7 @@ class TrailblazeHostMcpServer(
   val trailblazeMcpServer = TrailblazeMcpServer(
     logsRepo = logsRepo,
     targetTestAppProvider = { TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget },
+    homeCallbackHandler = homeCallbackHandler,
   ) { context: TrailblazeMcpSseSessionContext, server ->
     // Provide additional tools to the MCP server
     ToolRegistry {

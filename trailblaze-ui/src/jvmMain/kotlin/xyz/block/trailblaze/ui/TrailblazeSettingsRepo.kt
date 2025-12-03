@@ -14,7 +14,7 @@ import xyz.block.trailblaze.ui.tabs.session.SessionViewMode
 import java.io.File
 
 class TrailblazeSettingsRepo(
-  val settingsFile: File = File("build/trailblaze-settings.json"),
+  val settingsFile: File = File("build/${TrailblazeDesktopUtil.SETTINGS_FILENAME}"),
   private val initialConfig: SavedTrailblazeAppConfig,
 ) {
   private val trailblazeJson: Json = TrailblazeJson.defaultWithoutToolsInstance

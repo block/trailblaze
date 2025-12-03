@@ -15,6 +15,7 @@ import xyz.block.trailblaze.util.AndroidHostAdbUtils
 import xyz.block.trailblaze.util.HostAndroidDeviceConnectUtils
 
 class DesktopYamlRunner(
+  private val trailblazeHostAppTarget: TrailblazeHostAppTarget,
   private val onRunHostYaml: (RunOnHostParams) -> Unit,
 ) {
 
@@ -37,6 +38,7 @@ class DesktopYamlRunner(
       runYamlRequest = desktopRunYamlParams.runYamlRequest,
       onProgressMessage = desktopRunYamlParams.onProgressMessage,
       onConnectionStatus = desktopRunYamlParams.onConnectionStatus,
+      additionalInstrumentationArgs = desktopRunYamlParams.additionalInstrumentationArgs,
     )
   }
 
@@ -54,6 +56,7 @@ class DesktopYamlRunner(
     runYamlRequest: RunYamlRequest,
     onProgressMessage: (String) -> Unit,
     onConnectionStatus: (DeviceConnectionStatus) -> Unit,
+    additionalInstrumentationArgs: (suspend () -> Map<String, String>),
   ) {
     withContext(Dispatchers.IO) {
       // Wrap progress message callback to add device prefix
@@ -98,7 +101,7 @@ class DesktopYamlRunner(
         when (device.trailblazeDriverType) {
           TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION -> {
             val trailblazeOnDeviceInstrumentationTarget = targetTestApp?.getTrailblazeOnDeviceInstrumentationTarget()
-              ?: TrailblazeOnDeviceInstrumentationTarget.DEFAULT_ANDROID_ON_DEVICE
+              ?: trailblazeHostAppTarget.getTrailblazeOnDeviceInstrumentationTarget()
             HostAndroidDeviceConnectUtils.uninstallAllAndroidInstrumentationProcesses(
               trailblazeOnDeviceInstrumentationTargetTestApps = setOf(trailblazeOnDeviceInstrumentationTarget),
               deviceId = device.instanceId,
@@ -109,6 +112,7 @@ class DesktopYamlRunner(
               runYamlRequest = runYamlRequest,
               onProgressMessage = prefixedProgressMessage,
               onConnectionStatus = onConnectionStatus,
+              additionalInstrumentationArgs = additionalInstrumentationArgs,
             )
           }
 
@@ -155,12 +159,15 @@ class DesktopYamlRunner(
     runYamlRequest: RunYamlRequest,
     onConnectionStatus: (DeviceConnectionStatus) -> Unit,
     onProgressMessage: (String) -> Unit,
+    additionalInstrumentationArgs: (suspend () -> Map<String, String>?),
   ) {
     withContext(Dispatchers.IO) {
+      val additionalInstrumentationArgs = additionalInstrumentationArgs()
       val status = HostAndroidDeviceConnectUtils.connectToInstrumentationAndInstallAppIfNotAvailable(
         sendProgressMessage = onProgressMessage,
         deviceId = device.instanceId,
         trailblazeOnDeviceInstrumentationTarget = trailblazeOnDeviceInstrumentationTarget,
+        additionalInstrumentationArgs = additionalInstrumentationArgs.orEmpty(),
       )
 
       withContext(Dispatchers.Default) {

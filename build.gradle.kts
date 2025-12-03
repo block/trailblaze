@@ -22,6 +22,9 @@ subprojects {
   apply(plugin = "org.jetbrains.dokka")
 }
 
+// Apply shared git version computation
+apply(from = "gradle/git-version.gradle.kts")
+
 subprojects
   .forEach {
     it.plugins.withId("com.android.library") {

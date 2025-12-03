@@ -2,6 +2,7 @@ package xyz.block.trailblaze
 
 import android.content.pm.PackageManager
 import kotlinx.datetime.Clock
+import maestro.Point
 import xyz.block.trailblaze.InstrumentationUtil.withInstrumentation
 import xyz.block.trailblaze.InstrumentationUtil.withUiDevice
 
@@ -223,5 +224,21 @@ object AdbCommandUtil {
     "App $appId should not be in foreground",
   ) {
     withUiDevice { currentPackageName != appId }
+  }
+
+  /**
+   * Matches Maestro's Implementation
+   * https://github.com/mobile-dev-inc/Maestro/blob/0a38a9468cb769ecbc1edc76974fd2f8a8b0b64e/maestro-client/src/main/java/maestro/drivers/AndroidDriver.kt#L508-L512
+   */
+  fun directionalSwipe(durationMs: Long, start: Point, end: Point) {
+    execShellCommand("input swipe ${start.x} ${start.y} ${end.x} ${end.y} $durationMs")
+  }
+
+  /**
+   * Matches Maestro's Implementation with a 3 second long press
+   * https://github.com/mobile-dev-inc/Maestro/blob/0a38a9468cb769ecbc1edc76974fd2f8a8b0b64e/maestro-client/src/main/java/maestro/drivers/AndroidDriver.kt#L284
+   */
+  fun longPress(x: Int, y: Int) {
+    execShellCommand("input swipe $x $y $x $y 3000")
   }
 }

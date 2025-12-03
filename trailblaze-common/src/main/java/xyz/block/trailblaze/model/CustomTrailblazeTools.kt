@@ -10,15 +10,17 @@ import kotlin.reflect.KClass
 data class CustomTrailblazeTools(
   /** App Specific Tools given to the LLM by Default */
   val registeredAppSpecificLlmTools: Set<KClass<out TrailblazeTool>>,
+  /** Configuration for Trailblaze test execution */
+  val config: TrailblazeConfig,
   /** App Specific Tools that can be registered to the LLM, but are not by default */
   val otherAppSpecificLlmTools: Set<KClass<out TrailblazeTool>> = setOf(),
   /** App Specific Tools that cannot be registered to the LLM */
   val nonLlmAppSpecificTools: Set<KClass<out TrailblazeTool>> = setOf(),
-  /** Whether to use Set-of-Mark tools (true) or device control tools (false) for UI interactions */
-  val setOfMarkEnabled: Boolean = true,
-  /** Initial set of tools given to the LLM via a [TrailblazeToolRepo]. Uses Set-of-Mark tools by default. */
+  /** Initial set of tools given to the LLM via a [TrailblazeToolRepo]. */
   val initialToolRepoToolClasses: Set<KClass<out TrailblazeTool>> =
-    TrailblazeToolSet.getLlmToolSet(setOfMarkEnabled).toolClasses + registeredAppSpecificLlmTools,
+    TrailblazeToolSet.getLlmToolSet(
+      config.setOfMarkEnabled,
+    ).toolClasses + registeredAppSpecificLlmTools,
 ) {
   fun allForSerializationTools(): Set<KClass<out TrailblazeTool>> = buildSet {
     addAll(registeredAppSpecificLlmTools)

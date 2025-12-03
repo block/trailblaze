@@ -2,13 +2,13 @@ package xyz.block.trailblaze.ui
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.List
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.NavigationRail
@@ -17,6 +17,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -39,17 +40,17 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import xyz.block.trailblaze.llm.TrailblazeLlmModelList
 import xyz.block.trailblaze.logs.model.SessionInfo
-import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.model.inProgress
 import xyz.block.trailblaze.logs.server.TrailblazeMcpServer
 import xyz.block.trailblaze.model.DesktopAppRunYamlParams
-import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.ui.composables.IconWithBadges
 import xyz.block.trailblaze.ui.model.NavigationTab
 import xyz.block.trailblaze.ui.model.TrailblazeAppTab
 import xyz.block.trailblaze.ui.model.TrailblazeRoute
 import xyz.block.trailblaze.ui.models.TrailblazeServerState
+import xyz.block.trailblaze.ui.recordings.RecordedTrailsRepo
+import xyz.block.trailblaze.ui.recordings.RecordedTrailsRepoJvm
 import xyz.block.trailblaze.ui.tabs.devices.DevicesTabComposable
 import xyz.block.trailblaze.ui.tabs.sessions.SessionsTabComposableJvm
 import xyz.block.trailblaze.ui.tabs.sessions.YamlTabComposable
@@ -60,6 +61,7 @@ import xyz.block.trailblaze.ui.theme.TrailblazeTheme
 class MainTrailblazeApp(
   val trailblazeSavedSettingsRepo: TrailblazeSettingsRepo,
   val logsRepo: LogsRepo,
+  val recordedTrailsRepo: RecordedTrailsRepo,
   val trailblazeMcpServerProvider: () -> TrailblazeMcpServer,
   val customEnvVarNames: List<String>,
 ) {
@@ -82,6 +84,8 @@ class MainTrailblazeApp(
     availableModelLists: Set<TrailblazeLlmModelList>,
     deviceManager: TrailblazeDeviceManager,
     yamlRunner: (DesktopAppRunYamlParams) -> Unit,
+    globalSettingsContent: @Composable ColumnScope.(serverState: TrailblazeServerState) -> Unit,
+    additionalInstrumentationArgs: (suspend () -> Map<String, String>),
   ) {
     TrailblazeDesktopUtil.setAppConfigForTrailblaze()
 
@@ -122,7 +126,7 @@ class MainTrailblazeApp(
       Window(
         state = windowState,
         onCloseRequest = ::exitApplication,
-        title = "🧭 Trailblaze",
+        title = "Trailblaze",
         alwaysOnTop = currentServerState.appConfig.alwaysOnTop,
       ) {
         val settingsTab = TrailblazeAppTab(TrailblazeRoute.Settings, {
@@ -138,9 +142,10 @@ class MainTrailblazeApp(
               TrailblazeDesktopUtil.openGoose()
             },
             additionalContent = {},
+            globalSettingsContent = globalSettingsContent,
             environmentVariableProvider = { System.getenv(it) },
             availableModelLists = availableModelLists,
-            customEnvVariableNames = customEnvVarNames
+            customEnvVariableNames = customEnvVarNames,
           )
         })
 
@@ -155,6 +160,7 @@ class MainTrailblazeApp(
               trailblazeSavedSettingsRepo.updateState { newState }
             },
             deviceManager = deviceManager,
+            recordedTrailsRepo = recordedTrailsRepo,
           )
         }
 
@@ -180,6 +186,7 @@ class MainTrailblazeApp(
             trailblazeSettingsRepo = trailblazeSavedSettingsRepo,
             availableLlmModelLists = availableModelLists,
             yamlRunner = yamlRunner,
+            additionalInstrumentationArgs = additionalInstrumentationArgs
           )
         }
 

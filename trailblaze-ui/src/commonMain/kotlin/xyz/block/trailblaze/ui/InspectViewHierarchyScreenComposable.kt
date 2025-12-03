@@ -3,6 +3,7 @@
 package xyz.block.trailblaze.ui
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.horizontalScroll
@@ -21,19 +22,18 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.background
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.TextDecrease
 import androidx.compose.material.icons.outlined.TextIncrease
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -41,6 +41,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -59,15 +62,45 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.Dp
 import coil3.compose.AsyncImage
-import xyz.block.trailblaze.api.ViewHierarchyTreeNode
-import xyz.block.trailblaze.ui.images.ImageLoader
-import xyz.block.trailblaze.viewhierarchy.ViewHierarchyFilter
-import xyz.block.trailblaze.ui.composables.SelectableText
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.encodeToString
+import xyz.block.trailblaze.api.ViewHierarchyTreeNode
+import xyz.block.trailblaze.ui.composables.SelectableText
+import xyz.block.trailblaze.ui.images.ImageLoader
 import xyz.block.trailblaze.ui.models.TrailblazeServerState
+import xyz.block.trailblaze.viewhierarchy.ViewHierarchyFilter
+
+/**
+ * Data class representing a selector option with its strategy and YAML representation.
+ */
+data class SelectorOptionDisplay(
+  val yamlSelector: String,
+  val strategy: String,
+  val isSimplified: Boolean = false,
+  val isBest: Boolean = false, // True if this is the selector returned by findBestTrailblazeElementSelectorForTargetNode
+)
+
+/**
+ * Data class containing property uniqueness information for a node.
+ */
+data class PropertyUniquenessDisplay(
+  val text: String?,
+  val textIsUnique: Boolean,
+  val textOccurrences: Int,
+  val textMatchingNodeIds: List<Long>,
+  val id: String?,
+  val idIsUnique: Boolean,
+  val idOccurrences: Int,
+  val idMatchingNodeIds: List<Long>,
+)
+
+/**
+ * Combined result containing both selector options and property uniqueness analysis.
+ */
+data class SelectorAnalysisResult(
+  val selectorOptions: List<SelectorOptionDisplay>,
+  val propertyUniqueness: PropertyUniquenessDisplay?,
+)
 
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
@@ -79,22 +112,25 @@ fun InspectViewHierarchyScreenComposable(
   deviceWidth: Int,
   deviceHeight: Int,
   imageLoader: ImageLoader,
-  // Column widths and font scale with persistence
-  initialScreenshotWidth: Int = TrailblazeServerState.DEFAULT_UI_INSPECTOR_SCREENSHOT_WIDTH,
-  initialDetailsWidth: Int = TrailblazeServerState.DEFAULT_UI_INSPECTOR_DETAILS_WIDTH,
-  initialHierarchyWidth: Int = TrailblazeServerState.DEFAULT_UI_INSPECTOR_HIERARCHY_WIDTH,
+  // Screenshot width is fixed, details/hierarchy use weight ratio with persistence
+  screenshotWidth: Int = TrailblazeServerState.DEFAULT_UI_INSPECTOR_SCREENSHOT_WIDTH,
+  detailsWeight: Float = 1f,
+  hierarchyWeight: Float = 1f,
   showRawJson: Boolean = false,
   fontScale: Float = 1f,
-  onScreenshotWidthChanged: (Int) -> Unit = {},
-  onDetailsWidthChanged: (Int) -> Unit = {},
-  onHierarchyWidthChanged: (Int) -> Unit = {},
+  onDetailsWeightChanged: (Float) -> Unit = {},
+  onHierarchyWeightChanged: (Float) -> Unit = {},
   onFontScaleChanged: (Float) -> Unit = {},
   onShowRawJsonChanged: (Boolean) -> Unit = {},
   onClose: () -> Unit = {},
+  // Callback to compute selector analysis (options + uniqueness) for a given node
+  // This is platform-specific and only available in JVM
+  computeSelectorOptions: ((ViewHierarchyTreeNode) -> SelectorAnalysisResult)? = null,
 ) {
   var selectedNode by remember { mutableStateOf<ViewHierarchyTreeNode?>(null) }
   var hoveredNode by remember { mutableStateOf<ViewHierarchyTreeNode?>(null) }
   var showFilteredHierarchy by remember { mutableStateOf(false) }
+  var highlightedNodeIds by remember { mutableStateOf<Set<Long>>(emptySet()) }
 
   // Calculate counts once - use unique node IDs to avoid counting duplicates
   val viewHierarchyCount = remember(viewHierarchy) {
@@ -117,10 +153,9 @@ fun InspectViewHierarchyScreenComposable(
     hoveredNode = null
   }
 
-  // Column widths in dp
-  var screenshotWidth by remember { mutableStateOf(initialScreenshotWidth.dp) }
-  var detailsWidth by remember { mutableStateOf(initialDetailsWidth.dp) }
-  var hierarchyWidth by remember { mutableStateOf(initialHierarchyWidth.dp) }
+  // Screenshot has fixed width, details and hierarchy use weights
+  var currentDetailsWeight by remember { mutableStateOf(detailsWeight) }
+  var currentHierarchyWeight by remember { mutableStateOf(hierarchyWeight) }
 
   val density = LocalDensity.current
 
@@ -217,10 +252,10 @@ fun InspectViewHierarchyScreenComposable(
         .fillMaxSize()
         .padding(16.dp)
     ) {
-      // Left: Screenshot panel with overlays
+      // Left: Screenshot panel with overlays (fixed width, non-resizable)
       Box(
         modifier = Modifier
-          .width(screenshotWidth)
+          .width(screenshotWidth.dp)
           .fillMaxHeight()
       ) {
         Card(
@@ -259,26 +294,12 @@ fun InspectViewHierarchyScreenComposable(
         }
       }
 
-      // Resizer between screenshot and details
-      Box(
-        modifier = Modifier
-          .width(8.dp)
-          .fillMaxHeight()
-          .pointerInput(Unit) {
-            detectHorizontalDragGestures { change, dragAmount ->
-              change.consume()
-              val newWidth = screenshotWidth + with(density) { dragAmount.toDp() }
-              screenshotWidth = newWidth.coerceIn(300.dp, 1200.dp)
-              onScreenshotWidthChanged(screenshotWidth.value.toInt())
-            }
-          }
-          .background(MaterialTheme.colorScheme.outlineVariant)
-      )
+      Spacer(modifier = Modifier.width(8.dp))
 
-      // Middle: Element details panel
+      // Middle: Element details panel (stretches with weight)
       Box(
         modifier = Modifier
-          .width(detailsWidth)
+          .weight(currentDetailsWeight)
           .fillMaxHeight()
       ) {
         Card(
@@ -288,9 +309,14 @@ fun InspectViewHierarchyScreenComposable(
           )
         ) {
           NodeDetailsPanel(
-            selectedNode = selectedNode ?: hoveredNode,
+            selectedNode = selectedNode,
+            hoveredNode = hoveredNode,
+            viewHierarchy = viewHierarchy,
             fontScale = fontScale,
-            modifier = Modifier.fillMaxSize()
+            modifier = Modifier.fillMaxSize(),
+            computeSelectorOptions = computeSelectorOptions,
+            onNodeSelected = { selectedNode = it },
+            onHighlightedNodeIdsChange = { highlightedNodeIds = it }
           )
         }
       }
@@ -303,18 +329,27 @@ fun InspectViewHierarchyScreenComposable(
           .pointerInput(Unit) {
             detectHorizontalDragGestures { change, dragAmount ->
               change.consume()
-              val newWidth = detailsWidth + with(density) { dragAmount.toDp() }
-              detailsWidth = newWidth.coerceIn(250.dp, 800.dp)
-              onDetailsWidthChanged(detailsWidth.value.toInt())
+              // Adjust the weight ratio based on drag
+              val dragDp = dragAmount / density.density
+              val weightAdjustment = dragDp / 100f // Adjust sensitivity
+
+              val newDetailsWeight = (currentDetailsWeight + weightAdjustment).coerceAtLeast(0.3f)
+              val newHierarchyWeight = (currentHierarchyWeight - weightAdjustment).coerceAtLeast(0.3f)
+
+              currentDetailsWeight = newDetailsWeight
+              currentHierarchyWeight = newHierarchyWeight
+
+              onDetailsWeightChanged(newDetailsWeight)
+              onHierarchyWeightChanged(newHierarchyWeight)
             }
           }
           .background(MaterialTheme.colorScheme.outlineVariant)
       )
 
-      // Right: View hierarchy panel
+      // Right: View hierarchy panel (stretches with weight)
       Box(
         modifier = Modifier
-          .width(hierarchyWidth)
+          .weight(currentHierarchyWeight)
           .fillMaxHeight()
       ) {
         Card(
@@ -364,6 +399,8 @@ fun InspectViewHierarchyScreenComposable(
               ViewHierarchyTreePanel(
                 viewHierarchy = activeHierarchy,
                 selectedNode = selectedNode,
+                hoveredNode = hoveredNode,
+                highlightedNodeIds = highlightedNodeIds,
                 onNodeSelected = { selectedNode = it },
                 fontScale = fontScale,
                 modifier = Modifier
@@ -374,22 +411,6 @@ fun InspectViewHierarchyScreenComposable(
           }
         }
       }
-
-      // Resizer for hierarchy panel width
-      Box(
-        modifier = Modifier
-          .width(8.dp)
-          .fillMaxHeight()
-          .pointerInput(Unit) {
-            detectHorizontalDragGestures { change, dragAmount ->
-              change.consume()
-              val newWidth = hierarchyWidth + with(density) { dragAmount.toDp() }
-              hierarchyWidth = newWidth.coerceIn(350.dp, 1000.dp)
-              onHierarchyWidthChanged(hierarchyWidth.value.toInt())
-            }
-          }
-          .background(MaterialTheme.colorScheme.outlineVariant)
-      )
     }
   }
 
@@ -596,6 +617,8 @@ private fun DrawScope.drawNodeOverlay(
 private fun ViewHierarchyTreePanel(
   viewHierarchy: ViewHierarchyTreeNode,
   selectedNode: ViewHierarchyTreeNode?,
+  hoveredNode: ViewHierarchyTreeNode?,
+  highlightedNodeIds: Set<Long>,
   onNodeSelected: (ViewHierarchyTreeNode) -> Unit,
   fontScale: Float,
   modifier: Modifier = Modifier,
@@ -609,7 +632,14 @@ private fun ViewHierarchyTreePanel(
         .horizontalScroll(rememberScrollState())
         .padding(16.dp)
     ) {
-      ViewHierarchyTreeItem(viewHierarchy, selectedNode, onNodeSelected, fontScale = fontScale)
+      ViewHierarchyTreeItem(
+        node = viewHierarchy,
+        selectedNode = selectedNode,
+        hoveredNode = hoveredNode,
+        highlightedNodeIds = highlightedNodeIds,
+        onNodeSelected = onNodeSelected,
+        fontScale = fontScale
+      )
     }
   }
 }
@@ -648,17 +678,33 @@ private fun RawJsonPanel(
 private fun ViewHierarchyTreeItem(
   node: ViewHierarchyTreeNode,
   selectedNode: ViewHierarchyTreeNode?,
+  hoveredNode: ViewHierarchyTreeNode?,
+  highlightedNodeIds: Set<Long>,
   onNodeSelected: (ViewHierarchyTreeNode) -> Unit,
   fontScale: Float,
   modifier: Modifier = Modifier,
   level: Int = 0,
 ) {
+  // Determine the display node (hovered takes priority over selected for highlighting)
+  val isSelected = node == selectedNode
+  val isHovered = node == hoveredNode
+  val isMatchHighlighted = node.nodeId in highlightedNodeIds
+  val isHighlighted = isHovered || isSelected || isMatchHighlighted
+
   Column(modifier = modifier) {
     // Current node
     Row(
       modifier = Modifier
         .fillMaxWidth()
         .clickable { onNodeSelected(node) }
+        .background(
+          when {
+            isHovered -> MaterialTheme.colorScheme.primary.copy(alpha = 0.1f)
+            isSelected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.05f)
+            isMatchHighlighted -> MaterialTheme.colorScheme.tertiary.copy(alpha = 0.15f) // Amber/warning color for matches
+            else -> Color.Transparent
+          }
+        )
         .padding(start = (level * 16).dp, top = 4.dp, bottom = 4.dp),
       verticalAlignment = Alignment.CenterVertically
     ) {
@@ -669,8 +715,8 @@ private fun ViewHierarchyTreeItem(
           fontSize = MaterialTheme.typography.labelMedium.fontSize * fontScale,
           fontFamily = FontFamily.Monospace
         ),
-        fontWeight = if (node == selectedNode) FontWeight.Bold else FontWeight.Normal,
-        color = if (node == selectedNode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+        fontWeight = if (isHighlighted) FontWeight.Bold else FontWeight.Normal,
+        color = if (isHighlighted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
       )
 
       Spacer(modifier = Modifier.width(8.dp))
@@ -704,6 +750,8 @@ private fun ViewHierarchyTreeItem(
       ViewHierarchyTreeItem(
         node = child,
         selectedNode = selectedNode,
+        hoveredNode = hoveredNode,
+        highlightedNodeIds = highlightedNodeIds,
         onNodeSelected = onNodeSelected,
         fontScale = fontScale,
         level = level + 1
@@ -715,9 +763,17 @@ private fun ViewHierarchyTreeItem(
 @Composable
 private fun NodeDetailsPanel(
   selectedNode: ViewHierarchyTreeNode?,
+  hoveredNode: ViewHierarchyTreeNode?,
+  viewHierarchy: ViewHierarchyTreeNode,
   fontScale: Float,
   modifier: Modifier = Modifier,
+  computeSelectorOptions: ((ViewHierarchyTreeNode) -> SelectorAnalysisResult)? = null,
+  onNodeSelected: (ViewHierarchyTreeNode) -> Unit = {},
+  onHighlightedNodeIdsChange: (Set<Long>) -> Unit = {},
 ) {
+  // Show hovered node if available, otherwise show selected node
+  val displayNode = hoveredNode ?: selectedNode
+
   Column(
     modifier = modifier
       .padding(16.dp)
@@ -732,41 +788,89 @@ private fun NodeDetailsPanel(
 
     Spacer(modifier = Modifier.height(16.dp))
 
-    if (selectedNode != null) {
+    if (displayNode != null) {
+      // Compute selector analysis asynchronously if available
+      var selectorAnalysis by remember { mutableStateOf<SelectorAnalysisResult?>(null) }
+      var selectorError by remember { mutableStateOf<String?>(null) }
+      var isComputingSelectors by remember { mutableStateOf(false) }
+
+      LaunchedEffect(displayNode?.nodeId, computeSelectorOptions) {
+        if (computeSelectorOptions == null || displayNode == null) {
+          // No computation available
+          isComputingSelectors = false
+          selectorAnalysis = null
+          selectorError = null
+          return@LaunchedEffect
+        }
+
+        // Reset state and start computing
+        isComputingSelectors = true
+        selectorAnalysis = null
+        selectorError = null
+
+        try {
+          // Run in a background coroutine to avoid blocking UI
+          val result = withContext(Dispatchers.Default) {
+            computeSelectorOptions.invoke(displayNode)
+          }
+
+          // Success - update state
+          selectorAnalysis = result
+          isComputingSelectors = false
+        } catch (e: CancellationException) {
+          // Silently ignore cancellation - this is expected when hovering quickly
+          throw e
+        } catch (e: Exception) {
+          // Error - update state
+          e.printStackTrace()
+          selectorError = "Failed to compute selectors: ${e.message}"
+          isComputingSelectors = false
+        }
+      }
+
       Column(
         modifier = Modifier.verticalScroll(rememberScrollState())
       ) {
+        Text(
+          text = "Properties",
+          style = MaterialTheme.typography.titleMedium.copy(
+            fontSize = MaterialTheme.typography.titleMedium.fontSize * fontScale
+          ),
+          fontWeight = FontWeight.SemiBold
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+
         DetailRow(
           label = "Node ID",
-          value = selectedNode.nodeId.toString(),
+          value = displayNode.nodeId.toString(),
           fontScale = fontScale
         )
 
-        if (!selectedNode.text.isNullOrBlank()) {
+        if (!displayNode.text.isNullOrBlank()) {
           DetailRow(
             label = "Text",
-            value = selectedNode.text!!,
+            value = displayNode.text!!,
             fontScale = fontScale
           )
         }
 
-        if (!selectedNode.hintText.isNullOrBlank()) {
+        if (!displayNode.hintText.isNullOrBlank()) {
           DetailRow(
             label = "Hint",
-            value = selectedNode.hintText!!,
+            value = displayNode.hintText!!,
             fontScale = fontScale
           )
         }
 
-        if (!selectedNode.accessibilityText.isNullOrBlank()) {
+        if (!displayNode.accessibilityText.isNullOrBlank()) {
           DetailRow(
             label = "Content Description",
-            value = selectedNode.accessibilityText!!,
+            value = displayNode.accessibilityText!!,
             fontScale = fontScale
           )
         }
 
-        selectedNode.resourceId?.let {
+        displayNode.resourceId?.let {
           DetailRow(
             label = "Resource ID",
             value = it,
@@ -774,7 +878,7 @@ private fun NodeDetailsPanel(
           )
         }
 
-        selectedNode.className?.let {
+        displayNode.className?.let {
           DetailRow(
             label = "Class",
             value = it,
@@ -782,7 +886,7 @@ private fun NodeDetailsPanel(
           )
         }
 
-        selectedNode.bounds?.let { bounds ->
+        displayNode.bounds?.let { bounds ->
           DetailRow(
             label = "Bounds",
             value = "${bounds.x1},${bounds.y1} - ${bounds.x2},${bounds.y2}",
@@ -802,7 +906,7 @@ private fun NodeDetailsPanel(
 
         Spacer(modifier = Modifier.height(8.dp))
         Text(
-          text = "Properties",
+          text = "State Properties",
           style = MaterialTheme.typography.titleMedium.copy(
             fontSize = MaterialTheme.typography.titleMedium.fontSize * fontScale
           ),
@@ -810,12 +914,12 @@ private fun NodeDetailsPanel(
         )
         Spacer(modifier = Modifier.height(8.dp))
 
-        PropertiesGrid(selectedNode, fontScale)
+        PropertiesGrid(displayNode, fontScale)
 
-        if (selectedNode.children.isNotEmpty()) {
+        if (displayNode.children.isNotEmpty()) {
           Spacer(modifier = Modifier.height(16.dp))
           Text(
-            text = "Children (${selectedNode.children.size})",
+            text = "Children (${displayNode.children.size})",
             style = MaterialTheme.typography.titleMedium.copy(
               fontSize = MaterialTheme.typography.titleMedium.fontSize * fontScale
             ),
@@ -823,11 +927,83 @@ private fun NodeDetailsPanel(
           )
           Spacer(modifier = Modifier.height(8.dp))
 
-          selectedNode.children.forEach { child ->
-            ChildNodeItem(child, fontScale)
+          displayNode.children.forEach { child ->
+            ChildNodeItem(
+              child = child,
+              fontScale = fontScale,
+              onNodeSelected = onNodeSelected
+            )
+          }
+        }
+
+        // Show selector options section after properties (only if computation is available)
+        if (computeSelectorOptions != null) {
+          Spacer(modifier = Modifier.height(16.dp))
+
+          // Show property uniqueness first
+          val currentAnalysis = selectorAnalysis
+          if (currentAnalysis?.propertyUniqueness != null) {
+            PropertyUniquenessCard(
+              uniqueness = currentAnalysis.propertyUniqueness,
+              fontScale = fontScale,
+              viewHierarchy = viewHierarchy,
+              onNodeSelected = onNodeSelected,
+              computeSelectorOptions = computeSelectorOptions
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+          }
+
+          Text(
+            text = "Selector Options",
+            style = MaterialTheme.typography.titleMedium.copy(
+              fontSize = MaterialTheme.typography.titleMedium.fontSize * fontScale
+            ),
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.primary
+          )
+          Spacer(modifier = Modifier.height(8.dp))
+
+          when {
+            isComputingSelectors -> {
+              Text(
+                text = "Computing selectors...",
+                style = MaterialTheme.typography.bodySmall.copy(
+                  fontSize = MaterialTheme.typography.bodySmall.fontSize * fontScale
+                ),
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+              )
+            }
+
+            selectorError != null -> {
+              Text(
+                text = "⚠️ $selectorError",
+                style = MaterialTheme.typography.bodySmall.copy(
+                  fontSize = MaterialTheme.typography.bodySmall.fontSize * fontScale
+                ),
+                color = MaterialTheme.colorScheme.error
+              )
+            }
+
+            currentAnalysis?.selectorOptions?.isNotEmpty() == true -> {
+              currentAnalysis.selectorOptions.forEach { option ->
+                SelectorOptionCard(option, fontScale)
+                Spacer(modifier = Modifier.height(8.dp))
+              }
+            }
+
+            !isComputingSelectors && currentAnalysis?.selectorOptions?.isEmpty() == true && selectorError == null -> {
+              SelectableText(
+                text = "No selectors available for this node",
+                style = MaterialTheme.typography.bodySmall.copy(
+                  fontSize = MaterialTheme.typography.bodySmall.fontSize * fontScale
+                ),
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+              )
+            }
           }
         }
       }
+
     } else {
       Text(
         text = "Hover or click on an element in the screenshot to see its details.",
@@ -836,6 +1012,475 @@ private fun NodeDetailsPanel(
         ),
         color = MaterialTheme.colorScheme.onSurfaceVariant
       )
+    }
+  }
+}
+
+@Composable
+private fun SelectorOptionCard(
+  option: SelectorOptionDisplay,
+  fontScale: Float,
+) {
+  Card(
+    modifier = Modifier.fillMaxWidth(),
+    colors = CardDefaults.cardColors(
+      containerColor = when {
+        option.isBest -> MaterialTheme.colorScheme.primary.copy(alpha = 0.15f) // Highlight the best selector
+        option.isSimplified -> MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.3f)
+        else -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
+      }
+    )
+  ) {
+    Column(
+      modifier = Modifier.padding(12.dp)
+    ) {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+      ) {
+        Text(
+          text = option.strategy,
+          style = MaterialTheme.typography.labelMedium.copy(
+            fontSize = MaterialTheme.typography.labelMedium.fontSize * fontScale
+          ),
+          fontWeight = FontWeight.Medium,
+          color = MaterialTheme.colorScheme.primary
+        )
+
+        // Show badge for the production default selector
+        if (option.isBest) {
+          Card(
+            colors = CardDefaults.cardColors(
+              containerColor = MaterialTheme.colorScheme.primary
+            ),
+            modifier = Modifier.padding(start = 8.dp)
+          ) {
+            Text(
+              text = "DEFAULT",
+              style = MaterialTheme.typography.labelSmall.copy(
+                fontSize = MaterialTheme.typography.labelSmall.fontSize * fontScale
+              ),
+              fontWeight = FontWeight.Bold,
+              color = MaterialTheme.colorScheme.onPrimary,
+              modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+            )
+          }
+        }
+      }
+      Spacer(modifier = Modifier.height(4.dp))
+
+      // Code block for YAML selector
+      Box(
+        modifier = Modifier
+          .fillMaxWidth()
+          .background(
+            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+            shape = androidx.compose.foundation.shape.RoundedCornerShape(4.dp)
+          )
+          .padding(8.dp)
+      ) {
+        SelectableText(
+          text = option.yamlSelector,
+          style = MaterialTheme.typography.bodySmall.copy(
+            fontSize = MaterialTheme.typography.bodySmall.fontSize * fontScale,
+            fontFamily = FontFamily.Monospace
+          ),
+          color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+      }
+    }
+  }
+}
+
+@Composable
+private fun PropertyUniquenessCard(
+  uniqueness: PropertyUniquenessDisplay,
+  fontScale: Float,
+  viewHierarchy: ViewHierarchyTreeNode,
+  onNodeSelected: (ViewHierarchyTreeNode) -> Unit = {},
+  computeSelectorOptions: ((ViewHierarchyTreeNode) -> SelectorAnalysisResult)? = null,
+) {
+  var textExpanded by remember { mutableStateOf(false) }
+  var idExpanded by remember { mutableStateOf(false) }
+
+  // Store computed default selectors for matching nodes
+  var defaultSelectorsByNodeId by remember { mutableStateOf<Map<Long, String>>(emptyMap()) }
+
+  // Compute selectors for text matching nodes when expanded
+  LaunchedEffect(textExpanded, uniqueness.textMatchingNodeIds, computeSelectorOptions) {
+    if (textExpanded && computeSelectorOptions != null) {
+      val allNodes = viewHierarchy.aggregate()
+      val newSelectors = mutableMapOf<Long, String>()
+
+      uniqueness.textMatchingNodeIds.forEach { nodeId ->
+        allNodes.find { it.nodeId == nodeId }?.let { node ->
+          try {
+            val result = withContext(Dispatchers.Default) {
+              computeSelectorOptions.invoke(node)
+            }
+            // Find the default selector (isBest = true)
+            result.selectorOptions.find { it.isBest }?.yamlSelector?.let { selector ->
+              newSelectors[nodeId] = selector
+            }
+          } catch (e: CancellationException) {
+            throw e
+          } catch (e: Exception) {
+            // Silently ignore errors for individual nodes
+          }
+        }
+      }
+
+      defaultSelectorsByNodeId = defaultSelectorsByNodeId + newSelectors
+    }
+  }
+
+  // Compute selectors for ID matching nodes when expanded
+  LaunchedEffect(idExpanded, uniqueness.idMatchingNodeIds, computeSelectorOptions) {
+    if (idExpanded && computeSelectorOptions != null) {
+      val allNodes = viewHierarchy.aggregate()
+      val newSelectors = mutableMapOf<Long, String>()
+
+      uniqueness.idMatchingNodeIds.forEach { nodeId ->
+        allNodes.find { it.nodeId == nodeId }?.let { node ->
+          try {
+            val result = withContext(Dispatchers.Default) {
+              computeSelectorOptions.invoke(node)
+            }
+            // Find the default selector (isBest = true)
+            result.selectorOptions.find { it.isBest }?.yamlSelector?.let { selector ->
+              newSelectors[nodeId] = selector
+            }
+          } catch (e: CancellationException) {
+            throw e
+          } catch (e: Exception) {
+            // Silently ignore errors for individual nodes
+          }
+        }
+      }
+
+      defaultSelectorsByNodeId = defaultSelectorsByNodeId + newSelectors
+    }
+  }
+
+  Card(
+    modifier = Modifier.fillMaxWidth(),
+    colors = CardDefaults.cardColors(
+      containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.4f)
+    )
+  ) {
+    Column(
+      modifier = Modifier.padding(12.dp)
+    ) {
+      Text(
+        text = "Property Uniqueness",
+        style = MaterialTheme.typography.labelMedium.copy(
+          fontSize = MaterialTheme.typography.labelMedium.fontSize * fontScale
+        ),
+        fontWeight = FontWeight.Medium,
+        color = MaterialTheme.colorScheme.primary
+      )
+      Spacer(modifier = Modifier.height(8.dp))
+
+      // Text property
+      if (uniqueness.text != null) {
+        Column {
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+          ) {
+            Column(modifier = Modifier.weight(1f)) {
+              Text(
+                text = "Text: \"${uniqueness.text}\"",
+                style = MaterialTheme.typography.bodySmall.copy(
+                  fontSize = MaterialTheme.typography.bodySmall.fontSize * fontScale,
+                  fontFamily = FontFamily.Monospace
+                ),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+              )
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            Card(
+              colors = CardDefaults.cardColors(
+                containerColor = if (uniqueness.textIsUnique) {
+                  MaterialTheme.colorScheme.primary
+                } else {
+                  MaterialTheme.colorScheme.error
+                }
+              ),
+              modifier = if (!uniqueness.textIsUnique) {
+                Modifier.clickable { textExpanded = !textExpanded }
+              } else Modifier
+            ) {
+              Text(
+                text = if (uniqueness.textIsUnique) {
+                  "UNIQUE ✓"
+                } else {
+                  "${uniqueness.textOccurrences}x (${if (textExpanded) "hide" else "show matching"})"
+                },
+                style = MaterialTheme.typography.labelSmall.copy(
+                  fontSize = MaterialTheme.typography.labelSmall.fontSize * fontScale
+                ),
+                fontWeight = FontWeight.Bold,
+                color = if (uniqueness.textIsUnique) {
+                  MaterialTheme.colorScheme.onPrimary
+                } else {
+                  MaterialTheme.colorScheme.onError
+                },
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+              )
+            }
+          }
+
+          // Show matching nodes when expanded
+          if (textExpanded && !uniqueness.textIsUnique) {
+            Spacer(modifier = Modifier.height(8.dp))
+            val allNodes = remember(viewHierarchy) { viewHierarchy.aggregate() }
+            val matchingNodes = uniqueness.textMatchingNodeIds.mapNotNull { nodeId ->
+              allNodes.find { it.nodeId == nodeId }
+            }
+
+            Column(
+              modifier = Modifier
+                .fillMaxWidth()
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f), androidx.compose.foundation.shape.RoundedCornerShape(4.dp))
+                .padding(8.dp)
+            ) {
+              Text(
+                text = "Matching nodes:",
+                style = MaterialTheme.typography.labelSmall.copy(
+                  fontSize = MaterialTheme.typography.labelSmall.fontSize * fontScale
+                ),
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+              )
+              Spacer(modifier = Modifier.height(4.dp))
+
+              matchingNodes.forEach { node ->
+                Column(
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onNodeSelected(node) }
+                    .padding(vertical = 4.dp, horizontal = 4.dp)
+                    .background(MaterialTheme.colorScheme.surface, androidx.compose.foundation.shape.RoundedCornerShape(2.dp))
+                    .padding(4.dp)
+                ) {
+                  Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                  ) {
+                    Text(
+                      text = "#${node.nodeId}",
+                      style = MaterialTheme.typography.labelSmall.copy(
+                        fontSize = MaterialTheme.typography.labelSmall.fontSize * fontScale,
+                        fontFamily = FontFamily.Monospace
+                      ),
+                      color = MaterialTheme.colorScheme.primary,
+                      modifier = Modifier.width(60.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                      text = node.resolveMaestroText() ?: node.resourceId ?: node.className ?: "(empty)",
+                      style = MaterialTheme.typography.bodySmall.copy(
+                        fontSize = MaterialTheme.typography.bodySmall.fontSize * fontScale,
+                        fontFamily = FontFamily.Monospace
+                      ),
+                      color = MaterialTheme.colorScheme.onSurfaceVariant,
+                      maxLines = 1,
+                      overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                    )
+                  }
+
+                  // Show default selector if available
+                  defaultSelectorsByNodeId[node.nodeId]?.let { selector ->
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Box(
+                      modifier = Modifier
+                        .fillMaxWidth()
+                        .background(
+                          MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                          shape = androidx.compose.foundation.shape.RoundedCornerShape(2.dp)
+                        )
+                        .padding(6.dp)
+                    ) {
+                      Text(
+                        text = selector,
+                        style = MaterialTheme.typography.bodySmall.copy(
+                          fontSize = (MaterialTheme.typography.bodySmall.fontSize * fontScale * 0.9f),
+                          fontFamily = FontFamily.Monospace
+                        ),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                      )
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      } else {
+        Text(
+          text = "Text: (none)",
+          style = MaterialTheme.typography.bodySmall.copy(
+            fontSize = MaterialTheme.typography.bodySmall.fontSize * fontScale
+          ),
+          color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+        )
+      }
+
+      Spacer(modifier = Modifier.height(8.dp))
+
+      // ID property
+      if (uniqueness.id != null) {
+        Column {
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+          ) {
+            Column(modifier = Modifier.weight(1f)) {
+              Text(
+                text = "ID: \"${uniqueness.id}\"",
+                style = MaterialTheme.typography.bodySmall.copy(
+                  fontSize = MaterialTheme.typography.bodySmall.fontSize * fontScale,
+                  fontFamily = FontFamily.Monospace
+                ),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+              )
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            Card(
+              colors = CardDefaults.cardColors(
+                containerColor = if (uniqueness.idIsUnique) {
+                  MaterialTheme.colorScheme.primary
+                } else {
+                  MaterialTheme.colorScheme.error
+                }
+              ),
+              modifier = if (!uniqueness.idIsUnique) {
+                Modifier.clickable { idExpanded = !idExpanded }
+              } else Modifier
+            ) {
+              Text(
+                text = if (uniqueness.idIsUnique) {
+                  "UNIQUE ✓"
+                } else {
+                  "${uniqueness.idOccurrences}x (${if (idExpanded) "hide" else "show matching"})"
+                },
+                style = MaterialTheme.typography.labelSmall.copy(
+                  fontSize = MaterialTheme.typography.labelSmall.fontSize * fontScale
+                ),
+                fontWeight = FontWeight.Bold,
+                color = if (uniqueness.idIsUnique) {
+                  MaterialTheme.colorScheme.onPrimary
+                } else {
+                  MaterialTheme.colorScheme.onError
+                },
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+              )
+            }
+          }
+
+          // Show matching nodes when expanded
+          if (idExpanded && !uniqueness.idIsUnique) {
+            Spacer(modifier = Modifier.height(8.dp))
+            val allNodes = remember(viewHierarchy) { viewHierarchy.aggregate() }
+            val matchingNodes = uniqueness.idMatchingNodeIds.mapNotNull { nodeId ->
+              allNodes.find { it.nodeId == nodeId }
+            }
+
+            Column(
+              modifier = Modifier
+                .fillMaxWidth()
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f), androidx.compose.foundation.shape.RoundedCornerShape(4.dp))
+                .padding(8.dp)
+            ) {
+              Text(
+                text = "Matching nodes:",
+                style = MaterialTheme.typography.labelSmall.copy(
+                  fontSize = MaterialTheme.typography.labelSmall.fontSize * fontScale
+                ),
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+              )
+              Spacer(modifier = Modifier.height(4.dp))
+
+              matchingNodes.forEach { node ->
+                Column(
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onNodeSelected(node) }
+                    .padding(vertical = 4.dp, horizontal = 4.dp)
+                    .background(MaterialTheme.colorScheme.surface, androidx.compose.foundation.shape.RoundedCornerShape(2.dp))
+                    .padding(4.dp)
+                ) {
+                  Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                  ) {
+                    Text(
+                      text = "#${node.nodeId}",
+                      style = MaterialTheme.typography.labelSmall.copy(
+                        fontSize = MaterialTheme.typography.labelSmall.fontSize * fontScale,
+                        fontFamily = FontFamily.Monospace
+                      ),
+                      color = MaterialTheme.colorScheme.primary,
+                      modifier = Modifier.width(60.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                      text = node.resourceId ?: node.resolveMaestroText() ?: node.className ?: "(empty)",
+                      style = MaterialTheme.typography.bodySmall.copy(
+                        fontSize = MaterialTheme.typography.bodySmall.fontSize * fontScale,
+                        fontFamily = FontFamily.Monospace
+                      ),
+                      color = MaterialTheme.colorScheme.onSurfaceVariant,
+                      maxLines = 1,
+                      overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                    )
+                  }
+
+                  // Show default selector if available
+                  defaultSelectorsByNodeId[node.nodeId]?.let { selector ->
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Box(
+                      modifier = Modifier
+                        .fillMaxWidth()
+                        .background(
+                          MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                          shape = androidx.compose.foundation.shape.RoundedCornerShape(2.dp)
+                        )
+                        .padding(6.dp)
+                    ) {
+                      Text(
+                        text = selector,
+                        style = MaterialTheme.typography.bodySmall.copy(
+                          fontSize = (MaterialTheme.typography.bodySmall.fontSize * fontScale * 0.9f),
+                          fontFamily = FontFamily.Monospace
+                        ),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                      )
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      } else {
+        Text(
+          text = "ID: (none)",
+          style = MaterialTheme.typography.bodySmall.copy(
+            fontSize = MaterialTheme.typography.bodySmall.fontSize * fontScale
+          ),
+          color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+        )
+      }
     }
   }
 }
@@ -918,12 +1563,14 @@ private fun PropertiesGrid(
 @Composable
 private fun ChildNodeItem(
   child: ViewHierarchyTreeNode,
-  fontScale: Float
+  fontScale: Float,
+  onNodeSelected: (ViewHierarchyTreeNode) -> Unit = {},
 ) {
   Card(
     modifier = Modifier
       .fillMaxWidth()
-      .padding(vertical = 2.dp),
+      .padding(vertical = 2.dp)
+      .clickable { onNodeSelected(child) },
     colors = CardDefaults.cardColors(
       containerColor = MaterialTheme.colorScheme.surfaceVariant
     )

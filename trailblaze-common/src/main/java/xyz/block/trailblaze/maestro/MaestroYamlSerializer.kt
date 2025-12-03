@@ -30,6 +30,7 @@ import maestro.orchestra.ScrollCommand
 import maestro.orchestra.ScrollUntilVisibleCommand
 import maestro.orchestra.SetAirplaneModeCommand
 import maestro.orchestra.SetLocationCommand
+import maestro.orchestra.SetOrientationCommand
 import maestro.orchestra.StopAppCommand
 import maestro.orchestra.SwipeCommand
 import maestro.orchestra.TapOnElementCommand
@@ -495,6 +496,15 @@ object MaestroYamlSerializer {
         },
         mapToStringList = mutableMapOf<String, List<String>>().apply {
           put("points", command.points.map { "${it.latitude},${it.longitude}" })
+        },
+      )
+    }
+    // https://docs.maestro.dev/api-reference/commands/setorientation
+    is SetOrientationCommand -> {
+      MaestroCommandYamlNode(
+        type = "setOrientation",
+        stringProps = mutableMapOf<String, String>().apply {
+          put("orientation", command.orientation.name)
         },
       )
     }

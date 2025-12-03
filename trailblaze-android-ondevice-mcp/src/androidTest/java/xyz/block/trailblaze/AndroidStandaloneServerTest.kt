@@ -17,7 +17,7 @@ import xyz.block.trailblaze.mcp.OnDeviceRpcServerUtils
  * This would be the single test that runs the MCP server on port 52526.  It blocks the instrumentation test
  * so we can send prompts/etc.
  */
-class AndroidOnDeviceMcpServerTest {
+class AndroidStandaloneServerTest {
 
   @get:Rule
   val trailblazeLoggingRule = TrailblazeAndroidLoggingRule()
@@ -58,6 +58,7 @@ class AndroidOnDeviceMcpServerTest {
     AndroidTrailblazeRule(
       trailblazeLlmModel = defaultDynamicLlmClient.trailblazeLlmModel,
       llmClient = defaultDynamicLlmClient.createLlmClient(),
+      config = runYamlRequest.config,
     ).run(
       testYaml = runYamlRequest.yaml,
       useRecordedSteps = runYamlRequest.useRecordedSteps,

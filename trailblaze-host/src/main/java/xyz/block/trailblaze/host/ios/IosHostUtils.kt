@@ -4,6 +4,7 @@ import util.LocalSimulatorUtils
 import xyz.block.trailblaze.util.CommandProcessResult
 import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils
 import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils.runProcess
+import java.io.File
 
 object IosHostUtils {
 
@@ -42,5 +43,26 @@ object IosHostUtils {
     return installedAppIds
       .filter { !it.startsWith("group.") }
       .toSet()
+  }
+
+  fun clearAppDataContainer(deviceId: String?, appId: String) {
+    val output = TrailblazeProcessBuilderUtils.createProcessBuilder(
+      listOf(
+        "xcrun",
+        "simctl",
+        "get_app_container",
+        deviceId ?: "booted",
+        appId,
+        "data",
+      ),
+    ).runProcess {}
+
+    output.outputLines.firstOrNull()?.let { dataContainerPath ->
+      val dataContainerDirectory = File(dataContainerPath)
+      if (dataContainerDirectory.exists() && dataContainerDirectory.isDirectory) {
+        println("Clearing $appId data container under $dataContainerPath")
+        dataContainerDirectory.listFiles()?.forEach { it.deleteRecursively() }
+      }
+    }
   }
 }

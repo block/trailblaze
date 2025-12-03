@@ -91,6 +91,7 @@ object HostAndroidDeviceConnectUtils {
     fqTestName: String,
     sendProgressMessage: (String) -> Unit,
     deviceId: String?,
+    additionalInstrumentationArgs: Map<String, String> = emptyMap(),
   ): ProcessBuilder {
     sendProgressMessage(
       "Connecting to Android Test Instrumentation.",
@@ -133,6 +134,11 @@ object HostAndroidDeviceConnectUtils {
             addAll(listOf("-e", envVar, it))
           }
         }
+
+        additionalInstrumentationArgs.forEach { (key, value) ->
+          addAll(listOf("-e", key, value))
+        }
+
         add("$testAppId/androidx.test.runner.AndroidJUnitRunner")
       },
     )
@@ -153,6 +159,7 @@ object HostAndroidDeviceConnectUtils {
   suspend fun connectToInstrumentation(
     trailblazeOnDeviceInstrumentationTarget: TrailblazeOnDeviceInstrumentationTarget,
     deviceId: String?,
+    additionalInstrumentationArgs: Map<String, String> = emptyMap(),
     sendProgressMessage: (String) -> Unit,
   ): DeviceConnectionStatus {
     val trailblazeOnDeviceInstrumentationTarget = trailblazeOnDeviceInstrumentationTarget
@@ -181,6 +188,7 @@ object HostAndroidDeviceConnectUtils {
           fqTestName = trailblazeOnDeviceInstrumentationTarget.fqTestName,
           sendProgressMessage = sendProgressMessage,
           deviceId = deviceId,
+          additionalInstrumentationArgs = additionalInstrumentationArgs,
         )
 
         instrProcess.runProcess { line ->
@@ -312,6 +320,7 @@ object HostAndroidDeviceConnectUtils {
     deviceId: String?,
     port: Int = 52526,
     trailblazeOnDeviceInstrumentationTarget: TrailblazeOnDeviceInstrumentationTarget,
+    additionalInstrumentationArgs: Map<String, String> = emptyMap(),
   ): DeviceConnectionStatus {
     adbPortForward(deviceId, port)
     adbPortReverse(deviceId, 8443)
@@ -341,6 +350,7 @@ object HostAndroidDeviceConnectUtils {
       trailblazeOnDeviceInstrumentationTarget = trailblazeOnDeviceInstrumentationTarget,
       deviceId = deviceId,
       sendProgressMessage = sendProgressMessage,
+      additionalInstrumentationArgs = additionalInstrumentationArgs,
     )
   }
 }

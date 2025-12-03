@@ -3,14 +3,12 @@ package xyz.block.trailblaze.toolcalls.commands
 import ai.koog.agents.core.tools.annotations.LLMDescription
 import kotlinx.serialization.Serializable
 import maestro.ScrollDirection
-import maestro.orchestra.Command
 import maestro.orchestra.ElementSelector
 import maestro.orchestra.ScrollUntilVisibleCommand
-import xyz.block.trailblaze.AgentMemory
-import xyz.block.trailblaze.toolcalls.MapsToMaestroCommands
+import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
-import xyz.block.trailblaze.toolcalls.TrailblazeTools.REQUIRED_TEXT_DESCRIPTION
-import kotlin.text.Regex
+import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
+import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 
 @Serializable
 @TrailblazeToolClass("scrollUntilTextIsVisible")
@@ -25,33 +23,53 @@ In this case the additional fields will be used to identify the specific view to
 """,
 )
 class ScrollUntilTextIsVisibleTrailblazeTool(
-  @LLMDescription(REQUIRED_TEXT_DESCRIPTION)
+  @param:LLMDescription("Text to search for while scrolling.")
   val text: String,
-  @LLMDescription("0-based index of the view to select among those that match all other criteria.")
-  val index: Int = 0,
-  @LLMDescription("Regex for selecting the view by id. This is helpful to disambiguate when multiple views have the same text.")
+  @param:LLMDescription("The element id to scroll until. REQUIRED: 'text' and/or 'id' parameter.")
   val id: String? = null,
-  @LLMDescription("Valid values: UP, DOWN, LEFT, RIGHT. If not provided, it will start scrolling towards the bottom of the screen (DOWN value).")
-  val direction: ScrollDirection,
-  @LLMDescription("Percentage of element visible in viewport.")
-  val visibilityPercentage: Int = 100,
-  @LLMDescription("Boolean to determine if it will attempt to stop scrolling when the element is closer to the screen center.")
-  val centerElement: Boolean = false,
-  val enabled: Boolean? = null,
-  val selected: Boolean? = null,
-) : MapsToMaestroCommands() {
-  override fun toMaestroCommands(memory: AgentMemory): List<Command> = listOf(
-    ScrollUntilVisibleCommand(
-      selector = ElementSelector(
-        textRegex = ".*${Regex.escape(memory.interpolateVariables(text))}.*",
-        idRegex = id,
-        index = if (index == 0) null else index.toString(),
-        enabled = enabled,
-        selected = selected,
+  @param:LLMDescription("A 0-based index to disambiguate multiple views with the same text. Default is '0'.")
+  val index: Int = 0,
+  @param:LLMDescription("Direction to scroll. Default is 'DOWN'.")
+  val direction: ScrollDirection = ScrollDirection.DOWN,
+  @param:LLMDescription("Percentage of element visible in viewport. Default is '100'.")
+  val visibilityPercentage: Int = ScrollUntilVisibleCommand.DEFAULT_ELEMENT_VISIBILITY_PERCENTAGE,
+  @param:LLMDescription("If it will attempt to stop scrolling when the element is closer to the screen center. Default is 'false'.")
+  val centerElement: Boolean = ScrollUntilVisibleCommand.DEFAULT_CENTER_ELEMENT,
+) : ExecutableTrailblazeTool {
+
+  override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult {
+    val memory = toolExecutionContext.trailblazeAgent.memory
+
+    /** This detection is fragile - Ticket (TBZ-285) */
+    val isOnDeviceAndroidDriver =
+      toolExecutionContext.trailblazeAgent::class.simpleName == "AndroidMaestroTrailblazeAgent"
+    val scrollDuration = if (isOnDeviceAndroidDriver) {
+      /**
+       * This matches Maestro's Swipe Implementation with the 400ms duration and is working well on-device Android.
+       * https://github.com/mobile-dev-inc/Maestro/blob/0a38a9468cb769ecbc1edc76974fd2f8a8b0b64e/maestro-client/src/main/java/maestro/drivers/AndroidDriver.kt#L404
+       */
+      "400"
+    } else {
+      ScrollUntilVisibleCommand.DEFAULT_SCROLL_DURATION
+    }
+
+    val maestroCommands = listOf(
+      ScrollUntilVisibleCommand(
+        selector = ElementSelector(
+          textRegex = ".*${Regex.escape(memory.interpolateVariables(text))}.*",
+          idRegex = id,
+          index = if (index == 0) null else index.toString(),
+        ),
+        /** Maestro's default was 40ms which caused a "fling" behavior and scrolled past elements. */
+        scrollDuration = scrollDuration,
+        direction = direction,
+        visibilityPercentage = visibilityPercentage,
+        centerElement = centerElement,
       ),
-      direction = direction,
-      visibilityPercentage = visibilityPercentage,
-      centerElement = centerElement,
-    ),
-  )
+    )
+    return toolExecutionContext.trailblazeAgent.runMaestroCommands(
+      maestroCommands = maestroCommands,
+      traceId = toolExecutionContext.traceId,
+    )
+  }
 }

@@ -51,8 +51,8 @@ class TrailblazeTraceRecorder(
       threw = t
       throw t
     } finally {
-      val baseArgs = if (args.isEmpty()) emptyMap() else args
-      val finalArgs = if (threw != null) baseArgs + ("error" to ("SOMETHING...")) else baseArgs
+      val baseArgs = args.ifEmpty { emptyMap() }
+      val finalArgs = if (threw != null) baseArgs + ("error" to (threw.message ?: threw::class.simpleName!!)) else baseArgs
       add(CompleteEvent(name, cat, startWall, mark.elapsedNow(), pid, tid, "X", finalArgs).toJsonObject())
     }
     return result

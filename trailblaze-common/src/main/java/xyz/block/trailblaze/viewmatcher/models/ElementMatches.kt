@@ -1,4 +1,4 @@
-package xyz.block.trailblaze.viewmatcher
+package xyz.block.trailblaze.viewmatcher.models
 
 import maestro.TreeNode
 import xyz.block.trailblaze.api.TrailblazeElementSelector

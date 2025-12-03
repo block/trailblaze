@@ -2,6 +2,7 @@ package xyz.block.trailblaze.maestro
 
 import com.google.gson.Gson
 import com.google.gson.GsonBuilder
+import maestro.DeviceOrientation
 import maestro.KeyCode
 import maestro.ScrollDirection
 import maestro.SwipeDirection
@@ -25,6 +26,7 @@ import maestro.orchestra.PressKeyCommand
 import maestro.orchestra.ScrollUntilVisibleCommand
 import maestro.orchestra.SetAirplaneModeCommand
 import maestro.orchestra.SetLocationCommand
+import maestro.orchestra.SetOrientationCommand
 import maestro.orchestra.SwipeCommand
 import maestro.orchestra.TapOnElementCommand
 import maestro.orchestra.TapOnPointV2Command
@@ -40,6 +42,18 @@ import java.io.File
  * These tests serialize commands to yaml, use Maestro's yaml parser and then assert the command is parsed correctly.
  */
 class MaestroCommandToYamlSerializerTest {
+
+  @Test
+  fun `setOrientation command`() {
+    SetOrientationCommand(
+      orientation = DeviceOrientation.LANDSCAPE_LEFT,
+    ).also { command ->
+      convertCommandsToYamlAndParseAndCompare(
+        commandToSerialize = command,
+        expected = command,
+      )
+    }
+  }
 
   @Test
   fun `travelCommand with speed`() {

@@ -13,13 +13,16 @@ import kotlinx.coroutines.isActive
 import io.ktor.client.request.get
 import io.ktor.client.statement.bodyAsText
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 import maestro.device.Device
 import maestro.device.DeviceService
 import maestro.device.Platform
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.http.TrailblazeHttpClientFactory
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
+import xyz.block.trailblaze.model.TrailblazeOnDeviceInstrumentationTarget
 import xyz.block.trailblaze.ui.models.AppIconProvider
 import xyz.block.trailblaze.session.TrailblazeSessionManager
 
@@ -49,7 +52,8 @@ class TrailblazeDeviceManager(
   val appTargets: Set<TrailblazeHostAppTarget>,
   val supportedDrivers: Set<TrailblazeDriverType>,
   val appIconProvider: AppIconProvider,
-  val getInstalledAppIds: (Device.Connected) -> Set<String>
+  val getInstalledAppIds: (Device.Connected) -> Set<String>,
+  val trailblazeHostAppTarget: TrailblazeHostAppTarget,
 ) {
 
   /**
@@ -58,8 +62,8 @@ class TrailblazeDeviceManager(
    */
   var cancelSessionCallback: ((deviceInstanceId: String) -> Boolean)? = null
 
-  fun getCurrentSelectedTargetApp() = appTargets
-    .filter { it != TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget }
+  fun getCurrentSelectedTargetApp(): TrailblazeHostAppTarget? = appTargets
+    .filter { it != trailblazeHostAppTarget }
     .firstOrNull { appTarget ->
       appTarget.name == settingsRepo.serverStateFlow.value.appConfig.selectedTargetAppName
     }
@@ -338,13 +342,13 @@ class TrailblazeDeviceManager(
           try {
             // Query the on-device server status via adb port forwarding
             val client =
-              xyz.block.trailblaze.http.TrailblazeHttpClientFactory.createDefaultHttpClient(2L)
+              TrailblazeHttpClientFactory.createDefaultHttpClient(2L)
             val response = client.get("http://localhost:52526/status")
             val statusJson = response.bodyAsText()
             client.close()
 
             // Parse the JSON response using kotlinx.serialization.json.Json
-            val deviceStatus = kotlinx.serialization.json.Json.decodeFromString(
+            val deviceStatus = Json.decodeFromString(
               DeviceStatusResponse.serializer(),
               statusJson
             )
