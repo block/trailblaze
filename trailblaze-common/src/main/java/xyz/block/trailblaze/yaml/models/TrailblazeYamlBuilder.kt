@@ -21,6 +21,7 @@ class TrailblazeYamlBuilder {
     id: String? = null,
     title: String? = null,
     description: String? = null,
+    trailPath: String? = null,
     priority: String? = null,
     metadata: Map<String, String>? = null,
   ) = apply {
@@ -31,6 +32,7 @@ class TrailblazeYamlBuilder {
           id = id,
           title = title,
           description = description,
+          trailPath = trailPath,
           priority = priority,
           metadata = metadata,
         ),

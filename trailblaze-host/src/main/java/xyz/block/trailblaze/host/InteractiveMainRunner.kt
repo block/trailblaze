@@ -7,14 +7,15 @@ import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.api.JvmOpenAiApiKeyUtil
 import xyz.block.trailblaze.llm.providers.OpenAITrailblazeLlmModelList
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
+import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.session.TrailblazeSessionManager
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.yaml.DirectionStep
 
 class InteractiveMainRunner(
+  private val config: TrailblazeConfig = TrailblazeConfig.DEFAULT,
   private val filterViewHierarchy: Boolean = true,
-  private val setOfMarkEnabled: Boolean = true,
   private val trailblazeLogger: TrailblazeLogger,
 ) {
 
@@ -22,12 +23,12 @@ class InteractiveMainRunner(
     // Set the global set of mark flag
     println("InteractiveMainRunner config:")
     println("  filterViewHierarchy: $filterViewHierarchy")
-    println("  setOfMarkEnabled: $setOfMarkEnabled")
+    println("  setOfMarkEnabled: ${config.setOfMarkEnabled}")
   }
 
   val hostMaestroAgent by lazy {
     val hostRunner = MaestroHostRunnerImpl(
-      setOfMarkEnabled = setOfMarkEnabled,
+      setOfMarkEnabled = config.setOfMarkEnabled,
       trailblazeLogger = trailblazeLogger,
     )
     HostMaestroTrailblazeAgent(
@@ -40,7 +41,7 @@ class InteractiveMainRunner(
   private val toolRepo by lazy {
     TrailblazeToolRepo(
       TrailblazeToolSet.getSetOfMarkToolSet(
-        setOfMarkEnabled = setOfMarkEnabled,
+        setOfMarkEnabled = config.setOfMarkEnabled,
       ),
     )
   }

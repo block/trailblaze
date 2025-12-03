@@ -1,4 +1,4 @@
-package xyz.block.trailblaze.viewmatcher
+package xyz.block.trailblaze.viewmatcher.matching
 
 import maestro.Capability
 import maestro.DeviceInfo
@@ -14,8 +14,28 @@ import okio.Sink
 import java.io.File
 
 /**
- * Shell of a driver that allows us to use Maestro's internal implementation for view matching in [ElementMatcherUsingMaestro]
- * */
+ * Minimal Driver implementation for using Maestro's internal view matching logic.
+ *
+ * This class provides only the essential functionality needed by [ElementMatcherUsingMaestro] to perform
+ * element matching based on a view hierarchy. Most methods are intentionally unimplemented (throwing `TODO`)
+ * because they're not needed for pure view hierarchy analysis without actual device interaction.
+ *
+ * ## Implemented methods
+ * - [deviceInfo]: Returns the provided device metadata
+ * - [contentDescriptor]: Returns the provided view hierarchy tree
+ * - [waitForAppToSettle]: Returns the initial hierarchy unchanged
+ * - [capabilities]: Returns FAST_HIERARCHY capability
+ * - [takeScreenshot]: No-op implementation
+ * - [tap]: No-op implementation (no actual device interaction)
+ *
+ * ## Why most methods throw TODO
+ * This driver is designed solely for static view hierarchy analysis and element matching.
+ * It doesn't interact with real devices, so operations like launching apps, pressing keys,
+ * swiping, or managing device state are not applicable and intentionally left unimplemented.
+ *
+ * @property rootTreeNode The view hierarchy to analyze
+ * @property deviceInfo Device metadata for platform-specific matching semantics
+ */
 class ViewHierarchyOnlyDriver(
   val rootTreeNode: TreeNode,
   val deviceInfo: DeviceInfo,
@@ -55,11 +75,8 @@ class ViewHierarchyOnlyDriver(
     TODO("Not yet implemented")
   }
 
-  /** This records requested taps so that we have the ability to assert on them */
-  val recordedTaps = mutableListOf<Point>()
-
   override fun tap(point: Point) {
-    recordedTaps.add(point)
+    // No-op: this is a view hierarchy-only driver
   }
 
   override fun longPress(point: Point) {

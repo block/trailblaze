@@ -19,6 +19,7 @@ import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.exception.TrailblazeSessionCancelledException
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.model.CustomTrailblazeTools
+import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.rules.SimpleTestRuleChain
 import xyz.block.trailblaze.rules.TrailblazeRule
 import xyz.block.trailblaze.rules.TrailblazeRunnerUtil
@@ -26,7 +27,6 @@ import xyz.block.trailblaze.session.TrailblazeSessionManager
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
-import xyz.block.trailblaze.toolcalls.TrailblazeToolSet.Companion.DefaultSetOfMarkTrailblazeToolSet
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet.DynamicToolSet
 import xyz.block.trailblaze.utils.Ext.asMaestroCommands
 import xyz.block.trailblaze.yaml.DirectionStep
@@ -40,16 +40,20 @@ import xyz.block.trailblaze.yaml.TrailblazeYaml
 open class AndroidTrailblazeRule(
   val llmClient: LLMClient,
   val trailblazeLlmModel: TrailblazeLlmModel,
+  val config: TrailblazeConfig = TrailblazeConfig.DEFAULT,
   val trailblazeLoggingRule: TrailblazeAndroidLoggingRule = TrailblazeAndroidLoggingRule(),
   customToolClasses: CustomTrailblazeTools? = null,
   val sessionManager: TrailblazeSessionManager = trailblazeLoggingRule.sessionManager,
 ) : SimpleTestRuleChain(trailblazeLoggingRule),
   TrailblazeRule {
 
-  private val trailblazeAgent = AndroidMaestroTrailblazeAgent(trailblazeLoggingRule.trailblazeLogger)
+  private val trailblazeAgent =
+    AndroidMaestroTrailblazeAgent(trailblazeLoggingRule.trailblazeLogger)
 
   private val trailblazeToolRepo = TrailblazeToolRepo(
-    trailblazeToolSet = DefaultSetOfMarkTrailblazeToolSet + DynamicToolSet(
+    trailblazeToolSet = xyz.block.trailblaze.toolcalls.TrailblazeToolSet.getSetOfMarkToolSet(
+      config.setOfMarkEnabled,
+    ) + DynamicToolSet(
       toolClasses = customToolClasses?.initialToolRepoToolClasses ?: emptySet(),
     ),
   )
@@ -58,7 +62,7 @@ open class AndroidTrailblazeRule(
     AndroidOnDeviceUiAutomatorScreenState(
       includeScreenshot = true,
       filterViewHierarchy = true,
-      setOfMarkEnabled = true,
+      setOfMarkEnabled = config.setOfMarkEnabled,
     )
   }
 

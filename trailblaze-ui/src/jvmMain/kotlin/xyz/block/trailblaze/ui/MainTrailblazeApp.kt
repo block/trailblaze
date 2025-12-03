@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.List
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.NavigationRail
@@ -39,17 +38,17 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import xyz.block.trailblaze.llm.TrailblazeLlmModelList
 import xyz.block.trailblaze.logs.model.SessionInfo
-import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.model.inProgress
 import xyz.block.trailblaze.logs.server.TrailblazeMcpServer
 import xyz.block.trailblaze.model.DesktopAppRunYamlParams
-import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.ui.composables.IconWithBadges
 import xyz.block.trailblaze.ui.model.NavigationTab
 import xyz.block.trailblaze.ui.model.TrailblazeAppTab
 import xyz.block.trailblaze.ui.model.TrailblazeRoute
 import xyz.block.trailblaze.ui.models.TrailblazeServerState
+import xyz.block.trailblaze.ui.recordings.RecordedTrailsRepo
+import xyz.block.trailblaze.ui.recordings.RecordedTrailsRepoJvm
 import xyz.block.trailblaze.ui.tabs.devices.DevicesTabComposable
 import xyz.block.trailblaze.ui.tabs.sessions.SessionsTabComposableJvm
 import xyz.block.trailblaze.ui.tabs.sessions.YamlTabComposable
@@ -60,6 +59,7 @@ import xyz.block.trailblaze.ui.theme.TrailblazeTheme
 class MainTrailblazeApp(
   val trailblazeSavedSettingsRepo: TrailblazeSettingsRepo,
   val logsRepo: LogsRepo,
+  val recordedTrailsRepo: RecordedTrailsRepo,
   val trailblazeMcpServerProvider: () -> TrailblazeMcpServer,
   val customEnvVarNames: List<String>,
 ) {
@@ -82,6 +82,8 @@ class MainTrailblazeApp(
     availableModelLists: Set<TrailblazeLlmModelList>,
     deviceManager: TrailblazeDeviceManager,
     yamlRunner: (DesktopAppRunYamlParams) -> Unit,
+    databricksOAuthProvider: (suspend (allowAuthFlow: Boolean) -> String?) = { null },
+    databricksClearCacheProvider: (suspend () -> Unit) = { null },
   ) {
     TrailblazeDesktopUtil.setAppConfigForTrailblaze()
 
@@ -122,7 +124,7 @@ class MainTrailblazeApp(
       Window(
         state = windowState,
         onCloseRequest = ::exitApplication,
-        title = "🧭 Trailblaze",
+        title = "Trailblaze",
         alwaysOnTop = currentServerState.appConfig.alwaysOnTop,
       ) {
         val settingsTab = TrailblazeAppTab(TrailblazeRoute.Settings, {
@@ -140,7 +142,9 @@ class MainTrailblazeApp(
             additionalContent = {},
             environmentVariableProvider = { System.getenv(it) },
             availableModelLists = availableModelLists,
-            customEnvVariableNames = customEnvVarNames
+            customEnvVariableNames = customEnvVarNames,
+            databricksOAuthProvider = databricksOAuthProvider,
+            databricksClearCacheProvider = databricksClearCacheProvider
           )
         })
 
@@ -155,6 +159,7 @@ class MainTrailblazeApp(
               trailblazeSavedSettingsRepo.updateState { newState }
             },
             deviceManager = deviceManager,
+            recordedTrailsRepo = recordedTrailsRepo,
           )
         }
 
@@ -180,6 +185,7 @@ class MainTrailblazeApp(
             trailblazeSettingsRepo = trailblazeSavedSettingsRepo,
             availableLlmModelLists = availableModelLists,
             yamlRunner = yamlRunner,
+            databricksOauthProvider = databricksOAuthProvider
           )
         }
 

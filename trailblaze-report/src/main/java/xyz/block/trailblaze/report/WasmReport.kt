@@ -51,18 +51,34 @@ object WasmReport {
     useRelativeImageUrls: Boolean = false,
   ) {
     println("Encoding JSON data...")
-    val sessionIds = logsRepo.getSessionIds()
-    val sessionJson = compactJson(TrailblazeJsonInstance.encodeToString(sessionIds))
-
-    val sessionToImageFiles = sessionIds.associateWith { logsRepo.getImagesForSession(it) }
+    val allSessionIds = logsRepo.getSessionIds()
+    val sessionToImageFiles = allSessionIds.associateWith { logsRepo.getImagesForSession(it) }
 
     println("Generating lightweight session info metadata...")
-    val sessionInfoMap = sessionIds.associateWith { sessionId ->
-      logsRepo.getSessionInfo(sessionId) ?: error("Failed to get session info for $sessionId")
+    val skippedSessions = mutableListOf<String>()
+    val sessionInfoMap = allSessionIds.mapNotNull { sessionId ->
+      val sessionInfo = logsRepo.getSessionInfo(sessionId)
+      if (sessionInfo == null) {
+        println("  ⚠️  WARNING: Skipping session '$sessionId' - no session info available")
+        skippedSessions.add(sessionId)
+        null
+      } else {
+        sessionId to sessionInfo
+      }
+    }.toMap()
+
+    if (skippedSessions.isNotEmpty()) {
+      println("  ⚠️  Skipped ${skippedSessions.size} session(s) due to missing session info:")
+      skippedSessions.forEach { println("     - $it") }
     }
+
+    // Only include valid sessions in the report
+    val validSessionIds = allSessionIds.filter { it !in skippedSessions }
+    val sessionJson = compactJson(TrailblazeJsonInstance.encodeToString(validSessionIds))
     val sessionInfoJson = compactJson(TrailblazeJsonInstance.encodeToString(sessionInfoMap))
 
-    val perSessionData = buildPerSessionData(logsRepo, sessionIds, sessionToImageFiles)
+    // Only build data for sessions that have valid session info
+    val perSessionData = buildPerSessionData(logsRepo, validSessionIds, sessionToImageFiles)
 
     if (reportTemplateFile.exists()) {
       generateFromTemplate(
