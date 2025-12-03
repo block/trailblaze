@@ -46,7 +46,7 @@ abstract class TrailblazeHostAppTarget(
     appendLine("• Gradle Command: ${androidTarget.gradleInstallAndroidTestCommand}")
   }
 
-  object DefaultTrailblazeHostAppTarget : TrailblazeHostAppTarget(
+  data object DefaultTrailblazeHostAppTarget : TrailblazeHostAppTarget(
     "None",
   ) {
     override fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): List<String>? = null

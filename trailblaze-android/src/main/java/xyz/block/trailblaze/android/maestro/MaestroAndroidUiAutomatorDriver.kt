@@ -37,14 +37,14 @@ import java.io.File
  * This is Trailblaze's Maestro on-device driver implementation for Android using UiAutomator.
  */
 object MaestroAndroidUiAutomatorDriver : Driver {
-  var fastTyping: Boolean = true
 
   override fun addMedia(mediaFiles: List<File>) {
     error("Unsupported Maestro Driver Call to ${this::class.simpleName}::addMedia $mediaFiles")
   }
 
   override fun backPress() {
-    withUiDevice { pressBack() }
+    // Calling our util ensures we get the correct delay after pressing the key
+    InstrumentationUtil.pressKey(KeyCode.BACK)
   }
 
   override fun capabilities(): List<Capability> {
@@ -84,6 +84,7 @@ object MaestroAndroidUiAutomatorDriver : Driver {
   }
 
   override fun eraseText(charactersToErase: Int) {
+    // No delay required for each tap so just directly deleting the number of characters
     (0..charactersToErase).forEach { i ->
       withUiDevice { pressDelete() }
     }
@@ -96,13 +97,11 @@ object MaestroAndroidUiAutomatorDriver : Driver {
   }
 
   override fun inputText(text: String) {
-    if (fastTyping) {
-      InstrumentationUtil.inputTextFast(text)
-      if (isKeyboardVisible()) {
-        hideKeyboard()
-      }
-    } else {
-      InstrumentationUtil.inputTextByTyping(text)
+    // Simulate typing
+    InstrumentationUtil.inputTextByTyping(text)
+
+    if (isKeyboardVisible()) {
+      hideKeyboard()
     }
   }
 
@@ -169,18 +168,7 @@ object MaestroAndroidUiAutomatorDriver : Driver {
   }
 
   override fun longPress(point: Point) {
-    // Use the swipe gesture to fake a long press
-    // Same starting and ending points should resolve as a tap
-    // 100 steps is ~0.5 seconds
-    withUiDevice {
-      swipe(
-        point.x,
-        point.y,
-        point.x,
-        point.y,
-        100,
-      )
-    }
+    AdbCommandUtil.longPress(point.x, point.y)
   }
 
   override fun name(): String {
@@ -226,41 +214,7 @@ object MaestroAndroidUiAutomatorDriver : Driver {
   }
 
   override fun pressKey(code: KeyCode) {
-    val intCode: Int = when (code) {
-      KeyCode.ENTER -> 66
-      KeyCode.BACKSPACE -> 67
-      KeyCode.BACK -> 4
-      KeyCode.VOLUME_UP -> 24
-      KeyCode.VOLUME_DOWN -> 25
-      KeyCode.HOME -> 3
-      KeyCode.LOCK -> 276
-      KeyCode.REMOTE_UP -> 19
-      KeyCode.REMOTE_DOWN -> 20
-      KeyCode.REMOTE_LEFT -> 21
-      KeyCode.REMOTE_RIGHT -> 22
-      KeyCode.REMOTE_CENTER -> 23
-      KeyCode.REMOTE_PLAY_PAUSE -> 85
-      KeyCode.REMOTE_STOP -> 86
-      KeyCode.REMOTE_NEXT -> 87
-      KeyCode.REMOTE_PREVIOUS -> 88
-      KeyCode.REMOTE_REWIND -> 89
-      KeyCode.REMOTE_FAST_FORWARD -> 90
-      KeyCode.POWER -> 26
-      KeyCode.ESCAPE -> 111
-      KeyCode.TAB -> 62
-      KeyCode.REMOTE_SYSTEM_NAVIGATION_UP -> 280
-      KeyCode.REMOTE_SYSTEM_NAVIGATION_DOWN -> 281
-      KeyCode.REMOTE_BUTTON_A -> 96
-      KeyCode.REMOTE_BUTTON_B -> 97
-      KeyCode.REMOTE_MENU -> 82
-      KeyCode.TV_INPUT -> 178
-      KeyCode.TV_INPUT_HDMI_1 -> 243
-      KeyCode.TV_INPUT_HDMI_2 -> 244
-      KeyCode.TV_INPUT_HDMI_3 -> 245
-    }
-
-    withUiDevice { pressKeyCode(intCode) }
-    Thread.sleep(300)
+    InstrumentationUtil.pressKey(code)
   }
 
   override fun resetProxy() {
@@ -268,18 +222,7 @@ object MaestroAndroidUiAutomatorDriver : Driver {
   }
 
   override fun scrollVertical() {
-    withUiDevice {
-      val xPos = displayWidth / 2
-      val startY = (displayHeight * 0.5).toInt()
-      val endY = (displayHeight * 0.1).toInt()
-      swipe(
-        xPos,
-        startY,
-        xPos,
-        endY,
-        400,
-      )
-    }
+    InstrumentationUtil.scrollVertical(deviceInfo())
   }
 
   override fun setAirplaneMode(enabled: Boolean) {
@@ -318,13 +261,11 @@ object MaestroAndroidUiAutomatorDriver : Driver {
 
   override fun stopApp(appId: String) = AdbCommandUtil.forceStopApp(appId)
 
-  override fun swipe(start: Point, end: Point, durationMs: Long) = directionalSwipe(durationMs, start, end)
-
-  private fun directionalSwipe(durationMs: Long, start: Point, end: Point) {
-    withUiDevice {
-      executeShellCommand("input swipe ${start.x} ${start.y} ${end.x} ${end.y} $durationMs")
-    }
-  }
+  override fun swipe(start: Point, end: Point, durationMs: Long) = AdbCommandUtil.directionalSwipe(
+    durationMs = durationMs,
+    start = start,
+    end = end,
+  )
 
   /**
    * Swipes on a specific element in the given direction.
@@ -333,32 +274,12 @@ object MaestroAndroidUiAutomatorDriver : Driver {
    * This is still required by the Driver interface and may be used by other callers.
    */
   override fun swipe(elementPoint: Point, direction: SwipeDirection, durationMs: Long) {
-    println("swipe $elementPoint, $direction, $durationMs")
-    val deviceInfo = deviceInfo()
-    // The duration provided typically results in quick flings of the screen which is not what
-    // we want. Provide a slower duration to help scroll in a more controlled manner.
-    val delayedDuration: Long = 400
-    when (direction) {
-      SwipeDirection.UP -> {
-        val endY = (deviceInfo.heightGrid * 0.1f).toInt()
-        directionalSwipe(delayedDuration, elementPoint, Point(elementPoint.x, endY))
-      }
-
-      SwipeDirection.DOWN -> {
-        val endY = (deviceInfo.heightGrid * 0.9f).toInt()
-        directionalSwipe(delayedDuration, elementPoint, Point(elementPoint.x, endY))
-      }
-
-      SwipeDirection.RIGHT -> {
-        val endX = (deviceInfo.widthGrid * 0.9f).toInt()
-        directionalSwipe(delayedDuration, elementPoint, Point(endX, elementPoint.y))
-      }
-
-      SwipeDirection.LEFT -> {
-        val endX = (deviceInfo.widthGrid * 0.1f).toInt()
-        directionalSwipe(delayedDuration, elementPoint, Point(endX, elementPoint.y))
-      }
-    }
+    InstrumentationUtil.swipe(
+      deviceInfo = deviceInfo(),
+      elementPoint = elementPoint,
+      direction = direction,
+      durationMs = durationMs,
+    )
   }
 
   /**
@@ -368,56 +289,11 @@ object MaestroAndroidUiAutomatorDriver : Driver {
    * This is still required by the Driver interface and may be used by other callers.
    */
   override fun swipe(swipeDirection: SwipeDirection, durationMs: Long) {
-    val deviceInfo = deviceInfo()
-    when (swipeDirection) {
-      SwipeDirection.UP -> {
-        val startX = (deviceInfo.widthGrid * 0.5f).toInt()
-        val startY = (deviceInfo.heightGrid * 0.5f).toInt()
-        val endX = (deviceInfo.widthGrid * 0.5f).toInt()
-        val endY = (deviceInfo.heightGrid * 0.3f).toInt()
-        directionalSwipe(
-          durationMs,
-          Point(startX, startY),
-          Point(endX, endY),
-        )
-      }
-
-      SwipeDirection.DOWN -> {
-        val startX = (deviceInfo.widthGrid * 0.5f).toInt()
-        val startY = (deviceInfo.heightGrid * 0.5f).toInt()
-        val endX = (deviceInfo.widthGrid * 0.5f).toInt()
-        val endY = (deviceInfo.heightGrid * 0.7f).toInt()
-        directionalSwipe(
-          durationMs,
-          Point(startX, startY),
-          Point(endX, endY),
-        )
-      }
-
-      SwipeDirection.RIGHT -> {
-        val startX = (deviceInfo.widthGrid * 0.1f).toInt()
-        val startY = (deviceInfo.heightGrid * 0.5f).toInt()
-        val endX = (deviceInfo.widthGrid * 0.9f).toInt()
-        val endY = (deviceInfo.heightGrid * 0.5f).toInt()
-        directionalSwipe(
-          durationMs,
-          Point(startX, startY),
-          Point(endX, endY),
-        )
-      }
-
-      SwipeDirection.LEFT -> {
-        val startX = (deviceInfo.widthGrid * 0.9f).toInt()
-        val startY = (deviceInfo.heightGrid * 0.5f).toInt()
-        val endX = (deviceInfo.widthGrid * 0.1f).toInt()
-        val endY = (deviceInfo.heightGrid * 0.5f).toInt()
-        directionalSwipe(
-          durationMs,
-          Point(startX, startY),
-          Point(endX, endY),
-        )
-      }
-    }
+    InstrumentationUtil.swipeDirectionAndDuration(
+      deviceInfo = deviceInfo(),
+      swipeDirection = swipeDirection,
+      durationMs = durationMs,
+    )
   }
 
   override fun takeScreenshot(out: Sink, compressed: Boolean) {

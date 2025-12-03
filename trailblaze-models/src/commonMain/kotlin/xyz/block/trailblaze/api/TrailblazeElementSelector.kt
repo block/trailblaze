@@ -126,4 +126,10 @@ data class TrailblazeElementSelector(
 
     return descriptions.joinToString(", ")
   }
+
+  companion object {
+    private val BLANK_TRAILBLAZE_ELEMENT_SELECTOR = TrailblazeElementSelector()
+
+    fun TrailblazeElementSelector.isBlank(): Boolean = this == BLANK_TRAILBLAZE_ELEMENT_SELECTOR
+  }
 }

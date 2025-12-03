@@ -3,6 +3,7 @@ package xyz.block.trailblaze.viewmatcher
 import org.junit.Test
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.viewmatcher.matching.CenterPointMatcher
 import xyz.block.trailblaze.viewmatcher.models.OrderedSpatialHints
 import xyz.block.trailblaze.viewmatcher.models.RelativePosition
 import kotlin.test.assertEquals
@@ -229,13 +230,15 @@ class TapSelectorV2Test {
   @Test
   fun `STRATEGY 4 - target with unique descendants`() {
     // Setup: Two product cards with different nested content
+    // - Both cards have same text "Product Card" so they're not distinguishable by properties alone
     // - Target has "Product Name" and "price_label" descendants
     // - Other card has "Other Product" descendant
     // Expected: Should use containsDescendants to match multiple nested elements
-    val descendant1 = createNode(nodeId = 5, text = "Product Name")
-    val descendant2 = createNode(nodeId = 6, resourceId = "price_label")
+    val descendant1 = createNode(nodeId = 5, text = "Product Name", centerX = 320, centerY = 320)
+    val descendant2 = createNode(nodeId = 6, resourceId = "price_label", centerX = 340, centerY = 340)
     val target = createNode(
       nodeId = 3,
+      text = "Product Card",
       clickable = true,
       centerX = 300,
       centerY = 300,
@@ -244,6 +247,8 @@ class TapSelectorV2Test {
       children = listOf(
         createNode(
           nodeId = 4,
+          centerX = 330,
+          centerY = 330,
           children = listOf(descendant1, descendant2),
         ),
       ),
@@ -254,9 +259,14 @@ class TapSelectorV2Test {
         target,
         createNode(
           nodeId = 7,
+          text = "Product Card", // Same text as target - not distinguishable by properties alone
           clickable = true,
+          centerX = 700,
+          centerY = 700,
+          width = 400,
+          height = 400,
           children = listOf(
-            createNode(nodeId = 8, text = "Other Product"),
+            createNode(nodeId = 8, text = "Other Product", centerX = 720, centerY = 720),
           ),
         ),
       ),
@@ -645,5 +655,319 @@ class TapSelectorV2Test {
 
     // Verify: A selector was found (may use spatial + index, or just index)
     assertEquals("Item", result.textRegex)
+  }
+
+  @Test
+  fun `center point tolerance - descendant with tolerance difference treated as same location`() {
+    // Setup: Target node has a descendant with center point off by tolerance pixels in both X and Y
+    // This can happen due to rounding when converting between different coordinate systems
+    // - Target: centerPoint = "500,500" with text "ITEM" (all caps)
+    // - Descendant: centerPoint offset by DEFAULT_TOLERANCE_PX with text "Item" (mixed case)
+    // Expected: Should recognize descendant is at "same" location (within tolerance) and use its selector
+    val offset = CenterPointMatcher.DEFAULT_TOLERANCE_PX
+    val descendant = createNode(nodeId = 2, text = "Item", centerX = 500 + offset, centerY = 500 + offset)
+    val target = createNode(
+      nodeId = 1,
+      text = "ITEM",
+      centerX = 500,
+      centerY = 500,
+      clickable = true,
+      children = listOf(descendant),
+    )
+    val duplicateNode = createNode(nodeId = 3, text = "ITEM", centerX = 600, centerY = 600)
+    val root = createNode(
+      nodeId = 0,
+      children = listOf(
+        target,
+        duplicateNode, // Same text as target, different location
+      ),
+    )
+
+    val result = TapSelectorV2.findBestTrailblazeElementSelectorForTargetNode(
+      root = root,
+      target = target,
+      trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
+      widthPixels = DEVICE_WIDTH,
+      heightPixels = DEVICE_HEIGHT,
+      spatialHints = null,
+    )
+
+    // Verify: Should use the descendant's unique "Item" text (case-sensitive match)
+    // because it's considered at the same location (within tolerance)
+    assertEquals("Item", result.textRegex)
+  }
+
+  @Test
+  fun `center point tolerance - outside tolerance not treated as same location`() {
+    // Setup: Similar to previous test but descendant is outside tolerance (tolerance + 1px)
+    // - Target: centerPoint = "500,500" with text "ITEM"
+    // - Descendant: centerPoint offset by (tolerance + 1) with text "Item"
+    // Expected: Should NOT treat as same location, falls back to other strategies
+    val offset = CenterPointMatcher.DEFAULT_TOLERANCE_PX + 1
+    val descendant = createNode(nodeId = 2, text = "Item", centerX = 500 + offset, centerY = 500 + offset)
+    val target = createNode(
+      nodeId = 1,
+      text = "TARGET",
+      centerX = 500,
+      centerY = 500,
+      clickable = true,
+      children = listOf(descendant),
+    )
+    val root = createNode(
+      nodeId = 0,
+      children = listOf(target),
+    )
+
+    val result = TapSelectorV2.findBestTrailblazeElementSelectorForTargetNode(
+      root = root,
+      target = target,
+      trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
+      widthPixels = DEVICE_WIDTH,
+      heightPixels = DEVICE_HEIGHT,
+      spatialHints = null,
+    )
+
+    // Verify: Should use target's own unique text since descendant is too far away
+    assertEquals("TARGET", result.textRegex)
+  }
+
+  @Test
+  fun `center point tolerance - index matching with tolerance difference`() {
+    // Setup: Multiple items with same text, need index to disambiguate
+    // One of the items has center point off by tolerance pixels from expected
+    // Expected: Should still match correctly with tolerance
+    val offset = CenterPointMatcher.DEFAULT_TOLERANCE_PX
+    val target = createNode(nodeId = 2, text = "Item", centerX = 500, centerY = 200 + offset)
+    val root = createNode(
+      nodeId = 0,
+      children = listOf(
+        createNode(nodeId = 1, text = "Item", centerX = 500, centerY = 100),
+        target,
+        createNode(nodeId = 3, text = "Item", centerX = 500, centerY = 300),
+      ),
+    )
+
+    val result = TapSelectorV2.findBestTrailblazeElementSelectorForTargetNode(
+      root = root,
+      target = target,
+      trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
+      widthPixels = DEVICE_WIDTH,
+      heightPixels = DEVICE_HEIGHT,
+      spatialHints = null,
+    )
+
+    // Verify: Should find correct index despite tolerance difference
+    assertEquals("Item", result.textRegex)
+    assertEquals("1", result.index)
+  }
+
+  @Test
+  fun `test strategy descriptions include context`() {
+    // Create a hierarchy where different strategies will be used
+    val childNode = createNode(nodeId = 2, text = "Child", centerX = 500, centerY = 500)
+    val target = createNode(
+      nodeId = 1,
+      text = "Button",
+      centerX = 500,
+      centerY = 500,
+      children = listOf(childNode),
+    )
+    val parent = createNode(
+      nodeId = 0,
+      resourceId = "parent_id",
+      centerX = 500,
+      centerY = 500,
+      children = listOf(target),
+    )
+
+    // Test direct match
+    val directOptions = TapSelectorV2.findValidSelectorsForUI(
+      root = parent,
+      target = target,
+      trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
+      widthPixels = DEVICE_WIDTH,
+      heightPixels = DEVICE_HEIGHT,
+      spatialHints = null,
+      maxResults = 5,
+    )
+
+    // Verify we get contextual descriptions
+    val strategies = directOptions.map { it.strategy }
+
+    // Should have at least one strategy
+    assert(strategies.isNotEmpty()) { "Expected at least one strategy" }
+
+    // The first strategy should be the direct match with context
+    val directMatch = directOptions.find { it.strategy.contains("direct match") }
+    assertNotNull(directMatch, "Expected to find 'direct match' in strategy descriptions")
+
+    // If we have a parent strategy, it should include parent property info
+    val parentMatch = directOptions.find { it.strategy.contains("unique parent") }
+    if (parentMatch != null) {
+      // Should mention which parent property was used (id in this case)
+      assert(parentMatch.strategy.contains("parent:")) {
+        "Expected parent strategy to include property details, got: ${parentMatch.strategy}"
+      }
+    }
+
+    println("Strategy descriptions:")
+    directOptions.forEach { option ->
+      println("  - ${option.strategy}")
+    }
+  }
+
+  @Test
+  fun `handles target with no bounds gracefully`() {
+    // Edge case: Target element has null bounds (malformed hierarchy or invisible element)
+    // This happens when centerPoint or dimensions are missing
+    // Expected: Should not crash, should still find a valid selector
+    val targetWithNoBounds = ViewHierarchyTreeNode(
+      nodeId = 1,
+      text = "Button",
+      clickable = true,
+      centerPoint = null, // No center point means bounds will be null
+      dimensions = null,
+    )
+    val root = createNode(
+      nodeId = 0,
+      children = listOf(targetWithNoBounds),
+    )
+
+    val result = TapSelectorV2.findBestTrailblazeElementSelectorForTargetNode(
+      root = root,
+      target = targetWithNoBounds,
+      trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
+      widthPixels = DEVICE_WIDTH,
+      heightPixels = DEVICE_HEIGHT,
+      spatialHints = null,
+    )
+
+    // Should succeed with text-only selector since "Button" is unique
+    assertEquals("Button", result.textRegex)
+  }
+
+  @Test
+  fun `handles spatial hint with non-existent nodeId`() {
+    // Edge case: LLM provides spatial hint referencing a nodeId that doesn't exist
+    // Expected: Should skip the invalid hint and succeed with fallback strategy
+    val target = createNode(nodeId = 1, text = "Button", clickable = true)
+    val root = createNode(
+      nodeId = 0,
+      children = listOf(target),
+    )
+
+    val spatialHints = OrderedSpatialHints(
+      hints = listOf(
+        OrderedSpatialHints.SpatialHint(
+          referenceNodeId = 999, // Node doesn't exist
+          relationship = RelativePosition.ABOVE,
+        ),
+      ),
+    )
+
+    val result = TapSelectorV2.findBestTrailblazeElementSelectorForTargetNode(
+      root = root,
+      target = target,
+      trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
+      widthPixels = DEVICE_WIDTH,
+      heightPixels = DEVICE_HEIGHT,
+      spatialHints = spatialHints,
+    )
+
+    // Should succeed by falling back to simpler strategy
+    assertNotNull(result)
+    assertEquals("Button", result.textRegex)
+    // Spatial hint should be ignored since reference node doesn't exist
+    assertNull(result.above)
+  }
+
+  @Test
+  fun `handles root equals target`() {
+    // Edge case: Target element is the root of the hierarchy
+    // This can happen when searching within a subtree or for top-level containers
+    // Expected: Should find a valid selector for the root element itself
+    val rootAndTarget = createNode(
+      nodeId = 1,
+      text = "Root Container",
+      resourceId = "root_id",
+      clickable = true,
+    )
+
+    val result = TapSelectorV2.findBestTrailblazeElementSelectorForTargetNode(
+      root = rootAndTarget,
+      target = rootAndTarget,
+      trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
+      widthPixels = DEVICE_WIDTH,
+      heightPixels = DEVICE_HEIGHT,
+      spatialHints = null,
+    )
+
+    // Should succeed with unique properties
+    assertNotNull(result)
+    // Either text or id should be used since both are unique in this single-node tree
+    assert(result.textRegex != null || result.idRegex != null) {
+      "Expected either text or id selector for root element"
+    }
+  }
+
+  @Test
+  fun `handles hierarchy with duplicate text and no distinguishing features`() {
+    // Edge case: Multiple identical elements that can only be distinguished by index
+    // This tests the fallback to IndexStrategy when all else fails
+    val target = createNode(
+      nodeId = 2,
+      text = "Item",
+      centerX = 500,
+      centerY = 200,
+    )
+    val root = createNode(
+      nodeId = 0,
+      children = listOf(
+        createNode(nodeId = 1, text = "Item", centerX = 500, centerY = 100),
+        target,
+        createNode(nodeId = 3, text = "Item", centerX = 500, centerY = 300),
+      ),
+    )
+
+    val result = TapSelectorV2.findBestTrailblazeElementSelectorForTargetNode(
+      root = root,
+      target = target,
+      trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
+      widthPixels = DEVICE_WIDTH,
+      heightPixels = DEVICE_HEIGHT,
+      spatialHints = null,
+    )
+
+    // Should fall back to index-based selector
+    assertEquals("Item", result.textRegex)
+    assertEquals("1", result.index) // Middle item (0-indexed, sorted by Y coordinate)
+  }
+
+  @Test
+  fun `handles target with neither text nor id`() {
+    // Edge case: Element with no text or id (e.g., a decorative container)
+    // Expected: Should still find a valid selector, potentially using state or index
+    val target = createNode(
+      nodeId = 1,
+      centerX = 500,
+      centerY = 500,
+      clickable = true,
+    )
+    val root = createNode(
+      nodeId = 0,
+      children = listOf(target),
+    )
+
+    val result = TapSelectorV2.findBestTrailblazeElementSelectorForTargetNode(
+      root = root,
+      target = target,
+      trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
+      widthPixels = DEVICE_WIDTH,
+      heightPixels = DEVICE_HEIGHT,
+      spatialHints = null,
+    )
+
+    // Should succeed - IndexStrategy always provides a fallback
+    assertNotNull(result)
   }
 }

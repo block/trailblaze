@@ -155,7 +155,7 @@ fun SessionListComposable(
       verticalAlignment = Alignment.CenterVertically,
     ) {
       SelectableText(
-        "List of Trailblaze Sessions",
+        "Trailblaze Sessions",
         modifier = Modifier.padding(8.dp),
         style = MaterialTheme.typography.headlineSmall,
       )

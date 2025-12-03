@@ -8,6 +8,7 @@ data class TrailConfig(
   val id: String? = null,
   val title: String? = null,
   val description: String? = null,
+  val trailPath: String? = null,
   val priority: String? = null,
   val metadata: Map<String, String>? = null,
 )

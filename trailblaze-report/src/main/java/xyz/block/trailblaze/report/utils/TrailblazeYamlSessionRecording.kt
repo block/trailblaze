@@ -37,6 +37,7 @@ object TrailblazeYamlSessionRecording {
             id = sessionTrailConfig.id,
             title = sessionTrailConfig.title,
             priority = sessionTrailConfig.priority,
+            trailPath = sessionTrailConfig.trailPath,
             context = sessionTrailConfig.context,
             description = sessionTrailConfig.description,
             metadata = sessionTrailConfig.metadata,

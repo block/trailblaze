@@ -33,8 +33,59 @@ import xyz.block.trailblaze.ui.models.TrailblazeServerState
 import xyz.block.trailblaze.util.AndroidHostAdbUtils
 import java.io.File
 
-val logsDir = File("../logs")
+/**
+ * Gets the application data directory.
+ * Uses ~/.trailblaze for consistency across platforms, or the configured directory.
+ */
+private fun getAppDataDirectory(): File {
+  // First, we need to load settings from the default location to see if a custom location is set
+  val defaultAppDataDir = File(System.getProperty("user.home"), ".trailblaze")
+  val defaultSettingsFile = File(defaultAppDataDir, "trailblaze-settings.json")
 
+  // Try to read the configured app data directory from settings
+  if (defaultSettingsFile.exists()) {
+    try {
+      val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+      val config = json.decodeFromString<TrailblazeServerState.SavedTrailblazeAppConfig>(
+        defaultSettingsFile.readText(),
+      )
+      if (config.appDataDirectory != null) {
+        return File(config.appDataDirectory).apply { mkdirs() }
+      }
+    } catch (e: Exception) {
+      println("Could not load custom app data directory from settings: ${e.message}")
+    }
+  }
+
+  return defaultAppDataDir.apply { mkdirs() }
+}
+
+private val trailblazeSettingsRepo = TrailblazeSettingsRepo(
+  settingsFile = File(getAppDataDirectory(), "trailblaze-settings.json"),
+  initialConfig = TrailblazeServerState.SavedTrailblazeAppConfig(),
+)
+
+// Get logs directory from settings, or use default
+private fun getLogsDirectory(): File {
+  val configuredPath = trailblazeSettingsRepo.serverStateFlow.value.appConfig.logsDirectory
+  return if (configuredPath != null) {
+    File(configuredPath).apply { mkdirs() }
+  } else {
+    File(getAppDataDirectory(), "logs").apply { mkdirs() }
+  }
+}
+
+// Get trails directory from settings, or use default
+private fun getTrailsDirectory(): File {
+  val configuredPath = trailblazeSettingsRepo.serverStateFlow.value.appConfig.trailsDirectory
+  return if (configuredPath != null) {
+    File(configuredPath).apply { mkdirs() }
+  } else {
+    File(getAppDataDirectory(), "trails").apply { mkdirs() }
+  }
+}
+
+val logsDir = getLogsDirectory()
 val logsRepo = LogsRepo(logsDir)
 
 /** All supported LLM model lists for open source host mode. */
@@ -53,9 +104,6 @@ private val AVAILABLE_MODEL_LISTS = ALL_MODEL_LISTS.filter {
 @OptIn(DelicateCoroutinesApi::class, ExperimentalCoroutinesApi::class)
 fun main() {
   val targetTestApp: TrailblazeHostAppTarget = TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget
-  val trailblazeSavedSettingsRepo = TrailblazeSettingsRepo(
-    initialConfig = TrailblazeServerState.SavedTrailblazeAppConfig(),
-  )
   val server = TrailblazeMcpServer(
     logsRepo = logsRepo,
     targetTestAppProvider = { targetTestApp },
@@ -65,7 +113,8 @@ fun main() {
     supportedDrivers = TrailblazeDriverType.entries.toSet(),
     appTargets = setOf(targetTestApp),
     appIconProvider = AppIconProvider.DefaultAppIconProvider,
-    settingsRepo = trailblazeSavedSettingsRepo,
+    settingsRepo = trailblazeSettingsRepo,
+    trailblazeHostAppTarget = TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget,
     getInstalledAppIds = { connectedMaestroDevice: Device.Connected ->
       when (connectedMaestroDevice.platform) {
         Platform.ANDROID -> AndroidHostAdbUtils.listInstalledPackages(
@@ -84,9 +133,13 @@ fun main() {
     startPollingDeviceStatus()
   }
 
+  val trailsDir = getTrailsDirectory()
+  val recordedTrailsRepo = xyz.block.trailblaze.ui.recordings.RecordedTrailsRepoJvm(trailsDirectory = trailsDir)
+
   MainTrailblazeApp(
-    trailblazeSavedSettingsRepo = trailblazeSavedSettingsRepo,
+    trailblazeSavedSettingsRepo = trailblazeSettingsRepo,
     logsRepo = logsRepo,
+    recordedTrailsRepo = recordedTrailsRepo,
     trailblazeMcpServerProvider = { server },
     customEnvVarNames = emptyList(),
   ).runTrailblazeApp(
@@ -96,6 +149,7 @@ fun main() {
     yamlRunner = { desktopRunYamlParams ->
       CoroutineScope(Dispatchers.IO).launch {
         DesktopYamlRunner(
+          trailblazeHostAppTarget = TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget,
           onRunHostYaml = { runOnHostParams: RunOnHostParams ->
             CoroutineScope(Dispatchers.IO).launch {
               TrailblazeHostYamlRunner.runHostYaml(

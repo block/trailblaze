@@ -2,6 +2,7 @@ package xyz.block.trailblaze.host.rules
 
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.host.rules.TrailblazeHostLlmConfig.DEFAULT_TRAILBLAZE_LLM_MODEL
+import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.toolcalls.commands.HideKeyboardTrailblazeTool
@@ -11,7 +12,7 @@ import kotlin.reflect.KClass
 abstract class BaseWebTrailblazeTest :
   BaseHostTrailblazeTest(
     trailblazeDriverType = TrailblazeDriverType.WEB_PLAYWRIGHT_HOST,
-    setOfMarkEnabled = false,
+    config = TrailblazeConfig.DEVICE_CONTROL,
     trailblazeToolSet = TrailblazeToolSet.DynamicTrailblazeToolSet(
       toolClasses = mutableSetOf<KClass<out TrailblazeTool>>().apply {
         addAll(TrailblazeToolSet.DefaultSetOfMarkTrailblazeToolSet.toolClasses)

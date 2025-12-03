@@ -10,6 +10,7 @@ import xyz.block.trailblaze.host.screenstate.toTrailblazeDevicePlatform
 import xyz.block.trailblaze.host.setofmark.HostCanvasSetOfMark
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.server.TrailblazeMcpServer
+import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.util.GitUtils
@@ -77,7 +78,7 @@ fun main(args: Array<String>) {
     )
     InteractiveMainRunner(
       filterViewHierarchy = true,
-      setOfMarkEnabled = true,
+      config = TrailblazeConfig(setOfMarkEnabled = true),
       trailblazeLogger = trailblazeLoggingRule.trailblazeLogger,
     ).run()
     // Interactive mode always exits with success

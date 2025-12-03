@@ -28,11 +28,33 @@ dependencies {
 compose.desktop {
   application {
     mainClass = "xyz.block.trailblaze.desktop.Trailblaze"
-  }
 
-  nativeApplication {
-    distributions {
-      macOS.iconFile.set(project.file("src/main/resources/icons/icon.png"))
+    nativeDistributions {
+      targetFormats(
+        org.jetbrains.compose.desktop.application.dsl.TargetFormat.Dmg,
+      )
+
+      packageName = "Trailblaze"
+      // Use shared git-based version from root build file
+      packageVersion = rootProject.extra["gitVersion"] as String
+      description = "Trailblaze Desktop Application (Open Source)"
+      vendor = "Block, Inc."
+
+      macOS {
+        iconFile.set(project.file("../trailblaze-ui/src/jvmMain/resources/icons/icon.icns"))
+        bundleID = "xyz.block.trailblaze.opensource.desktop"
+
+        // Minimum macOS version required
+        minimumSystemVersion = "11.0"
+
+        // App store category
+        appCategory = "public.app-category.developer-tools"
+
+        // Set to true when ready to sign
+        signing {
+          sign.set(false)
+        }
+      }
     }
   }
 }

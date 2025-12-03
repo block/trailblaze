@@ -13,7 +13,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
@@ -23,7 +25,6 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -39,6 +40,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.mikepenz.markdown.m3.Markdown
 import kotlinx.datetime.Instant
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.api.HasClickCoordinates
@@ -231,17 +233,16 @@ fun LogListRow(
     }
 
     if (log is HasPromptStep) {
-      SelectableText(
-        text = log.promptStep.prompt,
-        style = MaterialTheme.typography.titleMedium,
-        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-        fontWeight = FontWeight.Bold,
-        modifier = Modifier
-          .fillMaxWidth()
-          .padding(start = ((logIndentLevel(log) * 16) + 26).dp) // Align with the text above
-          .padding(end = 16.dp)
-          .padding(bottom = 8.dp)
-      )
+      SelectionContainer {
+        Markdown(
+          content = log.promptStep.prompt,
+          modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = ((logIndentLevel(log) * 16) + 26).dp) // Align with the text above
+            .padding(end = 16.dp)
+            .padding(bottom = 8.dp),
+        )
+      }
     }
 
     if (log is TrailblazeLog.TrailblazeSessionStatusChangeLog) {

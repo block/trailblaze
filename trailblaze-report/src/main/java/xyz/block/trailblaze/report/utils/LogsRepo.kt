@@ -72,18 +72,30 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
     val trailblazeSessionId = trailblazeSessionListener.trailblazeSessionId
     if (fileWatcherByTrailblazeSession[trailblazeSessionId] == null) {
       val sessionDir = getSessionDir(trailblazeSessionId)
-      println("LOGLISTENER - Starting to watch trailblaze session: $trailblazeSessionId ${sessionDir.canonicalPath}")
+      println("[LogsRepo] Starting session watcher for: $trailblazeSessionId")
       val fileWatchService = FileWatchService(
         dirToWatch = sessionDir,
-        onFileChange = { changeType: FileWatchService.ChangeType, fileChanged: File ->
-          println("LOGLISTENER - $changeType $fileChanged")
-          if (fileChanged.extension == "json") {
-            fileOperationScope.launch {
+        debounceDelayMs = 300L, // Shorter debounce for session events
+        maxEventsPerSecond = 5, // Lower rate limit for sessions
+      )
+
+      fileWatcherByTrailblazeSession[trailblazeSessionId] = fileWatchService
+
+      // Start watching first, then collect from the Flow
+      fileWatchService.startWatching()
+
+      // Collect from the Flow and process events in a separate coroutine
+      fileOperationScope.launch {
+        try {
+          fileWatchService.fileChanges.collect { event ->
+            val (changeType, fileChanged) = event
+            println("[LogsRepo] Session event received: $changeType ${fileChanged.name} (session: $trailblazeSessionId)")
+            if (fileChanged.extension == "json") {
               try {
                 val logsForSession = getCachedLogsForSession(trailblazeSessionId).sortedBy { it.timestamp }
                 if (logsForSession.size == 1) {
                   trailblazeSessionListener.onSessionStarted()
-                  return@launch
+                  return@collect
                 }
                 val mostRecentLog = logsForSession.lastOrNull()
 
@@ -91,26 +103,24 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
                   if (mostRecentLog.sessionStatus is SessionStatus.Ended) {
                     trailblazeSessionListener.onSessionEnded()
                     stopWatching(trailblazeSessionId)
-                    return@launch
+                    return@collect
                   }
                 }
 
                 if (mostRecentLog != null) {
                   trailblazeSessionListener.onUpdate("Session Updated: ${mostRecentLog::class.java.simpleName} ${mostRecentLog.timestamp}")
-                  return@launch
+                  return@collect
                 }
               } catch (e: Exception) {
-                println("Error processing session update for $trailblazeSessionId: ${e.message}")
+                println("[LogsRepo] Error processing session event for $trailblazeSessionId: ${e.message}")
                 e.printStackTrace()
               }
             }
           }
-        },
-        debounceDelayMs = 300L, // Shorter debounce for session events
-        maxEventsPerSecond = 5, // Lower rate limit for sessions
-      )
-      fileWatcherByTrailblazeSession[trailblazeSessionId] = fileWatchService
-      fileWatchService.startWatching()
+        } catch (e: Exception) {
+          println("[LogsRepo] Flow collection ended for session $trailblazeSessionId: ${e.message}")
+        }
+      }
     } else {
       error("Already watching trailblaze session: $trailblazeSessionId. This method would need to be supported to allow multiple listeners for the same session.")
     }
@@ -233,20 +243,32 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
    */
   private fun startWatchingSessionList() {
     if (sessionListWatcher == null) {
-      println("SESSIONLISTENER - Starting to watch session list: ${logsDir.canonicalPath}")
-      sessionListWatcher = FileWatchService(
+      println("[LogsRepo] Starting session list watcher")
+      val watcher = FileWatchService(
         dirToWatch = logsDir,
-        onFileChange = { changeType: FileWatchService.ChangeType, fileChanged: File ->
-          println("SESSIONLISTENER - $changeType $fileChanged")
+        debounceDelayMs = 1000L, // Longer debounce for session list changes
+        maxEventsPerSecond = 3, // Very low rate limit for session list
+      )
 
-          fileOperationScope.launch {
+      sessionListWatcher = watcher
+
+      // Start watching first, then collect from the Flow
+      sessionListWatcher?.startWatching()
+
+      // Collect from the Flow and process events in a separate coroutine
+      fileOperationScope.launch {
+        try {
+          watcher.fileChanges.collect { event ->
+            val (changeType, fileChanged) = event
+            println("[LogsRepo] Session list event: $changeType ${fileChanged.name}")
+
             try {
               val currentSessionIds = getSessionIds().toSet()
               val previousSessionIds = cachedSessionIds
 
               // Only proceed if the session list actually changed
               if (currentSessionIds == previousSessionIds) {
-                return@launch
+                return@collect
               }
 
               val addedSessions = currentSessionIds - previousSessionIds
@@ -275,15 +297,14 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
               // Update cache
               cachedSessionIds = currentSessionIds
             } catch (e: Exception) {
-              println("Error processing session list changes: ${e.message}")
+              println("[LogsRepo] Error processing session list event: ${e.message}")
               e.printStackTrace()
             }
           }
-        },
-        debounceDelayMs = 1000L, // Longer debounce for session list changes
-        maxEventsPerSecond = 3, // Very low rate limit for session list
-      )
-      sessionListWatcher?.startWatching()
+        } catch (e: Exception) {
+          println("[LogsRepo] Flow collection ended for session list: ${e.message}")
+        }
+      }
     }
   }
 

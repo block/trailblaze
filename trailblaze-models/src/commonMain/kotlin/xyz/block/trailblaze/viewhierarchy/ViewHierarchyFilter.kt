@@ -1,6 +1,8 @@
 package xyz.block.trailblaze.viewhierarchy
 
 import kotlinx.serialization.Serializable
+import xyz.block.trailblaze.api.TrailblazeElementSelector
+import xyz.block.trailblaze.api.TrailblazeElementSelector.Companion.isBlank
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 
@@ -367,5 +369,36 @@ abstract class ViewHierarchyFilter(
             node.focusable
           )
     }
+
+    fun ViewHierarchyTreeNode.asTrailblazeElementSelector(): TrailblazeElementSelector? = TrailblazeElementSelector(
+      textRegex = resolveMaestroText()?.takeIf { it.isNotBlank() },
+      idRegex = resourceId?.takeIf { it.isNotBlank() },
+      /** Enabled is NOT a good selector and causes VERY expensive view hierarchy matching, stripping it out */
+      enabled = null,
+      selected = selected.takeIf { it },
+      checked = checked.takeIf { it },
+      focused = focused.takeIf { it },
+    ).takeIf { !it.isBlank() }
+
+    fun ViewHierarchyTreeNode.pruneNodesWithoutMaestroProperties(): ViewHierarchyTreeNode {
+      // First, recursively filter all children
+      val filteredChildren = this.children.flatMap { child ->
+        val filteredChild = child.pruneNodesWithoutMaestroProperties()
+        // If the child should be kept, keep it as a single node
+        // Otherwise, promote its children (flatten)
+        if (filteredChild.hasMaestroProperties()) {
+          listOf(filteredChild)
+        } else {
+          filteredChild.children
+        }
+      }
+
+      return this.copy(children = filteredChildren)
+    }
+
+    /**
+     * Converts the node to a [TrailblazeElementSelector] and sees if it has any non-default properties (not blank)
+     */
+    fun ViewHierarchyTreeNode.hasMaestroProperties(): Boolean = this.asTrailblazeElementSelector()?.isBlank() == false
   }
 }
