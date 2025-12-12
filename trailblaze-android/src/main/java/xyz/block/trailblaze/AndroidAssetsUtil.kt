@@ -1,6 +1,8 @@
 package xyz.block.trailblaze
 
 import xyz.block.trailblaze.InstrumentationUtil.withInstrumentation
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
+import xyz.block.trailblaze.recordings.TrailRecordings
 
 object AndroidAssetsUtil {
 
@@ -22,4 +24,13 @@ object AndroidAssetsUtil {
   } catch (e: Exception) {
     false
   }
+
+  /**
+   * @param yamlAssetPath An asset path. If .trail.yaml it will be used, otherwise it'll find the best match in that directory
+   */
+  fun findTrailAsset(deviceClassifiers: List<TrailblazeDeviceClassifier>, yamlAssetPath: String): String? = TrailRecordings.findBestTrailResourcePath(
+    path = yamlAssetPath,
+    deviceClassifiers = deviceClassifiers,
+    doesResourceExist = ::assetExists,
+  )
 }

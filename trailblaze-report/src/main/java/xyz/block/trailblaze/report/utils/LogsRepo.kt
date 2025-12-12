@@ -396,6 +396,8 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
               trailblazeDeviceInfo = startedStatus.trailblazeDeviceInfo,
               trailConfig = startedStatus.trailConfig,
               durationMs = durationMs,
+              trailFilePath = startedStatus.trailFilePath,
+              hasRecordedSteps = startedStatus.hasRecordedSteps,
             )
           }
         }
@@ -414,6 +416,8 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
         trailblazeDeviceInfo = startedStatus.trailblazeDeviceInfo,
         trailConfig = startedStatus.trailConfig,
         durationMs = durationMs,
+        trailFilePath = startedStatus.trailFilePath,
+        hasRecordedSteps = startedStatus.hasRecordedSteps,
       )
     } else {
       null

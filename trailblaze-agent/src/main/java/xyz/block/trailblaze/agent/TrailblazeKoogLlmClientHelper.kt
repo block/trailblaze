@@ -21,6 +21,7 @@ import xyz.block.trailblaze.agent.model.PromptStepStatus
 import xyz.block.trailblaze.api.ImageFormatDetector
 import xyz.block.trailblaze.api.TrailblazeAgent
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
+import xyz.block.trailblaze.exception.TrailblazeToolExecutionException
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.model.TraceId
@@ -166,11 +167,20 @@ class TrailblazeKoogLlmClientHelper(
         traceId = traceId,
         agent = agent,
       )
-    } catch (e: Exception) {
+    } catch (executionException: TrailblazeToolExecutionException) {
       ToolExecutionResult(
         result = TrailblazeToolResult.Error.ExceptionThrown.fromThrowable(
-          throwable = e,
-          trailblazeTool = null,
+          throwable = executionException,
+          trailblazeTool = executionException.tool,
+        ),
+        executedTools = buildList {
+          add(executionException.tool)
+        },
+      )
+    } catch (exception: Exception) {
+      ToolExecutionResult(
+        result = TrailblazeToolResult.Error.ExceptionThrown.fromThrowable(
+          throwable = exception,
         ),
         executedTools = emptyList(),
       )
@@ -181,7 +191,7 @@ class TrailblazeKoogLlmClientHelper(
     val actualToolNamesExecuted = toolExecutionResult.executedTools.map { it.getToolNameFromAnnotation() }
 
     // Serialize each executed tool to get its actual arguments
-    val executedToolsWithArgs = toolExecutionResult.executedTools.map { executedTool ->
+    val executedToolsWithArgs = toolExecutionResult.executedTools.associate { executedTool ->
       // Serialize the tool to JSON string, then parse back to JsonObject to extract its arguments
       val serializedToolJson = TrailblazeJsonInstance.encodeToString<TrailblazeTool>(executedTool)
       val toolJsonObject = TrailblazeJsonInstance.decodeFromString<JsonObject>(

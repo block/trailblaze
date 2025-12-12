@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.ui
 
+import xyz.block.trailblaze.ui.models.TrailblazeServerState
 import java.awt.Desktop
 import java.awt.Taskbar
 import java.io.File
@@ -7,9 +8,10 @@ import java.net.URI
 import javax.imageio.ImageIO
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
-import xyz.block.trailblaze.ui.models.TrailblazeServerState
 
 object TrailblazeDesktopUtil {
+
+  const val DOT_TRAILBLAZE_DIR_NAME: String = ".trailblaze"
 
   /**
    * The filename for Trailblaze settings.
@@ -20,8 +22,8 @@ object TrailblazeDesktopUtil {
    * Gets the default app data directory path.
    * @return The default app data directory: ~/.trailblaze
    */
-  fun getDefaultAppDataDirectory(): String {
-    return "${System.getProperty("user.home")}/.trailblaze"
+  fun getDefaultAppDataDirectory(): File {
+    return File(System.getProperty("user.home"), DOT_TRAILBLAZE_DIR_NAME)
   }
 
   /**
@@ -38,7 +40,7 @@ object TrailblazeDesktopUtil {
    * @return The effective app data directory (configured or default)
    */
   fun getEffectiveAppDataDirectory(appConfig: TrailblazeServerState.SavedTrailblazeAppConfig): String {
-    return appConfig.appDataDirectory ?: getDefaultAppDataDirectory()
+    return appConfig.appDataDirectory ?: getDefaultAppDataDirectory().canonicalPath
   }
 
   /**
@@ -58,6 +60,7 @@ object TrailblazeDesktopUtil {
   fun getEffectiveTrailsDirectory(appConfig: TrailblazeServerState.SavedTrailblazeAppConfig): String {
     return appConfig.trailsDirectory ?: "${getEffectiveAppDataDirectory(appConfig)}/trails"
   }
+
   /**
    * Sets the taskbar icon for macOS.
    *

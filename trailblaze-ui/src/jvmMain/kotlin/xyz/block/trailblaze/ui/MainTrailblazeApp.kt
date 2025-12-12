@@ -38,6 +38,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.llm.TrailblazeLlmModelList
 import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.logs.model.inProgress
@@ -50,13 +51,11 @@ import xyz.block.trailblaze.ui.model.TrailblazeAppTab
 import xyz.block.trailblaze.ui.model.TrailblazeRoute
 import xyz.block.trailblaze.ui.models.TrailblazeServerState
 import xyz.block.trailblaze.ui.recordings.RecordedTrailsRepo
-import xyz.block.trailblaze.ui.recordings.RecordedTrailsRepoJvm
 import xyz.block.trailblaze.ui.tabs.devices.DevicesTabComposable
 import xyz.block.trailblaze.ui.tabs.sessions.SessionsTabComposableJvm
 import xyz.block.trailblaze.ui.tabs.sessions.YamlTabComposable
-import xyz.block.trailblaze.ui.tabs.settings.LogsServerComposables
+import xyz.block.trailblaze.ui.tabs.settings.SettingsTabComposables
 import xyz.block.trailblaze.ui.theme.TrailblazeTheme
-
 
 class MainTrailblazeApp(
   val trailblazeSavedSettingsRepo: TrailblazeSettingsRepo,
@@ -74,14 +73,11 @@ class MainTrailblazeApp(
 
   fun runTrailblazeApp(
     /**
-     * Custom Tabs
-     */
-    customTabs: List<TrailblazeAppTab>,
-    /**
      * Custom tabs that need access to navigation - takes a route changer callback
      */
-    customTabsWithNavigation: (routeChanger: (TrailblazeRoute) -> Unit) -> List<TrailblazeAppTab> = { emptyList() },
+    customTabsWithNavigation: (routeChanger: (TrailblazeRoute) -> Unit) -> List<TrailblazeAppTab>,
     availableModelLists: Set<TrailblazeLlmModelList>,
+    currentTrailblazeLlmModelProvider: () -> TrailblazeLlmModel,
     deviceManager: TrailblazeDeviceManager,
     yamlRunner: (DesktopAppRunYamlParams) -> Unit,
     globalSettingsContent: @Composable ColumnScope.(serverState: TrailblazeServerState) -> Unit,
@@ -130,7 +126,7 @@ class MainTrailblazeApp(
         alwaysOnTop = currentServerState.appConfig.alwaysOnTop,
       ) {
         val settingsTab = TrailblazeAppTab(TrailblazeRoute.Settings, {
-          LogsServerComposables.SettingsTab(
+          SettingsTabComposables.SettingsTab(
             trailblazeSettingsRepo = trailblazeSavedSettingsRepo,
             openLogsFolder = {
               TrailblazeDesktopUtil.openInFileBrowser(logsRepo.logsDir)
@@ -184,18 +180,10 @@ class MainTrailblazeApp(
           YamlTabComposable(
             deviceManager = deviceManager,
             trailblazeSettingsRepo = trailblazeSavedSettingsRepo,
-            availableLlmModelLists = availableModelLists,
+            currentTrailblazeLlmModelProvider = currentTrailblazeLlmModelProvider,
             yamlRunner = yamlRunner,
             additionalInstrumentationArgs = additionalInstrumentationArgs
           )
-        }
-
-        val allTabs: List<TrailblazeAppTab> = buildList {
-          add(sessionsTab)
-          addAll(customTabs)
-          add(deviceTab)
-          add(yamlTab)
-          add(settingsTab)
         }
 
         TrailblazeTheme(themeMode = currentServerState.appConfig.themeMode) {
@@ -229,7 +217,7 @@ class MainTrailblazeApp(
           val firstSessionStatus = sessions.firstOrNull()?.latestStatus
 
           var currentRoute by remember {
-            mutableStateOf(allTabs.first().route)
+            mutableStateOf(sessionsTab.route)
           }
 
           // Connect the route changer to the actual currentRoute state
@@ -244,10 +232,7 @@ class MainTrailblazeApp(
           val allTabsWithNav = remember(customNavTabs) {
             buildList {
               add(sessionsTab)
-              // Add navigation-enabled custom tabs (e.g., TestRail) here
               addAll(customNavTabs)
-              // Then add other custom tabs (e.g., Buildkite)
-              addAll(customTabs)
               add(deviceTab)
               add(yamlTab)
               add(settingsTab)

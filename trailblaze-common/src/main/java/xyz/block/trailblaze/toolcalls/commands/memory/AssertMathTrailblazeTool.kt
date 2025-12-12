@@ -5,6 +5,7 @@ import kotlinx.serialization.Serializable
 import net.objecthunter.exp4j.ExpressionBuilder
 import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.exception.TrailblazeException
+import xyz.block.trailblaze.exception.TrailblazeToolExecutionException
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.utils.ElementComparator
@@ -33,15 +34,18 @@ data class AssertMathTrailblazeTool(
       val expectedValue = expected.toDouble()
 
       if (abs(result - expectedValue) > 0.0001) {
-        throw TrailblazeException("Math assertion failed: Expression '$interpolatedExpression' evaluated to $result, expected $expectedValue")
+        throw TrailblazeToolExecutionException(
+          message = "Math assertion failed: Expression '$interpolatedExpression' evaluated to $result, expected $expectedValue",
+          tool = this,
+        )
       }
+    } catch (e: TrailblazeException) { // Make sure to include "Math assertion failed" in all error cases
+      throw e // Rethrow existing TrailblazeExceptions
     } catch (e: Exception) {
-      // Make sure to include "Math assertion failed" in all error cases
-      if (e is TrailblazeException) {
-        throw e // Rethrow existing TrailblazeExceptions
-      } else {
-        throw TrailblazeException("Math assertion failed: Error evaluating expression - ${e.message}")
-      }
+      throw TrailblazeToolExecutionException(
+        message = "Math assertion failed: Error evaluating expression - ${e.message}",
+        tool = this,
+      )
     }
     return TrailblazeToolResult.Success
   }
@@ -87,11 +91,17 @@ data class AssertMathTrailblazeTool(
           interpolatedExpression = interpolatedExpression.replace(fullMatch, numberValue.toString())
         } else {
           println("Could not extract a number from: $extractedValue for prompt: $prompt")
-          throw TrailblazeException("Could not extract a numeric value for prompt: $prompt")
+          throw TrailblazeToolExecutionException(
+            message = "Could not extract a numeric value for prompt: $prompt",
+            tool = this,
+          )
         }
       } else {
         println("Failed to find element for prompt: $prompt")
-        throw TrailblazeException("Failed to find element for prompt: $prompt")
+        throw TrailblazeToolExecutionException(
+          message = "Failed to find element for prompt: $prompt",
+          tool = this,
+        )
       }
     }
 

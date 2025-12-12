@@ -48,8 +48,6 @@ import kotlinx.coroutines.launch
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
-import xyz.block.trailblaze.llm.TrailblazeLlmModelList
-import xyz.block.trailblaze.llm.providers.OpenAITrailblazeLlmModelList
 import xyz.block.trailblaze.model.DesktopAppRunYamlParams
 import xyz.block.trailblaze.model.DeviceConnectionStatus
 import xyz.block.trailblaze.model.TrailblazeConfig
@@ -57,15 +55,88 @@ import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.ui.TrailblazeSettingsRepo
 import xyz.block.trailblaze.ui.composables.DeviceSelectionDialog
 import xyz.block.trailblaze.ui.composables.SelectableText
+import xyz.block.trailblaze.yaml.TrailblazeYaml
+
+// Function to validate YAML
+// This does a "soft" validation that checks YAML syntax but doesn't fail on unknown tools
+// since the actual runner will have app-specific custom tools registered
+private fun validateYaml(content: String): String? {
+  if (content.isBlank()) {
+    return null // Empty is not an error, just disable the button
+  }
+
+  // Check for common indentation issues before parsing
+  val indentationError = checkIndentationIssues(content)
+  if (indentationError != null) {
+    return indentationError
+  }
+
+  return try {
+    // Try to parse with default tools
+    val trailblazeYaml = TrailblazeYaml()
+    trailblazeYaml.decodeTrail(content)
+    null // No error
+  } catch (e: Exception) {
+    val message = e.message ?: "Invalid YAML format"
+    // Only ignore errors that are specifically about unknown/unregistered tools
+    // The exact error format is: "TrailblazeYaml could not TrailblazeTool found with name: X. Did you register it?"
+    val isUnknownToolError = message.contains("TrailblazeYaml could not TrailblazeTool found with name:")
+
+    if (isUnknownToolError) {
+      null // Allow unknown tools - they'll be registered when the test runs
+    } else {
+      // Return all other errors including syntax, structure issues
+      message
+    }
+  }
+}
+
+// Check for common indentation problems that the YAML parser might not catch
+private fun checkIndentationIssues(yaml: String): String? {
+  val lines = yaml.lines()
+  var inRecording = false
+  var recordingIndent = 0
+
+  for ((index, line) in lines.withIndex()) {
+    if (line.isBlank()) continue
+
+    val trimmed = line.trim()
+    val indent = line.takeWhile { it == ' ' }.length
+
+    // Detect when we enter a recording block
+    if (trimmed == "recording:") {
+      inRecording = true
+      recordingIndent = indent
+      continue
+    }
+
+    // Check for misaligned "tools:" within recording
+    if (inRecording && trimmed == "tools:") {
+      val expectedIndent = recordingIndent + 2
+      if (indent != expectedIndent && indent != recordingIndent + 4) {
+        return "Line ${index + 1}: 'tools:' has incorrect indentation ($indent spaces). " +
+            "Expected $expectedIndent spaces to align with 'recording' block."
+      }
+    }
+
+    // Exit recording block when we de-indent
+    if (inRecording && indent <= recordingIndent && trimmed != "recording:") {
+      inRecording = false
+    }
+  }
+
+  return null
+}
 
 @Composable
 fun YamlTabComposable(
-  availableLlmModelLists: Set<TrailblazeLlmModelList>,
+  currentTrailblazeLlmModelProvider: () -> TrailblazeLlmModel,
   trailblazeSettingsRepo: TrailblazeSettingsRepo,
   deviceManager: TrailblazeDeviceManager,
   yamlRunner: (DesktopAppRunYamlParams) -> Unit,
   additionalInstrumentationArgs: (suspend () -> Map<String, String>),
 ) {
+  val currentTrailblazeLlmModel = currentTrailblazeLlmModelProvider()
   val serverState by trailblazeSettingsRepo.serverStateFlow.collectAsState()
   val yamlContent = serverState.appConfig.yamlContent
 
@@ -77,31 +148,34 @@ fun YamlTabComposable(
   // Local state for YAML content to avoid saving on every character
   var localYamlContent by remember(yamlContent) { mutableStateOf(yamlContent) }
 
+  // YAML validation state
+  var validationError by remember { mutableStateOf<String?>(null) }
+  var isValidating by remember { mutableStateOf(false) }
+
   val coroutineScope = rememberCoroutineScope()
 
-  // Debounce YAML content updates
+  // Debounce YAML content updates and validate
   LaunchedEffect(localYamlContent) {
     if (localYamlContent != yamlContent) {
+      isValidating = true
       delay(500) // 500ms debounce
       if (localYamlContent != yamlContent) { // Check again after delay
+        // Validate the YAML
+        validationError = validateYaml(localYamlContent)
+
+        // Save the content
         trailblazeSettingsRepo.updateAppConfig { appConfig ->
           appConfig.copy(
             yamlContent = localYamlContent
           )
         }
       }
+      isValidating = false
+    } else {
+      // When content matches saved content, validate it immediately
+      validationError = validateYaml(localYamlContent)
     }
   }
-
-  val savedProviderId = serverState.appConfig.llmProvider
-  val savedModelId: String = serverState.appConfig.llmModel
-  val currentProviderModelList = availableLlmModelLists.firstOrNull { it.provider.id == savedProviderId }
-    ?: OpenAITrailblazeLlmModelList
-  val currentProvider = currentProviderModelList.provider
-
-  val selectedTrailblazeLlmModel: TrailblazeLlmModel =
-    currentProviderModelList.entries.firstOrNull { it.modelId == savedModelId }
-      ?: OpenAITrailblazeLlmModelList.OPENAI_GPT_4_1
 
 
   LaunchedEffect(Unit) {
@@ -135,7 +209,7 @@ fun YamlTabComposable(
           fontWeight = FontWeight.Medium
         )
         Text(
-          text = "Provider: ${currentProvider.id}, Model: ${selectedTrailblazeLlmModel.modelId}. Change settings in Settings tab.",
+          text = "Provider: ${currentTrailblazeLlmModel.trailblazeLlmProvider.id}, Model: ${currentTrailblazeLlmModel.modelId}. Change settings in Settings tab.",
           style = MaterialTheme.typography.bodyMedium
         )
       }
@@ -164,13 +238,36 @@ fun YamlTabComposable(
               localYamlContent = newContent
             },
             modifier = Modifier
-              .fillMaxSize(),
+              .fillMaxWidth()
+              .weight(1f),
             textStyle = TextStyle(
               fontFamily = FontFamily.Monospace,
               fontSize = 14.sp
             ),
             placeholder = { Text("Enter your YAML test configuration here...") },
-            enabled = !isRunning
+            enabled = !isRunning,
+            isError = validationError != null,
+            supportingText = {
+              if (isValidating) {
+                Text(
+                  text = "Validating...",
+                  color = MaterialTheme.colorScheme.primary,
+                  style = MaterialTheme.typography.bodySmall
+                )
+              } else if (validationError != null) {
+                Text(
+                  text = "❌ $validationError",
+                  color = MaterialTheme.colorScheme.error,
+                  style = MaterialTheme.typography.bodySmall
+                )
+              } else if (localYamlContent.isNotBlank()) {
+                Text(
+                  text = "✓ Valid YAML",
+                  color = Color(0xFF4CAF50),
+                  style = MaterialTheme.typography.bodySmall
+                )
+              }
+            }
           )
         }
       }
@@ -291,7 +388,7 @@ fun YamlTabComposable(
             }
           },
           modifier = Modifier.weight(1f),
-          enabled = !isRunning && localYamlContent.isNotBlank()
+          enabled = !isRunning && localYamlContent.isNotBlank() && validationError == null
         ) {
           Icon(
             Icons.Filled.Laptop,
@@ -380,10 +477,11 @@ fun YamlTabComposable(
             val runYamlRequest = RunYamlRequest(
               testName = "Yaml",
               yaml = yamlContent,
-              trailblazeLlmModel = selectedTrailblazeLlmModel,
+              trailblazeLlmModel = currentTrailblazeLlmModel,
               useRecordedSteps = true,
               targetAppName = serverState.appConfig.selectedTargetAppName,
-              config = TrailblazeConfig(setOfMarkEnabled = setOfMarkEnabledConfig)
+              config = TrailblazeConfig(setOfMarkEnabled = setOfMarkEnabledConfig),
+              trailFilePath = null,
             )
 
             val onConnectionStatus: (DeviceConnectionStatus) -> Unit = { status ->

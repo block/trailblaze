@@ -11,6 +11,7 @@ import kotlinx.serialization.descriptors.buildClassSerialDescriptor
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.serializer
+import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.getToolNameFromAnnotation
 import xyz.block.trailblaze.toolcalls.toolName
@@ -34,9 +35,7 @@ class TrailblazeToolYamlWrapperSerializer(
 
     val toolKClass: KClass<out TrailblazeTool> = allTrailblazeToolClasses.firstOrNull { toolKClass ->
       toolKClass.toolName().toolName == toolName
-    } ?: throw IllegalArgumentException(
-      "TrailblazeYaml could not TrailblazeTool found with name: $toolName.  Did you register it?",
-    )
+    } ?: OtherTrailblazeTool::class
 
     @OptIn(InternalSerializationApi::class)
     val trailblazeToolSerializer: KSerializer<TrailblazeTool> = toolKClass.serializer() as KSerializer<TrailblazeTool>

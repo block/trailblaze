@@ -6,6 +6,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.client.TrailblazeJson
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.ui.models.TrailblazeServerState
@@ -16,6 +18,7 @@ import java.io.File
 class TrailblazeSettingsRepo(
   val settingsFile: File = File("build/${TrailblazeDesktopUtil.SETTINGS_FILENAME}"),
   private val initialConfig: SavedTrailblazeAppConfig,
+  private val supportedDriverTypes: Set<TrailblazeDriverType>,
 ) {
   private val trailblazeJson: Json = TrailblazeJson.defaultWithoutToolsInstance
 
@@ -71,6 +74,28 @@ class TrailblazeSettingsRepo(
     updateAppConfig { appConfig: SavedTrailblazeAppConfig ->
       appConfig.copy(selectedTargetAppName = targetApp.name)
     }
+  }
+
+  fun getCurrentTrailsDir(): File {
+    return File(serverStateFlow.value.appConfig.trailsDirectory ?: ".")
+  }
+
+  fun getAllSupportedDriverTypes(): Set<TrailblazeDriverType> {
+    return supportedDriverTypes
+  }
+
+  /**
+   * Get the map of enabled platforms to their selected driver types
+   */
+  fun getEnabledDriverTypesMap(): Map<TrailblazeDevicePlatform, TrailblazeDriverType> {
+    return serverStateFlow.value.appConfig.selectedTrailblazeDriverTypes
+  }
+
+  /**
+   * Get the set of currently enabled driver types (values from the map)
+   */
+  fun getEnabledDriverTypes(): Set<TrailblazeDriverType> {
+    return serverStateFlow.value.appConfig.selectedTrailblazeDriverTypes.values.toSet()
   }
 
   val serverStateFlow = MutableStateFlow(

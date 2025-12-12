@@ -16,7 +16,7 @@ class AndroidCalculatorOnePlusTwoAiTest {
   @Test
   fun trailblazeSuccess() {
     trailblazeRule.run(
-      """
+      testYaml = """
 - maestro:
   - launchApp:
       appId: com.android.calculator2

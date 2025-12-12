@@ -29,8 +29,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MoveDown
 import androidx.compose.material.icons.filled.Save
@@ -38,6 +40,7 @@ import androidx.compose.material.icons.outlined.TextDecrease
 import androidx.compose.material.icons.outlined.TextIncrease
 import androidx.compose.material.icons.outlined.ZoomIn
 import androidx.compose.material.icons.outlined.ZoomOut
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
@@ -49,7 +52,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -71,6 +73,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.llm.LlmSessionUsageAndCost
 import xyz.block.trailblaze.llm.LlmUsageAndCostExt.computeUsageSummary
 import xyz.block.trailblaze.logs.client.TrailblazeLog
@@ -79,9 +82,11 @@ import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.ui.Platform
 import xyz.block.trailblaze.ui.composables.CodeBlock
 import xyz.block.trailblaze.ui.composables.SelectableText
+import xyz.block.trailblaze.ui.composables.getIcon
 import xyz.block.trailblaze.ui.getPlatform
 import xyz.block.trailblaze.ui.images.ImageLoader
 import xyz.block.trailblaze.ui.images.NetworkImageLoader
+import xyz.block.trailblaze.ui.recordings.ExistingTrail
 import xyz.block.trailblaze.ui.recordings.RecordedTrailsRepo
 import xyz.block.trailblaze.ui.tabs.session.group.LogGroupRow
 import xyz.block.trailblaze.ui.tabs.session.models.GroupedLog
@@ -221,7 +226,7 @@ fun SessionDetailComposable(
               }
             }
             if (showDeleteConfirmation) {
-              androidx.compose.material3.AlertDialog(
+              AlertDialog(
                 onDismissRequest = { showDeleteConfirmation = false },
                 title = { Text("Delete Session?") },
                 text = {
@@ -230,7 +235,7 @@ fun SessionDetailComposable(
                   )
                 },
                 confirmButton = {
-                  androidx.compose.material3.TextButton(
+                  TextButton(
                     onClick = {
                       showDeleteConfirmation = false
                       onDeleteSession()
@@ -240,7 +245,7 @@ fun SessionDetailComposable(
                   }
                 },
                 dismissButton = {
-                  androidx.compose.material3.TextButton(
+                  TextButton(
                     onClick = { showDeleteConfirmation = false }
                   ) {
                     Text("Cancel")
@@ -409,259 +414,35 @@ fun SessionDetailComposable(
       Box(modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize()) {
           CompositionLocalProvider(LocalFontScale provides fontSizeScale) {
-            // Header item
-            Row(
-              modifier = Modifier.fillMaxWidth(),
-              horizontalArrangement = Arrangement.SpaceBetween,
-              verticalAlignment = Alignment.CenterVertically
-            ) {
-              Row(
-                verticalAlignment = Alignment.CenterVertically
-              ) {
-                IconButton(onClick = onBackClick) {
-                  Icon(
-                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = "Back to sessions",
-                    modifier = Modifier.size(20.dp)
-                  )
-                }
-                Spacer(modifier = Modifier.width(8.dp))
-                SelectableText(
-                  text = "Trailblaze Logs",
-                  style = MaterialTheme.typography.headlineSmall,
-                  fontWeight = FontWeight.Bold,
-                )
-              }
-              Row(verticalAlignment = Alignment.CenterVertically) {
-                // View mode toggle
-                Row(
-                  verticalAlignment = Alignment.CenterVertically,
-                  modifier = Modifier.padding(end = 8.dp)
-                ) {
-                  Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(end = 8.dp)
-                  ) {
-                    if (getPlatform() == Platform.JVM) {
-                      // Auto-scroll toggle - always visible for all view modes
-                      Checkbox(
-                        checked = alwaysAtBottom,
-                        onCheckedChange = { alwaysAtBottom = it }
-                      )
-                      Icon(
-                        imageVector = Icons.Default.MoveDown,
-                        contentDescription = "Toggle auto-scroll to bottom",
-                        modifier = Modifier.size(18.dp)
-                      )
-                      Text(
-                        text = "Auto-scroll",
-                        modifier = Modifier.padding(start = 4.dp),
-                        style = MaterialTheme.typography.bodyMedium
-                      )
-                    }
-                  }
-                  TextButton(onClick = {
-                    viewMode = SessionViewMode.List
-                    onViewModeChanged(SessionViewMode.List)
-                  }) {
-                    Text(
-                      text = "List",
-                      color = if (viewMode == SessionViewMode.List) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                    )
-                  }
-                  TextButton(onClick = {
-                    viewMode = SessionViewMode.Grid
-                    onViewModeChanged(SessionViewMode.Grid)
-                  }) {
-                    Text(
-                      text = "Grid",
-                      color = if (viewMode == SessionViewMode.Grid) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                    )
-                  }
-                  TextButton(onClick = {
-                    viewMode = SessionViewMode.LlmUsage
-                    onViewModeChanged(SessionViewMode.LlmUsage)
-                  }) {
-                    Text(
-                      text = "LLM Usage",
-                      color = if (viewMode == SessionViewMode.LlmUsage) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                    )
-                  }
-                  TextButton(onClick = {
-                    viewMode = SessionViewMode.Recording
-                    onViewModeChanged(SessionViewMode.Recording)
-                  }) {
-                    Text(
-                      text = "Recording",
-                      color = if (viewMode == SessionViewMode.Recording) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                    )
-                  }
-                }
-                // Cancel Session button for active sessions
-                if (sessionDetail.session.latestStatus.inProgress) {
-                  Spacer(modifier = Modifier.width(16.dp))
-                  Button(
-                    onClick = onCancelSession,
-                    enabled = !isCancelling,
-                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(
-                      containerColor = MaterialTheme.colorScheme.error
-                    )
-                  ) {
-                    if (isCancelling) {
-                      Text("Cancelling...")
-                    } else {
-                      Text("Cancel Session")
-                    }
-                  }
-                } else {
-                  var showDeleteConfirmation by remember { mutableStateOf(false) }
-                  var showMoreMenu by remember { mutableStateOf(false) }
-                  Box {
-                    IconButton(onClick = { showMoreMenu = !showMoreMenu }) {
-                      Icon(
-                        imageVector = Icons.Default.MoreVert,
-                        contentDescription = "More options",
-                        modifier = Modifier.size(18.dp)
-                      )
-                    }
-                    DropdownMenu(
-                      expanded = showMoreMenu,
-                      onDismissRequest = { showMoreMenu = false }
-                    ) {
-                      DropdownMenuItem(
-                        leadingIcon = {
-                          Icon(
-                            imageVector = Icons.Default.Folder,
-                            contentDescription = "Open Logs Folder"
-                          )
-                        },
-                        text = { Text("Open Logs Folder") },
-                        onClick = {
-                          onOpenLogsFolder()
-                          showMoreMenu = false
-                        }
-                      )
-                      DropdownMenuItem(
-                        leadingIcon = {
-                          Icon(
-                            imageVector = Icons.Default.Save,
-                            contentDescription = "Export Session"
-                          )
-                        },
-                        text = { Text("Export Session") },
-                        onClick = {
-                          onExportSession()
-                          showMoreMenu = false
-                        }
-                      )
-                      DropdownMenuItem(
-                        leadingIcon = {
-                          Icon(
-                            imageVector = Icons.Default.Delete,
-                            contentDescription = "Delete Session"
-                          )
-                        },
-                        text = { Text("Delete Session") },
-                        onClick = {
-                          showDeleteConfirmation = true
-                          showMoreMenu = false
-                        }
-                      )
-                    }
-                  }
-                  if (showDeleteConfirmation) {
-                    androidx.compose.material3.AlertDialog(
-                      onDismissRequest = { showDeleteConfirmation = false },
-                      title = { Text("Delete Session?") },
-                      text = {
-                        Text(
-                          "Are you sure you want to delete this session? This action cannot be undone."
-                        )
-                      },
-                      confirmButton = {
-                        androidx.compose.material3.TextButton(
-                          onClick = {
-                            showDeleteConfirmation = false
-                            onDeleteSession()
-                          }
-                        ) {
-                          Text("Delete")
-                        }
-                      },
-                      dismissButton = {
-                        androidx.compose.material3.TextButton(
-                          onClick = { showDeleteConfirmation = false }
-                        ) {
-                          Text("Cancel")
-                        }
-                      }
-                    )
-                  }
-                }
-                if (viewMode == SessionViewMode.Grid || viewMode == SessionViewMode.List) {
-                  Spacer(modifier = Modifier.width(16.dp))
-                  Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                      .background(
-                        MaterialTheme.colorScheme.surface,
-                        shape = RoundedCornerShape(8.dp)
-                      )
-                      .padding(2.dp)
-                  ) {
-                    IconButton(
-                      onClick = {
-                        zoomOffset++
-                        onZoomOffsetChanged(zoomOffset)
-                      },
-                      enabled = cardsPerRow < maxCards
-                    ) {
-                      Icon(
-                        Icons.Outlined.ZoomOut, contentDescription = "Smaller cards (more per row)"
-                      )
-                    }
-                    IconButton(
-                      onClick = {
-                        zoomOffset--
-                        onZoomOffsetChanged(zoomOffset)
-                      },
-                      enabled = cardsPerRow > 1
-                    ) {
-                      Icon(Icons.Outlined.ZoomIn, contentDescription = "Larger cards (fewer per row)")
-                    }
-                  }
-                  Spacer(modifier = Modifier.width(8.dp))
-                  Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                      .background(
-                        MaterialTheme.colorScheme.surface,
-                        shape = RoundedCornerShape(8.dp)
-                      )
-                      .padding(2.dp)
-                  ) {
-                    IconButton(
-                      onClick = {
-                        fontSizeScale = (fontSizeScale - 0.1f).coerceAtLeast(0.5f)
-                        onFontScaleChanged(fontSizeScale)
-                      },
-                      enabled = fontSizeScale > 0.5f
-                    ) {
-                      Icon(Icons.Outlined.TextDecrease, contentDescription = "Decrease font size")
-                    }
-                    IconButton(
-                      onClick = {
-                        fontSizeScale = (fontSizeScale + 0.1f).coerceAtMost(2f)
-                        onFontScaleChanged(fontSizeScale)
-                      },
-                      enabled = fontSizeScale < 2f
-                    ) {
-                      Icon(Icons.Outlined.TextIncrease, contentDescription = "Increase font size")
-                    }
-                  }
-                }
-              }
-            }
+            // Header
+            SessionDetailHeader(
+              onBackClick = onBackClick,
+              viewMode = viewMode,
+              onViewModeChanged = { newMode ->
+                viewMode = newMode
+                onViewModeChanged(newMode)
+              },
+              alwaysAtBottom = alwaysAtBottom,
+              onAlwaysAtBottomChanged = { alwaysAtBottom = it },
+              isSessionInProgress = sessionDetail.session.latestStatus.inProgress,
+              isCancelling = isCancelling,
+              onCancelSession = onCancelSession,
+              onOpenLogsFolder = onOpenLogsFolder,
+              onExportSession = onExportSession,
+              onDeleteSession = onDeleteSession,
+              zoomOffset = zoomOffset,
+              onZoomOffsetChanged = { newOffset ->
+                zoomOffset = newOffset
+                onZoomOffsetChanged(newOffset)
+              },
+              fontSizeScale = fontSizeScale,
+              onFontScaleChanged = { newScale ->
+                fontSizeScale = newScale
+                onFontScaleChanged(newScale)
+              },
+              cardsPerRow = cardsPerRow,
+              maxCards = maxCards,
+            )
 
             // Test Information Section
             val testTitle = sessionDetail.session.trailConfig?.title
@@ -882,7 +663,7 @@ fun SessionDetailComposable(
                         var saveResult by remember { mutableStateOf<Result<String>?>(null) }
 
                         // Load existing recordings initially
-                        var existingRecordings by remember { mutableStateOf<List<String>>(emptyList()) }
+                        var existingRecordings by remember { mutableStateOf<List<ExistingTrail>>(emptyList()) }
                         LaunchedEffect(recordedTrailsRepo, sessionDetail.session.sessionId) {
                           if (recordedTrailsRepo != null) {
                             withContext(Dispatchers.Default) {
@@ -891,15 +672,20 @@ fun SessionDetailComposable(
                           }
                         }
 
-                        // Watch for file changes - only active when Recording tab is visible
+                        // Watch for file changes in all directories - only active when Recording tab is visible
                         if (onRevealRecordingInFinder != null && recordedTrailsRepo != null) {
-                          val directoryPath = remember(recordedTrailsRepo, sessionDetail.session.sessionId) {
-                            recordedTrailsRepo.getWatchDirectoryForSession(sessionDetail.session)
+                          val directoryPaths = remember(recordedTrailsRepo, sessionDetail.session.sessionId) {
+                            recordedTrailsRepo.getWatchDirectoriesForSession(sessionDetail.session)
                           }
 
-                          if (directoryPath != null) {
-                            val fileChanges = remember(directoryPath) {
-                              recordedTrailsRepo.watchDirectory(directoryPath)
+                          if (directoryPaths.isNotEmpty()) {
+                            val fileChanges = remember(directoryPaths) {
+                              val flows = directoryPaths.mapNotNull { path ->
+                                recordedTrailsRepo.watchDirectory(path)
+                              }
+                              if (flows.isNotEmpty()) {
+                                kotlinx.coroutines.flow.merge(*flows.toTypedArray())
+                              } else null
                             }
 
                             if (fileChanges != null) {
@@ -947,28 +733,22 @@ fun SessionDetailComposable(
                                 Text("Copy Yaml")
                               }
 
-                              // Show Save Recording button if recordingsRepo is provided
-                              if (recordedTrailsRepo != null) {
-                                // Calculate preview filename based on trail config
-                                val trailConfig = sessionDetail.session.trailConfig
-                                val platform =
-                                  sessionDetail.session.trailblazeDeviceInfo?.trailblazeDriverType?.platform?.name?.lowercase()
+                              // Show Save Recording button if recordingsRepo is provided and trail config has an ID
+                              if (recordedTrailsRepo != null && sessionDetail.session.trailConfig?.id != null) {
+                                // Calculate expected filename based on all classifiers
+                                // Platform is always the first classifier
+                                // Filename format: {classifier1}-{classifier2}-...trail.yaml (e.g., ios-iphone-sim.trail.yaml)
                                 val classifiers =
                                   sessionDetail.session.trailblazeDeviceInfo?.classifiers ?: listOf()
-                                val baseFileNameWithPath = trailConfig?.id ?: sessionDetail.session.sessionId
-                                // Extract just the filename part (everything after the last slash)
-                                val baseFileName = baseFileNameWithPath.substringAfterLast('/').substringAfterLast('\\')
 
-                                // Check if platform + first classifier are available
-                                if (platform != null && classifiers.isNotEmpty()) {
-                                  val firstClassifier = classifiers.first()
-                                  val suffix = "-$platform-$firstClassifier"
-                                  val expectedFileName = "$baseFileName$suffix.trail.yaml"
+                                // Check if we have at least one classifier
+                                if (classifiers.isNotEmpty()) {
+                                  // Use all classifiers to build expected filename
+                                  val expectedFileName = "${classifiers.joinToString("-")}.trail.yaml"
 
                                   // Check if file already exists
-                                  val fileExists = existingRecordings.any { filePath ->
-                                    val fileName = filePath.substringAfterLast('/').substringAfterLast('\\')
-                                    fileName == expectedFileName
+                                  val fileExists = existingRecordings.any { trail ->
+                                    trail.fileName == expectedFileName
                                   }
 
                                   Button(
@@ -978,8 +758,6 @@ fun SessionDetailComposable(
                                         saveResult = recordedTrailsRepo.saveRecording(
                                           yaml,
                                           sessionDetail.session,
-                                          includePlatform = true,
-                                          numClassifiers = 1
                                         )
                                         // Refresh existing recordings after save
                                         withContext(Dispatchers.Default) {
@@ -995,67 +773,12 @@ fun SessionDetailComposable(
                               }
                             }
 
-                            // Show existing recordings info
+                            // Show existing recordings info grouped by subdirectory
                             if (recordedTrailsRepo != null && existingRecordings.isNotEmpty()) {
-                              Box(
-                                modifier = Modifier
-                                  .fillMaxWidth()
-                                  .background(
-                                    MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f),
-                                    shape = RoundedCornerShape(8.dp)
-                                  )
-                                  .padding(12.dp)
-                              ) {
-                                Column {
-                                  Text(
-                                    text = "📁 Existing Recordings (${existingRecordings.size})",
-                                    style = MaterialTheme.typography.titleSmall,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.onSecondaryContainer
-                                  )
-                                  Spacer(modifier = Modifier.height(8.dp))
-                                  existingRecordings.forEach { filePath ->
-                                    // Extract filename from path (works on both Windows and Unix)
-                                    val fileName = filePath.substringAfterLast('/').substringAfterLast('\\')
-                                    Row(
-                                      verticalAlignment = Alignment.CenterVertically,
-                                      horizontalArrangement = Arrangement.SpaceBetween,
-                                      modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(start = 8.dp, top = 4.dp, bottom = 4.dp)
-                                    ) {
-                                      SelectableText(
-                                        text = "• $fileName",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSecondaryContainer,
-                                        modifier = Modifier.weight(1f)
-                                      )
-
-                                      // Show "Show on Disk" button only on JVM platform
-                                      if (getPlatform() == Platform.JVM && onRevealRecordingInFinder != null) {
-                                        androidx.compose.material3.TextButton(
-                                          onClick = { onRevealRecordingInFinder.invoke(filePath) },
-                                          contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                                            horizontal = 8.dp,
-                                            vertical = 2.dp
-                                          )
-                                        ) {
-                                          Icon(
-                                            imageVector = Icons.Default.FolderOpen,
-                                            contentDescription = "Show on Disk",
-                                            modifier = Modifier.size(14.dp)
-                                          )
-                                          Spacer(modifier = Modifier.width(4.dp))
-                                          Text(
-                                            "Show on Disk",
-                                            style = MaterialTheme.typography.labelSmall
-                                          )
-                                        }
-                                      }
-                                    }
-                                  }
-                                }
-                              }
+                              ExistingRecordingsSection(
+                                existingRecordings = existingRecordings,
+                                onRevealRecordingInFinder = onRevealRecordingInFinder
+                              )
                               Spacer(modifier = Modifier.height(16.dp))
                             }
 

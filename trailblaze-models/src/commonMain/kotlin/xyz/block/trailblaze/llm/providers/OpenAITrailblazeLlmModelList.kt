@@ -6,6 +6,30 @@ import xyz.block.trailblaze.llm.TrailblazeLlmModelList
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
 
 object OpenAITrailblazeLlmModelList : TrailblazeLlmModelList {
+
+  val OPENAI_GPT_5_2 = TrailblazeLlmModel(
+    trailblazeLlmProvider = TrailblazeLlmProvider.OPENAI,
+    modelId = "gpt-5.2",
+    inputCostPerOneMillionTokens = 1.75,
+    outputCostPerOneMillionTokens = 14.00,
+    capabilityIds = listOf(
+      LLMCapability.Temperature,
+      LLMCapability.Schema.JSON.Basic,
+      LLMCapability.Schema.JSON.Standard,
+      LLMCapability.Speculation,
+      LLMCapability.Tools,
+      LLMCapability.ToolChoice,
+      LLMCapability.Vision.Image,
+      LLMCapability.Document,
+      LLMCapability.Completion,
+      LLMCapability.MultipleChoices,
+      LLMCapability.OpenAIEndpoint.Completions,
+      LLMCapability.OpenAIEndpoint.Responses,
+    ).map { it.id },
+    contextLength = 400_000,
+    maxOutputTokens = 128_000,
+  )
+
   val OPENAI_GPT_5 = TrailblazeLlmModel(
     trailblazeLlmProvider = TrailblazeLlmProvider.OPENAI,
     modelId = "gpt-5",
@@ -96,6 +120,7 @@ object OpenAITrailblazeLlmModelList : TrailblazeLlmModelList {
   )
 
   override val entries = listOf(
+    OPENAI_GPT_5_2,
     OPENAI_GPT_5,
     OPENAI_GPT_5_MINI,
     OPENAI_GPT_4_1,

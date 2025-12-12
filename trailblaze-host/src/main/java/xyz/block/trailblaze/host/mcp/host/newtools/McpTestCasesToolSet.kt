@@ -38,10 +38,10 @@ class McpTestCasesToolSet(
   }
 
   private fun listAllTestCases(dir: File): List<TestCase> {
-    val trailFiles = dir.walkTopDown().filter { it.name.endsWith(".trail.yaml") }.toList()
+    val trailFiles = dir.walkTopDown().filter { it.name.endsWith("trail.yaml") }.toList()
     return trailFiles.map {
       TestCase(
-        name = it.name.replace(".trail.yaml", ""),
+        name = it.name,
         filePath = it.relativeTo(dir).path,
       )
     }

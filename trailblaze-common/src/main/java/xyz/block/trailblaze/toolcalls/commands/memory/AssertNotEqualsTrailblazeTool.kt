@@ -3,7 +3,7 @@ package xyz.block.trailblaze.toolcalls.commands.memory
 import ai.koog.agents.core.tools.annotations.LLMDescription
 import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.AgentMemory
-import xyz.block.trailblaze.exception.TrailblazeException
+import xyz.block.trailblaze.exception.TrailblazeToolExecutionException
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.utils.ElementComparator
@@ -28,7 +28,10 @@ data class AssertNotEqualsTrailblazeTool(
     val interpolatedExpected = memory.interpolateVariables(expected)
 
     if (interpolatedActual == interpolatedExpected) {
-      throw TrailblazeException("Assertion failed: Expected '$interpolatedExpected' to NOT equal '$interpolatedActual'")
+      throw TrailblazeToolExecutionException(
+        message = "Assertion failed: Expected '$interpolatedExpected' to NOT equal '$interpolatedActual'",
+        tool = this,
+      )
     }
     return TrailblazeToolResult.Success
   }

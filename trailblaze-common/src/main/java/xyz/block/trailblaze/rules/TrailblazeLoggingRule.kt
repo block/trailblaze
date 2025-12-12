@@ -59,7 +59,6 @@ abstract class TrailblazeLoggingRule(
     this.description = description
     trailblazeLogger.startSession("${description.testClass.canonicalName}_${description.methodName}")
     sessionManager.startSession(trailblazeLogger.getCurrentSessionId())
-    subscribeToLoggingEventsAndSendToServer()
   }
 
   override fun beforeTestExecution(description: Description) {
@@ -119,5 +118,10 @@ abstract class TrailblazeLoggingRule(
         }
       }
     }
+  }
+
+  init {
+    // Ensure that logging has been subscribed to immediately
+    subscribeToLoggingEventsAndSendToServer()
   }
 }

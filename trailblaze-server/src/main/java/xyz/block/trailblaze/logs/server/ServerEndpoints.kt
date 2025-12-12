@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.logs.server
 
+import io.ktor.http.Headers
 import io.ktor.http.HttpStatusCode
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.Application
@@ -38,6 +39,9 @@ object ServerEndpoints {
     }
     install(CORS) {
       anyHost()
+      anyMethod()
+      allowHeader("Content-Type")
+      allowHeader("Authorization")
     }
     routing {
       HomeEndpoint.register(routing = this, logsRepo = logsRepo, homeCallbackHandler = homeCallbackHandler)

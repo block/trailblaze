@@ -13,6 +13,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.report.utils.LogsRepo
+import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.ui.tabs.session.LiveSessionDataProvider
 import xyz.block.trailblaze.ui.tabs.session.SessionListListener
 import xyz.block.trailblaze.ui.tabs.session.TrailblazeSessionListener

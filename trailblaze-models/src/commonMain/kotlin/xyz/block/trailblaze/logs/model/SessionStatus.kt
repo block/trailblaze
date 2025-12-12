@@ -13,6 +13,8 @@ sealed interface SessionStatus {
   @Serializable
   data class Started(
     val trailConfig: TrailConfig?,
+    val trailFilePath: String?,
+    val hasRecordedSteps: Boolean,
     val testMethodName: String,
     val testClassName: String,
     val trailblazeDeviceInfo: TrailblazeDeviceInfo,

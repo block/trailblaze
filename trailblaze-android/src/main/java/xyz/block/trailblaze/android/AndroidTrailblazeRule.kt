@@ -12,6 +12,7 @@ import xyz.block.trailblaze.TrailblazeYamlUtil
 import xyz.block.trailblaze.agent.TrailblazeElementComparator
 import xyz.block.trailblaze.agent.TrailblazeRunner
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
+import xyz.block.trailblaze.android.devices.TrailblazeAndroidOnDeviceClassifier
 import xyz.block.trailblaze.android.uiautomator.AndroidOnDeviceUiAutomatorScreenState
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TestAgentRunner
@@ -41,7 +42,9 @@ open class AndroidTrailblazeRule(
   val llmClient: LLMClient,
   val trailblazeLlmModel: TrailblazeLlmModel,
   val config: TrailblazeConfig = TrailblazeConfig.DEFAULT,
-  val trailblazeLoggingRule: TrailblazeAndroidLoggingRule = TrailblazeAndroidLoggingRule(),
+  val trailblazeLoggingRule: TrailblazeAndroidLoggingRule = TrailblazeAndroidLoggingRule(
+    trailblazeDeviceClassifiersProvider = TrailblazeAndroidOnDeviceClassifier.getDeviceClassifiersProvider(),
+  ),
   customToolClasses: CustomTrailblazeTools? = null,
   val sessionManager: TrailblazeSessionManager = trailblazeLoggingRule.sessionManager,
 ) : SimpleTestRuleChain(trailblazeLoggingRule),
@@ -104,19 +107,22 @@ open class AndroidTrailblazeRule(
 
   override fun run(
     testYaml: String,
+    trailFilePath: String?,
     useRecordedSteps: Boolean,
   ): Boolean {
-    val trailConfig = trailblazeYaml.extractTrailConfig(testYaml)
+    val trailItems = trailblazeYaml.decodeTrail(testYaml)
+    val trailConfig = trailblazeYaml.extractTrailConfig(trailItems)
     trailblazeLoggingRule.trailblazeLogger.sendStartLog(
       trailConfig = trailConfig,
       className = this.trailblazeLoggingRule.description?.className ?: "AndroidTrailblazeRule",
       methodName = this.trailblazeLoggingRule.description?.methodName ?: "run",
       trailblazeDeviceInfo = this.trailblazeLoggingRule.trailblazeDeviceInfoProvider(),
       rawYaml = testYaml,
+      trailFilePath = trailFilePath,
+      hasRecordedSteps = trailblazeYaml.hasRecordedSteps(trailItems),
     )
     trailblazeAgent.clearMemory()
-    val trailItems = trailblazeYaml.decodeTrail(testYaml)
-    for ((index, item) in trailItems.withIndex()) {
+    trailItems.forEach { item ->
       if (sessionManager.isCurrentSessionCancelled()) {
         throw TrailblazeSessionCancelledException()
       }
@@ -226,6 +232,7 @@ open class AndroidTrailblazeRule(
     run(
       testYaml = yamlContent,
       useRecordedSteps = useRecordedSteps,
+      trailFilePath = yamlAssetPath,
     )
   }
 }

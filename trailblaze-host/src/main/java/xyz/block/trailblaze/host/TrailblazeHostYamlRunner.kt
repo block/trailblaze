@@ -4,7 +4,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.exception.TrailblazeSessionCancelledException
@@ -54,7 +53,7 @@ object TrailblazeHostYamlRunner {
 
     if (runOnHostParams.trailblazeDevicePlatform == TrailblazeDevicePlatform.ANDROID) {
       HostAndroidDeviceConnectUtils.uninstallAllAndroidInstrumentationProcesses(
-        trailblazeOnDeviceInstrumentationTargetTestApps = deviceManager.appTargets.map { it.getTrailblazeOnDeviceInstrumentationTarget() }
+        trailblazeOnDeviceInstrumentationTargetTestApps = deviceManager.availableAppTargets.map { it.getTrailblazeOnDeviceInstrumentationTarget() }
           .toSet(),
         deviceId = deviceId,
       )
@@ -143,6 +142,7 @@ object TrailblazeHostYamlRunner {
         hostTbRunner.runTrailblazeYaml(
           yaml = runOnHostParams.runYamlRequest.yaml,
           forceStopApp = runOnHostParams.forceStopTargetApp,
+          trailFilePath = runOnHostParams.runYamlRequest.trailFilePath,
         )
         onProgressMessage("Test execution completed successfully")
         trailblazeLogger.sendSessionEndLog(sessionManager, isSuccess = true)

@@ -3,16 +3,6 @@ plugins {
   alias(libs.plugins.vanniktech.maven.publish)
   alias(libs.plugins.kotlin.serialization)
   alias(libs.plugins.dependency.guard)
-  alias(libs.plugins.spotless)
-  application
-}
-
-application {
-  mainClass.set("xyz.block.trailblaze.host.HostMainKt")
-}
-
-tasks.named<JavaExec>("run") {
-  standardInput = System.`in`
 }
 
 tasks.withType<Tar> {

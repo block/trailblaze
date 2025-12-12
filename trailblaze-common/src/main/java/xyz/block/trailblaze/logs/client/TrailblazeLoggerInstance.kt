@@ -212,8 +212,10 @@ abstract class TrailblazeLogger {
    */
   fun sendStartLog(
     trailConfig: TrailConfig?,
+    trailFilePath: String?,
     className: String,
     methodName: String,
+    hasRecordedSteps: Boolean,
     trailblazeDeviceInfo: TrailblazeDeviceInfo,
     rawYaml: String? = null,
   ) {
@@ -221,10 +223,12 @@ abstract class TrailblazeLogger {
       TrailblazeLog.TrailblazeSessionStatusChangeLog(
         sessionStatus = SessionStatus.Started(
           trailConfig = trailConfig,
+          trailFilePath = trailFilePath,
           testClassName = className,
           testMethodName = methodName,
           trailblazeDeviceInfo = trailblazeDeviceInfo,
           rawYaml = rawYaml,
+          hasRecordedSteps = hasRecordedSteps,
         ),
         session = getCurrentSessionId(),
         timestamp = Clock.System.now(),

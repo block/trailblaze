@@ -4,7 +4,6 @@ plugins {
   alias(libs.plugins.vanniktech.maven.publish)
   alias(libs.plugins.kotlin.serialization)
   alias(libs.plugins.dependency.guard)
-  alias(libs.plugins.spotless)
 }
 
 android {

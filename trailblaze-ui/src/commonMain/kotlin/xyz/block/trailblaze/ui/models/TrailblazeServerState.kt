@@ -1,6 +1,8 @@
 package xyz.block.trailblaze.ui.models
 
 import kotlinx.serialization.Serializable
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.llm.providers.OpenAITrailblazeLlmModelList
 
 @Serializable
@@ -9,6 +11,7 @@ data class TrailblazeServerState(
 ) {
   @Serializable
   data class SavedTrailblazeAppConfig(
+    val selectedTrailblazeDriverTypes: Map<TrailblazeDevicePlatform, TrailblazeDriverType>,
     val autoLaunchGoose: Boolean = false,
     val alwaysOnTop: Boolean = false,
     val serverPort: Int = HTTP_PORT,

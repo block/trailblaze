@@ -4,7 +4,7 @@ import android.os.Build
 import android.util.DisplayMetrics
 import xyz.block.trailblaze.InstrumentationUtil.withInstrumentation
 import xyz.block.trailblaze.devices.TrailblazeAndroidDeviceCategory
-import xyz.block.trailblaze.devices.TrailblazeDeviceClassifiersProvider
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDeviceOrientation
 import xyz.block.trailblaze.devices.TrailblazeDriverType
@@ -53,7 +53,7 @@ object AndroidTrailblazeDeviceInfoUtil {
 
   fun collectCurrentDeviceInfo(
     trailblazeDriverType: TrailblazeDriverType,
-    trailblazeDeviceClassifiersProvider: TrailblazeDeviceClassifiersProvider?,
+    trailblazeDeviceClassifiers: List<TrailblazeDeviceClassifier>,
   ): TrailblazeDeviceInfo {
     val displayMetrics = getDisplayMetrics()
     return TrailblazeDeviceInfo(
@@ -62,14 +62,14 @@ object AndroidTrailblazeDeviceInfoUtil {
       orientation = getDeviceOrientation(),
       widthPixels = displayMetrics.widthPixels,
       heightPixels = displayMetrics.heightPixels,
-      classifiers = trailblazeDeviceClassifiersProvider?.getDeviceClassifiers() ?: getConsumerAndroidClassifiers(),
+      classifiers = trailblazeDeviceClassifiers,
       metadata = getDeviceMetadata(),
     )
   }
 
-  fun getConsumerAndroidClassifiers(): List<String> = buildList {
+  fun getConsumerAndroidClassifiers(): List<TrailblazeDeviceClassifier> = buildList {
     add(getDeviceCategoryClassifier())
   }
 
-  private fun getDeviceCategoryClassifier(): String = getConsumerAndroidDeviceCategory().classifier
+  private fun getDeviceCategoryClassifier(): TrailblazeDeviceClassifier = getConsumerAndroidDeviceCategory().asTrailblazeDeviceClassifier()
 }

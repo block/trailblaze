@@ -114,4 +114,21 @@ class TrailblazeYaml(
     val configItem = trailItems.filterIsInstance<TrailYamlItem.ConfigTrailItem>().firstOrNull()
     return configItem?.config
   }
+
+  /**
+   * Determines if there are any recorded steps
+   */
+  fun hasRecordedSteps(trailItems: List<TrailYamlItem>): Boolean = trailItems.any { item ->
+    when (item) {
+      is TrailYamlItem.ConfigTrailItem -> false
+      is TrailYamlItem.MaestroTrailItem -> true
+      is TrailYamlItem.PromptsTrailItem -> {
+        item.promptSteps.any { promptStep ->
+          promptStep.recording?.tools?.isNotEmpty() ?: false
+        }
+      }
+
+      is TrailYamlItem.ToolTrailItem -> true
+    }
+  }
 }

@@ -18,13 +18,13 @@ import xyz.block.trailblaze.util.HostAndroidDeviceConnectUtils
 
 // --- Koog ToolSets ---
 @Suppress("unused")
-class AndroidOnDeviceToolSet(
+class AndroidOnDeviceFromHostToolSet(
   private val sessionContext: TrailblazeMcpSseSessionContext?,
   private val toolRegistryUpdated: (ToolRegistry) -> Unit,
   private val targetTestAppProvider: () -> TrailblazeHostAppTarget,
 ) : ToolSet {
 
-  companion object {
+  companion object Companion {
     const val ON_DEVICE_ANDROID_MCP_SERVER_PORT = 52526
   }
 
@@ -35,8 +35,23 @@ class AndroidOnDeviceToolSet(
 
   @LLMDescription("Connect to the attached device using Trailblaze.")
   @Tool
-  fun connectDevice(): String {
-    val connectionStatus = runBlocking { connectDeviceInternal(targetTestAppProvider()) }
+  fun sayHi(me: String?): String = "Hello from $me!"
+
+
+  @LLMDescription("Installed apps")
+  @Tool
+  fun getInstalledApps(): String {
+    val result = AndroidHostAdbUtils.execAdbShellCommand(deviceId = null, args = listOf("pm", "list", "packages"))
+    val packages = result.lines().map { it.substringAfter("package:") }
+    return packages
+      .sorted()
+      .joinToString("\n")
+  }
+
+  @LLMDescription("Connect to the attached device using Trailblaze.")
+  @Tool
+  fun connectAndroidDevice(): String {
+    val connectionStatus = runBlocking { connectAndroidDeviceInternal(targetTestAppProvider()) }
     return when (connectionStatus) {
       is DeviceConnectionStatus.ConnectionFailure -> {
         "Connection failed: ${connectionStatus.errorMessage}"
@@ -53,7 +68,7 @@ class AndroidOnDeviceToolSet(
     }
   }
 
-  suspend fun connectDeviceInternal(targetTestApp: TrailblazeHostAppTarget): DeviceConnectionStatus {
+  suspend fun connectAndroidDeviceInternal(targetTestApp: TrailblazeHostAppTarget): DeviceConnectionStatus {
     if (isThereAnActiveConnection()) {
       return getActiveConnection() ?: error("No active connection")
     }
@@ -120,7 +135,7 @@ class AndroidOnDeviceToolSet(
     "Call this to list the available Trailblaze Tool Sets on the connected device.",
   )
   @Tool
-  fun listToolSets(): String {
+  fun listAndroidToolSets(): String {
     if (sessionContext == null) {
       return "Session context is null. Cannot send progress messages or connect to device."
     }
@@ -150,7 +165,7 @@ class AndroidOnDeviceToolSet(
     "This changes the enabled Trailblaze ToolSets.  This will change what tools are available to the Trailblaze device control agent.",
   )
   @Tool
-  fun setToolSets(
+  fun setAndroidToolSets(
     @LLMDescription("The list of Trailblaze ToolSet Names to enable.  Find available ToolSet IDs with the listToolSets tool.  There is an exact match on the name, so be sure to use the correct name(s).")
     toolSetNames: List<String>,
   ): String {
@@ -187,7 +202,7 @@ The prompt/action/request will be sent to the mobile device to be run.
 """,
   )
   @Tool
-  fun prompt(
+  fun promptAndroid(
     @LLMDescription("The original prompt.")
     prompt: String,
   ): String {

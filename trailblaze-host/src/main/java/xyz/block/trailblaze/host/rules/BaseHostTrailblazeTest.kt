@@ -5,6 +5,7 @@ import org.junit.rules.RuleChain
 import xyz.block.trailblaze.TrailblazeYamlUtil
 import xyz.block.trailblaze.agent.TrailblazeElementComparator
 import xyz.block.trailblaze.agent.TrailblazeRunner
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.exception.TrailblazeException
@@ -15,6 +16,7 @@ import xyz.block.trailblaze.host.rules.TrailblazeHostLlmConfig.DEFAULT_TRAILBLAZ
 import xyz.block.trailblaze.http.DynamicLlmClient
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.model.TrailblazeConfig
+import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.rules.RetryRule
 import xyz.block.trailblaze.rules.TrailblazeLoggingRule
 import xyz.block.trailblaze.rules.TrailblazeRunnerUtil
@@ -57,16 +59,20 @@ abstract class BaseHostTrailblazeTest(
    */
   abstract fun ensureTargetAppIsStopped()
 
+  val trailblazeDeviceClassifiers: List<TrailblazeDeviceClassifier> by lazy {
+    TrailblazeHostDeviceClassifier(
+      trailblazeDriverType = trailblazeDriverType,
+      maestroDeviceInfoProvider = { hostRunner.connectedDevice.initialMaestroDeviceInfo },
+    ).getDeviceClassifiers()
+  }
+
   val trailblazeDeviceInfo: TrailblazeDeviceInfo by lazy {
     val initialMaestroDeviceInfo = hostRunner.connectedDevice.initialMaestroDeviceInfo
     TrailblazeDeviceInfo(
       trailblazeDriverType = trailblazeDriverType,
       widthPixels = initialMaestroDeviceInfo.widthPixels,
       heightPixels = initialMaestroDeviceInfo.heightPixels,
-      classifiers = TrailblazeHostDeviceClassifier(
-        trailblazeDriverType = trailblazeDriverType,
-        maestroDeviceInfoProvider = { hostRunner.connectedDevice.initialMaestroDeviceInfo },
-      ).getDeviceClassifiers(),
+      classifiers = trailblazeDeviceClassifiers,
     )
   }
 
@@ -181,6 +187,7 @@ abstract class BaseHostTrailblazeTest(
 
   fun runTrailblazeYaml(
     yaml: String,
+    trailFilePath: String?,
     forceStopApp: Boolean = true,
     useRecordedSteps: Boolean = true,
   ) {
@@ -190,6 +197,7 @@ abstract class BaseHostTrailblazeTest(
     }
     val trailItems: List<TrailYamlItem> = trailblazeYaml.decodeTrail(yaml)
     val trailConfig = trailblazeYaml.extractTrailConfig(trailItems)
+
     loggingRule.trailblazeLogger.sendStartLog(
       trailConfig = trailConfig,
       className = loggingRule.description?.className
@@ -198,6 +206,8 @@ abstract class BaseHostTrailblazeTest(
       methodName = loggingRule.description?.methodName ?: "run",
       trailblazeDeviceInfo = loggingRule.trailblazeDeviceInfoProvider(),
       rawYaml = yaml,
+      trailFilePath = trailFilePath,
+      hasRecordedSteps = trailblazeYaml.hasRecordedSteps(trailItems),
     )
     return runTrail(trailItems, useRecordedSteps)
   }
@@ -209,12 +219,19 @@ abstract class BaseHostTrailblazeTest(
     forceStopApp: Boolean = true,
     useRecordedSteps: Boolean = true,
   ) {
-    val trailYamlFromResource: String = TemplatingUtil.getResourceAsText(path)
-      ?: error("No YAML resource found at $path")
+    val computedResourcePath: String = TrailRecordings.findBestTrailResourcePath(
+      path = path,
+      deviceClassifiers = trailblazeDeviceClassifiers,
+      doesResourceExist = TemplatingUtil::doesResourceExist,
+    ) ?: throw TrailblazeException("Resource not found: $path")
+    println("Running from resource: $computedResourcePath")
+    val trailYamlFromResource: String = TemplatingUtil.getResourceAsText(computedResourcePath)
+      ?: error("No YAML resource found at $computedResourcePath")
     runTrailblazeYaml(
       yaml = trailYamlFromResource,
       forceStopApp = forceStopApp,
       useRecordedSteps = useRecordedSteps,
+      trailFilePath = computedResourcePath,
     )
   }
 }

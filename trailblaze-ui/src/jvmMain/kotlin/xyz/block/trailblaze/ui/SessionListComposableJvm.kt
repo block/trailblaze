@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.ui
 
 import xyz.block.trailblaze.report.utils.LogsRepo
+import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.ui.images.ImageLoader
 import xyz.block.trailblaze.ui.tabs.session.LiveSessionDataProvider
 import java.io.File

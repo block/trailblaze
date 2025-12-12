@@ -8,6 +8,7 @@ import org.junit.Rule
 import org.junit.Test
 import xyz.block.trailblaze.android.AndroidTrailblazeRule
 import xyz.block.trailblaze.android.InstrumentationArgUtil
+import xyz.block.trailblaze.android.devices.TrailblazeAndroidOnDeviceClassifier
 import xyz.block.trailblaze.http.DefaultDynamicLlmClient
 import xyz.block.trailblaze.http.TrailblazeHttpClientFactory
 import xyz.block.trailblaze.llm.RunYamlRequest
@@ -20,7 +21,9 @@ import xyz.block.trailblaze.mcp.OnDeviceRpcServerUtils
 class AndroidStandaloneServerTest {
 
   @get:Rule
-  val trailblazeLoggingRule = TrailblazeAndroidLoggingRule()
+  val trailblazeLoggingRule = TrailblazeAndroidLoggingRule(
+    trailblazeDeviceClassifiersProvider = TrailblazeAndroidOnDeviceClassifier.getDeviceClassifiersProvider(),
+  )
 
   @Test
   fun startServer() {
@@ -62,6 +65,7 @@ class AndroidStandaloneServerTest {
     ).run(
       testYaml = runYamlRequest.yaml,
       useRecordedSteps = runYamlRequest.useRecordedSteps,
+      trailFilePath = null,
     )
   }
 }

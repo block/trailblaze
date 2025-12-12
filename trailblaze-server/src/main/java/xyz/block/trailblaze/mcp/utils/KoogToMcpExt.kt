@@ -1,112 +1,66 @@
 package xyz.block.trailblaze.mcp.utils
 
-import ai.koog.agents.core.tools.ToolDescriptor
 import ai.koog.agents.core.tools.ToolParameterDescriptor
 import ai.koog.agents.core.tools.ToolParameterType
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonObjectBuilder
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.putJsonArray
+import kotlinx.serialization.json.putJsonObject
 
+/**
+ * Helper functions to convert Koog tool parameters to MCP JSON schema (following Koog pattern)
+ *
+ * Original Code in Koog
+ * https://github.com/JetBrains/koog/blob/c213e846834355c983eea16d41e1cf80d52f1cfc/agents/agents-mcp-server/src/commonMain/kotlin/ai/koog/agents/mcp/server/McpServer.kt#L154-L205
+ */
 object KoogToMcpExt {
+  fun ToolParameterDescriptor.toMcpJsonSchemaObject(): JsonObject = buildJsonObject {
+    put("description", JsonPrimitive(description))
+    fillJsonSchema(type)
+  }
 
-  /**
-   * Converts the current ToolDescriptor instance into a JSON Schema representation.
-   *
-   * This function generates a JSON object that conforms to the schema of the tool, including all required and optional
-   * parameters with their respective types and descriptions. The schema defines the tool structure in a JSON-friendly
-   * format for validation or documentation purposes.
-   *
-   * @return A JsonObject representing the JSON Schema for the current ToolDescriptor instance.
-   */
-  fun ToolDescriptor.toJSONSchema(): JsonObject {
-    /**
-     * Helper function to convert a ToolParameterDescriptor into JSON schema.
-     *
-     * It maps the declared type to a JSON type. For enums, it creates an "enum" array containing the valid options.
-     * For arrays, it recursively converts the items type.
-     */
-    fun toolParameterToSchema(
-      type: ToolParameterType,
-      description: String? = null,
-    ): JsonObject = buildJsonObject {
-      when (type) {
-        is ToolParameterType.String -> put("type", JsonPrimitive("string"))
-        is ToolParameterType.Integer -> put("type", JsonPrimitive("integer"))
-        is ToolParameterType.Float -> put("type", JsonPrimitive("number"))
-        is ToolParameterType.Boolean -> put("type", JsonPrimitive("boolean"))
-        is ToolParameterType.Enum -> {
-          // Assuming the enum entries expose a 'name' property.
-          val enumValues = type.entries.map { JsonPrimitive(it) }
-          put("type", JsonPrimitive("string"))
-          put("enum", JsonArray(enumValues))
+  private fun JsonObjectBuilder.fillJsonSchema(type: ToolParameterType) {
+    when (type) {
+      ToolParameterType.Boolean -> put("type", JsonPrimitive("boolean"))
+      ToolParameterType.Float -> put("type", JsonPrimitive("number"))
+      ToolParameterType.Integer -> put("type", JsonPrimitive("integer"))
+      ToolParameterType.String -> put("type", JsonPrimitive("string"))
+      ToolParameterType.Null -> put("type", JsonPrimitive("null"))
+
+      is ToolParameterType.Enum -> {
+        put("type", JsonPrimitive("string"))
+        putJsonArray("enum") {
+          type.entries.forEach { entry -> add(JsonPrimitive(entry)) }
         }
+      }
 
-        is ToolParameterType.List -> {
-          put("type", JsonPrimitive("array"))
-          put("items", toolParameterToSchema(type.itemsType))
-        }
+      is ToolParameterType.List -> {
+        put("type", JsonPrimitive("array"))
+        putJsonObject("items") { fillJsonSchema(type.itemsType) }
+      }
 
-        is ToolParameterType.Object -> {
-          put("type", JsonPrimitive("object"))
-          put(
-            "properties",
-            buildJsonObject {
-              type.properties.forEach { property ->
-                put(
-                  property.name,
-                  buildJsonObject {
-                    toolParameterToSchema(property.type, property.description)
-                    put("description", JsonPrimitive(property.description))
-                  },
-                )
-              }
-            },
-          )
-        }
-
-        is ToolParameterType.AnyOf -> {
-          // For AnyOf types, create an array of schemas for each possible type
-          val anyOfTypes = type.types.map { toolParameterDescriptor: ToolParameterDescriptor ->
-            toolParameterToSchema(
-              type = toolParameterDescriptor.type,
-            )
+      is ToolParameterType.AnyOf -> {
+        putJsonArray("anyOf") {
+          type.types.forEach { propertiesType ->
+            add(propertiesType.toMcpJsonSchemaObject())
           }
-          put("anyOf", JsonArray(anyOfTypes))
-        }
-
-        is ToolParameterType.Null -> {
-          put("type", JsonPrimitive("null"))
         }
       }
 
-      if (description != null) {
-        put("description", JsonPrimitive(description))
+      is ToolParameterType.Object -> {
+        put("type", JsonPrimitive("object"))
+        type.additionalProperties?.let { put("additionalProperties", JsonPrimitive(it)) }
+        putJsonObject("properties") {
+          type.properties.forEach { property ->
+            putJsonObject(property.name) {
+              fillJsonSchema(property.type)
+              put("description", JsonPrimitive(property.description))
+            }
+          }
+        }
       }
     }
-
-    // Build the properties object by converting each parameter to its JSON schema.
-    val properties = mutableMapOf<String, JsonElement>()
-
-    // Process required parameters.
-    for (param in requiredParameters) {
-      properties[param.name] = toolParameterToSchema(param.type, param.description)
-    }
-    // Process optional parameters.
-    for (param in optionalParameters) {
-      properties[param.name] = toolParameterToSchema(param.type, param.description)
-    }
-
-    // Build the outer JSON schema.
-    val schemaJson = buildJsonObject {
-      put("title", JsonPrimitive(name))
-      put("description", JsonPrimitive(description))
-      put("type", JsonPrimitive("object"))
-      put("properties", JsonObject(properties))
-      put("required", JsonArray(requiredParameters.map { JsonPrimitive(it.name) }))
-    }
-
-    return schemaJson
   }
 }

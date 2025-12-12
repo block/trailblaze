@@ -46,6 +46,7 @@ import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.ui.TrailblazeSettingsRepo
+import xyz.block.trailblaze.ui.devices.DeviceSessionInfo
 import xyz.block.trailblaze.ui.tabs.devices.TargetAppConfigRow
 
 /**
@@ -384,7 +385,7 @@ fun SingleDeviceListItem(
   isSelected: Boolean,
   appTarget: TrailblazeHostAppTarget?,
   installedAppId: String?,
-  activeSession: xyz.block.trailblaze.ui.DeviceSessionInfo? = null,
+  activeSession: DeviceSessionInfo? = null,
   onSessionClick: ((String) -> Unit)? = null,
   onToggle: () -> Unit,
   modifier: Modifier = Modifier,
@@ -493,11 +494,11 @@ fun SingleDeviceListItem(
           }
         }
 
-        Row(
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-          if (appTarget != null) {
+        if (appTarget != null) {
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+          ) {
             if (installedAppId != null) {
               Icon(
                 imageVector = Icons.Default.Check,

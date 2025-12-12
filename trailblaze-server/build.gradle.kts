@@ -1,14 +1,8 @@
 plugins {
   alias(libs.plugins.kotlin.jvm)
   alias(libs.plugins.kotlin.serialization)
-  alias(libs.plugins.spotless)
   alias(libs.plugins.dependency.guard)
   alias(libs.plugins.vanniktech.maven.publish)
-  application
-}
-
-application {
-  mainClass.set("xyz.block.trailblaze.logs.server.LogsServerMainKt")
 }
 
 dependencies {
@@ -43,6 +37,9 @@ dependencies {
   implementation(libs.kotlinx.serialization.json)
   implementation(libs.maestro.orchestra.models) { isTransitive = false }
   implementation(libs.mcp.sdk)
+
+  // Explicit kotlin-reflect dependency to ensure correct version
+  implementation(libs.kotlin.reflect)
 
   runtimeOnly(libs.jackson.module.kotlin)
   runtimeOnly(libs.slf4j.simple)

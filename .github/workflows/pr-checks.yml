@@ -45,7 +45,6 @@ jobs:
 
     steps:
       - name: Enable KVM group perms
-        shell: bash
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
@@ -112,7 +111,6 @@ jobs:
 
       - name: Verify logs were pulled
         if: always()
-        shell: bash
         run: |
           echo "========================================="
           echo "Verifying logs in workspace"
@@ -130,7 +128,6 @@ jobs:
       - name: Generate Trailblaze report
         if: always()
         continue-on-error: true
-        shell: bash
         run: |
           echo "========================================="
           echo "Building Compose Web/WASM UI..."
@@ -157,7 +154,6 @@ jobs:
       - name: Create artifacts
         if: always()
         continue-on-error: true
-        shell: bash
         run: |
           echo "========================================="
           echo "Creating Artifacts"
@@ -211,7 +207,6 @@ jobs:
 
       - name: Fail if tests failed
         if: steps.run-tests.outcome == 'failure'
-        shell: bash
         run: |
           echo "Tests failed - failing the workflow"
           exit 1

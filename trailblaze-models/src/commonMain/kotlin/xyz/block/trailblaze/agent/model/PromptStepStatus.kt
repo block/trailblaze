@@ -97,7 +97,7 @@ data class PromptStepStatus(
   fun addCompletedToolCallToChatHistory(
     commandResult: TrailblazeToolResult,
     llmResponseContent: String?,
-    toolsWithArgs: List<Pair<String, JsonObject>>,
+    toolsWithArgs: Map<String, JsonObject>,
   ) {
     llmResponseContent?.let { llmContent ->
       addAssistantMessageToChatHistory(
@@ -154,7 +154,7 @@ data class PromptStepStatus(
    */
   private fun addToolExecutionResultUserMessageToChatHistory(
     commandResult: TrailblazeToolResult,
-    toolsWithArgs: List<Pair<String, JsonObject>>,
+    toolsWithArgs: Map<String, JsonObject>,
   ) {
     val contentString = commandResult.toContentString(
       toolsWithArgs = toolsWithArgs,

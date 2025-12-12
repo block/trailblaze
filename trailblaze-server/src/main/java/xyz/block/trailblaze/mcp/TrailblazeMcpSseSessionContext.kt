@@ -11,11 +11,12 @@ import xyz.block.trailblaze.mcp.models.McpSseSessionId
 
 // Session context interface for tools
 class TrailblazeMcpSseSessionContext(
-  val mcpServer: Server,
-  val mcpServerSession: ServerSession,
+  var mcpServerSession: ServerSession?, // Nullable and mutable to handle race condition during initialization
   val mcpSseSessionId: McpSseSessionId,
   var progressToken: ProgressToken? = null,
 ) {
+  // Store transport directly so POSTs can be handled before connect() completes
+  var sseTransport: io.modelcontextprotocol.kotlin.sdk.server.SseServerTransport? = null
 
   val sendProgressNotificationsScope = CoroutineScope(Dispatchers.IO)
 
@@ -25,7 +26,7 @@ class TrailblazeMcpSseSessionContext(
     println("Sending progress $message $message")
     progressToken?.let { progressToken ->
       sendProgressNotificationsScope.launch {
-        mcpServerSession.notification(
+        mcpServerSession?.notification(
           ProgressNotification(
             params = ProgressNotification.Params(
               progress = progressCount++.toDouble(),
@@ -43,7 +44,7 @@ class TrailblazeMcpSseSessionContext(
     println("Sending progress $progress $message")
     progressToken?.let { progressToken ->
       sendProgressNotificationsScope.launch {
-        mcpServerSession.notification(
+        mcpServerSession?.notification(
           ProgressNotification(
             params = ProgressNotification.Params(
               progress = progress.toDouble(),

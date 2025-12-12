@@ -5,7 +5,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import xyz.block.trailblaze.api.TrailblazeElementSelector
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
-import xyz.block.trailblaze.exception.TrailblazeException
+import xyz.block.trailblaze.exception.TrailblazeToolExecutionException
 import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
@@ -50,16 +50,18 @@ data class AssertVisibleByNodeIdTrailblazeTool(
   override fun toExecutableTrailblazeTools(executionContext: TrailblazeToolExecutionContext): List<ExecutableTrailblazeTool> {
     val screenState = executionContext.screenState
     if (screenState?.viewHierarchyOriginal == null) {
-      throw TrailblazeException(
+      throw TrailblazeToolExecutionException(
         message = "No View Hierarchy available when processing $this",
+        tool = this,
       )
     }
     val matchingNode = ViewHierarchyTreeNode.dfs(screenState.viewHierarchyOriginal) {
       it.nodeId == nodeId
     }
     if (matchingNode == null) {
-      throw TrailblazeException(
+      throw TrailblazeToolExecutionException(
         message = "AssertVisibleWithNodeId: No node found with nodeId=$nodeId.  $this",
+        tool = this,
       )
     }
 

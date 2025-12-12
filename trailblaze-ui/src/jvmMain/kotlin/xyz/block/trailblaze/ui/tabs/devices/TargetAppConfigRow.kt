@@ -67,7 +67,7 @@ fun TargetAppConfigRow(
           expanded = false
         }
       ) {
-        deviceManager.appTargets.forEach { selectedTargetApp ->
+        deviceManager.availableAppTargets.forEach { selectedTargetApp ->
           DropdownMenuItem(
             leadingIcon = {
               deviceManager.appIconProvider.getIcon(selectedTargetApp)
@@ -87,7 +87,7 @@ fun TargetAppConfigRow(
       Spacer(modifier = Modifier.height(16.dp))
       CodeBlock(
         text = selectedTargetApp.getAppInfoText(
-          supportedDrivers = deviceManager.supportedDrivers
+          supportedDrivers = deviceManager.getAllSupportedDriverTypes()
         )
       )
     }

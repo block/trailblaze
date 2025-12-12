@@ -4,7 +4,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import xyz.block.trailblaze.InstrumentationUtil.withInstrumentation
 import xyz.block.trailblaze.android.AndroidTrailblazeDeviceInfoUtil
 import xyz.block.trailblaze.android.InstrumentationArgUtil
-import xyz.block.trailblaze.devices.TrailblazeDeviceClassifiersProvider
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
@@ -12,8 +12,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.rules.TrailblazeLoggingRule
 
 class TrailblazeAndroidLoggingRule(
-  /** Override the default device classifiers */
-  trailblazeDeviceClassifiersProvider: TrailblazeDeviceClassifiersProvider? = null,
+  trailblazeDeviceClassifiersProvider: () -> List<TrailblazeDeviceClassifier>,
 ) : TrailblazeLoggingRule(
   logsBaseUrl = InstrumentationArgUtil.logsEndpoint(),
   writeLogToDisk = { currentTestName: String, log: TrailblazeLog ->
@@ -61,7 +60,7 @@ class TrailblazeAndroidLoggingRule(
   override val trailblazeDeviceInfoProvider: () -> TrailblazeDeviceInfo = {
     AndroidTrailblazeDeviceInfoUtil.collectCurrentDeviceInfo(
       trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
-      trailblazeDeviceClassifiersProvider = trailblazeDeviceClassifiersProvider,
+      trailblazeDeviceClassifiers = trailblazeDeviceClassifiersProvider(),
     )
   }
 

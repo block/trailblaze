@@ -14,6 +14,8 @@ data class SessionInfo(
   val timestamp: Instant,
   /** How long the session lasted (based on calculating from logs) */
   val durationMs: Long,
+  val trailFilePath: String?,
+  val hasRecordedSteps: Boolean,
   val trailblazeDeviceInfo: TrailblazeDeviceInfo? = null,
   val testName: String? = null,
   val testClass: String? = null,
@@ -38,7 +40,7 @@ fun List<TrailblazeLog>.getSessionStartedInfo(): SessionStatus.Started? = this
   .firstOrNull()
 
 fun List<TrailblazeLog>.getSessionInfo(): SessionInfo {
-  val sessionStartedInfo = this.getSessionStartedInfo()
+  val sessionStartedInfo: SessionStatus.Started? = this.getSessionStartedInfo()
   val firstLog = this.first()
   val lastLog = this.lastOrNull()
 
@@ -57,5 +59,7 @@ fun List<TrailblazeLog>.getSessionInfo(): SessionInfo {
     trailblazeDeviceInfo = sessionStartedInfo?.trailblazeDeviceInfo,
     trailConfig = sessionStartedInfo?.trailConfig,
     durationMs = durationMs,
+    trailFilePath = sessionStartedInfo?.trailFilePath,
+    hasRecordedSteps = sessionStartedInfo?.hasRecordedSteps ?: false,
   )
 }

@@ -60,7 +60,7 @@ object AgentMessages {
   /**
    * Overload for handling multiple tools with their individual arguments (used for delegating tools)
    */
-  fun TrailblazeToolResult.toContentString(toolsWithArgs: List<Pair<String, JsonObject>>): String = when (this) {
+  fun TrailblazeToolResult.toContentString(toolsWithArgs: Map<String, JsonObject>): String = when (this) {
     is TrailblazeToolResult.Success -> successContentString(toolsWithArgs)
     is TrailblazeToolResult.Error.MaestroValidationError -> validationErrorContentString(
       toolsWithArgs,
@@ -109,9 +109,9 @@ object AgentMessages {
   /**
    * Overload for handling multiple tools with their individual arguments
    */
-  private fun successContentString(toolsWithArgs: List<Pair<String, JsonObject>>) = buildString {
+  private fun successContentString(toolsWithArgs: Map<String, JsonObject>) = buildString {
     if (toolsWithArgs.size == 1) {
-      val (toolName, toolArgs) = toolsWithArgs.first()
+      val (toolName, toolArgs) = toolsWithArgs.entries.first()
       appendLine("**Successfully used the `$toolName` tool on the device with the following parameters:**")
       appendLine(asJsonCodeBlock(toolArgs))
     } else {
@@ -166,7 +166,7 @@ object AgentMessages {
    * Overload for handling multiple tools with their individual arguments
    */
   private fun validationErrorContentString(
-    toolsWithArgs: List<Pair<String, JsonObject>>,
+    toolsWithArgs: Map<String, JsonObject>,
     errorMessage: String,
   ) = buildString {
     appendLine("**Failed to perform the following action(s) on the device because of a verification error:**")
@@ -210,7 +210,7 @@ object AgentMessages {
    * Overload for handling multiple tools with their individual arguments
    */
   private fun unknownCommandErrorContentString(
-    toolsWithArgs: List<Pair<String, JsonObject>>,
+    toolsWithArgs: Map<String, JsonObject>,
     errorMessage: String,
   ) = buildString {
     appendLine("# Unknown tool(s):")

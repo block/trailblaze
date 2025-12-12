@@ -18,8 +18,10 @@ import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Upload
@@ -28,13 +30,18 @@ import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.PlainTooltip
 import androidx.compose.material3.Text
+import androidx.compose.material3.TooltipBox
+import androidx.compose.material3.TooltipDefaults
+import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -42,11 +49,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.logs.model.SessionStatus
@@ -55,7 +65,29 @@ import xyz.block.trailblaze.ui.composables.SelectableText
 import xyz.block.trailblaze.ui.composables.StatusBadge
 import xyz.block.trailblaze.ui.icons.Android
 import xyz.block.trailblaze.ui.icons.Apple
+import xyz.block.trailblaze.ui.icons.BootstrapRecordCircle
 import xyz.block.trailblaze.ui.icons.BrowserChrome
+
+// Enum for session status filter options
+enum class SessionStatusFilter(val displayName: String) {
+  IN_PROGRESS("In Progress"),
+  SUCCEEDED("Succeeded"),
+  SUCCEEDED_FALLBACK("Succeeded (Fallback)"),
+  FAILED("Failed"),
+  FAILED_FALLBACK("Failed (Fallback)"),
+  TIMEOUT("Timeout"),
+  MAX_CALLS_LIMIT("Max Calls Limit");
+
+  fun matches(status: SessionStatus): Boolean = when (this) {
+    IN_PROGRESS -> status is SessionStatus.Started
+    SUCCEEDED -> status is SessionStatus.Ended.Succeeded
+    SUCCEEDED_FALLBACK -> status is SessionStatus.Ended.SucceededWithFallback
+    FAILED -> status is SessionStatus.Ended.Failed
+    FAILED_FALLBACK -> status is SessionStatus.Ended.FailedWithFallback
+    TIMEOUT -> status is SessionStatus.Ended.TimeoutReached
+    MAX_CALLS_LIMIT -> status is SessionStatus.Ended.MaxCallsLimitReached
+  }
+}
 
 // Color scheme for different chip types
 @Composable
@@ -76,6 +108,7 @@ fun getDeviceChipColors() = AssistChipDefaults.assistChipColors(
   labelColor = MaterialTheme.colorScheme.onSurfaceVariant
 )
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SessionListComposable(
   sessions: List<SessionInfo>,
@@ -93,24 +126,21 @@ fun SessionListComposable(
 ) {
   // Filter states
   var selectedPriorities by remember { mutableStateOf(setOf<String>()) }
-  var selectedStatuses by remember { mutableStateOf(setOf<String>()) }
+  var selectedStatuses by remember { mutableStateOf(setOf<SessionStatusFilter>()) }
   var selectedPlatforms by remember { mutableStateOf(setOf<String>()) }
-  var selectedClassifiers by remember { mutableStateOf(setOf<String>()) }
+  var selectedClassifiers by remember { mutableStateOf(setOf<TrailblazeDeviceClassifier>()) }
+  var recordedFilter by remember { mutableStateOf<Boolean?>(null) } // null = show all, true = recorded only, false = not recorded only
   var showFilters by remember { mutableStateOf(false) }
   var searchKeyword by remember { mutableStateOf("") }
   var showTestResults by remember { mutableStateOf(false) }
 
   // Collect all unique values for filters
   val allPriorities = sessions.mapNotNull { it.trailConfig?.priority }.distinct().sorted()
-  val allStatuses =
-    listOf(
-      "In Progress", "Succeeded", "Succeeded (Fallback)", "Failed", "Failed (Fallback)", "Timeout",
-      "Max Calls Limit"
-    )
+  val allStatuses = SessionStatusFilter.entries
   val allPlatforms =
     sessions.mapNotNull { it.trailblazeDeviceInfo?.platform?.name }.distinct().sorted()
   val allClassifiers =
-    sessions.flatMap { it.trailblazeDeviceInfo?.classifiers ?: emptyList() }.distinct().sorted()
+    sessions.flatMap { it.trailblazeDeviceInfo?.classifiers ?: emptyList() }.distinct().map { it.classifier }
 
   // Filter sessions
   val filteredSessions = sessions.filter { session ->
@@ -121,17 +151,7 @@ fun SessionListComposable(
     val statusMatch = if (selectedStatuses.isEmpty()) {
       true
     } else {
-      when (val status = session.latestStatus) {
-        is SessionStatus.Started -> "In Progress" in selectedStatuses
-        is SessionStatus.Ended.Succeeded -> "Succeeded" in selectedStatuses
-        is SessionStatus.Ended.SucceededWithFallback -> "Succeeded (Fallback)" in selectedStatuses
-        is SessionStatus.Ended.Failed -> "Failed" in selectedStatuses
-        is SessionStatus.Ended.FailedWithFallback -> "Failed (Fallback)" in selectedStatuses
-        is SessionStatus.Ended.TimeoutReached -> "Timeout" in selectedStatuses
-        is SessionStatus.Ended.MaxCallsLimitReached -> "Max Calls Limit" in selectedStatuses
-        is SessionStatus.Ended.Cancelled -> false // Cancelled not in filter options
-        SessionStatus.Unknown -> false
-      }
+      selectedStatuses.any { it.matches(session.latestStatus) }
     }
 
     val platformMatch = selectedPlatforms.isEmpty() ||
@@ -139,6 +159,8 @@ fun SessionListComposable(
 
     val classifierMatch = selectedClassifiers.isEmpty() ||
         session.trailblazeDeviceInfo?.classifiers?.any { it in selectedClassifiers } == true
+
+    val recordedMatch = recordedFilter == null || session.hasRecordedSteps == recordedFilter
 
     // Keyword search - match against display name and description (case-insensitive)
     val keywordMatch = searchKeyword.isEmpty() ||
@@ -149,7 +171,7 @@ fun SessionListComposable(
         session.testName?.contains(searchKeyword, ignoreCase = true) == true ||
         session.trailConfig?.title?.contains(searchKeyword, ignoreCase = true) == true
 
-    priorityMatch && statusMatch && platformMatch && classifierMatch && keywordMatch
+    priorityMatch && statusMatch && platformMatch && classifierMatch && recordedMatch && keywordMatch
   }
 
   // Wrap content in a key that changes with the tick to ensure subtree recomposes periodically
@@ -305,7 +327,7 @@ fun SessionListComposable(
                       selectedStatuses + status
                     }
                   },
-                  label = { Text(status) },
+                  label = { Text(status.displayName) },
                   selected = status in selectedStatuses,
                   modifier = Modifier.padding(end = 4.dp)
                 )
@@ -337,7 +359,7 @@ fun SessionListComposable(
             if (allClassifiers.isNotEmpty()) {
               Text("Classifiers", style = MaterialTheme.typography.labelLarge)
               Row(modifier = Modifier.padding(vertical = 8.dp)) {
-                allClassifiers.forEach { classifier ->
+                allClassifiers.map { TrailblazeDeviceClassifier(it) }.forEach { classifier ->
                   FilterChip(
                     onClick = {
                       selectedClassifiers = if (classifier in selectedClassifiers) {
@@ -346,7 +368,7 @@ fun SessionListComposable(
                         selectedClassifiers + classifier
                       }
                     },
-                    label = { Text(classifier) },
+                    label = { Text(classifier.classifier) },
                     selected = classifier in selectedClassifiers,
                     modifier = Modifier.padding(end = 4.dp)
                   )
@@ -354,14 +376,36 @@ fun SessionListComposable(
               }
             }
 
+            // Recorded Trail filter
+            Text("Uses Recorded Steps", style = MaterialTheme.typography.labelLarge)
+            Row(modifier = Modifier.padding(vertical = 8.dp)) {
+              FilterChip(
+                onClick = {
+                  recordedFilter = if (recordedFilter == true) null else true
+                },
+                label = { Text("Yes") },
+                selected = recordedFilter == true,
+                modifier = Modifier.padding(end = 4.dp)
+              )
+              FilterChip(
+                onClick = {
+                  recordedFilter = if (recordedFilter == false) null else false
+                },
+                label = { Text("No") },
+                selected = recordedFilter == false,
+                modifier = Modifier.padding(end = 4.dp)
+              )
+            }
+
             // Clear filters button
-            if (selectedPriorities.isNotEmpty() || selectedStatuses.isNotEmpty() || selectedPlatforms.isNotEmpty() || selectedClassifiers.isNotEmpty() || searchKeyword.isNotEmpty()) {
+            if (selectedPriorities.isNotEmpty() || selectedStatuses.isNotEmpty() || selectedPlatforms.isNotEmpty() || selectedClassifiers.isNotEmpty() || recordedFilter != null || searchKeyword.isNotEmpty()) {
               OutlinedButton(
                 onClick = {
                   selectedPriorities = emptySet()
                   selectedStatuses = emptySet()
                   selectedPlatforms = emptySet()
                   selectedClassifiers = emptySet()
+                  recordedFilter = null
                   searchKeyword = ""
                 },
                 modifier = Modifier.padding(top = 8.dp)
@@ -484,37 +528,65 @@ fun SessionListComposable(
                         )
                       }
 
+                      if (session.hasRecordedSteps) {
+                        TooltipBox(
+                          positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+                          tooltip = {
+                            session.trailFilePath?.let {
+                              PlainTooltip {
+                                Text(it)
+                              }
+                            }
+                          },
+                          state = rememberTooltipState(isPersistent = true)
+                        ) {
+                          val clipboardManager = LocalClipboardManager.current
+                          AssistChip(
+                            onClick = {
+                              session.trailFilePath?.let { clipboardManager.setText(AnnotatedString(it)) }
+                            },
+                            label = {
+                              Icon(
+                                imageVector = BootstrapRecordCircle,
+                                contentDescription = session.trailFilePath ?: "Recording",
+                                modifier = Modifier.size(12.dp),
+                                tint = MaterialTheme.colorScheme.error
+                              )
+                              Spacer(modifier = Modifier.width(4.dp))
+                              Text(
+                                text = "Recording",
+                                style = MaterialTheme.typography.labelSmall,
+                              )
+                            }
+                          )
+                        }
+
+                        Spacer(modifier = Modifier.width(4.dp))
+                      }
+
                       // Device info after metadata
                       session.trailblazeDeviceInfo?.let { trailblazeDeviceInfo ->
-                        AssistChip(
-                          onClick = { },
-                          colors = getDeviceChipColors(),
-                          label = {
-                            Icon(
-                              imageVector = when (trailblazeDeviceInfo.platform) {
-                                TrailblazeDevicePlatform.ANDROID -> Android
-                                TrailblazeDevicePlatform.IOS -> Apple
-                                TrailblazeDevicePlatform.WEB -> BrowserChrome
-                              },
-                              contentDescription = "Device Platform",
-                              modifier = Modifier.size(12.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                              text = trailblazeDeviceInfo.platform.name.lowercase(),
-                              style = MaterialTheme.typography.labelSmall
-                            )
-                          },
-                          modifier = Modifier.padding(end = 4.dp, bottom = 2.dp)
-                        )
-
-                        trailblazeDeviceInfo.classifiers.forEach { classifier ->
+                        trailblazeDeviceInfo.classifiers.forEach { classifier: TrailblazeDeviceClassifier ->
+                          val imageForClassifier = when (classifier.classifier) {
+                            TrailblazeDevicePlatform.ANDROID.name.lowercase() -> Android
+                            TrailblazeDevicePlatform.IOS.name.lowercase() -> Apple
+                            TrailblazeDevicePlatform.WEB.name.lowercase() -> BrowserChrome
+                            else -> null
+                          }
                           AssistChip(
                             onClick = { },
                             colors = getDeviceChipColors(),
                             label = {
+                              imageForClassifier?.let {
+                                Icon(
+                                  imageVector = imageForClassifier,
+                                  contentDescription = "Device Platform",
+                                  modifier = Modifier.size(12.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                              }
                               Text(
-                                text = classifier.lowercase(),
+                                text = classifier.classifier.lowercase(),
                                 style = MaterialTheme.typography.labelSmall
                               )
                             },

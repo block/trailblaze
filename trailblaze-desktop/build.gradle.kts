@@ -4,7 +4,6 @@ plugins {
   alias(libs.plugins.kotlin.serialization)
   alias(libs.plugins.jetbrains.compose.multiplatform)
   alias(libs.plugins.dependency.guard)
-  alias(libs.plugins.spotless)
 }
 
 dependencies {

@@ -15,7 +15,7 @@ class AndroidSettingsTest {
   @Test
   fun becomeADeveloperAi() {
     trailblazeRule.run(
-      """
+      testYaml = """
 - maestro:
   - launchApp:
       appId: com.android.settings

@@ -10,6 +10,7 @@ import xyz.block.trailblaze.model.TrailblazeConfig
 data class RunYamlRequest(
   val testName: String,
   val yaml: String,
+  val trailFilePath: String?,
   val targetAppName: String?,
   val useRecordedSteps: Boolean,
   val trailblazeLlmModel: TrailblazeLlmModel,

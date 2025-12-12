@@ -25,6 +25,7 @@ import xyz.block.trailblaze.report.utils.TemplateHelpers
 import xyz.block.trailblaze.report.utils.TrailblazeYamlSessionRecording.generateRecordedYaml
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.ui.createLiveSessionDataProviderJvm
+import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.ui.models.TrailblazeServerState
 import xyz.block.trailblaze.ui.recordings.RecordedTrailsRepo
 import xyz.block.trailblaze.ui.tabs.session.LiveSessionDetailComposableWithSelectorSupport
@@ -43,7 +44,7 @@ fun SessionsTabComposableJvm(
   logsRepo: LogsRepo,
   serverState: TrailblazeServerState,
   updateState: (TrailblazeServerState) -> Unit,
-  deviceManager: xyz.block.trailblaze.ui.TrailblazeDeviceManager? = null,
+  deviceManager: TrailblazeDeviceManager? = null,
   recordedTrailsRepo: RecordedTrailsRepo,
 ) {
   val liveSessionDataProvider = remember(logsRepo, deviceManager) {

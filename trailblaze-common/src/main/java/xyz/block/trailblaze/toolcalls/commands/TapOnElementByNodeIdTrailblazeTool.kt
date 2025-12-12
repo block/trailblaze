@@ -3,7 +3,7 @@ package xyz.block.trailblaze.toolcalls.commands
 import ai.koog.agents.core.tools.annotations.LLMDescription
 import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
-import xyz.block.trailblaze.exception.TrailblazeException
+import xyz.block.trailblaze.exception.TrailblazeToolExecutionException
 import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
@@ -51,8 +51,9 @@ data class TapOnElementByNodeIdTrailblazeTool(
 
     // Make sure we have a view hierarchy to work with
     if (screenState?.viewHierarchyOriginal == null) {
-      throw TrailblazeException(
+      throw TrailblazeToolExecutionException(
         message = "No View Hierarchy available when processing $trailblazeTool",
+        tool = this,
       )
     }
     // Make sure the nodeId is in the view hierarchy
@@ -60,8 +61,9 @@ data class TapOnElementByNodeIdTrailblazeTool(
       it.nodeId == trailblazeTool.nodeId
     }
     if (matchingNode == null) {
-      throw TrailblazeException(
+      throw TrailblazeToolExecutionException(
         message = "TapOnElementByNodeId: No node found with nodeId=${trailblazeTool.nodeId}.  $trailblazeTool",
+        tool = this,
       )
     }
 

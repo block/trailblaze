@@ -1,5 +1,7 @@
 package xyz.block.trailblaze.ui
 
+import io.ktor.client.request.get
+import io.ktor.client.statement.bodyAsText
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -7,41 +9,22 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.isActive
-import io.ktor.client.request.get
-import io.ktor.client.statement.bodyAsText
-import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import maestro.device.Device
 import maestro.device.DeviceService
 import maestro.device.Platform
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
-import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.http.TrailblazeHttpClientFactory
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
-import xyz.block.trailblaze.model.TrailblazeOnDeviceInstrumentationTarget
-import xyz.block.trailblaze.ui.models.AppIconProvider
 import xyz.block.trailblaze.session.TrailblazeSessionManager
-
-// Data class for parsing the device status response
-@Serializable
-private data class DeviceStatusResponse(
-  val sessionId: String?,
-  val isRunning: Boolean
-)
-
-/**
- * Information about an active session on a device
- */
-data class DeviceSessionInfo(
-  val sessionId: String,
-  val deviceInstanceId: String,
-  val startTimeMs: Long = System.currentTimeMillis(),
-  val sessionManager: TrailblazeSessionManager
-)
+import xyz.block.trailblaze.ui.devices.DeviceSessionInfo
+import xyz.block.trailblaze.ui.devices.DeviceState
+import xyz.block.trailblaze.ui.devices.DeviceStatusResponse
+import xyz.block.trailblaze.ui.models.AppIconProvider
 
 /**
  * Manages device discovery, selection, and state across the application.
@@ -49,12 +32,13 @@ data class DeviceSessionInfo(
  */
 class TrailblazeDeviceManager(
   val settingsRepo: TrailblazeSettingsRepo,
-  val appTargets: Set<TrailblazeHostAppTarget>,
-  val supportedDrivers: Set<TrailblazeDriverType>,
+  val defaultHostAppTarget: TrailblazeHostAppTarget,
+  val availableAppTargets: Set<TrailblazeHostAppTarget>,
   val appIconProvider: AppIconProvider,
   val getInstalledAppIds: (Device.Connected) -> Set<String>,
-  val trailblazeHostAppTarget: TrailblazeHostAppTarget,
 ) {
+
+  fun getAllSupportedDriverTypes() = settingsRepo.getAllSupportedDriverTypes()
 
   /**
    * Callback function that can be set by the host runner to actually cancel the running job.
@@ -62,26 +46,18 @@ class TrailblazeDeviceManager(
    */
   var cancelSessionCallback: ((deviceInstanceId: String) -> Boolean)? = null
 
-  fun getCurrentSelectedTargetApp(): TrailblazeHostAppTarget? = appTargets
-    .filter { it != trailblazeHostAppTarget }
+  fun getCurrentSelectedTargetApp(): TrailblazeHostAppTarget? = availableAppTargets
+    .filter { it != defaultHostAppTarget }
     .firstOrNull { appTarget ->
       appTarget.name == settingsRepo.serverStateFlow.value.appConfig.selectedTargetAppName
     }
 
-  private val targetDeviceFilter: (List<TrailblazeConnectedDeviceSummary>) -> List<TrailblazeConnectedDeviceSummary> = {
-    it.filter { supportedDrivers.contains(it.trailblazeDriverType) }
-  }
-
-  data class DeviceState(
-    val availableDevices: List<TrailblazeConnectedDeviceSummary> = emptyList(),
-    val selectedDevices: Set<TrailblazeConnectedDeviceSummary> = emptySet(),
-    val isLoading: Boolean = false,
-    val error: String? = null,
-    // Map of device instance ID to session manager
-    val sessionManagersByDevice: Map<String, TrailblazeSessionManager> = emptyMap(),
-    // Map of device instance ID to active session info
-    val activeSessionsByDevice: Map<String, DeviceSessionInfo> = emptyMap(),
-  )
+  private val targetDeviceFilter: (List<TrailblazeConnectedDeviceSummary>) -> List<TrailblazeConnectedDeviceSummary> =
+    { connectedDeviceSummaries ->
+      connectedDeviceSummaries.filter { connectedDeviceSummary ->
+        settingsRepo.getEnabledDriverTypes().contains(connectedDeviceSummary.trailblazeDriverType)
+      }
+    }
 
   private val _deviceStateFlow = MutableStateFlow(DeviceState())
   val deviceStateFlow: StateFlow<DeviceState> = _deviceStateFlow.asStateFlow()
@@ -348,7 +324,7 @@ class TrailblazeDeviceManager(
             client.close()
 
             // Parse the JSON response using kotlinx.serialization.json.Json
-            val deviceStatus = Json.decodeFromString(
+            val deviceStatus = Json.Default.decodeFromString(
               DeviceStatusResponse.serializer(),
               statusJson
             )
