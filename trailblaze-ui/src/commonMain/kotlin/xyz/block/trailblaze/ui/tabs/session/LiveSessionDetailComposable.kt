@@ -131,7 +131,7 @@ fun LiveSessionDetailComposable(
 
   DisposableEffect(sessionDataProvider, session.sessionId) {
     val listener = object : TrailblazeSessionListener {
-      override val trailblazeSessionId: String = session.sessionId
+      override val trailblazeSessionId: xyz.block.trailblaze.logs.model.SessionId = session.sessionId
 
       override fun onSessionStarted() {
         CoroutineScope(Dispatchers.Default).launch {
@@ -408,7 +408,7 @@ fun LiveSessionDetailComposable(
             }
 
             InspectViewHierarchyScreenComposable(
-              sessionId = session.sessionId,
+              sessionId = session.sessionId.value,
               viewHierarchy = viewHierarchy,
               viewHierarchyFiltered = viewHierarchyFiltered,
               imageUrl = imageUrl,

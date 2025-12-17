@@ -9,7 +9,7 @@ import xyz.block.trailblaze.yaml.TrailConfig
 
 @Serializable
 data class SessionInfo(
-  val sessionId: String,
+  val sessionId: SessionId,
   val latestStatus: SessionStatus,
   val timestamp: Instant,
   /** How long the session lasted (based on calculating from logs) */
@@ -26,7 +26,7 @@ data class SessionInfo(
   val displayName: String = trailConfig?.title
     ?: testName?.takeIf { it.isNotBlank() }
     ?: testClass?.substringAfterLast(".")
-    ?: sessionId
+    ?: sessionId.value
 }
 
 fun List<TrailblazeLog>.getSessionStatus(): SessionStatus = this

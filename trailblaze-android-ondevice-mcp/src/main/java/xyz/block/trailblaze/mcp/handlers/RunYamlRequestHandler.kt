@@ -84,7 +84,7 @@ class RunYamlRequestHandler(
       RpcResult.Success(
         RunYamlResponse(
           message = "YAML execution started successfully",
-          sessionId = startedSessionId,
+          sessionId = startedSessionId.value,
         )
       )
     } catch (e: Exception) {

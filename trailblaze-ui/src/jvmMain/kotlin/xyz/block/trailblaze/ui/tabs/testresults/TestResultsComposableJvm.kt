@@ -22,12 +22,12 @@ fun TestResultsComposableJvm(
   // Register a listener to watch for session list changes (additions/removals)
   DisposableEffect(logsRepo) {
     val listener = object : SessionListListener {
-      override fun onSessionAdded(sessionId: String) {
+      override fun onSessionAdded(sessionId: xyz.block.trailblaze.logs.model.SessionId) {
         println("[TestResultsComposableJvm] Session added: $sessionId")
         sessionUpdateTrigger++
       }
 
-      override fun onSessionRemoved(sessionId: String) {
+      override fun onSessionRemoved(sessionId: xyz.block.trailblaze.logs.model.SessionId) {
         println("[TestResultsComposableJvm] Session removed: $sessionId")
         sessionUpdateTrigger++
       }
@@ -88,6 +88,7 @@ fun TestResultsComposableJvm(
       .associateWith { sessionId ->
         logsRepo.getCachedLogsForSession(sessionId)
       }
+      .mapKeys { (sessionId, _) -> sessionId.value }
   }
 
   // Use the common composable with the loaded data

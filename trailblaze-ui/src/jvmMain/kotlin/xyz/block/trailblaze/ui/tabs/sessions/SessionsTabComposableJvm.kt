@@ -58,12 +58,12 @@ fun SessionsTabComposableJvm(
   var lastSessionIds by remember { mutableStateOf(emptySet<String>()) }
 
   // Track which sessions are imported
-  var importedSessionIds by remember { mutableStateOf(emptySet<String>()) }
+  var importedSessionIds by remember { mutableStateOf(emptySet<xyz.block.trailblaze.logs.model.SessionId>()) }
 
   // Get current session from serverState (persists across tab switches)
   val currentSessionId = serverState.appConfig.currentSessionId
   val selectedSession = remember(currentSessionId, sessions) {
-    sessions.firstOrNull { it.sessionId == currentSessionId }
+    sessions.firstOrNull { it.sessionId.value == currentSessionId }
   }
 
   val currentSessionViewMode = remember(serverState.appConfig.currentSessionViewMode) {
@@ -100,8 +100,8 @@ fun SessionsTabComposableJvm(
 
           if (hasChanges) {
             sessions = loadedSessions
-            lastSessionIds = currentSessionIds
-            importedSessionIds = sessions.filter { SessionImporter.isImportedSession(it.sessionId, logsRepo) }
+            lastSessionIds = currentSessionIds.map { it.value }.toSet()
+            importedSessionIds = sessions.filter { SessionImporter.isImportedSession(it.sessionId.value, logsRepo) }
               .map { it.sessionId }
               .toSet()
           }
@@ -125,7 +125,7 @@ fun SessionsTabComposableJvm(
       sessionClicked = { session ->
         updateState(
           serverState.copy(
-            appConfig = serverState.appConfig.copy(currentSessionId = session.sessionId)
+            appConfig = serverState.appConfig.copy(currentSessionId = session.sessionId.value)
           )
         )
       },
@@ -138,7 +138,7 @@ fun SessionsTabComposableJvm(
       openLogsFolder = { session ->
         // Open the logs folder for the session in the system file explorer
         val logsDirectory = logsRepo.logsDir
-        val sessionFolder = File(logsDirectory, session.sessionId)
+        val sessionFolder = File(logsDirectory, session.sessionId.value)
 
         if (sessionFolder.exists() && sessionFolder.isDirectory) {
           try {
@@ -260,7 +260,7 @@ fun SessionsTabComposableJvm(
       onOpenLogsFolder = {
         // Open the logs folder for the session
         val logsDirectory = logsRepo.logsDir
-        val sessionFolder = File(logsDirectory, selectedSession.sessionId)
+        val sessionFolder = File(logsDirectory, selectedSession.sessionId.value)
 
         if (sessionFolder.exists() && sessionFolder.isDirectory) {
           try {

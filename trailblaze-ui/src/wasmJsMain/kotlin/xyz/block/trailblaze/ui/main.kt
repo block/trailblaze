@@ -130,7 +130,7 @@ fun TrailblazeApp() {
       SessionListViewLoader(
         dataProvider = dataProvider,
         onSessionClick = { session ->
-          val newRoute = WasmRoute.SessionDetail(session.sessionId)
+          val newRoute = WasmRoute.SessionDetail(session.sessionId.value)
           currentRoute = newRoute
           navController.navigate(newRoute)
         },
@@ -197,7 +197,7 @@ fun SessionListViewLoader(
       sessionNames.forEach { sessionName ->
         val logs = dataProvider.getLogsForSessionAsync(sessionName)
         if (logs.isNotEmpty()) {
-          logsMap[sessionName] = logs
+          logsMap[sessionName.value] = logs
         }
       }
       sessionLogsMap = logsMap
@@ -341,13 +341,14 @@ fun WasmSessionDetailView(
 
       // Load session info first (from lightweight map, should be fast)
       val infoStartTime = window.performance.now()
-      sessionInfo = dataProvider.getSessionInfoAsync(sessionName)
+      val sessionId = xyz.block.trailblaze.logs.model.SessionId(sessionName)
+      sessionInfo = dataProvider.getSessionInfoAsync(sessionId)
       val infoEndTime = window.performance.now()
       println("📋 [${infoEndTime.toInt()}ms] Session info loaded in ${(infoEndTime - infoStartTime).toInt()}ms")
 
       // Now load logs (this is the heavy operation)
       val logsStartTime = window.performance.now()
-      val fetchedLogs: List<TrailblazeLog> = dataProvider.getLogsForSessionAsync(sessionName)
+      val fetchedLogs: List<TrailblazeLog> = dataProvider.getLogsForSessionAsync(sessionId)
       val logsEndTime = window.performance.now()
       println("📦 [${logsEndTime.toInt()}ms] Fetched ${fetchedLogs.size} logs in ${(logsEndTime - logsStartTime).toInt()}ms")
 
@@ -358,7 +359,7 @@ fun WasmSessionDetailView(
       // Load pre-generated recording YAML from chunks
       val yamlStartTime = window.performance.now()
       try {
-        recordingYaml = dataProvider.getSessionRecordingYaml(sessionName)
+        recordingYaml = dataProvider.getSessionRecordingYaml(sessionId)
         val yamlEndTime = window.performance.now()
         println("📝 [${yamlEndTime.toInt()}ms] Recording YAML loaded in ${(yamlEndTime - yamlStartTime).toInt()}ms")
       } catch (e: Exception) {

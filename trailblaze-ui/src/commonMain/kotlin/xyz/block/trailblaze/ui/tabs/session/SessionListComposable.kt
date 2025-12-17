@@ -122,7 +122,7 @@ fun SessionListComposable(
   openLogsFolderRoot: (() -> Unit)? = null,
   onExportSession: ((SessionInfo) -> Unit)? = null,
   onImportSession: ((Any) -> Unit)? = null,
-  importedSessionIds: Set<String> = emptySet(),
+  importedSessionIds: Set<xyz.block.trailblaze.logs.model.SessionId> = emptySet(),
 ) {
   // Filter states
   var selectedPriorities by remember { mutableStateOf(setOf<String>()) }

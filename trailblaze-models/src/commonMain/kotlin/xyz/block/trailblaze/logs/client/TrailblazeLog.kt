@@ -15,6 +15,7 @@ import xyz.block.trailblaze.logs.model.HasPromptStep
 import xyz.block.trailblaze.logs.model.HasScreenshot
 import xyz.block.trailblaze.logs.model.HasTraceId
 import xyz.block.trailblaze.logs.model.HasTrailblazeTool
+import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.logs.model.TrailblazeLlmMessage
@@ -24,14 +25,14 @@ import xyz.block.trailblaze.yaml.PromptStep
 
 @Serializable
 sealed interface TrailblazeLog {
-  val session: String
+  val session: SessionId
   val timestamp: Instant
 
   @Serializable
   data class TrailblazeAgentTaskStatusChangeLog(
     override val agentTaskStatus: AgentTaskStatus,
     override val durationMs: Long = agentTaskStatus.statusData.totalDurationMs,
-    override val session: String,
+    override val session: SessionId,
     override val timestamp: Instant,
   ) : TrailblazeLog,
     HasAgentTaskStatus,
@@ -40,7 +41,7 @@ sealed interface TrailblazeLog {
   @Serializable
   data class TrailblazeSessionStatusChangeLog(
     val sessionStatus: SessionStatus,
-    override val session: String,
+    override val session: SessionId,
     override val timestamp: Instant,
   ) : TrailblazeLog
 
@@ -57,7 +58,7 @@ sealed interface TrailblazeLog {
     val toolOptions: List<ToolOption>,
     override val screenshotFile: String?,
     override val durationMs: Long,
-    override val session: String,
+    override val session: SessionId,
     override val timestamp: Instant,
     override val traceId: TraceId,
     override val deviceHeight: Int,
@@ -86,7 +87,7 @@ sealed interface TrailblazeLog {
     override val traceId: TraceId?,
     val successful: Boolean,
     val trailblazeToolResult: TrailblazeToolResult,
-    override val session: String,
+    override val session: SessionId,
     override val timestamp: Instant,
     override val durationMs: Long,
   ) : TrailblazeLog,
@@ -99,7 +100,7 @@ sealed interface TrailblazeLog {
     override val screenshotFile: String?,
     val action: MaestroDriverActionType,
     override val durationMs: Long,
-    override val session: String,
+    override val session: SessionId,
     override val timestamp: Instant,
     override val deviceHeight: Int,
     override val deviceWidth: Int,
@@ -111,7 +112,7 @@ sealed interface TrailblazeLog {
   data class DelegatingTrailblazeToolLog(
     val toolName: String,
     override val trailblazeTool: TrailblazeTool,
-    override val session: String,
+    override val session: SessionId,
     override val timestamp: Instant,
     override val traceId: TraceId?,
     val executableTools: List<TrailblazeTool>,
@@ -127,7 +128,7 @@ sealed interface TrailblazeLog {
     override val traceId: TraceId?,
     val exceptionMessage: String? = null,
     override val durationMs: Long,
-    override val session: String,
+    override val session: SessionId,
     override val timestamp: Instant,
   ) : TrailblazeLog,
     HasTrailblazeTool,
@@ -137,7 +138,7 @@ sealed interface TrailblazeLog {
   @Serializable
   data class ObjectiveStartLog(
     override val promptStep: PromptStep,
-    override val session: String,
+    override val session: SessionId,
     override val timestamp: Instant,
   ) : TrailblazeLog,
     HasPromptStep
@@ -146,7 +147,7 @@ sealed interface TrailblazeLog {
   data class ObjectiveCompleteLog(
     override val promptStep: PromptStep,
     val objectiveResult: AgentTaskStatus,
-    override val session: String,
+    override val session: SessionId,
     override val timestamp: Instant,
   ) : TrailblazeLog,
     HasPromptStep
@@ -154,7 +155,7 @@ sealed interface TrailblazeLog {
   @Serializable
   data class AttemptAiFallbackLog(
     override val promptStep: PromptStep,
-    override val session: String,
+    override val session: SessionId,
     override val timestamp: Instant,
     val recordingResult: PromptRecordingResult.Failure,
   ) : TrailblazeLog,

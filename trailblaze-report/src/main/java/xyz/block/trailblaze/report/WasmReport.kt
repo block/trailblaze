@@ -11,6 +11,7 @@ import kotlinx.serialization.json.JsonElement
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.HasScreenshot
+import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.report.utils.TrailblazeYamlSessionRecording.generateRecordedYaml
 import java.io.ByteArrayOutputStream
@@ -55,7 +56,7 @@ object WasmReport {
     val sessionToImageFiles = allSessionIds.associateWith { logsRepo.getImagesForSession(it) }
 
     println("Generating lightweight session info metadata...")
-    val skippedSessions = mutableListOf<String>()
+    val skippedSessions = mutableListOf<SessionId>()
     val sessionInfoMap = allSessionIds.mapNotNull { sessionId ->
       val sessionInfo = logsRepo.getSessionInfo(sessionId)
       if (sessionInfo == null) {
@@ -74,11 +75,14 @@ object WasmReport {
 
     // Only include valid sessions in the report
     val validSessionIds = allSessionIds.filter { it !in skippedSessions }
-    val sessionJson = compactJson(TrailblazeJsonInstance.encodeToString(validSessionIds))
-    val sessionInfoJson = compactJson(TrailblazeJsonInstance.encodeToString(sessionInfoMap))
+    val sessionJson = compactJson(TrailblazeJsonInstance.encodeToString(validSessionIds.map { it.value }))
+    val sessionInfoJson = compactJson(TrailblazeJsonInstance.encodeToString(sessionInfoMap.mapKeys { it.key.value }))
 
     // Only build data for sessions that have valid session info
     val perSessionData = buildPerSessionData(logsRepo, validSessionIds, sessionToImageFiles)
+
+    // Convert SessionId keys to String for template generation
+    val sessionToImageFilesStr = sessionToImageFiles.mapKeys { it.key.value }
 
     if (reportTemplateFile.exists()) {
       generateFromTemplate(
@@ -86,7 +90,7 @@ object WasmReport {
         reportOutputFile = outputFile,
         sessionJson = sessionJson,
         sessionInfoJson = sessionInfoJson,
-        sessionToImageFiles = sessionToImageFiles,
+        sessionToImageFiles = sessionToImageFilesStr,
         perSessionData = perSessionData,
       )
     } else {
@@ -95,7 +99,7 @@ object WasmReport {
         reportOutputFile = outputFile,
         sessionJson = sessionJson,
         sessionInfoJson = sessionInfoJson,
-        sessionToImageFiles = sessionToImageFiles,
+        sessionToImageFiles = sessionToImageFilesStr,
         perSessionData = perSessionData,
       )
     }
@@ -107,12 +111,12 @@ object WasmReport {
 
   private fun buildPerSessionData(
     logsRepo: LogsRepo,
-    sessionIds: List<String>,
-    sessionToImageFiles: Map<String, List<File>>,
-  ): Map<String, PerSessionData> = sessionIds.associateWith { sessionId ->
+    sessionIds: List<SessionId>,
+    sessionToImageFiles: Map<SessionId, List<File>>,
+  ): Map<String, PerSessionData> = sessionIds.associate { sessionId ->
     val logs = logsRepo.getLogsForSession(sessionId)
     val imageFiles = sessionToImageFiles[sessionId] ?: emptyList()
-    val logsWithKeys = replaceScreenshotPathsWithImageKeys(logs, sessionId)
+    val logsWithKeys = replaceScreenshotPathsWithImageKeys(logs, sessionId.value)
 
     val yamlRecording = try {
       logs.generateRecordedYaml()
@@ -124,10 +128,10 @@ object WasmReport {
       }
     }
 
-    PerSessionData(
+    sessionId.value to PerSessionData(
       logs = logsWithKeys,
       yaml = yamlRecording,
-      imageKeys = imageFiles.map { "$sessionId/${it.name}" },
+      imageKeys = imageFiles.map { "${sessionId.value}/${it.name}" },
     )
   }
 

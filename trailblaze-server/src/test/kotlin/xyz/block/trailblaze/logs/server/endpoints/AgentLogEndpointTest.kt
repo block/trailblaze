@@ -53,7 +53,7 @@ class AgentLogEndpointTest {
           totalDurationMs = 1000L,
         ),
       ),
-      session = "test-session",
+      session = xyz.block.trailblaze.logs.model.SessionId("test-session"),
       timestamp = Clock.System.now(),
     )
 
@@ -127,7 +127,7 @@ class AgentLogEndpointTest {
       traceId = TraceId.generate(TraceOrigin.MAESTRO),
       successful = true,
       trailblazeToolResult = TrailblazeToolResult.Success,
-      session = "test-session",
+      session = xyz.block.trailblaze.logs.model.SessionId("test-session"),
       timestamp = Clock.System.now(),
       durationMs = 300L,
     )

@@ -525,7 +525,7 @@ fun SessionDetailComposable(
                     gridItems(sessionDetail.logs) { log ->
                       LogCard(
                         log = log,
-                        sessionId = sessionDetail.session.sessionId,
+                        sessionId = sessionDetail.session.sessionId.value,
                         sessionStartTime = sessionDetail.session.timestamp,
                         toMaestroYaml = toMaestroYaml,
                         toTrailblazeYaml = toTrailblazeYaml,
@@ -568,7 +568,7 @@ fun SessionDetailComposable(
                             is GroupedLog.Single -> {
                               LogListRow(
                                 log = groupedLog.log,
-                                sessionId = sessionDetail.session.sessionId,
+                                sessionId = sessionDetail.session.sessionId.value,
                                 sessionStartTime = sessionDetail.session.timestamp,
                                 imageLoader = imageLoader,
                                 showDetails = { onShowDetails(groupedLog.log) },
@@ -603,7 +603,7 @@ fun SessionDetailComposable(
                             is GroupedLog.Group -> {
                               LogGroupRow(
                                 group = groupedLog,
-                                sessionId = sessionDetail.session.sessionId,
+                                sessionId = sessionDetail.session.sessionId.value,
                                 sessionStartTime = sessionDetail.session.timestamp,
                                 toMaestroYaml = toMaestroYaml,
                                 toTrailblazeYaml = toTrailblazeYaml,

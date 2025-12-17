@@ -9,13 +9,14 @@ import xyz.block.trailblaze.logs.TrailblazeLogsDataProvider
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeScreenStateLog
+import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.report.utils.TrailblazeYamlSessionRecording.generateRecordedYaml
 import java.io.File
 import kotlin.time.Duration.Companion.milliseconds
 
-private typealias TrailblazeSessionId = String
+private typealias TrailblazeSessionId = SessionId
 
 const val DEFAULT_TIMEOUT = 120000L
 
@@ -50,11 +51,11 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
   private var cachedSessionIds = getSessionIds().toSet()
 
   // Cache for session logs to avoid redundant file reads
-  private val sessionLogsCache = mutableMapOf<String, Pair<Long, List<TrailblazeLog>>>()
+  private val sessionLogsCache = mutableMapOf<SessionId, Pair<Long, List<TrailblazeLog>>>()
 
   fun getSessionDirs(): List<File> = logsDir.listFiles()?.filter { it.isDirectory }?.sortedByDescending { it.name } ?: emptyList()
 
-  fun getSessionIds(): List<String> = getSessionDirs().map { it.name }
+  fun getSessionIds(): List<SessionId> = getSessionDirs().map { SessionId(it.name) }
 
   /**
    * Stops watching the trailblaze session directory for changes.
@@ -127,7 +128,7 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
     }
   }
 
-  private fun getLogFilesForSession(sessionId: String): List<File> = File(logsDir, sessionId)
+  private fun getLogFilesForSession(sessionId: SessionId): List<File> = File(logsDir, sessionId.value)
     .listFiles()
     ?.filter { it.extension == "json" }
     ?: emptyList()
@@ -136,10 +137,10 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
    * Returns a list of logs for the given session ID with caching to avoid redundant file reads.
    * If the session ID is null or the session directory does not exist, an empty list is returned.
    */
-  fun getCachedLogsForSession(sessionId: String?): List<TrailblazeLog> {
+  fun getCachedLogsForSession(sessionId: SessionId?): List<TrailblazeLog> {
     if (sessionId == null) return emptyList()
 
-    val sessionDir = File(logsDir, sessionId)
+    val sessionDir = File(logsDir, sessionId.value)
     if (!sessionDir.exists()) return emptyList()
 
     val lastModified = sessionDir.listFiles()?.maxOfOrNull { it.lastModified() } ?: 0L
@@ -160,7 +161,7 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
    * Returns a list of logs for the given session ID.
    * If the session ID is null or the session directory does not exist, an empty list is returned.
    */
-  fun getLogsForSession(sessionId: String?): List<TrailblazeLog> {
+  fun getLogsForSession(sessionId: SessionId?): List<TrailblazeLog> {
     if (sessionId != null) {
       val jsonFiles = getLogFilesForSession(sessionId)
       val logs: List<TrailblazeLog> = jsonFiles.mapNotNull {
@@ -182,8 +183,8 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
     null
   }
 
-  fun deleteLogsForSession(sessionId: String) {
-    val sessionDir = File(logsDir, sessionId)
+  fun deleteLogsForSession(sessionId: SessionId) {
+    val sessionDir = File(logsDir, sessionId.value)
     if (sessionDir.exists()) {
       sessionDir.deleteRecursively()
     }
@@ -204,11 +205,11 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
   /**
    * Returns the directory for the given session, creating it if it does not exist.
    */
-  fun getSessionDir(session: String): File {
+  fun getSessionDir(session: SessionId): File {
     if (!logsDir.exists()) {
       logsDir.mkdirs()
     }
-    val sessionDir = File(logsDir, session)
+    val sessionDir = File(logsDir, session.value)
     if (!sessionDir.exists()) {
       sessionDir.mkdirs()
     }
@@ -317,14 +318,15 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
     sessionListWatcher = null
   }
 
-  override suspend fun getSessionIdsAsync(): List<String> = getSessionIds()
+  override suspend fun getSessionIdsAsync(): List<SessionId> = getSessionIds()
 
-  override suspend fun getLogsForSessionAsync(sessionId: String?): List<TrailblazeLog> = getLogsForSession(sessionId)
-  override suspend fun getSessionInfoAsync(sessionId: String): SessionInfo? = getSessionInfo(sessionId)
+  override suspend fun getLogsForSessionAsync(sessionId: SessionId?): List<TrailblazeLog> = getLogsForSession(sessionId)
+  override suspend fun getSessionInfoAsync(sessionId: SessionId): SessionInfo? = getSessionInfo(sessionId)
 
-  override suspend fun getSessionRecordingYaml(sessionId: String): String = getLogsForSessionAsync(sessionId).generateRecordedYaml()
+  override suspend fun getSessionRecordingYaml(sessionId: SessionId): String =
+    getLogsForSessionAsync(sessionId).generateRecordedYaml()
 
-  fun getSessionInfo(sessionId: String): SessionInfo? {
+  fun getSessionInfo(sessionId: SessionId): SessionInfo? {
     val logFiles = getLogFilesForSession(sessionId)
     if (logFiles.isEmpty()) {
       return null
@@ -382,7 +384,7 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
                 durationMs = durationMs,
                 message = "Session was abandoned after ${timeSinceLastActivity.milliseconds.inWholeMinutes} minutes of inactivity",
               ),
-              session = sessionId,
+              session = SessionId(sessionId.value),
               timestamp = abandonedTimestamp,
             )
 
@@ -425,9 +427,9 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
     }
   }
 
-  private val countBySession = mutableMapOf<String, Int>()
+  private val countBySession = mutableMapOf<SessionId, Int>()
 
-  private fun getNextLogCountForSession(sessionId: String): Int = synchronized(countBySession) {
+  private fun getNextLogCountForSession(sessionId: SessionId): Int = synchronized(countBySession) {
     val newValue = (countBySession[sessionId] ?: 0) + 1
     countBySession[sessionId] = newValue
     newValue
@@ -469,8 +471,8 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
   /**
    * Returns a list of image files (PNG and JPEG) for the given session.
    */
-  fun getImagesForSession(sessionId: String): List<File> {
-    val sessionDir = File(logsDir, sessionId)
+  fun getImagesForSession(sessionId: SessionId): List<File> {
+    val sessionDir = File(logsDir, sessionId.value)
     if (!sessionDir.exists()) return emptyList()
     return sessionDir.listFiles()?.filter {
       it.extension == "png" || it.extension == "jpg" || it.extension == "jpeg"
@@ -486,7 +488,7 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
    * Since multiple logs of the same type can exist, we match by timestamp as well.
    */
   fun findLogFile(log: TrailblazeLog): File? {
-    val sessionDir = File(logsDir, log.session)
+    val sessionDir = File(logsDir, log.session.value)
     if (!sessionDir.exists()) return null
 
     val logClassName = log::class.java.simpleName

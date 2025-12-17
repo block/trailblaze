@@ -11,6 +11,7 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePort.getDeviceSpecificPort
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.http.TrailblazeHttpClientFactory
 import xyz.block.trailblaze.logs.client.TrailblazeLog
+import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.report.utils.LogsRepo
@@ -36,7 +37,7 @@ class JvmLiveSessionDataProvider(
   private val sessionListenerAdapters = mutableMapOf<SessionListListener, ReportSessionListListener>()
   private val trailblazeSessionAdapters = mutableMapOf<TrailblazeSessionListener, ReportTrailblazeSessionListener>()
 
-  override fun getSessionIds(): List<String> {
+  override fun getSessionIds(): List<SessionId> {
     return try {
       logsRepo.getSessionIds()
     } catch (e: Exception) {
@@ -52,7 +53,7 @@ class JvmLiveSessionDataProvider(
     }
   }
 
-  override fun getSessionInfo(sessionId: String): SessionInfo? {
+  override fun getSessionInfo(sessionId: SessionId): SessionInfo? {
     return try {
       logsRepo.getSessionInfo(sessionId)
     } catch (e: Exception) {
@@ -60,7 +61,7 @@ class JvmLiveSessionDataProvider(
     }
   }
 
-  override fun getLogsForSession(sessionId: String): List<TrailblazeLog> {
+  override fun getLogsForSession(sessionId: SessionId): List<TrailblazeLog> {
     return try {
       logsRepo.getCachedLogsForSession(sessionId)
     } catch (e: Exception) {
@@ -71,7 +72,7 @@ class JvmLiveSessionDataProvider(
   override fun addSessionListListener(listener: SessionListListener) {
     try {
       val adapter = object : ReportSessionListListener {
-        override fun onSessionAdded(sessionId: String) {
+        override fun onSessionAdded(sessionId: SessionId) {
           // Ensure UI updates happen on appropriate thread
           backgroundScope.launch {
             try {
@@ -82,7 +83,7 @@ class JvmLiveSessionDataProvider(
           }
         }
 
-        override fun onSessionRemoved(sessionId: String) {
+        override fun onSessionRemoved(sessionId: SessionId) {
           backgroundScope.launch {
             try {
               listener.onSessionRemoved(sessionId)
@@ -113,7 +114,7 @@ class JvmLiveSessionDataProvider(
   override fun startWatchingTrailblazeSession(listener: TrailblazeSessionListener) {
     try {
       val adapter = object : ReportTrailblazeSessionListener {
-        override val trailblazeSessionId: String = listener.trailblazeSessionId
+        override val trailblazeSessionId: SessionId = listener.trailblazeSessionId
 
         override fun onSessionStarted() {
           backgroundScope.launch {
@@ -155,7 +156,7 @@ class JvmLiveSessionDataProvider(
     }
   }
 
-  override fun stopWatching(sessionId: String) {
+  override fun stopWatching(sessionId: SessionId) {
     try {
       logsRepo.stopWatching(sessionId)
       // Clean up any adapters for this session
@@ -167,7 +168,7 @@ class JvmLiveSessionDataProvider(
     }
   }
 
-  override suspend fun cancelSession(sessionId: String): Boolean {
+  override suspend fun cancelSession(sessionId: SessionId): Boolean {
     return try {
       // Get logs to check session status
       val logs = logsRepo.getLogsForSession(sessionId)
@@ -201,7 +202,7 @@ class JvmLiveSessionDataProvider(
         deviceManager?.let { manager ->
           // Find the device running this session
           val deviceSessionInfo = manager.deviceStateFlow.value.activeSessionsByDevice.values
-            .firstOrNull { it.sessionId == sessionId }
+            .firstOrNull { it.sessionId == sessionId.value }
 
           if (deviceSessionInfo != null) {
             manager.cancelSession(deviceSessionInfo.trailblazeDeviceId)

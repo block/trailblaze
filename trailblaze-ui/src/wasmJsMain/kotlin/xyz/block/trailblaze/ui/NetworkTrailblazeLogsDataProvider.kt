@@ -27,10 +27,10 @@ object NetworkTrailblazeLogsDataProvider : TrailblazeLogsDataProvider {
   }
 
   // Async methods that match the HTTP patterns from the Composables
-  override suspend fun getSessionIdsAsync(): List<String> {
+  override suspend fun getSessionIdsAsync(): List<xyz.block.trailblaze.logs.model.SessionId> {
     return try {
       val url = "$BASE_URL/api/sessions"
-      httpClient.get(url).body<List<String>>()
+      httpClient.get(url).body<List<String>>().map { xyz.block.trailblaze.logs.model.SessionId(it) }
     } catch (e: Exception) {
       emptyList()
     }
@@ -38,16 +38,17 @@ object NetworkTrailblazeLogsDataProvider : TrailblazeLogsDataProvider {
 
   private val logsForSessionCache: MutableMap<String, List<TrailblazeLog>> = mutableMapOf()
 
-  override suspend fun getLogsForSessionAsync(sessionId: String?): List<TrailblazeLog> {
-    val cachedValue = logsForSessionCache[sessionId]
+  override suspend fun getLogsForSessionAsync(sessionId: xyz.block.trailblaze.logs.model.SessionId?): List<TrailblazeLog> {
+    val sessionIdStr = sessionId?.value
+    val cachedValue = logsForSessionCache[sessionIdStr]
     return if (!cachedValue.isNullOrEmpty()) {
       return cachedValue
     } else {
       try {
-        if (sessionId == null) return emptyList()
-        val url = "$BASE_URL/api/session/$sessionId/logs"
+        if (sessionIdStr == null) return emptyList()
+        val url = "$BASE_URL/api/session/$sessionIdStr/logs"
         httpClient.get(url).body<List<TrailblazeLog>>().also {
-          logsForSessionCache[sessionId] = it
+          logsForSessionCache[sessionIdStr] = it
         }
       } catch (e: Exception) {
         emptyList()
@@ -55,25 +56,25 @@ object NetworkTrailblazeLogsDataProvider : TrailblazeLogsDataProvider {
     }
   }
 
-  override suspend fun getSessionInfoAsync(sessionName: String): SessionInfo {
+  override suspend fun getSessionInfoAsync(sessionName: xyz.block.trailblaze.logs.model.SessionId): SessionInfo {
     return getLogsForSessionAsync(sessionName).getSessionInfo()
   }
 
   private val recordedYamlForSessionCache: MutableMap<String, String> = mutableMapOf()
-  override suspend fun getSessionRecordingYaml(sessionId: String): String {
-    val cachedValue = recordedYamlForSessionCache[sessionId]
+  override suspend fun getSessionRecordingYaml(sessionId: xyz.block.trailblaze.logs.model.SessionId): String {
+    val sessionIdStr = sessionId.value
+    val cachedValue = recordedYamlForSessionCache[sessionIdStr]
 
     return if (!cachedValue.isNullOrEmpty()) {
       return cachedValue
     } else {
       try {
-        if (sessionId == null) return "No Session ID Specified"
-        val url = "$BASE_URL/api/session/$sessionId/yaml"
+        val url = "$BASE_URL/api/session/$sessionIdStr/yaml"
         httpClient.get(url).bodyAsText().also {
-          recordedYamlForSessionCache[sessionId] = it
+          recordedYamlForSessionCache[sessionIdStr] = it
         }
       } catch (e: Exception) {
-        "Could not load YAML for session $sessionId: ${e.message}"
+        "Could not load YAML for session $sessionIdStr: ${e.message}"
       }
     }
   }

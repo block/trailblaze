@@ -138,7 +138,7 @@ object TrailblazeHostYamlRunner {
       // Start session via device manager (handles session manager + state updates)
       deviceManager.trackActiveSession(
         trailblazeDeviceId = trailblazeDeviceId,
-        sessionId = trailblazeLogger.getCurrentSessionId()
+        sessionId = trailblazeLogger.getCurrentSessionId()?.value ?: error("Session not started")
       )
 
       onProgressMessage("Connecting to ${device.platform} device...")

@@ -18,7 +18,7 @@ class DeviceStatusRequestHandler(
 
   override suspend fun handle(request: DeviceStatusRequest): RpcResult<DeviceStatusResponse> {
     return try {
-      val sessionId = trailblazeLogger.getCurrentSessionId()
+      val sessionId = trailblazeLogger.getCurrentSessionId().value
       val isRunning = getCurrentJob()?.isActive == true
       RpcResult.Success(DeviceStatusResponse.HasSession(sessionId, isRunning))
     } catch (e: Exception) {

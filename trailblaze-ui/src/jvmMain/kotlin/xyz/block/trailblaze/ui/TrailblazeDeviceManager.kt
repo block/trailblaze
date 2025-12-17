@@ -254,7 +254,7 @@ class TrailblazeDeviceManager(
     sessionId: String
   ) {
     val sessionManager = getOrCreateSessionManager(trailblazeDeviceId)
-    sessionManager.startSession(sessionId)
+    sessionManager.startSession(xyz.block.trailblaze.logs.model.SessionId(sessionId))
 
     updateDeviceState { state ->
       state.copy(

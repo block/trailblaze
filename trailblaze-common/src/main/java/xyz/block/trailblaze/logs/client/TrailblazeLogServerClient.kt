@@ -10,6 +10,7 @@ import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import kotlinx.datetime.Clock
+import xyz.block.trailblaze.logs.model.SessionId
 
 class TrailblazeLogServerClient(
   val httpClient: HttpClient,
@@ -36,9 +37,11 @@ class TrailblazeLogServerClient(
     }
   }
 
-  suspend fun postScreenshot(screenshotFilename: String, sessionId: String, screenshotBytes: ByteArray): HttpResponse = httpClient.post("$baseUrl/log/screenshot") {
+  suspend fun postScreenshot(screenshotFilename: String, sessionId: SessionId,
+                             screenshotBytes: ByteArray
+  ): HttpResponse = httpClient.post("$baseUrl/log/screenshot") {
     parameter(key = "filename", value = screenshotFilename)
-    parameter(key = "session", value = sessionId)
+    parameter(key = "session", value = sessionId.value)
     contentType(ContentType.Image.PNG)
     setBody(screenshotBytes)
   }

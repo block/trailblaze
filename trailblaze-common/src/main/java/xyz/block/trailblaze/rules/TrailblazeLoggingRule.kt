@@ -11,6 +11,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogServerClient
 import xyz.block.trailblaze.logs.client.TrailblazeLoggerInstance
 import xyz.block.trailblaze.logs.client.TrailblazeScreenStateLog
+import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.session.TrailblazeSessionManager
 import xyz.block.trailblaze.tracing.TrailblazeTracer
 
@@ -19,9 +20,9 @@ import xyz.block.trailblaze.tracing.TrailblazeTracer
  */
 abstract class TrailblazeLoggingRule(
   private val logsBaseUrl: String = "https://localhost:8443",
-  private val writeLogToDisk: ((currentTestName: String, log: TrailblazeLog) -> Unit) = { _, _ -> },
+  private val writeLogToDisk: ((currentTestName: SessionId, log: TrailblazeLog) -> Unit) = { _, _ -> },
   private val writeScreenshotToDisk: ((screenshot: TrailblazeScreenStateLog) -> Unit) = { _ -> },
-  private val writeTraceToDisk: ((sessionId: String, json: String) -> Unit) = { _, _ -> },
+  private val writeTraceToDisk: ((sessionId: SessionId, json: String) -> Unit) = { _, _ -> },
   val sessionManager: TrailblazeSessionManager = TrailblazeSessionManager(),
 ) : SimpleTestRule() {
 

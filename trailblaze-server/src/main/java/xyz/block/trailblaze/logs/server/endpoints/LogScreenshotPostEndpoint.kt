@@ -5,6 +5,7 @@ import io.ktor.server.request.receive
 import io.ktor.server.response.respond
 import io.ktor.server.routing.Routing
 import io.ktor.server.routing.post
+import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.report.utils.LogsRepo
 import java.io.File
 
@@ -33,7 +34,7 @@ object LogScreenshotPostEndpoint {
       // Receive the image bytes from the body
       val imageBytes = call.receive<ByteArray>()
 
-      val logScreenshotFile = File(logsRepo.getSessionDir(session), filename)
+      val logScreenshotFile = File(logsRepo.getSessionDir(SessionId(session)), filename)
       logScreenshotFile.writeBytes(imageBytes)
 
       val relativePath = logScreenshotFile.relativeTo(logsRepo.logsDir).path

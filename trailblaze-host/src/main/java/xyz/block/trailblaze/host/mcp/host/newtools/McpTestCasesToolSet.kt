@@ -68,7 +68,8 @@ class McpTestCasesToolSet(
       println("Executing prompt for session: $mcpSseSessionId")
       ioScope.launch {
         logsRepo.startWatchingTrailblazeSession(object : TrailblazeSessionListener {
-          override val trailblazeSessionId: String = trailblazeLogger.getCurrentSessionId()
+          override val trailblazeSessionId: xyz.block.trailblaze.logs.model.SessionId =
+            trailblazeLogger.getCurrentSessionId() ?: error("Session not started")
 
           var progress = 0
           override fun onSessionStarted() {

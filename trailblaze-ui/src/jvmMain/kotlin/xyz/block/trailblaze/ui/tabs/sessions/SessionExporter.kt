@@ -55,7 +55,7 @@ object SessionExporter {
     sessionInfo: SessionInfo,
     logsRepo: LogsRepo
   ): SessionExportResult {
-    val sessionFolder = File(logsRepo.logsDir, sessionInfo.sessionId)
+    val sessionFolder = File(logsRepo.logsDir, sessionInfo.sessionId.value)
 
     if (!sessionFolder.exists() || !sessionFolder.isDirectory) {
       return SessionExportResult.Error(

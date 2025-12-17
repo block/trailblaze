@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.session
 
+import xyz.block.trailblaze.logs.model.SessionId
 import java.util.concurrent.atomic.AtomicReference
 
 /**
@@ -12,7 +13,7 @@ import java.util.concurrent.atomic.AtomicReference
 class TrailblazeSessionManager {
 
   // Current active session ID (thread-safe)
-  private val currentSessionId = AtomicReference<String?>(null)
+  private val currentSessionId = AtomicReference<SessionId?>(null)
 
   // Cancellation status for the current session (thread-safe)
   private val isCancelled = AtomicReference(false)
@@ -31,7 +32,7 @@ class TrailblazeSessionManager {
   /**
    * Starts a new session. This clears any previous cancellation state and max calls limit state.
    */
-  fun startSession(sessionId: String) {
+  fun startSession(sessionId: SessionId) {
     currentSessionId.set(sessionId)
     isCancelled.set(false)
     maxCallsLimitInfo.set(null)
@@ -86,7 +87,7 @@ class TrailblazeSessionManager {
   /**
    * Gets the current active session ID.
    */
-  fun getCurrentSessionId(): String? = currentSessionId.get()
+  fun getCurrentSessionId(): SessionId? = currentSessionId.get()
 
   /**
    * Clears all session state. Mainly for testing.

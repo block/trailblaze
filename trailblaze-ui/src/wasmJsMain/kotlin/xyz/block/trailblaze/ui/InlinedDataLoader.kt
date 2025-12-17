@@ -24,20 +24,21 @@ object InlinedDataLoader : TrailblazeLogsDataProvider {
 
   private val json = createTrailblazeJsonInstance(emptyMap())
 
-  private var _sessionsCache: List<String>? = null
-    private var _sessionInfoCache: Map<String, SessionInfo>? = null
+  private var _sessionsCache: List<xyz.block.trailblaze.logs.model.SessionId>? = null
+  private var _sessionInfoCache: Map<String, SessionInfo>? = null
 
-    /**
-     * Gets the list of session names from window.trailblaze.sessions
-     */
-    override suspend fun getSessionIdsAsync(): List<String> {
-        if (_sessionsCache != null) return _sessionsCache!!
-        val completableDeferred = CompletableDeferred<List<String>>()
-        println("Loading sessions from getSessionIds()")
-        try {
-            getTrailblazeReportJsonFromBrowser("sessions") { sessionsJson ->
-                println("Got JSON for sessions: $sessionsJson")
-                val value = json.decodeFromString<List<String>>(sessionsJson)
+  /**
+   * Gets the list of session names from window.trailblaze.sessions
+   */
+  override suspend fun getSessionIdsAsync(): List<xyz.block.trailblaze.logs.model.SessionId> {
+    if (_sessionsCache != null) return _sessionsCache!!
+    val completableDeferred = CompletableDeferred<List<xyz.block.trailblaze.logs.model.SessionId>>()
+    println("Loading sessions from getSessionIds()")
+    try {
+      getTrailblazeReportJsonFromBrowser("sessions") { sessionsJson ->
+        println("Got JSON for sessions: $sessionsJson")
+        val value =
+          json.decodeFromString<List<String>>(sessionsJson).map { xyz.block.trailblaze.logs.model.SessionId(it) }
                 _sessionsCache = value
                 completableDeferred.complete(value)
             }
@@ -84,24 +85,25 @@ object InlinedDataLoader : TrailblazeLogsDataProvider {
     private val _perSessionLogsCache = mutableMapOf<String, List<TrailblazeLog>>()
     private val _perSessionYamlCache = mutableMapOf<String, String>()
 
-    override suspend fun getLogsForSessionAsync(sessionId: String?): List<TrailblazeLog> {
-        return try {
-            if (sessionId == null) return emptyList()
+    override suspend fun getLogsForSessionAsync(sessionId: xyz.block.trailblaze.logs.model.SessionId?): List<TrailblazeLog> {
+      return try {
+        if (sessionId == null) return emptyList()
+        val sessionIdStr = sessionId.value
 
-            // Try per-session lazy loading first (preferred)
-            if (_perSessionLogsCache.containsKey(sessionId)) {
-                return _perSessionLogsCache[sessionId]!!
-            }
+        // Try per-session lazy loading first (preferred)
+        if (_perSessionLogsCache.containsKey(sessionIdStr)) {
+          return _perSessionLogsCache[sessionIdStr]!!
+        }
 
-            // Try to load from per-session compressed data
-            try {
-                val logs = loadSessionLogs(sessionId)
-                _perSessionLogsCache[sessionId] = logs
-                return logs
-            } catch (e: Exception) {
-                println("Per-session loading failed for $sessionId, falling back to bulk load: ${e.message}")
-                // Fall back to loading all logs at once
-                return loadAllLogs()[sessionId] ?: error("Session detail not found for $sessionId")
+        // Try to load from per-session compressed data
+        try {
+          val logs = loadSessionLogs(sessionIdStr)
+          _perSessionLogsCache[sessionIdStr] = logs
+          return logs
+        } catch (e: Exception) {
+          println("Per-session loading failed for $sessionIdStr, falling back to bulk load: ${e.message}")
+          // Fall back to loading all logs at once
+          return loadAllLogs()[sessionIdStr] ?: error("Session detail not found for $sessionIdStr")
             }
         } catch (e: Exception) {
             println("Error loading session detail for $sessionId: ${e.message}")
@@ -109,20 +111,21 @@ object InlinedDataLoader : TrailblazeLogsDataProvider {
         }
     }
 
-    override suspend fun getSessionInfoAsync(sessionName: String): SessionInfo? {
-        val startTime = kotlinx.browser.window.performance.now()
-        println("⏳ [${startTime.toInt()}ms] Getting session info for: $sessionName")
+    override suspend fun getSessionInfoAsync(sessionName: xyz.block.trailblaze.logs.model.SessionId): SessionInfo? {
+      val sessionNameStr = sessionName.value
+      val startTime = kotlinx.browser.window.performance.now()
+      println("⏳ [${startTime.toInt()}ms] Getting session info for: $sessionNameStr")
 
-        // Try to get from the lightweight session info map first (fast!)
-        val sessionInfoMap = loadSessionInfoMap()
-        if (sessionInfoMap.containsKey(sessionName)) {
-            val endTime = kotlinx.browser.window.performance.now()
-            println("✅ [${endTime.toInt()}ms] Got session info from map in ${(endTime - startTime).toInt()}ms")
-            return sessionInfoMap[sessionName]
-        }
+      // Try to get from the lightweight session info map first (fast!)
+      val sessionInfoMap = loadSessionInfoMap()
+      if (sessionInfoMap.containsKey(sessionNameStr)) {
+        val endTime = kotlinx.browser.window.performance.now()
+        println("✅ [${endTime.toInt()}ms] Got session info from map in ${(endTime - startTime).toInt()}ms")
+        return sessionInfoMap[sessionNameStr]
+      }
 
-        // Fallback: load full logs and compute session info (slow, legacy compatibility)
-        println("⚠️  Session info not found in map for $sessionName, loading full logs...")
+      // Fallback: load full logs and compute session info (slow, legacy compatibility)
+      println("⚠️  Session info not found in map for $sessionNameStr, loading full logs...")
         val fallbackStartTime = kotlinx.browser.window.performance.now()
         val result = getLogsForSessionAsync(sessionName).getSessionInfo()
         val fallbackEndTime = kotlinx.browser.window.performance.now()
@@ -169,29 +172,30 @@ object InlinedDataLoader : TrailblazeLogsDataProvider {
         return completableDeferred.await()
     }
 
-    override suspend fun getSessionRecordingYaml(sessionId: String): String {
-        // Try per-session lazy loading first
-        if (_perSessionYamlCache.containsKey(sessionId)) {
-            return _perSessionYamlCache[sessionId]!!
+    override suspend fun getSessionRecordingYaml(sessionId: xyz.block.trailblaze.logs.model.SessionId): String {
+      val sessionIdStr = sessionId.value
+      // Try per-session lazy loading first
+      if (_perSessionYamlCache.containsKey(sessionIdStr)) {
+        return _perSessionYamlCache[sessionIdStr]!!
         }
 
         try {
-            val yaml = loadSessionYaml(sessionId)
-            _perSessionYamlCache[sessionId] = yaml
-            return yaml
+            val yaml = loadSessionYaml(sessionIdStr)
+          _perSessionYamlCache[sessionIdStr] = yaml
+          return yaml
         } catch (e: Exception) {
-            println("❌ Per-session YAML loading failed for $sessionId: ${e.message}")
-            println("⚠️  Attempting fallback to legacy bulk load...")
-            try {
-                val allRecordings = loadAllRecordings()
-                val yaml = allRecordings[sessionId]
-                if (yaml != null) {
-                    _perSessionYamlCache[sessionId] = yaml
-                    return yaml
-                } else {
-                    val errorMsg =
-                        "# No recording available for session: $sessionId\n# YAML chunks were not generated or are missing."
-                    println("❌ No YAML found for $sessionId in legacy data either")
+          println("❌ Per-session YAML loading failed for $sessionIdStr: ${e.message}")
+          println("⚠️  Attempting fallback to legacy bulk load...")
+          try {
+            val allRecordings = loadAllRecordings()
+            val yaml = allRecordings[sessionIdStr]
+            if (yaml != null) {
+              _perSessionYamlCache[sessionIdStr] = yaml
+              return yaml
+            } else {
+              val errorMsg =
+                "# No recording available for session: $sessionIdStr\n# YAML chunks were not generated or are missing."
+              println("❌ No YAML found for $sessionIdStr in legacy data either")
                     return errorMsg
                 }
             } catch (fallbackError: Exception) {

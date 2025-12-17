@@ -122,7 +122,7 @@ fun moveJsonFilesToSessionDirs(logsDir: File) {
       downloadedJsonFile.delete()
 
       val sessionId = log.session
-      val sessionDir = File(logsDir, sessionId)
+      val sessionDir = File(logsDir, sessionId.value)
       sessionDir.mkdirs()
 
       if (log is HasScreenshot) {
@@ -132,7 +132,7 @@ fun moveJsonFilesToSessionDirs(logsDir: File) {
           val destScreenshotFile = File(sessionDir, screenshotFile)
           destScreenshotFile.writeBytes(currentScreenshotFileBytes)
         }
-        val screenshotFileInSessionDirPath = "$sessionId/${log.screenshotFile}"
+        val screenshotFileInSessionDirPath = "${sessionId.value}/${log.screenshotFile}"
         when (log) {
           is TrailblazeLog.MaestroDriverLog -> log.copy(
             screenshotFile = screenshotFileInSessionDirPath,
@@ -186,7 +186,7 @@ fun movePngsToSessionDirs(logsDir: File) {
 
 fun renderSummary(logsRepo: LogsRepo, isStandaloneFileReport: Boolean): LogsSummary {
   val map = logsRepo.getSessionIds().associateWith { logsRepo.getLogsForSession(it) }
-  val logsSummary = LogsSummary.fromLogs(map, isStandaloneFileReport)
+  val logsSummary = LogsSummary.fromLogs(map.mapKeys { it.key.value }, isStandaloneFileReport)
   return logsSummary
 }
 

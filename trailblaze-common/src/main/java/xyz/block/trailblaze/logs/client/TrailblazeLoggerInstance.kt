@@ -15,6 +15,7 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.logs.client.TrailblazeLog.TrailblazeLlmRequestLog.Action
 import xyz.block.trailblaze.logs.client.TrailblazeLog.TrailblazeLlmRequestLog.ToolOption
+import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.logs.model.TrailblazeLlmMessage
@@ -79,7 +80,9 @@ abstract class TrailblazeLogger {
     val screenshotBytes = screenState.screenshotBytes ?: return ""
     val sessionId = getCurrentSessionId()
     val imageFormat = ImageFormatDetector.detectFormat(screenshotBytes)
-    val screenshotFileName = "${sessionId}_${Clock.System.now().toEpochMilliseconds()}.${imageFormat.fileExtension}"
+    val screenshotFileName = "${sessionId.value}_${
+      Clock.System.now().toEpochMilliseconds()
+    }.${imageFormat.fileExtension}"
     val screenState = TrailblazeScreenStateLog(
       fileName = screenshotFileName,
       sessionId = sessionId,
@@ -176,9 +179,10 @@ abstract class TrailblazeLogger {
   @Suppress("SimpleDateFormat")
   private val dateTimeFormat = SimpleDateFormat("yyyy_MM_dd_HH_mm_ss", Locale.US)
 
-  private fun generateSessionId(seed: String): String = "${dateTimeFormat.format(Date())}_$seed"
+  private fun generateSessionId(seed: String): SessionId = SessionId("${dateTimeFormat.format(Date())}_$seed")
 
-  private var sessionId: String = generateSessionId(defaultSessionPrefix)
+  private val sessionIdLock = Any()
+  private var sessionId: SessionId = generateSessionId(defaultSessionPrefix)
   private var sessionStartTime: Instant = Clock.System.now()
 
   /**
@@ -186,7 +190,7 @@ abstract class TrailblazeLogger {
    * @param sessionName The name to use for the session
    * @return The generated session ID
    */
-  fun startSession(sessionName: String): String {
+  fun startSession(sessionName: String): SessionId {
     resetFallbackFlag()
     return overrideSessionId(
       sessionIdOverride = generateSessionId(sessionName),
@@ -196,16 +200,18 @@ abstract class TrailblazeLogger {
   /**
    * Returns the current session ID in a thread-safe manner.
    */
-  fun getCurrentSessionId(): String = synchronized(sessionId) {
+  fun getCurrentSessionId(): SessionId = synchronized(sessionIdLock) {
     return this.sessionId
   }
 
   /**
    * Truncates and sanitizes session ID to ensure it's filesystem-safe.
    */
-  private fun truncateSessionId(sessionId: String): String = sessionId.take(minOf(sessionId.length, maxSessionIdLength))
-    .replace(Regex("[^a-zA-Z0-9]"), "_")
-    .lowercase()
+  private fun truncateSessionId(sessionId: String): SessionId = SessionId(
+    sessionId.take(minOf(sessionId.length, maxSessionIdLength))
+      .replace(Regex("[^a-zA-Z0-9]"), "_")
+      .lowercase()
+  )
 
   /**
    * Overrides the current session ID with a custom value.
@@ -213,10 +219,10 @@ abstract class TrailblazeLogger {
    * @deprecated Prefer startSession() unless you need to explicitly override the session id
    */
   @Deprecated("Prefer startSession() unless you need to explicitly override the session id")
-  fun overrideSessionId(sessionIdOverride: String): String = synchronized(this.sessionId) {
+  fun overrideSessionId(sessionIdOverride: SessionId): SessionId = synchronized(sessionIdLock) {
     sessionStartTime = Clock.System.now()
     clearEndLogSentFlag()
-    truncateSessionId(sessionIdOverride).also {
+    truncateSessionId(sessionIdOverride.value).also {
       this.sessionId = it
     }
   }
