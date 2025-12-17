@@ -9,13 +9,14 @@ import org.junit.Test
 import xyz.block.trailblaze.android.AndroidTrailblazeRule
 import xyz.block.trailblaze.android.InstrumentationArgUtil
 import xyz.block.trailblaze.android.devices.TrailblazeAndroidOnDeviceClassifier
+import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.http.DefaultDynamicLlmClient
 import xyz.block.trailblaze.http.TrailblazeHttpClientFactory
 import xyz.block.trailblaze.llm.RunYamlRequest
-import xyz.block.trailblaze.mcp.OnDeviceRpcServerUtils
+import xyz.block.trailblaze.android.runner.rpc.OnDeviceRpcServer
 
 /**
- * This would be the single test that runs the MCP server on port 52526.  It blocks the instrumentation test
+ * This would be the single test that runs the MCP server.  It blocks the instrumentation test
  * so we can send prompts/etc.
  */
 class AndroidStandaloneServerTest {
@@ -27,11 +28,16 @@ class AndroidStandaloneServerTest {
 
   @Test
   fun startServer() {
-    OnDeviceRpcServerUtils(
+    val adbReversePort = InstrumentationArgUtil.getInstrumentationArg(
+      TrailblazeDevicePort.INSTRUMENTATION_ARG_KEY
+    )?.toInt() ?: TrailblazeDevicePort.DEFAULT_ADB_REVERSE_PORT
+
+    val onDeviceRpcServer = OnDeviceRpcServer(
       runTrailblazeYaml = { runYamlRequest ->
         handleRunRequest(runYamlRequest)
       },
-    ).startServer(52526, true)
+    )
+    onDeviceRpcServer.startServer(adbReversePort, true)
   }
 
   private fun handleRunRequest(runYamlRequest: RunYamlRequest) {

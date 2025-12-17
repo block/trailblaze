@@ -6,6 +6,7 @@ import xyz.block.trailblaze.TrailblazeYamlUtil
 import xyz.block.trailblaze.agent.TrailblazeElementComparator
 import xyz.block.trailblaze.agent.TrailblazeRunner
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
+import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.exception.TrailblazeException
@@ -16,6 +17,7 @@ import xyz.block.trailblaze.host.rules.TrailblazeHostLlmConfig.DEFAULT_TRAILBLAZ
 import xyz.block.trailblaze.http.DynamicLlmClient
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.model.TrailblazeConfig
+import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.rules.RetryRule
 import xyz.block.trailblaze.rules.TrailblazeLoggingRule
@@ -44,6 +46,7 @@ abstract class BaseHostTrailblazeTest(
   customToolClasses: Set<KClass<out TrailblazeTool>> = setOf(),
   val sessionManager: TrailblazeSessionManager = TrailblazeSessionManager(),
   maxRetries: Int = 0,
+  appTarget: TrailblazeHostAppTarget? = null,
 ) {
 
   val hostRunner by lazy {
@@ -51,6 +54,7 @@ abstract class BaseHostTrailblazeTest(
       requestedPlatform = trailblazeDriverType.platform,
       setOfMarkEnabled = config.setOfMarkEnabled,
       trailblazeLogger = loggingRule.trailblazeLogger,
+      appTarget = appTarget,
     )
   }
 
@@ -187,6 +191,7 @@ abstract class BaseHostTrailblazeTest(
 
   fun runTrailblazeYaml(
     yaml: String,
+    trailblazeDeviceId: TrailblazeDeviceId?,
     trailFilePath: String?,
     forceStopApp: Boolean = true,
     useRecordedSteps: Boolean = true,
@@ -208,6 +213,7 @@ abstract class BaseHostTrailblazeTest(
       rawYaml = yaml,
       trailFilePath = trailFilePath,
       hasRecordedSteps = trailblazeYaml.hasRecordedSteps(trailItems),
+      trailblazeDeviceId = trailblazeDeviceId,
     )
     return runTrail(trailItems, useRecordedSteps)
   }
@@ -232,6 +238,7 @@ abstract class BaseHostTrailblazeTest(
       forceStopApp = forceStopApp,
       useRecordedSteps = useRecordedSteps,
       trailFilePath = computedResourcePath,
+      trailblazeDeviceId = null,
     )
   }
 }

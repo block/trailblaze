@@ -74,5 +74,11 @@ Please always provide a tool call that will help complete the task.
 Unknown custom command, ensure there is a mapping between the custom command and Maestro commands!
         """.trimIndent()
     }
+
+    @Serializable
+    data class InvalidToolCall(
+      override val errorMessage: String,
+      val command: TrailblazeTool,
+    ) : Error
   }
 }

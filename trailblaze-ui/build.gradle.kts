@@ -61,6 +61,9 @@ kotlin {
       implementation(libs.kotlinx.serialization.json)
       implementation(libs.kotlinx.datetime)
 
+      // Navigation
+      implementation(libs.compose.navigation)
+
       implementation(libs.koog.prompt.model)
       implementation(libs.koog.agents.tools)
       // Image loading

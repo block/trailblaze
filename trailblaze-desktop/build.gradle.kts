@@ -22,6 +22,45 @@ dependencies {
   implementation(compose.material3)
   implementation(compose.components.resources)
   implementation(libs.koog.prompt.executor.clients)
+  implementation(libs.ktor.network.tls.certificates)
+}
+
+// Task to build the Android test APK
+val buildAndroidTestApk by tasks.registering {
+  description = "Builds the Android on-device test APK"
+  group = "build"
+
+  doLast {
+    val gitRoot = rootProject.projectDir
+    exec {
+      workingDir = gitRoot
+      commandLine("./gradlew", ":trailblaze-android-ondevice-mcp:assembleDebugAndroidTest")
+    }
+  }
+}
+
+// Task to copy the APK to resources
+val copyAndroidTestApkToResources by tasks.registering(Copy::class) {
+  description = "Copies the Android test APK to desktop app resources"
+  group = "build"
+  dependsOn(buildAndroidTestApk)
+
+  val apkSourcePath =
+    "${rootProject.projectDir}/trailblaze-android-ondevice-mcp/build/outputs/apk/androidTest/debug/trailblaze-android-ondevice-mcp-debug-androidTest.apk"
+  val resourcesDir = "${projectDir}/src/main/resources/apks"
+
+  from(apkSourcePath)
+  into(resourcesDir)
+  rename { "trailblaze-ondevice-runner.apk" }
+
+  doFirst {
+    mkdir(resourcesDir)
+  }
+}
+
+// Make processResources depend on copying the APK
+tasks.named("processResources") {
+  dependsOn(copyAndroidTestApkToResources)
 }
 
 compose.desktop {

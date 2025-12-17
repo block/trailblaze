@@ -8,6 +8,9 @@ import kotlinx.datetime.Clock
 import kotlinx.datetime.Instant
 import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.agent.model.PromptStepStatus
+import xyz.block.trailblaze.api.ImageFormatDetector
+import xyz.block.trailblaze.api.ScreenState
+import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.logs.client.TrailblazeLog.TrailblazeLlmRequestLog.Action
@@ -33,7 +36,7 @@ abstract class TrailblazeLogger {
 
   private var logListener: (TrailblazeLog) -> Unit = { }
 
-  private var logScreenshotListener: (ByteArray) -> String = { "No Logger Set for Screenshots" }
+  private var screenStateLogger: ScreenStateLogger = DebugScreenStateLogger
 
   // Track fallback usage for the current session
   private var sessionFallbackUsed = false
@@ -65,14 +68,25 @@ abstract class TrailblazeLogger {
   /**
    * Sets the global screenshot logging listener for storing screenshot data.
    */
-  fun setLogScreenshotListener(logScreenshotListener: (ByteArray) -> String) {
-    this.logScreenshotListener = logScreenshotListener
+  fun setScreenStateLogger(screenStateLogger: ScreenStateLogger) {
+    this.screenStateLogger = screenStateLogger
   }
 
   /**
    * Logs a screenshot and returns the filename where it was stored.
    */
-  fun logScreenshot(screenshotBytes: ByteArray): String = logScreenshotListener(screenshotBytes)
+  fun logScreenState(screenState: ScreenState): String {
+    val screenshotBytes = screenState.screenshotBytes ?: return ""
+    val sessionId = getCurrentSessionId()
+    val imageFormat = ImageFormatDetector.detectFormat(screenshotBytes)
+    val screenshotFileName = "${sessionId}_${Clock.System.now().toEpochMilliseconds()}.${imageFormat.fileExtension}"
+    val screenState = TrailblazeScreenStateLog(
+      fileName = screenshotFileName,
+      sessionId = sessionId,
+      screenState = screenState,
+    )
+    return screenStateLogger.logScreenState(screenState)
+  }
 
   /**
    * Logs an attempt to use AI fallback and marks that fallback was used for the current session.
@@ -127,8 +141,8 @@ abstract class TrailblazeLogger {
   ) {
     val toolMessages = response.filterIsInstance<Message.Tool>()
 
-    val bytes = stepStatus.currentScreenState.screenshotBytes ?: byteArrayOf()
-    val screenshotFilename = logScreenshot(bytes)
+    val bytes = stepStatus.currentScreenState
+    val screenshotFilename = logScreenState(stepStatus.currentScreenState)
 
     val toolOptions = toolDescriptors.map { ToolOption(it.name) }
     val endTime = Clock.System.now()
@@ -217,7 +231,8 @@ abstract class TrailblazeLogger {
     methodName: String,
     hasRecordedSteps: Boolean,
     trailblazeDeviceInfo: TrailblazeDeviceInfo,
-    rawYaml: String? = null,
+    trailblazeDeviceId : TrailblazeDeviceId?,
+    rawYaml: String,
   ) {
     log(
       TrailblazeLog.TrailblazeSessionStatusChangeLog(
@@ -229,6 +244,7 @@ abstract class TrailblazeLogger {
           trailblazeDeviceInfo = trailblazeDeviceInfo,
           rawYaml = rawYaml,
           hasRecordedSteps = hasRecordedSteps,
+          trailblazeDeviceId = trailblazeDeviceId,
         ),
         session = getCurrentSessionId(),
         timestamp = Clock.System.now(),

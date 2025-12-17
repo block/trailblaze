@@ -1,7 +1,5 @@
 package xyz.block.trailblaze.ui
 
-import io.ktor.client.request.get
-import io.ktor.client.statement.bodyAsText
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -12,18 +10,22 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.json.Json
 import maestro.device.Device
 import maestro.device.DeviceService
 import maestro.device.Platform
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
+import xyz.block.trailblaze.devices.TrailblazeDeviceId
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
-import xyz.block.trailblaze.http.TrailblazeHttpClientFactory
+import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
+import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRpcClient
+import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
+import xyz.block.trailblaze.mcp.android.ondevice.rpc.models.DeviceStatus.DeviceStatusRequest
+import xyz.block.trailblaze.mcp.android.ondevice.rpc.models.DeviceStatus.DeviceStatusResponse
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.session.TrailblazeSessionManager
 import xyz.block.trailblaze.ui.devices.DeviceSessionInfo
 import xyz.block.trailblaze.ui.devices.DeviceState
-import xyz.block.trailblaze.ui.devices.DeviceStatusResponse
 import xyz.block.trailblaze.ui.models.AppIconProvider
 
 /**
@@ -35,7 +37,7 @@ class TrailblazeDeviceManager(
   val defaultHostAppTarget: TrailblazeHostAppTarget,
   val availableAppTargets: Set<TrailblazeHostAppTarget>,
   val appIconProvider: AppIconProvider,
-  val getInstalledAppIds: (Device.Connected) -> Set<String>,
+  val getInstalledAppIds: (TrailblazeDeviceId) -> Set<String>,
 ) {
 
   fun getAllSupportedDriverTypes() = settingsRepo.getAllSupportedDriverTypes()
@@ -44,7 +46,7 @@ class TrailblazeDeviceManager(
    * Callback function that can be set by the host runner to actually cancel the running job.
    * This is set by TrailblazeHostYamlRunner when it starts.
    */
-  var cancelSessionCallback: ((deviceInstanceId: String) -> Boolean)? = null
+  var cancelSessionCallback: ((deviceInstanceId: TrailblazeDeviceId) -> Boolean)? = null
 
   fun getCurrentSelectedTargetApp(): TrailblazeHostAppTarget? = availableAppTargets
     .filter { it != defaultHostAppTarget }
@@ -82,7 +84,17 @@ class TrailblazeDeviceManager(
 
         val deviceInfos = buildList {
           devices.forEach { maestroConnectedDevice: Device.Connected ->
-            val installedAppIds = getInstalledAppIds(maestroConnectedDevice)
+
+            val trailblazeDeviceId = TrailblazeDeviceId(
+              instanceId = maestroConnectedDevice.instanceId,
+              trailblazeDevicePlatform = when (maestroConnectedDevice.platform) {
+                Platform.ANDROID -> TrailblazeDevicePlatform.ANDROID
+                Platform.IOS -> TrailblazeDevicePlatform.IOS
+                Platform.WEB -> TrailblazeDevicePlatform.WEB
+              }
+            )
+
+            val installedAppIds = getInstalledAppIds(trailblazeDeviceId)
 
             when (maestroConnectedDevice.platform) {
               Platform.ANDROID -> {
@@ -214,13 +226,13 @@ class TrailblazeDeviceManager(
    * For host-based drivers, this returns the local session manager.
    * For on-device drivers, the session manager is a proxy that queries the device.
    */
-  fun getOrCreateSessionManager(deviceInstanceId: String): TrailblazeSessionManager {
+  fun getOrCreateSessionManager(trailblazeDeviceId: TrailblazeDeviceId): TrailblazeSessionManager {
     val currentManagers = _deviceStateFlow.value.sessionManagersByDevice
-    return currentManagers[deviceInstanceId] ?: run {
+    return currentManagers[trailblazeDeviceId] ?: run {
       val newManager = TrailblazeSessionManager()
       updateDeviceState { state ->
         state.copy(
-          sessionManagersByDevice = state.sessionManagersByDevice + (deviceInstanceId to newManager)
+          sessionManagersByDevice = state.sessionManagersByDevice + (trailblazeDeviceId to newManager)
         )
       }
       newManager
@@ -230,25 +242,25 @@ class TrailblazeDeviceManager(
   /**
    * Gets the session manager for a device if it exists.
    */
-  fun getSessionManager(deviceInstanceId: String): TrailblazeSessionManager? {
-    return _deviceStateFlow.value.sessionManagersByDevice[deviceInstanceId]
+  fun getSessionManager(trailblazeDeviceId: TrailblazeDeviceId): TrailblazeSessionManager? {
+    return _deviceStateFlow.value.sessionManagersByDevice[trailblazeDeviceId]
   }
 
   /**
    * Starts a session on a device. This creates/updates the session manager and tracks the session info.
    */
-  fun startSession(
-    deviceInstanceId: String,
+  fun trackActiveSession(
+    trailblazeDeviceId: TrailblazeDeviceId,
     sessionId: String
   ) {
-    val sessionManager = getOrCreateSessionManager(deviceInstanceId)
+    val sessionManager = getOrCreateSessionManager(trailblazeDeviceId)
     sessionManager.startSession(sessionId)
 
     updateDeviceState { state ->
       state.copy(
-        activeSessionsByDevice = state.activeSessionsByDevice + (deviceInstanceId to DeviceSessionInfo(
+        activeSessionsByDevice = state.activeSessionsByDevice + (trailblazeDeviceId to DeviceSessionInfo(
           sessionId = sessionId,
-          deviceInstanceId = deviceInstanceId,
+          trailblazeDeviceId = trailblazeDeviceId,
           sessionManager = sessionManager
         ))
       )
@@ -258,12 +270,12 @@ class TrailblazeDeviceManager(
   /**
    * Ends a session on a device. This updates the session manager and clears the active session info.
    */
-  fun endSession(deviceInstanceId: String) {
-    getSessionManager(deviceInstanceId)?.endSession()
+  fun endSession(trailblazeDeviceId: TrailblazeDeviceId) {
+    getSessionManager(trailblazeDeviceId)?.endSession()
 
     updateDeviceState { state ->
       state.copy(
-        activeSessionsByDevice = state.activeSessionsByDevice - deviceInstanceId
+        activeSessionsByDevice = state.activeSessionsByDevice - trailblazeDeviceId
       )
     }
   }
@@ -271,23 +283,23 @@ class TrailblazeDeviceManager(
   /**
    * Cancels the current session on a device.
    */
-  fun cancelSession(deviceInstanceId: String) {
-    cancelSessionCallback?.invoke(deviceInstanceId)
-    getSessionManager(deviceInstanceId)?.cancelCurrentSession()
+  fun cancelSession(trailblazeDeviceId: TrailblazeDeviceId) {
+    cancelSessionCallback?.invoke(trailblazeDeviceId)
+    getSessionManager(trailblazeDeviceId)?.cancelCurrentSession()
   }
 
   /**
    * Checks if a device currently has an active session.
    */
-  fun isDeviceRunningSession(deviceInstanceId: String): Boolean {
-    return _deviceStateFlow.value.activeSessionsByDevice.containsKey(deviceInstanceId)
+  fun isDeviceRunningSession(trailblazeDeviceId: TrailblazeDeviceId): Boolean {
+    return _deviceStateFlow.value.activeSessionsByDevice.containsKey(trailblazeDeviceId)
   }
 
   /**
    * Gets the active session info for a device, if any.
    */
-  fun getActiveSessionForDevice(deviceInstanceId: String): DeviceSessionInfo? {
-    return _deviceStateFlow.value.activeSessionsByDevice[deviceInstanceId]
+  fun getActiveSessionForDevice(trailblazeDeviceId: TrailblazeDeviceId): DeviceSessionInfo? {
+    return _deviceStateFlow.value.activeSessionsByDevice[trailblazeDeviceId]
   }
 
   /**
@@ -301,7 +313,7 @@ class TrailblazeDeviceManager(
 
   /**
    * Polls Android on-device instrumentation devices to check their status.
-   * This continuously monitors localhost:52526/status to see if a test is running.
+   * This continuously monitors device-specific ports to see if a test is running.
    */
   fun startPollingDeviceStatus() {
     pollingJob?.cancel()
@@ -314,39 +326,45 @@ class TrailblazeDeviceManager(
           it.trailblazeDriverType == TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION
         }
 
-        androidDevices.forEach { device ->
+        androidDevices.forEach { device: TrailblazeConnectedDeviceSummary ->
           try {
             // Query the on-device server status via adb port forwarding
-            val client =
-              TrailblazeHttpClientFactory.createDefaultHttpClient(2L)
-            val response = client.get("http://localhost:52526/status")
-            val statusJson = response.bodyAsText()
-            client.close()
+            val trailblazeDeviceId = device.trailblazeDeviceId
+            val onDeviceRpc = OnDeviceRpcClient(trailblazeDeviceId)
 
-            // Parse the JSON response using kotlinx.serialization.json.Json
-            val deviceStatus = Json.Default.decodeFromString(
-              DeviceStatusResponse.serializer(),
-              statusJson
+            onDeviceRpc.rpcCall(
+              request = DeviceStatusRequest(
+                trailblazeDeviceId = trailblazeDeviceId
+              ),
+              onSuccess = { deviceStatus ->
+                if (deviceStatus is DeviceStatusResponse.HasSession && deviceStatus.isRunning) {
+                  // Session is running on device - update session info
+                  val currentSession: DeviceSessionInfo? = getActiveSessionForDevice(device.trailblazeDeviceId)
+                  if (currentSession == null || currentSession.sessionId != deviceStatus.sessionId) {
+                    // Use device manager's startSession to handle everything
+                    trackActiveSession(device.trailblazeDeviceId, deviceStatus.sessionId)
+                  }
+                } else {
+                  // No session running - clear if we had marked one
+                  if (isDeviceRunningSession(device.trailblazeDeviceId)) {
+                    endSession(device.trailblazeDeviceId)
+                  }
+                }
+              },
+              onFailure = { failureResult: RpcResult.Failure ->
+                // Log the RPC error but don't throw - device might be unavailable temporarily
+                println(
+                  "Failed to get device status for ${device.instanceId}: ${
+                    TrailblazeJsonInstance.encodeToString(failureResult)
+                  }"
+                )
+              }
             )
-
-            if (deviceStatus.isRunning && !deviceStatus.sessionId.isNullOrEmpty()) {
-              // Session is running on device - update session info
-              val currentSession = getActiveSessionForDevice(device.instanceId)
-              if (currentSession == null || currentSession.sessionId != deviceStatus.sessionId) {
-                // Use device manager's startSession to handle everything
-                startSession(device.instanceId, deviceStatus.sessionId)
-              }
-            } else {
-              // No session running - clear if we had marked one
-              if (isDeviceRunningSession(device.instanceId)) {
-                endSession(device.instanceId)
-              }
-            }
           } catch (e: Exception) {
             // Can't connect to device - this is expected if no instrumentation is running
             // or if device is disconnected. Clear any session we had marked.
-            if (isDeviceRunningSession(device.instanceId)) {
-              endSession(device.instanceId)
+            if (isDeviceRunningSession(device.trailblazeDeviceId)) {
+              endSession(device.trailblazeDeviceId)
             }
           }
         }

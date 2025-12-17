@@ -11,6 +11,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -21,6 +22,11 @@ import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.ComposeViewport
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.rememberNavController
 import kotlinx.browser.document
 import kotlinx.browser.window
 import kotlinx.serialization.json.JsonObject
@@ -30,6 +36,7 @@ import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.logs.model.getSessionInfo
 import xyz.block.trailblaze.ui.composables.FullScreenModalOverlay
 import xyz.block.trailblaze.ui.composables.ScreenshotImageModal
+import xyz.block.trailblaze.ui.navigation.WasmRoute
 import xyz.block.trailblaze.ui.tabs.session.SessionDetailComposable
 import xyz.block.trailblaze.ui.tabs.session.SessionListComposable
 import xyz.block.trailblaze.ui.tabs.session.group.ChatHistoryDialog
@@ -39,7 +46,6 @@ import xyz.block.trailblaze.ui.tabs.testresults.TestResultsComposable
 
 // Central data provider instance
 private val dataProvider: TrailblazeLogsDataProvider = InlinedDataLoader
-//private val dataProvider: TrailblazeLogsDataProvider = NetworkTrailblazeLogsDataProvider
 
 @OptIn(ExperimentalComposeUiApi::class)
 fun main() {
@@ -50,61 +56,115 @@ fun main() {
 
 @Composable
 fun TrailblazeApp() {
-  var currentRoute by remember { mutableStateOf(parseRoute()) }
-
-  // Listen for hash changes
-  window.addEventListener("hashchange", {
-    currentRoute = parseRoute()
-  })
+  val navController = rememberNavController()
 
   val toMaestroYaml: (JsonObject) -> String = { it.toString() }
-  val toTrailblazeYaml: suspend (SessionInfo) -> String = { sessionInfo ->
-    dataProvider.getSessionRecordingYaml(sessionInfo.sessionId)
-  }
-
 
   println("Using data provider: $dataProvider")
 
-  when {
-    currentRoute.startsWith("session/") -> {
-      val sessionName = currentRoute.removePrefix("session/")
-      WasmSessionDetailView(
-        dataProvider = dataProvider,
-        toMaestroYaml = toMaestroYaml,
-        sessionName = sessionName,
-        onBackClick = {
-          navigateToHome()
-          currentRoute = ""
-        }
-      )
+  // Parse initial route from URL hash for backward compatibility with existing bookmarks
+  val initialRoute = remember {
+    val hash = parseRoute()
+    when {
+      hash.startsWith("session/") -> {
+        val sessionId = hash.removePrefix("session/")
+        WasmRoute.SessionDetail(sessionId)
+      }
+      else -> WasmRoute.Home
+    }
+  }
+
+  // Track current route explicitly to avoid serialization issues with toRoute()
+  var currentRoute by remember { mutableStateOf<WasmRoute>(initialRoute) }
+
+  // Update browser URL hash when route changes
+  LaunchedEffect(currentRoute) {
+    val newHash = when (currentRoute) {
+      is WasmRoute.Home -> ""
+      is WasmRoute.SessionDetail -> "session/${(currentRoute as WasmRoute.SessionDetail).sessionId}"
     }
 
-    else -> {
-      println("SessionListView with dataProvider: $dataProvider")
+    val currentHash = window.location.hash.removePrefix("#")
+    if (currentHash != newHash) {
+      window.location.hash = newHash
+    }
+  }
+
+  // Listen to browser hash changes (back/forward buttons, direct URL changes)
+  // and update navigation accordingly
+  DisposableEffect(Unit) {
+    val hashChangeListener = { _: Any? ->
+      val hash = parseRoute()
+      val newRoute = when {
+        hash.startsWith("session/") -> {
+          val sessionId = hash.removePrefix("session/")
+          WasmRoute.SessionDetail(sessionId)
+        }
+
+        else -> WasmRoute.Home
+      }
+
+      // Only navigate if the route actually changed
+      if (currentRoute != newRoute) {
+        currentRoute = newRoute
+        navController.navigate(newRoute) {
+          launchSingleTop = true
+        }
+      }
+    }
+
+    window.addEventListener("hashchange", hashChangeListener)
+
+    onDispose {
+      window.removeEventListener("hashchange", hashChangeListener)
+    }
+  }
+
+  NavHost(
+    navController = navController,
+    startDestination = initialRoute,
+    enterTransition = { EnterTransition.None },
+    exitTransition = { ExitTransition.None }
+  ) {
+    composable<WasmRoute.Home> {
       SessionListViewLoader(
         dataProvider = dataProvider,
         onSessionClick = { session ->
-          navigateToSession(session.sessionId)
-          currentRoute = "session/${session.sessionId}"
+          val newRoute = WasmRoute.SessionDetail(session.sessionId)
+          currentRoute = newRoute
+          navController.navigate(newRoute)
         },
         deleteSession = null
       )
     }
+
+    composable<WasmRoute.SessionDetail> {
+      // Use currentRoute instead of toRoute() to avoid serialization errors
+      val sessionDetail = currentRoute as? WasmRoute.SessionDetail
+        ?: WasmRoute.SessionDetail("") // Fallback shouldn't happen
+
+      WasmSessionDetailView(
+        dataProvider = dataProvider,
+        toMaestroYaml = toMaestroYaml,
+        sessionName = sessionDetail.sessionId,
+        onBackClick = {
+          currentRoute = WasmRoute.Home
+          navController.navigate(WasmRoute.Home) {
+            popUpTo(WasmRoute.Home) {
+              inclusive = false
+            }
+          }
+        }
+      )
+    }
   }
 }
 
-fun parseRoute(): String {
-  val hash = window.location.hash
-  return if (hash.startsWith("#")) hash.substring(1) else ""
-}
-
-fun navigateToHome() {
-  window.location.hash = ""
-}
-
-fun navigateToSession(sessionName: String) {
-  window.location.hash = "session/$sessionName"
-}
+/**
+ * Parse the current route from browser URL hash.
+ * Supports backward compatibility with existing hash-based URLs.
+ */
+fun parseRoute(): String = window.location.hash.removePrefix("#")
 
 /**
  * Loader composable for WASM that fetches data from the data provider

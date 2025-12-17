@@ -21,6 +21,7 @@ import xyz.block.trailblaze.toolcalls.commands.PressKeyTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.ScrollUntilTextIsVisibleTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.SwipeTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.SwipeWithRelativeCoordinatesTool
+import xyz.block.trailblaze.toolcalls.commands.TakeScreenshotTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnByElementSelector
 import xyz.block.trailblaze.toolcalls.commands.TapOnElementByNodeIdTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnElementWithAccessiblityTextTrailblazeTool
@@ -67,6 +68,7 @@ abstract class TrailblazeToolSet(
         OpenUrlTrailblazeTool::class,
         PressBackTrailblazeTool::class,
         PressKeyTrailblazeTool::class,
+        TakeScreenshotTool::class,
         ScrollUntilTextIsVisibleTrailblazeTool::class,
         SwipeTrailblazeTool::class,
         WaitForIdleSyncTrailblazeTool::class,

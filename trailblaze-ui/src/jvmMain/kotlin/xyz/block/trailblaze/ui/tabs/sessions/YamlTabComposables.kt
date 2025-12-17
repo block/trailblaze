@@ -338,35 +338,35 @@ fun YamlTabComposable(
             Spacer(modifier = Modifier.height(8.dp))
 
             when (status) {
-              is DeviceConnectionStatus.TrailblazeInstrumentationRunning -> {
+              is DeviceConnectionStatus.WithTargetDevice.TrailblazeInstrumentationRunning -> {
                 Text(
-                  text = "✓ Trailblaze running on device: ${status.deviceId ?: "default"}",
+                  text = "✓ Trailblaze running on device: ${status.trailblazeDeviceId}",
                   color = Color(0xFF4CAF50)
                 )
               }
 
-              is DeviceConnectionStatus.ConnectionFailure -> {
+              is DeviceConnectionStatus.DeviceConnectionError.ConnectionFailure -> {
                 Text(
                   text = "✗ Connection failed: ${status.errorMessage}",
                   color = Color(0xFFF44336)
                 )
               }
 
-              is DeviceConnectionStatus.StartingConnection -> {
+              is DeviceConnectionStatus.WithTargetDevice.StartingConnection -> {
                 Text(
-                  text = "🔄 Starting connection to device: ${status.deviceId ?: "default"}",
+                  text = "🔄 Starting connection to device: ${status.trailblazeDeviceId}",
                   color = Color(0xFF2196F3)
                 )
               }
 
-              is DeviceConnectionStatus.NoConnection -> {
+              is DeviceConnectionStatus.DeviceConnectionError.NoConnection -> {
                 Text(
                   text = "⚪ No active connections",
                   color = Color(0xFF9E9E9E)
                 )
               }
 
-              is DeviceConnectionStatus.ThereIsAlreadyAnActiveConnection -> {
+              is DeviceConnectionStatus.DeviceConnectionError.ThereIsAlreadyAnActiveConnection -> {
                 Text(
                   text = "⚠️ Already connected to device: ${status.deviceId}",
                   color = Color(0xFFFF9800)

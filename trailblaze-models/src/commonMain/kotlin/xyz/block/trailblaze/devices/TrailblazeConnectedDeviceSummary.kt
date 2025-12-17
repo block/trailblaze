@@ -20,4 +20,9 @@ data class TrailblazeConnectedDeviceSummary(
     }
     return installedAppId
   }
+
+  val trailblazeDeviceId = TrailblazeDeviceId(
+    instanceId = instanceId,
+    trailblazeDevicePlatform = platform
+  )
 }

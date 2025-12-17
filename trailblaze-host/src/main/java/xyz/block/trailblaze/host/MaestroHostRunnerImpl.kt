@@ -12,32 +12,33 @@ import maestro.orchestra.yaml.YamlCommandReader
 import xyz.block.trailblaze.android.maestro.LoggingDriver
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
-import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.host.devices.TrailblazeConnectedDevice
 import xyz.block.trailblaze.host.devices.TrailblazeDeviceService
 import xyz.block.trailblaze.host.screenstate.HostMaestroDriverScreenState
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.maestro.OrchestraRunner
+import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import java.io.File
 
 class MaestroHostRunnerImpl(
-  requestedPlatform: TrailblazeDevicePlatform? = null,
+  requestedPlatform: TrailblazeDevicePlatform,
   setOfMarkEnabled: Boolean = true,
   val trailblazeLogger: TrailblazeLogger,
+  /**
+   * Providing the "App Target" can enable app specific functionality if provided
+   */
+  appTarget: TrailblazeHostAppTarget? = null,
 ) : MaestroHostRunner {
   val connectedDevice: TrailblazeConnectedDevice by lazy {
-    if (requestedPlatform == null) {
-      TrailblazeDeviceService.getFirstConnectedDevice()
-    } else {
-      TrailblazeDeviceService.getConnectedDevice(requestedPlatform) ?: error(
-        "No connected devices found for platform $requestedPlatform.",
-      )
-    }
+    TrailblazeDeviceService.getConnectedDevice(
+      platform = requestedPlatform,
+      appTarget = appTarget
+    ) ?: error(
+      "No connected devices found for platform $requestedPlatform.",
+    )
   }
-
-  val connectedTrailblazeDriverType: TrailblazeDriverType = connectedDevice.trailblazeDriverType
 
   val loggingDriver: LoggingDriver by lazy {
     connectedDevice.getLoggingDriver(trailblazeLogger)

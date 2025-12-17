@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.desktop
 
 import maestro.device.Device
+import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.llm.TrailblazeLlmModelList
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
@@ -37,7 +38,7 @@ abstract class TrailblazeDesktopAppConfig(
 
   abstract val availableAppTargets: Set<TrailblazeHostAppTarget>
 
-  abstract fun getInstalledAppIds(connectedMaestroDevice: Device.Connected): Set<String>
+  abstract fun getInstalledAppIds(trailblazeDeviceId: TrailblazeDeviceId): Set<String>
 
   fun getCurrentLlmModel(): TrailblazeLlmModel {
     val serverState = trailblazeSettingsRepo.serverStateFlow.value

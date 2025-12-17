@@ -12,10 +12,6 @@ class TrailblazeConnectedDevice(
 ) {
   val initialMaestroDeviceInfo = maestroDriver.deviceInfo()
 
-  @Deprecated("Use getLoggingDriver(TrailblazeLogger) instead")
-  val loggingDriver: LoggingDriver
-    get() = throw IllegalStateException("Use getLoggingDriver(TrailblazeLogger) instead")
-
   fun getLoggingDriver(trailblazeLogger: TrailblazeLogger): LoggingDriver = LoggingDriver(
     delegate = maestroDriver,
     screenStateProvider = {

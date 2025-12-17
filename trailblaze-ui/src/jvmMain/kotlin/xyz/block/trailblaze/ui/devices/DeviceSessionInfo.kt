@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.ui.devices
 
+import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.session.TrailblazeSessionManager
 
 /**
@@ -7,7 +8,7 @@ import xyz.block.trailblaze.session.TrailblazeSessionManager
  */
 data class DeviceSessionInfo(
   val sessionId: String,
-  val deviceInstanceId: String,
+  val trailblazeDeviceId: TrailblazeDeviceId,
   val startTimeMs: Long = System.currentTimeMillis(),
   val sessionManager: TrailblazeSessionManager
 )

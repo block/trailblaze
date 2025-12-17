@@ -28,6 +28,7 @@ object AgentMessages {
       functionArgs,
       requiredArgs,
     )
+    is TrailblazeToolResult.Error.InvalidToolCall -> invalidToolCallContentString(this)
   }
 
   /**
@@ -55,6 +56,7 @@ object AgentMessages {
       functionArgs,
       requiredArgs,
     )
+    is TrailblazeToolResult.Error.InvalidToolCall -> invalidToolCallContentString(this)
   }
 
   /**
@@ -80,6 +82,7 @@ object AgentMessages {
       functionArgs,
       requiredArgs,
     )
+    is TrailblazeToolResult.Error.InvalidToolCall -> invalidToolCallContentString(this)
   }
 
   private fun errorExceptionContentString(errorException: TrailblazeToolResult.Error.ExceptionThrown) = buildString {
@@ -247,5 +250,10 @@ object AgentMessages {
     appendLine("Tool: $functionName")
     appendLine("Parameters provided $functionArgs")
     appendLine("Parameters required $requiredArguments")
+  }
+
+  private fun invalidToolCallContentString(call: TrailblazeToolResult.Error.InvalidToolCall) = buildString {
+    appendLine("# Error executing tool: ${call.command}")
+    appendLine("Exception Message: ${call.errorMessage}")
   }
 }

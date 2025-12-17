@@ -279,8 +279,16 @@ org.jetbrains.androidx.lifecycle:lifecycle-common:2.9.6
 org.jetbrains.androidx.lifecycle:lifecycle-runtime-compose-desktop:2.9.6
 org.jetbrains.androidx.lifecycle:lifecycle-runtime-compose:2.9.6
 org.jetbrains.androidx.lifecycle:lifecycle-runtime:2.9.6
+org.jetbrains.androidx.lifecycle:lifecycle-viewmodel-compose-desktop:2.9.5
+org.jetbrains.androidx.lifecycle:lifecycle-viewmodel-compose:2.9.5
 org.jetbrains.androidx.lifecycle:lifecycle-viewmodel-savedstate:2.9.6
 org.jetbrains.androidx.lifecycle:lifecycle-viewmodel:2.9.6
+org.jetbrains.androidx.navigation:navigation-common-desktop:2.9.1
+org.jetbrains.androidx.navigation:navigation-common:2.9.1
+org.jetbrains.androidx.navigation:navigation-compose-desktop:2.9.1
+org.jetbrains.androidx.navigation:navigation-compose:2.9.1
+org.jetbrains.androidx.navigation:navigation-runtime-desktop:2.9.1
+org.jetbrains.androidx.navigation:navigation-runtime:2.9.1
 org.jetbrains.androidx.savedstate:savedstate-compose-desktop:1.3.6
 org.jetbrains.androidx.savedstate:savedstate-compose:1.3.6
 org.jetbrains.androidx.savedstate:savedstate:1.3.6

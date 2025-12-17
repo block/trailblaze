@@ -6,10 +6,18 @@ import maestro.device.DeviceService
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.host.screenstate.toTrailblazeDevicePlatform
+import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 
 object TrailblazeDeviceService {
 
-  fun getConnectedIosDevice(): TrailblazeConnectedDevice? {
+  /**
+   * Gets the first connected iOS Device.
+   *
+   * @param appTarget Optional - Configuration for the target application under test
+   */
+  fun getConnectedIosDevice(
+    appTarget: TrailblazeHostAppTarget? = null,
+  ): TrailblazeConnectedDevice? {
     val connectedDevices: List<Device.Connected> = DeviceService.listConnectedDevices()
       .filter { it.platform.toTrailblazeDevicePlatform() == TrailblazeDevicePlatform.IOS }
     val connectedDevice = connectedDevices.firstOrNull() ?: return null
@@ -20,6 +28,7 @@ object TrailblazeDeviceService {
       deviceType = connectedDevice.deviceType,
       driverHostPort = null,
       platformConfiguration = null,
+      appTarget = appTarget,
     )
     return TrailblazeConnectedDevice(
       maestroDriver = iosDriver.driver,
@@ -42,13 +51,12 @@ object TrailblazeDeviceService {
     )
   }
 
-  fun getFirstConnectedDevice(): TrailblazeConnectedDevice = getConnectedDevice(TrailblazeDevicePlatform.ANDROID)
-    ?: getConnectedDevice(TrailblazeDevicePlatform.IOS)
-    ?: HostWebDriverFactory().createWeb()
-
-  fun getConnectedDevice(platform: TrailblazeDevicePlatform): TrailblazeConnectedDevice? = when (platform) {
+  fun getConnectedDevice(
+    platform: TrailblazeDevicePlatform,
+    appTarget: TrailblazeHostAppTarget? = null,
+  ): TrailblazeConnectedDevice? = when (platform) {
     TrailblazeDevicePlatform.ANDROID -> getConnectedHostAndroidDevice()
-    TrailblazeDevicePlatform.IOS -> getConnectedIosDevice()
+    TrailblazeDevicePlatform.IOS -> getConnectedIosDevice(appTarget)
     TrailblazeDevicePlatform.WEB -> HostWebDriverFactory().createWeb()
   }
 }

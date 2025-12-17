@@ -4,6 +4,7 @@ import device.SimctlIOSDevice
 import ios.LocalIOSDevice
 import ios.devicectl.DeviceControlIOSDevice
 import ios.xctest.XCTestIOSDevice
+import maestro.Driver
 import maestro.Maestro
 import maestro.device.Device
 import maestro.drivers.IOSDriver
@@ -16,6 +17,7 @@ import xcuitest.XCTestDriverClient
 import xcuitest.installer.Context
 import xcuitest.installer.LocalXCTestInstaller
 import xcuitest.installer.LocalXCTestInstaller.IOSDriverConfig
+import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import java.net.ServerSocket
 import java.nio.file.Paths
 import java.util.concurrent.TimeUnit
@@ -50,7 +52,7 @@ internal object HostIosDriverFactory {
         if (attempts % 10 == 0) {
           println(
             "Still waiting for port $port to be released... " +
-              "(${System.currentTimeMillis() - startTime}ms elapsed)",
+                "(${System.currentTimeMillis() - startTime}ms elapsed)",
           )
         }
         Thread.sleep(100)
@@ -67,6 +69,7 @@ internal object HostIosDriverFactory {
     reinstallDriver: Boolean,
     platformConfiguration: WorkspaceConfig.PlatformConfiguration?,
     deviceType: Device.DeviceType,
+    appTarget: TrailblazeHostAppTarget? = null,
   ): Maestro {
     val targetPort = driverHostPort ?: defaultXcTestPort
 
@@ -163,7 +166,7 @@ internal object HostIosDriverFactory {
       getInstalledApps = { XCRunnerCLIUtils.listApps(deviceId) },
     )
 
-    val iosDriver = IOSDriver(
+    val baseIosDriver = IOSDriver(
       LocalIOSDevice(
         deviceId = deviceId,
         xcTestDevice = xcTestDevice,
@@ -172,6 +175,11 @@ internal object HostIosDriverFactory {
       ),
       insights = CliInsights,
     )
+
+    /**
+     * Use custom driver from [TrailblazeHostAppTarget] if provided, otherwise use default driver
+     */
+    val iosDriver: Driver = appTarget?.getCustomIosDriverFactory(baseIosDriver) as? Driver ?: baseIosDriver
 
     val maestro = Maestro.ios(
       driver = iosDriver,
@@ -215,7 +223,7 @@ internal object HostIosDriverFactory {
         if (attempt < maxRetries) {
           println(
             "XCUITest driver not ready yet on port $port (attempt $attempt/$maxRetries), " +
-              "waiting ${currentDelay}ms before retry...",
+                "waiting ${currentDelay}ms before retry...",
           )
           Thread.sleep(currentDelay)
           // Exponential backoff with max delay of 3 seconds

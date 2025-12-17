@@ -55,7 +55,7 @@ class OpenSourceTrailblazeDesktopApp : TrailblazeDesktopApp(
       trailblazeMcpServerProvider = { trailblazeMcpServer },
       customEnvVarNames = emptyList(),
     ).runTrailblazeApp(
-      customTabsWithNavigation = { listOf() },
+      customTabs = { listOf() },
       availableModelLists = desktopAppConfig.getCurrentlyAvailableLlmModelLists(),
       deviceManager = desktopAppConfig.deviceManager,
       additionalInstrumentationArgs = { emptyMap() },
@@ -68,5 +68,4 @@ class OpenSourceTrailblazeDesktopApp : TrailblazeDesktopApp(
       },
     )
   }
-
 }

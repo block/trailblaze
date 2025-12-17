@@ -7,14 +7,19 @@ import ai.koog.agents.core.tools.reflect.ToolSet
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
+import xyz.block.trailblaze.devices.TrailblazeDeviceId
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.devices.TrailblazeDevicePort.getDeviceSpecificPort
 import xyz.block.trailblaze.mcp.TrailblazeMcpSseSessionContext
-import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRpc
+import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRpcClient
+import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.models.McpPromptRequestData
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.models.SelectToolSet
 import xyz.block.trailblaze.model.DeviceConnectionStatus
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.util.AndroidHostAdbUtils
 import xyz.block.trailblaze.util.HostAndroidDeviceConnectUtils
+import xyz.block.trailblaze.util.HostAndroidDeviceConnectUtils.getDeviceModelName
 
 // --- Koog ToolSets ---
 @Suppress("unused")
@@ -24,28 +29,30 @@ class AndroidOnDeviceFromHostToolSet(
   private val targetTestAppProvider: () -> TrailblazeHostAppTarget,
 ) : ToolSet {
 
-  companion object Companion {
-    const val ON_DEVICE_ANDROID_MCP_SERVER_PORT = 52526
-  }
-
   // Store active connection processes and their status
-  private var activeAdbOnDeviceConnections: DeviceConnectionStatus = DeviceConnectionStatus.NoConnection(
-    deviceId = null,
-  )
+  private var activeAdbOnDeviceConnections: DeviceConnectionStatus? = null
 
   @LLMDescription("Connect to the attached device using Trailblaze.")
   @Tool
   fun sayHi(me: String?): String = "Hello from $me!"
 
-
   @LLMDescription("Installed apps")
   @Tool
   fun getInstalledApps(): String {
-    val result = AndroidHostAdbUtils.execAdbShellCommand(deviceId = null, args = listOf("pm", "list", "packages"))
-    val packages = result.lines().map { it.substringAfter("package:") }
+    val activeConnection = activeAdbOnDeviceConnections as? DeviceConnectionStatus.WithTargetDevice
+      ?: return "No device connected."
+
+    val packages = AndroidHostAdbUtils.listInstalledPackages(activeConnection.trailblazeDeviceId)
     return packages
       .sorted()
       .joinToString("\n")
+  }
+
+
+  @LLMDescription("List connected devices.")
+  @Tool
+  fun listConnectedDevices(): String {
+    return "Not implemented."
   }
 
   @LLMDescription("Connect to the attached device using Trailblaze.")
@@ -53,13 +60,13 @@ class AndroidOnDeviceFromHostToolSet(
   fun connectAndroidDevice(): String {
     val connectionStatus = runBlocking { connectAndroidDeviceInternal(targetTestAppProvider()) }
     return when (connectionStatus) {
-      is DeviceConnectionStatus.ConnectionFailure -> {
+      is DeviceConnectionStatus.DeviceConnectionError.ConnectionFailure -> {
         "Connection failed: ${connectionStatus.errorMessage}"
       }
 
-      is DeviceConnectionStatus.TrailblazeInstrumentationRunning -> {
+      is DeviceConnectionStatus.WithTargetDevice.TrailblazeInstrumentationRunning -> {
         activeAdbOnDeviceConnections = connectionStatus
-        "Successfully connected to device ${connectionStatus.deviceId}. Trailblaze instrumentation is running."
+        "Successfully connected to device ${connectionStatus.trailblazeDeviceId}. Trailblaze instrumentation is running."
       }
 
       else -> {
@@ -75,32 +82,33 @@ class AndroidOnDeviceFromHostToolSet(
 
     val adbDevices = HostAndroidDeviceConnectUtils.getAdbDevices()
     if (adbDevices.isEmpty()) {
-      return DeviceConnectionStatus.ConnectionFailure(
+      return DeviceConnectionStatus.DeviceConnectionError.ConnectionFailure(
         errorMessage = "No devices found. Please ensure your device is connected and ADB is running.",
-        deviceId = null,
       )
     }
     if (adbDevices.size > 1) {
-      return DeviceConnectionStatus.ConnectionFailure(
-        "Multiple devices found. Please specify a device ID to connect to.  Available Devices: ${adbDevices.joinToString { it.id }}.",
-        deviceId = null,
+      return DeviceConnectionStatus.DeviceConnectionError.ConnectionFailure(
+        "Multiple devices found. Please specify a device ID to connect to.  Available Devices: ${adbDevices.joinToString { it.instanceId }}.",
       )
     }
 
     if (sessionContext == null) {
-      return DeviceConnectionStatus.ConnectionFailure(
+      return DeviceConnectionStatus.DeviceConnectionError.ConnectionFailure(
         "Error: Session context is null. Cannot send progress messages.",
-        deviceId = adbDevices.first().id,
       )
     }
 
     val device = adbDevices.first()
-    val deviceId = device.id
+    val deviceId = TrailblazeDeviceId(
+      instanceId = device.instanceId,
+      trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID
+    )
 
     // Start the connection process in the background
     return try {
+      val androidDeviceName = getDeviceModelName(deviceId)
       sessionContext.sendIndeterminateProgressMessage(
-        "Starting connection process for device: ${device.name} ($deviceId)",
+        "Starting connection process for device: $androidDeviceName (${deviceId.instanceId})",
       )
       val deviceConnectionStatus: DeviceConnectionStatus =
         HostAndroidDeviceConnectUtils.connectToInstrumentationAndInstallAppIfNotAvailable(
@@ -112,54 +120,23 @@ class AndroidOnDeviceFromHostToolSet(
       return deviceConnectionStatus
     } catch (e: Exception) {
       val errorMessage =
-        "Failed to start connection process for device: ${device.name} (${device.id}). Error: ${e.message}"
+        "Failed to start connection process for device: ${device.instanceId}. Error: ${e.message}"
       sessionContext.sendIndeterminateProgressMessage(
         errorMessage,
       )
-      DeviceConnectionStatus.ConnectionFailure(
+      DeviceConnectionStatus.DeviceConnectionError.ConnectionFailure(
         errorMessage = errorMessage,
-        deviceId = deviceId,
       )
     }
   }
 
   val ioScope = CoroutineScope(Dispatchers.IO)
 
-  private fun getActiveConnection(): DeviceConnectionStatus.TrailblazeInstrumentationRunning? = run {
-    activeAdbOnDeviceConnections as? DeviceConnectionStatus.TrailblazeInstrumentationRunning
+  private fun getActiveConnection(): DeviceConnectionStatus.WithTargetDevice.TrailblazeInstrumentationRunning? = run {
+    activeAdbOnDeviceConnections as? DeviceConnectionStatus.WithTargetDevice.TrailblazeInstrumentationRunning
   }
 
   private fun isThereAnActiveConnection(): Boolean = getActiveConnection() != null
-
-  @LLMDescription(
-    "Call this to list the available Trailblaze Tool Sets on the connected device.",
-  )
-  @Tool
-  fun listAndroidToolSets(): String {
-    if (sessionContext == null) {
-      return "Session context is null. Cannot send progress messages or connect to device."
-    }
-
-    val activeConnection: DeviceConnectionStatus.TrailblazeInstrumentationRunning? = getActiveConnection()
-    if (activeConnection == null) {
-      return "A device must be connected first."
-    }
-
-    if (activeConnection.deviceId == null) {
-      return "Device status reported connected, but deviceId was unavailable."
-    }
-
-    try {
-      val psuedoRpcResult = OnDeviceRpc(ON_DEVICE_ANDROID_MCP_SERVER_PORT) {
-        sessionContext.sendIndeterminateProgressMessage(it)
-      }.listAvailableToolSets()
-      return psuedoRpcResult
-    } catch (e: Exception) {
-      val errorMessage = "Exception sending HTTP request to device ${activeConnection.deviceId}. Error: ${e.message}"
-      sessionContext.sendIndeterminateProgressMessage(errorMessage)
-      return errorMessage
-    }
-  }
 
   @LLMDescription(
     "This changes the enabled Trailblaze ToolSets.  This will change what tools are available to the Trailblaze device control agent.",
@@ -173,22 +150,21 @@ class AndroidOnDeviceFromHostToolSet(
       return "Session context is null. Cannot send progress messages or connect to device."
     }
 
-    val activeConnection: DeviceConnectionStatus.TrailblazeInstrumentationRunning? = getActiveConnection()
-    if (activeConnection == null) {
-      return "A device must be connected first."
-    }
-
-    if (activeConnection.deviceId == null) {
-      return "Device status reported connected, but deviceId was unavailable."
-    }
+    val activeConnection: DeviceConnectionStatus.WithTargetDevice.TrailblazeInstrumentationRunning =
+      getActiveConnection() ?: return "A device must be connected first."
 
     try {
-      val psuedoRpcResult = OnDeviceRpc(ON_DEVICE_ANDROID_MCP_SERVER_PORT) {
-        sessionContext.sendIndeterminateProgressMessage(it)
-      }.setToolSets(SelectToolSet(toolSetNames))
-      return psuedoRpcResult
+      return runBlocking {
+        val rpcClient = OnDeviceRpcClient(activeConnection.trailblazeDeviceId)
+        val result: RpcResult<String> = rpcClient.rpcCall(SelectToolSet(toolSetNames))
+        when (result) {
+          is RpcResult.Success -> result.data
+          is RpcResult.Failure -> "Error: ${result.message}${result.details?.let { " - $it" } ?: ""}"
+        }
+      }
     } catch (e: Exception) {
-      val errorMessage = "Exception sending HTTP request to device ${activeConnection.deviceId}. Error: ${e.message}"
+      val errorMessage =
+        "Exception sending HTTP request to device ${activeConnection.trailblazeDeviceId}. Error: ${e.message}"
       sessionContext.sendIndeterminateProgressMessage(errorMessage)
       return errorMessage
     }
@@ -210,19 +186,13 @@ The prompt/action/request will be sent to the mobile device to be run.
       return "Session context is null. Cannot send progress messages or connect to device."
     }
 
-    val activeConnection: DeviceConnectionStatus.TrailblazeInstrumentationRunning? = getActiveConnection()
-    if (activeConnection == null) {
-      return "A device must be connected first."
-    }
-
-    if (activeConnection.deviceId == null) {
-      return "Device status reported connected, but deviceId was unavailable."
-    }
+    val activeConnection: DeviceConnectionStatus.WithTargetDevice.TrailblazeInstrumentationRunning =
+      getActiveConnection() ?: return "A device must be connected first."
 
     return sendPromptToAndroidOnDevice(
       originalPrompt = prompt,
       steps = listOf(prompt),
-      deviceId = activeConnection.deviceId!!,
+      trailblazeDeviceId = activeConnection.trailblazeDeviceId,
       sessionContext = sessionContext,
     )
   }
@@ -230,19 +200,23 @@ The prompt/action/request will be sent to the mobile device to be run.
   private fun sendPromptToAndroidOnDevice(
     originalPrompt: String,
     steps: List<String>,
-    deviceId: String,
+    trailblazeDeviceId: TrailblazeDeviceId,
     sessionContext: TrailblazeMcpSseSessionContext,
   ): String {
-    println("Sending prompt $steps to device $deviceId.")
+    println("Sending prompt $steps to device $trailblazeDeviceId.")
 
+    val deviceSpecificPort = trailblazeDeviceId.getDeviceSpecificPort()
     sessionContext.sendIndeterminateProgressMessage(
-      "Setting up port forwarding for device $deviceId on port $ON_DEVICE_ANDROID_MCP_SERVER_PORT.",
+      "Setting up port forwarding for device $trailblazeDeviceId on port $deviceSpecificPort.",
     )
-    // This tool sends a prompt to the local server running on port 52526
+    // This tool sends a prompt to the local server running on a device-specific port
     try {
-      AndroidHostAdbUtils.adbPortForward(deviceId, ON_DEVICE_ANDROID_MCP_SERVER_PORT)
+      AndroidHostAdbUtils.adbPortForward(
+        deviceId = trailblazeDeviceId,
+        localPort = deviceSpecificPort
+      )
     } catch (e: Exception) {
-      return "Failed to set up port forwarding for device $deviceId on port $ON_DEVICE_ANDROID_MCP_SERVER_PORT. Error: ${e.message}"
+      return "Failed to set up port forwarding for device $trailblazeDeviceId on port $deviceSpecificPort. Error: ${e.message}"
     }
 
     val promptRequestData = McpPromptRequestData(
@@ -252,14 +226,18 @@ The prompt/action/request will be sent to the mobile device to be run.
 
     try {
       sessionContext.sendIndeterminateProgressMessage(
-        "Running prompt on device $deviceId with steps: ${steps.joinToString(", ")}.",
+        "Running prompt on device $trailblazeDeviceId with steps: ${steps.joinToString(", ")}.",
       )
-      val psuedoRpcResult = OnDeviceRpc(ON_DEVICE_ANDROID_MCP_SERVER_PORT) {
-        sessionContext.sendIndeterminateProgressMessage(it)
-      }.prompt(promptRequestData)
-      return psuedoRpcResult
+      val onDeviceRpc = OnDeviceRpcClient(trailblazeDeviceId)
+      return runBlocking {
+        val result: RpcResult<String> = onDeviceRpc.rpcCall(promptRequestData)
+        when (result) {
+          is RpcResult.Success -> result.data
+          is RpcResult.Failure -> "Error: ${result.message}${result.details?.let { " - $it" } ?: ""}"
+        }
+      }
     } catch (e: Exception) {
-      val errorMessage = "Exception sending HTTP request to device $deviceId. Error: ${e.message}"
+      val errorMessage = "Exception sending HTTP request to device $trailblazeDeviceId. Error: ${e.message}"
       sessionContext.sendIndeterminateProgressMessage(errorMessage)
       return errorMessage
     }

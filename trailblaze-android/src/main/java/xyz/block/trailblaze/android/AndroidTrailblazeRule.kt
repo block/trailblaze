@@ -120,6 +120,7 @@ open class AndroidTrailblazeRule(
       rawYaml = testYaml,
       trailFilePath = trailFilePath,
       hasRecordedSteps = trailblazeYaml.hasRecordedSteps(trailItems),
+      trailblazeDeviceId = null,
     )
     trailblazeAgent.clearMemory()
     trailItems.forEach { item ->

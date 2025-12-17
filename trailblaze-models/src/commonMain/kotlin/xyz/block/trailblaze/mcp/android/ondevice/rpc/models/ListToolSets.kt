@@ -6,11 +6,12 @@ import kotlinx.serialization.Serializable
  * Used to send a prompt to the MCP server.
  */
 @Serializable
-data class McpPromptRequestData(
-  val fullPrompt: String,
-  val steps: List<String>,
+data class ListToolSets(
+  val toolSets: List<ToolSetInfo>,
 ) {
-  companion object {
-    const val URL_PATH = "/prompt"
-  }
+
+  @Serializable
+  data class ToolSetInfo(
+    val name: String,
+  )
 }

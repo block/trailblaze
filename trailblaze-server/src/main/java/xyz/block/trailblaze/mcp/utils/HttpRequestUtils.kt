@@ -1,46 +1,76 @@
 package xyz.block.trailblaze.mcp.utils
 
-import okhttp3.MediaType.Companion.toMediaTypeOrNull
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
-import java.util.concurrent.TimeUnit
+import io.ktor.client.HttpClient
+import io.ktor.client.plugins.HttpTimeout
+import io.ktor.client.request.post
+import io.ktor.client.request.setBody
+import io.ktor.client.statement.bodyAsText
+import io.ktor.http.ContentType
+import io.ktor.http.contentType
 
 class HttpRequestUtils(
   private val baseUrl: String,
 ) {
 
-  // Prepare the HTTP request to send the prompt
-  private val client = OkHttpClient.Builder()
-    .readTimeout(300, TimeUnit.SECONDS)
-    .connectTimeout(300, TimeUnit.SECONDS)
-    .writeTimeout(300, TimeUnit.SECONDS)
-    .build()
+  // Prepare the HTTP client with timeout configuration
+  private val client = HttpClient {
+    install(HttpTimeout) {
+      requestTimeoutMillis = 300_000
+      connectTimeoutMillis = 300_000
+      socketTimeoutMillis = 300_000
+    }
+  }
 
-  fun postRequest(jsonPostBody: String, urlPath: String): String {
-    val mediaType = "application/json".toMediaTypeOrNull()
-    val body = jsonPostBody.toRequestBody(mediaType)
+  suspend fun getRequest(urlPath: String): String {
+    return try {
+      val response = client.post("$baseUrl$urlPath") {
+        contentType(ContentType.Application.Json)
+      }
 
-    val request = Request.Builder()
-      .url("$baseUrl$urlPath")
-      .addHeader("Content-Type", "application/json")
-      .post(body)
-      .build()
-
-    try {
-      val response = client.newCall(request).execute()
-      val responseBody = response.body?.string()
+      val responseBody = response.bodyAsText()
       println("Response Body: $responseBody")
-      println("Response Code: ${response.code}")
-      println("Response Message: ${response.message}")
-      return if (!response.isSuccessful) {
-        """"Unexpected code $response""""
+      println("Response Code: ${response.status.value}")
+      println("Response Message: ${response.status.description}")
+
+      if (response.status.value !in 200..299) {
+        """"Unexpected code ${response.status}""""
       } else {
-        "$responseBody"
+        responseBody
       }
     } catch (e: Exception) {
       val errorMessage = "Exception sending HTTP request to device. Error: ${e.message}"
-      return errorMessage
+      errorMessage
     }
+  }
+
+  suspend fun postRequest(urlPath: String, jsonPostBody: String? = null): String {
+    return try {
+      val response = client.post("$baseUrl$urlPath") {
+        contentType(ContentType.Application.Json)
+        jsonPostBody?.let {
+          setBody(jsonPostBody)
+        }
+      }
+
+      val responseBody = response.bodyAsText()
+      println("Response Body: $responseBody")
+      println("Response Code: ${response.status.value}")
+      println("Response Message: ${response.status.description}")
+
+      if (response.status.value !in 200..299) {
+        """"Unexpected code ${response.status}""""
+      } else {
+        responseBody
+      }
+    } catch (e: Exception) {
+      val errorMessage = "Exception sending HTTP request to device. Error: ${e.message}"
+      errorMessage
+    } finally {
+      close()
+    }
+  }
+
+  fun close() {
+    client.close()
   }
 }

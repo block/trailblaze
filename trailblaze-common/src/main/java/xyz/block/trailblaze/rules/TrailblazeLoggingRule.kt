@@ -4,12 +4,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
 import org.junit.runner.Description
-import xyz.block.trailblaze.api.ImageFormatDetector
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.http.TrailblazeHttpClientFactory
+import xyz.block.trailblaze.logs.client.ScreenStateLogger
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogServerClient
 import xyz.block.trailblaze.logs.client.TrailblazeLoggerInstance
+import xyz.block.trailblaze.logs.client.TrailblazeScreenStateLog
 import xyz.block.trailblaze.session.TrailblazeSessionManager
 import xyz.block.trailblaze.tracing.TrailblazeTracer
 
@@ -19,7 +20,7 @@ import xyz.block.trailblaze.tracing.TrailblazeTracer
 abstract class TrailblazeLoggingRule(
   private val logsBaseUrl: String = "https://localhost:8443",
   private val writeLogToDisk: ((currentTestName: String, log: TrailblazeLog) -> Unit) = { _, _ -> },
-  private val writeScreenshotToDisk: ((sessionId: String, fileName: String, bytes: ByteArray) -> Unit) = { _, _, _ -> },
+  private val writeScreenshotToDisk: ((screenshot: TrailblazeScreenStateLog) -> Unit) = { _ -> },
   private val writeTraceToDisk: ((sessionId: String, json: String) -> Unit) = { _, _ -> },
   val sessionManager: TrailblazeSessionManager = TrailblazeSessionManager(),
 ) : SimpleTestRule() {
@@ -37,6 +38,14 @@ abstract class TrailblazeLoggingRule(
         timeoutInSeconds = 5,
       ),
       baseUrl = logsBaseUrl,
+    )
+  }
+
+  private val screenStateLogger by lazy {
+    ServerScreenStateLogger(
+      isServerAvailable = isServerAvailable,
+      trailblazeLogServerClient = trailblazeLogServerClient,
+      writeScreenshotToDisk = writeScreenshotToDisk,
     )
   }
 
@@ -83,27 +92,7 @@ abstract class TrailblazeLoggingRule(
   }
 
   fun subscribeToLoggingEventsAndSendToServer() {
-    trailblazeLogger.setLogScreenshotListener { screenshotBytes ->
-      val sessionId = trailblazeLogger.getCurrentSessionId()
-      val imageFormat = ImageFormatDetector.detectFormat(screenshotBytes)
-      val screenshotFileName = "${sessionId}_${Clock.System.now().toEpochMilliseconds()}.${imageFormat.fileExtension}"
-      // Send Log
-      runBlocking(Dispatchers.IO) {
-        if (isServerAvailable) {
-          val logResult = trailblazeLogServerClient.postScreenshot(
-            screenshotFilename = screenshotFileName,
-            sessionId = sessionId,
-            screenshotBytes = screenshotBytes,
-          )
-          if (logResult.status.value != 200) {
-            println("Error while posting agent log: ${logResult.status.value}")
-          }
-        } else {
-          writeScreenshotToDisk(sessionId, screenshotFileName, screenshotBytes)
-        }
-      }
-      screenshotFileName
-    }
+    trailblazeLogger.setScreenStateLogger(screenStateLogger)
     trailblazeLogger.setLogListener { log: TrailblazeLog ->
       val sessionId = trailblazeLogger.getCurrentSessionId()
       // Send Log
@@ -123,5 +112,30 @@ abstract class TrailblazeLoggingRule(
   init {
     // Ensure that logging has been subscribed to immediately
     subscribeToLoggingEventsAndSendToServer()
+  }
+}
+
+private class ServerScreenStateLogger(
+  val isServerAvailable: Boolean,
+  val trailblazeLogServerClient: TrailblazeLogServerClient,
+  val writeScreenshotToDisk: ((screenshot: TrailblazeScreenStateLog) -> Unit) = { _ -> },
+) : ScreenStateLogger {
+  override fun logScreenState(screenState: TrailblazeScreenStateLog): String {
+    // Send Log
+    return runBlocking(Dispatchers.IO) {
+      if (isServerAvailable) {
+        val logResult = trailblazeLogServerClient.postScreenshot(
+          screenshotFilename = screenState.fileName,
+          sessionId = screenState.sessionId,
+          screenshotBytes = screenState.screenState.screenshotBytes ?: ByteArray(0),
+        )
+        if (logResult.status.value != 200) {
+          println("Error while posting agent log: ${logResult.status.value}")
+        }
+      } else {
+        writeScreenshotToDisk(screenState)
+      }
+      screenState.fileName
+    }
   }
 }

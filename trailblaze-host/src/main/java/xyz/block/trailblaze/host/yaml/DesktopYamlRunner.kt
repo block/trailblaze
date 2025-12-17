@@ -7,6 +7,8 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.host.ios.IosHostUtils
 import xyz.block.trailblaze.llm.RunYamlRequest
+import xyz.block.trailblaze.llm.RunYamlResponse
+import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRpcClient
 import xyz.block.trailblaze.model.DesktopAppRunYamlParams
 import xyz.block.trailblaze.model.DeviceConnectionStatus
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
@@ -33,7 +35,7 @@ class DesktopYamlRunner(
   suspend fun runYaml(desktopRunYamlParams: DesktopAppRunYamlParams) {
     runYaml(
       targetTestApp = desktopRunYamlParams.targetTestApp,
-      device = desktopRunYamlParams.device,
+      connectedTrailblazeDevice = desktopRunYamlParams.device,
       forceStopTargetApp = desktopRunYamlParams.forceStopTargetApp,
       runYamlRequest = desktopRunYamlParams.runYamlRequest,
       onProgressMessage = desktopRunYamlParams.onProgressMessage,
@@ -50,7 +52,7 @@ class DesktopYamlRunner(
    * don't need the composable wrapper.
    */
   suspend fun runYaml(
-    device: TrailblazeConnectedDeviceSummary,
+    connectedTrailblazeDevice: TrailblazeConnectedDeviceSummary,
     forceStopTargetApp: Boolean,
     targetTestApp: TrailblazeHostAppTarget?,
     runYamlRequest: RunYamlRequest,
@@ -60,20 +62,20 @@ class DesktopYamlRunner(
   ) {
     withContext(Dispatchers.IO) {
       // Wrap progress message callback to add device prefix
-      val shortenedDescription = shortenDeviceDescription(device.description)
+      val shortenedDescription = shortenDeviceDescription(connectedTrailblazeDevice.description)
       val devicePrefix = "[$shortenedDescription]"
       val prefixedProgressMessage: (String) -> Unit = { message ->
         onProgressMessage("$devicePrefix $message")
       }
 
       if (forceStopTargetApp) {
-        val possibleAppIds = targetTestApp?.getPossibleAppIdsForPlatform(device.platform)
+        val possibleAppIds = targetTestApp?.getPossibleAppIdsForPlatform(connectedTrailblazeDevice.platform)
         if (!possibleAppIds.isNullOrEmpty()) {
-          when (device.platform) {
+          when (connectedTrailblazeDevice.platform) {
             TrailblazeDevicePlatform.ANDROID -> {
               possibleAppIds.forEach { possibleAppId ->
                 AndroidHostAdbUtils.forceStopApp(
-                  deviceId = device.instanceId,
+                  deviceId = connectedTrailblazeDevice.trailblazeDeviceId,
                   appId = possibleAppId,
                 )
               }
@@ -82,7 +84,7 @@ class DesktopYamlRunner(
             TrailblazeDevicePlatform.IOS -> {
               possibleAppIds.forEach { possibleAppId ->
                 IosHostUtils.killAppOnSimulator(
-                  deviceId = device.instanceId,
+                  deviceId = connectedTrailblazeDevice.instanceId,
                   appId = possibleAppId,
                 )
               }
@@ -95,19 +97,26 @@ class DesktopYamlRunner(
 
       try {
         prefixedProgressMessage(
-          "Starting YAML test execution with driver ${device.trailblazeDriverType}",
+          "Starting YAML test execution with driver ${connectedTrailblazeDevice.trailblazeDriverType}",
         )
 
-        when (device.trailblazeDriverType) {
+        when (connectedTrailblazeDevice.trailblazeDriverType) {
           TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION -> {
             val trailblazeOnDeviceInstrumentationTarget = targetTestApp?.getTrailblazeOnDeviceInstrumentationTarget()
               ?: trailblazeHostAppTarget.getTrailblazeOnDeviceInstrumentationTarget()
-            HostAndroidDeviceConnectUtils.uninstallAllAndroidInstrumentationProcesses(
+            HostAndroidDeviceConnectUtils.forceStopAllAndroidInstrumentationProcesses(
               trailblazeOnDeviceInstrumentationTargetTestApps = setOf(trailblazeOnDeviceInstrumentationTarget),
-              deviceId = device.instanceId,
+              deviceId = connectedTrailblazeDevice.trailblazeDeviceId,
             )
+
+            val onDeviceRpc = OnDeviceRpcClient(
+              trailblazeDeviceId = connectedTrailblazeDevice.trailblazeDeviceId,
+              sendProgressMessage = prefixedProgressMessage
+            )
+
             runYamlOnDevice(
-              device = device,
+              onDeviceRpc = onDeviceRpc,
+              trailblazeConnectedDevice = connectedTrailblazeDevice,
               trailblazeOnDeviceInstrumentationTarget = trailblazeOnDeviceInstrumentationTarget,
               runYamlRequest = runYamlRequest,
               onProgressMessage = prefixedProgressMessage,
@@ -120,7 +129,7 @@ class DesktopYamlRunner(
             onRunHostYaml(
               RunOnHostParams(
                 runYamlRequest = runYamlRequest,
-                device = device,
+                device = connectedTrailblazeDevice,
                 onProgressMessage = prefixedProgressMessage,
                 forceStopTargetApp = forceStopTargetApp,
                 desktopYamlRunnerParams = DesktopYamlRunnerParams(
@@ -130,8 +139,8 @@ class DesktopYamlRunner(
               ),
             )
             onConnectionStatus(
-              DeviceConnectionStatus.TrailblazeInstrumentationRunning(
-                deviceId = device.instanceId,
+              DeviceConnectionStatus.WithTargetDevice.TrailblazeInstrumentationRunning(
+                trailblazeDeviceId = connectedTrailblazeDevice.trailblazeDeviceId,
               ),
             )
           }
@@ -140,9 +149,8 @@ class DesktopYamlRunner(
         withContext(Dispatchers.Default) {
           prefixedProgressMessage("Error: ${e.message}")
           onConnectionStatus(
-            DeviceConnectionStatus.ConnectionFailure(
+            DeviceConnectionStatus.DeviceConnectionError.ConnectionFailure(
               errorMessage = e.message ?: "Unknown error",
-              deviceId = device.instanceId,
             ),
           )
         }
@@ -154,7 +162,8 @@ class DesktopYamlRunner(
    * Executes YAML test on a device using instrumentation.
    */
   private suspend fun runYamlOnDevice(
-    device: TrailblazeConnectedDeviceSummary,
+    onDeviceRpc: OnDeviceRpcClient,
+    trailblazeConnectedDevice: TrailblazeConnectedDeviceSummary,
     trailblazeOnDeviceInstrumentationTarget: TrailblazeOnDeviceInstrumentationTarget,
     runYamlRequest: RunYamlRequest,
     onConnectionStatus: (DeviceConnectionStatus) -> Unit,
@@ -165,17 +174,23 @@ class DesktopYamlRunner(
       val additionalInstrumentationArgs = additionalInstrumentationArgs()
       val status = HostAndroidDeviceConnectUtils.connectToInstrumentationAndInstallAppIfNotAvailable(
         sendProgressMessage = onProgressMessage,
-        deviceId = device.instanceId,
+        deviceId = trailblazeConnectedDevice.trailblazeDeviceId,
         trailblazeOnDeviceInstrumentationTarget = trailblazeOnDeviceInstrumentationTarget,
         additionalInstrumentationArgs = additionalInstrumentationArgs.orEmpty(),
       )
 
       withContext(Dispatchers.Default) {
         onConnectionStatus(status)
-        HostAndroidDeviceConnectUtils.sentRequestStartTestWithYaml(
-          runYamlRequest,
+        onDeviceRpc.verifyServerIsRunning()
+        onDeviceRpc.rpcCall(
+          request = runYamlRequest,
+          onSuccess = { response: RunYamlResponse ->
+            onProgressMessage("YAML test execution started: ${response.message} (Session: ${response.sessionId})")
+          },
+          onFailure = { failure ->
+            onProgressMessage("Failed to start YAML execution: ${failure.message}")
+          }
         )
-        onProgressMessage("YAML test execution request sent to the ${device.platform} device.")
       }
     }
   }

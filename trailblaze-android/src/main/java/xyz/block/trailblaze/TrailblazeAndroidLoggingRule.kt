@@ -9,6 +9,7 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
+import xyz.block.trailblaze.logs.client.TrailblazeScreenStateLog
 import xyz.block.trailblaze.rules.TrailblazeLoggingRule
 
 class TrailblazeAndroidLoggingRule(
@@ -29,12 +30,12 @@ class TrailblazeAndroidLoggingRule(
       println("Error writing log to disk: ${e.message}")
     }
   },
-  writeScreenshotToDisk = { sessionId: String, fileName: String, bytes: ByteArray ->
+  writeScreenshotToDisk = { screenshot: TrailblazeScreenStateLog ->
     try {
       FileReadWriteUtil.writeToDownloadsFile(
         context = InstrumentationRegistry.getInstrumentation().context,
-        fileName = fileName,
-        contentBytes = bytes,
+        fileName = screenshot.fileName,
+        contentBytes = screenshot.screenState.screenshotBytes!!,
         directory = LOGS_DIR,
       )
     } catch (e: Exception) {

@@ -11,13 +11,16 @@ import androidx.compose.ui.unit.dp
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.ui.TrailblazeSettingsRepo
 import xyz.block.trailblaze.ui.composables.DeviceConfigurationContent
+import xyz.block.trailblaze.ui.model.LocalNavController
+import xyz.block.trailblaze.ui.model.TrailblazeRoute
+import xyz.block.trailblaze.ui.model.navigateToRoute
 
 @Composable
 fun DevicesTabComposable(
   deviceManager: TrailblazeDeviceManager,
   trailblazeSavedSettingsRepo: TrailblazeSettingsRepo,
-  onNavigateToSessions: (() -> Unit)? = null,
 ) {
+  val navController = LocalNavController.current
   val serverState by trailblazeSavedSettingsRepo.serverStateFlow.collectAsState()
 
   Column(
@@ -38,8 +41,8 @@ fun DevicesTabComposable(
             appConfig = serverState.appConfig.copy(currentSessionId = sessionId)
           )
         }
-        // Switch to Sessions tab if callback is provided
-        onNavigateToSessions?.invoke()
+        // Switch to Sessions tab using navigation
+        navController.navigateToRoute(TrailblazeRoute.Sessions)
       }
     )
   }

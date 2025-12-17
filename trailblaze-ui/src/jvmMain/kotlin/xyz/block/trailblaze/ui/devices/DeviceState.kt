@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.ui.devices
 
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
+import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.session.TrailblazeSessionManager
 
 data class DeviceState(
@@ -9,7 +10,7 @@ data class DeviceState(
   val isLoading: Boolean = false,
   val error: String? = null,
     // Map of device instance ID to session manager
-  val sessionManagersByDevice: Map<String, TrailblazeSessionManager> = emptyMap(),
+  val sessionManagersByDevice: Map<TrailblazeDeviceId, TrailblazeSessionManager> = emptyMap(),
     // Map of device instance ID to active session info
-  val activeSessionsByDevice: Map<String, DeviceSessionInfo> = emptyMap(),
-  )
+  val activeSessionsByDevice: Map<TrailblazeDeviceId, DeviceSessionInfo> = emptyMap(),
+)

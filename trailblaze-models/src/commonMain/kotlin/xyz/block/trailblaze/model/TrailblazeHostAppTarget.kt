@@ -18,6 +18,17 @@ abstract class TrailblazeHostAppTarget(
   }.toSet()
 
   protected abstract fun internalGetAndroidOnDeviceTarget(): TrailblazeOnDeviceInstrumentationTarget?
+
+  /**
+   * We're provided with the original iOS Driver from Maestro
+   * Then we are instantiating our custom Square Driver, wrapped around the original
+   *
+   * @param originalIosDriver is actually of type "IOSDriver" and is provided by Maestro.
+   *   NOTE: It is typed as [Any] because it's in KMP code and Maestro is JVM Only.
+   * @return Return the original [originalIosDriver] or your custom "IOSDriver"
+   */
+  open fun getCustomIosDriverFactory(originalIosDriver: Any): Any = originalIosDriver
+
   fun getTrailblazeOnDeviceInstrumentationTarget(): TrailblazeOnDeviceInstrumentationTarget = internalGetAndroidOnDeviceTarget() ?: TrailblazeOnDeviceInstrumentationTarget.DEFAULT_ANDROID_ON_DEVICE
 
   /**
@@ -43,7 +54,6 @@ abstract class TrailblazeHostAppTarget(
     val androidTarget = getTrailblazeOnDeviceInstrumentationTarget()
     appendLine("• Test App ID: ${androidTarget.testAppId}")
     appendLine("• Test Class: ${androidTarget.fqTestName}")
-    appendLine("• Gradle Command: ${androidTarget.gradleInstallAndroidTestCommand}")
   }
 
   data object DefaultTrailblazeHostAppTarget : TrailblazeHostAppTarget(

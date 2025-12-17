@@ -53,7 +53,7 @@ class LoggingDriver(
         block()
       }
     }
-    val screenshotFilename = screenState.screenshotBytes?.let { trailblazeLogger.logScreenshot(it) }
+    val screenshotFilename = screenState.screenshotBytes?.let { trailblazeLogger.logScreenState(screenState) }
     trailblazeLogger.log(
       TrailblazeLog.MaestroDriverLog(
         viewHierarchy = screenState.viewHierarchy,

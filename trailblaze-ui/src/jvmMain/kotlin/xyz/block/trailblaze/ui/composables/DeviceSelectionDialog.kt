@@ -156,7 +156,7 @@ fun DeviceConfigurationContent(
         availableDevices.forEach { device ->
           val isAppInstalled = device.getAppIdIfInstalled(selectedTargetApp) != null
           val isDeviceEnabled = selectedTargetApp == null || isAppInstalled
-          val activeSession = activeSessionsByDevice[device.instanceId]
+          val activeSession = activeSessionsByDevice[device.trailblazeDeviceId]
           val hasActiveSession = activeSession != null
 
           SingleDeviceListItem(

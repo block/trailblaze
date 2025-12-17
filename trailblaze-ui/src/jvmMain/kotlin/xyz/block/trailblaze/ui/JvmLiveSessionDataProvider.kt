@@ -6,14 +6,14 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.datetime.Clock
+import xyz.block.trailblaze.devices.TrailblazeDevicePort
+import xyz.block.trailblaze.devices.TrailblazeDevicePort.getDeviceSpecificPort
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.http.TrailblazeHttpClientFactory
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.report.utils.LogsRepo
-import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.ui.tabs.session.LiveSessionDataProvider
 import xyz.block.trailblaze.ui.tabs.session.SessionListListener
 import xyz.block.trailblaze.ui.tabs.session.TrailblazeSessionListener
@@ -171,23 +171,22 @@ class JvmLiveSessionDataProvider(
     return try {
       // Get logs to check session status
       val logs = logsRepo.getLogsForSession(sessionId)
-      val latestStatus = logs
+      val sessionStartedLog: SessionStatus.Started = logs
         .filterIsInstance<TrailblazeLog.TrailblazeSessionStatusChangeLog>()
-        .lastOrNull()?.sessionStatus
-
-      if (latestStatus !is SessionStatus.Started) {
-        return false
-      }
+        .filter { it.sessionStatus is SessionStatus.Started }
+        .map { it.sessionStatus as SessionStatus.Started }
+        .firstOrNull() ?: return false
 
       // Check if this is an on-device session
-      val driverType = latestStatus.trailblazeDeviceInfo?.trailblazeDriverType
+      val driverType = sessionStartedLog.trailblazeDeviceInfo.trailblazeDriverType
       val isOnDevice = driverType == TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION
 
       if (isOnDevice) {
         // For on-device tests, send cancel request to the device's RPC server
         withContext(Dispatchers.IO) {
           try {
-            val devicePort = 52526 // TODO: Get from session metadata
+            val devicePort = sessionStartedLog.trailblazeDeviceId?.getDeviceSpecificPort()
+              ?: TrailblazeDevicePort.DEFAULT_ADB_REVERSE_PORT
             val cancelUrl = "http://localhost:$devicePort/cancel"
             val httpClient = TrailblazeHttpClientFactory.createDefaultHttpClient(10L)
             val response = httpClient.post(cancelUrl)
@@ -205,7 +204,7 @@ class JvmLiveSessionDataProvider(
             .firstOrNull { it.sessionId == sessionId }
 
           if (deviceSessionInfo != null) {
-            manager.cancelSession(deviceSessionInfo.deviceInstanceId)
+            manager.cancelSession(deviceSessionInfo.trailblazeDeviceId)
           } else {
             return false
           }

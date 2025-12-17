@@ -1,10 +1,9 @@
 package xyz.block.trailblaze.desktop
 
-import maestro.device.Device
-import maestro.device.Platform
+import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
-import xyz.block.trailblaze.host.ios.IosHostUtils
+import xyz.block.trailblaze.host.ios.MobileDeviceUtils
 import xyz.block.trailblaze.llm.TrailblazeLlmModelList
 import xyz.block.trailblaze.llm.providers.AnthropicTrailblazeLlmModelList
 import xyz.block.trailblaze.llm.providers.GoogleTrailblazeLlmModelList
@@ -18,7 +17,6 @@ import xyz.block.trailblaze.ui.TrailblazeSettingsRepo
 import xyz.block.trailblaze.ui.models.AppIconProvider
 import xyz.block.trailblaze.ui.models.TrailblazeServerState
 import xyz.block.trailblaze.ui.recordings.RecordedTrailsRepoJvm
-import xyz.block.trailblaze.util.AndroidHostAdbUtils
 import java.io.File
 
 /**
@@ -68,23 +66,12 @@ class OpenSourceTrailblazeDesktopAppConfig : TrailblazeDesktopAppConfig(
     return modelLists
   }
 
-
   override val availableAppTargets: Set<TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget> =
     setOf(TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget)
   override val appIconProvider: AppIconProvider = AppIconProvider.DefaultAppIconProvider
   override val defaultAppTarget: TrailblazeHostAppTarget = TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget
-  override fun getInstalledAppIds(connectedMaestroDevice: Device.Connected): Set<String> {
-    return when (connectedMaestroDevice.platform) {
-      Platform.ANDROID -> AndroidHostAdbUtils.listInstalledPackages(
-        deviceId = connectedMaestroDevice.instanceId
-      )
-
-      Platform.IOS -> IosHostUtils.getInstalledAppIds(
-        deviceId = connectedMaestroDevice.instanceId
-      )
-
-      Platform.WEB -> emptyList()
-    }.toSet()
+  override fun getInstalledAppIds(trailblazeDeviceId: TrailblazeDeviceId): Set<String> {
+    return MobileDeviceUtils.getInstalledAppIds(trailblazeDeviceId)
   }
 
   companion object {

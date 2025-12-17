@@ -100,8 +100,7 @@ class AssertionLogger(
           }
         }
 
-        val screenshotFilename =
-          screenState.screenshotBytes?.let { trailblazeLogger.logScreenshot(it) }
+        val screenshotFilename = trailblazeLogger.logScreenState(screenState)
         trailblazeLogger.log(
           TrailblazeLog.MaestroDriverLog(
             viewHierarchy = screenState.viewHierarchy,

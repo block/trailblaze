@@ -349,11 +349,12 @@ abstract class ViewHierarchyFilter(
 
     /**
      * Collects all elements with meaningful content for iOS platform.
-     * Includes elements with text, hint text, accessibility text, clickable elements, resource IDs, or focusable elements.
+     * Note: We don't filter by `enabled` here because:
+     * 1. The z-order filtering in IosViewHierarchyFilter already determines visibility
+     * 2. Disabled labels (like prices/times) are still visible to users and should be annotated
      */
     fun ViewHierarchyTreeNode.collectIOSElements(): List<ViewHierarchyTreeNode> = this.aggregate().filter { node ->
-      node.enabled &&
-        node.bounds != null &&
+      node.bounds != null &&
         (
           // Include nodes with text content
           !node.text.isNullOrBlank() ||

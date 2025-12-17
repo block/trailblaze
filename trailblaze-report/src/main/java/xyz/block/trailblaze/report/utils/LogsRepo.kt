@@ -8,6 +8,7 @@ import kotlinx.datetime.Clock
 import xyz.block.trailblaze.logs.TrailblazeLogsDataProvider
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
+import xyz.block.trailblaze.logs.client.TrailblazeScreenStateLog
 import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.report.utils.TrailblazeYamlSessionRecording.generateRecordedYaml
@@ -456,11 +457,13 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
     return jsonLogFilename
   }
 
-  fun saveScreenshotToDisk(sessionId: String, fileName: String, bytes: ByteArray) {
-    val sessionDir = getSessionDir(sessionId)
-    val screenshotFile = File(sessionDir, fileName)
-    println("Writing Screenshot to ${screenshotFile.absolutePath}")
-    screenshotFile.writeBytes(bytes)
+  fun saveScreenshotToDisk(screenshot: TrailblazeScreenStateLog) {
+    screenshot.screenState.screenshotBytes?.let { bytes ->
+      val sessionDir = getSessionDir(screenshot.sessionId)
+      val screenshotFile = File(sessionDir, screenshot.fileName)
+      println("Writing Screenshot to ${screenshotFile.absolutePath}")
+      screenshotFile.writeBytes(bytes)
+    }
   }
 
   /**

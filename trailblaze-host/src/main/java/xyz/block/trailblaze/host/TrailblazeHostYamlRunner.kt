@@ -5,6 +5,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.exception.TrailblazeSessionCancelledException
 import xyz.block.trailblaze.host.ios.IosHostUtils
@@ -19,17 +20,17 @@ import xyz.block.trailblaze.util.HostAndroidDeviceConnectUtils
 
 object TrailblazeHostYamlRunner {
   // Store jobs per device instance ID to support multiple concurrent device tests
-  private val jobs: MutableMap<String, Job> = mutableMapOf()
+  private val jobs: MutableMap<TrailblazeDeviceId, Job> = mutableMapOf()
 
   /**
    * Cancels the running test for a specific device.
    * @return true if a job was found and cancelled, false otherwise
    */
-  fun cancelSession(deviceInstanceId: String): Boolean {
-    val job = jobs[deviceInstanceId]
+  fun cancelSession(trailblazeDeviceId: TrailblazeDeviceId): Boolean {
+    val job = jobs[trailblazeDeviceId]
     return if (job?.isActive == true) {
       job.cancel()
-      jobs.remove(deviceInstanceId)
+      jobs.remove(trailblazeDeviceId)
       true
     } else {
       false
@@ -48,19 +49,20 @@ object TrailblazeHostYamlRunner {
     deviceManager.cancelSessionCallback = ::cancelSession
 
     val device = runOnHostParams.device
-    val deviceId = device.instanceId
+    val trailblazeDeviceId = device.trailblazeDeviceId
+    val deviceInstanceId = trailblazeDeviceId.instanceId
     val onProgressMessage = runOnHostParams.onProgressMessage
 
     if (runOnHostParams.trailblazeDevicePlatform == TrailblazeDevicePlatform.ANDROID) {
-      HostAndroidDeviceConnectUtils.uninstallAllAndroidInstrumentationProcesses(
+      HostAndroidDeviceConnectUtils.forceStopAllAndroidInstrumentationProcesses(
         trailblazeOnDeviceInstrumentationTargetTestApps = deviceManager.availableAppTargets.map { it.getTrailblazeOnDeviceInstrumentationTarget() }
           .toSet(),
-        deviceId = deviceId,
+        deviceId = trailblazeDeviceId,
       )
     }
 
     // Get session manager from device manager
-    val sessionManager = deviceManager.getOrCreateSessionManager(deviceId)
+    val sessionManager = deviceManager.getOrCreateSessionManager(trailblazeDeviceId)
 
     onProgressMessage("Initializing ${device.trailblazeDriverType} test runner...")
 
@@ -74,6 +76,7 @@ object TrailblazeHostYamlRunner {
       trailblazeLlmModel = runOnHostParams.runYamlRequest.trailblazeLlmModel,
       sessionManager = sessionManager,
       config = runOnHostParams.runYamlRequest.config,
+      appTarget = runOnHostParams.targetTestApp,
     ) {
       override fun ensureTargetAppIsStopped() {
         runOnHostParams.targetTestApp
@@ -84,12 +87,12 @@ object TrailblazeHostYamlRunner {
               TrailblazeDevicePlatform.ANDROID -> {
                 AndroidHostAdbUtils
                   .listInstalledPackages(
-                    deviceId = deviceId,
+                    deviceId = trailblazeDeviceId,
                   )
                   .filter { installedAppId -> possibleAppIds.any { installedAppId == it } }
                   .forEach { appId ->
                     AndroidHostAdbUtils.forceStopApp(
-                      deviceId = deviceId,
+                      deviceId = trailblazeDeviceId,
                       appId = appId,
                     )
                   }
@@ -98,7 +101,7 @@ object TrailblazeHostYamlRunner {
               TrailblazeDevicePlatform.IOS -> {
                 possibleAppIds.forEach { appId ->
                   IosHostUtils.killAppOnSimulator(
-                    deviceId = deviceId,
+                    deviceId = trailblazeDeviceId.instanceId,
                     appId = appId,
                   )
                 }
@@ -116,7 +119,7 @@ object TrailblazeHostYamlRunner {
     val trailblazeLogger = hostTbRunner.loggingRule.trailblazeLogger
 
     // Cancel any existing job for this device
-    val existingJob = jobs[deviceId]
+    val existingJob = jobs[trailblazeDeviceId]
     if (existingJob?.isActive == true) {
       // Signal cancellation through the session manager so the agent loop can detect it
       sessionManager.cancelCurrentSession()
@@ -133,7 +136,10 @@ object TrailblazeHostYamlRunner {
       trailblazeLogger.startSession(testName)
 
       // Start session via device manager (handles session manager + state updates)
-      deviceManager.startSession(deviceId, trailblazeLogger.getCurrentSessionId())
+      deviceManager.trackActiveSession(
+        trailblazeDeviceId = trailblazeDeviceId,
+        sessionId = trailblazeLogger.getCurrentSessionId()
+      )
 
       onProgressMessage("Connecting to ${device.platform} device...")
 
@@ -143,6 +149,7 @@ object TrailblazeHostYamlRunner {
           yaml = runOnHostParams.runYamlRequest.yaml,
           forceStopApp = runOnHostParams.forceStopTargetApp,
           trailFilePath = runOnHostParams.runYamlRequest.trailFilePath,
+          trailblazeDeviceId = trailblazeDeviceId,
         )
         onProgressMessage("Test execution completed successfully")
         trailblazeLogger.sendSessionEndLog(sessionManager, isSuccess = true)
@@ -172,13 +179,13 @@ object TrailblazeHostYamlRunner {
         trailblazeLogger.sendSessionEndLog(sessionManager, isSuccess = false, exception = e)
       } finally {
         // End session via device manager (handles session manager + state updates)
-        deviceManager.endSession(deviceId)
+        deviceManager.endSession(trailblazeDeviceId)
         // Clean up this job from the map
-        jobs.remove(deviceId)
+        jobs.remove(trailblazeDeviceId)
       }
     }
 
     // Store the new job
-    jobs[deviceId] = newJob
+    jobs[trailblazeDeviceId] = newJob
   }
 }

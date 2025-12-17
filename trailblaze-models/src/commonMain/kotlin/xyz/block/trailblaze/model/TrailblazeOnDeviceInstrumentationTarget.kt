@@ -7,14 +7,17 @@ package xyz.block.trailblaze.model
 data class TrailblazeOnDeviceInstrumentationTarget(
   val testAppId: String,
   val fqTestName: String,
-  val gradleInstallAndroidTestCommand: String,
 ) {
   /** Empty Companion object to allow extension values */
   companion object {
     val DEFAULT_ANDROID_ON_DEVICE = TrailblazeOnDeviceInstrumentationTarget(
       testAppId = "xyz.block.trailblaze.runner",
       fqTestName = "xyz.block.trailblaze.AndroidStandaloneServerTest",
-      gradleInstallAndroidTestCommand = ":trailblaze-android-ondevice-mcp:installDebugAndroidTest",
+    )
+
+    val BlockOnDeviceInstrumentationTarget = TrailblazeOnDeviceInstrumentationTarget(
+      testAppId = "xyz.block.trailblaze.runner",
+      fqTestName = "xyz.block.trailblaze.block.BlockAndroidStandaloneServerTest",
     )
   }
 }

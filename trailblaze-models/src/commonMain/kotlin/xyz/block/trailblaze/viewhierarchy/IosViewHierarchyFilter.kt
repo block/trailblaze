@@ -7,6 +7,12 @@ import xyz.block.trailblaze.viewhierarchy.ViewHierarchyFilter.Companion.isIntera
  * iOS-specific implementation of ViewHierarchyFilter.
  * Uses z-order based filtering: an element is only visible if tapping its center point
  * would actually interact with that element (not something on top of it).
+ *
+ * Key filtering behaviors:
+ * - Sibling elements with higher z-index block elements behind them
+ * - Opaque overlays (large, disabled UIViews) block content when UITextEffectsWindow exists
+ * - Elements in UITextEffectsWindow are accessibility mirrors and are never blocked
+ * - System windows don't block main app content
  */
 class IosViewHierarchyFilter(
   screenWidth: Int,
@@ -72,13 +78,58 @@ class IosViewHierarchyFilter(
     }
 
     // Helper function to check if an element is a scroll bar
-    fun isScrollBar(elem: ViewHierarchyTreeNode): Boolean = elem.accessibilityText?.contains("scroll bar", ignoreCase = true) == true
+    fun isScrollBar(elem: ViewHierarchyTreeNode): Boolean =
+      elem.accessibilityText?.contains("scroll bar", ignoreCase = true) == true
+
+    // Helper function to check if elem1 is a descendant of elem2
+    fun isDescendant(
+      potentialDescendant: ViewHierarchyTreeNode,
+      potentialAncestor: ViewHierarchyTreeNode,
+    ): Boolean = isAncestor(potentialAncestor, potentialDescendant)
+
+    // Helper function to check if an element is in a system window (keyboard, text effects, etc.)
+    // These windows shouldn't block main app content
+    fun isInSystemWindow(elem: ViewHierarchyTreeNode): Boolean {
+      val systemWindowClasses = setOf(
+        "UITextEffectsWindow",
+        "UIRemoteKeyboardWindow",
+        "UIEditingOverlayGestureView",
+      )
+      if (elem.className in systemWindowClasses) return true
+      var current: ViewHierarchyTreeNode? = elem
+      while (current != null) {
+        if (current.className in systemWindowClasses) return true
+        current = childToParent[current.nodeId]
+      }
+      return false
+    }
+
+    // Check if there's a UITextEffectsWindow in the hierarchy (provides accessibility mirrors)
+    val hasAccessibilityWindow = inBoundsElements.any { it.className == "UITextEffectsWindow" }
+
+    // Helper function to check if an element is an opaque overlay
+    // These are large, childless, disabled container views used as modal backgrounds
+    // Only consider them if there's an accessibility window to provide mirrors for blocked elements
+    fun isOpaqueOverlay(elem: ViewHierarchyTreeNode): Boolean {
+      if (!hasAccessibilityWindow) return false
+      if (elem.children.isNotEmpty()) return false
+      if (elem.enabled != false) return false
+      val className = elem.className ?: return false
+      if (className != "UIView") return false
+      val bounds = elem.bounds ?: return false
+      val minWidth = screenWidth * 0.8
+      val minHeight = screenHeight * 0.5
+      return bounds.width >= minWidth && bounds.height >= minHeight
+    }
+
+    val passed = mutableListOf<ViewHierarchyTreeNode>()
 
     // For each element, check if tapping its center point would actually hit it
-    return inBoundsElements.filter { elem ->
-      val bounds = elem.bounds ?: return@filter false
+    for (elem in inBoundsElements) {
+      val bounds = elem.bounds ?: continue
       val centerX = bounds.centerX
       val centerY = bounds.centerY
+      val elemZIndex = elementZIndices[elem.nodeId] ?: 0
 
       // Find all elements that contain this center point
       val elementsAtCenterPoint = inBoundsElements.filter { other ->
@@ -89,18 +140,36 @@ class IosViewHierarchyFilter(
           centerY <= otherBounds.y2
       }
 
-      // Filter out ancestors - parents shouldn't block their children
-      // Also filter out scroll bars - they shouldn't block other elements
+      // Filter out ancestors and scroll bars - they shouldn't block their children
       val nonAncestorElementsAtCenter = elementsAtCenterPoint.filter { other ->
         !isAncestor(other, elem) && !isScrollBar(other)
       }
 
-      // The element that would receive the tap is the one with:
-      // 1. Is interactable (not just a container)
-      // 2. Smallest size (most specific, not a container)
-      // 3. Highest z-index (latest in tree traversal)
-      val topElement = nonAncestorElementsAtCenter
-        .filter { it.isInteractable() } // Only consider interactable elements
+      // Check if there's a sibling element with higher z-index that would block this element
+      // Elements in system windows (UITextEffectsWindow) are accessibility mirrors
+      // and should always be visible - they can't be blocked by overlays
+      val elemInSystemWindow = isInSystemWindow(elem)
+
+      val blockingSibling = nonAncestorElementsAtCenter.find { other ->
+        val otherZIndex = elementZIndices[other.nodeId] ?: 0
+        otherZIndex > elemZIndex &&
+          !isDescendant(other, elem) &&
+          (other.isInteractable() || (!elemInSystemWindow && isOpaqueOverlay(other))) &&
+          !isInSystemWindow(other)
+      }
+
+      if (blockingSibling != null) {
+        continue
+      }
+
+      // Determine candidates for tap target selection (only descendants, siblings handled above)
+      val tapCandidates = nonAncestorElementsAtCenter.filter { other ->
+        other.nodeId == elem.nodeId || isDescendant(other, elem)
+      }
+
+      // The element that would receive the tap is the smallest interactable one
+      val topElement = tapCandidates
+        .filter { it.isInteractable() }
         .sortedWith(
           compareBy<ViewHierarchyTreeNode> {
             it.bounds?.let { b -> b.width * b.height } ?: Int.MAX_VALUE
@@ -110,8 +179,11 @@ class IosViewHierarchyFilter(
         .firstOrNull()
 
       // Element is visible if it would be the one to receive the tap
-      // If no interactable element at this point, keep this element (it might become interactable later)
-      topElement == null || topElement.nodeId == elem.nodeId
+      if (topElement == null || topElement.nodeId == elem.nodeId) {
+        passed.add(elem)
+      }
     }
+
+    return passed
   }
 }

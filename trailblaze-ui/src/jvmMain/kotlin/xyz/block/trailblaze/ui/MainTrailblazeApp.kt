@@ -18,6 +18,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -32,6 +33,12 @@ import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.WindowState
 import androidx.compose.ui.window.application
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
+import androidx.navigation.compose.rememberNavController
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -46,9 +53,11 @@ import xyz.block.trailblaze.logs.server.TrailblazeMcpServer
 import xyz.block.trailblaze.model.DesktopAppRunYamlParams
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.ui.composables.IconWithBadges
+import xyz.block.trailblaze.ui.model.LocalNavController
 import xyz.block.trailblaze.ui.model.NavigationTab
 import xyz.block.trailblaze.ui.model.TrailblazeAppTab
 import xyz.block.trailblaze.ui.model.TrailblazeRoute
+import xyz.block.trailblaze.ui.model.navigateToRoute
 import xyz.block.trailblaze.ui.models.TrailblazeServerState
 import xyz.block.trailblaze.ui.recordings.RecordedTrailsRepo
 import xyz.block.trailblaze.ui.tabs.devices.DevicesTabComposable
@@ -73,9 +82,9 @@ class MainTrailblazeApp(
 
   fun runTrailblazeApp(
     /**
-     * Custom tabs that need access to navigation - takes a route changer callback
+     * Custom tabs that can access navigation via LocalNavController.current
      */
-    customTabsWithNavigation: (routeChanger: (TrailblazeRoute) -> Unit) -> List<TrailblazeAppTab>,
+    customTabs: () -> List<TrailblazeAppTab>,
     availableModelLists: Set<TrailblazeLlmModelList>,
     currentTrailblazeLlmModelProvider: () -> TrailblazeLlmModel,
     deviceManager: TrailblazeDeviceManager,
@@ -125,142 +134,128 @@ class MainTrailblazeApp(
         title = "Trailblaze",
         alwaysOnTop = currentServerState.appConfig.alwaysOnTop,
       ) {
-        val settingsTab = TrailblazeAppTab(TrailblazeRoute.Settings, {
-          SettingsTabComposables.SettingsTab(
-            trailblazeSettingsRepo = trailblazeSavedSettingsRepo,
-            openLogsFolder = {
-              TrailblazeDesktopUtil.openInFileBrowser(logsRepo.logsDir)
-            },
-            openDesktopAppPreferencesFile = {
-              TrailblazeDesktopUtil.openInFileBrowser(trailblazeSavedSettingsRepo.settingsFile)
-            },
-            openGoose = {
-              TrailblazeDesktopUtil.openGoose()
-            },
-            additionalContent = {},
-            globalSettingsContent = globalSettingsContent,
-            environmentVariableProvider = { System.getenv(it) },
-            availableModelLists = availableModelLists,
-            customEnvVariableNames = customEnvVarNames,
-          )
-        })
+        // Create NavController for type-safe navigation
+        val navController = rememberNavController()
 
-        val sessionsTab = TrailblazeAppTab(
-          route = TrailblazeRoute.Sessions,
-        ) {
-          val serverState by trailblazeSavedSettingsRepo.serverStateFlow.collectAsState()
-          SessionsTabComposableJvm(
+        // Track sessions for badge display
+        var sessions by remember { mutableStateOf(emptyList<SessionInfo>()) }
+        val liveSessionDataProvider = remember(logsRepo, deviceManager) {
+          createLiveSessionDataProviderJvm(logsRepo, deviceManager)
+        }
+
+        // Poll for session updates every 2 seconds to update badges
+        LaunchedEffect(liveSessionDataProvider) {
+          while (isActive) {
+            withContext(Dispatchers.IO) {
+              try {
+                val sessionIds = liveSessionDataProvider.getSessionIds()
+                val loadedSessions = sessionIds.mapNotNull { sessionId ->
+                  liveSessionDataProvider.getSessionInfo(sessionId)
+                }
+                sessions = loadedSessions
+              } catch (e: Exception) {
+                e.printStackTrace()
+              }
+            }
+            delay(2000)
+          }
+        }
+
+        // Calculate session statistics for badges
+        val inProgressCount = sessions.count { it.latestStatus.inProgress }
+        val firstSessionStatus = sessions.firstOrNull()?.latestStatus
+
+        // Provide NavController to the entire composition tree for easy access
+        CompositionLocalProvider(LocalNavController provides navController) {
+          TrailblazeAppContent(
+            customTabs = customTabs,
+            sessions = sessions,
+            inProgressCount = inProgressCount,
+            firstSessionStatus = firstSessionStatus,
+            currentServerState = currentServerState,
+            trailblazeSavedSettingsRepo = trailblazeSavedSettingsRepo,
+            windowState = windowState,
             logsRepo = logsRepo,
-            serverState = serverState,
-            updateState = { newState: TrailblazeServerState ->
-              trailblazeSavedSettingsRepo.updateState { newState }
-            },
             deviceManager = deviceManager,
             recordedTrailsRepo = recordedTrailsRepo,
-          )
-        }
-
-        // Store a reference to the route changer to be used in tabs
-        var routeChanger: ((TrailblazeRoute) -> Unit)? by remember { mutableStateOf(null) }
-
-        val deviceTab = TrailblazeAppTab(TrailblazeRoute.Devices, {
-          DevicesTabComposable(
-            deviceManager = deviceManager,
-            trailblazeSavedSettingsRepo = trailblazeSavedSettingsRepo,
-            onNavigateToSessions = {
-              // Switch to Sessions tab when a session link is clicked
-              routeChanger?.invoke(TrailblazeRoute.Sessions)
-            }
-          )
-        })
-
-        val yamlTab = TrailblazeAppTab(
-          route = TrailblazeRoute.YamlRoute,
-        ) {
-          YamlTabComposable(
-            deviceManager = deviceManager,
-            trailblazeSettingsRepo = trailblazeSavedSettingsRepo,
             currentTrailblazeLlmModelProvider = currentTrailblazeLlmModelProvider,
             yamlRunner = yamlRunner,
-            additionalInstrumentationArgs = additionalInstrumentationArgs
+            additionalInstrumentationArgs = additionalInstrumentationArgs,
+            globalSettingsContent = globalSettingsContent,
+            availableModelLists = availableModelLists,
+            customEnvVarNames = customEnvVarNames,
           )
         }
+      }
+    }
+  }
 
-        TrailblazeTheme(themeMode = currentServerState.appConfig.themeMode) {
+  @Composable
+  private fun TrailblazeAppContent(
+    customTabs: () -> List<TrailblazeAppTab>,
+    sessions: List<SessionInfo>,
+    inProgressCount: Int,
+    firstSessionStatus: xyz.block.trailblaze.logs.model.SessionStatus?,
+    currentServerState: TrailblazeServerState,
+    trailblazeSavedSettingsRepo: TrailblazeSettingsRepo,
+    windowState: WindowState,
+    logsRepo: LogsRepo,
+    deviceManager: TrailblazeDeviceManager,
+    recordedTrailsRepo: RecordedTrailsRepo,
+    currentTrailblazeLlmModelProvider: () -> TrailblazeLlmModel,
+    yamlRunner: (DesktopAppRunYamlParams) -> Unit,
+    additionalInstrumentationArgs: (suspend () -> Map<String, String>),
+    globalSettingsContent: @Composable ColumnScope.(serverState: TrailblazeServerState) -> Unit,
+    availableModelLists: Set<TrailblazeLlmModelList>,
+    customEnvVarNames: List<String>,
+  ) {
+    val navController = LocalNavController.current
 
-          // Track sessions for badge display
-          var sessions by remember { mutableStateOf(emptyList<SessionInfo>()) }
-          val liveSessionDataProvider = remember(logsRepo, deviceManager) {
-            createLiveSessionDataProviderJvm(logsRepo, deviceManager)
-          }
+    // Custom tabs can now access navigation via LocalNavController.current
+    val customNavTabs = remember { customTabs() }
 
-          // Poll for session updates every 2 seconds to update badges
-          LaunchedEffect(liveSessionDataProvider) {
-            while (isActive) {
-              withContext(Dispatchers.IO) {
-                try {
-                  val sessionIds = liveSessionDataProvider.getSessionIds()
-                  val loadedSessions = sessionIds.mapNotNull { sessionId ->
-                    liveSessionDataProvider.getSessionInfo(sessionId)
-                  }
-                  sessions = loadedSessions
-                } catch (e: Exception) {
-                  e.printStackTrace()
-                }
-              }
-              delay(2000)
-            }
-          }
+    // Build final tab list with navigation tabs inserted after Sessions
+    val allRoutes = remember(customNavTabs) {
+      buildList {
+        add(TrailblazeRoute.Sessions)
+        addAll(customNavTabs.map { it.route })
+        add(TrailblazeRoute.Devices)
+        add(TrailblazeRoute.YamlRoute)
+        add(TrailblazeRoute.Settings)
+      }
+    }
 
-          // Calculate session statistics for badges
-          val inProgressCount = sessions.count { it.latestStatus.inProgress }
-          val firstSessionStatus = sessions.firstOrNull()?.latestStatus
-
-          var currentRoute by remember {
-            mutableStateOf(sessionsTab.route)
-          }
-
-          // Connect the route changer to the actual currentRoute state
-          routeChanger = { newRoute -> currentRoute = newRoute }
-
-          // Add navigation-enabled custom tabs now that routeChanger is set
-          val customNavTabs by remember {
-            mutableStateOf(customTabsWithNavigation(routeChanger!!))
-          }
-
-          // Build final tab list with navigation tabs inserted after Sessions
-          val allTabsWithNav = remember(customNavTabs) {
-            buildList {
-              add(sessionsTab)
-              addAll(customNavTabs)
-              add(deviceTab)
-              add(yamlTab)
-              add(settingsTab)
-            }
-          }
-
-          val navigationTabsWithNav = allTabsWithNav.map { tab: TrailblazeAppTab ->
-            val route: TrailblazeRoute = tab.route
-            NavigationTab(
-              route = route,
-              content = tab.content,
-              label = route.displayName,
-              icon = if (route == TrailblazeRoute.Sessions) {
-                {
-                  IconWithBadges(
-                    icon = route.icon, inProgressCount = inProgressCount,
-                    firstSessionStatus = firstSessionStatus
-                  )
-                }
-              } else {
-                route.icon
-              },
-              isEnabled = route.isEnabled,
+    val navigationTabsWithNav = allRoutes.map { route: TrailblazeRoute ->
+      NavigationTab(
+        route = route,
+        label = route.displayName,
+        icon = if (route == TrailblazeRoute.Sessions) {
+          {
+            IconWithBadges(
+              icon = route.icon, inProgressCount = inProgressCount,
+              firstSessionStatus = firstSessionStatus
             )
           }
+        } else {
+          route.icon
+        },
+        isEnabled = route.isEnabled,
+      )
+    }
 
+    TrailblazeTheme(themeMode = currentServerState.appConfig.themeMode) {
           var railExpanded by remember { mutableStateOf(false) }
           val snackbarHostState = remember { SnackbarHostState() }
+
+          // Get current route from nav controller
+          val navBackStackEntry by navController.currentBackStackEntryAsState()
+          val currentRouteString = navBackStackEntry?.destination?.route
+
+          // Helper to check if a tab is selected
+          fun isRouteSelected(tabRoute: TrailblazeRoute): Boolean {
+            // All routes use type-safe navigation, so we check against qualified name
+            return currentRouteString == tabRoute::class.qualifiedName
+          }
 
           // Save window state changes
           LaunchedEffect(windowState) {
@@ -299,13 +294,14 @@ class MainTrailblazeApp(
                   }
                   navigationTabsWithNav.forEach { tab ->
                     if (tab.isEnabled) {
-                      val selected = currentRoute == tab.route
+                      // Check if this tab's route matches the current route
+                      val selected = isRouteSelected(tab.route)
                       NavigationRailItem(
                         selected = selected,
                         onClick = {
                           // Special handling for Sessions tab: if already on Sessions and viewing a session detail,
                           // clicking Sessions again should go back to the list view
-                          if (tab.route == TrailblazeRoute.Sessions && currentRoute == TrailblazeRoute.Sessions) {
+                          if (tab.route == TrailblazeRoute.Sessions && selected) {
                             val serverState = trailblazeSavedSettingsRepo.serverStateFlow.value
                             if (serverState.appConfig.currentSessionId != null) {
                               // Clear the current session to go back to list
@@ -316,7 +312,7 @@ class MainTrailblazeApp(
                               }
                             }
                           } else {
-                            currentRoute = tab.route
+                            navController.navigateToRoute(tab.route)
                           }
                         },
                         icon = tab.icon,
@@ -331,13 +327,77 @@ class MainTrailblazeApp(
                     .fillMaxSize()
                     .padding(0.dp)
                 ) {
-                  navigationTabsWithNav.find { it.route == currentRoute }?.content?.invoke()
+                  // NavHost with type-safe navigation
+                  NavHost(
+                    navController = navController,
+                    startDestination = TrailblazeRoute.Sessions,
+                    enterTransition = { EnterTransition.None },
+                    exitTransition = { ExitTransition.None }
+                  ) {
+                    composable<TrailblazeRoute.Sessions> {
+                      val serverState by trailblazeSavedSettingsRepo.serverStateFlow.collectAsState()
+                      SessionsTabComposableJvm(
+                        logsRepo = logsRepo,
+                        serverState = serverState,
+                        updateState = { newState: TrailblazeServerState ->
+                          trailblazeSavedSettingsRepo.updateState { newState }
+                        },
+                        deviceManager = deviceManager,
+                        recordedTrailsRepo = recordedTrailsRepo,
+                      )
+                    }
+
+                    // Register custom tabs from external modules
+                    // Since external routes aren't known at compile time in the core framework,
+                    // we register them using a string-based route derived from their class name
+                    customNavTabs.forEach { customTab ->
+                      val routeString = customTab.route::class.qualifiedName ?: customTab.route.toString()
+                      composable(routeString) {
+                        customTab.content()
+                      }
+                    }
+
+                    composable<TrailblazeRoute.Devices> {
+                      DevicesTabComposable(
+                        deviceManager = deviceManager,
+                        trailblazeSavedSettingsRepo = trailblazeSavedSettingsRepo,
+                      )
+                    }
+
+                    composable<TrailblazeRoute.YamlRoute> {
+                      YamlTabComposable(
+                        deviceManager = deviceManager,
+                        trailblazeSettingsRepo = trailblazeSavedSettingsRepo,
+                        currentTrailblazeLlmModelProvider = currentTrailblazeLlmModelProvider,
+                        yamlRunner = yamlRunner,
+                        additionalInstrumentationArgs = additionalInstrumentationArgs
+                      )
+                    }
+
+                    composable<TrailblazeRoute.Settings> {
+                      SettingsTabComposables.SettingsTab(
+                        trailblazeSettingsRepo = trailblazeSavedSettingsRepo,
+                        openLogsFolder = {
+                          TrailblazeDesktopUtil.openInFileBrowser(logsRepo.logsDir)
+                        },
+                        openDesktopAppPreferencesFile = {
+                          TrailblazeDesktopUtil.openInFileBrowser(trailblazeSavedSettingsRepo.settingsFile)
+                        },
+                        openGoose = {
+                          TrailblazeDesktopUtil.openGoose()
+                        },
+                        additionalContent = {},
+                        globalSettingsContent = globalSettingsContent,
+                        environmentVariableProvider = { System.getenv(it) },
+                        availableModelLists = availableModelLists,
+                        customEnvVariableNames = customEnvVarNames,
+                      )
+                    }
+                  }
                 }
               }
             }
           }
         }
       }
-    }
-  }
 }

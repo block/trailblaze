@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.logs.model
 
 import kotlinx.serialization.Serializable
+import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.yaml.TrailConfig
 
@@ -18,6 +19,7 @@ sealed interface SessionStatus {
     val testMethodName: String,
     val testClassName: String,
     val trailblazeDeviceInfo: TrailblazeDeviceInfo,
+    val trailblazeDeviceId: TrailblazeDeviceId? = null,
     val rawYaml: String? = null,
   ) : SessionStatus
 

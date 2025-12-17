@@ -1,45 +1,39 @@
 package xyz.block.trailblaze.util
 
-import io.ktor.client.request.post
-import io.ktor.client.request.setBody
-import io.ktor.client.statement.bodyAsText
-import io.ktor.http.ContentType
-import io.ktor.http.contentType
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.serialization.json.Json
-import xyz.block.trailblaze.http.TrailblazeHttpClientFactory
-import xyz.block.trailblaze.llm.RunYamlRequest
+import kotlinx.coroutines.withContext
+import xyz.block.trailblaze.devices.TrailblazeDeviceId
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.devices.TrailblazeDevicePort
+import xyz.block.trailblaze.devices.TrailblazeDevicePort.getDeviceSpecificPort
 import xyz.block.trailblaze.model.DeviceConnectionStatus
 import xyz.block.trailblaze.model.TrailblazeOnDeviceInstrumentationTarget
 import xyz.block.trailblaze.util.AndroidHostAdbUtils.adbPortForward
 import xyz.block.trailblaze.util.AndroidHostAdbUtils.adbPortReverse
 import xyz.block.trailblaze.util.AndroidHostAdbUtils.createAdbCommandProcessBuilder
-import xyz.block.trailblaze.util.AndroidHostAdbUtils.hasAlreadyBeenBuiltAndInstalledThisSession
-import xyz.block.trailblaze.util.AndroidHostAdbUtils.isAppInstalled
 import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils.runProcess
-import java.io.File
 
 object HostAndroidDeviceConnectUtils {
 
-  val MAESTRO_APP_ID = "dev.mobile.maestro"
-  val MAESTRO_TEST_APP_ID = "dev.mobile.maestro.test"
+  const val MAESTRO_APP_ID = "dev.mobile.maestro"
+  const val MAESTRO_TEST_APP_ID = "dev.mobile.maestro.test"
 
   val ioScope = CoroutineScope(Dispatchers.IO)
 
-  suspend fun uninstallAllAndroidInstrumentationProcesses(
+  suspend fun forceStopAllAndroidInstrumentationProcesses(
     trailblazeOnDeviceInstrumentationTargetTestApps: Set<TrailblazeOnDeviceInstrumentationTarget>,
-    deviceId: String?,
+    deviceId: TrailblazeDeviceId,
   ) {
     val testAppIds: List<String> =
       trailblazeOnDeviceInstrumentationTargetTestApps.map { it.testAppId } + listOf(
         HostAndroidDeviceConnectUtils.MAESTRO_APP_ID,
         HostAndroidDeviceConnectUtils.MAESTRO_TEST_APP_ID,
       ).distinct()
-    println("Ensure All Android Instrumentation Processes are Uninstalled.  IDs: $testAppIds")
+    println("Force stopping all Android instrumentation processes. IDs: $testAppIds")
     testAppIds.forEach { appId ->
       AndroidHostAdbUtils.forceStopApp(
         deviceId = deviceId,
@@ -48,49 +42,42 @@ object HostAndroidDeviceConnectUtils {
     }
   }
 
-  private suspend fun buildWithGradleAndInstallTrailblazeOnDeviceInstrumentationTargetTestApp(
+  private suspend fun installPrecompiledTrailblazeOnDeviceInstrumentationTargetTestApp(
     trailblazeOnDeviceInstrumentationTarget: TrailblazeOnDeviceInstrumentationTarget,
+    trailblazeDeviceId: TrailblazeDeviceId,
     sendProgressMessage: (String) -> Unit,
   ): Boolean {
-    val gitRoot = File(GitUtils.getGitRootViaCommand() ?: ".")
-    sendProgressMessage("Building and Installing On-Device Trailblaze with Gradle (this may take a while)")
-    // Start Gradle process
-    val gradleProcess = ProcessBuilder(
-      "./gradlew",
-      trailblazeOnDeviceInstrumentationTarget.gradleInstallAndroidTestCommand,
-    ).directory(gitRoot).redirectErrorStream(true).start()
-
-    // Log Gradle output
-    val gradleSystemOutListenerThread = Thread {
-      try {
-        val reader = gradleProcess.inputStream.bufferedReader()
-        var line: String?
-        while (reader.readLine().also { line = it } != null) {
-          println("Gradle output: $line")
-        }
-      } catch (e: Exception) {
-        println("Error reading Gradle output: ${e.message}")
-      }
+    // Use pre-compiled APK bundled with the application
+    if (!PrecompiledApkInstaller.hasPrecompiledApk(trailblazeOnDeviceInstrumentationTarget)) {
+      val errorMessage = "Pre-compiled APK not found for ${trailblazeOnDeviceInstrumentationTarget.testAppId}. " +
+          "This indicates a build configuration issue. The APK should be bundled during the desktop app build process."
+      sendProgressMessage(errorMessage)
+      println(errorMessage)
+      return false
     }
-    gradleSystemOutListenerThread.start()
 
-    // Wait for Gradle to complete
-    val gradleExit = gradleProcess.waitFor()
-    gradleSystemOutListenerThread.interrupt() // Kill system out listening
-    val gradleSuccessful = gradleExit == 0
-    if (gradleSuccessful) {
-      sendProgressMessage("Gradle test app setup successful")
+    sendProgressMessage("Installing pre-compiled test APK...")
+
+    val installSuccess = PrecompiledApkInstaller.extractAndInstallPrecompiledApk(
+      resourcePath = PrecompiledApkInstaller.PRECOMPILED_APK_RESOURCE_PATH,
+      trailblazeDeviceId = trailblazeDeviceId,
+      sendProgressMessage = sendProgressMessage,
+    )
+
+    if (installSuccess) {
+      sendProgressMessage("Pre-compiled test APK installed successfully")
     } else {
-      sendProgressMessage("Gradle install failed with exit code $gradleExit")
+      sendProgressMessage("Failed to install pre-compiled test APK")
     }
-    return gradleSuccessful
+
+    return installSuccess
   }
 
   private fun instrumentationProcessBuilder(
     testAppId: String,
     fqTestName: String,
     sendProgressMessage: (String) -> Unit,
-    deviceId: String?,
+    deviceId: TrailblazeDeviceId,
     additionalInstrumentationArgs: Map<String, String> = emptyMap(),
   ): ProcessBuilder {
     sendProgressMessage(
@@ -126,6 +113,15 @@ object HostAndroidDeviceConnectUtils {
           ),
         )
 
+        // Use Reverse Proxy because we are connected
+        addAll(
+          listOf(
+            "-e",
+            TrailblazeDevicePort.INSTRUMENTATION_ARG_KEY,
+            deviceId.getDeviceSpecificPort().toString(),
+          ),
+        )
+
         listOf(
           "OPENAI_API_KEY",
           "DATABRICKS_TOKEN",
@@ -158,7 +154,7 @@ object HostAndroidDeviceConnectUtils {
 
   suspend fun connectToInstrumentation(
     trailblazeOnDeviceInstrumentationTarget: TrailblazeOnDeviceInstrumentationTarget,
-    deviceId: String?,
+    trailblazeDeviceId: TrailblazeDeviceId,
     additionalInstrumentationArgs: Map<String, String> = emptyMap(),
     sendProgressMessage: (String) -> Unit,
   ): DeviceConnectionStatus {
@@ -166,18 +162,20 @@ object HostAndroidDeviceConnectUtils {
     val completableDeferred: CompletableDeferred<DeviceConnectionStatus> = CompletableDeferred()
     var hasCallbackBeenCalled = false
 
-    HostAndroidDeviceConnectUtils.uninstallAllAndroidInstrumentationProcesses(
+    // Always force stop and reinstall to ensure a clean slate
+    forceStopAllAndroidInstrumentationProcesses(
       trailblazeOnDeviceInstrumentationTargetTestApps = setOf(trailblazeOnDeviceInstrumentationTarget),
-      deviceId = deviceId,
+      deviceId = trailblazeDeviceId,
     )
-    buildWithGradleAndInstallTrailblazeOnDeviceInstrumentationTargetTestApp(
+    installPrecompiledTrailblazeOnDeviceInstrumentationTargetTestApp(
       trailblazeOnDeviceInstrumentationTarget = trailblazeOnDeviceInstrumentationTarget,
+      trailblazeDeviceId = trailblazeDeviceId,
       sendProgressMessage = sendProgressMessage,
     )
 
     adbPortForward(
-      deviceId = deviceId,
-      localPort = 52526,
+      deviceId = trailblazeDeviceId,
+      localPort = trailblazeDeviceId.getDeviceSpecificPort(),
     )
 
     // Log instrumentation output
@@ -187,7 +185,7 @@ object HostAndroidDeviceConnectUtils {
           testAppId = trailblazeOnDeviceInstrumentationTarget.testAppId,
           fqTestName = trailblazeOnDeviceInstrumentationTarget.fqTestName,
           sendProgressMessage = sendProgressMessage,
-          deviceId = deviceId,
+          deviceId = trailblazeDeviceId,
           additionalInstrumentationArgs = additionalInstrumentationArgs,
         )
 
@@ -203,12 +201,12 @@ object HostAndroidDeviceConnectUtils {
               var attempts = 0
               val maxAttempts = 5
               var instrumentationRunning = false
-              val delayAmount = 2000L
+              val delayAmount = 1000L
 
               while (attempts < maxAttempts) {
                 delay(delayAmount) // Wait between checks
                 instrumentationRunning = AndroidHostAdbUtils.isAppRunning(
-                  deviceId = deviceId,
+                  deviceId = trailblazeDeviceId,
                   appId = trailblazeOnDeviceInstrumentationTarget.testAppId,
                 )
                 attempts++
@@ -216,8 +214,8 @@ object HostAndroidDeviceConnectUtils {
                 if (instrumentationRunning) {
                   sendProgressMessage("Instrumentation process verified as running!")
                   completableDeferred.complete(
-                    DeviceConnectionStatus.TrailblazeInstrumentationRunning(
-                      deviceId = deviceId,
+                    DeviceConnectionStatus.WithTargetDevice.TrailblazeInstrumentationRunning(
+                      trailblazeDeviceId = trailblazeDeviceId,
                     ),
                   )
                   break
@@ -230,9 +228,8 @@ object HostAndroidDeviceConnectUtils {
                 val errorMessage = "Could not validate instrumentation process started after 5 seconds"
                 sendProgressMessage(errorMessage)
                 completableDeferred.complete(
-                  DeviceConnectionStatus.ConnectionFailure(
+                  DeviceConnectionStatus.DeviceConnectionError.ConnectionFailure(
                     errorMessage = errorMessage,
-                    deviceId = deviceId,
                   ),
                 )
               }
@@ -244,9 +241,8 @@ object HostAndroidDeviceConnectUtils {
             sendProgressMessage(errorMessage)
             println(errorMessage)
             completableDeferred.complete(
-              DeviceConnectionStatus.ConnectionFailure(
+              DeviceConnectionStatus.DeviceConnectionError.ConnectionFailure(
                 errorMessage = errorMessage,
-                deviceId = deviceId,
               ),
             )
           }
@@ -255,9 +251,8 @@ object HostAndroidDeviceConnectUtils {
         val errorMessage = "Error connecting Trailblaze On-Device. ${e.message}"
         sendProgressMessage(errorMessage)
         completableDeferred.complete(
-          DeviceConnectionStatus.ConnectionFailure(
+          DeviceConnectionStatus.DeviceConnectionError.ConnectionFailure(
             errorMessage = errorMessage,
-            deviceId = deviceId,
           ),
         )
       }
@@ -266,8 +261,11 @@ object HostAndroidDeviceConnectUtils {
   }
 
   // Function to get devices from adb
-  suspend fun getAdbDevices(): List<AdbDevice> = try {
-    val processBuilder = createAdbCommandProcessBuilder(args = listOf("devices"), deviceId = null)
+  suspend fun getAdbDevices(): List<TrailblazeDeviceId> = try {
+    val processBuilder = createAdbCommandProcessBuilder(
+      args = listOf("devices"),
+      deviceId = null
+    )
 
     val processResult = processBuilder.runProcess(
       outputLineCallback = {},
@@ -276,29 +274,18 @@ object HostAndroidDeviceConnectUtils {
     processResult.outputLines.drop(1)
       .filter { it.isNotBlank() && it.contains("\tdevice") }
       .map { line ->
-        val id = line.substringBefore("\t")
-        AdbDevice(id, getDeviceModelName(id))
+        val adbId = line.substringBefore("\t")
+        TrailblazeDeviceId(
+          trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
+          instanceId = adbId,
+        )
       }
   } catch (e: Exception) {
     emptyList()
   }
 
-  suspend fun sentRequestStartTestWithYaml(request: RunYamlRequest): String {
-    val client = TrailblazeHttpClientFactory.createDefaultHttpClient(30L)
-    val json = Json.encodeToString(request)
-
-    val response = client.post("http://localhost:52526/run") {
-      contentType(ContentType.Application.Json)
-      setBody(json)
-    }
-
-    val responseText = response.bodyAsText()
-    client.close()
-    return responseText
-  }
-
   // Function to get the device model name from adb
-  fun getDeviceModelName(deviceId: String): String = try {
+  fun getDeviceModelName(deviceId: TrailblazeDeviceId): String = try {
     val processBuilder = createAdbCommandProcessBuilder(
       deviceId = deviceId,
       args = listOf(
@@ -310,45 +297,25 @@ object HostAndroidDeviceConnectUtils {
     val processResult = processBuilder.runProcess(
       outputLineCallback = {},
     )
-    processResult.outputLines.firstOrNull() ?: deviceId
+    processResult.outputLines.firstOrNull() ?: deviceId.instanceId
   } catch (e: Exception) {
-    deviceId
+    deviceId.instanceId
   }
 
   suspend fun connectToInstrumentationAndInstallAppIfNotAvailable(
     sendProgressMessage: (String) -> Unit,
-    deviceId: String?,
-    port: Int = 52526,
+    deviceId: TrailblazeDeviceId,
     trailblazeOnDeviceInstrumentationTarget: TrailblazeOnDeviceInstrumentationTarget,
     additionalInstrumentationArgs: Map<String, String> = emptyMap(),
   ): DeviceConnectionStatus {
-    adbPortForward(deviceId, port)
+    val devicePort = deviceId.getDeviceSpecificPort()
+    adbPortForward(deviceId, devicePort)
     adbPortReverse(deviceId, 8443)
 
-    if (!hasAlreadyBeenBuiltAndInstalledThisSession(trailblazeOnDeviceInstrumentationTarget) ||
-      !isAppInstalled(
-        trailblazeOnDeviceInstrumentationTarget.testAppId,
-        deviceId,
-      )
-    ) {
-      val installSuccessful = buildWithGradleAndInstallTrailblazeOnDeviceInstrumentationTargetTestApp(
-        trailblazeOnDeviceInstrumentationTarget = trailblazeOnDeviceInstrumentationTarget,
-        sendProgressMessage = sendProgressMessage,
-      )
-      if (!installSuccessful) {
-        return DeviceConnectionStatus.ConnectionFailure(
-          errorMessage = "Gradle install failed",
-          deviceId = deviceId,
-        )
-      } else {
-        delay(1000)
-      }
-    }
-    sendProgressMessage("On-Device Trailblaze Installed. Connecting to Trailblaze...")
-
+    // connectToInstrumentation will handle uninstall and reinstall for a clean slate
     return HostAndroidDeviceConnectUtils.connectToInstrumentation(
       trailblazeOnDeviceInstrumentationTarget = trailblazeOnDeviceInstrumentationTarget,
-      deviceId = deviceId,
+      trailblazeDeviceId = deviceId,
       sendProgressMessage = sendProgressMessage,
       additionalInstrumentationArgs = additionalInstrumentationArgs,
     )
