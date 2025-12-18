@@ -16,18 +16,18 @@ import xyz.block.trailblaze.android.devices.TrailblazeAndroidOnDeviceClassifier
 import xyz.block.trailblaze.android.uiautomator.AndroidOnDeviceUiAutomatorScreenState
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TestAgentRunner
+import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.exception.TrailblazeException
-import xyz.block.trailblaze.exception.TrailblazeSessionCancelledException
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.model.CustomTrailblazeTools
 import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.rules.SimpleTestRuleChain
 import xyz.block.trailblaze.rules.TrailblazeRule
 import xyz.block.trailblaze.rules.TrailblazeRunnerUtil
-import xyz.block.trailblaze.session.TrailblazeSessionManager
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet.DynamicToolSet
 import xyz.block.trailblaze.utils.Ext.asMaestroCommands
 import xyz.block.trailblaze.yaml.DirectionStep
@@ -46,15 +46,14 @@ open class AndroidTrailblazeRule(
     trailblazeDeviceClassifiersProvider = TrailblazeAndroidOnDeviceClassifier.getDeviceClassifiersProvider(),
   ),
   customToolClasses: CustomTrailblazeTools? = null,
-  val sessionManager: TrailblazeSessionManager = trailblazeLoggingRule.sessionManager,
+  private val trailblazeDeviceId: TrailblazeDeviceId? = null,
 ) : SimpleTestRuleChain(trailblazeLoggingRule),
   TrailblazeRule {
-
   private val trailblazeAgent =
     AndroidMaestroTrailblazeAgent(trailblazeLoggingRule.trailblazeLogger)
 
   private val trailblazeToolRepo = TrailblazeToolRepo(
-    trailblazeToolSet = xyz.block.trailblaze.toolcalls.TrailblazeToolSet.getSetOfMarkToolSet(
+    trailblazeToolSet = TrailblazeToolSet.getSetOfMarkToolSet(
       config.setOfMarkEnabled,
     ) + DynamicToolSet(
       toolClasses = customToolClasses?.initialToolRepoToolClasses ?: emptySet(),
@@ -92,7 +91,6 @@ open class AndroidTrailblazeRule(
       screenStateProvider = screenStateProvider,
       agent = trailblazeAgent,
       trailblazeLogger = trailblazeLoggingRule.trailblazeLogger,
-      sessionManager = sessionManager,
     )
   }
 
@@ -100,36 +98,30 @@ open class AndroidTrailblazeRule(
     TrailblazeRunnerUtil(
       trailblazeRunner = trailblazeRunner,
       runTrailblazeTool = ::runTrailblazeTool,
-      trailblazeLogger = trailblazeLoggingRule.trailblazeLogger,
-      sessionManager = sessionManager,
     )
   }
 
-  override fun run(
+  suspend fun runSuspend(
     testYaml: String,
     trailFilePath: String?,
     useRecordedSteps: Boolean,
-  ): Boolean {
+  ) {
     val trailItems = trailblazeYaml.decodeTrail(testYaml)
     val trailConfig = trailblazeYaml.extractTrailConfig(trailItems)
     trailblazeLoggingRule.trailblazeLogger.sendStartLog(
       trailConfig = trailConfig,
-      className = this.trailblazeLoggingRule.description?.className ?: "AndroidTrailblazeRule",
-      methodName = this.trailblazeLoggingRule.description?.methodName ?: "run",
-      trailblazeDeviceInfo = this.trailblazeLoggingRule.trailblazeDeviceInfoProvider(),
+      className = trailblazeLoggingRule.description?.className ?: "AndroidTrailblazeRule",
+      methodName = trailblazeLoggingRule.description?.methodName ?: "run",
+      trailblazeDeviceInfo = trailblazeLoggingRule.trailblazeDeviceInfoProvider(),
       rawYaml = testYaml,
       trailFilePath = trailFilePath,
       hasRecordedSteps = trailblazeYaml.hasRecordedSteps(trailItems),
-      trailblazeDeviceId = null,
+      trailblazeDeviceId = trailblazeDeviceId,
     )
     trailblazeAgent.clearMemory()
     trailItems.forEach { item ->
-      if (sessionManager.isCurrentSessionCancelled()) {
-        throw TrailblazeSessionCancelledException()
-      }
-
       val itemResult = when (item) {
-        is TrailYamlItem.MaestroTrailItem -> runMaestroCommandsBlocking(item.maestro.maestroCommands.asMaestroCommands())
+        is TrailYamlItem.MaestroTrailItem -> runMaestroCommands(item.maestro.maestroCommands.asMaestroCommands())
         is TrailYamlItem.PromptsTrailItem -> trailblazeRunnerUtil.runPrompt(item.promptSteps, useRecordedSteps)
         is TrailYamlItem.ToolTrailItem -> runTrailblazeTool(item.tools.map { it.trailblazeTool })
         is TrailYamlItem.ConfigTrailItem -> handleConfig(item.config)
@@ -138,7 +130,18 @@ open class AndroidTrailblazeRule(
         throw TrailblazeException(itemResult.errorMessage)
       }
     }
-    return true
+  }
+
+  override fun run(
+    testYaml: String,
+    trailFilePath: String?,
+    useRecordedSteps: Boolean,
+  ) = runBlocking {
+    runSuspend(
+      testYaml = testYaml,
+      trailFilePath = trailFilePath,
+      useRecordedSteps = useRecordedSteps
+    )
   }
 
   private fun runTrailblazeTool(trailblazeTools: List<TrailblazeTool>): TrailblazeToolResult {
@@ -154,10 +157,11 @@ open class AndroidTrailblazeRule(
   }
 
   @Deprecated("Prefer the suspend version.")
-  private fun runMaestroCommandsBlocking(maestroCommands: List<Command>): TrailblazeToolResult = runBlocking { runMaestroCommands(maestroCommands) }
+  private fun runMaestroCommandsBlocking(maestroCommands: List<Command>): TrailblazeToolResult =
+    runBlocking { runMaestroCommands(maestroCommands) }
 
-  private suspend fun runMaestroCommands(maestroCommands: List<Command>): TrailblazeToolResult = runBlocking {
-    when (
+  private suspend fun runMaestroCommands(maestroCommands: List<Command>): TrailblazeToolResult {
+    return when (
       val maestroResult =
         trailblazeAgent.runMaestroCommands(
           maestroCommands = maestroCommands,

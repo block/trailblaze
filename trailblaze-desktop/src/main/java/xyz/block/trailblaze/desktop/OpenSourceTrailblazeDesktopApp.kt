@@ -1,13 +1,9 @@
 package xyz.block.trailblaze.desktop
 
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import xyz.block.trailblaze.host.TrailblazeHostYamlRunner
 import xyz.block.trailblaze.host.rules.TrailblazeHostDynamicLlmClientProvider
 import xyz.block.trailblaze.host.rules.TrailblazeHostDynamicLlmTokenProvider
 import xyz.block.trailblaze.host.yaml.DesktopYamlRunner
-import xyz.block.trailblaze.host.yaml.RunOnHostParams
+import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.logs.server.TrailblazeMcpServer
 import xyz.block.trailblaze.model.DesktopAppRunYamlParams
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
@@ -27,30 +23,26 @@ class OpenSourceTrailblazeDesktopApp : TrailblazeDesktopApp(
     targetTestAppProvider = { TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget },
   )
 
-  override suspend fun runYaml(desktopRunYamlParams: DesktopAppRunYamlParams) {
-    DesktopYamlRunner(
-      trailblazeHostAppTarget = TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget,
-      onRunHostYaml = { runOnHostParams: RunOnHostParams ->
-        CoroutineScope(Dispatchers.IO).launch {
-          TrailblazeHostYamlRunner.runHostYaml(
-            runOnHostParams = runOnHostParams,
-            deviceManager = desktopAppConfig.deviceManager,
-            dynamicLlmClient = TrailblazeHostDynamicLlmClientProvider(
-              trailblazeLlmModel = runOnHostParams.runYamlRequest.trailblazeLlmModel,
-              trailblazeDynamicLlmTokenProvider = TrailblazeHostDynamicLlmTokenProvider,
-            ),
-          )
-        }
-      },
-    ).runYaml(
-      desktopRunYamlParams = desktopRunYamlParams,
+  fun createDynamicClient(trailblazeLlmModel: TrailblazeLlmModel): TrailblazeHostDynamicLlmClientProvider {
+    return TrailblazeHostDynamicLlmClientProvider(
+      trailblazeLlmModel = trailblazeLlmModel,
+      trailblazeDynamicLlmTokenProvider = TrailblazeHostDynamicLlmTokenProvider
     )
   }
+
+  override val desktopYamlRunner: DesktopYamlRunner = DesktopYamlRunner(
+    trailblazeDeviceManager = desktopAppConfig.deviceManager,
+    trailblazeHostAppTargetProvider = { TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget },
+    dynamicLlmClientProvider = { createDynamicClient(it) }
+  )
 
   override fun startTrailblazeDesktopApp() {
     MainTrailblazeApp(
       trailblazeSavedSettingsRepo = desktopAppConfig.trailblazeSettingsRepo,
       logsRepo = desktopAppConfig.logsRepo,
+      yamlRunner = { desktopRunYamlParams: DesktopAppRunYamlParams ->
+        desktopYamlRunner.runYaml(desktopRunYamlParams)
+      },
       recordedTrailsRepo = desktopAppConfig.recordedTrailsRepo,
       trailblazeMcpServerProvider = { trailblazeMcpServer },
       customEnvVarNames = emptyList(),
@@ -61,11 +53,7 @@ class OpenSourceTrailblazeDesktopApp : TrailblazeDesktopApp(
       additionalInstrumentationArgs = { emptyMap() },
       globalSettingsContent = { },
       currentTrailblazeLlmModelProvider = { desktopAppConfig.getCurrentLlmModel() },
-      yamlRunner = { desktopRunYamlParams: DesktopAppRunYamlParams ->
-        CoroutineScope(Dispatchers.IO).launch {
-          runYaml(desktopRunYamlParams)
-        }
-      },
-    )
+
+      )
   }
 }

@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.ui
 
 import xyz.block.trailblaze.desktop.TrailblazeDesktopAppConfig
+import xyz.block.trailblaze.host.yaml.DesktopYamlRunner
 import xyz.block.trailblaze.logs.server.TrailblazeMcpServer
 import xyz.block.trailblaze.model.DesktopAppRunYamlParams
 
@@ -10,9 +11,10 @@ import xyz.block.trailblaze.model.DesktopAppRunYamlParams
 abstract class TrailblazeDesktopApp(
   protected val desktopAppConfig: TrailblazeDesktopAppConfig,
 ) {
-  abstract val trailblazeMcpServer: TrailblazeMcpServer
 
-  abstract suspend fun runYaml(desktopRunYamlParams: DesktopAppRunYamlParams)
+  abstract val desktopYamlRunner: DesktopYamlRunner
+
+  abstract val trailblazeMcpServer: TrailblazeMcpServer
 
   abstract fun startTrailblazeDesktopApp()
 

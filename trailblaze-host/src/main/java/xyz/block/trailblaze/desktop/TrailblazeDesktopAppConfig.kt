@@ -1,6 +1,5 @@
 package xyz.block.trailblaze.desktop
 
-import maestro.device.Device
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.llm.TrailblazeLlmModelList
@@ -61,10 +60,6 @@ abstract class TrailblazeDesktopAppConfig(
       appIconProvider = appIconProvider,
       defaultHostAppTarget = defaultAppTarget,
       getInstalledAppIds = ::getInstalledAppIds
-    ).apply {
-      // Start polling device status to detect running sessions on Android devices
-      startPollingDeviceStatus()
-    }
+    )
   }
-
 }

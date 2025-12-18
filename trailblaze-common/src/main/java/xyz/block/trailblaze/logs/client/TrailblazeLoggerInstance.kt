@@ -19,7 +19,7 @@ import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.logs.model.TrailblazeLlmMessage
-import xyz.block.trailblaze.session.TrailblazeSessionManager
+
 import xyz.block.trailblaze.yaml.TrailConfig
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -320,29 +320,27 @@ abstract class TrailblazeLogger {
   }
 
   /**
-   * Sends the appropriate session end log based on the session manager state.
+   * Sends the appropriate session end log based on the exception type.
    * This is the single consolidated method that checks if max calls limit was reached
    * and sends the appropriate log. Use this method to avoid duplicating if-else logic.
    *
-   * @param sessionManager The session manager to check for max calls limit status
    * @param isSuccess Whether the session completed successfully
    * @param exception Optional exception if the session failed
    */
   fun sendSessionEndLog(
-    sessionManager: TrailblazeSessionManager,
     isSuccess: Boolean,
     exception: Throwable? = null,
   ) {
-    val maxCallsLimitInfo = sessionManager.getMaxCallsLimitInfo()
-    if (maxCallsLimitInfo != null) {
+    // Check if exception is MaxCallsLimitReachedException
+    if (exception is xyz.block.trailblaze.exception.MaxCallsLimitReachedException) {
       // Max calls limit was reached - send specific log
       val durationMs =
         Clock.System.now().toEpochMilliseconds() - sessionStartTime.toEpochMilliseconds()
       sendEndLog(
         SessionStatus.Ended.MaxCallsLimitReached(
           durationMs = durationMs,
-          maxCalls = maxCallsLimitInfo.maxCalls,
-          objectivePrompt = maxCallsLimitInfo.objectivePrompt,
+          maxCalls = exception.maxCalls,
+          objectivePrompt = exception.objectivePrompt,
         ),
       )
     } else {

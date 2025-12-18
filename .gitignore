@@ -13,6 +13,9 @@ local.properties
 # Kotlin
 .kotlin
 
+# Ignore pre-compiled APKs bundled as resources (built during desktop app build)
+/trailblaze-desktop/src/main/resources/apks/
+
 # Gradle Profiler
 profile-out*
 gradle-user-home

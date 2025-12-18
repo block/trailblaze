@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.llm
 
 import kotlinx.serialization.Serializable
+import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcRequest
 import xyz.block.trailblaze.model.TrailblazeConfig
 
@@ -15,6 +16,7 @@ data class RunYamlRequest(
   val trailFilePath: String?,
   val targetAppName: String?,
   val useRecordedSteps: Boolean,
+  val trailblazeDeviceId: TrailblazeDeviceId,
   val trailblazeLlmModel: TrailblazeLlmModel,
   val config: TrailblazeConfig,
 ) : RpcRequest<RunYamlResponse>

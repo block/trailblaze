@@ -1,5 +1,7 @@
 package xyz.block.trailblaze.ui
 
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -33,22 +35,16 @@ import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.WindowState
 import androidx.compose.ui.window.application
-import androidx.compose.animation.EnterTransition
-import androidx.compose.animation.ExitTransition
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.llm.TrailblazeLlmModelList
 import xyz.block.trailblaze.logs.model.SessionInfo
-import xyz.block.trailblaze.logs.model.inProgress
 import xyz.block.trailblaze.logs.server.TrailblazeMcpServer
 import xyz.block.trailblaze.model.DesktopAppRunYamlParams
 import xyz.block.trailblaze.report.utils.LogsRepo
@@ -69,6 +65,7 @@ import xyz.block.trailblaze.ui.theme.TrailblazeTheme
 class MainTrailblazeApp(
   val trailblazeSavedSettingsRepo: TrailblazeSettingsRepo,
   val logsRepo: LogsRepo,
+  private val yamlRunner: (DesktopAppRunYamlParams) -> Unit,
   val recordedTrailsRepo: RecordedTrailsRepo,
   val trailblazeMcpServerProvider: () -> TrailblazeMcpServer,
   val customEnvVarNames: List<String>,
@@ -88,7 +85,6 @@ class MainTrailblazeApp(
     availableModelLists: Set<TrailblazeLlmModelList>,
     currentTrailblazeLlmModelProvider: () -> TrailblazeLlmModel,
     deviceManager: TrailblazeDeviceManager,
-    yamlRunner: (DesktopAppRunYamlParams) -> Unit,
     globalSettingsContent: @Composable ColumnScope.(serverState: TrailblazeServerState) -> Unit,
     additionalInstrumentationArgs: (suspend () -> Map<String, String>),
   ) {
@@ -138,38 +134,21 @@ class MainTrailblazeApp(
         val navController = rememberNavController()
 
         // Track sessions for badge display
-        var sessions by remember { mutableStateOf(emptyList<SessionInfo>()) }
         val liveSessionDataProvider = remember(logsRepo, deviceManager) {
           createLiveSessionDataProviderJvm(logsRepo, deviceManager)
         }
 
-        // Poll for session updates every 2 seconds to update badges
-        LaunchedEffect(liveSessionDataProvider) {
-          while (isActive) {
-            withContext(Dispatchers.IO) {
-              try {
-                val sessionIds = liveSessionDataProvider.getSessionIds()
-                val loadedSessions = sessionIds.mapNotNull { sessionId ->
-                  liveSessionDataProvider.getSessionInfo(sessionId)
-                }
-                sessions = loadedSessions
-              } catch (e: Exception) {
-                e.printStackTrace()
-              }
-            }
-            delay(2000)
-          }
-        }
+        // Collect sessions reactively from the Flow - automatic updates!
+        val sessions by liveSessionDataProvider.getSessionsFlow().collectAsState()
 
-        // Calculate session statistics for badges
-        val inProgressCount = sessions.count { it.latestStatus.inProgress }
+        // Use filtered flows for badge counts - much simpler!
+        val inProgressCount by logsRepo.activeSessionCountFlow.collectAsState()
         val firstSessionStatus = sessions.firstOrNull()?.latestStatus
 
         // Provide NavController to the entire composition tree for easy access
         CompositionLocalProvider(LocalNavController provides navController) {
           TrailblazeAppContent(
             customTabs = customTabs,
-            sessions = sessions,
             inProgressCount = inProgressCount,
             firstSessionStatus = firstSessionStatus,
             currentServerState = currentServerState,
@@ -193,7 +172,6 @@ class MainTrailblazeApp(
   @Composable
   private fun TrailblazeAppContent(
     customTabs: () -> List<TrailblazeAppTab>,
-    sessions: List<SessionInfo>,
     inProgressCount: Int,
     firstSessionStatus: xyz.block.trailblaze.logs.model.SessionStatus?,
     currentServerState: TrailblazeServerState,

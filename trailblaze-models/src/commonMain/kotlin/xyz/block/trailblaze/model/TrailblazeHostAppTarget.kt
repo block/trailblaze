@@ -2,22 +2,27 @@ package xyz.block.trailblaze.model
 
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.model.TrailblazeOnDeviceInstrumentationTarget.Companion.DEFAULT_ANDROID_ON_DEVICE
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import kotlin.reflect.KClass
 
 abstract class TrailblazeHostAppTarget(
   val name: String,
 ) {
-  abstract fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): List<String>?
+  abstract fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): Set<String>?
 
   protected abstract fun internalGetCustomToolsForDriver(driverType: TrailblazeDriverType): Set<KClass<out TrailblazeTool>>
-  fun getCustomToolsForDriver(driverType: TrailblazeDriverType): Set<KClass<out TrailblazeTool>> = internalGetCustomToolsForDriver(driverType)
+  fun getCustomToolsForDriver(driverType: TrailblazeDriverType): Set<KClass<out TrailblazeTool>> =
+    internalGetCustomToolsForDriver(driverType)
 
-  fun getAllCustomToolClassesForSerialization(): Set<KClass<out TrailblazeTool>> = TrailblazeDriverType.entries.flatMap { trailblazeDriverType ->
-    getCustomToolsForDriver(trailblazeDriverType)
-  }.toSet()
+  fun getAllCustomToolClassesForSerialization(): Set<KClass<out TrailblazeTool>> =
+    TrailblazeDriverType.entries.flatMap { trailblazeDriverType ->
+      getCustomToolsForDriver(trailblazeDriverType)
+    }.toSet()
 
-  protected abstract fun internalGetAndroidOnDeviceTarget(): TrailblazeOnDeviceInstrumentationTarget?
+  fun internalGetAndroidOnDeviceTarget(): TrailblazeOnDeviceInstrumentationTarget {
+    return DEFAULT_ANDROID_ON_DEVICE
+  }
 
   /**
    * We're provided with the original iOS Driver from Maestro
@@ -29,7 +34,8 @@ abstract class TrailblazeHostAppTarget(
    */
   open fun getCustomIosDriverFactory(originalIosDriver: Any): Any = originalIosDriver
 
-  fun getTrailblazeOnDeviceInstrumentationTarget(): TrailblazeOnDeviceInstrumentationTarget = internalGetAndroidOnDeviceTarget() ?: TrailblazeOnDeviceInstrumentationTarget.DEFAULT_ANDROID_ON_DEVICE
+  fun getTrailblazeOnDeviceInstrumentationTarget(): TrailblazeOnDeviceInstrumentationTarget =
+    internalGetAndroidOnDeviceTarget() ?: TrailblazeOnDeviceInstrumentationTarget.DEFAULT_ANDROID_ON_DEVICE
 
   /**
    * Returns comprehensive information about this app target as formatted text including:
@@ -59,10 +65,9 @@ abstract class TrailblazeHostAppTarget(
   data object DefaultTrailblazeHostAppTarget : TrailblazeHostAppTarget(
     "None",
   ) {
-    override fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): List<String>? = null
+    override fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): Set<String>? = null
 
-    override fun internalGetCustomToolsForDriver(driverType: TrailblazeDriverType): Set<KClass<out TrailblazeTool>> = setOf()
-
-    override fun internalGetAndroidOnDeviceTarget(): TrailblazeOnDeviceInstrumentationTarget = TrailblazeOnDeviceInstrumentationTarget.DEFAULT_ANDROID_ON_DEVICE
+    override fun internalGetCustomToolsForDriver(driverType: TrailblazeDriverType): Set<KClass<out TrailblazeTool>> =
+      setOf()
   }
 }

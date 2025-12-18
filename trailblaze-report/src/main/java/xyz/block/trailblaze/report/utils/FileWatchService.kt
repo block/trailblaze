@@ -23,7 +23,6 @@ import kotlin.io.path.name
 class FileWatchService(
   private val dirToWatch: File,
   private val debounceDelayMs: Long = 500L, // Debounce changes within 500ms
-  private val maxEventsPerSecond: Int = 10, // Circuit breaker: max 10 events per second
 ) {
   private val eventTypes: List<FileChangeEvent.ChangeType> = listOf(
     FileChangeEvent.ChangeType.CREATE,
@@ -45,10 +44,6 @@ class FileWatchService(
 
   // Track pending events for debouncing
   private val pendingEvents = mutableMapOf<String, Pair<FileChangeEvent.ChangeType, File>>()
-
-  // Circuit breaker for rate limiting
-  private var eventCount = 0
-  private var lastResetTime = System.currentTimeMillis()
 
   // Channel for file change events
   private val fileChangeChannel = Channel<FileChangeEvent>(Channel.UNLIMITED)
@@ -76,16 +71,6 @@ class FileWatchService(
     return false
   }
 
-  private fun isWithinRateLimit(): Boolean {
-    val currentTime = System.currentTimeMillis()
-    if (currentTime - lastResetTime > 1000) {
-      // Reset counter every second
-      eventCount = 0
-      lastResetTime = currentTime
-    }
-    return eventCount < maxEventsPerSecond
-  }
-
   fun stopWatching() {
     // Close the WatchService to stop watching - this will cause the thread to exit
     watchService.close()
@@ -103,7 +88,7 @@ class FileWatchService(
       eventTypes.map { it.watchEventKind }.toTypedArray(),
     )
 
-    println("[FileWatchService] Started watching: $path (debounce: ${debounceDelayMs}ms, maxEvents: $maxEventsPerSecond/s)")
+    println("[FileWatchService] Started watching: $path (debounce: ${debounceDelayMs}ms)")
 
     // Start the watch loop in a background thread
     watchThread = thread(name = "FileWatcher-${dirToWatch.name}") {
@@ -125,12 +110,6 @@ class FileWatchService(
               continue // Skip ignored files
             }
 
-            if (!isWithinRateLimit()) {
-              println("[FileWatchService] Rate limit exceeded ($maxEventsPerSecond/s) for $dirToWatch, skipping: $fileName")
-              continue
-            }
-
-            eventCount++
             val changeType = FileChangeEvent.ChangeType.fromWatchEventKind(kind)
 
             // Construct the full file path only after filtering

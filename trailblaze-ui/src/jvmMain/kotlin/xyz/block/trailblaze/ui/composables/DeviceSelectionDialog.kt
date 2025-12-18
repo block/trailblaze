@@ -44,9 +44,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
+
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.ui.TrailblazeSettingsRepo
-import xyz.block.trailblaze.ui.devices.DeviceSessionInfo
+import xyz.block.trailblaze.ui.devices.DeviceState
 import xyz.block.trailblaze.ui.tabs.devices.TargetAppConfigRow
 
 /**
@@ -68,9 +69,9 @@ fun DeviceConfigurationContent(
   val lastSelectedDeviceInstanceIds: List<String> = currentState.appConfig.lastSelectedDeviceInstanceIds
 
   val deviceState by deviceManager.deviceStateFlow.collectAsState()
-  val availableDevices = deviceState.availableDevices
+  val availableDevices = deviceState.devices.values.map { it.device }
   val isLoadingDevices = deviceState.isLoading
-  val activeSessionsByDevice = deviceState.activeSessionsByDevice
+  val activeSessionsByDevice = deviceState.devices.mapValues { it.value.currentSessionId }
 
   val selectedTargetApp = deviceManager.getCurrentSelectedTargetApp()
 
@@ -156,15 +157,15 @@ fun DeviceConfigurationContent(
         availableDevices.forEach { device ->
           val isAppInstalled = device.getAppIdIfInstalled(selectedTargetApp) != null
           val isDeviceEnabled = selectedTargetApp == null || isAppInstalled
-          val activeSession = activeSessionsByDevice[device.trailblazeDeviceId]
-          val hasActiveSession = activeSession != null
+          val activeSessionId = activeSessionsByDevice[device.trailblazeDeviceId]
+          val hasActiveSession = activeSessionId != null
 
           SingleDeviceListItem(
             device = device,
             isSelected = selectedDevices.contains(device),
             installedAppId = device.getAppIdIfInstalled(selectedTargetApp),
             appTarget = selectedTargetApp,
-            activeSession = activeSession,
+            activeSessionId = activeSessionId?.value,
             onSessionClick = onSessionClick,
             onToggle = {
               // Only allow toggle if device is enabled and (allowSelectionOfActiveDevices is true OR device has no active session)
@@ -223,7 +224,7 @@ fun DeviceSelectionDialog(
   val lastSelectedDeviceInstanceIds: List<String> = currentState.appConfig.lastSelectedDeviceInstanceIds
 
   val deviceState by deviceManager.deviceStateFlow.collectAsState()
-  val availableDevices = deviceState.availableDevices
+  val availableDevices = deviceState.devices.values.map { it.device }
 
   val selectedTargetApp = deviceManager.getCurrentSelectedTargetApp()
 
@@ -385,14 +386,15 @@ fun SingleDeviceListItem(
   isSelected: Boolean,
   appTarget: TrailblazeHostAppTarget?,
   installedAppId: String?,
-  activeSession: DeviceSessionInfo? = null,
+  activeSessionId: String? = null,
   onSessionClick: ((String) -> Unit)? = null,
   onToggle: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
   val isAppInstalled = installedAppId != null
   val isEnabled = appTarget == null || isAppInstalled
-  val hasActiveSession = activeSession != null
+  // A device has an active session if there's a session ID
+  val hasActiveSession = activeSessionId != null
 
   val possibleAppIdsMessage =
     appTarget?.getPossibleAppIdsForPlatform(device.platform)?.joinToString(", ")
@@ -468,12 +470,12 @@ fun SingleDeviceListItem(
         }
 
         // Show active session indicator
-        if (hasActiveSession && onSessionClick != null) {
+        if (activeSessionId != null && onSessionClick != null) {
           Row(
             modifier = Modifier
               .clickable {
                 // Navigate to the session - the navigation will handle switching tabs
-                onSessionClick.invoke(activeSession.sessionId)
+                onSessionClick.invoke(activeSessionId)
               }
               .padding(vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -486,7 +488,7 @@ fun SingleDeviceListItem(
               modifier = Modifier.size(16.dp)
             )
             Text(
-              text = "Session running: ${activeSession.sessionId} (click to view)",
+              text = "Session running: $activeSessionId (click to view)",
               style = MaterialTheme.typography.bodySmall,
               color = MaterialTheme.colorScheme.tertiary,
               fontWeight = FontWeight.Medium

@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.host.rules
 
+import kotlinx.coroutines.runBlocking
 import org.junit.Rule
 import org.junit.rules.RuleChain
 import xyz.block.trailblaze.TrailblazeYamlUtil
@@ -22,7 +23,6 @@ import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.rules.RetryRule
 import xyz.block.trailblaze.rules.TrailblazeLoggingRule
 import xyz.block.trailblaze.rules.TrailblazeRunnerUtil
-import xyz.block.trailblaze.session.TrailblazeSessionManager
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
@@ -44,7 +44,6 @@ abstract class BaseHostTrailblazeTest(
   systemPromptTemplate: String? = null,
   trailblazeToolSet: TrailblazeToolSet? = null,
   customToolClasses: Set<KClass<out TrailblazeTool>> = setOf(),
-  val sessionManager: TrailblazeSessionManager = TrailblazeSessionManager(),
   maxRetries: Int = 0,
   appTarget: TrailblazeHostAppTarget? = null,
 ) {
@@ -82,7 +81,6 @@ abstract class BaseHostTrailblazeTest(
 
   val loggingRule: TrailblazeLoggingRule = HostTrailblazeLoggingRule(
     trailblazeDeviceInfoProvider = { trailblazeDeviceInfo },
-    sessionManager = sessionManager,
   )
 
   /**
@@ -132,7 +130,6 @@ abstract class BaseHostTrailblazeTest(
       trailblazeToolRepo = toolRepo,
       systemPromptTemplate = systemPromptTemplate,
       trailblazeLogger = loggingRule.trailblazeLogger,
-      sessionManager = sessionManager,
     )
   }
 
@@ -164,12 +161,14 @@ abstract class BaseHostTrailblazeTest(
           is TrailblazeToolResult.Error -> throw TrailblazeException(toolResult.errorMessage)
         }
       },
-      trailblazeLogger = loggingRule.trailblazeLogger,
-      sessionManager = sessionManager,
     )
   }
 
-  private fun runTrail(trailItems: List<TrailYamlItem>, useRecordedSteps: Boolean) {
+  /**
+   * Suspend version of runTrail that checks for coroutine cancellation.
+   * This allows proper cancellation propagation when running in a coroutine context.
+   */
+  private suspend fun runTrail(trailItems: List<TrailYamlItem>, useRecordedSteps: Boolean) {
     for (item in trailItems) {
       val itemResult = when (item) {
         is TrailYamlItem.MaestroTrailItem -> hostRunner.runMaestroCommands(
@@ -177,7 +176,7 @@ abstract class BaseHostTrailblazeTest(
           null,
         )
 
-        is TrailYamlItem.PromptsTrailItem -> trailblazeRunnerUtil.runPrompt(item.promptSteps, useRecordedSteps)
+        is TrailYamlItem.PromptsTrailItem -> trailblazeRunnerUtil.runPromptSuspend(item.promptSteps, useRecordedSteps)
         is TrailYamlItem.ToolTrailItem -> trailblazeRunnerUtil.runTrailblazeTool(item.tools.map { it.trailblazeTool })
         is TrailYamlItem.ConfigTrailItem -> item.config.context?.let { trailblazeRunner.appendToSystemPrompt(it) }
       }
@@ -189,7 +188,11 @@ abstract class BaseHostTrailblazeTest(
 
   fun runTools(tools: List<TrailblazeTool>): TrailblazeToolResult = trailblazeRunnerUtil.runTrailblazeTool(tools)
 
-  fun runTrailblazeYaml(
+  /**
+   * Suspend version of runTrailblazeYaml that properly handles coroutine cancellation.
+   * Use this when calling from a coroutine context (e.g., from the desktop app).
+   */
+  suspend fun runTrailblazeYamlSuspend(
     yaml: String,
     trailblazeDeviceId: TrailblazeDeviceId?,
     trailFilePath: String?,
@@ -216,6 +219,20 @@ abstract class BaseHostTrailblazeTest(
       trailblazeDeviceId = trailblazeDeviceId,
     )
     return runTrail(trailItems, useRecordedSteps)
+  }
+
+  /**
+   * Non-suspend version for backwards compatibility (e.g., JUnit tests).
+   * Calls the suspend version using runBlocking.
+   */
+  fun runTrailblazeYaml(
+    yaml: String,
+    trailblazeDeviceId: TrailblazeDeviceId?,
+    trailFilePath: String?,
+    forceStopApp: Boolean = true,
+    useRecordedSteps: Boolean = true,
+  ) = runBlocking {
+    runTrailblazeYamlSuspend(yaml, trailblazeDeviceId, trailFilePath, forceStopApp, useRecordedSteps)
   }
 
   fun runFromResource(

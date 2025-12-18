@@ -11,7 +11,7 @@ interface TrailblazeRule {
   /**
    * Run a full Trailblaze test using the YAML test format
    */
-  fun run(testYaml: String, trailFilePath: String? = null, useRecordedSteps: Boolean = true): Boolean
+  fun run(testYaml: String, trailFilePath: String? = null, useRecordedSteps: Boolean = true)
 
   /**
    * Run natural language instructions with the agent.

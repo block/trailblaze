@@ -4,51 +4,48 @@ import ai.koog.prompt.executor.clients.LLMClient
 import ai.koog.prompt.executor.clients.openai.OpenAILLMClient
 import ai.koog.prompt.executor.ollama.client.OllamaClient
 import ai.koog.prompt.llm.LLMProvider
-import org.junit.Rule
 import org.junit.Test
 import xyz.block.trailblaze.android.AndroidTrailblazeRule
+import xyz.block.trailblaze.android.BaseAndroidStandaloneServerTest
 import xyz.block.trailblaze.android.InstrumentationArgUtil
 import xyz.block.trailblaze.android.devices.TrailblazeAndroidOnDeviceClassifier
-import xyz.block.trailblaze.devices.TrailblazeDevicePort
+import xyz.block.trailblaze.android.runner.rpc.OnDeviceRpcServer
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.http.DefaultDynamicLlmClient
+import xyz.block.trailblaze.http.DynamicLlmClient
 import xyz.block.trailblaze.http.TrailblazeHttpClientFactory
 import xyz.block.trailblaze.llm.RunYamlRequest
-import xyz.block.trailblaze.android.runner.rpc.OnDeviceRpcServer
+import xyz.block.trailblaze.llm.TrailblazeLlmModel
 
 /**
  * This would be the single test that runs the MCP server.  It blocks the instrumentation test
  * so we can send prompts/etc.
  */
-class AndroidStandaloneServerTest {
+class AndroidStandaloneServerTest : BaseAndroidStandaloneServerTest() {
 
-  @get:Rule
-  val trailblazeLoggingRule = TrailblazeAndroidLoggingRule(
-    trailblazeDeviceClassifiersProvider = TrailblazeAndroidOnDeviceClassifier.getDeviceClassifiersProvider(),
-  )
-
-  @Test
-  fun startServer() {
-    val adbReversePort = InstrumentationArgUtil.getInstrumentationArg(
-      TrailblazeDevicePort.INSTRUMENTATION_ARG_KEY
-    )?.toInt() ?: TrailblazeDevicePort.DEFAULT_ADB_REVERSE_PORT
-
-    val onDeviceRpcServer = OnDeviceRpcServer(
-      runTrailblazeYaml = { runYamlRequest ->
-        handleRunRequest(runYamlRequest)
-      },
-    )
-    onDeviceRpcServer.startServer(adbReversePort, true)
+  override fun handleRunRequest(runYamlRequest: RunYamlRequest) {
+    startInTestCoroutineScope {
+      AndroidTrailblazeRule(
+        trailblazeLlmModel = runYamlRequest.trailblazeLlmModel,
+        llmClient = getDynamicLlmClient(runYamlRequest.trailblazeLlmModel).createLlmClient(),
+        config = runYamlRequest.config,
+        trailblazeDeviceId = runYamlRequest.trailblazeDeviceId,
+      ).runSuspend(
+        testYaml = runYamlRequest.yaml,
+        useRecordedSteps = runYamlRequest.useRecordedSteps,
+        trailFilePath = runYamlRequest.trailFilePath,
+      )
+    }
   }
 
-  private fun handleRunRequest(runYamlRequest: RunYamlRequest) {
+  override fun getDynamicLlmClient(trailblazeLlmModel: TrailblazeLlmModel): DynamicLlmClient {
     val openAiApiKey: String? = InstrumentationArgUtil.getInstrumentationArg("OPENAI_API_KEY")
     val baseClient = TrailblazeHttpClientFactory.createInsecureTrustAllCertsHttpClient(
       timeoutInSeconds = 120,
       reverseProxyUrl = InstrumentationArgUtil.reverseProxyEndpoint(),
     )
-
-    val defaultDynamicLlmClient = DefaultDynamicLlmClient(
-      trailblazeLlmModel = runYamlRequest.trailblazeLlmModel,
+    return DefaultDynamicLlmClient(
+      trailblazeLlmModel = trailblazeLlmModel,
       llmClients = mutableMapOf<LLMProvider, LLMClient>(
         LLMProvider.Ollama to OllamaClient(baseClient = baseClient),
       ).apply {
@@ -63,15 +60,19 @@ class AndroidStandaloneServerTest {
         }
       },
     )
+  }
 
-    AndroidTrailblazeRule(
-      trailblazeLlmModel = defaultDynamicLlmClient.trailblazeLlmModel,
-      llmClient = defaultDynamicLlmClient.createLlmClient(),
-      config = runYamlRequest.config,
-    ).run(
-      testYaml = runYamlRequest.yaml,
-      useRecordedSteps = runYamlRequest.useRecordedSteps,
-      trailFilePath = null,
+  override fun getDeviceClassifiersProvider(): () -> List<TrailblazeDeviceClassifier> {
+    return TrailblazeAndroidOnDeviceClassifier.getDeviceClassifiersProvider()
+  }
+
+  @Test
+  fun startServer() {
+    val onDeviceRpcServer = OnDeviceRpcServer(
+      runTrailblazeYaml = { runYamlRequest: RunYamlRequest ->
+        handleRunRequest(runYamlRequest)
+      },
     )
+    onDeviceRpcServer.startServer(port = adbReversePort, wait = true)
   }
 }

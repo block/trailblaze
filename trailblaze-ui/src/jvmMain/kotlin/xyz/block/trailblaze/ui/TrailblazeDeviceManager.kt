@@ -1,15 +1,16 @@
 package xyz.block.trailblaze.ui
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import maestro.Driver
 import maestro.device.Device
 import maestro.device.DeviceService
 import maestro.device.Platform
@@ -17,14 +18,9 @@ import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
-import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
-import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRpcClient
-import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
-import xyz.block.trailblaze.mcp.android.ondevice.rpc.models.DeviceStatus.DeviceStatusRequest
-import xyz.block.trailblaze.mcp.android.ondevice.rpc.models.DeviceStatus.DeviceStatusResponse
+import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
-import xyz.block.trailblaze.session.TrailblazeSessionManager
-import xyz.block.trailblaze.ui.devices.DeviceSessionInfo
+import xyz.block.trailblaze.ui.devices.DeviceManagerState
 import xyz.block.trailblaze.ui.devices.DeviceState
 import xyz.block.trailblaze.ui.models.AppIconProvider
 
@@ -40,20 +36,6 @@ class TrailblazeDeviceManager(
   val getInstalledAppIds: (TrailblazeDeviceId) -> Set<String>,
 ) {
 
-  fun getAllSupportedDriverTypes() = settingsRepo.getAllSupportedDriverTypes()
-
-  /**
-   * Callback function that can be set by the host runner to actually cancel the running job.
-   * This is set by TrailblazeHostYamlRunner when it starts.
-   */
-  var cancelSessionCallback: ((deviceInstanceId: TrailblazeDeviceId) -> Boolean)? = null
-
-  fun getCurrentSelectedTargetApp(): TrailblazeHostAppTarget? = availableAppTargets
-    .filter { it != defaultHostAppTarget }
-    .firstOrNull { appTarget ->
-      appTarget.name == settingsRepo.serverStateFlow.value.appConfig.selectedTargetAppName
-    }
-
   private val targetDeviceFilter: (List<TrailblazeConnectedDeviceSummary>) -> List<TrailblazeConnectedDeviceSummary> =
     { connectedDeviceSummaries ->
       connectedDeviceSummaries.filter { connectedDeviceSummary ->
@@ -61,18 +43,17 @@ class TrailblazeDeviceManager(
       }
     }
 
-  private val _deviceStateFlow = MutableStateFlow(DeviceState())
-  val deviceStateFlow: StateFlow<DeviceState> = _deviceStateFlow.asStateFlow()
+  private val _deviceStateFlow = MutableStateFlow(DeviceManagerState())
+  val deviceStateFlow: StateFlow<DeviceManagerState> = _deviceStateFlow.asStateFlow()
 
-  private val scope = CoroutineScope(Dispatchers.IO)
-  private var pollingJob: Job? = null
+  private val loadDevicesScope = CoroutineScope(Dispatchers.IO)
 
   /**
    * Load available devices from the system.
    * This will update the deviceStateFlow with the discovered devices.
    */
   fun loadDevices() {
-    scope.launch {
+    loadDevicesScope.launch {
       withContext(Dispatchers.Default) {
         updateDeviceState { currDeviceState ->
           currDeviceState.copy(isLoading = true, error = null)
@@ -145,12 +126,21 @@ class TrailblazeDeviceManager(
 
         withContext(Dispatchers.Default) {
           updateDeviceState { currState ->
+            // Create DeviceState for each device, preserving existing session state
+            val newDeviceStates = filteredDevices.associate { device ->
+              val deviceId = device.trailblazeDeviceId
+
+              // Preserve existing session state if device already exists
+              val existingSessionId = currState.devices[deviceId]?.currentSessionId
+
+              deviceId to DeviceState(
+                device = device,
+                currentSessionId = existingSessionId
+              )
+            }
+
             currState.copy(
-              availableDevices = filteredDevices,
-              selectedDevices = currState.selectedDevices.mapNotNull { selected ->
-                // Try to maintain the same selected devices if they still exist
-                filteredDevices.firstOrNull { it.instanceId == selected.instanceId && it.trailblazeDriverType == selected.trailblazeDriverType }
-              }.toSet(),
+              devices = newDeviceStates,
               isLoading = false,
               error = null
             )
@@ -159,7 +149,7 @@ class TrailblazeDeviceManager(
       } catch (e: Exception) {
         updateDeviceState { deviceState ->
           deviceState.copy(
-            availableDevices = emptyList(),
+            devices = emptyMap(),
             isLoading = false,
             error = e.message ?: "Unknown error loading devices"
           )
@@ -168,214 +158,137 @@ class TrailblazeDeviceManager(
     }
   }
 
-  /**
-   * Select a specific device. If already selected, does nothing.
-   */
-  fun selectDevice(device: TrailblazeConnectedDeviceSummary) {
-    updateDeviceState { deviceState ->
-      val currentSelected = deviceState.selectedDevices
-      deviceState.copy(
-        selectedDevices = currentSelected + device
-      )
-    }
-  }
-
-  /**
-   * Toggle device selection.
-   */
-  fun toggleDevice(device: TrailblazeConnectedDeviceSummary) {
-    updateDeviceState { deviceState ->
-      val currentSelected = deviceState.selectedDevices
-      deviceState.copy(
-        selectedDevices = if (device in currentSelected) {
-          currentSelected - device
-        } else {
-          currentSelected + device
-        }
-      )
-    }
-  }
-
-  /**
-   * Set multiple selected devices at once.
-   */
-  fun setSelectedDevices(devices: Set<TrailblazeConnectedDeviceSummary>) {
-    updateDeviceState { deviceState ->
-      deviceState.copy(selectedDevices = devices)
-    }
-  }
-
-  fun updateDeviceState(deviceStateUpdater: (DeviceState) -> DeviceState) {
+  fun updateDeviceState(deviceStateUpdater: (DeviceManagerState) -> DeviceManagerState) {
     _deviceStateFlow.value = deviceStateUpdater(_deviceStateFlow.value)
   }
 
   /**
-   * Select devices by instance IDs. Useful for restoring saved device selection.
-   * @return set of devices that were found and selected
+   * Tracks a session on a device. Updates the DeviceState to Running.
    */
-  fun selectDevicesByInstanceIds(instanceIds: List<String>): Set<TrailblazeConnectedDeviceSummary> {
-    val devices = _deviceStateFlow.value.availableDevices.filter { it.instanceId in instanceIds }.toSet()
-    if (devices.isNotEmpty()) {
-      setSelectedDevices(devices)
-    }
-    return devices
-  }
-
-  /**
-   * Gets or creates a session manager for a specific device.
-   * For host-based drivers, this returns the local session manager.
-   * For on-device drivers, the session manager is a proxy that queries the device.
-   */
-  fun getOrCreateSessionManager(trailblazeDeviceId: TrailblazeDeviceId): TrailblazeSessionManager {
-    val currentManagers = _deviceStateFlow.value.sessionManagersByDevice
-    return currentManagers[trailblazeDeviceId] ?: run {
-      val newManager = TrailblazeSessionManager()
-      updateDeviceState { state ->
-        state.copy(
-          sessionManagersByDevice = state.sessionManagersByDevice + (trailblazeDeviceId to newManager)
-        )
-      }
-      newManager
-    }
-  }
-
-  /**
-   * Gets the session manager for a device if it exists.
-   */
-  fun getSessionManager(trailblazeDeviceId: TrailblazeDeviceId): TrailblazeSessionManager? {
-    return _deviceStateFlow.value.sessionManagersByDevice[trailblazeDeviceId]
-  }
-
-  /**
-   * Starts a session on a device. This creates/updates the session manager and tracks the session info.
-   */
-  fun trackActiveSession(
+  fun trackActiveHostSession(
     trailblazeDeviceId: TrailblazeDeviceId,
-    sessionId: String
+    sessionId: SessionId
   ) {
-    val sessionManager = getOrCreateSessionManager(trailblazeDeviceId)
-    sessionManager.startSession(xyz.block.trailblaze.logs.model.SessionId(sessionId))
-
     updateDeviceState { state ->
-      state.copy(
-        activeSessionsByDevice = state.activeSessionsByDevice + (trailblazeDeviceId to DeviceSessionInfo(
-          sessionId = sessionId,
-          trailblazeDeviceId = trailblazeDeviceId,
-          sessionManager = sessionManager
-        ))
-      )
+      val deviceState = state.devices[trailblazeDeviceId]
+      if (deviceState != null) {
+        val updatedDeviceState = deviceState.copy(
+          currentSessionId = sessionId
+        )
+        state.copy(
+          devices = state.devices + (trailblazeDeviceId to updatedDeviceState)
+        )
+      } else {
+        state // Device not found, no change
+      }
     }
   }
 
-  /**
-   * Ends a session on a device. This updates the session manager and clears the active session info.
-   */
-  fun endSession(trailblazeDeviceId: TrailblazeDeviceId) {
-    getSessionManager(trailblazeDeviceId)?.endSession()
+  fun getAllSupportedDriverTypes() = settingsRepo.getAllSupportedDriverTypes()
 
-    updateDeviceState { state ->
-      state.copy(
-        activeSessionsByDevice = state.activeSessionsByDevice - trailblazeDeviceId
-      )
+  fun getCurrentSelectedTargetApp(): TrailblazeHostAppTarget? = availableAppTargets
+    .filter { it != defaultHostAppTarget }
+    .firstOrNull { appTarget ->
+      appTarget.name == settingsRepo.serverStateFlow.value.appConfig.selectedTargetAppName
     }
-  }
+
+  // Store running test instances per device - allows forceful driver shutdown
+  private val maestroDriverByDeviceMap: MutableMap<TrailblazeDeviceId, Driver> = mutableMapOf()
+
+  // Store running coroutine jobs per device - allows cancellation of test execution
+  private val coroutineScopeByDevice: MutableMap<TrailblazeDeviceId, CoroutineScope> = mutableMapOf()
 
   /**
    * Cancels the current session on a device.
+   * Uses forceful cancellation - closes the driver and kills the coroutine job.
+   * 
+   * FORCEFULLY KILLS the running test on a specific device.
+   * This is aggressive - it shuts down the driver (killing child processes like XCUITest),
+   * then cancels the coroutine job. No more "cooperative" cancellation.
+   * The job cleanup (finally block) will handle removing it from the map.
    */
-  fun cancelSession(trailblazeDeviceId: TrailblazeDeviceId) {
-    cancelSessionCallback?.invoke(trailblazeDeviceId)
-    getSessionManager(trailblazeDeviceId)?.cancelCurrentSession()
-  }
+  fun cancelSessionForDevice(trailblazeDeviceId: TrailblazeDeviceId) {
+    println("FORCEFULLY CANCELLING test on device: ${trailblazeDeviceId.instanceId}")
 
-  /**
-   * Checks if a device currently has an active session.
-   */
-  fun isDeviceRunningSession(trailblazeDeviceId: TrailblazeDeviceId): Boolean {
-    return _deviceStateFlow.value.activeSessionsByDevice.containsKey(trailblazeDeviceId)
-  }
+    closeAndRemoveMaestroDriverForDevice(trailblazeDeviceId)
 
-  /**
-   * Gets the active session info for a device, if any.
-   */
-  fun getActiveSessionForDevice(trailblazeDeviceId: TrailblazeDeviceId): DeviceSessionInfo? {
-    return _deviceStateFlow.value.activeSessionsByDevice[trailblazeDeviceId]
-  }
+    // Step 2: Cancel the coroutine job (stop any remaining work)
+    cancelAndRemoveCoroutineScopeForDeviceIfActive(trailblazeDeviceId)
 
-  /**
-   * Clears all active sessions. Useful when reconnecting or resetting state.
-   */
-  fun clearActiveSessions() {
-    updateDeviceState { deviceState ->
-      deviceState.copy(activeSessionsByDevice = emptyMap())
+    updateDeviceState { deviceManagerState: DeviceManagerState ->
+      deviceManagerState.devices[trailblazeDeviceId]?.let { stateForDevice: DeviceState ->
+        deviceManagerState.copy(
+          devices = deviceManagerState.devices + (trailblazeDeviceId to stateForDevice.copy(currentSessionId = null))
+        )
+      } ?: deviceManagerState // Device not found, no change
     }
   }
 
-  /**
-   * Polls Android on-device instrumentation devices to check their status.
-   * This continuously monitors device-specific ports to see if a test is running.
-   */
-  fun startPollingDeviceStatus() {
-    pollingJob?.cancel()
-    pollingJob = scope.launch {
-      while (isActive) {
-        delay(2000) // Poll every 2 seconds
+  private fun closeAndRemoveMaestroDriverForDevice(trailblazeDeviceId: TrailblazeDeviceId) {
+    // Step 1: Get the running test and KILL its driver (kills child processes)
+    maestroDriverByDeviceMap[trailblazeDeviceId]?.let { maestroDriver ->
+      try {
+        println("Forcefully closing driver for device: ${trailblazeDeviceId.instanceId}")
+        // This closes the underlying driver and kills child processes (XCUITest, adb, etc.)
+        maestroDriver.close()
+        println("Driver closed successfully for device: ${trailblazeDeviceId.instanceId}")
+      } catch (e: Exception) {
+        println("Error closing driver (continuing anyway): ${e.message}")
+        // Continue with coroutine cancellation even if driver close fails
+      } finally {
+        maestroDriverByDeviceMap.remove(trailblazeDeviceId)
+      }
+    } ?: println("No Maestro Driver found for device: ${trailblazeDeviceId.instanceId}")
+  }
 
-        // Check all Android on-device instrumentation devices
-        val androidDevices = _deviceStateFlow.value.availableDevices.filter {
-          it.trailblazeDriverType == TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION
-        }
+  private fun cancelAndRemoveCoroutineScopeForDeviceIfActive(trailblazeDeviceId: TrailblazeDeviceId) {
+    coroutineScopeByDevice[trailblazeDeviceId]?.let { coroutineScopeForDevice ->
+      println("Cancelling coroutine job for device: ${trailblazeDeviceId.instanceId}")
+      println("  Scope isActive BEFORE cancel: ${coroutineScopeForDevice.isActive}")
+      try {
+        if (coroutineScopeForDevice.isActive) {
+          coroutineScopeForDevice.cancel(CancellationException("Session cancelled by user - driver forcefully closed"))
 
-        androidDevices.forEach { device: TrailblazeConnectedDeviceSummary ->
-          try {
-            // Query the on-device server status via adb port forwarding
-            val trailblazeDeviceId = device.trailblazeDeviceId
-            val onDeviceRpc = OnDeviceRpcClient(trailblazeDeviceId)
+          // Verify cancellation propagated by checking status over time
+          println("  Scope isActive AFTER cancel (immediate): ${coroutineScopeForDevice.isActive}")
 
-            onDeviceRpc.rpcCall(
-              request = DeviceStatusRequest(
-                trailblazeDeviceId = trailblazeDeviceId
-              ),
-              onSuccess = { deviceStatus ->
-                if (deviceStatus is DeviceStatusResponse.HasSession && deviceStatus.isRunning) {
-                  // Session is running on device - update session info
-                  val currentSession: DeviceSessionInfo? = getActiveSessionForDevice(device.trailblazeDeviceId)
-                  if (currentSession == null || currentSession.sessionId != deviceStatus.sessionId) {
-                    // Use device manager's startSession to handle everything
-                    trackActiveSession(device.trailblazeDeviceId, deviceStatus.sessionId)
-                  }
-                } else {
-                  // No session running - clear if we had marked one
-                  if (isDeviceRunningSession(device.trailblazeDeviceId)) {
-                    endSession(device.trailblazeDeviceId)
-                  }
-                }
-              },
-              onFailure = { failureResult: RpcResult.Failure ->
-                // Log the RPC error but don't throw - device might be unavailable temporarily
-                println(
-                  "Failed to get device status for ${device.instanceId}: ${
-                    TrailblazeJsonInstance.encodeToString(failureResult)
-                  }"
-                )
-              }
-            )
-          } catch (e: Exception) {
-            // Can't connect to device - this is expected if no instrumentation is running
-            // or if device is disconnected. Clear any session we had marked.
-            if (isDeviceRunningSession(device.trailblazeDeviceId)) {
-              endSession(device.trailblazeDeviceId)
+          // Monitor cancellation propagation
+          repeat(5) { attempt ->
+            Thread.sleep(100)
+            val stillActive = coroutineScopeForDevice.isActive
+            println("  Scope isActive check #${attempt + 1} (after ${(attempt + 1) * 100}ms): $stillActive")
+            if (!stillActive) {
+              println("  ✓ Scope successfully cancelled and inactive")
+              return@repeat
             }
           }
+
+          // If still active after 500ms, warn
+          if (coroutineScopeForDevice.isActive) {
+            println("  ⚠️ WARNING: Scope still active after 500ms - cancellation may not have propagated!")
+          }
+        } else {
+          println("  Scope was already inactive, nothing to cancel")
         }
+      } finally {
+        coroutineScopeByDevice.remove(trailblazeDeviceId)
+        println("  Scope removed from map for device: ${trailblazeDeviceId.instanceId}")
       }
     }
   }
 
-  /**
-   * Stops polling device status.
-   */
-  fun stopPollingDeviceStatus() {
-    pollingJob?.cancel()
+  fun getDeviceState(trailblazeDeviceId: TrailblazeDeviceId): DeviceState? {
+    return deviceStateFlow.value.devices[trailblazeDeviceId]
+  }
+
+  fun createNewCoroutineScopeForDevice(trailblazeDeviceId: TrailblazeDeviceId): CoroutineScope {
+    cancelAndRemoveCoroutineScopeForDeviceIfActive(trailblazeDeviceId)
+    return CoroutineScope(Dispatchers.IO).also {
+      coroutineScopeByDevice[trailblazeDeviceId] = it
+    }
+  }
+
+  fun setActiveDriverForDevice(trailblazeDeviceId: TrailblazeDeviceId, maestroDriver: Driver) {
+    maestroDriverByDeviceMap[trailblazeDeviceId] = maestroDriver
   }
 }

@@ -284,8 +284,7 @@ class RecordedTrailsRepoJvm(
     return callbackFlow {
       val fileWatcher = FileWatchService(
         dirToWatch = directory,
-        debounceDelayMs = 300L,
-        maxEventsPerSecond = 5
+        debounceDelayMs = 300L
       )
 
       try {

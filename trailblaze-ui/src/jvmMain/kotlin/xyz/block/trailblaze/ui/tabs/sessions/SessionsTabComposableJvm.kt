@@ -8,6 +8,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -17,6 +19,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.logs.model.SessionInfo
@@ -26,6 +29,7 @@ import xyz.block.trailblaze.report.utils.TrailblazeYamlSessionRecording.generate
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.ui.createLiveSessionDataProviderJvm
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
+import xyz.block.trailblaze.ui.createLogsFileSystemImageLoader
 import xyz.block.trailblaze.ui.models.TrailblazeServerState
 import xyz.block.trailblaze.ui.recordings.RecordedTrailsRepo
 import xyz.block.trailblaze.ui.tabs.session.LiveSessionDetailComposableWithSelectorSupport
@@ -44,21 +48,24 @@ fun SessionsTabComposableJvm(
   logsRepo: LogsRepo,
   serverState: TrailblazeServerState,
   updateState: (TrailblazeServerState) -> Unit,
-  deviceManager: TrailblazeDeviceManager? = null,
+  deviceManager: TrailblazeDeviceManager,
   recordedTrailsRepo: RecordedTrailsRepo,
 ) {
   val liveSessionDataProvider = remember(logsRepo, deviceManager) {
     createLiveSessionDataProviderJvm(logsRepo, deviceManager)
   }
 
-  // Maintain session list state at parent level
-  var sessions by remember { mutableStateOf(emptyList<SessionInfo>()) }
+  // Collect sessions reactively from the Flow - automatic updates!
+  val sessions by liveSessionDataProvider.getSessionsFlow().collectAsState()
 
-  // Keep track of session IDs for change detection
-  var lastSessionIds by remember { mutableStateOf(emptySet<String>()) }
-
-  // Track which sessions are imported
-  var importedSessionIds by remember { mutableStateOf(emptySet<xyz.block.trailblaze.logs.model.SessionId>()) }
+  // Track which sessions are imported - update whenever sessions change
+  val importedSessionIds by remember {
+    derivedStateOf {
+      sessions.filter { SessionImporter.isImportedSession(it.sessionId.value, logsRepo) }
+        .map { it.sessionId }
+        .toSet()
+    }
+  }
 
   // Get current session from serverState (persists across tab switches)
   val currentSessionId = serverState.appConfig.currentSessionId
@@ -77,47 +84,9 @@ fun SessionsTabComposableJvm(
   var showImportDialog by remember { mutableStateOf(false) }
   var importResult: SessionImportResult? by remember { mutableStateOf(null) }
 
-  // Simple polling mechanism - check for changes every 2 seconds
-  LaunchedEffect(liveSessionDataProvider) {
-    while (isActive) {
-      withContext(Dispatchers.IO) {
-        try {
-          val currentSessionIds = liveSessionDataProvider.getSessionIds().toSet()
-
-          // Always reload sessions to catch status changes (e.g., in-progress -> completed)
-          // Session status can change without the session IDs changing
-          val loadedSessions = currentSessionIds.mapNotNull { sessionId ->
-            liveSessionDataProvider.getSessionInfo(sessionId)
-          }
-
-          // Only update state if something actually changed
-          val hasChanges = currentSessionIds != lastSessionIds ||
-              sessions.size != loadedSessions.size ||
-              sessions.zip(loadedSessions).any { (old, new) ->
-                old.latestStatus != new.latestStatus ||
-                    old.sessionId != new.sessionId
-              }
-
-          if (hasChanges) {
-            sessions = loadedSessions
-            lastSessionIds = currentSessionIds.map { it.value }.toSet()
-            importedSessionIds = sessions.filter { SessionImporter.isImportedSession(it.sessionId.value, logsRepo) }
-              .map { it.sessionId }
-              .toSet()
-          }
-        } catch (e: Exception) {
-          e.printStackTrace()
-        }
-      }
-
-      delay(2000) // Poll every 2 seconds
-    }
-  }
-
   val coroutineScope = rememberCoroutineScope()
 
   if (selectedSession == null) {
-
     SessionListComposable(
       testResultsSummaryView = { TestResultsComposableJvm(logsRepo) },
       sessions = sessions,
@@ -206,13 +175,15 @@ fun SessionsTabComposableJvm(
   } else {
     LiveSessionDetailComposableWithSelectorSupport(
       sessionDataProvider = liveSessionDataProvider,
-      imageLoader = xyz.block.trailblaze.ui.createLogsFileSystemImageLoader(),
+      imageLoader = createLogsFileSystemImageLoader(),
       toMaestroYaml = { jsonObject: JsonObject -> TemplateHelpers.asMaestroYaml(jsonObject) },
       toTrailblazeYaml = TemplateHelpers::asTrailblazeYaml,
       generateRecordingYaml = {
-        val logs = liveSessionDataProvider.getLogsForSession(selectedSession.sessionId)
-        val yamlContent = logs.generateRecordedYaml(selectedSession.trailConfig)
-        yamlContent
+        runBlocking {
+          val logs = liveSessionDataProvider.getLogsForSession(selectedSession.sessionId)
+          val yamlContent = logs.generateRecordedYaml(selectedSession.trailConfig)
+          yamlContent
+        }
       },
       session = selectedSession,
       initialZoomOffset = serverState.appConfig.sessionDetailZoomOffset,

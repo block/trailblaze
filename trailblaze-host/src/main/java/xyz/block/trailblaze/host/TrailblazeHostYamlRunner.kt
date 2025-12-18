@@ -1,41 +1,17 @@
 package xyz.block.trailblaze.host
 
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.launch
-import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.exception.TrailblazeSessionCancelledException
-import xyz.block.trailblaze.host.ios.IosHostUtils
+import xyz.block.trailblaze.host.ios.MobileDeviceUtils
 import xyz.block.trailblaze.host.rules.BaseHostTrailblazeTest
 import xyz.block.trailblaze.host.yaml.RunOnHostParams
 import xyz.block.trailblaze.http.DynamicLlmClient
 import xyz.block.trailblaze.llm.RunYamlRequest
-import xyz.block.trailblaze.logs.model.SessionStatus.Ended
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
-import xyz.block.trailblaze.util.AndroidHostAdbUtils
 import xyz.block.trailblaze.util.HostAndroidDeviceConnectUtils
 
 object TrailblazeHostYamlRunner {
-  // Store jobs per device instance ID to support multiple concurrent device tests
-  private val jobs: MutableMap<TrailblazeDeviceId, Job> = mutableMapOf()
-
-  /**
-   * Cancels the running test for a specific device.
-   * @return true if a job was found and cancelled, false otherwise
-   */
-  fun cancelSession(trailblazeDeviceId: TrailblazeDeviceId): Boolean {
-    val job = jobs[trailblazeDeviceId]
-    return if (job?.isActive == true) {
-      job.cancel()
-      jobs.remove(trailblazeDeviceId)
-      true
-    } else {
-      false
-    }
-  }
 
   /**
    * Runs a Trailblaze YAML test on a specific host-connected device with the given LLM client.
@@ -45,12 +21,9 @@ object TrailblazeHostYamlRunner {
     runOnHostParams: RunOnHostParams,
     deviceManager: TrailblazeDeviceManager,
   ) {
-    // Set the callback so the device manager can cancel our jobs
-    deviceManager.cancelSessionCallback = ::cancelSession
 
     val device = runOnHostParams.device
     val trailblazeDeviceId = device.trailblazeDeviceId
-    val deviceInstanceId = trailblazeDeviceId.instanceId
     val onProgressMessage = runOnHostParams.onProgressMessage
 
     if (runOnHostParams.trailblazeDevicePlatform == TrailblazeDevicePlatform.ANDROID) {
@@ -60,9 +33,6 @@ object TrailblazeHostYamlRunner {
         deviceId = trailblazeDeviceId,
       )
     }
-
-    // Get session manager from device manager
-    val sessionManager = deviceManager.getOrCreateSessionManager(trailblazeDeviceId)
 
     onProgressMessage("Initializing ${device.trailblazeDriverType} test runner...")
 
@@ -74,118 +44,82 @@ object TrailblazeHostYamlRunner {
         ) ?: emptySet(),
       dynamicLlmClient = dynamicLlmClient,
       trailblazeLlmModel = runOnHostParams.runYamlRequest.trailblazeLlmModel,
-      sessionManager = sessionManager,
       config = runOnHostParams.runYamlRequest.config,
       appTarget = runOnHostParams.targetTestApp,
     ) {
       override fun ensureTargetAppIsStopped() {
-        runOnHostParams.targetTestApp
-          ?.getPossibleAppIdsForPlatform(
-            runOnHostParams.trailblazeDevicePlatform,
-          )?.let { possibleAppIds ->
-            when (runOnHostParams.trailblazeDevicePlatform) {
-              TrailblazeDevicePlatform.ANDROID -> {
-                AndroidHostAdbUtils
-                  .listInstalledPackages(
-                    deviceId = trailblazeDeviceId,
-                  )
-                  .filter { installedAppId -> possibleAppIds.any { installedAppId == it } }
-                  .forEach { appId ->
-                    AndroidHostAdbUtils.forceStopApp(
-                      deviceId = trailblazeDeviceId,
-                      appId = appId,
-                    )
-                  }
-              }
-
-              TrailblazeDevicePlatform.IOS -> {
-                possibleAppIds.forEach { appId ->
-                  IosHostUtils.killAppOnSimulator(
-                    deviceId = trailblazeDeviceId.instanceId,
-                    appId = appId,
-                  )
-                }
-              }
-
-              TrailblazeDevicePlatform.WEB -> {
-                // Currently nothing to do here
-              }
-            }
-          }
+        val possibleAppIds = runOnHostParams.targetTestApp
+          ?.getPossibleAppIdsForPlatform(runOnHostParams.trailblazeDevicePlatform)
+          ?: emptySet()
+        MobileDeviceUtils.ensureAppsAreForceStopped(
+          possibleAppIds = possibleAppIds,
+          trailblazeDeviceId = trailblazeDeviceId
+        )
       }
     }
 
     // Get the logger from the test's logging rule
     val trailblazeLogger = hostTbRunner.loggingRule.trailblazeLogger
 
-    // Cancel any existing job for this device
-    val existingJob = jobs[trailblazeDeviceId]
-    if (existingJob?.isActive == true) {
-      // Signal cancellation through the session manager so the agent loop can detect it
-      sessionManager.cancelCurrentSession()
+    // Store the test instance for forceful shutdown on cancellation
+    deviceManager.setActiveDriverForDevice(trailblazeDeviceId, hostTbRunner.hostRunner.loggingDriver)
 
-      // Also cancel the coroutine job
-      existingJob.cancel()
-    }
+    // Launch the test in a coroutine - store Job IMMEDIATELY for instant cancellation
+    val runYamlRequest: RunYamlRequest = runOnHostParams.runYamlRequest
+    val testName = runYamlRequest.testName
 
-    // Create and store a new job for this device
-    val newJob = CoroutineScope(Dispatchers.IO).launch {
-      val runYamlRequest: RunYamlRequest = runOnHostParams.runYamlRequest
-      val testName = runYamlRequest.testName
+    val sessionId = trailblazeLogger.startSession(testName)
 
-      trailblazeLogger.startSession(testName)
+    // Start session via device manager (handles session manager + state updates)
+    deviceManager.trackActiveHostSession(
+      trailblazeDeviceId = trailblazeDeviceId,
+      sessionId = sessionId
+    )
 
-      // Start session via device manager (handles session manager + state updates)
-      deviceManager.trackActiveSession(
+    onProgressMessage("Connecting to ${device.platform} device...")
+
+    try {
+      onProgressMessage("Executing YAML test...")
+      println("▶️ Starting runTrailblazeYamlSuspend for device: ${trailblazeDeviceId.instanceId}")
+      hostTbRunner.runTrailblazeYamlSuspend(
+        yaml = runOnHostParams.runYamlRequest.yaml,
+        forceStopApp = runOnHostParams.forceStopTargetApp,
+        trailFilePath = runOnHostParams.runYamlRequest.trailFilePath,
         trailblazeDeviceId = trailblazeDeviceId,
-        sessionId = trailblazeLogger.getCurrentSessionId()?.value ?: error("Session not started")
       )
-
-      onProgressMessage("Connecting to ${device.platform} device...")
-
-      try {
-        onProgressMessage("Executing YAML test...")
-        hostTbRunner.runTrailblazeYaml(
-          yaml = runOnHostParams.runYamlRequest.yaml,
-          forceStopApp = runOnHostParams.forceStopTargetApp,
-          trailFilePath = runOnHostParams.runYamlRequest.trailFilePath,
-          trailblazeDeviceId = trailblazeDeviceId,
-        )
-        onProgressMessage("Test execution completed successfully")
-        trailblazeLogger.sendSessionEndLog(sessionManager, isSuccess = true)
-      } catch (e: TrailblazeSessionCancelledException) {
-        // Handle Trailblaze session cancellation - user cancelled via UI
-        onProgressMessage("Test session cancelled")
-        trailblazeLogger.sendEndLog(
-          Ended.Cancelled(
-            durationMs = 0L,
-            cancellationMessage = e.message ?: "Session cancelled by user",
-          ),
-        )
-        // Don't re-throw, just end gracefully
-      } catch (e: CancellationException) {
-        // Handle coroutine cancellation explicitly
-        onProgressMessage("Test execution cancelled")
-        trailblazeLogger.sendEndLog(
-          Ended.Cancelled(
-            durationMs = 0L,
-            cancellationMessage = "Test execution was cancelled by user",
-          ),
-        )
-        // Re-throw to propagate cancellation
-        throw e
-      } catch (e: Exception) {
-        onProgressMessage("Test execution failed: ${e.message}")
-        trailblazeLogger.sendSessionEndLog(sessionManager, isSuccess = false, exception = e)
-      } finally {
-        // End session via device manager (handles session manager + state updates)
-        deviceManager.endSession(trailblazeDeviceId)
-        // Clean up this job from the map
-        jobs.remove(trailblazeDeviceId)
-      }
+      println("✅ runTrailblazeYamlSuspend completed successfully for device: ${trailblazeDeviceId.instanceId}")
+      onProgressMessage("Test execution completed successfully")
+      trailblazeLogger.sendSessionEndLog(
+        isSuccess = true
+      )
+    } catch (e: TrailblazeSessionCancelledException) {
+      // Handle Trailblaze session cancellation - user cancelled via UI
+      println("🚫 TrailblazeSessionCancelledException caught for device: ${trailblazeDeviceId.instanceId}")
+      onProgressMessage("Test session cancelled")
+      // DON'T write log here - cancellation log is written by the UI layer
+      // (JvmLiveSessionDataProvider.writeCancellationLog) to avoid duplicates
+      // Don't re-throw, just end gracefully
+    } catch (e: CancellationException) {
+      // Handle coroutine cancellation explicitly
+      println("🚫 CancellationException caught for device: ${trailblazeDeviceId.instanceId} - ${e.message}")
+      onProgressMessage("Test execution cancelled")
+      // DON'T write log here - cancellation log is already written by the UI layer
+      // to avoid duplicate logs. Just do cleanup in finally block.
+      // Re-throw to propagate cancellation
+      throw e
+    } catch (e: Exception) {
+      println("❌ Exception caught in runHostYaml for device: ${trailblazeDeviceId.instanceId} - ${e::class.simpleName}: ${e.message}")
+      onProgressMessage("Test execution failed: ${e.message}")
+      trailblazeLogger.sendSessionEndLog(
+        isSuccess = false,
+        exception = e,
+      )
+    } finally {
+      // IMPORTANT: This ALWAYS executes, even when cancelled!
+      // Ensures device manager state is updated and job is cleaned up
+      println("🧹 Finally block executing for device: ${trailblazeDeviceId.instanceId} - calling cancelSessionForDevice")
+      deviceManager.cancelSessionForDevice(trailblazeDeviceId)
+      println("🏁 Finally block completed for device: ${trailblazeDeviceId.instanceId}")
     }
-
-    // Store the new job
-    jobs[trailblazeDeviceId] = newJob
   }
 }

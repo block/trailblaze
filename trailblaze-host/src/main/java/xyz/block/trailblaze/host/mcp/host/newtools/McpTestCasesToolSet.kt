@@ -6,15 +6,17 @@ import ai.koog.agents.core.tools.reflect.ToolSet
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.MaestroTrailblazeAgent
 import xyz.block.trailblaze.agent.TrailblazeRunner
+import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
+import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.maestro.MaestroYamlParser
 import xyz.block.trailblaze.mcp.TrailblazeMcpSseSessionContext
 import xyz.block.trailblaze.report.utils.LogsRepo
-import xyz.block.trailblaze.report.utils.TrailblazeSessionListener
 import java.io.File
 
 @Suppress("unused")
@@ -65,28 +67,41 @@ class McpTestCasesToolSet(
     // Send progress notifications if we have a session context with progress service
     sessionContext?.let { sessionContext ->
       val mcpSseSessionId = sessionContext.mcpSseSessionId
+      val trailblazeSessionId = trailblazeLogger.getCurrentSessionId()
       println("Executing prompt for session: $mcpSseSessionId")
       ioScope.launch {
-        logsRepo.startWatchingTrailblazeSession(object : TrailblazeSessionListener {
-          override val trailblazeSessionId: xyz.block.trailblaze.logs.model.SessionId =
-            trailblazeLogger.getCurrentSessionId() ?: error("Session not started")
+        var progress = 0
+        var lastLogCount = 0
 
-          var progress = 0
-          override fun onSessionStarted() {
+        // Collect logs reactively from the Flow
+        logsRepo.getSessionLogsFlow(trailblazeSessionId).collect { logs ->
+          // Check if this is the first log (session started)
+          if (logs.isNotEmpty() && lastLogCount == 0) {
             sessionContext.sendIndeterminateProgressMessage(progress++, "Session Started for session $mcpSseSessionId")
           }
 
-          override fun onUpdate(message: String) {
+          // Send progress for new logs
+          val newLogs = logs.drop(lastLogCount)
+          newLogs.forEach { log ->
+            val message = when (log) {
+              is TrailblazeLog.TrailblazeLlmRequestLog -> "LLM Request: ${log.instructions.take(50)}..."
+              is TrailblazeLog.TrailblazeSessionStatusChangeLog -> "Status: ${log.sessionStatus}"
+              else -> "Log: ${log::class.simpleName}"
+            }
             sessionContext.sendIndeterminateProgressMessage(progress++, message)
           }
+          lastLogCount = logs.size
 
-          override fun onSessionEnded() {
+          // Check if session ended
+          val lastLog = logs.lastOrNull()
+          if (lastLog is TrailblazeLog.TrailblazeSessionStatusChangeLog &&
+            lastLog.sessionStatus is SessionStatus.Ended
+          ) {
             sessionContext.sendIndeterminateProgressMessage(progress++, "Session Ended for session $mcpSseSessionId")
             println("Session $mcpSseSessionId ended. Stopping progress updates.")
             this@launch.cancel()
-            logsRepo.stopWatching(this.trailblazeSessionId)
           }
-        })
+        }
       }
     }
 

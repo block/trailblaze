@@ -10,7 +10,8 @@ import kotlinx.serialization.Serializable
  */
 @Serializable
 data class TrailblazeDeviceId(
+  /** The value from `adb devices` or the simulator id */
   val instanceId: String,
-  val trailblazeDevicePlatform: TrailblazeDevicePlatform
+  val trailblazeDevicePlatform: TrailblazeDevicePlatform,
 )
 

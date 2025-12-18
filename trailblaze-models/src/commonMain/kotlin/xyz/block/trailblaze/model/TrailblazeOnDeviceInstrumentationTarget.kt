@@ -14,10 +14,5 @@ data class TrailblazeOnDeviceInstrumentationTarget(
       testAppId = "xyz.block.trailblaze.runner",
       fqTestName = "xyz.block.trailblaze.AndroidStandaloneServerTest",
     )
-
-    val BlockOnDeviceInstrumentationTarget = TrailblazeOnDeviceInstrumentationTarget(
-      testAppId = "xyz.block.trailblaze.runner",
-      fqTestName = "xyz.block.trailblaze.block.BlockAndroidStandaloneServerTest",
-    )
   }
 }

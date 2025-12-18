@@ -10,7 +10,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.mcp.RpcHandler
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
-import xyz.block.trailblaze.session.TrailblazeSessionManager
+
 import xyz.block.trailblaze.util.toSnakeCaseIdentifier
 import xyz.block.trailblaze.util.toSnakeCaseWithId
 import xyz.block.trailblaze.yaml.TrailblazeYaml
@@ -21,7 +21,6 @@ import xyz.block.trailblaze.yaml.TrailblazeYaml
  */
 class RunYamlRequestHandler(
   private val trailblazeLogger: TrailblazeLogger,
-  private val sessionManager: TrailblazeSessionManager,
   private val backgroundScope: CoroutineScope,
   private val getCurrentJob: () -> Job?,
   private val setCurrentJob: (Job?) -> Unit,
@@ -65,17 +64,14 @@ class RunYamlRequestHandler(
 
       // Start session with method name for consistency
       val startedSessionId = trailblazeLogger.startSession(methodName)
-      sessionManager.startSession(startedSessionId)
       // Launch the job in the background scope so it doesn't block the response
       val job = backgroundScope.launch {
         try {
           runTrailblazeYaml(request)
-          trailblazeLogger.sendSessionEndLog(sessionManager, isSuccess = true)
+          trailblazeLogger.sendSessionEndLog(isSuccess = true)
         } catch (e: Exception) {
           e.printStackTrace()
-          trailblazeLogger.sendSessionEndLog(sessionManager, isSuccess = false, exception = e)
-        } finally {
-          sessionManager.endSession()
+          trailblazeLogger.sendSessionEndLog(isSuccess = false, exception = e)
         }
       }
 

@@ -25,6 +25,10 @@ object AdbCommandUtil {
     }
   }
 
+  fun getSerialNumber(): String {
+    return execShellCommand("getprop ro.boot.serialno")
+  }
+
   fun grantPermissions(targetAppPackageName: String, permissions: List<String>) {
     permissions.forEach { permission ->
       grantPermission(targetAppPackageName, permission)

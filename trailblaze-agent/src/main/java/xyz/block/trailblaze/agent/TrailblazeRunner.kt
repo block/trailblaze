@@ -1,8 +1,12 @@
 package xyz.block.trailblaze.agent
 
 import ai.koog.prompt.executor.clients.LLMClient
+import ai.koog.prompt.executor.clients.LLMClientException
 import ai.koog.prompt.message.Message
 import ai.koog.prompt.params.LLMParams
+import kotlinx.coroutines.currentCoroutineContext
+import kotlin.coroutines.coroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
@@ -16,13 +20,11 @@ import xyz.block.trailblaze.api.TestAgentRunner
 import xyz.block.trailblaze.api.TrailblazeAgent
 import xyz.block.trailblaze.exception.MaxCallsLimitReachedException
 import xyz.block.trailblaze.exception.TrailblazeException
-import xyz.block.trailblaze.exception.TrailblazeSessionCancelledException
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.logs.model.TraceId.Companion.TraceOrigin
-import xyz.block.trailblaze.session.TrailblazeSessionManager
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.util.TemplatingUtil
 import xyz.block.trailblaze.yaml.DirectionStep
@@ -37,7 +39,6 @@ class TrailblazeRunner(
   private val maxSteps: Int = 50,
   private val trailblazeToolRepo: TrailblazeToolRepo,
   val trailblazeLogger: TrailblazeLogger,
-  val sessionManager: TrailblazeSessionManager = TrailblazeSessionManager(),
   systemPromptTemplate: String? = null,
   userObjectiveTemplate: String = defaultUserObjective,
   userMessageTemplate: String = defaultUserMessage,
@@ -72,18 +73,22 @@ class TrailblazeRunner(
   override fun run(
     prompt: PromptStep,
     stepStatus: PromptStepStatus,
+  ): AgentTaskStatus = runBlocking {
+    runSuspend(prompt, stepStatus)
+  }
+
+  /**
+   * Suspend version of run() that properly handles coroutine cancellation.
+   * Checks for cancellation at the start of each LLM loop iteration.
+   */
+  override suspend fun runSuspend(
+    prompt: PromptStep,
+    stepStatus: PromptStepStatus,
   ): AgentTaskStatus {
     logObjectiveStart(prompt)
     llmClientHelper.setForceStepStatusUpdate(false)
     val stepToolStrategy = prompt.getToolStrategy()
     do {
-      // Check if session has been cancelled before making next LLM call
-      val isCancelled = isSessionCancelled()
-      if (isCancelled) {
-        stepStatus.markAsFailed()
-        throw TrailblazeSessionCancelledException()
-      }
-
       stepStatus.prepareNextStep()
       val requestStartTimeMs = Clock.System.now()
 
@@ -94,7 +99,8 @@ class TrailblazeRunner(
       val traceId = TraceId.generate(TraceOrigin.LLM)
 
       val toolDescriptors = trailblazeToolRepo.getToolDescriptorsForStep(prompt)
-      val koogLlmResponseMessages: List<Message.Response> = runBlocking {
+      val koogLlmResponseMessages: List<Message.Response> = try {
+        // Call LLM directly (we're already in suspend context)
         llmClientHelper.callLlm(
           KoogLlmRequestData(
             messages = koogLlmRequestMessages,
@@ -105,6 +111,11 @@ class TrailblazeRunner(
               LLMParams.ToolChoice.Auto
             },
           ),
+        )
+      } catch (e: LLMClientException) {
+        throw TrailblazeException(
+          "LLM call failed for ${trailblazeLlmModel.modelId} (${trailblazeLlmModel.trailblazeLlmProvider.id}) with Exception Message: ${e.message}",
+          e
         )
       }
 
@@ -127,11 +138,6 @@ class TrailblazeRunner(
       )
 
       if (stepStatus.currentStep >= maxSteps) {
-        // Mark in session manager that max calls limit was reached
-        sessionManager.markMaxCallsLimitReached(
-          maxCalls = maxSteps,
-          objectivePrompt = stepStatus.promptStep.prompt,
-        )
         // Create exception for logging and throwing
         val exception = MaxCallsLimitReachedException(
           maxCalls = maxSteps,
@@ -139,7 +145,6 @@ class TrailblazeRunner(
         )
         // Send end log immediately since this is a terminal condition
         trailblazeLogger.sendSessionEndLog(
-          sessionManager = sessionManager,
           isSuccess = false,
           exception = exception,
         )
@@ -151,12 +156,6 @@ class TrailblazeRunner(
     logObjectiveComplete(stepStatus)
     return stepStatus.currentStatus.value
   }
-
-  /**
-   * Check if the current session has been cancelled.
-   * The session manager is the single source of truth for cancellation state.
-   */
-  private fun isSessionCancelled(): Boolean = sessionManager.isCurrentSessionCancelled()
 
   override fun recover(
     promptStep: PromptStep,

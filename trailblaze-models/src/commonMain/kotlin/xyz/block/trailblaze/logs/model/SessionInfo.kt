@@ -3,6 +3,7 @@ package xyz.block.trailblaze.logs.model
 import kotlinx.datetime.Instant
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.Transient
+import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.yaml.TrailConfig
@@ -16,6 +17,7 @@ data class SessionInfo(
   val durationMs: Long,
   val trailFilePath: String?,
   val hasRecordedSteps: Boolean,
+  val trailblazeDeviceId: TrailblazeDeviceId? = null,
   val trailblazeDeviceInfo: TrailblazeDeviceInfo? = null,
   val testName: String? = null,
   val testClass: String? = null,
@@ -54,6 +56,7 @@ fun List<TrailblazeLog>.getSessionInfo(): SessionInfo {
     sessionId = firstLog.session,
     timestamp = firstLog.timestamp,
     latestStatus = this.getSessionStatus(),
+    trailblazeDeviceId = sessionStartedInfo?.trailblazeDeviceId,
     testName = sessionStartedInfo?.testMethodName,
     testClass = sessionStartedInfo?.testClassName,
     trailblazeDeviceInfo = sessionStartedInfo?.trailblazeDeviceInfo,

@@ -52,7 +52,6 @@ internal fun SessionDetailHeader(
   alwaysAtBottom: Boolean,
   onAlwaysAtBottomChanged: (Boolean) -> Unit,
   isSessionInProgress: Boolean,
-  isCancelling: Boolean,
   onCancelSession: () -> Unit,
   onOpenLogsFolder: () -> Unit,
   onExportSession: () -> Unit,
@@ -153,16 +152,11 @@ internal fun SessionDetailHeader(
         Spacer(modifier = Modifier.width(16.dp))
         Button(
           onClick = onCancelSession,
-          enabled = !isCancelling,
           colors = androidx.compose.material3.ButtonDefaults.buttonColors(
             containerColor = MaterialTheme.colorScheme.error
           )
         ) {
-          if (isCancelling) {
-            Text("Cancelling...")
-          } else {
-            Text("Cancel Session")
-          }
+          Text("Cancel Session")
         }
       } else {
         var showDeleteConfirmation by remember { mutableStateOf(false) }

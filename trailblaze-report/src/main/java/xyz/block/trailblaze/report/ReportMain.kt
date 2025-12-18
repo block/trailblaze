@@ -107,6 +107,9 @@ class GenerateReportCliCommand :
       reportTemplateFile = File(logsRepo.logsDir.parentFile, "trailblaze_report_template.html"),
       useRelativeImageUrls = useRelativeImageUrls,
     )
+
+    // Clean up file watchers to allow JVM to exit
+    logsRepo.close()
   }
 }
 

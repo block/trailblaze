@@ -26,30 +26,11 @@ import androidx.compose.foundation.rememberScrollbarAdapter
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material.icons.filled.FolderOpen
-import androidx.compose.material.icons.filled.InsertDriveFile
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.MoveDown
-import androidx.compose.material.icons.filled.Save
-import androidx.compose.material.icons.outlined.TextDecrease
-import androidx.compose.material.icons.outlined.TextIncrease
-import androidx.compose.material.icons.outlined.ZoomIn
-import androidx.compose.material.icons.outlined.ZoomOut
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.Checkbox
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -73,17 +54,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
-import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.llm.LlmSessionUsageAndCost
 import xyz.block.trailblaze.llm.LlmUsageAndCostExt.computeUsageSummary
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.inProgress
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
-import xyz.block.trailblaze.ui.Platform
 import xyz.block.trailblaze.ui.composables.CodeBlock
 import xyz.block.trailblaze.ui.composables.SelectableText
-import xyz.block.trailblaze.ui.composables.getIcon
-import xyz.block.trailblaze.ui.getPlatform
 import xyz.block.trailblaze.ui.images.ImageLoader
 import xyz.block.trailblaze.ui.images.NetworkImageLoader
 import xyz.block.trailblaze.ui.recordings.ExistingTrail
@@ -118,7 +95,6 @@ fun SessionDetailComposable(
   onDeleteSession: () -> Unit = {},
   onOpenLogsFolder: () -> Unit = {},
   onExportSession: () -> Unit = {},
-  isCancelling: Boolean = false,
   // Persistent UI state
   initialZoomOffset: Int = 0,
   initialFontScale: Float = 1f,
@@ -137,125 +113,25 @@ fun SessionDetailComposable(
     Column(
       modifier = Modifier.fillMaxSize().padding(16.dp)
     ) {
-      // Header with title and action buttons
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-      ) {
-        Row(
-          verticalAlignment = Alignment.CenterVertically
-        ) {
-          IconButton(onClick = onBackClick) {
-            Icon(
-              imageVector = Icons.Default.ArrowBack,
-              contentDescription = "Back to sessions",
-              modifier = Modifier.size(20.dp)
-            )
-          }
-          Spacer(modifier = Modifier.width(8.dp))
-          SelectableText(
-            text = "Trailblaze Logs",
-            style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.Bold,
-          )
-        }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-          if (sessionDetail.session.latestStatus.inProgress) {
-            Button(onClick = onCancelSession, enabled = !isCancelling) {
-              if (isCancelling) {
-                Text("Cancelling...")
-              } else {
-                Text("Cancel Session")
-              }
-            }
-          } else {
-            var showDeleteConfirmation by remember { mutableStateOf(false) }
-            var showMoreMenu by remember { mutableStateOf(false) }
-            Box {
-              IconButton(onClick = { showMoreMenu = !showMoreMenu }) {
-                Icon(
-                  imageVector = Icons.Default.MoreVert,
-                  contentDescription = "More options",
-                  modifier = Modifier.size(18.dp)
-                )
-              }
-              DropdownMenu(
-                expanded = showMoreMenu,
-                onDismissRequest = { showMoreMenu = false }
-              ) {
-                DropdownMenuItem(
-                  leadingIcon = {
-                    Icon(
-                      imageVector = Icons.Default.Folder,
-                      contentDescription = "Open Logs Folder"
-                    )
-                  },
-                  text = { Text("Open Logs Folder") },
-                  onClick = {
-                    onOpenLogsFolder()
-                    showMoreMenu = false
-                  }
-                )
-                DropdownMenuItem(
-                  leadingIcon = {
-                    Icon(
-                      imageVector = Icons.Default.Save,
-                      contentDescription = "Export Session"
-                    )
-                  },
-                  text = { Text("Export Session") },
-                  onClick = {
-                    onExportSession()
-                    showMoreMenu = false
-                  }
-                )
-                DropdownMenuItem(
-                  leadingIcon = {
-                    Icon(
-                      imageVector = Icons.Default.Delete,
-                      contentDescription = "Delete Session"
-                    )
-                  },
-                  text = { Text("Delete Session") },
-                  onClick = {
-                    showDeleteConfirmation = true
-                    showMoreMenu = false
-                  }
-                )
-              }
-            }
-            if (showDeleteConfirmation) {
-              AlertDialog(
-                onDismissRequest = { showDeleteConfirmation = false },
-                title = { Text("Delete Session?") },
-                text = {
-                  Text(
-                    "Are you sure you want to delete this session? This action cannot be undone."
-                  )
-                },
-                confirmButton = {
-                  TextButton(
-                    onClick = {
-                      showDeleteConfirmation = false
-                      onDeleteSession()
-                    }
-                  ) {
-                    Text("Delete")
-                  }
-                },
-                dismissButton = {
-                  TextButton(
-                    onClick = { showDeleteConfirmation = false }
-                  ) {
-                    Text("Cancel")
-                  }
-                }
-              )
-            }
-          }
-        }
-      }
+      // Use shared header component
+      SessionDetailHeader(
+        onBackClick = onBackClick,
+        viewMode = initialViewMode,
+        onViewModeChanged = {}, // No-op for empty logs
+        alwaysAtBottom = false,
+        onAlwaysAtBottomChanged = {}, // No-op for empty logs
+        isSessionInProgress = sessionDetail.session.latestStatus.inProgress,
+        onCancelSession = onCancelSession,
+        onOpenLogsFolder = onOpenLogsFolder,
+        onExportSession = onExportSession,
+        onDeleteSession = onDeleteSession,
+        zoomOffset = 0,
+        onZoomOffsetChanged = {}, // No-op for empty logs
+        fontSizeScale = 1f,
+        onFontScaleChanged = {}, // No-op for empty logs
+        cardsPerRow = 1,
+        maxCards = 1,
+      )
 
       Spacer(modifier = Modifier.height(16.dp))
 
@@ -425,7 +301,6 @@ fun SessionDetailComposable(
               alwaysAtBottom = alwaysAtBottom,
               onAlwaysAtBottomChanged = { alwaysAtBottom = it },
               isSessionInProgress = sessionDetail.session.latestStatus.inProgress,
-              isCancelling = isCancelling,
               onCancelSession = onCancelSession,
               onOpenLogsFolder = onOpenLogsFolder,
               onExportSession = onExportSession,

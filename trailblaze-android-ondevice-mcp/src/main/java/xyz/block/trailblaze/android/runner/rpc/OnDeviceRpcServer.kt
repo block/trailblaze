@@ -16,26 +16,20 @@ import io.ktor.server.routing.routing
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.cancelAndJoin
-import kotlinx.coroutines.launch
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifiersProvider
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeLoggerInstance
-import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
-import xyz.block.trailblaze.mcp.handlers.DeviceStatusRequestHandler
 import xyz.block.trailblaze.mcp.handlers.RunYamlRequestHandler
 import xyz.block.trailblaze.mcp.registerRpcHandler
 import xyz.block.trailblaze.mcp.respondRpcError
-import xyz.block.trailblaze.session.TrailblazeSessionManager
+
 
 class OnDeviceRpcServer(
   private val runTrailblazeYaml: suspend (RunYamlRequest) -> Unit,
-  private val trailblazeDeviceClassifiersProvider: TrailblazeDeviceClassifiersProvider? = null,
   private val trailblazeLogger: TrailblazeLogger = TrailblazeLoggerInstance,
-  val sessionManager: TrailblazeSessionManager = TrailblazeSessionManager(),
 ) {
 
   // Use a dedicated coroutine scope for background jobs
@@ -59,64 +53,14 @@ class OnDeviceRpcServer(
 
         // Register type-safe RPC handlers
         registerRpcHandler(
-          DeviceStatusRequestHandler(
-            trailblazeLogger = trailblazeLogger,
-            getCurrentJob = { currPromptJob }
-          )
-        )
-
-        registerRpcHandler(
           RunYamlRequestHandler(
             trailblazeLogger = trailblazeLogger,
-            sessionManager = sessionManager,
             backgroundScope = backgroundScope,
             getCurrentJob = { currPromptJob },
             setCurrentJob = { job -> currPromptJob = job },
             runTrailblazeYaml = { request -> runTrailblazeYaml(request) }
           )
         )
-
-        post("/cancel") {
-          try {
-            // Cancel the session in the session manager
-            sessionManager.cancelCurrentSession()
-
-            // Send cancellation end log immediately
-            trailblazeLogger.sendEndLog(
-              SessionStatus.Ended.Cancelled(
-                durationMs = 0L, // Duration will be calculated in the logger
-                cancellationMessage = "Session cancelled by user request via /cancel endpoint.",
-              ),
-            )
-
-            // Also cancel the current job if it's running
-            // Launch cancellation in background to avoid blocking the response
-            currPromptJob?.let { job ->
-              if (job.isActive) {
-                backgroundScope.launch {
-                  try {
-                    job.cancelAndJoin()
-                  } catch (e: Exception) {
-                    e.printStackTrace()
-                  }
-                  // End the session after job is cancelled
-                  sessionManager.endSession()
-                }
-              }
-            }
-
-            call.respond(
-              HttpStatusCode.OK,
-              "Session cancellation requested for: ${sessionManager.getCurrentSessionId() ?: "unknown"}",
-            )
-          } catch (e: Exception) {
-            e.printStackTrace()
-            call.respond(
-              HttpStatusCode.InternalServerError,
-              "Error cancelling session: ${e.message}",
-            )
-          }
-        }
 
         // Catch-all for unregistered RPC endpoints
         post("/rpc/{...}") {

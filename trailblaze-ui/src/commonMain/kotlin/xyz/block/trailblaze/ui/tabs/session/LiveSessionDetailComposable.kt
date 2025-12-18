@@ -18,6 +18,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -113,62 +114,17 @@ fun LiveSessionDetailComposable(
     )
   }
 
-  // Cancellation state
-  var isCancelling by remember { mutableStateOf(false) }
   var showCancelConfirmation by remember { mutableStateOf(false) }
   var cancellationError by remember { mutableStateOf<String?>(null) }
 
-  var logs by remember(session.sessionId) {
-    mutableStateOf(emptyList<TrailblazeLog>())
-  }
-
-  // Load initial logs asynchronously
-  LaunchedEffect(session.sessionId) {
-    withContext(Dispatchers.Default) {
-      logs = sessionDataProvider.getLogsForSession(session.sessionId)
-    }
-  }
-
-  DisposableEffect(sessionDataProvider, session.sessionId) {
-    val listener = object : TrailblazeSessionListener {
-      override val trailblazeSessionId: xyz.block.trailblaze.logs.model.SessionId = session.sessionId
-
-      override fun onSessionStarted() {
-        CoroutineScope(Dispatchers.Default).launch {
-          val newLogs = sessionDataProvider.getLogsForSession(session.sessionId)
-          logs = newLogs
-        }
-      }
-
-      override fun onUpdate(message: String) {
-        CoroutineScope(Dispatchers.Default).launch {
-          val newLogs = sessionDataProvider.getLogsForSession(session.sessionId)
-          logs = newLogs
-        }
-      }
-
-      override fun onSessionEnded() {
-        CoroutineScope(Dispatchers.Default).launch {
-          val newLogs = sessionDataProvider.getLogsForSession(session.sessionId)
-          logs = newLogs
-          isCancelling = false  // Reset cancelling state when session ends
-        }
-      }
-    }
-
-    sessionDataProvider.startWatchingTrailblazeSession(listener)
-
-    onDispose {
-      sessionDataProvider.stopWatching(session.sessionId)
-    }
-  }
+  // Collect logs reactively from the Flow - so much simpler!
+  val logs by sessionDataProvider.getSessionLogsFlow(session.sessionId).collectAsState()
 
   val sessionDetail = remember(logs, session) {
     // Use the session's latestStatus which already includes timeout detection from getSessionInfo()
     val overallStatus = session.latestStatus
-    val inProgress = overallStatus is SessionStatus.Started
 
-    val firstLogWithDeviceInfo = logs.firstOrNull { log ->
+    val firstLogWithDeviceInfo = logs.firstOrNull { log: TrailblazeLog ->
       when (log) {
         is TrailblazeLog.TrailblazeLlmRequestLog -> true
         is TrailblazeLog.MaestroDriverLog -> true
@@ -183,8 +139,8 @@ fun LiveSessionDetailComposable(
     }
 
     val totalDurationMs = if (logs.isNotEmpty()) {
-      val firstLog = logs.minByOrNull { it.timestamp }
-      val lastLog = logs.maxByOrNull { it.timestamp }
+      val firstLog = logs.minByOrNull { log: TrailblazeLog -> log.timestamp }
+      val lastLog = logs.maxByOrNull { log: TrailblazeLog -> log.timestamp }
       if (firstLog != null && lastLog != null) {
         lastLog.timestamp.toEpochMilliseconds() - firstLog.timestamp.toEpochMilliseconds()
       } else null
@@ -233,7 +189,6 @@ fun LiveSessionDetailComposable(
 
   val handleConfirmCancel: () -> Unit = {
     showCancelConfirmation = false
-    isCancelling = true
     cancellationError = null
 
     CoroutineScope(Dispatchers.Default).launch {
@@ -241,11 +196,12 @@ fun LiveSessionDetailComposable(
         val result = sessionDataProvider.cancelSession(session.sessionId)
         if (!result) {
           cancellationError = "Failed to cancel session. Check console for details."
+        } else {
+          // Cancel succeeded - clear the cancelling state immediately
+          // Don't wait for the session end log to arrive
         }
-        // Session end will be detected by the listener and UI will update
       } catch (e: Exception) {
         cancellationError = "Error cancelling session: ${e.message}"
-        isCancelling = false
       }
     }
   }
@@ -336,7 +292,6 @@ fun LiveSessionDetailComposable(
       onViewModeChanged = onViewModeChanged,
       onCancelSession = onCancelSession,
       onDeleteSession = onDeleteSession,
-      isCancelling = isCancelling,
       onOpenLogsFolder = onOpenLogsFolder,
       onExportSession = onExportSession,
       onOpenInFinder = onOpenInFinder,
@@ -551,9 +506,8 @@ fun LiveSessionDetailComposable(
                 colors = androidx.compose.material3.ButtonDefaults.buttonColors(
                   containerColor = MaterialTheme.colorScheme.error
                 ),
-                enabled = !isCancelling
               ) {
-                Text(if (isCancelling) "Cancelling..." else "Yes, Cancel")
+                Text("Yes, Cancel")
               }
             }
 

@@ -18,4 +18,36 @@ object MobileDeviceUtils {
       TrailblazeDevicePlatform.WEB -> emptyList()
     }.toSet()
   }
+
+  fun ensureAppsAreForceStopped(
+    possibleAppIds: Set<String>,
+    trailblazeDeviceId: TrailblazeDeviceId,
+  ) {
+    val installedAppIds = getInstalledAppIds(trailblazeDeviceId)
+    when (trailblazeDeviceId.trailblazeDevicePlatform) {
+      TrailblazeDevicePlatform.ANDROID -> {
+        installedAppIds
+          .filter { installedAppId -> possibleAppIds.any { installedAppId == it } }
+          .forEach { appId ->
+            AndroidHostAdbUtils.forceStopApp(
+              deviceId = trailblazeDeviceId,
+              appId = appId,
+            )
+          }
+      }
+
+      TrailblazeDevicePlatform.IOS -> {
+        possibleAppIds.forEach { appId ->
+          IosHostUtils.killAppOnSimulator(
+            deviceId = trailblazeDeviceId.instanceId,
+            appId = appId,
+          )
+        }
+      }
+
+      TrailblazeDevicePlatform.WEB -> {
+        // Currently nothing to do here
+      }
+    }
+  }
 }

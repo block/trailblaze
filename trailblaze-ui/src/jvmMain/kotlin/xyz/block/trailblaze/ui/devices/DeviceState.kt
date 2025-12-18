@@ -1,16 +1,14 @@
 package xyz.block.trailblaze.ui.devices
 
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
-import xyz.block.trailblaze.devices.TrailblazeDeviceId
-import xyz.block.trailblaze.session.TrailblazeSessionManager
+import xyz.block.trailblaze.logs.model.SessionId
 
+/**
+ * State for a single device.
+ * Contains the device info and current session ID (if running).
+ * Cancellation is handled forcefully by killing the driver and coroutine job.
+ */
 data class DeviceState(
-  val availableDevices: List<TrailblazeConnectedDeviceSummary> = emptyList(),
-  val selectedDevices: Set<TrailblazeConnectedDeviceSummary> = emptySet(),
-  val isLoading: Boolean = false,
-  val error: String? = null,
-    // Map of device instance ID to session manager
-  val sessionManagersByDevice: Map<TrailblazeDeviceId, TrailblazeSessionManager> = emptyMap(),
-    // Map of device instance ID to active session info
-  val activeSessionsByDevice: Map<TrailblazeDeviceId, DeviceSessionInfo> = emptyMap(),
+  val device: TrailblazeConnectedDeviceSummary,
+  val currentSessionId: SessionId? = null
 )

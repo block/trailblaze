@@ -298,8 +298,15 @@ object WasmReport {
     }
 
     println("\nCompressing and encoding WASM files...")
-    val wasmData = wasmFiles.associate { file ->
-      file.name to Base64.encode(compressBytes(file.readBytes()))
+    val wasmData = runBlocking(Dispatchers.IO) {
+      wasmFiles.map { file ->
+        async {
+          val bytes = file.readBytes()
+          val compressed = compressBytes(bytes)
+          val encoded = Base64.encode(compressed)
+          file.name to encoded
+        }
+      }.awaitAll().toMap()
     }
 
     println("\nCompressing JavaScript bundle...")
@@ -422,7 +429,11 @@ object WasmReport {
   }
 
   private fun compressBytes(bytes: ByteArray): ByteArray = ByteArrayOutputStream().use { outputStream ->
-    GZIPOutputStream(outputStream).use { it.write(bytes) }
+    GZIPOutputStream(outputStream).use { gzipStream ->
+      gzipStream.write(bytes)
+      gzipStream.flush()
+      gzipStream.finish()
+    }
     outputStream.toByteArray()
   }
 

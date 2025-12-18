@@ -7,10 +7,11 @@ import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 
 class RunOnHostParams(
-  val desktopYamlRunnerParams: DesktopYamlRunnerParams,
+  val targetTestApp: TrailblazeHostAppTarget?,
   val runYamlRequest: RunYamlRequest,
   val device: TrailblazeConnectedDeviceSummary,
   val forceStopTargetApp: Boolean,
+  val additionalInstrumentationArgs: () -> Map<String, String>,
   val onProgressMessage: (String) -> Unit,
 ) {
 
@@ -21,5 +22,4 @@ class RunOnHostParams(
     TrailblazeDevicePlatform.IOS -> TrailblazeDriverType.IOS_HOST
     TrailblazeDevicePlatform.WEB -> TrailblazeDriverType.WEB_PLAYWRIGHT_HOST
   }
-  val targetTestApp: TrailblazeHostAppTarget? = desktopYamlRunnerParams.trailblazeHostAppTarget
 }

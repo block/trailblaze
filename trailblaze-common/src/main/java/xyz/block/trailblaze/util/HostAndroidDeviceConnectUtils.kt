@@ -24,7 +24,7 @@ object HostAndroidDeviceConnectUtils {
 
   val ioScope = CoroutineScope(Dispatchers.IO)
 
-  suspend fun forceStopAllAndroidInstrumentationProcesses(
+  fun forceStopAllAndroidInstrumentationProcesses(
     trailblazeOnDeviceInstrumentationTargetTestApps: Set<TrailblazeOnDeviceInstrumentationTarget>,
     deviceId: TrailblazeDeviceId,
   ) {

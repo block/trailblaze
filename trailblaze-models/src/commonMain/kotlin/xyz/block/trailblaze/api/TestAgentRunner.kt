@@ -7,10 +7,21 @@ import xyz.block.trailblaze.yaml.PromptStep
 
 interface TestAgentRunner {
   val screenStateProvider: () -> ScreenState
+
   fun run(
     prompt: PromptStep,
     stepStatus: PromptStepStatus = PromptStepStatus(prompt, screenStateProvider = screenStateProvider),
   ): AgentTaskStatus
+
+  /**
+   * Suspend version of run() that supports coroutine cancellation.
+   * Default implementation calls the blocking version for backwards compatibility.
+   */
+  suspend fun runSuspend(
+    prompt: PromptStep,
+    stepStatus: PromptStepStatus = PromptStepStatus(prompt, screenStateProvider = screenStateProvider),
+  ): AgentTaskStatus = run(prompt, stepStatus)
+
   fun recover(promptStep: PromptStep, recordingResult: PromptRecordingResult.Failure): AgentTaskStatus
   fun appendToSystemPrompt(context: String)
 }

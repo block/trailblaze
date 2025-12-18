@@ -474,16 +474,6 @@ fun YamlTabComposable(
               "Set of Mark: ${if (setOfMarkEnabledConfig) "ENABLED" else "DISABLED"}"
             )
 
-            val runYamlRequest = RunYamlRequest(
-              testName = "Yaml",
-              yaml = yamlContent,
-              trailblazeLlmModel = currentTrailblazeLlmModel,
-              useRecordedSteps = true,
-              targetAppName = serverState.appConfig.selectedTargetAppName,
-              config = TrailblazeConfig(setOfMarkEnabled = setOfMarkEnabledConfig),
-              trailFilePath = null,
-            )
-
             val onConnectionStatus: (DeviceConnectionStatus) -> Unit = { status ->
               connectionStatus = status
             }
@@ -491,16 +481,26 @@ fun YamlTabComposable(
             val targetTestApp = deviceManager.getCurrentSelectedTargetApp()
             // Run on each selected device
             selectedDevices.forEach { device ->
+              val runYamlRequest = RunYamlRequest(
+                testName = "Yaml",
+                yaml = yamlContent,
+                trailblazeLlmModel = currentTrailblazeLlmModel,
+                useRecordedSteps = true,
+                targetAppName = serverState.appConfig.selectedTargetAppName,
+                config = TrailblazeConfig(setOfMarkEnabled = setOfMarkEnabledConfig),
+                trailFilePath = null,
+                trailblazeDeviceId = device.trailblazeDeviceId,
+              )
+
               try {
                 yamlRunner(
                   DesktopAppRunYamlParams(
-                    device = device,
                     forceStopTargetApp = forceStopApp,
                     runYamlRequest = runYamlRequest,
                     onProgressMessage = onProgressMessage,
                     onConnectionStatus = onConnectionStatus,
                     targetTestApp = targetTestApp,
-                    additionalInstrumentationArgs = additionalInstrumentationArgs
+                    additionalInstrumentationArgs = additionalInstrumentationArgs()
                   )
                 )
               } catch (e: Exception) {

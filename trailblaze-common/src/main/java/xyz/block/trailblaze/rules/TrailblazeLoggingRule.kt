@@ -12,7 +12,6 @@ import xyz.block.trailblaze.logs.client.TrailblazeLogServerClient
 import xyz.block.trailblaze.logs.client.TrailblazeLoggerInstance
 import xyz.block.trailblaze.logs.client.TrailblazeScreenStateLog
 import xyz.block.trailblaze.logs.model.SessionId
-import xyz.block.trailblaze.session.TrailblazeSessionManager
 import xyz.block.trailblaze.tracing.TrailblazeTracer
 
 /**
@@ -23,7 +22,6 @@ abstract class TrailblazeLoggingRule(
   private val writeLogToDisk: ((currentTestName: SessionId, log: TrailblazeLog) -> Unit) = { _, _ -> },
   private val writeScreenshotToDisk: ((screenshot: TrailblazeScreenStateLog) -> Unit) = { _ -> },
   private val writeTraceToDisk: ((sessionId: SessionId, json: String) -> Unit) = { _, _ -> },
-  val sessionManager: TrailblazeSessionManager = TrailblazeSessionManager(),
 ) : SimpleTestRule() {
 
   abstract val trailblazeDeviceInfoProvider: () -> TrailblazeDeviceInfo
@@ -68,7 +66,6 @@ abstract class TrailblazeLoggingRule(
   override fun ruleCreation(description: Description) {
     this.description = description
     trailblazeLogger.startSession("${description.testClass.canonicalName}_${description.methodName}")
-    sessionManager.startSession(trailblazeLogger.getCurrentSessionId())
   }
 
   override fun beforeTestExecution(description: Description) {
@@ -77,14 +74,11 @@ abstract class TrailblazeLoggingRule(
   }
 
   override fun afterTestExecution(description: Description, result: Result<Nothing?>) {
-    // Use consolidated method that checks session manager for max calls limit
     trailblazeLogger.sendSessionEndLog(
-      sessionManager = sessionManager,
       isSuccess = result.isSuccess,
       exception = result.exceptionOrNull(),
     )
     exportTraces()
-    sessionManager.endSession()
   }
 
   private fun exportTraces() {
