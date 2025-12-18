@@ -3,7 +3,7 @@ package xyz.block.trailblaze.android
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import org.junit.Rule
 import xyz.block.trailblaze.TrailblazeAndroidLoggingRule
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
@@ -19,7 +19,7 @@ abstract class BaseAndroidStandaloneServerTest {
 
   @get:Rule
   val trailblazeLoggingRule = TrailblazeAndroidLoggingRule(
-    trailblazeDeviceClassifiersProvider = getDeviceClassifiersProvider()
+    trailblazeDeviceClassifiersProvider = { getDeviceClassifiers() }
   )
 
   abstract fun handleRunRequest(runYamlRequest: RunYamlRequest)
@@ -35,7 +35,7 @@ abstract class BaseAndroidStandaloneServerTest {
     CoroutineScope(Dispatchers.IO).also { coroutineScope ->
       cancelAnyActiveRuns()
       runTestCoroutineScope = coroutineScope
-      coroutineScope.launch {
+      runBlocking {
         work()
       }
     }
@@ -43,7 +43,7 @@ abstract class BaseAndroidStandaloneServerTest {
 
   abstract fun getDynamicLlmClient(trailblazeLlmModel: TrailblazeLlmModel): DynamicLlmClient
 
-  abstract fun getDeviceClassifiersProvider(): (() -> List<TrailblazeDeviceClassifier>)
+  abstract fun getDeviceClassifiers(): List<TrailblazeDeviceClassifier>
 
   val adbReversePort =
     InstrumentationArgUtil.getInstrumentationArg(TrailblazeDevicePort.INSTRUMENTATION_ARG_KEY)?.toInt()

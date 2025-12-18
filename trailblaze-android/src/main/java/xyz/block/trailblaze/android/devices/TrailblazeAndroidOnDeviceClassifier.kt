@@ -14,7 +14,7 @@ object TrailblazeAndroidOnDeviceClassifier : TrailblazeDeviceClassifiersProvider
     }
   }
 
-  override fun getDeviceClassifiers(): List<TrailblazeDeviceClassifier> = trailblazeDeviceClassifiers
-
-  fun getDeviceClassifiersProvider() = { trailblazeDeviceClassifiers }
+  override fun getDeviceClassifiers(): List<TrailblazeDeviceClassifier> {
+    return trailblazeDeviceClassifiers
+  }
 }

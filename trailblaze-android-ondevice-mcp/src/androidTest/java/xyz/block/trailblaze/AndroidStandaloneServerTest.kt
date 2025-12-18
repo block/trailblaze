@@ -30,6 +30,7 @@ class AndroidStandaloneServerTest : BaseAndroidStandaloneServerTest() {
         llmClient = getDynamicLlmClient(runYamlRequest.trailblazeLlmModel).createLlmClient(),
         config = runYamlRequest.config,
         trailblazeDeviceId = runYamlRequest.trailblazeDeviceId,
+        trailblazeLoggingRule = trailblazeLoggingRule,
       ).runSuspend(
         testYaml = runYamlRequest.yaml,
         useRecordedSteps = runYamlRequest.useRecordedSteps,
@@ -62,8 +63,8 @@ class AndroidStandaloneServerTest : BaseAndroidStandaloneServerTest() {
     )
   }
 
-  override fun getDeviceClassifiersProvider(): () -> List<TrailblazeDeviceClassifier> {
-    return TrailblazeAndroidOnDeviceClassifier.getDeviceClassifiersProvider()
+  override fun getDeviceClassifiers(): List<TrailblazeDeviceClassifier> {
+    return TrailblazeAndroidOnDeviceClassifier.getDeviceClassifiers()
   }
 
   @Test

@@ -43,7 +43,7 @@ open class AndroidTrailblazeRule(
   val trailblazeLlmModel: TrailblazeLlmModel,
   val config: TrailblazeConfig = TrailblazeConfig.DEFAULT,
   val trailblazeLoggingRule: TrailblazeAndroidLoggingRule = TrailblazeAndroidLoggingRule(
-    trailblazeDeviceClassifiersProvider = TrailblazeAndroidOnDeviceClassifier.getDeviceClassifiersProvider(),
+    trailblazeDeviceClassifiersProvider = { TrailblazeAndroidOnDeviceClassifier.getDeviceClassifiers() },
   ),
   customToolClasses: CustomTrailblazeTools? = null,
   private val trailblazeDeviceId: TrailblazeDeviceId? = null,
