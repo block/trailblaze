@@ -47,7 +47,6 @@ dependencies {
   implementation(project(":trailblaze-models"))
   implementation(project(":trailblaze-android"))
   implementation(project(":trailblaze-agent"))
-  implementation(project(":trailblaze-server"))
 
   implementation(libs.ktor.server.core.jvm)
   implementation(libs.mcp.sdk)

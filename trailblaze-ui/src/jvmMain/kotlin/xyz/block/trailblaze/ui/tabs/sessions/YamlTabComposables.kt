@@ -487,7 +487,10 @@ fun YamlTabComposable(
                 trailblazeLlmModel = currentTrailblazeLlmModel,
                 useRecordedSteps = true,
                 targetAppName = serverState.appConfig.selectedTargetAppName,
-                config = TrailblazeConfig(setOfMarkEnabled = setOfMarkEnabledConfig),
+                config = TrailblazeConfig(
+                  setOfMarkEnabled = setOfMarkEnabledConfig,
+                  aiFallback = serverState.appConfig.aiFallbackEnabled,
+                ),
                 trailFilePath = null,
                 trailblazeDeviceId = device.trailblazeDeviceId,
               )

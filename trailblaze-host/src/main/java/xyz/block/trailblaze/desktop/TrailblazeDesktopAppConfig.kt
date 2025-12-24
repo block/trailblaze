@@ -3,6 +3,8 @@ package xyz.block.trailblaze.desktop
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.llm.TrailblazeLlmModelList
+import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
+import xyz.block.trailblaze.mcp.TrailblazeMcpBridgeImpl
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
@@ -51,15 +53,5 @@ abstract class TrailblazeDesktopAppConfig(
       currentProviderModelList.entries.firstOrNull { it.modelId == savedModelId }
         ?: defaultLlmModel
     return selectedTrailblazeLlmModel
-  }
-
-  val deviceManager by lazy {
-    TrailblazeDeviceManager(
-      settingsRepo = trailblazeSettingsRepo,
-      availableAppTargets = availableAppTargets,
-      appIconProvider = appIconProvider,
-      defaultHostAppTarget = defaultAppTarget,
-      getInstalledAppIds = ::getInstalledAppIds
-    )
   }
 }

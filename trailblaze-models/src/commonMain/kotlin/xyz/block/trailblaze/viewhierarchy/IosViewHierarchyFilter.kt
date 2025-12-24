@@ -51,7 +51,9 @@ class IosViewHierarchyFilter(
       elem.nodeId to index
     }.toMap()
 
-    // Build a map to find ancestors
+    // Build a map to find ancestors from the FULL element list (not just inBoundsElements)
+    // This is critical because parent elements may not have dimensions/bounds set,
+    // but we still need to trace the parent chain to identify system windows
     val childToParent = mutableMapOf<Long, ViewHierarchyTreeNode>()
     fun buildParentMap(node: ViewHierarchyTreeNode) {
       node.children.forEach { child ->
@@ -59,7 +61,7 @@ class IosViewHierarchyFilter(
         buildParentMap(child)
       }
     }
-    inBoundsElements.forEach { buildParentMap(it) }
+    elements.forEach { buildParentMap(it) }
 
     // Helper function to check if elem1 is an ancestor of elem2
     fun isAncestor(
@@ -107,6 +109,31 @@ class IosViewHierarchyFilter(
     // Check if there's a UITextEffectsWindow in the hierarchy (provides accessibility mirrors)
     val hasAccessibilityWindow = inBoundsElements.any { it.className == "UITextEffectsWindow" }
 
+    // Content container classes that indicate an element is part of scrollable/list content
+    val contentContainerClasses = setOf(
+      "CollectionView",
+      "ListView",
+      "TableView",
+      "ScrollView",
+      "UICollectionView",
+      "UITableView",
+      "UIScrollView",
+      "ItemCell",
+    )
+
+    // Helper function to find the nearest content container ancestor of an element
+    fun findNearestContentContainer(elem: ViewHierarchyTreeNode): ViewHierarchyTreeNode? {
+      var current: ViewHierarchyTreeNode? = childToParent[elem.nodeId]
+      while (current != null) {
+        val parentClass = current.className ?: ""
+        if (contentContainerClasses.any { parentClass.contains(it) }) {
+          return current
+        }
+        current = childToParent[current.nodeId]
+      }
+      return null
+    }
+
     // Helper function to check if an element is an opaque overlay
     // These are large, childless, disabled container views used as modal backgrounds
     // Only consider them if there's an accessibility window to provide mirrors for blocked elements
@@ -120,6 +147,52 @@ class IosViewHierarchyFilter(
       val minWidth = screenWidth * 0.8
       val minHeight = screenHeight * 0.5
       return bounds.width >= minWidth && bounds.height >= minHeight
+    }
+
+    // Helper function to get the ancestor chain of an element (for finding common ancestors)
+    fun getAncestorChain(elem: ViewHierarchyTreeNode): List<ViewHierarchyTreeNode> {
+      val ancestors = mutableListOf<ViewHierarchyTreeNode>()
+      var current: ViewHierarchyTreeNode? = childToParent[elem.nodeId]
+      while (current != null) {
+        ancestors.add(current)
+        current = childToParent[current.nodeId]
+      }
+      return ancestors
+    }
+
+    // Check if an opaque overlay should actually block a specific element
+    // An overlay doesn't block an element if:
+    // 1. They share the same content container ancestor (siblings in same scrollable list/grid)
+    // 2. The overlay and target share a common ancestor that is a content container
+    //    (meaning they're in the same scrollable area, not a modal overlay pattern)
+    fun shouldOpaqueOverlayBlock(overlay: ViewHierarchyTreeNode, target: ViewHierarchyTreeNode): Boolean {
+      val overlayContainer = findNearestContentContainer(overlay)
+      val targetContainer = findNearestContentContainer(target)
+
+      // If both are in the same content container, don't block (siblings in same scrollable area)
+      if (overlayContainer != null && targetContainer != null &&
+        overlayContainer.nodeId == targetContainer.nodeId
+      ) {
+        return false
+      }
+
+      // Check if they share a common ancestor that is a content container
+      // This handles the case where the overlay is nested in a content area alongside the target
+      val overlayAncestors = getAncestorChain(overlay).map { it.nodeId }.toSet()
+      val targetAncestors = getAncestorChain(target)
+
+      for (ancestor in targetAncestors) {
+        if (overlayAncestors.contains(ancestor.nodeId)) {
+          // Found common ancestor - check if it's a content container
+          val ancestorClass = ancestor.className ?: ""
+          if (contentContainerClasses.any { ancestorClass.contains(it) }) {
+            // They share a content container ancestor - overlay shouldn't block
+            return false
+          }
+        }
+      }
+
+      return true
     }
 
     val passed = mutableListOf<ViewHierarchyTreeNode>()
@@ -150,11 +223,32 @@ class IosViewHierarchyFilter(
       // and should always be visible - they can't be blocked by overlays
       val elemInSystemWindow = isInSystemWindow(elem)
 
+      // Helper to get depth of an element in the tree
+      fun getTreeDepth(node: ViewHierarchyTreeNode): Int {
+        var depth = 0
+        var current: ViewHierarchyTreeNode? = node
+        while (current != null) {
+          depth++
+          current = childToParent[current.nodeId]
+        }
+        return depth
+      }
+
+      // An opaque overlay should only block elements that are at a similar or shallower depth
+      // If the target is much deeper than the overlay, the overlay is probably just a
+      // background view at a higher level, not a modal that should block nested content
+      val maxDepthDifferenceForBlocking = 35
+
       val blockingSibling = nonAncestorElementsAtCenter.find { other ->
         val otherZIndex = elementZIndices[other.nodeId] ?: 0
+        val elemDepth = getTreeDepth(elem)
+        val overlayDepth = getTreeDepth(other)
+        val isBlockingOverlay = isOpaqueOverlay(other) &&
+          (elemDepth - overlayDepth) <= maxDepthDifferenceForBlocking &&
+          shouldOpaqueOverlayBlock(other, elem)
         otherZIndex > elemZIndex &&
           !isDescendant(other, elem) &&
-          (other.isInteractable() || (!elemInSystemWindow && isOpaqueOverlay(other))) &&
+          (other.isInteractable() || (!elemInSystemWindow && isBlockingOverlay)) &&
           !isInSystemWindow(other)
       }
 

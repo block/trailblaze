@@ -1,3 +1,5 @@
+import org.jetbrains.compose.desktop.application.dsl.TargetFormat
+
 plugins {
   kotlin("jvm")
   alias(libs.plugins.compose.compiler)
@@ -25,29 +27,19 @@ dependencies {
   implementation(libs.ktor.network.tls.certificates)
 }
 
-// Task to build the Android test APK
-val buildAndroidTestApk by tasks.registering {
-  description = "Builds the Android on-device test APK"
-  group = "build"
-
-  doLast {
-    val gitRoot = rootProject.projectDir
-    exec {
-      workingDir = gitRoot
-      commandLine("./gradlew", ":trailblaze-android-ondevice-mcp:assembleDebugAndroidTest")
-    }
-  }
-}
-
 // Task to copy the APK to resources
+// Extract paths at configuration time to avoid capturing Gradle script objects (configuration cache requirement)
+val rootProjectDir: String = rootProject.projectDir.absolutePath
+val currentProjectDir: String = projectDir.absolutePath
+
 val copyAndroidTestApkToResources by tasks.registering(Copy::class) {
   description = "Copies the Android test APK to desktop app resources"
   group = "build"
-  dependsOn(buildAndroidTestApk)
+  dependsOn(":trailblaze-android-ondevice-mcp:assembleDebugAndroidTest")
 
   val apkSourcePath =
-    "${rootProject.projectDir}/trailblaze-android-ondevice-mcp/build/outputs/apk/androidTest/debug/trailblaze-android-ondevice-mcp-debug-androidTest.apk"
-  val resourcesDir = "${projectDir}/src/main/resources/apks"
+    "$rootProjectDir/trailblaze-android-ondevice-mcp/build/outputs/apk/androidTest/debug/trailblaze-android-ondevice-mcp-debug-androidTest.apk"
+  val resourcesDir = "$currentProjectDir/src/main/resources/apks"
 
   from(apkSourcePath)
   into(resourcesDir)
@@ -69,7 +61,7 @@ compose.desktop {
 
     nativeDistributions {
       targetFormats(
-        org.jetbrains.compose.desktop.application.dsl.TargetFormat.Dmg,
+        TargetFormat.Dmg,
       )
 
       packageName = "Trailblaze"

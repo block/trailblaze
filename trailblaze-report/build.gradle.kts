@@ -19,13 +19,24 @@ tasks.named<JavaExec>("run") {
   }
 }
 
+// Task to generate CI test results artifact
+// Usage: ./gradlew :trailblaze-report:generateTestResultsArtifacts --args="./logs --output results.json"
+tasks.register<JavaExec>("generateTestResultsArtifacts") {
+  group = "application"
+  description = "Generate CI test results artifact from logs directory"
+  classpath = sourceSets["main"].runtimeClasspath
+  mainClass.set("xyz.block.trailblaze.report.GenerateTestResultsCliCommandKt")
+}
+
 dependencies {
   implementation(project(":trailblaze-common"))
   implementation(project(":trailblaze-models"))
   implementation(libs.kotlinx.datetime)
+  implementation(libs.clikt)
   implementation(libs.maestro.orchestra.models) { isTransitive = false }
   implementation(libs.kotlinx.serialization.core)
   implementation(libs.kotlinx.serialization.json)
+  implementation(libs.kaml)
 
   runtimeOnly(libs.slf4j.simple)
 }

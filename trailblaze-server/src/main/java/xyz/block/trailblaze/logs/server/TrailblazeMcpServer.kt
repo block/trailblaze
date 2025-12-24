@@ -36,9 +36,10 @@ import kotlinx.serialization.json.buildJsonObject
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.server.ServerEndpoints.logsServerKtorEndpoints
 import xyz.block.trailblaze.logs.server.SslConfig.configureForSelfSignedSsl
+import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
 import xyz.block.trailblaze.mcp.TrailblazeMcpSseSessionContext
 import xyz.block.trailblaze.mcp.models.McpSseSessionId
-import xyz.block.trailblaze.mcp.newtools.AndroidOnDeviceFromHostToolSet
+import xyz.block.trailblaze.mcp.newtools.DeviceManagerToolSet
 import xyz.block.trailblaze.mcp.newtools.TrailFilesToolSet
 import xyz.block.trailblaze.mcp.utils.KoogToMcpExt.toMcpJsonSchemaObject
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
@@ -48,6 +49,7 @@ import java.util.concurrent.ConcurrentHashMap
 
 class TrailblazeMcpServer(
   val logsRepo: LogsRepo,
+  val mcpBridge: TrailblazeMcpBridge,
   val trailsDirProvider: () -> File,
   val targetTestAppProvider: () -> TrailblazeHostAppTarget,
   val homeCallbackHandler: ((parameters: Map<String, List<String>>) -> Result<String>)? = null,
@@ -328,7 +330,7 @@ class TrailblazeMcpServer(
                   ).asTools(TrailblazeJsonInstance)
                 )
                 tools(
-                  AndroidOnDeviceFromHostToolSet(
+                  DeviceManagerToolSet(
                     sessionContext = getSessionContext(mcpSseSessionId),
                     toolRegistryUpdated = { updatedToolRegistry ->
                       addToolsAsMcpToolsFromRegistry(
@@ -338,6 +340,7 @@ class TrailblazeMcpServer(
                       )
                     },
                     targetTestAppProvider = targetTestAppProvider,
+                    mcpBridge = mcpBridge,
                   ).asTools(TrailblazeJsonInstance),
                 )
               } + additionalToolsProvider(

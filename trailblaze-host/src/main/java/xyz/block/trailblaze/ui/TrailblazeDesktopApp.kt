@@ -11,11 +11,11 @@ import xyz.block.trailblaze.model.DesktopAppRunYamlParams
 abstract class TrailblazeDesktopApp(
   protected val desktopAppConfig: TrailblazeDesktopAppConfig,
 ) {
-
   abstract val desktopYamlRunner: DesktopYamlRunner
 
   abstract val trailblazeMcpServer: TrailblazeMcpServer
 
-  abstract fun startTrailblazeDesktopApp()
+  abstract val deviceManager: TrailblazeDeviceManager
 
+  abstract fun startTrailblazeDesktopApp()
 }

@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.report
 
+import com.github.ajalt.clikt.core.main
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
@@ -113,7 +114,10 @@ class GenerateReportCliCommand :
   }
 }
 
-fun main(args: Array<String>) = GenerateReportCliCommand().main(args)
+fun main(args: Array<String>) {
+  GenerateReportCliCommand().main(args)
+  GenerateTestResultsCliCommand().main(argv = args)
+}
 
 fun moveJsonFilesToSessionDirs(logsDir: File) {
   val jsonFilesInLogsDir = logsDir.listFiles()?.filter { it.extension == "json" } ?: emptyList()

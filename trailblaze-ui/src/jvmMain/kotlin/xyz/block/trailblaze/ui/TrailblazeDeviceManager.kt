@@ -18,7 +18,11 @@ import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.llm.RunYamlRequest
+import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.model.DesktopAppRunYamlParams
+import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.ui.devices.DeviceManagerState
 import xyz.block.trailblaze.ui.devices.DeviceState
@@ -31,8 +35,10 @@ import xyz.block.trailblaze.ui.models.AppIconProvider
 class TrailblazeDeviceManager(
   val settingsRepo: TrailblazeSettingsRepo,
   val defaultHostAppTarget: TrailblazeHostAppTarget,
+  val currentTrailblazeLlmModelProvider: () -> TrailblazeLlmModel,
   val availableAppTargets: Set<TrailblazeHostAppTarget>,
   val appIconProvider: AppIconProvider,
+  private val runYamlLambda: (desktopAppRunYamlParams: DesktopAppRunYamlParams) -> Unit,
   val getInstalledAppIds: (TrailblazeDeviceId) -> Set<String>,
 ) {
 
@@ -48,6 +54,107 @@ class TrailblazeDeviceManager(
 
   private val loadDevicesScope = CoroutineScope(Dispatchers.IO)
 
+  fun runYaml(
+    yamlToRun: String,
+    trailblazeDeviceId: TrailblazeDeviceId,
+    forceStopTargetApp: Boolean = false,
+  ) {
+    val settingsState = settingsRepo.serverStateFlow.value
+    val runYamlRequest = RunYamlRequest(
+      yaml = yamlToRun,
+      // Use title with ID appended for method name (e.g., for_your_business_page_5374142)
+      // The class name will be auto-derived from testSectionName metadata
+      testName = "MCP",
+      useRecordedSteps = false,
+      trailblazeLlmModel = currentTrailblazeLlmModelProvider(),
+      targetAppName = settingsState.appConfig.selectedTargetAppName,
+      trailFilePath = null,
+      config = TrailblazeConfig(
+        setOfMarkEnabled = settingsState.appConfig.setOfMarkEnabled
+      ),
+      trailblazeDeviceId = trailblazeDeviceId,
+    )
+    runYamlLambda(
+      DesktopAppRunYamlParams(
+        forceStopTargetApp = forceStopTargetApp,
+        runYamlRequest = runYamlRequest,
+        targetTestApp = this.getCurrentSelectedTargetApp(),
+        onProgressMessage = {},
+        onConnectionStatus = {},
+        additionalInstrumentationArgs = emptyMap()
+      )
+    )
+  }
+
+
+  suspend fun loadDevicesSuspend(filterDevices: Boolean = true): List<TrailblazeConnectedDeviceSummary> {
+    val devices: List<Device.Connected> = DeviceService.listConnectedDevices(includeWeb = false)
+
+    return buildList {
+      devices.forEach { maestroConnectedDevice: Device.Connected ->
+        val trailblazeDeviceId = TrailblazeDeviceId(
+          instanceId = maestroConnectedDevice.instanceId,
+          trailblazeDevicePlatform = when (maestroConnectedDevice.platform) {
+            Platform.ANDROID -> TrailblazeDevicePlatform.ANDROID
+            Platform.IOS -> TrailblazeDevicePlatform.IOS
+            Platform.WEB -> TrailblazeDevicePlatform.WEB
+          }
+        )
+
+        val installedAppIds = getInstalledAppIds(trailblazeDeviceId)
+
+        when (maestroConnectedDevice.platform) {
+          Platform.ANDROID -> {
+            add(
+              TrailblazeConnectedDeviceSummary(
+                trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+                instanceId = maestroConnectedDevice.instanceId,
+                description = maestroConnectedDevice.description,
+                installedAppIds = installedAppIds
+              )
+            )
+            add(
+              TrailblazeConnectedDeviceSummary(
+                trailblazeDriverType = TrailblazeDriverType.ANDROID_HOST,
+                instanceId = maestroConnectedDevice.instanceId,
+                description = maestroConnectedDevice.description,
+                installedAppIds = installedAppIds
+              )
+            )
+          }
+
+          Platform.IOS -> {
+            add(
+              TrailblazeConnectedDeviceSummary(
+                trailblazeDriverType = TrailblazeDriverType.IOS_HOST,
+                instanceId = maestroConnectedDevice.instanceId,
+                description = maestroConnectedDevice.description,
+                installedAppIds = installedAppIds
+              )
+            )
+          }
+
+          Platform.WEB -> {
+            add(
+              TrailblazeConnectedDeviceSummary(
+                trailblazeDriverType = TrailblazeDriverType.WEB_PLAYWRIGHT_HOST,
+                instanceId = maestroConnectedDevice.instanceId,
+                description = maestroConnectedDevice.description,
+                installedAppIds = installedAppIds
+              )
+            )
+          }
+        }
+      }
+    }.let { trailblazeConnectedDeviceSummaries ->
+      if (filterDevices) {
+        targetDeviceFilter(trailblazeConnectedDeviceSummaries)
+      } else {
+        trailblazeConnectedDeviceSummaries
+      }
+    }
+  }
+
   /**
    * Load available devices from the system.
    * This will update the deviceStateFlow with the discovered devices.
@@ -61,73 +168,13 @@ class TrailblazeDeviceManager(
       }
 
       try {
-        val devices: List<Device.Connected> = DeviceService.listConnectedDevices(includeWeb = false)
-
-        val deviceInfos = buildList {
-          devices.forEach { maestroConnectedDevice: Device.Connected ->
-
-            val trailblazeDeviceId = TrailblazeDeviceId(
-              instanceId = maestroConnectedDevice.instanceId,
-              trailblazeDevicePlatform = when (maestroConnectedDevice.platform) {
-                Platform.ANDROID -> TrailblazeDevicePlatform.ANDROID
-                Platform.IOS -> TrailblazeDevicePlatform.IOS
-                Platform.WEB -> TrailblazeDevicePlatform.WEB
-              }
-            )
-
-            val installedAppIds = getInstalledAppIds(trailblazeDeviceId)
-
-            when (maestroConnectedDevice.platform) {
-              Platform.ANDROID -> {
-                add(
-                  TrailblazeConnectedDeviceSummary(
-                    trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
-                    instanceId = maestroConnectedDevice.instanceId,
-                    description = maestroConnectedDevice.description,
-                    installedAppIds = installedAppIds
-                  )
-                )
-                add(
-                  TrailblazeConnectedDeviceSummary(
-                    trailblazeDriverType = TrailblazeDriverType.ANDROID_HOST,
-                    instanceId = maestroConnectedDevice.instanceId,
-                    description = maestroConnectedDevice.description,
-                    installedAppIds = installedAppIds
-                  )
-                )
-              }
-
-              Platform.IOS -> {
-                add(
-                  TrailblazeConnectedDeviceSummary(
-                    trailblazeDriverType = TrailblazeDriverType.IOS_HOST,
-                    instanceId = maestroConnectedDevice.instanceId,
-                    description = maestroConnectedDevice.description,
-                    installedAppIds = installedAppIds
-                  )
-                )
-              }
-
-              Platform.WEB -> {
-                add(
-                  TrailblazeConnectedDeviceSummary(
-                    trailblazeDriverType = TrailblazeDriverType.WEB_PLAYWRIGHT_HOST,
-                    instanceId = maestroConnectedDevice.instanceId,
-                    description = maestroConnectedDevice.description,
-                    installedAppIds = installedAppIds
-                  )
-                )
-              }
-            }
-          }
-        }
-
-        val filteredDevices = targetDeviceFilter(deviceInfos)
+        val deviceInfos = loadDevicesSuspend()
+        val filteredDevices: List<TrailblazeConnectedDeviceSummary> = targetDeviceFilter(deviceInfos)
 
         withContext(Dispatchers.Default) {
           updateDeviceState { currState ->
             // Create DeviceState for each device, preserving existing session state
-            val newDeviceStates = filteredDevices.associate { device ->
+            val newDeviceStates: Map<TrailblazeDeviceId, DeviceState> = filteredDevices.associate { device ->
               val deviceId = device.trailblazeDeviceId
 
               // Preserve existing session state if device already exists
@@ -201,7 +248,7 @@ class TrailblazeDeviceManager(
   /**
    * Cancels the current session on a device.
    * Uses forceful cancellation - closes the driver and kills the coroutine job.
-   * 
+   *
    * FORCEFULLY KILLS the running test on a specific device.
    * This is aggressive - it shuts down the driver (killing child processes like XCUITest),
    * then cancels the coroutine job. No more "cooperative" cancellation.

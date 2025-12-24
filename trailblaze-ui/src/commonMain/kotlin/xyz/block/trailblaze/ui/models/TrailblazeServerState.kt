@@ -4,6 +4,7 @@ import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.llm.providers.OpenAITrailblazeLlmModelList
+import xyz.block.trailblaze.model.AI_FALLBACK_DEFAULT
 
 @Serializable
 data class TrailblazeServerState(
@@ -27,6 +28,7 @@ data class TrailblazeServerState(
     val llmProvider: String = DEFAULT_DESKTOP_APP_MODEL_LLM_MODEL.trailblazeLlmProvider.id,
     val llmModel: String = DEFAULT_DESKTOP_APP_MODEL_LLM_MODEL.modelId, // Default to GPT-4.1 model
     val setOfMarkEnabled: Boolean = true,
+    val aiFallbackEnabled: Boolean = AI_FALLBACK_DEFAULT,
     val yamlContent: String = """
 - prompts:
     - step: click back

@@ -1,5 +1,5 @@
 package xyz.block.trailblaze.report.utils
-
+ 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -144,20 +144,23 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
   fun close() {
     println("[LogsRepo] Cleaning up resources...")
 
+    // Cancel the coroutine scope first to stop all background operations
+    // This prevents concurrent modifications while we clean up
+    fileOperationScope.cancel()
+
     // Stop session list watcher
     sessionListWatcher?.stopWatching()
     sessionListWatcher = null
 
-    // Stop all session watchers
-    fileWatcherByTrailblazeSession.values.forEach { it.stopWatching() }
+    // Stop all session watchers - copy values first to avoid ConcurrentModificationException
+    val watchersToStop = fileWatcherByTrailblazeSession.values.toList()
+    watchersToStop.forEach { it.stopWatching() }
     fileWatcherByTrailblazeSession.clear()
 
-    // Cancel all session info watcher jobs
-    sessionInfoWatcherJobs.values.forEach { it.cancel() }
+    // Cancel all session info watcher jobs - copy values first to avoid ConcurrentModificationException
+    val jobsToCancel = sessionInfoWatcherJobs.values.toList()
+    jobsToCancel.forEach { it.cancel() }
     sessionInfoWatcherJobs.clear()
-
-    // Cancel the coroutine scope
-    fileOperationScope.cancel()
 
     println("[LogsRepo] Cleanup complete")
   }

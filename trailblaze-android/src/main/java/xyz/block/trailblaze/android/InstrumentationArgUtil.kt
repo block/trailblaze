@@ -57,4 +57,9 @@ object InstrumentationArgUtil {
     val aiEnabled = instrumentationArguments.getString("trailblaze.aiEnabled", "true").toBoolean()
     return aiEnabled
   }
+
+  fun isAiFallbackEnabled(): Boolean? {
+    // Returns null if not set, allowing config to be the default
+    return instrumentationArguments.getString("trailblaze.aiFallbackEnabled")?.toBoolean()
+  }
 }
