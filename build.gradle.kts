@@ -28,9 +28,6 @@ subprojects
     it.plugins.withId("com.android.library") {
       it.extensions.configure<com.android.build.gradle.LibraryExtension>("android") {
         defaultConfig {
-          System.getenv("OPENAI_API_KEY")?.let { apiKey ->
-            testInstrumentationRunnerArguments["OPENAI_API_KEY"] = apiKey
-          }
           rootProject.findProperty("trailblaze.reverseProxy")?.let { reverseProxy ->
             testInstrumentationRunnerArguments["trailblaze.reverseProxy"] = reverseProxy.toString()
           }

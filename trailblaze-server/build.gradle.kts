@@ -29,6 +29,7 @@ dependencies {
   implementation(libs.ktor.serialization.kotlinx.json)
   implementation(libs.coroutines)
   implementation(libs.koog.agents.tools)
+  implementation(libs.koog.prompt.executor.clients)
   implementation(libs.kotlinx.datetime)
   implementation(libs.ktor.http)
   implementation(libs.ktor.serialization)

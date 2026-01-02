@@ -42,9 +42,12 @@ jobs:
   android-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    env:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
 
     steps:
       - name: Enable KVM group perms
+        if: runner.os == 'Linux'
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
@@ -65,9 +68,10 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407
 
-      - name: Create and start emulator and run tests
+      - name: Create and start emulator and run tests (Linux)
+        if: runner.os == 'Linux'
         uses: reactivecircus/android-emulator-runner@b530d96654c385303d652368551fb075bc2f0b6b
-        id: run-tests
+        id: run-tests-linux
         continue-on-error: true
         with:
           api-level: 34
@@ -76,125 +80,22 @@ jobs:
           disk-size: 6000M
           heap-size: 600M
           profile: Nexus 6
-          script: |
-            echo "========================================="
-            echo "Starting Android Test Execution"
-            echo "Working directory: $(pwd)"
-            echo "========================================="
-            
-            # Run Android Tests
-            echo "Running Android Tests..."
-            ./gradlew --info :examples:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class="xyz.block.trailblaze.examples.clock.ClockTest" -Pandroid.testInstrumentationRunnerArguments.trailblaze.aiEnabled=false || TEST_FAILED=true
-            
-            echo "========================================="
-            echo "Test execution completed (failed: ${TEST_FAILED:-false})"
-            echo "========================================="
-            
-            # Check device status
-            echo "Checking ADB devices..."
-            adb devices -l || echo "Could not list ADB devices"
-            
-            # Check if logs exist on device
-            echo "Checking for logs on device..."
-            adb shell "ls -la /sdcard/Download/trailblaze-logs/ 2>&1" || echo "Could not list device log directory"
-            
-            echo "Pulling logs from device..."
-            mkdir -p "$(pwd)/trailblaze-logs"
-            adb pull /sdcard/Download/trailblaze-logs/. "$(pwd)/trailblaze-logs" && echo "Log pull succeeded" || echo "Failed to pull logs"
-            
-            # Check what was pulled
-            echo "Checking pulled logs..."
-            [ -d "$(pwd)/trailblaze-logs" ] || { echo "WARNING: trailblaze-logs directory does not exist!"; exit 0; }
-            ls -laR "$(pwd)/trailblaze-logs"
-            echo "Total files pulled: $(find "$(pwd)/trailblaze-logs" -type f 2>/dev/null | wc -l)"
-            echo "Emulator script completed"
+          script: ./.github/pr_run_android_tests.sh
 
       - name: Verify logs were pulled
         if: always()
-        run: |
-          echo "========================================="
-          echo "Verifying logs in workspace"
-          echo "Working directory: $(pwd)"
-          echo "========================================="
-          
-          if [ -d "$(pwd)/trailblaze-logs" ]; then
-            echo "trailblaze-logs directory exists in workspace"
-            echo "Contents:"
-            ls -laR "$(pwd)/trailblaze-logs" || echo "Could not list directory"
-          else
-            echo "WARNING: trailblaze-logs directory not found in workspace"
-          fi
+        run: ./.github/pr_verify_logs_were_pulled.sh
 
       - name: Generate Trailblaze report
         if: always()
         continue-on-error: true
-        run: |
-          echo "========================================="
-          echo "Building Compose Web/WASM UI..."
-          ./gradlew :trailblaze-ui:wasmJsBrowserProductionWebpack
-          UI_EXIT_CODE=$?
-          echo "UI build exit code: $UI_EXIT_CODE"
-          
-          echo "Generating Trailblaze report..."
-          ./gradlew :trailblaze-report:run --args="$(pwd)/trailblaze-logs"
-          REPORT_EXIT_CODE=$?
-          echo "Report generation exit code: $REPORT_EXIT_CODE"
-          
-          echo "Checking for generated report..."
-          if [ -f "$(pwd)/trailblaze-logs/trailblaze_report.html" ]; then
-            echo "✓ Report found at: $(pwd)/trailblaze-logs/trailblaze_report.html"
-            ls -lh "$(pwd)/trailblaze-logs/trailblaze_report.html"
-          else
-            echo "✗ Report NOT found at expected location"
-            echo "Searching for report files..."
-            find "$(pwd)" -name "trailblaze_report.html" -o -name "*report*.html" 2>/dev/null || echo "No report files found"
-          fi
-          echo "========================================="
+        run: ./.github/pr_generate_trailblaze_report.sh
 
       - name: Create artifacts
         if: always()
         continue-on-error: true
-        run: |
-          echo "========================================="
-          echo "Creating Artifacts"
-          echo "========================================="
-          
-          # Check for HTML report
-          echo "Checking for HTML report..."
-          if [ -f "$(pwd)/trailblaze-logs/trailblaze_report.html" ]; then
-            REPORT_SIZE=$(ls -lh "$(pwd)/trailblaze-logs/trailblaze_report.html" | awk '{print $5}')
-            echo "✓ Found trailblaze_report.html (size: $REPORT_SIZE)"
-          
-            # Copy report to workspace root for separate artifact upload
-            echo "Copying report to workspace root..."
-            cp "$(pwd)/trailblaze-logs/trailblaze_report.html" "$(pwd)/trailblaze_report.html"
-            if [ -f "$(pwd)/trailblaze_report.html" ]; then
-              echo "✓ Report copied successfully"
-            else
-              echo "✗ Failed to copy report"
-            fi
-          else
-            echo "✗ trailblaze_report.html not found"
-          fi
-          
-          # Zip up logs
-          if [ -d "$(pwd)/trailblaze-logs" ] && [ "$(ls -A $(pwd)/trailblaze-logs 2>/dev/null)" ]; then
-            echo "Zipping logs..."
-            cd "$(pwd)/trailblaze-logs" && zip -r "../trailblaze-logs.zip" . && cd ..
-            ZIP_EXIT_CODE=$?
-            echo "Zip exit code: $ZIP_EXIT_CODE"
-          
-            if [ -f "$(pwd)/trailblaze-logs.zip" ]; then
-              ZIP_SIZE=$(ls -lh "$(pwd)/trailblaze-logs.zip" | awk '{print $5}')
-              echo "Created trailblaze-logs.zip (size: $ZIP_SIZE)"
-            else
-              echo "WARNING: trailblaze-logs.zip was not created!"
-            fi
-          else
-            echo "WARNING: No logs found to zip (directory empty or doesn't exist)"
-          fi
-          
-          echo "========================================="
+        run: ./.github/pr_create_artifacts.sh
+
 
       - name: Upload artifacts
         if: always()  # Ensures this runs even if the previous step failed
@@ -204,9 +105,10 @@ jobs:
           path: |
             trailblaze-logs.zip
             trailblaze_report.html
+            logcat.log
 
       - name: Fail if tests failed
-        if: steps.run-tests.outcome == 'failure'
+        if: steps.run-tests-linux.outcome == 'failure'
         run: |
           echo "Tests failed - failing the workflow"
           exit 1

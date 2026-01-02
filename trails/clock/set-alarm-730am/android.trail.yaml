@@ -1,3 +1,5 @@
+- config:
+    id: "clock/set-alarm-730am"
 - prompts:
     - step: Reinstall and launch the Clock app (com.android.deskclock)
       recording:

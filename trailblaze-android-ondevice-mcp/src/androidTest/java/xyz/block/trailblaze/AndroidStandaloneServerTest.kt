@@ -51,14 +51,13 @@ class AndroidStandaloneServerTest : BaseAndroidStandaloneServerTest() {
   }
 
   override fun getDynamicLlmClient(trailblazeLlmModel: TrailblazeLlmModel): DynamicLlmClient {
-    val openAiApiKey: String? = InstrumentationArgUtil.getInstrumentationArg("OPENAI_API_KEY")
     // Reuse the cached HTTP client to prevent "unknown client" errors
     return DefaultDynamicLlmClient(
       trailblazeLlmModel = trailblazeLlmModel,
       llmClients = mutableMapOf<LLMProvider, LLMClient>(
         LLMProvider.Ollama to OllamaClient(baseClient = cachedHttpClient),
       ).apply {
-        openAiApiKey?.let {
+        InstrumentationArgUtil.getInstrumentationArg("OPENAI_API_KEY")?.let { openAiApiKey ->
           put(
             LLMProvider.OpenAI,
             OpenAILLMClient(

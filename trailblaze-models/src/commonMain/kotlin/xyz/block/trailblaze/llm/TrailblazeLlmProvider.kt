@@ -10,6 +10,7 @@ data class TrailblazeLlmProvider(
 ) {
   fun toKoogLlmProvider(): LLMProvider = when (id) {
     LLMProvider.OpenAI.id -> LLMProvider.OpenAI
+    LLMProvider.OpenRouter.id -> LLMProvider.OpenRouter
     LLMProvider.Ollama.id -> LLMProvider.Ollama
     LLMProvider.Anthropic.id -> LLMProvider.Anthropic
     LLMProvider.Google.id -> LLMProvider.Google
@@ -28,6 +29,7 @@ data class TrailblazeLlmProvider(
     val GOOGLE: TrailblazeLlmProvider = fromKoogLlmProvider(LLMProvider.Google)
     val OLLAMA: TrailblazeLlmProvider = fromKoogLlmProvider(LLMProvider.Ollama)
     val OPENAI: TrailblazeLlmProvider = fromKoogLlmProvider(LLMProvider.OpenAI)
+    val OPEN_ROUTER: TrailblazeLlmProvider = fromKoogLlmProvider(LLMProvider.OpenRouter)
 
     val ALL_PROVIDERS: List<TrailblazeLlmProvider> = listOf(
       ANTHROPIC,
@@ -35,6 +37,7 @@ data class TrailblazeLlmProvider(
       GOOGLE,
       OLLAMA,
       OPENAI,
+      OPEN_ROUTER,
     )
 
     fun fromKoogLlmProvider(koogLlmProvider: LLMProvider) = TrailblazeLlmProvider(

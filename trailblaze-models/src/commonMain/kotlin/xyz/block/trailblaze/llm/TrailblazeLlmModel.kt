@@ -33,4 +33,23 @@ data class TrailblazeLlmModel(
     maxOutputTokens = maxOutputTokens,
     contextLength = contextLength,
   )
+
+  companion object {
+    fun LLModel.toTrailblazeLlmModel(
+      inputCostPerOneMillionTokens: Double,
+      outputCostPerOneMillionTokens: Double,
+      maxOutputTokens: Long? = null,
+    ): TrailblazeLlmModel {
+      return TrailblazeLlmModel(
+        trailblazeLlmProvider = TrailblazeLlmProvider.fromKoogLlmProvider(this.provider),
+        modelId = this.id,
+        inputCostPerOneMillionTokens = inputCostPerOneMillionTokens,
+        outputCostPerOneMillionTokens = outputCostPerOneMillionTokens,
+        contextLength = this.contextLength,
+        maxOutputTokens = maxOutputTokens ?: this.maxOutputTokens
+        ?: error("maxOutputTokens must be set for ${this.id}"),
+        capabilityIds = this.capabilities.map { it.id }
+      )
+    }
+  }
 }

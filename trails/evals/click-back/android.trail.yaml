@@ -1,0 +1,4 @@
+- config:
+    id: "evals/click-back"
+- prompts:
+    - step: Click the back button

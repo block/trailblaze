@@ -17,5 +17,5 @@ abstract class TrailblazeDesktopApp(
 
   abstract val deviceManager: TrailblazeDeviceManager
 
-  abstract fun startTrailblazeDesktopApp()
+  abstract fun startTrailblazeDesktopApp(headless: Boolean = false)
 }

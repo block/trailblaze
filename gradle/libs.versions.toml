@@ -111,6 +111,7 @@ koog-prompt-executor-llms = { module = "ai.koog:prompt-executor-llms", version.r
 koog-prompt-executor-anthropic = { module = "ai.koog:prompt-executor-anthropic-client", version.ref = "koog" }
 koog-prompt-executor-google = { module = "ai.koog:prompt-executor-google-client", version.ref = "koog" }
 koog-prompt-executor-openai = { module = "ai.koog:prompt-executor-openai-client", version.ref = "koog" }
+koog-prompt-executor-openrouter = { module = "ai.koog:prompt-executor-openrouter-client", version.ref = "koog" }
 koog-prompt-executor-ollama = { module = "ai.koog:prompt-executor-ollama-client", version.ref = "koog" }
 koog-prompt-llm = { module = "ai.koog:prompt-llm", version.ref = "koog" }
 koog-prompt-model = { module = "ai.koog:prompt-model", version.ref = "koog" }

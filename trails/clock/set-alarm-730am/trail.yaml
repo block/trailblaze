@@ -1,0 +1,7 @@
+- config:
+    id: "clock/set-alarm-730am"
+- prompts:
+    - step: Reinstall and launch the Clock app (com.android.deskclock)
+    - step: Add a new alarm for 7:30 AM
+    - step: After it's been added, turn it off
+    - step: Delete the alarm

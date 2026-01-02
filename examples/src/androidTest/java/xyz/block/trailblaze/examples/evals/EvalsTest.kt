@@ -1,4 +1,4 @@
-package xyz.block.trailblaze.examples.clock
+package xyz.block.trailblaze.examples.evals
 
 import org.junit.Rule
 import org.junit.Test
@@ -7,12 +7,11 @@ import xyz.block.trailblaze.examples.rules.ExamplesAndroidTrailblazeRule
 /**
  * Example test showing how to use Trailblaze with AI to use the Clock app via prompts.
  */
-class ClockTest {
+class EvalsTest {
 
   @get:Rule
   val trailblazeRule = ExamplesAndroidTrailblazeRule()
 
   @Test
-  fun setAnAlarmRecorded() = trailblazeRule.runFromAsset("clock/set-alarm-730am")
-
+  fun clickBackAi() = trailblazeRule.runFromAsset("evals/click-back")
 }

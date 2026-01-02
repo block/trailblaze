@@ -21,6 +21,7 @@ import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.model.CustomTrailblazeTools
 import xyz.block.trailblaze.model.TrailblazeConfig
+import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.rules.SimpleTestRuleChain
 import xyz.block.trailblaze.rules.TrailblazeRule
 import xyz.block.trailblaze.rules.TrailblazeRunnerUtil
@@ -233,11 +234,17 @@ open class AndroidTrailblazeRule(
     useRecordedSteps: Boolean = true,
     targetAppId: String? = null,
   ) {
+    val computedAssetPath: String = TrailRecordings.findBestTrailResourcePath(
+      path = yamlAssetPath,
+      deviceClassifiers = trailblazeLoggingRule.trailblazeDeviceInfoProvider().classifiers,
+      doesResourceExist = AndroidAssetsUtil::assetExists,
+    ) ?: throw TrailblazeException("Asset not found: $yamlAssetPath")
+    println("Running from asset: $computedAssetPath")
     // Make sure the app is stopped before the test so the LLM doesn't get confused and think it's already running.
     if (forceStopApp && targetAppId != null) {
       AdbCommandUtil.forceStopApp(targetAppId)
     }
-    val yamlContent = AndroidAssetsUtil.readAssetAsString(yamlAssetPath)
+    val yamlContent = AndroidAssetsUtil.readAssetAsString(computedAssetPath)
     run(
       testYaml = yamlContent,
       useRecordedSteps = useRecordedSteps,

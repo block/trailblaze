@@ -9,6 +9,7 @@ import xyz.block.trailblaze.llm.providers.AnthropicTrailblazeLlmModelList
 import xyz.block.trailblaze.llm.providers.GoogleTrailblazeLlmModelList
 import xyz.block.trailblaze.llm.providers.OllamaTrailblazeLlmModelList
 import xyz.block.trailblaze.llm.providers.OpenAITrailblazeLlmModelList
+import xyz.block.trailblaze.llm.providers.OpenRouterTrailblazeLlmModelList
 import xyz.block.trailblaze.mcp.utils.JvmLLMProvidersUtil
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
@@ -84,6 +85,7 @@ class OpenSourceTrailblazeDesktopAppConfig : TrailblazeDesktopAppConfig(
       GoogleTrailblazeLlmModelList,
       OllamaTrailblazeLlmModelList,
       OpenAITrailblazeLlmModelList,
+      OpenRouterTrailblazeLlmModelList,
     )
   }
 

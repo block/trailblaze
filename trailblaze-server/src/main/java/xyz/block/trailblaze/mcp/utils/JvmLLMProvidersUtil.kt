@@ -32,6 +32,9 @@ object JvmLLMProvidersUtil {
       TrailblazeLlmProvider.GOOGLE -> "GOOGLE_API_KEY"
 
       TrailblazeLlmProvider.ANTHROPIC -> "ANTHROPIC_API_KEY"
+
+      TrailblazeLlmProvider.OPEN_ROUTER -> "OPENROUTER_API_KEY"
+      
       else -> null
     }
   }
@@ -56,14 +59,8 @@ object JvmLLMProvidersUtil {
 
   fun isProviderAvailableOnJvm(provider: TrailblazeLlmProvider): Boolean {
     return when (provider) {
-      TrailblazeLlmProvider.OPENAI,
-      TrailblazeLlmProvider.DATABRICKS,
-      TrailblazeLlmProvider.GOOGLE,
-      TrailblazeLlmProvider.ANTHROPIC -> getEnvironmentVariableValueForLlmProvider(provider) != null
-
       TrailblazeLlmProvider.OLLAMA -> isOllamaInstalled
-
-      else -> false
+      else -> getEnvironmentVariableValueForLlmProvider(provider) != null
     }
   }
 

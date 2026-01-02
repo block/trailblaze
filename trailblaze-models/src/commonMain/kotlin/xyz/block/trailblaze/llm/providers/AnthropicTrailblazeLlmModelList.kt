@@ -1,7 +1,9 @@
 package xyz.block.trailblaze.llm.providers
 
+import ai.koog.prompt.executor.clients.anthropic.AnthropicModels
 import ai.koog.prompt.llm.LLMCapability
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
+import xyz.block.trailblaze.llm.TrailblazeLlmModel.Companion.toTrailblazeLlmModel
 import xyz.block.trailblaze.llm.TrailblazeLlmModelList
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
 
@@ -16,23 +18,9 @@ object AnthropicTrailblazeLlmModelList : TrailblazeLlmModelList {
    *
    * @see <a href="https://docs.anthropic.com/claude/docs/models-overview">
    */
-  val CLAUDE_HAIKU_4_5 = TrailblazeLlmModel(
-    trailblazeLlmProvider = TrailblazeLlmProvider.ANTHROPIC,
-    modelId = "claude-haiku-4-5",
+  val CLAUDE_HAIKU_4_5 = AnthropicModels.Haiku_4_5.toTrailblazeLlmModel(
     inputCostPerOneMillionTokens = 1.00,
     outputCostPerOneMillionTokens = 5.00,
-    capabilityIds = listOf(
-      LLMCapability.Temperature,
-      LLMCapability.Tools,
-      LLMCapability.ToolChoice,
-      LLMCapability.Vision.Image,
-      LLMCapability.Document,
-      LLMCapability.Completion,
-      LLMCapability.OpenAIEndpoint.Completions,
-      LLMCapability.OpenAIEndpoint.Responses,
-    ).map { it.id },
-    contextLength = 200_000,
-    maxOutputTokens = 64_000,
   )
 
   /**
@@ -44,23 +32,9 @@ object AnthropicTrailblazeLlmModelList : TrailblazeLlmModelList {
    *
    * @see <a href="https://docs.anthropic.com/claude/docs/models-overview">
    */
-  val CLAUDE_SONNET_4_5 = TrailblazeLlmModel(
-    trailblazeLlmProvider = TrailblazeLlmProvider.ANTHROPIC,
-    modelId = "claude-sonnet-4-5",
+  val CLAUDE_SONNET_4_5 = AnthropicModels.Sonnet_4_5.toTrailblazeLlmModel(
     inputCostPerOneMillionTokens = 3.00,
     outputCostPerOneMillionTokens = 15.00,
-    capabilityIds = listOf(
-      LLMCapability.Temperature,
-      LLMCapability.Tools,
-      LLMCapability.ToolChoice,
-      LLMCapability.Vision.Image,
-      LLMCapability.Document,
-      LLMCapability.Completion,
-      LLMCapability.OpenAIEndpoint.Completions,
-      LLMCapability.OpenAIEndpoint.Responses,
-    ).map { it.id },
-    contextLength = 200_000,
-    maxOutputTokens = 64_000,
   )
 
   override val entries = listOf(
