@@ -90,6 +90,7 @@ jobs:
             
             # Start Ollama LLM Server
             echo "Starting Ollama server..."
+            OLLAMA_MODEL="qwen3-vl:2b"
             nohup ollama serve > /tmp/ollama.log 2>&1 &
             OLLAMA_PID=$!
             echo "Ollama server started with PID: $OLLAMA_PID"
@@ -99,12 +100,12 @@ jobs:
             curl -s http://localhost:11434/api/tags > /dev/null 2>&1 || (echo "ERROR: Ollama failed to start" && cat /tmp/ollama.log && exit 1)
             echo "✓ Ollama server is ready!"
             
-            echo "Downloading qwen3-vl:2b model..."
-            ollama pull qwen3-vl:2b
+            echo "Downloading $OLLAMA_MODEL model..."
+            ollama pull $OLLAMA_MODEL
             echo "✓ Model downloaded"
             
-            echo "Validating qwen3-vl:2b model connectivity..."
-            curl --verbose http://localhost:11434/api/generate -d '{"model": "qwen3-vl:2b", "prompt": "Test", "stream": false}' 2>&1 | head -30
+            echo "Validating $OLLAMA_MODEL model connectivity..."
+            curl --verbose http://localhost:11434/api/generate -d '{"model": "'$OLLAMA_MODEL'", "prompt": "Test", "stream": false}' 2>&1 | head -30
             echo "✓ Ollama LLM ready at http://localhost:11434"
             echo "========================================="
             
@@ -119,7 +120,7 @@ jobs:
             
             # Run Android Tests
             echo "Running Android Tests..."
-            ./gradlew --info :examples:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class="xyz.block.trailblaze.examples.clock.ClockTest" -Pandroid.testInstrumentationRunnerArguments.trailblaze.aiEnabled=false || TEST_FAILED=true
+            ./gradlew --info :examples:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class="xyz.block.trailblaze.examples.clock.ClockTest" || TEST_FAILED=true
             
             echo "========================================="
             echo "Test execution completed (failed: ${TEST_FAILED:-false})"
