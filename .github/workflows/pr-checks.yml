@@ -65,6 +65,44 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407
 
+      - name: Cache Ollama models
+        uses: actions/cache@v4
+        with:
+          path: ~/.ollama
+          key: ollama-qwen3-vl-2b-${{ runner.os }}
+
+      - name: Install and setup Ollama
+        run: |
+          echo "Installing Ollama..."
+          curl -fsSL https://ollama.com/install.sh | sh
+          
+          echo "Starting Ollama server in background..."
+          ollama serve > /tmp/ollama-setup.log 2>&1 &
+          OLLAMA_PID=$!
+          echo "Ollama server started with PID: $OLLAMA_PID"
+          
+          echo "Waiting for Ollama server to be ready..."
+          for i in {1..30}; do
+            if curl -s http://localhost:11434/api/tags > /dev/null 2>&1; then
+              echo "Ollama server is ready!"
+              break
+            fi
+            echo "Waiting for Ollama... ($i/30)"
+            sleep 2
+          done
+          
+          echo "Pulling qwen3-vl:2b model (will use cache if available)..."
+          ollama pull qwen3-vl:2b
+          
+          echo "Validating model is available..."
+          ollama list
+          
+          echo "Stopping Ollama server before emulator starts..."
+          kill $OLLAMA_PID || true
+          sleep 2
+          
+          echo "Ollama setup complete! Model cached for future runs."
+
       - name: Create and start emulator and run tests
         uses: reactivecircus/android-emulator-runner@b530d96654c385303d652368551fb075bc2f0b6b
         id: run-tests
@@ -80,6 +118,19 @@ jobs:
             echo "========================================="
             echo "Starting Android Test Execution"
             echo "Working directory: $(pwd)"
+            echo "========================================="
+            
+            # Start Ollama LLM Server (model pre-installed)
+            echo "Starting Ollama server..."
+            nohup ollama serve > /tmp/ollama.log 2>&1 &
+            sleep 3
+            echo "Waiting for Ollama server to be ready..."
+            for attempt in 1 2 3 4 5 6 7 8 9 10; do curl -s http://localhost:11434/api/tags > /dev/null 2>&1 && break || (echo "Attempt $attempt/10..." && sleep 2); done
+            curl -s http://localhost:11434/api/tags > /dev/null 2>&1 || (echo "ERROR: Ollama failed to start" && cat /tmp/ollama.log && exit 1)
+            echo "✓ Ollama server is ready!"
+            echo "Validating qwen3-vl:2b model connectivity..."
+            curl --verbose http://localhost:11434/api/generate -d '{"model": "qwen3-vl:2b", "prompt": "Test", "stream": false}' 2>&1 | head -30
+            echo "✓ Ollama LLM ready at http://localhost:11434"
             echo "========================================="
             
             # Run Android Tests
