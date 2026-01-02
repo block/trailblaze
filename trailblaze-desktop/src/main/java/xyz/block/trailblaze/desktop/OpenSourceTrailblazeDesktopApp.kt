@@ -28,23 +28,40 @@ class OpenSourceTrailblazeDesktopApp : TrailblazeDesktopApp(
     )
   }
 
-  override fun startTrailblazeDesktopApp() {
-    MainTrailblazeApp(
-      trailblazeSavedSettingsRepo = desktopAppConfig.trailblazeSettingsRepo,
-      logsRepo = desktopAppConfig.logsRepo,
-      yamlRunner = { desktopRunYamlParams: DesktopAppRunYamlParams ->
-        desktopYamlRunner.runYaml(desktopRunYamlParams)
-      },
-      recordedTrailsRepo = desktopAppConfig.recordedTrailsRepo,
-      trailblazeMcpServerProvider = { trailblazeMcpServer },
-      customEnvVarNames = emptyList(),
-    ).runTrailblazeApp(
-      customTabs = { listOf() },
-      availableModelLists = desktopAppConfig.getCurrentlyAvailableLlmModelLists(),
-      deviceManager = deviceManager,
-      additionalInstrumentationArgs = { emptyMap() },
-      globalSettingsContent = { },
-      currentTrailblazeLlmModelProvider = { desktopAppConfig.getCurrentLlmModel() },
+  override fun startTrailblazeDesktopApp(headless: Boolean) {
+    if (headless) {
+      startHeadlessMode()
+    } else {
+      MainTrailblazeApp(
+        trailblazeSavedSettingsRepo = desktopAppConfig.trailblazeSettingsRepo,
+        logsRepo = desktopAppConfig.logsRepo,
+        yamlRunner = { desktopRunYamlParams: DesktopAppRunYamlParams ->
+          desktopYamlRunner.runYaml(desktopRunYamlParams)
+        },
+        recordedTrailsRepo = desktopAppConfig.recordedTrailsRepo,
+        trailblazeMcpServerProvider = { trailblazeMcpServer },
+        customEnvVarNames = emptyList(),
+      ).runTrailblazeApp(
+        customTabs = { listOf() },
+        availableModelLists = desktopAppConfig.getCurrentlyAvailableLlmModelLists(),
+        deviceManager = deviceManager,
+        additionalInstrumentationArgs = { emptyMap() },
+        globalSettingsContent = { },
+        currentTrailblazeLlmModelProvider = { desktopAppConfig.getCurrentLlmModel() },
+      )
+    }
+  }
+
+  private fun startHeadlessMode() {
+    val appConfig = desktopAppConfig.trailblazeSettingsRepo.serverStateFlow.value.appConfig
+    
+    println("Starting Trailblaze in headless mode...")
+    println("MCP Server will be available on port ${appConfig.serverPort}")
+    
+    // Start MCP Server
+    trailblazeMcpServer.startSseMcpServer(
+      port = appConfig.serverPort,
+      wait = true, // Keep the process running
     )
   }
 

@@ -3,7 +3,7 @@ package xyz.block.trailblaze.examples.calculator
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
-import xyz.block.trailblaze.examples.ExamplesAndroidTrailblazeRuleOpenAiTrailblazeRule
+import xyz.block.trailblaze.examples.rules.ExamplesAndroidTrailblazeRule
 import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.toolcalls.commands.LaunchAppTrailblazeTool
 
@@ -13,7 +13,7 @@ import xyz.block.trailblaze.toolcalls.commands.LaunchAppTrailblazeTool
 class AndroidCalculatorOnePlusTwoMixedTest {
 
   @get:Rule
-  val trailblazeRule = ExamplesAndroidTrailblazeRuleOpenAiTrailblazeRule()
+  val trailblazeRule = ExamplesAndroidTrailblazeRule()
 
   @Before
   fun setUp() {

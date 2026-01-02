@@ -2,7 +2,7 @@ package xyz.block.trailblaze.examples.settings
 
 import org.junit.Rule
 import org.junit.Test
-import xyz.block.trailblaze.examples.ExamplesAndroidTrailblazeRuleOpenAiTrailblazeRule
+import xyz.block.trailblaze.examples.rules.ExamplesAndroidTrailblazeRule
 
 /**
  * Example showing how to use Trailblaze with Settings app via prompts and maestro.
@@ -10,7 +10,7 @@ import xyz.block.trailblaze.examples.ExamplesAndroidTrailblazeRuleOpenAiTrailbla
 class AndroidSettingsTest {
 
   @get:Rule
-  val trailblazeRule = ExamplesAndroidTrailblazeRuleOpenAiTrailblazeRule()
+  val trailblazeRule = ExamplesAndroidTrailblazeRule()
 
   @Test
   fun becomeADeveloperAi() {
