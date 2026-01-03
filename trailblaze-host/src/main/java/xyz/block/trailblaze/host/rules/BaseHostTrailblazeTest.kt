@@ -17,6 +17,7 @@ import xyz.block.trailblaze.host.devices.TrailblazeHostDeviceClassifier
 import xyz.block.trailblaze.host.rules.TrailblazeHostLlmConfig.DEFAULT_TRAILBLAZE_LLM_MODEL
 import xyz.block.trailblaze.http.DynamicLlmClient
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
+import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.recordings.TrailRecordings
@@ -115,9 +116,9 @@ abstract class BaseHostTrailblazeTest(
     TrailblazeToolSet.DynamicTrailblazeToolSet(
       "Dynamic Initial Tool Set",
       (
-        trailblazeToolSet?.toolClasses
-          ?: TrailblazeToolSet.getLlmToolSet(config.setOfMarkEnabled).toolClasses
-        ) + customToolClasses,
+          trailblazeToolSet?.toolClasses
+            ?: TrailblazeToolSet.getLlmToolSet(config.setOfMarkEnabled).toolClasses
+          ) + customToolClasses,
     ),
   )
 
@@ -198,7 +199,8 @@ abstract class BaseHostTrailblazeTest(
     trailFilePath: String?,
     forceStopApp: Boolean = true,
     useRecordedSteps: Boolean = true,
-  ) {
+    sendSessionStartLog: Boolean,
+  ): SessionId {
     // Make sure the app is stopped before the test so the LLM doesn't get confused and think it's already running.
     if (forceStopApp) {
       ensureTargetAppIsStopped()
@@ -206,19 +208,22 @@ abstract class BaseHostTrailblazeTest(
     val trailItems: List<TrailYamlItem> = trailblazeYaml.decodeTrail(yaml)
     val trailConfig = trailblazeYaml.extractTrailConfig(trailItems)
 
-    loggingRule.trailblazeLogger.sendStartLog(
-      trailConfig = trailConfig,
-      className = loggingRule.description?.className
-        ?: this::class.java.simpleName.takeIf { it.isNotEmpty() }
-        ?: "BaseHostTrailblazeTest",
-      methodName = loggingRule.description?.methodName ?: "run",
-      trailblazeDeviceInfo = loggingRule.trailblazeDeviceInfoProvider(),
-      rawYaml = yaml,
-      trailFilePath = trailFilePath,
-      hasRecordedSteps = trailblazeYaml.hasRecordedSteps(trailItems),
-      trailblazeDeviceId = trailblazeDeviceId,
-    )
-    return runTrail(trailItems, useRecordedSteps)
+    if (sendSessionStartLog) {
+      loggingRule.trailblazeLogger.sendStartLog(
+        trailConfig = trailConfig,
+        className = loggingRule.description?.className
+          ?: this::class.java.simpleName.takeIf { it.isNotEmpty() }
+          ?: "BaseHostTrailblazeTest",
+        methodName = loggingRule.description?.methodName ?: "run",
+        trailblazeDeviceInfo = loggingRule.trailblazeDeviceInfoProvider(),
+        rawYaml = yaml,
+        trailFilePath = trailFilePath,
+        hasRecordedSteps = trailblazeYaml.hasRecordedSteps(trailItems),
+        trailblazeDeviceId = trailblazeDeviceId,
+      )
+    }
+    runTrail(trailItems, useRecordedSteps)
+    return loggingRule.trailblazeLogger.getCurrentSessionId()
   }
 
   /**
@@ -229,10 +234,18 @@ abstract class BaseHostTrailblazeTest(
     yaml: String,
     trailblazeDeviceId: TrailblazeDeviceId?,
     trailFilePath: String?,
+    sendSessionStartLog: Boolean,
     forceStopApp: Boolean = true,
     useRecordedSteps: Boolean = true,
   ) = runBlocking {
-    runTrailblazeYamlSuspend(yaml, trailblazeDeviceId, trailFilePath, forceStopApp, useRecordedSteps)
+    runTrailblazeYamlSuspend(
+      yaml = yaml,
+      trailblazeDeviceId = trailblazeDeviceId,
+      trailFilePath = trailFilePath,
+      forceStopApp = forceStopApp,
+      useRecordedSteps = useRecordedSteps,
+      sendSessionStartLog = sendSessionStartLog
+    )
   }
 
   fun runFromResource(
@@ -255,6 +268,7 @@ abstract class BaseHostTrailblazeTest(
       forceStopApp = forceStopApp,
       useRecordedSteps = useRecordedSteps,
       trailFilePath = computedResourcePath,
+      sendSessionStartLog = true,
       trailblazeDeviceId = null,
     )
   }

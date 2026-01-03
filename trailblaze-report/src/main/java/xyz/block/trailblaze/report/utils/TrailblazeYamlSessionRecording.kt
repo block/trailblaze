@@ -44,9 +44,7 @@ object TrailblazeYamlSessionRecording {
         }
 
         while (currentLogIndex < size) {
-          val currentLog = logs[currentLogIndex]
-          println("### have current log ${currentLog::class}")
-          when (currentLog) {
+          when (val currentLog = logs[currentLogIndex]) {
             is TrailblazeLog.DelegatingTrailblazeToolLog -> {
               if (currentLog.trailblazeTool::class != OtherTrailblazeTool::class) {
                 tools(listOf(currentLog.trailblazeTool))

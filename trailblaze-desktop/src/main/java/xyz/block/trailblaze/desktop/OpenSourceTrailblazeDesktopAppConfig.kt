@@ -40,10 +40,16 @@ class OpenSourceTrailblazeDesktopAppConfig : TrailblazeDesktopAppConfig(
   )
 
   override val defaultAppDataDir: File = TrailblazeDesktopUtil.getDefaultAppDataDirectory().apply { mkdirs() }
+
+  override val availableAppTargets: Set<TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget> =
+    setOf(TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget)
+  override val defaultAppTarget: TrailblazeHostAppTarget = TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget
   override val trailblazeSettingsRepo = TrailblazeSettingsRepo(
     settingsFile = File(defaultAppDataDir, TrailblazeDesktopUtil.SETTINGS_FILENAME),
     initialConfig = TrailblazeServerState.SavedTrailblazeAppConfig(initialDriverTypesMap),
     supportedDriverTypes = initialDriverTypes,
+    defaultHostAppTarget = defaultAppTarget,
+    allTargetApps = { availableAppTargets }
   )
   val logsDir = File(
     TrailblazeDesktopUtil.getEffectiveLogsDirectory(
@@ -66,10 +72,7 @@ class OpenSourceTrailblazeDesktopAppConfig : TrailblazeDesktopAppConfig(
     return modelLists
   }
 
-  override val availableAppTargets: Set<TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget> =
-    setOf(TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget)
   override val appIconProvider: AppIconProvider = AppIconProvider.DefaultAppIconProvider
-  override val defaultAppTarget: TrailblazeHostAppTarget = TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget
   override fun getInstalledAppIds(trailblazeDeviceId: TrailblazeDeviceId): Set<String> {
     return MobileDeviceUtils.getInstalledAppIds(trailblazeDeviceId)
   }

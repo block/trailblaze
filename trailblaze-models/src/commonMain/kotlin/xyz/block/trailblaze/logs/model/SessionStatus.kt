@@ -83,5 +83,5 @@ sealed interface SessionStatus {
   }
 }
 
-val SessionStatus.inProgress: Boolean
-  get() = this is SessionStatus.Started
+val SessionStatus.isInProgress: Boolean
+  get() = this !is SessionStatus.Ended

@@ -20,6 +20,8 @@ import xyz.block.trailblaze.llm.TrailblazeLlmModel
 /**
  * This would be the single test that runs the MCP server.  It blocks the instrumentation test
  * so we can send prompts/etc.
+ *
+ * OPEN SOURCE VERSION
  */
 class AndroidStandaloneServerTest : BaseAndroidStandaloneServerTest() {
 
@@ -35,6 +37,7 @@ class AndroidStandaloneServerTest : BaseAndroidStandaloneServerTest() {
         testYaml = runYamlRequest.yaml,
         useRecordedSteps = runYamlRequest.useRecordedSteps,
         trailFilePath = runYamlRequest.trailFilePath,
+        sendSessionStartLog = runYamlRequest.config.sendSessionStartLog
       )
     }
   }

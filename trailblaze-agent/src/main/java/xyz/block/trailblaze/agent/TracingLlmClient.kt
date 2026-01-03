@@ -4,7 +4,7 @@ import ai.koog.agents.core.tools.ToolDescriptor
 import ai.koog.prompt.dsl.ModerationResult
 import ai.koog.prompt.dsl.Prompt
 import ai.koog.prompt.executor.clients.LLMClient
-import ai.koog.prompt.executor.model.LLMChoice
+
 import ai.koog.prompt.llm.LLMProvider
 import ai.koog.prompt.llm.LLModel
 import ai.koog.prompt.message.Message
@@ -45,7 +45,7 @@ class TracingLlmClient(private val delegate: LLMClient) : LLMClient {
     prompt: Prompt,
     model: LLModel,
     tools: List<ToolDescriptor>,
-  ): List<LLMChoice> = traceLlmClient("executeMultipleChoices") {
+  ): List<List<Message.Response>> = traceLlmClient("executeMultipleChoices") {
     delegate.executeMultipleChoices(prompt, model, tools)
   }
 

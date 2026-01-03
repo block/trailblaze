@@ -57,7 +57,7 @@ import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.llm.LlmSessionUsageAndCost
 import xyz.block.trailblaze.llm.LlmUsageAndCostExt.computeUsageSummary
 import xyz.block.trailblaze.logs.client.TrailblazeLog
-import xyz.block.trailblaze.logs.model.inProgress
+import xyz.block.trailblaze.logs.model.isInProgress
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.ui.composables.CodeBlock
 import xyz.block.trailblaze.ui.composables.SelectableText
@@ -120,7 +120,7 @@ fun SessionDetailComposable(
         onViewModeChanged = {}, // No-op for empty logs
         alwaysAtBottom = false,
         onAlwaysAtBottomChanged = {}, // No-op for empty logs
-        isSessionInProgress = sessionDetail.session.latestStatus.inProgress,
+        isSessionInProgress = sessionDetail.session.latestStatus.isInProgress,
         onCancelSession = onCancelSession,
         onOpenLogsFolder = onOpenLogsFolder,
         onExportSession = onExportSession,
@@ -158,7 +158,7 @@ fun SessionDetailComposable(
   } else {
     val gridState = rememberLazyGridState()
     var viewMode by remember { mutableStateOf(initialViewMode) }
-    var alwaysAtBottom by remember { mutableStateOf(sessionDetail.session.latestStatus.inProgress) }
+    var alwaysAtBottom by remember { mutableStateOf(sessionDetail.session.latestStatus.isInProgress) }
     var showDeleteConfirmation by remember { mutableStateOf(false) }
 
     // Pre-compute heavy operations in background threads and cache results
@@ -188,7 +188,7 @@ fun SessionDetailComposable(
 
     // Background computation for recording YAML (used in Recording view)
     // Refresh if logs change or session status changes
-    LaunchedEffect(sessionDetail.logs, sessionDetail.session.latestStatus.inProgress) {
+    LaunchedEffect(sessionDetail.logs, sessionDetail.session.latestStatus.isInProgress) {
       isLoadingRecordingYaml = true
       withContext(Dispatchers.Default) {
         val computedYaml = generateRecordingYaml()
@@ -300,7 +300,7 @@ fun SessionDetailComposable(
               },
               alwaysAtBottom = alwaysAtBottom,
               onAlwaysAtBottomChanged = { alwaysAtBottom = it },
-              isSessionInProgress = sessionDetail.session.latestStatus.inProgress,
+              isSessionInProgress = sessionDetail.session.latestStatus.isInProgress,
               onCancelSession = onCancelSession,
               onOpenLogsFolder = onOpenLogsFolder,
               onExportSession = onExportSession,
@@ -702,7 +702,7 @@ fun SessionDetailComposable(
                           }
 
                           // Show warning if session is still in progress
-                          if (sessionDetail.session.latestStatus.inProgress) {
+                          if (sessionDetail.session.latestStatus.isInProgress) {
                             Box(
                               modifier = Modifier
                                 .fillMaxWidth()

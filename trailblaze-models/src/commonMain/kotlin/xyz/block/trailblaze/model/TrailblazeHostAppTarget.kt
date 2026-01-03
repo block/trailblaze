@@ -6,6 +6,7 @@ import xyz.block.trailblaze.model.TrailblazeOnDeviceInstrumentationTarget.Compan
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import kotlin.reflect.KClass
 
+
 abstract class TrailblazeHostAppTarget(
   val name: String,
 ) {
@@ -70,4 +71,17 @@ abstract class TrailblazeHostAppTarget(
     override fun internalGetCustomToolsForDriver(driverType: TrailblazeDriverType): Set<KClass<out TrailblazeTool>> =
       setOf()
   }
+
+  fun getAppIdIfInstalled(
+    platform: TrailblazeDevicePlatform,
+    installedAppIds: Set<String>
+  ): String? {
+    val installedAppId = getPossibleAppIdsForPlatform(platform)?.let { expectedAppIds ->
+      expectedAppIds.firstOrNull { expectedAppId ->
+        installedAppIds.contains(expectedAppId)
+      }
+    }
+    return installedAppId
+  }
 }
+

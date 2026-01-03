@@ -179,7 +179,7 @@ abstract class TrailblazeLogger {
   @Suppress("SimpleDateFormat")
   private val dateTimeFormat = SimpleDateFormat("yyyy_MM_dd_HH_mm_ss", Locale.US)
 
-  private fun generateSessionId(seed: String): SessionId = SessionId("${dateTimeFormat.format(Date())}_$seed")
+  fun generateSessionId(seed: String): SessionId = SessionId("${dateTimeFormat.format(Date())}_$seed")
 
   private val sessionIdLock = Any()
   private var sessionId: SessionId = generateSessionId(defaultSessionPrefix)
@@ -237,7 +237,7 @@ abstract class TrailblazeLogger {
     methodName: String,
     hasRecordedSteps: Boolean,
     trailblazeDeviceInfo: TrailblazeDeviceInfo,
-    trailblazeDeviceId : TrailblazeDeviceId?,
+    trailblazeDeviceId: TrailblazeDeviceId?,
     rawYaml: String,
   ) {
     log(

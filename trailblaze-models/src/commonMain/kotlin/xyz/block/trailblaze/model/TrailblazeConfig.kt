@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.model
 
 import kotlinx.serialization.Serializable
+import xyz.block.trailblaze.logs.model.SessionId
 
 /**
  * Default value for whether AI fallback is enabled.
@@ -28,6 +29,10 @@ const val AI_FALLBACK_DEFAULT: Boolean = false
 @Serializable
 data class TrailblazeConfig(
   val setOfMarkEnabled: Boolean,
+  val sendSessionStartLog: Boolean = true,
+  val sendSessionEndLog: Boolean = true,
+  /** Provide a non-null session ID to override the default session ID generation. */
+  val overrideSessionId: SessionId? = null,
   val aiFallback: Boolean = AI_FALLBACK_DEFAULT,
 ) {
   companion object {

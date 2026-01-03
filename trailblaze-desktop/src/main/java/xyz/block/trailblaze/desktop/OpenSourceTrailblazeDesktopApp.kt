@@ -7,6 +7,7 @@ import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.logs.server.TrailblazeMcpServer
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridgeImpl
+import xyz.block.trailblaze.mcp.utils.JvmLLMProvidersUtil
 import xyz.block.trailblaze.model.DesktopAppRunYamlParams
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.ui.MainTrailblazeApp
@@ -55,7 +56,11 @@ class OpenSourceTrailblazeDesktopApp : TrailblazeDesktopApp(
       appIconProvider = desktopAppConfig.appIconProvider,
       defaultHostAppTarget = desktopAppConfig.defaultAppTarget,
       runYamlLambda = { desktopYamlRunner.runYaml(it) },
-      getInstalledAppIds = { desktopAppConfig.getInstalledAppIds(it) }
+      installedAppIdsProviderBlocking = { desktopAppConfig.getInstalledAppIds(it) },
+      logsRepo = desktopAppConfig.logsRepo,
+      onDeviceInstrumentationArgsProvider = {
+        JvmLLMProvidersUtil.getAdditionalInstrumentationArgs()
+      }
     )
   }
 

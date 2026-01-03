@@ -1,29 +1,23 @@
 package xyz.block.trailblaze.report.utils
- 
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharingStarted
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.launch
+
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.*
 import kotlinx.datetime.Clock
 import xyz.block.trailblaze.logs.TrailblazeLogsDataProvider
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeScreenStateLog
+import xyz.block.trailblaze.logs.model.HasScreenshot
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.logs.model.SessionStatus
-import xyz.block.trailblaze.logs.model.inProgress
+import xyz.block.trailblaze.logs.model.isInProgress
 import xyz.block.trailblaze.report.utils.TrailblazeYamlSessionRecording.generateRecordedYaml
 import java.io.File
+import kotlin.reflect.KClass
+import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
 
 private typealias TrailblazeSessionId = SessionId
 
@@ -51,14 +45,7 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
    * Automatically updates when sessions start or complete.
    */
   val activeSessionsFlow: StateFlow<List<SessionInfo>> = sessionInfoFlow
-    .map { sessions -> sessions.filter { it.latestStatus.inProgress } }
-    .stateIn(fileOperationScope, SharingStarted.Eagerly, emptyList())
-
-  /**
-   * Flow of only completed sessions (status is Ended, Cancelled, MaxCallsLimitReached, or Timeout).
-   */
-  val completedSessionsFlow: StateFlow<List<SessionInfo>> = sessionInfoFlow
-    .map { sessions -> sessions.filter { !it.latestStatus.inProgress } }
+    .map { sessions -> sessions.filter { it.latestStatus.isInProgress } }
     .stateIn(fileOperationScope, SharingStarted.Eagerly, emptyList())
 
   /**
@@ -119,23 +106,10 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
    */
   private var sessionListWatcher: FileWatchService? = null
 
-  // Cache for session logs to avoid redundant file reads
-  private val sessionLogsCache = mutableMapOf<SessionId, Pair<Long, List<TrailblazeLog>>>()
-
   fun getSessionDirs(): List<File> =
     logsDir.listFiles()?.filter { it.isDirectory }?.sortedByDescending { it.name } ?: emptyList()
 
   fun getSessionIds(): List<SessionId> = getSessionDirs().map { SessionId(it.name) }
-
-  /**
-   * Stops watching the trailblaze session directory for changes.
-   */
-  fun stopWatching(trailblazeSessionId: TrailblazeSessionId) {
-    fileWatcherByTrailblazeSession[trailblazeSessionId]?.stopWatching()
-    fileWatcherByTrailblazeSession.remove(trailblazeSessionId)
-    // Clear cache for stopped session
-    sessionLogsCache.remove(trailblazeSessionId)
-  }
 
   /**
    * Stops all file watchers and cleans up resources.
@@ -166,15 +140,21 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
   }
 
 
-
-  private fun getLogFilesForSession(sessionId: SessionId): List<File> = File(logsDir, sessionId.value)
+  /**
+   * Reads log files from disk for the given session.
+   *
+   * WARNING: This performs disk I/O on every call. Prefer using [getCachedLogsForSession]
+   * or [getSessionLogsFlow] for cached/reactive access to avoid repeated disk reads.
+   */
+  private fun readLogFilesFromDisk(sessionId: SessionId): List<File> = File(logsDir, sessionId.value)
     .listFiles()
     ?.filter { it.extension == "json" }
     ?: emptyList()
 
   /**
-   * Returns a list of logs for the given session ID with caching to avoid redundant file reads.
+   * Returns a list of logs for the given session ID with caching via the reactive flow.
    * If the session ID is null or the session directory does not exist, an empty list is returned.
+   * Creates and populates the flow cache if it doesn't exist yet.
    */
   fun getCachedLogsForSession(sessionId: SessionId?): List<TrailblazeLog> {
     if (sessionId == null) return emptyList()
@@ -182,18 +162,8 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
     val sessionDir = File(logsDir, sessionId.value)
     if (!sessionDir.exists()) return emptyList()
 
-    val lastModified = sessionDir.listFiles()?.maxOfOrNull { it.lastModified() } ?: 0L
-
-    // Check cache
-    val cached = sessionLogsCache[sessionId]
-    if (cached != null && cached.first >= lastModified) {
-      return cached.second
-    }
-
-    // Refresh cache
-    val logs = getLogsForSession(sessionId)
-    sessionLogsCache[sessionId] = Pair(lastModified, logs)
-    return logs
+    // Get or create the flow (which will read from disk and cache if needed)
+    return getSessionLogsFlow(sessionId).value
   }
 
   /**
@@ -202,7 +172,7 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
    */
   fun getLogsForSession(sessionId: SessionId?): List<TrailblazeLog> {
     if (sessionId != null) {
-      val jsonFiles = getLogFilesForSession(sessionId)
+      val jsonFiles = readLogFilesFromDisk(sessionId)
       val logs: List<TrailblazeLog> = jsonFiles.mapNotNull {
         parseTrailblazeLogFromFile(it)
       }.sortedBy { it.timestamp }
@@ -261,10 +231,62 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
    */
   fun getSessionLogsFlow(sessionId: SessionId): StateFlow<List<TrailblazeLog>> {
     return _sessionLogsFlows.getOrPut(sessionId) {
-      MutableStateFlow(getCachedLogsForSession(sessionId)).also { flow ->
+      // Read from disk to initialize the flow (only happens once per session)
+      MutableStateFlow(getLogsForSession(sessionId)).also { flow ->
         // Start watching this session to update the flow
         startWatchingSessionForFlow(sessionId, flow)
       }
+    }
+  }
+
+  /**
+   * Suspends for up to [timeout] (default 5 seconds) waiting for a log of type [T] matching [predicate]
+   * to appear in the session logs.
+   *
+   * Usage: `awaitLog<TrailblazeLog.MaestroDriverLog>(sessionId) { it.successful }`
+   *
+   * @param sessionId The session to watch logs for
+   * @param timeout Maximum time to wait for the log (default 5 seconds)
+   * @param skipExisting If true, only consider logs that arrive after this call (ignore existing logs)
+   * @param predicate Returns true if the log matches
+   * @return The matching log, or null if timeout is reached
+   */
+  suspend inline fun <reified T : TrailblazeLog> awaitLog(
+    sessionId: SessionId,
+    timeout: Duration = 30.seconds,
+    skipExisting: Boolean = true,
+    noinline predicate: (T) -> Boolean = { true }
+  ): T? = awaitLog(sessionId, T::class, timeout, skipExisting, predicate)
+
+  /**
+   * Suspends for up to [timeout] (default 5 seconds) waiting for a log of type [T] matching [predicate]
+   * to appear in the session logs.
+   *
+   * @param sessionId The session to watch logs for
+   * @param expectedType The expected log type class
+   * @param timeout Maximum time to wait for the log (default 5 seconds)
+   * @param skipExisting If true, only consider logs that arrive after this call (ignore existing logs)
+   * @param predicate Returns true if the log matches
+   * @return The matching log, or null if timeout is reached
+   */
+  @Suppress("UNCHECKED_CAST")
+  suspend fun <T : TrailblazeLog> awaitLog(
+    sessionId: SessionId,
+    expectedType: KClass<T>,
+    timeout: Duration = 5.seconds,
+    skipExisting: Boolean = true,
+    predicate: (T) -> Boolean = { true }
+  ): T? {
+    val startIndex = if (skipExisting) getSessionLogsFlow(sessionId).value.size else 0
+
+    return withTimeoutOrNull(timeout) {
+      getSessionLogsFlow(sessionId)
+        .mapNotNull { logs ->
+          logs.drop(startIndex)
+            .asReversed()
+            .firstOrNull { expectedType.isInstance(it) && predicate(it as T) } as? T
+        }
+        .first()
     }
   }
 
@@ -303,9 +325,8 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
 
               val removedSessions = previousSessionIds.toSet() - currentSessionIds.toSet()
 
-              // Clear cache for removed sessions
+              // Clean up flows for removed sessions
               removedSessions.forEach { sessionId ->
-                sessionLogsCache.remove(sessionId)
                 _sessionLogsFlows.remove(sessionId)
               }
 
@@ -345,7 +366,8 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
             println("[LogsRepo] Session event received: $changeType ${fileChanged.name} (session: $sessionId)")
             if (fileChanged.extension == "json") {
               try {
-                val logs = getCachedLogsForSession(sessionId).sortedBy { it.timestamp }
+                // Read fresh from disk to update the flow (which serves as the cache)
+                val logs = getLogsForSession(sessionId).sortedBy { it.timestamp }
                 flow.value = logs
               } catch (e: Exception) {
                 println("[LogsRepo] Error processing session event for $sessionId: ${e.message}")
@@ -362,41 +384,36 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
 
   override suspend fun getSessionIdsAsync(): List<SessionId> = getSessionIds()
 
-  override suspend fun getLogsForSessionAsync(sessionId: SessionId?): List<TrailblazeLog> = getLogsForSession(sessionId)
+  override suspend fun getLogsForSessionAsync(
+    sessionId: SessionId?
+  ): List<TrailblazeLog> = getCachedLogsForSession(sessionId)
+
   override suspend fun getSessionInfoAsync(sessionName: SessionId): SessionInfo? = getSessionInfo(sessionName)
 
   override suspend fun getSessionRecordingYaml(sessionId: SessionId): String =
     getLogsForSessionAsync(sessionId).generateRecordedYaml()
 
   fun getSessionInfo(sessionId: SessionId): SessionInfo? {
-    val logFiles = getLogFilesForSession(sessionId)
-    if (logFiles.isEmpty()) {
+    // Use cached logs from the flow if available, otherwise read from disk
+    val allLogs = getCachedLogsForSession(sessionId)
+    if (allLogs.isEmpty()) {
       return null
     }
 
-    // Parse all log files once and filter for session status logs
-    val sessionStatusLogs = logFiles
-      .sortedBy { it.lastModified() }
-      .mapNotNull { file ->
-        val log = parseTrailblazeLogFromFile(file)
-        if (log is TrailblazeLog.TrailblazeSessionStatusChangeLog) {
-          Pair(file.lastModified(), log)
-        } else {
-          null
-        }
-      }
+    // Filter for session status logs from the cached logs
+    val sessionStatusLogs = allLogs
+      .filterIsInstance<TrailblazeLog.TrailblazeSessionStatusChangeLog>()
+      .sortedBy { it.timestamp }
 
     if (sessionStatusLogs.isEmpty()) {
       return null
     }
 
     val sessionStartedLog = sessionStatusLogs
-      .firstOrNull { it.second.sessionStatus is SessionStatus.Started }
-      ?.second
+      .firstOrNull { it.sessionStatus is SessionStatus.Started }
 
     val lastSessionStatusLog = sessionStatusLogs
-      .maxByOrNull { it.first }
-      ?.second
+      .maxByOrNull { it.timestamp }
 
     // Check if session is abandoned (in progress but >2 mins since last activity)
     if (sessionStartedLog != null && lastSessionStatusLog != null) {
@@ -406,8 +423,7 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
       if (lastStatus is SessionStatus.Started) {
         val currentTimeMs = Clock.System.now().toEpochMilliseconds()
 
-        // Find the most recent log of any type to determine last activity
-        val allLogs = getLogsForSession(sessionId)
+        // Find the most recent log of any type to determine last activity (already have allLogs)
         val mostRecentLog = allLogs.maxByOrNull { it.timestamp.toEpochMilliseconds() }
 
         if (mostRecentLog != null) {
@@ -419,15 +435,12 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
             val abandonedTimestamp = kotlinx.datetime.Instant.fromEpochMilliseconds(
               mostRecentLog.timestamp.toEpochMilliseconds() + twoMinutesMs,
             )
-            val durationMs = abandonedTimestamp.toEpochMilliseconds() - sessionStartedLog.timestamp.toEpochMilliseconds()
+            val durationMs =
+              abandonedTimestamp.toEpochMilliseconds() - sessionStartedLog.timestamp.toEpochMilliseconds()
 
-            val abandonedLog = TrailblazeLog.TrailblazeSessionStatusChangeLog(
-              sessionStatus = SessionStatus.Ended.TimeoutReached(
-                durationMs = durationMs,
-                message = "Session was abandoned after ${timeSinceLastActivity.milliseconds.inWholeMinutes} minutes of inactivity",
-              ),
-              session = sessionId,
-              timestamp = abandonedTimestamp,
+            val abandonedSessionStatus = SessionStatus.Ended.TimeoutReached(
+              durationMs = durationMs,
+              message = "Session was abandoned after ${timeSinceLastActivity.milliseconds.inWholeMinutes} minutes of inactivity",
             )
 
             // Return session info with Abandoned status
@@ -435,7 +448,7 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
             return SessionInfo(
               sessionId = sessionStartedLog.session,
               timestamp = sessionStartedLog.timestamp,
-              latestStatus = abandonedLog.sessionStatus,
+              latestStatus = abandonedSessionStatus,
               testName = startedStatus.testMethodName,
               testClass = startedStatus.testClassName,
               trailblazeDeviceInfo = startedStatus.trailblazeDeviceInfo,
@@ -452,7 +465,8 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
 
     return if (sessionStartedLog != null && lastSessionStatusLog != null) {
       val startedStatus: SessionStatus.Started = sessionStartedLog.sessionStatus as SessionStatus.Started
-      val durationMs = lastSessionStatusLog.timestamp.toEpochMilliseconds() - sessionStartedLog.timestamp.toEpochMilliseconds()
+      val durationMs =
+        lastSessionStatusLog.timestamp.toEpochMilliseconds() - sessionStartedLog.timestamp.toEpochMilliseconds()
       SessionInfo(
         sessionId = sessionStartedLog.session,
         timestamp = sessionStartedLog.timestamp,
@@ -473,7 +487,18 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
 
   private val countBySession = mutableMapOf<SessionId, Int>()
 
+  // Sessions where we detected existing logs on first write (restarted mid-session)
+  // This enables session resuming/continuation
+  private val sessionsNeedingTimestamp = mutableSetOf<SessionId>()
+
   private fun getNextLogCountForSession(sessionId: SessionId): Int = synchronized(countBySession) {
+    // On first access, check if there are existing logs (indicates restart mid-session)
+    if (sessionId !in countBySession) {
+      val existingLogs = readLogFilesFromDisk(sessionId)
+      if (existingLogs.isNotEmpty()) {
+        sessionsNeedingTimestamp.add(sessionId)
+      }
+    }
     val newValue = (countBySession[sessionId] ?: 0) + 1
     countBySession[sessionId] = newValue
     newValue
@@ -489,17 +514,23 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
    */
   fun saveLogToDisk(logEvent: TrailblazeLog): File {
     val logCount = getNextLogCountForSession(logEvent.session)
+    // Only add timestamp if we restarted mid-session (to avoid filename collisions)
+    val filename = if (logEvent.session in sessionsNeedingTimestamp) {
+      val timestampMs = logEvent.timestamp.toEpochMilliseconds()
+      "${formatNumber(logCount)}_${timestampMs}_${logEvent::class.java.simpleName}.json"
+    } else {
+      "${formatNumber(logCount)}_${logEvent::class.java.simpleName}.json"
+    }
     val jsonLogFilename = File(
       getSessionDir(session = logEvent.session),
-      "${formatNumber(logCount)}_${logEvent::class.java.simpleName}.json",
+      filename,
     )
     jsonLogFilename.writeText(
       TrailblazeJsonInstance.encodeToString<TrailblazeLog>(
         logEvent,
       ),
     )
-    // Invalidate cache for this session since we wrote a new log
-    sessionLogsCache.remove(logEvent.session)
+    // The flow will be updated automatically via the file watcher
     return jsonLogFilename
   }
 
@@ -525,28 +556,36 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
   }
 
   /**
+   * Returns the screenshot File for a log that has a screenshot.
+   * Returns null if the log has no screenshot or the file doesn't exist.
+   *
+   * @param log A log that implements both TrailblazeLog and HasScreenshot
+   * @return The screenshot File, or null if unavailable
+   */
+  fun getScreenshotFile(log: TrailblazeLog): File? {
+    if (log !is HasScreenshot) return null
+    val screenshotFile = log.screenshotFile ?: return null
+    val sessionDir = File(logsDir, log.session.value)
+    val file = File(sessionDir, screenshotFile)
+    return if (file.exists()) file else null
+  }
+
+  /**
    * Finds the log file on disk for a specific TrailblazeLog.
    * Returns the file if found, or null if not found.
    *
-   * The log file is identified by matching the session ID and log class simple name.
-   * Since multiple logs of the same type can exist, we match by timestamp as well.
+   * Parses each JSON file in the session directory and matches by timestamp and type.
    */
   fun findLogFile(log: TrailblazeLog): File? {
-    val sessionDir = File(logsDir, log.session.value)
-    if (!sessionDir.exists()) return null
+    val logFiles = readLogFilesFromDisk(log.session)
+    if (logFiles.isEmpty()) return null
 
-    val logClassName = log::class.java.simpleName
-    val logFiles = sessionDir.listFiles()?.filter { file ->
-      file.extension == "json" && file.name.endsWith("_$logClassName.json")
-    } ?: return null
-
-    // Parse each matching file to find the one with the exact timestamp
     for (file in logFiles) {
       try {
         val parsedLog = parseTrailblazeLogFromFile(file)
         if (parsedLog != null &&
           parsedLog.timestamp == log.timestamp &&
-          parsedLog::class.java.simpleName == logClassName
+          parsedLog::class == log::class
         ) {
           return file
         }

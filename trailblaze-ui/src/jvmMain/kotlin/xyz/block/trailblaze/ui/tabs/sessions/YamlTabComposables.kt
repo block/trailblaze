@@ -490,6 +490,7 @@ fun YamlTabComposable(
                 config = TrailblazeConfig(
                   setOfMarkEnabled = setOfMarkEnabledConfig,
                   aiFallback = serverState.appConfig.aiFallbackEnabled,
+                  overrideSessionId = null,
                 ),
                 trailFilePath = null,
                 trailblazeDeviceId = device.trailblazeDeviceId,

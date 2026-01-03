@@ -42,6 +42,8 @@ import xyz.block.trailblaze.mcp.models.McpSseSessionId
 import xyz.block.trailblaze.mcp.newtools.DeviceManagerToolSet
 import xyz.block.trailblaze.mcp.newtools.TrailFilesToolSet
 import xyz.block.trailblaze.mcp.utils.KoogToMcpExt.toMcpJsonSchemaObject
+import xyz.block.trailblaze.mcp.utils.TrailblazeToolToMcpBridge
+import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
 import java.io.File
@@ -350,6 +352,18 @@ class TrailblazeMcpServer(
 
               addToolsAsMcpToolsFromRegistry(
                 newToolRegistry = initialToolRegistry,
+                mcpServer = mcpSseServer,
+                mcpSseSessionId = mcpSseSessionId,
+              )
+
+              // Register TrailblazeTools (low-level device control tools) via the bridge
+              // This allows MCP clients to act as the agent and call tools like tapOnPoint, swipe, etc.
+              val trailblazeToolBridge = TrailblazeToolToMcpBridge(
+                mcpBridge = mcpBridge,
+                sessionContext = getSessionContext(mcpSseSessionId),
+              )
+              trailblazeToolBridge.registerTrailblazeToolSet(
+                trailblazeToolSet = TrailblazeToolSet.DeviceControlTrailblazeToolSet,
                 mcpServer = mcpSseServer,
                 mcpSseSessionId = mcpSseSessionId,
               )

@@ -23,15 +23,43 @@ object JvmLLMProvidersUtil {
     }
   }
 
+  fun getEnvironmentVariableKeyForLlmProvider(llmProvider: TrailblazeLlmProvider): String? {
+    return when (llmProvider) {
+      TrailblazeLlmProvider.OPENAI -> "OPENAI_API_KEY"
+
+      TrailblazeLlmProvider.DATABRICKS -> "DATABRICKS_TOKEN"
+
+      TrailblazeLlmProvider.GOOGLE -> "GOOGLE_API_KEY"
+
+      TrailblazeLlmProvider.ANTHROPIC -> "ANTHROPIC_API_KEY"
+      else -> null
+    }
+  }
+
+
+  fun getEnvironmentVariableValueForLlmProvider(llmProvider: TrailblazeLlmProvider): String? {
+    val key = getEnvironmentVariableKeyForLlmProvider(llmProvider)
+    return key?.let { System.getenv(it) }
+  }
+
+  fun getAdditionalInstrumentationArgs(): Map<String, String> {
+    return TrailblazeLlmProvider.ALL_PROVIDERS.mapNotNull { llmProvider ->
+      val key = getEnvironmentVariableKeyForLlmProvider(llmProvider)
+      val value = getEnvironmentVariableValueForLlmProvider(llmProvider)
+      if (key != null && value != null) {
+        key to value
+      } else {
+        null
+      }
+    }.toMap()
+  }
+
   fun isProviderAvailableOnJvm(provider: TrailblazeLlmProvider): Boolean {
     return when (provider) {
-      TrailblazeLlmProvider.OPENAI -> System.getenv("OPENAI_API_KEY") != null
-
-      TrailblazeLlmProvider.DATABRICKS -> System.getenv("DATABRICKS_TOKEN") != null
-
-      TrailblazeLlmProvider.GOOGLE -> System.getenv("GOOGLE_API_KEY") != null
-
-      TrailblazeLlmProvider.ANTHROPIC -> System.getenv("ANTHROPIC_API_KEY") != null
+      TrailblazeLlmProvider.OPENAI,
+      TrailblazeLlmProvider.DATABRICKS,
+      TrailblazeLlmProvider.GOOGLE,
+      TrailblazeLlmProvider.ANTHROPIC -> getEnvironmentVariableValueForLlmProvider(provider) != null
 
       TrailblazeLlmProvider.OLLAMA -> isOllamaInstalled
 

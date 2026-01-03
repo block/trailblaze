@@ -105,19 +105,22 @@ open class AndroidTrailblazeRule(
     testYaml: String,
     trailFilePath: String?,
     useRecordedSteps: Boolean,
+    sendSessionStartLog: Boolean,
   ) {
     val trailItems = trailblazeYaml.decodeTrail(testYaml)
     val trailConfig = trailblazeYaml.extractTrailConfig(trailItems)
-    trailblazeLoggingRule.trailblazeLogger.sendStartLog(
-      trailConfig = trailConfig,
-      className = trailblazeLoggingRule.description?.className ?: "AndroidTrailblazeRule",
-      methodName = trailblazeLoggingRule.description?.methodName ?: "run",
-      trailblazeDeviceInfo = trailblazeLoggingRule.trailblazeDeviceInfoProvider(),
-      rawYaml = testYaml,
-      trailFilePath = trailFilePath,
-      hasRecordedSteps = trailblazeYaml.hasRecordedSteps(trailItems),
-      trailblazeDeviceId = trailblazeDeviceId,
-    )
+    if (sendSessionStartLog) {
+      trailblazeLoggingRule.trailblazeLogger.sendStartLog(
+        trailConfig = trailConfig,
+        className = trailblazeLoggingRule.description?.className ?: "AndroidTrailblazeRule",
+        methodName = trailblazeLoggingRule.description?.methodName ?: "run",
+        trailblazeDeviceInfo = trailblazeLoggingRule.trailblazeDeviceInfoProvider(),
+        rawYaml = testYaml,
+        trailFilePath = trailFilePath,
+        hasRecordedSteps = trailblazeYaml.hasRecordedSteps(trailItems),
+        trailblazeDeviceId = trailblazeDeviceId,
+      )
+    }
     trailblazeAgent.clearMemory()
     trailItems.forEach { item ->
       val itemResult = when (item) {
@@ -140,7 +143,8 @@ open class AndroidTrailblazeRule(
     runSuspend(
       testYaml = testYaml,
       trailFilePath = trailFilePath,
-      useRecordedSteps = useRecordedSteps
+      useRecordedSteps = useRecordedSteps,
+      sendSessionStartLog = true,
     )
   }
 

@@ -1,45 +1,53 @@
 package xyz.block.trailblaze.ui
 
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.*
 import maestro.Driver
 import maestro.device.Device
 import maestro.device.DeviceService
 import maestro.device.Platform
+import xyz.block.trailblaze.api.ScreenState
+import xyz.block.trailblaze.api.TrailblazeElementSelector
+import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
+import xyz.block.trailblaze.logs.client.TrailblazeLog
+import xyz.block.trailblaze.logs.client.TrailblazeLoggerInstance
 import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.model.DesktopAppRunYamlParams
 import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
+import xyz.block.trailblaze.report.utils.LogsRepo
+import xyz.block.trailblaze.toolcalls.TrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.AssertVisibleBySelectorTrailblazeTool
 import xyz.block.trailblaze.ui.devices.DeviceManagerState
 import xyz.block.trailblaze.ui.devices.DeviceState
 import xyz.block.trailblaze.ui.models.AppIconProvider
+import xyz.block.trailblaze.yaml.TrailblazeYaml
+import xyz.block.trailblaze.yaml.models.TrailblazeYamlBuilder
+import kotlin.coroutines.cancellation.CancellationException
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * Manages device discovery, selection, and state across the application.
  * Can be shared across multiple Composables to maintain consistent device state.
  */
 class TrailblazeDeviceManager(
+  val logsRepo: LogsRepo,
   val settingsRepo: TrailblazeSettingsRepo,
   val defaultHostAppTarget: TrailblazeHostAppTarget,
   val currentTrailblazeLlmModelProvider: () -> TrailblazeLlmModel,
   val availableAppTargets: Set<TrailblazeHostAppTarget>,
   val appIconProvider: AppIconProvider,
   private val runYamlLambda: (desktopAppRunYamlParams: DesktopAppRunYamlParams) -> Unit,
-  val getInstalledAppIds: (TrailblazeDeviceId) -> Set<String>,
+  private val installedAppIdsProviderBlocking: (TrailblazeDeviceId) -> Set<String>,
+  val onDeviceInstrumentationArgsProvider: () -> Map<String, String>
 ) {
 
   private val targetDeviceFilter: (List<TrailblazeConnectedDeviceSummary>) -> List<TrailblazeConnectedDeviceSummary> =
@@ -52,11 +60,56 @@ class TrailblazeDeviceManager(
   private val _deviceStateFlow = MutableStateFlow(DeviceManagerState())
   val deviceStateFlow: StateFlow<DeviceManagerState> = _deviceStateFlow.asStateFlow()
 
+  /**
+   * Tracks active session IDs by device ID.
+   * Separate from device summaries since sessions can exist for devices
+   * we don't have full summaries for yet, and the mapping is a different concern.
+   */
+  private val _activeDeviceSessionsFlow = MutableStateFlow<Map<TrailblazeDeviceId, SessionId>>(emptyMap())
+  val activeDeviceSessionsFlow: StateFlow<Map<TrailblazeDeviceId, SessionId>> = _activeDeviceSessionsFlow.asStateFlow()
+
+  /**
+   * Tracks installed app IDs per device.
+   * Populated when loadDevices() is called.
+   */
+  private val _installedAppIdsByDeviceFlow = MutableStateFlow<Map<TrailblazeDeviceId, Set<String>>>(emptyMap())
+  val installedAppIdsByDeviceFlow: StateFlow<Map<TrailblazeDeviceId, Set<String>>> =
+    _installedAppIdsByDeviceFlow.asStateFlow()
+
   private val loadDevicesScope = CoroutineScope(Dispatchers.IO)
 
-  fun runYaml(
+  // Track session IDs we've already processed to detect new sessions
+  private val knownSessionIds = mutableSetOf<SessionId>()
+
+  init {
+    // Monitor sessionInfoFlow for new sessions and ended sessions to update device state
+    loadDevicesScope.launch {
+      logsRepo.sessionInfoFlow.collect { sessionInfos ->
+        sessionInfos.forEach { sessionInfo ->
+          val sessionId = sessionInfo.sessionId
+          val deviceId = sessionInfo.trailblazeDeviceId
+
+          // If this is a new session with a device ID, update the device state
+          if (sessionId !in knownSessionIds && deviceId != null) {
+            knownSessionIds.add(sessionId)
+            trackActiveSession(deviceId, sessionId)
+          }
+
+          // If session has ended, clear it from device state so next call creates a new session
+          if (sessionInfo.latestStatus is SessionStatus.Ended && deviceId != null) {
+            clearEndedSessionFromDevice(deviceId, sessionId)
+          }
+        }
+      }
+    }
+  }
+
+  suspend fun runYaml(
     yamlToRun: String,
     trailblazeDeviceId: TrailblazeDeviceId,
+    sendSessionStartLog: Boolean,
+    sendSessionEndLog: Boolean,
+    existingSessionId: SessionId?,
     forceStopTargetApp: Boolean = false,
   ) {
     val settingsState = settingsRepo.serverStateFlow.value
@@ -70,7 +123,10 @@ class TrailblazeDeviceManager(
       targetAppName = settingsState.appConfig.selectedTargetAppName,
       trailFilePath = null,
       config = TrailblazeConfig(
-        setOfMarkEnabled = settingsState.appConfig.setOfMarkEnabled
+        overrideSessionId = existingSessionId,
+        sendSessionStartLog = sendSessionStartLog,
+        sendSessionEndLog = sendSessionEndLog,
+        setOfMarkEnabled = settingsState.appConfig.setOfMarkEnabled,
       ),
       trailblazeDeviceId = trailblazeDeviceId,
     )
@@ -81,77 +137,255 @@ class TrailblazeDeviceManager(
         targetTestApp = this.getCurrentSelectedTargetApp(),
         onProgressMessage = {},
         onConnectionStatus = {},
-        additionalInstrumentationArgs = emptyMap()
+        additionalInstrumentationArgs = onDeviceInstrumentationArgsProvider()
       )
+    )
+    // Wait until the first session log has bene received for this session
+    awaitSessionForDevice(trailblazeDeviceId)
+  }
+
+  /**
+   * Result of resolving/creating a session for a device.
+   */
+  data class DeviceSessionResolution(
+    val sessionId: SessionId,
+    val isNewSession: Boolean
+  )
+
+  /**
+   * Gets the current session for a device, or creates a new one if none exists.
+   * Automatically tracks the session in the device state.
+   *
+   * @param trailblazeDeviceId The device to get/create a session for
+   * @param forceNewSession If true, always creates a new session even if one exists
+   * @param sessionIdPrefix Prefix for generated session IDs (e.g., "tool", "yaml")
+   * @param deviceSummary Optional device summary for creating DeviceState if device isn't tracked yet
+   */
+  fun getOrCreateSessionResolution(
+    trailblazeDeviceId: TrailblazeDeviceId,
+    forceNewSession: Boolean = false,
+    sessionIdPrefix: String = "session",
+    deviceSummary: TrailblazeConnectedDeviceSummary? = null
+  ): DeviceSessionResolution {
+    val existingSessionId = if (forceNewSession) null else getCurrentSessionIdForDevice(trailblazeDeviceId)
+    val isNewSession = existingSessionId == null
+    val sessionId = existingSessionId ?: TrailblazeLoggerInstance.generateSessionId(sessionIdPrefix)
+
+    // Track the session ID immediately so subsequent calls can find it
+    if (isNewSession) {
+      trackActiveSession(trailblazeDeviceId, sessionId, deviceSummary)
+    }
+
+    return DeviceSessionResolution(sessionId, isNewSession)
+  }
+
+  /**
+   * Ends the current session for a device.
+   * Clears the session ID from activeDeviceSessionsFlow and writes a session end log.
+   * Use [cancelSessionForDevice] if you need to forcefully stop a running test.
+   *
+   * @param trailblazeDeviceId The device to end the session for
+   * @return The session ID that was ended, or null if no session was active
+   */
+  fun endSessionForDevice(trailblazeDeviceId: TrailblazeDeviceId): SessionId? {
+    val sessionId = getCurrentSessionIdForDevice(trailblazeDeviceId) ?: return null
+
+    // Clear the session from the sessions flow
+    _activeDeviceSessionsFlow.value -= trailblazeDeviceId
+
+    println("Ended session $sessionId for device: ${trailblazeDeviceId.instanceId}")
+
+    // Write session end log
+    try {
+      val sessionEndLog = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+        session = sessionId,
+        timestamp = kotlinx.datetime.Clock.System.now(),
+        sessionStatus = SessionStatus.Ended.Succeeded(durationMs = 0L),
+      )
+      logsRepo.saveLogToDisk(sessionEndLog)
+    } catch (e: Exception) {
+      println("Failed to write session end log: ${e.message}")
+      // Don't fail session end if log write fails
+    }
+
+    return sessionId
+  }
+
+  suspend fun runTool(
+    trailblazeDeviceId: TrailblazeDeviceId,
+    trailblazeTool: TrailblazeTool,
+  ) {
+    val yaml = TrailblazeYaml().encodeToString(
+      TrailblazeYamlBuilder()
+        .tools(listOf(trailblazeTool))
+        .build()
+    )
+    val session = getOrCreateSessionResolution(trailblazeDeviceId, sessionIdPrefix = "tool")
+
+    runYaml(
+      yamlToRun = yaml,
+      trailblazeDeviceId = trailblazeDeviceId,
+      sendSessionStartLog = session.isNewSession,
+      sendSessionEndLog = false,
+      existingSessionId = session.sessionId
     )
   }
 
+  suspend fun awaitSessionForDevice(
+    trailblazeDeviceId: TrailblazeDeviceId,
+    timeout: Duration = 30.seconds,
+  ): SessionId? {
+    val currentSession = getCurrentSessionIdForDevice(trailblazeDeviceId)
+    if (currentSession != null) {
+      return currentSession
+    }
+    // If null, wait for up to the timeout length. Subscribe to sessionInfoFlow until a matching session appears.
+    return withTimeoutOrNull(timeout) {
+      logsRepo.sessionInfoFlow
+        .mapNotNull { sessionInfos ->
+          sessionInfos.firstOrNull { it.trailblazeDeviceId == trailblazeDeviceId }?.sessionId
+        }
+        .first()
+    }
+  }
 
-  suspend fun loadDevicesSuspend(filterDevices: Boolean = true): List<TrailblazeConnectedDeviceSummary> {
-    val devices: List<Device.Connected> = DeviceService.listConnectedDevices(includeWeb = false)
-
-    return buildList {
-      devices.forEach { maestroConnectedDevice: Device.Connected ->
-        val trailblazeDeviceId = TrailblazeDeviceId(
-          instanceId = maestroConnectedDevice.instanceId,
-          trailblazeDevicePlatform = when (maestroConnectedDevice.platform) {
-            Platform.ANDROID -> TrailblazeDevicePlatform.ANDROID
-            Platform.IOS -> TrailblazeDevicePlatform.IOS
-            Platform.WEB -> TrailblazeDevicePlatform.WEB
-          }
+  /**
+   * This does a always successful assertion which captures the view hierarchy and screenshot.
+   *
+   * This allows us to query the screen state and use the data written to the log file.
+   *
+   * This method is used from the MCP server.
+   */
+  suspend fun getCurrentScreenState(trailblazeDeviceId: TrailblazeDeviceId): ScreenState? {
+    CoroutineScope(currentCoroutineContext()).launch {
+      runTool(
+        trailblazeDeviceId,
+        AssertVisibleBySelectorTrailblazeTool(
+          selector = TrailblazeElementSelector(
+            index = "0"
+          )
         )
+      )
+    }
+    val sessionIdForDevice = awaitSessionForDevice(trailblazeDeviceId)
+    sessionIdForDevice?.let { sessionId ->
+      val newLog = logsRepo.awaitLog<TrailblazeLog.MaestroDriverLog>(
+        sessionId = sessionId,
+        skipExisting = true
+      ) { log ->
+        // some logic will go here, true for default
+        true
 
-        val installedAppIds = getInstalledAppIds(trailblazeDeviceId)
-
-        when (maestroConnectedDevice.platform) {
-          Platform.ANDROID -> {
-            add(
-              TrailblazeConnectedDeviceSummary(
-                trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
-                instanceId = maestroConnectedDevice.instanceId,
-                description = maestroConnectedDevice.description,
-                installedAppIds = installedAppIds
-              )
-            )
-            add(
-              TrailblazeConnectedDeviceSummary(
-                trailblazeDriverType = TrailblazeDriverType.ANDROID_HOST,
-                instanceId = maestroConnectedDevice.instanceId,
-                description = maestroConnectedDevice.description,
-                installedAppIds = installedAppIds
-              )
-            )
-          }
-
-          Platform.IOS -> {
-            add(
-              TrailblazeConnectedDeviceSummary(
-                trailblazeDriverType = TrailblazeDriverType.IOS_HOST,
-                instanceId = maestroConnectedDevice.instanceId,
-                description = maestroConnectedDevice.description,
-                installedAppIds = installedAppIds
-              )
-            )
-          }
-
-          Platform.WEB -> {
-            add(
-              TrailblazeConnectedDeviceSummary(
-                trailblazeDriverType = TrailblazeDriverType.WEB_PLAYWRIGHT_HOST,
-                instanceId = maestroConnectedDevice.instanceId,
-                description = maestroConnectedDevice.description,
-                installedAppIds = installedAppIds
-              )
-            )
+      }
+      if (newLog != null) {
+        val screenshotFile = logsRepo.getScreenshotFile(newLog)
+        if (screenshotFile != null) {
+          val viewHierarchy = newLog.viewHierarchy!!
+          return object : ScreenState {
+            override val screenshotBytes: ByteArray = screenshotFile.readBytes()
+            override val deviceWidth: Int = newLog.deviceWidth
+            override val deviceHeight: Int = newLog.deviceHeight
+            override val viewHierarchyOriginal: ViewHierarchyTreeNode = viewHierarchy
+            override val viewHierarchy: ViewHierarchyTreeNode = viewHierarchy
+            override val trailblazeDevicePlatform: TrailblazeDevicePlatform =
+              trailblazeDeviceId.trailblazeDevicePlatform
           }
         }
       }
-    }.let { trailblazeConnectedDeviceSummaries ->
-      if (filterDevices) {
-        targetDeviceFilter(trailblazeConnectedDeviceSummaries)
-      } else {
-        trailblazeConnectedDeviceSummaries
+    }
+    return null
+  }
+
+  /**
+   * Load available devices from the system (suspend version).
+   * This will update the deviceStateFlow with the discovered devices and cache installed app IDs.
+   */
+  suspend fun loadDevicesSuspend(): List<TrailblazeConnectedDeviceSummary> {
+    withContext(Dispatchers.Default) {
+      updateDeviceState { currDeviceState ->
+        currDeviceState.copy(isLoading = true, error = null)
       }
+    }
+
+    try {
+      val devices: List<Device.Connected> = DeviceService.listConnectedDevices(includeWeb = false)
+
+      val allDevices = buildList {
+        devices.forEach { maestroConnectedDevice: Device.Connected ->
+          when (maestroConnectedDevice.platform) {
+            Platform.ANDROID -> {
+              add(
+                TrailblazeConnectedDeviceSummary(
+                  trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+                  instanceId = maestroConnectedDevice.instanceId,
+                  description = maestroConnectedDevice.description,
+                )
+              )
+              add(
+                TrailblazeConnectedDeviceSummary(
+                  trailblazeDriverType = TrailblazeDriverType.ANDROID_HOST,
+                  instanceId = maestroConnectedDevice.instanceId,
+                  description = maestroConnectedDevice.description,
+                )
+              )
+            }
+
+            Platform.IOS -> {
+              add(
+                TrailblazeConnectedDeviceSummary(
+                  trailblazeDriverType = TrailblazeDriverType.IOS_HOST,
+                  instanceId = maestroConnectedDevice.instanceId,
+                  description = maestroConnectedDevice.description,
+                )
+              )
+            }
+
+            Platform.WEB -> {
+              add(
+                TrailblazeConnectedDeviceSummary(
+                  trailblazeDriverType = TrailblazeDriverType.WEB_PLAYWRIGHT_HOST,
+                  instanceId = maestroConnectedDevice.instanceId,
+                  description = maestroConnectedDevice.description,
+                )
+              )
+            }
+          }
+        }
+      }
+
+      val filteredDevices = targetDeviceFilter(allDevices)
+
+      // Query installed app IDs for each device
+      val installedAppIdsByDevice: Map<TrailblazeDeviceId, Set<String>> = filteredDevices.associate { device ->
+        device.trailblazeDeviceId to installedAppIdsProviderBlocking(device.trailblazeDeviceId)
+      }
+      _installedAppIdsByDeviceFlow.value = installedAppIdsByDevice
+
+      withContext(Dispatchers.Default) {
+        updateDeviceState { currState ->
+          // Create DeviceState for each device (sessions tracked separately in activeDeviceSessionsFlow)
+          val newDeviceStates: Map<TrailblazeDeviceId, DeviceState> = filteredDevices.associate { device ->
+            device.trailblazeDeviceId to DeviceState(device = device)
+          }
+
+          currState.copy(
+            devices = newDeviceStates,
+            isLoading = false,
+            error = null
+          )
+        }
+      }
+
+      return filteredDevices
+    } catch (e: Exception) {
+      updateDeviceState { deviceState ->
+        deviceState.copy(
+          devices = emptyMap(),
+          isLoading = false,
+          error = e.message ?: "Unknown error loading devices"
+        )
+      }
+      throw e
     }
   }
 
@@ -159,75 +393,47 @@ class TrailblazeDeviceManager(
    * Load available devices from the system.
    * This will update the deviceStateFlow with the discovered devices.
    */
-  fun loadDevices() {
-    loadDevicesScope.launch {
-      withContext(Dispatchers.Default) {
-        updateDeviceState { currDeviceState ->
-          currDeviceState.copy(isLoading = true, error = null)
-        }
-      }
-
-      try {
-        val deviceInfos = loadDevicesSuspend()
-        val filteredDevices: List<TrailblazeConnectedDeviceSummary> = targetDeviceFilter(deviceInfos)
-
-        withContext(Dispatchers.Default) {
-          updateDeviceState { currState ->
-            // Create DeviceState for each device, preserving existing session state
-            val newDeviceStates: Map<TrailblazeDeviceId, DeviceState> = filteredDevices.associate { device ->
-              val deviceId = device.trailblazeDeviceId
-
-              // Preserve existing session state if device already exists
-              val existingSessionId = currState.devices[deviceId]?.currentSessionId
-
-              deviceId to DeviceState(
-                device = device,
-                currentSessionId = existingSessionId
-              )
-            }
-
-            currState.copy(
-              devices = newDeviceStates,
-              isLoading = false,
-              error = null
-            )
-          }
-        }
-      } catch (e: Exception) {
-        updateDeviceState { deviceState ->
-          deviceState.copy(
-            devices = emptyMap(),
-            isLoading = false,
-            error = e.message ?: "Unknown error loading devices"
-          )
-        }
-      }
-    }
-  }
+  fun loadDevices() = loadDevicesScope.launch { loadDevicesSuspend() }
 
   fun updateDeviceState(deviceStateUpdater: (DeviceManagerState) -> DeviceManagerState) {
     _deviceStateFlow.value = deviceStateUpdater(_deviceStateFlow.value)
   }
 
   /**
-   * Tracks a session on a device. Updates the DeviceState to Running.
+   * Tracks a session on a device.
+   * Updates activeDeviceSessionsFlow. If deviceSummary is provided and device isn't
+   * already tracked, also adds the device to the devices map.
    */
-  fun trackActiveHostSession(
+  fun trackActiveSession(
     trailblazeDeviceId: TrailblazeDeviceId,
-    sessionId: SessionId
+    sessionId: SessionId,
+    deviceSummary: TrailblazeConnectedDeviceSummary? = null
   ) {
-    updateDeviceState { state ->
-      val deviceState = state.devices[trailblazeDeviceId]
-      if (deviceState != null) {
-        val updatedDeviceState = deviceState.copy(
-          currentSessionId = sessionId
-        )
+    // Update the session mapping
+    _activeDeviceSessionsFlow.value += (trailblazeDeviceId to sessionId)
+
+    // Optionally add device to devices map if not present and summary provided
+    if (deviceSummary != null && deviceStateFlow.value.devices[trailblazeDeviceId] == null) {
+      updateDeviceState { state ->
         state.copy(
-          devices = state.devices + (trailblazeDeviceId to updatedDeviceState)
+          devices = state.devices + (trailblazeDeviceId to DeviceState(device = deviceSummary))
         )
-      } else {
-        state // Device not found, no change
       }
+    }
+  }
+
+  /**
+   * Clears an ended session from activeDeviceSessionsFlow.
+   * Only clears if the session ID matches the current session for the device
+   * (to avoid clearing a newer session that started after this one ended).
+   */
+  private fun clearEndedSessionFromDevice(
+    trailblazeDeviceId: TrailblazeDeviceId,
+    endedSessionId: SessionId
+  ) {
+    // Only clear if this is the current session for the device
+    if (_activeDeviceSessionsFlow.value[trailblazeDeviceId] == endedSessionId) {
+      _activeDeviceSessionsFlow.value = _activeDeviceSessionsFlow.value - trailblazeDeviceId
     }
   }
 
@@ -262,13 +468,8 @@ class TrailblazeDeviceManager(
     // Step 2: Cancel the coroutine job (stop any remaining work)
     cancelAndRemoveCoroutineScopeForDeviceIfActive(trailblazeDeviceId)
 
-    updateDeviceState { deviceManagerState: DeviceManagerState ->
-      deviceManagerState.devices[trailblazeDeviceId]?.let { stateForDevice: DeviceState ->
-        deviceManagerState.copy(
-          devices = deviceManagerState.devices + (trailblazeDeviceId to stateForDevice.copy(currentSessionId = null))
-        )
-      } ?: deviceManagerState // Device not found, no change
-    }
+    // Clear the session from the sessions flow
+    _activeDeviceSessionsFlow.value = _activeDeviceSessionsFlow.value - trailblazeDeviceId
   }
 
   private fun closeAndRemoveMaestroDriverForDevice(trailblazeDeviceId: TrailblazeDeviceId) {
@@ -328,6 +529,10 @@ class TrailblazeDeviceManager(
     return deviceStateFlow.value.devices[trailblazeDeviceId]
   }
 
+  fun getCurrentSessionIdForDevice(trailblazeDeviceId: TrailblazeDeviceId): SessionId? {
+    return _activeDeviceSessionsFlow.value[trailblazeDeviceId]
+  }
+
   fun createNewCoroutineScopeForDevice(trailblazeDeviceId: TrailblazeDeviceId): CoroutineScope {
     cancelAndRemoveCoroutineScopeForDeviceIfActive(trailblazeDeviceId)
     return CoroutineScope(Dispatchers.IO).also {
@@ -337,5 +542,14 @@ class TrailblazeDeviceManager(
 
   fun setActiveDriverForDevice(trailblazeDeviceId: TrailblazeDeviceId, maestroDriver: Driver) {
     maestroDriverByDeviceMap[trailblazeDeviceId] = maestroDriver
+  }
+
+  fun getInstalledAppIdsFlow(trailblazeDeviceId: TrailblazeDeviceId): StateFlow<Set<String>> {
+    return installedAppIdsByDeviceFlow.map { it[trailblazeDeviceId] ?: emptySet() }
+      .stateIn(
+        loadDevicesScope,
+        SharingStarted.Eagerly,
+        installedAppIdsByDeviceFlow.value[trailblazeDeviceId] ?: emptySet()
+      )
   }
 }

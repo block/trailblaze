@@ -1,6 +1,5 @@
 package xyz.block.trailblaze.model
 
-import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.llm.RunYamlRequest
 
 class DesktopAppRunYamlParams(

@@ -29,6 +29,7 @@ object TrailblazeJson {
     ignoreUnknownKeys = true // Avoids errors on unknown fields
     isLenient = true // Allows unquoted strings & other relaxed parsing
     prettyPrint = true
+    allowStructuredMapKeys = true
     @OptIn(InternalSerializationApi::class)
     serializersModule = SerializersModule {
       polymorphicDefaultSerializer(TrailblazeLog::class) { value ->

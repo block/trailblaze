@@ -14,6 +14,7 @@ data class TrailblazeServerState(
   data class SavedTrailblazeAppConfig(
     val selectedTrailblazeDriverTypes: Map<TrailblazeDevicePlatform, TrailblazeDriverType>,
     val autoLaunchGoose: Boolean = false,
+    val showDebugPopOutWindow: Boolean = false,
     val alwaysOnTop: Boolean = false,
     val serverPort: Int = HTTP_PORT,
     val serverUrl: String = "http://localhost:$HTTP_PORT",

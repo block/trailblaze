@@ -10,7 +10,6 @@ import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.mcp.RpcHandler
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
-
 import xyz.block.trailblaze.util.toSnakeCaseIdentifier
 import xyz.block.trailblaze.util.toSnakeCaseWithId
 import xyz.block.trailblaze.yaml.TrailblazeYaml
@@ -62,13 +61,26 @@ class RunYamlRequestHandler(
         toSnakeCaseIdentifier(request.testName)
       }
 
-      // Start session with method name for consistency
-      val startedSessionId = trailblazeLogger.startSession(methodName)
+      // Start session with method name for consistency, we must call this for lifecycle/resetting
+      trailblazeLogger.startSession(methodName)
+
+      // Override the session id if requested
+      val overrideSessionId = request.config.overrideSessionId
+      if (overrideSessionId != null) {
+        trailblazeLogger.overrideSessionId(overrideSessionId)
+      }
+
+      val startedSessionId = trailblazeLogger.getCurrentSessionId()
+
       // Launch the job in the background scope so it doesn't block the response
       val job = backgroundScope.launch {
         try {
           runTrailblazeYaml(request)
-          trailblazeLogger.sendSessionEndLog(isSuccess = true)
+          if (request.config.sendSessionEndLog) {
+            trailblazeLogger.sendSessionEndLog(isSuccess = true)
+          } else {
+            // Keep the session open
+          }
         } catch (e: Exception) {
           e.printStackTrace()
           trailblazeLogger.sendSessionEndLog(isSuccess = false, exception = e)
@@ -79,8 +91,7 @@ class RunYamlRequestHandler(
 
       RpcResult.Success(
         RunYamlResponse(
-          message = "YAML execution started successfully",
-          sessionId = startedSessionId.value,
+          sessionId = startedSessionId,
         )
       )
     } catch (e: Exception) {

@@ -7,7 +7,7 @@ import xyz.block.trailblaze.host.ios.MobileDeviceUtils
 import xyz.block.trailblaze.host.rules.BaseHostTrailblazeTest
 import xyz.block.trailblaze.host.yaml.RunOnHostParams
 import xyz.block.trailblaze.http.DynamicLlmClient
-import xyz.block.trailblaze.llm.RunYamlRequest
+import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.util.HostAndroidDeviceConnectUtils
 
@@ -20,7 +20,7 @@ object TrailblazeHostYamlRunner {
     dynamicLlmClient: DynamicLlmClient,
     runOnHostParams: RunOnHostParams,
     deviceManager: TrailblazeDeviceManager,
-  ) {
+  ): SessionId? {
 
     val device = runOnHostParams.device
     val trailblazeDeviceId = device.trailblazeDeviceId
@@ -36,6 +36,7 @@ object TrailblazeHostYamlRunner {
 
     onProgressMessage("Initializing ${device.trailblazeDriverType} test runner...")
 
+    val runYamlRequest = runOnHostParams.runYamlRequest
     val hostTbRunner = object : BaseHostTrailblazeTest(
       trailblazeDriverType = runOnHostParams.trailblazeDriverType,
       customToolClasses = runOnHostParams.targetTestApp
@@ -43,8 +44,8 @@ object TrailblazeHostYamlRunner {
           runOnHostParams.trailblazeDriverType,
         ) ?: emptySet(),
       dynamicLlmClient = dynamicLlmClient,
-      trailblazeLlmModel = runOnHostParams.runYamlRequest.trailblazeLlmModel,
-      config = runOnHostParams.runYamlRequest.config,
+      trailblazeLlmModel = runYamlRequest.trailblazeLlmModel,
+      config = runYamlRequest.config,
       appTarget = runOnHostParams.targetTestApp,
     ) {
       override fun ensureTargetAppIsStopped() {
@@ -65,33 +66,38 @@ object TrailblazeHostYamlRunner {
     deviceManager.setActiveDriverForDevice(trailblazeDeviceId, hostTbRunner.hostRunner.loggingDriver)
 
     // Launch the test in a coroutine - store Job IMMEDIATELY for instant cancellation
-    val runYamlRequest: RunYamlRequest = runOnHostParams.runYamlRequest
     val testName = runYamlRequest.testName
 
-    val sessionId = trailblazeLogger.startSession(testName)
+    // REQUIRED: Initializes the Session ID based on the testName, this triggers lifecycle calls
+    trailblazeLogger.startSession(testName)
 
-    // Start session via device manager (handles session manager + state updates)
-    deviceManager.trackActiveHostSession(
-      trailblazeDeviceId = trailblazeDeviceId,
-      sessionId = sessionId
-    )
+    val overrideSessionId = runYamlRequest.config.overrideSessionId
+    if (overrideSessionId != null) {
+      // A specific session ID was provided, use that instead of the auto-generated one.
+      trailblazeLogger.overrideSessionId(overrideSessionId)
+    }
 
     onProgressMessage("Connecting to ${device.platform} device...")
 
-    try {
+    return try {
       onProgressMessage("Executing YAML test...")
       println("▶️ Starting runTrailblazeYamlSuspend for device: ${trailblazeDeviceId.instanceId}")
-      hostTbRunner.runTrailblazeYamlSuspend(
-        yaml = runOnHostParams.runYamlRequest.yaml,
+      val sessionId = hostTbRunner.runTrailblazeYamlSuspend(
+        yaml = runYamlRequest.yaml,
         forceStopApp = runOnHostParams.forceStopTargetApp,
-        trailFilePath = runOnHostParams.runYamlRequest.trailFilePath,
+        trailFilePath = runYamlRequest.trailFilePath,
         trailblazeDeviceId = trailblazeDeviceId,
+        sendSessionStartLog = runYamlRequest.config.sendSessionStartLog
       )
       println("✅ runTrailblazeYamlSuspend completed successfully for device: ${trailblazeDeviceId.instanceId}")
       onProgressMessage("Test execution completed successfully")
-      trailblazeLogger.sendSessionEndLog(
-        isSuccess = true
-      )
+
+      if (runYamlRequest.config.sendSessionEndLog) {
+        trailblazeLogger.sendSessionEndLog(isSuccess = true)
+      } else {
+        // Keep the session open
+      }
+       sessionId
     } catch (e: TrailblazeSessionCancelledException) {
       // Handle Trailblaze session cancellation - user cancelled via UI
       println("🚫 TrailblazeSessionCancelledException caught for device: ${trailblazeDeviceId.instanceId}")
@@ -99,6 +105,7 @@ object TrailblazeHostYamlRunner {
       // DON'T write log here - cancellation log is written by the UI layer
       // (JvmLiveSessionDataProvider.writeCancellationLog) to avoid duplicates
       // Don't re-throw, just end gracefully
+      null
     } catch (e: CancellationException) {
       // Handle coroutine cancellation explicitly
       println("🚫 CancellationException caught for device: ${trailblazeDeviceId.instanceId} - ${e.message}")
@@ -114,6 +121,7 @@ object TrailblazeHostYamlRunner {
         isSuccess = false,
         exception = e,
       )
+      null
     } finally {
       // IMPORTANT: This ALWAYS executes, even when cancelled!
       // Ensures device manager state is updated and job is cleaned up

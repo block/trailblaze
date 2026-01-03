@@ -17,7 +17,9 @@ import java.io.File
 
 class TrailblazeSettingsRepo(
   val settingsFile: File = File("build/${TrailblazeDesktopUtil.SETTINGS_FILENAME}"),
-  private val initialConfig: SavedTrailblazeAppConfig,
+  initialConfig: SavedTrailblazeAppConfig,
+  private val defaultHostAppTarget: TrailblazeHostAppTarget,
+  private val allTargetApps: () -> Set<TrailblazeHostAppTarget>,
   private val supportedDriverTypes: Set<TrailblazeDriverType>,
 ) {
   private val trailblazeJson: Json = TrailblazeJson.defaultWithoutToolsInstance
@@ -97,6 +99,15 @@ class TrailblazeSettingsRepo(
   fun getEnabledDriverTypes(): Set<TrailblazeDriverType> {
     return serverStateFlow.value.appConfig.selectedTrailblazeDriverTypes.values.toSet()
   }
+
+  fun getCurrentSelectedTargetApp(): TrailblazeHostAppTarget? {
+    return allTargetApps()
+      .filter { it != defaultHostAppTarget }
+      .firstOrNull { appTarget ->
+        appTarget.name == serverStateFlow.value.appConfig.selectedTargetAppName
+      }
+  }
+
 
   val serverStateFlow = MutableStateFlow(
     TrailblazeServerState(

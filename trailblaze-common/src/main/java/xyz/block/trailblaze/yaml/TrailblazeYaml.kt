@@ -120,15 +120,18 @@ class TrailblazeYaml(
    */
   fun hasRecordedSteps(trailItems: List<TrailYamlItem>): Boolean = trailItems.any { item ->
     when (item) {
-      is TrailYamlItem.ConfigTrailItem -> false
-      is TrailYamlItem.MaestroTrailItem -> true
       is TrailYamlItem.PromptsTrailItem -> {
         item.promptSteps.any { promptStep ->
           promptStep.recording?.tools?.isNotEmpty() ?: false
         }
       }
 
-      is TrailYamlItem.ToolTrailItem -> true
+      is TrailYamlItem.ConfigTrailItem,
+      is TrailYamlItem.MaestroTrailItem,
+      is TrailYamlItem.ToolTrailItem -> {
+        // These aren't "recorded" steps, it's handwritten, so not going to flag
+        false
+      }
     }
   }
 }

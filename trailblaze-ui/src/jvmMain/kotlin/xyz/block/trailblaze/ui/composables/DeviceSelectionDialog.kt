@@ -1,53 +1,21 @@
 package xyz.block.trailblaze.ui.composables
 
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Checkbox
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
-
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.ui.TrailblazeSettingsRepo
-import xyz.block.trailblaze.ui.devices.DeviceState
 import xyz.block.trailblaze.ui.tabs.devices.TargetAppConfigRow
 
 /**
@@ -71,16 +39,27 @@ fun DeviceConfigurationContent(
   val deviceState by deviceManager.deviceStateFlow.collectAsState()
   val availableDevices = deviceState.devices.values.map { it.device }
   val isLoadingDevices = deviceState.isLoading
-  val activeSessionsByDevice = deviceState.devices.mapValues { it.value.currentSessionId }
+  val activeDeviceSessions by deviceManager.activeDeviceSessionsFlow.collectAsState()
 
   val selectedTargetApp = deviceManager.getCurrentSelectedTargetApp()
 
+  val installedAppIdsByDevice by deviceManager.installedAppIdsByDeviceFlow.collectAsState()
+
   // Initialize selectedDevices with previously selected devices that are still available and have the app installed
-  var selectedDevices by remember(availableDevices, lastSelectedDeviceInstanceIds, selectedTargetApp) {
+  var selectedDevices by remember(
+    availableDevices,
+    lastSelectedDeviceInstanceIds,
+    selectedTargetApp,
+    installedAppIdsByDevice
+  ) {
     mutableStateOf(
       availableDevices.filter { device ->
+        val appIdIfInstalled = selectedTargetApp?.getAppIdIfInstalled(
+          platform = device.platform,
+          installedAppIds = installedAppIdsByDevice[device.trailblazeDeviceId] ?: emptySet()
+        )
         device.instanceId in lastSelectedDeviceInstanceIds &&
-            (selectedTargetApp == null || device.getAppIdIfInstalled(selectedTargetApp) != null)
+            (selectedTargetApp == null || appIdIfInstalled != null)
       }.toSet()
     )
   }
@@ -155,15 +134,19 @@ fun DeviceConfigurationContent(
         verticalArrangement = Arrangement.spacedBy(8.dp)
       ) {
         availableDevices.forEach { device ->
-          val isAppInstalled = device.getAppIdIfInstalled(selectedTargetApp) != null
+          val appIdIfInstalled = selectedTargetApp?.getAppIdIfInstalled(
+            platform = device.platform,
+            installedAppIds = installedAppIdsByDevice[device.trailblazeDeviceId] ?: emptySet()
+          )
+          val isAppInstalled = appIdIfInstalled != null
           val isDeviceEnabled = selectedTargetApp == null || isAppInstalled
-          val activeSessionId = activeSessionsByDevice[device.trailblazeDeviceId]
+          val activeSessionId = activeDeviceSessions[device.trailblazeDeviceId]
           val hasActiveSession = activeSessionId != null
 
           SingleDeviceListItem(
             device = device,
             isSelected = selectedDevices.contains(device),
-            installedAppId = device.getAppIdIfInstalled(selectedTargetApp),
+            installedAppId = appIdIfInstalled,
             appTarget = selectedTargetApp,
             activeSessionId = activeSessionId?.value,
             onSessionClick = onSessionClick,
@@ -227,17 +210,25 @@ fun DeviceSelectionDialog(
   val availableDevices = deviceState.devices.values.map { it.device }
 
   val selectedTargetApp = deviceManager.getCurrentSelectedTargetApp()
+  val installedAppIdsByDevice by deviceManager.installedAppIdsByDeviceFlow.collectAsState()
 
   // Initialize selectedDevices with previously selected devices that are still available and have the app installed
-  var selectedDevices by remember(availableDevices, lastSelectedDeviceInstanceIds, selectedTargetApp) {
+  var selectedDevices by remember(
+    availableDevices,
+    lastSelectedDeviceInstanceIds,
+    selectedTargetApp,
+    installedAppIdsByDevice
+  ) {
     mutableStateOf(
       availableDevices.filter { device ->
-        device.instanceId in lastSelectedDeviceInstanceIds &&
-            (selectedTargetApp == null || device.getAppIdIfInstalled(selectedTargetApp) != null)
+        val appIdIfInstalled = selectedTargetApp?.getAppIdIfInstalled(
+          platform = device.platform,
+          installedAppIds = installedAppIdsByDevice[device.trailblazeDeviceId] ?: emptySet()
+        )
+        device.instanceId in lastSelectedDeviceInstanceIds && (appIdIfInstalled != null)
       }.toSet()
     )
   }
-
 
   // State for force stop app option
   var forceStopApp by remember { mutableStateOf(forceStopApp) }

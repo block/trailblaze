@@ -1,11 +1,8 @@
 package xyz.block.trailblaze.host.yaml
 
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlin.coroutines.coroutineContext
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.host.TrailblazeHostYamlRunner
@@ -14,7 +11,9 @@ import xyz.block.trailblaze.http.DynamicLlmClient
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.llm.RunYamlResponse
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
+import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRpcClient
+import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
 import xyz.block.trailblaze.model.DesktopAppRunYamlParams
 import xyz.block.trailblaze.model.DeviceConnectionStatus
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
@@ -59,6 +58,7 @@ class DesktopYamlRunner(
       println("🚀 COROUTINE STARTED for device: ${trailblazeDeviceId.instanceId}")
 
       val connectedTrailblazeDevice = trailblazeDeviceManager.getDeviceState(trailblazeDeviceId)?.device
+        ?: trailblazeDeviceManager.loadDevicesSuspend().firstOrNull { it.trailblazeDeviceId == trailblazeDeviceId }
 
       if (connectedTrailblazeDevice == null) {
         onProgressMessage("Device with ID $trailblazeDeviceId not found")
@@ -122,7 +122,10 @@ class DesktopYamlRunner(
                 onProgressMessage = prefixedProgressMessage,
                 forceStopTargetApp = forceStopTargetApp,
                 targetTestApp = targetTestApp,
-                additionalInstrumentationArgs = { emptyMap() },
+                additionalInstrumentationArgs = {
+                  // Not required since this is "host", but is required "on-device"
+                  emptyMap()
+                },
               ),
               deviceManager = trailblazeDeviceManager,
             )
@@ -159,8 +162,8 @@ class DesktopYamlRunner(
     onConnectionStatus: (DeviceConnectionStatus) -> Unit,
     onProgressMessage: (String) -> Unit,
     additionalInstrumentationArgs: Map<String, String>,
-  ) {
-    withContext(Dispatchers.IO) {
+  ): SessionId? {
+    return withContext(Dispatchers.IO) {
       val status = HostAndroidDeviceConnectUtils.connectToInstrumentationAndInstallAppIfNotAvailable(
         sendProgressMessage = onProgressMessage,
         deviceId = trailblazeConnectedDevice.trailblazeDeviceId,
@@ -171,15 +174,18 @@ class DesktopYamlRunner(
       withContext(Dispatchers.Default) {
         onConnectionStatus(status)
         onDeviceRpc.verifyServerIsRunning()
-        onDeviceRpc.rpcCall(
-          request = runYamlRequest,
-          onSuccess = { response: RunYamlResponse ->
-            onProgressMessage("YAML test execution started: ${response.message} (Session: ${response.sessionId})")
-          },
-          onFailure = { failure ->
-            onProgressMessage("Failed to start YAML execution: ${failure.message}")
+        when (val result: RpcResult<RunYamlResponse> = onDeviceRpc.rpcCall(runYamlRequest)) {
+          is RpcResult.Failure -> {
+            onProgressMessage("Failed to start YAML execution: ${result.message}")
+            null
           }
-        )
+
+          is RpcResult.Success -> {
+            val runYamlResponse = result.data
+            onProgressMessage("YAML test execution started for session: ${runYamlResponse.sessionId}")
+            runYamlResponse.sessionId
+          }
+        }
       }
     }
   }
