@@ -40,11 +40,12 @@ jobs:
 
   # Run Android Instrumentation Tests
   android-tests:
-    runs-on: ubuntu-latest-4-cores  # 4 cores, 16GB RAM for LLM processing
+    runs-on: macos-latest  # Apple Silicon runner with Neural Engine for LLM acceleration
     timeout-minutes: 60
 
     steps:
       - name: Enable KVM group perms
+        if: runner.os == 'Linux'
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
@@ -67,9 +68,11 @@ jobs:
 
       - name: Install Ollama
         run: |
-          echo "Installing Ollama..."
-          curl -fsSL https://ollama.com/install.sh | sh
-          echo "✓ Ollama installed"
+          if [[ "$OSTYPE" == "linux"* ]]; then
+            curl -fsSL https://ollama.com/install.sh | sh
+          elif [[ "$OSTYPE" == "darwin"* ]]; then
+            brew install ollama
+          fi
 
       - name: Create and start emulator and run tests
         uses: reactivecircus/android-emulator-runner@b530d96654c385303d652368551fb075bc2f0b6b
