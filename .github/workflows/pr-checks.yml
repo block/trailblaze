@@ -40,7 +40,7 @@ jobs:
 
   # Run Android Instrumentation Tests
   android-tests:
-    runs-on: macos-latest  # Apple Silicon runner with Neural Engine for LLM acceleration
+    runs-on: ubuntu-latest
     timeout-minutes: 60
 
     steps:
