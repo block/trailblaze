@@ -1,6 +1,8 @@
 package xyz.block.trailblaze.toolcalls
 
 import ai.koog.agents.core.tools.SimpleTool
+import ai.koog.agents.core.tools.ToolDescriptor
+import ai.koog.agents.core.tools.ToolParameterDescriptor
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.serializer
 import kotlin.reflect.KClass
@@ -21,4 +23,19 @@ open class TrailblazeKoogTool<T : TrailblazeTool>(
 
   override suspend fun execute(args: T): String = executeTool(args)
 
+  companion object {
+    fun ToolParameterDescriptor.toTrailblazeToolParameterDescriptor(): TrailblazeToolParameterDescriptor =
+      TrailblazeToolParameterDescriptor(
+        name = this.name,
+        description = this.description.takeIf { it.isNotBlank() },
+        type = this.type.name
+      )
+
+    fun ToolDescriptor.toTrailblazeToolDescriptor(): TrailblazeToolDescriptor = TrailblazeToolDescriptor(
+      name = this.name,
+      description = this.description.takeIf { it.isNotBlank() },
+      optionalParameters = this.optionalParameters.map { it.toTrailblazeToolParameterDescriptor() },
+      requiredParameters = this.requiredParameters.map { it.toTrailblazeToolParameterDescriptor() }
+    )
+  }
 }

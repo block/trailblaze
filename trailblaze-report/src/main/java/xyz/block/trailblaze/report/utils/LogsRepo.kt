@@ -23,7 +23,15 @@ private typealias TrailblazeSessionId = SessionId
 
 const val DEFAULT_TIMEOUT = 120000L
 
-class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
+class LogsRepo(
+  val logsDir: File,
+  /**
+   * Whether we should monitor the filesystem for changes, or just do a single read.
+   * 
+   * Single read is good for analyzing files on disk that won't change.
+   */
+  private val watchFileSystem: Boolean = true,
+) : TrailblazeLogsDataProvider {
 
   // Create a dedicated coroutine scope for background file operations
   private val fileOperationScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -62,37 +70,43 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
     // Ensure the logs directory exists
     logsDir.mkdirs()
 
-    // Start watching session list immediately for reactive updates
-    startWatchingSessionList()
-
     // Initialize with current sessions
     _sessionsFlow.value = getSessionIds()
 
-    // Initialize SessionInfo flow and keep it updated
-    fileOperationScope.launch {
-      sessionsFlow.collect { sessionIds ->
-        // Update SessionInfo for all sessions
-        _sessionInfoFlow.value = sessionIds.mapNotNull { getSessionInfo(it) }
+    if (watchFileSystem) {
+      // Start watching session list immediately for reactive updates
+      startWatchingSessionList()
 
-        // Cancel watchers for removed sessions
-        val removedSessions = sessionInfoWatcherJobs.keys - sessionIds.toSet()
-        removedSessions.forEach { sessionId ->
-          sessionInfoWatcherJobs[sessionId]?.cancel()
-          sessionInfoWatcherJobs.remove(sessionId)
-        }
+      // Initialize SessionInfo flow and keep it updated
+      fileOperationScope.launch {
+        sessionsFlow.collect { sessionIds ->
+          // Update SessionInfo for all sessions
+          _sessionInfoFlow.value = sessionIds.mapNotNull { getSessionInfo(it) }
 
-        // Start watching new sessions' logs to detect status changes
-        sessionIds.forEach { sessionId ->
-          if (sessionId !in sessionInfoWatcherJobs) {
-            sessionInfoWatcherJobs[sessionId] = fileOperationScope.launch {
-              getSessionLogsFlow(sessionId).collect {
-                // When any session's logs change, refresh all SessionInfo
-                _sessionInfoFlow.value = sessionsFlow.value.mapNotNull { getSessionInfo(it) }
+          // Cancel watchers for removed sessions
+          val removedSessions = sessionInfoWatcherJobs.keys - sessionIds.toSet()
+          removedSessions.forEach { sessionId ->
+            sessionInfoWatcherJobs[sessionId]?.cancel()
+            sessionInfoWatcherJobs.remove(sessionId)
+          }
+
+          // Start watching new sessions' logs to detect status changes
+          sessionIds.forEach { sessionId ->
+            if (sessionId !in sessionInfoWatcherJobs) {
+              sessionInfoWatcherJobs[sessionId] = fileOperationScope.launch {
+                getSessionLogsFlow(sessionId).collect {
+                  // When any session's logs change, refresh all SessionInfo
+                  _sessionInfoFlow.value = sessionsFlow.value.mapNotNull { getSessionInfo(it) }
+                }
               }
             }
           }
         }
       }
+    } else {
+      // Single read mode: just initialize SessionInfo once without reactive updates
+      _sessionInfoFlow.value = _sessionsFlow.value.mapNotNull { getSessionInfo(it) }
+      println("[LogsRepo] Initialized in single-read mode with ${_sessionsFlow.value.size} sessions")
     }
   }
 
@@ -295,6 +309,11 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
    * Emits updates to sessionsFlow.
    */
   private fun startWatchingSessionList() {
+    if (!watchFileSystem) {
+      println("[LogsRepo] File system watching disabled, skipping session list watcher")
+      return
+    }
+    
     if (sessionListWatcher == null) {
       println("[LogsRepo] Starting session list watcher")
       val watcher = FileWatchService(
@@ -348,6 +367,11 @@ class LogsRepo(val logsDir: File) : TrailblazeLogsDataProvider {
    * Starts watching a specific session and updates its StateFlow with new logs.
    */
   private fun startWatchingSessionForFlow(sessionId: SessionId, flow: MutableStateFlow<List<TrailblazeLog>>) {
+    if (!watchFileSystem) {
+      println("[LogsRepo] File system watching disabled, skipping session watcher for: $sessionId")
+      return
+    }
+    
     if (fileWatcherByTrailblazeSession[sessionId] == null) {
       val sessionDir = getSessionDir(sessionId)
       println("[LogsRepo] Starting session watcher for flow: $sessionId")

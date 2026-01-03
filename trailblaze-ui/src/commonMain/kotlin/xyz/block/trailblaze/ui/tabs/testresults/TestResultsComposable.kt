@@ -15,14 +15,9 @@ import androidx.compose.ui.unit.dp
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.model.getSessionInfo
-
-/**
- * Format a double as a percentage string with one decimal place
- */
-private fun formatPercentage(value: Double): String {
-  val rounded = (value * 10).toInt() / 10.0
-  return "$rounded%"
-}
+import xyz.block.trailblaze.ui.composables.InteractivePieChart
+import xyz.block.trailblaze.ui.composables.PieChartCenterContent
+import xyz.block.trailblaze.ui.composables.PieChartSegment
 
 /**
  * Common test results UI that accepts session data directly.
@@ -60,9 +55,6 @@ fun TestResultsComposable(
   val inProgressTests = sessionInfos.count { it.latestStatus is SessionStatus.Started }
   val unknownTests = sessionInfos.count { it.latestStatus is SessionStatus.Unknown }
 
-  val passPercentage = if (totalTests > 0) (succeededTests * 100.0 / totalTests) else 0.0
-  val failPercentage = if (totalTests > 0) (failedTests * 100.0 / totalTests) else 0.0
-
   Column(
     modifier = Modifier
       .fillMaxWidth()
@@ -70,230 +62,127 @@ fun TestResultsComposable(
   ) {
     // Header
     Text(
-      text = "Test Results Summary",
+      text = "Test Results",
       style = MaterialTheme.typography.headlineMedium,
       fontWeight = FontWeight.Bold,
-      modifier = Modifier.padding(bottom = 16.dp)
+      modifier = Modifier.padding(bottom = 24.dp)
     )
 
-    // Summary Cards
-    Row(
-      modifier = Modifier.fillMaxWidth(),
-      horizontalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-      // Total Tests Card
-      SummaryCard(
-        title = "Total Tests",
-        value = totalTests.toString(),
-        subtitle = " ", // Empty subtitle to match height of other cards
-        color = Color(0xFF6200EE),
-        modifier = Modifier.weight(1f)
-      )
-
-      // Passed Tests Card
-      SummaryCard(
-        title = "Passed",
-        value = succeededTests.toString(),
-        subtitle = formatPercentage(passPercentage),
-        color = Color(0xFF4CAF50),
-        modifier = Modifier.weight(1f)
-      )
-
-      // Failed Tests Card
-      SummaryCard(
-        title = "Failed",
-        value = failedTests.toString(),
-        subtitle = formatPercentage(failPercentage),
-        color = Color(0xFFF44336),
-        modifier = Modifier.weight(1f)
-      )
-    }
-
-    Spacer(modifier = Modifier.height(24.dp))
-
-    // Detailed Breakdown
-    Card(
-      modifier = Modifier.fillMaxWidth(),
-      elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-    ) {
-      Column(
-        modifier = Modifier.padding(16.dp)
-      ) {
-        Text(
-          text = "Detailed Breakdown",
-          style = MaterialTheme.typography.titleLarge,
-          fontWeight = FontWeight.SemiBold,
-          modifier = Modifier.padding(bottom = 12.dp)
-        )
-
-        Divider(modifier = Modifier.padding(bottom = 12.dp))
-
-        StatusRow("Succeeded", succeededTests, totalTests, Color(0xFF4CAF50))
-        StatusRow("Failed", failedTests, totalTests, Color(0xFFF44336))
-        if (cancelledTests > 0) {
-          StatusRow("Cancelled", cancelledTests, totalTests, Color(0xFFFF9800))
-        }
-        if (timeoutTests > 0) {
-          StatusRow("Timeout", timeoutTests, totalTests, Color(0xFFFF5722))
-        }
-        if (inProgressTests > 0) {
-          StatusRow("In Progress", inProgressTests, totalTests, Color(0xFF2196F3))
-        }
-        if (unknownTests > 0) {
-          StatusRow("Unknown", unknownTests, totalTests, Color(0xFF9E9E9E))
-        }
-      }
-    }
-
-    Spacer(modifier = Modifier.height(24.dp))
-
-    // Visual Progress Bar
+    // Test Status Distribution Pie Chart - Now at the top and prominent
     if (totalTests > 0) {
       Card(
         modifier = Modifier.fillMaxWidth(),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
       ) {
         Column(
-          modifier = Modifier.padding(16.dp)
+          modifier = Modifier.padding(24.dp)
         ) {
-          Text(
-            text = "Pass/Fail Distribution",
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.padding(bottom = 12.dp)
-          )
-
-          Row(
-            modifier = Modifier
-              .fillMaxWidth()
-              .height(40.dp),
-            horizontalArrangement = Arrangement.Start
-          ) {
-            // Passed segment
+          val segments = buildList {
             if (succeededTests > 0) {
-              Box(
-                modifier = Modifier
-                  .fillMaxHeight()
-                  .weight(succeededTests.toFloat())
-                  .background(Color(0xFF4CAF50))
+              add(
+                PieChartSegment(
+                  label = "Passed",
+                  value = succeededTests.toLong(),
+                  color = Color(0xFF4CAF50),
+                  description = "$succeededTests tests"
+                )
               )
             }
-            // Failed segment
             if (failedTests > 0) {
-              Box(
-                modifier = Modifier
-                  .fillMaxHeight()
-                  .weight(failedTests.toFloat())
-                  .background(Color(0xFFF44336))
+              add(
+                PieChartSegment(
+                  label = "Failed",
+                  value = failedTests.toLong(),
+                  color = Color(0xFFF44336),
+                  description = "$failedTests tests"
+                )
               )
             }
-            // Other statuses segment
-            val otherTests = cancelledTests + timeoutTests + inProgressTests + unknownTests
-            if (otherTests > 0) {
-              Box(
-                modifier = Modifier
-                  .fillMaxHeight()
-                  .weight(otherTests.toFloat())
-                  .background(Color(0xFF9E9E9E))
+            if (cancelledTests > 0) {
+              add(
+                PieChartSegment(
+                  label = "Cancelled",
+                  value = cancelledTests.toLong(),
+                  color = Color(0xFFFF9800),
+                  description = "$cancelledTests tests"
+                )
+              )
+            }
+            if (timeoutTests > 0) {
+              add(
+                PieChartSegment(
+                  label = "Timeout",
+                  value = timeoutTests.toLong(),
+                  color = Color(0xFFFF5722),
+                  description = "$timeoutTests tests"
+                )
+              )
+            }
+            if (inProgressTests > 0) {
+              add(
+                PieChartSegment(
+                  label = "In Progress",
+                  value = inProgressTests.toLong(),
+                  color = Color(0xFF2196F3),
+                  description = "$inProgressTests tests"
+                )
+              )
+            }
+            if (unknownTests > 0) {
+              add(
+                PieChartSegment(
+                  label = "Unknown",
+                  value = unknownTests.toLong(),
+                  color = Color(0xFF9E9E9E),
+                  description = "$unknownTests tests"
+                )
               )
             }
           }
+
+          InteractivePieChart(
+            segments = segments,
+            chartSize = 280.dp,
+            strokeWidth = 50f,
+            centerContent = { content ->
+              when (content) {
+                is PieChartCenterContent.Default -> {
+                  Text(
+                    text = content.totalValue,
+                    style = MaterialTheme.typography.displayLarge,
+                    fontWeight = FontWeight.Bold
+                  )
+                  Text(
+                    text = "Total Tests",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                  )
+                }
+                is PieChartCenterContent.Hovered -> {
+                  Text(
+                    text = content.label,
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Medium,
+                    color = content.color
+                  )
+                  Spacer(modifier = Modifier.height(8.dp))
+                  Text(
+                    text = content.value,
+                    style = MaterialTheme.typography.displayLarge,
+                    fontWeight = FontWeight.Bold
+                  )
+                  Text(
+                    text = "${content.percentage} of tests",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontWeight = FontWeight.Medium
+                  )
+                }
+              }
+            }
+          )
         }
       }
-    }
-  }
-}
-
-@Composable
-private fun SummaryCard(
-  title: String,
-  value: String,
-  modifier: Modifier = Modifier,
-  subtitle: String? = null,
-  color: Color = MaterialTheme.colorScheme.primary,
-) {
-  Card(
-    modifier = modifier,
-    elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
-    colors = CardDefaults.cardColors(containerColor = color)
-  ) {
-    Column(
-      modifier = Modifier
-        .padding(16.dp)
-        .fillMaxWidth(),
-      horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-      Text(
-        text = title,
-        style = MaterialTheme.typography.titleMedium,
-        color = Color.White,
-        fontWeight = FontWeight.Medium
-      )
-      Spacer(modifier = Modifier.height(8.dp))
-      Text(
-        text = value,
-        style = MaterialTheme.typography.displaySmall,
-        color = Color.White,
-        fontWeight = FontWeight.Bold
-      )
-      if (subtitle != null) {
-        Text(
-          text = subtitle,
-          style = MaterialTheme.typography.titleMedium,
-          color = Color.White.copy(alpha = 0.9f),
-          fontWeight = FontWeight.Medium
-        )
-      }
-    }
-  }
-}
-
-@Composable
-private fun StatusRow(
-  label: String,
-  count: Int,
-  total: Int,
-  color: Color,
-) {
-  val percentage = if (total > 0) (count * 100.0 / total) else 0.0
-
-  Row(
-    modifier = Modifier
-      .fillMaxWidth()
-      .padding(vertical = 6.dp),
-    horizontalArrangement = Arrangement.SpaceBetween,
-    verticalAlignment = Alignment.CenterVertically
-  ) {
-    Row(
-      verticalAlignment = Alignment.CenterVertically,
-      modifier = Modifier.weight(1f)
-    ) {
-      Box(
-        modifier = Modifier
-          .size(12.dp)
-          .background(color, shape = RoundedCornerShape(2.dp))
-      )
-      Spacer(modifier = Modifier.width(12.dp))
-      Text(
-        text = label,
-        style = MaterialTheme.typography.bodyLarge
-      )
-    }
-
-    Row(
-      horizontalArrangement = Arrangement.spacedBy(16.dp),
-      verticalAlignment = Alignment.CenterVertically
-    ) {
-      Text(
-        text = count.toString(),
-        style = MaterialTheme.typography.bodyLarge,
-        fontWeight = FontWeight.SemiBold
-      )
-      Text(
-        text = formatPercentage(percentage),
-        style = MaterialTheme.typography.bodyMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant
-      )
     }
   }
 }

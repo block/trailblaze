@@ -742,7 +742,18 @@ fun SessionDetailComposable(
                 }
 
                 SessionViewMode.LlmUsage -> {
-                  LlmUsageComposable(llmUsageSummary, gridState)
+                  // Get LLM request logs to map index to actual log
+                  val llmRequestLogs = sessionDetail.logs.filterIsInstance<TrailblazeLog.TrailblazeLlmRequestLog>()
+                  
+                  LlmUsageComposable(
+                    llmSessionUsageAndCost = llmUsageSummary,
+                    gridState = gridState,
+                    onShowRequestDetails = { requestIndex ->
+                      if (requestIndex < llmRequestLogs.size) {
+                        onShowChatHistory(llmRequestLogs[requestIndex])
+                      }
+                    }
+                  )
                 }
               }
             }

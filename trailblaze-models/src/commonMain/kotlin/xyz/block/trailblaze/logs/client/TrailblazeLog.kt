@@ -8,7 +8,9 @@ import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.agent.model.PromptRecordingResult
 import xyz.block.trailblaze.api.MaestroDriverActionType
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
+import xyz.block.trailblaze.llm.LlmRequestUsageAndCost
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
+import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
 import xyz.block.trailblaze.logs.model.HasAgentTaskStatus
 import xyz.block.trailblaze.logs.model.HasDuration
 import xyz.block.trailblaze.logs.model.HasPromptStep
@@ -55,7 +57,8 @@ sealed interface TrailblazeLog {
     val llmMessages: List<TrailblazeLlmMessage>,
     val llmResponse: List<Message.Response>,
     val actions: List<Action>,
-    val toolOptions: List<ToolOption>,
+    val toolOptions: List<TrailblazeToolDescriptor>,
+    val llmRequestUsageAndCost: LlmRequestUsageAndCost? = null,
     override val screenshotFile: String?,
     override val durationMs: Long,
     override val session: SessionId,
@@ -73,11 +76,6 @@ sealed interface TrailblazeLog {
     data class Action(
       val name: String,
       val args: JsonObject,
-    )
-
-    @Serializable
-    data class ToolOption(
-      val name: String,
     )
   }
 

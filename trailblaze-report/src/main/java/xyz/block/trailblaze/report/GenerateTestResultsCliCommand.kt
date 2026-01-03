@@ -18,6 +18,7 @@ import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.report.models.CiRunMetadata
@@ -98,10 +99,11 @@ class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-results
     ),
   )
 
-  private val json = Json { prettyPrint }
-
   override fun run() {
-    val logsRepo = LogsRepo(logsDir)
+    val logsRepo = LogsRepo(
+      logsDir = logsDir,
+      watchFileSystem = false
+    )
     val sessionIds = logsRepo.getSessionIds()
     logsRepo.close()
 
@@ -176,7 +178,7 @@ class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-results
 
     val output = outputArg ?: File(logsDir, "trailblaze_test_report.${outputFormat.extension}")
     val content = when (outputFormat) {
-      OutputFormat.JSON -> json.encodeToString(value = summaryReport)
+      OutputFormat.JSON -> TrailblazeJsonInstance.encodeToString(value = summaryReport)
       OutputFormat.YAML -> yamlSerializer.encodeToString(value = summaryReport)
     }
 
@@ -219,10 +221,10 @@ class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-results
   private fun buildMetadataFromEnvironment(): CiRunMetadata {
     fun getEnv(name: String): String? = System.getenv(name)?.takeIf { it.isNotBlank() }
     fun getEnvList(name: String): List<String> = getEnv(name)?.split(",")?.map {
-        it.trim()
-      }?.filter {
-        it.isNotEmpty()
-      } ?: emptyList()
+      it.trim()
+    }?.filter {
+      it.isNotEmpty()
+    } ?: emptyList()
 
     return CiRunMetadata(
       target_app = getEnv("TRAILBLAZE_TARGET_APP") ?: "",
@@ -321,9 +323,9 @@ class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-results
       else -> "${ms / 60_000}m ${(ms % 60_000) / 1000}s"
     }
   }
-  
+
   private fun passBar(count: Int, total: Int, icon: String): String {
-    if (total==0) return ""
+    if (total == 0) return ""
     val barLength = 20
     val filled = (count.toDouble() / total * barLength).toInt()
     return icon.repeat(filled.coerceIn(0, barLength))

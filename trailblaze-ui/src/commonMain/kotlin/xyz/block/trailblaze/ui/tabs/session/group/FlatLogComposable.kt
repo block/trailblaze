@@ -24,7 +24,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import kotlinx.serialization.json.Json
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.logs.client.TrailblazeJson
 import xyz.block.trailblaze.logs.client.TrailblazeLog

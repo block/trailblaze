@@ -12,18 +12,18 @@ import xyz.block.trailblaze.api.ImageFormatDetector
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
+import xyz.block.trailblaze.llm.LlmRequestUsageAndCost
+import xyz.block.trailblaze.llm.LlmTokenBreakdownEstimator
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.logs.client.TrailblazeLog.TrailblazeLlmRequestLog.Action
-import xyz.block.trailblaze.logs.client.TrailblazeLog.TrailblazeLlmRequestLog.ToolOption
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.logs.model.TrailblazeLlmMessage
-
+import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeToolDescriptor
 import xyz.block.trailblaze.yaml.TrailConfig
 import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
+import java.util.*
 
 /**
  * Central logging facility for Trailblaze operations.
@@ -144,11 +144,38 @@ abstract class TrailblazeLogger {
   ) {
     val toolMessages = response.filterIsInstance<Message.Tool>()
 
-    val bytes = stepStatus.currentScreenState
     val screenshotFilename = logScreenState(stepStatus.currentScreenState)
 
-    val toolOptions = toolDescriptors.map { ToolOption(it.name) }
+    // Log full tool descriptors, sorted alphabetically
+    val toolOptions = toolDescriptors
+      .map { it.toTrailblazeToolDescriptor() }
+      .sortedBy { it.name }
     val endTime = Clock.System.now()
+    
+    // Calculate usage and cost with token breakdown
+    val usage = response.last().metaInfo
+    val inputTokens = usage.inputTokensCount?.toLong() ?: 0L
+    val outputTokens = usage.outputTokensCount?.toLong() ?: 0L
+    
+    val tokenBreakdown = if (inputTokens > 0) {
+      LlmTokenBreakdownEstimator.estimateBreakdown(
+        messages = koogLlmRequestMessages,
+        toolDescriptors = toolDescriptors,
+        totalInputTokens = inputTokens,
+      )
+    } else {
+      null
+    }
+    
+    val usageAndCost = LlmRequestUsageAndCost(
+      trailblazeLlmModel = trailblazeLlmModel,
+      inputTokens = inputTokens,
+      outputTokens = outputTokens,
+      promptCost = inputTokens * trailblazeLlmModel.inputCostPerOneMillionTokens / 1_000_000.0,
+      completionCost = outputTokens * trailblazeLlmModel.outputCostPerOneMillionTokens / 1_000_000.0,
+      inputTokenBreakdown = tokenBreakdown,
+    )
+    
     log(
       TrailblazeLog.TrailblazeLlmRequestLog(
         agentTaskStatus = stepStatus.currentStatus.value,
@@ -159,10 +186,21 @@ abstract class TrailblazeLogger {
         llmMessages = (koogLlmRequestMessages + response).toTrailblazeLlmMessages(),
         screenshotFile = screenshotFilename,
         llmResponse = response,
+        llmRequestUsageAndCost = usageAndCost,
         actions = toolMessages.map {
           Action(
             it.tool,
-            TrailblazeJsonInstance.decodeFromString(JsonObject.serializer(), it.content),
+            // Handle null content gracefully by using an empty JsonObject
+            if (it.content.trim() == "null") {
+              JsonObject(emptyMap())
+            } else {
+              try {
+                TrailblazeJsonInstance.decodeFromString(JsonObject.serializer(), it.content)
+              } catch (e: Exception) {
+                // If parsing fails for any reason, use an empty JsonObject
+                JsonObject(emptyMap())
+              }
+            },
           )
         },
         timestamp = startTime,

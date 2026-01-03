@@ -16,6 +16,8 @@ data class LlmSessionUsageAndCost(
   val totalOutputTokens: Long,
   val averageInputTokens: Double,
   val averageOutputTokens: Double,
+  val aggregatedInputTokenBreakdown: LlmInputTokenBreakdown? = null,
+  val requestBreakdowns: List<LlmRequestUsageAndCost> = emptyList(),
 ) {
   private fun Double.formatTo2Decimals(): String {
     val rounded = round(this * 100) / 100
@@ -37,6 +39,12 @@ data class LlmSessionUsageAndCost(
     if (totalRequestCount > 0 && totalOutputTokens > 0) {
       appendLine("- Input Tokens: ${(averageInputTokens / 1000).formatTo2Decimals()}")
       appendLine("- Output Tokens: ${(averageOutputTokens / 1000).formatTo2Decimals()}")
+    }
+    
+    aggregatedInputTokenBreakdown?.let {
+      appendLine()
+      appendLine("--- Token Breakdown (Aggregated) ---")
+      append(it.debugString())
     }
   }
 }

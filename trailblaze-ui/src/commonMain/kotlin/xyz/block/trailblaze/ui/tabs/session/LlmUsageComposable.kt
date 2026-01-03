@@ -8,34 +8,46 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells.Fixed
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BarChart
+import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.MonetizationOn
-import androidx.compose.material.icons.filled.Money
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Summarize
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import xyz.block.trailblaze.llm.LlmSessionUsageAndCost
+import xyz.block.trailblaze.ui.composables.InteractivePieChart
+import xyz.block.trailblaze.ui.composables.PieChartCenterContent
+import xyz.block.trailblaze.ui.composables.PieChartSegment
 import xyz.block.trailblaze.ui.utils.FormattingUtils.formatCommaNumber
 import xyz.block.trailblaze.ui.utils.FormattingUtils.formatDouble
 
 @Composable
-fun LlmUsageComposable(llmSessionUsageAndCost: LlmSessionUsageAndCost?, gridState: LazyGridState) {
+fun LlmUsageComposable(
+  llmSessionUsageAndCost: LlmSessionUsageAndCost?,
+  gridState: LazyGridState,
+  onShowRequestDetails: (Int) -> Unit = {},
+) {
 
   if (llmSessionUsageAndCost != null) {
     LazyVerticalGrid(
@@ -260,7 +272,7 @@ fun LlmUsageComposable(llmSessionUsageAndCost: LlmSessionUsageAndCost?, gridStat
                   textAlign = TextAlign.Center
                 )
                 Text(
-                  text = "Avg: ${formatCommaNumber(llmSessionUsageAndCost.averageInputTokens, 0)}/req",
+                  text = "Avg: ${formatCommaNumber(llmSessionUsageAndCost.averageInputTokens, 0)} Tokens/request",
                   style = MaterialTheme.typography.bodySmall,
                   color = MaterialTheme.colorScheme.onSurfaceVariant,
                   textAlign = TextAlign.Center
@@ -293,7 +305,7 @@ fun LlmUsageComposable(llmSessionUsageAndCost: LlmSessionUsageAndCost?, gridStat
                   textAlign = TextAlign.Center
                 )
                 Text(
-                  text = "Avg: ${formatCommaNumber(llmSessionUsageAndCost.averageOutputTokens, 0)}/req",
+                  text = "Avg: ${formatCommaNumber(llmSessionUsageAndCost.averageOutputTokens, 0)} Tokens/request",
                   style = MaterialTheme.typography.bodySmall,
                   color = MaterialTheme.colorScheme.onSurfaceVariant,
                   textAlign = TextAlign.Center
@@ -361,6 +373,362 @@ fun LlmUsageComposable(llmSessionUsageAndCost: LlmSessionUsageAndCost?, gridStat
                   fontWeight = FontWeight.Bold,
                   color = MaterialTheme.colorScheme.error
                 )
+              }
+            }
+          }
+        }
+      }
+      
+      // Token Breakdown Section (if available)
+      llmSessionUsageAndCost.aggregatedInputTokenBreakdown?.let { breakdown ->
+        item {
+          Card(
+            modifier = Modifier.fillMaxWidth(),
+            elevation = CardDefaults.cardElevation()
+          ) {
+            Column(
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(20.dp)
+            ) {
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+              ) {
+                Icon(
+                  imageVector = Icons.Default.Summarize,
+                  contentDescription = null,
+                )
+                Column {
+                  Text(
+                    text = "Input Token Breakdown",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                  )
+                  Text(
+                    text = "Aggregated across all ${llmSessionUsageAndCost.totalRequestCount} requests",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                  )
+                  Text(
+                    text = "Shows what takes up space in the LLM's context window",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                  )
+                }
+              }
+              
+              Spacer(modifier = Modifier.height(20.dp))
+              
+              // Pie Chart
+              val segments = buildList {
+                add(
+                  PieChartSegment(
+                    label = "System Prompts",
+                    value = breakdown.systemPrompt.tokens,
+                    color = MaterialTheme.colorScheme.primary,
+                    description = "${breakdown.systemPrompt.count} messages"
+                  )
+                )
+                add(
+                  PieChartSegment(
+                    label = "User Prompts",
+                    value = breakdown.userPrompt.tokens,
+                    color = MaterialTheme.colorScheme.secondary,
+                    description = "${breakdown.userPrompt.count} messages"
+                  )
+                )
+                add(
+                  PieChartSegment(
+                    label = "Tool Descriptors",
+                    value = breakdown.toolDescriptors.tokens,
+                    color = MaterialTheme.colorScheme.tertiary,
+                    description = "${breakdown.toolDescriptors.count} tools"
+                  )
+                )
+                if (breakdown.images.count > 0) {
+                  add(
+                    PieChartSegment(
+                      label = "Images",
+                      value = breakdown.images.tokens,
+                      color = MaterialTheme.colorScheme.error,
+                      description = "${breakdown.images.count} images"
+                    )
+                  )
+                }
+              }
+              
+              InteractivePieChart(
+                segments = segments,
+                formatValue = { formatCommaNumber(it) },
+                centerContent = { content ->
+                  when (content) {
+                    is PieChartCenterContent.Default -> {
+                      Text(
+                        text = content.totalValue,
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold
+                      )
+                      Text(
+                        text = "Total Tokens",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                      )
+                    }
+                    is PieChartCenterContent.Hovered -> {
+                      Text(
+                        text = content.label,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Medium,
+                        color = content.color
+                      )
+                      Spacer(modifier = Modifier.height(4.dp))
+                      Text(
+                        text = content.value,
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold
+                      )
+                      Text(
+                        text = "${content.percentage} of context",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontWeight = FontWeight.Medium
+                      )
+                      content.description?.let { desc ->
+                        Text(
+                          text = desc,
+                          style = MaterialTheme.typography.bodySmall,
+                          color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                      }
+                    }
+                  }
+                }
+              )
+              
+
+            }
+          }
+        }
+      }
+      
+      // Per-Request Breakdown Section
+      if (llmSessionUsageAndCost.requestBreakdowns.isNotEmpty()) {
+        item {
+          Card(
+            modifier = Modifier.fillMaxWidth(),
+            elevation = CardDefaults.cardElevation()
+          ) {
+            Column(
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(20.dp)
+            ) {
+              Text(
+                text = "Per-Request Details",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold
+              )
+              
+              Spacer(modifier = Modifier.height(8.dp))
+              
+              // Header row
+              Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+              ) {
+                Row(
+                  horizontalArrangement = Arrangement.spacedBy(8.dp),
+                  modifier = Modifier.weight(1f)
+                ) {
+                  Text(
+                    text = "Request",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.width(75.dp)
+                  )
+                  Text(
+                    text = "System",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.width(65.dp)
+                  )
+                  Text(
+                    text = "User",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.width(65.dp)
+                  )
+                  Text(
+                    text = "Tools",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.width(65.dp)
+                  )
+                  Text(
+                    text = "Images",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.width(65.dp)
+                  )
+                }
+                Row(
+                  horizontalArrangement = Arrangement.spacedBy(8.dp),
+                  verticalAlignment = Alignment.CenterVertically
+                ) {
+                  Column(modifier = Modifier.width(100.dp)) {
+                    Text(
+                      text = "Input (LLM)",
+                      style = MaterialTheme.typography.labelSmall,
+                      color = MaterialTheme.colorScheme.primary,
+                      fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                      text = "Input (Est)",
+                      style = MaterialTheme.typography.labelSmall,
+                      color = MaterialTheme.colorScheme.onSurfaceVariant,
+                      fontSize = MaterialTheme.typography.labelSmall.fontSize * 0.9
+                    )
+                  }
+                  Text(
+                    text = "Output",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.secondary,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.width(70.dp)
+                  )
+                  Spacer(modifier = Modifier.width(60.dp)) // View button space
+                  Text(
+                    text = "Cost",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.width(80.dp)
+                  )
+                }
+              }
+              
+              Spacer(modifier = Modifier.height(8.dp))
+              HorizontalDivider()
+              Spacer(modifier = Modifier.height(4.dp))
+              
+              llmSessionUsageAndCost.requestBreakdowns.forEachIndexed { index, request ->
+                // Column-aligned row with Input/Output groupings
+                Row(
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp),
+                  horizontalArrangement = Arrangement.SpaceBetween,
+                  verticalAlignment = Alignment.CenterVertically
+                ) {
+                  // Left: Request number and breakdown columns
+                  Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.weight(1f)
+                  ) {
+                    Text(
+                      text = "Request ${index + 1}",
+                      style = MaterialTheme.typography.bodyMedium,
+                      fontWeight = FontWeight.Medium,
+                      modifier = Modifier.width(75.dp)
+                    )
+                    
+                    // Breakdown columns
+                    request.inputTokenBreakdown?.let { breakdown ->
+                      Text(
+                        text = formatCommaNumber(breakdown.systemPrompt.tokens),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.width(65.dp)
+                      )
+                      Text(
+                        text = formatCommaNumber(breakdown.userPrompt.tokens),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.width(65.dp)
+                      )
+                      Text(
+                        text = formatCommaNumber(breakdown.toolDescriptors.tokens),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.width(65.dp)
+                      )
+                      Text(
+                        text = if (breakdown.images.count > 0) formatCommaNumber(breakdown.images.tokens) else "-",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.width(65.dp)
+                      )
+                    } ?: run {
+                      // No breakdown available - show dashes
+                      repeat(4) {
+                        Text(
+                          text = "-",
+                          style = MaterialTheme.typography.bodySmall,
+                          color = MaterialTheme.colorScheme.onSurfaceVariant,
+                          modifier = Modifier.width(65.dp)
+                        )
+                      }
+                    }
+                  }
+                  
+                  // Right: Input Total, Output Tokens, View button, and Cost (aligned columns)
+                  Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                  ) {
+                    // Input Tokens - Reported vs Estimated
+                    Column(modifier = Modifier.width(100.dp)) {
+                      // LLM-Reported tokens
+                      Text(
+                        text = formatCommaNumber(request.inputTokens),
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.SemiBold
+                      )
+                      
+                      // Estimated tokens
+                      val estimatedTokens = request.inputTokenBreakdown?.totalEstimatedTokens
+                      Text(
+                        text = estimatedTokens?.let { formatCommaNumber(it) } ?: "-",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = MaterialTheme.typography.bodySmall.fontSize * 0.9
+                      )
+                    }
+                    
+                    // Output Tokens
+                    Text(
+                      text = "${formatCommaNumber(request.outputTokens)}",
+                      style = MaterialTheme.typography.bodySmall,
+                      color = MaterialTheme.colorScheme.onSurfaceVariant,
+                      modifier = Modifier.width(70.dp)
+                    )
+                    TextButton(
+                      onClick = { onShowRequestDetails(index) },
+                      contentPadding = ButtonDefaults.TextButtonContentPadding
+                    ) {
+                      Icon(
+                        imageVector = Icons.Default.Chat,
+                        contentDescription = "View chat history",
+                        modifier = Modifier.size(16.dp).padding(end = 4.dp)
+                      )
+                      Text("View", style = MaterialTheme.typography.labelSmall)
+                    }
+                    Text(
+                      text = "$${formatDouble(request.totalCost, 4)}",
+                      style = MaterialTheme.typography.bodySmall,
+                      fontWeight = FontWeight.Bold,
+                      color = MaterialTheme.colorScheme.error,
+                      modifier = Modifier.width(80.dp)
+                    )
+                  }
+                }
+                
+                if (index < llmSessionUsageAndCost.requestBreakdowns.size - 1) {
+                  HorizontalDivider()
+                }
               }
             }
           }

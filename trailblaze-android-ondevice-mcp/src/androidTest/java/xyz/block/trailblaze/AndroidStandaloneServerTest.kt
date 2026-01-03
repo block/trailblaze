@@ -25,6 +25,14 @@ import xyz.block.trailblaze.llm.TrailblazeLlmModel
  */
 class AndroidStandaloneServerTest : BaseAndroidStandaloneServerTest() {
 
+  // Cache the HTTP client to prevent "unknown client" errors on subsequent calls
+  private val cachedHttpClient by lazy {
+    TrailblazeHttpClientFactory.createInsecureTrustAllCertsHttpClient(
+      timeoutInSeconds = 120,
+      reverseProxyUrl = InstrumentationArgUtil.reverseProxyEndpoint(),
+    )
+  }
+
   override fun handleRunRequest(runYamlRequest: RunYamlRequest) {
     startInTestCoroutineScope {
       AndroidTrailblazeRule(
@@ -44,20 +52,17 @@ class AndroidStandaloneServerTest : BaseAndroidStandaloneServerTest() {
 
   override fun getDynamicLlmClient(trailblazeLlmModel: TrailblazeLlmModel): DynamicLlmClient {
     val openAiApiKey: String? = InstrumentationArgUtil.getInstrumentationArg("OPENAI_API_KEY")
-    val baseClient = TrailblazeHttpClientFactory.createInsecureTrustAllCertsHttpClient(
-      timeoutInSeconds = 120,
-      reverseProxyUrl = InstrumentationArgUtil.reverseProxyEndpoint(),
-    )
+    // Reuse the cached HTTP client to prevent "unknown client" errors
     return DefaultDynamicLlmClient(
       trailblazeLlmModel = trailblazeLlmModel,
       llmClients = mutableMapOf<LLMProvider, LLMClient>(
-        LLMProvider.Ollama to OllamaClient(baseClient = baseClient),
+        LLMProvider.Ollama to OllamaClient(baseClient = cachedHttpClient),
       ).apply {
         openAiApiKey?.let {
           put(
             LLMProvider.OpenAI,
             OpenAILLMClient(
-              baseClient = baseClient,
+              baseClient = cachedHttpClient,
               apiKey = openAiApiKey,
             ),
           )
