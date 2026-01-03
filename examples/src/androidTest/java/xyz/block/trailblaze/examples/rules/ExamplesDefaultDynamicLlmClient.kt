@@ -34,7 +34,7 @@ class ExamplesDefaultDynamicLlmClient(trailblazeLlmModel: TrailblazeLlmModel) :
   ) {
   companion object {
     private val cachedLlmHttpClient = TrailblazeHttpClientFactory.createInsecureTrustAllCertsHttpClient(
-      timeoutInSeconds = 120,
+      timeoutInSeconds = 300,
       reverseProxyUrl = InstrumentationArgUtil.reverseProxyEndpoint(),
     )
   }

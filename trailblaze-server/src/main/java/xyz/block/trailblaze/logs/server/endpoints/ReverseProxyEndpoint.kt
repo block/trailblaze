@@ -40,7 +40,7 @@ object ReverseProxyEndpoint {
     engine {
       config {
         // Set timeouts for LLM requests (2 minutes to match other LLM client configs)
-        val timeoutInSeconds = 120L
+        val timeoutInSeconds = 300L
         writeTimeout(timeoutInSeconds, TimeUnit.SECONDS)
         readTimeout(timeoutInSeconds, TimeUnit.SECONDS)
         connectTimeout(timeoutInSeconds, TimeUnit.SECONDS)
