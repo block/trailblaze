@@ -1,0 +1,84 @@
+name: Build Desktop App
+
+on:
+  # Runs on PRs targeting the default branch
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - '.github/workflows/build-desktop.yml'
+
+  # Runs after merging to the default branch
+  push:
+    branches: [ "main" ]
+
+  # Allows manual triggering from Actions tab
+  workflow_dispatch:
+
+concurrency:
+  group: desktop-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-macos-app:
+    runs-on: macos-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Need full history for git-version.gradle.kts
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+          check-latest: true
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Build Desktop App
+        run: ./gradlew :trailblaze-desktop:createDistributable
+
+      - name: Ad-hoc Sign App
+        run: |
+          APP_PATH="trailblaze-desktop/build/compose/binaries/main/app/Trailblaze.app"
+          echo "Signing app bundle with ad-hoc signature..."
+          codesign --force --deep --sign - "$APP_PATH"
+          
+          # Verify signing
+          codesign --verify --verbose "$APP_PATH"
+          echo "App successfully signed"
+
+      - name: Package .app file
+        id: package-app
+        run: |
+          APP_PATH="trailblaze-desktop/build/compose/binaries/main/app/Trailblaze.app"
+          echo "Found .app at: $APP_PATH"
+          
+          # Get directory size for logging
+          du -sh "$APP_PATH"
+          
+          # Create zip archive preserving the .app bundle structure
+          cd trailblaze-desktop/build/compose/binaries/main/app
+          ZIP_NAME="Trailblaze-macos.zip"
+          zip -r -y "$ZIP_NAME" Trailblaze.app
+          
+          # Move zip to root for easier artifact path
+          mv "$ZIP_NAME" "$GITHUB_WORKSPACE/"
+          echo "zip_path=$GITHUB_WORKSPACE/$ZIP_NAME" >> $GITHUB_OUTPUT
+          echo "Created zip: $ZIP_NAME"
+          ls -lh "$GITHUB_WORKSPACE/$ZIP_NAME"
+
+      - name: Upload App Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: trailblaze-desktop-macos-app
+          path: ${{ steps.package-app.outputs.zip_path }}
+          if-no-files-found: error
+          retention-days: 30

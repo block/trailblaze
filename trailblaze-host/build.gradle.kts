@@ -38,7 +38,9 @@ dependencies {
   implementation(libs.koog.prompt.executor.ollama)
   implementation(libs.koog.agents.tools)
   implementation(libs.mcp.sdk)
-  implementation(libs.playwright)
+
+  // We're not actually leveraging playwright now, so let's keep it out of the app
+  compileOnly(libs.playwright)
 
   testImplementation(project(":trailblaze-tracing"))
   testImplementation(libs.kotlin.test.junit4)
