@@ -32,7 +32,7 @@ curl --verbose http://localhost:11434/api/generate -d '{"model": "'$OLLAMA_MODEL
 
 # Start Trailblaze server in background
 echo "Starting Trailblaze server..."
-./gradlew :trailblaze-desktop:run --args="$(pwd) --headless" --no-daemon > /tmp/trailblaze.log 2>&1 &
+./gradlew :trailblaze-desktop:run --args="$(pwd) --headless" > /tmp/trailblaze.log 2>&1 &
 TRAILBLAZE_PID=$!
 echo "Trailblaze server started with PID: $TRAILBLAZE_PID"
 echo "Waiting for Trailblaze server to be ready on port 8443..."
@@ -56,10 +56,10 @@ echo "========================================="
 
 # Run Android Tests
 echo "Assembling Android Tests..."
-./gradlew :examples:assembleDebugAndroidTest --no-daemon
+./gradlew :examples:assembleDebugAndroidTest
 
 echo "Running Android Tests..."
-./gradlew --info :examples:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class="xyz.block.trailblaze.examples.clock.ClockTest" -Pandroid.testInstrumentationRunnerArguments.trailblaze.reverseProxy="true" --no-daemon || TEST_FAILED=true
+./gradlew --info :examples:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class="xyz.block.trailblaze.examples.clock.ClockTest" -Pandroid.testInstrumentationRunnerArguments.trailblaze.reverseProxy="true" || TEST_FAILED=true
 
 echo "========================================="
 echo "Test execution completed (failed: ${TEST_FAILED:-false})"
