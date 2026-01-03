@@ -2,7 +2,7 @@ package xyz.block.trailblaze.examples.calculator
 
 import org.junit.Rule
 import org.junit.Test
-import xyz.block.trailblaze.examples.ExamplesAndroidTrailblazeRuleOpenAiTrailblazeRule
+import xyz.block.trailblaze.examples.rules.ExamplesAndroidTrailblazeRule
 import xyz.block.trailblaze.exception.TrailblazeException
 
 /**
@@ -11,7 +11,7 @@ import xyz.block.trailblaze.exception.TrailblazeException
 class AndroidCalculatorOnePlusTwoAiTest {
 
   @get:Rule
-  val trailblazeRule = ExamplesAndroidTrailblazeRuleOpenAiTrailblazeRule()
+  val trailblazeRule = ExamplesAndroidTrailblazeRule()
 
   @Test
   fun trailblazeSuccess() {

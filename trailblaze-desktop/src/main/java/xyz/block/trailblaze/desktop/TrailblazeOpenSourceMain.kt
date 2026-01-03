@@ -7,6 +7,7 @@ import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 
 @OptIn(DelicateCoroutinesApi::class, ExperimentalCoroutinesApi::class)
-fun main() {
-  OpenSourceTrailblazeDesktopApp().startTrailblazeDesktopApp()
+fun main(args: Array<String>) {
+  val headless = args.contains("--headless") || args.contains("-h")
+  OpenSourceTrailblazeDesktopApp().startTrailblazeDesktopApp(headless = headless)
 }

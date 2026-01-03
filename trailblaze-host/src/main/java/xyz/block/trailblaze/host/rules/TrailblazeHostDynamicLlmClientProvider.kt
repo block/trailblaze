@@ -21,7 +21,7 @@ class TrailblazeHostDynamicLlmClientProvider(
 ) : DynamicLlmClient {
 
   private val baseClient = TrailblazeHttpClientFactory.createInsecureTrustAllCertsHttpClient(
-    timeoutInSeconds = 120,
+    timeoutInSeconds = 600, // 10 minutes for large vision model requests
   )
 
   private val llmClients = mutableMapOf<LLMProvider, LLMClient>(

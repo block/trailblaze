@@ -20,6 +20,7 @@ import io.ktor.server.routing.route
 import io.ktor.utils.io.toByteArray
 import xyz.block.trailblaze.http.ReverseProxyHeaders
 import xyz.block.trailblaze.report.utils.LogsRepo
+import java.util.concurrent.TimeUnit
 
 /**
  * Registers an endpoint to display LLM conversation as an html chat view.
@@ -36,42 +37,78 @@ object ReverseProxyEndpoint {
       }
       level = LogLevel.NONE
     }
+    engine {
+      config {
+        // Set timeouts for LLM requests (10 minutes for large vision model requests on CI)
+        val timeoutInSeconds = 600L
+        writeTimeout(timeoutInSeconds, TimeUnit.SECONDS)
+        readTimeout(timeoutInSeconds, TimeUnit.SECONDS)
+        connectTimeout(timeoutInSeconds, TimeUnit.SECONDS)
+      }
+    }
   }
 
   fun register(routing: Routing, logsRepo: LogsRepo) = with(routing) {
     route("/reverse-proxy") {
       handle {
-        val callBytes = call.receiveChannel().toByteArray()
-        val httpMethod = call.request.httpMethod
-        val callHeaders = call.request.headers
-        val targetUrl = callHeaders[ReverseProxyHeaders.ORIGINAL_URI]
-          ?: error("No header value for ${ReverseProxyHeaders.ORIGINAL_URI}")
+        try {
+          val httpMethod = call.request.httpMethod
+          val callHeaders = call.request.headers
+          val targetUrl = callHeaders[ReverseProxyHeaders.ORIGINAL_URI]
+            ?: error("No header value for ${ReverseProxyHeaders.ORIGINAL_URI}")
 
-        val proxiedResponse = client.request(targetUrl) {
-          this.method = httpMethod
-          this.headers.appendAll(callHeaders)
-          this.headers.remove(HttpHeaders.Host)
-          this.headers.remove(HttpHeaders.ContentLength)
-          this.headers.remove(ReverseProxyHeaders.ORIGINAL_URI)
-          if (httpMethod != HttpMethod.Get && httpMethod != HttpMethod.Head) {
-            setBody(callBytes)
-          }
-        }
+          println("ReverseProxy: Proxying $httpMethod request to $targetUrl")
 
-        // Copy status, headers, and body to the response
-        proxiedResponse.headers.forEach { key, values ->
-          if (!HttpHeaders.isUnsafe(key) && key != HttpHeaders.ContentLength) {
-            values.forEach { call.response.headers.append(key, it) }
+          // Only read body for methods that typically have request bodies
+          // Reading body on GET/HEAD requests can hang with HTTP/2
+          val callBytes = if (httpMethod != HttpMethod.Get && httpMethod != HttpMethod.Head) {
+            call.receiveChannel().toByteArray()
+          } else {
+            ByteArray(0)
           }
+
+          println("ReverseProxy: Read ${callBytes.size} bytes from incoming request")
+
+          val proxiedResponse = client.request(targetUrl) {
+            this.method = httpMethod
+            this.headers.appendAll(callHeaders)
+            this.headers.remove(HttpHeaders.Host)
+            this.headers.remove(HttpHeaders.ContentLength)
+            this.headers.remove(ReverseProxyHeaders.ORIGINAL_URI)
+            if (httpMethod != HttpMethod.Get && httpMethod != HttpMethod.Head) {
+              setBody(callBytes)
+            }
+          }
+
+          println("ReverseProxy: Received response with status ${proxiedResponse.status}")
+
+          // Copy status, headers, and body to the response
+          // Filter out headers that Ktor will set automatically to avoid duplicates in HTTP/2
+          proxiedResponse.headers.forEach { key, values ->
+            val shouldSkip = HttpHeaders.isUnsafe(key) || 
+                            key.equals(HttpHeaders.ContentLength, ignoreCase = true) ||
+                            key.equals(HttpHeaders.TransferEncoding, ignoreCase = true)
+            if (!shouldSkip) {
+              values.forEach { call.response.headers.append(key, it) }
+            }
+          }
+          val proxiedRequestResponseBytes = proxiedResponse.bodyAsChannel().toByteArray()
+          println("ReverseProxy: Sending ${proxiedRequestResponseBytes.size} bytes back to client")
+          call.respond(
+            ByteArrayContent(
+              proxiedRequestResponseBytes,
+              proxiedResponse.contentType(),
+              proxiedResponse.status,
+            ),
+          )
+        } catch (e: Exception) {
+          println("ReverseProxy ERROR: ${e.message}")
+          e.printStackTrace()
+          call.respond(
+            io.ktor.http.HttpStatusCode.InternalServerError,
+            "Reverse proxy error: ${e.message}"
+          )
         }
-        val proxiedRequestResponseBytes = proxiedResponse.bodyAsChannel().toByteArray()
-        call.respond(
-          ByteArrayContent(
-            proxiedRequestResponseBytes,
-            proxiedResponse.contentType(),
-            proxiedResponse.status,
-          ),
-        )
       }
     }
   }

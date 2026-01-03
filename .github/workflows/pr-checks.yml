@@ -45,6 +45,7 @@ jobs:
 
     steps:
       - name: Enable KVM group perms
+        if: runner.os == 'Linux'
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
@@ -65,9 +66,18 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407
 
-      - name: Create and start emulator and run tests
+      - name: Install Ollama
+        run: |
+          if [[ "$OSTYPE" == "linux"* ]]; then
+            curl -fsSL https://ollama.com/install.sh | sh
+          elif [[ "$OSTYPE" == "darwin"* ]]; then
+            brew install ollama
+          fi
+
+      - name: Create and start emulator and run tests (Linux)
+        if: runner.os == 'Linux'
         uses: reactivecircus/android-emulator-runner@b530d96654c385303d652368551fb075bc2f0b6b
-        id: run-tests
+        id: run-tests-linux
         continue-on-error: true
         with:
           api-level: 34
@@ -76,38 +86,23 @@ jobs:
           disk-size: 6000M
           heap-size: 600M
           profile: Nexus 6
-          script: |
-            echo "========================================="
-            echo "Starting Android Test Execution"
-            echo "Working directory: $(pwd)"
-            echo "========================================="
-            
-            # Run Android Tests
-            echo "Running Android Tests..."
-            ./gradlew --info :examples:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class="xyz.block.trailblaze.examples.clock.ClockTest" -Pandroid.testInstrumentationRunnerArguments.trailblaze.aiEnabled=false || TEST_FAILED=true
-            
-            echo "========================================="
-            echo "Test execution completed (failed: ${TEST_FAILED:-false})"
-            echo "========================================="
-            
-            # Check device status
-            echo "Checking ADB devices..."
-            adb devices -l || echo "Could not list ADB devices"
-            
-            # Check if logs exist on device
-            echo "Checking for logs on device..."
-            adb shell "ls -la /sdcard/Download/trailblaze-logs/ 2>&1" || echo "Could not list device log directory"
-            
-            echo "Pulling logs from device..."
-            mkdir -p "$(pwd)/trailblaze-logs"
-            adb pull /sdcard/Download/trailblaze-logs/. "$(pwd)/trailblaze-logs" && echo "Log pull succeeded" || echo "Failed to pull logs"
-            
-            # Check what was pulled
-            echo "Checking pulled logs..."
-            [ -d "$(pwd)/trailblaze-logs" ] || { echo "WARNING: trailblaze-logs directory does not exist!"; exit 0; }
-            ls -laR "$(pwd)/trailblaze-logs"
-            echo "Total files pulled: $(find "$(pwd)/trailblaze-logs" -type f 2>/dev/null | wc -l)"
-            echo "Emulator script completed"
+          script: ./.github/pr_run_android_tests.sh
+
+      - name: Create and start emulator and run tests (macOS)
+        if: runner.os == 'macOS'
+        uses: reactivecircus/android-emulator-runner@b530d96654c385303d652368551fb075bc2f0b6b
+        id: run-tests-macos
+        continue-on-error: true
+        with:
+          api-level: 34
+          arch: arm64-v8a
+          target: google_apis
+          disable-animations: true
+          disk-size: 6000M
+          heap-size: 600M
+          profile: pixel_6
+          emulator-boot-timeout: 600
+          script: ./.github/pr_run_android_tests.sh
 
       - name: Verify logs were pulled
         if: always()
@@ -204,9 +199,10 @@ jobs:
           path: |
             trailblaze-logs.zip
             trailblaze_report.html
+            logcat.log
 
       - name: Fail if tests failed
-        if: steps.run-tests.outcome == 'failure'
+        if: steps.run-tests-linux.outcome == 'failure' || steps.run-tests-macos.outcome == 'failure'
         run: |
           echo "Tests failed - failing the workflow"
           exit 1
