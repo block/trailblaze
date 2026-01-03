@@ -40,6 +40,12 @@ echo "Trailblaze server started with PID: $TRAILBLAZE_PID"
 echo "✓ Trailblaze server is running!"
 echo "========================================="
 
+# Setup ADB reverse port forwarding for reverse proxy mode
+echo "Setting up ADB reverse port forwarding..."
+adb reverse tcp:8443 tcp:8443
+echo "✓ Port forwarding configured (device localhost:8443 -> host localhost:8443)"
+echo "========================================="
+
 # Start capturing logcat
 echo "Starting logcat capture (filtering out noise)..."
 adb logcat | grep -v "skipping invisible child" > logcat.log &
@@ -83,6 +89,8 @@ if [ -n "$LOGCAT_PID" ]; then
   echo "Stopping logcat capture (PID: $LOGCAT_PID)..."
   kill $LOGCAT_PID 2>/dev/null || echo "Logcat capture already stopped"
 fi
+echo "Removing ADB reverse port forwarding..."
+adb reverse --remove tcp:8443 2>/dev/null || echo "Port forwarding already removed"
 if [ -n "$OLLAMA_PID" ]; then
   echo "Stopping Ollama server (PID: $OLLAMA_PID)..."
   kill $OLLAMA_PID 2>/dev/null || echo "Ollama server already stopped"
