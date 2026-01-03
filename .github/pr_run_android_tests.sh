@@ -31,13 +31,17 @@ echo "Validating direct Ollama $OLLAMA_MODEL model connectivity..."
 curl --verbose http://localhost:11434/api/generate -d '{"model": "'$OLLAMA_MODEL'", "prompt": "Test", "stream": false}' 2>&1 | head -30
 
 # Start Trailblaze server in background
+echo "Building Trailblaze server..."
+./gradlew :trailblaze-desktop:jar
+
 echo "Starting Trailblaze server..."
 ./gradlew :trailblaze-desktop:run --args="$(pwd) --headless" > /tmp/trailblaze.log 2>&1 &
 TRAILBLAZE_PID=$!
 echo "Trailblaze server started with PID: $TRAILBLAZE_PID"
-echo "Waiting for Trailblaze server to be ready on port 8443..."
-for attempt in 1 2 3 4 5 6 7 8 9 10; do 
-  nc -z localhost 8443 > /dev/null 2>&1 && break || (echo "Attempt $attempt/10..." && sleep 3)
+echo "Waiting for Trailblaze server to be ready on port 8443 (this may take up to 2 minutes)..."
+sleep 10
+for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do 
+  nc -z localhost 8443 > /dev/null 2>&1 && break || (echo "Attempt $attempt/20..." && sleep 5)
 done
 nc -z localhost 8443 > /dev/null 2>&1 || (echo "ERROR: Trailblaze server failed to start on port 8443" && echo "=== Trailblaze logs ===" && cat /tmp/trailblaze.log && exit 1)
 echo "✓ Trailblaze server is running on port 8443!"
