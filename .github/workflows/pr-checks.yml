@@ -179,6 +179,7 @@ jobs:
           path: |
             trailblaze-logs.zip
             trailblaze_report.html
+            logcat.log
 
       - name: Fail if tests failed
         if: steps.run-tests.outcome == 'failure'

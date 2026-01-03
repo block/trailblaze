@@ -40,6 +40,13 @@ echo "Trailblaze server started with PID: $TRAILBLAZE_PID"
 echo "✓ Trailblaze server is running!"
 echo "========================================="
 
+# Start capturing logcat
+echo "Starting logcat capture (filtering out noise)..."
+adb logcat | grep -v "skipping invisible child" > logcat.log &
+LOGCAT_PID=$!
+echo "Logcat capture started with PID: $LOGCAT_PID"
+echo "========================================="
+
 # Run Android Tests
 echo "Assembling Android Tests..."
 ./gradlew :examples:assembleDebugAndroidTest --no-daemon
@@ -72,6 +79,10 @@ echo "Total files pulled: $(find "$(pwd)/trailblaze-logs" -type f 2>/dev/null | 
 # Cleanup: Kill background servers
 echo "========================================="
 echo "Cleaning up background servers..."
+if [ -n "$LOGCAT_PID" ]; then
+  echo "Stopping logcat capture (PID: $LOGCAT_PID)..."
+  kill $LOGCAT_PID 2>/dev/null || echo "Logcat capture already stopped"
+fi
 if [ -n "$OLLAMA_PID" ]; then
   echo "Stopping Ollama server (PID: $OLLAMA_PID)..."
   kill $OLLAMA_PID 2>/dev/null || echo "Ollama server already stopped"
@@ -82,4 +93,5 @@ if [ -n "$TRAILBLAZE_PID" ]; then
 fi
 echo "✓ Cleanup complete"
 echo "========================================="
+echo "Logcat saved to: $(pwd)/logcat.log"
 echo "Emulator script completed"
