@@ -1,0 +1,69 @@
+name: Build Desktop App
+
+on:
+  # Runs on PRs targeting the default branch
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - '.github/workflows/build-desktop.yml'
+
+  # Runs after merging to the default branch
+  push:
+    branches: [ "main" ]
+
+  # Allows manual triggering from Actions tab
+  workflow_dispatch:
+
+concurrency:
+  group: desktop-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-macos-dmg:
+    runs-on: macos-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Need full history for git-version.gradle.kts
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+          check-latest: true
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Build Desktop DMG
+        run: ./gradlew :trailblaze-desktop:packageDmg
+
+      - name: Find DMG file
+        id: find-dmg
+        run: |
+          DMG_PATH=$(find trailblaze-desktop/build/compose/binaries/main/dmg -name "*.dmg" | head -n 1)
+          echo "dmg_path=$DMG_PATH" >> $GITHUB_OUTPUT
+          echo "Found DMG at: $DMG_PATH"
+          
+          # Get DMG filename for artifact naming
+          DMG_NAME=$(basename "$DMG_PATH")
+          echo "dmg_name=$DMG_NAME" >> $GITHUB_OUTPUT
+          echo "DMG filename: $DMG_NAME"
+          
+          # Get file size for logging
+          ls -lh "$DMG_PATH"
+
+      - name: Upload DMG Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: trailblaze-desktop-macos-dmg
+          path: ${{ steps.find-dmg.outputs.dmg_path }}
+          if-no-files-found: error
+          retention-days: 30
