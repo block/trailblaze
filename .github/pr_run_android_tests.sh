@@ -34,16 +34,18 @@ echo "========================================="
 
 # Start Trailblaze server in background
 echo "Starting Trailblaze server..."
-./trailblaze --headless > /tmp/trailblaze.log 2>&1 &
+./gradlew :trailblaze-desktop:run --args="$(pwd) --headless" --no-daemon > /tmp/trailblaze.log 2>&1 &
 TRAILBLAZE_PID=$!
 echo "Trailblaze server started with PID: $TRAILBLAZE_PID"
-sleep 3
 echo "✓ Trailblaze server is running!"
 echo "========================================="
 
 # Run Android Tests
+echo "Assembling Android Tests..."
+./gradlew :examples:assembleDebugAndroidTest --no-daemon
+
 echo "Running Android Tests..."
-./gradlew --info :examples:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class="xyz.block.trailblaze.examples.clock.ClockTest" || TEST_FAILED=true
+./gradlew --info :examples:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class="xyz.block.trailblaze.examples.clock.ClockTest" -Pandroid.testInstrumentationRunnerArguments.trailblaze.reverseProxy="true" --no-daemon || TEST_FAILED=true
 
 echo "========================================="
 echo "Test execution completed (failed: ${TEST_FAILED:-false})"
