@@ -27,24 +27,25 @@ echo "Downloading $OLLAMA_MODEL model..."
 ollama pull $OLLAMA_MODEL
 echo "✓ Model downloaded"
 
-echo "Validating $OLLAMA_MODEL model connectivity..."
+echo "Validating direct Ollama $OLLAMA_MODEL model connectivity..."
 curl --verbose http://localhost:11434/api/generate -d '{"model": "'$OLLAMA_MODEL'", "prompt": "Test", "stream": false}' 2>&1 | head -30
-echo "✓ Ollama LLM ready at http://localhost:11434"
-echo "========================================="
 
 # Start Trailblaze server in background
 echo "Starting Trailblaze server..."
 ./gradlew :trailblaze-desktop:run --args="$(pwd) --headless" --no-daemon > /tmp/trailblaze.log 2>&1 &
 TRAILBLAZE_PID=$!
 echo "Trailblaze server started with PID: $TRAILBLAZE_PID"
-echo "✓ Trailblaze server is running!"
+echo "Waiting for Trailblaze server to be ready on port 8443..."
+for attempt in 1 2 3 4 5 6 7 8 9 10; do 
+  nc -z localhost 8443 > /dev/null 2>&1 && break || (echo "Attempt $attempt/10..." && sleep 3)
+done
+nc -z localhost 8443 > /dev/null 2>&1 || (echo "ERROR: Trailblaze server failed to start on port 8443" && echo "=== Trailblaze logs ===" && cat /tmp/trailblaze.log && exit 1)
+echo "✓ Trailblaze server is running on port 8443!"
 echo "========================================="
 
-# Setup ADB reverse port forwarding for reverse proxy mode
-echo "Setting up ADB reverse port forwarding..."
-adb reverse tcp:8443 tcp:8443
-echo "✓ Port forwarding configured (device localhost:8443 -> host localhost:8443)"
-echo "========================================="
+# Validate reverse proxy is working
+echo "Validating reverse proxy"
+curl --verbose https://localhost:8443/reverse-proxy --insecure -d '{"model": "'$OLLAMA_MODEL'", "prompt": "Test", "stream": false}' -H "X-Original-URI: http://localhost:11434/api/generate" -H "Content-Type: application/json"
 
 # Start capturing logcat
 echo "Starting logcat capture (filtering out noise)..."
@@ -89,8 +90,6 @@ if [ -n "$LOGCAT_PID" ]; then
   echo "Stopping logcat capture (PID: $LOGCAT_PID)..."
   kill $LOGCAT_PID 2>/dev/null || echo "Logcat capture already stopped"
 fi
-echo "Removing ADB reverse port forwarding..."
-adb reverse --remove tcp:8443 2>/dev/null || echo "Port forwarding already removed"
 if [ -n "$OLLAMA_PID" ]; then
   echo "Stopping Ollama server (PID: $OLLAMA_PID)..."
   kill $OLLAMA_PID 2>/dev/null || echo "Ollama server already stopped"
