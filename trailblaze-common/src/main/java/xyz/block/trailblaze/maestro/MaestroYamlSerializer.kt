@@ -25,6 +25,7 @@ import maestro.orchestra.LaunchAppCommand
 import maestro.orchestra.OpenLinkCommand
 import maestro.orchestra.PasteTextCommand
 import maestro.orchestra.PressKeyCommand
+import maestro.orchestra.RunFlowCommand
 import maestro.orchestra.RunScriptCommand
 import maestro.orchestra.ScrollCommand
 import maestro.orchestra.ScrollUntilVisibleCommand
@@ -516,6 +517,11 @@ object MaestroYamlSerializer {
 
     is DefineVariablesCommand -> {
       println("DefineVariablesCommand is not handled currently")
+      null
+    }
+
+    is RunFlowCommand -> {
+      println("RunFlowCommand is not handled currently - skipping flow reference in report")
       null
     }
 
