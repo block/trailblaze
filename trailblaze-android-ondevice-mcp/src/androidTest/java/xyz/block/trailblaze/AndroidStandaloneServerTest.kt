@@ -25,6 +25,7 @@ import xyz.block.trailblaze.llm.TrailblazeLlmModel
  */
 class AndroidStandaloneServerTest : BaseAndroidStandaloneServerTest() {
 
+
   // Cache the HTTP client to prevent "unknown client" errors on subsequent calls
   private val cachedHttpClient by lazy {
     TrailblazeHttpClientFactory.createInsecureTrustAllCertsHttpClient(
@@ -34,14 +35,16 @@ class AndroidStandaloneServerTest : BaseAndroidStandaloneServerTest() {
   }
 
   override fun handleRunRequest(runYamlRequest: RunYamlRequest) {
+    this.trailblazeDeviceId = runYamlRequest.trailblazeDeviceId
+    val androidTrailblazeRule = AndroidTrailblazeRule(
+      trailblazeLlmModel = runYamlRequest.trailblazeLlmModel,
+      llmClient = getDynamicLlmClient(runYamlRequest.trailblazeLlmModel).createLlmClient(),
+      config = runYamlRequest.config,
+      trailblazeDeviceId = this.trailblazeDeviceId,
+      trailblazeLoggingRule = trailblazeLoggingRule
+    )
     startInTestCoroutineScope {
-      AndroidTrailblazeRule(
-        trailblazeLlmModel = runYamlRequest.trailblazeLlmModel,
-        llmClient = getDynamicLlmClient(runYamlRequest.trailblazeLlmModel).createLlmClient(),
-        config = runYamlRequest.config,
-        trailblazeDeviceId = runYamlRequest.trailblazeDeviceId,
-        trailblazeLoggingRule = trailblazeLoggingRule,
-      ).runSuspend(
+      androidTrailblazeRule.runSuspend(
         testYaml = runYamlRequest.yaml,
         useRecordedSteps = runYamlRequest.useRecordedSteps,
         trailFilePath = runYamlRequest.trailFilePath,
@@ -77,6 +80,8 @@ class AndroidStandaloneServerTest : BaseAndroidStandaloneServerTest() {
   @Test
   fun startServer() {
     val onDeviceRpcServer = OnDeviceRpcServer(
+      trailblazeLogger = trailblazeLoggingRule.trailblazeLogger,
+      trailblazeDeviceClassifiersProvider = { getDeviceClassifiers() },
       runTrailblazeYaml = { runYamlRequest: RunYamlRequest ->
         handleRunRequest(runYamlRequest)
       },

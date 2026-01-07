@@ -22,8 +22,7 @@ object TrailblazeHostYamlRunner {
     deviceManager: TrailblazeDeviceManager,
   ): SessionId? {
 
-    val device = runOnHostParams.device
-    val trailblazeDeviceId = device.trailblazeDeviceId
+    val trailblazeDeviceId = runOnHostParams.runYamlRequest.trailblazeDeviceId
     val onProgressMessage = runOnHostParams.onProgressMessage
 
     if (runOnHostParams.trailblazeDevicePlatform == TrailblazeDevicePlatform.ANDROID) {
@@ -34,7 +33,7 @@ object TrailblazeHostYamlRunner {
       )
     }
 
-    onProgressMessage("Initializing ${device.trailblazeDriverType} test runner...")
+    onProgressMessage("Initializing $trailblazeDeviceId test runner...")
 
     val runYamlRequest = runOnHostParams.runYamlRequest
     val hostTbRunner = object : BaseHostTrailblazeTest(
@@ -47,6 +46,7 @@ object TrailblazeHostYamlRunner {
       trailblazeLlmModel = runYamlRequest.trailblazeLlmModel,
       config = runYamlRequest.config,
       appTarget = runOnHostParams.targetTestApp,
+      trailblazeDeviceId = trailblazeDeviceId,
     ) {
       override fun ensureTargetAppIsStopped() {
         val possibleAppIds = runOnHostParams.targetTestApp
@@ -59,17 +59,13 @@ object TrailblazeHostYamlRunner {
       }
     }
 
-    // Get the logger from the test's logging rule
-    val trailblazeLogger = hostTbRunner.loggingRule.trailblazeLogger
-
     // Store the test instance for forceful shutdown on cancellation
     deviceManager.setActiveDriverForDevice(trailblazeDeviceId, hostTbRunner.hostRunner.loggingDriver)
 
-    // Launch the test in a coroutine - store Job IMMEDIATELY for instant cancellation
-    val testName = runYamlRequest.testName
-
+    // Get the logger from the test's logging rule
+    val trailblazeLogger = hostTbRunner.loggingRule.trailblazeLogger
     // REQUIRED: Initializes the Session ID based on the testName, this triggers lifecycle calls
-    trailblazeLogger.startSession(testName)
+    trailblazeLogger.resetForNewSession(runYamlRequest.testName)
 
     val overrideSessionId = runYamlRequest.config.overrideSessionId
     if (overrideSessionId != null) {
@@ -77,7 +73,7 @@ object TrailblazeHostYamlRunner {
       trailblazeLogger.overrideSessionId(overrideSessionId)
     }
 
-    onProgressMessage("Connecting to ${device.platform} device...")
+    onProgressMessage("Connecting to $trailblazeDeviceId device...")
 
     return try {
       onProgressMessage("Executing YAML test...")

@@ -6,11 +6,11 @@ import kotlinx.datetime.Instant
 import maestro.orchestra.Command
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeAgent
+import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
-import xyz.block.trailblaze.logs.client.TrailblazeLoggerInstance
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.logs.model.TraceId.Companion.TraceOrigin
 import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
@@ -29,7 +29,8 @@ import xyz.block.trailblaze.utils.ElementComparator
  * This is abstract because there can be both on-device and host implementations of this agent.
  */
 abstract class MaestroTrailblazeAgent(
-  val trailblazeLogger: TrailblazeLogger = TrailblazeLoggerInstance,
+  val trailblazeLogger: TrailblazeLogger,
+  val trailblazeDeviceInfoProvider: () -> TrailblazeDeviceInfo,
 ) : TrailblazeAgent {
 
   protected abstract suspend fun executeMaestroCommands(
@@ -83,6 +84,7 @@ abstract class MaestroTrailblazeAgent(
       screenState = screenState,
       traceId = traceId,
       trailblazeAgent = this,
+      trailblazeDeviceInfo = trailblazeDeviceInfoProvider(),
     )
 
     val toolsExecuted = mutableListOf<TrailblazeTool>()

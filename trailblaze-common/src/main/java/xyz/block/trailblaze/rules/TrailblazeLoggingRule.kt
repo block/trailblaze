@@ -9,7 +9,7 @@ import xyz.block.trailblaze.http.TrailblazeHttpClientFactory
 import xyz.block.trailblaze.logs.client.ScreenStateLogger
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogServerClient
-import xyz.block.trailblaze.logs.client.TrailblazeLoggerInstance
+import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeScreenStateLog
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.tracing.TrailblazeTracer
@@ -29,7 +29,7 @@ abstract class TrailblazeLoggingRule(
   /**
    * Logger instance for this test run
    */
-  val trailblazeLogger = TrailblazeLoggerInstance
+  val trailblazeLogger: TrailblazeLogger = TrailblazeLogger.create()
 
   val trailblazeLogServerClient by lazy {
     TrailblazeLogServerClient(
@@ -65,7 +65,9 @@ abstract class TrailblazeLoggingRule(
 
   override fun ruleCreation(description: Description) {
     this.description = description
-    trailblazeLogger.startSession("${description.testClass.canonicalName}_${description.methodName}")
+    trailblazeLogger.resetForNewSession(
+      "${description.testClass.canonicalName}_${description.methodName}"
+    )
   }
 
   override fun beforeTestExecution(description: Description) {

@@ -4,7 +4,7 @@ import io.ktor.client.request.get
 import kotlinx.coroutines.delay
 import kotlinx.serialization.SerializationException
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
-import xyz.block.trailblaze.devices.TrailblazeDevicePort.getDeviceSpecificPort
+import xyz.block.trailblaze.devices.TrailblazeDevicePort.getTrailblazeOnDeviceSpecificPort
 import xyz.block.trailblaze.http.TrailblazeHttpClientFactory
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcRequest.Companion.toRpcPath
@@ -22,7 +22,7 @@ class OnDeviceRpcClient(
 ) {
 
   @PublishedApi
-  internal val baseUrl = "http://localhost:${trailblazeDeviceId.getDeviceSpecificPort()}"
+  internal val baseUrl = "http://localhost:${trailblazeDeviceId.getTrailblazeOnDeviceSpecificPort()}"
 
   @PublishedApi
   internal val httpRequestUtils: HttpRequestUtils = HttpRequestUtils(

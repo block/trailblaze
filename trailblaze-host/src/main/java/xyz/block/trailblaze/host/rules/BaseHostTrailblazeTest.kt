@@ -13,6 +13,7 @@ import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.host.HostMaestroTrailblazeAgent
 import xyz.block.trailblaze.host.MaestroHostRunnerImpl
+import xyz.block.trailblaze.host.devices.TrailblazeDeviceService
 import xyz.block.trailblaze.host.devices.TrailblazeHostDeviceClassifier
 import xyz.block.trailblaze.host.rules.TrailblazeHostLlmConfig.DEFAULT_TRAILBLAZE_LLM_MODEL
 import xyz.block.trailblaze.http.DynamicLlmClient
@@ -47,11 +48,14 @@ abstract class BaseHostTrailblazeTest(
   customToolClasses: Set<KClass<out TrailblazeTool>> = setOf(),
   maxRetries: Int = 0,
   appTarget: TrailblazeHostAppTarget? = null,
+  protected val trailblazeDeviceId: TrailblazeDeviceId = TrailblazeDeviceService.listConnectedTrailblazeDevices()
+    .firstOrNull { it.trailblazeDevicePlatform == trailblazeDriverType.platform }
+    ?: error("No connected ${trailblazeDriverType.platform} device found")
 ) {
 
   val hostRunner by lazy {
     MaestroHostRunnerImpl(
-      requestedPlatform = trailblazeDriverType.platform,
+      trailblazeDeviceId = trailblazeDeviceId,
       setOfMarkEnabled = config.setOfMarkEnabled,
       trailblazeLogger = loggingRule.trailblazeLogger,
       appTarget = appTarget,
@@ -73,6 +77,7 @@ abstract class BaseHostTrailblazeTest(
   val trailblazeDeviceInfo: TrailblazeDeviceInfo by lazy {
     val initialMaestroDeviceInfo = hostRunner.connectedDevice.initialMaestroDeviceInfo
     TrailblazeDeviceInfo(
+      trailblazeDeviceId = trailblazeDeviceId,
       trailblazeDriverType = trailblazeDriverType,
       widthPixels = initialMaestroDeviceInfo.widthPixels,
       heightPixels = initialMaestroDeviceInfo.heightPixels,
@@ -81,7 +86,9 @@ abstract class BaseHostTrailblazeTest(
   }
 
   val loggingRule: TrailblazeLoggingRule = HostTrailblazeLoggingRule(
-    trailblazeDeviceInfoProvider = { trailblazeDeviceInfo },
+    trailblazeDeviceInfoProvider = {
+      trailblazeDeviceInfo
+    },
   )
 
   /**
@@ -109,6 +116,7 @@ abstract class BaseHostTrailblazeTest(
     HostMaestroTrailblazeAgent(
       maestroHostRunner = hostRunner,
       trailblazeLogger = loggingRule.trailblazeLogger,
+      trailblazeDeviceInfoProvider = loggingRule.trailblazeDeviceInfoProvider,
     )
   }
 
@@ -195,7 +203,7 @@ abstract class BaseHostTrailblazeTest(
    */
   suspend fun runTrailblazeYamlSuspend(
     yaml: String,
-    trailblazeDeviceId: TrailblazeDeviceId?,
+    trailblazeDeviceId: TrailblazeDeviceId,
     trailFilePath: String?,
     forceStopApp: Boolean = true,
     useRecordedSteps: Boolean = true,
@@ -232,7 +240,7 @@ abstract class BaseHostTrailblazeTest(
    */
   fun runTrailblazeYaml(
     yaml: String,
-    trailblazeDeviceId: TrailblazeDeviceId?,
+    trailblazeDeviceId: TrailblazeDeviceId,
     trailFilePath: String?,
     sendSessionStartLog: Boolean,
     forceStopApp: Boolean = true,
@@ -269,7 +277,7 @@ abstract class BaseHostTrailblazeTest(
       useRecordedSteps = useRecordedSteps,
       trailFilePath = computedResourcePath,
       sendSessionStartLog = true,
-      trailblazeDeviceId = null,
+      trailblazeDeviceId = trailblazeDeviceId,
     )
   }
 }

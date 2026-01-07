@@ -460,42 +460,42 @@ fun YamlTabComposable(
             )
           }
 
-          coroutineScope.launch {
-            isRunning = true
-            progressMessages = emptyList()
-            connectionStatus = null
+          isRunning = true
+          progressMessages = emptyList()
+          connectionStatus = null
 
-            val onProgressMessage: (String) -> Unit = { message ->
-              progressMessages = progressMessages + message
-            }
+          val onProgressMessage: (String) -> Unit = { message ->
+            progressMessages = progressMessages + message
+          }
 
-            val setOfMarkEnabledConfig = serverState.appConfig.setOfMarkEnabled
-            onProgressMessage(
-              "Set of Mark: ${if (setOfMarkEnabledConfig) "ENABLED" else "DISABLED"}"
+          val setOfMarkEnabledConfig = serverState.appConfig.setOfMarkEnabled
+          onProgressMessage(
+            "Set of Mark: ${if (setOfMarkEnabledConfig) "ENABLED" else "DISABLED"}"
+          )
+
+          val onConnectionStatus: (DeviceConnectionStatus) -> Unit = { status ->
+            connectionStatus = status
+          }
+
+          val targetTestApp = deviceManager.getCurrentSelectedTargetApp()
+          // Run on each selected device
+          selectedDevices.forEach { device ->
+            val runYamlRequest = RunYamlRequest(
+              testName = "Yaml",
+              yaml = yamlContent,
+              trailblazeLlmModel = currentTrailblazeLlmModel,
+              useRecordedSteps = true,
+              targetAppName = serverState.appConfig.selectedTargetAppName,
+              config = TrailblazeConfig(
+                setOfMarkEnabled = setOfMarkEnabledConfig,
+                aiFallback = serverState.appConfig.aiFallbackEnabled,
+                overrideSessionId = null,
+              ),
+              trailFilePath = null,
+              trailblazeDeviceId = device.trailblazeDeviceId,
             )
 
-            val onConnectionStatus: (DeviceConnectionStatus) -> Unit = { status ->
-              connectionStatus = status
-            }
-
-            val targetTestApp = deviceManager.getCurrentSelectedTargetApp()
-            // Run on each selected device
-            selectedDevices.forEach { device ->
-              val runYamlRequest = RunYamlRequest(
-                testName = "Yaml",
-                yaml = yamlContent,
-                trailblazeLlmModel = currentTrailblazeLlmModel,
-                useRecordedSteps = true,
-                targetAppName = serverState.appConfig.selectedTargetAppName,
-                config = TrailblazeConfig(
-                  setOfMarkEnabled = setOfMarkEnabledConfig,
-                  aiFallback = serverState.appConfig.aiFallbackEnabled,
-                  overrideSessionId = null,
-                ),
-                trailFilePath = null,
-                trailblazeDeviceId = device.trailblazeDeviceId,
-              )
-
+            coroutineScope.launch {
               try {
                 yamlRunner(
                   DesktopAppRunYamlParams(

@@ -1,7 +1,21 @@
 package xyz.block.trailblaze.ui
 
-import kotlinx.coroutines.*
-import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.mapNotNull
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import maestro.Driver
 import maestro.device.Device
 import maestro.device.DeviceService
@@ -16,7 +30,7 @@ import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.logs.client.TrailblazeLog
-import xyz.block.trailblaze.logs.client.TrailblazeLoggerInstance
+import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.model.DesktopAppRunYamlParams
@@ -169,7 +183,7 @@ class TrailblazeDeviceManager(
   ): DeviceSessionResolution {
     val existingSessionId = if (forceNewSession) null else getCurrentSessionIdForDevice(trailblazeDeviceId)
     val isNewSession = existingSessionId == null
-    val sessionId = existingSessionId ?: TrailblazeLoggerInstance.generateSessionId(sessionIdPrefix)
+    val sessionId = existingSessionId ?: TrailblazeLogger.generateSessionId(sessionIdPrefix)
 
     // Track the session ID immediately so subsequent calls can find it
     if (isNewSession) {
@@ -433,7 +447,7 @@ class TrailblazeDeviceManager(
   ) {
     // Only clear if this is the current session for the device
     if (_activeDeviceSessionsFlow.value[trailblazeDeviceId] == endedSessionId) {
-      _activeDeviceSessionsFlow.value = _activeDeviceSessionsFlow.value - trailblazeDeviceId
+      _activeDeviceSessionsFlow.value -= trailblazeDeviceId
     }
   }
 

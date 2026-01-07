@@ -425,7 +425,10 @@ ID).
 
 ### Logging
 
-- Use `TrailblazeLogger` for structured logging
+- Each logger instance maintains its own state (session ID, fallback tracking, end log status). Create a new logger for each test.
+- Use `TrailblazeLoggerFactory.create()` to instantiate logger instances
+- Each test execution should have its own logger instance for proper isolation
+- Pass logger through dependency chain (Rule → Runner → Agent → Driver)
 - Include `traceId` for correlation across tool calls
 - Log tool execution start, completion, and errors
 

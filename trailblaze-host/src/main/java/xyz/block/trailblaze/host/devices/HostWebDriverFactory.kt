@@ -12,6 +12,7 @@ class HostWebDriverFactory {
     return TrailblazeConnectedDevice(
       maestroDriver = playwrightDriver,
       trailblazeDriverType = TrailblazeDriverType.WEB_PLAYWRIGHT_HOST,
+      instanceId = "web-playwright",
     )
   }
 

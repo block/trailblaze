@@ -23,19 +23,22 @@ import xyz.block.trailblaze.logs.model.TrailblazeLlmMessage
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeToolDescriptor
 import xyz.block.trailblaze.yaml.TrailConfig
 import java.text.SimpleDateFormat
-import java.util.*
+import java.util.Date
+import java.util.Locale
+import kotlin.random.Random
 
 /**
  * Central logging facility for Trailblaze operations.
  * Handles session management, screenshot logging, and LLM request/response tracking.
  * Each instance is scoped to a single test run/session.
+ *
+ * Use [TrailblazeLogger.create] to create a new instance
  */
-abstract class TrailblazeLogger {
+class TrailblazeLogger private constructor() {
 
-  private val maxSessionIdLength = 100
-  private val defaultSessionPrefix = "Trailblaze"
-
-  private var logListener: (TrailblazeLog) -> Unit = { }
+  private var logListener: (TrailblazeLog) -> Unit = {
+    error("NO LOG LISTENER SET. Would have logged: $it")
+  }
 
   private var screenStateLogger: ScreenStateLogger = DebugScreenStateLogger
 
@@ -50,7 +53,7 @@ abstract class TrailblazeLogger {
   private var sessionEndLogSent: Boolean = false
 
   /**
-   * Sets the global log listener for capturing TrailblazeLog events.
+   * Sets the log listener for capturing TrailblazeLog events.
    */
   fun setLogListener(logListener: (TrailblazeLog) -> Unit) {
     this.logListener = logListener
@@ -151,12 +154,12 @@ abstract class TrailblazeLogger {
       .map { it.toTrailblazeToolDescriptor() }
       .sortedBy { it.name }
     val endTime = Clock.System.now()
-    
+
     // Calculate usage and cost with token breakdown
     val usage = response.last().metaInfo
     val inputTokens = usage.inputTokensCount?.toLong() ?: 0L
     val outputTokens = usage.outputTokensCount?.toLong() ?: 0L
-    
+
     val tokenBreakdown = if (inputTokens > 0) {
       LlmTokenBreakdownEstimator.estimateBreakdown(
         messages = koogLlmRequestMessages,
@@ -166,7 +169,7 @@ abstract class TrailblazeLogger {
     } else {
       null
     }
-    
+
     val usageAndCost = LlmRequestUsageAndCost(
       trailblazeLlmModel = trailblazeLlmModel,
       inputTokens = inputTokens,
@@ -175,7 +178,7 @@ abstract class TrailblazeLogger {
       completionCost = outputTokens * trailblazeLlmModel.outputCostPerOneMillionTokens / 1_000_000.0,
       inputTokenBreakdown = tokenBreakdown,
     )
-    
+
     log(
       TrailblazeLog.TrailblazeLlmRequestLog(
         agentTaskStatus = stepStatus.currentStatus.value,
@@ -214,21 +217,68 @@ abstract class TrailblazeLogger {
     )
   }
 
-  @Suppress("SimpleDateFormat")
-  private val dateTimeFormat = SimpleDateFormat("yyyy_MM_dd_HH_mm_ss", Locale.US)
-
-  fun generateSessionId(seed: String): SessionId = SessionId("${dateTimeFormat.format(Date())}_$seed")
-
   private val sessionIdLock = Any()
-  private var sessionId: SessionId = generateSessionId(defaultSessionPrefix)
+  private var sessionId: SessionId = generateSessionId(DEFAULT_SESSION_PREFIX)
   private var sessionStartTime: Instant = Clock.System.now()
+
+  companion object {
+
+    private const val MAX_SESSION_ID_LENGTH = 100
+
+    private const val DEFAULT_SESSION_PREFIX = "Trailblaze"
+
+    @Suppress("SimpleDateFormat")
+    private val dateTimeFormat = SimpleDateFormat("yyyy_MM_dd_HH_mm_ss", Locale.US)
+
+    /**
+     * Used to generate unique suffix to session ids.
+     * Ensures uniqueness when multiple tests are started at the same time
+     */
+    private val random = Random(0)
+
+    /**
+     * Use this to generate a session ID with a standardized datestamp prefix that can be sorted alphabetically
+     */
+    fun generateSessionId(seed: String): SessionId {
+      // Generate a random number in case there are multiple sessions started with the same name at the same moment
+      val randomNumber = random.nextInt(0, 9999)
+      return SessionId(
+        "${dateTimeFormat.format(Date())}_${seed}_${randomNumber}"
+      )
+    }
+
+    /**
+     * Truncates and sanitizes session ID to ensure it's filesystem-safe.
+     */
+    private fun truncateSessionId(sessionId: String): SessionId = SessionId(
+      sessionId.take(minOf(sessionId.length, MAX_SESSION_ID_LENGTH))
+        .replace(Regex("[^a-zA-Z0-9]"), "_")
+        .lowercase()
+    )
+
+    /**
+     * Creates a new TrailblazeLogger instance.
+     *
+     * @param sessionName Optional initial session name
+     * @param logListener Optional log listener to set up immediately
+     * @param screenStateLogger Optional screen state logger
+     * @return A new TrailblazeLogger instance
+     */
+    fun create(
+      sessionName: String? = null,
+    ): TrailblazeLogger {
+      return TrailblazeLogger().apply {
+        resetForNewSession(sessionName ?: DEFAULT_SESSION_PREFIX)
+      }
+    }
+  }
 
   /**
    * Starts a new session with the given name.
    * @param sessionName The name to use for the session
    * @return The generated session ID
    */
-  fun startSession(sessionName: String): SessionId {
+  fun resetForNewSession(sessionName: String): SessionId {
     resetFallbackFlag()
     return overrideSessionId(
       sessionIdOverride = generateSessionId(sessionName),
@@ -241,15 +291,6 @@ abstract class TrailblazeLogger {
   fun getCurrentSessionId(): SessionId = synchronized(sessionIdLock) {
     return this.sessionId
   }
-
-  /**
-   * Truncates and sanitizes session ID to ensure it's filesystem-safe.
-   */
-  private fun truncateSessionId(sessionId: String): SessionId = SessionId(
-    sessionId.take(minOf(sessionId.length, maxSessionIdLength))
-      .replace(Regex("[^a-zA-Z0-9]"), "_")
-      .lowercase()
-  )
 
   /**
    * Overrides the current session ID with a custom value.
@@ -275,7 +316,7 @@ abstract class TrailblazeLogger {
     methodName: String,
     hasRecordedSteps: Boolean,
     trailblazeDeviceInfo: TrailblazeDeviceInfo,
-    trailblazeDeviceId: TrailblazeDeviceId?,
+    trailblazeDeviceId: TrailblazeDeviceId,
     rawYaml: String,
   ) {
     log(
@@ -448,14 +489,4 @@ abstract class TrailblazeLogger {
   }
 }
 
-/**
- * Central location for logging system.
- * using this instance will only allow one run simultaneously
- */
-data object TrailblazeLoggerInstance : TrailblazeLogger()
 
-/**
- * Implementation of the TrailblazeLogger class.
- * Using this class since it won't have knowledge of other runs will allow for running simultaneous tests.
- */
-class TrailblazeLoggerImpl : TrailblazeLogger()

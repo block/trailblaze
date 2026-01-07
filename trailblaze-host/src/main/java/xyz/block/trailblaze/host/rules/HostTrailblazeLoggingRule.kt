@@ -3,6 +3,7 @@ package xyz.block.trailblaze.host.rules
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeScreenStateLog
+import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.rules.TrailblazeLoggingRule
 
@@ -14,13 +15,13 @@ class HostTrailblazeLoggingRule(
   logsBaseUrl: String = "https://localhost:8443",
 ) : TrailblazeLoggingRule(
   logsBaseUrl = logsBaseUrl,
-  writeLogToDisk = { currentTestName: xyz.block.trailblaze.logs.model.SessionId, log: TrailblazeLog ->
+  writeLogToDisk = { sessionId: SessionId, log: TrailblazeLog ->
     logsRepo.saveLogToDisk(log)
   },
   writeScreenshotToDisk = { screenshot: TrailblazeScreenStateLog ->
     logsRepo.saveScreenshotToDisk(screenshot)
   },
-  writeTraceToDisk = { sessionId: xyz.block.trailblaze.logs.model.SessionId, json: String ->
+  writeTraceToDisk = { sessionId: SessionId, json: String ->
     val sessionDir = logsRepo.getSessionDir(sessionId)
     File(sessionDir, "trace.json").writeText(json)
   },

@@ -5,6 +5,7 @@ import kotlinx.serialization.Serializable
 import maestro.ScrollDirection
 import maestro.orchestra.ElementSelector
 import maestro.orchestra.ScrollUntilVisibleCommand
+import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
@@ -39,11 +40,8 @@ class ScrollUntilTextIsVisibleTrailblazeTool(
 
   override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult {
     val memory = toolExecutionContext.trailblazeAgent.memory
-
-    /** This detection is fragile - Ticket (TBZ-285) */
-    val isOnDeviceAndroidDriver =
-      toolExecutionContext.trailblazeAgent::class.simpleName == "AndroidMaestroTrailblazeAgent"
-    val scrollDuration = if (isOnDeviceAndroidDriver) {
+    val trailblazeDriverType = toolExecutionContext.trailblazeDeviceInfo.trailblazeDriverType
+    val scrollDuration = if (trailblazeDriverType == TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION) {
       /**
        * This matches Maestro's Swipe Implementation with the 400ms duration and is working well on-device Android.
        * https://github.com/mobile-dev-inc/Maestro/blob/0a38a9468cb769ecbc1edc76974fd2f8a8b0b64e/maestro-client/src/main/java/maestro/drivers/AndroidDriver.kt#L404

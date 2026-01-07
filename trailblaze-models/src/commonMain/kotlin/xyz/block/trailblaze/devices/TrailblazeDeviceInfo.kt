@@ -4,6 +4,7 @@ import kotlinx.serialization.Serializable
 
 @Serializable
 data class TrailblazeDeviceInfo(
+  val trailblazeDeviceId: TrailblazeDeviceId,
   val trailblazeDriverType: TrailblazeDriverType,
   val widthPixels: Int,
   val heightPixels: Int,

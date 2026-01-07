@@ -5,12 +5,13 @@ import android.util.DisplayMetrics
 import xyz.block.trailblaze.InstrumentationUtil.withInstrumentation
 import xyz.block.trailblaze.devices.TrailblazeAndroidDeviceCategory
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
-import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDeviceOrientation
-import xyz.block.trailblaze.devices.TrailblazeDriverType
 import java.util.Locale
 import java.util.TimeZone
 
+/**
+ * For use on-device only
+ */
 object AndroidTrailblazeDeviceInfoUtil {
 
   fun getCurrentLocale(): Locale = withInstrumentation { context.resources.configuration.getLocales().get(0) }
@@ -51,25 +52,10 @@ object AndroidTrailblazeDeviceInfoUtil {
     }
   }
 
-  fun collectCurrentDeviceInfo(
-    trailblazeDriverType: TrailblazeDriverType,
-    trailblazeDeviceClassifiers: List<TrailblazeDeviceClassifier>,
-  ): TrailblazeDeviceInfo {
-    val displayMetrics = getDisplayMetrics()
-    return TrailblazeDeviceInfo(
-      trailblazeDriverType = trailblazeDriverType,
-      locale = getCurrentLocale().toLanguageTag(),
-      orientation = getDeviceOrientation(),
-      widthPixels = displayMetrics.widthPixels,
-      heightPixels = displayMetrics.heightPixels,
-      classifiers = trailblazeDeviceClassifiers,
-      metadata = getDeviceMetadata(),
-    )
-  }
-
   fun getConsumerAndroidClassifiers(): List<TrailblazeDeviceClassifier> = buildList {
     add(getDeviceCategoryClassifier())
   }
 
-  private fun getDeviceCategoryClassifier(): TrailblazeDeviceClassifier = getConsumerAndroidDeviceCategory().asTrailblazeDeviceClassifier()
+  private fun getDeviceCategoryClassifier(): TrailblazeDeviceClassifier =
+    getConsumerAndroidDeviceCategory().asTrailblazeDeviceClassifier()
 }

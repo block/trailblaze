@@ -17,6 +17,8 @@ import xyz.block.trailblaze.android.uiautomator.AndroidOnDeviceUiAutomatorScreen
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TestAgentRunner
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.model.CustomTrailblazeTools
@@ -43,15 +45,18 @@ open class AndroidTrailblazeRule(
   val llmClient: LLMClient,
   val trailblazeLlmModel: TrailblazeLlmModel,
   val config: TrailblazeConfig = TrailblazeConfig.DEFAULT,
+  private val trailblazeDeviceId: TrailblazeDeviceId = DEFAULT_JUNIT_TEST_ANDROID_ON_DEVICE_TRAILBLAZE_DEVICE_ID,
   val trailblazeLoggingRule: TrailblazeAndroidLoggingRule = TrailblazeAndroidLoggingRule(
+    trailblazeDeviceIdProvider = { trailblazeDeviceId },
     trailblazeDeviceClassifiersProvider = { TrailblazeAndroidOnDeviceClassifier.getDeviceClassifiers() },
   ),
   customToolClasses: CustomTrailblazeTools? = null,
-  private val trailblazeDeviceId: TrailblazeDeviceId? = null,
 ) : SimpleTestRuleChain(trailblazeLoggingRule),
   TrailblazeRule {
-  private val trailblazeAgent =
-    AndroidMaestroTrailblazeAgent(trailblazeLoggingRule.trailblazeLogger)
+  private val trailblazeAgent = AndroidMaestroTrailblazeAgent(
+    trailblazeLogger = trailblazeLoggingRule.trailblazeLogger,
+    trailblazeDeviceInfoProvider = trailblazeLoggingRule.trailblazeDeviceInfoProvider,
+  )
 
   private val trailblazeToolRepo = TrailblazeToolRepo(
     trailblazeToolSet = TrailblazeToolSet.getSetOfMarkToolSet(
@@ -249,6 +254,19 @@ open class AndroidTrailblazeRule(
       testYaml = yamlContent,
       useRecordedSteps = useRecordedSteps,
       trailFilePath = yamlAssetPath,
+    )
+  }
+
+  companion object {
+    /**
+     * Only use this on-device when no deviceId is available (like in a connectedDebugAndroidTest)
+     *
+     * NOTE: It would be better to pass these values as instrumentation args if possible
+     */
+    @Deprecated("Only use this on-device when no deviceId is available (like in a connectedDebugAndroidTest)")
+    val DEFAULT_JUNIT_TEST_ANDROID_ON_DEVICE_TRAILBLAZE_DEVICE_ID = TrailblazeDeviceId(
+      instanceId = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION.name,
+      trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
     )
   }
 }

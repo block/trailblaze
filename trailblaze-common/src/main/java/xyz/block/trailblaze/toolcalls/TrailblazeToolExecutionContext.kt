@@ -2,6 +2,7 @@ package xyz.block.trailblaze.toolcalls
 
 import xyz.block.trailblaze.MaestroTrailblazeAgent
 import xyz.block.trailblaze.api.ScreenState
+import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.logs.model.TraceId
 
 /**
@@ -12,4 +13,5 @@ class TrailblazeToolExecutionContext(
   val screenState: ScreenState?,
   val traceId: TraceId?,
   val trailblazeAgent: MaestroTrailblazeAgent,
+  val trailblazeDeviceInfo: TrailblazeDeviceInfo,
 )

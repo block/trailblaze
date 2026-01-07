@@ -17,6 +17,8 @@ import xcuitest.XCTestDriverClient
 import xcuitest.installer.Context
 import xcuitest.installer.LocalXCTestInstaller
 import xcuitest.installer.LocalXCTestInstaller.IOSDriverConfig
+import xyz.block.trailblaze.devices.TrailblazeDeviceId
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import java.net.ServerSocket
 import java.nio.file.Paths
@@ -179,7 +181,13 @@ internal object HostIosDriverFactory {
     /**
      * Use custom driver from [TrailblazeHostAppTarget] if provided, otherwise use default driver
      */
-    val iosDriver: Driver = appTarget?.getCustomIosDriverFactory(baseIosDriver) as? Driver ?: baseIosDriver
+    val iosDriver: Driver = appTarget?.getCustomIosDriverFactory(
+      trailblazeDeviceId = TrailblazeDeviceId(
+        instanceId = deviceId,
+        trailblazeDevicePlatform = TrailblazeDevicePlatform.IOS,
+      ),
+      originalIosDriver = baseIosDriver
+    ) as? Driver ?: baseIosDriver
 
     val maestro = Maestro.ios(
       driver = iosDriver,

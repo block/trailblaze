@@ -25,6 +25,7 @@ class KoogToolRegistryTest {
         trailblazeAgent = trailblazeAgent,
         traceId = null,
         screenState = null,
+        trailblazeDeviceInfo = trailblazeAgent.trailblazeDeviceInfoProvider(),
       )
     })
     val inputTextTool = toolRegistry.getTool("inputText")

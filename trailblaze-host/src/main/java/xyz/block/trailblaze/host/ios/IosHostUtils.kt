@@ -1,6 +1,5 @@
 package xyz.block.trailblaze.host.ios
 
-import util.LocalSimulatorUtils
 import xyz.block.trailblaze.util.CommandProcessResult
 import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils
 import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils.runProcess
@@ -8,20 +7,25 @@ import java.io.File
 
 object IosHostUtils {
 
-  fun killAppOnSimulator(deviceId: String?, appId: String) {
-    LocalSimulatorUtils.terminate(
-      deviceId = deviceId ?: "booted",
-      bundleId = appId,
-    )
+  fun killAppOnSimulator(deviceId: String, appId: String) {
+    TrailblazeProcessBuilderUtils.createProcessBuilder(
+      listOf(
+        "xcrun",
+        "simctl",
+        "terminate",
+        deviceId,
+        appId,
+      ),
+    ).runProcess {}
   }
 
-  fun getInstalledAppIds(deviceId: String?): Set<String> {
+  fun getInstalledAppIds(deviceId: String): Set<String> {
     val output: CommandProcessResult = TrailblazeProcessBuilderUtils.createProcessBuilder(
       listOf(
         "xcrun",
         "simctl",
         "listapps",
-        deviceId ?: "booted",
+        deviceId,
       ),
     ).runProcess {}
 
@@ -45,13 +49,13 @@ object IosHostUtils {
       .toSet()
   }
 
-  fun clearAppDataContainer(deviceId: String?, appId: String) {
+  fun clearAppDataContainer(deviceId: String, appId: String) {
     val output = TrailblazeProcessBuilderUtils.createProcessBuilder(
       listOf(
         "xcrun",
         "simctl",
         "get_app_container",
-        deviceId ?: "booted",
+        deviceId,
         appId,
         "data",
       ),

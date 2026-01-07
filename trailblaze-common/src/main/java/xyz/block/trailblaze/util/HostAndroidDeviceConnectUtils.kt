@@ -5,11 +5,10 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
-import xyz.block.trailblaze.devices.TrailblazeDevicePort.getDeviceSpecificPort
+import xyz.block.trailblaze.devices.TrailblazeDevicePort.getTrailblazeOnDeviceSpecificPort
 import xyz.block.trailblaze.model.DeviceConnectionStatus
 import xyz.block.trailblaze.model.TrailblazeOnDeviceInstrumentationTarget
 import xyz.block.trailblaze.util.AndroidHostAdbUtils.adbPortForward
@@ -118,7 +117,7 @@ object HostAndroidDeviceConnectUtils {
           listOf(
             "-e",
             TrailblazeDevicePort.INSTRUMENTATION_ARG_KEY,
-            deviceId.getDeviceSpecificPort().toString(),
+            deviceId.getTrailblazeOnDeviceSpecificPort().toString(),
           ),
         )
 
@@ -175,7 +174,7 @@ object HostAndroidDeviceConnectUtils {
 
     adbPortForward(
       deviceId = trailblazeDeviceId,
-      localPort = trailblazeDeviceId.getDeviceSpecificPort(),
+      localPort = trailblazeDeviceId.getTrailblazeOnDeviceSpecificPort(),
     )
 
     // Log instrumentation output
@@ -308,7 +307,7 @@ object HostAndroidDeviceConnectUtils {
     trailblazeOnDeviceInstrumentationTarget: TrailblazeOnDeviceInstrumentationTarget,
     additionalInstrumentationArgs: Map<String, String> = emptyMap(),
   ): DeviceConnectionStatus {
-    val devicePort = deviceId.getDeviceSpecificPort()
+    val devicePort = deviceId.getTrailblazeOnDeviceSpecificPort()
     adbPortForward(deviceId, devicePort)
     adbPortReverse(deviceId, 8443)
 

@@ -15,13 +15,12 @@ import xyz.block.trailblaze.api.MaestroDriverActionType
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
-import xyz.block.trailblaze.logs.client.TrailblazeLoggerInstance
 import xyz.block.trailblaze.tracing.TrailblazeTracer.traceRecorder
 import java.io.File
 import kotlin.system.measureTimeMillis
 
 /**
- * This is a delegate Maestro [Driver] that logs all actions to the [TrailblazeLoggerInstance].
+ * This is a delegate Maestro [Driver] that logs all actions to the [TrailblazeLogger].
  */
 class LoggingDriver(
   private val delegate: Driver,

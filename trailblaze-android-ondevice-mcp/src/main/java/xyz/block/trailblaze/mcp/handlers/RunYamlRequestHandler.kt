@@ -4,6 +4,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.llm.RunYamlResponse
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
@@ -19,14 +20,42 @@ import xyz.block.trailblaze.yaml.TrailblazeYaml
  * Manages session lifecycle and executes tests in the background.
  */
 class RunYamlRequestHandler(
-  private val trailblazeLogger: TrailblazeLogger,
+  private val trailblazeDeviceClassifiersProvider: () -> List<TrailblazeDeviceClassifier>,
   private val backgroundScope: CoroutineScope,
   private val getCurrentJob: () -> Job?,
   private val setCurrentJob: (Job?) -> Unit,
+  private val trailblazeLogger: TrailblazeLogger,
   private val runTrailblazeYaml: suspend (RunYamlRequest) -> Unit
 ) : RpcHandler<RunYamlRequest, RunYamlResponse> {
 
   override suspend fun handle(request: RunYamlRequest): RpcResult<RunYamlResponse> {
+    // Extract config values for session naming
+    val trailConfig = try {
+      TrailblazeYaml().extractTrailConfig(request.yaml)
+    } catch (e: Exception) {
+      null
+    }
+
+    val configTitle = trailConfig?.title
+    val configId = trailConfig?.id
+
+    val methodName = if (configTitle != null && configId != null) {
+      toSnakeCaseWithId(configTitle, configId)
+    } else {
+      toSnakeCaseIdentifier(request.testName)
+    }
+
+    // Start session with method name for consistency, we must call this for lifecycle/resetting
+    trailblazeLogger.resetForNewSession(methodName)
+
+    // Override the session id if requested
+    val overrideSessionId = request.config.overrideSessionId
+    if (overrideSessionId != null) {
+      trailblazeLogger.overrideSessionId(overrideSessionId)
+    }
+
+    val startedSessionId = trailblazeLogger.getCurrentSessionId()
+
     return try {
       // Cancel any currently running job before starting a new session
       getCurrentJob()?.let { job ->
@@ -44,34 +73,6 @@ class RunYamlRequestHandler(
           )
         }
       }
-
-      // Extract config values for session naming
-      val trailConfig = try {
-        TrailblazeYaml().extractTrailConfig(request.yaml)
-      } catch (e: Exception) {
-        null
-      }
-
-      val configTitle = trailConfig?.title
-      val configId = trailConfig?.id
-
-      val methodName = if (configTitle != null && configId != null) {
-        toSnakeCaseWithId(configTitle, configId)
-      } else {
-        toSnakeCaseIdentifier(request.testName)
-      }
-
-      // Start session with method name for consistency, we must call this for lifecycle/resetting
-      trailblazeLogger.startSession(methodName)
-
-      // Override the session id if requested
-      val overrideSessionId = request.config.overrideSessionId
-      if (overrideSessionId != null) {
-        trailblazeLogger.overrideSessionId(overrideSessionId)
-      }
-
-      val startedSessionId = trailblazeLogger.getCurrentSessionId()
-
       // Launch the job in the background scope so it doesn't block the response
       val job = backgroundScope.launch {
         try {

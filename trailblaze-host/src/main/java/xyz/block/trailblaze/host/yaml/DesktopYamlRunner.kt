@@ -83,7 +83,7 @@ class DesktopYamlRunner(
       val trailblazeDriverType = connectedTrailblazeDevice.trailblazeDriverType
       try {
         prefixedProgressMessage(
-          "Starting YAML test execution with driver $trailblazeDriverType",
+          "Starting ${trailblazeDeviceId.trailblazeDevicePlatform.displayName} test on device ${trailblazeDeviceId.instanceId} with driver type $trailblazeDriverType",
         )
 
         val trailblazeHostAppTarget = trailblazeHostAppTargetProvider()

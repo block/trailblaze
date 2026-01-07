@@ -2,21 +2,27 @@ package xyz.block.trailblaze
 
 import androidx.test.platform.app.InstrumentationRegistry
 import xyz.block.trailblaze.InstrumentationUtil.withInstrumentation
-import xyz.block.trailblaze.android.AndroidTrailblazeDeviceInfoUtil
+import xyz.block.trailblaze.android.AndroidTrailblazeDeviceInfoUtil.getCurrentLocale
+import xyz.block.trailblaze.android.AndroidTrailblazeDeviceInfoUtil.getDeviceMetadata
+import xyz.block.trailblaze.android.AndroidTrailblazeDeviceInfoUtil.getDeviceOrientation
+import xyz.block.trailblaze.android.AndroidTrailblazeDeviceInfoUtil.getDisplayMetrics
 import xyz.block.trailblaze.android.InstrumentationArgUtil
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
+import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeScreenStateLog
+import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.rules.TrailblazeLoggingRule
 
 class TrailblazeAndroidLoggingRule(
+  trailblazeDeviceIdProvider: () -> TrailblazeDeviceId,
   trailblazeDeviceClassifiersProvider: () -> List<TrailblazeDeviceClassifier>,
 ) : TrailblazeLoggingRule(
   logsBaseUrl = InstrumentationArgUtil.logsEndpoint(),
-  writeLogToDisk = { currentTestName: xyz.block.trailblaze.logs.model.SessionId, log: TrailblazeLog ->
+  writeLogToDisk = { currentTestName: SessionId, log: TrailblazeLog ->
     try {
       val json = TrailblazeJsonInstance.encodeToString(TrailblazeLog.serializer(), log)
       val fileName = "${currentTestName.value}_${log.timestamp.toEpochMilliseconds()}.json"
@@ -42,7 +48,7 @@ class TrailblazeAndroidLoggingRule(
       println("Error writing screenshot to disk: ${e.message}")
     }
   },
-  writeTraceToDisk = { sessionId: xyz.block.trailblaze.logs.model.SessionId, json: String ->
+  writeTraceToDisk = { sessionId: SessionId, json: String ->
     try {
       // Currently disabled due to exception on some API levels
       withInstrumentation {
@@ -58,10 +64,18 @@ class TrailblazeAndroidLoggingRule(
     }
   },
 ) {
+
   override val trailblazeDeviceInfoProvider: () -> TrailblazeDeviceInfo = {
-    AndroidTrailblazeDeviceInfoUtil.collectCurrentDeviceInfo(
+    val displayMetrics = getDisplayMetrics()
+    TrailblazeDeviceInfo(
+      trailblazeDeviceId = trailblazeDeviceIdProvider(),
       trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
-      trailblazeDeviceClassifiers = trailblazeDeviceClassifiersProvider(),
+      locale = getCurrentLocale().toLanguageTag(),
+      orientation = getDeviceOrientation(),
+      widthPixels = displayMetrics.widthPixels,
+      heightPixels = displayMetrics.heightPixels,
+      classifiers = trailblazeDeviceClassifiersProvider(),
+      metadata = getDeviceMetadata(),
     )
   }
 

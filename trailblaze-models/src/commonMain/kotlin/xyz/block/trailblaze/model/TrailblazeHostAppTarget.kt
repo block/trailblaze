@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.model
 
+import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.model.TrailblazeOnDeviceInstrumentationTarget.Companion.DEFAULT_ANDROID_ON_DEVICE
@@ -33,7 +34,7 @@ abstract class TrailblazeHostAppTarget(
    *   NOTE: It is typed as [Any] because it's in KMP code and Maestro is JVM Only.
    * @return Return the original [originalIosDriver] or your custom "IOSDriver"
    */
-  open fun getCustomIosDriverFactory(originalIosDriver: Any): Any = originalIosDriver
+  open fun getCustomIosDriverFactory(trailblazeDeviceId: TrailblazeDeviceId, originalIosDriver: Any): Any = originalIosDriver
 
   fun getTrailblazeOnDeviceInstrumentationTarget(): TrailblazeOnDeviceInstrumentationTarget =
     internalGetAndroidOnDeviceTarget() ?: TrailblazeOnDeviceInstrumentationTarget.DEFAULT_ANDROID_ON_DEVICE
