@@ -16,6 +16,7 @@ import xyz.block.trailblaze.http.DynamicLlmClient
 import xyz.block.trailblaze.http.TrailblazeHttpClientFactory
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
+import xyz.block.trailblaze.logs.client.TrailblazeSession
 
 /**
  * This would be the single test that runs the MCP server.  It blocks the instrumentation test
@@ -80,10 +81,18 @@ class AndroidStandaloneServerTest : BaseAndroidStandaloneServerTest() {
   @Test
   fun startServer() {
     val onDeviceRpcServer = OnDeviceRpcServer(
-      trailblazeLogger = trailblazeLoggingRule.trailblazeLogger,
-      trailblazeDeviceClassifiersProvider = { getDeviceClassifiers() },
-      runTrailblazeYaml = { runYamlRequest: RunYamlRequest ->
-        handleRunRequest(runYamlRequest)
+      sessionManager = trailblazeLoggingRule.sessionManager,
+      runTrailblazeYaml = { runYamlRequest: RunYamlRequest, session: TrailblazeSession ->
+        // Set the session on the logging rule so it's available to all components
+        // that use sessionProvider (AndroidTrailblazeRule and its subcomponents)
+        trailblazeLoggingRule.setSession(session)
+        try {
+          handleRunRequest(runYamlRequest)
+        } finally {
+          // Clear the session after execution to prevent stale sessions
+          trailblazeLoggingRule.setSession(null)
+        }
+        session // Return the session unchanged
       },
     )
     onDeviceRpcServer.startServer(port = adbReversePort, wait = true)

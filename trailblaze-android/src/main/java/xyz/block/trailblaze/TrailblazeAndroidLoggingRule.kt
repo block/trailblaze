@@ -11,6 +11,7 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.logs.client.LogEmitter
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeScreenStateLog
@@ -20,8 +21,10 @@ import xyz.block.trailblaze.rules.TrailblazeLoggingRule
 class TrailblazeAndroidLoggingRule(
   trailblazeDeviceIdProvider: () -> TrailblazeDeviceId,
   trailblazeDeviceClassifiersProvider: () -> List<TrailblazeDeviceClassifier>,
+  additionalLogEmitter: LogEmitter? = null,
 ) : TrailblazeLoggingRule(
   logsBaseUrl = InstrumentationArgUtil.logsEndpoint(),
+  additionalLogEmitter = additionalLogEmitter,
   writeLogToDisk = { currentTestName: SessionId, log: TrailblazeLog ->
     try {
       val json = TrailblazeJsonInstance.encodeToString(TrailblazeLog.serializer(), log)

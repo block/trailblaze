@@ -9,17 +9,23 @@ import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeElementSelector
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
+import xyz.block.trailblaze.logs.client.TrailblazeSession
+import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.viewmatcher.TapSelectorV2
 
 /**
  * Handles logging of assertion commands for visualization purposes.
  * This class extracts the assertion logging logic that was previously embedded in Orchestra.
  * Works for both Android on-device and host-based (iOS/RPC) execution environments.
+ * 
+ * Uses stateless logger with explicit session management.
+ * The sessionProvider must be provided to enable logging.
  */
 class AssertionLogger(
   private val maestro: Maestro,
   private val screenStateProvider: (() -> ScreenState)?,
   private val trailblazeLogger: TrailblazeLogger,
+  private val sessionProvider: TrailblazeSessionProvider,
 ) {
 
   private val logger = LoggerFactory.getLogger(AssertionLogger::class.java)
@@ -100,26 +106,28 @@ class AssertionLogger(
           }
         }
 
-        val screenshotFilename = trailblazeLogger.logScreenState(screenState)
-        trailblazeLogger.log(
-          TrailblazeLog.MaestroDriverLog(
-            viewHierarchy = screenState.viewHierarchy,
-            screenshotFile = screenshotFilename,
-            action = MaestroDriverActionType.AssertCondition(
-              conditionDescription = assertionFilterDescription,
-              x = elementCenterX,
-              y = elementCenterY,
-              isVisible = isVisibleAssertion,
-              textToDisplay = textToDisplay,
-              succeeded = succeeded,
-            ),
-            durationMs = 0,
-            timestamp = kotlinx.datetime.Clock.System.now(),
-            session = trailblazeLogger.getCurrentSessionId(),
-            deviceWidth = screenState.deviceWidth,
-            deviceHeight = screenState.deviceHeight,
+        // Get current session for logging
+        val session = sessionProvider.invoke()
+        val screenshotFilename = trailblazeLogger.logScreenState(session, screenState)
+        
+        val log = TrailblazeLog.MaestroDriverLog(
+          viewHierarchy = screenState.viewHierarchy,
+          screenshotFile = screenshotFilename,
+          action = MaestroDriverActionType.AssertCondition(
+            conditionDescription = assertionFilterDescription,
+            x = elementCenterX,
+            y = elementCenterY,
+            isVisible = isVisibleAssertion,
+            textToDisplay = textToDisplay,
+            succeeded = succeeded,
           ),
+          durationMs = 0,
+          timestamp = kotlinx.datetime.Clock.System.now(),
+          session = session.sessionId,
+          deviceWidth = screenState.deviceWidth,
+          deviceHeight = screenState.deviceHeight,
         )
+        trailblazeLogger.log(session, log)
       }
     } catch (t: Throwable) {
       logger.error("[TrailblazeLog] Failed to log assertion during execution.", t)

@@ -16,19 +16,22 @@ import io.ktor.server.routing.routing
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
-import xyz.block.trailblaze.logs.client.TrailblazeLogger
+import xyz.block.trailblaze.logs.client.TrailblazeSession
+import xyz.block.trailblaze.logs.client.TrailblazeSessionManager
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
 import xyz.block.trailblaze.mcp.handlers.RunYamlRequestHandler
 import xyz.block.trailblaze.mcp.registerRpcHandler
 import xyz.block.trailblaze.mcp.respondRpcError
 
+/**
+ * On-device RPC server for MCP.
+ * Uses explicit session management via TrailblazeSessionManager.
+ */
 class OnDeviceRpcServer(
-  private val trailblazeLogger: TrailblazeLogger,
-  private val trailblazeDeviceClassifiersProvider: () -> List<TrailblazeDeviceClassifier>,
-  private val runTrailblazeYaml: suspend (RunYamlRequest) -> Unit,
+  private val sessionManager: TrailblazeSessionManager,
+  private val runTrailblazeYaml: suspend (RunYamlRequest, TrailblazeSession) -> TrailblazeSession,
 ) {
 
   // Use a dedicated coroutine scope for background jobs
@@ -53,12 +56,11 @@ class OnDeviceRpcServer(
         // Register type-safe RPC handlers
         registerRpcHandler(
           RunYamlRequestHandler(
-            trailblazeLogger = trailblazeLogger,
-            trailblazeDeviceClassifiersProvider = trailblazeDeviceClassifiersProvider,
+            sessionManager = sessionManager,
             backgroundScope = backgroundScope,
             getCurrentJob = { currPromptJob },
             setCurrentJob = { job -> currPromptJob = job },
-            runTrailblazeYaml = { request -> runTrailblazeYaml(request) }
+            runTrailblazeYaml = runTrailblazeYaml
           )
         )
 

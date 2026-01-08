@@ -4,10 +4,10 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
-import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.llm.RunYamlResponse
-import xyz.block.trailblaze.logs.client.TrailblazeLogger
+import xyz.block.trailblaze.logs.client.TrailblazeSession
+import xyz.block.trailblaze.logs.client.TrailblazeSessionManager
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.mcp.RpcHandler
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
@@ -18,14 +18,15 @@ import xyz.block.trailblaze.yaml.TrailblazeYaml
 /**
  * Handler for YAML test execution requests.
  * Manages session lifecycle and executes tests in the background.
+ *
+ * Uses explicit session management with TrailblazeSessionManager.
  */
 class RunYamlRequestHandler(
-  private val trailblazeDeviceClassifiersProvider: () -> List<TrailblazeDeviceClassifier>,
   private val backgroundScope: CoroutineScope,
   private val getCurrentJob: () -> Job?,
   private val setCurrentJob: (Job?) -> Unit,
-  private val trailblazeLogger: TrailblazeLogger,
-  private val runTrailblazeYaml: suspend (RunYamlRequest) -> Unit
+  private val sessionManager: TrailblazeSessionManager,
+  private val runTrailblazeYaml: suspend (RunYamlRequest, TrailblazeSession) -> TrailblazeSession
 ) : RpcHandler<RunYamlRequest, RunYamlResponse> {
 
   override suspend fun handle(request: RunYamlRequest): RpcResult<RunYamlResponse> {
@@ -45,16 +46,13 @@ class RunYamlRequestHandler(
       toSnakeCaseIdentifier(request.testName)
     }
 
-    // Start session with method name for consistency, we must call this for lifecycle/resetting
-    trailblazeLogger.resetForNewSession(methodName)
-
-    // Override the session id if requested
-    val overrideSessionId = request.config.overrideSessionId
-    if (overrideSessionId != null) {
-      trailblazeLogger.overrideSessionId(overrideSessionId)
+    // Start session for this test execution
+    val overrideId = request.config.overrideSessionId
+    val session: TrailblazeSession = if (overrideId != null) {
+      sessionManager.createSessionWithId(overrideId)
+    } else {
+      sessionManager.startSession(methodName)
     }
-
-    val startedSessionId = trailblazeLogger.getCurrentSessionId()
 
     return try {
       // Cancel any currently running job before starting a new session
@@ -65,8 +63,9 @@ class RunYamlRequestHandler(
             job.cancelAndJoin()
           }
           // Send end log for the interrupted session with cancellation status
-          trailblazeLogger.sendEndLog(
-            SessionStatus.Ended.Cancelled(
+          sessionManager.endSession(
+            session = session,
+            endedStatus = SessionStatus.Ended.Cancelled(
               durationMs = 0L,
               cancellationMessage = "Session cancelled after the user started a new session.",
             ),
@@ -76,15 +75,23 @@ class RunYamlRequestHandler(
       // Launch the job in the background scope so it doesn't block the response
       val job = backgroundScope.launch {
         try {
-          runTrailblazeYaml(request)
+          // Pass session to runner and get updated session back
+          val finalSession = runTrailblazeYaml(request, session)
           if (request.config.sendSessionEndLog) {
-            trailblazeLogger.sendSessionEndLog(isSuccess = true)
+            sessionManager.endSession(
+              session = finalSession,
+              isSuccess = true,
+            )
           } else {
             // Keep the session open
           }
         } catch (e: Exception) {
           e.printStackTrace()
-          trailblazeLogger.sendSessionEndLog(isSuccess = false, exception = e)
+          sessionManager.endSession(
+            session = session,
+            isSuccess = false,
+            exception = e,
+          )
         }
       }
 
@@ -92,11 +99,15 @@ class RunYamlRequestHandler(
 
       RpcResult.Success(
         RunYamlResponse(
-          sessionId = startedSessionId,
+          sessionId = session.sessionId,
         )
       )
     } catch (e: Exception) {
-      trailblazeLogger.sendEndLog(false, e)
+      sessionManager.endSession(
+        session = session,
+        isSuccess = false,
+        exception = e,
+      )
       RpcResult.Failure(
         errorType = RpcResult.ErrorType.UNKNOWN_ERROR,
         message = "Failed to start YAML execution",

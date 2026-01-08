@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.host.rules
 
 import kotlinx.coroutines.runBlocking
+import kotlinx.datetime.Clock
 import org.junit.Rule
 import org.junit.rules.RuleChain
 import xyz.block.trailblaze.TrailblazeYamlUtil
@@ -18,7 +19,9 @@ import xyz.block.trailblaze.host.devices.TrailblazeHostDeviceClassifier
 import xyz.block.trailblaze.host.rules.TrailblazeHostLlmConfig.DEFAULT_TRAILBLAZE_LLM_MODEL
 import xyz.block.trailblaze.http.DynamicLlmClient
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
+import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.recordings.TrailRecordings
@@ -57,7 +60,8 @@ abstract class BaseHostTrailblazeTest(
     MaestroHostRunnerImpl(
       trailblazeDeviceId = trailblazeDeviceId,
       setOfMarkEnabled = config.setOfMarkEnabled,
-      trailblazeLogger = loggingRule.trailblazeLogger,
+      trailblazeLogger = loggingRule.logger,
+      sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
       appTarget = appTarget,
     )
   }
@@ -115,8 +119,9 @@ abstract class BaseHostTrailblazeTest(
   val trailblazeAgent by lazy {
     HostMaestroTrailblazeAgent(
       maestroHostRunner = hostRunner,
-      trailblazeLogger = loggingRule.trailblazeLogger,
+      trailblazeLogger = loggingRule.logger,
       trailblazeDeviceInfoProvider = loggingRule.trailblazeDeviceInfoProvider,
+      sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
     )
   }
 
@@ -138,7 +143,8 @@ abstract class BaseHostTrailblazeTest(
       trailblazeLlmModel = trailblazeLlmModel,
       trailblazeToolRepo = toolRepo,
       systemPromptTemplate = systemPromptTemplate,
-      trailblazeLogger = loggingRule.trailblazeLogger,
+      trailblazeLogger = loggingRule.logger,
+      sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
     )
   }
 
@@ -217,21 +223,31 @@ abstract class BaseHostTrailblazeTest(
     val trailConfig = trailblazeYaml.extractTrailConfig(trailItems)
 
     if (sendSessionStartLog) {
-      loggingRule.trailblazeLogger.sendStartLog(
-        trailConfig = trailConfig,
-        className = loggingRule.description?.className
-          ?: this::class.java.simpleName.takeIf { it.isNotEmpty() }
-          ?: "BaseHostTrailblazeTest",
-        methodName = loggingRule.description?.methodName ?: "run",
-        trailblazeDeviceInfo = loggingRule.trailblazeDeviceInfoProvider(),
-        rawYaml = yaml,
-        trailFilePath = trailFilePath,
-        hasRecordedSteps = trailblazeYaml.hasRecordedSteps(trailItems),
-        trailblazeDeviceId = trailblazeDeviceId,
-      )
+      val session = loggingRule.session
+      if (session != null) {
+        loggingRule.logger.log(
+          session,
+          TrailblazeLog.TrailblazeSessionStatusChangeLog(
+            sessionStatus = SessionStatus.Started(
+              trailConfig = trailConfig,
+              trailFilePath = trailFilePath,
+              testClassName = loggingRule.description?.className
+                ?: this::class.java.simpleName.takeIf { it.isNotEmpty() }
+                ?: "BaseHostTrailblazeTest",
+              testMethodName = loggingRule.description?.methodName ?: "run",
+              trailblazeDeviceInfo = loggingRule.trailblazeDeviceInfoProvider(),
+              rawYaml = yaml,
+              hasRecordedSteps = trailblazeYaml.hasRecordedSteps(trailItems),
+              trailblazeDeviceId = trailblazeDeviceId,
+            ),
+            session = session.sessionId,
+            timestamp = Clock.System.now(),
+          ),
+        )
+      }
     }
     runTrail(trailItems, useRecordedSteps)
-    return loggingRule.trailblazeLogger.getCurrentSessionId()
+    return loggingRule.session?.sessionId ?: SessionId("unknown")
   }
 
   /**

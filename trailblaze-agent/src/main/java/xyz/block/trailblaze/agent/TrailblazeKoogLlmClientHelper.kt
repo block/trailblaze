@@ -150,6 +150,7 @@ class TrailblazeKoogLlmClientHelper(
         screenState = step.currentScreenState,
         traceId = traceId,
         trailblazeDeviceInfo = agent.trailblazeDeviceInfoProvider(),
+        sessionProvider = agent.sessionProvider,
       )
     }
     val toolName = tool.tool

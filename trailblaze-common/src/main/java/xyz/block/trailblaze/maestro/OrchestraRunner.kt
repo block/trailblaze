@@ -6,6 +6,9 @@ import maestro.orchestra.MaestroCommand
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
+import xyz.block.trailblaze.logs.client.TrailblazeSession
+import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
+import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.utils.Ext.asJsonObject
@@ -13,6 +16,8 @@ import xyz.block.trailblaze.utils.Ext.asJsonObject
 /**
  * Encapsulates common Orchestra execution logic for running Maestro commands.
  * This utility eliminates code duplication across on-device and host runners.
+ * 
+ * Uses stateless logger with explicit session management via sessionProvider.
  */
 object OrchestraRunner {
 
@@ -23,6 +28,7 @@ object OrchestraRunner {
    * @param commands The list of commands to execute
    * @param traceId Optional trace ID for logging
    * @param trailblazeLogger Logger for capturing command results
+   * @param sessionProvider Provides current session for logging operations (required)
    * @param screenStateProvider Function to provide screen state (for assertion logging)
    * @param orchestraFactory Factory function to create Orchestra instances
    * @return The result of the command execution
@@ -32,11 +38,17 @@ object OrchestraRunner {
     commands: List<MaestroCommand>,
     traceId: TraceId?,
     trailblazeLogger: TrailblazeLogger,
+    sessionProvider: TrailblazeSessionProvider,
     screenStateProvider: (() -> ScreenState)?,
     orchestraFactory: (OrchestraCallbacks) -> OrchestraExecutor,
   ): TrailblazeToolResult {
     // Create assertion logger for visualization
-    val assertionLogger = AssertionLogger(maestro, screenStateProvider, trailblazeLogger)
+    val assertionLogger = AssertionLogger(
+      maestro = maestro,
+      screenStateProvider = screenStateProvider,
+      trailblazeLogger = trailblazeLogger,
+      sessionProvider = sessionProvider
+    )
 
     commands.forEach { maestroCommand ->
       val maestroCommandJsonObj = maestroCommand.asJsonObject()
@@ -63,17 +75,18 @@ object OrchestraRunner {
       // Execute command using provided Orchestra factory
       val runSuccess = orchestraFactory(callbacks).execute(listOf(maestroCommand))
 
-      trailblazeLogger.log(
-        TrailblazeLog.MaestroCommandLog(
-          maestroCommandJsonObj = maestroCommandJsonObj,
-          trailblazeToolResult = result,
-          timestamp = startTime,
-          durationMs = Clock.System.now().toEpochMilliseconds() - startTime.toEpochMilliseconds(),
-          traceId = traceId,
-          successful = result is TrailblazeToolResult.Success,
-          session = trailblazeLogger.getCurrentSessionId(),
-        ),
+      // Get current session and log command execution
+      val session = sessionProvider.invoke()
+      val log = TrailblazeLog.MaestroCommandLog(
+        maestroCommandJsonObj = maestroCommandJsonObj,
+        trailblazeToolResult = result,
+        timestamp = startTime,
+        durationMs = Clock.System.now().toEpochMilliseconds() - startTime.toEpochMilliseconds(),
+        traceId = traceId,
+        successful = result is TrailblazeToolResult.Success,
+        session = session.sessionId,
       )
+      trailblazeLogger.log(session, log)
 
       if (!runSuccess) {
         return result

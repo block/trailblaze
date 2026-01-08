@@ -16,16 +16,25 @@ import xyz.block.trailblaze.host.devices.TrailblazeConnectedDevice
 import xyz.block.trailblaze.host.devices.TrailblazeDeviceService
 import xyz.block.trailblaze.host.screenstate.HostMaestroDriverScreenState
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
+import xyz.block.trailblaze.logs.client.TrailblazeSession
+import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.maestro.OrchestraRunner
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import java.io.File
 
+/**
+ * Host-mode Maestro runner for executing Maestro commands on connected devices.
+ * 
+ * Uses stateless logger with explicit session management.
+ * Session should be managed by the caller and passed via sessionProvider.
+ */
 class MaestroHostRunnerImpl(
   private val trailblazeDeviceId: TrailblazeDeviceId,
   setOfMarkEnabled: Boolean = true,
   val trailblazeLogger: TrailblazeLogger,
+  private val sessionProvider: TrailblazeSessionProvider,
   /**
    * Providing the "App Target" can enable app specific functionality if provided
    */
@@ -41,7 +50,7 @@ class MaestroHostRunnerImpl(
   }
 
   val loggingDriver: LoggingDriver by lazy {
-    connectedDevice.getLoggingDriver(trailblazeLogger)
+    connectedDevice.getLoggingDriver(trailblazeLogger, sessionProvider)
   }
 
   companion object {
@@ -100,6 +109,7 @@ class MaestroHostRunnerImpl(
         commands = commands,
         traceId = traceId,
         trailblazeLogger = trailblazeLogger,
+        sessionProvider = sessionProvider,
         screenStateProvider = screenStateProvider,
         orchestraFactory = { callbacks ->
           // Create Orchestra executor with standardized callbacks

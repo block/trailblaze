@@ -2,6 +2,9 @@ package xyz.block.trailblaze.toolcalls.commands
 
 import ai.koog.agents.core.tools.annotations.LLMDescription
 import kotlinx.serialization.Serializable
+import maestro.orchestra.AssertConditionCommand
+import maestro.orchestra.Condition
+import maestro.orchestra.ElementSelector
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
@@ -15,7 +18,7 @@ This tool will take a screenshot of the current page and save it with the provid
   """,
 )
 class TakeScreenshotTool(
-  @LLMDescription("Filename for the screenshot.")
+  @param:LLMDescription("Filename for the screenshot.")
   val filename: String,
 ) : ExecutableTrailblazeTool {
 
@@ -24,11 +27,20 @@ class TakeScreenshotTool(
     return TrailblazeToolResult.Success
   }
 
-  private fun saveScreenshot(context: TrailblazeToolExecutionContext) {
-    println("### Taking screenshot and saving as $filename")
-    val screenState = context.screenState
-      ?: error("No screen state available in context $context")
-
-    context.trailblazeAgent.trailblazeLogger.logScreenState(screenState)
+  private suspend fun saveScreenshot(context: TrailblazeToolExecutionContext) {
+    // Assertion that always passes to get the screenshot with no markup to be taken
+    // Through the `traceId` we can correlate the tool log with the filename, screenshot and hierarchy
+    context.trailblazeAgent.runMaestroCommands(
+      listOf(
+        AssertConditionCommand(
+          condition = Condition(
+            visible = ElementSelector(
+              index = "0"
+            )
+          ),
+        )
+      ),
+      traceId = context.traceId
+    )
   }
 }

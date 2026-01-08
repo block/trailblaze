@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.host.rules
 
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
+import xyz.block.trailblaze.logs.client.LogEmitter
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeScreenStateLog
 import xyz.block.trailblaze.logs.model.SessionId
@@ -13,8 +14,10 @@ import java.io.File
 class HostTrailblazeLoggingRule(
   override val trailblazeDeviceInfoProvider: () -> TrailblazeDeviceInfo,
   logsBaseUrl: String = "https://localhost:8443",
+  additionalLogEmitter: LogEmitter? = null,
 ) : TrailblazeLoggingRule(
   logsBaseUrl = logsBaseUrl,
+  additionalLogEmitter = additionalLogEmitter,
   writeLogToDisk = { sessionId: SessionId, log: TrailblazeLog ->
     logsRepo.saveLogToDisk(log)
   },

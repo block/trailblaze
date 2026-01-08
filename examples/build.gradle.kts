@@ -46,13 +46,6 @@ android {
     val isTrailblazeServerRunning = isHttpsServerRunning(8443)
     val isOpenRouterApiKeyEnvVarSet = (System.getenv("OPENROUTER_API_KEY") != null)
 
-    if (isRunningTests) {
-      println("=== Trailblaze Configuration ===")
-      println("isGitHubActions: $isGitHubActions")
-      println("isTrailblazeServerRunning: $isTrailblazeServerRunning")
-      println("isOpenRouterApiKeyEnvVarSet: $isOpenRouterApiKeyEnvVarSet")
-    }
-
     if (isGitHubActions && isRunningTests) {
       if (!isTrailblazeServerRunning) {
         throw GradleException("Trailblaze Reverse Proxy is required when running in GitHub Actions. Please ensure the server is running on port 8443.")
@@ -82,18 +75,6 @@ android {
     if (isTrailblazeServerRunning) {
       if (isRunningTests) println("Server is running on port 8443, enabling Trailblaze Reverse Proxy")
       testInstrumentationRunnerArguments["trailblaze.reverseProxy"] = "true"
-    }
-    
-    if (isRunningTests) {
-      println("=== Final testInstrumentationRunnerArguments ===")
-      for ((key, valueStr) in testInstrumentationRunnerArguments) {
-        val displayValue = if (key.contains("KEY", ignoreCase = true) || key.contains("API", ignoreCase = true)) {
-          maskValue(valueStr)
-        } else {
-          valueStr
-        }
-        println("  $key = $displayValue")
-      }
     }
   }
 

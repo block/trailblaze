@@ -2,6 +2,7 @@ package xyz.block.trailblaze.android
 
 import ai.koog.prompt.executor.clients.LLMClient
 import kotlinx.coroutines.runBlocking
+import kotlinx.datetime.Clock
 import maestro.orchestra.Command
 import org.junit.runner.Description
 import xyz.block.trailblaze.AdbCommandUtil
@@ -21,6 +22,8 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
+import xyz.block.trailblaze.logs.client.TrailblazeLog
+import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.model.CustomTrailblazeTools
 import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.recordings.TrailRecordings
@@ -40,6 +43,11 @@ import xyz.block.trailblaze.yaml.TrailblazeYaml
 
 /**
  * On-Device Android Trailblaze Rule Implementation.
+ *
+ * Provides stateless logger with explicit session management:
+ * - Access logger via `logger` property
+ * - Access current session via `session` property
+ * - Use `logger.log(session, log)` for all logging operations
  */
 open class AndroidTrailblazeRule(
   val llmClient: LLMClient,
@@ -53,9 +61,11 @@ open class AndroidTrailblazeRule(
   customToolClasses: CustomTrailblazeTools? = null,
 ) : SimpleTestRuleChain(trailblazeLoggingRule),
   TrailblazeRule {
+
   private val trailblazeAgent = AndroidMaestroTrailblazeAgent(
-    trailblazeLogger = trailblazeLoggingRule.trailblazeLogger,
+    trailblazeLogger = trailblazeLoggingRule.logger,
     trailblazeDeviceInfoProvider = trailblazeLoggingRule.trailblazeDeviceInfoProvider,
+    sessionProvider = { trailblazeLoggingRule.session ?: error("Session not available - ensure test is running") },
   )
 
   private val trailblazeToolRepo = TrailblazeToolRepo(
@@ -96,7 +106,8 @@ open class AndroidTrailblazeRule(
       llmClient = llmClient,
       screenStateProvider = screenStateProvider,
       agent = trailblazeAgent,
-      trailblazeLogger = trailblazeLoggingRule.trailblazeLogger,
+      trailblazeLogger = trailblazeLoggingRule.logger,
+      sessionProvider = { trailblazeLoggingRule.session ?: error("Session not available - ensure test is running") },
     )
   }
 
@@ -116,15 +127,25 @@ open class AndroidTrailblazeRule(
     val trailItems = trailblazeYaml.decodeTrail(testYaml)
     val trailConfig = trailblazeYaml.extractTrailConfig(trailItems)
     if (sendSessionStartLog) {
-      trailblazeLoggingRule.trailblazeLogger.sendStartLog(
-        trailConfig = trailConfig,
-        className = trailblazeLoggingRule.description?.className ?: "AndroidTrailblazeRule",
-        methodName = trailblazeLoggingRule.description?.methodName ?: "run",
-        trailblazeDeviceInfo = trailblazeLoggingRule.trailblazeDeviceInfoProvider(),
-        rawYaml = testYaml,
-        trailFilePath = trailFilePath,
-        hasRecordedSteps = trailblazeYaml.hasRecordedSteps(trailItems),
-        trailblazeDeviceId = trailblazeDeviceId,
+      val currentSession = trailblazeLoggingRule.session
+        ?: error("Session not available when sendSessionStartLog=true. Ensure this rule is used as a @Rule in a JUnit test.")
+
+      trailblazeLoggingRule.logger.log(
+        currentSession,
+        TrailblazeLog.TrailblazeSessionStatusChangeLog(
+          sessionStatus = SessionStatus.Started(
+            trailConfig = trailConfig,
+            trailFilePath = trailFilePath,
+            testClassName = trailblazeLoggingRule.description?.className ?: "AndroidTrailblazeRule",
+            testMethodName = trailblazeLoggingRule.description?.methodName ?: "run",
+            trailblazeDeviceInfo = trailblazeLoggingRule.trailblazeDeviceInfoProvider(),
+            rawYaml = testYaml,
+            hasRecordedSteps = trailblazeYaml.hasRecordedSteps(trailItems),
+            trailblazeDeviceId = trailblazeDeviceId,
+          ),
+          session = currentSession.sessionId,
+          timestamp = Clock.System.now(),
+        ),
       )
     }
     trailblazeAgent.clearMemory()

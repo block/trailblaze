@@ -31,6 +31,7 @@ import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
+import xyz.block.trailblaze.logs.client.TrailblazeSessionManager
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.model.DesktopAppRunYamlParams
@@ -183,7 +184,7 @@ class TrailblazeDeviceManager(
   ): DeviceSessionResolution {
     val existingSessionId = if (forceNewSession) null else getCurrentSessionIdForDevice(trailblazeDeviceId)
     val isNewSession = existingSessionId == null
-    val sessionId = existingSessionId ?: TrailblazeLogger.generateSessionId(sessionIdPrefix)
+    val sessionId = existingSessionId ?: TrailblazeSessionManager.generateSessionId(sessionIdPrefix)
 
     // Track the session ID immediately so subsequent calls can find it
     if (isNewSession) {

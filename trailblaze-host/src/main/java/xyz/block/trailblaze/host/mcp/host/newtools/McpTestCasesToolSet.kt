@@ -13,12 +13,20 @@ import xyz.block.trailblaze.MaestroTrailblazeAgent
 import xyz.block.trailblaze.agent.TrailblazeRunner
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
+import xyz.block.trailblaze.logs.client.TrailblazeSession
+import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
+import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.maestro.MaestroYamlParser
 import xyz.block.trailblaze.mcp.TrailblazeMcpSseSessionContext
 import xyz.block.trailblaze.report.utils.LogsRepo
 import java.io.File
 
+/**
+ * MCP toolset for managing and executing Trailblaze test cases.
+ * 
+ * Uses stateless logger with explicit session management via sessionProvider.
+ */
 @Suppress("unused")
 class McpTestCasesToolSet(
   private val sessionContext: TrailblazeMcpSseSessionContext?,
@@ -26,6 +34,7 @@ class McpTestCasesToolSet(
   private val openAiRunnerProvider: () -> TrailblazeRunner,
   private val typesafeYamlExecutor: (String) -> Unit,
   private val trailblazeLogger: TrailblazeLogger,
+  private val sessionProvider: TrailblazeSessionProvider,
 ) : ToolSet {
 
   val testCasesDirectory: String = File("../").canonicalPath
@@ -67,7 +76,7 @@ class McpTestCasesToolSet(
     // Send progress notifications if we have a session context with progress service
     sessionContext?.let { sessionContext ->
       val mcpSseSessionId = sessionContext.mcpSseSessionId
-      val trailblazeSessionId = trailblazeLogger.getCurrentSessionId()
+      val trailblazeSessionId = sessionProvider.invoke().sessionId
       println("Executing prompt for session: $mcpSseSessionId")
       ioScope.launch {
         var progress = 0

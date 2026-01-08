@@ -28,6 +28,7 @@ import maestro.orchestra.SetAirplaneModeCommand
 import maestro.orchestra.SetLocationCommand
 import maestro.orchestra.SetOrientationCommand
 import maestro.orchestra.SwipeCommand
+import maestro.orchestra.TakeScreenshotCommand
 import maestro.orchestra.TapOnElementCommand
 import maestro.orchestra.TapOnPointV2Command
 import maestro.orchestra.TravelCommand
@@ -54,6 +55,18 @@ class MaestroCommandToYamlSerializerTest {
       )
     }
   }
+
+    @Test
+    fun `takeScreenshot command`() {
+      TakeScreenshotCommand(
+        path = "hello",
+      ).also { command ->
+        convertCommandsToYamlAndParseAndCompare(
+          commandToSerialize = command,
+          expected = command,
+        )
+      }
+    }
 
   @Test
   fun `travelCommand with speed`() {

@@ -15,17 +15,23 @@ import xyz.block.trailblaze.api.MaestroDriverActionType
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
+import xyz.block.trailblaze.logs.client.TrailblazeSession
+import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.tracing.TrailblazeTracer.traceRecorder
 import java.io.File
 import kotlin.system.measureTimeMillis
 
 /**
- * This is a delegate Maestro [Driver] that logs all actions to the [TrailblazeLogger].
+ * This is a delegate Maestro [Driver] that logs all actions to the logger.
+ * 
+ * Uses stateless logger with explicit session management.
+ * The sessionProvider must be provided to enable logging.
  */
 class LoggingDriver(
   private val delegate: Driver,
   private val screenStateProvider: () -> ScreenState,
   private val trailblazeLogger: TrailblazeLogger,
+  private val sessionProvider: TrailblazeSessionProvider,
 ) : Driver {
 
   private inline fun <T> traceMaestroDriver(name: String, block: () -> T): T = traceRecorder.trace(name, "MaestroDriver", emptyMap(), block = {
@@ -52,19 +58,26 @@ class LoggingDriver(
         block()
       }
     }
-    val screenshotFilename = screenState.screenshotBytes?.let { trailblazeLogger.logScreenState(screenState) }
-    trailblazeLogger.log(
-      TrailblazeLog.MaestroDriverLog(
-        viewHierarchy = screenState.viewHierarchy,
-        screenshotFile = screenshotFilename,
-        action = action,
-        durationMs = executionTimeMs,
-        timestamp = startTime,
-        session = trailblazeLogger.getCurrentSessionId(),
-        deviceWidth = screenState.deviceWidth,
-        deviceHeight = screenState.deviceHeight,
-      ),
+    
+    // Get current session for logging
+    val session = sessionProvider.invoke()
+    val screenshotFilename = if (screenState.screenshotBytes != null) {
+      trailblazeLogger.logScreenState(session, screenState)
+    } else {
+      null
+    }
+    
+    val log = TrailblazeLog.MaestroDriverLog(
+      viewHierarchy = screenState.viewHierarchy,
+      screenshotFile = screenshotFilename,
+      action = action,
+      durationMs = executionTimeMs,
+      timestamp = startTime,
+      session = session.sessionId,
+      deviceWidth = screenState.deviceWidth,
+      deviceHeight = screenState.deviceHeight,
     )
+    trailblazeLogger.log(session, log)
   }
 
   private fun logActionWithoutScreenshot(action: MaestroDriverActionType, block: () -> Unit = {}) {
@@ -75,18 +88,20 @@ class LoggingDriver(
         block()
       }
     }
-    trailblazeLogger.log(
-      TrailblazeLog.MaestroDriverLog(
-        viewHierarchy = null,
-        screenshotFile = null,
-        action = action,
-        durationMs = executionTimeMs,
-        timestamp = startTime,
-        session = trailblazeLogger.getCurrentSessionId(),
-        deviceWidth = deviceInfo.widthPixels,
-        deviceHeight = deviceInfo.heightPixels,
-      ),
+    
+    // Get current session for logging
+    val session = sessionProvider.invoke()
+    val log = TrailblazeLog.MaestroDriverLog(
+      viewHierarchy = null,
+      screenshotFile = null,
+      action = action,
+      durationMs = executionTimeMs,
+      timestamp = startTime,
+      session = session.sessionId,
+      deviceWidth = deviceInfo.widthPixels,
+      deviceHeight = deviceInfo.heightPixels,
     )
+    trailblazeLogger.log(session, log)
   }
 
   override fun addMedia(mediaFiles: List<File>) = logActionWithScreenshot(MaestroDriverActionType.AddMedia(mediaFiles.map { it.canonicalPath })) {

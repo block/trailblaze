@@ -62,16 +62,23 @@ object TrailblazeHostYamlRunner {
     // Store the test instance for forceful shutdown on cancellation
     deviceManager.setActiveDriverForDevice(trailblazeDeviceId, hostTbRunner.hostRunner.loggingDriver)
 
-    // Get the logger from the test's logging rule
-    val trailblazeLogger = hostTbRunner.loggingRule.trailblazeLogger
-    // REQUIRED: Initializes the Session ID based on the testName, this triggers lifecycle calls
-    trailblazeLogger.resetForNewSession(runYamlRequest.testName)
-
+    // Get logger and session manager from the test's logging rule
+    val logger = hostTbRunner.loggingRule.logger
+    val sessionManager = hostTbRunner.loggingRule.sessionManager
+    
+    // Extract override session ID to avoid smart cast issues
     val overrideSessionId = runYamlRequest.config.overrideSessionId
-    if (overrideSessionId != null) {
-      // A specific session ID was provided, use that instead of the auto-generated one.
-      trailblazeLogger.overrideSessionId(overrideSessionId)
+    
+    // Initialize session using SessionManager
+    var session = if (overrideSessionId != null) {
+      sessionManager.createSessionWithId(overrideSessionId)
+    } else {
+      sessionManager.startSession(runYamlRequest.testName)
     }
+    
+    // Set the session on the logging rule so it's available to all components
+    // (hostRunner, trailblazeAgent, trailblazeRunner) that use sessionProvider
+    hostTbRunner.loggingRule.setSession(session)
 
     onProgressMessage("Connecting to $trailblazeDeviceId device...")
 
@@ -89,7 +96,8 @@ object TrailblazeHostYamlRunner {
       onProgressMessage("Test execution completed successfully")
 
       if (runYamlRequest.config.sendSessionEndLog) {
-        trailblazeLogger.sendSessionEndLog(isSuccess = true)
+        // End session using SessionManager
+        sessionManager.endSession(session, isSuccess = true)
       } else {
         // Keep the session open
       }
@@ -113,15 +121,15 @@ object TrailblazeHostYamlRunner {
     } catch (e: Exception) {
       println("❌ Exception caught in runHostYaml for device: ${trailblazeDeviceId.instanceId} - ${e::class.simpleName}: ${e.message}")
       onProgressMessage("Test execution failed: ${e.message}")
-      trailblazeLogger.sendSessionEndLog(
-        isSuccess = false,
-        exception = e,
-      )
+        // End session using SessionManager
+      sessionManager.endSession(session, isSuccess = false, exception = e)
       null
     } finally {
       // IMPORTANT: This ALWAYS executes, even when cancelled!
       // Ensures device manager state is updated and job is cleaned up
       println("🧹 Finally block executing for device: ${trailblazeDeviceId.instanceId} - calling cancelSessionForDevice")
+      // Clear the session from the logging rule to prevent stale sessions
+      hostTbRunner.loggingRule.setSession(null)
       deviceManager.cancelSessionForDevice(trailblazeDeviceId)
       println("🏁 Finally block completed for device: ${trailblazeDeviceId.instanceId}")
     }

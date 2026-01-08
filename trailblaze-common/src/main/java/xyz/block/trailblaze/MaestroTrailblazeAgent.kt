@@ -11,6 +11,9 @@ import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
+import xyz.block.trailblaze.logs.client.TrailblazeSession
+import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
+import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.logs.model.TraceId.Companion.TraceOrigin
 import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
@@ -27,10 +30,12 @@ import xyz.block.trailblaze.utils.ElementComparator
  * This class provides a framework for executing Maestro commands and handling [TrailblazeTool]s.
  *
  * This is abstract because there can be both on-device and host implementations of this agent.
+ * Uses stateless logger with explicit session management via sessionProvider.
  */
 abstract class MaestroTrailblazeAgent(
   val trailblazeLogger: TrailblazeLogger,
   val trailblazeDeviceInfoProvider: () -> TrailblazeDeviceInfo,
+  val sessionProvider: TrailblazeSessionProvider,
 ) : TrailblazeAgent {
 
   protected abstract suspend fun executeMaestroCommands(
@@ -85,6 +90,7 @@ abstract class MaestroTrailblazeAgent(
       traceId = traceId,
       trailblazeAgent = this,
       trailblazeDeviceInfo = trailblazeDeviceInfoProvider(),
+      sessionProvider = sessionProvider,
     )
 
     val toolsExecuted = mutableListOf<TrailblazeTool>()
@@ -184,11 +190,13 @@ abstract class MaestroTrailblazeAgent(
       durationMs = Clock.System.now().toEpochMilliseconds() - timeBeforeToolExecution.toEpochMilliseconds(),
       timestamp = timeBeforeToolExecution,
       traceId = trailblazeExecutionContext.traceId,
-      session = trailblazeLogger.getCurrentSessionId(),
+      session = sessionProvider.invoke().sessionId,
     )
     val toolLogJson = TrailblazeJsonInstance.encodeToString(toolLog)
     println("toolLogJson: $toolLogJson")
-    trailblazeLogger.log(toolLog)
+    
+    val session = sessionProvider.invoke()
+    trailblazeLogger.log(session, toolLog)
   }
 
   private fun logDelegatingTrailblazeTool(
@@ -196,12 +204,14 @@ abstract class MaestroTrailblazeAgent(
     traceId: TraceId?,
     executableTools: List<ExecutableTrailblazeTool>,
   ) {
+    val session = sessionProvider.invoke()
     trailblazeLogger.log(
+      session,
       TrailblazeLog.DelegatingTrailblazeToolLog(
         trailblazeTool = trailblazeTool,
         toolName = trailblazeTool.getToolNameFromAnnotation(),
         executableTools = executableTools,
-        session = trailblazeLogger.getCurrentSessionId(),
+        session = session.sessionId,
         traceId = traceId,
         timestamp = Clock.System.now(),
       ),

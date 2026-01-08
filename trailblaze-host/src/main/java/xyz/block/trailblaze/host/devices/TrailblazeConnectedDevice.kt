@@ -6,6 +6,7 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.host.screenstate.HostMaestroDriverScreenState
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
+import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 
 /**
  * A light wrapper around discovered connected devices
@@ -22,7 +23,10 @@ class TrailblazeConnectedDevice(
     trailblazeDevicePlatform = trailblazeDriverType.platform,
   )
 
-  fun getLoggingDriver(trailblazeLogger: TrailblazeLogger): LoggingDriver = LoggingDriver(
+  fun getLoggingDriver(
+    trailblazeLogger: TrailblazeLogger,
+    sessionProvider: TrailblazeSessionProvider,
+  ): LoggingDriver = LoggingDriver(
     delegate = maestroDriver,
     screenStateProvider = {
       HostMaestroDriverScreenState(
@@ -31,5 +35,6 @@ class TrailblazeConnectedDevice(
       )
     },
     trailblazeLogger = trailblazeLogger,
+    sessionProvider = sessionProvider,
   )
 }

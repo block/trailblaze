@@ -4,9 +4,6 @@ import ai.koog.prompt.executor.clients.LLMClient
 import ai.koog.prompt.executor.clients.LLMClientException
 import ai.koog.prompt.message.Message
 import ai.koog.prompt.params.LLMParams
-import kotlinx.coroutines.currentCoroutineContext
-import kotlin.coroutines.coroutineContext
-import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
@@ -23,6 +20,7 @@ import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
+import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.logs.model.TraceId.Companion.TraceOrigin
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
@@ -31,6 +29,15 @@ import xyz.block.trailblaze.yaml.DirectionStep
 import xyz.block.trailblaze.yaml.PromptStep
 import xyz.block.trailblaze.yaml.VerificationStep
 
+/**
+ * AI-powered test runner that executes prompts using LLM and tools.
+ *
+ * Uses explicit session management via sessionProvider for all logging operations.
+ * The sessionProvider must be provided to enable logging.
+ *
+ * @property trailblazeLogger Stateless logger that requires explicit session for each log
+ * @property sessionProvider Provides current session for logging operations (required)
+ */
 class TrailblazeRunner(
   val agent: TrailblazeAgent,
   override val screenStateProvider: () -> ScreenState,
@@ -39,6 +46,7 @@ class TrailblazeRunner(
   private val maxSteps: Int = 50,
   private val trailblazeToolRepo: TrailblazeToolRepo,
   val trailblazeLogger: TrailblazeLogger,
+  private val sessionProvider: TrailblazeSessionProvider,
   systemPromptTemplate: String? = null,
   userObjectiveTemplate: String = defaultUserObjective,
   userMessageTemplate: String = defaultUserMessage,
@@ -119,7 +127,9 @@ class TrailblazeRunner(
         )
       }
 
+      val session = sessionProvider.invoke()
       trailblazeLogger.logLlmRequest(
+        session = session,
         koogLlmRequestMessages = koogLlmRequestMessages,
         stepStatus = stepStatus,
         response = koogLlmResponseMessages,
@@ -143,11 +153,7 @@ class TrailblazeRunner(
           maxCalls = maxSteps,
           objectivePrompt = stepStatus.promptStep.prompt,
         )
-        // Send end log immediately since this is a terminal condition
-        trailblazeLogger.sendSessionEndLog(
-          isSuccess = false,
-          exception = exception,
-        )
+        // Session end is now handled by SessionManager in the calling context
         // Throw terminal exception to halt execution
         throw exception
       }
@@ -161,7 +167,8 @@ class TrailblazeRunner(
     promptStep: PromptStep,
     recordingResult: PromptRecordingResult.Failure,
   ): AgentTaskStatus {
-    trailblazeLogger.logAttemptAiFallback(promptStep, recordingResult)
+    val session = sessionProvider.invoke()
+    trailblazeLogger.logAttemptAiFallback(session, promptStep, recordingResult)
     val calculatedHistory = recordingResult.toLlmResponseHistory()
     val reconstructedStepStatus = PromptStepStatus(
       promptStep = promptStep,
@@ -199,21 +206,25 @@ class TrailblazeRunner(
   }
 
   private fun logObjectiveStart(prompt: PromptStep) {
+    val session = sessionProvider.invoke()
     trailblazeLogger.log(
+      session,
       TrailblazeLog.ObjectiveStartLog(
         promptStep = prompt,
-        session = trailblazeLogger.getCurrentSessionId(),
+        session = session.sessionId,
         timestamp = Clock.System.now(),
       ),
     )
   }
 
   private fun logObjectiveComplete(stepStatus: PromptStepStatus) {
+    val session = sessionProvider.invoke()
     trailblazeLogger.log(
+      session,
       TrailblazeLog.ObjectiveCompleteLog(
         promptStep = stepStatus.promptStep,
         objectiveResult = stepStatus.currentStatus.value,
-        session = trailblazeLogger.getCurrentSessionId(),
+        session = session.sessionId,
         timestamp = Clock.System.now(),
       ),
     )

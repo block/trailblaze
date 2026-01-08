@@ -34,12 +34,12 @@ import maestro.orchestra.SetLocationCommand
 import maestro.orchestra.SetOrientationCommand
 import maestro.orchestra.StopAppCommand
 import maestro.orchestra.SwipeCommand
+import maestro.orchestra.TakeScreenshotCommand
 import maestro.orchestra.TapOnElementCommand
 import maestro.orchestra.TapOnPointV2Command
 import maestro.orchestra.ToggleAirplaneModeCommand
 import maestro.orchestra.TravelCommand
 import maestro.orchestra.WaitForAnimationToEndCommand
-import xyz.block.trailblaze.maestro.MaestroYamlSerializer.wrappedInQuotes
 
 object MaestroYamlSerializer {
 
@@ -506,6 +506,16 @@ object MaestroYamlSerializer {
         type = "setOrientation",
         stringProps = mutableMapOf<String, String>().apply {
           put("orientation", command.orientation.name)
+        },
+      )
+    }
+
+    // https://docs.maestro.dev/api-reference/commands/takescreenshot
+    is TakeScreenshotCommand -> {
+      MaestroCommandYamlNode(
+        type = "takeScreenshot",
+        stringProps = mutableMapOf<String, String>().apply {
+          put("path", command.path)
         },
       )
     }

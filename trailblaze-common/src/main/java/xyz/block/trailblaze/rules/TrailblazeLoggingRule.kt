@@ -6,30 +6,94 @@ import kotlinx.datetime.Clock
 import org.junit.runner.Description
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.http.TrailblazeHttpClientFactory
+import xyz.block.trailblaze.logs.client.LogEmitter
 import xyz.block.trailblaze.logs.client.ScreenStateLogger
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogServerClient
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeScreenStateLog
+import xyz.block.trailblaze.logs.client.TrailblazeSession
+import xyz.block.trailblaze.logs.client.TrailblazeSessionManager
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.tracing.TrailblazeTracer
 
 /**
  * Base JUnit4 Logging Rule for Trailblaze Tests
+ *
+ * Provides stateless logger with explicit session management:
+ * - Use `logger` with `session` for all logging operations
+ * - Session lifecycle is managed automatically by the rule
+ * - Access current session via the `session` property
  */
 abstract class TrailblazeLoggingRule(
   private val logsBaseUrl: String = "https://localhost:8443",
   private val writeLogToDisk: ((currentTestName: SessionId, log: TrailblazeLog) -> Unit) = { _, _ -> },
   private val writeScreenshotToDisk: ((screenshot: TrailblazeScreenStateLog) -> Unit) = { _ -> },
   private val writeTraceToDisk: ((sessionId: SessionId, json: String) -> Unit) = { _, _ -> },
+  /** This can be used for additional log monitoring or verifications if needed, but is not needed for normal usage */
+  private val additionalLogEmitter: LogEmitter? = null,
 ) : SimpleTestRule() {
 
   abstract val trailblazeDeviceInfoProvider: () -> TrailblazeDeviceInfo
 
   /**
-   * Logger instance for this test run
+   * Current session for this test.
+   * Updated automatically during test lifecycle (ruleCreation, afterTestExecution).
+   * Can also be set externally via [setSession] for non-JUnit usage.
    */
-  val trailblazeLogger: TrailblazeLogger = TrailblazeLogger.create()
+  var session: TrailblazeSession? = null
+    private set
+
+  /**
+   * Allows external session injection for non-JUnit usage (e.g., desktop app runner).
+   * This enables using the logging infrastructure without going through JUnit rules.
+   */
+  fun setSession(newSession: TrailblazeSession?) {
+    session = newSession
+  }
+
+  /**
+   * LogEmitter that sends logs to server or disk.
+   * Shared by both SessionManager and Logger.
+   */
+  private val logEmitter: LogEmitter by lazy {
+    LogEmitter { log: TrailblazeLog ->
+      // Notify additional log emitter (for test inspection, etc.)
+      additionalLogEmitter?.emit(log)
+
+      // Get session ID from current session
+      val sessionId = session?.sessionId ?: SessionId("unknown")
+      runBlocking(Dispatchers.IO) {
+        if (isServerAvailable) {
+          val logResult = trailblazeLogServerClient.postAgentLog(log)
+          if (logResult.status.value != 200) {
+            println("Error while posting agent log: ${logResult.status.value}")
+          }
+        } else {
+          writeLogToDisk(sessionId, log)
+        }
+      }
+    }
+  }
+
+  /**
+   * Session Manager for lifecycle operations (start, end, create sessions).
+   * Public to allow external components to manage sessions explicitly.
+   */
+  val sessionManager: TrailblazeSessionManager by lazy {
+    TrailblazeSessionManager(logEmitter)
+  }
+
+  /**
+   * Stateless logger for emitting log events.
+   * Always use with an explicit [session] instance.
+   */
+  val logger: TrailblazeLogger by lazy {
+    TrailblazeLogger(
+      logEmitter = logEmitter,
+      screenStateLogger = screenStateLogger,
+    )
+  }
 
   val trailblazeLogServerClient by lazy {
     TrailblazeLogServerClient(
@@ -65,9 +129,11 @@ abstract class TrailblazeLoggingRule(
 
   override fun ruleCreation(description: Description) {
     this.description = description
-    trailblazeLogger.resetForNewSession(
-      "${description.testClass.canonicalName}_${description.methodName}"
-    )
+    
+    val testName = "${description.testClass.canonicalName}_${description.methodName}"
+    
+    // Start new session
+    session = sessionManager.startSession(testName)
   }
 
   override fun beforeTestExecution(description: Description) {
@@ -76,39 +142,22 @@ abstract class TrailblazeLoggingRule(
   }
 
   override fun afterTestExecution(description: Description, result: Result<Nothing?>) {
-    trailblazeLogger.sendSessionEndLog(
-      isSuccess = result.isSuccess,
-      exception = result.exceptionOrNull(),
-    )
+    // End session if it exists
+    session?.let { currentSession ->
+      sessionManager.endSession(
+        session = currentSession,
+        isSuccess = result.isSuccess,
+        exception = result.exceptionOrNull(),
+      )
+    }
+    
     exportTraces()
   }
 
   private fun exportTraces() {
     val traceEventsJson = TrailblazeTracer.exportJson()
-    writeTraceToDisk(trailblazeLogger.getCurrentSessionId(), traceEventsJson)
-  }
-
-  fun subscribeToLoggingEventsAndSendToServer() {
-    trailblazeLogger.setScreenStateLogger(screenStateLogger)
-    trailblazeLogger.setLogListener { log: TrailblazeLog ->
-      val sessionId = trailblazeLogger.getCurrentSessionId()
-      // Send Log
-      runBlocking(Dispatchers.IO) {
-        if (isServerAvailable) {
-          val logResult = trailblazeLogServerClient.postAgentLog(log)
-          if (logResult.status.value != 200) {
-            println("Error while posting agent log: ${logResult.status.value}")
-          }
-        } else {
-          writeLogToDisk(sessionId, log)
-        }
-      }
-    }
-  }
-
-  init {
-    // Ensure that logging has been subscribed to immediately
-    subscribeToLoggingEventsAndSendToServer()
+    val sessionId = session?.sessionId ?: SessionId("unknown")
+    writeTraceToDisk(sessionId, traceEventsJson)
   }
 }
 
