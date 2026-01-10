@@ -71,7 +71,7 @@ compose.desktop {
       vendor = "Block, Inc."
 
       macOS {
-        iconFile.set(project.file("../trailblaze-ui/src/jvmMain/resources/icons/icon.icns"))
+        iconFile.set(project.file("../trailblaze-host/src/main/resources/icons/icon.icns"))
         bundleID = "xyz.block.trailblaze.opensource.desktop"
 
         // Minimum macOS version required
@@ -100,9 +100,6 @@ afterEvaluate {
 
 dependencyGuard {
   configuration("runtimeClasspath") {
-    baselineMap = {
-      it.replace("-macos-arm64", "_PLATFORM_")
-        .replace("-linux-x64", "_PLATFORM_")
-    }
+    baselineMap = rootProject.extra["trailblazePlatformBaselineMap"] as (String) -> String
   }
 }

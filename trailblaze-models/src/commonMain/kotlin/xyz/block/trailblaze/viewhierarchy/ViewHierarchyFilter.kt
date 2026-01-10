@@ -171,6 +171,42 @@ abstract class ViewHierarchyFilter(
     }
 
     /**
+     * Iterates through a view hierarchy from the root going down.
+     * The root is always kept, but after that we only keep nodes that have
+     * meaningful properties. Nodes without properties are removed and their
+     * children are promoted up to take their place.
+     */
+    fun ViewHierarchyTreeNode.trimEmptyNodes(): ViewHierarchyTreeNode {
+      val node = this
+      fun shouldKeepNode(n: ViewHierarchyTreeNode): Boolean {
+        return listOf(
+          n.resolveMaestroText(),
+          n.resourceId
+        ).any { propValue ->
+          !propValue.isNullOrBlank()
+        }
+      }
+
+      fun processChildren(children: List<ViewHierarchyTreeNode>): List<ViewHierarchyTreeNode> {
+        return children.flatMap { child ->
+          // First, recursively process the child's children
+          val processedChild = child.copy(children = processChildren(child.children))
+
+          if (shouldKeepNode(child)) {
+            // Keep this node with its processed children
+            listOf(processedChild)
+          } else {
+            // Remove this node but promote its children up
+            processedChild.children
+          }
+        }
+      }
+
+      // Root is always kept, only process its children
+      return node.copy(children = processChildren(node.children))
+    }
+
+    /**
      * Check if two bounds rectangles overlap.
      */
     protected fun boundsOverlap(

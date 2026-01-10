@@ -17,9 +17,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import maestro.Driver
-import maestro.device.Device
-import maestro.device.DeviceService
-import maestro.device.Platform
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeElementSelector
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
@@ -27,10 +24,10 @@ import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.host.devices.HostWebDriverFactory.Companion.DEFAULT_PLAYWRIGHT_WEB_TRAILBLAZE_DEVICE_ID
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.logs.client.TrailblazeLog
-import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSessionManager
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
@@ -48,6 +45,9 @@ import xyz.block.trailblaze.yaml.models.TrailblazeYamlBuilder
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
+import maestro.device.Device as MaestroDevice
+import maestro.device.DeviceService as MaestroDeviceService
+import maestro.device.Platform as MaestroPlatform
 
 /**
  * Manages device discovery, selection, and state across the application.
@@ -323,12 +323,13 @@ class TrailblazeDeviceManager(
     }
 
     try {
-      val devices: List<Device.Connected> = DeviceService.listConnectedDevices(includeWeb = false)
+      val devices: List<MaestroDevice.Connected> = MaestroDeviceService.listConnectedDevices()
 
       val allDevices = buildList {
-        devices.forEach { maestroConnectedDevice: Device.Connected ->
+        // Connected iOS and Android Devices
+        devices.forEach { maestroConnectedDevice: MaestroDevice.Connected ->
           when (maestroConnectedDevice.platform) {
-            Platform.ANDROID -> {
+            MaestroPlatform.ANDROID -> {
               add(
                 TrailblazeConnectedDeviceSummary(
                   trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
@@ -345,7 +346,7 @@ class TrailblazeDeviceManager(
               )
             }
 
-            Platform.IOS -> {
+            MaestroPlatform.IOS -> {
               add(
                 TrailblazeConnectedDeviceSummary(
                   trailblazeDriverType = TrailblazeDriverType.IOS_HOST,
@@ -355,17 +356,25 @@ class TrailblazeDeviceManager(
               )
             }
 
-            Platform.WEB -> {
+            MaestroPlatform.WEB -> {
               add(
                 TrailblazeConnectedDeviceSummary(
                   trailblazeDriverType = TrailblazeDriverType.WEB_PLAYWRIGHT_HOST,
-                  instanceId = maestroConnectedDevice.instanceId,
+                  instanceId = DEFAULT_PLAYWRIGHT_WEB_TRAILBLAZE_DEVICE_ID.instanceId,
                   description = maestroConnectedDevice.description,
                 )
               )
             }
           }
         }
+        // A Playwright "Device" is always available
+        add(
+          TrailblazeConnectedDeviceSummary(
+            trailblazeDriverType = TrailblazeDriverType.WEB_PLAYWRIGHT_HOST,
+            instanceId = "playwright-web",
+            description = "Web Playwright Instance",
+          )
+        )
       }
 
       val filteredDevices = targetDeviceFilter(allDevices)

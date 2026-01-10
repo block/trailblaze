@@ -31,7 +31,8 @@ class OpenSourceTrailblazeDesktopAppConfig : TrailblazeDesktopAppConfig(
   private val initialDriverTypes = setOf(
     TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
     TrailblazeDriverType.ANDROID_HOST,
-    TrailblazeDriverType.IOS_HOST
+    TrailblazeDriverType.IOS_HOST,
+    TrailblazeDriverType.WEB_PLAYWRIGHT_HOST,
   )
 
   // Start with no platforms enabled by default - user must explicitly enable them

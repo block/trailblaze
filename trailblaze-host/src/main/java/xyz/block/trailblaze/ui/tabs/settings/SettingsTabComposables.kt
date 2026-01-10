@@ -71,7 +71,7 @@ object SettingsTabComposables {
         ) {
           // "None" option to disable the platform
           DropdownMenuItem(
-            text = { SelectableText("DISABLED") },
+            text = { SelectableText("None") },
             onClick = {
               showDriverMenu = false
               trailblazeSettingsRepo.updateAppConfig { config ->

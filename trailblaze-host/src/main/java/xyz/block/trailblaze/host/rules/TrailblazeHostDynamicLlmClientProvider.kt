@@ -1,10 +1,8 @@
 package xyz.block.trailblaze.host.rules
 
 import ai.koog.prompt.executor.clients.LLMClient
-import ai.koog.prompt.executor.clients.openai.OpenAILLMClient
 import ai.koog.prompt.executor.llms.MultiLLMPromptExecutor
 import ai.koog.prompt.executor.model.PromptExecutor
-import ai.koog.prompt.executor.ollama.client.OllamaClient
 import ai.koog.prompt.llm.LLMProvider
 import xyz.block.trailblaze.http.DynamicLlmClient
 import xyz.block.trailblaze.http.TrailblazeHttpClientFactory
@@ -24,19 +22,20 @@ class TrailblazeHostDynamicLlmClientProvider(
     timeoutInSeconds = 120,
   )
 
-  private val llmClients = mutableMapOf<LLMProvider, LLMClient>(
-    LLMProvider.Ollama to OllamaClient(),
-  ).apply {
-    trailblazeDynamicLlmTokenProvider.getApiTokenForProvider(
+  private val llmClients: Map<LLMProvider, LLMClient> = buildMap {
+    listOf(
+      TrailblazeLlmProvider.OLLAMA,
       TrailblazeLlmProvider.OPENAI,
-    )?.let { openAiApiKey ->
-      put(
-        LLMProvider.OpenAI,
-        OpenAILLMClient(
-          baseClient = baseClient,
-          apiKey = openAiApiKey,
-        ),
-      )
+      TrailblazeLlmProvider.GOOGLE,
+      TrailblazeLlmProvider.ANTHROPIC,
+      TrailblazeLlmProvider.OPEN_ROUTER
+    ).forEach { llmProvider ->
+      trailblazeDynamicLlmTokenProvider.getLLMClientForProviderIfAvailable(
+        llmProvider,
+        baseClient
+      )?.let { llmClient ->
+        put(llmProvider.toKoogLlmProvider(), llmClient)
+      }
     }
   }
 

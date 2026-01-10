@@ -233,6 +233,13 @@ object MaestroPlaywrightScreenStateUtils {
       return TreeNode(attributes = attributes, children = children.map { parse(it) })
     }
 
+    if (domJsonString == null) {
+      throw IllegalStateException(
+        "Failed to get view hierarchy from page. The page body may not be loaded yet or the page is in an invalid state. " +
+          "URL: ${currentPage.url()}"
+      )
+    }
+
     val root: TreeNode = parse(domJsonString as Map<String, Any>)
 
     root.attributes["url"] = currentPage.url()

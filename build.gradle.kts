@@ -18,7 +18,7 @@ plugins {
 
 subprojects {
   apply(plugin = "org.jetbrains.dokka")
-  
+
   // Configure Java toolchain to use JDK 17
   plugins.withId("org.jetbrains.kotlin.jvm") {
     configure<JavaPluginExtension> {
@@ -31,19 +31,19 @@ subprojects {
       options.release = 17
     }
   }
-  
+
   plugins.withId("org.jetbrains.kotlin.multiplatform") {
     configure<org.jetbrains.kotlin.gradle.dsl.KotlinMultiplatformExtension> {
       jvmToolchain(17)
     }
   }
-  
+
   plugins.withId("org.jetbrains.kotlin.android") {
     configure<org.jetbrains.kotlin.gradle.dsl.KotlinAndroidProjectExtension> {
       jvmToolchain(17)
     }
   }
-  
+
   // For Android projects, configure compile and target compatibility
   plugins.withId("com.android.library") {
     configure<com.android.build.gradle.LibraryExtension> {
@@ -53,7 +53,7 @@ subprojects {
       }
     }
   }
-  
+
   plugins.withId("com.android.application") {
     configure<com.android.build.gradle.AppExtension> {
       compileOptions {
@@ -137,3 +137,21 @@ subprojects
       }
     }
   }
+
+/**
+ * Standard baseline map for dependency-guard that normalizes platform-specific dependency names.
+ * This allows baselines to work across macOS and Linux machines.
+ *
+ * Usage in module build.gradle.kts:
+ * ```
+ * dependencyGuard {
+ *   configuration("runtimeClasspath") {
+ *     baselineMap = rootProject.extra["trailblazePlatformBaselineMap"] as (String) -> String
+ *   }
+ * }
+ * ```
+ */
+extra["trailblazePlatformBaselineMap"] = { dep: String ->
+  dep.replace("-macos-arm64", "_PLATFORM_")
+    .replace("-linux-x64", "_PLATFORM_")
+}

@@ -39,7 +39,6 @@ object JvmLLMProvidersUtil {
     }
   }
 
-
   fun getEnvironmentVariableValueForLlmProvider(llmProvider: TrailblazeLlmProvider): String? {
     val key = getEnvironmentVariableKeyForLlmProvider(llmProvider)
     return key?.let { System.getenv(it) }

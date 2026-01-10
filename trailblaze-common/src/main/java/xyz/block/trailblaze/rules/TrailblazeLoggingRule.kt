@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.rules
 
+import io.ktor.client.statement.bodyAsText
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
@@ -65,9 +66,9 @@ abstract class TrailblazeLoggingRule(
       val sessionId = session?.sessionId ?: SessionId("unknown")
       runBlocking(Dispatchers.IO) {
         if (isServerAvailable) {
-          val logResult = trailblazeLogServerClient.postAgentLog(log)
-          if (logResult.status.value != 200) {
-            println("Error while posting agent log: ${logResult.status.value}")
+          val httpResult = trailblazeLogServerClient.postAgentLog(log)
+          if (httpResult.status.value != 200) {
+            println("Error while posting agent log: ${httpResult.status.value} ${httpResult.bodyAsText()}")
           }
         } else {
           writeLogToDisk(sessionId, log)

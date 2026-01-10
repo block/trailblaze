@@ -1,5 +1,7 @@
 package xyz.block.trailblaze.llm.providers
 
+import ai.koog.prompt.executor.clients.LLMClient
+import io.ktor.client.HttpClient
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
 
 /**
@@ -7,4 +9,9 @@ import xyz.block.trailblaze.llm.TrailblazeLlmProvider
  */
 interface TrailblazeDynamicLlmTokenProvider {
   fun getApiTokenForProvider(llmProvider: TrailblazeLlmProvider): String?
+
+  fun getLLMClientForProviderIfAvailable(
+    trailblazeLlmProvider: TrailblazeLlmProvider,
+    baseClient: HttpClient,
+  ): LLMClient?
 }

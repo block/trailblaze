@@ -12,9 +12,9 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 @TrailblazeToolClass("tapOnPoint")
 @LLMDescription("""Tap or long press on the UI at the provided coordinates.""")
 data class TapOnPointTrailblazeTool(
-  @LLMDescription("The center X coordinate for the clickable element")
+  @param:LLMDescription("The center X coordinate for the clickable element")
   val x: Int,
-  @LLMDescription("The center Y coordinate for the clickable element")
+  @param:LLMDescription("The center Y coordinate for the clickable element")
   val y: Int,
   @param:LLMDescription("A standard tap is default, but return 'true' to perform a long press instead.")
   val longPress: Boolean = false,

@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.host.rules
 
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.host.devices.HostWebDriverFactory.Companion.DEFAULT_PLAYWRIGHT_WEB_TRAILBLAZE_DEVICE_ID
 import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
@@ -10,6 +11,7 @@ import kotlin.reflect.KClass
 
 abstract class BaseWebTrailblazeTest :
   BaseHostTrailblazeTest(
+    trailblazeDeviceId = DEFAULT_PLAYWRIGHT_WEB_TRAILBLAZE_DEVICE_ID,
     trailblazeDriverType = TrailblazeDriverType.WEB_PLAYWRIGHT_HOST,
     config = TrailblazeConfig.DEVICE_CONTROL,
     systemPromptTemplate = """

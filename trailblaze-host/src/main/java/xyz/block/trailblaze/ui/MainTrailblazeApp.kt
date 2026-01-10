@@ -91,11 +91,13 @@ class MainTrailblazeApp(
       // Initialize window state from saved config or use defaults
       val windowState = remember {
         val config = currentServerState.appConfig
+        val windowX = config.windowX
+        val windowY = config.windowY
         WindowState(
           width = config.windowWidth?.dp ?: 1200.dp,
           height = config.windowHeight?.dp ?: 800.dp,
-          position = if (config.windowX != null && config.windowY != null) {
-            WindowPosition(config.windowX.dp, config.windowY.dp)
+          position = if (windowX != null && windowY != null) {
+            WindowPosition(windowX.dp, windowY.dp)
           } else {
             WindowPosition.Aligned(Alignment.Center)
           }

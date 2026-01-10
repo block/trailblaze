@@ -12,7 +12,6 @@ import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.mcp.RpcHandler
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
 import xyz.block.trailblaze.util.toSnakeCaseIdentifier
-import xyz.block.trailblaze.util.toSnakeCaseWithId
 import xyz.block.trailblaze.yaml.TrailblazeYaml
 
 /**
@@ -37,21 +36,20 @@ class RunYamlRequestHandler(
       null
     }
 
-    val configTitle = trailConfig?.title
-    val configId = trailConfig?.id
-
-    val methodName = if (configTitle != null && configId != null) {
-      toSnakeCaseWithId(configTitle, configId)
-    } else {
-      toSnakeCaseIdentifier(request.testName)
-    }
-
     // Start session for this test execution
     val overrideId = request.config.overrideSessionId
     val session: TrailblazeSession = if (overrideId != null) {
       sessionManager.createSessionWithId(overrideId)
     } else {
-      sessionManager.startSession(methodName)
+      val configTitle = trailConfig?.title
+      val configId = trailConfig?.id
+      val newSessionId = run {
+        configTitle ?: configId ?: request.testName
+      }.let {
+        // Ensure sessionId is a valid snake case identifier without special characters for a filename
+        toSnakeCaseIdentifier(it)
+      }
+      sessionManager.startSession(newSessionId)
     }
 
     return try {

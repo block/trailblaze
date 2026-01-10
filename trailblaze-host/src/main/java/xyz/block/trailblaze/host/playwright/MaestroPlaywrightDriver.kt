@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.host.playwright
 
+import com.microsoft.playwright.Browser
 import com.microsoft.playwright.BrowserType
 import com.microsoft.playwright.Playwright
 import kotlinx.serialization.Serializable
@@ -47,17 +48,39 @@ class MaestroPlaywrightDriver(headless: Boolean) : Driver {
     .setHeadless(headless || isCI)
     .apply {
       setArgs(
-        listOf(
-          "--no-sandbox",
-          "--disable-dev-shm-usage",
-          "--disable-gpu",
-          "--disable-background-timer-throttling",
-          "--disable-backgrounding-occluded-windows",
-          "--disable-renderer-backgrounding",
-          "--disable-web-security",
-          "--no-first-run",
-          "--disable-extensions",
-        ),
+        buildList {
+          // Core stability flags
+          add("--no-sandbox")
+          add("--disable-dev-shm-usage")
+          add("--no-first-run")
+          add("--disable-extensions")
+          add("--disable-web-security")
+
+          // Prevent background throttling (important for automation)
+          add("--disable-background-timer-throttling")
+          add("--disable-backgrounding-occluded-windows")
+          add("--disable-renderer-backgrounding")
+
+          // Reduce visual flashing and flickering
+          add("--disable-infobars") // Remove "controlled by automation" bar
+          add("--disable-popup-blocking")
+          add("--disable-features=TranslateUI") // No translate popups
+          add("--force-color-profile=srgb") // Consistent color rendering
+          add("--disable-ipc-flooding-protection") // Smoother IPC for automation
+
+          // GPU handling - enable on macOS for smoother rendering, disable on Linux CI
+          if (isRunningOnCi()) {
+            add("--disable-gpu")
+          } else {
+            // On local dev machines (especially macOS), GPU often renders smoother
+            add("--enable-gpu-rasterization")
+            add("--enable-zero-copy") // Reduce memory copying/flashing
+          }
+
+          // Reduce compositor flicker
+          add("--disable-smooth-scrolling")
+          add("--animation-duration-scale=0") // Disable animations that cause flicker
+        },
       )
         .setEnv(customEnv)
 
@@ -68,7 +91,7 @@ class MaestroPlaywrightDriver(headless: Boolean) : Driver {
           else -> null
         }
         executablePath?.let { path ->
-          val chromiumDirs = java.io.File(cliDir).listFiles { file ->
+          val chromiumDirs = File(cliDir).listFiles { file ->
             file.isDirectory && file.name.startsWith(".local-browsers")
           }
           chromiumDirs?.firstOrNull()?.let { browsersDir ->
@@ -76,7 +99,7 @@ class MaestroPlaywrightDriver(headless: Boolean) : Driver {
               file.isDirectory && file.name.startsWith("chromium-")
             }
             chromiumVersionDirs?.firstOrNull()?.let { chromiumDir ->
-              val chromeExecutable = java.io.File(chromiumDir, "chrome-linux/chrome")
+              val chromeExecutable = File(chromiumDir, "chrome-linux/chrome")
               if (chromeExecutable.exists()) {
                 setExecutablePath(chromeExecutable.toPath())
               }
@@ -92,8 +115,8 @@ class MaestroPlaywrightDriver(headless: Boolean) : Driver {
       println("Connecting to WebSocket endpoint: $endpoint")
       var retryCount = 0
       var connected = false
-      var browserInstance: com.microsoft.playwright.Browser? = null
-      while (!connected && retryCount < 3) {
+      var browserInstance: Browser? = null
+      while (!connected) {
         try {
           browserInstance = Playwright.create().chromium().connect(endpoint)
           connected = true
@@ -108,7 +131,7 @@ class MaestroPlaywrightDriver(headless: Boolean) : Driver {
           }
         }
       }
-      if (!connected || browserInstance == null) {
+      if (browserInstance == null) {
         throw RuntimeException("Failed to connect to WebSocket endpoint after 3 retries")
       }
       browserInstance
@@ -119,15 +142,86 @@ class MaestroPlaywrightDriver(headless: Boolean) : Driver {
     Playwright.create().chromium().launch(launchOptions)
   }
 
-  var currentPage = browser.newPage()
+  // Default viewport size for web testing - landscape orientation suitable for most web apps
+  companion object {
+    const val DEFAULT_VIEWPORT_WIDTH = 1280
+    const val DEFAULT_VIEWPORT_HEIGHT = 800
+  }
+
+  // Create a context with explicit viewport and matching deviceScaleFactor to prevent flicker.
+  // The flicker issue (https://github.com/microsoft/playwright/issues/2576) is caused by
+  // deviceScaleFactor mismatch: Playwright defaults to 1, but Mac Retina is 2.
+  // By matching the native scale factor, we avoid the zoom/rescale during screenshots.
+  private val browserContext = browser.newContext(
+    Browser.NewContextOptions()
+      .setViewportSize(DEFAULT_VIEWPORT_WIDTH, DEFAULT_VIEWPORT_HEIGHT)
+      .setDeviceScaleFactor(if (isCI) 1.0 else 2.0), // Match native: 2 for Mac Retina, 1 for CI/Linux
+  )
+
+  var currentPage = browserContext.newPage()
+
+  // Timeout configuration for CI vs local environments
+  private val navigationTimeout: Double = if (isCI) 60000.0 else 30000.0 // 60s for CI, 30s for local
+  private val defaultTimeout: Double = if (isCI) 45000.0 else 30000.0 // 45s for CI, 30s for local
+
+  /**
+   * JavaScript that injects CSS to disable all animations and transitions.
+   * Using addInitScript ensures this runs on every page load/navigation.
+   */
+  private val disableAnimationsScript = """
+    (function() {
+      const style = document.createElement('style');
+      style.textContent = `
+        *, *::before, *::after {
+          animation-duration: 0s !important;
+          animation-delay: 0s !important;
+          transition-duration: 0s !important;
+          transition-delay: 0s !important;
+          scroll-behavior: auto !important;
+        }
+      `;
+      // Inject as early as possible
+      if (document.head) {
+        document.head.appendChild(style);
+      } else {
+        document.addEventListener('DOMContentLoaded', () => document.head.appendChild(style));
+      }
+    })();
+  """.trimIndent()
+
+  /**
+   * Sets up a page for automation: popup handling, timeouts, and visual stability.
+   * When a new tab opens (via target="_blank" or window.open), we automatically
+   * switch currentPage to the new tab so the agent follows the navigation flow.
+   */
+  private fun setupPageForAutomation(page: com.microsoft.playwright.Page) {
+    // Apply timeouts
+    page.setDefaultNavigationTimeout(navigationTimeout)
+    page.setDefaultTimeout(defaultTimeout)
+
+    // Inject script to disable animations/transitions on every navigation (reduces flicker)
+    page.addInitScript(disableAnimationsScript)
+
+    // Handle new tabs: automatically switch to them
+    page.onPopup { popup ->
+      println("[Playwright] New tab detected, switching currentPage to: ${popup.url()}")
+      // Set up the new page for automation too
+      setupPageForAutomation(popup)
+      // Switch to the new tab
+      currentPage = popup
+      // Wait for the new page to be ready
+      try {
+        popup.waitForLoadState(com.microsoft.playwright.options.LoadState.LOAD)
+        println("[Playwright] New tab loaded: ${popup.url()}")
+      } catch (e: Exception) {
+        println("[Playwright] Warning: New tab load wait failed: ${e.message}")
+      }
+    }
+  }
 
   init {
-    // Configure timeouts for CI environment
-    val navigationTimeout: Double = if (isCI) 60000.0 else 30000.0 // 60s for CI, 30s for local
-    val defaultTimeout: Double = if (isCI) 45000.0 else 30000.0 // 45s for CI, 30s for local
-
-    currentPage.setDefaultNavigationTimeout(navigationTimeout)
-    currentPage.setDefaultTimeout(defaultTimeout)
+    // Set up the initial page for automation (timeouts, animations disabled, popup handling)
+    setupPageForAutomation(currentPage)
 
     println("Playwright driver initialized with timeouts - Navigation: ${navigationTimeout}ms, Default: ${defaultTimeout}ms")
     println("CI environment detected: $isCI")
@@ -196,7 +290,60 @@ class MaestroPlaywrightDriver(headless: Boolean) : Driver {
   }
 
   override fun close() {
-    error("Unsupported Maestro Playwright Driver Call to ${this::class.simpleName}::close")
+    println("[Playwright] Closing browser...")
+    try {
+      // Close all pages in the context
+      browserContext.pages().forEach { page ->
+        try {
+          page.close()
+        } catch (e: Exception) {
+          println("[Playwright] Warning: Failed to close page: ${e.message}")
+        }
+      }
+      // Close the context
+      browserContext.close()
+      // Close the browser
+      browser.close()
+      println("[Playwright] Browser closed successfully")
+    } catch (e: Exception) {
+      println("[Playwright] Error closing browser: ${e.message}")
+    }
+  }
+
+  /**
+   * Resets the browser session without closing the browser.
+   * This is faster than close() + create new driver, useful between tests.
+   * - Navigates to about:blank
+   * - Clears cookies and storage
+   * - Closes any extra tabs
+   */
+  fun resetSession() {
+    println("[Playwright] Resetting browser session...")
+    try {
+      // Close all extra pages, keep only one
+      val pages = browserContext.pages()
+      if (pages.size > 1) {
+        pages.drop(1).forEach { page ->
+          try {
+            page.close()
+          } catch (e: Exception) {
+            println("[Playwright] Warning: Failed to close extra page: ${e.message}")
+          }
+        }
+      }
+
+      // Navigate the remaining page to blank
+      currentPage = browserContext.pages().firstOrNull() ?: browserContext.newPage()
+      setupPageForAutomation(currentPage)
+      currentPage.navigate("about:blank")
+
+      // Clear cookies and storage
+      browserContext.clearCookies()
+
+      println("[Playwright] Browser session reset successfully")
+    } catch (e: Exception) {
+      println("[Playwright] Error resetting session: ${e.message}")
+    }
   }
 
   @Serializable
@@ -212,13 +359,20 @@ class MaestroPlaywrightDriver(headless: Boolean) : Driver {
     return treeNode
   }
 
-  override fun deviceInfo(): DeviceInfo = DeviceInfo(
-    platform = Platform.WEB,
-    widthPixels = currentPage.viewportSize().width,
-    heightPixels = currentPage.viewportSize().height,
-    widthGrid = currentPage.viewportSize().width,
-    heightGrid = currentPage.viewportSize().height,
-  )
+  override fun deviceInfo(): DeviceInfo {
+    // Use viewport size, with fallback to window dimensions for robustness
+    val viewportSize = currentPage.viewportSize()
+    val width = viewportSize?.width ?: (currentPage.evaluate("window.innerWidth") as Number).toInt()
+    val height = viewportSize?.height ?: (currentPage.evaluate("window.innerHeight") as Number).toInt()
+
+    return DeviceInfo(
+      platform = Platform.WEB,
+      widthPixels = width,
+      heightPixels = height,
+      widthGrid = width,
+      heightGrid = height,
+    )
+  }
 
   override fun eraseText(charactersToErase: Int) {
     error("Unsupported Maestro Playwright Driver Call to ${this::class.simpleName}::eraseText")
@@ -457,23 +611,59 @@ class MaestroPlaywrightDriver(headless: Boolean) : Driver {
   }
 
   override fun swipe(start: Point, end: Point, durationMs: Long) {
-    currentPage.mouse().apply {
-      down()
-      move(start.x.toDouble(), start.y.toDouble())
-      up()
-    }
+    // Calculate scroll delta from start to end
+    val deltaX = (start.x - end.x).toDouble()
+    val deltaY = (start.y - end.y).toDouble()
+
+    // Move mouse to start position and use wheel to scroll
+    currentPage.mouse().move(start.x.toDouble(), start.y.toDouble())
+    currentPage.mouse().wheel(deltaX, deltaY)
   }
 
   override fun swipe(elementPoint: Point, direction: SwipeDirection, durationMs: Long) {
-    error("Unsupported Maestro Playwright Driver Call to ${this::class.simpleName}::swipe")
+    val scrollAmount = 300.0 // Reasonable scroll distance for web
+    // Swipe UP = finger moves up = page scrolls down = positive wheel deltaY
+    // Swipe DOWN = finger moves down = page scrolls up = negative wheel deltaY
+    val (deltaX, deltaY) = when (direction) {
+      SwipeDirection.UP -> 0.0 to scrollAmount
+      SwipeDirection.DOWN -> 0.0 to -scrollAmount
+      SwipeDirection.LEFT -> scrollAmount to 0.0
+      SwipeDirection.RIGHT -> -scrollAmount to 0.0
+    }
+
+    // Move mouse to element position and scroll
+    currentPage.mouse().move(elementPoint.x.toDouble(), elementPoint.y.toDouble())
+    currentPage.mouse().wheel(deltaX, deltaY)
   }
 
   override fun swipe(swipeDirection: SwipeDirection, durationMs: Long) {
-    error("Unsupported Maestro Playwright Driver Call to ${this::class.simpleName}::swipe")
+    // Swipe from center of viewport
+    val viewportSize = currentPage.viewportSize()
+    val centerX = (viewportSize?.width ?: DEFAULT_VIEWPORT_WIDTH) / 2.0
+    val centerY = (viewportSize?.height ?: DEFAULT_VIEWPORT_HEIGHT) / 2.0
+
+    val scrollAmount = 400.0 // Larger scroll for full-page swipe
+    // Swipe UP = finger moves up = page scrolls down = positive wheel deltaY
+    // Swipe DOWN = finger moves down = page scrolls up = negative wheel deltaY
+    val (deltaX, deltaY) = when (swipeDirection) {
+      SwipeDirection.UP -> 0.0 to scrollAmount
+      SwipeDirection.DOWN -> 0.0 to -scrollAmount
+      SwipeDirection.LEFT -> scrollAmount to 0.0
+      SwipeDirection.RIGHT -> -scrollAmount to 0.0
+    }
+
+    // Move mouse to center and scroll
+    currentPage.mouse().move(centerX, centerY)
+    currentPage.mouse().wheel(deltaX, deltaY)
   }
 
+  // Reusable screenshot options to minimize flicker
+  private val screenshotOptions = com.microsoft.playwright.Page.ScreenshotOptions()
+    .setAnimations(com.microsoft.playwright.options.ScreenshotAnimations.DISABLED) // Freeze animations
+    .setCaret(com.microsoft.playwright.options.ScreenshotCaret.HIDE) // Hide blinking cursor
+
   override fun takeScreenshot(out: Sink, compressed: Boolean) {
-    val screenshot = currentPage.screenshot()
+    val screenshot = currentPage.screenshot(screenshotOptions)
     val finalSink = if (compressed) out.gzip() else out
     finalSink.buffer().use { sink ->
       sink.write(screenshot)

@@ -6,7 +6,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
-import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.client.TrailblazeJson
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
@@ -84,13 +83,6 @@ class TrailblazeSettingsRepo(
 
   fun getAllSupportedDriverTypes(): Set<TrailblazeDriverType> {
     return supportedDriverTypes
-  }
-
-  /**
-   * Get the map of enabled platforms to their selected driver types
-   */
-  fun getEnabledDriverTypesMap(): Map<TrailblazeDevicePlatform, TrailblazeDriverType> {
-    return serverStateFlow.value.appConfig.selectedTrailblazeDriverTypes
   }
 
   /**
