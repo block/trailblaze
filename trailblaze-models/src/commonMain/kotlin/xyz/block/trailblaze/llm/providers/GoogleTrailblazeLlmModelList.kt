@@ -26,6 +26,12 @@ object GoogleTrailblazeLlmModelList : TrailblazeLlmModelList {
     outputCostPerOneMillionTokens = 2.50,
   )
 
+  val GEMINI_2_5_FLASH_LITE = GEMINI_2_5_FLASH.copy(
+    modelId = "gemini-2.5-flash-lite",
+    inputCostPerOneMillionTokens = 0.10,
+    outputCostPerOneMillionTokens = 0.40,
+  )
+
   val GEMINI_2_5_PRO = GoogleModels.Gemini2_5Pro.toTrailblazeLlmModel(
     inputCostPerOneMillionTokens = 1.25,
     outputCostPerOneMillionTokens = 10.00,
@@ -33,6 +39,7 @@ object GoogleTrailblazeLlmModelList : TrailblazeLlmModelList {
 
   override val entries = listOf(
     GEMINI_2_5_FLASH,
+    GEMINI_2_5_FLASH_LITE,
     GEMINI_2_5_PRO,
     GEMINI_3_0_PRO_PREVIEW,
     GEMINI_3_0_FLASH_PREVIEW,

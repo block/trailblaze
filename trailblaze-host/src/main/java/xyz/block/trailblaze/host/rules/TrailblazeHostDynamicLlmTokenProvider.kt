@@ -14,13 +14,13 @@ import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils.createProcessBuil
 import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils.runProcess
 
 /**
- * Retrieves LLM API tokens from environment variables for host testing (OPENAI_API_KEY).
+ * Retrieves LLM API tokens from environment variables
  */
 object TrailblazeHostDynamicLlmTokenProvider : TrailblazeDynamicLlmTokenProvider {
 
   override fun getApiTokenForProvider(llmProvider: TrailblazeLlmProvider): String? = when (llmProvider) {
     TrailblazeLlmProvider.ANTHROPIC -> System.getenv("ANTHROPIC_API_KEY")
-    TrailblazeLlmProvider.DATABRICKS -> "DATABRICKS_TOKEN"
+    TrailblazeLlmProvider.DATABRICKS -> System.getenv("DATABRICKS_TOKEN")
     TrailblazeLlmProvider.GOOGLE -> System.getenv("GOOGLE_API_KEY")
     TrailblazeLlmProvider.OPENAI -> System.getenv("OPENAI_API_KEY")
     TrailblazeLlmProvider.OPEN_ROUTER -> System.getenv("OPENROUTER_API_KEY")
@@ -60,7 +60,6 @@ object TrailblazeHostDynamicLlmTokenProvider : TrailblazeDynamicLlmTokenProvider
           baseClient = baseClient,
           apiKey = apiKey,
         )
-
 
         TrailblazeLlmProvider.GOOGLE -> GoogleLLMClient(
           baseClient = baseClient,

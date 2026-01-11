@@ -5,12 +5,22 @@ package xyz.block.trailblaze.api
  *
  * @property formatName The name of the format (e.g., "PNG", "JPEG")
  * @property fileExtension The file extension for this format (e.g., "png", "jpg")
+ * @property mimeSubtype The mime subtype for this format (e.g., "png", "jpeg")
  */
 enum class TrailblazeImageFormat(
   val formatName: String,
   val fileExtension: String,
-  val mimeType: String,
+  val mimeSubtype: String,
+  val mimeType: String = "image/$mimeSubtype"
 ) {
-  PNG("PNG", "png", "image/png"),
-  JPEG("JPEG", "jpg", "image/jpeg"),
+  PNG(
+    formatName = "PNG",
+    fileExtension = "png",
+    mimeSubtype = "png"
+  ),
+  JPEG(
+    formatName = "JPEG",
+    fileExtension = "jpg",
+    mimeSubtype = "jpeg"
+  )
 }

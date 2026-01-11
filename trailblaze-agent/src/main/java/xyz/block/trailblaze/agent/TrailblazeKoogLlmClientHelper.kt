@@ -13,6 +13,7 @@ import ai.koog.prompt.message.RequestMetaInfo
 import ai.koog.prompt.params.LLMParams
 import kotlinx.coroutines.delay
 import kotlinx.datetime.Clock
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import xyz.block.trailblaze.MaestroTrailblazeAgent
@@ -305,7 +306,7 @@ class TrailblazeKoogLlmClientHelper(
     // Add previous LLM responses
     addAll(stepStatus.getLimitedHistory())
 
-    val viewHierarchyJson = TrailblazeJsonInstance.encodeToString(
+    val viewHierarchyJson = Json.encodeToString(
       serializer = ViewHierarchyTreeNode.serializer(),
       value = stepStatus.currentScreenState.viewHierarchy,
     )
@@ -332,7 +333,7 @@ class TrailblazeKoogLlmClientHelper(
             add(
               ContentPart.Image(
                 content = AttachmentContent.Binary.Bytes(screenshotBytes),
-                format = ImageFormatDetector.detectFormat(screenshotBytes).fileExtension,
+                format = ImageFormatDetector.detectFormat(screenshotBytes).mimeSubtype,
               ),
             )
           }

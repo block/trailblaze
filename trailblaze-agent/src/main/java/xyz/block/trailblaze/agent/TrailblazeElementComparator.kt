@@ -256,8 +256,8 @@ class TrailblazeElementComparator(
             screenState.screenshotBytes?.let { screenshotBytes ->
               add(
                 ContentPart.Image(
-                  AttachmentContent.Binary.Bytes(screenshotBytes),
-                  format = ImageFormatDetector.detectFormat(screenshotBytes).fileExtension,
+                  content = AttachmentContent.Binary.Bytes(screenshotBytes),
+                  format = ImageFormatDetector.detectFormat(screenshotBytes).mimeSubtype,
                 ),
               )
             }
@@ -331,8 +331,8 @@ class TrailblazeElementComparator(
           screenState.screenshotBytes?.let { screenshotBytes ->
             add(
               ContentPart.Image(
-                AttachmentContent.Binary.Bytes(screenshotBytes),
-                format = ImageFormatDetector.detectFormat(screenshotBytes).fileExtension,
+                content = AttachmentContent.Binary.Bytes(screenshotBytes),
+                format = ImageFormatDetector.detectFormat(screenshotBytes).mimeSubtype,
               ),
             )
           }
