@@ -3,6 +3,10 @@ package xyz.block.trailblaze.report.models
 import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.logs.model.SessionId
 
+
+const val SOURCE_TYPE_HANDWRITTEN = "HANDWRITTEN"
+const val SOURCE_TYPE_GENERATED = "GENERATED"
+
 @Serializable
 data class CiSummaryReport(
   val metadata: CiRunMetadata,
@@ -18,6 +22,9 @@ data class SessionResult(
 
   /** How the test was executed */
   val execution_mode: ExecutionMode,
+
+  /** Source of the trail file (handwritten vs generated), null if unknown */
+  val trail_source: String? = null,
 
   /** Device classifier used */
   val device_classifier: String? = null,

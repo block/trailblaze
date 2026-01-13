@@ -47,18 +47,14 @@ interface RecordedTrailsRepo {
    * @return List of existing trails with path information, or empty list if none found
    */
   fun getExistingTrails(sessionInfo: SessionInfo): List<ExistingTrail>
+  
   /**
-   * Gets all directories that should be watched for a given session's recordings.
-   * This includes all configured subdirectories (e.g., "handwritten" and "generated")
-   * that either already exist or where new recordings might be saved.
+   * Gets the directory that should be watched for a given session's recordings.
    *
-   * This is useful when you need to detect changes in any of the possible recording
-   * locations, not just the first existing one.
-   *
-   * @param sessionInfo The session to get the watch directories for
-   * @return List of directory paths to watch, or empty list if no directories can be determined
+   * @param sessionInfo The session to get the watch directory for
+   * @return The directory path to watch, or null if the directory doesn't exist
    */
-  fun getWatchDirectoriesForSession(sessionInfo: SessionInfo): List<String>
+  fun getWatchDirectoryForSession(sessionInfo: SessionInfo): String?
 
   /**
    * Watches a directory for trail file changes and returns a Flow of change events.

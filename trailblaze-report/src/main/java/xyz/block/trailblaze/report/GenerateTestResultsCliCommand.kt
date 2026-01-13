@@ -18,7 +18,6 @@ import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
-import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.report.models.CiRunMetadata
@@ -27,8 +26,12 @@ import xyz.block.trailblaze.report.models.ExecutionMode
 import xyz.block.trailblaze.report.models.Outcome
 import xyz.block.trailblaze.report.models.SessionRecordingInfo
 import xyz.block.trailblaze.report.models.RecordingSkipReason
+import xyz.block.trailblaze.report.models.SOURCE_TYPE_GENERATED
+import xyz.block.trailblaze.report.models.SOURCE_TYPE_HANDWRITTEN
 import xyz.block.trailblaze.report.models.SessionResult
 import xyz.block.trailblaze.report.utils.LogsRepo
+import xyz.block.trailblaze.yaml.TrailConfig
+import xyz.block.trailblaze.yaml.TrailSourceType
 import java.io.File
 import kotlin.io.path.Path
 
@@ -99,6 +102,12 @@ class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-results
     ),
   )
 
+  /** JSON serializer that encodes default values (for complete report output) */
+  private val jsonSerializer = Json {
+    prettyPrint = true
+    encodeDefaults = true
+  }
+
   override fun run() {
     val logsRepo = LogsRepo(
       logsDir = logsDir,
@@ -143,6 +152,7 @@ class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-results
               status = sessionInfo.latestStatus,
               sessionRecordingInfo = sessionRecordingInfo
             ),
+            trail_source = determineTrailSource(sessionInfo.trailConfig),
             device_classifier = sessionInfo.trailblazeDeviceInfo?.classifiers
               ?.joinToString("-") { it.classifier },
             outcome = outcome,
@@ -178,7 +188,7 @@ class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-results
 
     val output = outputArg ?: File(logsDir, "trailblaze_test_report.${outputFormat.extension}")
     val content = when (outputFormat) {
-      OutputFormat.JSON -> TrailblazeJsonInstance.encodeToString(value = summaryReport)
+      OutputFormat.JSON -> jsonSerializer.encodeToString(value = summaryReport)
       OutputFormat.YAML -> yamlSerializer.encodeToString(value = summaryReport)
     }
 
@@ -276,6 +286,14 @@ class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-results
       "Max LLM calls limit reached (${status.maxCalls}) for: ${status.objectivePrompt}"
 
     else -> null
+  }
+
+  /**
+   * Determines source type from trail config's Source
+   * This will assume generated if trail config or source is null
+   */
+  private fun determineTrailSource(trailConfig: TrailConfig?): String? {
+    return trailConfig?.source?.type?.name
   }
 
   private fun countLlmCalls(logs: List<TrailblazeLog>): Int {

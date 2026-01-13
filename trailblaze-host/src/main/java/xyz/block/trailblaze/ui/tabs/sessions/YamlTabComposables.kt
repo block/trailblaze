@@ -11,21 +11,25 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Laptop
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.ViewModule
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedCard
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -38,6 +42,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -55,79 +66,16 @@ import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.ui.TrailblazeSettingsRepo
 import xyz.block.trailblaze.ui.composables.DeviceSelectionDialog
 import xyz.block.trailblaze.ui.composables.SelectableText
-import xyz.block.trailblaze.yaml.TrailblazeYaml
 
-// Function to validate YAML
-// This does a "soft" validation that checks YAML syntax but doesn't fail on unknown tools
-// since the actual runner will have app-specific custom tools registered
-private fun validateYaml(content: String): String? {
-  if (content.isBlank()) {
-    return null // Empty is not an error, just disable the button
-  }
-
-  // Check for common indentation issues before parsing
-  val indentationError = checkIndentationIssues(content)
-  if (indentationError != null) {
-    return indentationError
-  }
-
-  return try {
-    // Try to parse with default tools
-    val trailblazeYaml = TrailblazeYaml()
-    trailblazeYaml.decodeTrail(content)
-    null // No error
-  } catch (e: Exception) {
-    val message = e.message ?: "Invalid YAML format"
-    // Only ignore errors that are specifically about unknown/unregistered tools
-    // The exact error format is: "TrailblazeYaml could not TrailblazeTool found with name: X. Did you register it?"
-    val isUnknownToolError = message.contains("TrailblazeYaml could not TrailblazeTool found with name:")
-
-    if (isUnknownToolError) {
-      null // Allow unknown tools - they'll be registered when the test runs
-    } else {
-      // Return all other errors including syntax, structure issues
-      message
-    }
-  }
-}
-
-// Check for common indentation problems that the YAML parser might not catch
-private fun checkIndentationIssues(yaml: String): String? {
-  val lines = yaml.lines()
-  var inRecording = false
-  var recordingIndent = 0
-
-  for ((index, line) in lines.withIndex()) {
-    if (line.isBlank()) continue
-
-    val trimmed = line.trim()
-    val indent = line.takeWhile { it == ' ' }.length
-
-    // Detect when we enter a recording block
-    if (trimmed == "recording:") {
-      inRecording = true
-      recordingIndent = indent
-      continue
-    }
-
-    // Check for misaligned "tools:" within recording
-    if (inRecording && trimmed == "tools:") {
-      val expectedIndent = recordingIndent + 2
-      if (indent != expectedIndent && indent != recordingIndent + 4) {
-        return "Line ${index + 1}: 'tools:' has incorrect indentation ($indent spaces). " +
-            "Expected $expectedIndent spaces to align with 'recording' block."
-      }
-    }
-
-    // Exit recording block when we de-indent
-    if (inRecording && indent <= recordingIndent && trimmed != "recording:") {
-      inRecording = false
-    }
-  }
-
-  return null
-}
-
+/**
+ * Main YAML Tab composable that provides a combined text and visual editor for Trailblaze YAML files.
+ * 
+ * This composable orchestrates:
+ * - Editor mode switching (Text vs Visual)
+ * - YAML content persistence and validation
+ * - Test execution on connected devices
+ * - Progress and connection status display
+ */
 @Composable
 fun YamlTabComposable(
   currentTrailblazeLlmModelProvider: () -> TrailblazeLlmModel,
@@ -138,42 +86,50 @@ fun YamlTabComposable(
 ) {
   val currentTrailblazeLlmModel = currentTrailblazeLlmModelProvider()
   val serverState by trailblazeSettingsRepo.serverStateFlow.collectAsState()
-  val yamlContent = serverState.appConfig.yamlContent
+  val savedYamlContent = serverState.appConfig.yamlContent
 
   var isRunning by remember { mutableStateOf(false) }
   var progressMessages by remember { mutableStateOf<List<String>>(emptyList()) }
   var connectionStatus by remember { mutableStateOf<DeviceConnectionStatus?>(null) }
   var showDeviceSelectionDialog by remember { mutableStateOf(false) }
+  
+  // Editor mode state - Visual is the default
+  var editorMode by remember { mutableStateOf(YamlEditorMode.VISUAL) }
 
-  // Local state for YAML content to avoid saving on every character
-  var localYamlContent by remember(yamlContent) { mutableStateOf(yamlContent) }
+  // Local state for YAML content - shared between text and visual editors
+  var localYamlContent by remember(savedYamlContent) { mutableStateOf(savedYamlContent) }
 
   // YAML validation state
   var validationError by remember { mutableStateOf<String?>(null) }
   var isValidating by remember { mutableStateOf(false) }
+  
+  // Save state - shared across editors
+  var saveSuccess by remember { mutableStateOf(false) }
+  val hasUnsavedChanges = localYamlContent != savedYamlContent
 
   val coroutineScope = rememberCoroutineScope()
 
-  // Debounce YAML content updates and validate
-  LaunchedEffect(localYamlContent) {
-    if (localYamlContent != yamlContent) {
-      isValidating = true
-      delay(500) // 500ms debounce
-      if (localYamlContent != yamlContent) { // Check again after delay
-        // Validate the YAML
-        validationError = validateYaml(localYamlContent)
+  // Function to save changes
+  fun saveChanges() {
+    trailblazeSettingsRepo.updateAppConfig { appConfig ->
+      appConfig.copy(yamlContent = localYamlContent)
+    }
+    saveSuccess = true
+  }
 
-        // Save the content
-        trailblazeSettingsRepo.updateAppConfig { appConfig ->
-          appConfig.copy(
-            yamlContent = localYamlContent
-          )
-        }
-      }
-      isValidating = false
-    } else {
-      // When content matches saved content, validate it immediately
-      validationError = validateYaml(localYamlContent)
+  // Debounce validation (but don't auto-save)
+  LaunchedEffect(localYamlContent) {
+    isValidating = true
+    delay(300) // 300ms debounce for validation
+    validationError = validateYaml(localYamlContent)
+    isValidating = false
+  }
+  
+  // Auto-dismiss save success message
+  LaunchedEffect(saveSuccess) {
+    if (saveSuccess && !hasUnsavedChanges) {
+      delay(2000)
+      saveSuccess = false
     }
   }
 
@@ -183,248 +139,83 @@ fun YamlTabComposable(
   }
 
   // Root Box to contain everything including dialogs
-  Box(modifier = Modifier.fillMaxSize()) {
+  Box(
+    modifier = Modifier
+      .fillMaxSize()
+      .onKeyEvent { keyEvent ->
+        if (keyEvent.type == KeyEventType.KeyDown &&
+          keyEvent.key == Key.S &&
+          (keyEvent.isCtrlPressed || keyEvent.isMetaPressed)
+        ) {
+          if (hasUnsavedChanges && validationError == null) {
+            saveChanges()
+          }
+          true
+        } else {
+          false
+        }
+      }
+  ) {
     Column(
       modifier = Modifier
         .fillMaxSize()
         .padding(16.dp),
       verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-      Text(
-        text = "YAML Test Runner",
-        style = MaterialTheme.typography.headlineMedium,
-        fontWeight = FontWeight.Bold
+      // Header row with title, editor mode toggle, and save button
+      YamlEditorHeader(
+        editorMode = editorMode,
+        onEditorModeChange = { editorMode = it },
+        hasUnsavedChanges = hasUnsavedChanges,
+        validationError = validationError,
+        saveSuccess = saveSuccess,
+        onSave = { saveChanges() }
       )
 
       HorizontalDivider()
 
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically
-      ) {
-        Text(
-          text = "LLM Configuration:",
-          style = MaterialTheme.typography.bodyMedium,
-          fontWeight = FontWeight.Medium
-        )
-        Text(
-          text = "Provider: ${currentTrailblazeLlmModel.trailblazeLlmProvider.id}, Model: ${currentTrailblazeLlmModel.modelId}. Change settings in Settings tab.",
-          style = MaterialTheme.typography.bodyMedium
-        )
-      }
-
-      OutlinedCard(
-        modifier = Modifier
-          .fillMaxWidth()
-          .weight(1f)
-      ) {
-        Column(
-          modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp)
-        ) {
-          Text(
-            text = "Trailblaze YAML",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Medium
+      // Editor area - switches between text and visual modes
+      when (editorMode) {
+        YamlEditorMode.TEXT -> {
+          YamlTextEditor(
+            yamlContent = localYamlContent,
+            onYamlContentChange = { localYamlContent = it },
+            isRunning = isRunning,
+            validationError = validationError,
+            isValidating = isValidating,
+            modifier = Modifier.weight(1f)
           )
-
-          Spacer(modifier = Modifier.height(8.dp))
-
-          OutlinedTextField(
-            value = localYamlContent,
-            onValueChange = { newContent ->
-              localYamlContent = newContent
-            },
-            modifier = Modifier
-              .fillMaxWidth()
-              .weight(1f),
-            textStyle = TextStyle(
-              fontFamily = FontFamily.Monospace,
-              fontSize = 14.sp
-            ),
-            placeholder = { Text("Enter your YAML test configuration here...") },
-            enabled = !isRunning,
-            isError = validationError != null,
-            supportingText = {
-              if (isValidating) {
-                Text(
-                  text = "Validating...",
-                  color = MaterialTheme.colorScheme.primary,
-                  style = MaterialTheme.typography.bodySmall
-                )
-              } else if (validationError != null) {
-                Text(
-                  text = "❌ $validationError",
-                  color = MaterialTheme.colorScheme.error,
-                  style = MaterialTheme.typography.bodySmall
-                )
-              } else if (localYamlContent.isNotBlank()) {
-                Text(
-                  text = "✓ Valid YAML",
-                  color = Color(0xFF4CAF50),
-                  style = MaterialTheme.typography.bodySmall
-                )
-              }
-            }
+        }
+        YamlEditorMode.VISUAL -> {
+          YamlVisualEditor(
+            yamlContent = localYamlContent,
+            onYamlContentChange = { localYamlContent = it },
+            modifier = Modifier.weight(1f)
           )
         }
       }
 
+      // Progress Messages Panel
       if (progressMessages.isNotEmpty()) {
-        OutlinedCard(
-          modifier = Modifier
-            .fillMaxWidth()
-            .height(200.dp)
-        ) {
-          Column(
-            modifier = Modifier
-              .fillMaxSize()
-              .padding(16.dp)
-          ) {
-            Text(
-              text = "Progress Messages",
-              style = MaterialTheme.typography.titleSmall,
-              fontWeight = FontWeight.Medium
-            )
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            val scrollState = rememberScrollState()
-
-            // Auto-scroll to bottom when messages change
-            LaunchedEffect(progressMessages.size) {
-              scrollState.animateScrollTo(scrollState.maxValue)
-            }
-
-            Box(
-              modifier = Modifier
-                .fillMaxSize()
-                .verticalScroll(scrollState)
-            ) {
-              Column {
-                progressMessages.forEach { message ->
-                  SelectableText(
-                    text = "• $message",
-                    style = TextStyle(
-                      fontFamily = FontFamily.Monospace,
-                      fontSize = 12.sp
-                    ),
-                    modifier = Modifier.padding(vertical = 2.dp)
-                  )
-                }
-              }
-            }
-          }
-        }
+        ProgressMessagesPanel(progressMessages)
       }
 
+      // Connection Status Panel
       connectionStatus?.let { status ->
-        OutlinedCard(
-          modifier = Modifier.fillMaxWidth()
-        ) {
-          Column(
-            modifier = Modifier
-              .fillMaxWidth()
-              .padding(16.dp)
-          ) {
-            Text(
-              text = "Connection Status",
-              style = MaterialTheme.typography.titleSmall,
-              fontWeight = FontWeight.Medium
-            )
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            when (status) {
-              is DeviceConnectionStatus.WithTargetDevice.TrailblazeInstrumentationRunning -> {
-                Text(
-                  text = "✓ Trailblaze running on device: ${status.trailblazeDeviceId}",
-                  color = Color(0xFF4CAF50)
-                )
-              }
-
-              is DeviceConnectionStatus.DeviceConnectionError.ConnectionFailure -> {
-                Text(
-                  text = "✗ Connection failed: ${status.errorMessage}",
-                  color = Color(0xFFF44336)
-                )
-              }
-
-              is DeviceConnectionStatus.WithTargetDevice.StartingConnection -> {
-                Text(
-                  text = "🔄 Starting connection to device: ${status.trailblazeDeviceId}",
-                  color = Color(0xFF2196F3)
-                )
-              }
-
-              is DeviceConnectionStatus.DeviceConnectionError.NoConnection -> {
-                Text(
-                  text = "⚪ No active connections",
-                  color = Color(0xFF9E9E9E)
-                )
-              }
-
-              is DeviceConnectionStatus.DeviceConnectionError.ThereIsAlreadyAnActiveConnection -> {
-                Text(
-                  text = "⚠️ Already connected to device: ${status.deviceId}",
-                  color = Color(0xFFFF9800)
-                )
-              }
-            }
-          }
-        }
+        ConnectionStatusPanel(status)
       }
 
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-      ) {
-        Button(
-          onClick = {
-            if (localYamlContent.isNotBlank()) {
-              showDeviceSelectionDialog = true
-            }
-          },
-          modifier = Modifier.weight(1f),
-          enabled = !isRunning && localYamlContent.isNotBlank() && validationError == null
-        ) {
-          Icon(
-            Icons.Filled.Laptop,
-            contentDescription = null,
-            modifier = Modifier.padding(end = 6.dp)
-          )
-          Text(
-            if (isRunning) {
-              "Running..."
-            } else {
-              "Run"
-            }
-          )
-          Icon(
-            Icons.Filled.PlayArrow,
-            contentDescription = null,
-            modifier = Modifier.padding(start = 6.dp)
-          )
+      // Run Controls
+      RunControlsRow(
+        isRunning = isRunning,
+        yamlContent = localYamlContent,
+        validationError = validationError,
+        onRunClick = { showDeviceSelectionDialog = true },
+        onStopClick = {
+          isRunning = false
+          progressMessages = progressMessages + "Test execution stopped by user"
         }
-
-        if (isRunning) {
-          Button(
-            onClick = {
-              isRunning = false
-              progressMessages = progressMessages + "Test execution stopped by user"
-            },
-            colors = ButtonDefaults.buttonColors(
-              containerColor = Color(0xFFF44336)
-            )
-          ) {
-            Icon(Icons.Default.Close, contentDescription = null)
-            Spacer(modifier = Modifier.width(8.dp))
-            Text("Stop")
-          }
-        }
-      }
+      )
     }
 
     // Device Selection Dialog
@@ -482,7 +273,7 @@ fun YamlTabComposable(
           selectedDevices.forEach { device ->
             val runYamlRequest = RunYamlRequest(
               testName = "Yaml",
-              yaml = yamlContent,
+              yaml = localYamlContent,
               trailblazeLlmModel = currentTrailblazeLlmModel,
               useRecordedSteps = true,
               targetAppName = serverState.appConfig.selectedTargetAppName,
@@ -516,6 +307,272 @@ fun YamlTabComposable(
           }
         },
       )
+    }
+  }
+}
+
+/**
+ * Header row with title, editor mode toggle, and save button.
+ */
+@Composable
+private fun YamlEditorHeader(
+  editorMode: YamlEditorMode,
+  onEditorModeChange: (YamlEditorMode) -> Unit,
+  hasUnsavedChanges: Boolean,
+  validationError: String?,
+  saveSuccess: Boolean,
+  onSave: () -> Unit,
+) {
+  Row(
+    modifier = Modifier.fillMaxWidth(),
+    horizontalArrangement = Arrangement.SpaceBetween,
+    verticalAlignment = Alignment.CenterVertically
+  ) {
+    Row(
+      horizontalArrangement = Arrangement.spacedBy(16.dp),
+      verticalAlignment = Alignment.CenterVertically
+    ) {
+      Text(
+        text = "YAML Editor",
+        style = MaterialTheme.typography.headlineMedium,
+        fontWeight = FontWeight.Bold
+      )
+      
+      if (hasUnsavedChanges) {
+        Text(
+          text = "● Unsaved",
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.primary
+        )
+      }
+    }
+    
+    // Editor mode toggle and save button
+    Row(
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
+      verticalAlignment = Alignment.CenterVertically
+    ) {
+      FilterChip(
+        selected = editorMode == YamlEditorMode.TEXT,
+        onClick = { onEditorModeChange(YamlEditorMode.TEXT) },
+        label = { Text("Text") },
+        leadingIcon = {
+          Icon(
+            Icons.Filled.Code,
+            contentDescription = null,
+            modifier = Modifier.size(18.dp)
+          )
+        }
+      )
+      FilterChip(
+        selected = editorMode == YamlEditorMode.VISUAL,
+        onClick = { onEditorModeChange(YamlEditorMode.VISUAL) },
+        label = { Text("Visual") },
+        leadingIcon = {
+          Icon(
+            Icons.Filled.ViewModule,
+            contentDescription = null,
+            modifier = Modifier.size(18.dp)
+          )
+        }
+      )
+      
+      Spacer(modifier = Modifier.width(8.dp))
+      
+      Button(
+        onClick = onSave,
+        enabled = hasUnsavedChanges && validationError == null,
+        colors = ButtonDefaults.buttonColors(
+          containerColor = if (hasUnsavedChanges && validationError == null) 
+            MaterialTheme.colorScheme.primary
+          else MaterialTheme.colorScheme.surfaceVariant
+        )
+      ) {
+        Icon(
+          Icons.Filled.Save,
+          contentDescription = "Save",
+          modifier = Modifier.size(18.dp).padding(end = 4.dp)
+        )
+        Text(
+          text = when {
+            saveSuccess && !hasUnsavedChanges -> "Saved!"
+            validationError != null -> "Invalid"
+            hasUnsavedChanges -> "Save"
+            else -> "Saved"
+          }
+        )
+      }
+    }
+  }
+}
+
+/**
+ * Panel displaying progress messages during test execution.
+ */
+@Composable
+private fun ProgressMessagesPanel(
+  progressMessages: List<String>,
+) {
+  OutlinedCard(
+    modifier = Modifier
+      .fillMaxWidth()
+      .height(200.dp)
+  ) {
+    Column(
+      modifier = Modifier
+        .fillMaxSize()
+        .padding(16.dp)
+    ) {
+      Text(
+        text = "Progress Messages",
+        style = MaterialTheme.typography.titleSmall,
+        fontWeight = FontWeight.Medium
+      )
+
+      Spacer(modifier = Modifier.height(8.dp))
+
+      val scrollState = rememberScrollState()
+
+      // Auto-scroll to bottom when messages change
+      LaunchedEffect(progressMessages.size) {
+        scrollState.animateScrollTo(scrollState.maxValue)
+      }
+
+      Box(
+        modifier = Modifier
+          .fillMaxSize()
+          .verticalScroll(scrollState)
+      ) {
+        Column {
+          progressMessages.forEach { message ->
+            SelectableText(
+              text = "• $message",
+              style = TextStyle(
+                fontFamily = FontFamily.Monospace,
+                fontSize = 12.sp
+              ),
+              modifier = Modifier.padding(vertical = 2.dp)
+            )
+          }
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Panel displaying the current device connection status.
+ */
+@Composable
+private fun ConnectionStatusPanel(
+  status: DeviceConnectionStatus,
+) {
+  OutlinedCard(
+    modifier = Modifier.fillMaxWidth()
+  ) {
+    Column(
+      modifier = Modifier
+        .fillMaxWidth()
+        .padding(16.dp)
+    ) {
+      Text(
+        text = "Connection Status",
+        style = MaterialTheme.typography.titleSmall,
+        fontWeight = FontWeight.Medium
+      )
+
+      Spacer(modifier = Modifier.height(8.dp))
+
+      when (status) {
+        is DeviceConnectionStatus.WithTargetDevice.TrailblazeInstrumentationRunning -> {
+          Text(
+            text = "✓ Trailblaze running on device: ${status.trailblazeDeviceId}",
+            color = Color(0xFF4CAF50)
+          )
+        }
+
+        is DeviceConnectionStatus.DeviceConnectionError.ConnectionFailure -> {
+          Text(
+            text = "✗ Connection failed: ${status.errorMessage}",
+            color = Color(0xFFF44336)
+          )
+        }
+
+        is DeviceConnectionStatus.WithTargetDevice.StartingConnection -> {
+          Text(
+            text = "🔄 Starting connection to device: ${status.trailblazeDeviceId}",
+            color = Color(0xFF2196F3)
+          )
+        }
+
+        is DeviceConnectionStatus.DeviceConnectionError.NoConnection -> {
+          Text(
+            text = "⚪ No active connections",
+            color = Color(0xFF9E9E9E)
+          )
+        }
+
+        is DeviceConnectionStatus.DeviceConnectionError.ThereIsAlreadyAnActiveConnection -> {
+          Text(
+            text = "⚠️ Already connected to device: ${status.deviceId}",
+            color = Color(0xFFFF9800)
+          )
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Row containing run and stop controls for test execution.
+ */
+@Composable
+private fun RunControlsRow(
+  isRunning: Boolean,
+  yamlContent: String,
+  validationError: String?,
+  onRunClick: () -> Unit,
+  onStopClick: () -> Unit,
+) {
+  Row(
+    modifier = Modifier.fillMaxWidth(),
+    horizontalArrangement = Arrangement.spacedBy(8.dp)
+  ) {
+    Button(
+      onClick = onRunClick,
+      modifier = Modifier.weight(1f),
+      enabled = !isRunning && yamlContent.isNotBlank() && validationError == null
+    ) {
+      Icon(
+        Icons.Filled.Laptop,
+        contentDescription = null,
+        modifier = Modifier.padding(end = 6.dp)
+      )
+      Text(
+        if (isRunning) {
+          "Running..."
+        } else {
+          "Run"
+        }
+      )
+      Icon(
+        Icons.Filled.PlayArrow,
+        contentDescription = null,
+        modifier = Modifier.padding(start = 6.dp)
+      )
+    }
+
+    if (isRunning) {
+      Button(
+        onClick = onStopClick,
+        colors = ButtonDefaults.buttonColors(
+          containerColor = Color(0xFFF44336)
+        )
+      ) {
+        Icon(Icons.Default.Close, contentDescription = null)
+        Spacer(modifier = Modifier.width(8.dp))
+        Text("Stop")
+      }
     }
   }
 }

@@ -6,19 +6,17 @@ import ai.koog.agents.core.tools.reflect.ToolSet
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.MaestroTrailblazeAgent
 import xyz.block.trailblaze.agent.TrailblazeRunner
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
-import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
-import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.maestro.MaestroYamlParser
 import xyz.block.trailblaze.mcp.TrailblazeMcpSseSessionContext
+import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.report.utils.LogsRepo
 import java.io.File
 
@@ -49,7 +47,7 @@ class McpTestCasesToolSet(
   }
 
   private fun listAllTestCases(dir: File): List<TestCase> {
-    val trailFiles = dir.walkTopDown().filter { it.name.endsWith("trail.yaml") }.toList()
+    val trailFiles = dir.walkTopDown().filter { it.name.endsWith(TrailRecordings.TRAIL_DOT_YAML) }.toList()
     return trailFiles.map {
       TestCase(
         name = it.name,

@@ -9,5 +9,19 @@ data class TrailConfig(
   val title: String? = null,
   val description: String? = null,
   val priority: String? = null,
+  val source: TrailSource? = null,
   val metadata: Map<String, String>? = null,
 )
+
+@Serializable
+data class TrailSource(
+  val type: TrailSourceType? = null,
+  val reason: String? = null
+)
+
+@Serializable
+enum class TrailSourceType {
+  TESTRAIL,
+  HANDWRITTEN,
+  GENERATED
+}

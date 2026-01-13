@@ -20,41 +20,14 @@ import java.io.File
 /**
  * JVM implementation of RecordingsRepo that saves recordings to the file system.
  *
- * Trails can be organized into subdirectory categories under the trails directory.
- * The lookup order and save destination are configured separately:
- *
- * - **lookupSubdirectories**: Directories to search when looking for existing trails, in priority order.
- *   The first match wins. Use empty string "" to include the root directory in the search.
- *
- * - **defaultSaveSubdirectory**: Where new recordings are saved. Use "generated" to clearly
- *   indicate auto-generated trails, or null to save at the root.
- *
- * Example for Block internal (handwritten takes priority, but saves go to generated):
- * ```
- * lookupSubdirectories = listOf("handwritten", "generated")
- * defaultSaveSubdirectory = "generated"
- * ```
- * Search order: handwritten → generated
- * New recordings saved to: trails/generated/...
- *
- * Example for open source (simple, everything at root):
- * ```
- * lookupSubdirectories = emptyList()  // or listOf("")
- * defaultSaveSubdirectory = null
- * ```
- * Search and save directly at: trails/testrail/suite_123/...
+ * All trails are stored directly under the trails directory (e.g., trails/testrail/suite_123/...).
  *
  * @param trailsDirectory The root directory for all trails. Defaults to ~/.trailblaze/trails
- * @param lookupSubdirectories Subdirectories to search when looking for trails, in priority order.
- *                             Empty list (default) means search only at root.
- *                             Use "" to include root in the search order.
  * @param defaultSaveSubdirectory Subdirectory where new recordings are saved.
  *                                null (default) means save at root.
- *                                "generated" is recommended for auto-generated trails.
  */
 class RecordedTrailsRepoJvm(
   private val trailsDirectory: File = File(System.getProperty("user.home"), ".trailblaze/trails"),
-  private val lookupSubdirectories: List<String> = emptyList(),
   private val defaultSaveSubdirectory: String? = null,
 ) : RecordedTrailsRepo {
 
@@ -94,14 +67,14 @@ class RecordedTrailsRepoJvm(
         // Filename is platform-classifiers (e.g., "ios-iphone.trail.yaml", "android.trail.yaml")
         // If no suffix, use a timestamp to avoid overwriting
         fileName = if (suffix.isNotEmpty()) {
-          "${suffix.removePrefix("-")}.trail.yaml"
+          "${suffix.removePrefix("-")}.${TrailRecordings.TRAIL_DOT_YAML}"
         } else {
-          "trail.yaml"
+          TrailRecordings.TRAIL_DOT_YAML
         }
       } else {
         // Fallback to session-based filename if no trailPath is provided
         directoryPath = defaultSaveSubdirectory ?: ""
-        fileName = "${sessionInfo.sessionId}/$suffix.trail.yaml"
+        fileName = "${sessionInfo.sessionId}/$suffix.${TrailRecordings.TRAIL_DOT_YAML}"
       }
 
       val recordingFile = File(File(trailsDirectory, directoryPath), fileName)
@@ -165,100 +138,46 @@ class RecordedTrailsRepoJvm(
     val trailPath = trailConfig.id ?: return emptyList()
 
     return try {
-      // Determine which directories to search based on lookup order
-      val searchPaths = if (lookupSubdirectories.isEmpty()) {
-        // No lookup subdirectories configured - search at root only
-        listOf("" to trailPath)
-      } else {
-        // Search in each subdirectory in priority order
-        // Empty string "" means search at root
-        lookupSubdirectories.map { subdir ->
-          val path = if (subdir.isEmpty()) trailPath else "$subdir/$trailPath"
-          subdir to path
-        }
+      val targetDir = File(trailsDirectory, trailPath)
+      if (!targetDir.exists() || !targetDir.isDirectory) {
+        return emptyList()
       }
 
-      // Search directories in priority order, results grouped by order then sorted within each
-      val allTrails = searchPaths.flatMap { (subdirectory, relativePath) ->
-        // subdirectory is the lookup subdirectory (null-ish if empty string for root)
-        val subdirectoryForDisplay = subdirectory.takeIf { it.isNotEmpty() }
-
-        val targetDir = File(trailsDirectory, relativePath)
-        if (!targetDir.exists() || !targetDir.isDirectory) {
-          emptyList()
-        } else {
-          // Find all *trail.yaml files in the directory:
-          // - trail.yaml (default file)
-          // - {platform}-{classifier}.trail.yaml (platform-specific recordings, e.g., ios-iphone.trail.yaml)
-          targetDir.listFiles()
-            ?.filter { file ->
-              file.isFile && file.name.endsWith("trail.yaml")
-            }
-            ?.map { file ->
-              val fileRelativePath = "$relativePath/${file.name}"
-              ExistingTrail(
-                absolutePath = file.absolutePath,
-                relativePath = fileRelativePath,
-                fileName = file.name,
-                subdirectory = subdirectoryForDisplay,
-              )
-            }
-            // Sort with trail.yaml first, then alphabetically
-            ?.sortedWith(compareBy({ it.fileName != TrailRecordings.TRAIL_DOT_YAML }, { it.fileName }))
-            ?: emptyList()
+      // Find all *trail.yaml files in the directory:
+      // - trail.yaml (default file)
+      // - {platform}-{classifier}.trail.yaml (platform-specific recordings, e.g., ios-iphone.trail.yaml)
+      targetDir.listFiles()
+        ?.filter { file ->
+          file.isFile && file.name.endsWith(TrailRecordings.TRAIL_DOT_YAML)
+        }?.map { file ->
+          val fileRelativePath = "$trailPath/${file.name}"
+          ExistingTrail(
+            absolutePath = file.absolutePath,
+            relativePath = fileRelativePath,
+            fileName = file.name,
+          )
         }
-      }
-
-      // Detect shadowed trails: mark trails that have the same filename in a higher-priority directory
-      // Build a map of filename -> first subdirectory that has it (the one that wins)
-      val fileNameToWinningSubdir = mutableMapOf<String, String?>()
-      allTrails.forEach { trail ->
-        if (!fileNameToWinningSubdir.containsKey(trail.fileName)) {
-          fileNameToWinningSubdir[trail.fileName] = trail.subdirectory
-        }
-      }
-
-      // Mark trails as shadowed if they're not the winning one
-      allTrails.map { trail ->
-        val winningSubdir = fileNameToWinningSubdir[trail.fileName]
-        if (winningSubdir != trail.subdirectory) {
-          trail.copy(isShadowed = true, shadowedBy = winningSubdir)
-        } else {
-          trail
-        }
-      }
+        // Sort with trail.yaml first, then alphabetically
+        ?.sortedWith(compareBy({ it.fileName != TrailRecordings.TRAIL_DOT_YAML }, { it.fileName }))
+        ?: emptyList()
     } catch (e: Exception) {
       println("Failed to search for existing recordings: ${e.message}")
       emptyList()
     }
   }
 
-  override fun getWatchDirectoriesForSession(sessionInfo: SessionInfo): List<String> {
+  override fun getWatchDirectoryForSession(sessionInfo: SessionInfo): String? {
     // trailConfig.id is the trail path (e.g., "testrail/suite_123/section_456/case_789")
-    val trailPath = sessionInfo.trailConfig?.id ?: return emptyList()
+    val trailPath = sessionInfo.trailConfig?.id ?: return null
 
-    // Determine which directories to check based on lookup order
-    val searchPaths = if (lookupSubdirectories.isEmpty()) {
-      // No lookup subdirectories configured - check at root only
-      listOf(trailPath)
-    } else {
-      // Check in each subdirectory in priority order
-      // Empty string "" means check at root
-      lookupSubdirectories.map { subdir ->
-        if (subdir.isEmpty()) trailPath else "$subdir/$trailPath"
-      }
-    }
-
-    // Return all directories that exist
+    // Return the directory if it exists
     // We don't create directories here to avoid empty directories;
     // directories are created only when saveRecording() writes a file
-    return searchPaths.mapNotNull { relativePath ->
-      val dir = File(trailsDirectory, relativePath)
-      if (dir.exists() && dir.isDirectory) {
-        dir.absolutePath
-      } else {
-        null
-      }
+    val dir = File(trailsDirectory, trailPath)
+    return if (dir.exists() && dir.isDirectory) {
+      dir.absolutePath
+    } else {
+      null
     }
   }
 
@@ -295,7 +214,7 @@ class RecordedTrailsRepoJvm(
         launch {
           fileWatcher.fileChanges.collect { event ->
             // Only emit events for .trail.yaml files
-            if (event.file.name.endsWith("trail.yaml")) {
+            if (event.file.name.endsWith(TrailRecordings.TRAIL_DOT_YAML)) {
               val mappedChangeType = when (event.changeType) {
                 FileChangeEvent.ChangeType.CREATE -> TrailFileChangeType.CREATE
                 FileChangeEvent.ChangeType.DELETE -> TrailFileChangeType.DELETE

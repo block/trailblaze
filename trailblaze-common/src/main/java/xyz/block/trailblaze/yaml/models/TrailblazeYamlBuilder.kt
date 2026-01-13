@@ -7,6 +7,7 @@ import xyz.block.trailblaze.yaml.MaestroCommandList
 import xyz.block.trailblaze.yaml.PromptStep
 import xyz.block.trailblaze.yaml.ToolRecording
 import xyz.block.trailblaze.yaml.TrailConfig
+import xyz.block.trailblaze.yaml.TrailSource
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.TrailYamlItem.MaestroTrailItem
 import xyz.block.trailblaze.yaml.VerificationStep
@@ -22,6 +23,7 @@ class TrailblazeYamlBuilder {
     title: String? = null,
     description: String? = null,
     priority: String? = null,
+    source: TrailSource? = null,
     metadata: Map<String, String>? = null,
   ) = apply {
     recordings.add(
@@ -30,6 +32,7 @@ class TrailblazeYamlBuilder {
           context = context,
           id = id,
           title = title,
+          source = source,
           description = description,
           priority = priority,
           metadata = metadata,

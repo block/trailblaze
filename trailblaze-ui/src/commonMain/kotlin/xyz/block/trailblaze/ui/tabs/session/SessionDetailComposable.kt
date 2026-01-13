@@ -547,20 +547,15 @@ fun SessionDetailComposable(
                           }
                         }
 
-                        // Watch for file changes in all directories - only active when Recording tab is visible
+                        // Watch for file changes - only active when Recording tab is visible
                         if (onRevealRecordingInFinder != null && recordedTrailsRepo != null) {
-                          val directoryPaths = remember(recordedTrailsRepo, sessionDetail.session.sessionId) {
-                            recordedTrailsRepo.getWatchDirectoriesForSession(sessionDetail.session)
+                          val directoryPath = remember(recordedTrailsRepo, sessionDetail.session.sessionId) {
+                            recordedTrailsRepo.getWatchDirectoryForSession(sessionDetail.session)
                           }
 
-                          if (directoryPaths.isNotEmpty()) {
-                            val fileChanges = remember(directoryPaths) {
-                              val flows = directoryPaths.mapNotNull { path ->
-                                recordedTrailsRepo.watchDirectory(path)
-                              }
-                              if (flows.isNotEmpty()) {
-                                kotlinx.coroutines.flow.merge(*flows.toTypedArray())
-                              } else null
+                          if (directoryPath != null) {
+                            val fileChanges = remember(directoryPath) {
+                              recordedTrailsRepo.watchDirectory(directoryPath)
                             }
 
                             if (fileChanges != null) {

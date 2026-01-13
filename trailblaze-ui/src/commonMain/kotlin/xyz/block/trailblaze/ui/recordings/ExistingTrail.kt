@@ -7,20 +7,13 @@ import xyz.block.trailblaze.recordings.TrailRecordings
  *
  * @param absolutePath The absolute path to the trail file
  * @param relativePath The path relative to the trails directory
- *                     (e.g., "generated/testrail/suite_123/section_456/case_789/ios-iphone.trail.yaml")
- *                     where "generated" is the subdirectory and "testrail/suite_123/section_456/case_789" is the trail ID
+ *                     (e.g., "testrail/suite_123/section_456/case_789/ios-iphone.trail.yaml")
  * @param fileName The name of the file (e.g., "ios-iphone.trail.yaml" or "trail.yaml")
- * @param subdirectory The subdirectory category (e.g., "generated", "handwritten"), or null if at root
- * @param isShadowed Whether this trail is shadowed by another trail with the same filename in a higher-priority directory
- * @param shadowedBy The subdirectory name that shadows this trail, or null if not shadowed
  */
 data class ExistingTrail(
   val absolutePath: String,
   val relativePath: String,
   val fileName: String,
-  val subdirectory: String? = null,
-  val isShadowed: Boolean = false,
-  val shadowedBy: String? = null,
 ) {
   /**
    * Determines if this is a prompts file (source of truth for natural language steps).

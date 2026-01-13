@@ -32,10 +32,7 @@ import xyz.block.trailblaze.ui.getPlatform
 import xyz.block.trailblaze.ui.recordings.ExistingTrail
 
 /**
- * Displays a list of existing trail recordings grouped by subdirectory.
- *
- * Shows recordings organized by their subdirectory (e.g., "handwritten", "generated"),
- * with the primary directory labeled and shadowed trails indicated.
+ * Displays a list of existing trail recordings.
  *
  * @param existingRecordings List of existing trail files to display
  * @param onRevealRecordingInFinder Optional callback to reveal a recording file in the system file explorer
@@ -67,51 +64,11 @@ fun ExistingRecordingsSection(
       )
       Spacer(modifier = Modifier.height(8.dp))
 
-      // Group recordings by subdirectory (preserving order from search)
-      val groupedRecordings = existingRecordings.groupBy { it.subdirectory }
-      val subdirectoryOrder = existingRecordings.mapNotNull { it.subdirectory }.distinct()
-
-      // Show recordings at root first (if any), then by subdirectory order
-      val orderedGroups = buildList {
-        groupedRecordings[null]?.let { add(null to it) }
-        subdirectoryOrder.forEach { subdir ->
-          groupedRecordings[subdir]?.let { add(subdir to it) }
-        }
-      }
-
-      orderedGroups.forEachIndexed { groupIndex, (subdirectory, trails) ->
-        // Show subdirectory header if there are multiple groups or if subdirectory is set
-        if (orderedGroups.size > 1 || subdirectory != null) {
-          if (groupIndex > 0) {
-            Spacer(modifier = Modifier.height(12.dp))
-          }
-          Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(bottom = 4.dp)
-          ) {
-            Text(
-              text = "📂 ${subdirectory ?: "root"}",
-              style = MaterialTheme.typography.labelMedium,
-              fontWeight = FontWeight.SemiBold,
-              color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f)
-            )
-            if (groupIndex == 0 && subdirectory != null) {
-              Spacer(modifier = Modifier.width(8.dp))
-              Text(
-                text = "(primary)",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.primary
-              )
-            }
-          }
-        }
-
-        trails.forEach { trail ->
-          ExistingRecordingItem(
-            trail = trail,
-            onRevealInFinder = onRevealRecordingInFinder
-          )
-        }
+      existingRecordings.forEach { trail ->
+        ExistingRecordingItem(
+          trail = trail,
+          onRevealInFinder = onRevealRecordingInFinder
+        )
       }
     }
   }
@@ -121,8 +78,6 @@ fun ExistingRecordingsSection(
  * Displays a single existing trail recording item.
  *
  * Shows the platform icon, filename/classifier, and optional "Show on Disk" button.
- * Shadowed trails (overridden by higher-priority versions) are displayed with reduced opacity
- * and an indicator message.
  *
  * @param trail The trail file to display
  * @param onRevealInFinder Optional callback to reveal the file in the system file explorer
@@ -183,24 +138,11 @@ private fun ExistingRecordingItem(
           trail.platform ?: trail.fileName
         }
       }
-      Column {
-        SelectableText(
-          text = displayName,
-          style = MaterialTheme.typography.bodySmall,
-          color = if (trail.isShadowed) {
-            MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.5f)
-          } else {
-            MaterialTheme.colorScheme.onSecondaryContainer
-          },
-        )
-        if (trail.isShadowed) {
-          Text(
-            text = "Overridden by ${trail.shadowedBy ?: "higher priority"}",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.6f)
-          )
-        }
-      }
+      SelectableText(
+        text = displayName,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSecondaryContainer,
+      )
     }
 
     // Show "Show on Disk" button only on JVM platform

@@ -76,6 +76,7 @@ class TrailblazeYaml(
     },
   )
 
+  @OptIn(ExperimentalSerializationApi::class)
   fun encodeToString(items: List<TrailYamlItem>): String = getInstance().encodeToString(
     ListSerializer(
       getInstance().serializersModule.getContextual(TrailYamlItem::class)
@@ -86,13 +87,18 @@ class TrailblazeYaml(
 
   @OptIn(ExperimentalSerializationApi::class)
   fun decodeTrail(yaml: String): List<TrailYamlItem> = with(getInstance()) {
-    decodeFromString(
+    val trailItemList = decodeFromString(
       ListSerializer(
         serializersModule.getContextual(TrailYamlItem::class)
           ?: error("Missing contextual serializer for TrailYamlItem"),
       ),
       yaml,
     )
+    val configItems = trailItemList.filterIsInstance<TrailYamlItem.ConfigTrailItem>()
+    require(configItems.isEmpty() || (configItems.size == 1 && configItems[0] == trailItemList[0])) {
+      "Only one config item is allowed, and it must be the first item in the trail."
+    }
+    return trailItemList
   }
 
   /**
