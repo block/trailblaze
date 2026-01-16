@@ -13,7 +13,6 @@ import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.serializer
 import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
-import xyz.block.trailblaze.toolcalls.getToolNameFromAnnotation
 import xyz.block.trailblaze.toolcalls.toolName
 import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
 import xyz.block.trailblaze.yaml.TrailblazeYaml
@@ -55,9 +54,11 @@ class TrailblazeToolYamlWrapperSerializer(
     val trailblazeToolSerializer: KSerializer<TrailblazeTool> =
       trailblazeTool::class.serializer() as KSerializer<TrailblazeTool>
 
+    // Use value.name instead of getToolNameFromAnnotation() to preserve the original
+    // tool name for OtherTrailblazeTool instances (which deserialize with "unknown" toolName)
     encoder.encodeSerializableValue(
       MapSerializer(String.serializer(), trailblazeToolSerializer),
-      mapOf(trailblazeTool.getToolNameFromAnnotation() to trailblazeTool),
+      mapOf(value.name to trailblazeTool),
     )
   }
 }

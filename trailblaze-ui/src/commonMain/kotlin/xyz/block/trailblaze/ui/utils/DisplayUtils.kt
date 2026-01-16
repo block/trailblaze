@@ -16,6 +16,7 @@ object DisplayUtils {
       is TrailblazeLog.ObjectiveStartLog -> "Objective Start"
       is TrailblazeLog.ObjectiveCompleteLog -> "Objective Complete"
       is TrailblazeLog.AttemptAiFallbackLog -> "Attempt AI Fallback"
+      is TrailblazeLog.TrailblazeSnapshotLog -> "Snapshot"
     }
   }
 }

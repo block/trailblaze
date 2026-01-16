@@ -1,6 +1,6 @@
 @file:OptIn(ExperimentalMaterial3Api::class)
 
-package xyz.block.trailblaze.ui.tabs.sessions
+package xyz.block.trailblaze.ui.editors.yaml
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -57,8 +57,6 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import xyz.block.trailblaze.report.models.SOURCE_TYPE_GENERATED
-import xyz.block.trailblaze.report.models.SOURCE_TYPE_HANDWRITTEN
 import xyz.block.trailblaze.yaml.DirectionStep
 import xyz.block.trailblaze.yaml.TrailConfig
 import xyz.block.trailblaze.yaml.TrailSource
@@ -92,7 +90,7 @@ fun YamlVisualEditor(
       VisualEditorParseResult.Empty
     } else {
       try {
-        val trailblazeYaml = TrailblazeYaml()
+        val trailblazeYaml = TrailblazeYaml.Default
         val items = trailblazeYaml.decodeTrail(yamlContent)
         VisualEditorParseResult.Success(items)
       } catch (e: Exception) {
@@ -109,10 +107,8 @@ fun YamlVisualEditor(
         ?: TrailYamlItem.ConfigTrailItem(config = TrailConfig())
       val others = parseResult.items.filterNot { it is TrailYamlItem.ConfigTrailItem }
       // If no other items exist, create an empty prompts section so users can add steps
-      val finalOthers = if (others.isEmpty()) {
+      val finalOthers = others.ifEmpty {
         listOf(TrailYamlItem.PromptsTrailItem(promptSteps = emptyList()))
-      } else {
-        others
       }
       Pair(config, finalOthers)
     } else {
@@ -130,7 +126,7 @@ fun YamlVisualEditor(
   // Function to update the YAML content when items change
   fun updateYamlFromItems() {
     try {
-      val trailblazeYaml = TrailblazeYaml()
+      val trailblazeYaml = TrailblazeYaml.Default
       val allItems = listOf(editedConfig) + editedItems
       val newYamlContent = trailblazeYaml.encodeToString(allItems)
       onYamlContentChange(newYamlContent)
@@ -164,163 +160,89 @@ fun YamlVisualEditor(
       )
     }
 
-    // Content based on parse result and selected sub-view
-    when (parseResult) {
-      is VisualEditorParseResult.Success -> {
-        when (visualEditorView) {
-          YamlVisualEditorView.CONFIG -> {
-            // Show only Config
-            LazyColumn(
-              modifier = Modifier.fillMaxSize(),
-              verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-              item {
-                TrailYamlItemCard(
-                  item = editedConfig,
-                  index = -1,
-                  canMoveUp = false,
-                  canMoveDown = false,
-                  onMoveUp = {},
-                  onMoveDown = {},
-                  onItemUpdate = { updatedItem ->
-                    editedConfig = updatedItem as TrailYamlItem.ConfigTrailItem
-                    updateYamlFromItems()
-                  },
-                  onItemDelete = {},
-                  modifier = Modifier.fillMaxWidth()
-                )
-              }
-            }
-          }
-
-          YamlVisualEditorView.STEPS -> {
-            // Show Steps/Prompts, Tools, Maestro items
-            LazyColumn(
-              modifier = Modifier.fillMaxSize(),
-              verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-              itemsIndexed(editedItems) { index, item ->
-                TrailYamlItemCard(
-                  item = item,
-                  index = index,
-                  canMoveUp = index > 0,
-                  canMoveDown = index < editedItems.size - 1,
-                  onMoveUp = {
-                    if (index > 0) {
-                      editedItems = editedItems.toMutableList().apply {
-                        val temp = this[index]
-                        this[index] = this[index - 1]
-                        this[index - 1] = temp
-                      }
-                      updateYamlFromItems()
-                    }
-                  },
-                  onMoveDown = {
-                    if (index < editedItems.size - 1) {
-                      editedItems = editedItems.toMutableList().apply {
-                        val temp = this[index]
-                        this[index] = this[index + 1]
-                        this[index + 1] = temp
-                      }
-                      updateYamlFromItems()
-                    }
-                  },
-                  onItemUpdate = { updatedItem ->
-                    editedItems = editedItems.toMutableList().apply {
-                      set(index, updatedItem)
-                    }
-                    updateYamlFromItems()
-                  },
-                  onItemDelete = {
-                    editedItems = editedItems.toMutableList().apply {
-                      removeAt(index)
-                    }
-                    updateYamlFromItems()
-                  },
-                  modifier = Modifier.fillMaxWidth()
-                )
-              }
-            }
-          }
+    // Helper to render the config editor
+    @Composable
+    fun ConfigEditor() {
+      LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+      ) {
+        item {
+          TrailYamlItemCard(
+            item = editedConfig,
+            index = -1,
+            canMoveUp = false,
+            canMoveDown = false,
+            onMoveUp = {},
+            onMoveDown = {},
+            onItemUpdate = { updatedItem ->
+              editedConfig = updatedItem as TrailYamlItem.ConfigTrailItem
+              updateYamlFromItems()
+            },
+            onItemDelete = {},
+            modifier = Modifier.fillMaxWidth()
+          )
         }
       }
+    }
 
-      is VisualEditorParseResult.Empty -> {
+    // Helper to render the steps editor
+    @Composable
+    fun StepsEditor() {
+      LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+      ) {
+        itemsIndexed(editedItems) { index, item ->
+          TrailYamlItemCard(
+            item = item,
+            index = index,
+            canMoveUp = index > 0,
+            canMoveDown = index < editedItems.size - 1,
+            onMoveUp = {
+              if (index > 0) {
+                editedItems = editedItems.toMutableList().apply {
+                  val temp = this[index]
+                  this[index] = this[index - 1]
+                  this[index - 1] = temp
+                }
+                updateYamlFromItems()
+              }
+            },
+            onMoveDown = {
+              if (index < editedItems.size - 1) {
+                editedItems = editedItems.toMutableList().apply {
+                  val temp = this[index]
+                  this[index] = this[index + 1]
+                  this[index + 1] = temp
+                }
+                updateYamlFromItems()
+              }
+            },
+            onItemUpdate = { updatedItem ->
+              editedItems = editedItems.toMutableList().apply {
+                set(index, updatedItem)
+              }
+              updateYamlFromItems()
+            },
+            onItemDelete = {
+              editedItems = editedItems.toMutableList().apply {
+                removeAt(index)
+              }
+              updateYamlFromItems()
+            },
+            modifier = Modifier.fillMaxWidth()
+          )
+        }
+      }
+    }
+
+    // Content based on parse result and selected sub-view
+    when (parseResult) {
+      is VisualEditorParseResult.Success, is VisualEditorParseResult.Empty -> {
         when (visualEditorView) {
-          YamlVisualEditorView.CONFIG -> {
-            // Show Config editor even when empty
-            LazyColumn(
-              modifier = Modifier.fillMaxSize(),
-              verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-              item {
-                TrailYamlItemCard(
-                  item = editedConfig,
-                  index = -1,
-                  canMoveUp = false,
-                  canMoveDown = false,
-                  onMoveUp = {},
-                  onMoveDown = {},
-                  onItemUpdate = { updatedItem ->
-                    editedConfig = updatedItem as TrailYamlItem.ConfigTrailItem
-                    updateYamlFromItems()
-                  },
-                  onItemDelete = {},
-                  modifier = Modifier.fillMaxWidth()
-                )
-              }
-            }
-          }
-
-          YamlVisualEditorView.STEPS -> {
-            // Show Steps/Prompts items (with empty prompts section for adding steps)
-            LazyColumn(
-              modifier = Modifier.fillMaxSize(),
-              verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-              itemsIndexed(editedItems) { index, item ->
-                TrailYamlItemCard(
-                  item = item,
-                  index = index,
-                  canMoveUp = index > 0,
-                  canMoveDown = index < editedItems.size - 1,
-                  onMoveUp = {
-                    if (index > 0) {
-                      editedItems = editedItems.toMutableList().apply {
-                        val temp = this[index]
-                        this[index] = this[index - 1]
-                        this[index - 1] = temp
-                      }
-                      updateYamlFromItems()
-                    }
-                  },
-                  onMoveDown = {
-                    if (index < editedItems.size - 1) {
-                      editedItems = editedItems.toMutableList().apply {
-                        val temp = this[index]
-                        this[index] = this[index + 1]
-                        this[index + 1] = temp
-                      }
-                      updateYamlFromItems()
-                    }
-                  },
-                  onItemUpdate = { updatedItem ->
-                    editedItems = editedItems.toMutableList().apply {
-                      set(index, updatedItem)
-                    }
-                    updateYamlFromItems()
-                  },
-                  onItemDelete = {
-                    editedItems = editedItems.toMutableList().apply {
-                      removeAt(index)
-                    }
-                    updateYamlFromItems()
-                  },
-                  modifier = Modifier.fillMaxWidth()
-                )
-              }
-            }
-          }
+          YamlVisualEditorView.CONFIG -> ConfigEditor()
+          YamlVisualEditorView.STEPS -> StepsEditor()
         }
       }
 
@@ -431,27 +353,22 @@ private fun TrailYamlItemCard(
         when (item) {
           is TrailYamlItem.ConfigTrailItem -> ConfigItemContent(
             item = item,
-            index = index,
             onUpdate = { onItemUpdate(it) },
-            onDelete = { showDeleteDialog = true }
           )
 
           is TrailYamlItem.PromptsTrailItem -> PromptsItemContent(
             item = item,
-            index = index,
             onUpdate = { onItemUpdate(it) },
             onDelete = { showDeleteDialog = true }
           )
 
           is TrailYamlItem.ToolTrailItem -> ToolItemContent(
             item = item,
-            index = index,
             onDelete = { showDeleteDialog = true }
           )
 
           is TrailYamlItem.MaestroTrailItem -> MaestroItemContent(
             item = item,
-            index = index,
             onDelete = { showDeleteDialog = true }
           )
         }
@@ -477,9 +394,7 @@ private fun TrailYamlItemCard(
 @Composable
 private fun ConfigItemContent(
   item: TrailYamlItem.ConfigTrailItem,
-  index: Int,
   onUpdate: (TrailYamlItem.ConfigTrailItem) -> Unit,
-  onDelete: () -> Unit,
 ) {
   Text(
     text = "Configuration",
@@ -548,23 +463,47 @@ private fun ConfigItemContent(
     fontWeight = FontWeight.Medium
   )
 
-  val sourceTypeOptions = listOf("", SOURCE_TYPE_GENERATED, SOURCE_TYPE_HANDWRITTEN)
-  val currentSourceType = item.config.source?.type?.name ?: ""
+  var sourceTypeExpanded by remember { mutableStateOf(false) }
+  val currentSourceTypeName = item.config.source?.type?.name ?: ""
 
-  StringDropdown(
-    options = sourceTypeOptions,
-    selectedValue = currentSourceType,
-    onValueSelected = { selectedName ->
-      val sourceType = if (selectedName == TrailSourceType.GENERATED.name) TrailSourceType.GENERATED else if (selectedName == TrailSourceType.HANDWRITTEN.name) TrailSourceType.HANDWRITTEN  else null
-      val newSource = if (sourceType != null) {
-        (item.config.source ?: TrailSource()).copy(type = sourceType)
-      } else {
-        item.config.source?.copy(type = null)
+  ExposedDropdownMenuBox(
+    expanded = sourceTypeExpanded,
+    onExpandedChange = { sourceTypeExpanded = it }
+  ) {
+    OutlinedTextField(
+      value = currentSourceTypeName,
+      onValueChange = {},
+      readOnly = true,
+      label = { Text("Source Type") },
+      trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = sourceTypeExpanded) },
+      modifier = Modifier
+        .fillMaxWidth()
+        .menuAnchor()
+    )
+    ExposedDropdownMenu(
+      expanded = sourceTypeExpanded,
+      onDismissRequest = { sourceTypeExpanded = false }
+    ) {
+      DropdownMenuItem(
+        text = { Text("") },
+        onClick = {
+          val newSource = (item.config.source ?: TrailSource()).copy(type = null)
+          onUpdate(item.copy(config = item.config.copy(source = newSource)))
+          sourceTypeExpanded = false
+        }
+      )
+      TrailSourceType.entries.forEach { sourceType ->
+        DropdownMenuItem(
+          text = { Text(sourceType.name) },
+          onClick = {
+            val newSource = (item.config.source ?: TrailSource()).copy(type = sourceType)
+            onUpdate(item.copy(config = item.config.copy(source = newSource)))
+            sourceTypeExpanded = false
+          }
+        )
       }
-      onUpdate(item.copy(config = item.config.copy(source = newSource)))
-    },
-    label = "Source Type"
-  )
+    }
+  }
 
   OutlinedTextField(
     value = item.config.source?.reason ?: "",
@@ -664,7 +603,6 @@ private fun ConfigItemContent(
 @Composable
 private fun PromptsItemContent(
   item: TrailYamlItem.PromptsTrailItem,
-  index: Int,
   onUpdate: (TrailYamlItem.PromptsTrailItem) -> Unit,
   onDelete: () -> Unit,
 ) {
@@ -890,7 +828,7 @@ private fun PromptsItemContent(
           horizontalArrangement = Arrangement.spacedBy(6.dp),
           verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-          if (hasRecording && recording != null) {
+          if (hasRecording) {
             // Show individual tool chips
             recording.tools.forEach { tool ->
               Surface(
@@ -984,7 +922,6 @@ private fun PromptsItemContent(
 @Composable
 private fun ToolItemContent(
   item: TrailYamlItem.ToolTrailItem,
-  index: Int,
   onDelete: () -> Unit,
 ) {
   Row(
@@ -1042,7 +979,6 @@ private fun ToolItemContent(
 @Composable
 private fun MaestroItemContent(
   item: TrailYamlItem.MaestroTrailItem,
-  index: Int,
   onDelete: () -> Unit,
 ) {
   Row(
@@ -1105,50 +1041,6 @@ private fun ItemTypeBadge(
         color = Color.White,
         fontWeight = FontWeight.Bold
       )
-    }
-  }
-}
-
-/**
- * A reusable dropdown component that displays a list of string options.
- */
-@Composable
-private fun StringDropdown(
-  options: List<String>,
-  selectedValue: String,
-  onValueSelected: (String) -> Unit,
-  label: String,
-  modifier: Modifier = Modifier,
-) {
-  var expanded by remember { mutableStateOf(false) }
-
-  ExposedDropdownMenuBox(
-    expanded = expanded,
-    onExpandedChange = { expanded = it }
-  ) {
-    OutlinedTextField(
-      value = selectedValue,
-      onValueChange = {},
-      readOnly = true,
-      label = { Text(label) },
-      trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-      modifier = modifier
-        .fillMaxWidth()
-        .menuAnchor()
-    )
-    ExposedDropdownMenu(
-      expanded = expanded,
-      onDismissRequest = { expanded = false }
-    ) {
-      options.forEach { option ->
-        DropdownMenuItem(
-          text = { Text(option) },
-          onClick = {
-            onValueSelected(option)
-            expanded = false
-          }
-        )
-      }
     }
   }
 }

@@ -71,6 +71,7 @@ class TrailblazeRunner(
     llmClient = tracingLlmClient,
     elementComparator = elementComparator,
     toolRepo = trailblazeToolRepo,
+    screenStateProvider = screenStateProvider,
   )
 
   override fun appendToSystemPrompt(context: String) {

@@ -1,3 +1,7 @@
+---
+title: Logging
+---
+
 Observability of the test execution and agent performance is crucial to adopting AI-based tests.
 Trailblaze includes thorough logging capabilities in all phases of the test execution.
 

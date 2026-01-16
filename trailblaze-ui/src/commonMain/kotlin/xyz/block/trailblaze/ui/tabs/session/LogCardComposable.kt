@@ -150,6 +150,16 @@ fun LogCard(
       elapsedTime = elapsedTimeMs,
       preformattedText = log.promptStep.prompt
     )
+
+    is TrailblazeLog.TrailblazeSnapshotLog -> LogCardData(
+      title = "Device Snapshot",
+      duration = null,
+      elapsedTime = elapsedTimeMs,
+      screenshotFile = log.screenshotFile,
+      deviceWidth = log.deviceWidth,
+      deviceHeight = log.deviceHeight,
+      preformattedText = log.displayName?.let { "Name: $it" }
+    )
   }
 
   Card(
@@ -322,6 +332,7 @@ fun LogCard(
           val hasViewHierarchy = when (log) {
             is TrailblazeLog.TrailblazeLlmRequestLog -> log.viewHierarchy != null
             is TrailblazeLog.MaestroDriverLog -> log.viewHierarchy != null
+            is TrailblazeLog.TrailblazeSnapshotLog -> true // Snapshot logs always have view hierarchy
             else -> false
           }
 
@@ -407,9 +418,10 @@ fun LogCard(
           )
 
           Row {
-            // Add Inspect UI button for logs with view hierarchy (LLM Request logs and Maestro Driver logs)
+            // Add Inspect UI button for logs with view hierarchy (LLM Request logs, Maestro Driver logs, and Snapshot logs)
             if ((log is TrailblazeLog.TrailblazeLlmRequestLog ||
-                (log is TrailblazeLog.MaestroDriverLog && log.viewHierarchy != null)) &&
+                (log is TrailblazeLog.MaestroDriverLog && log.viewHierarchy != null) ||
+                log is TrailblazeLog.TrailblazeSnapshotLog) &&
               showInspectUI != null
             ) {
               IconButton(

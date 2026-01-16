@@ -309,6 +309,12 @@ fun LiveSessionDetailComposable(
       ) {
         LogDetailsDialog(
           log = currentLog!!,
+          sessionId = session.sessionId.value,
+          imageLoader = imageLoader,
+          onShowScreenshotModal = handleShowScreenshotModal,
+          showInspectUI = if (currentLog is TrailblazeLog.TrailblazeSnapshotLog) {
+            { handleShowInspectUI(currentLog!!) }
+          } else null,
           onDismiss = {
             showDetailsDialog = false
             currentLog = null
@@ -341,6 +347,12 @@ fun LiveSessionDetailComposable(
               deviceHeight = inspectorLog.deviceHeight
             }
             is TrailblazeLog.MaestroDriverLog -> {
+              viewHierarchy = inspectorLog.viewHierarchy
+              imageUrl = inspectorLog.screenshotFile
+              deviceWidth = inspectorLog.deviceWidth
+              deviceHeight = inspectorLog.deviceHeight
+            }
+            is TrailblazeLog.TrailblazeSnapshotLog -> {
               viewHierarchy = inspectorLog.viewHierarchy
               imageUrl = inspectorLog.screenshotFile
               deviceWidth = inspectorLog.deviceWidth

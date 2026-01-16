@@ -180,6 +180,7 @@ open class AndroidTrailblazeRule(
       tools = trailblazeTools,
       screenState = screenStateProvider(),
       elementComparator = elementComparator,
+      screenStateProvider = screenStateProvider,
     )
     return when (val toolResult = runTrailblazeToolsResult.result) {
       is TrailblazeToolResult.Success -> toolResult
@@ -229,6 +230,7 @@ open class AndroidTrailblazeRule(
     val result = trailblazeAgent.runTrailblazeTools(
       tools = trailblazeTool.toList(),
       elementComparator = elementComparator,
+      screenStateProvider = screenStateProvider,
     ).result
     return if (result is TrailblazeToolResult.Success) {
       result

@@ -1,3 +1,6 @@
+---
+title: Trailblaze Tools
+---
 
 Trailblaze allows you to create custom tools for app-specific testing needs.
 Use this if your application has unique user interactions that do not fit existing tools, or provide

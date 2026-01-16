@@ -1,3 +1,6 @@
+---
+title: LLM Support
+---
 
 ## Koog Integration
 Trailblaze makes API calls leverage the [koog.ai](https://koog.ai) library.

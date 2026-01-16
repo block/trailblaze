@@ -1,4 +1,4 @@
-package xyz.block.trailblaze.ui.tabs.sessions.editor
+package xyz.block.trailblaze.ui.editors.yaml
 
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.AnnotatedString
@@ -217,10 +217,11 @@ class YamlSyntaxHighlighter(
       "id",
       "title",
       "priority",
+      "source",
       "metadata",
       "selector",
       "reason",
-    )
+    ).sorted()
   }
 }
 

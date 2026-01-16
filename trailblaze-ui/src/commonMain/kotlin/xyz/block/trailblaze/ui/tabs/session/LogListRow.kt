@@ -136,6 +136,15 @@ fun LogListRow(
       duration = null,
       elapsedTime = elapsedTimeMs
     )
+
+    is TrailblazeLog.TrailblazeSnapshotLog -> LogCardData(
+      title = "Snapshot",
+      duration = null,
+      elapsedTime = elapsedTimeMs,
+      screenshotFile = log.screenshotFile,
+      deviceWidth = log.deviceWidth,
+      deviceHeight = log.deviceHeight
+    )
   }
 
   val elapsedMs = log.timestamp.toEpochMilliseconds() - sessionStartTime.toEpochMilliseconds()

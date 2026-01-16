@@ -16,15 +16,20 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import xyz.block.trailblaze.ui.composables.DeviceClassifierIconProvider
 import maestro.Driver
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeElementSelector
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.host.devices.HostWebDriverFactory
 import xyz.block.trailblaze.host.devices.HostWebDriverFactory.Companion.DEFAULT_PLAYWRIGHT_WEB_TRAILBLAZE_DEVICE_ID
+import xyz.block.trailblaze.host.devices.WebBrowserManager
+import xyz.block.trailblaze.host.devices.WebBrowserState
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.logs.client.TrailblazeLog
@@ -60,10 +65,48 @@ class TrailblazeDeviceManager(
   val currentTrailblazeLlmModelProvider: () -> TrailblazeLlmModel,
   val availableAppTargets: Set<TrailblazeHostAppTarget>,
   val appIconProvider: AppIconProvider,
+  val deviceClassifierIconProvider: DeviceClassifierIconProvider,
   private val runYamlLambda: (desktopAppRunYamlParams: DesktopAppRunYamlParams) -> Unit,
   private val installedAppIdsProviderBlocking: (TrailblazeDeviceId) -> Set<String>,
   val onDeviceInstrumentationArgsProvider: () -> Map<String, String>
 ) {
+
+  /**
+   * Manages the web browser lifecycle for web testing.
+   * Use [launchWebBrowser] and [closeWebBrowser] to control the browser.
+   */
+  val webBrowserManager = WebBrowserManager()
+
+  /**
+   * Exposes the web browser state for UI observation.
+   */
+  val webBrowserStateFlow: StateFlow<WebBrowserState> = webBrowserManager.browserStateFlow
+
+  /**
+   * Launches a web browser for testing.
+   * The browser will appear as a device in the device list once running.
+   *
+   * @return true if the browser was launched successfully
+   */
+  fun launchWebBrowser(): Boolean {
+    val device = webBrowserManager.launchBrowser()
+    if (device != null) {
+      // Refresh device list to include the new browser
+      loadDevices()
+      return true
+    }
+    return false
+  }
+
+  /**
+   * Closes the web browser.
+   * The browser will be removed from the device list.
+   */
+  fun closeWebBrowser() {
+    webBrowserManager.closeBrowser()
+    // Refresh device list to remove the browser
+    loadDevices()
+  }
 
   private val targetDeviceFilter: (List<TrailblazeConnectedDeviceSummary>) -> List<TrailblazeConnectedDeviceSummary> =
     { connectedDeviceSummaries ->
@@ -230,7 +273,7 @@ class TrailblazeDeviceManager(
     trailblazeDeviceId: TrailblazeDeviceId,
     trailblazeTool: TrailblazeTool,
   ) {
-    val yaml = TrailblazeYaml().encodeToString(
+    val yaml = TrailblazeYaml.Default.encodeToString(
       TrailblazeYamlBuilder()
         .tools(listOf(trailblazeTool))
         .build()
@@ -357,24 +400,16 @@ class TrailblazeDeviceManager(
             }
 
             MaestroPlatform.WEB -> {
-              add(
-                TrailblazeConnectedDeviceSummary(
-                  trailblazeDriverType = TrailblazeDriverType.WEB_PLAYWRIGHT_HOST,
-                  instanceId = DEFAULT_PLAYWRIGHT_WEB_TRAILBLAZE_DEVICE_ID.instanceId,
-                  description = maestroConnectedDevice.description,
-                )
-              )
+              // Web devices from Maestro DeviceService are not used - we manage web browsers ourselves
+              // via WebBrowserManager
             }
           }
         }
-        // A Playwright "Device" is always available
-        add(
-          TrailblazeConnectedDeviceSummary(
-            trailblazeDriverType = TrailblazeDriverType.WEB_PLAYWRIGHT_HOST,
-            instanceId = "playwright-web",
-            description = "Web Playwright Instance",
-          )
-        )
+
+        // Include web browser device only if the browser is currently running
+        webBrowserManager.getRunningBrowserSummary()?.let { browserSummary ->
+          add(browserSummary)
+        }
       }
 
       val filteredDevices = targetDeviceFilter(allDevices)
@@ -500,10 +535,27 @@ class TrailblazeDeviceManager(
     // Step 1: Get the running test and KILL its driver (kills child processes)
     maestroDriverByDeviceMap[trailblazeDeviceId]?.let { maestroDriver ->
       try {
-        println("Forcefully closing driver for device: ${trailblazeDeviceId.instanceId}")
-        // This closes the underlying driver and kills child processes (XCUITest, adb, etc.)
-        maestroDriver.close()
-        println("Driver closed successfully for device: ${trailblazeDeviceId.instanceId}")
+        // For web browsers managed by WebBrowserManager, don't close the browser - just reset the session.
+        // This allows the browser to stay open between test runs for debugging.
+        // The user can explicitly close the browser via the UI when done.
+        val isWebBrowserManagedByUs = trailblazeDeviceId == DEFAULT_PLAYWRIGHT_WEB_TRAILBLAZE_DEVICE_ID &&
+            webBrowserManager.isRunning()
+
+        if (isWebBrowserManagedByUs) {
+          println("Web browser managed by WebBrowserManager - keeping browser open, resetting session")
+          // Reset the browser session (clear cookies, navigate to about:blank, etc.)
+          // but don't close the browser window.
+          // The driver in maestroDriverByDeviceMap is wrapped in a LoggingDriver, so we need to
+          // get the actual MaestroPlaywrightDriver from the HostWebDriverFactory's cache.
+          // Calling getOrCreateDriver with resetSession=true will reset the session without closing.
+          HostWebDriverFactory.getOrCreateDriver(headless = false, resetSession = true)
+          println("Browser session reset successfully")
+        } else {
+          println("Forcefully closing driver for device: ${trailblazeDeviceId.instanceId}")
+          // This closes the underlying driver and kills child processes (XCUITest, adb, etc.)
+          maestroDriver.close()
+          println("Driver closed successfully for device: ${trailblazeDeviceId.instanceId}")
+        }
       } catch (e: Exception) {
         println("Error closing driver (continuing anyway): ${e.message}")
         // Continue with coroutine cancellation even if driver close fails

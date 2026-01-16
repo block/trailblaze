@@ -1,3 +1,7 @@
+---
+title: Configuration
+---
+
 ## On-Device Android Instrumentation Arguments
 * `trailblaze.aiEnabled` (defaults to `true`) - This will have the Trailblaze SDK send all requests to the LLM.  When `false`, only recordings can be used.
 * `trailblaze.reverseProxy` (defaults to `false`) - This will enable the reverse proxy for all Trailblaze traffic.

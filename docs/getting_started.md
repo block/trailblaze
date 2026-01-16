@@ -1,3 +1,7 @@
+---
+title: Getting Started
+---
+
 ### Add the Trailblaze `androidTestImplementation` Gradle Dependency
 
 Trailblaze was just open sourced and is not yet published as an artifact. You can try it out with the `examples` project

@@ -15,8 +15,8 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.serializer
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
-import xyz.block.trailblaze.mcp.TrailblazeMcpSseSessionContext
-import xyz.block.trailblaze.mcp.models.McpSseSessionId
+import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
+import xyz.block.trailblaze.mcp.models.McpSessionId
 import xyz.block.trailblaze.mcp.utils.KoogToMcpExt.toMcpJsonSchemaObject
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
@@ -41,14 +41,14 @@ import kotlin.reflect.full.starProjectedType
  * bridge.registerTrailblazeToolSet(
  *   trailblazeToolSet = TrailblazeToolSet.DeviceControlTrailblazeToolSet,
  *   mcpServer = server,
- *   mcpSseSessionId = sessionId,
+ *   mcpSessionId = sessionId,
  * )
  * ```
  */
 class TrailblazeToolToMcpBridge(
   private val mcpBridge: TrailblazeMcpBridge,
-  private val sessionContext: TrailblazeMcpSseSessionContext? = null,
-  private val onProgressToken: ((McpSseSessionId, RequestId?) -> Unit)? = null,
+  private val sessionContext: TrailblazeMcpSessionContext? = null,
+  private val onProgressToken: ((McpSessionId, RequestId?) -> Unit)? = null,
 ) {
 
   /**
@@ -58,12 +58,12 @@ class TrailblazeToolToMcpBridge(
   fun registerTrailblazeToolSet(
     trailblazeToolSet: TrailblazeToolSet,
     mcpServer: Server,
-    mcpSseSessionId: McpSseSessionId,
+    mcpSessionId: McpSessionId,
   ) {
     registerTrailblazeTools(
       toolClasses = trailblazeToolSet.toolClasses,
       mcpServer = mcpServer,
-      mcpSseSessionId = mcpSseSessionId,
+      mcpSessionId = mcpSessionId,
     )
   }
 
@@ -74,7 +74,7 @@ class TrailblazeToolToMcpBridge(
   fun registerTrailblazeTools(
     toolClasses: Set<KClass<out TrailblazeTool>>,
     mcpServer: Server,
-    mcpSseSessionId: McpSseSessionId,
+    mcpSessionId: McpSessionId,
   ) {
     println("Registering ${toolClasses.size} TrailblazeTools as MCP tools")
 
@@ -99,12 +99,8 @@ class TrailblazeToolToMcpBridge(
       println("  Properties: $properties")
       println("  Required: $required")
 
-      // Use empty ToolSchema for tools with no parameters
-      val inputSchema = if (properties.isEmpty()) {
-        ToolSchema()
-      } else {
-        ToolSchema(properties, required)
-      }
+      // Always provide properties (even if empty) - Goose client expects properties to be present
+      val inputSchema = ToolSchema(properties, required)
 
       mcpServer.addTool(
         name = descriptor.name,
@@ -115,7 +111,7 @@ class TrailblazeToolToMcpBridge(
           request = request,
           toolClass = toolClass,
           toolName = descriptor.name,
-          mcpSseSessionId = mcpSseSessionId,
+          mcpSessionId = mcpSessionId,
         )
       }
     }
@@ -126,14 +122,14 @@ class TrailblazeToolToMcpBridge(
     request: CallToolRequest,
     toolClass: KClass<out TrailblazeTool>,
     toolName: String,
-    mcpSseSessionId: McpSseSessionId,
+    mcpSessionId: McpSessionId,
   ): CallToolResult {
     // Extract progress token from request metadata
     val progressToken = request.meta?.get("progressToken")?.let { progressTokenValue ->
       when (progressTokenValue) {
         is JsonPrimitive -> {
           val tokenString = progressTokenValue.content
-          println("progressToken for session $mcpSseSessionId = $tokenString")
+          println("progressToken for session $mcpSessionId = $tokenString")
           RequestId.StringId(tokenString)
         }
 
@@ -142,7 +138,7 @@ class TrailblazeToolToMcpBridge(
     }
 
     // Notify about progress token (for session context updates)
-    onProgressToken?.invoke(mcpSseSessionId, progressToken)
+    onProgressToken?.invoke(mcpSessionId, progressToken)
     sessionContext?.progressToken = progressToken
 
     println("MCP Tool Called: $toolName")
@@ -183,6 +179,7 @@ class TrailblazeToolToMcpBridge(
         content = mutableListOf(
           TextContent(result),
         ),
+        isError = false,  // Explicitly set to false for success (some MCP clients require this)
       )
     } catch (e: Exception) {
       println("ERROR executing tool $toolName: ${e.message}")

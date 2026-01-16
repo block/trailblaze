@@ -95,6 +95,18 @@ class HostWebDriverFactory {
     }
 
     /**
+     * Checks if a browser is currently cached and connected.
+     * Used by WebBrowserManager to monitor browser state.
+     *
+     * @return true if a browser is cached and its connection is still active
+     */
+    @Synchronized
+    fun isBrowserConnected(): Boolean {
+      val driver = cachedDriver ?: return false
+      return !driver.isShutdown() && driver.browser.isConnected
+    }
+
+    /**
      * Currently we only support a single web browser instance, the default from Playwright
      */
     val DEFAULT_PLAYWRIGHT_WEB_TRAILBLAZE_DEVICE_ID = TrailblazeDeviceId(

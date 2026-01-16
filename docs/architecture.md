@@ -1,3 +1,7 @@
+---
+title: Architecture
+---
+
 # Architecture
 
 This document describes the software architecture and key design decisions of the Trailblaze framework.

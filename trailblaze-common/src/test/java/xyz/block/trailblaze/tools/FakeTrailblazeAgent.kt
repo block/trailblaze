@@ -47,6 +47,7 @@ class FakeTrailblazeAgent(
     traceId: TraceId?,
     screenState: ScreenState?,
     elementComparator: ElementComparator,
+    screenStateProvider: (() -> ScreenState)?,
   ): TrailblazeAgent.RunTrailblazeToolsResult {
     error("FakeTrailblazeAgent does not have an implementation for runTrailblazeTools()")
   }

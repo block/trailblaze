@@ -23,12 +23,9 @@ import java.io.File
  * All trails are stored directly under the trails directory (e.g., trails/testrail/suite_123/...).
  *
  * @param trailsDirectory The root directory for all trails. Defaults to ~/.trailblaze/trails
- * @param defaultSaveSubdirectory Subdirectory where new recordings are saved.
- *                                null (default) means save at root.
  */
 class RecordedTrailsRepoJvm(
   private val trailsDirectory: File = File(System.getProperty("user.home"), ".trailblaze/trails"),
-  private val defaultSaveSubdirectory: String? = null,
 ) : RecordedTrailsRepo {
 
   // Cache shared flows per directory path to avoid creating multiple watchers for the same directory
@@ -63,7 +60,7 @@ class RecordedTrailsRepoJvm(
         // The directory IS the trail identity, so filename is just platform-classifiers
         val trailPath = trailConfig.id!!
         // Prepend save subdirectory if configured, otherwise save at root
-        directoryPath = if (defaultSaveSubdirectory != null) "$defaultSaveSubdirectory/$trailPath" else trailPath
+        directoryPath = trailPath
         // Filename is platform-classifiers (e.g., "ios-iphone.trail.yaml", "android.trail.yaml")
         // If no suffix, use a timestamp to avoid overwriting
         fileName = if (suffix.isNotEmpty()) {
@@ -73,7 +70,7 @@ class RecordedTrailsRepoJvm(
         }
       } else {
         // Fallback to session-based filename if no trailPath is provided
-        directoryPath = defaultSaveSubdirectory ?: ""
+        directoryPath = ""
         fileName = "${sessionInfo.sessionId}/$suffix.${TrailRecordings.TRAIL_DOT_YAML}"
       }
 
@@ -104,10 +101,10 @@ class RecordedTrailsRepoJvm(
         // trailConfig.id is the trail path (e.g., "testrail/suite_123/section_456/case_789")
         val trailPath = trailConfig.id!!
         // Prepend save subdirectory if configured, otherwise save at root
-        if (defaultSaveSubdirectory != null) "$defaultSaveSubdirectory/$trailPath" else trailPath
+        trailPath
       } else {
         // Fallback to just the subdirectory if no trailPath is provided
-        defaultSaveSubdirectory ?: ""
+        ""
       }
 
       val promptsFile = File(File(trailsDirectory, directoryPath), TrailRecordings.TRAIL_DOT_YAML)

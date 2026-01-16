@@ -15,7 +15,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.maestro.MaestroYamlParser
-import xyz.block.trailblaze.mcp.TrailblazeMcpSseSessionContext
+import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
 import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.report.utils.LogsRepo
 import java.io.File
@@ -27,7 +27,7 @@ import java.io.File
  */
 @Suppress("unused")
 class McpTestCasesToolSet(
-  private val sessionContext: TrailblazeMcpSseSessionContext?,
+  private val sessionContext: TrailblazeMcpSessionContext?,
   private val logsRepo: LogsRepo,
   private val openAiRunnerProvider: () -> TrailblazeRunner,
   private val typesafeYamlExecutor: (String) -> Unit,
@@ -73,9 +73,9 @@ class McpTestCasesToolSet(
 
     // Send progress notifications if we have a session context with progress service
     sessionContext?.let { sessionContext ->
-      val mcpSseSessionId = sessionContext.mcpSseSessionId
+      val mcpSessionId = sessionContext.mcpSessionId
       val trailblazeSessionId = sessionProvider.invoke().sessionId
-      println("Executing prompt for session: $mcpSseSessionId")
+      println("Executing prompt for session: $mcpSessionId")
       ioScope.launch {
         var progress = 0
         var lastLogCount = 0
@@ -84,7 +84,7 @@ class McpTestCasesToolSet(
         logsRepo.getSessionLogsFlow(trailblazeSessionId).collect { logs ->
           // Check if this is the first log (session started)
           if (logs.isNotEmpty() && lastLogCount == 0) {
-            sessionContext.sendIndeterminateProgressMessage(progress++, "Session Started for session $mcpSseSessionId")
+            sessionContext.sendIndeterminateProgressMessage(progress++, "Session Started for session $mcpSessionId")
           }
 
           // Send progress for new logs
@@ -104,8 +104,8 @@ class McpTestCasesToolSet(
           if (lastLog is TrailblazeLog.TrailblazeSessionStatusChangeLog &&
             lastLog.sessionStatus is SessionStatus.Ended
           ) {
-            sessionContext.sendIndeterminateProgressMessage(progress++, "Session Ended for session $mcpSseSessionId")
-            println("Session $mcpSseSessionId ended. Stopping progress updates.")
+            sessionContext.sendIndeterminateProgressMessage(progress++, "Session Ended for session $mcpSessionId")
+            println("Session $mcpSessionId ended. Stopping progress updates.")
             this@launch.cancel()
           }
         }

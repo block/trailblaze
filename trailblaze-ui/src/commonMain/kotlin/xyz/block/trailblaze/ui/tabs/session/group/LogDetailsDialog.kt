@@ -53,6 +53,10 @@ import xyz.block.trailblaze.ui.utils.FormattingUtils.formatCommaNumber
 @Composable
 fun LogDetailsDialog(
   log: TrailblazeLog,
+  sessionId: String,
+  imageLoader: xyz.block.trailblaze.ui.images.ImageLoader,
+  onShowScreenshotModal: (imageModel: Any?, deviceWidth: Int, deviceHeight: Int, clickX: Int?, clickY: Int?, action: xyz.block.trailblaze.api.MaestroDriverActionType?) -> Unit,
+  showInspectUI: (() -> Unit)?,
   onDismiss: () -> Unit,
 ) {
   val lazyListState = rememberLazyListState()
@@ -164,6 +168,18 @@ fun LogDetailsDialog(
         item {
           AttemptAiFallbackFlat(
             log = log,
+          )
+        }
+      }
+
+      is TrailblazeLog.TrailblazeSnapshotLog -> {
+        item {
+          DeviceSnapshotFlat(
+            log = log,
+            sessionId = sessionId,
+            imageLoader = imageLoader,
+            onShowScreenshotModal = onShowScreenshotModal,
+            showInspectUI = showInspectUI,
           )
         }
       }

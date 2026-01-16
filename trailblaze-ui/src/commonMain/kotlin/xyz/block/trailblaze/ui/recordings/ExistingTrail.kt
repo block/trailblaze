@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.ui.recordings
 
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.recordings.TrailRecordings
 
 /**
@@ -22,24 +23,30 @@ data class ExistingTrail(
 
   /**
    * Extracts the platform from the filename (e.g., "ios" from "ios-iphone.trail.yaml").
-   * Returns null for trail.yaml or unrecognized formats.
+   * The platform is the first classifier. Returns null for trail.yaml or unrecognized formats.
    */
-  val platform: String?
+  val platform: TrailblazeDeviceClassifier?
     get() {
       if (isDefaultTrailFile) return null
       val nameWithoutExtension = fileName.removeSuffix(".trail.yaml")
-      return nameWithoutExtension.split("-").firstOrNull()?.lowercase()
+      return nameWithoutExtension.split("-").firstOrNull()?.lowercase()?.let {
+        TrailblazeDeviceClassifier(it)
+      }
     }
 
   /**
-   * Extracts the classifier from the filename (e.g., "iphone" from "ios-iphone.trail.yaml").
-   * Returns null if no classifier or for trail.yaml.
+   * Extracts the classifiers from the filename (e.g., ["iphone", "portrait"] from
+   * "ios-iphone-portrait.trail.yaml"). Returns an empty list for trail.yaml.
    */
-  val classifier: String?
+  val classifiers: List<TrailblazeDeviceClassifier>
     get() {
-      if (isDefaultTrailFile) return null
+      if (isDefaultTrailFile) return emptyList()
       val nameWithoutExtension = fileName.removeSuffix(".trail.yaml")
       val parts = nameWithoutExtension.split("-")
-      return if (parts.size > 1) parts.drop(1).joinToString("-") else null
+      return if (parts.size > 1) {
+        parts.drop(1).map { TrailblazeDeviceClassifier(it) }
+      } else {
+        emptyList()
+      }
     }
 }

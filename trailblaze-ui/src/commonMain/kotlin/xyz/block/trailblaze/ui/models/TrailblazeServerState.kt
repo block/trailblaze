@@ -56,6 +56,10 @@ data class TrailblazeServerState(
     val trailsDirectory: String? = null,
     // Root app data directory path (null means use default: ~/.trailblaze)
     val appDataDirectory: String? = null,
+    // Tab visibility settings
+    val showTrailsTab: Boolean = true, // Default true for backward compatibility
+    // Last navigation route (restored on app restart)
+    val lastRoute: String? = null, // Qualified class name of the last visited route
   ) {
 
     companion object {

@@ -21,7 +21,5 @@ data class TrailSource(
 
 @Serializable
 enum class TrailSourceType {
-  TESTRAIL,
   HANDWRITTEN,
-  GENERATED
 }

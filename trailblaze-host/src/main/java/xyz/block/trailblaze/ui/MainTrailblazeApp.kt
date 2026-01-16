@@ -2,12 +2,31 @@ package xyz.block.trailblaze.ui
 
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.filled.KeyboardArrowRight
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.NavigationRail
+import androidx.compose.material3.NavigationRailItem
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -22,30 +41,27 @@ import androidx.navigation.compose.rememberNavController
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import xyz.block.trailblaze.llm.TrailblazeLlmModel
-import xyz.block.trailblaze.llm.TrailblazeLlmModelList
 import xyz.block.trailblaze.logs.server.TrailblazeMcpServer
 import xyz.block.trailblaze.model.DesktopAppRunYamlParams
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.ui.composables.DeviceStatusPanel
 import xyz.block.trailblaze.ui.composables.IconWithBadges
-import xyz.block.trailblaze.ui.model.*
+import xyz.block.trailblaze.ui.composables.LocalDeviceClassifierIcons
+import xyz.block.trailblaze.ui.model.LocalNavController
+import xyz.block.trailblaze.ui.model.NavigationTab
+import xyz.block.trailblaze.ui.model.TrailblazeAppTab
+import xyz.block.trailblaze.ui.model.TrailblazeRoute
+import xyz.block.trailblaze.ui.model.navigateToRoute
 import xyz.block.trailblaze.ui.models.TrailblazeServerState
 import xyz.block.trailblaze.ui.recordings.RecordedTrailsRepo
 import xyz.block.trailblaze.ui.tabs.devdebug.DevDebugWindow
-import xyz.block.trailblaze.ui.tabs.devices.DevicesTabComposable
-import xyz.block.trailblaze.ui.tabs.sessions.SessionsTabComposableJvm
-import xyz.block.trailblaze.ui.tabs.sessions.YamlTabComposable
-import xyz.block.trailblaze.ui.tabs.settings.SettingsTabComposables
 import xyz.block.trailblaze.ui.theme.TrailblazeTheme
 
 class MainTrailblazeApp(
   val trailblazeSavedSettingsRepo: TrailblazeSettingsRepo,
   val logsRepo: LogsRepo,
-  private val yamlRunner: (DesktopAppRunYamlParams) -> Unit,
   val recordedTrailsRepo: RecordedTrailsRepo,
   val trailblazeMcpServerProvider: () -> TrailblazeMcpServer,
-  val customEnvVarNames: List<String>,
 ) {
 
   private data class WindowStateSnapshot(
@@ -56,14 +72,12 @@ class MainTrailblazeApp(
 
   fun runTrailblazeApp(
     /**
-     * Custom tabs that can access navigation via LocalNavController.current
+     * Complete list of tabs to display in the app, in order.
+     * The caller provides the full ordered list including built-in routes.
+     * Custom tabs can access navigation via LocalNavController.current.
      */
-    customTabs: () -> List<TrailblazeAppTab>,
-    availableModelLists: Set<TrailblazeLlmModelList>,
-    currentTrailblazeLlmModelProvider: () -> TrailblazeLlmModel,
+    allTabs: () -> List<TrailblazeAppTab>,
     deviceManager: TrailblazeDeviceManager,
-    globalSettingsContent: @Composable ColumnScope.(serverState: TrailblazeServerState) -> Unit,
-    additionalInstrumentationArgs: (suspend () -> Map<String, String>),
   ) {
     TrailblazeDesktopUtil.setAppConfigForTrailblaze()
 
@@ -75,7 +89,7 @@ class MainTrailblazeApp(
 
       // Start Server
       val trailblazeMcpServer = trailblazeMcpServerProvider()
-      trailblazeMcpServer.startSseMcpServer(
+      trailblazeMcpServer.startStreamableHttpMcpServer(
         port = appConfig.serverPort,
         wait = false,
       )
@@ -124,24 +138,19 @@ class MainTrailblazeApp(
         val inProgressCount by logsRepo.activeSessionCountFlow.collectAsState()
         val firstSessionStatus = sessions.firstOrNull()?.latestStatus
 
-        // Provide NavController to the entire composition tree for easy access
-        CompositionLocalProvider(LocalNavController provides navController) {
+        // Provide NavController and device classifier icons to the entire composition tree
+        CompositionLocalProvider(
+          LocalNavController provides navController,
+          LocalDeviceClassifierIcons provides deviceManager.deviceClassifierIconProvider,
+        ) {
           TrailblazeAppContent(
-            customTabs = customTabs,
+            allTabs = allTabs,
             inProgressCount = inProgressCount,
             firstSessionStatus = firstSessionStatus,
             currentServerState = currentServerState,
             trailblazeSavedSettingsRepo = trailblazeSavedSettingsRepo,
             windowState = windowState,
-            logsRepo = logsRepo,
             deviceManager = deviceManager,
-            recordedTrailsRepo = recordedTrailsRepo,
-            currentTrailblazeLlmModelProvider = currentTrailblazeLlmModelProvider,
-            yamlRunner = yamlRunner,
-            additionalInstrumentationArgs = additionalInstrumentationArgs,
-            globalSettingsContent = globalSettingsContent,
-            availableModelLists = availableModelLists,
-            customEnvVarNames = customEnvVarNames,
           )
         }
       }
@@ -150,40 +159,33 @@ class MainTrailblazeApp(
 
   @Composable
   private fun TrailblazeAppContent(
-    customTabs: () -> List<TrailblazeAppTab>,
+    allTabs: () -> List<TrailblazeAppTab>,
     inProgressCount: Int,
     firstSessionStatus: xyz.block.trailblaze.logs.model.SessionStatus?,
     currentServerState: TrailblazeServerState,
     trailblazeSavedSettingsRepo: TrailblazeSettingsRepo,
     windowState: WindowState,
-    logsRepo: LogsRepo,
     deviceManager: TrailblazeDeviceManager,
-    recordedTrailsRepo: RecordedTrailsRepo,
-    currentTrailblazeLlmModelProvider: () -> TrailblazeLlmModel,
-    yamlRunner: (DesktopAppRunYamlParams) -> Unit,
-    additionalInstrumentationArgs: (suspend () -> Map<String, String>),
-    globalSettingsContent: @Composable ColumnScope.(serverState: TrailblazeServerState) -> Unit,
-    availableModelLists: Set<TrailblazeLlmModelList>,
-    customEnvVarNames: List<String>,
   ) {
 
     val navController = LocalNavController.current
 
-    // Custom tabs can now access navigation via LocalNavController.current
-    val customNavTabs = remember { customTabs() }
+    // Get all tabs that should be registered in NavHost (stable, computed once)
+    // This ensures NavHost doesn't rebuild when visibility settings change
+    val allRegisteredTabs = remember { allTabs() }
 
-    // Build final tab list with navigation tabs inserted after Sessions
-    val allRoutes = remember(customNavTabs) {
-      buildList {
-        add(TrailblazeRoute.Sessions)
-        addAll(customNavTabs.map { it.route })
-        add(TrailblazeRoute.Devices)
-        add(TrailblazeRoute.YamlRoute)
-        add(TrailblazeRoute.Settings)
+    // Get visible tabs for the navigation rail (reactive to showTrailsTab)
+    // This filters which tabs appear in the UI without rebuilding NavHost
+    val visibleTabs = remember(currentServerState.appConfig.showTrailsTab) {
+      allTabs().filter { tab ->
+        // All tabs are visible unless it's Trails and showTrailsTab is false
+        tab.route != TrailblazeRoute.Trails || currentServerState.appConfig.showTrailsTab
       }
     }
 
-    val navigationTabsWithNav = allRoutes.map { route: TrailblazeRoute ->
+    // Build navigation tabs from the visible list
+    val navigationTabsWithNav = visibleTabs.map { tab ->
+      val route = tab.route
       NavigationTab(
         route = route,
         label = route.displayName,
@@ -255,6 +257,15 @@ class MainTrailblazeApp(
         }
       }
 
+      // Save the current route whenever navigation changes
+      LaunchedEffect(currentRouteString) {
+        if (currentRouteString != null) {
+          trailblazeSavedSettingsRepo.updateAppConfig { currAppConfig ->
+            currAppConfig.copy(lastRoute = currentRouteString)
+          }
+        }
+      }
+
       Scaffold(
         snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
       ) { innerPadding ->
@@ -302,71 +313,27 @@ class MainTrailblazeApp(
                 .fillMaxSize()
                 .padding(0.dp)
             ) {
-              // NavHost with type-safe navigation
+              // NavHost - all tabs are registered here (stable, doesn't change with visibility settings)
+              // Use the saved lastRoute if valid, otherwise fall back to the first tab (defaults to Sessions)
+              val validRoutes = allRegisteredTabs.map { it.route::class.qualifiedName }.toSet()
+              val defaultRoute = allRegisteredTabs.firstOrNull()?.let { it.route::class.qualifiedName }
+                ?: TrailblazeRoute.Sessions::class.qualifiedName!!
+              val savedRoute = currentServerState.appConfig.lastRoute
+              val startRoute = if (savedRoute != null && savedRoute in validRoutes) savedRoute else defaultRoute
+
               NavHost(
                 navController = navController,
-                startDestination = TrailblazeRoute.Sessions,
+                startDestination = startRoute,
                 enterTransition = { EnterTransition.None },
                 exitTransition = { ExitTransition.None }
               ) {
-                composable<TrailblazeRoute.Sessions> {
-                  val serverState by trailblazeSavedSettingsRepo.serverStateFlow.collectAsState()
-                  SessionsTabComposableJvm(
-                    logsRepo = logsRepo,
-                    serverState = serverState,
-                    updateState = { newState: TrailblazeServerState ->
-                      trailblazeSavedSettingsRepo.updateState { newState }
-                    },
-                    deviceManager = deviceManager,
-                    recordedTrailsRepo = recordedTrailsRepo,
-                  )
-                }
-
-                // Register custom tabs from external modules
-                // Since external routes aren't known at compile time in the core framework,
-                // we register them using a string-based route derived from their class name
-                customNavTabs.forEach { customTab ->
-                  val routeString = customTab.route::class.qualifiedName ?: customTab.route.toString()
+                // Register all tabs (including hidden ones) so navigation always works
+                // Visibility is controlled by the navigation rail, not by route registration
+                allRegisteredTabs.forEach { tab ->
+                  val routeString = tab.route::class.qualifiedName ?: tab.route.toString()
                   composable(routeString) {
-                    customTab.content()
+                    tab.content()
                   }
-                }
-
-                composable<TrailblazeRoute.Devices> {
-                  DevicesTabComposable(
-                    deviceManager = deviceManager,
-                    trailblazeSavedSettingsRepo = trailblazeSavedSettingsRepo,
-                  )
-                }
-
-                composable<TrailblazeRoute.YamlRoute> {
-                  YamlTabComposable(
-                    deviceManager = deviceManager,
-                    trailblazeSettingsRepo = trailblazeSavedSettingsRepo,
-                    currentTrailblazeLlmModelProvider = currentTrailblazeLlmModelProvider,
-                    yamlRunner = yamlRunner,
-                    additionalInstrumentationArgs = additionalInstrumentationArgs
-                  )
-                }
-
-                composable<TrailblazeRoute.Settings> {
-                  SettingsTabComposables.SettingsTab(
-                    trailblazeSettingsRepo = trailblazeSavedSettingsRepo,
-                    openLogsFolder = {
-                      TrailblazeDesktopUtil.openInFileBrowser(logsRepo.logsDir)
-                    },
-                    openDesktopAppPreferencesFile = {
-                      TrailblazeDesktopUtil.openInFileBrowser(trailblazeSavedSettingsRepo.settingsFile)
-                    },
-                    openGoose = {
-                      TrailblazeDesktopUtil.openGoose()
-                    },
-                    additionalContent = {},
-                    globalSettingsContent = globalSettingsContent,
-                    environmentVariableProvider = { System.getenv(it) },
-                    availableModelLists = availableModelLists,
-                    customEnvVariableNames = customEnvVarNames,
-                  )
                 }
               }
             }

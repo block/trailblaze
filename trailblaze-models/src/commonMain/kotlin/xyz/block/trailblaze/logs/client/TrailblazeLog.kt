@@ -158,4 +158,39 @@ sealed interface TrailblazeLog {
     val recordingResult: PromptRecordingResult.Failure,
   ) : TrailblazeLog,
     HasPromptStep
+
+  /**
+   * Log entry for a snapshot captured via TakeSnapshotTool.
+   * 
+   * Snapshots are user-initiated screen captures intended for documentation,
+   * debugging, or compliance purposes. They contain clean (unannotated) screenshots
+   * along with the view hierarchy at the time of capture.
+   */
+  @Serializable
+  data class TrailblazeSnapshotLog(
+    /**
+     * Optional user-provided display name for this snapshot.
+     * 
+     * This is a human-readable label shown in the snapshot viewer UI (e.g., "login_screen",
+     * "payment_confirmation"). It does NOT affect the actual filename on disk.
+     * 
+     * If null, the snapshot viewer will use the [screenshotFile] name as the display label.
+     */
+    val displayName: String?,
+    
+    /**
+     * The filename of the screenshot file on disk.
+     * 
+     * Auto-generated with format: `{sessionId}_{timestamp}.{extension}`
+     * This is the actual file path used to locate the PNG in the logs directory.
+     */
+    override val screenshotFile: String,
+    
+    val viewHierarchy: ViewHierarchyTreeNode,
+    override val deviceWidth: Int,
+    override val deviceHeight: Int,
+    override val session: SessionId,
+    override val timestamp: Instant,
+  ) : TrailblazeLog,
+    HasScreenshot
 }

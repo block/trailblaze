@@ -34,56 +34,20 @@ The text value to swipe on. If not provided, the swipe will be performed on the 
 ) : ExecutableTrailblazeTool {
 
   override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult {
-    val memory = toolExecutionContext.trailblazeAgent.memory
-    val devicePlatform = toolExecutionContext.screenState?.trailblazeDevicePlatform
-
-    val (startRelative, endRelative) = when (direction) {
-      SwipeDirection.UP -> {
-        // Start at center, move up to 40% height
-        "50%,50%" to "50%,30%"
-      }
-
-      SwipeDirection.DOWN -> {
-        // Start at center, move down to 60% height
-        "50%,50%" to "50%,70%"
-      }
-
-      SwipeDirection.LEFT -> {
-        // Start at 90% width (right side), move left to 10%
-        "90%,50%" to "10%,50%"
-      }
-
-      SwipeDirection.RIGHT -> {
-        // Start at 10% width (left side), move right to 90%
-        "10%,50%" to "90%,50%"
-      }
-    }
-
     println(
-      "SwipeTrailblazeTool delegating: direction=$direction, startRelative=$startRelative, endRelative=$endRelative, swipeOnElementText=$swipeOnElementText",
+      "SwipeTrailblazeTool delegating: direction=$direction, swipeOnElementText=$swipeOnElementText",
     )
 
-    val maestroCommands = when (devicePlatform) {
-      TrailblazeDevicePlatform.IOS -> {
-        // This is a temporary workaround to Support previous logic (TBZ-287)
-        SwipeWithRelativeCoordinatesTool(
-          startRelative = startRelative,
-          endRelative = endRelative,
-          swipeOnElementText = swipeOnElementText,
-        ).toMaestroCommands(memory)
-      }
-
-      else -> listOf(
-        SwipeCommand(
-          elementSelector = swipeOnElementText?.let {
-            ElementSelector(
-              textRegex = swipeOnElementText,
-            )
-          },
-          direction = direction,
-        ),
-      )
-    }
+    val maestroCommands = listOf(
+      SwipeCommand(
+        elementSelector = swipeOnElementText?.let {
+          ElementSelector(
+            textRegex = swipeOnElementText,
+          )
+        },
+        direction = direction,
+      ),
+    )
     return toolExecutionContext.trailblazeAgent.runMaestroCommands(
       maestroCommands = maestroCommands,
       traceId = toolExecutionContext.traceId,

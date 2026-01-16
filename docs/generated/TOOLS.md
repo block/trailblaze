@@ -14,7 +14,7 @@
 - [pressKey](functions/custom/pressKey.md)
 - [scrollUntilTextIsVisible](functions/custom/scrollUntilTextIsVisible.md)
 - [swipe](functions/custom/swipe.md)
-- [takeScreenshot](functions/custom/takeScreenshot.md)
+- [takeSnapshot](functions/custom/takeSnapshot.md)
 - [tapOnPoint](functions/custom/tapOnPoint.md)
 - [wait](functions/custom/wait.md)
 
@@ -36,7 +36,7 @@
 - [pressKey](functions/custom/pressKey.md)
 - [scrollUntilTextIsVisible](functions/custom/scrollUntilTextIsVisible.md)
 - [swipe](functions/custom/swipe.md)
-- [takeScreenshot](functions/custom/takeScreenshot.md)
+- [takeSnapshot](functions/custom/takeSnapshot.md)
 - [tapOnElementByNodeId](functions/custom/tapOnElementByNodeId.md)
 - [wait](functions/custom/wait.md)
 

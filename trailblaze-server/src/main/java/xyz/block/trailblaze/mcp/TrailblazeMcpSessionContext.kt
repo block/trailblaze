@@ -2,28 +2,27 @@ package xyz.block.trailblaze.mcp
 
 import io.modelcontextprotocol.kotlin.sdk.ProgressNotification
 import io.modelcontextprotocol.kotlin.sdk.ProgressToken
-import io.modelcontextprotocol.kotlin.sdk.server.Server
 import io.modelcontextprotocol.kotlin.sdk.server.ServerSession
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import xyz.block.trailblaze.mcp.models.McpSseSessionId
+import xyz.block.trailblaze.mcp.models.McpSessionId
+import xyz.block.trailblaze.mcp.transport.StreamableHttpServerTransport
 
 // Session context interface for tools
-class TrailblazeMcpSseSessionContext(
+class TrailblazeMcpSessionContext(
   var mcpServerSession: ServerSession?, // Nullable and mutable to handle race condition during initialization
-  val mcpSseSessionId: McpSseSessionId,
+  val mcpSessionId: McpSessionId,
   var progressToken: ProgressToken? = null,
 ) {
-  // Store transport directly so POSTs can be handled before connect() completes
-  var sseTransport: io.modelcontextprotocol.kotlin.sdk.server.SseServerTransport? = null
+  // Store transport directly so requests can be handled before connect() completes
+  var transport: StreamableHttpServerTransport? = null
 
   val sendProgressNotificationsScope = CoroutineScope(Dispatchers.IO)
 
   var progressCount: Int = 0
 
   fun sendIndeterminateProgressMessage(message: String) {
-    println("Sending progress $message $message")
     progressToken?.let { progressToken ->
       sendProgressNotificationsScope.launch {
         mcpServerSession?.notification(
@@ -41,7 +40,6 @@ class TrailblazeMcpSseSessionContext(
   }
 
   fun sendIndeterminateProgressMessage(progress: Int, message: String, total: Double? = null) {
-    println("Sending progress $progress $message")
     progressToken?.let { progressToken ->
       sendProgressNotificationsScope.launch {
         mcpServerSession?.notification(

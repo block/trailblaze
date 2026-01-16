@@ -19,6 +19,7 @@ import kotlinx.serialization.json.jsonObject
 import xyz.block.trailblaze.MaestroTrailblazeAgent
 import xyz.block.trailblaze.agent.model.PromptStepStatus
 import xyz.block.trailblaze.api.ImageFormatDetector
+import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeAgent
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.exception.TrailblazeToolExecutionException
@@ -53,6 +54,7 @@ class TrailblazeKoogLlmClientHelper(
   val llmClient: LLMClient,
   val elementComparator: TrailblazeElementComparator,
   val toolRepo: TrailblazeToolRepo,
+  val screenStateProvider: (() -> ScreenState)? = null,
 ) {
 
   // This field will be used to determine whether or not our next request to the LLM should require
@@ -112,6 +114,7 @@ class TrailblazeKoogLlmClientHelper(
         traceId = traceId,
         screenState = step.currentScreenState,
         elementComparator = elementComparator,
+        screenStateProvider = screenStateProvider,
       )
       setForceStepStatusUpdate(true)
       println("\u001B[33m\n[ACTION_TAKEN] Tool executed: ${trailblazeTool.javaClass.simpleName}\u001B[0m")
@@ -151,6 +154,7 @@ class TrailblazeKoogLlmClientHelper(
         traceId = traceId,
         trailblazeDeviceInfo = agent.trailblazeDeviceInfoProvider(),
         sessionProvider = agent.sessionProvider,
+        screenStateProvider = screenStateProvider,
       )
     }
     val toolName = tool.tool
@@ -323,7 +327,7 @@ class TrailblazeKoogLlmClientHelper(
               ),
             ),
           )
-          val screenshotBytes = stepStatus.currentScreenState.screenshotBytes
+          val screenshotBytes = stepStatus.currentScreenState.annotatedScreenshotBytes
           if (screenshotBytes != null &&
             screenshotBytes.isNotEmpty() &&
             trailblazeLlmModel.capabilityIds.contains(

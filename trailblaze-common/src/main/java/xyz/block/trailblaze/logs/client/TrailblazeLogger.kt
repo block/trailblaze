@@ -63,24 +63,55 @@ class TrailblazeLogger(
   }
 
   /**
-   * Logs a screenshot and returns the filename where it was stored.
+   * Saves a screenshot file and logs the screen state.
    *
    * @param session The session this screenshot belongs to
    * @param screenState The screen state containing screenshot bytes
-   * @return The filename where the screenshot was stored, or empty string if no screenshot
+   * @return The filename where the screenshot was stored, or null if no screenshot
    */
-  fun logScreenState(session: TrailblazeSession, screenState: ScreenState): String {
-    val screenshotBytes = screenState.screenshotBytes ?: return ""
+  fun logScreenState(session: TrailblazeSession, screenState: ScreenState): String? {
+    val screenshotBytes = screenState.screenshotBytes ?: return null
+    
     val imageFormat = ImageFormatDetector.detectFormat(screenshotBytes)
-    val screenshotFileName = "${session.sessionId.value}_${
-      Clock.System.now().toEpochMilliseconds()
-    }.${imageFormat.fileExtension}"
+    val timestamp = Clock.System.now()
+    val screenshotFileName = "${session.sessionId.value}_${timestamp.toEpochMilliseconds()}.${imageFormat.fileExtension}"
+    
     val screenStateLog = TrailblazeScreenStateLog(
       fileName = screenshotFileName,
       sessionId = session.sessionId,
       screenState = screenState,
     )
-    return screenStateLogger.logScreenState(screenStateLog)
+    screenStateLogger.logScreenState(screenStateLog)
+    
+    return screenshotFileName
+  }
+
+  /**
+   * Logs a snapshot with clean screenshot and view hierarchy.
+   *
+   * @param session The session this snapshot belongs to
+   * @param screenState The screen state containing clean screenshot and view hierarchy
+   * @param displayName Optional human-readable name for this snapshot (e.g., "login_screen").
+   *                    Shown in the snapshot viewer UI. Does not affect the actual filename.
+   * @return The filename where the snapshot was stored, or null if no screenshot available
+   */
+  fun logSnapshot(session: TrailblazeSession, screenState: ScreenState, displayName: String? = null): String? {
+    val screenshotFileName = logScreenState(session, screenState) ?: return null
+    
+    log(
+      session,
+      TrailblazeLog.TrailblazeSnapshotLog(
+        displayName = displayName,
+        screenshotFile = screenshotFileName,
+        viewHierarchy = screenState.viewHierarchy,
+        deviceWidth = screenState.deviceWidth,
+        deviceHeight = screenState.deviceHeight,
+        session = session.sessionId,
+        timestamp = Clock.System.now(),
+      )
+    )
+    
+    return screenshotFileName
   }
 
   /**

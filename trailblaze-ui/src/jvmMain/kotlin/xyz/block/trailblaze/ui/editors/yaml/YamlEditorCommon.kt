@@ -1,6 +1,6 @@
 @file:OptIn(ExperimentalMaterial3Api::class)
 
-package xyz.block.trailblaze.ui.tabs.sessions
+package xyz.block.trailblaze.ui.editors.yaml
 
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
@@ -49,7 +49,7 @@ fun validateYaml(content: String): String? {
 
   return try {
     // Try to parse with default tools
-    val trailblazeYaml = TrailblazeYaml()
+    val trailblazeYaml = TrailblazeYaml.Default
     trailblazeYaml.decodeTrail(content)
     null // No error
   } catch (e: Exception) {

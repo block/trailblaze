@@ -37,7 +37,6 @@ class HostMaestroDriverScreenState(
   private var matched = false
   private var attempts = 0
   private var stableRelabeledViewHierarchy: ViewHierarchyTreeNode? = null
-  private var stableFilteredViewHierarchy: ViewHierarchyTreeNode? = null
   private var stableRawScreenshotBytes: ByteArray? = null
   private var stableBufferedImage: BufferedImage? = null
 
@@ -50,21 +49,6 @@ class HostMaestroDriverScreenState(
 
       // Relabel for drawing and returning
       stableRelabeledViewHierarchy = vh1?.relabelWithFreshIds()
-
-      // Filter the view hierarchy if needed
-      stableFilteredViewHierarchy =
-        if (filterViewHierarchy && stableRelabeledViewHierarchy != null) {
-          val viewHierarchyFilter = ViewHierarchyFilter.create(
-            screenWidth = deviceWidth,
-            screenHeight = deviceHeight,
-            platform = deviceInfo.platform.toTrailblazeDevicePlatform(),
-          )
-          viewHierarchyFilter.filterInteractableViewHierarchyTreeNodes(
-            stableRelabeledViewHierarchy!!,
-          )
-        } else {
-          stableRelabeledViewHierarchy
-        }
 
       // Take the screenshot (raw, without set of mark)
       val sink = Buffer()
@@ -96,59 +80,85 @@ class HostMaestroDriverScreenState(
   override val viewHierarchyOriginal: ViewHierarchyTreeNode = stableRelabeledViewHierarchy
     ?: throw IllegalStateException("Failed to get stable view hierarchy from Maestro driver after $maxAttempts attempts.")
 
-  override val viewHierarchy: ViewHierarchyTreeNode = stableFilteredViewHierarchy
-    ?: throw IllegalStateException("Failed to get stable view hierarchy from Maestro driver after $maxAttempts attempts.")
+  /**
+   * Returns the filtered view hierarchy.
+   * Generates filtered hierarchy on-demand without caching - used for LLM requests.
+   */
+  override val viewHierarchy: ViewHierarchyTreeNode
+    get() {
+      if (!filterViewHierarchy) {
+        return viewHierarchyOriginal
+      }
+
+      val viewHierarchyFilter = ViewHierarchyFilter.create(
+        screenWidth = deviceWidth,
+        screenHeight = deviceHeight,
+        platform = deviceInfo.platform.toTrailblazeDevicePlatform(),
+      )
+      return viewHierarchyFilter.filterInteractableViewHierarchyTreeNodes(viewHierarchyOriginal)
+    }
 
   override val trailblazeDevicePlatform: TrailblazeDevicePlatform = deviceInfo.platform.toTrailblazeDevicePlatform()
 
   /**
-   * Returns screenshot bytes with set of mark annotations applied if enabled.
-   * This matches the device-side behavior where set of mark is applied based on the setOfMarkEnabled flag.
-   * Uses the filtered view hierarchy for set of mark annotations.
+   * Returns the clean screenshot bytes without any annotations.
+   * This is the raw screenshot suitable for compliance documentation and is always stored.
+   */
+  override val screenshotBytes: ByteArray? = stableRawScreenshotBytes
+
+  /**
+   * Returns screenshot bytes with set-of-mark annotations applied if enabled.
+   * Generates annotations on-demand without caching - used only for LLM requests.
+   * Uses the filtered view hierarchy for set-of-mark annotations.
    * Applies scaling if screenshotScalingConfig is specified.
    */
-  private fun computeScreenshotBytes(): ByteArray? {
-    val bufferedImage = stableBufferedImage ?: return null
+  override val annotatedScreenshotBytes: ByteArray?
+    get() {
+      val bufferedImage = stableBufferedImage ?: return null
 
-    // Apply set of mark if enabled
-    val imageWithSetOfMark = if (setOfMarkEnabled) {
+      // If set-of-mark is disabled, return the clean screenshot
+      if (!setOfMarkEnabled) {
+        return screenshotBytes
+      }
+
+      // Create a copy of the buffered image for annotation (don't modify original)
+      val imageForAnnotation = BufferedImage(
+        bufferedImage.width,
+        bufferedImage.height,
+        bufferedImage.type
+      )
+      val graphics = imageForAnnotation.createGraphics()
+      graphics.drawImage(bufferedImage, 0, 0, null)
+      graphics.dispose()
+
+      // Apply set of mark annotations
       val elementList = ViewHierarchyTreeNodeUtils.from(
         viewHierarchy, // Use filtered hierarchy for set of mark
         deviceInfo,
       )
 
-      val canvas = HostCanvasSetOfMark(bufferedImage, deviceInfo)
+      val canvas = HostCanvasSetOfMark(imageForAnnotation, deviceInfo)
       canvas.draw(elementList)
-      bufferedImage // Canvas draws directly on the bufferedImage
-    } else {
-      bufferedImage
-    }
 
-    // Apply scaling if config is specified
-    val scaledImage = if (screenshotScalingConfig != null) {
-      imageWithSetOfMark.scale(
-        maxDim1 = screenshotScalingConfig.maxDimension1,
-        maxDim2 = screenshotScalingConfig.maxDimension2,
-      )
-    } else {
-      imageWithSetOfMark
-    }
+      // Apply scaling if config is specified
+      val scaledImage = if (screenshotScalingConfig != null) {
+        imageForAnnotation.scale(
+          maxDim1 = screenshotScalingConfig.maxDimension1,
+          maxDim2 = screenshotScalingConfig.maxDimension2,
+        )
+      } else {
+        imageForAnnotation
+      }
 
-    // Convert to byte array with format and quality from config
-    return if (screenshotScalingConfig != null) {
-      scaledImage.toByteArray(
-        format = screenshotScalingConfig.imageFormat,
-        compressionQuality = screenshotScalingConfig.compressionQuality,
-      )
-    } else {
-      // Default to PNG when no config is provided
-      scaledImage.toByteArray()
+      // Convert to byte array with format and quality from config
+      return if (screenshotScalingConfig != null) {
+        scaledImage.toByteArray(
+          format = screenshotScalingConfig.imageFormat,
+          compressionQuality = screenshotScalingConfig.compressionQuality,
+        )
+      } else {
+        // Default to PNG when no config is provided
+        scaledImage.toByteArray()
+      }
     }
-  }
-
-  /**
-   * The screenshotBytes property returns screenshots with or without set of mark annotations
-   * based on the setOfMarkEnabled flag, matching the device-side behavior.
-   */
-  override val screenshotBytes: ByteArray? = computeScreenshotBytes()
 }

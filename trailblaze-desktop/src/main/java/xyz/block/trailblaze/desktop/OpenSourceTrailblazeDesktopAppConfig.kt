@@ -67,7 +67,9 @@ class OpenSourceTrailblazeDesktopAppConfig : TrailblazeDesktopAppConfig(
     ),
   ).apply { mkdirs() }
 
-  override val recordedTrailsRepo = RecordedTrailsRepoJvm(trailsDirectory = trailsDir)
+  override val recordedTrailsRepo = RecordedTrailsRepoJvm(
+    trailsDirectory = trailsDir
+  )
 
   override fun getCurrentlyAvailableLlmModelLists(): Set<TrailblazeLlmModelList> {
     val modelLists = JvmLLMProvidersUtil.getAvailableTrailblazeLlmProviderModelLists(ALL_MODEL_LISTS)

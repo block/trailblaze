@@ -9,7 +9,7 @@ import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
-import xyz.block.trailblaze.mcp.TrailblazeMcpSseSessionContext
+import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.viewhierarchy.ViewHierarchyFilter
 import xyz.block.trailblaze.viewhierarchy.ViewHierarchyFilter.Companion.asTrailblazeElementSelector
@@ -20,7 +20,7 @@ import xyz.block.trailblaze.yaml.models.TrailblazeYamlBuilder
 // --- Koog ToolSets ---
 @Suppress("unused")
 class DeviceManagerToolSet(
-  private val sessionContext: TrailblazeMcpSseSessionContext?,
+  private val sessionContext: TrailblazeMcpSessionContext?,
   private val toolRegistryUpdated: (ToolRegistry) -> Unit,
   private val targetTestAppProvider: () -> TrailblazeHostAppTarget,
   private val mcpBridge: TrailblazeMcpBridge,
@@ -34,9 +34,7 @@ class DeviceManagerToolSet(
   @Tool
   suspend fun getInstalledApps(): String {
     val packages = mcpBridge.getInstalledAppIds()
-    return packages
-      .sorted()
-      .joinToString("\n")
+    return packages.sorted().joinToString("\n")
   }
 
   @LLMDescription("List connected devices.")
@@ -167,7 +165,7 @@ class DeviceManagerToolSet(
     )
     steps: List<String>,
   ): String {
-    val yaml = TrailblazeYaml().encodeToString(
+    val yaml = TrailblazeYaml.Default.encodeToString(
       TrailblazeYamlBuilder()
         .apply {
           steps.forEach { promptLine ->

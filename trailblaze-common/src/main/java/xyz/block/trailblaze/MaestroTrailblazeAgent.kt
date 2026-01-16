@@ -83,6 +83,7 @@ abstract class MaestroTrailblazeAgent(
     traceId: TraceId?,
     screenState: ScreenState?,
     elementComparator: ElementComparator,
+    screenStateProvider: (() -> ScreenState)?,
   ): TrailblazeAgent.RunTrailblazeToolsResult {
     val traceId = traceId ?: TraceId.generate(TraceOrigin.TOOL)
     val trailblazeExecutionContext = TrailblazeToolExecutionContext(
@@ -91,6 +92,7 @@ abstract class MaestroTrailblazeAgent(
       trailblazeAgent = this,
       trailblazeDeviceInfo = trailblazeDeviceInfoProvider(),
       sessionProvider = sessionProvider,
+      screenStateProvider = screenStateProvider,
     )
 
     val toolsExecuted = mutableListOf<TrailblazeTool>()

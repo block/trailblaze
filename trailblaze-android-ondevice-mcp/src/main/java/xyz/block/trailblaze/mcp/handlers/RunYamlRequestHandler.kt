@@ -31,7 +31,7 @@ class RunYamlRequestHandler(
   override suspend fun handle(request: RunYamlRequest): RpcResult<RunYamlResponse> {
     // Extract config values for session naming
     val trailConfig = try {
-      TrailblazeYaml().extractTrailConfig(request.yaml)
+      TrailblazeYaml.Default.extractTrailConfig(request.yaml)
     } catch (e: Exception) {
       null
     }

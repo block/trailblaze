@@ -49,6 +49,7 @@ abstract class BaseHostTrailblazeTest(
   systemPromptTemplate: String? = null,
   trailblazeToolSet: TrailblazeToolSet? = null,
   customToolClasses: Set<KClass<out TrailblazeTool>> = setOf(),
+  excludedToolClasses: Set<KClass<out TrailblazeTool>> = setOf(),
   maxRetries: Int = 0,
   appTarget: TrailblazeHostAppTarget? = null,
   protected val trailblazeDeviceId: TrailblazeDeviceId = TrailblazeDeviceService.listConnectedTrailblazeDevices()
@@ -131,7 +132,7 @@ abstract class BaseHostTrailblazeTest(
       (
           trailblazeToolSet?.toolClasses
             ?: TrailblazeToolSet.getLlmToolSet(config.setOfMarkEnabled).toolClasses
-          ) + customToolClasses,
+          ) + customToolClasses - excludedToolClasses,
     ),
   )
 
@@ -170,6 +171,7 @@ abstract class BaseHostTrailblazeTest(
           null,
           screenState = hostRunner.screenStateProvider(),
           elementComparator = elementComparator,
+          screenStateProvider = hostRunner.screenStateProvider,
         )
         when (val toolResult = result.result) {
           is TrailblazeToolResult.Success -> toolResult

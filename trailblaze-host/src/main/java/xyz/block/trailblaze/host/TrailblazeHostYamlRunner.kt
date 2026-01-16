@@ -42,6 +42,10 @@ object TrailblazeHostYamlRunner {
         ?.getCustomToolsForDriver(
           runOnHostParams.trailblazeDriverType,
         ) ?: emptySet(),
+      excludedToolClasses = runOnHostParams.targetTestApp
+        ?.getExcludedToolsForDriver(
+          runOnHostParams.trailblazeDriverType,
+        ) ?: emptySet(),
       dynamicLlmClient = dynamicLlmClient,
       trailblazeLlmModel = runYamlRequest.trailblazeLlmModel,
       config = runYamlRequest.config,

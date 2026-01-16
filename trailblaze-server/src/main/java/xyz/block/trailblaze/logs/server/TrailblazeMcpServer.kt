@@ -10,16 +10,15 @@ import io.ktor.server.application.install
 import io.ktor.server.engine.EmbeddedServer
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
-import io.ktor.server.request.queryString
+import io.ktor.server.request.header
 import io.ktor.server.response.respond
+import io.ktor.server.routing.delete
+import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.routing
-import io.ktor.server.sse.SSE
-import io.ktor.server.sse.sse
 import io.modelcontextprotocol.kotlin.sdk.server.Server
 import io.modelcontextprotocol.kotlin.sdk.server.ServerOptions
 import io.modelcontextprotocol.kotlin.sdk.server.ServerSession
-import io.modelcontextprotocol.kotlin.sdk.server.SseServerTransport
 import io.modelcontextprotocol.kotlin.sdk.types.CallToolRequest
 import io.modelcontextprotocol.kotlin.sdk.types.CallToolResult
 import io.modelcontextprotocol.kotlin.sdk.types.Implementation
@@ -27,6 +26,7 @@ import io.modelcontextprotocol.kotlin.sdk.types.RequestId
 import io.modelcontextprotocol.kotlin.sdk.types.ServerCapabilities
 import io.modelcontextprotocol.kotlin.sdk.types.TextContent
 import io.modelcontextprotocol.kotlin.sdk.types.ToolSchema
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -37,15 +37,17 @@ import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.server.ServerEndpoints.logsServerKtorEndpoints
 import xyz.block.trailblaze.logs.server.SslConfig.configureForSelfSignedSsl
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
-import xyz.block.trailblaze.mcp.TrailblazeMcpSseSessionContext
-import xyz.block.trailblaze.mcp.models.McpSseSessionId
+import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
+import xyz.block.trailblaze.mcp.models.McpSessionId
 import xyz.block.trailblaze.mcp.newtools.DeviceManagerToolSet
 import xyz.block.trailblaze.mcp.newtools.TrailFilesToolSet
+import xyz.block.trailblaze.mcp.transport.MCP_SESSION_ID_HEADER
+import xyz.block.trailblaze.mcp.transport.StreamableHttpServerTransport
 import xyz.block.trailblaze.mcp.utils.KoogToMcpExt.toMcpJsonSchemaObject
 import xyz.block.trailblaze.mcp.utils.TrailblazeToolToMcpBridge
-import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
+import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 
@@ -55,22 +57,21 @@ class TrailblazeMcpServer(
   val trailsDirProvider: () -> File,
   val targetTestAppProvider: () -> TrailblazeHostAppTarget,
   val homeCallbackHandler: ((parameters: Map<String, List<String>>) -> Result<String>)? = null,
-  val additionalToolsProvider: (TrailblazeMcpSseSessionContext, Server) -> ToolRegistry = { _, _ -> ToolRegistry {} },
+  val additionalToolsProvider: (TrailblazeMcpSessionContext, Server) -> ToolRegistry = { _, _ -> ToolRegistry {} },
 ) {
-  // Per-session progress token tracking (multiplatform compatible)
-  private val sessionContexts = ConcurrentHashMap<McpSseSessionId, TrailblazeMcpSseSessionContext>()
+  // Per-session progress token tracking - use String keys for reliable ConcurrentHashMap behavior
+  private val sessionContexts = ConcurrentHashMap<String, TrailblazeMcpSessionContext>()
 
   // Track session creation time for timing diagnostics
-  private val sessionCreationTimes = ConcurrentHashMap<McpSseSessionId, Long>()
+  private val sessionCreationTimes = ConcurrentHashMap<String, Long>()
 
   var hostMcpToolRegistry = ToolRegistry.Companion {}
 
-  fun getSessionContext(mcpSseSessionId: McpSseSessionId): TrailblazeMcpSseSessionContext? =
-    sessionContexts[mcpSseSessionId]
+  fun getSessionContext(mcpSessionId: McpSessionId): TrailblazeMcpSessionContext? =
+    sessionContexts[mcpSessionId.sessionId]
 
   @OptIn(InternalAgentToolsApi::class)
   fun configureMcpServer(): Server {
-    println("configureMcpServer()")
     val server = Server(
       Implementation(
         name = "Trailblaze MCP server",
@@ -91,9 +92,8 @@ class TrailblazeMcpServer(
   fun addToolsAsMcpToolsFromRegistry(
     newToolRegistry: ToolRegistry,
     mcpServer: Server,
-    mcpSseSessionId: McpSseSessionId,
+    mcpSessionId: McpSessionId,
   ) {
-    println("Adding These Tools: ${newToolRegistry.tools.map { it.descriptor.name }}")
     hostMcpToolRegistry = hostMcpToolRegistry.plus(newToolRegistry)
 
     newToolRegistry.tools.forEach { tool: Tool<*, *> ->
@@ -106,16 +106,10 @@ class TrailblazeMcpServer(
 
       val required = tool.descriptor.requiredParameters.map { it.name }
 
-      println("Registering ${tool.descriptor.name} for session $mcpSseSessionId")
-      println("  Properties: $properties")
-      println("  Required: $required")
-
-      // Use empty ToolSchema for tools with no parameters (following Koog pattern)
-      val inputSchema = if (properties.isEmpty()) {
-        ToolSchema()
-      } else {
-        ToolSchema(properties, required)
-      }
+      // Always provide properties (even if empty) - Goose client expects properties to be present
+      // Previously we used ToolSchema() for empty tools, but this omits the "properties" field
+      // which causes Goose to fail with "Cannot convert undefined or null to object"
+      val inputSchema = ToolSchema(properties, required)
 
       mcpServer.addTool(
         name = tool.descriptor.name,
@@ -123,111 +117,91 @@ class TrailblazeMcpServer(
         inputSchema = inputSchema,
       ) { request: CallToolRequest ->
 
-        // In 0.8.x, CallToolRequest.meta is nullable and accessed via the meta property
+        // Extract progress token from request metadata
         val progressToken = request.meta?.get("progressToken")?.let { progressTokenValue ->
           when (progressTokenValue) {
-            is JsonPrimitive -> {
-              val tokenString = progressTokenValue.content
-              println("progressToken for session $mcpSseSessionId = $tokenString")
-              println("progressToken isString = ${progressTokenValue.isString}")
-              RequestId.StringId(tokenString)
-            }
-
+            is JsonPrimitive -> RequestId.StringId(progressTokenValue.content)
             else -> null
           }
         }
 
-        // Store progress token for this session (multiplatform compatible)
-        sessionContexts[mcpSseSessionId]?.progressToken = progressToken
+        // Store progress token for this session
+        sessionContexts[mcpSessionId.sessionId]?.progressToken = progressToken
 
         val toolName = tool.descriptor.name
-        println("Tool Called: $toolName")
 
         @Suppress("UNCHECKED_CAST")
         val koogTool = newToolRegistry.getTool(toolName)
 
-        // In 0.8.x, request.arguments is JsonElement?, not JsonObject?
-        // Safely convert to JsonObject, handling null and non-object types
+        // Convert request arguments to JsonObject
         val argumentsJsonObject = when (val args = request.arguments) {
           null -> JsonObject(emptyMap())
           else -> args
         }
 
-        println("Deserializing arguments for tool: $toolName")
-        println("  Arguments JSON: $argumentsJsonObject")
-        println("  Serializer: ${koogTool.argsSerializer}")
-
-        val koogToolArgs = try {
-          println("  → Attempting deserialization...")
-          val result = TrailblazeJsonInstance.decodeFromJsonElement(
+        try {
+          val koogToolArgs = TrailblazeJsonInstance.decodeFromJsonElement(
             koogTool.argsSerializer,
             argumentsJsonObject,
           )
-          println("  ✓ Deserialization successful")
-          println("  Deserialized arguments: $result")
-          result
-        } catch (e: NoSuchFieldError) {
-          println("✗ KOTLIN REFLECTION ERROR during deserialization!")
-          println("  This indicates a Kotlin version mismatch between runtime and reflection libraries")
-          println("  Error: ${e.message}")
-          println("  Serializer type: ${koogTool.argsSerializer::class.qualifiedName}")
-          println("  Kotlin runtime version: ${KotlinVersion.CURRENT}")
-          println()
-          println("  The error 'CONTEXT' field not found suggests:")
-          println("    - kotlin-reflect library version doesn't match Kotlin runtime")
-          println("    - CONTEXT parameters were added in Kotlin 1.6.20")
-          println("    - Check your Gradle dependencies for version alignment")
-          e.printStackTrace()
-          throw e
+
+          // Execute tool in background thread to prevent UI blocking
+          val toolResponse = withContext(Dispatchers.IO) {
+            @OptIn(InternalAgentToolsApi::class)
+            koogTool.executeUnsafe(args = koogToolArgs)
+          }
+
+          val toolResponseMessage = when (toolResponse) {
+            is ToolResult -> toolResponse.toStringDefault()
+            else -> toolResponse.toString()
+          }
+
+          CallToolResult(
+            content = mutableListOf(
+              TextContent(toolResponseMessage),
+            ),
+            isError = false,  // Explicitly set to false for success (some MCP clients require this)
+          )
         } catch (e: Exception) {
-          println("✗ ERROR deserializing arguments for tool $toolName")
-          println("  Arguments: $argumentsJsonObject")
-          println("  Expected type: ${koogTool.argsSerializer.descriptor}")
-          println("  Error type: ${e::class.qualifiedName}")
-          println("  Error message: ${e.message}")
-          e.printStackTrace()
-          throw e
+          // Return error result instead of throwing - allows LLM to see the error
+          CallToolResult(
+            content = mutableListOf(
+              TextContent("Error: ${e.message}"),
+            ),
+            isError = true,
+          )
         }
-
-        println("Executing tool: $toolName with arguments: $koogToolArgs")
-
-        // Execute tool in background thread to prevent UI blocking
-        val toolResponse = withContext(Dispatchers.IO) {
-          @OptIn(InternalAgentToolsApi::class)
-          koogTool.executeUnsafe(args = koogToolArgs)
-        }
-
-        val toolResponseMessage = when (toolResponse) {
-          is ToolResult -> toolResponse.toStringDefault()
-          else -> toolResponse.toString()
-        }
-        println("Tool result toolResponseMessage: $toolResponseMessage")
-
-        CallToolResult(
-          content = mutableListOf(
-            TextContent(toolResponseMessage),
-          ),
-        )
       }
     }
   }
 
-  /** MCP Server using Koog [io.modelcontextprotocol.kotlin.sdk.Tool]s */
-  fun startSseMcpServer(
+  /**
+   * MCP Server using Streamable HTTP transport.
+   *
+   * This replaces the previous SSE-based implementation with a simpler HTTP-based approach:
+   * - Client sends JSON-RPC requests via HTTP POST to /mcp
+   * - Server processes request and returns response in the same HTTP connection
+   * - Session management via Mcp-Session-Id header
+   * - Optional GET /mcp for server-to-client streaming (notifications)
+   *
+   * @param port The port to listen on (default: 52525)
+   * @param wait Whether to block until server stops (default: false)
+   * @return The embedded server instance
+   */
+  fun startStreamableHttpMcpServer(
     port: Int = 52525,
     wait: Boolean = false,
   ): EmbeddedServer<*, *> {
     println("═══════════════════════════════════════════════════════════")
-    println("Starting Trailblaze MCP SSE Server")
+    println("Starting Trailblaze MCP Server (Streamable HTTP)")
     println("  Port: $port")
-    println("  SSE endpoint: http://localhost:$port/sse")
-    println("  Message endpoint: http://localhost:$port/message?sessionId=<session_id>")
+    println("  MCP endpoint: http://localhost:$port/mcp")
     println()
     println("Connection flow:")
-    println("  1. Client connects to /sse endpoint")
-    println("  2. Server creates session and sends session ID via SSE")
-    println("  3. Client uses session ID for /message endpoint")
-    println("  4. Session remains valid while SSE connection is active")
+    println("  1. Client sends POST to /mcp with JSON-RPC request")
+    println("  2. Server creates session (if new) and returns Mcp-Session-Id header")
+    println("  3. Client includes Mcp-Session-Id header in subsequent requests")
+    println("  4. Optional: GET /mcp for server-to-client streaming")
     println("═══════════════════════════════════════════════════════════")
     println("Will Wait: $wait")
 
@@ -241,217 +215,115 @@ class TrailblazeMcpServer(
       },
     ) {
       logsServerKtorEndpoints(logsRepo, homeCallbackHandler = homeCallbackHandler)
-      install(SSE)
       routing {
-        sse("/sse") {
-          val sseServerSession = this
-          // Job to keep the SSE connection alive until the session is closed
-          val sessionJob = kotlinx.coroutines.Job()
+        // Main MCP endpoint for JSON-RPC requests
+        post("/mcp") {
 
-          // Declare session ID outside try block so it's accessible in finally
-          var mcpSseSessionId: McpSseSessionId? = null
+          println("==============================================================")
+          println("======================= POST /mcp =======================")
+          println("==============================================================")
+          println("Server instance: ${this@TrailblazeMcpServer.hashCode()}")
+          println("sessionContexts instance: ${sessionContexts.hashCode()}, size: ${sessionContexts.size}")
+          println("sessionContexts keys: ${sessionContexts.keys}")
+          val clientSessionId = call.request.header(MCP_SESSION_ID_HEADER)
+          println("Client provided session ID: '$clientSessionId'")
 
-          withContext(Dispatchers.IO) {
-            try {
-              val mcpSseServer: Server = configureMcpServer()
-              val transport = SseServerTransport("/message", sseServerSession)
-              mcpSseSessionId = McpSseSessionId(transport.sessionId)
-              println("═══════════════════════════════════════════════════════════")
-              println("✓ NEW SSE Connection established")
-              println("  Session ID: $mcpSseSessionId")
-              println("  Message endpoint: /message?sessionId=${transport.sessionId}")
-              println("  Query string: ${sseServerSession.call.request.queryString()}")
-              println("═══════════════════════════════════════════════════════════")
-              // For SSE, you can also add prompts/tools/resources if needed:
-              // server.addTool(...), server.addPrompt(...), server.addResource(...)
+          // Check if this is an existing session or new session
+          // For Streamable HTTP, the client may provide its own session ID
+          val (mcpSessionId, sessionContext, isNewSession) = if (clientSessionId != null) {
+            val existingContext = sessionContexts[clientSessionId]
+            println("Lookup result for '$clientSessionId': ${if (existingContext != null) "FOUND" else "NOT FOUND"}")
 
-              // Pre-create and register session context BEFORE connect() sends SSE events
-              // Store the transport immediately so POSTs can be handled during connect()
-              println("→ Pre-registering session context (before connect sends SSE events)")
-              val sessionStartTime = System.currentTimeMillis()
-              sessionCreationTimes[mcpSseSessionId] = sessionStartTime
-
-              // Create a temporary ServerSession-like object that holds the transport
-              // This allows POST requests to be processed while connect() is still running
-              val tempSessionContext = TrailblazeMcpSseSessionContext(
-                mcpServerSession = null as ServerSession?, // Will be set after connect
-                mcpSseSessionId = mcpSseSessionId,
-              )
-              // Store the transport reference for immediate use
-              tempSessionContext.sseTransport = transport
-
-              sessionContexts[mcpSseSessionId] = tempSessionContext
-              println("✓ Session pre-registered with transport: $mcpSseSessionId (Total active sessions: ${sessionContexts.size})")
-
-              // Launch connect() asynchronously to avoid blocking the SSE handler
-              // This prevents deadlock where connect() waits for events on the same dispatcher we're blocking
-              println("→ Launching MCP server connection asynchronously for session: $mcpSseSessionId")
-              val connectStartTime = System.currentTimeMillis()
-
-              kotlinx.coroutines.CoroutineScope(Dispatchers.Default).launch {
-                try {
-                  println("  → connect() starting in background coroutine...")
-
-                  // Add timeout to detect if connect() hangs indefinitely
-                  val mcpServerSession = kotlinx.coroutines.withTimeout(10000) {
-                    mcpSseServer.connect(transport)
-                  }
-
-                  val connectDuration = System.currentTimeMillis() - connectStartTime
-                  println("  → connect() completed in ${connectDuration}ms, updating session context...")
-
-                  // Update the session context with the actual ServerSession (this makes it available to POST handler)
-                  tempSessionContext.mcpServerSession = mcpServerSession
-                  println("✓ Session context fully initialized: $mcpSseSessionId")
-
-                  if (connectDuration > 100) {
-                    println("⚠️  WARNING: connect() took ${connectDuration}ms (>100ms). Client may have timed out.")
-                  }
-                } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
-                  println("✗ TIMEOUT in connect() for session $mcpSseSessionId after 10 seconds")
-                  println("  This indicates connect() is waiting for something that never arrives.")
-                  println("  Possible causes: waiting for client response, deadlock, or slow initialization")
-                  // Remove failed session
-                  sessionContexts.remove(mcpSseSessionId)
-                  sessionCreationTimes.remove(mcpSseSessionId)
-                } catch (e: Exception) {
-                  println("✗ ERROR in connect() for session $mcpSseSessionId: ${e.message}")
-                  e.printStackTrace()
-                  // Remove failed session
-                  sessionContexts.remove(mcpSseSessionId)
-                  sessionCreationTimes.remove(mcpSseSessionId)
-                }
-              }
-
-              println("✓ Session setup launched, connect() running in background")
-
-              val initialToolRegistry = ToolRegistry.Companion {
-                tools(
-                  TrailFilesToolSet(
-                    trailsDirProvider = trailsDirProvider,
-                  ).asTools(TrailblazeJsonInstance)
-                )
-                tools(
-                  DeviceManagerToolSet(
-                    sessionContext = getSessionContext(mcpSseSessionId),
-                    toolRegistryUpdated = { updatedToolRegistry ->
-                      addToolsAsMcpToolsFromRegistry(
-                        newToolRegistry = updatedToolRegistry,
-                        mcpServer = mcpSseServer,
-                        mcpSseSessionId = mcpSseSessionId,
-                      )
-                    },
-                    targetTestAppProvider = targetTestAppProvider,
-                    mcpBridge = mcpBridge,
-                  ).asTools(TrailblazeJsonInstance),
-                )
-              } + additionalToolsProvider(
-                getSessionContext(mcpSseSessionId)!!,
-                mcpSseServer,
-              )
-
-              addToolsAsMcpToolsFromRegistry(
-                newToolRegistry = initialToolRegistry,
-                mcpServer = mcpSseServer,
-                mcpSseSessionId = mcpSseSessionId,
-              )
-
-              // Register TrailblazeTools (low-level device control tools) via the bridge
-              // This allows MCP clients to act as the agent and call tools like tapOnPoint, swipe, etc.
-              val trailblazeToolBridge = TrailblazeToolToMcpBridge(
-                mcpBridge = mcpBridge,
-                sessionContext = getSessionContext(mcpSseSessionId),
-              )
-              trailblazeToolBridge.registerTrailblazeToolSet(
-                trailblazeToolSet = TrailblazeToolSet.DeviceControlTrailblazeToolSet,
-                mcpServer = mcpSseServer,
-                mcpSseSessionId = mcpSseSessionId,
-              )
-
-              println("✓ Session $mcpSseSessionId is fully initialized and ready for use")
-              println("  Active sessions: ${sessionContexts.size}")
-
-              mcpSseServer.onClose {
-                println("═══════════════════════════════════════════════════════════")
-                println("✗ SSE Connection closed for session: $mcpSseSessionId")
-                println("  Reason: onClose callback triggered")
-                val wasRemoved = sessionContexts.remove(mcpSseSessionId) != null
-                sessionCreationTimes.remove(mcpSseSessionId) // Clean up timing map
-                println("  Session was${if (wasRemoved) "" else " NOT"} in sessionContexts")
-                println("  Remaining active sessions: ${sessionContexts.size}")
-                if (sessionContexts.isNotEmpty()) {
-                  println("  Active session IDs: ${sessionContexts.keys.joinToString(", ")}")
-                }
-                println("═══════════════════════════════════════════════════════════")
-
-                // Signal that the session is closed so SSE handler can complete
-                sessionJob.complete()
-              }
-            } catch (e: Exception) {
-              println("✗ ERROR during SSE connection setup: ${e.message}")
-              e.printStackTrace()
-              sessionJob.completeExceptionally(e)
-              throw e
+            if (existingContext != null) {
+              println("✓ Reusing existing session: $clientSessionId")
+              Triple(McpSessionId(clientSessionId), existingContext, false)
+            } else {
+              // Client sent a session ID but we don't have it - create new session with that ID
+              println("⚠ Client provided unknown session ID: '$clientSessionId' - creating new session")
+              println("  Known sessions: ${sessionContexts.keys.map { "'$it'" }}")
+              val (newSessionId, newContext) = createNewSession(clientSessionId)
+              Triple(newSessionId, newContext, true)
             }
+          } else {
+            // New session - create transport and context with server-generated ID
+            println("→ No session ID provided - creating new session")
+            val (newSessionId, newContext) = createNewSession(null)
+            Triple(newSessionId, newContext, true)
+          }
 
-            // Keep the SSE connection alive until the session is closed
-            // This prevents Ktor from closing the SSE channel while connect() is still running
-            println("→ SSE handler waiting for session to close...")
-            sessionJob.join()
-            println("✓ SSE handler completed for session: $mcpSseSessionId")
+          if (isNewSession) {
+            println("✓ New MCP session created: ${mcpSessionId.sessionId}")
+          }
+
+          val transport = sessionContext.transport
+          if (transport == null) {
+            call.respond(HttpStatusCode.InternalServerError, "Transport not initialized")
+            return@post
+          }
+
+          // Handle the request through the transport
+          withContext(Dispatchers.IO) {
+            println("Handling request in IO context")
+            transport.handleRequest(call)
           }
         }
-        post("/message") {
-          val sessionId: String? = call.request.queryParameters["sessionId"]
 
-          if (sessionId == null) {
-            val errorMsg = "Missing sessionId query parameter"
-            println("✗ POST /message failed: $errorMsg")
-            call.respond(HttpStatusCode.BadRequest, errorMsg)
-            return@post
+        // Optional GET endpoint for server-to-client streaming (notifications)
+        get("/mcp") {
+          println("==============================================================")
+          println("======================= GET /mcp =======================")
+          println("==============================================================")
+          val clientSessionId = call.request.header(MCP_SESSION_ID_HEADER)
+
+          println("==============================================================")
+          println("Client provided session ID: $clientSessionId")
+          println("==============================================================")
+          if (clientSessionId == null) {
+            call.respond(HttpStatusCode.BadRequest, "Missing $MCP_SESSION_ID_HEADER header")
+            println("Missing $MCP_SESSION_ID_HEADER header")
+            return@get
           }
 
-          val mcpSseSessionId = McpSseSessionId(sessionId)
-          val timeSinceCreation = sessionCreationTimes[mcpSseSessionId]?.let {
-            System.currentTimeMillis() - it
-          }
-          val timingInfo = timeSinceCreation?.let { " (${it}ms after session creation)" } ?: ""
-
-          println("→ Received POST /message for session: $sessionId$timingInfo")
-          println("  Currently active sessions: ${sessionContexts.size}")
-          if (sessionContexts.isNotEmpty()) {
-            println("  Active session IDs: ${sessionContexts.keys.joinToString(", ")}")
-          }
-
-          val sessionContext = sessionContexts[mcpSseSessionId]
+          val sessionContext = sessionContexts[clientSessionId]
 
           if (sessionContext == null) {
-            val errorMsg = "Session not found: $sessionId. " +
-                if (sessionContexts.isEmpty()) {
-                  "No active sessions available. The SSE connection may have been closed."
-                } else {
-                  "Available sessions: ${sessionContexts.keys.joinToString(", ")}"
-                }
-            println("✗ $errorMsg")
-            call.respond(HttpStatusCode.NotFound, errorMsg)
-            return@post
+            call.respond(HttpStatusCode.NotFound, "Session not found: $clientSessionId")
+            println("Session not found: $clientSessionId")
+            return@get
           }
 
-          // Use the transport directly - it's available immediately, even before connect() completes
-          // This allows the MCP initialization handshake to proceed during connect()
-          val sseServerTransport = sessionContext.sseTransport
-          if (sseServerTransport == null) {
-            // This should never happen since we set sseTransport immediately after creating the session
-            val errorMsg =
-              "Transport not available for session: $sessionId. This is an internal error."
-            println("✗ $errorMsg")
-            call.respond(HttpStatusCode.InternalServerError, errorMsg)
-            return@post
+          val transport = sessionContext?.transport
+          if (transport == null) {
+            call.respond(HttpStatusCode.InternalServerError, "Transport not initialized")
+            println("Transport not initialized")
+            return@get
           }
 
-          println("✓ Processing message for valid session: $sessionId")
+          // Stream notifications to client
           withContext(Dispatchers.IO) {
-            sseServerTransport.handlePostMessage(call)
+            println("Handling stream request in IO context")
+            transport.handleStreamRequest(call)
+          }
+        }
+
+        // DELETE endpoint for session termination
+        delete("/mcp") {
+          val clientSessionId = call.request.header(MCP_SESSION_ID_HEADER)
+
+          if (clientSessionId == null) {
+            call.respond(HttpStatusCode.BadRequest, "Missing $MCP_SESSION_ID_HEADER header")
+            return@delete
+          }
+
+          val sessionContext = sessionContexts.remove(clientSessionId)
+          sessionCreationTimes.remove(clientSessionId)
+
+          if (sessionContext != null) {
+            sessionContext.transport?.close()
+            println("✓ Session terminated: $clientSessionId")
+            call.respond(HttpStatusCode.OK, "Session terminated")
+          } else {
+            call.respond(HttpStatusCode.NotFound, "Session not found: $clientSessionId")
           }
         }
       }
@@ -459,4 +331,120 @@ class TrailblazeMcpServer(
     println("Server starting...")
     return server
   }
+
+  /**
+   * Creates a new MCP session with transport and registers tools.
+   * For Streamable HTTP, we set up the session synchronously so it's ready to handle requests immediately.
+   *
+   * @param clientProvidedSessionId Optional session ID provided by the client. If null, uses the transport's generated ID.
+   */
+  private suspend fun createNewSession(clientProvidedSessionId: String?): Pair<McpSessionId, TrailblazeMcpSessionContext> {
+    val mcpServer: Server = configureMcpServer()
+    val transport = StreamableHttpServerTransport()
+
+    // Use client-provided session ID if available, otherwise use transport's generated ID
+    val sessionIdString = clientProvidedSessionId ?: transport.sessionId
+
+    // If client provided a session ID, configure the transport to use it
+    if (clientProvidedSessionId != null) {
+      transport.useSessionId(clientProvidedSessionId)
+    }
+
+    val mcpSessionId = McpSessionId(sessionIdString)
+
+    val sessionStartTime = System.currentTimeMillis()
+    sessionCreationTimes[sessionIdString] = sessionStartTime
+
+    // Create session context
+    val sessionContext = TrailblazeMcpSessionContext(
+      mcpServerSession = null as ServerSession?, // Will be set after connect
+      mcpSessionId = mcpSessionId,
+    )
+    sessionContext.transport = transport
+
+    sessionContexts[sessionIdString] = sessionContext
+    println("  → Session stored in sessionContexts with key: $sessionIdString")
+    println("  → Current sessions: ${sessionContexts.keys}")
+
+    // Launch connect() in background - it wires up message handlers and runs for session lifetime
+    // Note: Do NOT call transport.start() here - mcpServer.connect() calls it internally via Protocol.connect()
+    CoroutineScope(Dispatchers.Default).launch {
+      try {
+        val mcpServerSession = mcpServer.connect(transport)
+        sessionContext.mcpServerSession = mcpServerSession
+        println("  ✓ Session $sessionIdString fully initialized")
+      } catch (e: Exception) {
+        // Remove failed session
+        println("  ✗ Session $sessionIdString failed to initialize: ${e.message}")
+        e.printStackTrace()
+        sessionContexts.remove(sessionIdString)
+        sessionCreationTimes.remove(sessionIdString)
+      }
+    }
+
+    // Wait for the transport to be ready to handle messages
+    transport.waitForReady(2000)
+
+    // Register initial tools - use sessionContext directly instead of getSessionContext()
+    // to avoid potential ConcurrentHashMap lookup issues with value class keys
+    val initialToolRegistry = ToolRegistry.Companion {
+      tools(
+        TrailFilesToolSet(
+          trailsDirProvider = trailsDirProvider,
+        ).asTools(TrailblazeJsonInstance),
+      )
+      tools(
+        DeviceManagerToolSet(
+          sessionContext = sessionContext,
+          toolRegistryUpdated = { updatedToolRegistry ->
+            addToolsAsMcpToolsFromRegistry(
+              newToolRegistry = updatedToolRegistry,
+              mcpServer = mcpServer,
+              mcpSessionId = mcpSessionId,
+            )
+          },
+          targetTestAppProvider = targetTestAppProvider,
+          mcpBridge = mcpBridge,
+        ).asTools(TrailblazeJsonInstance),
+      )
+    } + additionalToolsProvider(
+      sessionContext,
+      mcpServer,
+    )
+
+    addToolsAsMcpToolsFromRegistry(
+      newToolRegistry = initialToolRegistry,
+      mcpServer = mcpServer,
+      mcpSessionId = mcpSessionId,
+    )
+
+    // Register TrailblazeTools (low-level device control tools) via the bridge
+    val trailblazeToolBridge = TrailblazeToolToMcpBridge(
+      mcpBridge = mcpBridge,
+      sessionContext = sessionContext,
+    )
+    trailblazeToolBridge.registerTrailblazeToolSet(
+      trailblazeToolSet = TrailblazeToolSet.DeviceControlTrailblazeToolSet,
+      mcpServer = mcpServer,
+      mcpSessionId = mcpSessionId,
+    )
+
+    // For Streamable HTTP, onClose is called when Server.connect() completes.
+    // We don't remove the session here - sessions are managed via DELETE /mcp endpoint.
+    mcpServer.onClose { }
+
+    return Pair(mcpSessionId, sessionContext)
+  }
+
+  /**
+   * @deprecated Use [startStreamableHttpMcpServer] instead. SSE transport has been deprecated by LLM providers.
+   */
+  @Deprecated(
+    message = "SSE transport has been deprecated. Use startStreamableHttpMcpServer() instead.",
+    replaceWith = ReplaceWith("startStreamableHttpMcpServer(port, wait)"),
+  )
+  fun startSseMcpServer(
+    port: Int = 52525,
+    wait: Boolean = false,
+  ): EmbeddedServer<*, *> = startStreamableHttpMcpServer(port, wait)
 }

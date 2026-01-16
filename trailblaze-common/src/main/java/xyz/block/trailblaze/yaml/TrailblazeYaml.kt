@@ -23,6 +23,12 @@ class TrailblazeYaml(
     TrailblazeToolSet.AllBuiltInTrailblazeToolsForSerialization + customTrailblazeToolClasses
 
   companion object {
+    /**
+     * Shared default instance for cases that don't need custom tool classes.
+     * Prefer using this over creating new instances to avoid repeated serializer setup.
+     */
+    val Default: TrailblazeYaml by lazy { TrailblazeYaml() }
+
     fun toolToYaml(toolName: String, trailblazeTool: TrailblazeTool): String = defaultYamlInstance.encodeToString(
       TrailblazeToolYamlWrapperSerializer(
         setOf(),

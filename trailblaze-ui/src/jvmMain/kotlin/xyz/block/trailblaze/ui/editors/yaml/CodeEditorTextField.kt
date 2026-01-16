@@ -1,10 +1,11 @@
-package xyz.block.trailblaze.ui.tabs.sessions.editor
+package xyz.block.trailblaze.ui.editors.yaml
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -35,9 +36,13 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.foundation.layout.defaultMinSize
+
+// Editor text style constants
+private val EditorFontSize: TextUnit = 14.sp
+private val EditorLineHeight: TextUnit = 20.sp
 
 /**
  * A code editor text field with YAML syntax highlighting, proper tab handling,
@@ -53,7 +58,6 @@ fun CodeEditorTextField(
   history: TextEditHistory = rememberTextEditHistory(),
   onUndo: (() -> Unit)? = null,
   onRedo: (() -> Unit)? = null,
-  onFormat: (() -> Boolean)? = null,
   placeholder: String = "",
   showLineNumbers: Boolean = true,
 ) {
@@ -85,23 +89,24 @@ fun CodeEditorTextField(
       .border(1.dp, borderColor, RoundedCornerShape(8.dp))
       .background(backgroundColor, RoundedCornerShape(8.dp))
   ) {
+    // Single vertical scroll container for both line numbers and editor
     Row(
-      modifier = Modifier.fillMaxSize()
+      modifier = Modifier
+        .fillMaxSize()
+        .verticalScroll(verticalScrollState)
     ) {
       // Line numbers gutter
       if (showLineNumbers) {
         LineNumberGutter(
           text = value.text,
-          scrollState = verticalScrollState,
           modifier = Modifier.padding(vertical = 12.dp),
         )
       }
 
-      // Editor area
+      // Editor area (only horizontal scroll here)
       Box(
         modifier = Modifier
           .weight(1f)
-          .verticalScroll(verticalScrollState)
           .horizontalScroll(horizontalScrollState)
           .padding(12.dp)
       ) {
@@ -125,21 +130,19 @@ fun CodeEditorTextField(
                 history = history,
                 onUndo = onUndo,
                 onRedo = onRedo,
-                onFormat = onFormat,
                 rawOnValueChange = onValueChange, // For undo/redo (don't push to history)
               )
             },
           enabled = enabled,
           textStyle = TextStyle(
             fontFamily = FontFamily.Monospace,
-            fontSize = 14.sp,
+            fontSize = EditorFontSize,
+            lineHeight = EditorLineHeight,
             color = MaterialTheme.colorScheme.onSurface,
           ),
           cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
           visualTransformation = visualTransformation,
           decorationBox = { innerTextField ->
-            // Use fillMaxSize to make the entire area clickable/selectable
-            // This helps with selecting newlines by clicking past line ends
             Box(
               modifier = Modifier
                 .fillMaxWidth()
@@ -150,7 +153,8 @@ fun CodeEditorTextField(
                   text = placeholder,
                   style = TextStyle(
                     fontFamily = FontFamily.Monospace,
-                    fontSize = 14.sp,
+                    fontSize = EditorFontSize,
+                    lineHeight = EditorLineHeight,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
                   ),
                 )
@@ -170,7 +174,6 @@ fun CodeEditorTextField(
 @Composable
 private fun LineNumberGutter(
   text: String,
-  scrollState: androidx.compose.foundation.ScrollState,
   modifier: Modifier = Modifier,
 ) {
   val lineCount = text.count { it == '\n' } + 1
@@ -181,15 +184,14 @@ private fun LineNumberGutter(
       .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
       .padding(horizontal = 8.dp)
   ) {
-    // We use a simple Text here since line numbers don't need to be individually clickable
-    // The vertical scroll is synced via the shared scrollState
     Text(
       text = (1..lineCount).joinToString("\n") { lineNum ->
         lineNum.toString().padStart(maxLineNumberWidth, ' ')
       },
       style = TextStyle(
         fontFamily = FontFamily.Monospace,
-        fontSize = 14.sp,
+        fontSize = EditorFontSize,
+        lineHeight = EditorLineHeight,
         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
       ),
     )
@@ -207,7 +209,6 @@ private fun handleKeyEvent(
   history: TextEditHistory,
   onUndo: (() -> Unit)?,
   onRedo: (() -> Unit)?,
-  onFormat: (() -> Boolean)?,
   rawOnValueChange: (TextFieldValue) -> Unit,
 ): Boolean {
   if (keyEvent.type != KeyEventType.KeyDown) return false
@@ -217,12 +218,6 @@ private fun handleKeyEvent(
   val isAltPressed = keyEvent.isAltPressed
 
   return when {
-    // Cmd+Option+L (Mac) or Ctrl+Alt+L (Windows/Linux) - Format
-    isModifierPressed && isAltPressed && keyEvent.key == Key.L -> {
-      onFormat?.invoke()
-      true
-    }
-
     // Tab key - indent (handles multi-line selection)
     keyEvent.key == Key.Tab && !keyEvent.isShiftPressed -> {
       indentLines(value, onValueChange)

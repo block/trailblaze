@@ -1,3 +1,7 @@
+---
+title: Maestro Compatibility
+---
+
 Trailblaze uses the [Maestro](https://maestro.dev) Command Model for UI commands, however does not implement the entire spec.
 
 #### Implemented:

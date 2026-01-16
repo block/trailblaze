@@ -3,6 +3,7 @@ package xyz.block.trailblaze.ui.tabs.session.group
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -324,6 +325,73 @@ fun AttemptAiFallbackFlat(
     }
     DetailSection("Prompt") {
       CodeBlock(log.promptStep.prompt)
+    }
+  }
+}
+
+@Composable
+fun DeviceSnapshotFlat(
+  log: TrailblazeLog.TrailblazeSnapshotLog,
+  sessionId: String,
+  imageLoader: xyz.block.trailblaze.ui.images.ImageLoader,
+  onShowScreenshotModal: (imageModel: Any?, deviceWidth: Int, deviceHeight: Int, clickX: Int?, clickY: Int?, action: xyz.block.trailblaze.api.MaestroDriverActionType?) -> Unit,
+  showInspectUI: (() -> Unit)?,
+) {
+  Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+    // Display the user-provided display name if provided
+    val displayName = log.displayName
+    if (displayName != null) {
+      DetailSection("Display Name") {
+        CodeBlock(displayName)
+      }
+    }
+
+    // Note: Test context (testClassName, testMethodName) is available in the session-level
+    // SessionStatus.Started log, not duplicated here
+
+    // Display screenshot
+    DetailSection("Screenshot") {
+      xyz.block.trailblaze.ui.composables.ScreenshotImage(
+        sessionId = sessionId,
+        screenshotFile = log.screenshotFile,
+        deviceWidth = log.deviceWidth,
+        deviceHeight = log.deviceHeight,
+        clickX = null,
+        clickY = null,
+        action = null,
+        modifier = Modifier.fillMaxWidth(),
+        imageLoader = imageLoader,
+        forceHighQuality = false,
+        onImageClick = { imageModel, deviceWidth, deviceHeight, clickX, clickY ->
+          // Snapshot logs should open UI Inspector when screenshot is clicked (if view hierarchy available)
+          if (showInspectUI != null) {
+            showInspectUI.invoke()
+          } else {
+            // Fall back to screenshot modal if no view hierarchy handler available
+            onShowScreenshotModal(imageModel, deviceWidth, deviceHeight, clickX, clickY, null)
+          }
+        }
+      )
+      
+      // Add helpful hint for UI Inspector
+      if (showInspectUI != null) {
+        Spacer(modifier = Modifier.height(4.dp))
+        xyz.block.trailblaze.ui.composables.SelectableText(
+          text = "💡 Click screenshot to inspect UI elements",
+          style = MaterialTheme.typography.labelSmall,
+          color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+        )
+      }
+    }
+
+    // Display screenshot file path
+    DetailSection("Screenshot File") {
+      CodeBlock(log.screenshotFile)
+    }
+
+    // Display device dimensions
+    DetailSection("Device Dimensions") {
+      CodeBlock("${log.deviceWidth} x ${log.deviceHeight}")
     }
   }
 }

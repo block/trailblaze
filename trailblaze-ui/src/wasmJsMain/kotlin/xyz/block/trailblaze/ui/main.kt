@@ -437,8 +437,26 @@ fun WasmSessionDetailView(
             currentLog = null
           }
         ) {
+          val imageLoader = remember { xyz.block.trailblaze.ui.images.NetworkImageLoader() }
           LogDetailsDialog(
             log = currentLog!!,
+            sessionId = sessionName,
+            imageLoader = imageLoader,
+            onShowScreenshotModal = { imageModel, deviceWidth, deviceHeight, clickX, clickY, action ->
+              modalImageModel = imageModel
+              modalDeviceWidth = deviceWidth
+              modalDeviceHeight = deviceHeight
+              modalClickX = clickX
+              modalClickY = clickY
+              modalAction = action
+              showScreenshotModal = true
+            },
+            showInspectUI = if (currentLog is TrailblazeLog.TrailblazeLlmRequestLog || currentLog is TrailblazeLog.MaestroDriverLog) {
+              {
+                currentInspectorLog = currentLog
+                showInspectUIDialog = true
+              }
+            } else null,
             onDismiss = {
               showDetailsDialog = false
               currentLog = null

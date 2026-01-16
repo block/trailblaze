@@ -2,6 +2,7 @@ package xyz.block.trailblaze.ui.model
 
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.Hiking
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Smartphone
@@ -20,30 +21,18 @@ val LocalNavController = compositionLocalOf<NavHostController> {
 }
 
 /**
- * Extension function for type-safe navigation to TrailblazeRoute destinations.
- * Handles both built-in routes (with type-safe navigation) and external custom routes.
+ * Extension function for navigation to TrailblazeRoute destinations.
+ * All routes (built-in and external) use string-based navigation via qualified class name.
  * 
  * @param route The TrailblazeRoute to navigate to
  * @param launchSingleTop Whether to launch the route as single top (defaults to true)
  */
 fun NavHostController.navigateToRoute(route: TrailblazeRoute, launchSingleTop: Boolean = true) {
-  when (route) {
-    // Built-in framework routes use type-safe navigation
-    is TrailblazeRoute.Sessions,
-    is TrailblazeRoute.Devices,
-    is TrailblazeRoute.YamlRoute,
-    is TrailblazeRoute.Settings -> {
-      navigate(route) {
-        this.launchSingleTop = launchSingleTop
-      }
-    }
-    // External routes use string-based navigation (can't use composable<T> for unknown types)
-    else -> {
-      val routeString = route::class.qualifiedName ?: route.toString()
-      navigate(routeString) {
-        this.launchSingleTop = launchSingleTop
-      }
-    }
+  // All routes use string-based navigation via qualified class name
+  // This matches how routes are registered in NavHost via composable(routeString)
+  val routeString = route::class.qualifiedName ?: route.toString()
+  navigate(routeString) {
+    this.launchSingleTop = launchSingleTop
   }
 }
 
@@ -100,6 +89,14 @@ interface TrailblazeRoute {
     override val displayName = "Settings"
     override val icon: @Composable () -> Unit = {
       Icon(Icons.Filled.Settings, contentDescription = "Settings")
+    }
+  }
+
+  @Serializable
+  data object Trails : TrailblazeRoute {
+    override val displayName = "Trails"
+    override val icon: @Composable () -> Unit = {
+      Icon(Icons.Filled.Hiking, contentDescription = "Trails")
     }
   }
 }

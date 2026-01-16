@@ -66,6 +66,10 @@ import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.ui.TrailblazeSettingsRepo
 import xyz.block.trailblaze.ui.composables.DeviceSelectionDialog
 import xyz.block.trailblaze.ui.composables.SelectableText
+import xyz.block.trailblaze.ui.editors.yaml.YamlEditorMode
+import xyz.block.trailblaze.ui.editors.yaml.YamlTextEditor
+import xyz.block.trailblaze.ui.editors.yaml.YamlVisualEditor
+import xyz.block.trailblaze.ui.editors.yaml.validateYaml
 
 /**
  * Main YAML Tab composable that provides a combined text and visual editor for Trailblaze YAML files.

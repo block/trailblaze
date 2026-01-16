@@ -69,6 +69,7 @@ data class SessionSummary(
             is TrailblazeLog.ObjectiveStartLog,
             is TrailblazeLog.ObjectiveCompleteLog,
             is TrailblazeLog.AttemptAiFallbackLog,
+            is TrailblazeLog.TrailblazeSnapshotLog,
             -> it
           }
         }.sortedBy { it.timestamp }
@@ -213,6 +214,7 @@ data class SessionSummary(
             is TrailblazeLog.ObjectiveStartLog,
             is TrailblazeLog.ObjectiveCompleteLog,
             is TrailblazeLog.DelegatingTrailblazeToolLog,
+            is TrailblazeLog.TrailblazeSnapshotLog,
             -> null
           }
         }

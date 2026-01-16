@@ -35,19 +35,16 @@ class OpenSourceTrailblazeDesktopApp : TrailblazeDesktopApp(
       MainTrailblazeApp(
         trailblazeSavedSettingsRepo = desktopAppConfig.trailblazeSettingsRepo,
         logsRepo = desktopAppConfig.logsRepo,
-        yamlRunner = { desktopRunYamlParams: DesktopAppRunYamlParams ->
-          desktopYamlRunner.runYaml(desktopRunYamlParams)
-        },
         recordedTrailsRepo = desktopAppConfig.recordedTrailsRepo,
         trailblazeMcpServerProvider = { trailblazeMcpServer },
-        customEnvVarNames = emptyList(),
       ).runTrailblazeApp(
-        customTabs = { listOf() },
-        availableModelLists = desktopAppConfig.getCurrentlyAvailableLlmModelLists(),
+        allTabs = {
+          desktopAppConfig.getTabs(
+            deviceManager = deviceManager,
+            yamlRunner = { desktopYamlRunner.runYaml(it) },
+          )
+        },
         deviceManager = deviceManager,
-        additionalInstrumentationArgs = { emptyMap() },
-        globalSettingsContent = { },
-        currentTrailblazeLlmModelProvider = { desktopAppConfig.getCurrentLlmModel() },
       )
     }
   }
@@ -59,7 +56,7 @@ class OpenSourceTrailblazeDesktopApp : TrailblazeDesktopApp(
     println("MCP Server will be available on port ${appConfig.serverPort}")
     
     // Start MCP Server
-    trailblazeMcpServer.startSseMcpServer(
+    trailblazeMcpServer.startStreamableHttpMcpServer(
       port = appConfig.serverPort,
       wait = true, // Keep the process running
     )
@@ -71,6 +68,7 @@ class OpenSourceTrailblazeDesktopApp : TrailblazeDesktopApp(
       currentTrailblazeLlmModelProvider = { desktopAppConfig.getCurrentLlmModel() },
       availableAppTargets = desktopAppConfig.availableAppTargets,
       appIconProvider = desktopAppConfig.appIconProvider,
+      deviceClassifierIconProvider = desktopAppConfig.deviceClassifierIconProvider,
       defaultHostAppTarget = desktopAppConfig.defaultAppTarget,
       runYamlLambda = { desktopYamlRunner.runYaml(it) },
       installedAppIdsProviderBlocking = { desktopAppConfig.getInstalledAppIds(it) },

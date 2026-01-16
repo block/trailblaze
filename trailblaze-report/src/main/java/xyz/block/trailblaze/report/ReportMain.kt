@@ -5,7 +5,10 @@ import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.HasScreenshot
+import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.report.models.LogsSummary
+import xyz.block.trailblaze.report.snapshot.SnapshotCollector
+import xyz.block.trailblaze.report.snapshot.SnapshotViewerGenerator
 import xyz.block.trailblaze.report.utils.LogsRepo
 import java.io.File
 
@@ -76,7 +79,7 @@ class GenerateReportCliCommand :
     println("logsDir: ${logsDir.canonicalPath}")
     println("useRelativeImageUrls: $useRelativeImageUrls")
 
-    val logsRepo = LogsRepo(logsDir)
+    val logsRepo = LogsRepo(logsDir, watchFileSystem = false)
 
     // Move the files into session directories.  This is needed after an adb pull
     moveJsonFilesToSessionDirs(logsDir)
@@ -109,8 +112,74 @@ class GenerateReportCliCommand :
       useRelativeImageUrls = useRelativeImageUrls,
     )
 
+    // Generate snapshot viewer using pre-parsed logs from LogsRepo (integrated mode)
+    // This avoids re-scanning and re-parsing all the JSON files
+    generateSnapshotViewerIntegrated(logsRepo)
+
     // Clean up file watchers to allow JVM to exit
     logsRepo.close()
+  }
+}
+
+/**
+ * Generate snapshot viewer HTML using pre-parsed logs from LogsRepo.
+ * 
+ * This is more efficient than the standalone mode because it reuses logs
+ * that have already been parsed for the main report generation, avoiding
+ * duplicate file I/O and JSON parsing.
+ */
+private fun generateSnapshotViewerIntegrated(logsRepo: LogsRepo) {
+  println()
+  println("--- Generating Snapshot Viewer (integrated mode)")
+  
+  try {
+    val snapshotViewerFile = File(logsRepo.logsDir, "snapshot_viewer.html")
+    
+    // Get all session IDs and their logs from LogsRepo (already parsed)
+    val sessionIds = logsRepo.getSessionIds()
+    println("📂 Using ${sessionIds.size} session(s) from LogsRepo")
+    
+    // Build maps for the collector
+    val logsBySession = sessionIds.associateWith { sessionId ->
+      logsRepo.getLogsForSession(sessionId)
+    }
+    
+    val sessionInfoBySession = sessionIds.associateWith { sessionId ->
+      logsRepo.getSessionInfo(sessionId)
+    }
+    
+    // Collect snapshots from pre-parsed logs (avoids duplicate file I/O)
+    val collector = SnapshotCollector(logsRepo.logsDir)
+    val snapshots = collector.collectSnapshots(logsBySession, sessionInfoBySession)
+    
+    if (snapshots.isEmpty()) {
+      println()
+      println("ℹ️  No snapshots found - skipping snapshot viewer generation")
+      println("   This is normal if TakeSnapshotTool was not used in any tests")
+      println()
+      return
+    }
+    
+    // Print summary
+    println()
+    println(collector.getSummary(snapshots))
+    
+    // Generate HTML
+    println()
+    val generator = SnapshotViewerGenerator()
+    generator.generateHtml(snapshots, snapshotViewerFile)
+    
+    println()
+    println("✅ Snapshot viewer generated successfully!")
+    println("   File: ${snapshotViewerFile.absolutePath}")
+    println("   Size: ${snapshotViewerFile.length() / 1024} KB")
+    
+  } catch (e: Exception) {
+    println()
+    println("⚠️  Error generating snapshot viewer: ${e.message}")
+    e.printStackTrace()
+    // Don't fail the entire report generation if snapshot viewer fails
+    println("   Continuing without snapshot viewer...")
   }
 }
 

@@ -8,9 +8,10 @@ import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
-import xyz.block.trailblaze.viewmatcher.TapSelectorV2.findBestTrailblazeElementSelectorForTargetNode
+import xyz.block.trailblaze.viewmatcher.TapSelectorV2.findBestTrailblazeElementSelectorForTargetNodeWithStrategy
 import xyz.block.trailblaze.viewmatcher.models.RelativeViewPositioningData
 import xyz.block.trailblaze.viewmatcher.models.toOrderedSpatialHints
+import xyz.block.trailblaze.viewmatcher.strategies.IndexStrategy
 
 @Serializable
 @TrailblazeToolClass(
@@ -67,7 +68,7 @@ data class TapOnElementByNodeIdTrailblazeTool(
       )
     }
 
-    val trailblazeElementSelector = findBestTrailblazeElementSelectorForTargetNode(
+    val selectorWithStrategy = findBestTrailblazeElementSelectorForTargetNodeWithStrategy(
       root = screenState.viewHierarchyOriginal,
       target = matchingNode,
       trailblazeDevicePlatform = screenState.trailblazeDevicePlatform,
@@ -76,10 +77,33 @@ data class TapOnElementByNodeIdTrailblazeTool(
       spatialHints = relativelyPositionedViews.toOrderedSpatialHints(),
     )
 
-    println("Selected TrailblazeTool: $trailblazeElementSelector")
+    println("Selected TrailblazeTool: ${selectorWithStrategy.selector} (strategy: ${selectorWithStrategy.strategyName})")
+
+    // If IndexStrategy was used with a high index (> 10), the selector is fragile.
+    // High indices depend on exact element ordering in the hierarchy which can change.
+    // Low indices (≤ 10) are usually stable enough to be useful.
+    // Fall back to tapping by coordinates for high indices.
+    if (selectorWithStrategy.strategyName == IndexStrategy.name) {
+      val index = selectorWithStrategy.selector.index?.toIntOrNull()
+      if (index != null && index > 10) {
+        val centerPoint = matchingNode.centerPoint
+        if (centerPoint != null) {
+          val (x, y) = centerPoint.split(",").map { it.toInt() }
+          println("IndexStrategy with high index ($index) - falling back to coordinate tap at ($x, $y)")
+          return listOf(
+            TapOnPointTrailblazeTool(
+              x = x,
+              y = y,
+              longPress = longPress,
+            ),
+          )
+        }
+      }
+    }
+
     val bestTapTrailblazeToolForNode: ExecutableTrailblazeTool = TapOnByElementSelector(
       reason = reason,
-      selector = trailblazeElementSelector,
+      selector = selectorWithStrategy.selector,
       longPress = longPress,
     )
 

@@ -1,3 +1,7 @@
+---
+title: MCP & Goose
+---
+
 Below are the instructions for using the Trailblaze MCP server with [Goose](https://github.com/block/goose).  
 
 Note: Trailblaze can work with any MCP client, we've just optimized for Goose. 

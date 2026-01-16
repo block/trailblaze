@@ -88,7 +88,7 @@ object Ext {
         className = getAttributeIfNotBlank("class"),
         dimensions = bounds?.let { "${it.width}x${it.height}" },
         clickable = clickable ?: false,
-        enabled = enabled ?: false,
+        enabled = enabled ?: true,
         focusable = getAttributeIfNotBlank("focusable") == "true",
         focused = focused ?: false,
         hintText = getAttributeIfNotBlank("hintText"),

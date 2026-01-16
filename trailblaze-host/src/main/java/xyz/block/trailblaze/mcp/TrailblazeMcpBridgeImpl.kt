@@ -96,7 +96,7 @@ class TrailblazeMcpBridgeImpl(
     // Default implementation: convert tool to YAML and run via runYaml()
     println("Executing TrailblazeTool via YAML conversion: ${tool::class.simpleName}")
 
-    val yaml = TrailblazeYaml().encodeToString(
+    val yaml = TrailblazeYaml.Default.encodeToString(
       TrailblazeYamlBuilder()
         .tools(listOf(tool))
         .build()

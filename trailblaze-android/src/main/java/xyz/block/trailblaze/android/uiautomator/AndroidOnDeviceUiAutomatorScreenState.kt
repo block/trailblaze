@@ -23,10 +23,16 @@ import java.io.ByteArrayOutputStream
 
 /**
  * Snapshot in time of what the screen has in it.
+ * 
+ * Memory Optimization:
+ * - Only stores the clean (non-annotated) screenshot in memory
+ * - Only stores the original (unfiltered) view hierarchy in memory
+ * - Set-of-mark annotations are generated on-demand
+ * - Filtered view hierarchy is generated on-demand
  */
 class AndroidOnDeviceUiAutomatorScreenState(
-  filterViewHierarchy: Boolean = false,
-  screenshotScalingConfig: ScreenshotScalingConfig = ScreenshotScalingConfig.DEFAULT,
+  private val filterViewHierarchy: Boolean = false,
+  private val screenshotScalingConfig: ScreenshotScalingConfig = ScreenshotScalingConfig.DEFAULT,
   private val setOfMarkEnabled: Boolean = true,
   maxAttempts: Int = 1,
   includeScreenshot: Boolean = true,
@@ -34,9 +40,10 @@ class AndroidOnDeviceUiAutomatorScreenState(
 
   override var deviceWidth: Int = -1
   override var deviceHeight: Int = -1
-  override var screenshotBytes: ByteArray
   override var viewHierarchyOriginal: ViewHierarchyTreeNode
-  override var viewHierarchy: ViewHierarchyTreeNode
+
+  // Store only the clean screenshot bytes (compressed)
+  private var _screenshotBytes: ByteArray = ByteArray(0)
 
   init {
     val (displayWidth, displayHeight) = withUiDevice { displayWidth to displayHeight }
@@ -46,7 +53,6 @@ class AndroidOnDeviceUiAutomatorScreenState(
     var matched = false
     var attempts = 0
     var lastViewHierarchyOriginal: ViewHierarchyTreeNode? = null
-    var lastViewHierarchy: ViewHierarchyTreeNode? = null
     var lastScreenshotBytes: ByteArray? = null
 
     while (!matched && attempts < maxAttempts) {
@@ -55,20 +61,9 @@ class AndroidOnDeviceUiAutomatorScreenState(
         excludeKeyboardElements = false,
       ).relabelWithFreshIds()
 
-      // Filter the view hierarchy if needed
-      val vh1Filtered = if (filterViewHierarchy) {
-        val viewHierarchyFilter = ViewHierarchyFilter.create(
-          screenHeight = deviceHeight,
-          screenWidth = deviceWidth,
-          platform = TrailblazeDevicePlatform.ANDROID,
-        )
-        viewHierarchyFilter.filterInteractableViewHierarchyTreeNodes(vh1Original)
-      } else {
-        vh1Original
-      }
-
-      val screenshot = if (includeScreenshot) {
-        getScreenshot(vh1Filtered, screenshotScalingConfig)
+      val bytes = if (includeScreenshot) {
+        // Use original hierarchy for screenshot capture (filtering happens lazily later)
+        getScreenshot(vh1Original, screenshotScalingConfig)
       } else {
         null
       }
@@ -79,8 +74,7 @@ class AndroidOnDeviceUiAutomatorScreenState(
       )
 
       lastViewHierarchyOriginal = vh1Original
-      lastViewHierarchy = vh1Filtered
-      lastScreenshotBytes = screenshot
+      lastScreenshotBytes = bytes
 
       // Create a copy of the view hierarchies with the node ids all set to 0 and then compare
       val vh1Zeroed = vh1Original.copy(nodeId = 0)
@@ -98,11 +92,90 @@ class AndroidOnDeviceUiAutomatorScreenState(
 
     // Ensure these are set after the loop
     viewHierarchyOriginal = lastViewHierarchyOriginal ?: throw IllegalStateException("Failed to get view hierarchy")
-    viewHierarchy = lastViewHierarchy ?: throw IllegalStateException("Failed to get view hierarchy")
-    screenshotBytes = lastScreenshotBytes ?: ByteArray(0)
+    _screenshotBytes = lastScreenshotBytes ?: ByteArray(0)
   }
 
   override val trailblazeDevicePlatform: TrailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID
+
+  /**
+   * Returns the filtered view hierarchy.
+   * Generates filtered hierarchy on-demand without caching - used for LLM requests.
+   */
+  override val viewHierarchy: ViewHierarchyTreeNode
+    get() {
+      if (!filterViewHierarchy) {
+        return viewHierarchyOriginal
+      }
+
+      val viewHierarchyFilter = ViewHierarchyFilter.create(
+        screenHeight = deviceHeight,
+        screenWidth = deviceWidth,
+        platform = TrailblazeDevicePlatform.ANDROID,
+      )
+      return viewHierarchyFilter.filterInteractableViewHierarchyTreeNodes(viewHierarchyOriginal)
+    }
+
+  /**
+   * Returns the clean screenshot without any annotations.
+   * This is always stored in memory and used for logging and snapshots.
+   */
+  override val screenshotBytes: ByteArray
+    get() = _screenshotBytes
+
+  /**
+   * Returns screenshot bytes with set-of-mark annotations applied.
+   * Generates annotations on-demand without caching - used only for LLM requests.
+   * 
+   * Decodes the stored screenshot bytes back to a bitmap, applies annotations, then re-encodes.
+   * This avoids storing the uncompressed bitmap in memory.
+   */
+  override val annotatedScreenshotBytes: ByteArray
+    get() {
+      // If set-of-mark is disabled, return the clean screenshot
+      if (!setOfMarkEnabled) {
+        return _screenshotBytes
+      }
+
+      // If no screenshot bytes, return empty
+      if (_screenshotBytes.isEmpty()) {
+        return _screenshotBytes
+      }
+
+      // Decode the compressed bytes back to a bitmap
+      val bitmap = android.graphics.BitmapFactory.decodeByteArray(_screenshotBytes, 0, _screenshotBytes.size)
+        ?: return _screenshotBytes
+      
+      try {
+        // Create a mutable copy for annotation
+        val annotatedBitmap = bitmap.copy(Bitmap.Config.ARGB_8888, true)
+        bitmap.recycle() // Recycle the decoded bitmap
+        
+        // Apply set-of-mark annotations
+        AndroidCanvasSetOfMark.drawSetOfMarkOnBitmap(
+          originalScreenshotBitmap = annotatedBitmap,
+          elements = ViewHierarchyTreeNodeUtils.from(
+            viewHierarchy,
+            DeviceInfo(
+              platform = Platform.ANDROID,
+              widthPixels = annotatedBitmap.width,
+              heightPixels = annotatedBitmap.height,
+              widthGrid = annotatedBitmap.width,
+              heightGrid = annotatedBitmap.height,
+            ),
+          ),
+          includeLabel = true,
+        )
+        
+        // Convert to bytes and clean up
+        val bytes = annotatedBitmap.toByteArray()
+        annotatedBitmap.recycle()
+        
+        return bytes
+      } catch (e: Exception) {
+        bitmap.recycle()
+        throw e
+      }
+    }
 
   companion object {
 
@@ -186,28 +259,39 @@ class AndroidOnDeviceUiAutomatorScreenState(
     }
   }
 
+  /**
+   * Captures the clean screenshot and returns the compressed bytes.
+   * The bitmap is converted to bytes and recycled immediately to minimize memory usage.
+   */
   private fun getScreenshot(
     viewHierarchy: ViewHierarchyTreeNode?,
     screenshotScalingConfig: ScreenshotScalingConfig?,
   ): ByteArray? {
-    val screenshotBitmap = takeScreenshot(
+    // Capture only the clean screenshot (without set-of-mark)
+    val cleanBitmap = takeScreenshot(
       viewHierarchy = viewHierarchy,
-      setOfMarkEnabled = setOfMarkEnabled,
-    )
-    if (screenshotBitmap != null) {
-      val scaledBitmap = if (screenshotScalingConfig != null) {
-        screenshotBitmap.scale(
-          maxDim1 = screenshotScalingConfig.maxDimension1,
-          maxDim2 = screenshotScalingConfig.maxDimension2,
-        )
-      } else {
-        screenshotBitmap
+      setOfMarkEnabled = false,
+    ) ?: return null
+    
+    // Scale if needed
+    val bitmap = if (screenshotScalingConfig != null) {
+      val scaled = cleanBitmap.scale(
+        maxDim1 = screenshotScalingConfig.maxDimension1,
+        maxDim2 = screenshotScalingConfig.maxDimension2,
+      )
+      // Recycle original if scaling created a new bitmap
+      if (scaled != cleanBitmap) {
+        cleanBitmap.recycle()
       }
-      val compressedBitmapBytes: ByteArray = scaledBitmap.toByteArray()
-      scaledBitmap.recycle()
-      return compressedBitmapBytes
+      scaled
     } else {
-      return null
+      cleanBitmap
     }
+    
+    // Convert to bytes and recycle bitmap immediately
+    val bytes = bitmap.toByteArray()
+    bitmap.recycle()
+    
+    return bytes
   }
 }

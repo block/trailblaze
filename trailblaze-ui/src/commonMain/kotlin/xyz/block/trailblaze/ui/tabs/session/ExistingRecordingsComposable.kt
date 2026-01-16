@@ -99,7 +99,7 @@ private fun ExistingRecordingItem(
       modifier = Modifier.weight(1f)
     ) {
       val devicePlatform = TrailblazeDevicePlatform.entries.firstOrNull {
-        it.name.equals(trail.platform, ignoreCase = true)
+        it.name.equals(trail.platform?.classifier, ignoreCase = true)
       }
 
       // Platform indicator icon
@@ -131,11 +131,11 @@ private fun ExistingRecordingItem(
       val displayName = if (trail.isDefaultTrailFile) {
         trail.fileName
       } else {
-        val classifier = trail.classifier
-        if (classifier != null) {
-          "${trail.platform ?: "unknown"}-$classifier"
+        val classifiers = trail.classifiers
+        if (classifiers.isNotEmpty()) {
+          "${trail.platform ?: "unknown"}-${classifiers.joinToString("-")}"
         } else {
-          trail.platform ?: trail.fileName
+          trail.platform?.toString() ?: trail.fileName
         }
       }
       SelectableText(

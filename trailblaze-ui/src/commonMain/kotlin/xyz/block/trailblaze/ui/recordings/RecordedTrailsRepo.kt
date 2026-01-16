@@ -4,6 +4,19 @@ import kotlinx.coroutines.flow.Flow
 import xyz.block.trailblaze.logs.model.SessionInfo
 
 /**
+ * Configuration for a trails directory.
+ *
+ * @param path Absolute path to the directory
+ * @param label Display label for the directory (e.g., "Handwritten", "Generated")
+ * @param priority Priority for lookup order (lower number = higher priority, 1 is highest)
+ */
+data class TrailsDirectory(
+  val path: String,
+  val label: String,
+  val priority: Int,
+)
+
+/**
  * Repository for saving session recordings to disk.
  */
 interface RecordedTrailsRepo {
@@ -35,7 +48,7 @@ interface RecordedTrailsRepo {
   ): Result<String>
 
   /**
-   * Gets the default recordings directory path.
+   * Gets configured trails directory
    */
   fun getTrailsDirectory(): String
 

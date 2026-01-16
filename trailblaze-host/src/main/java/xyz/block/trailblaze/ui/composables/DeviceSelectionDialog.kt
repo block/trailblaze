@@ -43,6 +43,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.ui.TrailblazeSettingsRepo
@@ -76,6 +77,7 @@ fun DeviceConfigurationContent(
   val installedAppIdsByDevice by deviceManager.installedAppIdsByDeviceFlow.collectAsState()
 
   // Initialize selectedDevices with previously selected devices that are still available and have the app installed
+  // Web browsers are always considered "installed" since they don't have apps
   var selectedDevices by remember(
     availableDevices,
     lastSelectedDeviceInstanceIds,
@@ -84,12 +86,13 @@ fun DeviceConfigurationContent(
   ) {
     mutableStateOf(
       availableDevices.filter { device ->
+        val isWebPlatform = device.platform == TrailblazeDevicePlatform.WEB
         val appIdIfInstalled = selectedTargetApp?.getAppIdIfInstalled(
           platform = device.platform,
           installedAppIds = installedAppIdsByDevice[device.trailblazeDeviceId] ?: emptySet()
         )
         device.instanceId in lastSelectedDeviceInstanceIds &&
-            (selectedTargetApp == null || appIdIfInstalled != null)
+            (isWebPlatform || selectedTargetApp == null || appIdIfInstalled != null)
       }.toSet()
     )
   }
@@ -164,12 +167,14 @@ fun DeviceConfigurationContent(
         verticalArrangement = Arrangement.spacedBy(8.dp)
       ) {
         availableDevices.forEach { device ->
+          val isWebPlatform = device.platform == TrailblazeDevicePlatform.WEB
           val appIdIfInstalled = selectedTargetApp?.getAppIdIfInstalled(
             platform = device.platform,
             installedAppIds = installedAppIdsByDevice[device.trailblazeDeviceId] ?: emptySet()
           )
           val isAppInstalled = appIdIfInstalled != null
-          val isDeviceEnabled = selectedTargetApp == null || isAppInstalled
+          // Web browsers are always enabled (no app to install); other devices need app check
+          val isDeviceEnabled = isWebPlatform || selectedTargetApp == null || isAppInstalled
           val activeSessionId = activeDeviceSessions[device.trailblazeDeviceId]
           val hasActiveSession = activeSessionId != null
 
@@ -243,6 +248,7 @@ fun DeviceSelectionDialog(
   val installedAppIdsByDevice by deviceManager.installedAppIdsByDeviceFlow.collectAsState()
 
   // Initialize selectedDevices with previously selected devices that are still available and have the app installed
+  // Web browsers are always considered "installed" since they don't have apps
   var selectedDevices by remember(
     availableDevices,
     lastSelectedDeviceInstanceIds,
@@ -252,7 +258,11 @@ fun DeviceSelectionDialog(
     mutableStateOf(
       availableDevices.filter { device ->
         val isDeviceSelected = device.instanceId in lastSelectedDeviceInstanceIds
-        if (selectedTargetApp != null) {
+        val isWebPlatform = device.platform == TrailblazeDevicePlatform.WEB
+        if (isWebPlatform) {
+          // Web browsers are always selectable
+          isDeviceSelected
+        } else if (selectedTargetApp != null) {
           val appIdIfInstalled = selectedTargetApp.getAppIdIfInstalled(
             platform = device.platform,
             installedAppIds = installedAppIdsByDevice[device.trailblazeDeviceId] ?: emptySet()
@@ -417,8 +427,11 @@ fun SingleDeviceListItem(
   onToggle: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
+  // Web browsers don't have apps to install - they're always ready to use
+  val isWebPlatform = device.platform == TrailblazeDevicePlatform.WEB
   val isAppInstalled = installedAppId != null
-  val isEnabled = appTarget == null || isAppInstalled
+  // Web devices are always enabled; other devices need app installation check
+  val isEnabled = isWebPlatform || appTarget == null || isAppInstalled
   // A device has an active session if there's a session ID
   val hasActiveSession = activeSessionId != null
 
@@ -522,7 +535,26 @@ fun SingleDeviceListItem(
           }
         }
 
-        if (appTarget != null) {
+        // Show app installation status for non-web devices, or "Ready" for web browsers
+        if (isWebPlatform) {
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+          ) {
+            Icon(
+              imageVector = Icons.Default.Check,
+              contentDescription = null,
+              tint = MaterialTheme.colorScheme.primary,
+              modifier = Modifier.size(16.dp)
+            )
+            Text(
+              text = "Web browser ready for testing",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.primary,
+              fontWeight = FontWeight.Medium
+            )
+          }
+        } else if (appTarget != null) {
           Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(4.dp)

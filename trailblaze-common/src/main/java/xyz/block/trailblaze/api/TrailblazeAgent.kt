@@ -16,7 +16,13 @@ interface TrailblazeAgent {
     tools: List<TrailblazeTool>,
     /** Used to associate the tool calls with downstream logs. */
     traceId: TraceId? = null,
-    screenState: ScreenState? = null, // TODO: This should probably be a provider instead of a static state, and should be required
+    screenState: ScreenState? = null,
     elementComparator: ElementComparator,
+    /**
+     * Optional provider to capture a fresh screen state on demand.
+     * Used by tools like TakeSnapshotTool that need to capture the current device state
+     * at the moment the tool is executed, rather than using the cached screenState.
+     */
+    screenStateProvider: (() -> ScreenState)? = null,
   ): RunTrailblazeToolsResult
 }

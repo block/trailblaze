@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -90,7 +91,7 @@ fun DeviceStatusPanel(
   val devicesWithSessions = devices.count { activeDeviceSessions.containsKey(it.trailblazeDeviceId) }
   val isLoading = deviceState.isLoading
 
-  var panelState by remember { mutableStateOf(PanelState.Collapsed) }
+  var panelState by remember { mutableStateOf(PanelState.Minimized) }
 
   AnimatedContent(
     targetState = panelState,
@@ -131,6 +132,7 @@ fun DeviceStatusPanel(
                   PanelState.Expanded
                 }
               },
+              onRefreshClick = { deviceManager.loadDevices() },
               onMinimizeClick = { panelState = PanelState.Minimized }
             )
 
@@ -232,6 +234,7 @@ private fun DeviceStatusHeader(
   isLoading: Boolean,
   isExpanded: Boolean,
   onExpandClick: () -> Unit,
+  onRefreshClick: () -> Unit,
   onMinimizeClick: () -> Unit,
 ) {
   Surface(
@@ -315,6 +318,24 @@ private fun DeviceStatusHeader(
           contentDescription = if (isExpanded) "Collapse" else "Expand",
           tint = MaterialTheme.colorScheme.onSurfaceVariant,
           modifier = Modifier.size(20.dp)
+        )
+      }
+
+      // Refresh button
+      IconButton(
+        onClick = onRefreshClick,
+        enabled = !isLoading,
+        modifier = Modifier.size(32.dp)
+      ) {
+        Icon(
+          imageVector = Icons.Default.Refresh,
+          contentDescription = "Refresh devices",
+          tint = if (isLoading) {
+            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+          } else {
+            MaterialTheme.colorScheme.onSurfaceVariant
+          },
+          modifier = Modifier.size(16.dp)
         )
       }
 

@@ -1,6 +1,6 @@
 @file:OptIn(ExperimentalMaterial3Api::class)
 
-package xyz.block.trailblaze.ui.tabs.sessions
+package xyz.block.trailblaze.ui.editors.yaml
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -16,11 +16,11 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.Undo
-import androidx.compose.material.icons.automirrored.filled.FormatAlignLeft
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedCard
+import androidx.compose.material3.PlainTooltip
 import androidx.compose.material3.Text
 import androidx.compose.material3.TooltipBox
 import androidx.compose.material3.TooltipDefaults
@@ -38,24 +38,28 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
-import xyz.block.trailblaze.ui.tabs.sessions.editor.CodeEditorTextField
-import xyz.block.trailblaze.ui.tabs.sessions.editor.TextEditHistory
-import xyz.block.trailblaze.ui.tabs.sessions.editor.YamlSyntaxHighlighter
-import xyz.block.trailblaze.ui.tabs.sessions.editor.rememberTextEditHistory
-import xyz.block.trailblaze.ui.tabs.sessions.editor.YamlFormatter
 
 /**
  * Text editor content for the YAML tab.
  * Provides a code editor with YAML syntax highlighting, proper indentation,
  * and undo/redo support.
+ *
+ * @param yamlContent The current YAML content
+ * @param onYamlContentChange Callback when content changes
+ * @param validationError Current validation error message, or null if valid
+ * @param isValidating Whether validation is currently in progress
+ * @param enabled Whether the editor is enabled for input
+ * @param showTitle Whether to show the "Trailblaze YAML" title header
+ * @param modifier Modifier for the component
  */
 @Composable
 fun YamlTextEditor(
   yamlContent: String,
   onYamlContentChange: (String) -> Unit,
-  isRunning: Boolean,
   validationError: String?,
   isValidating: Boolean,
+  enabled: Boolean = true,
+  showTitle: Boolean = true,
   modifier: Modifier = Modifier,
 ) {
   // Track the text field value internally - don't use yamlContent as remember key
@@ -64,7 +68,7 @@ fun YamlTextEditor(
     mutableStateOf(
       TextFieldValue(
         text = yamlContent,
-        selection = TextRange(yamlContent.length),
+        selection = TextRange(0), // Start at beginning of file
       ),
     )
   }
@@ -78,7 +82,7 @@ fun YamlTextEditor(
     if (yamlContent != lastEmittedText && yamlContent != textFieldValue.text) {
       textFieldValue = TextFieldValue(
         text = yamlContent,
-        selection = TextRange(yamlContent.length),
+        selection = TextRange(0), // Start at beginning of file
       )
       lastEmittedText = yamlContent
     }
@@ -102,26 +106,6 @@ fun YamlTextEditor(
     onYamlContentChange(newValue.text)
   }
 
-  // Format YAML using the isolated YamlFormatter utility
-  fun formatYaml(): Boolean {
-    val currentText = textFieldValue.text
-    if (currentText.isBlank()) return false
-
-    val formatted = YamlFormatter.format(currentText) ?: return false
-
-    if (formatted != currentText) {
-      // Save current state for undo
-      history.push(textFieldValue)
-      // Apply formatted text
-      val newValue = TextFieldValue(
-        text = formatted,
-        selection = TextRange(0), // Move cursor to start after formatting
-      )
-      handleValueChange(newValue)
-    }
-    return true
-  }
-
   OutlinedCard(
     modifier = modifier.fillMaxWidth(),
   ) {
@@ -133,11 +117,10 @@ fun YamlTextEditor(
       // Header row with title and toolbar buttons
       EditorHeader(
         history = history,
-        enabled = !isRunning,
-        canFormat = yamlContent.isNotBlank(), // Allow formatting even with validation errors - formatting might fix them!
+        enabled = enabled,
         textFieldValue = textFieldValue,
         onValueChange = { handleValueChange(it) },
-        onFormat = { formatYaml() },
+        showTitle = showTitle,
       )
 
       Spacer(modifier = Modifier.height(8.dp))
@@ -149,12 +132,11 @@ fun YamlTextEditor(
         modifier = Modifier
           .fillMaxWidth()
           .weight(1f),
-        enabled = !isRunning,
+        enabled = enabled,
         syntaxHighlighter = syntaxHighlighter,
         history = history,
         placeholder = "Enter your YAML test configuration here...",
         showLineNumbers = true,
-        onFormat = { formatYaml() },
       )
 
       Spacer(modifier = Modifier.height(4.dp))
@@ -170,65 +152,64 @@ fun YamlTextEditor(
 }
 
 /**
- * Header row with title and toolbar buttons (undo, redo, format).
+ * Backward-compatible overload for existing code that uses isRunning parameter.
+ * Used by YamlTabComposables.kt.
+ */
+@Composable
+fun YamlTextEditor(
+  yamlContent: String,
+  onYamlContentChange: (String) -> Unit,
+  isRunning: Boolean,
+  validationError: String?,
+  isValidating: Boolean,
+  modifier: Modifier = Modifier,
+) {
+  YamlTextEditor(
+    yamlContent = yamlContent,
+    onYamlContentChange = onYamlContentChange,
+    validationError = validationError,
+    isValidating = isValidating,
+    enabled = !isRunning,
+    showTitle = true,
+    modifier = modifier,
+  )
+}
+
+/**
+ * Header row with title and toolbar buttons (undo, redo).
  */
 @Composable
 private fun EditorHeader(
   history: TextEditHistory,
   enabled: Boolean,
-  canFormat: Boolean,
   textFieldValue: TextFieldValue,
   onValueChange: (TextFieldValue) -> Unit,
-  onFormat: () -> Unit,
+  showTitle: Boolean = true,
 ) {
   Row(
     modifier = Modifier.fillMaxWidth(),
-    horizontalArrangement = Arrangement.SpaceBetween,
+    horizontalArrangement = if (showTitle) Arrangement.SpaceBetween else Arrangement.End,
     verticalAlignment = Alignment.CenterVertically,
   ) {
-    Text(
-      text = "Trailblaze YAML",
-      style = MaterialTheme.typography.titleMedium,
-      fontWeight = FontWeight.Medium,
-    )
+    if (showTitle) {
+      Text(
+        text = "Trailblaze YAML",
+        style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.Medium,
+      )
+    }
 
     Row(
       horizontalArrangement = Arrangement.spacedBy(4.dp),
       verticalAlignment = Alignment.CenterVertically,
     ) {
-      // Format button
-      TooltipBox(
-        positionProvider = TooltipDefaults.rememberTooltipPositionProvider(),
-        tooltip = {
-          Text("Format YAML (${if (isMac()) "⌘⌥F" else "Ctrl+Alt+F"})")
-        },
-        state = rememberTooltipState(),
-      ) {
-        IconButton(
-          onClick = onFormat,
-          enabled = enabled && canFormat,
-          modifier = Modifier.size(32.dp),
-        ) {
-          Icon(
-            imageVector = Icons.AutoMirrored.Filled.FormatAlignLeft,
-            contentDescription = "Format YAML",
-            tint = if (enabled && canFormat) {
-              MaterialTheme.colorScheme.onSurface
-            } else {
-              MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-            },
-            modifier = Modifier.size(20.dp),
-          )
-        }
-      }
-
-      Spacer(modifier = Modifier.width(8.dp))
-
       // Undo button
       TooltipBox(
         positionProvider = TooltipDefaults.rememberTooltipPositionProvider(),
         tooltip = {
-          Text("Undo (${if (isMac()) "⌘Z" else "Ctrl+Z"})")
+          PlainTooltip {
+            Text("Undo (${if (isMac()) "⌘Z" else "Ctrl+Z"})")
+          }
         },
         state = rememberTooltipState(),
       ) {
@@ -259,7 +240,9 @@ private fun EditorHeader(
       TooltipBox(
         positionProvider = TooltipDefaults.rememberTooltipPositionProvider(),
         tooltip = {
-          Text("Redo (${if (isMac()) "⌘⇧Z" else "Ctrl+Y"})")
+          PlainTooltip {
+            Text("Redo (${if (isMac()) "⌘⇧Z" else "Ctrl+Y"})")
+          }
         },
         state = rememberTooltipState(),
       ) {

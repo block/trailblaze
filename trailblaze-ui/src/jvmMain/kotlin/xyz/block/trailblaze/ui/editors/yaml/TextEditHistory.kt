@@ -1,4 +1,4 @@
-package xyz.block.trailblaze.ui.tabs.sessions.editor
+package xyz.block.trailblaze.ui.editors.yaml
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable

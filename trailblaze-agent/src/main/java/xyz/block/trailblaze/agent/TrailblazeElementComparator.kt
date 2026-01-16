@@ -253,7 +253,7 @@ class TrailblazeElementComparator(
                 ),
               ),
             )
-            screenState.screenshotBytes?.let { screenshotBytes ->
+            screenState.annotatedScreenshotBytes?.let { screenshotBytes ->
               add(
                 ContentPart.Image(
                   content = AttachmentContent.Binary.Bytes(screenshotBytes),
@@ -328,7 +328,7 @@ class TrailblazeElementComparator(
           add(
             ContentPart.Text("Evaluate this on the current screen: $prompt"),
           )
-          screenState.screenshotBytes?.let { screenshotBytes ->
+          screenState.annotatedScreenshotBytes?.let { screenshotBytes ->
             add(
               ContentPart.Image(
                 content = AttachmentContent.Binary.Bytes(screenshotBytes),

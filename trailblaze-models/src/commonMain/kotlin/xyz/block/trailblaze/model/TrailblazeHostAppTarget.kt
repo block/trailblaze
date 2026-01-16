@@ -17,6 +17,13 @@ abstract class TrailblazeHostAppTarget(
   fun getCustomToolsForDriver(driverType: TrailblazeDriverType): Set<KClass<out TrailblazeTool>> =
     internalGetCustomToolsForDriver(driverType)
 
+  /**
+   * Override this to exclude specific tools from the default tool set.
+   * This is useful when you want to replace a default tool with a custom implementation.
+   */
+  open fun getExcludedToolsForDriver(driverType: TrailblazeDriverType): Set<KClass<out TrailblazeTool>> =
+    emptySet()
+
   fun getAllCustomToolClassesForSerialization(): Set<KClass<out TrailblazeTool>> =
     TrailblazeDriverType.entries.flatMap { trailblazeDriverType ->
       getCustomToolsForDriver(trailblazeDriverType)
