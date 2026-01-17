@@ -50,8 +50,10 @@ ai.koog:utils:0.6.0
 androidx.annotation:annotation-jvm:1.9.1
 androidx.annotation:annotation:1.9.1
 androidx.startup:startup-runtime:1.2.0
+androidx.test.services:storage:1.6.0
 androidx.test.uiautomator:uiautomator:2.3.0
 androidx.test:monitor:1.8.0
+androidx.test:runner:1.7.0
 androidx.tracing:tracing:1.1.0
 com.charleskorn.kaml:kaml-jvm:0.104.0
 com.charleskorn.kaml:kaml:0.104.0

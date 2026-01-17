@@ -5,14 +5,24 @@ import kotlinx.datetime.Clock
 import maestro.Point
 import xyz.block.trailblaze.InstrumentationUtil.withInstrumentation
 import xyz.block.trailblaze.InstrumentationUtil.withUiDevice
+import xyz.block.trailblaze.adb.TrailblazeAdb
 
+/**
+ * Utility object for executing ADB commands from within an Android instrumentation process.
+ * 
+ * This delegates core shell operations to [TrailblazeAdb], which provides a multiplatform
+ * abstraction that works both on-device (via UiDevice) and from the host (via dadb/adb binary).
+ * 
+ * Some device-specific features (like checking foreground app) still use UiDevice directly.
+ */
 object AdbCommandUtil {
 
+  /**
+   * Execute a shell command on the device.
+   * Delegates to [TrailblazeAdb.shell] for the actual execution.
+   */
   fun execShellCommand(shellCommand: String): String {
-    println("adb shell $shellCommand")
-    return withUiDevice {
-      executeShellCommand(shellCommand)
-    }
+    return TrailblazeAdb.shell(shellCommand)
   }
 
   fun grantPermission(targetAppPackageName: String, permission: String) {
@@ -21,12 +31,12 @@ object AdbCommandUtil {
         packageName = targetAppPackageName,
       )
     ) {
-      execShellCommand("pm grant $targetAppPackageName $permission")
+      TrailblazeAdb.grantPermission(targetAppPackageName, permission)
     }
   }
 
   fun getSerialNumber(): String {
-    return execShellCommand("getprop ro.boot.serialno")
+    return TrailblazeAdb.getSerialNumber()
   }
 
   fun grantPermissions(targetAppPackageName: String, permissions: List<String>) {
@@ -44,7 +54,7 @@ object AdbCommandUtil {
   }
 
   fun clearPackageData(targetAppPackageName: String) {
-    execShellCommand("pm clear $targetAppPackageName")
+    TrailblazeAdb.clearAppData(targetAppPackageName)
   }
 
   fun listInstalledApps(): List<String> = withInstrumentation {
@@ -54,15 +64,10 @@ object AdbCommandUtil {
   }
 
   fun isAppRunning(appId: String): Boolean {
-    val output = execShellCommand("pidof $appId")
-    println("pidof $appId: $output")
-    val isRunning = output.trim().isNotEmpty()
-    return isRunning
+    return TrailblazeAdb.isAppRunning(appId)
   }
 
-  fun forceStopApp(
-    appId: String,
-  ) {
+  fun forceStopApp(appId: String) {
     if (isAppRunning(appId)) {
       execShellCommand("am force-stop $appId")
       tryUntilSuccessOrThrowException(
@@ -137,7 +142,8 @@ object AdbCommandUtil {
   }
 
   /**
-   * Wait for app to come to foreground
+   * Wait for app to come to foreground.
+   * Uses UiDevice directly because currentPackageName is a UiDevice property.
    */
   fun waitUntilAppInForeground(
     appId: String,
@@ -166,7 +172,7 @@ object AdbCommandUtil {
    * Enables the Google Assistant
    *
    * Note: This assumes the Google App is installed,
-   * which is true on most emulators with Play Store or “Google APIs” images.
+   * which is true on most emulators with Play Store or "Google APIs" images.
    */
   fun enableAssistant() {
     execShellCommand("settings put secure assistant com.google.android.googlequicksearchbox/com.google.android.voiceinteraction.GsaVoiceInteractionService")
@@ -216,7 +222,8 @@ object AdbCommandUtil {
   }
 
   /**
-   * Wait for app to not be in the foreground
+   * Wait for app to not be in the foreground.
+   * Uses UiDevice directly because currentPackageName is a UiDevice property.
    */
   fun waitUntilAppNotInForeground(
     appId: String,

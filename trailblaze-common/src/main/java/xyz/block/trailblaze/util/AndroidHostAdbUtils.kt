@@ -2,10 +2,14 @@ package xyz.block.trailblaze.util
 
 import kotlinx.datetime.Clock
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
-import xyz.block.trailblaze.model.TrailblazeOnDeviceInstrumentationTarget
-import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils.runProcess
 import java.io.File
 
+/**
+ * Utility object for executing ADB commands from the host machine.
+ * 
+ * Note: This uses [HostAdbExecutor] for actual ADB operations. The factory must be
+ * initialized before using these methods (typically done in the host module startup).
+ */
 object AndroidHostAdbUtils {
 
   fun intentToAdbBroadcastCommandArgs(
@@ -38,28 +42,8 @@ object AndroidHostAdbUtils {
     deviceId: TrailblazeDeviceId,
     appPackageId: String,
   ) {
-    createAdbCommandProcessBuilder(
-      deviceId = deviceId,
-      args = listOf(
-        "uninstall",
-        appPackageId,
-      ),
-    ).runProcess {}
-  }
-
-  fun createAdbCommandProcessBuilder(
-    args: List<String>,
-    deviceId: TrailblazeDeviceId?,
-  ): ProcessBuilder {
-    val args = mutableListOf<String>().apply {
-      add("adb")
-      if (deviceId != null) {
-        add("-s")
-        add(deviceId.instanceId)
-      }
-      this.addAll(args)
-    }
-    return TrailblazeProcessBuilderUtils.createProcessBuilder(args)
+    val adbExecutor = HostAdbExecutor.create(deviceId)
+    adbExecutor.uninstall(appPackageId)
   }
 
   suspend fun isAppInstalled(appId: String, deviceId: TrailblazeDeviceId): Boolean =
@@ -69,85 +53,24 @@ object AndroidHostAdbUtils {
     deviceId: TrailblazeDeviceId,
     localPort: Int,
     remotePort: Int = localPort,
-  ): Process = try {
-    // Check if forward already exists
-    if (isPortForwardAlreadyActive(
-        trailblazeDeviceId = deviceId,
-        localPort = localPort,
-        remotePort = remotePort
-      )
-    ) {
-      println("Port forward tcp:$localPort -> tcp:$remotePort already exists")
-      ProcessBuilder("echo", "Port forward already exists").start()
-    } else {
-      println("Setting up port forward tcp:$localPort -> tcp:$remotePort")
-      createAdbCommandProcessBuilder(
-        deviceId = deviceId,
-        args = listOf("forward", "tcp:$localPort", "tcp:$remotePort"),
-      ).start()
-    }
-  } catch (e: Exception) {
-    throw RuntimeException("Failed to start port forwarding: ${e.message}")
-  }
-
-  // Simplified helper to check if a port reverse already exists
-  private fun isPortReverseAlreadyActive(deviceId: TrailblazeDeviceId, localPort: Int, remotePort: Int): Boolean = try {
-    val result = createAdbCommandProcessBuilder(
-      deviceId = deviceId,
-      args = listOf("reverse", "--list"),
-    ).runProcess({})
-
-    result.outputLines.any { line ->
-      line.contains("tcp:$localPort") && line.contains("tcp:$remotePort")
-    }
-  } catch (e: Exception) {
-    false // If we can't check, assume it doesn't exist
-  }
-
-  // Simplified helper to check if a port forward already exists
-  private fun isPortForwardAlreadyActive(
-    trailblazeDeviceId: TrailblazeDeviceId, localPort: Int, remotePort: Int
-  ): Boolean = try {
-    val result = createAdbCommandProcessBuilder(
-      deviceId = trailblazeDeviceId,
-      args = listOf("forward", "--list"),
-    ).runProcess({})
-
-    result.outputLines.any { line ->
-      line.contains("tcp:$localPort") && line.contains("tcp:$remotePort")
-    }
-  } catch (e: Exception) {
-    false // If we can't check, assume it doesn't exist
+  ) {
+    val adbExecutor = HostAdbExecutor.create(deviceId)
+    adbExecutor.forward(localPort, remotePort)
   }
 
   fun adbPortReverse(
     deviceId: TrailblazeDeviceId,
     localPort: Int,
     remotePort: Int = localPort,
-  ): Process = try {
-    // Check if forward already exists
-    if (isPortReverseAlreadyActive(deviceId, localPort, remotePort)) {
-      println("Port reverse tcp:$localPort -> tcp:$remotePort already exists")
-      ProcessBuilder("echo", "Port reverse already exists").start()
-    } else {
-      println("Setting up port forward tcp:$localPort -> tcp:$remotePort")
-      createAdbCommandProcessBuilder(
-        deviceId = deviceId,
-        args = listOf("reverse", "tcp:$localPort", "tcp:$remotePort"),
-      ).start()
-    }
-  } catch (e: Exception) {
-    throw RuntimeException("Failed to start port forwarding: ${e.message}")
+  ) {
+    val adbExecutor = HostAdbExecutor.create(deviceId)
+    adbExecutor.reverse(remotePort, localPort)
   }
 
   fun execAdbShellCommand(deviceId: TrailblazeDeviceId, args: List<String>): String {
     println("adb shell ${args.joinToString(" ")}")
-    return createAdbCommandProcessBuilder(
-      deviceId = deviceId,
-      args = listOf(
-        "shell",
-      ) + args,
-    ).runProcess {}.fullOutput
+    val adbExecutor = HostAdbExecutor.create(deviceId)
+    return adbExecutor.shell(args.joinToString(" "))
   }
 
   fun isAppRunning(deviceId: TrailblazeDeviceId, appId: String): Boolean {
@@ -270,19 +193,10 @@ object AndroidHostAdbUtils {
 
   // Function to list installed packages on device
   fun listInstalledPackages(deviceId: TrailblazeDeviceId): List<String> = try {
-    val processBuilder = createAdbCommandProcessBuilder(
-      deviceId = deviceId,
-      args = listOf(
-        "shell",
-        "pm",
-        "list",
-        "packages",
-      ),
-    )
-
-    val processResult = processBuilder.runProcess {}
-
-    processResult.outputLines
+    val adbExecutor = HostAdbExecutor.create(deviceId)
+    val output = adbExecutor.shell("pm list packages")
+    
+    output.lines()
       .filter { it.isNotBlank() && it.startsWith("package:") }
       .map { line ->
         line.substringAfter("package:")
@@ -295,28 +209,11 @@ object AndroidHostAdbUtils {
    * Installs an APK file using adb install command.
    */
   fun installApkFile(apkFile: File, trailblazeDeviceId: TrailblazeDeviceId): Boolean {
-    val processBuilder = createAdbCommandProcessBuilder(
-      deviceId = trailblazeDeviceId,
-      args = listOf(
-        "install",
-        "-r", // Replace existing application
-        "-t", // Allow test packages
-        apkFile.absolutePath,
-      ),
+    val adbExecutor = HostAdbExecutor.create(trailblazeDeviceId)
+    return adbExecutor.install(
+      apkFile = apkFile,
+      reinstall = true,
+      allowTestPackages = true,
     )
-
-    val result = processBuilder.runProcess { line ->
-      println("adb install output: $line")
-    }
-
-    // Check if installation was successful
-    // Use case-insensitive check to handle any variations in adb output
-    val success = result.fullOutput.contains("Success", ignoreCase = true) && result.exitCode == 0
-
-    if (!success) {
-      println("APK installation failed. Output: ${result.fullOutput}")
-    }
-
-    return success
   }
 }

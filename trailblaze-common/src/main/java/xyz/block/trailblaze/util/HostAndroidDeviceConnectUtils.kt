@@ -13,7 +13,6 @@ import xyz.block.trailblaze.model.DeviceConnectionStatus
 import xyz.block.trailblaze.model.TrailblazeOnDeviceInstrumentationTarget
 import xyz.block.trailblaze.util.AndroidHostAdbUtils.adbPortForward
 import xyz.block.trailblaze.util.AndroidHostAdbUtils.adbPortReverse
-import xyz.block.trailblaze.util.AndroidHostAdbUtils.createAdbCommandProcessBuilder
 import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils.runProcess
 
 object HostAndroidDeviceConnectUtils {
@@ -72,6 +71,13 @@ object HostAndroidDeviceConnectUtils {
     return installSuccess
   }
 
+  /**
+   * Creates a ProcessBuilder for running Android instrumentation.
+   * 
+   * Note: This uses ProcessBuilder with adb binary because instrumentation requires
+   * streaming output to monitor when the process starts. For non-streaming ADB operations,
+   * use [HostAdbExecutor] instead.
+   */
   private fun instrumentationProcessBuilder(
     testAppId: String,
     fqTestName: String,
@@ -82,61 +88,63 @@ object HostAndroidDeviceConnectUtils {
     sendProgressMessage(
       "Connecting to Android Test Instrumentation.",
     )
-    // Start instrumentation
-    val processBuilder = createAdbCommandProcessBuilder(
-      deviceId = deviceId,
-      args = buildList {
-        addAll(
-          listOf(
-            "shell",
-            "am",
-            "instrument",
-            "-w",
-            "-r",
-          ),
-        )
-        addAll(
-          listOf(
-            "-e",
-            "class",
-            fqTestName,
-          ),
-        )
-
-        // Use Reverse Proxy because we are connected
-        addAll(
-          listOf(
-            "-e",
-            "trailblaze.reverseProxy",
-            "true",
-          ),
-        )
-
-        // Use Reverse Proxy because we are connected
-        addAll(
-          listOf(
-            "-e",
-            TrailblazeDevicePort.INSTRUMENTATION_ARG_KEY,
-            deviceId.getTrailblazeOnDeviceSpecificPort().toString(),
-          ),
-        )
-
+    // Start instrumentation - uses ProcessBuilder for streaming output
+    val args = mutableListOf<String>().apply {
+      add("adb")
+      add("-s")
+      add(deviceId.instanceId)
+      addAll(
         listOf(
-          "OPENAI_API_KEY",
-          "DATABRICKS_TOKEN",
-        ).forEach { envVar ->
-          System.getenv(envVar)?.let {
-            addAll(listOf("-e", envVar, it))
-          }
-        }
+          "shell",
+          "am",
+          "instrument",
+          "-w",
+          "-r",
+        ),
+      )
+      addAll(
+        listOf(
+          "-e",
+          "class",
+          fqTestName,
+        ),
+      )
 
-        additionalInstrumentationArgs.forEach { (key, value) ->
-          addAll(listOf("-e", key, value))
-        }
+      // Use Reverse Proxy because we are connected
+      addAll(
+        listOf(
+          "-e",
+          "trailblaze.reverseProxy",
+          "true",
+        ),
+      )
 
-        add("$testAppId/androidx.test.runner.AndroidJUnitRunner")
-      },
-    )
+      // Use Reverse Proxy because we are connected
+      addAll(
+        listOf(
+          "-e",
+          TrailblazeDevicePort.INSTRUMENTATION_ARG_KEY,
+          deviceId.getTrailblazeOnDeviceSpecificPort().toString(),
+        ),
+      )
+
+      listOf(
+        "OPENAI_API_KEY",
+        "DATABRICKS_TOKEN",
+      ).forEach { envVar ->
+        System.getenv(envVar)?.let {
+          addAll(listOf("-e", envVar, it))
+        }
+      }
+
+      additionalInstrumentationArgs.forEach { (key, value) ->
+        addAll(listOf("-e", key, value))
+      }
+
+      add("$testAppId/androidx.test.runner.AndroidJUnitRunner")
+    }
+    
+    val processBuilder = TrailblazeProcessBuilderUtils.createProcessBuilder(args)
 
     // Get the environment map
     System.getenv().keys.forEach { envVar ->
@@ -259,44 +267,22 @@ object HostAndroidDeviceConnectUtils {
     return completableDeferred.await()
   }
 
-  // Function to get devices from adb
+  /**
+   * Get list of connected Android devices using the HostAdbExecutor.
+   */
   suspend fun getAdbDevices(): List<TrailblazeDeviceId> = try {
-    val processBuilder = createAdbCommandProcessBuilder(
-      args = listOf("devices"),
-      deviceId = null
-    )
-
-    val processResult = processBuilder.runProcess(
-      outputLineCallback = {},
-    )
-
-    processResult.outputLines.drop(1)
-      .filter { it.isNotBlank() && it.contains("\tdevice") }
-      .map { line ->
-        val adbId = line.substringBefore("\t")
-        TrailblazeDeviceId(
-          trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
-          instanceId = adbId,
-        )
-      }
+    HostAdbExecutor.listDevices()
   } catch (e: Exception) {
+    println("Error listing ADB devices: ${e.message}")
     emptyList()
   }
 
-  // Function to get the device model name from adb
+  /**
+   * Get the device model name.
+   */
   fun getDeviceModelName(deviceId: TrailblazeDeviceId): String = try {
-    val processBuilder = createAdbCommandProcessBuilder(
-      deviceId = deviceId,
-      args = listOf(
-        "shell",
-        "getprop",
-        "ro.product.model",
-      ),
-    )
-    val processResult = processBuilder.runProcess(
-      outputLineCallback = {},
-    )
-    processResult.outputLines.firstOrNull() ?: deviceId.instanceId
+    val adbExecutor = HostAdbExecutor.create(deviceId)
+    adbExecutor.shell("getprop ro.product.model").trim().ifEmpty { deviceId.instanceId }
   } catch (e: Exception) {
     deviceId.instanceId
   }

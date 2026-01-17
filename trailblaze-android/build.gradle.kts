@@ -35,6 +35,9 @@ android {
 
 dependencies {
   api(project(":trailblaze-common"))
+  // Direct dependency on trailblaze-models to get the androidMain variant
+  // (trailblaze-common is JVM-only and would give us jvmMain instead)
+  api(project(":trailblaze-models"))
 
   api(libs.androidx.uiautomator)
   api(libs.ktor.client.okhttp)
