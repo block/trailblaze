@@ -27,7 +27,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -57,6 +59,7 @@ import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.llm.LlmSessionUsageAndCost
 import xyz.block.trailblaze.llm.LlmUsageAndCostExt.computeUsageSummary
 import xyz.block.trailblaze.logs.client.TrailblazeLog
+import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.model.isInProgress
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.ui.composables.CodeBlock
@@ -108,6 +111,8 @@ fun SessionDetailComposable(
   onRevealRecordingInFinder: ((String) -> Unit)? = null,
   // Recordings
   recordedTrailsRepo: RecordedTrailsRepo? = null,
+  // Retry callback - called when user clicks retry FAB on a failed session
+  onRetryTest: (() -> Unit)? = null,
 ) {
   if (sessionDetail.logs.isEmpty()) {
     Column(
@@ -762,6 +767,31 @@ fun SessionDetailComposable(
             .fillMaxHeight()
             .padding(end = 2.dp)
         )
+
+        // Show retry FAB when session has failed
+        val isSessionFailed = when (sessionDetail.overallStatus) {
+          is SessionStatus.Ended.Failed,
+          is SessionStatus.Ended.FailedWithFallback,
+          is SessionStatus.Ended.TimeoutReached,
+          is SessionStatus.Ended.MaxCallsLimitReached -> true
+          else -> false
+        }
+
+        if (isSessionFailed && onRetryTest != null) {
+          ExtendedFloatingActionButton(
+            onClick = onRetryTest,
+            modifier = Modifier
+              .align(Alignment.BottomCenter)
+              .padding(16.dp),
+            icon = {
+              Icon(
+                imageVector = Icons.Default.Refresh,
+                contentDescription = "Retry"
+              )
+            },
+            text = { Text("Retry") }
+          )
+        }
       }
     }
   }

@@ -58,7 +58,6 @@ abstract class TrailblazeToolSet(
       name = "Default UI Tools",
       toolClasses = setOf(
         AssertVisibleByNodeIdTrailblazeTool::class,
-        AssertNotVisibleWithTextTrailblazeTool::class,
         EraseTextTrailblazeTool::class,
         HideKeyboardTrailblazeTool::class,
         InputTextTrailblazeTool::class,
@@ -110,6 +109,8 @@ abstract class TrailblazeToolSet(
     val NonLlmTrailblazeTools: Set<KClass<out TrailblazeTool>> = setOf(
       // Used by recordings, but shouldn't be registered directly to the LLM
       AssertVisibleBySelectorTrailblazeTool::class,
+      // Deprecated tool - Assert Not Visible with Text, allow LLM to detect not visible items instead.
+      AssertNotVisibleWithTextTrailblazeTool::class,
       TapOnByElementSelector::class,
       SwipeWithRelativeCoordinatesTool::class,
 
@@ -157,7 +158,6 @@ abstract class TrailblazeToolSet(
   object VerifyToolSet : TrailblazeToolSet(
     toolClasses = setOf(
       AssertVisibleByNodeIdTrailblazeTool::class,
-      AssertNotVisibleWithTextTrailblazeTool::class,
     ),
   )
 

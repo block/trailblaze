@@ -7,6 +7,7 @@ import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
+import xyz.block.trailblaze.llm.TrailblazeReferrer
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.yaml.TrailblazeYaml
@@ -62,7 +63,8 @@ class TrailblazeMcpBridgeImpl(
       forceStopTargetApp = false,
       sendSessionStartLog = sessionResolution.isNewSession,
       sendSessionEndLog = false,
-      existingSessionId = sessionResolution.sessionId
+      existingSessionId = sessionResolution.sessionId,
+      referrer = TrailblazeReferrer.MCP,
     )
   }
 

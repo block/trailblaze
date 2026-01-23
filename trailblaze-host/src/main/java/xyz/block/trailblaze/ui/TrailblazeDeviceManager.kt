@@ -22,7 +22,6 @@ import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeElementSelector
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
-import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
@@ -32,6 +31,7 @@ import xyz.block.trailblaze.host.devices.WebBrowserManager
 import xyz.block.trailblaze.host.devices.WebBrowserState
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
+import xyz.block.trailblaze.llm.TrailblazeReferrer
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeSessionManager
 import xyz.block.trailblaze.logs.model.SessionId
@@ -68,7 +68,8 @@ class TrailblazeDeviceManager(
   val deviceClassifierIconProvider: DeviceClassifierIconProvider,
   private val runYamlLambda: (desktopAppRunYamlParams: DesktopAppRunYamlParams) -> Unit,
   private val installedAppIdsProviderBlocking: (TrailblazeDeviceId) -> Set<String>,
-  val onDeviceInstrumentationArgsProvider: () -> Map<String, String>
+  val onDeviceInstrumentationArgsProvider: () -> Map<String, String>,
+  private val trailblazeAnalytics: TrailblazeAnalytics,
 ) {
 
   /**
@@ -169,13 +170,14 @@ class TrailblazeDeviceManager(
     sendSessionEndLog: Boolean,
     existingSessionId: SessionId?,
     forceStopTargetApp: Boolean = false,
+    referrer: TrailblazeReferrer
   ) {
     val settingsState = settingsRepo.serverStateFlow.value
     val runYamlRequest = RunYamlRequest(
       yaml = yamlToRun,
       // Use title with ID appended for method name (e.g., for_your_business_page_5374142)
       // The class name will be auto-derived from testSectionName metadata
-      testName = "MCP",
+      testName = "test",
       useRecordedSteps = false,
       trailblazeLlmModel = currentTrailblazeLlmModelProvider(),
       targetAppName = settingsState.appConfig.selectedTargetAppName,
@@ -187,17 +189,18 @@ class TrailblazeDeviceManager(
         setOfMarkEnabled = settingsState.appConfig.setOfMarkEnabled,
       ),
       trailblazeDeviceId = trailblazeDeviceId,
+      referrer = referrer
     )
-    runYamlLambda(
-      DesktopAppRunYamlParams(
-        forceStopTargetApp = forceStopTargetApp,
-        runYamlRequest = runYamlRequest,
-        targetTestApp = this.getCurrentSelectedTargetApp(),
-        onProgressMessage = {},
-        onConnectionStatus = {},
-        additionalInstrumentationArgs = onDeviceInstrumentationArgsProvider()
-      )
+    val params = DesktopAppRunYamlParams(
+      forceStopTargetApp = forceStopTargetApp,
+      runYamlRequest = runYamlRequest,
+      targetTestApp = this.getCurrentSelectedTargetApp(),
+      onProgressMessage = {},
+      onConnectionStatus = {},
+      additionalInstrumentationArgs = onDeviceInstrumentationArgsProvider()
     )
+
+    runYamlLambda(params)
     // Wait until the first session log has bene received for this session
     awaitSessionForDevice(trailblazeDeviceId)
   }
@@ -272,6 +275,7 @@ class TrailblazeDeviceManager(
   suspend fun runTool(
     trailblazeDeviceId: TrailblazeDeviceId,
     trailblazeTool: TrailblazeTool,
+    referrer: TrailblazeReferrer
   ) {
     val yaml = TrailblazeYaml.Default.encodeToString(
       TrailblazeYamlBuilder()
@@ -285,7 +289,8 @@ class TrailblazeDeviceManager(
       trailblazeDeviceId = trailblazeDeviceId,
       sendSessionStartLog = session.isNewSession,
       sendSessionEndLog = false,
-      existingSessionId = session.sessionId
+      existingSessionId = session.sessionId,
+      referrer = referrer
     )
   }
 
@@ -317,12 +322,13 @@ class TrailblazeDeviceManager(
   suspend fun getCurrentScreenState(trailblazeDeviceId: TrailblazeDeviceId): ScreenState? {
     CoroutineScope(currentCoroutineContext()).launch {
       runTool(
-        trailblazeDeviceId,
-        AssertVisibleBySelectorTrailblazeTool(
+        trailblazeDeviceId = trailblazeDeviceId,
+        trailblazeTool = AssertVisibleBySelectorTrailblazeTool(
           selector = TrailblazeElementSelector(
             index = "0"
           )
-        )
+        ),
+        referrer = TrailblazeReferrer.MCP
       )
     }
     val sessionIdForDevice = awaitSessionForDevice(trailblazeDeviceId)

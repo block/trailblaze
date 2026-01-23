@@ -25,6 +25,12 @@ NOTE:
 - Use this tool whenever an objective begins with the word expect, verify, confirm, or assert (case-insensitive).
 """,
 )
+@Deprecated(
+  message = """
+    This tool is deprecated because it is not specific enough and can lead to ambiguous results.
+    For now the LLM is able to handle this scenario better, so it's recommended to use the LLM's capabilities instead.
+    """
+)
 data class AssertNotVisibleWithTextTrailblazeTool(
   @LLMDescription(REQUIRED_TEXT_DESCRIPTION)
   val text: String,

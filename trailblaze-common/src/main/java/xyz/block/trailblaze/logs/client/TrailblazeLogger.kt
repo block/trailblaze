@@ -71,18 +71,51 @@ class TrailblazeLogger(
    */
   fun logScreenState(session: TrailblazeSession, screenState: ScreenState): String? {
     val screenshotBytes = screenState.screenshotBytes ?: return null
-    
+
     val imageFormat = ImageFormatDetector.detectFormat(screenshotBytes)
     val timestamp = Clock.System.now()
     val screenshotFileName = "${session.sessionId.value}_${timestamp.toEpochMilliseconds()}.${imageFormat.fileExtension}"
-    
+
     val screenStateLog = TrailblazeScreenStateLog(
       fileName = screenshotFileName,
       sessionId = session.sessionId,
       screenState = screenState,
     )
     screenStateLogger.logScreenState(screenStateLog)
-    
+
+    return screenshotFileName
+  }
+
+  /**
+   * Logs the annotated screenshot from a screen state.
+   * This saves the screenshot with set-of-mark annotations applied.
+   *
+   * @param session The session this screenshot belongs to
+   * @param screenState The screen state containing annotated screenshot
+   * @return The filename where the screenshot was stored, or null if no screenshot available
+   */
+  fun logScreenStateAnnotated(session: TrailblazeSession, screenState: ScreenState): String? {
+    val screenshotBytes = screenState.annotatedScreenshotBytes ?: return null
+
+    val imageFormat = ImageFormatDetector.detectFormat(screenshotBytes)
+    val timestamp = Clock.System.now()
+    val screenshotFileName = "${session.sessionId.value}_${timestamp.toEpochMilliseconds()}.${imageFormat.fileExtension}"
+
+    // Create a wrapper that exposes the annotated screenshot as the primary screenshot
+    val annotatedScreenStateWrapper = object : ScreenState by screenState {
+      override val screenshotBytes: ByteArray?
+        get() = screenState.annotatedScreenshotBytes
+      override val annotatedScreenshotBytes: ByteArray?
+        get() = screenState.annotatedScreenshotBytes
+    }
+
+    val screenStateLog = TrailblazeScreenStateLog(
+      fileName = screenshotFileName,
+      sessionId = session.sessionId,
+      screenState = annotatedScreenStateWrapper,
+    )
+    screenStateLogger.logScreenState(screenStateLog)
+
     return screenshotFileName
   }
 
@@ -181,7 +214,7 @@ class TrailblazeLogger(
     toolDescriptors: List<ToolDescriptor>,
   ) {
     val toolMessages = response.filterIsInstance<Message.Tool>()
-    val screenshotFilename = logScreenState(session, stepStatus.currentScreenState)
+    val screenshotFilename = logScreenStateAnnotated(session, stepStatus.currentScreenState)
 
     val toolOptions = toolDescriptors
       .map { it.toTrailblazeToolDescriptor() }

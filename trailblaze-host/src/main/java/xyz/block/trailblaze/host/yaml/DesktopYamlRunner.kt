@@ -18,11 +18,13 @@ import xyz.block.trailblaze.model.DesktopAppRunYamlParams
 import xyz.block.trailblaze.model.DeviceConnectionStatus
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.model.TrailblazeOnDeviceInstrumentationTarget
+import xyz.block.trailblaze.ui.TrailblazeAnalytics
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.util.HostAndroidDeviceConnectUtils
 
 class DesktopYamlRunner(
   private val trailblazeDeviceManager: TrailblazeDeviceManager,
+  private val trailblazeAnalytics: TrailblazeAnalytics,
   private val trailblazeHostAppTargetProvider: () -> TrailblazeHostAppTarget,
   private val dynamicLlmClientProvider: (TrailblazeLlmModel) -> DynamicLlmClient,
 ) {
@@ -82,6 +84,7 @@ class DesktopYamlRunner(
 
       val trailblazeDriverType = connectedTrailblazeDevice.trailblazeDriverType
       try {
+        trailblazeAnalytics.runTest(trailblazeDriverType, desktopAppRunYamlParams)
         prefixedProgressMessage(
           "Starting ${trailblazeDeviceId.trailblazeDevicePlatform.displayName} test on device ${trailblazeDeviceId.instanceId} with driver type $trailblazeDriverType",
         )

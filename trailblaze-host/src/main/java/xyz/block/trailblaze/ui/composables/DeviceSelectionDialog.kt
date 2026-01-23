@@ -403,7 +403,9 @@ fun DeviceSelectionDialog(
               }
 
               Button(
-                onClick = { onRunTests(selectedDevices.toList(), forceStopApp) },
+                onClick = {
+                  onRunTests(selectedDevices.toList(), forceStopApp)
+                },
                 enabled = selectedDevices.isNotEmpty()
               ) {
                 Text("Run Tests")

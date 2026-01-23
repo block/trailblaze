@@ -151,19 +151,22 @@ class AndroidOnDeviceUiAutomatorScreenState(
         bitmap.recycle() // Recycle the decoded bitmap
         
         // Apply set-of-mark annotations
+        // Pass device dimensions so coordinates can be scaled to match bitmap size
         AndroidCanvasSetOfMark.drawSetOfMarkOnBitmap(
           originalScreenshotBitmap = annotatedBitmap,
           elements = ViewHierarchyTreeNodeUtils.from(
             viewHierarchy,
             DeviceInfo(
               platform = Platform.ANDROID,
-              widthPixels = annotatedBitmap.width,
-              heightPixels = annotatedBitmap.height,
-              widthGrid = annotatedBitmap.width,
-              heightGrid = annotatedBitmap.height,
+              widthPixels = deviceWidth,
+              heightPixels = deviceHeight,
+              widthGrid = deviceWidth,
+              heightGrid = deviceHeight,
             ),
           ),
           includeLabel = true,
+          deviceWidth = deviceWidth,
+          deviceHeight = deviceHeight,
         )
         
         // Convert to bytes and clean up

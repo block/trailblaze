@@ -185,7 +185,9 @@ private fun generateSnapshotViewerIntegrated(logsRepo: LogsRepo) {
 
 fun main(args: Array<String>) {
   GenerateReportCliCommand().main(args)
-  GenerateTestResultsCliCommand().main(argv = args)
+  // Filter out flags that are specific to GenerateReportCliCommand
+  val filteredArgs = args.filter { it != "--use-relative-image-urls" }.toTypedArray()
+  GenerateTestResultsCliCommand().main(argv = filteredArgs)
 }
 
 fun moveJsonFilesToSessionDirs(logsDir: File) {

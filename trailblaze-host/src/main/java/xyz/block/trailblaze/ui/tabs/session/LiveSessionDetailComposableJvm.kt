@@ -44,6 +44,8 @@ fun LiveSessionDetailComposableWithSelectorSupport(
   onOpenInFinder: ((TrailblazeLog) -> Unit)? = null,
   onRevealRecordingInFinder: ((String) -> Unit)? = null,
   recordedTrailsRepo: RecordedTrailsRepo? = null,
+  // Retry callback - called when user clicks retry FAB on a failed session
+  onRetryTest: (() -> Unit)? = null,
 ) {
   // Create a factory function that creates selector computers per log
   // This avoids caching issues where the wrong hierarchy is used for different logs
@@ -100,5 +102,6 @@ fun LiveSessionDetailComposableWithSelectorSupport(
     computeSelectorOptions = null, // No longer using cached function
     createSelectorFunctionForLog = selectorFactory, // Pass factory instead
     recordedTrailsRepo = recordedTrailsRepo,
+    onRetryTest = onRetryTest,
   )
 }

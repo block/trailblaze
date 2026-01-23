@@ -61,6 +61,9 @@ fun ImagePreviewDialog(
   var scale by remember { mutableStateOf(1f) }
   var offsetX by remember { mutableStateOf(0f) }
   var offsetY by remember { mutableStateOf(0f) }
+  
+  // Hover state for animations
+  var isHovered by remember { mutableStateOf(false) }
 
   // Dimensions state for button constraints
   var containerWidth by remember { mutableStateOf(0f) }
@@ -187,6 +190,8 @@ fun ImagePreviewDialog(
             modifier = Modifier
               .width(finalWidth)
               .height(finalHeight)
+              .onPointerEvent(PointerEventType.Enter) { isHovered = true }
+              .onPointerEvent(PointerEventType.Exit) { isHovered = false }
               .pointerInput(Unit) {
                 detectTransformGestures { _, pan, zoom, _ ->
                   scale = (scale * zoom).coerceIn(0.5f, 5f) // Limit zoom between 50% and 500%
@@ -238,7 +243,10 @@ fun ImagePreviewDialog(
                 centerY = centerY,
                 maxWidth = finalWidth,
                 maxHeight = finalHeight,
-                action = action
+                deviceWidth = deviceWidth,
+                deviceHeight = deviceHeight,
+                action = action,
+                isHovered = isHovered
               )
             } else if (action is MaestroDriverActionType.Swipe) {
               // For swipe gestures, always show annotation in center even without click coordinates
@@ -247,7 +255,10 @@ fun ImagePreviewDialog(
                 centerY = finalHeight / 2,
                 maxWidth = finalWidth,
                 maxHeight = finalHeight,
-                action = action
+                deviceWidth = deviceWidth,
+                deviceHeight = deviceHeight,
+                action = action,
+                isHovered = isHovered
               )
             }
           }

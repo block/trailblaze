@@ -53,7 +53,6 @@ android {
       if (isOpenRouterApiKeyEnvVarSet) {
         // Setting a dummy value so this LLM client is used, but it doesn't get in the logs as it's replaced by the reverse proxy
         val dummyValue = "OPENROUTER_API_KEY_GOES_HERE"
-        println("Setting OPENROUTER_API_KEY to dummy value for GitHub Actions: ${maskValue(dummyValue)}")
         testInstrumentationRunnerArguments["OPENROUTER_API_KEY"] = dummyValue
       } else {
         // This key will be replaced by the reverse proxy, but is required as a system environmenet variable
@@ -62,12 +61,10 @@ android {
     } else {
       // Local Development
       System.getenv("OPENROUTER_API_KEY")?.let { apiKey ->
-        if (isRunningTests) println("Setting OPENROUTER_API_KEY from environment variable: ${maskValue(apiKey)}")
         testInstrumentationRunnerArguments["OPENROUTER_API_KEY"] = apiKey
       }
 
       System.getenv("OPENAI_API_KEY")?.let { apiKey ->
-        if (isRunningTests) println("Setting OPENAI_API_KEY from environment variable: ${maskValue(apiKey)}")
         testInstrumentationRunnerArguments["OPENAI_API_KEY"] = apiKey
       }
     }

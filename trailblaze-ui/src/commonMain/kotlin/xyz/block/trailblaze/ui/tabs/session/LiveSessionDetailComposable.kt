@@ -92,6 +92,8 @@ fun LiveSessionDetailComposable(
   createSelectorFunctionForLog: ((TrailblazeLog) -> ((xyz.block.trailblaze.api.ViewHierarchyTreeNode) -> xyz.block.trailblaze.ui.SelectorAnalysisResult)?)? = null,
   // Recordings
   recordedTrailsRepo: RecordedTrailsRepo? = null,
+  // Retry callback - called when user clicks retry FAB on a failed session
+  onRetryTest: (() -> Unit)? = null,
 ) {
   // Modal state at the TOP level - this is the root
   var showDetailsDialog by remember { mutableStateOf(false) }
@@ -297,6 +299,7 @@ fun LiveSessionDetailComposable(
       onOpenInFinder = onOpenInFinder,
       onRevealRecordingInFinder = onRevealRecordingInFinder,
       recordedTrailsRepo = recordedTrailsRepo,
+      onRetryTest = onRetryTest,
     )
 
     // Modal dialogs as separate children with high zIndex

@@ -22,7 +22,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
+import xyz.block.trailblaze.llm.TrailblazeReferrer
 import xyz.block.trailblaze.logs.model.SessionInfo
+import xyz.block.trailblaze.logs.model.getSessionStartedInfo
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.report.utils.TemplateHelpers
 import xyz.block.trailblaze.report.utils.TrailblazeYamlSessionRecording.generateRecordedYaml
@@ -173,6 +175,12 @@ fun SessionsTabComposableJvm(
       },
     )
   } else {
+    // Check if the device that ran this session is still available for retry
+    val deviceState by deviceManager.deviceStateFlow.collectAsState()
+    val isDeviceAvailable = selectedSession.trailblazeDeviceId?.let { deviceId ->
+      deviceState.devices.containsKey(deviceId)
+    } ?: false
+
     LiveSessionDetailComposableWithSelectorSupport(
       sessionDataProvider = liveSessionDataProvider,
       imageLoader = createLogsFileSystemImageLoader(),
@@ -287,6 +295,37 @@ fun SessionsTabComposableJvm(
         )
       },
       recordedTrailsRepo = recordedTrailsRepo,
+      // Only show retry button if the device is available
+      onRetryTest = if (isDeviceAvailable) {
+        {
+          // Get the raw YAML from the session's start log and re-run it
+          coroutineScope.launch {
+            val logs = liveSessionDataProvider.getLogsForSession(selectedSession.sessionId)
+            val startedInfo = logs.getSessionStartedInfo()
+            val rawYaml = startedInfo?.rawYaml
+            val deviceId = selectedSession.trailblazeDeviceId
+
+            if (rawYaml != null && deviceId != null) {
+              // Navigate back to session list first (new session will appear there)
+              updateState(
+                serverState.copy(
+                  appConfig = serverState.appConfig.copy(currentSessionId = null)
+                )
+              )
+              // Run the same YAML on the same device
+              deviceManager.runYaml(
+                yamlToRun = rawYaml,
+                trailblazeDeviceId = deviceId,
+                sendSessionStartLog = true,
+                sendSessionEndLog = true,
+                existingSessionId = null, // Create new session
+                forceStopTargetApp = false,
+                referrer = TrailblazeReferrer.SESSION_TAB_RETRY
+              )
+            }
+          }
+        }
+      } else null,
     )
   }
 

@@ -18,20 +18,18 @@ import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import xyz.block.trailblaze.llm.LlmUsageAndCostExt.computeUsageSummary
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.report.models.CiRunMetadata
 import xyz.block.trailblaze.report.models.CiSummaryReport
 import xyz.block.trailblaze.report.models.ExecutionMode
 import xyz.block.trailblaze.report.models.Outcome
-import xyz.block.trailblaze.report.models.SessionRecordingInfo
 import xyz.block.trailblaze.report.models.RecordingSkipReason
-import xyz.block.trailblaze.report.models.SOURCE_TYPE_GENERATED
-import xyz.block.trailblaze.report.models.SOURCE_TYPE_HANDWRITTEN
+import xyz.block.trailblaze.report.models.SessionRecordingInfo
 import xyz.block.trailblaze.report.models.SessionResult
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.yaml.TrailConfig
-import xyz.block.trailblaze.yaml.TrailSourceType
 import java.io.File
 import kotlin.io.path.Path
 
@@ -114,9 +112,9 @@ class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-results
       watchFileSystem = false
     )
     val sessionIds = logsRepo.getSessionIds()
-    logsRepo.close()
 
     if (sessionIds.isEmpty()) {
+      logsRepo.close()
       println("⚠️  No sessions found in: ${logsDir.absolutePath}")
       return
     }
@@ -161,6 +159,7 @@ class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-results
             recording_skip_reason = sessionRecordingInfo.skipReason,
             duration_ms = sessionInfo.durationMs,
             llm_call_count = countLlmCalls(logs),
+            llm_cost_usd = logs.computeUsageSummary()?.totalCostInUsDollars,
             started_at = firstLog?.timestamp?.toIso8601String(),
             started_at_epoch_ms = firstLog?.timestamp?.toEpochMilliseconds(),
             completed_at = lastLog?.timestamp?.toIso8601String(),
@@ -195,6 +194,9 @@ class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-results
     output.writeText(content)
     println()
     println("📄 Summary written to: ${output.absolutePath}")
+
+    // Clean up file watchers to allow JVM to exit
+    logsRepo.close()
   }
 
   private fun printFailedTests(results: List<SessionResult>) {
@@ -211,7 +213,7 @@ class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-results
         appendLine("────────────────────────────────────────────────────────────")
 
         failedTests.forEach { result ->
-          val platformIcon = if (result.platform.contains("android", ignoreCase = true)) "🤖" else "🍎"
+          val platformIcon = getPlatformIcon(result.platform)
 
           appendLine()
           appendLine("❌ ${result.title}")
@@ -317,7 +319,7 @@ class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-results
             Outcome.TIMEOUT -> "⏱️"
             Outcome.MAX_CALLS_REACHED -> "📞"
           }
-          val platformIcon = if (result.platform.contains("android", ignoreCase = true)) "🤖" else "🍎"
+          val platformIcon = getPlatformIcon(result.platform)
 
           appendLine()
           appendLine("$outcomeIcon ${result.title}")
@@ -387,11 +389,7 @@ class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-results
       if (byPlatform.size > 1) {
         appendLine("📱 BY PLATFORM")
         byPlatform.forEach { (platform, platformResults) ->
-          val platformIcon = when {
-            platform.contains("android", ignoreCase = true) -> "🤖"
-            platform.contains("ios", ignoreCase = true) -> "🍎"
-            else -> "📱"
-          }
+          val platformIcon = getPlatformIcon(platform)
           val platformPassed = platformResults.count { it.outcome == Outcome.PASSED }
           val platformTotal = platformResults.size
           val platformRate = if (platformTotal > 0) (platformPassed.toDouble() / platformTotal) * 100 else 0.0
@@ -421,6 +419,17 @@ class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-results
 private fun Instant.toIso8601String(): String {
   val localDateTime = this.toLocalDateTime(TimeZone.UTC)
   return "${localDateTime.date}T${localDateTime.time}Z"
+}
+
+/**
+ * Returns an emoji icon for the given platform string.
+ */
+private fun getPlatformIcon(platform: String): String = when {
+  platform.contains("android", ignoreCase = true) -> "🤖"
+  platform.contains("ios", ignoreCase = true) -> "🍎"
+  platform.contains("squid", ignoreCase = true) -> "🦑"
+  platform.contains("web", ignoreCase = true) -> "🌐"
+  else -> "📱"
 }
 
 fun main(args: Array<String>) = GenerateTestResultsCliCommand().main(args)

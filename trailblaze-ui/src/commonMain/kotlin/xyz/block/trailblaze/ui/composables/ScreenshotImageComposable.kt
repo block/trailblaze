@@ -23,11 +23,19 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
@@ -49,7 +57,10 @@ fun ScreenshotAnnotation(
   centerY: Dp,
   maxWidth: Dp,
   maxHeight: Dp,
+  deviceWidth: Int,
+  deviceHeight: Int,
   action: MaestroDriverActionType? = null,
+  isHovered: Boolean = false,
 ) {
   if (action is MaestroDriverActionType.AssertCondition) {
     val checkSize = 20.dp
@@ -147,38 +158,50 @@ fun ScreenshotAnnotation(
       }
     }
   } else if (action is MaestroDriverActionType.Swipe) {
-    // Swipe gesture visualization - simple arrow matching the style of assertion checkmark
-    val arrowSize = 28.dp
-    val backgroundSize = 40.dp
-
-    // Determine arrow icon based on direction
-    val arrowIcon = when (action.direction.uppercase()) {
-      "UP" -> Icons.Filled.ArrowUpward
-      "DOWN" -> Icons.Filled.ArrowDownward
-      "LEFT" -> Icons.Filled.ArrowBack
-      "RIGHT" -> Icons.Filled.ArrowForward
-      else -> error("Invalid swipe direction: ${action.direction}")
-    }
-
-    Box(
-      modifier = Modifier
-        .size(backgroundSize)
-        .offset(
-          x = (maxWidth / 2) - (backgroundSize / 2),
-          y = (maxHeight / 2) - (backgroundSize / 2)
-        )
-        .border(
-          2.dp, Color.Blue.copy(alpha = 0.6f), shape = CircleShape
-        )
-    ) {
-      Icon(
-        imageVector = arrowIcon,
-        contentDescription = "Swipe ${action.direction}",
-        modifier = Modifier
-          .size(arrowSize)
-          .align(Alignment.Center),
-        tint = Color.Blue.copy(alpha = 0.7f)
+    // Check if we have start/end coordinates for animated swipe
+    if (action.startX != null && action.startY != null && action.endX != null && action.endY != null) {
+      // Animated swipe visualization showing arrow moving from start to end
+      AnimatedSwipeAnnotation(
+        startX = action.startX!!,
+        startY = action.startY!!,
+        endX = action.endX!!,
+        endY = action.endY!!,
+        deviceWidth = deviceWidth,
+        deviceHeight = deviceHeight,
+        maxWidth = maxWidth,
+        maxHeight = maxHeight,
+        durationMs = action.durationMs,
+        direction = action.direction,
+        isHovered = isHovered
       )
+    } else {
+      // Fallback to centered static arrow if coordinates not available
+      val arrowSize = 28.dp
+      val backgroundSize = 40.dp
+
+      // Determine arrow icon based on direction
+      val arrowIcon = swipeDirectionIcon(direction = action.direction)
+
+      Box(
+        modifier = Modifier
+          .size(backgroundSize)
+          .offset(
+            x = (maxWidth / 2) - (backgroundSize / 2),
+            y = (maxHeight / 2) - (backgroundSize / 2)
+          )
+          .border(
+            2.dp, Color.Blue.copy(alpha = 0.6f), shape = CircleShape
+          )
+      ) {
+        Icon(
+          imageVector = arrowIcon,
+          contentDescription = "Swipe ${action.direction}",
+          modifier = Modifier
+            .size(arrowSize)
+            .align(Alignment.Center),
+          tint = Color.Blue.copy(alpha = 0.7f)
+        )
+      }
     }
   } else {
     // Transparent red crosshairs with circle background for other action types
@@ -225,6 +248,7 @@ fun ScreenshotAnnotation(
   }
 }
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun ScreenshotImage(
   sessionId: String,
@@ -243,10 +267,14 @@ fun ScreenshotImage(
     val imageModel = xyz.block.trailblaze.ui.resolveImageModel(sessionId, screenshotFile, imageLoader)
 
   if (imageModel != null) {
+    var isHovered by remember { mutableStateOf(false) }
+
     BoxWithConstraints(
       modifier = modifier
         .aspectRatio(deviceWidth.toFloat() / deviceHeight.toFloat())
         .clip(RoundedCornerShape(8.dp))
+        .onPointerEvent(PointerEventType.Enter) { isHovered = true }
+        .onPointerEvent(PointerEventType.Exit) { isHovered = false }
         .clickable { 
           onImageClick?.invoke(imageModel, deviceWidth, deviceHeight, clickX, clickY)
         }
@@ -278,7 +306,10 @@ fun ScreenshotImage(
           centerY = centerY,
           maxWidth = maxWidth,
           maxHeight = maxHeight,
-          action = action
+          deviceWidth = deviceWidth,
+          deviceHeight = deviceHeight,
+          action = action,
+          isHovered = isHovered
         )
       } else if (action is MaestroDriverActionType.Swipe) {
         // For swipe gestures, always show annotation in center even without click coordinates
@@ -287,7 +318,10 @@ fun ScreenshotImage(
           centerY = maxHeight / 2,
           maxWidth = maxWidth,
           maxHeight = maxHeight,
-          action = action
+          deviceWidth = deviceWidth,
+          deviceHeight = deviceHeight,
+          action = action,
+          isHovered = isHovered
         )
       }
 
@@ -315,5 +349,19 @@ fun ScreenshotImageModal(
       action = action,
       onDismiss = onDismiss
     )
+  }
+}
+
+fun swipeDirectionIcon(
+  direction: String,
+): ImageVector {
+  return when (direction.uppercase()) {
+    "UP" -> Icons.Filled.ArrowUpward
+    "DOWN" -> Icons.Filled.ArrowDownward
+    "LEFT" -> Icons.Filled.ArrowBack
+    "RIGHT" -> Icons.Filled.ArrowForward
+    else -> {
+      Icons.Filled.ArrowUpward
+    }
   }
 }

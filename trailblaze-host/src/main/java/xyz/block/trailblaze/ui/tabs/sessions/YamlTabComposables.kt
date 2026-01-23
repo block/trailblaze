@@ -59,6 +59,7 @@ import kotlinx.coroutines.launch
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
+import xyz.block.trailblaze.llm.TrailblazeReferrer
 import xyz.block.trailblaze.model.DesktopAppRunYamlParams
 import xyz.block.trailblaze.model.DeviceConnectionStatus
 import xyz.block.trailblaze.model.TrailblazeConfig
@@ -288,6 +289,7 @@ fun YamlTabComposable(
               ),
               trailFilePath = null,
               trailblazeDeviceId = device.trailblazeDeviceId,
+              referrer = TrailblazeReferrer.YAML_TAB
             )
 
             coroutineScope.launch {

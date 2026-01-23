@@ -32,14 +32,38 @@ object AndroidCanvasSetOfMark {
     originalScreenshotBitmap: Bitmap,
     elements: List<ViewHierarchyTreeNode>,
     includeLabel: Boolean = true,
+    deviceWidth: Int? = null,
+    deviceHeight: Int? = null,
   ): Bitmap {
     val canvas = Canvas(originalScreenshotBitmap)
+
+    // Calculate scale factors if device dimensions are provided and different from bitmap size
+    val scaleX = if (deviceWidth != null && deviceWidth != originalScreenshotBitmap.width) {
+      originalScreenshotBitmap.width.toFloat() / deviceWidth.toFloat()
+    } else {
+      1.0f
+    }
+    val scaleY = if (deviceHeight != null && deviceHeight != originalScreenshotBitmap.height) {
+      originalScreenshotBitmap.height.toFloat() / deviceHeight.toFloat()
+    } else {
+      1.0f
+    }
+
     elements.forEachIndexed { index, element ->
       val bounds = element.bounds
       if (bounds == null) return@forEachIndexed
+
+      // Scale bounds to match bitmap coordinates
+      val scaledBounds = ViewHierarchyFilter.Bounds(
+        x1 = (bounds.x1 * scaleX).toInt(),
+        y1 = (bounds.y1 * scaleY).toInt(),
+        x2 = (bounds.x2 * scaleX).toInt(),
+        y2 = (bounds.y2 * scaleY).toInt(),
+      )
+
       val text = element.nodeId.toString()
       val color = BORDER_AND_BACKGROUND_COLORS[index % BORDER_AND_BACKGROUND_COLORS.size]
-      drawRectOutline(canvas, bounds, color)
+      drawRectOutline(canvas, scaledBounds, color)
 
       if (includeLabel) {
         val textPaint = Paint().apply {
@@ -57,10 +81,10 @@ object AndroidCanvasSetOfMark {
         }
         val padding = 5f
         val textRect = Rect(
-          bounds.x2 - textWidth.toInt() - (padding * 2).toInt(),
-          bounds.y2 - textHeight - (padding * 2).toInt(),
-          bounds.x2,
-          bounds.y2,
+          scaledBounds.x2 - textWidth.toInt() - (padding * 2).toInt(),
+          scaledBounds.y2 - textHeight - (padding * 2).toInt(),
+          scaledBounds.x2,
+          scaledBounds.y2,
         )
         canvas.drawRect(textRect, textBackgroundPaint)
         canvas.drawText(text, textRect.left + padding, textRect.bottom.toFloat() - padding, textPaint)

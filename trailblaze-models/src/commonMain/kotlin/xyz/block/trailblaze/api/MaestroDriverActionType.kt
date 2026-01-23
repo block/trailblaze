@@ -99,7 +99,14 @@ sealed interface MaestroDriverActionType {
   }
 
   @Serializable
-  data class Swipe(val direction: String, val durationMs: Long) : MaestroDriverActionType {
+  data class Swipe(
+    val direction: String,
+    val durationMs: Long,
+    val startX: Int? = null,
+    val startY: Int? = null,
+    val endX: Int? = null,
+    val endY: Int? = null,
+  ) : MaestroDriverActionType {
     override val type = AgentActionType.SWIPE
   }
 

@@ -8,9 +8,9 @@ import xyz.block.trailblaze.logs.server.TrailblazeMcpServer
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridgeImpl
 import xyz.block.trailblaze.mcp.utils.JvmLLMProvidersUtil
-import xyz.block.trailblaze.model.DesktopAppRunYamlParams
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.ui.MainTrailblazeApp
+import xyz.block.trailblaze.ui.TrailblazeAnalytics
 import xyz.block.trailblaze.ui.TrailblazeDesktopApp
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 
@@ -51,10 +51,10 @@ class OpenSourceTrailblazeDesktopApp : TrailblazeDesktopApp(
 
   private fun startHeadlessMode() {
     val appConfig = desktopAppConfig.trailblazeSettingsRepo.serverStateFlow.value.appConfig
-    
+
     println("Starting Trailblaze in headless mode...")
     println("MCP Server will be available on port ${appConfig.serverPort}")
-    
+
     // Start MCP Server
     trailblazeMcpServer.startStreamableHttpMcpServer(
       port = appConfig.serverPort,
@@ -75,7 +75,8 @@ class OpenSourceTrailblazeDesktopApp : TrailblazeDesktopApp(
       logsRepo = desktopAppConfig.logsRepo,
       onDeviceInstrumentationArgsProvider = {
         JvmLLMProvidersUtil.getAdditionalInstrumentationArgs()
-      }
+      },
+      trailblazeAnalytics = TrailblazeAnalytics.NoOp
     )
   }
 
@@ -83,7 +84,8 @@ class OpenSourceTrailblazeDesktopApp : TrailblazeDesktopApp(
     DesktopYamlRunner(
       trailblazeDeviceManager = deviceManager,
       trailblazeHostAppTargetProvider = { TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget },
-      dynamicLlmClientProvider = { createDynamicClient(it) }
+      dynamicLlmClientProvider = { createDynamicClient(it) },
+      trailblazeAnalytics = TrailblazeAnalytics.NoOp
     )
   }
 

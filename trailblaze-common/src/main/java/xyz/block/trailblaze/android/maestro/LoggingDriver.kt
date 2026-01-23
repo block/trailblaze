@@ -225,6 +225,10 @@ class LoggingDriver(
     MaestroDriverActionType.Swipe(
       direction = inferSwipeDirection(start, end),
       durationMs = durationMs,
+      startX = start.x,
+      startY = start.y,
+      endX = end.x,
+      endY = end.y,
     ),
   ) {
     delegate.swipe(

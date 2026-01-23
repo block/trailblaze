@@ -19,4 +19,6 @@ data class RunYamlRequest(
   val trailblazeDeviceId: TrailblazeDeviceId,
   val trailblazeLlmModel: TrailblazeLlmModel,
   val config: TrailblazeConfig,
-) : RpcRequest<RunYamlResponse>
+  val referrer: TrailblazeReferrer,
+) : RpcRequest<RunYamlResponse> {
+}
