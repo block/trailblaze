@@ -7,7 +7,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import xyz.block.trailblaze.mcp.models.McpSessionId
-import xyz.block.trailblaze.mcp.transport.StreamableHttpServerTransport
 
 // Session context interface for tools
 class TrailblazeMcpSessionContext(
@@ -15,8 +14,6 @@ class TrailblazeMcpSessionContext(
   val mcpSessionId: McpSessionId,
   var progressToken: ProgressToken? = null,
 ) {
-  // Store transport directly so requests can be handled before connect() completes
-  var transport: StreamableHttpServerTransport? = null
 
   val sendProgressNotificationsScope = CoroutineScope(Dispatchers.IO)
 

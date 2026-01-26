@@ -12,7 +12,7 @@ execute tests using natural language._
 </p>
 </div>
 
-![trailblaze-with-goose-android.gif](docs/assets/images/trailblaze-with-goose-android.gif)
+![trailblaze-with-goose-android.gif](docs/images-opensource/trailblaze-with-goose-android.gif)
 
 ## Current Vision
 

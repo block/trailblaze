@@ -5,20 +5,20 @@ import ai.koog.agents.core.tools.ToolRegistry
 import ai.koog.agents.core.tools.ToolResult
 import ai.koog.agents.core.tools.annotations.InternalAgentToolsApi
 import ai.koog.agents.core.tools.reflect.asTools
-import io.ktor.http.HttpStatusCode
+import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.install
 import io.ktor.server.engine.EmbeddedServer
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
-import io.ktor.server.request.header
-import io.ktor.server.response.respond
+import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.routing.delete
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.routing
 import io.modelcontextprotocol.kotlin.sdk.server.Server
+import io.modelcontextprotocol.kotlin.sdk.types.McpJson
 import io.modelcontextprotocol.kotlin.sdk.server.ServerOptions
-import io.modelcontextprotocol.kotlin.sdk.server.ServerSession
+import io.modelcontextprotocol.kotlin.sdk.server.StreamableHttpServerTransport
 import io.modelcontextprotocol.kotlin.sdk.types.CallToolRequest
 import io.modelcontextprotocol.kotlin.sdk.types.CallToolResult
 import io.modelcontextprotocol.kotlin.sdk.types.Implementation
@@ -26,9 +26,8 @@ import io.modelcontextprotocol.kotlin.sdk.types.RequestId
 import io.modelcontextprotocol.kotlin.sdk.types.ServerCapabilities
 import io.modelcontextprotocol.kotlin.sdk.types.TextContent
 import io.modelcontextprotocol.kotlin.sdk.types.ToolSchema
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -41,8 +40,6 @@ import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
 import xyz.block.trailblaze.mcp.models.McpSessionId
 import xyz.block.trailblaze.mcp.newtools.DeviceManagerToolSet
 import xyz.block.trailblaze.mcp.newtools.TrailFilesToolSet
-import xyz.block.trailblaze.mcp.transport.MCP_SESSION_ID_HEADER
-import xyz.block.trailblaze.mcp.transport.StreamableHttpServerTransport
 import xyz.block.trailblaze.mcp.utils.KoogToMcpExt.toMcpJsonSchemaObject
 import xyz.block.trailblaze.mcp.utils.TrailblazeToolToMcpBridge
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
@@ -205,188 +202,106 @@ class TrailblazeMcpServer(
     println("═══════════════════════════════════════════════════════════")
     println("Will Wait: $wait")
 
+    // Create MCP server and transport BEFORE starting HTTP server
+    val mcpServer: Server = configureMcpServer()
+
+    // Create official SDK transport with JSON response mode (Streamable HTTP)
+    val transport = StreamableHttpServerTransport(
+      enableJsonResponse = true,
+    )
+
+    // Session context will be created when we get the real session ID from the SDK
+    var sessionContext: TrailblazeMcpSessionContext? = null
+    var mcpSessionId: McpSessionId? = null
+
+    // Set up session callbacks to capture and track the session
+    transport.setOnSessionInitialized { generatedSessionId ->
+      mcpSessionId = McpSessionId(generatedSessionId)
+      sessionContext = TrailblazeMcpSessionContext(
+        mcpServerSession = null,
+        mcpSessionId = mcpSessionId!!,
+      )
+      sessionContexts[generatedSessionId] = sessionContext!!
+      sessionCreationTimes[generatedSessionId] = System.currentTimeMillis()
+    }
+
+    transport.setOnSessionClosed { closedSessionId ->
+      sessionContexts.remove(closedSessionId)
+      sessionCreationTimes.remove(closedSessionId)
+    }
+
+    // Create server session BEFORE starting the HTTP server
+    runBlocking {
+      val mcpServerSession = mcpServer.createSession(transport)
+
+      val ctx = sessionContext
+      val sessId = mcpSessionId
+      if (ctx != null && sessId != null) {
+        ctx.mcpServerSession = mcpServerSession
+        registerTools(mcpServer, sessId, ctx)
+      } else {
+        // Fallback: create session context with transport's session ID
+        val fallbackSessionId = transport.sessionId ?: "fallback-${System.currentTimeMillis()}"
+        val fallbackMcpSessionId = McpSessionId(fallbackSessionId)
+        val fallbackContext = TrailblazeMcpSessionContext(
+          mcpServerSession = mcpServerSession,
+          mcpSessionId = fallbackMcpSessionId,
+        )
+        sessionContexts[fallbackSessionId] = fallbackContext
+        sessionCreationTimes[fallbackSessionId] = System.currentTimeMillis()
+        registerTools(mcpServer, fallbackMcpSessionId, fallbackContext)
+      }
+    }
     val server = embeddedServer(
       factory = Netty,
       configure = {
         configureForSelfSignedSsl(
           requestedHttpPort = port,
-          requestedHttpsPort = 8443, // Default HTTPS port, can be changed
+          requestedHttpsPort = 8443,
         )
       },
     ) {
-      logsServerKtorEndpoints(logsRepo, homeCallbackHandler = homeCallbackHandler)
+      // Install ContentNegotiation with McpJson for MCP type serialization
+      install(ContentNegotiation) {
+        json(McpJson)
+      }
+
+      logsServerKtorEndpoints(logsRepo, homeCallbackHandler = homeCallbackHandler, installContentNegotiation = false)
       routing {
-        // Main MCP endpoint for JSON-RPC requests
+        // POST /mcp - Main JSON-RPC request endpoint
         post("/mcp") {
-
-          println("==============================================================")
-          println("======================= POST /mcp =======================")
-          println("==============================================================")
-          println("Server instance: ${this@TrailblazeMcpServer.hashCode()}")
-          println("sessionContexts instance: ${sessionContexts.hashCode()}, size: ${sessionContexts.size}")
-          println("sessionContexts keys: ${sessionContexts.keys}")
-          val clientSessionId = call.request.header(MCP_SESSION_ID_HEADER)
-          println("Client provided session ID: '$clientSessionId'")
-
-          // Check if this is an existing session or new session
-          // For Streamable HTTP, the client may provide its own session ID
-          val (mcpSessionId, sessionContext, isNewSession) = if (clientSessionId != null) {
-            val existingContext = sessionContexts[clientSessionId]
-            println("Lookup result for '$clientSessionId': ${if (existingContext != null) "FOUND" else "NOT FOUND"}")
-
-            if (existingContext != null) {
-              println("✓ Reusing existing session: $clientSessionId")
-              Triple(McpSessionId(clientSessionId), existingContext, false)
-            } else {
-              // Client sent a session ID but we don't have it - create new session with that ID
-              println("⚠ Client provided unknown session ID: '$clientSessionId' - creating new session")
-              println("  Known sessions: ${sessionContexts.keys.map { "'$it'" }}")
-              val (newSessionId, newContext) = createNewSession(clientSessionId)
-              Triple(newSessionId, newContext, true)
-            }
-          } else {
-            // New session - create transport and context with server-generated ID
-            println("→ No session ID provided - creating new session")
-            val (newSessionId, newContext) = createNewSession(null)
-            Triple(newSessionId, newContext, true)
-          }
-
-          if (isNewSession) {
-            println("✓ New MCP session created: ${mcpSessionId.sessionId}")
-          }
-
-          val transport = sessionContext.transport
-          if (transport == null) {
-            call.respond(HttpStatusCode.InternalServerError, "Transport not initialized")
-            return@post
-          }
-
-          // Handle the request through the transport
           withContext(Dispatchers.IO) {
-            println("Handling request in IO context")
-            transport.handleRequest(call)
+            transport.handlePostRequest(null, call)
           }
         }
 
-        // Optional GET endpoint for server-to-client streaming (notifications)
+        // GET /mcp - Streaming endpoint
         get("/mcp") {
-          println("==============================================================")
-          println("======================= GET /mcp =======================")
-          println("==============================================================")
-          val clientSessionId = call.request.header(MCP_SESSION_ID_HEADER)
-
-          println("==============================================================")
-          println("Client provided session ID: $clientSessionId")
-          println("==============================================================")
-          if (clientSessionId == null) {
-            call.respond(HttpStatusCode.BadRequest, "Missing $MCP_SESSION_ID_HEADER header")
-            println("Missing $MCP_SESSION_ID_HEADER header")
-            return@get
-          }
-
-          val sessionContext = sessionContexts[clientSessionId]
-
-          if (sessionContext == null) {
-            call.respond(HttpStatusCode.NotFound, "Session not found: $clientSessionId")
-            println("Session not found: $clientSessionId")
-            return@get
-          }
-
-          val transport = sessionContext?.transport
-          if (transport == null) {
-            call.respond(HttpStatusCode.InternalServerError, "Transport not initialized")
-            println("Transport not initialized")
-            return@get
-          }
-
-          // Stream notifications to client
           withContext(Dispatchers.IO) {
-            println("Handling stream request in IO context")
-            transport.handleStreamRequest(call)
+            transport.handleGetRequest(null, call)
           }
         }
 
-        // DELETE endpoint for session termination
+        // DELETE /mcp - Session termination
         delete("/mcp") {
-          val clientSessionId = call.request.header(MCP_SESSION_ID_HEADER)
-
-          if (clientSessionId == null) {
-            call.respond(HttpStatusCode.BadRequest, "Missing $MCP_SESSION_ID_HEADER header")
-            return@delete
-          }
-
-          val sessionContext = sessionContexts.remove(clientSessionId)
-          sessionCreationTimes.remove(clientSessionId)
-
-          if (sessionContext != null) {
-            sessionContext.transport?.close()
-            println("✓ Session terminated: $clientSessionId")
-            call.respond(HttpStatusCode.OK, "Session terminated")
-          } else {
-            call.respond(HttpStatusCode.NotFound, "Session not found: $clientSessionId")
+          withContext(Dispatchers.IO) {
+            transport.handleDeleteRequest(call)
           }
         }
       }
     }.start(wait = wait)
-    println("Server starting...")
     return server
   }
 
   /**
-   * Creates a new MCP session with transport and registers tools.
-   * For Streamable HTTP, we set up the session synchronously so it's ready to handle requests immediately.
-   *
-   * @param clientProvidedSessionId Optional session ID provided by the client. If null, uses the transport's generated ID.
+   * Registers all tools with the MCP server.
    */
-  private suspend fun createNewSession(clientProvidedSessionId: String?): Pair<McpSessionId, TrailblazeMcpSessionContext> {
-    val mcpServer: Server = configureMcpServer()
-    val transport = StreamableHttpServerTransport()
-
-    // Use client-provided session ID if available, otherwise use transport's generated ID
-    val sessionIdString = clientProvidedSessionId ?: transport.sessionId
-
-    // If client provided a session ID, configure the transport to use it
-    if (clientProvidedSessionId != null) {
-      transport.useSessionId(clientProvidedSessionId)
-    }
-
-    val mcpSessionId = McpSessionId(sessionIdString)
-
-    val sessionStartTime = System.currentTimeMillis()
-    sessionCreationTimes[sessionIdString] = sessionStartTime
-
-    // Create session context
-    val sessionContext = TrailblazeMcpSessionContext(
-      mcpServerSession = null as ServerSession?, // Will be set after connect
-      mcpSessionId = mcpSessionId,
-    )
-    sessionContext.transport = transport
-
-    sessionContexts[sessionIdString] = sessionContext
-    println("  → Session stored in sessionContexts with key: $sessionIdString")
-    println("  → Current sessions: ${sessionContexts.keys}")
-
-    // Launch connect() in background - it wires up message handlers and runs for session lifetime
-    // Note: Do NOT call transport.start() here - mcpServer.connect() calls it internally via Protocol.connect()
-    CoroutineScope(Dispatchers.Default).launch {
-      try {
-        val mcpServerSession = mcpServer.connect(transport)
-        sessionContext.mcpServerSession = mcpServerSession
-        println("  ✓ Session $sessionIdString fully initialized")
-      } catch (e: Exception) {
-        // Remove failed session
-        println("  ✗ Session $sessionIdString failed to initialize: ${e.message}")
-        e.printStackTrace()
-        sessionContexts.remove(sessionIdString)
-        sessionCreationTimes.remove(sessionIdString)
-      }
-    }
-
-    // Wait for the transport to be ready to handle messages
-    transport.waitForReady(2000)
-
-    // Register initial tools - use sessionContext directly instead of getSessionContext()
-    // to avoid potential ConcurrentHashMap lookup issues with value class keys
+  @OptIn(InternalAgentToolsApi::class)
+  private fun registerTools(
+    mcpServer: Server,
+    mcpSessionId: McpSessionId,
+    sessionContext: TrailblazeMcpSessionContext,
+  ) {
     val initialToolRegistry = ToolRegistry.Companion {
       tools(
         TrailFilesToolSet(
@@ -407,10 +322,7 @@ class TrailblazeMcpServer(
           mcpBridge = mcpBridge,
         ).asTools(TrailblazeJsonInstance),
       )
-    } + additionalToolsProvider(
-      sessionContext,
-      mcpServer,
-    )
+    } + additionalToolsProvider(sessionContext, mcpServer)
 
     addToolsAsMcpToolsFromRegistry(
       newToolRegistry = initialToolRegistry,
@@ -429,11 +341,7 @@ class TrailblazeMcpServer(
       mcpSessionId = mcpSessionId,
     )
 
-    // For Streamable HTTP, onClose is called when Server.connect() completes.
-    // We don't remove the session here - sessions are managed via DELETE /mcp endpoint.
     mcpServer.onClose { }
-
-    return Pair(mcpSessionId, sessionContext)
   }
 
   /**

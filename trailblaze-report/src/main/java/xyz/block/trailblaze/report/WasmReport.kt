@@ -85,6 +85,7 @@ object WasmReport {
     val sessionToImageFilesStr = sessionToImageFiles.mapKeys { it.key.value }
 
     if (reportTemplateFile.exists()) {
+      println("Generating report from template: ${reportTemplateFile.absolutePath}")
       generateFromTemplate(
         reportTemplateFile = reportTemplateFile,
         reportOutputFile = outputFile,
@@ -94,6 +95,7 @@ object WasmReport {
         perSessionData = perSessionData,
       )
     } else {
+      println("Generating report from raw WASM UI build artifacts...")
       generateRaw(
         trailblazeUiProjectDir = trailblazeUiProjectDir,
         reportOutputFile = outputFile,

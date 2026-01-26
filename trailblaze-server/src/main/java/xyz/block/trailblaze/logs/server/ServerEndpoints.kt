@@ -33,9 +33,12 @@ object ServerEndpoints {
   fun Application.logsServerKtorEndpoints(
     logsRepo: LogsRepo,
     homeCallbackHandler: ((parameters: Map<String, List<String>>) -> Result<String>)? = null,
+    installContentNegotiation: Boolean = true,
   ) {
-    install(ContentNegotiation) {
-      json(TrailblazeJsonInstance)
+    if (installContentNegotiation) {
+      install(ContentNegotiation) {
+        json(TrailblazeJsonInstance)
+      }
     }
     install(CORS) {
       anyHost()

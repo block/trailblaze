@@ -13,7 +13,7 @@ Run the following to start the trailblaze (including server):
 ./trailblaze
 ```
 
-![launch-trailblaze.gif](assets/images/launch-trailblaze.gif)
+![launch-trailblaze.gif](images-opensource/launch-trailblaze.gif)
 
 This initializes a local web server that Trailblaze will send all the logs to on your local machine.
 Logs _will not_ be collected if the server is not running.

@@ -1,10 +1,19 @@
 package xyz.block.trailblaze.ui
 
+import org.yaml.snakeyaml.DumperOptions
+import org.yaml.snakeyaml.Yaml
+import xyz.block.trailblaze.ui.goose.GooseRecipe
+import xyz.block.trailblaze.ui.goose.createGooseRecipe
+import xyz.block.trailblaze.ui.goose.defaultOpenSourceActivities
+import xyz.block.trailblaze.ui.goose.gooseRecipeJson
+import xyz.block.trailblaze.ui.goose.TrailblazeGooseExtension
 import xyz.block.trailblaze.ui.models.TrailblazeServerState
 import java.awt.Desktop
 import java.awt.Taskbar
 import java.io.File
+import java.io.FileWriter
 import java.net.URI
+import java.net.URLEncoder
 import javax.imageio.ImageIO
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
@@ -143,12 +152,126 @@ object TrailblazeDesktopUtil {
     }
   }
 
-  fun openGoose() {
-    val gooseRecipeJson = this::class.java.classLoader.getResource("trailblaze_goose_recipe.json").readText()
+  /**
+   * Gets the Goose config file path.
+   * @return The Goose config file: ~/.config/goose/config.yaml
+   */
+  fun getGooseConfigFile(): File {
+    return File(System.getProperty("user.home"), ".config/goose/config.yaml")
+  }
 
-    @OptIn(ExperimentalEncodingApi::class)
-    val gooseRecipeEncoded = Base64.encode(gooseRecipeJson.toByteArray())
-    val gooseUrl = "goose://recipe?config=$gooseRecipeEncoded"
+  /**
+   * Result of ensuring the Trailblaze extension is installed in Goose.
+   */
+  sealed class GooseExtensionResult {
+    /** Extension was already installed with matching type and URI */
+    data object AlreadyInstalled : GooseExtensionResult()
+
+    /** Extension was successfully added to the config */
+    data object Added : GooseExtensionResult()
+
+    /** Goose config file was not found */
+    data object ConfigNotFound : GooseExtensionResult()
+
+    /** An error occurred while processing the config */
+    data class Error(val message: String) : GooseExtensionResult()
+  }
+
+  /**
+   * Ensures the Trailblaze extension is installed in the Goose config.
+   * Checks if an extension with matching type and URI already exists.
+   * If not found, adds the trailblaze extension to the config.
+   *
+   * @return [GooseExtensionResult] indicating the outcome
+   */
+  @Suppress("UNCHECKED_CAST")
+  fun ensureTrailblazeExtensionInstalledInGoose(): GooseExtensionResult {
+    val configFile = getGooseConfigFile()
+
+    if (!configFile.exists()) {
+      println("Goose config file not found at: ${configFile.absolutePath}")
+      return GooseExtensionResult.ConfigNotFound
+    }
+
+    return try {
+      val yaml = Yaml()
+      val config: MutableMap<String, Any> = configFile.inputStream().use { yaml.load(it) }
+        ?: mutableMapOf()
+
+      // Get or create extensions map
+      val extensions = config.getOrPut("extensions") { mutableMapOf<String, Any>() }
+        as? MutableMap<String, Any>
+        ?: return GooseExtensionResult.Error("Invalid extensions format in config")
+
+      // Check if an extension with matching type and URI already exists
+      val targetType = TrailblazeGooseExtension.type
+      val targetUri = TrailblazeGooseExtension.uri
+
+      val alreadyExists = extensions.values.any { ext ->
+        val extMap = ext as? Map<*, *> ?: return@any false
+        val extType = extMap["type"] as? String
+        val extUri = extMap["uri"] as? String
+        extType == targetType && extUri == targetUri
+      }
+
+      if (alreadyExists) {
+        println("Trailblaze extension already installed in Goose config")
+        return GooseExtensionResult.AlreadyInstalled
+      }
+
+      // Add the trailblaze extension
+      val extensionConfig = mutableMapOf(
+        "enabled" to TrailblazeGooseExtension.enabled,
+        "type" to TrailblazeGooseExtension.type,
+        "name" to TrailblazeGooseExtension.name,
+        "description" to TrailblazeGooseExtension.description,
+        "uri" to TrailblazeGooseExtension.uri,
+        "envs" to TrailblazeGooseExtension.envs,
+        "env_keys" to TrailblazeGooseExtension.env_keys,
+        "timeout" to TrailblazeGooseExtension.timeout,
+        "bundled" to TrailblazeGooseExtension.bundled,
+      )
+
+      extensions["trailblaze"] = extensionConfig
+
+      // Write the updated config back
+      val dumperOptions = DumperOptions().apply {
+        defaultFlowStyle = DumperOptions.FlowStyle.BLOCK
+        isPrettyFlow = true
+        indent = 2
+        indicatorIndent = 0
+      }
+      val yamlWriter = Yaml(dumperOptions)
+
+      FileWriter(configFile).use { writer ->
+        yamlWriter.dump(config, writer)
+      }
+
+      println("Trailblaze extension added to Goose config")
+      GooseExtensionResult.Added
+    } catch (e: Exception) {
+      println("Error processing Goose config: ${e.message}")
+      e.printStackTrace()
+      GooseExtensionResult.Error(e.message ?: "Unknown error")
+    }
+  }
+
+  /**
+   * Opens Goose with the Trailblaze recipe.
+   * Ensures the Trailblaze extension is installed before opening.
+   * @param activities Optional list of activities to include. Defaults to [defaultOpenSourceActivities].
+   */
+  @OptIn(ExperimentalEncodingApi::class)
+  fun openGoose(activities: List<String> = defaultOpenSourceActivities) {
+    // Ensure the extension is installed before opening Goose
+    ensureTrailblazeExtensionInstalledInGoose()
+
+    val recipe = createGooseRecipe(activities)
+    val recipeJsonString = gooseRecipeJson.encodeToString(GooseRecipe.serializer(), recipe)
+    val recipeBase64 = Base64.encode(recipeJsonString.toByteArray())
+    val recipeEncoded = URLEncoder.encode(recipeBase64, Charsets.UTF_8)
+    val gooseUrl = "goose://recipe?config=$recipeEncoded"
+    println(gooseUrl)
     openInDefaultBrowser(gooseUrl)
   }
 }
