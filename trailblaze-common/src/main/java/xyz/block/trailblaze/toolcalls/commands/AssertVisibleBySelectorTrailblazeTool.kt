@@ -12,7 +12,10 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.commands.TrailblazeElementSelectorExt.toMaestroElementSelector
 
 @Serializable
-@TrailblazeToolClass("assertVisibleBySelector", isForLlm = false)
+@TrailblazeToolClass(
+  name = "assertVisibleBySelector",
+  isForLlm = false,
+)
 @LLMDescription("Asserts that an element with the provided selector is visible on the screen.")
 /**
  *  ----- DO NOT USE GIVE THIS TOOL TO THE LLM -----

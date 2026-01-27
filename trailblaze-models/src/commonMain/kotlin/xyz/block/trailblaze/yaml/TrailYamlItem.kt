@@ -31,7 +31,12 @@ sealed interface TrailYamlItem {
    * maestro
    *
    * This is used to represent a list of Maestro commands in the trail.
+   *
+   * @deprecated Use Trailblaze tools instead of raw Maestro commands.
+   * Tools can be recorded, processed by the agent, and provide consistent cross-platform behavior.
+   * See Trailblaze Decision 002 for details.
    */
+  @Deprecated("Use Trailblaze tools instead of raw Maestro commands. See Trailblaze Decision 002.")
   @Serializable
   data class MaestroTrailItem(
     @Contextual

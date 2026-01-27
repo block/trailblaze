@@ -40,6 +40,26 @@ object TrailblazeProcessBuilderUtils {
     throw RuntimeException("Failed to start process for $args. Error: ${e.message}", e)
   }
 
+  /**
+   * Checks if a command is available on the system PATH using 'which'.
+   * This is faster than running the command itself since it only searches PATH directories.
+   */
+  fun isCommandAvailable(command: String): Boolean {
+    return try {
+      val result = createProcessBuilder(listOf("which", command)).runProcess {}
+      val found = result.exitCode == 0
+      if (found) {
+        println("$command installation is available on the PATH")
+      } else {
+        println("$command installation is not available on the PATH")
+      }
+      found
+    } catch (e: Throwable) {
+      println("$command installation not found")
+      false
+    }
+  }
+
   fun ProcessBuilder.runProcess(
     outputLineCallback: (String) -> Unit,
   ): CommandProcessResult {

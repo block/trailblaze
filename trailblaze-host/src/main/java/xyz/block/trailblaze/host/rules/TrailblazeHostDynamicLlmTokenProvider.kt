@@ -9,9 +9,7 @@ import ai.koog.prompt.executor.ollama.client.OllamaClient
 import io.ktor.client.HttpClient
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
 import xyz.block.trailblaze.llm.providers.TrailblazeDynamicLlmTokenProvider
-import xyz.block.trailblaze.util.CommandProcessResult
-import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils.createProcessBuilder
-import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils.runProcess
+import xyz.block.trailblaze.mcp.utils.JvmLLMProvidersUtil
 
 /**
  * Retrieves LLM API tokens from environment variables
@@ -27,27 +25,12 @@ object TrailblazeHostDynamicLlmTokenProvider : TrailblazeDynamicLlmTokenProvider
     else -> error("Currently unsupported provider: $llmProvider")
   }
 
-  private val isOllamaInstalled: Boolean by lazy {
-    try {
-      val processSystemOutput: CommandProcessResult = createProcessBuilder(
-        listOf("ollama", "-v"),
-      ).runProcess {
-        println(it)
-      }
-      println("Ollama Found.  ${processSystemOutput.fullOutput}")
-      true
-    } catch (e: Throwable) {
-      println("ollama installation not found")
-      false
-    }
-  }
-
   override fun getLLMClientForProviderIfAvailable(
     trailblazeLlmProvider: TrailblazeLlmProvider,
     baseClient: HttpClient,
   ): LLMClient? {
     if (trailblazeLlmProvider == TrailblazeLlmProvider.OLLAMA) {
-      return if (isOllamaInstalled) {
+      return if (JvmLLMProvidersUtil.isOllamaInstalled) {
         OllamaClient()
       } else {
         null

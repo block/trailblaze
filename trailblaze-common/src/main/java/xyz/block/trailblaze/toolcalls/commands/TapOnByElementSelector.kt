@@ -13,7 +13,7 @@ import xyz.block.trailblaze.toolcalls.commands.TrailblazeElementSelectorExt.toMa
 @Serializable
 @TrailblazeToolClass(
   name = "tapOnElementBySelector",
-  isForLlm = false,
+  isForLlm = false
 )
 @LLMDescription("Taps on an element by its selector.")
 /**
@@ -21,7 +21,11 @@ import xyz.block.trailblaze.toolcalls.commands.TrailblazeElementSelectorExt.toMa
  *
  * This is a tool that should be delegated to, not registered to the LLM
  */
-data class TapOnByElementSelector(val reason: String? = null, val selector: TrailblazeElementSelector, val longPress: Boolean = false) : MapsToMaestroCommands() {
+data class TapOnByElementSelector(
+  val reason: String? = null,
+  val selector: TrailblazeElementSelector,
+  val longPress: Boolean = false
+) : MapsToMaestroCommands() {
   override fun toMaestroCommands(memory: AgentMemory): List<Command> = listOf(
     TapOnElementCommand(
       selector = selector.toMaestroElementSelector(),

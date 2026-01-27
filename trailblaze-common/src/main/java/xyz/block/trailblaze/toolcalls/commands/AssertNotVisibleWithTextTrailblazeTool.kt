@@ -12,7 +12,9 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeTools.REQUIRED_TEXT_DESCRIPTION
 
 @Serializable
-@TrailblazeToolClass("assertNotVisibleWithText")
+@TrailblazeToolClass(
+  name = "assertNotVisibleWithText",
+)
 @LLMDescription(
   """
 Asserts that an element with the provided text is NOT visible on the screen. The text argument is required.

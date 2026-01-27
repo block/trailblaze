@@ -57,7 +57,6 @@ abstract class TrailblazeToolSet(
     private object DefaultUiTrailblazeToolSet : TrailblazeToolSet(
       name = "Default UI Tools",
       toolClasses = setOf(
-        AssertVisibleByNodeIdTrailblazeTool::class,
         EraseTextTrailblazeTool::class,
         HideKeyboardTrailblazeTool::class,
         InputTextTrailblazeTool::class,

@@ -2,25 +2,12 @@ package xyz.block.trailblaze.mcp.utils
 
 import xyz.block.trailblaze.llm.TrailblazeLlmModelList
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
-import xyz.block.trailblaze.util.CommandProcessResult
-import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils.createProcessBuilder
-import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils.runProcess
+import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils.isCommandAvailable
 
 object JvmLLMProvidersUtil {
 
-  private val isOllamaInstalled: Boolean by lazy {
-    try {
-      val processSystemOutput: CommandProcessResult = createProcessBuilder(
-        listOf("ollama", "-v"),
-      ).runProcess {
-        println(it)
-      }
-      println("Ollama Found.  ${processSystemOutput.fullOutput}")
-      true
-    } catch (e: Throwable) {
-      println("ollama installation not found")
-      false
-    }
+  val isOllamaInstalled: Boolean by lazy {
+    isCommandAvailable("ollama")
   }
 
   fun getEnvironmentVariableKeyForLlmProvider(llmProvider: TrailblazeLlmProvider): String? {
@@ -34,7 +21,7 @@ object JvmLLMProvidersUtil {
       TrailblazeLlmProvider.ANTHROPIC -> "ANTHROPIC_API_KEY"
 
       TrailblazeLlmProvider.OPEN_ROUTER -> "OPENROUTER_API_KEY"
-      
+
       else -> null
     }
   }
