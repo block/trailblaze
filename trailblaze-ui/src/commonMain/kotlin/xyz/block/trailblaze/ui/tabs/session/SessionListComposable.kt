@@ -421,10 +421,39 @@ fun SessionListComposable(
         it.timestamp.toLocalDateTime(TimeZone.currentSystemDefault()).date
       }
 
-      LazyColumn(
-        modifier = Modifier.padding(start = 8.dp, end = 8.dp),
-      ) {
-        groupedSessions.toList().sortedByDescending { it.first }.forEach { (date, sessionsForDay) ->
+      if (sessions.isEmpty()) {
+        // Empty state when no sessions exist
+        Column(
+          modifier = Modifier
+            .fillMaxWidth()
+            .padding(32.dp),
+          horizontalAlignment = Alignment.CenterHorizontally,
+          verticalArrangement = Arrangement.Center,
+        ) {
+          Icon(
+            imageVector = Icons.Default.FolderOpen,
+            contentDescription = null,
+            modifier = Modifier.size(64.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+          )
+          Spacer(modifier = Modifier.height(16.dp))
+          Text(
+            text = "No sessions yet",
+            style = MaterialTheme.typography.titleLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+          )
+          Spacer(modifier = Modifier.height(8.dp))
+          Text(
+            text = "After you run Trailblaze, session information will appear here.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+          )
+        }
+      } else {
+        LazyColumn(
+          modifier = Modifier.padding(start = 8.dp, end = 8.dp),
+        ) {
+          groupedSessions.toList().sortedByDescending { it.first }.forEach { (date, sessionsForDay) ->
           item {
             Text(
               text = date.toString(), // Consider a more friendly format
@@ -682,6 +711,7 @@ fun SessionListComposable(
               }
             }
           }
+        }
         }
       }
     }

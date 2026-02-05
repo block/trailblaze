@@ -77,8 +77,6 @@ data class TapOnElementByNodeIdTrailblazeTool(
       spatialHints = relativelyPositionedViews.toOrderedSpatialHints(),
     )
 
-    println("Selected TrailblazeTool: ${selectorWithStrategy.selector} (strategy: ${selectorWithStrategy.strategyName})")
-
     // If IndexStrategy was used with a high index (> 10), the selector is fragile.
     // High indices depend on exact element ordering in the hierarchy which can change.
     // Low indices (≤ 10) are usually stable enough to be useful.
@@ -89,7 +87,6 @@ data class TapOnElementByNodeIdTrailblazeTool(
         val centerPoint = matchingNode.centerPoint
         if (centerPoint != null) {
           val (x, y) = centerPoint.split(",").map { it.toInt() }
-          println("IndexStrategy with high index ($index) - falling back to coordinate tap at ($x, $y)")
           return listOf(
             TapOnPointTrailblazeTool(
               x = x,

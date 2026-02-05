@@ -33,6 +33,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.Status
 import xyz.block.trailblaze.toolcalls.getToolNameFromAnnotation
+import xyz.block.trailblaze.toolcalls.toolName
 import xyz.block.trailblaze.util.TemplatingUtil
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
@@ -222,6 +223,17 @@ class TrailblazeKoogLlmClientHelper(
       executedTool.getToolNameFromAnnotation() to flattenedArgs
     }
 
+    // Record the action performed for context in status checks (skip for objectiveStatus)
+    if (toolName != ObjectiveStatusTrailblazeTool::class.toolName().toolName && toolExecutionResult.result is TrailblazeToolResult.Success) {
+      val reason = toolArgs["reason"]?.toString()?.trim('"') ?: ""
+      val actionDescription = if (reason.isNotEmpty()) {
+        "$toolName: $reason"
+      } else {
+        "Executed $toolName"
+      }
+      step.addActionPerformed(actionDescription)
+    }
+
     step.addCompletedToolCallToChatHistory(
       llmResponseContent = llmMessage,
       toolsWithArgs = executedToolsWithArgs,
@@ -302,7 +314,11 @@ class TrailblazeKoogLlmClientHelper(
     )
     add(
       Message.User(
-        content = TrailblazeAiRunnerMessages.getReminderMessage(stepStatus.promptStep, forceStepStatusUpdate),
+        content = TrailblazeAiRunnerMessages.getReminderMessage(
+          promptStep = stepStatus.promptStep,
+          forceStepStatusUpdate = forceStepStatusUpdate,
+          actionsPerformedThisObjective = stepStatus.getActionsPerformed(),
+        ),
         metaInfo = RequestMetaInfo.create(Clock.System),
       ),
     )

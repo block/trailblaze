@@ -20,6 +20,19 @@ data class PromptStepStatus(
 ) {
   val taskId = TaskId.generate()
 
+  // Track actions performed during this objective for context in status checks
+  private val actionsPerformedThisObjective: MutableList<String> = mutableListOf()
+
+  fun addActionPerformed(description: String) {
+    actionsPerformedThisObjective.add(description)
+  }
+
+  fun getActionsPerformed(): List<String> = actionsPerformedThisObjective.toList()
+
+  fun clearActions() {
+    actionsPerformedThisObjective.clear()
+  }
+
   fun getLimitedHistory(): List<Message> = koogLlmResponseHistory.takeLast(5)
 
   private fun getHistorySize() = koogLlmResponseHistory.size

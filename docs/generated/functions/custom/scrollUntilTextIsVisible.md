@@ -31,6 +31,11 @@ In this case the additional fields will be used to identify the specific view to
   Percentage of element visible in viewport. Default is '100'.
 - `centerElement`: `Boolean`
   If it will attempt to stop scrolling when the element is closer to the screen center. Default is 'false'.
+- `scrollStartPosition`: `[
+  "CENTER",
+  "TOP",
+  "BOTTOM"
+]`
 
 
 

@@ -48,7 +48,7 @@ fun TargetAppConfigRow(
     ) {
       TextField(
         readOnly = true,
-        value = selectedTargetApp?.name ?: "Select target app",
+        value = selectedTargetApp?.displayName ?: "Select target app",
         onValueChange = { },
         label = { Text("Target App") },
         leadingIcon = {
@@ -72,7 +72,7 @@ fun TargetAppConfigRow(
             leadingIcon = {
               deviceManager.appIconProvider.getIcon(selectedTargetApp)
             },
-            text = { Text(selectedTargetApp.name) },
+            text = { Text(selectedTargetApp.displayName) },
             onClick = {
               settingsRepo.targetAppSelected(selectedTargetApp)
               expanded = false

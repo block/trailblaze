@@ -148,7 +148,7 @@ class DeviceManagerToolSet(
   @Tool
   suspend fun getAvailableAppTargets(): String {
     return TrailblazeJsonInstance.encodeToString(
-      mcpBridge.getAvailableAppTargets().map { it.name }
+      mcpBridge.getAvailableAppTargets().map { it.id }
     )
   }
 

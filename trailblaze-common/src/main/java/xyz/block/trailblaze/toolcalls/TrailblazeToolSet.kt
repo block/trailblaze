@@ -48,7 +48,8 @@ abstract class TrailblazeToolSet(
 ) {
 
   // Provide a way to add multiple tool sets together
-  operator fun plus(otherToolSet: TrailblazeToolSet): TrailblazeToolSet = DynamicToolSet(toolClasses = this.toolClasses + otherToolSet.toolClasses)
+  operator fun plus(otherToolSet: TrailblazeToolSet): TrailblazeToolSet =
+    DynamicToolSet(toolClasses = this.toolClasses + otherToolSet.toolClasses)
 
   fun asTools(): Set<KClass<out TrailblazeTool>> = toolClasses
 
@@ -57,6 +58,8 @@ abstract class TrailblazeToolSet(
     private object DefaultUiTrailblazeToolSet : TrailblazeToolSet(
       name = "Default UI Tools",
       toolClasses = setOf(
+        AssertVisibleByNodeIdTrailblazeTool::class,
+        AssertNotVisibleWithTextTrailblazeTool::class,
         EraseTextTrailblazeTool::class,
         HideKeyboardTrailblazeTool::class,
         InputTextTrailblazeTool::class,
@@ -92,8 +95,8 @@ abstract class TrailblazeToolSet(
     fun getLlmToolSet(setOfMarkEnabled: Boolean): TrailblazeToolSet = DynamicTrailblazeToolSet(
       name = if (setOfMarkEnabled) "Set-of-Mark LLM Tools" else "Device Control LLM Tools",
       toolClasses = getSetOfMarkToolSet(setOfMarkEnabled).toolClasses +
-        RememberTrailblazeToolSet.toolClasses +
-        VerifyToolSet.toolClasses,
+          RememberTrailblazeToolSet.toolClasses +
+          VerifyToolSet.toolClasses,
     )
 
     val AllDefaultTrailblazeToolSets: Set<TrailblazeToolSet> = setOf(
@@ -108,8 +111,6 @@ abstract class TrailblazeToolSet(
     val NonLlmTrailblazeTools: Set<KClass<out TrailblazeTool>> = setOf(
       // Used by recordings, but shouldn't be registered directly to the LLM
       AssertVisibleBySelectorTrailblazeTool::class,
-      // Deprecated tool - Assert Not Visible with Text, allow LLM to detect not visible items instead.
-      AssertNotVisibleWithTextTrailblazeTool::class,
       TapOnByElementSelector::class,
       SwipeWithRelativeCoordinatesTool::class,
 
@@ -157,6 +158,7 @@ abstract class TrailblazeToolSet(
   object VerifyToolSet : TrailblazeToolSet(
     toolClasses = setOf(
       AssertVisibleByNodeIdTrailblazeTool::class,
+      AssertNotVisibleWithTextTrailblazeTool::class,
     ),
   )
 

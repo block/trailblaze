@@ -115,20 +115,26 @@ object TrailblazeBuiltInTabs {
     globalSettingsContent: @Composable ColumnScope.(TrailblazeServerState) -> Unit,
     availableModelLists: Set<TrailblazeLlmModelList>,
     customEnvVarNames: List<String>,
-  ): TrailblazeAppTab = TrailblazeAppTab(
-    route = TrailblazeRoute.Settings,
-    content = {
-      SettingsTabComposables.SettingsTab(
-        trailblazeSettingsRepo = trailblazeSettingsRepo,
-        openLogsFolder = { TrailblazeDesktopUtil.openInFileBrowser(logsRepo.logsDir) },
-        openDesktopAppPreferencesFile = { TrailblazeDesktopUtil.openInFileBrowser(trailblazeSettingsRepo.settingsFile) },
-        openGoose = { TrailblazeDesktopUtil.openGoose() },
-        additionalContent = {},
-        globalSettingsContent = globalSettingsContent,
-        environmentVariableProvider = { System.getenv(it) },
-        availableModelLists = availableModelLists,
-        customEnvVariableNames = customEnvVarNames,
-      )
-    }
-  )
+  ): TrailblazeAppTab {
+    val shellProfile = DesktopUtil.getShellProfileFile()
+    return TrailblazeAppTab(
+      route = TrailblazeRoute.Settings,
+      content = {
+        SettingsTabComposables.SettingsTab(
+          trailblazeSettingsRepo = trailblazeSettingsRepo,
+          openLogsFolder = { TrailblazeDesktopUtil.openInFileBrowser(logsRepo.logsDir) },
+          openDesktopAppPreferencesFile = { TrailblazeDesktopUtil.openInFileBrowser(trailblazeSettingsRepo.settingsFile) },
+          openGoose = { TrailblazeDesktopUtil.openGoose() },
+          additionalContent = {},
+          globalSettingsContent = globalSettingsContent,
+          environmentVariableProvider = { System.getenv(it) },
+          availableModelLists = availableModelLists,
+          customEnvVariableNames = customEnvVarNames,
+          openShellProfile = shellProfile?.let { { TrailblazeDesktopUtil.openInFileBrowser(it) } },
+          shellProfileName = shellProfile?.name,
+          onQuitApp = { kotlin.system.exitProcess(0) },
+        )
+      }
+    )
+  }
 }

@@ -42,11 +42,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.mikepenz.markdown.m3.Markdown
+import com.mikepenz.markdown.m3.markdownColor
+import com.mikepenz.markdown.m3.markdownTypography
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.model.AppVersionInfo
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.ui.TrailblazeSettingsRepo
+import xyz.block.trailblaze.ui.getVersionInfo
 import xyz.block.trailblaze.ui.tabs.devices.TargetAppConfigRow
 
 /**
@@ -75,6 +80,7 @@ fun DeviceConfigurationContent(
   val selectedTargetApp = deviceManager.getCurrentSelectedTargetApp()
 
   val installedAppIdsByDevice by deviceManager.installedAppIdsByDeviceFlow.collectAsState()
+  val appVersionInfoByDevice by deviceManager.appVersionInfoByDeviceFlow.collectAsState()
 
   // Initialize selectedDevices with previously selected devices that are still available and have the app installed
   // Web browsers are always considered "installed" since they don't have apps
@@ -177,12 +183,17 @@ fun DeviceConfigurationContent(
           val isDeviceEnabled = isWebPlatform || selectedTargetApp == null || isAppInstalled
           val activeSessionId = activeDeviceSessions[device.trailblazeDeviceId]
           val hasActiveSession = activeSessionId != null
+          // Get version info for the installed app
+          val versionInfo = appIdIfInstalled?.let { appId ->
+            appVersionInfoByDevice.getVersionInfo(device.trailblazeDeviceId, appId)
+          }
 
           SingleDeviceListItem(
             device = device,
             isSelected = selectedDevices.contains(device),
             installedAppId = appIdIfInstalled,
             appTarget = selectedTargetApp,
+            appVersionInfo = versionInfo,
             activeSessionId = activeSessionId?.value,
             onSessionClick = onSessionClick,
             onToggle = {
@@ -372,7 +383,7 @@ fun DeviceSelectionDialog(
                   modifier = Modifier.weight(1f)
                 ) {
                   Text(
-                    text = "Force stop ${selectedTargetApp.name} before running tests",
+                    text = "Force stop ${selectedTargetApp.displayName} before running tests",
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.Medium
                   )
@@ -424,6 +435,7 @@ fun SingleDeviceListItem(
   isSelected: Boolean,
   appTarget: TrailblazeHostAppTarget?,
   installedAppId: String?,
+  appVersionInfo: AppVersionInfo? = null,
   activeSessionId: String? = null,
   onSessionClick: ((String) -> Unit)? = null,
   onToggle: () -> Unit,
@@ -557,36 +569,79 @@ fun SingleDeviceListItem(
             )
           }
         } else if (appTarget != null) {
-          Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
+          Column(
+            verticalArrangement = Arrangement.spacedBy(2.dp)
           ) {
-            if (installedAppId != null) {
-              Icon(
-                imageVector = Icons.Default.Check,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(16.dp)
-              )
-              Text(
-                text = "${appTarget.name} App installed ($installedAppId)",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.primary,
-                fontWeight = FontWeight.Medium
-              )
-            } else {
-              Icon(
-                imageVector = Icons.Default.Close,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.error,
-                modifier = Modifier.size(16.dp)
-              )
-              Text(
-                text = "${appTarget.name} App not installed ($possibleAppIdsMessage)",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error,
-                fontWeight = FontWeight.Medium
-              )
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+              if (installedAppId != null) {
+                Icon(
+                  imageVector = Icons.Default.Check,
+                  contentDescription = null,
+                  tint = MaterialTheme.colorScheme.primary,
+                  modifier = Modifier.size(16.dp)
+                )
+                // Show version info if available, otherwise just show the app ID
+                val versionText = if (appVersionInfo != null) {
+                  val formattedVersion = appTarget.formatVersionInfo(device.platform, appVersionInfo)
+                    ?: appVersionInfo.versionName ?: appVersionInfo.versionCode
+                  "${appTarget.displayName} App installed - $formattedVersion"
+                } else {
+                  "${appTarget.displayName} App installed ($installedAppId)"
+                }
+                Text(
+                  text = versionText,
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.primary,
+                  fontWeight = FontWeight.Medium
+                )
+              } else {
+                Icon(
+                  imageVector = Icons.Default.Close,
+                  contentDescription = null,
+                  tint = MaterialTheme.colorScheme.error,
+                  modifier = Modifier.size(16.dp)
+                )
+                Text(
+                  text = "${appTarget.displayName} App not installed ($possibleAppIdsMessage)",
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.error,
+                  fontWeight = FontWeight.Medium
+                )
+              }
+            }
+
+            // Show version warning if app is installed but version is below minimum
+            if (installedAppId != null && appVersionInfo != null) {
+              val isVersionOk = appTarget.isVersionAcceptable(device.platform, appVersionInfo)
+              if (!isVersionOk) {
+                val minVersion = appTarget.getMinBuildVersion(device.platform)
+                val warningMessage = minVersion?.let {
+                  appTarget.getVersionWarningMessage(device.platform, appVersionInfo, it)
+                } ?: "App version may be outdated"
+
+                Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                  Icon(
+                    imageVector = Icons.Default.Warning,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.size(14.dp)
+                  )
+                  Markdown(
+                    content = warningMessage,
+                    colors = markdownColor(text = MaterialTheme.colorScheme.error),
+                    typography = markdownTypography(
+                      text = MaterialTheme.typography.bodySmall,
+                      paragraph = MaterialTheme.typography.bodySmall,
+                    ),
+                  )
+                }
+              }
             }
           }
         }

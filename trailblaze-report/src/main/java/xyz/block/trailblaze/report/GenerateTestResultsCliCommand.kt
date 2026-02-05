@@ -26,10 +26,12 @@ import xyz.block.trailblaze.report.models.CiSummaryReport
 import xyz.block.trailblaze.report.models.ExecutionMode
 import xyz.block.trailblaze.report.models.Outcome
 import xyz.block.trailblaze.report.models.RecordingSkipReason
+import xyz.block.trailblaze.report.models.SOURCE_TYPE_GENERATED
 import xyz.block.trailblaze.report.models.SessionRecordingInfo
 import xyz.block.trailblaze.report.models.SessionResult
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.yaml.TrailConfig
+import xyz.block.trailblaze.yaml.TrailSourceType
 import java.io.File
 import kotlin.io.path.Path
 
@@ -57,7 +59,7 @@ import kotlin.io.path.Path
  * - BUILDKITE_COMMIT / GIT_COMMIT
  * - BUILDKITE_BRANCH / GIT_BRANCH
  */
-class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-results") {
+open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-results") {
 
   private val logsDirArg by argument(
     name = "logs-dir",
@@ -105,6 +107,13 @@ class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-results
     prettyPrint = true
     encodeDefaults = true
   }
+
+  /**
+   * The generated report, available after [run] completes.
+   * Subclasses can access this to perform additional processing (e.g., uploading to CDP).
+   */
+  protected var generatedReport: CiSummaryReport? = null
+    private set
 
   override fun run() {
     val logsRepo = LogsRepo(
@@ -194,6 +203,9 @@ class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-results
     output.writeText(content)
     println()
     println("📄 Summary written to: ${output.absolutePath}")
+
+    // Store the generated report for subclasses to access
+    generatedReport = summaryReport
 
     // Clean up file watchers to allow JVM to exit
     logsRepo.close()
@@ -294,8 +306,8 @@ class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-results
    * Determines source type from trail config's Source
    * This will assume generated if trail config or source is null
    */
-  private fun determineTrailSource(trailConfig: TrailConfig?): String? {
-    return trailConfig?.source?.type?.name
+  private fun determineTrailSource(trailConfig: TrailConfig?): String {
+    return trailConfig?.source?.type?.name ?: SOURCE_TYPE_GENERATED
   }
 
   private fun countLlmCalls(logs: List<TrailblazeLog>): Int {

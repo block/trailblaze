@@ -12,7 +12,7 @@ import xyz.block.trailblaze.report.snapshot.SnapshotViewerGenerator
 import xyz.block.trailblaze.report.utils.LogsRepo
 import java.io.File
 
-class GenerateReportCliCommand :
+open class GenerateReportCliCommand :
   SimpleCliCommand(
     name = "generate-report",
   ) {

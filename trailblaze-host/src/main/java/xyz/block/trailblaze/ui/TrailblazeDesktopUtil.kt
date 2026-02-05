@@ -2,6 +2,7 @@ package xyz.block.trailblaze.ui
 
 import org.yaml.snakeyaml.DumperOptions
 import org.yaml.snakeyaml.Yaml
+import xyz.block.trailblaze.ui.DesktopOsType
 import xyz.block.trailblaze.ui.goose.GooseRecipe
 import xyz.block.trailblaze.ui.goose.createGooseRecipe
 import xyz.block.trailblaze.ui.goose.defaultOpenSourceActivities
@@ -118,20 +119,19 @@ object TrailblazeDesktopUtil {
     }
 
     try {
-      val osName = System.getProperty("os.name").lowercase()
-      when {
-        osName.contains("mac") -> {
+      when (DesktopOsType.current()) {
+        DesktopOsType.MAC_OS -> {
           // macOS: Use 'open -R' to reveal the file in Finder
           Runtime.getRuntime().exec(arrayOf("open", "-R", file.absolutePath))
         }
 
-        osName.contains("win") -> {
+        DesktopOsType.WINDOWS -> {
           // Windows: Use explorer /select to highlight the file
           Runtime.getRuntime().exec(arrayOf("explorer.exe", "/select,", file.absolutePath))
         }
 
-        else -> {
-          // Linux and other platforms: Just open the parent directory
+        DesktopOsType.LINUX -> {
+          // Linux: Just open the parent directory
           if (Desktop.isDesktopSupported()) {
             Desktop.getDesktop().open(file.parentFile)
           }

@@ -72,6 +72,7 @@ class OpenSourceTrailblazeDesktopApp : TrailblazeDesktopApp(
       defaultHostAppTarget = desktopAppConfig.defaultAppTarget,
       runYamlLambda = { desktopYamlRunner.runYaml(it) },
       installedAppIdsProviderBlocking = { desktopAppConfig.getInstalledAppIds(it) },
+      appVersionInfoProviderBlocking = { deviceId, appId -> desktopAppConfig.getAppVersionInfo(deviceId, appId) },
       logsRepo = desktopAppConfig.logsRepo,
       onDeviceInstrumentationArgsProvider = {
         JvmLLMProvidersUtil.getAdditionalInstrumentationArgs()

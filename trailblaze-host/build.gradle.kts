@@ -45,6 +45,7 @@ dependencies {
   implementation(compose.preview)
   implementation(compose.components.resources)
   implementation(libs.material.icons.extended)
+  implementation(libs.multiplatform.markdown.renderer.m3)
   implementation(libs.compose.navigation)
 
   implementation(libs.ktor.client.logging)

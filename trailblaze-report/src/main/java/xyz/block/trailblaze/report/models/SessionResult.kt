@@ -24,7 +24,7 @@ data class SessionResult(
   val execution_mode: ExecutionMode,
 
   /** Source of the trail file (handwritten vs generated), null if unknown */
-  val trail_source: String? = null,
+  val trail_source: String,
 
   /** Device classifier used */
   val device_classifier: String? = null,

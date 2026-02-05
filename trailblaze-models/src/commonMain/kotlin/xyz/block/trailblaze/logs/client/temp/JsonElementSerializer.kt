@@ -132,7 +132,7 @@ object OtherTrailblazeToolFlatSerializer : KSerializer<OtherTrailblazeTool> {
     decoder is YamlInput -> {
       // For YAML, directly access the node to preserve all nested data
       val raw = yamlNodeToJsonElement(decoder.node) as? JsonObject ?: JsonObject(emptyMap())
-      // toolName is NOT available at this level - it comes from the YAML key (e.g., "launchSquareAppSignedIn:")
+      // toolName is NOT available at this level - it comes from the YAML key (e.g., "square_launchAppSignedIn:")
       // which is extracted by TrailblazeToolYamlWrapperSerializer and stored in TrailblazeToolYamlWrapper.name.
       // Using a sentinel value so it's obvious if this ever leaks out incorrectly.
       OtherTrailblazeTool(YAML_CONTEXT_TOOL_NAME_PLACEHOLDER, raw)

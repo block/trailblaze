@@ -16,7 +16,6 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
-import xyz.block.trailblaze.ui.composables.DeviceClassifierIconProvider
 import maestro.Driver
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeElementSelector
@@ -36,12 +35,14 @@ import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeSessionManager
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
+import xyz.block.trailblaze.model.AppVersionInfo
 import xyz.block.trailblaze.model.DesktopAppRunYamlParams
 import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleBySelectorTrailblazeTool
+import xyz.block.trailblaze.ui.composables.DeviceClassifierIconProvider
 import xyz.block.trailblaze.ui.devices.DeviceManagerState
 import xyz.block.trailblaze.ui.devices.DeviceState
 import xyz.block.trailblaze.ui.models.AppIconProvider
@@ -68,6 +69,7 @@ class TrailblazeDeviceManager(
   val deviceClassifierIconProvider: DeviceClassifierIconProvider,
   private val runYamlLambda: (desktopAppRunYamlParams: DesktopAppRunYamlParams) -> Unit,
   private val installedAppIdsProviderBlocking: (TrailblazeDeviceId) -> Set<String>,
+  private val appVersionInfoProviderBlocking: (TrailblazeDeviceId, String) -> AppVersionInfo? = { _, _ -> null },
   val onDeviceInstrumentationArgsProvider: () -> Map<String, String>,
   private val trailblazeAnalytics: TrailblazeAnalytics,
 ) {
@@ -135,6 +137,15 @@ class TrailblazeDeviceManager(
   val installedAppIdsByDeviceFlow: StateFlow<Map<TrailblazeDeviceId, Set<String>>> =
     _installedAppIdsByDeviceFlow.asStateFlow()
 
+  /**
+   * Tracks app version info per device.
+   * Key is a DeviceAppKey (deviceId, appId) to support multiple apps per device.
+   * Populated when loadDevices() is called.
+   */
+  private val _appVersionInfoByDeviceFlow = MutableStateFlow<Map<DeviceAppKey, AppVersionInfo>>(emptyMap())
+  val appVersionInfoByDeviceFlow: StateFlow<Map<DeviceAppKey, AppVersionInfo>> =
+    _appVersionInfoByDeviceFlow.asStateFlow()
+
   private val loadDevicesScope = CoroutineScope(Dispatchers.IO)
 
   // Track session IDs we've already processed to detect new sessions
@@ -180,7 +191,7 @@ class TrailblazeDeviceManager(
       testName = "test",
       useRecordedSteps = false,
       trailblazeLlmModel = currentTrailblazeLlmModelProvider(),
-      targetAppName = settingsState.appConfig.selectedTargetAppName,
+      targetAppName = settingsState.appConfig.selectedTargetAppId,
       trailFilePath = null,
       config = TrailblazeConfig(
         overrideSessionId = existingSessionId,
@@ -426,6 +437,27 @@ class TrailblazeDeviceManager(
       }
       _installedAppIdsByDeviceFlow.value = installedAppIdsByDevice
 
+      // Query version info only for apps that belong to available app targets (not all installed apps)
+      // This is important for performance - querying version info for all apps would be very slow
+      val relevantAppIds = availableAppTargets.flatMap { target ->
+        target.getPossibleAppIdsForPlatform(TrailblazeDevicePlatform.ANDROID).orEmpty() +
+            target.getPossibleAppIdsForPlatform(TrailblazeDevicePlatform.IOS).orEmpty()
+      }.toSet()
+
+      val appVersionInfoByDevice = mutableMapOf<DeviceAppKey, AppVersionInfo>()
+      filteredDevices.forEach { device ->
+        val installedAppIds = installedAppIdsByDevice[device.trailblazeDeviceId] ?: emptySet()
+        // Only query version info for relevant apps (intersection of installed and target apps)
+        val appsToQuery = installedAppIds.intersect(relevantAppIds)
+        appsToQuery.forEach { appId ->
+          val versionInfo = appVersionInfoProviderBlocking(device.trailblazeDeviceId, appId)
+          if (versionInfo != null) {
+            appVersionInfoByDevice[DeviceAppKey(device.trailblazeDeviceId, appId)] = versionInfo
+          }
+        }
+      }
+      _appVersionInfoByDeviceFlow.value = appVersionInfoByDevice
+
       withContext(Dispatchers.Default) {
         updateDeviceState { currState ->
           // Create DeviceState for each device (sessions tracked separately in activeDeviceSessionsFlow)
@@ -504,11 +536,7 @@ class TrailblazeDeviceManager(
 
   fun getAllSupportedDriverTypes() = settingsRepo.getAllSupportedDriverTypes()
 
-  fun getCurrentSelectedTargetApp(): TrailblazeHostAppTarget? = availableAppTargets
-    .filter { it != defaultHostAppTarget }
-    .firstOrNull { appTarget ->
-      appTarget.name == settingsRepo.serverStateFlow.value.appConfig.selectedTargetAppName
-    }
+  fun getCurrentSelectedTargetApp(): TrailblazeHostAppTarget? = settingsRepo.getCurrentSelectedTargetApp()
 
   // Store running test instances per device - allows forceful driver shutdown
   private val maestroDriverByDeviceMap: MutableMap<TrailblazeDeviceId, Driver> = mutableMapOf()
@@ -635,3 +663,19 @@ class TrailblazeDeviceManager(
       )
   }
 }
+
+/**
+ * Key for looking up app version info by device and app ID.
+ */
+data class DeviceAppKey(
+  val deviceId: TrailblazeDeviceId,
+  val appId: String,
+)
+
+/**
+ * Extension function to look up app version info by device ID and app ID.
+ */
+fun Map<DeviceAppKey, AppVersionInfo>.getVersionInfo(
+  deviceId: TrailblazeDeviceId,
+  appId: String,
+): AppVersionInfo? = this[DeviceAppKey(deviceId, appId)]
