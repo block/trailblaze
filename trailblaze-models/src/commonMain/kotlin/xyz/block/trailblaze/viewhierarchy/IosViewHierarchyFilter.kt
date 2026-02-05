@@ -262,13 +262,15 @@ class IosViewHierarchyFilter(
       }
 
       // The element that would receive the tap is the smallest interactable one
+      // Prefer clickable elements over non-clickable ones (e.g., ButtonView over LabelView)
       val topElement = tapCandidates
         .filter { it.isInteractable() }
         .sortedWith(
           compareBy<ViewHierarchyTreeNode> {
             it.bounds?.let { b -> b.width * b.height } ?: Int.MAX_VALUE
           }
-            .then(compareByDescending { elementZIndices[it.nodeId] ?: 0 }),
+            .thenByDescending { it.clickable == true }
+            .thenByDescending { elementZIndices[it.nodeId] ?: 0 },
         )
         .firstOrNull()
 

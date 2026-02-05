@@ -39,6 +39,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import xyz.block.trailblaze.ui.isMacOs
 
 // Editor text style constants
 private val EditorFontSize: TextUnit = 14.sp
@@ -213,8 +214,7 @@ private fun handleKeyEvent(
 ): Boolean {
   if (keyEvent.type != KeyEventType.KeyDown) return false
 
-  val isMac = System.getProperty("os.name")?.lowercase()?.contains("mac") == true
-  val isModifierPressed = if (isMac) keyEvent.isMetaPressed else keyEvent.isCtrlPressed
+  val isModifierPressed = if (isMacOs()) keyEvent.isMetaPressed else keyEvent.isCtrlPressed
   val isAltPressed = keyEvent.isAltPressed
 
   return when {

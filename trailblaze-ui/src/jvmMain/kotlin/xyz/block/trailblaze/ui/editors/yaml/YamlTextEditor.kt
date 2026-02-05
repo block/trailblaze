@@ -38,6 +38,7 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
+import xyz.block.trailblaze.ui.isMacOs
 
 /**
  * Text editor content for the YAML tab.
@@ -208,7 +209,7 @@ private fun EditorHeader(
         positionProvider = TooltipDefaults.rememberTooltipPositionProvider(),
         tooltip = {
           PlainTooltip {
-            Text("Undo (${if (isMac()) "⌘Z" else "Ctrl+Z"})")
+            Text("Undo (${if (isMacOs()) "⌘Z" else "Ctrl+Z"})")
           }
         },
         state = rememberTooltipState(),
@@ -241,7 +242,7 @@ private fun EditorHeader(
         positionProvider = TooltipDefaults.rememberTooltipPositionProvider(),
         tooltip = {
           PlainTooltip {
-            Text("Redo (${if (isMac()) "⌘⇧Z" else "Ctrl+Y"})")
+            Text("Redo (${if (isMacOs()) "⌘⇧Z" else "Ctrl+Y"})")
           }
         },
         state = rememberTooltipState(),
@@ -271,11 +272,6 @@ private fun EditorHeader(
     }
   }
 }
-
-/**
- * Check if running on macOS.
- */
-private fun isMac(): Boolean = System.getProperty("os.name")?.lowercase()?.contains("mac") == true
 
 /**
  * Validation status indicator.

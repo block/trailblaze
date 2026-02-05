@@ -73,7 +73,7 @@ class TrailblazeSettingsRepo(
 
   fun targetAppSelected(targetApp: TrailblazeHostAppTarget) {
     updateAppConfig { appConfig: SavedTrailblazeAppConfig ->
-      appConfig.copy(selectedTargetAppName = targetApp.name)
+      appConfig.copy(selectedTargetAppId = targetApp.id)
     }
   }
 
@@ -96,7 +96,7 @@ class TrailblazeSettingsRepo(
     return allTargetApps()
       .filter { it != defaultHostAppTarget }
       .firstOrNull { appTarget ->
-        appTarget.name == serverStateFlow.value.appConfig.selectedTargetAppName
+        appTarget.id == serverStateFlow.value.appConfig.selectedTargetAppId
       }
   }
 

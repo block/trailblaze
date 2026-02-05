@@ -2,6 +2,7 @@ package xyz.block.trailblaze.util
 
 import kotlinx.datetime.Clock
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
+import xyz.block.trailblaze.model.AppVersionInfo
 import xyz.block.trailblaze.model.TrailblazeOnDeviceInstrumentationTarget
 import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils.runProcess
 import java.io.File
@@ -289,6 +290,70 @@ object AndroidHostAdbUtils {
       }
   } catch (e: Exception) {
     emptyList()
+  }
+
+  /**
+   * Gets version information for an installed Android app.
+   *
+   * Uses `adb shell dumpsys package <packageName>` to retrieve version details.
+   * Parses output like: `versionCode=67500009 minSdk=28 targetSdk=34`
+   *
+   * @param deviceId The device to query
+   * @param packageName The package name of the app (e.g., "com.squareup.development")
+   * @return AppVersionInfo with version details, or null if the app is not installed or parsing fails
+   */
+  fun getAppVersionInfo(deviceId: TrailblazeDeviceId, packageName: String): AppVersionInfo? = try {
+    val output = execAdbShellCommand(
+      deviceId = deviceId,
+      args = listOf("dumpsys", "package", packageName),
+    )
+
+    // Find the versionCode line that appears after codePath=/data/app (to get the installed version)
+    // The output contains multiple versionCode entries, we want the one for the installed app
+    val lines = output.lines()
+    var foundDataApp = false
+    var versionCode: String? = null
+    var minSdk: Int? = null
+    var versionName: String? = null
+
+    for (line in lines) {
+      // Look for codePath that indicates installed app location
+      if (line.contains("codePath=/data/app")) {
+        foundDataApp = true
+      }
+
+      // After finding the app path, look for version info
+      if (foundDataApp && line.contains("versionCode=")) {
+        // Parse: versionCode=67500009 minSdk=28 targetSdk=34
+        val versionCodeMatch = Regex("versionCode=(\\d+)").find(line)
+        val minSdkMatch = Regex("minSdk=(\\d+)").find(line)
+
+        versionCode = versionCodeMatch?.groupValues?.get(1)
+        minSdk = minSdkMatch?.groupValues?.get(1)?.toIntOrNull()
+        // Don't break yet - versionName comes after versionCode
+      }
+
+      // Also look for versionName (comes after versionCode in the output)
+      if (foundDataApp && line.trim().startsWith("versionName=")) {
+        versionName = line.trim().substringAfter("versionName=")
+        // Now we have all the info we need
+        if (versionCode != null) break
+      }
+    }
+
+    if (versionCode != null) {
+      AppVersionInfo(
+        trailblazeDeviceId = deviceId,
+        versionCode = versionCode,
+        versionName = versionName,
+        minOsVersion = minSdk,
+      )
+    } else {
+      null
+    }
+  } catch (e: Exception) {
+    println("Failed to get version info for $packageName: ${e.message}")
+    null
   }
 
   /**

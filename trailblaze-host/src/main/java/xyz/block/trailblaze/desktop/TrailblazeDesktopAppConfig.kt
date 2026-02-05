@@ -4,7 +4,9 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.runtime.Composable
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
+import xyz.block.trailblaze.host.ios.MobileDeviceUtils
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
+import xyz.block.trailblaze.model.AppVersionInfo
 import xyz.block.trailblaze.llm.TrailblazeLlmModelList
 import xyz.block.trailblaze.model.DesktopAppRunYamlParams
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
@@ -33,7 +35,7 @@ abstract class TrailblazeDesktopAppConfig(
   /**
    * Environment variables that should be surfaced in UI/settings for this configuration.
    */
-  open val customEnvVarNames: List<String> = emptyList()
+  abstract val customEnvVarNames: List<String>
 
   /**
    * Additional global settings content to render in the Settings tab.
@@ -69,6 +71,14 @@ abstract class TrailblazeDesktopAppConfig(
   abstract val availableAppTargets: Set<TrailblazeHostAppTarget>
 
   abstract fun getInstalledAppIds(trailblazeDeviceId: TrailblazeDeviceId): Set<String>
+
+  /**
+   * Gets version information for an installed app on the specified device.
+   * Override in subclasses if custom version retrieval is needed.
+   */
+  open fun getAppVersionInfo(trailblazeDeviceId: TrailblazeDeviceId, appId: String): AppVersionInfo? {
+    return MobileDeviceUtils.getAppVersionInfo(trailblazeDeviceId, appId)
+  }
 
   fun getCurrentLlmModel(): TrailblazeLlmModel {
     val serverState = trailblazeSettingsRepo.serverStateFlow.value

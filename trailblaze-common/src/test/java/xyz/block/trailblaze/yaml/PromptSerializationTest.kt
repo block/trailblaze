@@ -157,7 +157,7 @@ class PromptSerializationTest {
    * Regression test: When editing a step's text and saving, unrecognized tools
    * (OtherTrailblazeTool) should preserve their parameters during round-trip serialization.
    *
-   * This test verifies that custom tools not on the classpath (like launchSquareAppSignedIn)
+   * This test verifies that custom tools not on the classpath (like square_launchAppSignedIn)
    * retain their nested parameters (like email, password) when the YAML is decoded and re-encoded.
    */
   @Test

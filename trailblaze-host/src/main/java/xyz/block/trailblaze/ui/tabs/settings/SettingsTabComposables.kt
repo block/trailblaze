@@ -13,6 +13,10 @@ import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.llm.TrailblazeLlmModelList
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
 import xyz.block.trailblaze.llm.providers.OpenAITrailblazeLlmModelList
+import xyz.block.trailblaze.ui.DesktopUtil
+import xyz.block.trailblaze.ui.EnvVarSaveResult
+import xyz.block.trailblaze.ui.saveEnvVarToShellProfile
+import xyz.block.trailblaze.ui.ShellProfileRestartRequiredDialog
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.ui.TrailblazeSettingsRepo
 import xyz.block.trailblaze.ui.composables.SelectableText
@@ -171,9 +175,71 @@ object SettingsTabComposables {
     additionalContent: @Composable () -> Unit,
     globalSettingsContent: @Composable ColumnScope.(serverState: TrailblazeServerState) -> Unit,
     environmentVariableProvider: (String) -> String? = { null },
+    openShellProfile: (() -> Unit)? = null,
+    shellProfileName: String? = null,
+    onQuitApp: (() -> Unit)? = null,
   ) {
 
     val serverState: TrailblazeServerState by trailblazeSettingsRepo.serverStateFlow.collectAsState()
+    var showShellProfileRestartDialog by remember { mutableStateOf(false) }
+    var restartDialogMessage by remember { mutableStateOf("") }
+
+    // State for configuring environment variables
+    var envVarBeingConfigured by remember { mutableStateOf<String?>(null) }
+    var envVarInputValue by remember { mutableStateOf("") }
+    var envVarSaveError by remember { mutableStateOf<String?>(null) }
+
+    val shellProfile = remember { DesktopUtil.getShellProfileFile() }
+    val effectiveShellProfileName = shellProfileName ?: shellProfile?.name
+
+    // Dialog prompting user to restart after editing shell profile
+    if (showShellProfileRestartDialog && effectiveShellProfileName != null && onQuitApp != null) {
+      ShellProfileRestartRequiredDialog(
+        title = "Restart Required",
+        message = restartDialogMessage,
+        onDismiss = { showShellProfileRestartDialog = false },
+        onQuit = onQuitApp,
+      )
+    }
+
+    // Dialog for configuring an environment variable
+    if (envVarBeingConfigured != null && effectiveShellProfileName != null) {
+      ConfigureEnvVarDialog(
+        variableName = envVarBeingConfigured!!,
+        shellProfileName = effectiveShellProfileName,
+        inputValue = envVarInputValue,
+        onInputChange = {
+          envVarInputValue = it
+          envVarSaveError = null
+        },
+        errorMessage = envVarSaveError,
+        onDismiss = {
+          envVarBeingConfigured = null
+          envVarInputValue = ""
+          envVarSaveError = null
+        },
+        onSave = {
+          val result = saveEnvVarToShellProfile(
+            variableName = envVarBeingConfigured!!,
+            value = envVarInputValue.trim(),
+            shellProfile = shellProfile,
+          )
+          when (result) {
+            is EnvVarSaveResult.Success -> {
+              restartDialogMessage = "${envVarBeingConfigured!!} has been saved to $effectiveShellProfileName.\n\n" +
+                "Quit and reopen the app for the changes to take effect."
+              envVarBeingConfigured = null
+              envVarInputValue = ""
+              envVarSaveError = null
+              showShellProfileRestartDialog = true
+            }
+            is EnvVarSaveResult.Error -> {
+              envVarSaveError = result.message
+            }
+          }
+        },
+      )
+    }
 
     MaterialTheme {
       Surface(
@@ -468,13 +534,6 @@ object SettingsTabComposables {
                       Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         envVariableNames.forEach { name ->
                           val value = environmentVariableProvider(name)
-
-                          val displayValue = if (!value.isNullOrBlank()) {
-                            "•••••" + value.takeLast(4)
-                          } else {
-                            "Not set"
-                          }
-
                           val hasValue = !value.isNullOrBlank()
 
                           Row(
@@ -488,14 +547,33 @@ object SettingsTabComposables {
                               modifier = Modifier.weight(1f)
                             )
 
-                            SelectableText(
-                              text = displayValue,
-                              color = if (hasValue)
-                                MaterialTheme.colorScheme.onSurfaceVariant
-                              else
-                                MaterialTheme.colorScheme.error,
-                              style = MaterialTheme.typography.bodyMedium
-                            )
+                            if (hasValue) {
+                              // Show masked value for set variables
+                              SelectableText(
+                                text = "•••••" + value!!.takeLast(4),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.bodyMedium
+                              )
+                            } else {
+                              // Show Configure button for unset variables
+                              if (effectiveShellProfileName != null) {
+                                OutlinedButton(
+                                  onClick = {
+                                    envVarBeingConfigured = name
+                                    envVarInputValue = ""
+                                    envVarSaveError = null
+                                  }
+                                ) {
+                                  Text("Configure")
+                                }
+                              } else {
+                                SelectableText(
+                                  text = "Not set",
+                                  color = MaterialTheme.colorScheme.error,
+                                  style = MaterialTheme.typography.bodyMedium
+                                )
+                              }
+                            }
                           }
                         }
                       }
@@ -507,10 +585,26 @@ object SettingsTabComposables {
                       Spacer(modifier = Modifier.height(8.dp))
 
                       SelectableText(
-                        text = "💡 Tip: If you change environment variables, restart the app to apply changes.",
+                        text = "💡 Tip: After configuring environment variables, restart the app to apply changes.",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodySmall
                       )
+
+                      // Button to open shell profile for manual editing
+                      if (openShellProfile != null && effectiveShellProfileName != null) {
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        OutlinedButton(
+                          onClick = {
+                            openShellProfile()
+                            restartDialogMessage = "$effectiveShellProfileName has been opened in your default text editor.\n\n" +
+                              "After making changes, save the file, then quit and reopen the app for the changes to take effect."
+                            showShellProfileRestartDialog = true
+                          }
+                        ) {
+                          Text("Edit $effectiveShellProfileName manually")
+                        }
+                      }
                     }
                   }
                 }
@@ -782,5 +876,84 @@ object SettingsTabComposables {
         }
       }
     }
+  }
+
+  /**
+   * Dialog for configuring an environment variable by saving it to the shell profile.
+   */
+  @Composable
+  private fun ConfigureEnvVarDialog(
+    variableName: String,
+    shellProfileName: String,
+    inputValue: String,
+    onInputChange: (String) -> Unit,
+    errorMessage: String?,
+    onDismiss: () -> Unit,
+    onSave: () -> Unit,
+  ) {
+    AlertDialog(
+      onDismissRequest = onDismiss,
+      title = { Text("Configure $variableName") },
+      text = {
+        Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+          Text(
+            text = "Enter the value for $variableName. This will be saved to ~/$shellProfileName " +
+              "as a standard shell export statement.",
+            style = MaterialTheme.typography.bodyMedium,
+          )
+
+          OutlinedTextField(
+            value = inputValue,
+            onValueChange = onInputChange,
+            label = { Text(variableName) },
+            placeholder = { Text("Paste your value here") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+          )
+
+          // Error message
+          if (errorMessage != null) {
+            Text(
+              text = errorMessage,
+              color = MaterialTheme.colorScheme.error,
+              style = MaterialTheme.typography.bodySmall,
+            )
+          }
+
+          // Security notice
+          Surface(
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            shape = MaterialTheme.shapes.small,
+          ) {
+            Row(
+              modifier = Modifier.padding(12.dp),
+              horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+              Text("⚠️", style = MaterialTheme.typography.bodyMedium)
+              Text(
+                text = "This value will be stored in plain text in your shell profile (~/$shellProfileName). " +
+                  "This is the standard way to configure environment variables on your machine, " +
+                  "but be aware that anyone with access to your user account can read this file.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+            }
+          }
+        }
+      },
+      confirmButton = {
+        Button(
+          onClick = onSave,
+          enabled = inputValue.isNotBlank(),
+        ) {
+          Text("Save to $shellProfileName")
+        }
+      },
+      dismissButton = {
+        TextButton(onClick = onDismiss) {
+          Text("Cancel")
+        }
+      },
+    )
   }
 }

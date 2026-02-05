@@ -6,7 +6,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeLog
  * Small helper class that is used to determine recording availability and skip reasons from logs.
  * Used in [xyz.block.trailblaze.report.GenerateTestResultsCliCommand]
  */
-internal data class SessionRecordingInfo(
+data class SessionRecordingInfo(
   val available: Boolean,
   val skipReason: RecordingSkipReason? = null,
   val usedAiFallback: Boolean = false,

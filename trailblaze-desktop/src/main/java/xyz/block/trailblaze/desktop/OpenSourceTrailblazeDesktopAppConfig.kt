@@ -70,6 +70,11 @@ class OpenSourceTrailblazeDesktopAppConfig : TrailblazeDesktopAppConfig(
   override val recordedTrailsRepo = RecordedTrailsRepoJvm(
     trailsDirectory = trailsDir
   )
+  override val customEnvVarNames: List<String> =
+    ALL_MODEL_LISTS.mapNotNull { trailblazeLlmModelList ->
+      val trailblazeLlmProvider = trailblazeLlmModelList.provider
+      JvmLLMProvidersUtil.getEnvironmentVariableKeyForLlmProvider(trailblazeLlmProvider)
+    }
 
   override fun getCurrentlyAvailableLlmModelLists(): Set<TrailblazeLlmModelList> {
     val modelLists = JvmLLMProvidersUtil.getAvailableTrailblazeLlmProviderModelLists(ALL_MODEL_LISTS)
