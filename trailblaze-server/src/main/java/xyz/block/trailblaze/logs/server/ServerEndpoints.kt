@@ -15,6 +15,13 @@ import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.server.endpoints.AgentLogEndpoint
+import xyz.block.trailblaze.logs.server.endpoints.CliRunEndpoint
+import xyz.block.trailblaze.logs.server.endpoints.CliRunRequest
+import xyz.block.trailblaze.logs.server.endpoints.CliRunResponse
+import xyz.block.trailblaze.logs.server.endpoints.CliShutdownEndpoint
+import xyz.block.trailblaze.logs.server.endpoints.CliShowWindowEndpoint
+import xyz.block.trailblaze.logs.server.endpoints.CliStatusEndpoint
+import xyz.block.trailblaze.logs.server.endpoints.CliStatusResponse
 import xyz.block.trailblaze.logs.server.endpoints.DeleteLogsEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.GetEndpointSessionDetail
 import xyz.block.trailblaze.logs.server.endpoints.HomeEndpoint
@@ -23,6 +30,20 @@ import xyz.block.trailblaze.logs.server.endpoints.PingEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.ReverseProxyEndpoint
 import xyz.block.trailblaze.report.utils.LogsRepo
 import kotlin.io.encoding.ExperimentalEncodingApi
+
+/**
+ * Callbacks for CLI endpoints. These are provided by the desktop app.
+ */
+data class CliEndpointCallbacks(
+  /** Called when CLI requests a trail run */
+  val onRunRequest: (CliRunRequest) -> CliRunResponse,
+  /** Called when CLI requests shutdown */
+  val onShutdownRequest: () -> Unit,
+  /** Called when CLI requests to show the window */
+  val onShowWindowRequest: () -> Unit,
+  /** Provides current daemon status */
+  val statusProvider: () -> CliStatusResponse,
+)
 
 /**
  * This object contains the Ktor server endpoints for the Trailblaze logs server.
@@ -34,6 +55,7 @@ object ServerEndpoints {
     logsRepo: LogsRepo,
     homeCallbackHandler: ((parameters: Map<String, List<String>>) -> Result<String>)? = null,
     installContentNegotiation: Boolean = true,
+    cliCallbacks: CliEndpointCallbacks? = null,
   ) {
     if (installContentNegotiation) {
       install(ContentNegotiation) {
@@ -55,6 +77,15 @@ object ServerEndpoints {
       LogScreenshotPostEndpoint.register(this, logsRepo)
       ReverseProxyEndpoint.register(this, logsRepo)
       staticFiles("/static", logsRepo.logsDir)
+      
+      // CLI endpoints (only registered if callbacks provided)
+      cliCallbacks?.let { callbacks ->
+        CliRunEndpoint.register(this, callbacks.onRunRequest)
+        CliShutdownEndpoint.register(this, callbacks.onShutdownRequest)
+        CliShowWindowEndpoint.register(this, callbacks.onShowWindowRequest)
+        CliStatusEndpoint.register(this, callbacks.statusProvider)
+      }
+      
       route("{...}") {
         handle {
           println("Unhandled route: ${call.request.uri} [${call.request.httpMethod}]")

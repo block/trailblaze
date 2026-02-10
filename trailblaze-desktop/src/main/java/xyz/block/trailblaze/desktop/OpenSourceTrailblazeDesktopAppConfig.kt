@@ -81,6 +81,11 @@ class OpenSourceTrailblazeDesktopAppConfig : TrailblazeDesktopAppConfig(
     return modelLists
   }
 
+  override fun getAllSupportedLlmModelLists(): Set<TrailblazeLlmModelList> {
+    // Return ALL supported providers, not filtered by availability
+    return ALL_MODEL_LISTS
+  }
+
   override val appIconProvider: AppIconProvider = AppIconProvider.DefaultAppIconProvider
   override fun getInstalledAppIds(trailblazeDeviceId: TrailblazeDeviceId): Set<String> {
     return MobileDeviceUtils.getInstalledAppIds(trailblazeDeviceId)

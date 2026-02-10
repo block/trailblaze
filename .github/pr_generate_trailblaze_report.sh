@@ -4,6 +4,14 @@ set -e
 TRAILBLAZE_LOGS_DIR="$(pwd)/trailblaze-logs"
 
 echo "========================================="
+
+# Check if logs directory exists and has content before attempting report generation
+if [ ! -d "$TRAILBLAZE_LOGS_DIR" ] || [ -z "$(ls -A "$TRAILBLAZE_LOGS_DIR" 2>/dev/null)" ]; then
+  echo "WARNING: No logs found in $TRAILBLAZE_LOGS_DIR - skipping report generation"
+  echo "========================================="
+  exit 0
+fi
+
 echo "Building Compose Web/WASM UI..."
 ./gradlew :trailblaze-ui:wasmJsBrowserProductionWebpack
 UI_EXIT_CODE=$?

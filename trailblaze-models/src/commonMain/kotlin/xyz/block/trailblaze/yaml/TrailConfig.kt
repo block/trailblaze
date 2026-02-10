@@ -11,6 +11,12 @@ data class TrailConfig(
   val priority: String? = null,
   val source: TrailSource? = null,
   val metadata: Map<String, String>? = null,
+  /**
+   * Optional target application identifier. This can be an alias if custom tools provided by your
+   * organization use a short name for the app, or a package ID (e.g., "com.example.app") if
+   * desired. Not required.
+   */
+  val targetApp: String? = null,
 )
 
 @Serializable

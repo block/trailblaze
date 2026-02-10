@@ -1,6 +1,8 @@
 package xyz.block.trailblaze.ui
 
 import androidx.compose.foundation.layout.ColumnScope
+import xyz.block.trailblaze.ui.desktoputil.DesktopUtil
+import xyz.block.trailblaze.ui.desktoputil.ExitApp
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -13,6 +15,7 @@ import xyz.block.trailblaze.ui.model.TrailblazeRoute
 import xyz.block.trailblaze.ui.models.TrailblazeServerState
 import xyz.block.trailblaze.ui.recordings.RecordedTrailsRepo
 import xyz.block.trailblaze.ui.tabs.devices.DevicesTabComposable
+import xyz.block.trailblaze.ui.tabs.home.HomeTabComposable
 import xyz.block.trailblaze.ui.tabs.sessions.SessionsTabComposableJvm
 import xyz.block.trailblaze.ui.tabs.sessions.YamlTabComposable
 import xyz.block.trailblaze.ui.tabs.settings.SettingsTabComposables
@@ -24,6 +27,20 @@ import xyz.block.trailblaze.ui.tabs.trails.TrailsBrowserTabComposable
  * which ones to include and in what order.
  */
 object TrailblazeBuiltInTabs {
+
+  /**
+   * Creates the Home tab which provides onboarding and environment status.
+   */
+  fun homeTab(
+    trailblazeSettingsRepo: TrailblazeSettingsRepo,
+  ): TrailblazeAppTab = TrailblazeAppTab(
+    route = TrailblazeRoute.Home,
+    content = {
+      HomeTabComposable(
+        trailblazeSettingsRepo = trailblazeSettingsRepo,
+      )
+    }
+  )
 
   /**
    * Creates the Sessions tab which displays session history and details.
@@ -132,7 +149,7 @@ object TrailblazeBuiltInTabs {
           customEnvVariableNames = customEnvVarNames,
           openShellProfile = shellProfile?.let { { TrailblazeDesktopUtil.openInFileBrowser(it) } },
           shellProfileName = shellProfile?.name,
-          onQuitApp = { kotlin.system.exitProcess(0) },
+          onQuitApp = { ExitApp.quit() },
         )
       }
     )

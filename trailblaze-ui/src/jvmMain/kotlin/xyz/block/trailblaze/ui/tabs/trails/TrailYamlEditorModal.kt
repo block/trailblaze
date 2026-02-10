@@ -46,11 +46,12 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
-import xyz.block.trailblaze.ui.DesktopUtil
+import xyz.block.trailblaze.ui.desktoputil.DesktopUtil
 import xyz.block.trailblaze.ui.composables.FullScreenModalOverlay
 import xyz.block.trailblaze.ui.editors.yaml.YamlEditorMode
 import xyz.block.trailblaze.ui.editors.yaml.YamlTextEditor
 import xyz.block.trailblaze.ui.editors.yaml.YamlVisualEditor
+import xyz.block.trailblaze.ui.editors.yaml.YamlVisualEditorView
 import xyz.block.trailblaze.ui.editors.yaml.validateYaml
 import java.io.File
 
@@ -81,6 +82,7 @@ fun TrailYamlEditorModal(
   
   // Editor mode state - Visual is the default (matches YAML tab)
   var editorMode by remember { mutableStateOf(YamlEditorMode.VISUAL) }
+  var visualEditorView by remember { mutableStateOf(YamlVisualEditorView.STEPS) }
   
   val hasUnsavedChanges = localContent != initialContent
   
@@ -179,6 +181,8 @@ fun TrailYamlEditorModal(
           YamlVisualEditor(
             yamlContent = localContent,
             onYamlContentChange = { localContent = it },
+            visualEditorView = visualEditorView,
+            onVisualEditorViewChange = { visualEditorView = it },
             modifier = Modifier.weight(1f)
           )
         }

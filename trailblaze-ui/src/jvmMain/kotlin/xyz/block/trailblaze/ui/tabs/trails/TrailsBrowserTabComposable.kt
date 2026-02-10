@@ -64,7 +64,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
-import xyz.block.trailblaze.ui.DesktopUtil
+import xyz.block.trailblaze.ui.desktoputil.DesktopUtil
 import xyz.block.trailblaze.yaml.TrailSourceType
 import java.io.File
 import java.nio.file.Paths

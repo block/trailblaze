@@ -1,16 +1,180 @@
-#!/bin/sh
+#!/bin/bash
 
-# Start Gradle in the background
-echo "Trailblaze is compiling and starting up..."
-./gradlew :trailblaze-desktop:run --args="$(pwd) $@" &
+# Trailblaze launcher script
+# 
+# Usage:
+#   ./trailblaze              - Start in background (logs saved to file)
+#   ./trailblaze --dev        - Start in foreground with logs visible (for development)
+#   ./trailblaze stop         - Stop the running daemon
+#   ./trailblaze status       - Check if daemon is running
+#   ./trailblaze <command>    - Run other CLI commands (run, config, etc.)
 
-# Capture the Gradle process ID
-GRADLE_PID=$!
+# Allow override of Gradle module (for internal/enterprise variants)
+TRAILBLAZE_MODULE="${TRAILBLAZE_MODULE:-:trailblaze-desktop}"
 
-# Ensure Gradle is killed when this script is terminated
-trap "kill $GRADLE_PID" EXIT
+TRAILBLAZE_LOG_DIR="${HOME}/.trailblaze/logs"
+TRAILBLAZE_LOG_FILE="${TRAILBLAZE_LOG_DIR}/trailblaze.log"
+TRAILBLAZE_PORT=52525
+TRAILBLAZE_LOG_MAX_SIZE=10485760  # 10MB in bytes
 
-echo "Once Trailblaze is running, you'll be able to view captured logs from any executions."
+# Ensure log directory exists
+mkdir -p "$TRAILBLAZE_LOG_DIR"
 
-# Wait for the Gradle process to finish (rejoins it)
-wait $GRADLE_PID
+# Rotate log file if it's too large
+rotate_log_if_needed() {
+    if [ -f "$TRAILBLAZE_LOG_FILE" ]; then
+        log_size=$(wc -c < "$TRAILBLAZE_LOG_FILE" 2>/dev/null || echo 0)
+        if [ "$log_size" -gt "$TRAILBLAZE_LOG_MAX_SIZE" ]; then
+            # Keep the old log as .old and start fresh
+            mv "$TRAILBLAZE_LOG_FILE" "${TRAILBLAZE_LOG_FILE}.old"
+            echo "$(date): Log rotated (previous log: ${TRAILBLAZE_LOG_FILE}.old)" > "$TRAILBLAZE_LOG_FILE"
+        fi
+    fi
+}
+
+# Rotate log on startup
+rotate_log_if_needed
+
+# Check if daemon is already running
+is_daemon_running() {
+    curl -s --connect-timeout 1 "http://localhost:${TRAILBLAZE_PORT}/ping" > /dev/null 2>&1
+}
+
+# Show the window by calling the API
+show_window() {
+    curl -s -X POST "http://localhost:${TRAILBLAZE_PORT}/cli/show-window" \
+        -H "Content-Type: application/json" \
+        -d '{}' > /dev/null 2>&1
+}
+
+# Stop the daemon
+stop_daemon() {
+    if ! is_daemon_running; then
+        echo "Trailblaze is not running."
+        return 0
+    fi
+    
+    echo "Stopping Trailblaze..."
+    curl -s -X POST "http://localhost:${TRAILBLAZE_PORT}/cli/shutdown" \
+        -H "Content-Type: application/json" \
+        -d '{}' > /dev/null 2>&1
+    
+    # Wait for daemon to stop
+    attempts=0
+    while is_daemon_running && [ $attempts -lt 10 ]; do
+        sleep 0.5
+        attempts=$((attempts + 1))
+    done
+    
+    if is_daemon_running; then
+        echo "Daemon did not stop gracefully."
+        return 1
+    else
+        echo "Trailblaze stopped."
+        return 0
+    fi
+}
+
+# Get daemon status
+get_status() {
+    if is_daemon_running; then
+        echo "Trailblaze is running on port ${TRAILBLAZE_PORT}."
+        curl -s "http://localhost:${TRAILBLAZE_PORT}/cli/status" 2>/dev/null | cat
+        echo ""
+    else
+        echo "Trailblaze is not running."
+    fi
+}
+
+# Add timestamps to each line of input
+add_timestamps() {
+    while IFS= read -r line; do
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] $line"
+    done
+}
+
+# Convert a path to absolute if it exists as a file
+to_absolute_path() {
+    local path="$1"
+    if [ -f "$path" ]; then
+        # File exists, convert to absolute path
+        echo "$(cd "$(dirname "$path")" && pwd)/$(basename "$path")"
+    elif [ -d "$path" ]; then
+        # Directory exists, convert to absolute path
+        echo "$(cd "$path" && pwd)"
+    else
+        # Not a file/dir, return as-is (might be a command or flag)
+        echo "$path"
+    fi
+}
+
+# Check for --dev flag and process arguments
+DEV_MODE=false
+ARGS=""
+for arg in "$@"; do
+    if [ "$arg" = "--dev" ]; then
+        DEV_MODE=true
+    else
+        # Convert file paths to absolute paths (for Gradle working directory compatibility)
+        resolved_arg=$(to_absolute_path "$arg")
+        if [ -z "$ARGS" ]; then
+            ARGS="$resolved_arg"
+        else
+            ARGS="$ARGS $resolved_arg"
+        fi
+    fi
+done
+
+# Run the app
+if [ "$DEV_MODE" = true ]; then
+    # Development mode: foreground with logs visible
+    echo "Starting Trailblaze in dev mode (foreground)..."
+    echo "Logs will be visible here and saved to: $TRAILBLAZE_LOG_FILE"
+    # Show clean output in terminal, but add timestamps to log file
+    if [ -z "$ARGS" ]; then
+        ./gradlew ${TRAILBLAZE_MODULE}:run 2>&1 | tee >(add_timestamps >> "$TRAILBLAZE_LOG_FILE")
+    else
+        ./gradlew ${TRAILBLAZE_MODULE}:run --args="$ARGS" 2>&1 | tee >(add_timestamps >> "$TRAILBLAZE_LOG_FILE")
+    fi
+elif [ "$1" = "stop" ]; then
+    # Fast path: stop daemon without starting Gradle
+    stop_daemon
+elif [ "$1" = "status" ]; then
+    # Fast path: check status without starting Gradle
+    get_status
+elif [ -n "$ARGS" ]; then
+    # CLI command mode: foreground (for commands like 'run', 'config', etc.)
+    ./gradlew ${TRAILBLAZE_MODULE}:run --args="$ARGS"
+else
+    # Default mode: check if already running, otherwise start in background
+    if is_daemon_running; then
+        echo "Trailblaze is already running."
+        show_window
+        echo "Use the menu bar icon to show the window."
+    else
+        echo "Starting Trailblaze..."
+        echo "Logs: $TRAILBLAZE_LOG_FILE"
+        
+        # Run in background with timestamped logs
+        nohup sh -c "./gradlew ${TRAILBLAZE_MODULE}:run 2>&1 | while IFS= read -r line; do echo \"[\$(date '+%Y-%m-%d %H:%M:%S')] \$line\"; done" >> "$TRAILBLAZE_LOG_FILE" 2>&1 &
+        
+        # Poll for daemon to become available with progress feedback
+        echo -n "Waiting for Trailblaze to start"
+        max_attempts=30  # 30 seconds max
+        attempts=0
+        while [ $attempts -lt $max_attempts ]; do
+            if is_daemon_running; then
+                echo ""
+                echo "Trailblaze is ready! Check the menu bar icon."
+                exit 0
+            fi
+            echo -n "."
+            sleep 1
+            attempts=$((attempts + 1))
+        done
+        
+        echo ""
+        echo "Trailblaze is starting in the background (taking longer than expected)."
+        echo "Check the menu bar icon or run './trailblaze --dev' for verbose output."
+    fi
+fi

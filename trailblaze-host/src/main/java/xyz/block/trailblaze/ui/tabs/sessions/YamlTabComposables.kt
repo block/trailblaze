@@ -20,7 +20,6 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Laptop
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.ViewModule
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -38,17 +37,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.isCtrlPressed
-import androidx.compose.ui.input.key.isMetaPressed
-import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.onKeyEvent
-import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -70,6 +63,7 @@ import xyz.block.trailblaze.ui.composables.SelectableText
 import xyz.block.trailblaze.ui.editors.yaml.YamlEditorMode
 import xyz.block.trailblaze.ui.editors.yaml.YamlTextEditor
 import xyz.block.trailblaze.ui.editors.yaml.YamlVisualEditor
+import xyz.block.trailblaze.ui.editors.yaml.YamlVisualEditorView
 import xyz.block.trailblaze.ui.editors.yaml.validateYaml
 
 /**
@@ -92,34 +86,42 @@ fun YamlTabComposable(
   val currentTrailblazeLlmModel = currentTrailblazeLlmModelProvider()
   val serverState by trailblazeSettingsRepo.serverStateFlow.collectAsState()
   val savedYamlContent = serverState.appConfig.yamlContent
+  val savedEditorMode = serverState.appConfig.yamlEditorMode
+  val savedVisualEditorView = serverState.appConfig.yamlVisualEditorView
 
   var isRunning by remember { mutableStateOf(false) }
   var progressMessages by remember { mutableStateOf<List<String>>(emptyList()) }
   var connectionStatus by remember { mutableStateOf<DeviceConnectionStatus?>(null) }
   var showDeviceSelectionDialog by remember { mutableStateOf(false) }
   
-  // Editor mode state - Visual is the default
-  var editorMode by remember { mutableStateOf(YamlEditorMode.VISUAL) }
+  // Editor mode state
+  var editorMode by rememberSaveable { mutableStateOf(savedEditorMode) }
+
+  // Visual editor sub-view state
+  var visualEditorView by rememberSaveable { mutableStateOf(savedVisualEditorView) }
 
   // Local state for YAML content - shared between text and visual editors
-  var localYamlContent by remember(savedYamlContent) { mutableStateOf(savedYamlContent) }
+  var localYamlContent by rememberSaveable { mutableStateOf(savedYamlContent) }
 
   // YAML validation state
   var validationError by remember { mutableStateOf<String?>(null) }
   var isValidating by remember { mutableStateOf(false) }
-  
-  // Save state - shared across editors
-  var saveSuccess by remember { mutableStateOf(false) }
-  val hasUnsavedChanges = localYamlContent != savedYamlContent
 
   val coroutineScope = rememberCoroutineScope()
 
   // Function to save changes
-  fun saveChanges() {
+  fun saveChanges(
+    yamlContent: String = localYamlContent,
+    yamlEditorMode: YamlEditorMode = editorMode,
+    yamlVisualEditorView: YamlVisualEditorView = visualEditorView,
+  ) {
     trailblazeSettingsRepo.updateAppConfig { appConfig ->
-      appConfig.copy(yamlContent = localYamlContent)
+      appConfig.copy(
+        yamlContent = yamlContent,
+        yamlEditorMode = yamlEditorMode,
+        yamlVisualEditorView = yamlVisualEditorView,
+      )
     }
-    saveSuccess = true
   }
 
   // Debounce validation (but don't auto-save)
@@ -130,14 +132,48 @@ fun YamlTabComposable(
     isValidating = false
   }
   
-  // Auto-dismiss save success message
-  LaunchedEffect(saveSuccess) {
-    if (saveSuccess && !hasUnsavedChanges) {
-      delay(2000)
-      saveSuccess = false
+  // Keep local content in sync with what's saved on disk
+  LaunchedEffect(savedYamlContent) {
+    if (savedYamlContent != localYamlContent) {
+      localYamlContent = savedYamlContent
     }
   }
 
+  // Keep editor mode in sync with what's saved on disk
+  LaunchedEffect(savedEditorMode) {
+    if (savedEditorMode != editorMode) {
+      editorMode = savedEditorMode
+    }
+  }
+
+  // Keep visual editor view in sync with what's saved on disk
+  LaunchedEffect(savedVisualEditorView) {
+    if (savedVisualEditorView != visualEditorView) {
+      visualEditorView = savedVisualEditorView
+    }
+  }
+
+  // Auto-persist YAML edits with a debounce so switching tabs doesn't lose work
+  LaunchedEffect(localYamlContent) {
+    delay(300)
+    if (localYamlContent != savedYamlContent) {
+      saveChanges(yamlContent = localYamlContent)
+    }
+  }
+
+  // Auto-persist editor mode changes with a debounce so switching tabs doesn't lose state
+  LaunchedEffect(editorMode) {
+    if (editorMode != savedEditorMode) {
+      saveChanges(yamlEditorMode = editorMode)
+    }
+  }
+
+  // Auto-persist visual editor view changes
+  LaunchedEffect(visualEditorView) {
+    if (visualEditorView != savedVisualEditorView) {
+      saveChanges(yamlVisualEditorView = visualEditorView)
+    }
+  }
 
   LaunchedEffect(Unit) {
     deviceManager.loadDevices()
@@ -145,21 +181,7 @@ fun YamlTabComposable(
 
   // Root Box to contain everything including dialogs
   Box(
-    modifier = Modifier
-      .fillMaxSize()
-      .onKeyEvent { keyEvent ->
-        if (keyEvent.type == KeyEventType.KeyDown &&
-          keyEvent.key == Key.S &&
-          (keyEvent.isCtrlPressed || keyEvent.isMetaPressed)
-        ) {
-          if (hasUnsavedChanges && validationError == null) {
-            saveChanges()
-          }
-          true
-        } else {
-          false
-        }
-      }
+    modifier = Modifier.fillMaxSize()
   ) {
     Column(
       modifier = Modifier
@@ -167,14 +189,10 @@ fun YamlTabComposable(
         .padding(16.dp),
       verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-      // Header row with title, editor mode toggle, and save button
+      // Header row with title and editor mode toggle
       YamlEditorHeader(
         editorMode = editorMode,
         onEditorModeChange = { editorMode = it },
-        hasUnsavedChanges = hasUnsavedChanges,
-        validationError = validationError,
-        saveSuccess = saveSuccess,
-        onSave = { saveChanges() }
       )
 
       HorizontalDivider()
@@ -195,6 +213,8 @@ fun YamlTabComposable(
           YamlVisualEditor(
             yamlContent = localYamlContent,
             onYamlContentChange = { localYamlContent = it },
+            visualEditorView = visualEditorView,
+            onVisualEditorViewChange = { visualEditorView = it },
             modifier = Modifier.weight(1f)
           )
         }
@@ -318,16 +338,12 @@ fun YamlTabComposable(
 }
 
 /**
- * Header row with title, editor mode toggle, and save button.
+ * Header row with title and editor mode toggle.
  */
 @Composable
 private fun YamlEditorHeader(
   editorMode: YamlEditorMode,
   onEditorModeChange: (YamlEditorMode) -> Unit,
-  hasUnsavedChanges: Boolean,
-  validationError: String?,
-  saveSuccess: Boolean,
-  onSave: () -> Unit,
 ) {
   Row(
     modifier = Modifier.fillMaxWidth(),
@@ -344,16 +360,9 @@ private fun YamlEditorHeader(
         fontWeight = FontWeight.Bold
       )
       
-      if (hasUnsavedChanges) {
-        Text(
-          text = "● Unsaved",
-          style = MaterialTheme.typography.bodySmall,
-          color = MaterialTheme.colorScheme.primary
-        )
-      }
     }
     
-    // Editor mode toggle and save button
+    // Editor mode toggle
     Row(
       horizontalArrangement = Arrangement.spacedBy(8.dp),
       verticalAlignment = Alignment.CenterVertically
@@ -382,32 +391,6 @@ private fun YamlEditorHeader(
           )
         }
       )
-      
-      Spacer(modifier = Modifier.width(8.dp))
-      
-      Button(
-        onClick = onSave,
-        enabled = hasUnsavedChanges && validationError == null,
-        colors = ButtonDefaults.buttonColors(
-          containerColor = if (hasUnsavedChanges && validationError == null) 
-            MaterialTheme.colorScheme.primary
-          else MaterialTheme.colorScheme.surfaceVariant
-        )
-      ) {
-        Icon(
-          Icons.Filled.Save,
-          contentDescription = "Save",
-          modifier = Modifier.size(18.dp).padding(end = 4.dp)
-        )
-        Text(
-          text = when {
-            saveSuccess && !hasUnsavedChanges -> "Saved!"
-            validationError != null -> "Invalid"
-            hasUnsavedChanges -> "Save"
-            else -> "Saved"
-          }
-        )
-      }
     }
   }
 }

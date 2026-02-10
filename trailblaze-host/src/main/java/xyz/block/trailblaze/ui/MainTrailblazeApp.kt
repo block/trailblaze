@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Hiking
 import androidx.compose.material.icons.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material3.Icon
@@ -29,11 +30,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.painter.Painter
+import androidx.compose.ui.graphics.vector.RenderVectorGroup
+import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Tray
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.WindowState
 import androidx.compose.ui.window.application
+import androidx.compose.ui.window.rememberTrayState
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
@@ -41,8 +48,8 @@ import androidx.navigation.compose.rememberNavController
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import xyz.block.trailblaze.TrailblazeVersion
 import xyz.block.trailblaze.logs.server.TrailblazeMcpServer
-import xyz.block.trailblaze.model.DesktopAppRunYamlParams
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.ui.composables.DeviceStatusPanel
 import xyz.block.trailblaze.ui.composables.IconWithBadges
@@ -53,14 +60,16 @@ import xyz.block.trailblaze.ui.model.TrailblazeAppTab
 import xyz.block.trailblaze.ui.model.TrailblazeRoute
 import xyz.block.trailblaze.ui.model.navigateToRoute
 import xyz.block.trailblaze.ui.models.TrailblazeServerState
-import xyz.block.trailblaze.ui.recordings.RecordedTrailsRepo
 import xyz.block.trailblaze.ui.tabs.devdebug.DevDebugWindow
 import xyz.block.trailblaze.ui.theme.TrailblazeTheme
+import java.awt.Desktop
+import java.awt.GraphicsEnvironment
+import java.awt.Window
+
 
 class MainTrailblazeApp(
   val trailblazeSavedSettingsRepo: TrailblazeSettingsRepo,
   val logsRepo: LogsRepo,
-  val recordedTrailsRepo: RecordedTrailsRepo,
   val trailblazeMcpServerProvider: () -> TrailblazeMcpServer,
 ) {
 
@@ -78,17 +87,36 @@ class MainTrailblazeApp(
      */
     allTabs: () -> List<TrailblazeAppTab>,
     deviceManager: TrailblazeDeviceManager,
+    /**
+     * If true, starts in headless mode with only the menu bar tray icon visible.
+     * The window can be shown later via the tray menu.
+     */
+    headless: Boolean = false,
   ) {
     TrailblazeDesktopUtil.setAppConfigForTrailblaze()
 
     // Set the logs directory for the FileSystemImageLoader
     setLogsDirectory(logsRepo.logsDir)
 
+    // Get the MCP server instance (we'll set the callback after Compose state is ready)
+    val trailblazeMcpServer = trailblazeMcpServerProvider()
+
+    if (headless && GraphicsEnvironment.isHeadless()) {
+      // True headless mode (no display available, e.g. CI): start only the MCP server
+      // without any Compose Desktop UI. This avoids requiring AWT/display.
+      println("Starting Trailblaze in headless mode (server only, no GUI)...")
+      val appConfig = trailblazeSavedSettingsRepo.serverStateFlow.value.appConfig
+      trailblazeMcpServer.startStreamableHttpMcpServer(
+        port = appConfig.serverPort,
+        wait = true,
+      )
+      return
+    }
+
     CoroutineScope(Dispatchers.IO).launch {
       val appConfig = trailblazeSavedSettingsRepo.serverStateFlow.value.appConfig
 
       // Start Server
-      val trailblazeMcpServer = trailblazeMcpServerProvider()
       trailblazeMcpServer.startStreamableHttpMcpServer(
         port = appConfig.serverPort,
         wait = false,
@@ -102,6 +130,68 @@ class MainTrailblazeApp(
 
     application {
       val currentServerState by trailblazeSavedSettingsRepo.serverStateFlow.collectAsState()
+      
+      // Window visibility state - starts hidden in headless mode, visible otherwise
+      // Closing the window hides it instead of quitting (can reopen from tray)
+      var windowVisible by remember { mutableStateOf(!headless) }
+      
+      // Track the AWT window for bringing to front
+      var awtWindow by remember { mutableStateOf<Window?>(null) }
+      
+      // Wire up CLI callbacks for integration
+      LaunchedEffect(Unit) {
+        trailblazeMcpServer.onShowWindowRequest = {
+          windowVisible = true
+          // Bring window to front on macOS
+          awtWindow?.let { window ->
+            window.toFront()
+            window.requestFocus()
+          }
+        }
+        trailblazeMcpServer.onShutdownRequest = {
+          exitApplication()
+        }
+      }
+      
+      // Tray state for menu bar icon
+      val trayState = rememberTrayState()
+      // Use Material Hiking icon with white tint for macOS menu bar
+      val trayIcon = rememberTrayIcon()
+      
+      // Menu bar tray icon - always visible while app is running
+      Tray(
+        state = trayState,
+        icon = trayIcon,
+        tooltip = "Trailblaze",
+        onAction = { windowVisible = true }, // Double-click opens window
+        menu = {
+          Item(
+            text = if (windowVisible) "Hide Window" else "Show Window",
+            onClick = { windowVisible = !windowVisible }
+          )
+          Item(
+            text = "View Logs",
+            onClick = {
+              if (logsRepo.logsDir.exists()) {
+                Desktop.getDesktop().open(logsRepo.logsDir)
+              }
+            }
+          )
+          Separator()
+          Item(
+            text = "Quit Trailblaze",
+            onClick = ::exitApplication
+          )
+          Separator()
+          // Version at the bottom (grayed out, like Cyprus app)
+          Item(
+            text = TrailblazeVersion.displayVersion,
+            enabled = false,
+            onClick = {}
+          )
+        }
+      )
+      
       // Initialize window state from saved config or use defaults
       val windowState = remember {
         val config = currentServerState.appConfig
@@ -117,12 +207,23 @@ class MainTrailblazeApp(
           }
         )
       }
-      Window(
-        state = windowState,
-        onCloseRequest = ::exitApplication,
-        title = "Trailblaze",
-        alwaysOnTop = currentServerState.appConfig.alwaysOnTop,
-      ) {
+      
+      // Main window - visible state controlled by tray
+      if (windowVisible) {
+        Window(
+          state = windowState,
+          onCloseRequest = { windowVisible = false }, // Hide instead of quit
+          title = "Trailblaze",
+          alwaysOnTop = currentServerState.appConfig.alwaysOnTop,
+        ) {
+        // Capture the AWT window reference for bringing to front
+        LaunchedEffect(Unit) {
+          awtWindow = window
+          // Bring to front when window becomes visible
+          window.toFront()
+          window.requestFocus()
+        }
+        
         // Create NavController for type-safe navigation
         val navController = rememberNavController()
 
@@ -154,6 +255,7 @@ class MainTrailblazeApp(
           )
         }
       }
+      } // end if (windowVisible)
     }
   }
 
@@ -174,12 +276,18 @@ class MainTrailblazeApp(
     // This ensures NavHost doesn't rebuild when visibility settings change
     val allRegisteredTabs = remember { allTabs() }
 
-    // Get visible tabs for the navigation rail (reactive to showTrailsTab)
+    // Get visible tabs for the navigation rail (reactive to tab visibility settings)
     // This filters which tabs appear in the UI without rebuilding NavHost
-    val visibleTabs = remember(currentServerState.appConfig.showTrailsTab) {
+    val visibleTabs = remember(
+      currentServerState.appConfig.showTrailsTab,
+      currentServerState.appConfig.showDevicesTab,
+    ) {
       allTabs().filter { tab ->
-        // All tabs are visible unless it's Trails and showTrailsTab is false
-        tab.route != TrailblazeRoute.Trails || currentServerState.appConfig.showTrailsTab
+        when (tab.route) {
+          TrailblazeRoute.Trails -> currentServerState.appConfig.showTrailsTab
+          TrailblazeRoute.Devices -> currentServerState.appConfig.showDevicesTab
+          else -> true
+        }
       }
     }
 
@@ -221,7 +329,7 @@ class MainTrailblazeApp(
         )
       }
 
-      var railExpanded by remember { mutableStateOf(false) }
+      var railExpanded by remember { mutableStateOf(currentServerState.appConfig.navRailExpanded) }
       val snackbarHostState = remember { SnackbarHostState() }
 
       // Get current route from nav controller
@@ -272,7 +380,12 @@ class MainTrailblazeApp(
         Box(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
           Row(modifier = Modifier.fillMaxSize()) {
             NavigationRail {
-              IconButton(onClick = { railExpanded = !railExpanded }) {
+              IconButton(onClick = {
+                railExpanded = !railExpanded
+                trailblazeSavedSettingsRepo.updateAppConfig {
+                  it.copy(navRailExpanded = railExpanded)
+                }
+              }) {
                 Icon(
                   imageVector = if (railExpanded) Icons.Filled.KeyboardArrowLeft else Icons.Filled.KeyboardArrowRight,
                   contentDescription = if (railExpanded) "Collapse" else "Expand"
@@ -358,5 +471,27 @@ class MainTrailblazeApp(
         }
       }
     }
+  }
+}
+
+/**
+ * Creates a tray icon painter using the Material Hiking icon.
+ * This is used for the macOS menu bar.
+ *
+ * The icon is rendered in white so it is visible against the dark macOS menu bar.
+ */
+@Composable
+private fun rememberTrayIcon(): Painter {
+  val icon = Icons.Filled.Hiking
+  return rememberVectorPainter(
+    defaultWidth = icon.defaultWidth,
+    defaultHeight = icon.defaultHeight,
+    viewportWidth = icon.viewportWidth,
+    viewportHeight = icon.viewportHeight,
+    name = icon.name,
+    tintColor = Color.White,
+    autoMirror = icon.autoMirror,
+  ) { _, _ ->
+    RenderVectorGroup(group = icon.root)
   }
 }

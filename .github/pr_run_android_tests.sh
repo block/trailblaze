@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-set -e
-
+# Note: intentionally not using set -e so that log collection always runs even if build/tests fail
 TRAILBLAZE_LOGS_DIR="$(pwd)/trailblaze-logs"
 TRAILBLAZE_LOCAL_LOGS_DIR="$HOME/.trailblaze/logs"
+
+# Create logs directory early so it always exists for downstream steps
+mkdir -p "$TRAILBLAZE_LOGS_DIR"
 
 echo "========================================="
 echo "Starting Android Test Execution"
@@ -11,20 +13,28 @@ echo "========================================="
 
 # Start Trailblaze server in background
 echo "Building Trailblaze server..."
-./gradlew :trailblaze-desktop:jar
+./gradlew :trailblaze-desktop:jar || { echo "ERROR: Failed to build Trailblaze server"; TEST_FAILED=true; }
 
-echo "Starting Trailblaze server..."
-./gradlew :trailblaze-desktop:run --args="$(pwd) --headless" > /tmp/trailblaze.log 2>&1 &
-TRAILBLAZE_PID=$!
-echo "Trailblaze server started with PID: $TRAILBLAZE_PID"
-echo "Waiting for Trailblaze server to be ready on port 8443 (this may take up to 2 minutes)..."
-sleep 10
-for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do 
-  nc -z localhost 8443 > /dev/null 2>&1 && break || (echo "Attempt $attempt/20..." && sleep 5)
-done
-nc -z localhost 8443 > /dev/null 2>&1 || (echo "ERROR: Trailblaze server failed to start on port 8443" && echo "=== Trailblaze logs ===" && cat /tmp/trailblaze.log && exit 1)
-echo "✓ Trailblaze server is running on port 8443!"
-echo "========================================="
+if [ "$TEST_FAILED" != "true" ]; then
+  echo "Starting Trailblaze server..."
+  ./gradlew :trailblaze-desktop:run --args="--headless" > /tmp/trailblaze.log 2>&1 &
+  TRAILBLAZE_PID=$!
+  echo "Trailblaze server started with PID: $TRAILBLAZE_PID"
+  echo "Waiting for Trailblaze server to be ready on port 8443 (this may take up to 2 minutes)..."
+  sleep 10
+  for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+    nc -z localhost 8443 > /dev/null 2>&1 && break || (echo "Attempt $attempt/20..." && sleep 5)
+  done
+  if ! nc -z localhost 8443 > /dev/null 2>&1; then
+    echo "ERROR: Trailblaze server failed to start on port 8443"
+    echo "=== Trailblaze logs ==="
+    cat /tmp/trailblaze.log
+    TEST_FAILED=true
+  else
+    echo "✓ Trailblaze server is running on port 8443!"
+  fi
+  echo "========================================="
+fi
 
 # Start capturing logcat
 echo "Starting logcat capture (filtering out noise)..."
@@ -35,10 +45,14 @@ echo "========================================="
 
 # Run Android Tests
 echo "Assembling Android Tests..."
-./gradlew :examples:assembleDebugAndroidTest
+./gradlew :examples:assembleDebugAndroidTest || TEST_FAILED=true
 
-echo "Running Android Tests..."
-./gradlew --info :examples:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class="xyz.block.trailblaze.examples.clock.ClockTest" -Pandroid.testInstrumentationRunnerArguments.trailblaze.reverseProxy="true" || TEST_FAILED=true
+if [ "$TEST_FAILED" != "true" ]; then
+  echo "Running Android Tests..."
+  ./gradlew --info :examples:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class="xyz.block.trailblaze.examples.clock.ClockTest" || TEST_FAILED=true
+else
+  echo "Skipping test execution because assembly failed"
+fi
 
 echo "========================================="
 echo "Test execution completed (failed: ${TEST_FAILED:-false})"
@@ -74,11 +88,15 @@ echo "Copying logs from $TRAILBLAZE_LOCAL_LOGS_DIR to $TRAILBLAZE_LOGS_DIR..."
 mkdir -p "$TRAILBLAZE_LOGS_DIR"
 cp -r "$TRAILBLAZE_LOCAL_LOGS_DIR"/* "$TRAILBLAZE_LOGS_DIR/" 2>/dev/null || echo "No logs found in $TRAILBLAZE_LOCAL_LOGS_DIR"
 
-# copy here
+# Copy server log for debugging
+if [ -f /tmp/trailblaze.log ]; then
+  cp /tmp/trailblaze.log "$TRAILBLAZE_LOGS_DIR/trailblaze-server.log"
+  echo "Copied server log to $TRAILBLAZE_LOGS_DIR/trailblaze-server.log"
+fi
 
 # Cleanup: Kill background servers
 echo "========================================="
-echo "Cleaning up background servers..."
+echo "Cleaning up background processes..."
 if [ -n "$LOGCAT_PID" ]; then
   echo "Stopping logcat capture (PID: $LOGCAT_PID)..."
   kill $LOGCAT_PID 2>/dev/null || echo "Logcat capture already stopped"

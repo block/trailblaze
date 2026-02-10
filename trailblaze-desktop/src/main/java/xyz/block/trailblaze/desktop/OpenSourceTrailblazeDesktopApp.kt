@@ -29,36 +29,19 @@ class OpenSourceTrailblazeDesktopApp : TrailblazeDesktopApp(
   }
 
   override fun startTrailblazeDesktopApp(headless: Boolean) {
-    if (headless) {
-      startHeadlessMode()
-    } else {
-      MainTrailblazeApp(
-        trailblazeSavedSettingsRepo = desktopAppConfig.trailblazeSettingsRepo,
-        logsRepo = desktopAppConfig.logsRepo,
-        recordedTrailsRepo = desktopAppConfig.recordedTrailsRepo,
-        trailblazeMcpServerProvider = { trailblazeMcpServer },
-      ).runTrailblazeApp(
-        allTabs = {
-          desktopAppConfig.getTabs(
-            deviceManager = deviceManager,
-            yamlRunner = { desktopYamlRunner.runYaml(it) },
-          )
-        },
-        deviceManager = deviceManager,
-      )
-    }
-  }
-
-  private fun startHeadlessMode() {
-    val appConfig = desktopAppConfig.trailblazeSettingsRepo.serverStateFlow.value.appConfig
-
-    println("Starting Trailblaze in headless mode...")
-    println("MCP Server will be available on port ${appConfig.serverPort}")
-
-    // Start MCP Server
-    trailblazeMcpServer.startStreamableHttpMcpServer(
-      port = appConfig.serverPort,
-      wait = true, // Keep the process running
+    MainTrailblazeApp(
+      trailblazeSavedSettingsRepo = desktopAppConfig.trailblazeSettingsRepo,
+      logsRepo = desktopAppConfig.logsRepo,
+      trailblazeMcpServerProvider = { trailblazeMcpServer },
+    ).runTrailblazeApp(
+      allTabs = {
+        desktopAppConfig.getTabs(
+          deviceManager = deviceManager,
+          yamlRunner = { desktopYamlRunner.runYaml(it) },
+        )
+      },
+      deviceManager = deviceManager,
+      headless = headless,
     )
   }
 

@@ -41,10 +41,13 @@ fun List<TrailblazeLog>.getSessionStartedInfo(): SessionStatus.Started? = this
   .filterIsInstance<SessionStatus.Started>()
   .firstOrNull()
 
-fun List<TrailblazeLog>.getSessionInfo(): SessionInfo {
+fun List<TrailblazeLog>.getSessionInfo(): SessionInfo? {
+  if (this.isEmpty()) {
+    return null
+  }
   val sessionStartedInfo: SessionStatus.Started? = this.getSessionStartedInfo()
-  val firstLog = this.first()
-  val lastLog = this.lastOrNull()
+  val firstLog: TrailblazeLog = this.first()
+  val lastLog: TrailblazeLog? = this.lastOrNull()
 
   val durationMs = if (lastLog != null) {
     lastLog.timestamp.toEpochMilliseconds() - firstLog.timestamp.toEpochMilliseconds()

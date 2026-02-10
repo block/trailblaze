@@ -9,9 +9,14 @@ fun main() {
   val generatedDir = File(docsDir, "generated").apply { mkdirs() }
   val generatedFunctionsDocsDir = File(generatedDir, "functions").apply { mkdirs() }
 
-  // Generate
+  // Generate Tools documentation
   DocsGenerator(
     generatedDir = generatedDir,
     generatedFunctionsDocsDir = generatedFunctionsDocsDir
+  ).generate()
+
+  // Generate CLI documentation (goes in main docs folder, not generated/)
+  CliDocsGenerator(
+    docsDir = docsDir
   ).generate()
 }

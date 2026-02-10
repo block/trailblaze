@@ -16,22 +16,6 @@ import androidx.compose.runtime.Composable
 import xyz.block.trailblaze.yaml.TrailblazeYaml
 
 /**
- * Editor mode for the YAML tab - either text-based or visual editor.
- */
-enum class YamlEditorMode {
-  TEXT,
-  VISUAL
-}
-
-/**
- * Sub-view mode within the visual editor - Configuration or Steps.
- */
-enum class YamlVisualEditorView {
-  CONFIG,
-  STEPS
-}
-
-/**
  * Validates YAML content.
  * This does a "soft" validation that checks YAML syntax but doesn't fail on unknown tools
  * since the actual runner will have app-specific custom tools registered.

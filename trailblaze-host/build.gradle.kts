@@ -69,6 +69,31 @@ tasks.test {
   useJUnit()
 }
 
+// Generate version.properties file with git version info
+val generateVersionProperties by tasks.registering {
+  val outputDir = layout.buildDirectory.dir("generated/resources/version")
+  outputs.dir(outputDir)
+
+  doLast {
+    val dir = outputDir.get().asFile
+    dir.mkdirs()
+    val propsFile = File(dir, "version.properties")
+    val gitVersionFull = rootProject.extra["gitVersionFull"] as String
+    propsFile.writeText("version=$gitVersionFull\n")
+  }
+}
+
+// Add generated resources to source sets
+sourceSets {
+  main {
+    resources.srcDir(generateVersionProperties.map { it.outputs.files.singleFile })
+  }
+}
+
+tasks.named("processResources") {
+  dependsOn(generateVersionProperties)
+}
+
 dependencyGuard {
   configuration("runtimeClasspath") {
     baselineMap = rootProject.extra["trailblazePlatformBaselineMap"] as (String) -> String

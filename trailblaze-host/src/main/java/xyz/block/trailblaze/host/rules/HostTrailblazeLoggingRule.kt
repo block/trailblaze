@@ -15,10 +15,12 @@ class HostTrailblazeLoggingRule(
   override val trailblazeDeviceInfoProvider: () -> TrailblazeDeviceInfo,
   logsBaseUrl: String = "https://localhost:8443",
   additionalLogEmitter: LogEmitter? = null,
+  logsDir: File? = null,
+  private val logsRepo: LogsRepo = LogsRepo(resolveLogsDir(logsDir)),
 ) : TrailblazeLoggingRule(
   logsBaseUrl = logsBaseUrl,
   additionalLogEmitter = additionalLogEmitter,
-  writeLogToDisk = { sessionId: SessionId, log: TrailblazeLog ->
+  writeLogToDisk = { _: SessionId, log: TrailblazeLog ->
     logsRepo.saveLogToDisk(log)
   },
   writeScreenshotToDisk = { screenshot: TrailblazeScreenStateLog ->
@@ -30,9 +32,16 @@ class HostTrailblazeLoggingRule(
   },
 ) {
 
+  init {
+    println("Logs dir: ${logsRepo.logsDir.canonicalPath}")
+  }
+
   companion object {
-    private val gitRoot = GitUtils.getGitRootViaCommand()
-    private val logsDir = File(gitRoot, "logs").also { println("Logs dir: ${it.canonicalPath}") }
-    private val logsRepo = LogsRepo(logsDir)
+    private fun resolveLogsDir(explicitLogsDir: File?): File {
+      explicitLogsDir?.let { return it }
+
+      val gitRoot = GitUtils.getGitRootViaCommand()
+      return File(gitRoot, "logs")
+    }
   }
 }

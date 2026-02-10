@@ -3,6 +3,7 @@ package xyz.block.trailblaze.ui.model
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Hiking
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Smartphone
@@ -59,6 +60,14 @@ interface TrailblazeRoute {
   val isEnabled: Boolean
     get() = true
   val icon: @Composable () -> Unit
+
+  @Serializable
+  data object Home : TrailblazeRoute {
+    override val displayName = "Home"
+    override val icon: @Composable () -> Unit = {
+      Icon(Icons.Filled.Home, contentDescription = "Home")
+    }
+  }
 
   @Serializable
   data object Sessions : TrailblazeRoute {
