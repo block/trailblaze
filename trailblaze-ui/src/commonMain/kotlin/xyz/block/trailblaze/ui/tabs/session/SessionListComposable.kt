@@ -58,6 +58,7 @@ import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.ui.composables.FullScreenModalOverlay
@@ -122,7 +123,8 @@ fun SessionListComposable(
   openLogsFolderRoot: (() -> Unit)? = null,
   onExportSession: ((SessionInfo) -> Unit)? = null,
   onImportSession: ((Any) -> Unit)? = null,
-  importedSessionIds: Set<xyz.block.trailblaze.logs.model.SessionId> = emptySet(),
+  importedSessionIds: Set<SessionId> = emptySet(),
+  emptyStateContent: (@Composable () -> Unit)? = null,
 ) {
   // Filter states
   var selectedPriorities by remember { mutableStateOf(setOf<String>()) }
@@ -428,7 +430,7 @@ fun SessionListComposable(
             .fillMaxWidth()
             .padding(32.dp),
           horizontalAlignment = Alignment.CenterHorizontally,
-          verticalArrangement = Arrangement.Center,
+          verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
           Icon(
             imageVector = Icons.Default.FolderOpen,
@@ -436,18 +438,22 @@ fun SessionListComposable(
             modifier = Modifier.size(64.dp),
             tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
           )
-          Spacer(modifier = Modifier.height(16.dp))
           Text(
             text = "No sessions yet",
             style = MaterialTheme.typography.titleLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant
           )
-          Spacer(modifier = Modifier.height(8.dp))
           Text(
-            text = "After you run Trailblaze, session information will appear here.",
+            text = "Run a trail to see session results here.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
           )
+
+          // Optional quick-start content provided by the host
+          if (emptyStateContent != null) {
+            Spacer(modifier = Modifier.height(8.dp))
+            emptyStateContent()
+          }
         }
       } else {
         LazyColumn(

@@ -50,7 +50,6 @@ class TrailblazeSettingsRepo(
       // Clear session-specific state on app restart
       currentSessionId = null,
       currentSessionViewMode = SessionViewMode.DEFAULT_VIEW_MODE,
-      lastSelectedTestRailTestCaseId = null,
     )
   } catch (e: Exception) {
     println("Error loading settings, using default: ${e.message}")

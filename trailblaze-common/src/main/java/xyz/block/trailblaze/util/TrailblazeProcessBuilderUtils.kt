@@ -41,12 +41,14 @@ object TrailblazeProcessBuilderUtils {
   }
 
   /**
-   * Checks if a command is available on the system PATH using 'which'.
-   * This is faster than running the command itself since it only searches PATH directories.
+   * Checks if a command is available on the system PATH. Uses `where` on Windows and `which` on
+   * other platforms.
    */
   fun isCommandAvailable(command: String): Boolean {
     return try {
-      val result = createProcessBuilder(listOf("which", command)).runProcess {}
+      val whichCommand =
+        if (System.getProperty("os.name")?.lowercase()?.contains("win") == true) "where" else "which"
+      val result = createProcessBuilder(listOf(whichCommand, command)).runProcess {}
       val found = result.exitCode == 0
       if (found) {
         println("$command installation is available on the PATH")

@@ -3,6 +3,8 @@
 ## Description
 Asserts that an element with the provided text is NOT visible on the screen. The text argument is required.
 Only provide additional fields if the text provided exactly matches elsewhere on the screen.
+Only use this tool if the user is explicitly asking to verify an element that is a TextView, Button, or any views that can display text.
+IF the view that is being referenced does not display text, DO NOT use this tool.
 In this case, the additional fields will be used to identify the specific view to assert visibility for.
 
 NOTE:

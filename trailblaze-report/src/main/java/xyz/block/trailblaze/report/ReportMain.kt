@@ -1,11 +1,9 @@
 package xyz.block.trailblaze.report
 
 import com.github.ajalt.clikt.core.main
-import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.HasScreenshot
-import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.report.models.LogsSummary
 import xyz.block.trailblaze.report.snapshot.SnapshotCollector
 import xyz.block.trailblaze.report.snapshot.SnapshotViewerGenerator
@@ -91,15 +89,17 @@ open class GenerateReportCliCommand :
     val summaryJsonFile = File(logsDir, "summary.json")
     summaryJsonFile.writeText(logsSummaryJson)
 
+    val rootWorkingDir = logsRepo.logsDir.parentFile
+
     val trailblazeReportHtmlFile = File(logsDir, "trailblaze_report.html")
     println("file://${trailblazeReportHtmlFile.absolutePath}")
 
-    val isInternal = File(logsRepo.logsDir.parentFile, "opensource").exists()
+    val isInternal = File(rootWorkingDir, "opensource").exists()
 
     val trailblazeUiProjectDir = if (isInternal) {
-      File(logsRepo.logsDir.parentFile, "opensource/trailblaze-ui")
+      File(rootWorkingDir, "opensource/trailblaze-ui")
     } else {
-      File(logsRepo.logsDir.parentFile, "trailblaze-ui")
+      File(rootWorkingDir, "trailblaze-ui")
     }.also {
       println("Using project directory: ${it.canonicalPath}")
     }
@@ -108,9 +108,11 @@ open class GenerateReportCliCommand :
       logsRepo = logsRepo,
       trailblazeUiProjectDir = trailblazeUiProjectDir,
       outputFile = trailblazeReportHtmlFile,
-      reportTemplateFile = File(logsRepo.logsDir.parentFile, "trailblaze_report_template.html"),
+      reportTemplateFile = File(rootWorkingDir, "trailblaze_report_template.html"),
       useRelativeImageUrls = useRelativeImageUrls,
     )
+
+    afterReportGenerated(logsRepo, rootWorkingDir)
 
     // Generate snapshot viewer using pre-parsed logs from LogsRepo (integrated mode)
     // This avoids re-scanning and re-parsing all the JSON files
@@ -118,6 +120,14 @@ open class GenerateReportCliCommand :
 
     // Clean up file watchers to allow JVM to exit
     logsRepo.close()
+  }
+
+  /**
+   * Hook for subclasses to perform additional processing after the report is generated.
+   * Called after the WASM report is generated but before snapshot viewer generation.
+   */
+  protected open fun afterReportGenerated(logsRepo: LogsRepo, rootWorkingDir: File) {
+    // No-op in base class
   }
 }
 
@@ -131,27 +141,27 @@ open class GenerateReportCliCommand :
 private fun generateSnapshotViewerIntegrated(logsRepo: LogsRepo) {
   println()
   println("--- Generating Snapshot Viewer (integrated mode)")
-  
+
   try {
     val snapshotViewerFile = File(logsRepo.logsDir, "snapshot_viewer.html")
-    
+
     // Get all session IDs and their logs from LogsRepo (already parsed)
     val sessionIds = logsRepo.getSessionIds()
     println("📂 Using ${sessionIds.size} session(s) from LogsRepo")
-    
+
     // Build maps for the collector
     val logsBySession = sessionIds.associateWith { sessionId ->
       logsRepo.getLogsForSession(sessionId)
     }
-    
+
     val sessionInfoBySession = sessionIds.associateWith { sessionId ->
       logsRepo.getSessionInfo(sessionId)
     }
-    
+
     // Collect snapshots from pre-parsed logs (avoids duplicate file I/O)
     val collector = SnapshotCollector(logsRepo.logsDir)
     val snapshots = collector.collectSnapshots(logsBySession, sessionInfoBySession)
-    
+
     if (snapshots.isEmpty()) {
       println()
       println("ℹ️  No snapshots found - skipping snapshot viewer generation")
@@ -159,21 +169,21 @@ private fun generateSnapshotViewerIntegrated(logsRepo: LogsRepo) {
       println()
       return
     }
-    
+
     // Print summary
     println()
     println(collector.getSummary(snapshots))
-    
+
     // Generate HTML
     println()
     val generator = SnapshotViewerGenerator()
     generator.generateHtml(snapshots, snapshotViewerFile)
-    
+
     println()
     println("✅ Snapshot viewer generated successfully!")
     println("   File: ${snapshotViewerFile.absolutePath}")
     println("   Size: ${snapshotViewerFile.length() / 1024} KB")
-    
+
   } catch (e: Exception) {
     println()
     println("⚠️  Error generating snapshot viewer: ${e.message}")
@@ -266,28 +276,4 @@ fun renderSummary(logsRepo: LogsRepo, isStandaloneFileReport: Boolean): LogsSumm
   val map = logsRepo.getSessionIds().associateWith { logsRepo.getLogsForSession(it) }
   val logsSummary = LogsSummary.fromLogs(map.mapKeys { it.key.value }, isStandaloneFileReport)
   return logsSummary
-}
-
-fun getStatusMessage(agentTaskStatus: AgentTaskStatus?): String = when (agentTaskStatus) {
-  is AgentTaskStatus.Failure.MaxCallsLimitReached ->
-
-    buildString {
-      append("Failed, Maximum Calls Limit Reached ${agentTaskStatus.statusData.callCount}")
-      append(" in ${agentTaskStatus.statusData.totalDurationMs / 1000} seconds")
-    }
-
-  is AgentTaskStatus.Failure.ObjectiveFailed -> buildString {
-    append("Objective Failed after ${agentTaskStatus.statusData.callCount} Calls")
-    append(" in ${agentTaskStatus.statusData.totalDurationMs / 1000} seconds")
-    append(" with agent reason: \"${agentTaskStatus.llmExplanation}\"")
-  }
-
-  is AgentTaskStatus.InProgress -> "Running, ${agentTaskStatus.statusData.callCount} LLM Requests so far. "
-  is AgentTaskStatus.Success.ObjectiveComplete -> buildString {
-    append("Successfully Completed after ${agentTaskStatus.statusData.callCount} Calls")
-    append(" in ${agentTaskStatus.statusData.totalDurationMs / 1000} seconds")
-    append(" with agent reason: \"${agentTaskStatus.llmExplanation}\"")
-  }
-
-  null -> "Session Not Found"
 }

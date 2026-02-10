@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.mcp.utils
 
+import xyz.block.trailblaze.llm.LlmProviderEnvVarUtil
 import xyz.block.trailblaze.llm.TrailblazeLlmModelList
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
 import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils.isCommandAvailable
@@ -11,24 +12,11 @@ object JvmLLMProvidersUtil {
   }
 
   fun getEnvironmentVariableKeyForLlmProvider(llmProvider: TrailblazeLlmProvider): String? {
-    return when (llmProvider) {
-      TrailblazeLlmProvider.OPENAI -> "OPENAI_API_KEY"
-
-      TrailblazeLlmProvider.DATABRICKS -> "DATABRICKS_TOKEN"
-
-      TrailblazeLlmProvider.GOOGLE -> "GOOGLE_API_KEY"
-
-      TrailblazeLlmProvider.ANTHROPIC -> "ANTHROPIC_API_KEY"
-
-      TrailblazeLlmProvider.OPEN_ROUTER -> "OPENROUTER_API_KEY"
-
-      else -> null
-    }
+    return LlmProviderEnvVarUtil.getEnvironmentVariableKeyForProvider(llmProvider)
   }
 
   fun getEnvironmentVariableValueForLlmProvider(llmProvider: TrailblazeLlmProvider): String? {
-    val key = getEnvironmentVariableKeyForLlmProvider(llmProvider)
-    return key?.let { System.getenv(it) }
+    return LlmProviderEnvVarUtil.getEnvironmentVariableValueForProvider(llmProvider)
   }
 
   fun getAdditionalInstrumentationArgs(): Map<String, String> {

@@ -1,13 +1,18 @@
 @file:JvmName("Trailblaze")
-@file:OptIn(ExperimentalCoroutinesApi::class)
 
 package xyz.block.trailblaze.desktop
 
-import kotlinx.coroutines.DelicateCoroutinesApi
-import kotlinx.coroutines.ExperimentalCoroutinesApi
+import xyz.block.trailblaze.cli.TrailblazeCli
 
-@OptIn(DelicateCoroutinesApi::class, ExperimentalCoroutinesApi::class)
+/**
+ * Open source Trailblaze desktop application entry point.
+ * 
+ * Uses the shared CLI infrastructure from trailblaze-host.
+ */
 fun main(args: Array<String>) {
-  val headless = args.contains("--headless") || args.contains("-h")
-  OpenSourceTrailblazeDesktopApp().startTrailblazeDesktopApp(headless = headless)
+  TrailblazeCli.run(
+    args = args,
+    appProvider = { OpenSourceTrailblazeDesktopApp() },
+    configProvider = { OpenSourceTrailblazeDesktopAppConfig() },
+  )
 }

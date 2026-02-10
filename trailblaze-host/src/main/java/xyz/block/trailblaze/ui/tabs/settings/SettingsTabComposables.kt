@@ -13,10 +13,10 @@ import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.llm.TrailblazeLlmModelList
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
 import xyz.block.trailblaze.llm.providers.OpenAITrailblazeLlmModelList
-import xyz.block.trailblaze.ui.DesktopUtil
-import xyz.block.trailblaze.ui.EnvVarSaveResult
-import xyz.block.trailblaze.ui.saveEnvVarToShellProfile
-import xyz.block.trailblaze.ui.ShellProfileRestartRequiredDialog
+import xyz.block.trailblaze.ui.desktoputil.DesktopUtil
+import xyz.block.trailblaze.ui.desktoputil.EnvVarSaveResult
+import xyz.block.trailblaze.ui.desktoputil.saveEnvVarToShellProfile
+import xyz.block.trailblaze.ui.desktoputil.ShellProfileRestartRequiredDialog
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.ui.TrailblazeSettingsRepo
 import xyz.block.trailblaze.ui.composables.SelectableText
@@ -348,6 +348,19 @@ object SettingsTabComposables {
                         }
                       }
                     )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    PreferenceToggle(
+                      label = "Show Devices Tab",
+                      description = "Show the Devices tab in the navigation rail",
+                      checked = serverState.appConfig.showDevicesTab,
+                      onCheckedChange = { checkedValue ->
+                        trailblazeSettingsRepo.updateAppConfig {
+                          it.copy(showDevicesTab = checkedValue)
+                        }
+                      }
+                    )
                   }
                 }
 
@@ -506,7 +519,7 @@ object SettingsTabComposables {
                   }
                 }
 
-                // Global Settings (Databricks OAuth)
+                // Global Settings
                 item {
                   SettingsSection(title = "Global Settings") {
                     Column(

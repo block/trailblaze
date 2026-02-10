@@ -82,6 +82,8 @@ private sealed class VisualEditorParseResult {
 fun YamlVisualEditor(
   yamlContent: String,
   onYamlContentChange: (String) -> Unit,
+  visualEditorView: YamlVisualEditorView,
+  onVisualEditorViewChange: (YamlVisualEditorView) -> Unit,
   modifier: Modifier = Modifier,
 ) {
   // Parse YAML content
@@ -135,9 +137,6 @@ fun YamlVisualEditor(
     }
   }
 
-  // Sub-view toggle state
-  var visualEditorView by remember { mutableStateOf(YamlVisualEditorView.STEPS) }
-
   Column(
     modifier = modifier.fillMaxSize(),
     verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -150,12 +149,12 @@ fun YamlVisualEditor(
     ) {
       FilterChip(
         selected = visualEditorView == YamlVisualEditorView.CONFIG,
-        onClick = { visualEditorView = YamlVisualEditorView.CONFIG },
+        onClick = { onVisualEditorViewChange(YamlVisualEditorView.CONFIG) },
         label = { Text("Config") }
       )
       FilterChip(
         selected = visualEditorView == YamlVisualEditorView.STEPS,
-        onClick = { visualEditorView = YamlVisualEditorView.STEPS },
+        onClick = { onVisualEditorViewChange(YamlVisualEditorView.STEPS) },
         label = { Text("Steps") }
       )
     }

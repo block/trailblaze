@@ -2,12 +2,13 @@ package xyz.block.trailblaze.desktop
 
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.runtime.Composable
-import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.host.ios.MobileDeviceUtils
+import xyz.block.trailblaze.llm.LlmProviderEnvVarUtil
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
-import xyz.block.trailblaze.model.AppVersionInfo
 import xyz.block.trailblaze.llm.TrailblazeLlmModelList
+import xyz.block.trailblaze.llm.TrailblazeLlmProvider
+import xyz.block.trailblaze.model.AppVersionInfo
 import xyz.block.trailblaze.model.DesktopAppRunYamlParams
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
@@ -36,6 +37,57 @@ abstract class TrailblazeDesktopAppConfig(
    * Environment variables that should be surfaced in UI/settings for this configuration.
    */
   abstract val customEnvVarNames: List<String>
+
+  /**
+   * Gets the status of LLM tokens for a specific provider.
+   * 
+   * This method checks token availability without triggering any authentication flows.
+   * Override in subclasses to provide provider-specific token checking (e.g., custom OAuth flows).
+   * 
+   * @param provider The LLM provider to check token status for.
+   * @return The token status for the given provider.
+   */
+  open fun getLlmTokenStatus(provider: TrailblazeLlmProvider): LlmTokenStatus {
+    // Default implementation checks environment variables for standard open source providers
+    val envVarName = getEnvironmentVariableForProvider(provider)
+
+    return when {
+      envVarName == null -> LlmTokenStatus.Available(provider) // Provider doesn't need a token (e.g., Ollama)
+      System.getenv(envVarName)?.isNotBlank() == true -> LlmTokenStatus.Available(provider)
+      else -> LlmTokenStatus.NotAvailable(provider)
+    }
+  }
+
+  /**
+   * Gets the environment variable name for a provider's API key.
+   * Returns null if the provider doesn't require an API key.
+   * 
+   * Override in subclasses to add support for additional providers.
+   */
+  open fun getEnvironmentVariableForProvider(provider: TrailblazeLlmProvider): String? {
+    return LlmProviderEnvVarUtil.getEnvironmentVariableKeyForProvider(provider)
+  }
+
+  /**
+   * Gets all supported LLM model lists for this configuration.
+   * Unlike [getCurrentlyAvailableLlmModelLists], this returns ALL supported providers
+   * regardless of whether they have tokens configured.
+   * 
+   * Used by the `auth` command to show status of all providers.
+   */
+  abstract fun getAllSupportedLlmModelLists(): Set<TrailblazeLlmModelList>
+
+  /**
+   * Gets the status of all supported LLM providers.
+   * 
+   * @return A map of provider to token status for ALL supported providers (not just available ones).
+   */
+  fun getAllLlmTokenStatuses(): Map<TrailblazeLlmProvider, LlmTokenStatus> {
+    return getAllSupportedLlmModelLists()
+      .map { it.provider }
+      .distinct()
+      .associateWith { getLlmTokenStatus(it) }
+  }
 
   /**
    * Additional global settings content to render in the Settings tab.
@@ -128,6 +180,9 @@ abstract class TrailblazeDesktopAppConfig(
     customEnvVarNames: List<String>,
   ): List<TrailblazeAppTab> {
     return listOf(
+      TrailblazeBuiltInTabs.homeTab(
+        trailblazeSettingsRepo = trailblazeSettingsRepo,
+      ),
       TrailblazeBuiltInTabs.sessionsTab(
         logsRepo = logsRepo,
         trailblazeSettingsRepo = trailblazeSettingsRepo,

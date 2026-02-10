@@ -47,7 +47,6 @@ import kotlin.io.path.Path
  * generate-test-results ./logs --output results.yaml
  * generate-test-results ./logs --format json
  * generate-test-results ./logs --format yaml --output results.yml
- * generate-test-results ./logs --json   # shorthand for --format json
  * ```
  *
  * Environment variables (optional, used for metadata):

@@ -5,6 +5,8 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.llm.providers.OpenAITrailblazeLlmModelList
 import xyz.block.trailblaze.model.AI_FALLBACK_DEFAULT
+import xyz.block.trailblaze.ui.editors.yaml.YamlVisualEditorView
+import xyz.block.trailblaze.ui.editors.yaml.YamlEditorMode
 
 @Serializable
 data class TrailblazeServerState(
@@ -18,8 +20,6 @@ data class TrailblazeServerState(
     val alwaysOnTop: Boolean = false,
     val serverPort: Int = HTTP_PORT,
     val serverUrl: String = "http://localhost:$HTTP_PORT",
-    val lastSelectedTestRailSuiteId: Int? = null,
-    val lastSelectedTestRailTestCaseId: Int? = null,
     val lastSelectedDeviceInstanceIds: List<String> = emptyList(),
     val terminateTargetAppBeforeRunning: Boolean = false,
     val selectedTargetAppId: String? = null,
@@ -32,6 +32,9 @@ data class TrailblazeServerState(
 - prompts:
     - step: click back
 """.trimIndent(), // Default YAML content
+    // YAML editor UI preferences
+    val yamlEditorMode: YamlEditorMode = YamlEditorMode.VISUAL,
+    val yamlVisualEditorView: YamlVisualEditorView = YamlVisualEditorView.STEPS,
     // Session detail UI preferences
     val sessionDetailZoomOffset: Int = 0, // Zoom offset for card size
     val sessionDetailFontScale: Float = 1f, // Font size scale
@@ -56,6 +59,9 @@ data class TrailblazeServerState(
     val appDataDirectory: String? = null,
     // Tab visibility settings
     val showTrailsTab: Boolean = true, // Default true for backward compatibility
+    val showDevicesTab: Boolean = false, // Default hidden - can be enabled in Settings
+    // Navigation rail expanded/collapsed state
+    val navRailExpanded: Boolean = true, // Default to expanded
     // Last navigation route (restored on app restart)
     val lastRoute: String? = null, // Qualified class name of the last visited route
   ) {

@@ -35,6 +35,8 @@ import kotlinx.serialization.json.buildJsonObject
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.server.ServerEndpoints.logsServerKtorEndpoints
 import xyz.block.trailblaze.logs.server.SslConfig.configureForSelfSignedSsl
+import xyz.block.trailblaze.logs.server.endpoints.CliRunResponse
+import xyz.block.trailblaze.logs.server.endpoints.CliStatusResponse
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
 import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
 import xyz.block.trailblaze.mcp.models.McpSessionId
@@ -55,6 +57,10 @@ class TrailblazeMcpServer(
   val targetTestAppProvider: () -> TrailblazeHostAppTarget,
   val homeCallbackHandler: ((parameters: Map<String, List<String>>) -> Result<String>)? = null,
   val additionalToolsProvider: (TrailblazeMcpSessionContext, Server) -> ToolRegistry = { _, _ -> ToolRegistry {} },
+  /** Optional callback to show the desktop window (for CLI integration) */
+  var onShowWindowRequest: (() -> Unit)? = null,
+  /** Optional callback to shutdown the application (for CLI integration) */
+  var onShutdownRequest: (() -> Unit)? = null,
 ) {
   // Per-session progress token tracking - use String keys for reliable ConcurrentHashMap behavior
   private val sessionContexts = ConcurrentHashMap<String, TrailblazeMcpSessionContext>()
@@ -266,7 +272,34 @@ class TrailblazeMcpServer(
         json(McpJson)
       }
 
-      logsServerKtorEndpoints(logsRepo, homeCallbackHandler = homeCallbackHandler, installContentNegotiation = false)
+      logsServerKtorEndpoints(
+        logsRepo = logsRepo,
+        homeCallbackHandler = homeCallbackHandler,
+        installContentNegotiation = false,
+        // Always register CLI callbacks - onShowWindowRequest is checked dynamically
+        cliCallbacks = CliEndpointCallbacks(
+          onRunRequest = { request ->
+            // TODO: Implement run request handling
+            CliRunResponse(success = false, error = "Not implemented")
+          },
+          onShutdownRequest = {
+            // Call the shutdown callback if set, otherwise fall back to System.exit
+            onShutdownRequest?.invoke() ?: System.exit(0)
+          },
+          onShowWindowRequest = {
+            // Call the callback if it's set (it's set by the UI after startup)
+            onShowWindowRequest?.invoke()
+          },
+          statusProvider = {
+            CliStatusResponse(
+              running = true,
+              port = port,
+              connectedDevices = 0, // TODO: Get actual device count
+              uptimeSeconds = 0, // TODO: Track uptime
+            )
+          },
+        ),
+      )
       routing {
         // POST /mcp - Main JSON-RPC request endpoint
         post("/mcp") {

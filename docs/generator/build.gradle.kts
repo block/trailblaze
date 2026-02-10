@@ -11,6 +11,15 @@ application {
   mainClass.set("xyz.block.trailblaze.docs.GenerateDocsMainKt")
 }
 
+// Multiple dependencies transitively include the same JARs (e.g. library-desktop),
+// so we need to allow duplicates in the distribution archives.
+tasks.withType<Tar> {
+  duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+tasks.withType<Zip> {
+  duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
 
 kotlin {
   this.compilerOptions {
@@ -21,7 +30,9 @@ kotlin {
 dependencies {
   implementation(project(":trailblaze-models"))
   implementation(project(":trailblaze-common"))
+  implementation(project(":trailblaze-host"))
   runtimeOnly(libs.kotlin.reflect)
   implementation(libs.koog.agents.tools)
   implementation(libs.gson)
+  implementation(libs.picocli)
 }

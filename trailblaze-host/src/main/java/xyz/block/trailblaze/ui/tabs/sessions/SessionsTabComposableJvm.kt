@@ -2,8 +2,17 @@
 
 package xyz.block.trailblaze.ui.tabs.sessions
 
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Alarm
+import androidx.compose.material.icons.filled.ContactPhone
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -15,6 +24,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -32,9 +44,15 @@ import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.ui.createLiveSessionDataProviderJvm
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.ui.createLogsFileSystemImageLoader
+import xyz.block.trailblaze.ui.model.LocalNavController
+import xyz.block.trailblaze.ui.model.TrailblazeRoute
+import xyz.block.trailblaze.ui.model.navigateToRoute
 import xyz.block.trailblaze.ui.models.TrailblazeServerState
 import xyz.block.trailblaze.ui.recordings.RecordedTrailsRepo
 import xyz.block.trailblaze.ui.tabs.session.LiveSessionDetailComposableWithSelectorSupport
+import xyz.block.trailblaze.ui.tabs.home.ADD_CONTACT_YAML
+import xyz.block.trailblaze.ui.tabs.home.QuickStartCard
+import xyz.block.trailblaze.ui.tabs.home.SET_ALARM_YAML
 import xyz.block.trailblaze.ui.tabs.session.SessionListComposable
 import xyz.block.trailblaze.ui.tabs.session.SessionViewMode
 import xyz.block.trailblaze.ui.tabs.testresults.TestResultsComposableJvm
@@ -88,11 +106,62 @@ fun SessionsTabComposableJvm(
 
   val coroutineScope = rememberCoroutineScope()
 
+  val navController = LocalNavController.current
+
   if (selectedSession == null) {
     SessionListComposable(
       testResultsSummaryView = { TestResultsComposableJvm(logsRepo) },
       sessions = sessions,
       importedSessionIds = importedSessionIds,
+      emptyStateContent = {
+        Column(
+          verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+          Text(
+            text = "Quick Start",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+          )
+          Text(
+            text = "Try a sample trail to see Trailblaze in action.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+          ) {
+            QuickStartCard(
+              title = "Set an Alarm",
+              description = "Open the Clock app and set a new alarm for 7:30 AM",
+              icon = Icons.Filled.Alarm,
+              modifier = Modifier.weight(1f),
+              onClick = {
+                updateState(
+                  serverState.copy(
+                    appConfig = serverState.appConfig.copy(yamlContent = SET_ALARM_YAML)
+                  )
+                )
+                navController.navigateToRoute(TrailblazeRoute.YamlRoute)
+              },
+            )
+            QuickStartCard(
+              title = "Add a Contact",
+              description = "Open the Contacts app and create a new contact",
+              icon = Icons.Filled.ContactPhone,
+              modifier = Modifier.weight(1f),
+              onClick = {
+                updateState(
+                  serverState.copy(
+                    appConfig = serverState.appConfig.copy(yamlContent = ADD_CONTACT_YAML)
+                  )
+                )
+                navController.navigateToRoute(TrailblazeRoute.YamlRoute)
+              },
+            )
+          }
+        }
+      },
       sessionClicked = { session ->
         updateState(
           serverState.copy(
