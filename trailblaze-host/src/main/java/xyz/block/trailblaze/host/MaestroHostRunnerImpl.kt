@@ -11,12 +11,12 @@ import maestro.orchestra.util.Env.withInjectedShellEnvVars
 import maestro.orchestra.yaml.YamlCommandReader
 import xyz.block.trailblaze.android.maestro.LoggingDriver
 import xyz.block.trailblaze.api.ScreenState
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.host.devices.TrailblazeConnectedDevice
 import xyz.block.trailblaze.host.devices.TrailblazeDeviceService
 import xyz.block.trailblaze.host.screenstate.HostMaestroDriverScreenState
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
-import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.maestro.OrchestraRunner
@@ -39,6 +39,7 @@ class MaestroHostRunnerImpl(
    * Providing the "App Target" can enable app specific functionality if provided
    */
   appTarget: TrailblazeHostAppTarget? = null,
+  private val deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
 ) : MaestroHostRunner {
   val connectedDevice: TrailblazeConnectedDevice by lazy {
     TrailblazeDeviceService.getConnectedDevice(
@@ -63,6 +64,7 @@ class MaestroHostRunnerImpl(
     HostMaestroDriverScreenState(
       maestroDriver = loggingDriver,
       setOfMarkEnabled = setOfMarkEnabled,
+      deviceClassifiers = deviceClassifiers,
     )
   }
 

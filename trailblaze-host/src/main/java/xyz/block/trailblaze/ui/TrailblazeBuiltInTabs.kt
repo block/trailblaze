@@ -20,6 +20,7 @@ import xyz.block.trailblaze.ui.tabs.sessions.SessionsTabComposableJvm
 import xyz.block.trailblaze.ui.tabs.sessions.YamlTabComposable
 import xyz.block.trailblaze.ui.tabs.settings.SettingsTabComposables
 import xyz.block.trailblaze.ui.tabs.trails.TrailsBrowserTabComposable
+import kotlin.system.exitProcess
 
 /**
  * Factory object for creating built-in Trailblaze tabs.
@@ -125,6 +126,11 @@ object TrailblazeBuiltInTabs {
 
   /**
    * Creates the Settings tab for app configuration.
+   *
+   * @param isProviderLocked Whether the LLM provider dropdown starts locked (disabled).
+   *   When true, a lock icon button is shown next to the dropdown. Clicking it shows a warning
+   *   dialog; accepting the warning unlocks the dropdown. Clicking again re-locks it.
+   *   Defaults to false (unlocked) for open source builds.
    */
   fun settingsTab(
     trailblazeSettingsRepo: TrailblazeSettingsRepo,
@@ -132,6 +138,8 @@ object TrailblazeBuiltInTabs {
     globalSettingsContent: @Composable ColumnScope.(TrailblazeServerState) -> Unit,
     availableModelLists: Set<TrailblazeLlmModelList>,
     customEnvVarNames: List<String>,
+    openGoose: () -> Unit = { TrailblazeDesktopUtil.openGoose() },
+    isProviderLocked: Boolean = false,
   ): TrailblazeAppTab {
     val shellProfile = DesktopUtil.getShellProfileFile()
     return TrailblazeAppTab(
@@ -141,7 +149,7 @@ object TrailblazeBuiltInTabs {
           trailblazeSettingsRepo = trailblazeSettingsRepo,
           openLogsFolder = { TrailblazeDesktopUtil.openInFileBrowser(logsRepo.logsDir) },
           openDesktopAppPreferencesFile = { TrailblazeDesktopUtil.openInFileBrowser(trailblazeSettingsRepo.settingsFile) },
-          openGoose = { TrailblazeDesktopUtil.openGoose() },
+          openGoose = openGoose,
           additionalContent = {},
           globalSettingsContent = globalSettingsContent,
           environmentVariableProvider = { System.getenv(it) },
@@ -150,6 +158,7 @@ object TrailblazeBuiltInTabs {
           openShellProfile = shellProfile?.let { { TrailblazeDesktopUtil.openInFileBrowser(it) } },
           shellProfileName = shellProfile?.name,
           onQuitApp = { ExitApp.quit() },
+          isProviderLocked = isProviderLocked,
         )
       }
     )

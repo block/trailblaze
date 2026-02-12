@@ -14,7 +14,12 @@ interface TrailblazeMcpBridge {
   suspend fun getAvailableDevices(): Set<TrailblazeConnectedDeviceSummary>
   suspend fun getInstalledAppIds(): Set<String>
   fun getAvailableAppTargets(): Set<TrailblazeHostAppTarget>
-  suspend fun runYaml(yaml: String, startNewSession: Boolean)
+  /**
+   * Runs Trailblaze YAML on the connected device.
+   *
+   * @return The session ID value for monitoring progress, or null if unavailable.
+   */
+  suspend fun runYaml(yaml: String, startNewSession: Boolean): String
 
   /**
    * Allows us to see the "connected device" from the viewpoint of the MCP server.
@@ -39,4 +44,17 @@ interface TrailblazeMcpBridge {
    * @return true if a session was ended, false if no session was active
    */
   suspend fun endSession(): Boolean
+
+  /**
+   * Switches the current target app to the one matching the given app target ID.
+   *
+   * @param appTargetId The ID of the app target to switch to (e.g., "cash", "square")
+   * @return The display name of the newly selected app target, or null if not found
+   */
+  fun selectAppTarget(appTargetId: String): String?
+
+  /**
+   * Returns the ID of the currently selected target app, or null if none is selected.
+   */
+  fun getCurrentAppTargetId(): String?
 }

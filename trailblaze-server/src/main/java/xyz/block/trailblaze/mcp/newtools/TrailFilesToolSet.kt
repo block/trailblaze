@@ -10,8 +10,8 @@ import java.io.File
 class TrailFilesToolSet(
   private val trailsDirProvider: () -> File,
 ) : ToolSet {
-  @LLMDescription("Lists all available Trailblaze test cases.")
-  @Tool
+  @LLMDescription("Lists all available Trailblaze file-based test cases.")
+  @Tool("listFileBasedTestCases")
   fun listTestCases(): List<String> {
     val trailsDir = trailsDirProvider()
     println("Listing test cases in directory: ${trailsDir.canonicalPath}")

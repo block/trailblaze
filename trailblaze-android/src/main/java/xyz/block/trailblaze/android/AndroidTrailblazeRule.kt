@@ -81,6 +81,7 @@ open class AndroidTrailblazeRule(
       includeScreenshot = true,
       filterViewHierarchy = true,
       setOfMarkEnabled = config.setOfMarkEnabled,
+      deviceClassifiers = trailblazeLoggingRule.trailblazeDeviceInfoProvider().classifiers,
     )
   }
 

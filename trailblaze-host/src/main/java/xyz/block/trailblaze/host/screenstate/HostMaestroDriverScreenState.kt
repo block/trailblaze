@@ -8,8 +8,10 @@ import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ScreenshotScalingConfig
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode.Companion.relabelWithFreshIds
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.host.setofmark.HostCanvasSetOfMark
+import xyz.block.trailblaze.host.toTrailblazeDevicePlatform
 import xyz.block.trailblaze.host.util.BufferedImageUtils.scale
 import xyz.block.trailblaze.host.util.BufferedImageUtils.toByteArray
 import xyz.block.trailblaze.utils.Ext.toViewHierarchyTreeNode
@@ -28,6 +30,7 @@ class HostMaestroDriverScreenState(
   private val filterViewHierarchy: Boolean = true,
   private val screenshotScalingConfig: ScreenshotScalingConfig? = ScreenshotScalingConfig.DEFAULT,
   maxAttempts: Int = 10,
+  deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
 ) : ScreenState {
 
   private val deviceInfo: DeviceInfo = maestroDriver.deviceInfo()
@@ -99,6 +102,8 @@ class HostMaestroDriverScreenState(
     }
 
   override val trailblazeDevicePlatform: TrailblazeDevicePlatform = deviceInfo.platform.toTrailblazeDevicePlatform()
+
+  override val deviceClassifiers: List<TrailblazeDeviceClassifier> = deviceClassifiers
 
   /**
    * Returns the clean screenshot bytes without any annotations.

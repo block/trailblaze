@@ -14,6 +14,7 @@ import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.host.HostMaestroTrailblazeAgent
 import xyz.block.trailblaze.host.MaestroHostRunnerImpl
+import xyz.block.trailblaze.host.devices.TrailblazeConnectedDevice
 import xyz.block.trailblaze.host.devices.TrailblazeDeviceService
 import xyz.block.trailblaze.host.devices.TrailblazeHostDeviceClassifier
 import xyz.block.trailblaze.host.rules.TrailblazeHostLlmConfig.DEFAULT_TRAILBLAZE_LLM_MODEL
@@ -50,6 +51,8 @@ abstract class BaseHostTrailblazeTest(
   trailblazeToolSet: TrailblazeToolSet? = null,
   customToolClasses: Set<KClass<out TrailblazeTool>> = setOf(),
   excludedToolClasses: Set<KClass<out TrailblazeTool>> = setOf(),
+  /** All custom tool classes for YAML serialization/deserialization. Defaults to [customToolClasses]. */
+  allSerializationToolClasses: Set<KClass<out TrailblazeTool>> = customToolClasses,
   maxRetries: Int = 0,
   appTarget: TrailblazeHostAppTarget? = null,
   protected val trailblazeDeviceId: TrailblazeDeviceId = TrailblazeDeviceService.listConnectedTrailblazeDevices()
@@ -64,6 +67,7 @@ abstract class BaseHostTrailblazeTest(
       trailblazeLogger = loggingRule.logger,
       sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
       appTarget = appTarget,
+      deviceClassifiers = trailblazeDeviceClassifiers,
     )
   }
 
@@ -72,15 +76,26 @@ abstract class BaseHostTrailblazeTest(
    */
   abstract fun ensureTargetAppIsStopped()
 
+  /**
+   * The connected device, fetched independently to avoid circular dependency with hostRunner.
+   * This must be lazy to avoid initialization during test class construction.
+   */
+  private val connectedDevice: TrailblazeConnectedDevice by lazy {
+    TrailblazeDeviceService.getConnectedDevice(
+      trailblazeDeviceId = trailblazeDeviceId,
+      appTarget = appTarget,
+    ) ?: error("No connected device matching $trailblazeDeviceId found.")
+  }
+
   val trailblazeDeviceClassifiers: List<TrailblazeDeviceClassifier> by lazy {
     TrailblazeHostDeviceClassifier(
       trailblazeDriverType = trailblazeDriverType,
-      maestroDeviceInfoProvider = { hostRunner.connectedDevice.initialMaestroDeviceInfo },
+      maestroDeviceInfoProvider = { connectedDevice.initialMaestroDeviceInfo },
     ).getDeviceClassifiers()
   }
 
   val trailblazeDeviceInfo: TrailblazeDeviceInfo by lazy {
-    val initialMaestroDeviceInfo = hostRunner.connectedDevice.initialMaestroDeviceInfo
+    val initialMaestroDeviceInfo = connectedDevice.initialMaestroDeviceInfo
     TrailblazeDeviceInfo(
       trailblazeDeviceId = trailblazeDeviceId,
       trailblazeDriverType = trailblazeDriverType,
@@ -159,7 +174,7 @@ abstract class BaseHostTrailblazeTest(
   }
 
   private val trailblazeYaml = TrailblazeYaml(
-    customTrailblazeToolClasses = customToolClasses,
+    customTrailblazeToolClasses = allSerializationToolClasses,
   )
 
   private val trailblazeRunnerUtil by lazy {

@@ -12,6 +12,7 @@ import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ScreenshotScalingConfig
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode.Companion.relabelWithFreshIds
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.setofmark.android.AndroidBitmapUtils.scale
 import xyz.block.trailblaze.setofmark.android.AndroidBitmapUtils.toByteArray
@@ -36,6 +37,7 @@ class AndroidOnDeviceUiAutomatorScreenState(
   private val setOfMarkEnabled: Boolean = true,
   maxAttempts: Int = 1,
   includeScreenshot: Boolean = true,
+  deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
 ) : ScreenState {
 
   override var deviceWidth: Int = -1
@@ -96,6 +98,8 @@ class AndroidOnDeviceUiAutomatorScreenState(
   }
 
   override val trailblazeDevicePlatform: TrailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID
+
+  override val deviceClassifiers: List<TrailblazeDeviceClassifier> = deviceClassifiers
 
   /**
    * Returns the filtered view hierarchy.

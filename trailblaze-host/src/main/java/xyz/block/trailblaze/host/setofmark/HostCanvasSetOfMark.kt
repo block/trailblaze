@@ -47,53 +47,59 @@ class HostCanvasSetOfMark(
   }
 
   /**
-   * For iOS, scale coordinates from logical points to physical pixels.
+   * For iOS and Web, scale coordinates from logical points to physical pixels.
    * iOS provides view hierarchy coordinates in logical points (e.g., 375x667)
    * but screenshots are in physical pixels (e.g., 750x1334).
+   * Web with Playwright uses deviceScaleFactor (e.g., 2.0 for Retina) where
+   * getBoundingClientRect() returns logical coordinates but screenshots are physical pixels.
    */
-  private fun scaleCoordinateForPlatform(coordinate: Int): Int = if (deviceInfo?.platform == Platform.IOS) {
-    (coordinate * getScaleFactorForPlatform()).toInt()
-  } else {
-    coordinate
-  }
-
-  /**
-   * Get the integer scale factor for iOS coordinate scaling.
-   * Validates that X and Y scale factors are consistent.
-   */
-  private fun getScaleFactorForPlatform(): Int = if (deviceInfo?.platform == Platform.IOS) {
-    val scaleX = bufferedImage.width.toFloat() / deviceInfo?.widthGrid?.toFloat()!!
-    val scaleY = bufferedImage.height.toFloat() / deviceInfo?.heightGrid?.toFloat()!!
-
-    // Round to nearest integer
-    val roundedScaleX = round(scaleX).toInt()
-    val roundedScaleY = round(scaleY).toInt()
-
-    // Validate that both scales are the same
-    if (roundedScaleX != roundedScaleY) {
-      println(
-        "Warning: iOS scale factors differ - X: $scaleX ($roundedScaleX), Y: $scaleY ($roundedScaleY). Using X scale.",
-      )
+  private fun scaleCoordinateForPlatform(coordinate: Int): Int =
+    if (deviceInfo?.platform == Platform.IOS || deviceInfo?.platform == Platform.WEB) {
+      (coordinate * getScaleFactorForPlatform()).toInt()
+    } else {
+      coordinate
     }
 
-    roundedScaleX
-  } else {
-    1
-  }
+  /**
+   * Get the integer scale factor for iOS and Web coordinate scaling.
+   * Validates that X and Y scale factors are consistent.
+   */
+  private fun getScaleFactorForPlatform(): Int =
+    if (deviceInfo?.platform == Platform.IOS || deviceInfo?.platform == Platform.WEB) {
+      val scaleX = bufferedImage.width.toFloat() / deviceInfo?.widthGrid?.toFloat()!!
+      val scaleY = bufferedImage.height.toFloat() / deviceInfo?.heightGrid?.toFloat()!!
+
+      // Round to nearest integer
+      val roundedScaleX = round(scaleX).toInt()
+      val roundedScaleY = round(scaleY).toInt()
+
+      // Validate that both scales are the same
+      if (roundedScaleX != roundedScaleY) {
+        val platformName = if (deviceInfo?.platform == Platform.IOS) "iOS" else "Web"
+        println(
+          "Warning: $platformName scale factors differ - X: $scaleX ($roundedScaleX), Y: $scaleY ($roundedScaleY). Using X scale.",
+        )
+      }
+
+      roundedScaleX
+    } else {
+      1
+    }
 
   /**
-   * Scale bounds coordinates for iOS coordinate system mismatch
+   * Scale bounds coordinates for iOS and Web coordinate system mismatch
    */
-  private fun scaleBoundsForPlatform(bounds: ViewHierarchyFilter.Bounds): ViewHierarchyFilter.Bounds = if (deviceInfo?.platform == Platform.IOS) {
-    ViewHierarchyFilter.Bounds(
-      x1 = scaleCoordinateForPlatform(bounds.x1),
-      y1 = scaleCoordinateForPlatform(bounds.y1),
-      x2 = scaleCoordinateForPlatform(bounds.x2),
-      y2 = scaleCoordinateForPlatform(bounds.y2),
-    )
-  } else {
-    bounds
-  }
+  private fun scaleBoundsForPlatform(bounds: ViewHierarchyFilter.Bounds): ViewHierarchyFilter.Bounds =
+    if (deviceInfo?.platform == Platform.IOS || deviceInfo?.platform == Platform.WEB) {
+      ViewHierarchyFilter.Bounds(
+        x1 = scaleCoordinateForPlatform(bounds.x1),
+        y1 = scaleCoordinateForPlatform(bounds.y1),
+        x2 = scaleCoordinateForPlatform(bounds.x2),
+        y2 = scaleCoordinateForPlatform(bounds.y2),
+      )
+    } else {
+      bounds
+    }
 
   fun drawImage(image: BufferedImage, multiply: Double, compositeMode: CompositeMode = CompositeMode.SrcOver) {
     bufferedImage.graphics { graphics2D ->

@@ -2,6 +2,9 @@ package xyz.block.trailblaze.ui.tabs.settings
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -178,9 +181,19 @@ object SettingsTabComposables {
     openShellProfile: (() -> Unit)? = null,
     shellProfileName: String? = null,
     onQuitApp: (() -> Unit)? = null,
+    isProviderLocked: Boolean = false,
   ) {
 
     val serverState: TrailblazeServerState by trailblazeSettingsRepo.serverStateFlow.collectAsState()
+    // Provider lock state: starts locked if isProviderLocked is true, can be unlocked via dialog
+    var isProviderUnlocked by remember { mutableStateOf(!isProviderLocked) }
+    var showProviderUnlockWarning by remember { mutableStateOf(false) }
+    // Capture the initial provider/model to snap back to on re-lock
+    val lockedProviderState = remember {
+      if (isProviderLocked) {
+        serverState.appConfig.let { it.llmProvider to it.llmModel }
+      } else null
+    }
     var showShellProfileRestartDialog by remember { mutableStateOf(false) }
     var restartDialogMessage by remember { mutableStateOf("") }
 
@@ -199,6 +212,36 @@ object SettingsTabComposables {
         message = restartDialogMessage,
         onDismiss = { showShellProfileRestartDialog = false },
         onQuit = onQuitApp,
+      )
+    }
+
+    // Dialog warning before unlocking provider switching
+    if (showProviderUnlockWarning) {
+      AlertDialog(
+        onDismissRequest = { showProviderUnlockWarning = false },
+        title = { Text("Unlock Provider Switching?") },
+        text = {
+          Text(
+            "Changing the LLM provider from the default may affect test reliability " +
+              "and is intended for development purposes only.",
+            style = MaterialTheme.typography.bodyMedium,
+          )
+        },
+        confirmButton = {
+          Button(
+            onClick = {
+              showProviderUnlockWarning = false
+              isProviderUnlocked = true
+            }
+          ) {
+            Text("Unlock")
+          }
+        },
+        dismissButton = {
+          TextButton(onClick = { showProviderUnlockWarning = false }) {
+            Text("Cancel")
+          }
+        },
       )
     }
 
@@ -404,46 +447,88 @@ object SettingsTabComposables {
                       verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                       SelectableText("Provider", style = MaterialTheme.typography.bodyMedium)
-                      ExposedDropdownMenuBox(
-                        expanded = showLlmProviderMenu,
-                        onExpandedChange = { showLlmProviderMenu = !showLlmProviderMenu }
+                      Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
                       ) {
-                        OutlinedTextField(
-                          modifier = Modifier.fillMaxWidth()
-                            .menuAnchor(MenuAnchorType.PrimaryNotEditable),
-                          value = currentProvider.display,
-                          onValueChange = {},
-                          readOnly = true,
-                          trailingIcon = {
-                            ExposedDropdownMenuDefaults.TrailingIcon(
-                              expanded = showLlmProviderMenu
-                            )
-                          }
-                        )
-                        DropdownMenu(
+                        ExposedDropdownMenuBox(
                           expanded = showLlmProviderMenu,
-                          onDismissRequest = { showLlmProviderMenu = false }
+                          onExpandedChange = {
+                            if (isProviderUnlocked) {
+                              showLlmProviderMenu = !showLlmProviderMenu
+                            }
+                          },
+                          modifier = Modifier.weight(1f)
                         ) {
-                          availableModelLists.forEach { modelList: TrailblazeLlmModelList ->
-                            val provider: TrailblazeLlmProvider = modelList.provider
-                            DropdownMenuItem(
-                              text = { SelectableText(provider.display) },
-                              onClick = {
-                                showLlmProviderMenu = false
-                                val savedSettings = serverState.appConfig
-                                val providerModels = availableModelLists.first {
-                                  it.provider == provider
-                                }.entries
-                                trailblazeSettingsRepo.updateState { serverState2 ->
-                                  serverState.copy(
-                                    appConfig = savedSettings.copy(
-                                      llmProvider = provider.id,
-                                      llmModel = providerModels
-                                        .first()
-                                        .modelId
-                                    )
-                                  )
+                          OutlinedTextField(
+                            modifier = Modifier.fillMaxWidth()
+                              .menuAnchor(MenuAnchorType.PrimaryNotEditable),
+                            value = currentProvider.display,
+                            onValueChange = {},
+                            readOnly = true,
+                            enabled = isProviderUnlocked,
+                            trailingIcon = {
+                              ExposedDropdownMenuDefaults.TrailingIcon(
+                                expanded = showLlmProviderMenu
+                              )
+                            }
+                          )
+                          if (isProviderUnlocked) {
+                            DropdownMenu(
+                              expanded = showLlmProviderMenu,
+                              onDismissRequest = { showLlmProviderMenu = false }
+                            ) {
+                              availableModelLists.forEach { modelList: TrailblazeLlmModelList ->
+                                val provider: TrailblazeLlmProvider = modelList.provider
+                                DropdownMenuItem(
+                                  text = { SelectableText(provider.display) },
+                                  onClick = {
+                                    showLlmProviderMenu = false
+                                    val savedSettings = serverState.appConfig
+                                    val providerModels = availableModelLists.first {
+                                      it.provider == provider
+                                    }.entries
+                                    trailblazeSettingsRepo.updateState { serverState2 ->
+                                      serverState.copy(
+                                        appConfig = savedSettings.copy(
+                                          llmProvider = provider.id,
+                                          llmModel = providerModels
+                                            .first()
+                                            .modelId
+                                        )
+                                      )
+                                    }
+                                  }
+                                )
+                              }
+                            }
+                          }
+                        }
+                        // Lock/unlock icon button (only shown when provider locking is configured)
+                        if (isProviderLocked) {
+                          IconButton(
+                            onClick = {
+                              if (isProviderUnlocked) {
+                                // Re-lock and snap provider back to initial state
+                                isProviderUnlocked = false
+                                lockedProviderState?.let { (provider, model) ->
+                                  trailblazeSettingsRepo.updateAppConfig {
+                                    it.copy(llmProvider = provider, llmModel = model)
+                                  }
                                 }
+                              } else {
+                                showProviderUnlockWarning = true
+                              }
+                            }
+                          ) {
+                            Icon(
+                              imageVector = if (isProviderUnlocked) Icons.Default.LockOpen else Icons.Default.Lock,
+                              contentDescription = if (isProviderUnlocked) "Lock provider switching" else "Unlock provider switching",
+                              tint = if (isProviderUnlocked) {
+                                MaterialTheme.colorScheme.primary
+                              } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
                               }
                             )
                           }

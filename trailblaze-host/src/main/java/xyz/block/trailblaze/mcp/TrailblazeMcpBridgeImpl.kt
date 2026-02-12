@@ -48,7 +48,7 @@ class TrailblazeMcpBridgeImpl(
       ?: error("Device $trailblazeDeviceId is not available.")
   }
 
-  override suspend fun runYaml(yaml: String, startNewSession: Boolean) {
+  override suspend fun runYaml(yaml: String, startNewSession: Boolean): String {
     val deviceId = assertDeviceIsSelected()
 
     val sessionResolution = trailblazeDeviceManager.getOrCreateSessionResolution(
@@ -66,6 +66,9 @@ class TrailblazeMcpBridgeImpl(
       existingSessionId = sessionResolution.sessionId,
       referrer = TrailblazeReferrer.MCP,
     )
+
+    // Return the session ID used for this run so callers can monitor progress
+    return sessionResolution.sessionId.value
   }
 
   override fun getCurrentlySelectedDeviceId(): TrailblazeDeviceId? {
@@ -116,6 +119,17 @@ class TrailblazeMcpBridgeImpl(
     val deviceId = assertDeviceIsSelected(null)
     val endedSessionId = trailblazeDeviceManager.endSessionForDevice(deviceId)
     return endedSessionId != null
+  }
+
+  override fun selectAppTarget(appTargetId: String): String? {
+    val matchingTarget = trailblazeDeviceManager.availableAppTargets.firstOrNull { it.id == appTargetId }
+      ?: return null
+    trailblazeDeviceManager.settingsRepo.targetAppSelected(matchingTarget)
+    return matchingTarget.displayName
+  }
+
+  override fun getCurrentAppTargetId(): String? {
+    return trailblazeDeviceManager.settingsRepo.getCurrentSelectedTargetApp()?.id
   }
 
   private suspend fun assertDeviceIsSelected(requestedDeviceId: TrailblazeDeviceId? = null): TrailblazeDeviceId {
