@@ -13,6 +13,7 @@ import xyz.block.trailblaze.model.DesktopAppRunYamlParams
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.ui.TrailblazeBuiltInTabs
+import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.ui.TrailblazeSettingsRepo
 import xyz.block.trailblaze.ui.composables.DefaultDeviceClassifierIconProvider
@@ -113,7 +114,7 @@ abstract class TrailblazeDesktopAppConfig(
 
   /**
    * Provider for device classifier icons. Internal builds can override
-   * to add proprietary icons like PNG resources for "squid" devices.
+   * to add custom icons for customized use cases.
    */
   open val deviceClassifierIconProvider: DeviceClassifierIconProvider =
     DefaultDeviceClassifierIconProvider
@@ -171,6 +172,10 @@ abstract class TrailblazeDesktopAppConfig(
   /**
    * Creates the standard set of tabs (Sessions, Trails, Devices, YAML, Settings).
    * Subclasses can call this and add/remove tabs as needed.
+   *
+   * @param isProviderLocked Whether the LLM provider dropdown starts locked.
+   *   When true, the provider dropdown is disabled and a lock icon is shown to unlock it.
+   *   Defaults to false (unlocked) for open source builds.
    */
   protected fun getStandardTabs(
     deviceManager: TrailblazeDeviceManager,
@@ -178,6 +183,8 @@ abstract class TrailblazeDesktopAppConfig(
     additionalInstrumentationArgsProvider: suspend () -> Map<String, String>,
     globalSettingsContent: @Composable ColumnScope.(TrailblazeServerState) -> Unit,
     customEnvVarNames: List<String>,
+    openGoose: (() -> Unit)? = null,
+    isProviderLocked: Boolean = false,
   ): List<TrailblazeAppTab> {
     return listOf(
       TrailblazeBuiltInTabs.homeTab(
@@ -209,6 +216,8 @@ abstract class TrailblazeDesktopAppConfig(
         globalSettingsContent = globalSettingsContent,
         availableModelLists = getCurrentlyAvailableLlmModelLists(),
         customEnvVarNames = customEnvVarNames,
+        openGoose = openGoose ?: { TrailblazeDesktopUtil.openGoose() },
+        isProviderLocked = isProviderLocked,
       ),
     )
   }

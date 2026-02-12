@@ -7,7 +7,7 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDevicePort.getMaestroOnDeviceSpecificPort
 import xyz.block.trailblaze.devices.TrailblazeDriverType
-import xyz.block.trailblaze.host.screenstate.toTrailblazeDevicePlatform
+import xyz.block.trailblaze.host.toTrailblazeDevicePlatform
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 
 object TrailblazeDeviceService {

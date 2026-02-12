@@ -259,14 +259,14 @@ object TrailblazeDesktopUtil {
   /**
    * Opens Goose with the Trailblaze recipe.
    * Ensures the Trailblaze extension is installed before opening.
-   * @param activities Optional list of activities to include. Defaults to [defaultOpenSourceActivities].
+   * @param recipe The Goose recipe to launch with. Defaults to the base Trailblaze recipe with
+   *   [defaultOpenSourceActivities].
    */
   @OptIn(ExperimentalEncodingApi::class)
-  fun openGoose(activities: List<String> = defaultOpenSourceActivities) {
+  fun openGoose(recipe: GooseRecipe = createGooseRecipe(defaultOpenSourceActivities)) {
     // Ensure the extension is installed before opening Goose
     ensureTrailblazeExtensionInstalledInGoose()
 
-    val recipe = createGooseRecipe(activities)
     val recipeJsonString = gooseRecipeJson.encodeToString(GooseRecipe.serializer(), recipe)
     val recipeBase64 = Base64.encode(recipeJsonString.toByteArray())
     val recipeEncoded = URLEncoder.encode(recipeBase64, Charsets.UTF_8)

@@ -70,6 +70,29 @@ class TrailblazeKoogLlmClientHelper(
 
   fun getShouldForceToolCall(): Boolean = shouldForceToolCall
 
+  /**
+   * Builds a device description string that combines classifiers, platform, and screen dimensions.
+   * Only includes the platform in parentheses if it differs from the first classifier.
+   * Examples:
+   * - "android - 1080x2400" (first classifier matches platform)
+   * - "classifier1, classifier2 (android) - 1080x2400" (first classifier differs from platform)
+   */
+  private fun buildDeviceDescription(screenState: ScreenState): String {
+    val classifiers = screenState.deviceClassifiers
+    val platform = screenState.trailblazeDevicePlatform.displayName
+    val classifierList = classifiers.joinToString(", ") { it.classifier }
+    val firstClassifier = classifiers.firstOrNull()?.classifier
+    val dimensions = "${screenState.deviceWidth}x${screenState.deviceHeight}"
+
+    val devicePart = if (firstClassifier != null && !firstClassifier.equals(platform, ignoreCase = true)) {
+      "$classifierList ($platform)"
+    } else {
+      classifierList.ifEmpty { platform }
+    }
+
+    return "$devicePart - $dimensions"
+  }
+
   private var forceStepStatusUpdate = false
 
   fun setForceStepStatusUpdate(force: Boolean) {
@@ -295,7 +318,7 @@ class TrailblazeKoogLlmClientHelper(
         content = TemplatingUtil.renderTemplate(
           template = systemPromptTemplate,
           values = mapOf(
-            "device_platform" to stepStatus.currentScreenState.trailblazeDevicePlatform.displayName,
+            "device_description" to buildDeviceDescription(stepStatus.currentScreenState),
           ),
         ),
         metaInfo = RequestMetaInfo.create(Clock.System),

@@ -36,6 +36,14 @@ object TrailblazeHostYamlRunner {
     onProgressMessage("Initializing $trailblazeDeviceId test runner...")
 
     val runYamlRequest = runOnHostParams.runYamlRequest
+
+    // Gather ALL custom tool classes from ALL available app targets for YAML deserialization.
+    // This ensures any tool referenced in a trail file can be deserialized regardless of which
+    // app target is selected. The LLM tool repo still uses the target-specific customToolClasses.
+    val allSerializationToolClasses = deviceManager.availableAppTargets
+      .flatMap { it.getAllCustomToolClassesForSerialization() }
+      .toSet()
+
     val hostTbRunner = object : BaseHostTrailblazeTest(
       trailblazeDriverType = runOnHostParams.trailblazeDriverType,
       customToolClasses = runOnHostParams.targetTestApp
@@ -46,6 +54,7 @@ object TrailblazeHostYamlRunner {
         ?.getExcludedToolsForDriver(
           runOnHostParams.trailblazeDriverType,
         ) ?: emptySet(),
+      allSerializationToolClasses = allSerializationToolClasses,
       dynamicLlmClient = dynamicLlmClient,
       trailblazeLlmModel = runYamlRequest.trailblazeLlmModel,
       config = runYamlRequest.config,

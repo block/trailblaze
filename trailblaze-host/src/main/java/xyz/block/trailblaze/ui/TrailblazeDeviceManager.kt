@@ -21,6 +21,7 @@ import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeElementSelector
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
@@ -364,6 +365,7 @@ class TrailblazeDeviceManager(
             override val viewHierarchy: ViewHierarchyTreeNode = viewHierarchy
             override val trailblazeDevicePlatform: TrailblazeDevicePlatform =
               trailblazeDeviceId.trailblazeDevicePlatform
+            override val deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList()
           }
         }
       }

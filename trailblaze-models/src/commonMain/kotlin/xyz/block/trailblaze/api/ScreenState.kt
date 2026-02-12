@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.api
 
+import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 
 interface ScreenState {
@@ -41,4 +42,6 @@ interface ScreenState {
   val viewHierarchy: ViewHierarchyTreeNode
 
   val trailblazeDevicePlatform: TrailblazeDevicePlatform
+
+  val deviceClassifiers: List<TrailblazeDeviceClassifier>
 }

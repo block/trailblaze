@@ -20,9 +20,7 @@ import xcuitest.installer.LocalXCTestInstaller.IOSDriverConfig
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
-import java.net.ServerSocket
 import java.nio.file.Paths
-import java.util.concurrent.TimeUnit
 import kotlin.io.path.pathString
 
 internal object HostIosDriverFactory {
@@ -37,32 +35,6 @@ internal object HostIosDriverFactory {
 
   @Volatile
   private var hasPerformedInitialCleanup = false
-
-  private fun waitForPortRelease(
-    port: Int,
-    timeoutMs: Long,
-  ): Boolean {
-    val startTime = System.currentTimeMillis()
-    var attempts = 0
-    while (System.currentTimeMillis() - startTime < timeoutMs) {
-      try {
-        ServerSocket(port).close()
-        println("Port $port successfully released after ${System.currentTimeMillis() - startTime}ms")
-        return true
-      } catch (e: Exception) {
-        attempts++
-        if (attempts % 10 == 0) {
-          println(
-            "Still waiting for port $port to be released... " +
-                "(${System.currentTimeMillis() - startTime}ms elapsed)",
-          )
-        }
-        Thread.sleep(100)
-      }
-    }
-    println("Warning: Port $port may still be in use after ${timeoutMs}ms timeout")
-    return false
-  }
 
   fun createIOS(
     deviceId: String,
@@ -88,13 +60,13 @@ internal object HostIosDriverFactory {
     // Only perform cleanup on first creation in this JVM (handles stale processes from previous runs)
     if (!hasPerformedInitialCleanup) {
       println("Performing initial cleanup for fresh JVM - killing stale processes on port $targetPort")
-      killProcessesUsingPort(targetPort)
+      HostDriverPortUtils.killProcessesUsingPort(targetPort)
       // Give the system more time to fully release the port after killing processes
       Thread.sleep(2000)
       hasPerformedInitialCleanup = true
     } else {
       println("Skipping process cleanup - reusing connection within same JVM session")
-      waitForPortRelease(port = targetPort, timeoutMs = 5000)
+      HostDriverPortUtils.waitForPortRelease(port = targetPort, timeoutMs = 5000)
     }
 
     val iOSDeviceType = when (deviceType) {
@@ -244,36 +216,4 @@ internal object HostIosDriverFactory {
     return false
   }
 
-  private fun killProcessesUsingPort(port: Int) {
-    try {
-      // Use lsof to find processes using the port
-      val lsofProcess = ProcessBuilder(listOf("lsof", "-ti:$port"))
-        .redirectErrorStream(true)
-        .start()
-
-      val lsofCompleted = lsofProcess.waitFor(5, TimeUnit.SECONDS)
-      if (!lsofCompleted) {
-        lsofProcess.destroyForcibly()
-        return
-      }
-
-      val pids = lsofProcess.inputStream.bufferedReader().readText().trim()
-
-      if (pids.isNotEmpty()) {
-        pids.split("\n").filter { it.isNotBlank() }.forEach { pid ->
-          try {
-            val pidTrimmed = pid.trim()
-            // Force kill the process
-            ProcessBuilder(listOf("kill", "-9", pidTrimmed))
-              .start()
-              .waitFor(2, TimeUnit.SECONDS)
-          } catch (e: Exception) {
-            // Ignore individual process kill failures
-          }
-        }
-      }
-    } catch (e: Exception) {
-      // Ignore cleanup failures - don't prevent new connections
-    }
-  }
 }

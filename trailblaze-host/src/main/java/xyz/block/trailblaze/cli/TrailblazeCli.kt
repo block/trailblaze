@@ -267,10 +267,17 @@ class RunCommand : Callable<Int> {
     val completionLatch = CountDownLatch(1)
     var exitCode = CommandLine.ExitCode.OK
 
+    // Use the currently selected target app from settings so that custom tools
+    // (e.g., square_launchAppSignedIn) are available during YAML deserialization & execution.
+    val targetTestApp = app.deviceManager.getCurrentSelectedTargetApp()
+    if (verbose) {
+      println("Target app: ${targetTestApp?.displayName ?: "None (using built-in tools only)"}")
+    }
+
     val params = DesktopAppRunYamlParams(
       forceStopTargetApp = false,
       runYamlRequest = runYamlRequest,
-      targetTestApp = null,
+      targetTestApp = targetTestApp,
       onProgressMessage = { message ->
         println(message)
       },
