@@ -43,6 +43,7 @@ import xyz.block.trailblaze.ui.tabs.session.group.ChatHistoryDialog
 import xyz.block.trailblaze.ui.tabs.session.group.LogDetailsDialog
 import xyz.block.trailblaze.ui.tabs.session.models.SessionDetail
 import xyz.block.trailblaze.ui.tabs.testresults.TestResultsComposable
+import xyz.block.trailblaze.util.Console
 
 // Central data provider instance
 private val dataProvider: TrailblazeLogsDataProvider = InlinedDataLoader
@@ -60,7 +61,7 @@ fun TrailblazeApp() {
 
   val toMaestroYaml: (JsonObject) -> String = { it.toString() }
 
-  println("Using data provider: $dataProvider")
+  Console.log("Using data provider: $dataProvider")
 
   // Parse initial route from URL hash for backward compatibility with existing bookmarks
   val initialRoute = remember {
@@ -186,11 +187,11 @@ fun SessionListViewLoader(
       errorMessage = null
 
       val startTime = window.performance.now()
-      println("📋 [${startTime.toInt()}ms] Loading session list...")
+      Console.log("📋 [${startTime.toInt()}ms] Loading session list...")
 
       val sessionNames = dataProvider.getSessionIdsAsync()
       val namesEndTime = window.performance.now()
-      println("📝 [${namesEndTime.toInt()}ms] Got ${sessionNames.size} session IDs in ${(namesEndTime - startTime).toInt()}ms")
+      Console.log("📝 [${namesEndTime.toInt()}ms] Got ${sessionNames.size} session IDs in ${(namesEndTime - startTime).toInt()}ms")
 
       val infoStartTime = window.performance.now()
       val logsMap = mutableMapOf<String, List<TrailblazeLog>>()
@@ -203,11 +204,11 @@ fun SessionListViewLoader(
       sessionLogsMap = logsMap
 
       val infoEndTime = window.performance.now()
-      println("✅ [${infoEndTime.toInt()}ms] Loaded ${logsMap.size} sessions in ${(infoEndTime - infoStartTime).toInt()}ms")
-      println("🎉 [${infoEndTime.toInt()}ms] Total session list load time: ${(infoEndTime - startTime).toInt()}ms")
+      Console.log("✅ [${infoEndTime.toInt()}ms] Loaded ${logsMap.size} sessions in ${(infoEndTime - infoStartTime).toInt()}ms")
+      Console.log("🎉 [${infoEndTime.toInt()}ms] Total session list load time: ${(infoEndTime - startTime).toInt()}ms")
     } catch (e: Exception) {
       errorMessage = "Failed to load sessions: ${e.message}"
-      println("❌ Error loading sessions: ${e.message}")
+      Console.log("❌ Error loading sessions: ${e.message}")
       sessionLogsMap = emptyMap()
     } finally {
       isLoading = false
@@ -337,20 +338,20 @@ fun WasmSessionDetailView(
       errorMessage = null
 
       val startTime = window.performance.now()
-      println("📥 [${startTime.toInt()}ms] Starting to load session: $sessionName")
+      Console.log("📥 [${startTime.toInt()}ms] Starting to load session: $sessionName")
 
       // Load session info first (from lightweight map, should be fast)
       val infoStartTime = window.performance.now()
       val sessionId = xyz.block.trailblaze.logs.model.SessionId(sessionName)
       sessionInfo = dataProvider.getSessionInfoAsync(sessionId)
       val infoEndTime = window.performance.now()
-      println("📋 [${infoEndTime.toInt()}ms] Session info loaded in ${(infoEndTime - infoStartTime).toInt()}ms")
+      Console.log("📋 [${infoEndTime.toInt()}ms] Session info loaded in ${(infoEndTime - infoStartTime).toInt()}ms")
 
       // Now load logs (this is the heavy operation)
       val logsStartTime = window.performance.now()
       val fetchedLogs: List<TrailblazeLog> = dataProvider.getLogsForSessionAsync(sessionId)
       val logsEndTime = window.performance.now()
-      println("📦 [${logsEndTime.toInt()}ms] Fetched ${fetchedLogs.size} logs in ${(logsEndTime - logsStartTime).toInt()}ms")
+      Console.log("📦 [${logsEndTime.toInt()}ms] Fetched ${fetchedLogs.size} logs in ${(logsEndTime - logsStartTime).toInt()}ms")
 
       // Don't resolve screenshots immediately - they'll be loaded on-demand when rendered
       // This significantly speeds up initial page load
@@ -361,22 +362,22 @@ fun WasmSessionDetailView(
       try {
         recordingYaml = dataProvider.getSessionRecordingYaml(sessionId)
         val yamlEndTime = window.performance.now()
-        println("📝 [${yamlEndTime.toInt()}ms] Recording YAML loaded in ${(yamlEndTime - yamlStartTime).toInt()}ms")
+        Console.log("📝 [${yamlEndTime.toInt()}ms] Recording YAML loaded in ${(yamlEndTime - yamlStartTime).toInt()}ms")
       } catch (e: Exception) {
-        println("⚠️ Failed to load recording YAML: ${e.message}")
+        Console.log("⚠️ Failed to load recording YAML: ${e.message}")
         recordingYaml =
           "# Error loading YAML: ${e.message}\n# YAML is pre-generated on the JVM and should be available in chunks."
       }
 
       val totalTime = window.performance.now() - startTime
-      println(
+      Console.log(
         "✅ [${
           window.performance.now().toInt()
         }ms] Total loading time: ${totalTime.toInt()}ms"
       )
     } catch (e: Exception) {
       errorMessage = "Failed to load logs: ${e.message}"
-      println("❌ Error loading session: ${e.message}")
+      Console.log("❌ Error loading session: ${e.message}")
       e.printStackTrace()
     } finally {
       isLoading = false
@@ -386,7 +387,7 @@ fun WasmSessionDetailView(
   // Show UI as soon as we have data
   if (sessionInfo != null && logs.isNotEmpty()) {
     val renderStartTime = window.performance.now()
-    println("🎨 [${renderStartTime.toInt()}ms] Starting to render SessionDetailComposable with ${logs.size} logs")
+    Console.log("🎨 [${renderStartTime.toInt()}ms] Starting to render SessionDetailComposable with ${logs.size} logs")
 
     Box(modifier = Modifier.fillMaxSize()) {
       SessionDetailComposable(

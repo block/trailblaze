@@ -22,6 +22,7 @@ import okio.gzip
 import xyz.block.trailblaze.host.devices.HostWebDriverFactory.Companion.isRunningOnCi
 import java.io.File
 import java.util.concurrent.TimeUnit
+import xyz.block.trailblaze.util.Console
 
 /**
  * A maestro driver for Playwright, the web automation framework
@@ -112,7 +113,7 @@ class MaestroPlaywrightDriver(headless: Boolean) : Driver {
   val browser = if (System.getenv("PW_TEST_CONNECT_WS_ENDPOINT") != null) {
     val endpoint = System.getenv("PW_TEST_CONNECT_WS_ENDPOINT")
     if (endpoint != null) {
-      println("Connecting to WebSocket endpoint: $endpoint")
+      Console.log("Connecting to WebSocket endpoint: $endpoint")
       var retryCount = 0
       var connected = false
       var browserInstance: Browser? = null
@@ -123,10 +124,10 @@ class MaestroPlaywrightDriver(headless: Boolean) : Driver {
         } catch (e: Exception) {
           retryCount++
           if (retryCount < 3) {
-            println("Error connecting to WebSocket endpoint: $e. Retrying in 1 second...")
+            Console.log("Error connecting to WebSocket endpoint: $e. Retrying in 1 second...")
             TimeUnit.SECONDS.sleep(1)
           } else {
-            println("Error connecting to WebSocket endpoint: $e")
+            Console.log("Error connecting to WebSocket endpoint: $e")
             throw e
           }
         }
@@ -204,7 +205,7 @@ class MaestroPlaywrightDriver(headless: Boolean) : Driver {
 
     // Handle new tabs: automatically switch to them
     page.onPopup { popup ->
-      println("[Playwright] New tab detected, switching currentPage to: ${popup.url()}")
+      Console.log("[Playwright] New tab detected, switching currentPage to: ${popup.url()}")
       // Set up the new page for automation too
       setupPageForAutomation(popup)
       // Switch to the new tab
@@ -212,9 +213,9 @@ class MaestroPlaywrightDriver(headless: Boolean) : Driver {
       // Wait for the new page to be ready
       try {
         popup.waitForLoadState(com.microsoft.playwright.options.LoadState.LOAD)
-        println("[Playwright] New tab loaded: ${popup.url()}")
+        Console.log("[Playwright] New tab loaded: ${popup.url()}")
       } catch (e: Exception) {
-        println("[Playwright] Warning: New tab load wait failed: ${e.message}")
+        Console.log("[Playwright] Warning: New tab load wait failed: ${e.message}")
       }
     }
   }
@@ -223,15 +224,15 @@ class MaestroPlaywrightDriver(headless: Boolean) : Driver {
     // Set up the initial page for automation (timeouts, animations disabled, popup handling)
     setupPageForAutomation(currentPage)
 
-    println("Playwright driver initialized with timeouts - Navigation: ${navigationTimeout}ms, Default: ${defaultTimeout}ms")
-    println("CI environment detected: $isCI")
-    println("Browser connected: ${browser.isConnected}")
+    Console.log("Playwright driver initialized with timeouts - Navigation: ${navigationTimeout}ms, Default: ${defaultTimeout}ms")
+    Console.log("CI environment detected: $isCI")
+    Console.log("Browser connected: ${browser.isConnected}")
   }
 
   // Debugging helpers for current page state and network
   private fun debugPageState(label: String = "") {
     try {
-      println("=== Debug Page State ${if (label.isNotBlank()) "[$label]" else ""} ===")
+      Console.log("=== Debug Page State ${if (label.isNotBlank()) "[$label]" else ""} ===")
       val url = currentPage.url()
       val title = try {
         currentPage.title()
@@ -243,19 +244,19 @@ class MaestroPlaywrightDriver(headless: Boolean) : Driver {
       } catch (_: Exception) {
         "<error>"
       }
-      println("  URL: $url")
-      println("  Title: $title")
-      println("  Performance timing: $loadingState")
+      Console.log("  URL: $url")
+      Console.log("  Title: $title")
+      Console.log("  Performance timing: $loadingState")
       // Network info: active requests (using performance API)
       try {
         val activeRequests =
           currentPage.evaluate("window.performance.getEntriesByType('resource').filter(e => e.initiatorType === 'xmlhttprequest' || e.initiatorType === 'fetch').length")
-        println("  Active XHR/fetch network requests: $activeRequests")
+        Console.log("  Active XHR/fetch network requests: $activeRequests")
       } catch (_: Exception) {
       }
-      println("=== End Debug Page State ===")
+      Console.log("=== End Debug Page State ===")
     } catch (ex: Exception) {
-      println("Error during debugPageState: ${ex.message}")
+      Console.log("Error during debugPageState: ${ex.message}")
     }
   }
 
@@ -290,23 +291,23 @@ class MaestroPlaywrightDriver(headless: Boolean) : Driver {
   }
 
   override fun close() {
-    println("[Playwright] Closing browser...")
+    Console.log("[Playwright] Closing browser...")
     try {
       // Close all pages in the context
       browserContext.pages().forEach { page ->
         try {
           page.close()
         } catch (e: Exception) {
-          println("[Playwright] Warning: Failed to close page: ${e.message}")
+          Console.log("[Playwright] Warning: Failed to close page: ${e.message}")
         }
       }
       // Close the context
       browserContext.close()
       // Close the browser
       browser.close()
-      println("[Playwright] Browser closed successfully")
+      Console.log("[Playwright] Browser closed successfully")
     } catch (e: Exception) {
-      println("[Playwright] Error closing browser: ${e.message}")
+      Console.log("[Playwright] Error closing browser: ${e.message}")
     }
   }
 
@@ -318,7 +319,7 @@ class MaestroPlaywrightDriver(headless: Boolean) : Driver {
    * - Closes any extra tabs
    */
   fun resetSession() {
-    println("[Playwright] Resetting browser session...")
+    Console.log("[Playwright] Resetting browser session...")
     try {
       // Close all extra pages, keep only one
       val pages = browserContext.pages()
@@ -327,7 +328,7 @@ class MaestroPlaywrightDriver(headless: Boolean) : Driver {
           try {
             page.close()
           } catch (e: Exception) {
-            println("[Playwright] Warning: Failed to close extra page: ${e.message}")
+            Console.log("[Playwright] Warning: Failed to close extra page: ${e.message}")
           }
         }
       }
@@ -340,9 +341,9 @@ class MaestroPlaywrightDriver(headless: Boolean) : Driver {
       // Clear cookies and storage
       browserContext.clearCookies()
 
-      println("[Playwright] Browser session reset successfully")
+      Console.log("[Playwright] Browser session reset successfully")
     } catch (e: Exception) {
-      println("[Playwright] Error resetting session: ${e.message}")
+      Console.log("[Playwright] Error resetting session: ${e.message}")
     }
   }
 
@@ -435,69 +436,69 @@ class MaestroPlaywrightDriver(headless: Boolean) : Driver {
 
     // Preprocess link if needed (for debugging or normalization)
     val processedLink = link.trim()
-    println("[Playwright] openLink (raw): $link")
-    println("[Playwright] openLink (processed): $processedLink")
+    Console.log("[Playwright] openLink (raw): $link")
+    Console.log("[Playwright] openLink (processed): $processedLink")
 
     while (retryCount < maxRetries) {
       try {
         val startTimeMs = System.currentTimeMillis()
-        println("[Playwright] Starting navigation to: $processedLink")
+        Console.log("[Playwright] Starting navigation to: $processedLink")
         debugPageState("Before navigation")
         currentPage.navigate(processedLink)
-        println("[Playwright] Navigation to '$processedLink' successful")
+        Console.log("[Playwright] Navigation to '$processedLink' successful")
         debugPageState("After navigation")
 
         // Wait for multiple selectors for robustness
         for (selector in waitForSelectors) {
           try {
-            println("[Playwright] Waiting for selector: '$selector' (timeout ${waitTimeoutMs}ms)")
+            Console.log("[Playwright] Waiting for selector: '$selector' (timeout ${waitTimeoutMs}ms)")
             currentPage.waitForSelector(
               selector,
               com.microsoft.playwright.Page.WaitForSelectorOptions()
                 .setTimeout(waitTimeoutMs)
                 .setState(com.microsoft.playwright.options.WaitForSelectorState.ATTACHED),
             )
-            println("[Playwright] Selector '$selector' appeared")
+            Console.log("[Playwright] Selector '$selector' appeared")
           } catch (waitEx: Exception) {
-            println("[Playwright] Selector '$selector' not found within timeout: ${waitEx.message}")
+            Console.log("[Playwright] Selector '$selector' not found within timeout: ${waitEx.message}")
           }
         }
 
         // Progressive waiting strategy for navigation settle
         val settleStrategies = mutableListOf<() -> Unit>(
           {
-            println("[Playwright] Waiting for NETWORKIDLE (timeout ${waitTimeoutMs}ms)")
+            Console.log("[Playwright] Waiting for NETWORKIDLE (timeout ${waitTimeoutMs}ms)")
             currentPage.waitForLoadState(
               com.microsoft.playwright.options.LoadState.NETWORKIDLE,
               com.microsoft.playwright.Page.WaitForLoadStateOptions().setTimeout(waitTimeoutMs),
             )
-            println("[Playwright] NETWORKIDLE reached")
+            Console.log("[Playwright] NETWORKIDLE reached")
           },
           {
-            println("[Playwright] Waiting for LOAD (timeout ${waitTimeoutMs}ms)")
+            Console.log("[Playwright] Waiting for LOAD (timeout ${waitTimeoutMs}ms)")
             currentPage.waitForLoadState(
               com.microsoft.playwright.options.LoadState.LOAD,
               com.microsoft.playwright.Page.WaitForLoadStateOptions().setTimeout(waitTimeoutMs),
             )
-            println("[Playwright] LOAD reached")
+            Console.log("[Playwright] LOAD reached")
           },
           {
-            println("[Playwright] Waiting for DOMCONTENTLOADED (timeout ${waitTimeoutMs}ms)")
+            Console.log("[Playwright] Waiting for DOMCONTENTLOADED (timeout ${waitTimeoutMs}ms)")
             currentPage.waitForLoadState(
               com.microsoft.playwright.options.LoadState.DOMCONTENTLOADED,
               com.microsoft.playwright.Page.WaitForLoadStateOptions().setTimeout(waitTimeoutMs),
             )
-            println("[Playwright] DOMCONTENTLOADED reached")
+            Console.log("[Playwright] DOMCONTENTLOADED reached")
           },
           {
             // Fallback: active network requests <= 0, but only if isCI
             if (isCI) {
-              println("[Playwright] Fallback: Polling for network requests to be idle (isCI) up to ${waitTimeoutMs.toLong()}ms")
+              Console.log("[Playwright] Fallback: Polling for network requests to be idle (isCI) up to ${waitTimeoutMs.toLong()}ms")
               val pollStart = System.currentTimeMillis()
               var pollSucceeded = false
               while (System.currentTimeMillis() - pollStart < waitTimeoutMs.toLong()) {
                 val activeRequests = activeNetworkRequestsCount()
-                println("[Playwright] Fallback network poll: activeRequests=$activeRequests (${System.currentTimeMillis() - pollStart}ms elapsed)")
+                Console.log("[Playwright] Fallback network poll: activeRequests=$activeRequests (${System.currentTimeMillis() - pollStart}ms elapsed)")
                 if (activeRequests == 0) {
                   pollSucceeded = true
                   break
@@ -505,9 +506,9 @@ class MaestroPlaywrightDriver(headless: Boolean) : Driver {
                 Thread.sleep(500)
               }
               if (pollSucceeded) {
-                println("[Playwright] Fallback network idle achieved.")
+                Console.log("[Playwright] Fallback network idle achieved.")
               } else {
-                println("[Playwright] Fallback network idle not achieved in time.")
+                Console.log("[Playwright] Fallback network idle not achieved in time.")
               }
             }
           },
@@ -522,39 +523,39 @@ class MaestroPlaywrightDriver(headless: Boolean) : Driver {
             break
           } catch (ex: Exception) {
             lastSettleException = ex
-            println("[Playwright] Navigation settle strategy failed: ${ex.message}")
+            Console.log("[Playwright] Navigation settle strategy failed: ${ex.message}")
           }
         }
         if (!successfullySettled) {
-          println("[Playwright] All navigation settle strategies failed.")
+          Console.log("[Playwright] All navigation settle strategies failed.")
           lastSettleException?.let {
-            println("[Playwright] Last settle exception: ${it.message}")
+            Console.log("[Playwright] Last settle exception: ${it.message}")
           }
         }
 
         // Debug diagnostics after attempted load
         debugPageState("After all waits")
-        println("[Playwright] Active network requests after load: ${activeNetworkRequestsCount()}")
+        Console.log("[Playwright] Active network requests after load: ${activeNetworkRequestsCount()}")
 
         // Debug: print timing
         val elapsedMs = System.currentTimeMillis() - startTimeMs
-        println("[Playwright] openLink total elapsed: ${elapsedMs}ms")
+        Console.log("[Playwright] openLink total elapsed: ${elapsedMs}ms")
         return
       } catch (ex: Exception) {
         lastException = ex
         retryCount += 1
-        println("[Playwright] Error navigating to link ($processedLink) attempt $retryCount/$maxRetries: ${ex.message}")
+        Console.log("[Playwright] Error navigating to link ($processedLink) attempt $retryCount/$maxRetries: ${ex.message}")
         debugPageState("Navigation Failure $retryCount/$maxRetries")
-        println("[Playwright] Active network requests after failure: ${activeNetworkRequestsCount()}")
+        Console.log("[Playwright] Active network requests after failure: ${activeNetworkRequestsCount()}")
         if (retryCount < maxRetries) {
           val delay = 1200L * retryCount
-          println("[Playwright] Retrying in $delay ms")
+          Console.log("[Playwright] Retrying in $delay ms")
           try {
             Thread.sleep(delay)
           } catch (_: InterruptedException) {
           }
         } else {
-          println("[Playwright] All retries failed")
+          Console.log("[Playwright] All retries failed")
         }
       }
     }

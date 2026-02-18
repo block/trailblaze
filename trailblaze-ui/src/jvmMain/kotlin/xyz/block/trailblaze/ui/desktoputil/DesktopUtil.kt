@@ -3,6 +3,7 @@ package xyz.block.trailblaze.ui.desktoputil
 import java.awt.Desktop
 import java.io.File
 import xyz.block.trailblaze.ui.DesktopOsType
+import xyz.block.trailblaze.util.Console
 
 /**
  * Desktop utility functions for file operations.
@@ -34,7 +35,7 @@ object DesktopUtil {
     if (file.exists()) {
       Desktop.getDesktop().open(file)
     } else {
-      println("File does not exist: ${file.absolutePath}")
+      Console.log("File does not exist: ${file.absolutePath}")
     }
   }
 
@@ -45,7 +46,7 @@ object DesktopUtil {
    */
   fun revealFileInFinder(file: File) {
     if (!file.exists()) {
-      println("File does not exist: ${file.absolutePath}")
+      Console.log("File does not exist: ${file.absolutePath}")
       return
     }
 
@@ -69,7 +70,7 @@ object DesktopUtil {
         }
       }
     } catch (e: Exception) {
-      println("Failed to reveal file in Finder: ${e.message}")
+      Console.log("Failed to reveal file in Finder: ${e.message}")
       e.printStackTrace()
       // Fallback: just open the parent directory
       try {
@@ -77,7 +78,7 @@ object DesktopUtil {
           Desktop.getDesktop().open(file.parentFile)
         }
       } catch (fallbackException: Exception) {
-        println("Fallback also failed: ${fallbackException.message}")
+        Console.log("Fallback also failed: ${fallbackException.message}")
         fallbackException.printStackTrace()
       }
     }

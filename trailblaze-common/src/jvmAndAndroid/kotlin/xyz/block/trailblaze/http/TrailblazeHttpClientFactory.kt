@@ -12,6 +12,7 @@ import java.security.cert.X509Certificate
 import javax.net.ssl.SSLContext
 import javax.net.ssl.TrustManager
 import javax.net.ssl.X509TrustManager
+import xyz.block.trailblaze.util.Console
 
 /**
  * Factory for creating a Trailblaze HttpClient.
@@ -53,7 +54,7 @@ object TrailblazeHttpClientFactory {
       logger = object : Logger {
         override fun log(message: String) {
           // Log the request and response details
-          println("TrailblazeClient: $message")
+          Console.log("TrailblazeClient: $message")
         }
       }
       level = LogLevel.NONE

@@ -22,9 +22,11 @@ class MetadataSerializationTest {
             environment: "staging"
       - prompts:
         - step: Navigate to checkout
-      - maestro:
-        - assertVisible:
-            text: "Hello World"
+        - verify: Verify text "Hello World" is visible
+          recording:
+            tools:
+            - assertVisibleWithText:
+                text: "Hello World"
     """.trimIndent()
 
     val config = trailblazeYaml.extractTrailConfig(yaml)
@@ -38,7 +40,7 @@ class MetadataSerializationTest {
 
     // Also verify we can parse the trail items
     val trailItems = trailblazeYaml.decodeTrail(yaml)
-    assertEquals(3, trailItems.size) // config, prompts, maestro
+    assertEquals(2, trailItems.size) // config, prompts
   }
 
   @Test
@@ -46,16 +48,18 @@ class MetadataSerializationTest {
     val yaml = """
       - prompts:
         - step: Navigate to checkout
-      - maestro:
-        - assertVisible:
-            text: "Hello World"
+        - verify: Verify text "Hello World"is visible
+          recording:
+            tools:
+            - assertVisibleWithText:
+                text: "Hello World"
     """.trimIndent()
 
     val config = trailblazeYaml.extractTrailConfig(yaml)
     assertNull(config)
 
     val trailItems = trailblazeYaml.decodeTrail(yaml)
-    assertEquals(2, trailItems.size)
+    assertEquals(1, trailItems.size)
   }
 
   @Test

@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.ui.goose
 
 import kotlinx.serialization.json.Json
+import xyz.block.trailblaze.devices.TrailblazeDevicePort
 
 /**
  * JSON encoder configured for Goose recipe serialization.
@@ -11,14 +12,20 @@ val gooseRecipeJson = Json {
 }
 
 /**
- * The base Trailblaze extension configuration for Goose recipes.
+ * Creates a Trailblaze extension configuration for Goose recipes.
+ * @param port The HTTP port the Trailblaze server is running on.
  */
-val TrailblazeGooseExtension = GooseExtension(
+fun createTrailblazeGooseExtension(port: Int = TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTP_PORT) = GooseExtension(
   type = "streamable_http",
   name = "trailblaze",
   description = "AI Powered UI Testing Framework and Device Control for Android, iOS and Web",
-  uri = "http://localhost:52525/mcp",
+  uri = "http://localhost:$port/mcp",
 )
+
+/**
+ * The base Trailblaze extension configuration for Goose recipes (using default port).
+ */
+val TrailblazeGooseExtension = createTrailblazeGooseExtension()
 
 /**
  * The base Goose recipe for Trailblaze (without activities).
@@ -38,10 +45,12 @@ val baseGooseRecipe = GooseRecipe(
 /**
  * Creates a Goose recipe with custom activities.
  * @param activities List of activity descriptions to include in the recipe
+ * @param port The HTTP port the Trailblaze server is running on.
  * @return A new GooseRecipe with the specified activities
  */
-fun createGooseRecipe(activities: List<String> = emptyList()): GooseRecipe {
-  return baseGooseRecipe.copy(activities = activities)
+fun createGooseRecipe(activities: List<String> = emptyList(), port: Int = TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTP_PORT): GooseRecipe {
+  val extension = createTrailblazeGooseExtension(port)
+  return baseGooseRecipe.copy(activities = activities, extensions = listOf(extension))
 }
 
 /**

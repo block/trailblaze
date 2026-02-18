@@ -7,6 +7,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeJson
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.ui.models.TrailblazeServerState.SavedTrailblazeAppConfig
 import java.io.File
+import xyz.block.trailblaze.util.Console
 
 /**
  * Lightweight helper for CLI config commands.
@@ -33,7 +34,7 @@ object CliConfigHelper {
         null
       }
     } catch (e: Exception) {
-      System.err.println("Error reading config: ${e.message}")
+      Console.error("Error reading config: ${e.message}")
       null
     }
   }

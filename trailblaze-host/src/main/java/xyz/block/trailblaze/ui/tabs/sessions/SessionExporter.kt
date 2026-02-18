@@ -10,6 +10,7 @@ import java.util.zip.ZipOutputStream
 import javax.swing.JFileChooser
 import javax.swing.SwingUtilities
 import javax.swing.filechooser.FileNameExtensionFilter
+import xyz.block.trailblaze.util.Console
 
 /**
  * Utility for exporting Trailblaze sessions to ZIP archives.
@@ -95,7 +96,7 @@ object SessionExporter {
         }
       }
     } catch (e: Exception) {
-      println("Failed to show file chooser: ${e.message}")
+      Console.log("Failed to show file chooser: ${e.message}")
       return SessionExportResult.Error(
         title = "Dialog Error",
         message = "Failed to show file chooser dialog:\n${e.message}"
@@ -118,7 +119,7 @@ object SessionExporter {
         zipFile = zipFile.absolutePath
       )
     } catch (e: Exception) {
-      println("Failed to create zip: ${e.message}")
+      Console.log("Failed to create zip: ${e.message}")
       SessionExportResult.Error(
         title = "Export Failed",
         message = "Failed to create zip file:\n${e.message}"

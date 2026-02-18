@@ -4,6 +4,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionInfo
 import java.io.File
+import xyz.block.trailblaze.util.Console
 
 /**
  * Collects and organizes snapshots from pre-parsed logs.
@@ -35,7 +36,7 @@ class SnapshotCollector(private val logsDir: File) {
     logsBySession: Map<SessionId, List<TrailblazeLog>>,
     sessionInfoBySession: Map<SessionId, SessionInfo?>
   ): Map<String, List<SnapshotMetadata>> {
-    println("📸 Collecting snapshots from ${logsBySession.size} session(s)...")
+    Console.log("📸 Collecting snapshots from ${logsBySession.size} session(s)...")
     
     val snapshots = mutableListOf<SnapshotMetadata>()
     var totalSnapshotLogs = 0
@@ -63,21 +64,21 @@ class SnapshotCollector(private val logsDir: File) {
         
         if (metadata != null) {
           snapshots.add(metadata)
-          println("✅ Found snapshot: ${metadata.shortTestName()} - ${metadata.displayName()}")
+          Console.log("✅ Found snapshot: ${metadata.shortTestName()} - ${metadata.displayName()}")
         } else {
-          println("⚠️  Skipping snapshot (screenshot file not found): ${snapshotLog.screenshotFile}")
+          Console.log("⚠️  Skipping snapshot (screenshot file not found): ${snapshotLog.screenshotFile}")
         }
       }
     }
     
-    println("📸 Found $totalSnapshotLogs snapshot log(s) across ${logsBySession.size} session(s)")
+    Console.log("📸 Found $totalSnapshotLogs snapshot log(s) across ${logsBySession.size} session(s)")
     
     if (snapshots.isEmpty() && totalSnapshotLogs > 0) {
-      println("⚠️  Warning: Found $totalSnapshotLogs snapshot log(s) but could not locate any screenshot files.")
-      println("   This may happen if:")
-      println("   - Screenshot files were not saved to disk")
-      println("   - Screenshot files are in a different directory")
-      println("   - Logs are from an older version with different filename format")
+      Console.log("⚠️  Warning: Found $totalSnapshotLogs snapshot log(s) but could not locate any screenshot files.")
+      Console.log("   This may happen if:")
+      Console.log("   - Screenshot files were not saved to disk")
+      Console.log("   - Screenshot files are in a different directory")
+      Console.log("   - Logs are from an older version with different filename format")
     }
     
     // Group by full test name and sort by timestamp within each group

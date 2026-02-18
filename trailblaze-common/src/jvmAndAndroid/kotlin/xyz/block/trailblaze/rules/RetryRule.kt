@@ -3,6 +3,7 @@ package xyz.block.trailblaze.rules
 import org.junit.rules.TestRule
 import org.junit.runner.Description
 import org.junit.runners.model.Statement
+import xyz.block.trailblaze.util.Console
 
 /**
  * A JUnit rule that retries a test if it fails.
@@ -102,31 +103,31 @@ class RetryRule(private val maxRetries: Int) : TestRule {
         return
       }
 
-      println("\n" + "=".repeat(70))
-      println("📊 RETRY SUMMARY - ${retriedTests.size} test(s) required retries")
-      println("=".repeat(70))
+      Console.log("\n" + "=".repeat(70))
+      Console.log("📊 RETRY SUMMARY - ${retriedTests.size} test(s) required retries")
+      Console.log("=".repeat(70))
 
       val succeeded = retriedTests.filter { it.succeeded }
       val failed = retriedTests.filter { !it.succeeded }
 
       if (succeeded.isNotEmpty()) {
-        println("\n✅ Tests that PASSED after retry (${succeeded.size}):")
+        Console.log("\n✅ Tests that PASSED after retry (${succeeded.size}):")
         succeeded.forEach { info ->
-          println("   • ${info.className}.${info.testName}")
-          println("     └─ Passed on attempt ${info.attemptCount}")
+          Console.log("   • ${info.className}.${info.testName}")
+          Console.log("     └─ Passed on attempt ${info.attemptCount}")
         }
       }
 
       if (failed.isNotEmpty()) {
-        println("\n❌ Tests that FAILED even after retry (${failed.size}):")
+        Console.log("\n❌ Tests that FAILED even after retry (${failed.size}):")
         failed.forEach { info ->
-          println("   • ${info.className}.${info.testName}")
-          println("     └─ Failed after ${info.attemptCount} attempts")
+          Console.log("   • ${info.className}.${info.testName}")
+          Console.log("     └─ Failed after ${info.attemptCount} attempts")
         }
       }
 
-      println("\n⚠️  WARNING: Retried tests indicate flakiness and should be investigated!")
-      println("=".repeat(70) + "\n")
+      Console.log("\n⚠️  WARNING: Retried tests indicate flakiness and should be investigated!")
+      Console.log("=".repeat(70) + "\n")
     }
 
     /**
@@ -154,20 +155,20 @@ class RetryRule(private val maxRetries: Int) : TestRule {
           try {
             if (attempt > 0) {
               hadRetry = true
-              println("\n⚠️  ============================================================")
-              println("⚠️  RETRY: ${description.displayName}")
-              println("⚠️  Attempt ${attempt + 1} of ${maxRetries + 1}")
-              println("⚠️  ============================================================\n")
+              Console.log("\n⚠️  ============================================================")
+              Console.log("⚠️  RETRY: ${description.displayName}")
+              Console.log("⚠️  Attempt ${attempt + 1} of ${maxRetries + 1}")
+              Console.log("⚠️  ============================================================\n")
             }
             base.evaluate()
 
             // Test passed
             if (hadRetry) {
               // Test passed after retry - this is important to know!
-              println("\n✅ ============================================================")
-              println("✅ RETRY SUCCEEDED: ${description.displayName}")
-              println("✅ Test passed on attempt ${attempt + 1} after $attempt failure(s)")
-              println("✅ ============================================================\n")
+              Console.log("\n✅ ============================================================")
+              Console.log("✅ RETRY SUCCEEDED: ${description.displayName}")
+              Console.log("✅ Test passed on attempt ${attempt + 1} after $attempt failure(s)")
+              Console.log("✅ ============================================================\n")
 
               // Track this retry
               retriedTests.add(
@@ -183,16 +184,16 @@ class RetryRule(private val maxRetries: Int) : TestRule {
           } catch (t: Throwable) {
             lastException = t
             if (attempt < maxRetries) {
-              println("\n⚠️  Test ${description.displayName} failed on attempt ${attempt + 1}, will retry...")
+              Console.log("\n⚠️  Test ${description.displayName} failed on attempt ${attempt + 1}, will retry...")
             }
           }
         }
 
         // All attempts exhausted, throw the last exception
-        println("\n❌ ============================================================")
-        println("❌ RETRY EXHAUSTED: ${description.displayName}")
-        println("❌ Test failed after ${maxRetries + 1} attempt(s)")
-        println("❌ ============================================================\n")
+        Console.log("\n❌ ============================================================")
+        Console.log("❌ RETRY EXHAUSTED: ${description.displayName}")
+        Console.log("❌ Test failed after ${maxRetries + 1} attempt(s)")
+        Console.log("❌ ============================================================\n")
 
         // Track this failed retry
         retriedTests.add(

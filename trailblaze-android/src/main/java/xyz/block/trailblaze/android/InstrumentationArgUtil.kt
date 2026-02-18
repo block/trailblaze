@@ -1,6 +1,8 @@
 package xyz.block.trailblaze.android
 
 import androidx.test.platform.app.InstrumentationRegistry
+import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.devices.TrailblazeDevicePort
 
 object InstrumentationArgUtil {
 
@@ -23,20 +25,24 @@ object InstrumentationArgUtil {
             appendLine("Unable to access instrumentation argument key: $key")
           }
         }
-      }.also { println(it) }
+      }.also { Console.log(it) }
     }
   }
-
 
   fun getInstrumentationArg(key: String): String? = instrumentationArguments.getString(key)
 
   fun logsEndpoint(): String {
+    val httpsPort = InstrumentationRegistry.getArguments().getString(
+      "trailblaze.httpsPort",
+      TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTPS_PORT.toString(),
+    )?.toIntOrNull() ?: TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTPS_PORT
+
     val defaultLogsEndpoint = if (isReverseProxyEnabled()) {
       // adb reverse port forwarding
-      "https://localhost:8443"
+      "https://localhost:$httpsPort"
     } else {
       // Emulator
-      "https://10.0.2.2:8443"
+      "https://10.0.2.2:$httpsPort"
     }
     return InstrumentationRegistry.getArguments().getString(
       "trailblaze.logsEndpoint",

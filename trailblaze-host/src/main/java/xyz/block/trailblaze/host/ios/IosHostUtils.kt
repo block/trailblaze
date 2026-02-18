@@ -6,6 +6,7 @@ import xyz.block.trailblaze.util.CommandProcessResult
 import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils
 import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils.runProcess
 import java.io.File
+import xyz.block.trailblaze.util.Console
 
 object IosHostUtils {
 
@@ -78,7 +79,7 @@ object IosHostUtils {
     output.outputLines.firstOrNull()?.let { dataContainerPath ->
       val dataContainerDirectory = File(dataContainerPath)
       if (dataContainerDirectory.exists() && dataContainerDirectory.isDirectory) {
-        println("Clearing $appId data container under $dataContainerPath")
+        Console.log("Clearing $appId data container under $dataContainerPath")
         dataContainerDirectory.listFiles()?.forEach { it.deleteRecursively() }
       }
     }
@@ -131,7 +132,7 @@ object IosHostUtils {
         null
       }
     } catch (e: Exception) {
-      println("Failed to get version info for $appId: ${e.message}")
+      Console.log("Failed to get version info for $appId: ${e.message}")
       null
     }
   }

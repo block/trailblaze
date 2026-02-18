@@ -8,6 +8,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeJson.createTrailblazeJsonInsta
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.logs.model.getSessionInfo
+import xyz.block.trailblaze.util.Console
 
 /**
  * Loads session data from inlined JavaScript variables in the HTML page.
@@ -33,17 +34,17 @@ object InlinedDataLoader : TrailblazeLogsDataProvider {
   override suspend fun getSessionIdsAsync(): List<xyz.block.trailblaze.logs.model.SessionId> {
     if (_sessionsCache != null) return _sessionsCache!!
     val completableDeferred = CompletableDeferred<List<xyz.block.trailblaze.logs.model.SessionId>>()
-    println("Loading sessions from getSessionIds()")
+    Console.log("Loading sessions from getSessionIds()")
     try {
       getTrailblazeReportJsonFromBrowser("sessions") { sessionsJson ->
-        println("Got JSON for sessions: $sessionsJson")
+        Console.log("Got JSON for sessions: $sessionsJson")
         val value =
           json.decodeFromString<List<String>>(sessionsJson).map { xyz.block.trailblaze.logs.model.SessionId(it) }
                 _sessionsCache = value
                 completableDeferred.complete(value)
             }
         } catch (e: Exception) {
-            println("Error loading sessions from window.trailblaze.sessions: ${e.message}")
+            Console.log("Error loading sessions from window.trailblaze.sessions: ${e.message}")
             completableDeferred.complete(emptyList())
         }
         return completableDeferred.await()
@@ -54,28 +55,28 @@ object InlinedDataLoader : TrailblazeLogsDataProvider {
      */
     private suspend fun loadSessionInfoMap(): Map<String, SessionInfo> {
         if (_sessionInfoCache != null) {
-            println("✅ Using cached session info map")
+            Console.log("✅ Using cached session info map")
             return _sessionInfoCache!!
         }
         val completableDeferred = CompletableDeferred<Map<String, SessionInfo>>()
         val startTime = kotlinx.browser.window.performance.now()
-        println("⏳ [${startTime.toInt()}ms] Loading session info map...")
+        Console.log("⏳ [${startTime.toInt()}ms] Loading session info map...")
         try {
             getTrailblazeReportJsonFromBrowser("session_info") { jsonString ->
                 val decompressEndTime = kotlinx.browser.window.performance.now()
-                println("📦 [${decompressEndTime.toInt()}ms] Decompressed session_info (${jsonString.length} chars) in ${(decompressEndTime - startTime).toInt()}ms")
+                Console.log("📦 [${decompressEndTime.toInt()}ms] Decompressed session_info (${jsonString.length} chars) in ${(decompressEndTime - startTime).toInt()}ms")
 
                 val parseStartTime = kotlinx.browser.window.performance.now()
                 val sessionInfoMap = json.decodeFromString<Map<String, SessionInfo>>(jsonString)
                 val parseEndTime = kotlinx.browser.window.performance.now()
-                println("✅ [${parseEndTime.toInt()}ms] Parsed ${sessionInfoMap.size} SessionInfo objects in ${(parseEndTime - parseStartTime).toInt()}ms")
+                Console.log("✅ [${parseEndTime.toInt()}ms] Parsed ${sessionInfoMap.size} SessionInfo objects in ${(parseEndTime - parseStartTime).toInt()}ms")
 
                 _sessionInfoCache = sessionInfoMap
                 completableDeferred.complete(sessionInfoMap)
             }
         } catch (e: Exception) {
-            println("❌ Error loading session info map: ${e.message}")
-            println("⚠️  Falling back to legacy method (loading full logs)")
+            Console.log("❌ Error loading session info map: ${e.message}")
+            Console.log("⚠️  Falling back to legacy method (loading full logs)")
             completableDeferred.complete(emptyMap())
     }
     return completableDeferred.await()
@@ -101,12 +102,12 @@ object InlinedDataLoader : TrailblazeLogsDataProvider {
           _perSessionLogsCache[sessionIdStr] = logs
           return logs
         } catch (e: Exception) {
-          println("Per-session loading failed for $sessionIdStr, falling back to bulk load: ${e.message}")
+          Console.log("Per-session loading failed for $sessionIdStr, falling back to bulk load: ${e.message}")
           // Fall back to loading all logs at once
           return loadAllLogs()[sessionIdStr] ?: error("Session detail not found for $sessionIdStr")
             }
         } catch (e: Exception) {
-            println("Error loading session detail for $sessionId: ${e.message}")
+            Console.log("Error loading session detail for $sessionId: ${e.message}")
             emptyList()
         }
     }
@@ -114,22 +115,22 @@ object InlinedDataLoader : TrailblazeLogsDataProvider {
     override suspend fun getSessionInfoAsync(sessionName: xyz.block.trailblaze.logs.model.SessionId): SessionInfo? {
       val sessionNameStr = sessionName.value
       val startTime = kotlinx.browser.window.performance.now()
-      println("⏳ [${startTime.toInt()}ms] Getting session info for: $sessionNameStr")
+      Console.log("⏳ [${startTime.toInt()}ms] Getting session info for: $sessionNameStr")
 
       // Try to get from the lightweight session info map first (fast!)
       val sessionInfoMap = loadSessionInfoMap()
       if (sessionInfoMap.containsKey(sessionNameStr)) {
         val endTime = kotlinx.browser.window.performance.now()
-        println("✅ [${endTime.toInt()}ms] Got session info from map in ${(endTime - startTime).toInt()}ms")
+        Console.log("✅ [${endTime.toInt()}ms] Got session info from map in ${(endTime - startTime).toInt()}ms")
         return sessionInfoMap[sessionNameStr]
       }
 
       // Fallback: load full logs and compute session info (slow, legacy compatibility)
-      println("⚠️  Session info not found in map for $sessionNameStr, loading full logs...")
+      Console.log("⚠️  Session info not found in map for $sessionNameStr, loading full logs...")
         val fallbackStartTime = kotlinx.browser.window.performance.now()
         val result = getLogsForSessionAsync(sessionName).getSessionInfo()
         val fallbackEndTime = kotlinx.browser.window.performance.now()
-        println("✅ [${fallbackEndTime.toInt()}ms] Computed session info from logs in ${(fallbackEndTime - fallbackStartTime).toInt()}ms")
+        Console.log("✅ [${fallbackEndTime.toInt()}ms] Computed session info from logs in ${(fallbackEndTime - fallbackStartTime).toInt()}ms")
         return result
     }
 
@@ -140,15 +141,15 @@ object InlinedDataLoader : TrailblazeLogsDataProvider {
         val completableDeferred = CompletableDeferred<List<TrailblazeLog>>()
         val key = "session/$sessionId/logs"
         val startTime = kotlinx.browser.window.performance.now()
-        println("⏳ [${startTime.toInt()}ms] Loading per-session logs: $key")
+        Console.log("⏳ [${startTime.toInt()}ms] Loading per-session logs: $key")
         getTrailblazeReportJsonFromBrowser(key) { jsonString ->
             val decompressEndTime = kotlinx.browser.window.performance.now()
-            println("📦 [${decompressEndTime.toInt()}ms] Decompressed JSON (${jsonString.length} chars) in ${(decompressEndTime - startTime).toInt()}ms")
+            Console.log("📦 [${decompressEndTime.toInt()}ms] Decompressed JSON (${jsonString.length} chars) in ${(decompressEndTime - startTime).toInt()}ms")
 
             val parseStartTime = kotlinx.browser.window.performance.now()
             val logs = json.decodeFromString<List<TrailblazeLog>>(jsonString)
             val parseEndTime = kotlinx.browser.window.performance.now()
-            println("✅ [${parseEndTime.toInt()}ms] Parsed ${logs.size} logs in ${(parseEndTime - parseStartTime).toInt()}ms")
+            Console.log("✅ [${parseEndTime.toInt()}ms] Parsed ${logs.size} logs in ${(parseEndTime - parseStartTime).toInt()}ms")
 
             completableDeferred.complete(logs)
         }
@@ -184,8 +185,8 @@ object InlinedDataLoader : TrailblazeLogsDataProvider {
           _perSessionYamlCache[sessionIdStr] = yaml
           return yaml
         } catch (e: Exception) {
-          println("❌ Per-session YAML loading failed for $sessionIdStr: ${e.message}")
-          println("⚠️  Attempting fallback to legacy bulk load...")
+          Console.log("❌ Per-session YAML loading failed for $sessionIdStr: ${e.message}")
+          Console.log("⚠️  Attempting fallback to legacy bulk load...")
           try {
             val allRecordings = loadAllRecordings()
             val yaml = allRecordings[sessionIdStr]
@@ -195,13 +196,13 @@ object InlinedDataLoader : TrailblazeLogsDataProvider {
             } else {
               val errorMsg =
                 "# No recording available for session: $sessionIdStr\n# YAML chunks were not generated or are missing."
-              println("❌ No YAML found for $sessionIdStr in legacy data either")
+              Console.log("❌ No YAML found for $sessionIdStr in legacy data either")
                     return errorMsg
                 }
             } catch (fallbackError: Exception) {
                 val errorMsg =
                     "# Error loading YAML: ${fallbackError.message}\n# Both per-session chunks and legacy data failed."
-                println("❌ Fallback also failed: ${fallbackError.message}")
+                Console.log("❌ Fallback also failed: ${fallbackError.message}")
                 return errorMsg
             }
         }
@@ -213,7 +214,7 @@ object InlinedDataLoader : TrailblazeLogsDataProvider {
     private suspend fun loadSessionYaml(sessionId: String): String {
         val completableDeferred = CompletableDeferred<String>()
         val key = "session/$sessionId/yaml"
-        println("Loading per-session YAML: $key")
+        Console.log("Loading per-session YAML: $key")
         getTrailblazeReportJsonFromBrowser(key) { jsonString ->
             val yaml = json.decodeFromString<String>(jsonString)
             completableDeferred.complete(yaml)

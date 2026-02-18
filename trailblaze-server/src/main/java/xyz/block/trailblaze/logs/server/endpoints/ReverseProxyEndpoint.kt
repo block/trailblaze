@@ -23,6 +23,7 @@ import xyz.block.trailblaze.http.ReverseProxyHeaders
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
 import xyz.block.trailblaze.mcp.utils.JvmLLMProvidersUtil.getEnvironmentVariableValueForLlmProvider
 import xyz.block.trailblaze.report.utils.LogsRepo
+import xyz.block.trailblaze.util.Console
 
 /**
  * Registers an endpoint to display LLM conversation as an html chat view.
@@ -34,7 +35,7 @@ object ReverseProxyEndpoint {
       logger = object : Logger {
         override fun log(message: String) {
           // Log the request and response details
-          println("ReverseProxy: $message")
+          Console.log("ReverseProxy: $message")
         }
       }
       level = LogLevel.NONE
@@ -50,7 +51,7 @@ object ReverseProxyEndpoint {
           val targetUrl = callHeaders[ReverseProxyHeaders.ORIGINAL_URI]
             ?: error("No header value for ${ReverseProxyHeaders.ORIGINAL_URI}")
 
-          println("ReverseProxy: Proxying $httpMethod request to $targetUrl")
+          Console.log("ReverseProxy: Proxying $httpMethod request to $targetUrl")
 
           // Only read body for methods that typically have request bodies
           // Reading body on GET/HEAD requests can hang with HTTP/2
@@ -60,7 +61,7 @@ object ReverseProxyEndpoint {
             ByteArray(0)
           }
 
-          println("ReverseProxy: Read ${callBytes.size} bytes from incoming request")
+          Console.log("ReverseProxy: Read ${callBytes.size} bytes from incoming request")
 
           val proxiedResponse = client.request(targetUrl) {
             this.method = httpMethod
@@ -86,7 +87,7 @@ object ReverseProxyEndpoint {
             }
           }
 
-          println("ReverseProxy: Received response with status ${proxiedResponse.status}")
+          Console.log("ReverseProxy: Received response with status ${proxiedResponse.status}")
 
           // Copy status, headers, and body to the response
           // Filter out headers that Ktor will set automatically to avoid duplicates in HTTP/2
@@ -99,7 +100,7 @@ object ReverseProxyEndpoint {
             }
           }
           val proxiedRequestResponseBytes = proxiedResponse.bodyAsChannel().toByteArray()
-          println("ReverseProxy: Sending ${proxiedRequestResponseBytes.size} bytes back to client")
+          Console.log("ReverseProxy: Sending ${proxiedRequestResponseBytes.size} bytes back to client")
           call.respond(
             ByteArrayContent(
               proxiedRequestResponseBytes,
@@ -108,7 +109,7 @@ object ReverseProxyEndpoint {
             ),
           )
         } catch (e: Exception) {
-          println("ReverseProxy ERROR: ${e.message}")
+          Console.error("ReverseProxy ERROR: ${e.message}")
           e.printStackTrace()
           call.respond(
             io.ktor.http.HttpStatusCode.InternalServerError,

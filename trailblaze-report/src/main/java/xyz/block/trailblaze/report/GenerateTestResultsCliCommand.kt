@@ -34,6 +34,7 @@ import xyz.block.trailblaze.yaml.TrailConfig
 import xyz.block.trailblaze.yaml.TrailSourceType
 import java.io.File
 import kotlin.io.path.Path
+import xyz.block.trailblaze.util.Console
 
 /**
  * CLI command to generate test results YAML/JSON from a logs directory.
@@ -123,7 +124,7 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
 
     if (sessionIds.isEmpty()) {
       logsRepo.close()
-      println("⚠️  No sessions found in: ${logsDir.absolutePath}")
+      Console.log("⚠️  No sessions found in: ${logsDir.absolutePath}")
       return
     }
 
@@ -200,8 +201,8 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
     }
 
     output.writeText(content)
-    println()
-    println("📄 Summary written to: ${output.absolutePath}")
+    Console.log("")
+    Console.log("📄 Summary written to: ${output.absolutePath}")
 
     // Store the generated report for subclasses to access
     generatedReport = summaryReport
@@ -238,7 +239,7 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
         appendLine()
       }
     }
-    print(output)
+    Console.log(output)
   }
 
   private fun buildMetadataFromEnvironment(): CiRunMetadata {
@@ -261,6 +262,9 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
       parallel_execution = getEnv("TRAILBLAZE_PARALLEL_EXECUTION")?.toBoolean() ?: false,
       ci_build_url = getEnv("BUILDKITE_BUILD_URL") ?: getEnv("CI_BUILD_URL"),
       ci_build_number = getEnv("BUILDKITE_BUILD_NUMBER") ?: getEnv("CI_BUILD_NUMBER"),
+      ci_build_source = getEnv("BUILDKITE_SOURCE") ?: getEnv("CI_BUILD_SOURCE"),
+      ci_build_message = getEnv("BUILDKITE_MESSAGE") ?: getEnv("CI_BUILD_MESSAGE"),
+      ci_build_label = getEnv("BUILDKITE_LABEL") ?: getEnv("CI_BUILD_LABEL"),
       git_commit = getEnv("BUILDKITE_COMMIT") ?: getEnv("GIT_COMMIT"),
       git_branch = getEnv("BUILDKITE_BRANCH") ?: getEnv("GIT_BRANCH"),
     )
@@ -344,7 +348,7 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
         }
       appendLine()
     }
-    print(output)
+    Console.log(output)
   }
 
   private fun formatDuration(ms: Long): String {
@@ -423,7 +427,7 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
 
       appendLine("════════════════════════════════════════════════════════════")
     }
-    print(output)
+    Console.log(output)
   }
 }
 

@@ -13,6 +13,7 @@ import xyz.block.trailblaze.yaml.DirectionStep
 import xyz.block.trailblaze.yaml.PromptStep
 import xyz.block.trailblaze.yaml.VerificationStep
 import kotlin.reflect.KClass
+import xyz.block.trailblaze.util.Console
 
 /**
  * Manual calls we register that are not related to Maestro
@@ -41,7 +42,7 @@ class TrailblazeToolRepo(
       if (tool.toKoogToolDescriptor() != null) {
         registeredTrailblazeToolClasses.add(tool)
       } else {
-        println("Class ${tool.qualifiedName} (${tool.toolName().toolName}) cannot be used by the LLM.  It was not registered.")
+        Console.log("Class ${tool.qualifiedName} (${tool.toolName().toolName}) cannot be used by the LLM.  It was not registered.")
       }
     }
   }

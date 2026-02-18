@@ -14,6 +14,7 @@ import xyz.block.trailblaze.viewmatcher.TapSelectorV2.findBestTrailblazeElementS
 import xyz.block.trailblaze.viewmatcher.models.RelativeViewPositioningData
 import xyz.block.trailblaze.viewmatcher.models.toOrderedSpatialHints
 import xyz.block.trailblaze.yaml.TrailblazeYaml
+import xyz.block.trailblaze.util.Console
 
 @Serializable
 @TrailblazeToolClass(
@@ -73,7 +74,7 @@ data class AssertVisibleByNodeIdTrailblazeTool(
       heightPixels = screenState.deviceHeight,
       spatialHints = relativelyPositionedViews.toOrderedSpatialHints(),
     )
-    println("Best Element Selector:\n${TrailblazeYaml.defaultYamlInstance.encodeToString(trailblazeElementSelector)}")
+    Console.log("Best Element Selector:\n${TrailblazeYaml.defaultYamlInstance.encodeToString(trailblazeElementSelector)}")
     val bestTapTrailblazeToolForNode: ExecutableTrailblazeTool = AssertVisibleBySelectorTrailblazeTool(
       reason = reason,
       selector = trailblazeElementSelector,

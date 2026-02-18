@@ -3,10 +3,22 @@ package xyz.block.trailblaze.ui.images
 import xyz.block.trailblaze.ui.Platform
 import xyz.block.trailblaze.ui.getCurrentUrl
 import xyz.block.trailblaze.ui.getPlatform
+import xyz.block.trailblaze.ui.models.TrailblazeServerState
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
+import xyz.block.trailblaze.util.Console
 
-class NetworkImageLoader : ImageLoader {
+class NetworkImageLoader(
+    private val serverBaseUrl: String = currentServerBaseUrl,
+) : ImageLoader {
+
+    companion object {
+        /**
+         * The current server base URL used by all default-constructed [NetworkImageLoader] instances.
+         * Updated at app startup when port overrides are applied.
+         */
+        var currentServerBaseUrl: String = "http://localhost:${TrailblazeServerState.HTTP_PORT}"
+    }
 
     @OptIn(ExperimentalEncodingApi::class)
     override fun getImageModel(sessionId: String, screenshotFile: String?): Any? {
@@ -27,13 +39,13 @@ class NetworkImageLoader : ImageLoader {
                         val decodedBytes = Base64.decode(cleanBase64)
                   return decodedBytes
               } catch (e: Exception) {
-                  println("❌ NetworkImageLoader: Failed to decode base64: ${e.message}")
-                  println("   Data URL preview: ${filename.take(100)}...")
-                  println("   Base64 preview: ${base64Data.take(50)}...")
+                  Console.log("❌ NetworkImageLoader: Failed to decode base64: ${e.message}")
+                  Console.log("   Data URL preview: ${filename.take(100)}...")
+                  Console.log("   Base64 preview: ${base64Data.take(50)}...")
                   return null
               }
           } else {
-              println("⚠️  NetworkImageLoader: Empty base64 data for data URL")
+              Console.log("⚠️  NetworkImageLoader: Empty base64 data for data URL")
         }
       }
 
@@ -44,8 +56,7 @@ class NetworkImageLoader : ImageLoader {
         // Check current URL to determine appropriate base URL
         // Jvm Impl returns 'null'
 
-        val defaultLocalhostBaseUrl = "http://localhost:52525"
-        val localhostStaticUrl = "$defaultLocalhostBaseUrl/static/$sessionId/$filename"
+        val localhostStaticUrl = "$serverBaseUrl/static/$sessionId/$filename"
         return when (getPlatform()) {
           Platform.WASM -> {
             val currentUrl: String? = getCurrentUrl()
@@ -57,7 +68,7 @@ class NetworkImageLoader : ImageLoader {
                     // Image URL should be: https://web.buildkiteartifacts.com/ba3.../$sessionId/$filename
                     val baseUrl = currentUrl.substringBeforeLast('/')
                     val fullUrl = "$baseUrl/$filename"
-                    println("🔗 Buildkite artifact URL constructed: $fullUrl")
+                    Console.log("🔗 Buildkite artifact URL constructed: $fullUrl")
                     fullUrl
                 } else {
                     // Use localhost static server

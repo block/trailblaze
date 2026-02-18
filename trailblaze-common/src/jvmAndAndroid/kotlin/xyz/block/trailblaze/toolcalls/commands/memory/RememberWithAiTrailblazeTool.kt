@@ -6,6 +6,7 @@ import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.utils.ElementComparator
+import xyz.block.trailblaze.util.Console
 
 @Serializable
 @TrailblazeToolClass("rememberWithAi")
@@ -25,7 +26,7 @@ data class RememberWithAiTrailblazeTool(
   ): TrailblazeToolResult {
     val interpolatedPrompt = memory.interpolateVariables(prompt)
     val evaluation = elementComparator.evaluateString(interpolatedPrompt)
-    println("UI Evaluation result: ${evaluation.result}, reason: ${evaluation.reason}")
+    Console.log("UI Evaluation result: ${evaluation.result}, reason: ${evaluation.reason}")
 
     memory.remember(variable, evaluation.result)
     return TrailblazeToolResult.Success

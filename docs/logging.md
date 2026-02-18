@@ -17,7 +17,7 @@ Run the following to start the trailblaze (including server):
 
 This initializes a local web server that Trailblaze will send all the logs to on your local machine.
 Logs _will not_ be collected if the server is not running.
-To view them open [http://localhost:52525](http://localhost:52525) in your browser.
+To view them open [http://localhost:52525](http://localhost:52525) in your browser (port may vary if configured differently in Settings).
 
 ### Understanding Test Logs
 

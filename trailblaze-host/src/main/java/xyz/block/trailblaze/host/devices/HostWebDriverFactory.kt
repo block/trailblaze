@@ -4,6 +4,7 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.host.playwright.MaestroPlaywrightDriver
+import xyz.block.trailblaze.util.Console
 
 class HostWebDriverFactory {
 
@@ -42,7 +43,7 @@ class HostWebDriverFactory {
 
       // Reuse existing driver if it's still valid and settings match
       if (existingDriver != null && cachedHeadless == headless && !existingDriver.isShutdown()) {
-        println("[Playwright] Reusing existing browser instance")
+        Console.log("[Playwright] Reusing existing browser instance")
         if (resetSession) {
           existingDriver.resetSession()
         }
@@ -55,16 +56,16 @@ class HostWebDriverFactory {
 
       // Close existing driver if it exists (might be shutdown or have different settings)
       if (existingDriver != null) {
-        println("[Playwright] Closing existing browser instance before creating new one")
+        Console.log("[Playwright] Closing existing browser instance before creating new one")
         try {
           existingDriver.close()
         } catch (e: Exception) {
-          println("[Playwright] Warning: Error closing existing driver: ${e.message}")
+          Console.log("[Playwright] Warning: Error closing existing driver: ${e.message}")
         }
       }
 
       // Create new driver
-      println("[Playwright] Creating new browser instance (headless=$headless)")
+      Console.log("[Playwright] Creating new browser instance (headless=$headless)")
       val newDriver = MaestroPlaywrightDriver(headless)
       cachedDriver = newDriver
       cachedHeadless = headless
@@ -83,11 +84,11 @@ class HostWebDriverFactory {
     @Synchronized
     fun clearCache() {
       cachedDriver?.let { driver ->
-        println("[Playwright] Clearing cached browser instance")
+        Console.log("[Playwright] Clearing cached browser instance")
         try {
           driver.close()
         } catch (e: Exception) {
-          println("[Playwright] Warning: Error closing cached driver: ${e.message}")
+          Console.log("[Playwright] Warning: Error closing cached driver: ${e.message}")
         }
       }
       cachedDriver = null

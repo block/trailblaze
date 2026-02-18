@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.android.maestro
 
 import maestro.js.JsEngine
+import xyz.block.trailblaze.util.Console
 
 /**
  * Maestro requires an implementation of a JS engine for a small feature
@@ -10,13 +11,13 @@ import maestro.js.JsEngine
 class FakeJsEngine : JsEngine {
 
   override fun enterEnvScope() {
-    println("enterEnvScope")
+    Console.log("enterEnvScope")
   }
   override fun leaveEnvScope() {
-    println("leaveEnvScope")
+    Console.log("leaveEnvScope")
   }
   override fun enterScope() {
-    println("enterScope")
+    Console.log("enterScope")
   }
 
   override fun evaluateScript(
@@ -25,27 +26,27 @@ class FakeJsEngine : JsEngine {
     sourceName: String,
     runInSubScope: Boolean,
   ): Any? {
-    println("evaluateScript")
+    Console.log("evaluateScript")
     return null
   }
 
   override fun leaveScope() {
-    println("leaveScope")
+    Console.log("leaveScope")
   }
 
   override fun onLogMessage(callback: (String) -> Unit) {
-    println("onLogMessage")
+    Console.log("onLogMessage")
   }
 
   override fun putEnv(key: String, value: String) {
-    println("putEnv")
+    Console.log("putEnv")
   }
 
   override fun setCopiedText(text: String?) {
-    println("setCopiedText")
+    Console.log("setCopiedText")
   }
 
   override fun close() {
-    println("close")
+    Console.log("close")
   }
 }

@@ -17,6 +17,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeScreenStateLog
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.rules.TrailblazeLoggingRule
+import xyz.block.trailblaze.util.Console
 
 class TrailblazeAndroidLoggingRule(
   trailblazeDeviceIdProvider: () -> TrailblazeDeviceId,
@@ -36,7 +37,7 @@ class TrailblazeAndroidLoggingRule(
         directory = LOGS_DIR,
       )
     } catch (e: Exception) {
-      println("Error writing log to disk: ${e.message}")
+      Console.log("Error writing log to disk: ${e.message}")
     }
   },
   writeScreenshotToDisk = { screenshot: TrailblazeScreenStateLog ->
@@ -48,7 +49,7 @@ class TrailblazeAndroidLoggingRule(
         directory = LOGS_DIR,
       )
     } catch (e: Exception) {
-      println("Error writing screenshot to disk: ${e.message}")
+      Console.log("Error writing screenshot to disk: ${e.message}")
     }
   },
   writeTraceToDisk = { sessionId: SessionId, json: String ->
@@ -63,7 +64,7 @@ class TrailblazeAndroidLoggingRule(
         )
       }
     } catch (e: Exception) {
-      println("Error writing trace file to disk: ${e.message}")
+      Console.log("Error writing trace file to disk: ${e.message}")
     }
   },
 ) {

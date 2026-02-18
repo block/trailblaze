@@ -16,7 +16,9 @@ import xyz.block.trailblaze.logs.client.TrailblazeScreenStateLog
 import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.client.TrailblazeSessionManager
 import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.tracing.TrailblazeTracer
+import xyz.block.trailblaze.util.Console
 
 /**
  * Base JUnit4 Logging Rule for Trailblaze Tests
@@ -27,7 +29,7 @@ import xyz.block.trailblaze.tracing.TrailblazeTracer
  * - Access current session via the `session` property
  */
 abstract class TrailblazeLoggingRule(
-  private val logsBaseUrl: String = "https://localhost:8443",
+  private val logsBaseUrl: String = "https://localhost:${TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTPS_PORT}",
   private val writeLogToDisk: ((currentTestName: SessionId, log: TrailblazeLog) -> Unit) = { _, _ -> },
   private val writeScreenshotToDisk: ((screenshot: TrailblazeScreenStateLog) -> Unit) = { _ -> },
   private val writeTraceToDisk: ((sessionId: SessionId, json: String) -> Unit) = { _, _ -> },
@@ -68,7 +70,7 @@ abstract class TrailblazeLoggingRule(
         if (isServerAvailable) {
           val httpResult = trailblazeLogServerClient.postAgentLog(log)
           if (httpResult.status.value != 200) {
-            println("Error while posting agent log: ${httpResult.status.value} ${httpResult.bodyAsText()}")
+            Console.log("Error while posting agent log: ${httpResult.status.value} ${httpResult.bodyAsText()}")
           }
         } else {
           writeLogToDisk(sessionId, log)
@@ -116,9 +118,9 @@ abstract class TrailblazeLoggingRule(
   private val isServerAvailable by lazy {
     val startTime = Clock.System.now()
     val isRunning = runBlocking { trailblazeLogServerClient.isServerRunning() }
-    println("isServerAvailable [$isRunning] took ${Clock.System.now() - startTime}ms")
+    Console.log("isServerAvailable [$isRunning] took ${Clock.System.now() - startTime}ms")
     if (!isRunning) {
-      println(
+      Console.log(
         "Log Server is not available at ${trailblazeLogServerClient.baseUrl}. Run with ./gradlew :trailblaze-server:run",
       )
     }
@@ -177,7 +179,7 @@ private class ServerScreenStateLogger(
           screenshotBytes = screenState.screenState.screenshotBytes ?: ByteArray(0),
         )
         if (logResult.status.value != 200) {
-          println("Error while posting agent log: ${logResult.status.value}")
+          Console.log("Error while posting agent log: ${logResult.status.value}")
         }
       } else {
         writeScreenshotToDisk(screenState)

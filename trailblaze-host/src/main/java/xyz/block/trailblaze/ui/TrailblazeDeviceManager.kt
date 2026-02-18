@@ -55,6 +55,7 @@ import kotlin.time.Duration.Companion.seconds
 import maestro.device.Device as MaestroDevice
 import maestro.device.DeviceService as MaestroDeviceService
 import maestro.device.Platform as MaestroPlatform
+import xyz.block.trailblaze.util.Console
 
 /**
  * Manages device discovery, selection, and state across the application.
@@ -266,7 +267,7 @@ class TrailblazeDeviceManager(
     // Clear the session from the sessions flow
     _activeDeviceSessionsFlow.value -= trailblazeDeviceId
 
-    println("Ended session $sessionId for device: ${trailblazeDeviceId.instanceId}")
+    Console.log("Ended session $sessionId for device: ${trailblazeDeviceId.instanceId}")
 
     // Write session end log
     try {
@@ -277,7 +278,7 @@ class TrailblazeDeviceManager(
       )
       logsRepo.saveLogToDisk(sessionEndLog)
     } catch (e: Exception) {
-      println("Failed to write session end log: ${e.message}")
+      Console.log("Failed to write session end log: ${e.message}")
       // Don't fail session end if log write fails
     }
 
@@ -556,7 +557,7 @@ class TrailblazeDeviceManager(
    * The job cleanup (finally block) will handle removing it from the map.
    */
   fun cancelSessionForDevice(trailblazeDeviceId: TrailblazeDeviceId) {
-    println("FORCEFULLY CANCELLING test on device: ${trailblazeDeviceId.instanceId}")
+    Console.log("FORCEFULLY CANCELLING test on device: ${trailblazeDeviceId.instanceId}")
 
     closeAndRemoveMaestroDriverForDevice(trailblazeDeviceId)
 
@@ -578,61 +579,61 @@ class TrailblazeDeviceManager(
             webBrowserManager.isRunning()
 
         if (isWebBrowserManagedByUs) {
-          println("Web browser managed by WebBrowserManager - keeping browser open, resetting session")
+          Console.log("Web browser managed by WebBrowserManager - keeping browser open, resetting session")
           // Reset the browser session (clear cookies, navigate to about:blank, etc.)
           // but don't close the browser window.
           // The driver in maestroDriverByDeviceMap is wrapped in a LoggingDriver, so we need to
           // get the actual MaestroPlaywrightDriver from the HostWebDriverFactory's cache.
           // Calling getOrCreateDriver with resetSession=true will reset the session without closing.
           HostWebDriverFactory.getOrCreateDriver(headless = false, resetSession = true)
-          println("Browser session reset successfully")
+          Console.log("Browser session reset successfully")
         } else {
-          println("Forcefully closing driver for device: ${trailblazeDeviceId.instanceId}")
+          Console.log("Forcefully closing driver for device: ${trailblazeDeviceId.instanceId}")
           // This closes the underlying driver and kills child processes (XCUITest, adb, etc.)
           maestroDriver.close()
-          println("Driver closed successfully for device: ${trailblazeDeviceId.instanceId}")
+          Console.log("Driver closed successfully for device: ${trailblazeDeviceId.instanceId}")
         }
       } catch (e: Exception) {
-        println("Error closing driver (continuing anyway): ${e.message}")
+        Console.log("Error closing driver (continuing anyway): ${e.message}")
         // Continue with coroutine cancellation even if driver close fails
       } finally {
         maestroDriverByDeviceMap.remove(trailblazeDeviceId)
       }
-    } ?: println("No Maestro Driver found for device: ${trailblazeDeviceId.instanceId}")
+    } ?: Console.log("No Maestro Driver found for device: ${trailblazeDeviceId.instanceId}")
   }
 
   private fun cancelAndRemoveCoroutineScopeForDeviceIfActive(trailblazeDeviceId: TrailblazeDeviceId) {
     coroutineScopeByDevice[trailblazeDeviceId]?.let { coroutineScopeForDevice ->
-      println("Cancelling coroutine job for device: ${trailblazeDeviceId.instanceId}")
-      println("  Scope isActive BEFORE cancel: ${coroutineScopeForDevice.isActive}")
+      Console.log("Cancelling coroutine job for device: ${trailblazeDeviceId.instanceId}")
+      Console.log("  Scope isActive BEFORE cancel: ${coroutineScopeForDevice.isActive}")
       try {
         if (coroutineScopeForDevice.isActive) {
           coroutineScopeForDevice.cancel(CancellationException("Session cancelled by user - driver forcefully closed"))
 
           // Verify cancellation propagated by checking status over time
-          println("  Scope isActive AFTER cancel (immediate): ${coroutineScopeForDevice.isActive}")
+          Console.log("  Scope isActive AFTER cancel (immediate): ${coroutineScopeForDevice.isActive}")
 
           // Monitor cancellation propagation
           repeat(5) { attempt ->
             Thread.sleep(100)
             val stillActive = coroutineScopeForDevice.isActive
-            println("  Scope isActive check #${attempt + 1} (after ${(attempt + 1) * 100}ms): $stillActive")
+            Console.log("  Scope isActive check #${attempt + 1} (after ${(attempt + 1) * 100}ms): $stillActive")
             if (!stillActive) {
-              println("  ✓ Scope successfully cancelled and inactive")
+              Console.log("  ✓ Scope successfully cancelled and inactive")
               return@repeat
             }
           }
 
           // If still active after 500ms, warn
           if (coroutineScopeForDevice.isActive) {
-            println("  ⚠️ WARNING: Scope still active after 500ms - cancellation may not have propagated!")
+            Console.log("  ⚠️ WARNING: Scope still active after 500ms - cancellation may not have propagated!")
           }
         } else {
-          println("  Scope was already inactive, nothing to cancel")
+          Console.log("  Scope was already inactive, nothing to cancel")
         }
       } finally {
         coroutineScopeByDevice.remove(trailblazeDeviceId)
-        println("  Scope removed from map for device: ${trailblazeDeviceId.instanceId}")
+        Console.log("  Scope removed from map for device: ${trailblazeDeviceId.instanceId}")
       }
     }
   }

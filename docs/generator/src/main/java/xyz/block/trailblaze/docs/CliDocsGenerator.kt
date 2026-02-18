@@ -5,6 +5,7 @@ import picocli.CommandLine
 import picocli.CommandLine.Model.OptionSpec
 import picocli.CommandLine.Model.PositionalParamSpec
 import xyz.block.trailblaze.cli.TrailblazeCliCommand
+import xyz.block.trailblaze.util.Console
 
 /**
  * Generates markdown documentation for the Trailblaze CLI.
@@ -34,7 +35,7 @@ class CliDocsGenerator(
     // Generate single CLI.md page with all commands
     generateCliPage(commandLine)
 
-    println("CLI documentation generated: ${File(docsDir, "CLI.md").absolutePath}")
+    Console.log("CLI documentation generated: ${File(docsDir, "CLI.md").absolutePath}")
   }
 
   private fun generateCliPage(commandLine: CommandLine) {

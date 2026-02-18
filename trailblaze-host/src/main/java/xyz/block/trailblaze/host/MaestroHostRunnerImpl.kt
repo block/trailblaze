@@ -23,6 +23,7 @@ import xyz.block.trailblaze.maestro.OrchestraRunner
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import java.io.File
+import xyz.block.trailblaze.util.Console
 
 /**
  * Host-mode Maestro runner for executing Maestro commands on connected devices.
@@ -60,7 +61,7 @@ class MaestroHostRunnerImpl(
 
   override val screenStateProvider: () -> ScreenState = {
     callCount++
-    println("screenStateProvider call count: $callCount")
+    Console.log("screenStateProvider call count: $callCount")
     HostMaestroDriverScreenState(
       maestroDriver = loggingDriver,
       setOfMarkEnabled = setOfMarkEnabled,

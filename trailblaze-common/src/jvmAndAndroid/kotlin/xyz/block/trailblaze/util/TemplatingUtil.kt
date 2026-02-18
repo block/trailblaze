@@ -5,7 +5,7 @@ object TemplatingUtil {
    * Reads a resource file from the classpath and returns its content as a string.
    */
   fun getResourceAsText(resourcePath: String): String? {
-    println("Reading resource: $resourcePath")
+    Console.log("Reading resource: $resourcePath")
     return object {}.javaClass.classLoader.getResource(resourcePath)?.readText()
   }
 
@@ -57,7 +57,7 @@ object TemplatingUtil {
 
     val unusedKeys = availableKeys.subtract(requiredVariables)
     if (unusedKeys.isNotEmpty()) {
-      println(
+      Console.log(
         buildString {
           appendLine("For template: $template")
           appendLine("---")

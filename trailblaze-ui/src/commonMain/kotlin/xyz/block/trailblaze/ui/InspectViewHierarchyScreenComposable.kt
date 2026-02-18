@@ -69,6 +69,7 @@ import xyz.block.trailblaze.ui.composables.SelectableText
 import xyz.block.trailblaze.ui.images.ImageLoader
 import xyz.block.trailblaze.ui.models.TrailblazeServerState
 import xyz.block.trailblaze.viewhierarchy.ViewHierarchyFilter
+import xyz.block.trailblaze.util.Console
 
 /**
  * Data class representing a selector option with its strategy and YAML representation.
@@ -416,16 +417,16 @@ fun InspectViewHierarchyScreenComposable(
 
   // Debug: Print node counts and check for duplicates
   LaunchedEffect(viewHierarchy, viewHierarchyFiltered) {
-    println("=== View Hierarchy Debug ===")
-    println("Main hierarchy node count: $viewHierarchyCount")
-    println("Alt hierarchy node count: $viewHierarchyFilteredCount")
+    Console.log("=== View Hierarchy Debug ===")
+    Console.log("Main hierarchy node count: $viewHierarchyCount")
+    Console.log("Alt hierarchy node count: $viewHierarchyFilteredCount")
 
     // Check for duplicate node IDs in each hierarchy
     val mainNodes = viewHierarchy.aggregate()
     val mainNodeIds = mainNodes.map { it.nodeId }
     val mainDuplicates = mainNodeIds.groupingBy { it }.eachCount().filter { it.value > 1 }
     if (mainDuplicates.isNotEmpty()) {
-      println("WARNING: Main hierarchy has duplicate node IDs: $mainDuplicates")
+      Console.log("WARNING: Main hierarchy has duplicate node IDs: $mainDuplicates")
     }
 
     viewHierarchyFiltered?.let { filtered ->
@@ -433,16 +434,16 @@ fun InspectViewHierarchyScreenComposable(
       val filteredNodeIds = filteredNodes.map { it.nodeId }
       val filteredDuplicates = filteredNodeIds.groupingBy { it }.eachCount().filter { it.value > 1 }
       if (filteredDuplicates.isNotEmpty()) {
-        println("WARNING: Alt hierarchy has duplicate node IDs: $filteredDuplicates")
+        Console.log("WARNING: Alt hierarchy has duplicate node IDs: $filteredDuplicates")
       }
 
       // Show unique node count
       val uniqueCount = filteredNodeIds.toSet().size
-      println(
+      Console.log(
         "Alt hierarchy unique node count: $uniqueCount (total including duplicates: ${filteredNodeIds.size})"
       )
     }
-    println("===========================")
+    Console.log("===========================")
   }
 }
 

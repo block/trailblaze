@@ -19,6 +19,7 @@ import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
 import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.report.utils.LogsRepo
 import java.io.File
+import xyz.block.trailblaze.util.Console
 
 /**
  * MCP toolset for managing and executing Trailblaze test cases.
@@ -40,7 +41,7 @@ class McpTestCasesToolSet(
   @LLMDescription("Lists all available Trailblaze test cases.")
   @Tool
   fun listTestCases(): List<TestCase> {
-    println("Listing test cases in directory: $testCasesDirectory")
+    Console.log("Listing test cases in directory: $testCasesDirectory")
     val dir = File(testCasesDirectory).also { it.mkdirs() }
 
     return listAllTestCases(dir)
@@ -75,7 +76,7 @@ class McpTestCasesToolSet(
     sessionContext?.let { sessionContext ->
       val mcpSessionId = sessionContext.mcpSessionId
       val trailblazeSessionId = sessionProvider.invoke().sessionId
-      println("Executing prompt for session: $mcpSessionId")
+      Console.log("Executing prompt for session: $mcpSessionId")
       ioScope.launch {
         var progress = 0
         var lastLogCount = 0
@@ -105,7 +106,7 @@ class McpTestCasesToolSet(
             lastLog.sessionStatus is SessionStatus.Ended
           ) {
             sessionContext.sendIndeterminateProgressMessage(progress++, "Session Ended for session $mcpSessionId")
-            println("Session $mcpSessionId ended. Stopping progress updates.")
+            Console.log("Session $mcpSessionId ended. Stopping progress updates.")
             this@launch.cancel()
           }
         }

@@ -1,5 +1,7 @@
 package xyz.block.trailblaze
 
+import xyz.block.trailblaze.util.Console
+
 /**
  * This class allows the trailblaze agent to remember data from the screen for reference later.
  * Values are kept in a map of the variable name to the value being remembered.
@@ -13,7 +15,7 @@ class AgentMemory {
   }
 
   fun remember(key: String, value: String) {
-    println("Remembering for current test: $key and value: $value")
+    Console.log("Remembering for current test: $key and value: $value")
     variables[key] = value
   }
 

@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.agent.util
 
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
+import xyz.block.trailblaze.util.Console
 
 /**
  * Helper class for interacting with view hierarchy to retrieve element values.
@@ -21,28 +22,28 @@ object ElementRetriever {
     resourceId: String,
     index: Int = 0,
   ): String {
-    println("$TAG: Getting text by resource ID: $resourceId, index: $index")
+    Console.log("$TAG: Getting text by resource ID: $resourceId, index: $index")
 
     if (currentViewHierarchy == null) {
-      println("$TAG: Error - View hierarchy is null")
+      Console.log("$TAG: Error - View hierarchy is null")
       return "Error: View hierarchy not set"
     }
 
     val nodes = findNodes(currentViewHierarchy) { it.resourceId == resourceId }
 
     if (nodes.isEmpty()) {
-      println("$TAG: No nodes found for resource ID: $resourceId")
+      Console.log("$TAG: No nodes found for resource ID: $resourceId")
       return "Element not found for resource ID: $resourceId"
     }
 
-    println("$TAG: Found ${nodes.size} nodes with resource ID: $resourceId")
+    Console.log("$TAG: Found ${nodes.size} nodes with resource ID: $resourceId")
 
     return if (index < nodes.size) {
       val node = nodes[index]
-      println("$TAG: Using node at index $index with resourceId: ${node.resourceId}, text: ${node.text}, hintText: ${node.hintText}, accessibilityText: ${node.accessibilityText}")
+      Console.log("$TAG: Using node at index $index with resourceId: ${node.resourceId}, text: ${node.text}, hintText: ${node.hintText}, accessibilityText: ${node.accessibilityText}")
       extractTextFromNode(node) ?: "No text found for resource ID: $resourceId at index $index"
     } else {
-      println("$TAG: Index $index out of bounds for resource ID: $resourceId (max index: ${nodes.size - 1})")
+      Console.log("$TAG: Index $index out of bounds for resource ID: $resourceId (max index: ${nodes.size - 1})")
       "Index out of bounds for resource ID: $resourceId"
     }
   }
@@ -59,7 +60,7 @@ object ElementRetriever {
     contentDescription: String,
     index: Int = 0,
   ): String {
-    println("$TAG: Getting text by content description: $contentDescription, index: $index")
+    Console.log("$TAG: Getting text by content description: $contentDescription, index: $index")
 
     val nodes = findNodes(currentViewHierarchy) { it.accessibilityText == contentDescription }
 
@@ -86,7 +87,7 @@ object ElementRetriever {
     text: String,
     index: Int = 0,
   ): String {
-    println("$TAG: Getting text by text: $text, index: $index")
+    Console.log("$TAG: Getting text by text: $text, index: $index")
 
     // For text search, we can actually just return the text if we find the node
     // Since the node's text is what we're searching for

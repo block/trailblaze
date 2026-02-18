@@ -4,6 +4,7 @@ import ai.koog.agents.core.tools.annotations.LLMDescription
 import ai.koog.agents.core.tools.annotations.Tool
 import ai.koog.agents.core.tools.reflect.ToolSet
 import xyz.block.trailblaze.recordings.TrailRecordings
+import xyz.block.trailblaze.util.Console
 import java.io.File
 
 @Suppress("unused")
@@ -14,7 +15,7 @@ class TrailFilesToolSet(
   @Tool("listFileBasedTestCases")
   fun listTestCases(): List<String> {
     val trailsDir = trailsDirProvider()
-    println("Listing test cases in directory: ${trailsDir.canonicalPath}")
+    Console.log("Listing test cases in directory: ${trailsDir.canonicalPath}")
     val dir = trailsDir.also { it.mkdirs() }
 
     return listAllTestCases(dir)

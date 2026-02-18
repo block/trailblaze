@@ -98,12 +98,7 @@ object MaestroAndroidUiAutomatorDriver : Driver {
   }
 
   override fun inputText(text: String) {
-    // Simulate typing
     InstrumentationUtil.inputTextByTyping(text)
-
-    if (isKeyboardVisible()) {
-      hideKeyboard()
-    }
   }
 
   /**

@@ -62,6 +62,7 @@ import xyz.block.trailblaze.ui.model.navigateToRoute
 import xyz.block.trailblaze.ui.models.TrailblazeServerState
 import xyz.block.trailblaze.ui.tabs.devdebug.DevDebugWindow
 import xyz.block.trailblaze.ui.theme.TrailblazeTheme
+import xyz.block.trailblaze.util.Console
 import java.awt.Desktop
 import java.awt.GraphicsEnvironment
 import java.awt.Window
@@ -104,25 +105,27 @@ class MainTrailblazeApp(
     if (headless && GraphicsEnvironment.isHeadless()) {
       // True headless mode (no display available, e.g. CI): start only the MCP server
       // without any Compose Desktop UI. This avoids requiring AWT/display.
-      println("Starting Trailblaze in headless mode (server only, no GUI)...")
-      val appConfig = trailblazeSavedSettingsRepo.serverStateFlow.value.appConfig
+      Console.log("Starting Trailblaze in headless mode (server only, no GUI)...")
+      val portManager = trailblazeSavedSettingsRepo.portManager
       trailblazeMcpServer.startStreamableHttpMcpServer(
-        port = appConfig.serverPort,
+        port = portManager.httpPort,
+        httpsPort = portManager.httpsPort,
         wait = true,
       )
       return
     }
 
     CoroutineScope(Dispatchers.IO).launch {
-      val appConfig = trailblazeSavedSettingsRepo.serverStateFlow.value.appConfig
-
-      // Start Server
+      // Start Server — use portManager so runtime CLI overrides are respected
+      val portManager = trailblazeSavedSettingsRepo.portManager
       trailblazeMcpServer.startStreamableHttpMcpServer(
-        port = appConfig.serverPort,
+        port = portManager.httpPort,
+        httpsPort = portManager.httpsPort,
         wait = false,
       )
 
       // Auto Launch Goose if enabled
+      val appConfig = trailblazeSavedSettingsRepo.serverStateFlow.value.appConfig
       if (appConfig.autoLaunchGoose) {
         TrailblazeDesktopUtil.openGoose()
       }
@@ -172,8 +175,9 @@ class MainTrailblazeApp(
           Item(
             text = "View Logs",
             onClick = {
-              if (logsRepo.logsDir.exists()) {
-                Desktop.getDesktop().open(logsRepo.logsDir)
+              val desktopLogsDir = TrailblazeDesktopUtil.getDesktopLogsDirectory()
+              if (desktopLogsDir.exists()) {
+                Desktop.getDesktop().open(desktopLogsDir)
               }
             }
           )

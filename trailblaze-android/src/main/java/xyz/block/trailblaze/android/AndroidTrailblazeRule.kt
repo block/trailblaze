@@ -40,6 +40,7 @@ import xyz.block.trailblaze.yaml.DirectionStep
 import xyz.block.trailblaze.yaml.TrailConfig
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.TrailblazeYaml
+import xyz.block.trailblaze.util.Console
 
 /**
  * On-Device Android Trailblaze Rule Implementation.
@@ -268,7 +269,7 @@ open class AndroidTrailblazeRule(
       deviceClassifiers = trailblazeLoggingRule.trailblazeDeviceInfoProvider().classifiers,
       doesResourceExist = AndroidAssetsUtil::assetExists,
     ) ?: throw TrailblazeException("Asset not found: $yamlAssetPath")
-    println("Running from asset: $computedAssetPath")
+    Console.log("Running from asset: $computedAssetPath")
     // Make sure the app is stopped before the test so the LLM doesn't get confused and think it's already running.
     if (forceStopApp && targetAppId != null) {
       AdbCommandUtil.forceStopApp(targetAppId)

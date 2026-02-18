@@ -7,6 +7,7 @@ import xyz.block.trailblaze.exception.TrailblazeToolExecutionException
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.utils.ElementComparator
+import xyz.block.trailblaze.util.Console
 
 @Serializable
 @TrailblazeToolClass("assertWithAi")
@@ -25,7 +26,7 @@ data class AssertWithAiTrailblazeTool(
   ): TrailblazeToolResult {
     val interpolatedPrompt = memory.interpolateVariables(prompt)
     val evaluation = elementComparator.evaluateBoolean(prompt)
-    println("UI Assertion result: ${evaluation.result}, reason: ${evaluation.reason}")
+    Console.log("UI Assertion result: ${evaluation.result}, reason: ${evaluation.reason}")
 
     if (!evaluation.result) {
       throw TrailblazeToolExecutionException(message = "AI assertion failed: $interpolatedPrompt", tool = this)

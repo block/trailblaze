@@ -12,6 +12,7 @@ import xyz.block.trailblaze.toolcalls.MapsToMaestroCommands
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.util.Console
 
 @Serializable
 @TrailblazeToolClass("swipe")
@@ -33,7 +34,7 @@ The text value to swipe on. If not provided, the swipe will be performed on the 
 ) : ExecutableTrailblazeTool {
 
   override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult {
-    println(
+    Console.log(
       "SwipeTrailblazeTool delegating: direction=$direction, swipeOnElementText=$swipeOnElementText",
     )
 
@@ -84,7 +85,7 @@ data class SwipeWithRelativeCoordinatesTool(
       },
     )
 
-    println(
+    Console.log(
       "SwipeWithRelativeCoordinatesTool creating Maestro SwipeCommand: startRelative=$startRelative, endRelative=$endRelative, elementSelector=${command.elementSelector}",
     )
 

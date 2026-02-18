@@ -38,6 +38,7 @@ import xyz.block.trailblaze.toolcalls.commands.memory.RememberNumberTrailblazeTo
 import xyz.block.trailblaze.toolcalls.commands.memory.RememberTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.memory.RememberWithAiTrailblazeTool
 import kotlin.reflect.KClass
+import xyz.block.trailblaze.util.Console
 
 @Suppress("ktlint:standard:property-naming")
 abstract class TrailblazeToolSet(
@@ -106,7 +107,7 @@ abstract class TrailblazeToolSet(
       DefaultSetOfMarkTrailblazeToolSet,
       VerifyToolSet,
     ).also {
-      println("All Built In Trailblaze Tool Sets: $it")
+      Console.log("All Built In Trailblaze Tool Sets: $it")
     }
 
     val NonLlmTrailblazeTools: Set<KClass<out TrailblazeTool>> = setOf(

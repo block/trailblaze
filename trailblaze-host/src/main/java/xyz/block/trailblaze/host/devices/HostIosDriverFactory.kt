@@ -22,6 +22,7 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import java.nio.file.Paths
 import kotlin.io.path.pathString
+import xyz.block.trailblaze.util.Console
 
 internal object HostIosDriverFactory {
 
@@ -53,19 +54,19 @@ internal object HostIosDriverFactory {
       cachedDriverHostPort == targetPort &&
       !cachedMaestro!!.driver.isShutdown()
     ) {
-      println("Reusing existing iOS driver for device $deviceId on port $targetPort")
+      Console.log("Reusing existing iOS driver for device $deviceId on port $targetPort")
       return cachedMaestro!!
     }
 
     // Only perform cleanup on first creation in this JVM (handles stale processes from previous runs)
     if (!hasPerformedInitialCleanup) {
-      println("Performing initial cleanup for fresh JVM - killing stale processes on port $targetPort")
+      Console.log("Performing initial cleanup for fresh JVM - killing stale processes on port $targetPort")
       HostDriverPortUtils.killProcessesUsingPort(targetPort)
       // Give the system more time to fully release the port after killing processes
       Thread.sleep(2000)
       hasPerformedInitialCleanup = true
     } else {
-      println("Skipping process cleanup - reusing connection within same JVM session")
+      Console.log("Skipping process cleanup - reusing connection within same JVM session")
       HostDriverPortUtils.waitForPortRelease(port = targetPort, timeoutMs = 5000)
     }
 
@@ -169,10 +170,10 @@ internal object HostIosDriverFactory {
     // Wait for driver to be ready with retry logic
     // The first test often fails because the XCUITest driver needs time to fully start
     if (openDriver) {
-      println("Waiting for XCUITest driver to be ready on port $targetPort...")
+      Console.log("Waiting for XCUITest driver to be ready on port $targetPort...")
       val driverReady = waitForDriverReady(defaultXctestHost, targetPort, maxRetries = 3, initialDelayMs = 1000)
       if (!driverReady) {
-        println("Warning: XCUITest driver may not be fully ready, but proceeding anyway")
+        Console.log("Warning: XCUITest driver may not be fully ready, but proceeding anyway")
       }
     }
 
@@ -181,7 +182,7 @@ internal object HostIosDriverFactory {
     cachedDeviceId = deviceId
     cachedDriverHostPort = targetPort
 
-    println("Created new iOS driver for device $deviceId on port $targetPort")
+    Console.log("Created new iOS driver for device $deviceId on port $targetPort")
     return maestro
   }
 
@@ -196,12 +197,12 @@ internal object HostIosDriverFactory {
       try {
         // Try to establish a connection to the XCUITest server
         java.net.Socket(host, port).use { socket ->
-          println("XCUITest driver is ready on port $port after $attempt attempt(s)")
+          Console.log("XCUITest driver is ready on port $port after $attempt attempt(s)")
           return true
         }
       } catch (e: Exception) {
         if (attempt < maxRetries) {
-          println(
+          Console.log(
             "XCUITest driver not ready yet on port $port (attempt $attempt/$maxRetries), " +
                 "waiting ${currentDelay}ms before retry...",
           )
@@ -209,7 +210,7 @@ internal object HostIosDriverFactory {
           // Exponential backoff with max delay of 3 seconds
           currentDelay = minOf(currentDelay * 2, 3000)
         } else {
-          println("XCUITest driver failed to respond after $maxRetries attempts: ${e.message}")
+          Console.log("XCUITest driver failed to respond after $maxRetries attempts: ${e.message}")
         }
       }
     }

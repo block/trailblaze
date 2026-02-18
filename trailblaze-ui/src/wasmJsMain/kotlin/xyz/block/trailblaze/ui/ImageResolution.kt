@@ -4,6 +4,7 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.HasScreenshot
 import kotlin.coroutines.resume
+import xyz.block.trailblaze.util.Console
 
 /**
  * External function to transform image URLs (defined in External.kt)
@@ -39,7 +40,7 @@ suspend fun resolveScreenshot(screenshotRef: String): String? {
     // If remote URL (after transformation), return as-is
     if (transformedRef.startsWith("http://") || transformedRef.startsWith("https://")) {
         if (transformedRef != screenshotRef) {
-            println("🔗 URL transformed: $screenshotRef -> $transformedRef")
+            Console.log("🔗 URL transformed: $screenshotRef -> $transformedRef")
         }
         return transformedRef
     }
@@ -61,7 +62,7 @@ suspend fun resolveScreenshot(screenshotRef: String): String? {
                 // Cache the result
                 imageCache[transformedRef] = dataUrl
             } else {
-                println("���️ Failed to decompress: $transformedRef")
+                Console.log("���️ Failed to decompress: $transformedRef")
             }
             continuation.resume(dataUrl)
         }

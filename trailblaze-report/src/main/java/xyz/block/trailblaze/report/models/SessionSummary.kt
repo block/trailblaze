@@ -6,6 +6,7 @@ import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.api.AgentActionType
 import xyz.block.trailblaze.api.HasClickCoordinates
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
+import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.llm.LlmUsageAndCostExt.computeUsageSummary
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
@@ -30,17 +31,27 @@ data class SessionSummary(
 ) {
   companion object {
 
-    private const val HTTP_PORT: Int = 52525 // Default port for the report server
+    private const val DEFAULT_HTTP_PORT: Int = TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTP_PORT
 
-    fun screenshotUrl(sessionId: String, screenshotFile: String?, isStandaloneFileReport: Boolean): String? = if (screenshotFile == null) {
+    fun screenshotUrl(
+      sessionId: String,
+      screenshotFile: String?,
+      isStandaloneFileReport: Boolean,
+      httpPort: Int = DEFAULT_HTTP_PORT,
+    ): String? = if (screenshotFile == null) {
       null
     } else if (isStandaloneFileReport) {
       "$sessionId/$screenshotFile"
     } else {
-      "http://localhost:$HTTP_PORT/static/$sessionId/$screenshotFile"
+      "http://localhost:$httpPort/static/$sessionId/$screenshotFile"
     }
 
-    fun fromLogs(sessionId: String, logs: List<TrailblazeLog>, isStandaloneFileReport: Boolean): SessionSummary {
+    fun fromLogs(
+      sessionId: String,
+      logs: List<TrailblazeLog>,
+      isStandaloneFileReport: Boolean,
+      httpPort: Int = DEFAULT_HTTP_PORT,
+    ): SessionSummary {
       val sortedLogs = logs.filterNot {
         it is TrailblazeLog.MaestroCommandLog && it.maestroCommandJsonObj.asMaestroCommand() is ApplyConfigurationCommand
       }
@@ -49,7 +60,7 @@ data class SessionSummary(
             is TrailblazeLog.MaestroDriverLog -> {
               it.copy(
                 viewHierarchy = ViewHierarchyTreeNode(),
-                screenshotFile = screenshotUrl(sessionId, it.screenshotFile, isStandaloneFileReport),
+                screenshotFile = screenshotUrl(sessionId, it.screenshotFile, isStandaloneFileReport, httpPort),
               )
             }
 
@@ -57,7 +68,7 @@ data class SessionSummary(
               it.copy(
                 viewHierarchy = ViewHierarchyTreeNode(),
                 llmMessages = emptyList(),
-                screenshotFile = screenshotUrl(sessionId, it.screenshotFile, isStandaloneFileReport),
+                screenshotFile = screenshotUrl(sessionId, it.screenshotFile, isStandaloneFileReport, httpPort),
               )
             }
 

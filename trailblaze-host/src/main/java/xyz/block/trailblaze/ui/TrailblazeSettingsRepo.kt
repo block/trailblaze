@@ -13,6 +13,7 @@ import xyz.block.trailblaze.ui.models.TrailblazeServerState
 import xyz.block.trailblaze.ui.models.TrailblazeServerState.SavedTrailblazeAppConfig
 import xyz.block.trailblaze.ui.tabs.session.SessionViewMode
 import java.io.File
+import xyz.block.trailblaze.util.Console
 
 class TrailblazeSettingsRepo(
   val settingsFile: File = File("build/${TrailblazeDesktopUtil.SETTINGS_FILENAME}"),
@@ -24,7 +25,7 @@ class TrailblazeSettingsRepo(
   private val trailblazeJson: Json = TrailblazeJson.defaultWithoutToolsInstance
 
   fun saveConfig(trailblazeSettings: SavedTrailblazeAppConfig) {
-    println(
+    Console.log(
       "Saving Settings to: ${settingsFile.absolutePath}\n ${
         trailblazeJson.encodeToString(
           trailblazeSettings,
@@ -42,7 +43,7 @@ class TrailblazeSettingsRepo(
   fun load(
     initialConfig: SavedTrailblazeAppConfig,
   ): SavedTrailblazeAppConfig = try {
-    println("Loading Settings from: ${settingsFile.absolutePath}")
+    Console.log("Loading Settings from: ${settingsFile.absolutePath}")
     trailblazeJson.decodeFromString(
       SavedTrailblazeAppConfig.serializer(),
       settingsFile.readText(),
@@ -52,12 +53,12 @@ class TrailblazeSettingsRepo(
       currentSessionViewMode = SessionViewMode.DEFAULT_VIEW_MODE,
     )
   } catch (e: Exception) {
-    println("Error loading settings, using default: ${e.message}")
+    Console.log("Error loading settings, using default: ${e.message}")
     initialConfig.also {
       saveConfig(initialConfig)
     }
   }.also {
-    println("Loaded settings: $it")
+    Console.log("Loaded settings: $it")
   }
 
   fun updateState(stateUpdater: (TrailblazeServerState) -> TrailblazeServerState) {
@@ -99,6 +100,10 @@ class TrailblazeSettingsRepo(
       }
   }
 
+  /** Manages HTTP/HTTPS port resolution (runtime CLI overrides + persisted fallback). */
+  val portManager = TrailblazePortManager(
+    persistedConfigProvider = { serverStateFlow.value.appConfig },
+  )
 
   val serverStateFlow = MutableStateFlow(
     TrailblazeServerState(
@@ -109,7 +114,7 @@ class TrailblazeSettingsRepo(
       serverStateFlow
         .distinctUntilChangedBy { newState -> newState }
         .collect { newState ->
-          println("Trailblaze Server State Updated: $newState")
+          Console.log("Trailblaze Server State Updated: $newState")
           saveConfig(newState.appConfig)
         }
     }

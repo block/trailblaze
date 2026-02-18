@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.report
 
 import java.io.File
+import xyz.block.trailblaze.util.Console
 
 /**
  * Very basic command-line parsing helper.
@@ -31,14 +32,14 @@ abstract class SimpleCliCommand(
   }
 
   protected fun parseError(message: String): Nothing {
-    System.err.println("Error: $message")
-    System.err.println()
+    Console.error("Error: $message")
+    Console.error("")
     printUsage()
     kotlin.system.exitProcess(1)
   }
 
   protected open fun printUsage() {
-    System.err.println("Usage: $name")
+    Console.error("Usage: $name")
   }
 }
 

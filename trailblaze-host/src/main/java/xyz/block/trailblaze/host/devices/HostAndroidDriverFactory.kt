@@ -3,6 +3,7 @@ package xyz.block.trailblaze.host.devices
 import dadb.Dadb
 import maestro.Maestro
 import maestro.drivers.AndroidDriver
+import xyz.block.trailblaze.util.Console
 
 internal object HostAndroidDriverFactory {
 
@@ -29,21 +30,21 @@ internal object HostAndroidDriverFactory {
         cachedDriverHostPort == targetPort &&
         !cached.isShutDown()
       ) {
-        println("Reusing existing Android driver for device $instanceId on port $targetPort")
+        Console.log("Reusing existing Android driver for device $instanceId on port $targetPort")
         return cached
       }
     }
 
     // Only perform cleanup on first creation in this JVM (handles stale processes from previous runs)
     if (!hasPerformedInitialCleanup) {
-      println("Performing initial cleanup for fresh JVM - removing stale port forwards on port $targetPort")
+      Console.log("Performing initial cleanup for fresh JVM - removing stale port forwards on port $targetPort")
       HostDriverPortUtils.removeStaleAdbPortForward(instanceId, targetPort)
       HostDriverPortUtils.killProcessesUsingPort(targetPort)
       // Give the system time to fully release the port after killing processes
       Thread.sleep(2000)
       hasPerformedInitialCleanup = true
     } else {
-      println("Skipping process cleanup - reusing connection within same JVM session")
+      Console.log("Skipping process cleanup - reusing connection within same JVM session")
       HostDriverPortUtils.waitForPortRelease(port = targetPort, timeoutMs = 5000)
     }
 
@@ -53,7 +54,7 @@ internal object HostAndroidDriverFactory {
 
     for (attempt in 1..maxRetries) {
       try {
-        println("Creating Android driver for device $instanceId on port $targetPort (attempt $attempt/$maxRetries)")
+        Console.log("Creating Android driver for device $instanceId on port $targetPort (attempt $attempt/$maxRetries)")
 
         val dadb = Dadb
           .list()
@@ -77,17 +78,17 @@ internal object HostAndroidDriverFactory {
         cachedInstanceId = instanceId
         cachedDriverHostPort = targetPort
 
-        println("Created new Android driver for device $instanceId on port $targetPort")
+        Console.log("Created new Android driver for device $instanceId on port $targetPort")
         return maestro
       } catch (e: Exception) {
         lastException = e
-        println("Android driver creation failed (attempt $attempt/$maxRetries): ${e::class.simpleName} - ${e.message}")
+        Console.log("Android driver creation failed (attempt $attempt/$maxRetries): ${e::class.simpleName} - ${e.message}")
 
         if (attempt < maxRetries) {
           // Clean up before retrying
           HostDriverPortUtils.killProcessesUsingPort(targetPort)
           val backoffMs = 2000L * attempt
-          println("Waiting ${backoffMs}ms before retry...")
+          Console.log("Waiting ${backoffMs}ms before retry...")
           Thread.sleep(backoffMs)
         }
       }

@@ -6,6 +6,7 @@ import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.utils.ElementComparator
+import xyz.block.trailblaze.util.Console
 
 @Serializable
 @TrailblazeToolClass("dumpMemory")
@@ -27,9 +28,9 @@ data object DumpMemoryTrailblazeTool : MemoryTrailblazeTool {
 }
 
 private fun AgentMemory.dump() {
-  println("DUMPING AGENT MEMORY ---------------------------")
+  Console.log("DUMPING AGENT MEMORY ---------------------------")
   variables.forEach { item ->
-    println("${item.key} : ${item.value}")
+    Console.log("${item.key} : ${item.value}")
   }
-  println("FINISHED DUMPING AGENT MEMORY ---------------------------")
+  Console.log("FINISHED DUMPING AGENT MEMORY ---------------------------")
 }

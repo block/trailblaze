@@ -198,6 +198,10 @@ abstract class TrailblazeDesktopAppConfig(
       ),
       TrailblazeBuiltInTabs.trailsTab(
         trailblazeSettingsRepo = trailblazeSettingsRepo,
+        deviceManager = deviceManager,
+        currentTrailblazeLlmModelProvider = { getCurrentLlmModel() },
+        yamlRunner = yamlRunner,
+        additionalInstrumentationArgs = additionalInstrumentationArgsProvider,
       ),
       TrailblazeBuiltInTabs.devicesTab(
         deviceManager = deviceManager,
