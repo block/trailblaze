@@ -26,6 +26,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.commands.memory.MemoryTrailblazeTool
 import xyz.block.trailblaze.toolcalls.getToolNameFromAnnotation
 import xyz.block.trailblaze.utils.ElementComparator
+import xyz.block.trailblaze.util.Console
 
 /**
  * Abstract class for Trailblaze agents that handle Maestro commands.
@@ -208,7 +209,7 @@ abstract class MaestroTrailblazeAgent(
       session = sessionProvider.invoke().sessionId,
     )
     val toolLogJson = TrailblazeJsonInstance.encodeToString(toolLog)
-    println("toolLogJson: $toolLogJson")
+    Console.log("toolLogJson: $toolLogJson")
     
     val session = sessionProvider.invoke()
     trailblazeLogger.log(session, toolLog)

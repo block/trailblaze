@@ -2,10 +2,11 @@ package xyz.block.trailblaze.http
 
 import io.ktor.client.plugins.api.createClientPlugin
 import io.ktor.http.takeFrom
+import xyz.block.trailblaze.devices.TrailblazeDevicePort
 
 class ReverseProxyPluginConfig {
   var reverseProxyEnabled: Boolean = true
-  var reverseProxyUrl: String? = "https://localhost:8443/reverse-proxy"
+  var reverseProxyUrl: String? = "https://localhost:${TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTPS_PORT}/reverse-proxy"
 }
 
 val ReverseProxyPlugin = createClientPlugin(

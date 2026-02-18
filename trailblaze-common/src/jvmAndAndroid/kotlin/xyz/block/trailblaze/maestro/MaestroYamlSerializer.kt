@@ -40,6 +40,7 @@ import maestro.orchestra.TapOnPointV2Command
 import maestro.orchestra.ToggleAirplaneModeCommand
 import maestro.orchestra.TravelCommand
 import maestro.orchestra.WaitForAnimationToEndCommand
+import xyz.block.trailblaze.util.Console
 
 object MaestroYamlSerializer {
 
@@ -521,17 +522,17 @@ object MaestroYamlSerializer {
     }
 
     is ApplyConfigurationCommand -> {
-      println("ApplyConfigurationCommand is not handled currently")
+      Console.log("ApplyConfigurationCommand is not handled currently")
       null
     }
 
     is DefineVariablesCommand -> {
-      println("DefineVariablesCommand is not handled currently")
+      Console.log("DefineVariablesCommand is not handled currently")
       null
     }
 
     is RunFlowCommand -> {
-      println("RunFlowCommand is not handled currently - skipping flow reference in report")
+      Console.log("RunFlowCommand is not handled currently - skipping flow reference in report")
       null
     }
 

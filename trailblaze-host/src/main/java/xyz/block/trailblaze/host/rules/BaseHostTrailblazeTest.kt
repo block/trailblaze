@@ -38,6 +38,7 @@ import xyz.block.trailblaze.utils.Ext.asMaestroCommands
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.TrailblazeYaml
 import kotlin.reflect.KClass
+import xyz.block.trailblaze.util.Console
 
 abstract class BaseHostTrailblazeTest(
   trailblazeDriverType: TrailblazeDriverType,
@@ -301,7 +302,7 @@ abstract class BaseHostTrailblazeTest(
       deviceClassifiers = trailblazeDeviceClassifiers,
       doesResourceExist = TemplatingUtil::doesResourceExist,
     ) ?: throw TrailblazeException("Resource not found: $path")
-    println("Running from resource: $computedResourcePath")
+    Console.log("Running from resource: $computedResourcePath")
     val trailYamlFromResource: String = TemplatingUtil.getResourceAsText(computedResourcePath)
       ?: error("No YAML resource found at $computedResourcePath")
     runTrailblazeYaml(

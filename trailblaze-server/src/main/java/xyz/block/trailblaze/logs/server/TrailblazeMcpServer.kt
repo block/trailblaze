@@ -16,9 +16,10 @@ import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.routing
 import io.modelcontextprotocol.kotlin.sdk.server.Server
-import io.modelcontextprotocol.kotlin.sdk.types.McpJson
 import io.modelcontextprotocol.kotlin.sdk.server.ServerOptions
+import io.modelcontextprotocol.kotlin.sdk.server.StdioServerTransport
 import io.modelcontextprotocol.kotlin.sdk.server.StreamableHttpServerTransport
+import io.modelcontextprotocol.kotlin.sdk.types.McpJson
 import io.modelcontextprotocol.kotlin.sdk.types.CallToolRequest
 import io.modelcontextprotocol.kotlin.sdk.types.CallToolResult
 import io.modelcontextprotocol.kotlin.sdk.types.Implementation
@@ -27,11 +28,16 @@ import io.modelcontextprotocol.kotlin.sdk.types.ServerCapabilities
 import io.modelcontextprotocol.kotlin.sdk.types.TextContent
 import io.modelcontextprotocol.kotlin.sdk.types.ToolSchema
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import kotlinx.io.asSink
+import kotlinx.io.asSource
+import kotlinx.io.buffered
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.server.ServerEndpoints.logsServerKtorEndpoints
 import xyz.block.trailblaze.logs.server.SslConfig.configureForSelfSignedSsl
@@ -47,7 +53,9 @@ import xyz.block.trailblaze.mcp.utils.TrailblazeToolToMcpBridge
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
+import xyz.block.trailblaze.util.Console
 import java.io.File
+import java.io.OutputStream
 import java.util.concurrent.ConcurrentHashMap
 
 class TrailblazeMcpServer(
@@ -187,26 +195,29 @@ class TrailblazeMcpServer(
    * - Session management via Mcp-Session-Id header
    * - Optional GET /mcp for server-to-client streaming (notifications)
    *
-   * @param port The port to listen on (default: 52525)
+   * @param port The HTTP port to listen on
+   * @param httpsPort The HTTPS port to listen on
    * @param wait Whether to block until server stops (default: false)
    * @return The embedded server instance
    */
   fun startStreamableHttpMcpServer(
-    port: Int = 52525,
+    port: Int = TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTP_PORT,
+    httpsPort: Int = TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTPS_PORT,
     wait: Boolean = false,
   ): EmbeddedServer<*, *> {
-    println("═══════════════════════════════════════════════════════════")
-    println("Starting Trailblaze MCP Server (Streamable HTTP)")
-    println("  Port: $port")
-    println("  MCP endpoint: http://localhost:$port/mcp")
-    println()
-    println("Connection flow:")
-    println("  1. Client sends POST to /mcp with JSON-RPC request")
-    println("  2. Server creates session (if new) and returns Mcp-Session-Id header")
-    println("  3. Client includes Mcp-Session-Id header in subsequent requests")
-    println("  4. Optional: GET /mcp for server-to-client streaming")
-    println("═══════════════════════════════════════════════════════════")
-    println("Will Wait: $wait")
+    Console.log("═══════════════════════════════════════════════════════════")
+    Console.log("Starting Trailblaze MCP Server (Streamable HTTP)")
+    Console.log("  HTTP Port:  $port")
+    Console.log("  HTTPS Port: $httpsPort")
+    Console.log("  MCP endpoint: http://localhost:$port/mcp")
+    Console.log("")
+    Console.log("Connection flow:")
+    Console.log("  1. Client sends POST to /mcp with JSON-RPC request")
+    Console.log("  2. Server creates session (if new) and returns Mcp-Session-Id header")
+    Console.log("  3. Client includes Mcp-Session-Id header in subsequent requests")
+    Console.log("  4. Optional: GET /mcp for server-to-client streaming")
+    Console.log("═══════════════════════════════════════════════════════════")
+    Console.log("Will Wait: $wait")
 
     // Create MCP server and transport BEFORE starting HTTP server
     val mcpServer: Server = configureMcpServer()
@@ -263,7 +274,7 @@ class TrailblazeMcpServer(
       configure = {
         configureForSelfSignedSsl(
           requestedHttpPort = port,
-          requestedHttpsPort = 8443,
+          requestedHttpsPort = httpsPort,
         )
       },
     ) {
@@ -378,6 +389,69 @@ class TrailblazeMcpServer(
   }
 
   /**
+   * MCP Server using STDIO transport (stdin/stdout for JSON-RPC).
+   *
+   * This is the preferred transport for MCP client integrations (e.g., Claude Desktop,
+   * Firebender, Goose) where the MCP client launches Trailblaze as a subprocess and
+   * communicates via stdin/stdout.
+   *
+   * **Important:** Call [Console.useStdErr] before this method to redirect all console
+   * output to stderr, keeping stdout clean for the JSON-RPC protocol stream. Because
+   * [Console.useStdErr] redirects `System.out` to stderr, callers must capture the
+   * original stdout **before** that call and pass it as [stdout].
+   *
+   * Usage in MCP client configuration:
+   * ```json
+   * {
+   *   "mcpServers": {
+   *     "trailblaze": {
+   *       "command": "./trailblaze",
+   *       "args": ["mcp", "--stdio"]
+   *     }
+   *   }
+   * }
+   * ```
+   *
+   * @param stdout The output stream for JSON-RPC responses. Pass the original
+   *   `System.out` captured **before** [Console.useStdErr] was called, so that
+   *   the transport writes to the real stdout (fd 1) rather than the redirected stderr.
+   *
+   * This method blocks until the session is closed by the client.
+   */
+  suspend fun startStdioMcpServer(stdout: OutputStream = System.out) {
+    Console.log("Starting Trailblaze MCP Server (STDIO)")
+
+    val mcpServer: Server = configureMcpServer()
+
+    val mcpSessionId = McpSessionId("stdio-${System.currentTimeMillis()}")
+    val sessionContext = TrailblazeMcpSessionContext(
+      mcpServerSession = null,
+      mcpSessionId = mcpSessionId,
+    )
+    sessionContexts[mcpSessionId.sessionId] = sessionContext
+    sessionCreationTimes[mcpSessionId.sessionId] = System.currentTimeMillis()
+
+    val transport = StdioServerTransport(
+      System.`in`.asSource().buffered(),
+      stdout.asSink().buffered(),
+    )
+
+    val session = mcpServer.createSession(transport)
+    sessionContext.mcpServerSession = session
+    registerTools(mcpServer, mcpSessionId, sessionContext)
+
+    Console.log("STDIO MCP server ready — waiting for JSON-RPC on stdin")
+
+    val done = Job()
+    session.onClose {
+      sessionContexts.remove(mcpSessionId.sessionId)
+      sessionCreationTimes.remove(mcpSessionId.sessionId)
+      done.complete()
+    }
+    done.join()
+  }
+
+  /**
    * @deprecated Use [startStreamableHttpMcpServer] instead. SSE transport has been deprecated by LLM providers.
    */
   @Deprecated(
@@ -385,7 +459,8 @@ class TrailblazeMcpServer(
     replaceWith = ReplaceWith("startStreamableHttpMcpServer(port, wait)"),
   )
   fun startSseMcpServer(
-    port: Int = 52525,
+    port: Int = TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTP_PORT,
+    httpsPort: Int = TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTPS_PORT,
     wait: Boolean = false,
-  ): EmbeddedServer<*, *> = startStreamableHttpMcpServer(port, wait)
+  ): EmbeddedServer<*, *> = startStreamableHttpMcpServer(port, httpsPort, wait)
 }

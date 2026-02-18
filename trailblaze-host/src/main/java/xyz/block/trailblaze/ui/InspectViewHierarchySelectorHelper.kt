@@ -5,6 +5,7 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.viewmatcher.TapSelectorV2
 import xyz.block.trailblaze.viewmatcher.models.PropertyUniqueness
 import xyz.block.trailblaze.yaml.TrailblazeYaml
+import xyz.block.trailblaze.util.Console
 
 /**
  * JVM-specific helper for computing selector options for a given node.
@@ -98,7 +99,7 @@ object InspectViewHierarchySelectorHelper {
         )
       } catch (e: Exception) {
         // If anything goes wrong, return empty result
-        println("Error computing selectors for node ${targetNode.nodeId}: ${e.message}")
+        Console.log("Error computing selectors for node ${targetNode.nodeId}: ${e.message}")
         e.printStackTrace()
         SelectorAnalysisResult(emptyList(), null)
       }

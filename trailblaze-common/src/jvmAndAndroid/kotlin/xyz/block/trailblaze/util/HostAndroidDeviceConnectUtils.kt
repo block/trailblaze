@@ -15,6 +15,7 @@ import xyz.block.trailblaze.util.AndroidHostAdbUtils.adbPortForward
 import xyz.block.trailblaze.util.AndroidHostAdbUtils.adbPortReverse
 import xyz.block.trailblaze.util.AndroidHostAdbUtils.createAdbCommandProcessBuilder
 import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils.runProcess
+import xyz.block.trailblaze.util.Console
 
 object HostAndroidDeviceConnectUtils {
 
@@ -32,7 +33,7 @@ object HostAndroidDeviceConnectUtils {
         HostAndroidDeviceConnectUtils.MAESTRO_APP_ID,
         HostAndroidDeviceConnectUtils.MAESTRO_TEST_APP_ID,
       ).distinct()
-    println("Force stopping all Android instrumentation processes. IDs: $testAppIds")
+    Console.log("Force stopping all Android instrumentation processes. IDs: $testAppIds")
     testAppIds.forEach { appId ->
       AndroidHostAdbUtils.forceStopApp(
         deviceId = deviceId,
@@ -51,7 +52,7 @@ object HostAndroidDeviceConnectUtils {
       val errorMessage = "Pre-compiled APK not found for ${trailblazeOnDeviceInstrumentationTarget.testAppId}. " +
           "This indicates a build configuration issue. The APK should be bundled during the desktop app build process."
       sendProgressMessage(errorMessage)
-      println(errorMessage)
+      Console.log(errorMessage)
       return false
     }
 
@@ -144,7 +145,7 @@ object HostAndroidDeviceConnectUtils {
       if (value != null) {
         processBuilder.environment()[envVar] = value
       } else {
-        println("Warning: $envVar is not set in the environment")
+        Console.log("Warning: $envVar is not set in the environment")
       }
     }
 
@@ -189,11 +190,11 @@ object HostAndroidDeviceConnectUtils {
         )
 
         instrProcess.runProcess { line ->
-          println("Instrumentation output: $line")
+          Console.log("Instrumentation output: $line")
           // Update status based on output
           if (!hasCallbackBeenCalled && line.contains("INSTRUMENTATION_STATUS_CODE:")) {
             sendProgressMessage("Trailblaze On-Device Connected Successfully!")
-            println("INSTRUMENTATION_STATUS_CODE found in output: $line")
+            Console.log("INSTRUMENTATION_STATUS_CODE found in output: $line")
 
             // Poll for up to 5 seconds to verify instrumentation is actually running
             ioScope.launch {
@@ -238,7 +239,7 @@ object HostAndroidDeviceConnectUtils {
           } else if (line.contains("INSTRUMENTATION_CODE: 0")) {
             val errorMessage = "Error occurred during instrumentation process."
             sendProgressMessage(errorMessage)
-            println(errorMessage)
+            Console.log(errorMessage)
             completableDeferred.complete(
               DeviceConnectionStatus.DeviceConnectionError.ConnectionFailure(
                 errorMessage = errorMessage,
@@ -306,10 +307,11 @@ object HostAndroidDeviceConnectUtils {
     deviceId: TrailblazeDeviceId,
     trailblazeOnDeviceInstrumentationTarget: TrailblazeOnDeviceInstrumentationTarget,
     additionalInstrumentationArgs: Map<String, String> = emptyMap(),
+    httpsPort: Int = TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTPS_PORT,
   ): DeviceConnectionStatus {
     val devicePort = deviceId.getTrailblazeOnDeviceSpecificPort()
     adbPortForward(deviceId, devicePort)
-    adbPortReverse(deviceId, 8443)
+    adbPortReverse(deviceId, httpsPort)
 
     // connectToInstrumentation will handle uninstall and reinstall for a clean slate
     return HostAndroidDeviceConnectUtils.connectToInstrumentation(

@@ -3,6 +3,7 @@ package xyz.block.trailblaze.toolcalls.commands
 import ai.koog.agents.core.tools.annotations.LLMDescription
 import kotlinx.serialization.Serializable
 import maestro.orchestra.Command
+import maestro.orchestra.HideKeyboardCommand
 import maestro.orchestra.InputTextCommand
 import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.toolcalls.MapsToMaestroCommands
@@ -23,8 +24,7 @@ data class InputTextTrailblazeTool(
 ) : MapsToMaestroCommands() {
 
   override fun toMaestroCommands(memory: AgentMemory): List<Command> = listOf(
-    InputTextCommand(
-      text = text,
-    ),
+    InputTextCommand(text),
+    HideKeyboardCommand(),
   )
 }

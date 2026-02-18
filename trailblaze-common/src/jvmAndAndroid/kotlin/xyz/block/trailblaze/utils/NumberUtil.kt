@@ -1,5 +1,7 @@
 package xyz.block.trailblaze.utils
 
+import xyz.block.trailblaze.util.Console
+
 // Regex to extract any positive or negative integer or float from a string
 private val numberRegex = """-?\d{1,3}(?:,\d{3})*(?:\.\d+)?${'$'}|^-?\d+(?:\.\d+)?""".toRegex()
 
@@ -10,7 +12,7 @@ private val numberRegex = """-?\d{1,3}(?:,\d{3})*(?:\.\d+)?${'$'}|^-?\d+(?:\.\d+
 // This returns the number as a string value without the comma values
 fun parseNumberString(input: String): String? {
   val match = numberRegex.find(input)
-  println("### Have match $match")
+  Console.log("### Have match $match")
   return match?.value?.replace(",", "")
 }
 

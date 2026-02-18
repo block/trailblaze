@@ -8,6 +8,12 @@ object TrailblazeDevicePort {
 
   const val INSTRUMENTATION_ARG_KEY = "trailblaze.ondevice.server.port"
 
+  /** Default HTTP port for the Trailblaze server */
+  const val TRAILBLAZE_DEFAULT_HTTP_PORT = 52525
+
+  /** Default HTTPS port for the Trailblaze server */
+  const val TRAILBLAZE_DEFAULT_HTTPS_PORT = 8443
+
   /** Android on-device uses this to route calls back to host */
   const val TRAILBLAZE_DEFAULT_ADB_REVERSE_PORT = 52526
 
@@ -19,7 +25,8 @@ object TrailblazeDevicePort {
    * for device-specific port allocation.
    */
   private val RESERVED_PORTS = setOf(
-    52525, // Reserved for other Trailblaze services
+    TRAILBLAZE_DEFAULT_HTTP_PORT, // Reserved for Trailblaze HTTP server
+    TRAILBLAZE_DEFAULT_HTTPS_PORT, // Reserved for Trailblaze HTTPS server
     7001, // Used by default by Maestro
     TRAILBLAZE_DEFAULT_ADB_REVERSE_PORT, // Android on-device uses this to route calls back to host
   )

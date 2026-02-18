@@ -23,6 +23,7 @@ import xyz.block.trailblaze.model.TrailblazeOnDeviceInstrumentationTarget
 import xyz.block.trailblaze.ui.TrailblazeAnalytics
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.util.HostAndroidDeviceConnectUtils
+import xyz.block.trailblaze.util.Console
 
 class DesktopYamlRunner(
   private val trailblazeDeviceManager: TrailblazeDeviceManager,
@@ -60,7 +61,7 @@ class DesktopYamlRunner(
     val onComplete = desktopAppRunYamlParams.onComplete
 
     trailblazeDeviceManager.createNewCoroutineScopeForDevice(trailblazeDeviceId).launch {
-      println("🚀 COROUTINE STARTED for device: ${trailblazeDeviceId.instanceId}")
+      Console.log("🚀 COROUTINE STARTED for device: ${trailblazeDeviceId.instanceId}")
       
       // Track the execution result to report in finally block
       var executionResult: TrailExecutionResult = TrailExecutionResult.Success
@@ -70,7 +71,7 @@ class DesktopYamlRunner(
 
       if (connectedTrailblazeDevice == null) {
         onProgressMessage("Device with ID $trailblazeDeviceId not found")
-        println("❌ COROUTINE ENDING (device not found) for device: ${trailblazeDeviceId.instanceId}")
+        Console.log("❌ COROUTINE ENDING (device not found) for device: ${trailblazeDeviceId.instanceId}")
         executionResult = TrailExecutionResult.Failed("Device not found")
         onComplete?.invoke(executionResult)
         return@launch
@@ -149,11 +150,11 @@ class DesktopYamlRunner(
           }
         }
       } catch (e: CancellationException) {
-        println("⚠️ COROUTINE CANCELLED for device ${trailblazeDeviceId.instanceId}")
+        Console.log("⚠️ COROUTINE CANCELLED for device ${trailblazeDeviceId.instanceId}")
         executionResult = TrailExecutionResult.Cancelled
         throw e // Re-throw to properly propagate cancellation
       } catch (e: Exception) {
-        println("⚠️ EXCEPTION in coroutine for device ${trailblazeDeviceId.instanceId}: ${e::class.simpleName} - ${e.message}")
+        Console.log("⚠️ EXCEPTION in coroutine for device ${trailblazeDeviceId.instanceId}: ${e::class.simpleName} - ${e.message}")
         prefixedProgressMessage("Error: ${e.message}")
         executionResult = TrailExecutionResult.Failed(e.message)
         onConnectionStatus(
@@ -162,7 +163,7 @@ class DesktopYamlRunner(
           ),
         )
       } finally {
-        println("🏁 COROUTINE FINISHED (finally block) for device: ${trailblazeDeviceId.instanceId}")
+        Console.log("🏁 COROUTINE FINISHED (finally block) for device: ${trailblazeDeviceId.instanceId}")
         onComplete?.invoke(executionResult)
       }
     }

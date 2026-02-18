@@ -1,8 +1,6 @@
 package xyz.block.trailblaze.ui
 
 import androidx.compose.foundation.layout.ColumnScope
-import xyz.block.trailblaze.ui.desktoputil.DesktopUtil
-import xyz.block.trailblaze.ui.desktoputil.ExitApp
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -10,6 +8,8 @@ import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.llm.TrailblazeLlmModelList
 import xyz.block.trailblaze.model.DesktopAppRunYamlParams
 import xyz.block.trailblaze.report.utils.LogsRepo
+import xyz.block.trailblaze.ui.desktoputil.DesktopUtil
+import xyz.block.trailblaze.ui.desktoputil.ExitApp
 import xyz.block.trailblaze.ui.model.TrailblazeAppTab
 import xyz.block.trailblaze.ui.model.TrailblazeRoute
 import xyz.block.trailblaze.ui.models.TrailblazeServerState
@@ -72,13 +72,24 @@ object TrailblazeBuiltInTabs {
    */
   fun trailsTab(
     trailblazeSettingsRepo: TrailblazeSettingsRepo,
+    deviceManager: TrailblazeDeviceManager,
+    currentTrailblazeLlmModelProvider: () -> TrailblazeLlmModel,
+    yamlRunner: (DesktopAppRunYamlParams) -> Unit,
+    additionalInstrumentationArgs: suspend () -> Map<String, String>,
+    onNavigateToSessions: ((String) -> Unit)? = null,
   ): TrailblazeAppTab = TrailblazeAppTab(
     route = TrailblazeRoute.Trails,
     content = {
       val serverState by trailblazeSettingsRepo.serverStateFlow.collectAsState()
       val effectiveTrailsDir = TrailblazeDesktopUtil.getEffectiveTrailsDirectory(serverState.appConfig)
+
       TrailsBrowserTabComposable(
         trailsDirectoryPath = effectiveTrailsDir,
+        deviceManager = deviceManager,
+        trailblazeSettingsRepo = trailblazeSettingsRepo,
+        currentTrailblazeLlmModelProvider = currentTrailblazeLlmModelProvider,
+        yamlRunner = yamlRunner,
+        additionalInstrumentationArgs = additionalInstrumentationArgs,
         onChangeDirectory = { newPath ->
           trailblazeSettingsRepo.updateAppConfig { it.copy(trailsDirectory = newPath) }
         }

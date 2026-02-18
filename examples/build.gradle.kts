@@ -34,6 +34,9 @@ val isRunningTests = gradle.startParameter.taskNames.any { taskName ->
   taskName.contains("test", ignoreCase = true) || taskName.contains("connected", ignoreCase = true)
 }
 
+val trailblazeDefaultHttpsPort = 8443
+val trailblazeHttpsPort = System.getenv("TRAILBLAZE_HTTPS_PORT")?.toIntOrNull() ?: trailblazeDefaultHttpsPort
+
 android {
   namespace = "xyz.block.trailblaze.examples"
   compileSdk = 35
@@ -43,12 +46,12 @@ android {
 
     // Trailblaze Reverse Proxy to support Physical Devices and Ollama
     val isGitHubActions = (System.getenv("GITHUB_ACTIONS") == "true")
-    val isTrailblazeServerRunning = isHttpsServerRunning(8443)
+    val isTrailblazeServerRunning = isHttpsServerRunning(trailblazeHttpsPort)
     val isOpenRouterApiKeyEnvVarSet = (System.getenv("OPENROUTER_API_KEY") != null)
 
     if (isGitHubActions && isRunningTests) {
       if (!isTrailblazeServerRunning) {
-        throw GradleException("Trailblaze Reverse Proxy is required when running in GitHub Actions. Please ensure the server is running on port 8443.")
+        throw GradleException("Trailblaze Reverse Proxy is required when running in GitHub Actions. Please ensure the server is running on port $trailblazeHttpsPort.")
       }
       if (isOpenRouterApiKeyEnvVarSet) {
         // Setting a dummy value so this LLM client is used, but it doesn't get in the logs as it's replaced by the reverse proxy
@@ -70,20 +73,21 @@ android {
     }
 
     if (isTrailblazeServerRunning) {
-      if (isRunningTests) println("Server is running on port 8443, enabling Trailblaze Reverse Proxy")
+      if (isRunningTests) println("Server is running on port $trailblazeHttpsPort, enabling Trailblaze Reverse Proxy")
       testInstrumentationRunnerArguments["trailblaze.reverseProxy"] = "true"
+      testInstrumentationRunnerArguments["trailblaze.httpsPort"] = trailblazeHttpsPort.toString()
     }
   }
 
   project.afterEvaluate {
     tasks.matching { task -> task.name == "connectedDebugAndroidTest" }.configureEach {
       doFirst {
-        val isTrailblazeServerRunning = isHttpsServerRunning(8443)
+        val isTrailblazeServerRunning = isHttpsServerRunning(trailblazeHttpsPort)
         if (isTrailblazeServerRunning) {
           try {
             project.exec {
               // Trailblaze Reverse Proxy
-              commandLine(listOf("adb", "reverse", "tcp:8443", "tcp:8443"))
+              commandLine(listOf("adb", "reverse", "tcp:$trailblazeHttpsPort", "tcp:$trailblazeHttpsPort"))
             }
           } catch (e: Exception) {
             println("Failed to enable adb reverse proxy: ${e.message}")

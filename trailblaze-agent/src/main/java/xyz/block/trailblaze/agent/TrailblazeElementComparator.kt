@@ -2,6 +2,7 @@ package xyz.block.trailblaze.agent
 
 import ai.koog.prompt.executor.clients.LLMClient
 import ai.koog.prompt.message.AttachmentContent
+import xyz.block.trailblaze.util.Console
 import ai.koog.prompt.message.ContentPart
 import ai.koog.prompt.message.Message
 import ai.koog.prompt.message.RequestMetaInfo
@@ -52,7 +53,7 @@ class TrailblazeElementComparator(
    */
   override fun getElementValue(prompt: String): String? {
     val screenState = screenStateProvider()
-    println("Getting element value for prompt: '$prompt'")
+    Console.log("Getting element value for prompt: '$prompt'")
 
     val locatorResponse = identifyElementLocator(screenState, prompt)
 
@@ -99,7 +100,7 @@ class TrailblazeElementComparator(
    * Evaluates a statement about the UI and returns a boolean result with explanation.
    */
   override fun evaluateBoolean(statement: String): BooleanAssertionTrailblazeTool {
-    println("Evaluating boolean assertion: '$statement'")
+    Console.log("Evaluating boolean assertion: '$statement'")
 
     // Use LLM with boolean assertion tool
     val koogAiRequestMessages = createToolRequest(
@@ -154,7 +155,7 @@ class TrailblazeElementComparator(
    * Evaluates a prompt and returns a descriptive string response with explanation.
    */
   override fun evaluateString(query: String): StringEvaluationTrailblazeTool {
-    println("Evaluating string query: '$query'")
+    Console.log("Evaluating string query: '$query'")
 
     // Use LLM with string evaluation tool
     val koogAiRequestMessages: List<Message> = createToolRequest(
@@ -188,7 +189,7 @@ class TrailblazeElementComparator(
       )
     }
 
-    println("Tool call found: ${evalToolCall.tool}, arguments: ${evalToolCall.content}")
+    Console.log("Tool call found: ${evalToolCall.tool}, arguments: ${evalToolCall.content}")
 
     try {
       val stringCommand = evaluationToolRepo.toolCallToTrailblazeTool(
@@ -196,7 +197,7 @@ class TrailblazeElementComparator(
         evalToolCall.content,
       ) as? StringEvaluationTrailblazeTool
       if (stringCommand == null) {
-        println("ERROR: Failed to parse tool call as StringEvaluationCommand")
+        Console.log("ERROR: Failed to parse tool call as StringEvaluationCommand")
         return StringEvaluationTrailblazeTool(
           result = "",
           reason = "Failed to parse tool call response",
@@ -205,7 +206,7 @@ class TrailblazeElementComparator(
 
       return stringCommand
     } catch (e: Exception) {
-      println("ERROR: Exception processing evaluation: ${e.message}")
+      Console.log("ERROR: Exception processing evaluation: ${e.message}")
       e.printStackTrace()
 
       return StringEvaluationTrailblazeTool(
@@ -229,7 +230,7 @@ class TrailblazeElementComparator(
    * Uses LLM to identify the best locator for an element based on description.
    */
   private fun identifyElementLocator(screenState: ScreenState, prompt: String): LocatorResponse {
-    println("Identifying element locator for: $prompt")
+    Console.log("Identifying element locator for: $prompt")
     val viewHierarchyJson = Json.encodeToString(ViewHierarchyTreeNode.serializer(), screenState.viewHierarchy)
 
     val koogRequestMessages: List<Message.Request> = buildList {

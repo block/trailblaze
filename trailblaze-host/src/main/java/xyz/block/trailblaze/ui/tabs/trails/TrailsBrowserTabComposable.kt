@@ -46,9 +46,11 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -63,12 +65,28 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.llm.RunYamlRequest
+import xyz.block.trailblaze.llm.TrailblazeLlmModel
+import xyz.block.trailblaze.llm.TrailblazeReferrer
+import xyz.block.trailblaze.model.DesktopAppRunYamlParams
+import xyz.block.trailblaze.model.TrailblazeConfig
+import xyz.block.trailblaze.ui.TrailblazeDeviceManager
+import xyz.block.trailblaze.ui.TrailblazeSettingsRepo
+import xyz.block.trailblaze.ui.composables.DeviceSelectionDialog
 import xyz.block.trailblaze.ui.desktoputil.DesktopUtil
+import xyz.block.trailblaze.ui.tabs.trails.TrailCard
+import xyz.block.trailblaze.ui.tabs.trails.TrailConfigCache
+import xyz.block.trailblaze.ui.tabs.trails.TrailDetailsView
+import xyz.block.trailblaze.ui.tabs.trails.TrailVariant
+import xyz.block.trailblaze.ui.tabs.trails.TrailYamlEditorModal
+import xyz.block.trailblaze.ui.tabs.trails.TrailsDirectoryScanner
 import xyz.block.trailblaze.yaml.TrailSourceType
 import java.io.File
 import java.nio.file.Paths
 import javax.swing.JFileChooser
+import xyz.block.trailblaze.util.Console
 
 /**
  * Available sort options for trails.
@@ -85,15 +103,33 @@ sealed class TrailSortOption(val displayName: String) {
  * Shows trails grouped by their directory ID with variant chips.
  *
  * @param trailsDirectoryPath The path to the trails directory to browse
+ * @param deviceManager The device manager for accessing connected devices
+ * @param trailblazeSettingsRepo The settings repository for accessing app state
+ * @param currentTrailblazeLlmModelProvider Provider for the current LLM model
+ * @param yamlRunner The runner for executing YAML tests
+ * @param additionalInstrumentationArgs Provider for additional instrumentation args
  * @param onChangeDirectory Callback when the user wants to change the trails directory.
  *                          Receives the new directory path. If null, the change directory button is hidden.
  */
 @Composable
 fun TrailsBrowserTabComposable(
   trailsDirectoryPath: String,
+  deviceManager: TrailblazeDeviceManager,
+  trailblazeSettingsRepo: TrailblazeSettingsRepo,
+  currentTrailblazeLlmModelProvider: () -> TrailblazeLlmModel,
+  yamlRunner: (DesktopAppRunYamlParams) -> Unit,
+  additionalInstrumentationArgs: suspend () -> Map<String, String>,
   onChangeDirectory: ((String) -> Unit)? = null,
 ) {
   val trailsDirectory = remember(trailsDirectoryPath) { File(trailsDirectoryPath) }
+  val serverState by trailblazeSettingsRepo.serverStateFlow.collectAsState()
+  val coroutineScope = rememberCoroutineScope()
+
+  // Device selection dialog state for running trails
+  var showDeviceSelectionDialog by remember { mutableStateOf(false) }
+  var trailNameToRun by remember { mutableStateOf<String?>(null) }
+  var yamlContentToRun by remember { mutableStateOf<String?>(null) }
+
   var trails by remember { mutableStateOf<List<Trail>>(emptyList()) }
   var selectedTrailId by remember { mutableStateOf<String?>(null) }
   var searchQuery by remember { mutableStateOf("") }
@@ -102,11 +138,11 @@ fun TrailsBrowserTabComposable(
   var showYamlViewer by remember { mutableStateOf(false) }
   var yamlViewerContent by remember { mutableStateOf("") }
   var yamlViewerVariant by remember { mutableStateOf<TrailVariant?>(null) }
-  
+
   // Indexing state for background config parsing
   var isIndexing by remember { mutableStateOf(false) }
   var indexingProgress by remember { mutableStateOf(0f) } // 0.0 to 1.0
-  
+
   // Filter state
   var selectedPlatform by remember { mutableStateOf<TrailblazeDevicePlatform?>(null) }
   var selectedClassifier by remember { mutableStateOf<String?>(null) } // e.g., "phone", "tablet"
@@ -114,11 +150,11 @@ fun TrailsBrowserTabComposable(
   var selectedMetadataKey by remember { mutableStateOf<String?>(null) }
   var metadataFilterValue by remember { mutableStateOf("") }
   var showFilters by remember { mutableStateOf(false) }
-  
+
   // Sort state
   var selectedSortOption by remember { mutableStateOf<TrailSortOption>(TrailSortOption.ById) }
   var showSortMenu by remember { mutableStateOf(false) }
-  
+
   // Scan directory on load
   LaunchedEffect(trailsDirectory) {
     isLoading = true
@@ -136,7 +172,7 @@ fun TrailsBrowserTabComposable(
       isLoading = false
     }
   }
-  
+
   // Background indexing for search functionality - runs after initial scan
   LaunchedEffect(trails) {
     if (trails.isNotEmpty() && !isLoading) {
@@ -147,14 +183,14 @@ fun TrailsBrowserTabComposable(
           indexingProgress = indexed.toFloat() / total.toFloat()
         }
       } catch (e: Exception) {
-        println("[TrailsTab] Error during background indexing: ${e.message}")
+        Console.log("[TrailsTab] Error during background indexing: ${e.message}")
       } finally {
         isIndexing = false
         indexingProgress = 1f
       }
     }
   }
-  
+
   // Periodic refresh to detect file changes (every 30 seconds)
   LaunchedEffect(trailsDirectory) {
     while (true) {
@@ -166,9 +202,9 @@ fun TrailsBrowserTabComposable(
           }
           // Only update if the trails actually changed
           if (foundTrails != trails) {
-            println("[TrailsTab] Detected file system changes, updating trails")
+            Console.log("[TrailsTab] Detected file system changes, updating trails")
             trails = foundTrails
-            
+
             // Clear selection if the selected trail no longer exists
             selectedTrailId?.let { id ->
               if (foundTrails.none { it.id == id }) {
@@ -177,17 +213,17 @@ fun TrailsBrowserTabComposable(
             }
           }
         } catch (e: Exception) {
-          println("[TrailsTab] Error during periodic refresh: ${e.message}")
+          Console.log("[TrailsTab] Error during periodic refresh: ${e.message}")
         }
       }
     }
   }
-  
+
   // Filter and sort trails based on search query, filters, and sort option
   val filteredTrails = remember(trails, searchQuery, selectedPlatform, selectedClassifier, selectedSourceType, selectedMetadataKey, metadataFilterValue, selectedSortOption) {
     trails.filter { trail ->
       // Text search filter
-      val matchesSearch = searchQuery.isBlank() || 
+      val matchesSearch = searchQuery.isBlank() ||
         trail.id.contains(searchQuery, ignoreCase = true) ||
         trail.displayName.contains(searchQuery, ignoreCase = true) ||
         trail.title?.contains(searchQuery, ignoreCase = true) == true ||
@@ -195,29 +231,29 @@ fun TrailsBrowserTabComposable(
         trail.priority?.contains(searchQuery, ignoreCase = true) == true ||
         trail.source?.type?.name?.contains(searchQuery, ignoreCase = true) == true ||
         trail.metadata.any { (key, value) ->
-          key.contains(searchQuery, ignoreCase = true) || 
+          key.contains(searchQuery, ignoreCase = true) ||
             value.contains(searchQuery, ignoreCase = true)
         } ||
         trail.platforms.any { it.name.contains(searchQuery, ignoreCase = true) }
-      
+
       // Platform filter - check if any variant matches the selected platform
       val matchesPlatform = selectedPlatform == null ||
         trail.variants.any { it.platform == selectedPlatform }
-      
+
       // Classifier filter (e.g., phone, tablet) - check if any variant has this classifier
       val matchesClassifier = selectedClassifier == null ||
         trail.variants.any { variant ->
           variant.classifiers.any { it.classifier.equals(selectedClassifier, ignoreCase = true) }
         }
-      
+
       // Source type filter
       val matchesSourceType = selectedSourceType == null ||
         trail.source?.type == selectedSourceType
-      
+
       // Metadata filter
       val matchesMetadata = selectedMetadataKey == null || metadataFilterValue.isBlank() ||
         trail.metadata[selectedMetadataKey]?.contains(metadataFilterValue, ignoreCase = true) == true
-      
+
       matchesSearch && matchesPlatform && matchesClassifier && matchesSourceType && matchesMetadata
     }.let { filtered ->
       val sortOption = selectedSortOption
@@ -243,7 +279,7 @@ fun TrailsBrowserTabComposable(
       }
     }
   }
-  
+
   // Get available classifiers from the data for the filter options
   val availableClassifiers = remember(trails) {
     trails.flatMap { trail ->
@@ -255,7 +291,7 @@ fun TrailsBrowserTabComposable(
       classifier !in listOf("android", "ios", "web")
     }.sorted()
   }
-  
+
   // Get available source types from the data (only show source types that exist in scanned trails)
   val availableSourceTypes = remember(trails) {
     trails.flatMap { trail ->
@@ -264,14 +300,14 @@ fun TrailsBrowserTabComposable(
       }
     }.distinct().sortedBy { it.name }
   }
-  
+
   // Get available metadata keys from the data for sort options
   val availableMetadataKeys = remember(trails) {
     trails.flatMap { trail ->
       trail.metadata.keys
     }.distinct().sorted()
   }
-  
+
   // Build available sort options based on discovered data
   val availableSortOptions = remember(availableMetadataKeys) {
     buildList {
@@ -283,11 +319,11 @@ fun TrailsBrowserTabComposable(
       }
     }
   }
-  
+
   val selectedTrail = remember(selectedTrailId, trails) {
     selectedTrailId?.let { id -> trails.find { it.id == id } }
   }
-  
+
   Column(
     modifier = Modifier.fillMaxSize().padding(16.dp)
   ) {
@@ -303,7 +339,7 @@ fun TrailsBrowserTabComposable(
           style = MaterialTheme.typography.headlineMedium,
           fontWeight = FontWeight.Bold
         )
-        
+
         Row(
           verticalAlignment = Alignment.CenterVertically,
           horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -316,7 +352,7 @@ fun TrailsBrowserTabComposable(
               DesktopUtil.openInFileBrowser(trailsDirectory)
             }
           )
-          
+
           // Open in Finder button
           IconButton(
             onClick = { DesktopUtil.openInFileBrowser(trailsDirectory) },
@@ -329,7 +365,7 @@ fun TrailsBrowserTabComposable(
               tint = MaterialTheme.colorScheme.onSurfaceVariant
             )
           }
-          
+
           // Change directory button (only if callback is provided)
           if (onChangeDirectory != null) {
             IconButton(
@@ -356,7 +392,7 @@ fun TrailsBrowserTabComposable(
           }
         }
       }
-      
+
       // Refresh button
       IconButton(
         onClick = {
@@ -390,9 +426,9 @@ fun TrailsBrowserTabComposable(
         )
       }
     }
-    
+
     HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
-    
+
     // Content
     when {
       isLoading -> {
@@ -512,7 +548,7 @@ fun TrailsBrowserTabComposable(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
               ) {
-                val hasFilters = searchQuery.isNotBlank() || selectedPlatform != null || 
+                val hasFilters = searchQuery.isNotBlank() || selectedPlatform != null ||
                   selectedClassifier != null || selectedSourceType != null
                 Text(
                   text = if (hasFilters) {
@@ -537,7 +573,7 @@ fun TrailsBrowserTabComposable(
                   )
                 }
               }
-              
+
               // Sort dropdown
               Box {
                 Row(
@@ -557,7 +593,7 @@ fun TrailsBrowserTabComposable(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                   )
                 }
-                
+
                 DropdownMenu(
                   expanded = showSortMenu,
                   onDismissRequest = { showSortMenu = false }
@@ -574,9 +610,9 @@ fun TrailsBrowserTabComposable(
                 }
               }
             }
-            
+
             Spacer(modifier = Modifier.height(8.dp))
-            
+
             // Search field
             OutlinedTextField(
               value = searchQuery,
@@ -592,9 +628,9 @@ fun TrailsBrowserTabComposable(
               },
               singleLine = true
             )
-            
+
             Spacer(modifier = Modifier.height(8.dp))
-            
+
             // Filter panel with visual container
             val activeFilterCount = listOfNotNull(
               selectedPlatform,
@@ -602,7 +638,7 @@ fun TrailsBrowserTabComposable(
               selectedSourceType,
               selectedMetadataKey.takeIf { metadataFilterValue.isNotBlank() }
             ).size
-            
+
             Card(
               modifier = Modifier.fillMaxWidth(),
               colors = CardDefaults.cardColors(
@@ -651,7 +687,7 @@ fun TrailsBrowserTabComposable(
                       tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                   }
-                  
+
                   if (activeFilterCount > 0) {
                     TextButton(
                       onClick = {
@@ -666,13 +702,13 @@ fun TrailsBrowserTabComposable(
                     }
                   }
                 }
-                
+
                 // Collapsible filter sections
                 if (showFilters) {
                   Spacer(modifier = Modifier.height(12.dp))
                   HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
                   Spacer(modifier = Modifier.height(12.dp))
-                  
+
                   Column(
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                   ) {
@@ -697,7 +733,7 @@ fun TrailsBrowserTabComposable(
                         }
                       }
                     }
-                    
+
                     // Device classifier section (only show if there are classifiers)
                     if (availableClassifiers.isNotEmpty()) {
                       FilterSection(
@@ -721,7 +757,7 @@ fun TrailsBrowserTabComposable(
                         }
                       }
                     }
-                    
+
                     // Source type section (only show if there are source types)
                     if (availableSourceTypes.isNotEmpty()) {
                       FilterSection(
@@ -745,7 +781,7 @@ fun TrailsBrowserTabComposable(
                         }
                       }
                     }
-                    
+
                     // Metadata filter section (only show if there are metadata keys)
                     if (availableMetadataKeys.isNotEmpty()) {
                       FilterSection(
@@ -791,9 +827,9 @@ fun TrailsBrowserTabComposable(
                                 .clickable { showMetadataKeyMenu = true }
                             )
                           }
-                          
+
                           Text("contains", style = MaterialTheme.typography.bodySmall)
-                          
+
                           // Metadata value input
                           OutlinedTextField(
                             value = metadataFilterValue,
@@ -804,7 +840,7 @@ fun TrailsBrowserTabComposable(
                             singleLine = true,
                             enabled = selectedMetadataKey != null
                           )
-                          
+
                           // Clear metadata filter button
                           if (selectedMetadataKey != null) {
                             IconButton(
@@ -828,9 +864,9 @@ fun TrailsBrowserTabComposable(
                 }
               }
             }
-            
+
             Spacer(modifier = Modifier.height(8.dp))
-            
+
             // Trail list
             LazyColumn(
               verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -845,7 +881,7 @@ fun TrailsBrowserTabComposable(
               }
             }
           }
-          
+
           // Right side: Details panel (if trail selected)
           selectedTrail?.let { trail ->
             Spacer(modifier = Modifier.width(16.dp))
@@ -879,7 +915,7 @@ fun TrailsBrowserTabComposable(
       }
     }
   }
-  
+
   // YAML Editor Modal
   if (showYamlViewer && yamlViewerVariant != null) {
     TrailYamlEditorModal(
@@ -903,9 +939,88 @@ fun TrailsBrowserTabComposable(
         yamlViewerVariant = null
         yamlViewerContent = ""
       },
+      onRun = {
+        // Show device selection dialog to run the trail
+        trailNameToRun = yamlViewerVariant?.displayLabel ?: "Trail"
+        yamlContentToRun = yamlViewerContent
+        showDeviceSelectionDialog = true
+      },
       relativePath = runCatching {
         Paths.get(trailsDirectory.absolutePath).relativize(Paths.get(yamlViewerVariant!!.absolutePath)).toString()
       }.getOrElse { yamlViewerVariant!!.fileName }
+    )
+  }
+
+  // Device Selection Dialog for running trails
+  if (showDeviceSelectionDialog && yamlContentToRun != null) {
+    val currentLlmModel = currentTrailblazeLlmModelProvider()
+
+    DeviceSelectionDialog(
+      deviceManager = deviceManager,
+      settingsRepo = trailblazeSettingsRepo,
+      onSelectionChanged = { selectedDeviceInstanceIds ->
+        trailblazeSettingsRepo.updateAppConfig { appConfig ->
+          appConfig.copy(
+            lastSelectedDeviceInstanceIds = selectedDeviceInstanceIds
+          )
+        }
+      },
+      onDismiss = {
+        showDeviceSelectionDialog = false
+        trailNameToRun = null
+        yamlContentToRun = null
+      },
+      onSessionClick = { sessionId ->
+        showDeviceSelectionDialog = false
+      },
+      onRunTests = { selectedDevices: List<TrailblazeConnectedDeviceSummary>, forceStopApp: Boolean ->
+        showDeviceSelectionDialog = false
+
+        val setOfMarkEnabledConfig = serverState.appConfig.setOfMarkEnabled
+        val targetTestApp = deviceManager.getCurrentSelectedTargetApp()
+
+        // Run on each selected device
+        selectedDevices.forEach { device ->
+          val runYamlRequest = RunYamlRequest(
+            testName = trailNameToRun ?: "Trail from Browser",
+            yaml = yamlContentToRun!!,
+            trailblazeLlmModel = currentLlmModel,
+            useRecordedSteps = true,
+            targetAppName = serverState.appConfig.selectedTargetAppId,
+            config = TrailblazeConfig(
+              setOfMarkEnabled = setOfMarkEnabledConfig,
+              aiFallback = serverState.appConfig.aiFallbackEnabled,
+              overrideSessionId = null,
+            ),
+            trailFilePath = null,
+            trailblazeDeviceId = device.trailblazeDeviceId,
+            referrer = TrailblazeReferrer(id = "trails_tab", display = "Trails Tab")
+          )
+
+          coroutineScope.launch(Dispatchers.IO) {
+            try {
+              yamlRunner(
+                DesktopAppRunYamlParams(
+                  forceStopTargetApp = forceStopApp,
+                  runYamlRequest = runYamlRequest,
+                  onProgressMessage = { _ -> },
+                  onConnectionStatus = { _ -> },
+                  targetTestApp = targetTestApp,
+                  additionalInstrumentationArgs = additionalInstrumentationArgs(),
+                  onComplete = { result ->
+                    // Stay in the current session view - don't navigate away
+                    // The session detail view will show the completed state
+                  }
+                )
+              )
+            } catch (e: Exception) {
+              // Handle error silently - the session will show the error
+            }
+          }
+        }
+        trailNameToRun = null
+        yamlContentToRun = null
+      }
     )
   }
 }

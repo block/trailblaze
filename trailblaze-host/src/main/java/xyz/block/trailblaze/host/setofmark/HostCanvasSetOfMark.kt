@@ -16,6 +16,7 @@ import javax.imageio.IIOImage
 import javax.imageio.ImageIO
 import javax.imageio.ImageWriteParam
 import kotlin.math.round
+import xyz.block.trailblaze.util.Console
 
 /** https://github.com/takahirom/arbigent/blob/5871d8a92a499423b00c1c5c280a55be9e5561cd/arbigent-core/src/main/java/io/github/takahirom/arbigent/ArbigentCanvas.kt */
 class HostCanvasSetOfMark(
@@ -76,7 +77,7 @@ class HostCanvasSetOfMark(
       // Validate that both scales are the same
       if (roundedScaleX != roundedScaleY) {
         val platformName = if (deviceInfo?.platform == Platform.IOS) "iOS" else "Web"
-        println(
+        Console.log(
           "Warning: $platformName scale factors differ - X: $scaleX ($roundedScaleX), Y: $scaleY ($roundedScaleY). Using X scale.",
         )
       }

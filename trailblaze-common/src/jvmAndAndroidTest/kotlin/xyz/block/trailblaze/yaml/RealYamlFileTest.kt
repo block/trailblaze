@@ -28,9 +28,11 @@ class RealYamlFileTest {
             tools:
             - tapOnElementWithText:
                 text: Create appointment
-      - maestro:
-        - assertVisible:
-            text: .*total Points
+        - verify: Verify total points are visible
+          recording:
+            tools:
+            - assertVisibleWithText:
+                text: .*total Points
     """.trimIndent()
 
     // Test extracting metadata
@@ -41,7 +43,7 @@ class RealYamlFileTest {
 
     // Test parsing trail items
     val trailItems = trailblazeYaml.decodeTrail(yaml)
-    assertEquals(3, trailItems.size) // config, prompts, and maestro sections
+    assertEquals(2, trailItems.size) // config and prompts sections
   }
 
   @Test
@@ -49,13 +51,15 @@ class RealYamlFileTest {
     val yaml = """
       - prompts:
         - step: Navigate to login
-      - maestro:
-        - assertVisible:
-            text: Login
+        - verify: Verify login is visible
+          recording:
+            tools:
+            - assertVisibleWithText:
+                text: Login
     """.trimIndent()
 
     val items = trailblazeYaml.decodeTrail(yaml)
-    assertEquals(2, items.size)
+    assertEquals(1, items.size)
 
     // Config should be null when no config item
     val config = trailblazeYaml.extractTrailConfig(yaml)

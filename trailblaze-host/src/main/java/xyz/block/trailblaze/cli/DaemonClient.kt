@@ -13,6 +13,7 @@ import io.ktor.http.contentType
 import io.ktor.http.isSuccess
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.coroutines.runBlocking
+import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import kotlinx.serialization.json.Json
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.logs.client.TrailblazeJson
@@ -31,7 +32,7 @@ import xyz.block.trailblaze.logs.server.endpoints.CliStatusResponse
  */
 class DaemonClient(
   private val host: String = "localhost",
-  private val port: Int = DEFAULT_PORT,
+  private val port: Int = TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTP_PORT,
 ) {
   
   private val json: Json = TrailblazeJson.defaultWithoutToolsInstance
@@ -187,9 +188,6 @@ class DaemonClient(
   }
   
   companion object {
-    /** Default daemon port (matches TrailblazeServerState.HTTP_PORT) */
-    const val DEFAULT_PORT = 52525
-    
     /** Connection timeout for quick checks */
     const val CONNECT_TIMEOUT_MS = 2000L
     

@@ -3,37 +3,28 @@
 # Trailblaze launcher script
 # 
 # Usage:
-#   ./trailblaze              - Start in background (logs saved to file)
-#   ./trailblaze --dev        - Start in foreground with logs visible (for development)
+#   ./trailblaze              - Start in background
+#   ./trailblaze --dev        - Start in foreground (for development)
 #   ./trailblaze stop         - Stop the running daemon
 #   ./trailblaze status       - Check if daemon is running
+#   ./trailblaze mcp --stdio  - Start STDIO MCP server (for AI clients)
 #   ./trailblaze <command>    - Run other CLI commands (run, config, etc.)
+#
+# Environment variables:
+#   TRAILBLAZE_PORT           - HTTP port (default: 52525). Override to run multiple instances.
+#   TRAILBLAZE_HTTPS_PORT     - HTTPS port (default: 8443). Override to run multiple instances.
+#   TRAILBLAZE_MODULE         - Gradle module (default: :trailblaze-desktop)
+#
+# Logs are saved automatically by the JVM to ~/.trailblaze/desktop-logs/
+# (port-specific filenames for parallel instances).
 
 # Allow override of Gradle module (for internal/enterprise variants)
 TRAILBLAZE_MODULE="${TRAILBLAZE_MODULE:-:trailblaze-desktop}"
 
-TRAILBLAZE_LOG_DIR="${HOME}/.trailblaze/logs"
-TRAILBLAZE_LOG_FILE="${TRAILBLAZE_LOG_DIR}/trailblaze.log"
-TRAILBLAZE_PORT=52525
-TRAILBLAZE_LOG_MAX_SIZE=10485760  # 10MB in bytes
-
-# Ensure log directory exists
-mkdir -p "$TRAILBLAZE_LOG_DIR"
-
-# Rotate log file if it's too large
-rotate_log_if_needed() {
-    if [ -f "$TRAILBLAZE_LOG_FILE" ]; then
-        log_size=$(wc -c < "$TRAILBLAZE_LOG_FILE" 2>/dev/null || echo 0)
-        if [ "$log_size" -gt "$TRAILBLAZE_LOG_MAX_SIZE" ]; then
-            # Keep the old log as .old and start fresh
-            mv "$TRAILBLAZE_LOG_FILE" "${TRAILBLAZE_LOG_FILE}.old"
-            echo "$(date): Log rotated (previous log: ${TRAILBLAZE_LOG_FILE}.old)" > "$TRAILBLAZE_LOG_FILE"
-        fi
-    fi
-}
-
-# Rotate log on startup
-rotate_log_if_needed
+TRAILBLAZE_DEFAULT_PORT=52525
+TRAILBLAZE_DEFAULT_HTTPS_PORT=8443
+TRAILBLAZE_PORT="${TRAILBLAZE_PORT:-$TRAILBLAZE_DEFAULT_PORT}"
+TRAILBLAZE_HTTPS_PORT="${TRAILBLAZE_HTTPS_PORT:-$TRAILBLAZE_DEFAULT_HTTPS_PORT}"
 
 # Check if daemon is already running
 is_daemon_running() {
@@ -47,7 +38,7 @@ show_window() {
         -d '{}' > /dev/null 2>&1
 }
 
-# Stop the daemon
+# Stop the daemon (fast path: no JVM startup needed)
 stop_daemon() {
     if ! is_daemon_running; then
         echo "Trailblaze is not running."
@@ -75,7 +66,7 @@ stop_daemon() {
     fi
 }
 
-# Get daemon status
+# Get daemon status (fast path: no JVM startup needed)
 get_status() {
     if is_daemon_running; then
         echo "Trailblaze is running on port ${TRAILBLAZE_PORT}."
@@ -86,64 +77,77 @@ get_status() {
     fi
 }
 
-# Add timestamps to each line of input
-add_timestamps() {
-    while IFS= read -r line; do
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] $line"
-    done
-}
-
 # Convert a path to absolute if it exists as a file
 to_absolute_path() {
     local path="$1"
     if [ -f "$path" ]; then
-        # File exists, convert to absolute path
         echo "$(cd "$(dirname "$path")" && pwd)/$(basename "$path")"
     elif [ -d "$path" ]; then
-        # Directory exists, convert to absolute path
         echo "$(cd "$path" && pwd)"
     else
-        # Not a file/dir, return as-is (might be a command or flag)
         echo "$path"
     fi
 }
 
-# Check for --dev flag and process arguments
+# Build port flags to pass to the CLI when ports are overridden via env vars
+PORT_ARGS=""
+if [ "$TRAILBLAZE_PORT" != "$TRAILBLAZE_DEFAULT_PORT" ]; then
+    PORT_ARGS="--port $TRAILBLAZE_PORT"
+fi
+if [ "$TRAILBLAZE_HTTPS_PORT" != "$TRAILBLAZE_DEFAULT_HTTPS_PORT" ]; then
+    PORT_ARGS="$PORT_ARGS --https-port $TRAILBLAZE_HTTPS_PORT"
+fi
+
+# Process arguments: strip --dev flag, resolve file paths to absolute,
+# and detect STDIO mode for MCP transport.
 DEV_MODE=false
+STDIO_MODE=false
 ARGS=""
 for arg in "$@"; do
     if [ "$arg" = "--dev" ]; then
         DEV_MODE=true
+        continue
+    fi
+    if [ "$arg" = "--stdio" ]; then
+        STDIO_MODE=true
+    fi
+
+    resolved_arg=$(to_absolute_path "$arg")
+    if [ -z "$ARGS" ]; then
+        ARGS="$resolved_arg"
     else
-        # Convert file paths to absolute paths (for Gradle working directory compatibility)
-        resolved_arg=$(to_absolute_path "$arg")
-        if [ -z "$ARGS" ]; then
-            ARGS="$resolved_arg"
-        else
-            ARGS="$ARGS $resolved_arg"
-        fi
+        ARGS="$ARGS $resolved_arg"
     fi
 done
 
+# Prepend port args (top-level flags go before subcommands)
+if [ -n "$PORT_ARGS" ]; then
+    if [ -z "$ARGS" ]; then
+        ARGS="$PORT_ARGS"
+    else
+        ARGS="$PORT_ARGS $ARGS"
+    fi
+fi
+
 # Run the app
 if [ "$DEV_MODE" = true ]; then
-    # Development mode: foreground with logs visible
+    # Development mode: foreground with logs visible in terminal
     echo "Starting Trailblaze in dev mode (foreground)..."
-    echo "Logs will be visible here and saved to: $TRAILBLAZE_LOG_FILE"
-    # Show clean output in terminal, but add timestamps to log file
     if [ -z "$ARGS" ]; then
-        ./gradlew ${TRAILBLAZE_MODULE}:run 2>&1 | tee >(add_timestamps >> "$TRAILBLAZE_LOG_FILE")
+        ./gradlew ${TRAILBLAZE_MODULE}:run
     else
-        ./gradlew ${TRAILBLAZE_MODULE}:run --args="$ARGS" 2>&1 | tee >(add_timestamps >> "$TRAILBLAZE_LOG_FILE")
+        ./gradlew ${TRAILBLAZE_MODULE}:run --args="$ARGS"
     fi
 elif [ "$1" = "stop" ]; then
-    # Fast path: stop daemon without starting Gradle
     stop_daemon
 elif [ "$1" = "status" ]; then
-    # Fast path: check status without starting Gradle
     get_status
+elif [ "$STDIO_MODE" = true ]; then
+    # STDIO MCP mode: suppress Gradle's task output so stdout is clean for JSON-RPC.
+    # The Java application handles stderr redirection via Console.useStdErr().
+    ./gradlew -q --console=plain ${TRAILBLAZE_MODULE}:run --args="$ARGS"
 elif [ -n "$ARGS" ]; then
-    # CLI command mode: foreground (for commands like 'run', 'config', etc.)
+    # CLI command mode (run, config, auth, etc.)
     ./gradlew ${TRAILBLAZE_MODULE}:run --args="$ARGS"
 else
     # Default mode: check if already running, otherwise start in background
@@ -153,14 +157,17 @@ else
         echo "Use the menu bar icon to show the window."
     else
         echo "Starting Trailblaze..."
-        echo "Logs: $TRAILBLAZE_LOG_FILE"
         
-        # Run in background with timestamped logs
-        nohup sh -c "./gradlew ${TRAILBLAZE_MODULE}:run 2>&1 | while IFS= read -r line; do echo \"[\$(date '+%Y-%m-%d %H:%M:%S')] \$line\"; done" >> "$TRAILBLAZE_LOG_FILE" 2>&1 &
+        # Start in background
+        if [ -n "$PORT_ARGS" ]; then
+            nohup ./gradlew ${TRAILBLAZE_MODULE}:run --args="${PORT_ARGS}" > /dev/null 2>&1 &
+        else
+            nohup ./gradlew ${TRAILBLAZE_MODULE}:run > /dev/null 2>&1 &
+        fi
         
-        # Poll for daemon to become available with progress feedback
+        # Poll for daemon to become available
         echo -n "Waiting for Trailblaze to start"
-        max_attempts=30  # 30 seconds max
+        max_attempts=30
         attempts=0
         while [ $attempts -lt $max_attempts ]; do
             if is_daemon_running; then

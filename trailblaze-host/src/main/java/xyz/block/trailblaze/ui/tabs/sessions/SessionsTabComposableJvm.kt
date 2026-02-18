@@ -61,6 +61,7 @@ import java.io.File
 import javax.swing.JFileChooser
 import javax.swing.SwingUtilities
 import javax.swing.filechooser.FileNameExtensionFilter
+import xyz.block.trailblaze.util.Console
 
 
 @Composable
@@ -184,11 +185,11 @@ fun SessionsTabComposableJvm(
           try {
             Desktop.getDesktop().open(sessionFolder)
           } catch (e: Exception) {
-            println("Failed to open logs folder: ${e.message}")
+            Console.log("Failed to open logs folder: ${e.message}")
             e.printStackTrace()
           }
         } else {
-          println("Logs folder not found: ${sessionFolder.absolutePath}")
+          Console.log("Logs folder not found: ${sessionFolder.absolutePath}")
         }
       },
       openLogsFolderRoot = {
@@ -197,7 +198,7 @@ fun SessionsTabComposableJvm(
         try {
           Desktop.getDesktop().open(logsDirectory)
         } catch (e: Exception) {
-          println("Failed to open root logs folder: ${e.message}")
+          Console.log("Failed to open root logs folder: ${e.message}")
           e.printStackTrace()
         }
       },
@@ -314,11 +315,11 @@ fun SessionsTabComposableJvm(
           try {
             Desktop.getDesktop().open(sessionFolder)
           } catch (e: Exception) {
-            println("Failed to open logs folder: ${e.message}")
+            Console.log("Failed to open logs folder: ${e.message}")
             e.printStackTrace()
           }
         } else {
-          println("Logs folder not found: ${sessionFolder.absolutePath}")
+          Console.log("Logs folder not found: ${sessionFolder.absolutePath}")
         }
       },
       onOpenInFinder = { log ->

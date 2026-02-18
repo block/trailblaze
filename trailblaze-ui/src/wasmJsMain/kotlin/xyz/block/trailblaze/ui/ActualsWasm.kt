@@ -9,6 +9,7 @@ import androidx.compose.runtime.setValue
 import kotlinx.browser.window
 import xyz.block.trailblaze.ui.images.ImageLoader
 import xyz.block.trailblaze.ui.images.NetworkImageLoader
+import xyz.block.trailblaze.util.Console
 
 actual fun createLogsFileSystemImageLoader(): ImageLoader {
     // For WASM, use NetworkImageLoader since screenshots are already resolved to data URLs
@@ -42,7 +43,7 @@ actual fun resolveImageModel(sessionId: String, screenshotFile: String?, imageLo
                 val dataUrl = resolveScreenshot(screenshotFile)
                 resolvedImage = dataUrl
             } catch (e: Exception) {
-                println("❌ Failed to resolve screenshot: $screenshotFile - ${e.message}")
+                Console.log("❌ Failed to resolve screenshot: $screenshotFile - ${e.message}")
                 // If resolution fails, keep the original path as fallback
                 resolvedImage = screenshotFile
             }

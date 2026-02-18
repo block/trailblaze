@@ -15,6 +15,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.ViewModule
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -59,11 +60,13 @@ import java.io.File
  * Full-screen modal for editing trail YAML files.
  * Supports both text-based and visual editing modes, matching the functionality
  * of the YAML tab in the sessions panel.
- * 
+ *
  * @param variant The trail variant being edited
  * @param initialContent The initial YAML content
  * @param onSave Callback when the user saves - receives the new content, returns success/failure
  * @param onDismiss Callback when the modal is dismissed
+ * @param onRun Optional callback when the user wants to run the trail - receives the current content
+ * @param relativePath Optional relative path for display
  */
 @Composable
 fun TrailYamlEditorModal(
@@ -71,6 +74,7 @@ fun TrailYamlEditorModal(
   initialContent: String,
   onSave: (String) -> Result<Unit>,
   onDismiss: () -> Unit,
+  onRun: ((String) -> Unit)? = null,
   relativePath: String? = null,
 ) {
   var localContent by remember(initialContent) { mutableStateOf(initialContent) }
@@ -79,7 +83,8 @@ fun TrailYamlEditorModal(
   var saveSuccess by remember { mutableStateOf(false) }
   var saveError by remember { mutableStateOf<String?>(null) }
   var showCloseConfirmation by remember { mutableStateOf(false) }
-  
+  var showDeviceMenu by remember { mutableStateOf(false) }
+
   // Editor mode state - Visual is the default (matches YAML tab)
   var editorMode by remember { mutableStateOf(YamlEditorMode.VISUAL) }
   var visualEditorView by remember { mutableStateOf(YamlVisualEditorView.STEPS) }
@@ -147,7 +152,7 @@ fun TrailYamlEditorModal(
       // Header with editor mode toggle
       TrailEditorHeader(
         variant = variant,
-    relativePath = relativePath,
+        relativePath = relativePath,
         editorMode = editorMode,
         onYamlEditorModeChange = { editorMode = it },
         hasUnsavedChanges = hasUnsavedChanges,
@@ -159,7 +164,10 @@ fun TrailYamlEditorModal(
           val file = File(variant.absolutePath)
           DesktopUtil.openInFileBrowser(file.parentFile)
         },
-        onClose = { requestClose() }
+        onClose = { requestClose() },
+        onRun = onRun?.let { runCallback ->
+          { runCallback(localContent) }
+        }
       )
       
       HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
@@ -236,6 +244,7 @@ private fun TrailEditorHeader(
   onSave: () -> Unit,
   onOpenFolder: () -> Unit,
   onClose: () -> Unit,
+  onRun: (() -> Unit)? = null,
 ) {
   Row(
     modifier = Modifier.fillMaxWidth(),
@@ -354,7 +363,28 @@ private fun TrailEditorHeader(
       )
       
       Spacer(modifier = Modifier.width(8.dp))
-      
+
+      // Run button - only shown when onRun callback is provided
+      if (onRun != null) {
+        Button(
+          onClick = onRun,
+          enabled = validationError == null,
+          colors = ButtonDefaults.buttonColors(
+            containerColor = MaterialTheme.colorScheme.secondary
+          )
+        ) {
+          Icon(
+            Icons.Filled.PlayArrow,
+            contentDescription = "Run",
+            modifier = Modifier.size(18.dp)
+          )
+          Spacer(modifier = Modifier.width(4.dp))
+          Text("Run")
+        }
+
+        Spacer(modifier = Modifier.width(8.dp))
+      }
+
       Button(
         onClick = onSave,
         enabled = hasUnsavedChanges && validationError == null,

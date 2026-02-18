@@ -2,6 +2,7 @@ package xyz.block.trailblaze.report.snapshot
 
 import java.io.File
 import java.util.Base64
+import xyz.block.trailblaze.util.Console
 
 /**
  * Generates a standalone HTML viewer for test snapshots.
@@ -15,7 +16,7 @@ class SnapshotViewerGenerator {
     snapshots: Map<String, List<SnapshotMetadata>>,
     outputFile: File
   ) {
-    println("📝 Generating HTML viewer...")
+    Console.log("📝 Generating HTML viewer...")
     
     val html = buildString {
       appendLine("<!DOCTYPE html>")
@@ -65,8 +66,8 @@ class SnapshotViewerGenerator {
     }
     
     outputFile.writeText(html)
-    println("✅ HTML viewer generated: ${outputFile.absolutePath}")
-    println("   File size: ${outputFile.length() / 1024} KB")
+    Console.log("✅ HTML viewer generated: ${outputFile.absolutePath}")
+    Console.log("   File size: ${outputFile.length() / 1024} KB")
   }
   
   private fun StringBuilder.appendTestSection(testName: String, snapshots: List<SnapshotMetadata>) {

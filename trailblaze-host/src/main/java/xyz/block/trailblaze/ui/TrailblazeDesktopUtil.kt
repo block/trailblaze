@@ -18,6 +18,7 @@ import java.net.URLEncoder
 import javax.imageio.ImageIO
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
+import xyz.block.trailblaze.util.Console
 
 object TrailblazeDesktopUtil {
 
@@ -42,6 +43,16 @@ object TrailblazeDesktopUtil {
    */
   fun getDefaultSettingsFile(): File {
     return File(getDefaultAppDataDirectory(), SETTINGS_FILENAME)
+  }
+
+  /**
+   * Gets the desktop application logs directory.
+   * This is for the desktop app's own runtime logs (e.g. logback output),
+   * separate from the Trailblaze session/test logs.
+   * @return The desktop logs directory: ~/.trailblaze/desktop-logs
+   */
+  fun getDesktopLogsDirectory(): File {
+    return File(getDefaultAppDataDirectory(), "desktop-logs").apply { mkdirs() }
   }
 
   /**
@@ -92,7 +103,7 @@ object TrailblazeDesktopUtil {
       if (Desktop.isDesktopSupported()) {
         Desktop.getDesktop().browse(URI(url))
       } else {
-        println("Desktop is not supported on this platform.")
+        Console.log("Desktop is not supported on this platform.")
       }
     } catch (e: Exception) {
       e.printStackTrace()
@@ -103,7 +114,7 @@ object TrailblazeDesktopUtil {
     if (file.exists()) {
       Desktop.getDesktop().open(file)
     } else {
-      println("File does not exist: ${file.absolutePath}")
+      Console.log("File does not exist: ${file.absolutePath}")
     }
   }
 
@@ -114,7 +125,7 @@ object TrailblazeDesktopUtil {
    */
   fun revealFileInFinder(file: File) {
     if (!file.exists()) {
-      println("File does not exist: ${file.absolutePath}")
+      Console.log("File does not exist: ${file.absolutePath}")
       return
     }
 
@@ -138,7 +149,7 @@ object TrailblazeDesktopUtil {
         }
       }
     } catch (e: Exception) {
-      println("Failed to reveal file in Finder: ${e.message}")
+      Console.log("Failed to reveal file in Finder: ${e.message}")
       e.printStackTrace()
       // Fallback: just open the parent directory
       try {
@@ -146,7 +157,7 @@ object TrailblazeDesktopUtil {
           Desktop.getDesktop().open(file.parentFile)
         }
       } catch (fallbackException: Exception) {
-        println("Fallback also failed: ${fallbackException.message}")
+        Console.log("Fallback also failed: ${fallbackException.message}")
         fallbackException.printStackTrace()
       }
     }
@@ -189,7 +200,7 @@ object TrailblazeDesktopUtil {
     val configFile = getGooseConfigFile()
 
     if (!configFile.exists()) {
-      println("Goose config file not found at: ${configFile.absolutePath}")
+      Console.log("Goose config file not found at: ${configFile.absolutePath}")
       return GooseExtensionResult.ConfigNotFound
     }
 
@@ -215,7 +226,7 @@ object TrailblazeDesktopUtil {
       }
 
       if (alreadyExists) {
-        println("Trailblaze extension already installed in Goose config")
+        Console.log("Trailblaze extension already installed in Goose config")
         return GooseExtensionResult.AlreadyInstalled
       }
 
@@ -247,10 +258,10 @@ object TrailblazeDesktopUtil {
         yamlWriter.dump(config, writer)
       }
 
-      println("Trailblaze extension added to Goose config")
+      Console.log("Trailblaze extension added to Goose config")
       GooseExtensionResult.Added
     } catch (e: Exception) {
-      println("Error processing Goose config: ${e.message}")
+      Console.log("Error processing Goose config: ${e.message}")
       e.printStackTrace()
       GooseExtensionResult.Error(e.message ?: "Unknown error")
     }
@@ -271,7 +282,7 @@ object TrailblazeDesktopUtil {
     val recipeBase64 = Base64.encode(recipeJsonString.toByteArray())
     val recipeEncoded = URLEncoder.encode(recipeBase64, Charsets.UTF_8)
     val gooseUrl = "goose://recipe?config=$recipeEncoded"
-    println(gooseUrl)
+    Console.log(gooseUrl)
     openInDefaultBrowser(gooseUrl)
   }
 }

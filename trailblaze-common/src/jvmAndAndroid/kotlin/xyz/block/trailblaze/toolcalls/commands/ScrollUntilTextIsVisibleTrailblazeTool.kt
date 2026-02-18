@@ -24,6 +24,7 @@ import xyz.block.trailblaze.utils.Ext.toViewHierarchyTreeNode
 import xyz.block.trailblaze.viewmatcher.matching.ElementMatcherUsingMaestro
 import xyz.block.trailblaze.viewmatcher.matching.asTreeNode
 import xyz.block.trailblaze.viewmatcher.models.ElementMatches
+import xyz.block.trailblaze.util.Console
 
 @Serializable
 @TrailblazeToolClass("scrollUntilTextIsVisible")
@@ -151,11 +152,11 @@ class ScrollUntilTextIsVisibleTrailblazeTool(
           val visibility: Double = maestroUiElement.getVisiblePercentage(
             widthGrid, heightGrid
           )
-          println("Scrolling try count: $retryCenterCount, DeviceWidth: ${widthGrid}, DeviceWidth: ${heightGrid}")
-          println("Element bounds: ${bounds}")
-          println("Visibility Percent: $visibility")
-          println("Command centerElement: $maestroCommand.centerElement")
-          println("visibilityPercentageNormalized: ${maestroCommand.visibilityPercentageNormalized}")
+          Console.log("Scrolling try count: $retryCenterCount, DeviceWidth: ${widthGrid}, DeviceWidth: ${heightGrid}")
+          Console.log("Element bounds: ${bounds}")
+          Console.log("Visibility Percent: $visibility")
+          Console.log("Command centerElement: $maestroCommand.centerElement")
+          Console.log("visibilityPercentageNormalized: ${maestroCommand.visibilityPercentageNormalized}")
 
           if (maestroCommand.centerElement && visibility > 0.1 && retryCenterCount <= maxRetryCenterCount) {
             if (maestroUiElement.isElementNearScreenCenter(direction, widthGrid, heightGrid)) {
@@ -167,7 +168,7 @@ class ScrollUntilTextIsVisibleTrailblazeTool(
           }
         }
       } catch (ignored: MaestroException.ElementNotFound) {
-        println("Error: $ignored")
+        Console.log("Error: $ignored")
       }
 
       val durationMs = maestroCommand.scrollDuration.toLong()

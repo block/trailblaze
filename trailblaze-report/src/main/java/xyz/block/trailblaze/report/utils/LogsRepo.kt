@@ -18,6 +18,7 @@ import kotlin.reflect.KClass
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
+import xyz.block.trailblaze.util.Console
 
 private typealias TrailblazeSessionId = SessionId
 
@@ -106,7 +107,7 @@ class LogsRepo(
     } else {
       // Single read mode: just initialize SessionInfo once without reactive updates
       _sessionInfoFlow.value = _sessionsFlow.value.mapNotNull { getSessionInfo(it) }
-      println("[LogsRepo] Initialized in single-read mode with ${_sessionsFlow.value.size} sessions")
+      Console.log("[LogsRepo] Initialized in single-read mode with ${_sessionsFlow.value.size} sessions")
     }
   }
 
@@ -130,7 +131,7 @@ class LogsRepo(
    * Call this when you're done with the LogsRepo to allow the JVM to exit cleanly.
    */
   fun close() {
-    println("[LogsRepo] Cleaning up resources...")
+    Console.log("[LogsRepo] Cleaning up resources...")
 
     // Cancel the coroutine scope first to stop all background operations
     // This prevents concurrent modifications while we clean up
@@ -150,7 +151,7 @@ class LogsRepo(
     jobsToCancel.forEach { it.cancel() }
     sessionInfoWatcherJobs.clear()
 
-    println("[LogsRepo] Cleanup complete")
+    Console.log("[LogsRepo] Cleanup complete")
   }
 
 
@@ -201,7 +202,7 @@ class LogsRepo(
     )
   } catch (e: Exception) {
     if (!logFile.name.endsWith("trace.json")) {
-      println("Could Not Parse Log: ${logFile.absolutePath}.  ${e.stackTraceToString()}")
+      Console.log("Could Not Parse Log: ${logFile.absolutePath}.  ${e.stackTraceToString()}")
     }
     null
   }
@@ -310,12 +311,12 @@ class LogsRepo(
    */
   private fun startWatchingSessionList() {
     if (!watchFileSystem) {
-      println("[LogsRepo] File system watching disabled, skipping session list watcher")
+      Console.log("[LogsRepo] File system watching disabled, skipping session list watcher")
       return
     }
     
     if (sessionListWatcher == null) {
-      println("[LogsRepo] Starting session list watcher")
+      Console.log("[LogsRepo] Starting session list watcher")
       val watcher = FileWatchService(
         dirToWatch = logsDir,
         debounceDelayMs = 100L, // Faster for session list updates (especially status changes)
@@ -331,7 +332,7 @@ class LogsRepo(
         try {
           watcher.fileChanges.collect { event ->
             val (changeType, fileChanged) = event
-            println("[LogsRepo] Session list event: $changeType ${fileChanged.name}")
+            Console.log("[LogsRepo] Session list event: $changeType ${fileChanged.name}")
 
             try {
               val currentSessionIds = getSessionIds()
@@ -352,12 +353,12 @@ class LogsRepo(
               // Update the flow with new session list
               _sessionsFlow.value = currentSessionIds
             } catch (e: Exception) {
-              println("[LogsRepo] Error processing session list event: ${e.message}")
+              Console.log("[LogsRepo] Error processing session list event: ${e.message}")
               e.printStackTrace()
             }
           }
         } catch (e: Exception) {
-          println("[LogsRepo] Flow collection ended for session list: ${e.message}")
+          Console.log("[LogsRepo] Flow collection ended for session list: ${e.message}")
         }
       }
     }
@@ -368,13 +369,13 @@ class LogsRepo(
    */
   private fun startWatchingSessionForFlow(sessionId: SessionId, flow: MutableStateFlow<List<TrailblazeLog>>) {
     if (!watchFileSystem) {
-      println("[LogsRepo] File system watching disabled, skipping session watcher for: $sessionId")
+      Console.log("[LogsRepo] File system watching disabled, skipping session watcher for: $sessionId")
       return
     }
     
     if (fileWatcherByTrailblazeSession[sessionId] == null) {
       val sessionDir = getSessionDir(sessionId)
-      println("[LogsRepo] Starting session watcher for flow: $sessionId")
+      Console.log("[LogsRepo] Starting session watcher for flow: $sessionId")
       val fileWatchService = FileWatchService(
         dirToWatch = sessionDir,
         debounceDelayMs = 50L, // Faster for immediate UI updates (especially cancellation)
@@ -387,20 +388,20 @@ class LogsRepo(
         try {
           fileWatchService.fileChanges.collect { event ->
             val (changeType, fileChanged) = event
-            println("[LogsRepo] Session event received: $changeType ${fileChanged.name} (session: $sessionId)")
+            Console.log("[LogsRepo] Session event received: $changeType ${fileChanged.name} (session: $sessionId)")
             if (fileChanged.extension == "json") {
               try {
                 // Read fresh from disk to update the flow (which serves as the cache)
                 val logs = getLogsForSession(sessionId).sortedBy { it.timestamp }
                 flow.value = logs
               } catch (e: Exception) {
-                println("[LogsRepo] Error processing session event for $sessionId: ${e.message}")
+                Console.log("[LogsRepo] Error processing session event for $sessionId: ${e.message}")
                 e.printStackTrace()
               }
             }
           }
         } catch (e: Exception) {
-          println("[LogsRepo] Flow collection ended for session $sessionId: ${e.message}")
+          Console.log("[LogsRepo] Flow collection ended for session $sessionId: ${e.message}")
         }
       }
     }
@@ -562,7 +563,7 @@ class LogsRepo(
     screenshot.screenState.screenshotBytes?.let { bytes ->
       val sessionDir = getSessionDir(screenshot.sessionId)
       val screenshotFile = File(sessionDir, screenshot.fileName)
-      println("Writing Screenshot to ${screenshotFile.absolutePath}")
+      Console.log("Writing Screenshot to ${screenshotFile.absolutePath}")
       screenshotFile.writeBytes(bytes)
     }
   }

@@ -2,6 +2,7 @@ package xyz.block.trailblaze.agent
 
 import ai.koog.agents.core.tools.Tool
 import ai.koog.agents.core.tools.ToolRegistry
+import xyz.block.trailblaze.util.Console
 import ai.koog.agents.core.tools.ToolResult
 import ai.koog.prompt.dsl.Prompt
 import ai.koog.prompt.executor.clients.LLMClient
@@ -141,7 +142,7 @@ class TrailblazeKoogLlmClientHelper(
         screenStateProvider = screenStateProvider,
       )
       setForceStepStatusUpdate(true)
-      println("\u001B[33m\n[ACTION_TAKEN] Tool executed: ${trailblazeTool.javaClass.simpleName}\u001B[0m")
+      Console.log("\u001B[33m\n[ACTION_TAKEN] Tool executed: ${trailblazeTool.javaClass.simpleName}\u001B[0m")
 
       // Return both the result and the executed tools (which may differ for delegating tools)
       ToolExecutionResult(
@@ -299,7 +300,7 @@ class TrailblazeKoogLlmClientHelper(
         if (attempt < maxRetries) {
           val baseDelayMs = 1000L // 1 second base delay
           val delayMs = baseDelayMs + (attempt - 1) * 3000L // Add 3 seconds per retry
-          println("[RETRY] Server error (attempt $attempt/$maxRetries), retrying in ${delayMs}ms...")
+          Console.log("[RETRY] Server error (attempt $attempt/$maxRetries), retrying in ${delayMs}ms...")
           delay(delayMs)
         } else {
           // exhausted retries

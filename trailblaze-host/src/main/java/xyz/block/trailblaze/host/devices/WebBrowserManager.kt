@@ -10,6 +10,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.util.Console
 
 /**
  * Represents the state of the managed web browser.
@@ -61,11 +62,11 @@ class WebBrowserManager {
     // This ensures we don't leave orphaned browser processes
     Runtime.getRuntime().addShutdownHook(Thread {
       if (isRunning()) {
-        println("WebBrowserManager: Closing browser on app shutdown")
+        Console.log("WebBrowserManager: Closing browser on app shutdown")
         try {
           HostWebDriverFactory.clearCache()
         } catch (e: Exception) {
-          println("WebBrowserManager: Error closing browser on shutdown: ${e.message}")
+          Console.log("WebBrowserManager: Error closing browser on shutdown: ${e.message}")
         }
       }
     })
@@ -93,7 +94,7 @@ class WebBrowserManager {
     // If already running, return existing device
     val existingState = _browserState.value
     if (existingState is WebBrowserState.Running) {
-      println("WebBrowserManager: Browser already running, reusing existing instance")
+      Console.log("WebBrowserManager: Browser already running, reusing existing instance")
       return existingState.connectedDevice
     }
 
@@ -113,10 +114,10 @@ class WebBrowserManager {
       // Start monitoring for browser close/crash
       startBrowserMonitor()
 
-      println("WebBrowserManager: Launched browser instance")
+      Console.log("WebBrowserManager: Launched browser instance")
       connectedDevice
     } catch (e: Exception) {
-      println("WebBrowserManager: Failed to launch browser: ${e.message}")
+      Console.log("WebBrowserManager: Failed to launch browser: ${e.message}")
       e.printStackTrace()
       _browserState.value = WebBrowserState.Error(e.message ?: "Unknown error launching browser")
       null
@@ -132,9 +133,9 @@ class WebBrowserManager {
       try {
         // Use the factory's clearCache to properly close the browser
         HostWebDriverFactory.clearCache()
-        println("WebBrowserManager: Closed browser instance")
+        Console.log("WebBrowserManager: Closed browser instance")
       } catch (e: Exception) {
-        println("WebBrowserManager: Error closing browser: ${e.message}")
+        Console.log("WebBrowserManager: Error closing browser: ${e.message}")
       }
     }
     currentDevice = null
@@ -178,12 +179,12 @@ class WebBrowserManager {
           // Check if the browser is still connected by checking the cached driver
           val isConnected = checkBrowserConnected()
           if (!isConnected) {
-            println("WebBrowserManager: Browser disconnected (user closed or crashed)")
+            Console.log("WebBrowserManager: Browser disconnected (user closed or crashed)")
             handleBrowserDisconnected()
             break
           }
         } catch (e: Exception) {
-          println("WebBrowserManager: Error monitoring browser: ${e.message}")
+          Console.log("WebBrowserManager: Error monitoring browser: ${e.message}")
           handleBrowserDisconnected()
           break
         }

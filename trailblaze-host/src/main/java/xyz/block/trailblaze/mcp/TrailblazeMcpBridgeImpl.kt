@@ -10,6 +10,7 @@ import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.llm.TrailblazeReferrer
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
+import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.TrailblazeYaml
 import xyz.block.trailblaze.yaml.models.TrailblazeYamlBuilder
 
@@ -99,7 +100,7 @@ class TrailblazeMcpBridgeImpl(
     }
 
     // Default implementation: convert tool to YAML and run via runYaml()
-    println("Executing TrailblazeTool via YAML conversion: ${tool::class.simpleName}")
+    Console.log("Executing TrailblazeTool via YAML conversion: ${tool::class.simpleName}")
 
     val yaml = TrailblazeYaml.Default.encodeToString(
       TrailblazeYamlBuilder()
@@ -107,7 +108,7 @@ class TrailblazeMcpBridgeImpl(
         .build()
     )
 
-    println("Generated YAML:\n$yaml")
+    Console.log("Generated YAML:\n$yaml")
 
     // Reuse the existing session if available, otherwise runYaml will create one
     runYaml(yaml, startNewSession = false)

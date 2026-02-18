@@ -4,6 +4,7 @@ import org.junit.rules.TestRule
 import org.junit.runner.Description
 import org.junit.runners.model.MultipleFailureException
 import org.junit.runners.model.Statement
+import xyz.block.trailblaze.util.Console
 
 /**
  * This implementation of [TestRule] attempts to make execution order more clear and
@@ -52,7 +53,7 @@ abstract class SimpleTestRule(private val enableLogging: Boolean = false) : Test
     message: String,
   ) {
     if (enableLogging) {
-      println(
+      Console.log(
         buildString {
           append(SimpleTestRule::class.java.simpleName)
           append(": ")

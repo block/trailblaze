@@ -51,6 +51,15 @@ data class CiRunMetadata(
   /** CI build number */
   val ci_build_number: String? = null,
 
+  /** CI build source (e.g., "web", "api", "schedule) */
+  val ci_build_source: String? = null,
+
+  /** CI build message */
+  val ci_build_message: String? = null,
+
+  /** CI build label */
+  val ci_build_label: String? = null,
+
   /** Git commit SHA */
   val git_commit: String? = null,
 

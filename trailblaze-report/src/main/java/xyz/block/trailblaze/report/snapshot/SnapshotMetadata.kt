@@ -8,6 +8,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeLog
 import java.io.File
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
+import xyz.block.trailblaze.util.Console
 
 /**
  * Metadata extracted from a TrailblazeSnapshotLog entry.
@@ -64,8 +65,8 @@ data class SnapshotMetadata(
         screenshotFile = logsDir.walkTopDown()
           .firstOrNull { it.isFile && it.name == screenshotFileName }
           ?: run {
-            println("⚠️  Screenshot file not found: $screenshotFileName in ${logsDir.absolutePath}")
-            println("   Original path from log: $screenshotPath")
+            Console.log("⚠️  Screenshot file not found: $screenshotFileName in ${logsDir.absolutePath}")
+            Console.log("   Original path from log: $screenshotPath")
             return null
           }
       }

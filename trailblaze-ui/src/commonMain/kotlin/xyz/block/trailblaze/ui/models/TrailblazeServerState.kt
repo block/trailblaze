@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.ui.models
 
 import kotlinx.serialization.Serializable
+import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.llm.providers.OpenAITrailblazeLlmModelList
@@ -19,6 +20,7 @@ data class TrailblazeServerState(
     val showDebugPopOutWindow: Boolean = false,
     val alwaysOnTop: Boolean = false,
     val serverPort: Int = HTTP_PORT,
+    val serverHttpsPort: Int = HTTPS_PORT,
     val serverUrl: String = "http://localhost:$HTTP_PORT",
     val lastSelectedDeviceInstanceIds: List<String> = emptyList(),
     val terminateTargetAppBeforeRunning: Boolean = false,
@@ -80,7 +82,8 @@ data class TrailblazeServerState(
   }
 
   companion object {
-    const val HTTP_PORT = 52525
+    const val HTTP_PORT = TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTP_PORT
+    const val HTTPS_PORT = TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTPS_PORT
 
     // UI Inspector default panel dimensions
     // UI Inspector is opened by clicking on LLM request screenshots to debug what the LLM "saw".

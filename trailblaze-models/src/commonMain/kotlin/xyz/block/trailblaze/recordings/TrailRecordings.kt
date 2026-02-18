@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.recordings
 
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
+import xyz.block.trailblaze.util.Console
 
 object TrailRecordings {
 
@@ -62,7 +63,7 @@ object TrailRecordings {
       trailPaths.find { trail -> trail.endsWith(candidateFileName) }
     }
 
-    println("No matching trail file found matching ($candidateFileNames) for classifiers $deviceClassifiers in $trailPaths")
+    Console.log("No matching trail file found matching ($candidateFileNames) for classifiers $deviceClassifiers in $trailPaths")
 
     return matchedFile
   }

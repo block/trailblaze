@@ -9,6 +9,7 @@ import xyz.block.trailblaze.report.snapshot.SnapshotCollector
 import xyz.block.trailblaze.report.snapshot.SnapshotViewerGenerator
 import xyz.block.trailblaze.report.utils.LogsRepo
 import java.io.File
+import xyz.block.trailblaze.util.Console
 
 open class GenerateReportCliCommand :
   SimpleCliCommand(
@@ -62,20 +63,20 @@ open class GenerateReportCliCommand :
   }
 
   override fun printUsage() {
-    System.err.println("Usage: generate-report ${logsDirArg.getUsage()} ${useRelativeImageUrlsFlag.getUsage()}")
-    System.err.println()
-    System.err.println("Generate Trailblaze HTML report from logs directory")
-    System.err.println()
-    System.err.println("Arguments:")
-    System.err.println("  ${logsDirArg.getUsage()}  ${logsDirArg.getHelp()}")
-    System.err.println()
-    System.err.println("Options:")
-    System.err.println("  ${useRelativeImageUrlsFlag.getUsage()}  ${useRelativeImageUrlsFlag.getHelp()}")
+    Console.error("Usage: generate-report ${logsDirArg.getUsage()} ${useRelativeImageUrlsFlag.getUsage()}")
+    Console.error("")
+    Console.error("Generate Trailblaze HTML report from logs directory")
+    Console.error("")
+    Console.error("Arguments:")
+    Console.error("  ${logsDirArg.getUsage()}  ${logsDirArg.getHelp()}")
+    Console.error("")
+    Console.error("Options:")
+    Console.error("  ${useRelativeImageUrlsFlag.getUsage()}  ${useRelativeImageUrlsFlag.getHelp()}")
   }
 
   override fun run() {
-    println("logsDir: ${logsDir.canonicalPath}")
-    println("useRelativeImageUrls: $useRelativeImageUrls")
+    Console.log("logsDir: ${logsDir.canonicalPath}")
+    Console.log("useRelativeImageUrls: $useRelativeImageUrls")
 
     val logsRepo = LogsRepo(logsDir, watchFileSystem = false)
 
@@ -92,7 +93,7 @@ open class GenerateReportCliCommand :
     val rootWorkingDir = logsRepo.logsDir.parentFile
 
     val trailblazeReportHtmlFile = File(logsDir, "trailblaze_report.html")
-    println("file://${trailblazeReportHtmlFile.absolutePath}")
+    Console.log("file://${trailblazeReportHtmlFile.absolutePath}")
 
     val isInternal = File(rootWorkingDir, "opensource").exists()
 
@@ -101,7 +102,7 @@ open class GenerateReportCliCommand :
     } else {
       File(rootWorkingDir, "trailblaze-ui")
     }.also {
-      println("Using project directory: ${it.canonicalPath}")
+      Console.log("Using project directory: ${it.canonicalPath}")
     }
 
     WasmReport.generate(
@@ -139,15 +140,15 @@ open class GenerateReportCliCommand :
  * duplicate file I/O and JSON parsing.
  */
 private fun generateSnapshotViewerIntegrated(logsRepo: LogsRepo) {
-  println()
-  println("--- Generating Snapshot Viewer (integrated mode)")
+  Console.log("")
+  Console.log("--- Generating Snapshot Viewer (integrated mode)")
 
   try {
     val snapshotViewerFile = File(logsRepo.logsDir, "snapshot_viewer.html")
 
     // Get all session IDs and their logs from LogsRepo (already parsed)
     val sessionIds = logsRepo.getSessionIds()
-    println("📂 Using ${sessionIds.size} session(s) from LogsRepo")
+    Console.log("📂 Using ${sessionIds.size} session(s) from LogsRepo")
 
     // Build maps for the collector
     val logsBySession = sessionIds.associateWith { sessionId ->
@@ -163,33 +164,33 @@ private fun generateSnapshotViewerIntegrated(logsRepo: LogsRepo) {
     val snapshots = collector.collectSnapshots(logsBySession, sessionInfoBySession)
 
     if (snapshots.isEmpty()) {
-      println()
-      println("ℹ️  No snapshots found - skipping snapshot viewer generation")
-      println("   This is normal if TakeSnapshotTool was not used in any tests")
-      println()
+      Console.log("")
+      Console.log("ℹ️  No snapshots found - skipping snapshot viewer generation")
+      Console.log("   This is normal if TakeSnapshotTool was not used in any tests")
+      Console.log("")
       return
     }
 
     // Print summary
-    println()
-    println(collector.getSummary(snapshots))
+    Console.log("")
+    Console.log(collector.getSummary(snapshots))
 
     // Generate HTML
-    println()
+    Console.log("")
     val generator = SnapshotViewerGenerator()
     generator.generateHtml(snapshots, snapshotViewerFile)
 
-    println()
-    println("✅ Snapshot viewer generated successfully!")
-    println("   File: ${snapshotViewerFile.absolutePath}")
-    println("   Size: ${snapshotViewerFile.length() / 1024} KB")
+    Console.log("")
+    Console.log("✅ Snapshot viewer generated successfully!")
+    Console.log("   File: ${snapshotViewerFile.absolutePath}")
+    Console.log("   Size: ${snapshotViewerFile.length() / 1024} KB")
 
   } catch (e: Exception) {
-    println()
-    println("⚠️  Error generating snapshot viewer: ${e.message}")
+    Console.log("")
+    Console.log("⚠️  Error generating snapshot viewer: ${e.message}")
     e.printStackTrace()
     // Don't fail the entire report generation if snapshot viewer fails
-    println("   Continuing without snapshot viewer...")
+    Console.log("   Continuing without snapshot viewer...")
   }
 }
 
@@ -240,9 +241,9 @@ fun moveJsonFilesToSessionDirs(logsDir: File) {
       )
 
       outputFile.writeText(TrailblazeJsonInstance.encodeToString(log))
-      println("Deleting ${downloadedJsonFile.canonicalPath}")
+      Console.log("Deleting ${downloadedJsonFile.canonicalPath}")
     } catch (e: Exception) {
-      println("Error processing ${downloadedJsonFile.absolutePath}: ${e.message}")
+      Console.log("Error processing ${downloadedJsonFile.absolutePath}: ${e.message}")
     }
   }
 }
@@ -262,12 +263,12 @@ fun movePngsToSessionDirs(logsDir: File) {
         val destFile = File(sessionDir, pngFile.name)
         pngFile.copyTo(destFile, overwrite = true)
         pngFile.delete()
-        println("Moved ${pngFile.name} to session directory: $sessionId")
+        Console.log("Moved ${pngFile.name} to session directory: $sessionId")
       } else {
-        println("Could not determine session ID for PNG file: ${pngFile.name}, skipping")
+        Console.log("Could not determine session ID for PNG file: ${pngFile.name}, skipping")
       }
     } catch (e: Exception) {
-      println("Error processing PNG file ${pngFile.absolutePath}: ${e.message}")
+      Console.log("Error processing PNG file ${pngFile.absolutePath}: ${e.message}")
     }
   }
 }

@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.util
 
 import java.io.File
+import xyz.block.trailblaze.util.Console
 
 object TrailblazeProcessBuilderUtils {
 
@@ -24,11 +25,11 @@ object TrailblazeProcessBuilderUtils {
       if (value != null) {
         processBuilder.environment()[envVar] = value
       } else {
-        println("Warning: $envVar is not set in the environment")
+        Console.log("Warning: $envVar is not set in the environment")
       }
     }
 
-    println(
+    Console.log(
       buildString {
         append("Starting process: ")
         append(processBuilder.command().joinToString(" "))
@@ -51,13 +52,13 @@ object TrailblazeProcessBuilderUtils {
       val result = createProcessBuilder(listOf(whichCommand, command)).runProcess {}
       val found = result.exitCode == 0
       if (found) {
-        println("$command installation is available on the PATH")
+        Console.log("$command installation is available on the PATH")
       } else {
-        println("$command installation is not available on the PATH")
+        Console.log("$command installation is not available on the PATH")
       }
       found
     } catch (e: Throwable) {
-      println("$command installation not found")
+      Console.log("$command installation not found")
       false
     }
   }

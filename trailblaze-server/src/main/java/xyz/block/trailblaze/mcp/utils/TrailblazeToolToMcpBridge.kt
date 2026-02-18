@@ -21,6 +21,7 @@ import xyz.block.trailblaze.mcp.utils.KoogToMcpExt.toMcpJsonSchemaObject
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.toolcalls.toKoogToolDescriptor
+import xyz.block.trailblaze.util.Console
 import kotlin.reflect.KClass
 import kotlin.reflect.full.starProjectedType
 
@@ -76,12 +77,12 @@ class TrailblazeToolToMcpBridge(
     mcpServer: Server,
     mcpSessionId: McpSessionId,
   ) {
-    println("Registering ${toolClasses.size} TrailblazeTools as MCP tools")
+    Console.log("Registering ${toolClasses.size} TrailblazeTools as MCP tools")
 
     toolClasses.forEach { toolClass ->
       val descriptor = toolClass.toKoogToolDescriptor()
       if (descriptor == null) {
-        println("  Skipping ${toolClass.simpleName} - no tool descriptor")
+        Console.log("  Skipping ${toolClass.simpleName} - no tool descriptor")
         return@forEach
       }
 
@@ -94,10 +95,10 @@ class TrailblazeToolToMcpBridge(
 
       val required = descriptor.requiredParameters.map { it.name }
 
-      println("Registering MCP tool: ${descriptor.name}")
-      println("  Description: ${descriptor.description}")
-      println("  Properties: $properties")
-      println("  Required: $required")
+      Console.log("Registering MCP tool: ${descriptor.name}")
+      Console.log("  Description: ${descriptor.description}")
+      Console.log("  Properties: $properties")
+      Console.log("  Required: $required")
 
       // Always provide properties (even if empty) - Goose client expects properties to be present
       val inputSchema = ToolSchema(properties, required)
@@ -129,7 +130,7 @@ class TrailblazeToolToMcpBridge(
       when (progressTokenValue) {
         is JsonPrimitive -> {
           val tokenString = progressTokenValue.content
-          println("progressToken for session $mcpSessionId = $tokenString")
+          Console.log("progressToken for session $mcpSessionId = $tokenString")
           RequestId.StringId(tokenString)
         }
 
@@ -141,11 +142,11 @@ class TrailblazeToolToMcpBridge(
     onProgressToken?.invoke(mcpSessionId, progressToken)
     sessionContext?.progressToken = progressToken
 
-    println("MCP Tool Called: $toolName")
+    Console.log("MCP Tool Called: $toolName")
 
     // Convert request arguments to JsonObject
     val argumentsJsonObject = request.arguments ?: JsonObject(emptyMap())
-    println("  Arguments JSON: $argumentsJsonObject")
+    Console.log("  Arguments JSON: $argumentsJsonObject")
 
     // Deserialize arguments into the TrailblazeTool instance
     val tool: TrailblazeTool = try {
@@ -153,7 +154,7 @@ class TrailblazeToolToMcpBridge(
       val serializer = serializer(toolClass.starProjectedType)
       TrailblazeJsonInstance.decodeFromJsonElement(serializer, argumentsJsonObject) as TrailblazeTool
     } catch (e: Exception) {
-      println("ERROR deserializing arguments for tool $toolName: ${e.message}")
+      Console.error("ERROR deserializing arguments for tool $toolName: ${e.message}")
       e.printStackTrace()
       return CallToolResult(
         content = mutableListOf(
@@ -163,8 +164,8 @@ class TrailblazeToolToMcpBridge(
       )
     }
 
-    println("Executing TrailblazeTool: $toolName")
-    println("  Tool instance: $tool")
+    Console.log("Executing TrailblazeTool: $toolName")
+    Console.log("  Tool instance: $tool")
 
     // Execute tool via the bridge (which delegates to the device)
     return try {
@@ -173,7 +174,7 @@ class TrailblazeToolToMcpBridge(
           tool = tool,
         )
       }
-      println("Tool result: $result")
+      Console.log("Tool result: $result")
 
       CallToolResult(
         content = mutableListOf(
@@ -182,7 +183,7 @@ class TrailblazeToolToMcpBridge(
         isError = false,  // Explicitly set to false for success (some MCP clients require this)
       )
     } catch (e: Exception) {
-      println("ERROR executing tool $toolName: ${e.message}")
+      Console.error("ERROR executing tool $toolName: ${e.message}")
       e.printStackTrace()
       CallToolResult(
         content = mutableListOf(

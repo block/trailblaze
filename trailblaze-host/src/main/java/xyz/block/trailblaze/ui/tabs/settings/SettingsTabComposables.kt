@@ -710,6 +710,109 @@ object SettingsTabComposables {
                 // Advanced Configuration
                 item {
                   SettingsSection(title = "Advanced Configuration") {
+                    // Server Port Configuration
+                    Column(
+                      modifier = Modifier.fillMaxWidth(),
+                      verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                      SelectableText("Server Ports", style = MaterialTheme.typography.bodyMedium)
+                      SelectableText(
+                        text = "Custom ports allow running multiple Trailblaze instances simultaneously. " +
+                          "Save and restart the app to apply changes.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                      )
+
+                      // Local draft state so edits don't auto-save
+                      var draftHttpPort by remember(serverState.appConfig.serverPort) {
+                        mutableStateOf(serverState.appConfig.serverPort.toString())
+                      }
+                      var draftHttpsPort by remember(serverState.appConfig.serverHttpsPort) {
+                        mutableStateOf(serverState.appConfig.serverHttpsPort.toString())
+                      }
+
+                      val draftHttpPortInt = draftHttpPort.toIntOrNull()
+                      val draftHttpsPortInt = draftHttpsPort.toIntOrNull()
+                      val isHttpPortValid = draftHttpPortInt != null && draftHttpPortInt in 1024..65535
+                      val isHttpsPortValid = draftHttpsPortInt != null && draftHttpsPortInt in 1024..65535
+
+                      val hasUnsavedChanges = (draftHttpPort != serverState.appConfig.serverPort.toString()) ||
+                        (draftHttpsPort != serverState.appConfig.serverHttpsPort.toString())
+
+                      Row(
+                        horizontalArrangement = Arrangement.spacedBy(16.dp),
+                        modifier = Modifier.fillMaxWidth()
+                      ) {
+                        // HTTP Port
+                        OutlinedTextField(
+                          modifier = Modifier.weight(1f),
+                          value = draftHttpPort,
+                          onValueChange = { draftHttpPort = it },
+                          label = { Text("HTTP Port") },
+                          isError = draftHttpPort.isNotEmpty() && !isHttpPortValid,
+                          singleLine = true,
+                        )
+
+                        // HTTPS Port
+                        OutlinedTextField(
+                          modifier = Modifier.weight(1f),
+                          value = draftHttpsPort,
+                          onValueChange = { draftHttpsPort = it },
+                          label = { Text("HTTPS Port") },
+                          isError = draftHttpsPort.isNotEmpty() && !isHttpsPortValid,
+                          singleLine = true,
+                        )
+                      }
+
+                      Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                          onClick = {
+                            trailblazeSettingsRepo.updateAppConfig {
+                              it.copy(
+                                serverPort = draftHttpPortInt!!,
+                                serverHttpsPort = draftHttpsPortInt!!,
+                                serverUrl = "http://localhost:$draftHttpPortInt",
+                              )
+                            }
+                            restartDialogMessage = "Server ports have been updated. Restart Trailblaze for the new ports to take effect."
+                            showShellProfileRestartDialog = true
+                          },
+                          enabled = hasUnsavedChanges && isHttpPortValid && isHttpsPortValid,
+                        ) {
+                          Text("Save")
+                        }
+
+                        if (serverState.appConfig.serverPort != TrailblazeServerState.HTTP_PORT ||
+                          serverState.appConfig.serverHttpsPort != TrailblazeServerState.HTTPS_PORT
+                        ) {
+                          OutlinedButton(onClick = {
+                            draftHttpPort = TrailblazeServerState.HTTP_PORT.toString()
+                            draftHttpsPort = TrailblazeServerState.HTTPS_PORT.toString()
+                            trailblazeSettingsRepo.updateAppConfig {
+                              it.copy(
+                                serverPort = TrailblazeServerState.HTTP_PORT,
+                                serverHttpsPort = TrailblazeServerState.HTTPS_PORT,
+                                serverUrl = "http://localhost:${TrailblazeServerState.HTTP_PORT}",
+                              )
+                            }
+                            restartDialogMessage = "Server ports have been reset to defaults. Restart Trailblaze for the changes to take effect."
+                            showShellProfileRestartDialog = true
+                          }) {
+                            Text("Reset to Defaults")
+                          }
+                        }
+                      }
+
+                      SelectableText(
+                        text = "Can also be set via TRAILBLAZE_PORT / TRAILBLAZE_HTTPS_PORT env vars, " +
+                          "or --port / --https-port CLI flags (which take highest priority).",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                      )
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
                     // Logs Directory Configuration
                     Column(
                       modifier = Modifier.fillMaxWidth(),

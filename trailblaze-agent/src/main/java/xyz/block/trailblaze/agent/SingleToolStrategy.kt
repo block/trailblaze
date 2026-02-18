@@ -4,6 +4,7 @@ import ai.koog.prompt.message.Message
 import xyz.block.trailblaze.agent.model.PromptStepStatus
 import xyz.block.trailblaze.api.TrailblazeAgent
 import xyz.block.trailblaze.logs.model.TraceId
+import xyz.block.trailblaze.util.Console
 
 /**
  * Strategy for processing single tool calls - maintains current behavior for DirectionStep
@@ -30,7 +31,7 @@ class SingleToolStrategy : ToolProcessingStrategy {
         traceId = traceId,
       )
     } else {
-      println("[WARNING] No tool call detected - forcing tool call on next iteration")
+      Console.log("[WARNING] No tool call detected - forcing tool call on next iteration")
       stepStatus.handleEmptyToolCall(llmMessage)
       helper.setShouldForceToolCall(true)
     }

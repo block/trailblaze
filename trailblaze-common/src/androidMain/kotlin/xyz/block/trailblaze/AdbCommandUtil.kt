@@ -8,6 +8,7 @@ import xyz.block.trailblaze.InstrumentationUtil.withUiDevice
 import xyz.block.trailblaze.device.AndroidDeviceCommandExecutor
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.util.Console
 
 /**
  * Utility for executing ADB shell commands via UiAutomation.
@@ -16,7 +17,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 object AdbCommandUtil {
 
   fun execShellCommand(shellCommand: String): String {
-    println("adb shell $shellCommand")
+    Console.log("adb shell $shellCommand")
     return withUiDevice {
       executeShellCommand(shellCommand)
     }
@@ -62,7 +63,7 @@ object AdbCommandUtil {
 
   fun isAppRunning(appId: String): Boolean {
     val output = execShellCommand("pidof $appId")
-    println("pidof $appId: $output")
+    Console.log("pidof $appId: $output")
     val isRunning = output.trim().isNotEmpty()
     return isRunning
   }
@@ -80,7 +81,7 @@ object AdbCommandUtil {
         execShellCommand("dumpsys package $appId | grep stopped=true").contains("stopped=true")
       }
     } else {
-      println("App $appId does not have an active process, no need to force stop")
+      Console.log("App $appId does not have an active process, no need to force stop")
     }
   }
 
@@ -119,19 +120,19 @@ object AdbCommandUtil {
       val conditionResult: Boolean = try {
         condition()
       } catch (e: Exception) {
-        println("Ignored Exception while computing Condition [$conditionDescription], Exception [${e.message}]")
+        Console.log("Ignored Exception while computing Condition [$conditionDescription], Exception [${e.message}]")
         false
       }
       if (conditionResult) {
-        println("Condition [$conditionDescription] met after ${elapsedTime}ms")
+        Console.log("Condition [$conditionDescription] met after ${elapsedTime}ms")
         return true
       } else {
-        println("Condition [$conditionDescription] not yet met after ${elapsedTime}ms with timeout of ${maxWaitMs}ms")
+        Console.log("Condition [$conditionDescription] not yet met after ${elapsedTime}ms with timeout of ${maxWaitMs}ms")
         Thread.sleep(intervalMs)
         elapsedTime = Clock.System.now().toEpochMilliseconds() - startTime.toEpochMilliseconds()
       }
     }
-    println("Timed out (${maxWaitMs}ms limit) met [$conditionDescription] after ${elapsedTime}ms")
+    Console.log("Timed out (${maxWaitMs}ms limit) met [$conditionDescription] after ${elapsedTime}ms")
     return false
   }
 

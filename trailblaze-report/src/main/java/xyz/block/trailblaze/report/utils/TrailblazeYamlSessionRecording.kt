@@ -11,6 +11,7 @@ import xyz.block.trailblaze.yaml.DirectionStep
 import xyz.block.trailblaze.yaml.TrailblazeYaml
 import xyz.block.trailblaze.yaml.VerificationStep
 import xyz.block.trailblaze.yaml.models.TrailblazeYamlBuilder
+import xyz.block.trailblaze.util.Console
 
 /**
  * Endpoint to get the YAML representation of a Trailblaze session recording.
@@ -54,7 +55,7 @@ object TrailblazeYamlSessionRecording {
             is TrailblazeLog.ObjectiveStartLog -> {
               // Grab the initial prompt step
               val promptStep = currentLog.promptStep
-              println("### handle prompt step $promptStep")
+              Console.log("### handle prompt step $promptStep")
               // Find the associated objective complete log for the current prompt step
               var completeIndex = currentLogIndex + 1
               var foundCompleteLog = false

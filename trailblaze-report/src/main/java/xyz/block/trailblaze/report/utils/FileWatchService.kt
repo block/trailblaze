@@ -19,6 +19,7 @@ import java.nio.file.Paths
 import java.nio.file.WatchService
 import kotlin.concurrent.thread
 import kotlin.io.path.name
+import xyz.block.trailblaze.util.Console
 
 class FileWatchService(
   private val dirToWatch: File,
@@ -78,7 +79,7 @@ class FileWatchService(
     watchThread = null
     debounceScope.cancel()
     fileChangeChannel.close()
-    println("[FileWatchService] Stopped watching: $path")
+    Console.log("[FileWatchService] Stopped watching: $path")
   }
 
   fun startWatching() {
@@ -88,7 +89,7 @@ class FileWatchService(
       eventTypes.map { it.watchEventKind }.toTypedArray(),
     )
 
-    println("[FileWatchService] Started watching: $path (debounce: ${debounceDelayMs}ms)")
+    Console.log("[FileWatchService] Started watching: $path (debounce: ${debounceDelayMs}ms)")
 
     // Start the watch loop in a background thread
     watchThread = thread(name = "FileWatcher-${dirToWatch.name}") {
@@ -132,7 +133,7 @@ class FileWatchService(
         // Thread was interrupted, exit gracefully
         Thread.currentThread().interrupt()
       } catch (e: Exception) {
-        println("[FileWatchService] Error in watch loop for $dirToWatch: ${e.message}")
+        Console.log("[FileWatchService] Error in watch loop for $dirToWatch: ${e.message}")
         e.printStackTrace()
       }
     }
@@ -156,10 +157,10 @@ class FileWatchService(
       eventToProcess?.let { (debouncedChangeType, debouncedFile) ->
         try {
           // Use absolutePath instead of canonicalPath to avoid expensive filesystem I/O
-          println("[FileWatchService] Emitting event: $debouncedChangeType ${debouncedFile.name} (${debouncedFile.absolutePath})")
+          Console.log("[FileWatchService] Emitting event: $debouncedChangeType ${debouncedFile.name} (${debouncedFile.absolutePath})")
           fileChangeChannel.send(FileChangeEvent(debouncedChangeType, debouncedFile))
         } catch (e: Exception) {
-          println("[FileWatchService] Error emitting event for ${debouncedFile.absolutePath}: ${e.message}")
+          Console.log("[FileWatchService] Error emitting event for ${debouncedFile.absolutePath}: ${e.message}")
           e.printStackTrace()
         }
       }

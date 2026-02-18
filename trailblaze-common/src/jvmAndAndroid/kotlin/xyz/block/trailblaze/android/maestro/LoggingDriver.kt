@@ -20,6 +20,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.tracing.TrailblazeTracer.traceRecorder
 import java.io.File
 import kotlin.system.measureTimeMillis
+import xyz.block.trailblaze.util.Console
 
 /**
  * This is a delegate Maestro [Driver] that logs all actions to the logger.
@@ -35,7 +36,7 @@ class LoggingDriver(
 ) : Driver {
 
   private inline fun <T> traceMaestroDriver(name: String, block: () -> T): T = traceRecorder.trace(name, "MaestroDriver", emptyMap(), block = {
-    println("Maestro-${delegate::class.java.simpleName}-$name()")
+    Console.log("Maestro-${delegate::class.java.simpleName}-$name()")
     block()
   })
 
@@ -43,7 +44,7 @@ class LoggingDriver(
    * Wraps the Screen State Provider so that we can use a cached value when requested.
    */
   fun getCurrentScreenState(): ScreenState = temporaryStaticScreenStateData?.let { screenStateTemporarilyDisabledData ->
-    println("Temporarily using cached  is currently preloaded because: ${screenStateTemporarilyDisabledData.reason}.")
+    Console.log("Temporarily using cached  is currently preloaded because: ${screenStateTemporarilyDisabledData.reason}.")
     screenStateTemporarilyDisabledData.screenState
   } ?: screenStateProvider()
 

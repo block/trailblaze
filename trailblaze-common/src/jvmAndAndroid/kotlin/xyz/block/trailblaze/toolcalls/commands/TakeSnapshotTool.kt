@@ -6,6 +6,7 @@ import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.util.Console
 
 @Serializable
 @TrailblazeToolClass("takeSnapshot")
@@ -28,7 +29,7 @@ class TakeSnapshotTool(
 
   private fun saveSnapshot(context: TrailblazeToolExecutionContext) {
     val descriptionText = description?.let { " - $it" } ?: ""
-    println("### Taking snapshot and saving as $screenName$descriptionText")
+    Console.log("### Taking snapshot and saving as $screenName$descriptionText")
     
     // Get current session from the agent
     val session = context.trailblazeAgent.sessionProvider.invoke()
@@ -36,7 +37,7 @@ class TakeSnapshotTool(
     // Capture a fresh screenshot from the device using the screenStateProvider
     val screenStateProvider = context.screenStateProvider
     if (screenStateProvider == null) {
-      println("⚠️  No screenStateProvider available - snapshot not saved")
+      Console.log("⚠️  No screenStateProvider available - snapshot not saved")
       return
     }
     
@@ -45,9 +46,9 @@ class TakeSnapshotTool(
     val savedFilename = context.trailblazeAgent.trailblazeLogger.logSnapshot(session, freshScreenState, screenName)
     
     if (savedFilename == null) {
-      println("⚠️  No screenshot available - snapshot not saved")
+      Console.log("⚠️  No screenshot available - snapshot not saved")
     } else {
-      println("✅ Snapshot saved: $savedFilename")
+      Console.log("✅ Snapshot saved: $savedFilename")
     }
   }
 }

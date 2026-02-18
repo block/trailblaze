@@ -16,6 +16,7 @@ import xyz.block.trailblaze.report.utils.FileChangeEvent
 import xyz.block.trailblaze.report.utils.FileWatchService
 import xyz.block.trailblaze.yaml.TrailConfig
 import java.io.File
+import xyz.block.trailblaze.util.Console
 
 /**
  * JVM implementation of RecordingsRepo that saves recordings to the file system.
@@ -82,10 +83,10 @@ class RecordedTrailsRepoJvm(
       // Write the YAML content
       recordingFile.writeText(yaml)
 
-      println("Recording saved to: ${recordingFile.absolutePath}")
+      Console.log("Recording saved to: ${recordingFile.absolutePath}")
       Result.success(recordingFile.absolutePath)
     } catch (e: Exception) {
-      println("Failed to save recording: ${e.message}")
+      Console.log("Failed to save recording: ${e.message}")
       Result.failure(e)
     }
   }
@@ -115,10 +116,10 @@ class RecordedTrailsRepoJvm(
       // Write the YAML content
       promptsFile.writeText(yaml)
 
-      println("Prompts saved to: ${promptsFile.absolutePath}")
+      Console.log("Prompts saved to: ${promptsFile.absolutePath}")
       Result.success(promptsFile.absolutePath)
     } catch (e: Exception) {
-      println("Failed to save prompts: ${e.message}")
+      Console.log("Failed to save prompts: ${e.message}")
       Result.failure(e)
     }
   }
@@ -158,7 +159,7 @@ class RecordedTrailsRepoJvm(
         ?.sortedWith(compareBy({ it.fileName != TrailRecordings.TRAIL_DOT_YAML }, { it.fileName }))
         ?: emptyList()
     } catch (e: Exception) {
-      println("Failed to search for existing recordings: ${e.message}")
+      Console.log("Failed to search for existing recordings: ${e.message}")
       emptyList()
     }
   }
@@ -181,7 +182,7 @@ class RecordedTrailsRepoJvm(
   override fun watchDirectory(directoryPath: String): Flow<TrailFileChangeEvent>? {
     val directory = File(directoryPath)
     if (!directory.exists() || !directory.isDirectory) {
-      println("Cannot watch non-existent or non-directory path: $directoryPath")
+      Console.log("Cannot watch non-existent or non-directory path: $directoryPath")
       return null
     }
 
@@ -205,7 +206,7 @@ class RecordedTrailsRepoJvm(
 
       try {
         fileWatcher.startWatching()
-        println("Started watching directory: $directoryPath")
+        Console.log("Started watching directory: $directoryPath")
 
         // Launch a coroutine to collect file changes from the FileWatchService flow
         launch {
@@ -217,7 +218,7 @@ class RecordedTrailsRepoJvm(
                 FileChangeEvent.ChangeType.DELETE -> TrailFileChangeType.DELETE
                 FileChangeEvent.ChangeType.MODIFY -> TrailFileChangeType.MODIFY
               }
-              println("[RecordedTrailsRepo] Emitting file change: ${mappedChangeType} ${event.file.name}")
+              Console.log("[RecordedTrailsRepo] Emitting file change: ${mappedChangeType} ${event.file.name}")
               send(TrailFileChangeEvent(mappedChangeType, event.file.absolutePath))
             }
           }
@@ -225,7 +226,7 @@ class RecordedTrailsRepoJvm(
 
         // Wait for the flow to be cancelled
         awaitClose {
-          println("Stopping file watcher for: $directoryPath")
+          Console.log("Stopping file watcher for: $directoryPath")
           fileWatcher.stopWatching()
           scope.cancel()
           // Remove from cache when stopped
@@ -234,7 +235,7 @@ class RecordedTrailsRepoJvm(
           }
         }
       } catch (e: Exception) {
-        println("Error in file watcher for $directoryPath: ${e.message}")
+        Console.log("Error in file watcher for $directoryPath: ${e.message}")
         e.printStackTrace()
         fileWatcher.stopWatching()
         scope.cancel()

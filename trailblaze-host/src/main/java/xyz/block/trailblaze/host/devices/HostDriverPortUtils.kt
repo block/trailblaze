@@ -2,6 +2,7 @@ package xyz.block.trailblaze.host.devices
 
 import java.net.ServerSocket
 import java.util.concurrent.TimeUnit
+import xyz.block.trailblaze.util.Console
 
 /**
  * Shared port management utilities used by host driver factories (Android and iOS).
@@ -25,12 +26,12 @@ internal object HostDriverPortUtils {
     while (System.currentTimeMillis() - startTime < timeoutMs) {
       try {
         ServerSocket(port).close()
-        println("Port $port successfully released after ${System.currentTimeMillis() - startTime}ms")
+        Console.log("Port $port successfully released after ${System.currentTimeMillis() - startTime}ms")
         return true
       } catch (e: Exception) {
         attempts++
         if (attempts % 10 == 0) {
-          println(
+          Console.log(
             "Still waiting for port $port to be released... " +
               "(${System.currentTimeMillis() - startTime}ms elapsed)",
           )
@@ -38,7 +39,7 @@ internal object HostDriverPortUtils {
         Thread.sleep(100)
       }
     }
-    println("Warning: Port $port may still be in use after ${timeoutMs}ms timeout")
+    Console.log("Warning: Port $port may still be in use after ${timeoutMs}ms timeout")
     return false
   }
 

@@ -74,6 +74,7 @@ import xyz.block.trailblaze.ui.tabs.session.models.SessionDetail
 import xyz.block.trailblaze.ui.theme.LocalFontScale
 import xyz.block.trailblaze.ui.utils.LogUtils
 import androidx.compose.foundation.lazy.grid.items as gridItems
+import xyz.block.trailblaze.util.Console
 
 @Composable
 fun SessionDetailComposable(
@@ -570,7 +571,7 @@ fun SessionDetailComposable(
                               // Reload recordings whenever a file change is detected
                               LaunchedEffect(latestChange) {
                                 if (latestChange != null) {
-                                  println("Detected ${latestChange?.changeType?.name} for session recording: ${latestChange?.filePath}")
+                                  Console.log("Detected ${latestChange?.changeType?.name} for session recording: ${latestChange?.filePath}")
                                   withContext(Dispatchers.Default) {
                                     existingRecordings = recordedTrailsRepo.getExistingTrails(sessionDetail.session)
                                   }

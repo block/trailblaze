@@ -90,6 +90,10 @@ compose.desktop {
 }
 afterEvaluate {
   tasks.withType<JavaExec> {
+    // Forward stdin to the JVM process so STDIO MCP transport can read JSON-RPC
+    // from the parent process's stdin (e.g., `./trailblaze mcp --stdio`).
+    standardInput = System.`in`
+
     if (System.getProperty("os.name").contains("Mac")) {
       jvmArgs("--add-opens", "java.desktop/sun.awt=ALL-UNNAMED")
       jvmArgs("--add-opens", "java.desktop/sun.lwawt=ALL-UNNAMED")

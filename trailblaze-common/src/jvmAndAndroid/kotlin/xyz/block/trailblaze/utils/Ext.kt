@@ -8,6 +8,7 @@ import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.toolcalls.GenericGsonJsonSerializer
 import java.util.regex.Pattern
+import xyz.block.trailblaze.util.Console
 
 object Ext {
 
@@ -52,7 +53,7 @@ object Ext {
       val pattern = Pattern.compile("\\[([0-9-]+),([0-9-]+)]\\[([0-9-]+),([0-9-]+)]")
       val m = pattern.matcher(boundsString)
       if (!m.matches()) {
-        System.err.println("Warning: Bounds text does not match expected pattern: $boundsString")
+        Console.error("Warning: Bounds text does not match expected pattern: $boundsString")
         return null
       }
 

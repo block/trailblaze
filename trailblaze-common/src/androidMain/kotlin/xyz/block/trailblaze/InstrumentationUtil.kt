@@ -34,6 +34,7 @@ import maestro.Point
 import maestro.SwipeDirection
 import xyz.block.trailblaze.AdbCommandUtil.directionalSwipe
 import xyz.block.trailblaze.AdbCommandUtil.execShellCommand
+import xyz.block.trailblaze.util.Console
 
 /**
  * Utilities when running with Instrumentation and UiAutomation.
@@ -233,7 +234,7 @@ object InstrumentationUtil {
    * https://github.com/mobile-dev-inc/Maestro/blob/0a38a9468cb769ecbc1edc76974fd2f8a8b0b64e/maestro-client/src/main/java/maestro/drivers/AndroidDriver.kt#L483-L504
    */
   fun swipe(deviceInfo: DeviceInfo, elementPoint: Point, direction: SwipeDirection, durationMs: Long) {
-    println("swipe $elementPoint, $direction, $durationMs")
+    Console.log("swipe $elementPoint, $direction, $durationMs")
     when (direction) {
       SwipeDirection.UP -> {
         val endY = (deviceInfo.heightGrid * 0.1f).toInt()

@@ -19,6 +19,7 @@ import java.io.File
 import java.util.zip.GZIPOutputStream
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
+import xyz.block.trailblaze.util.Console
 
 /**
  * Data for a single session that can be lazy-loaded
@@ -51,16 +52,16 @@ object WasmReport {
     reportTemplateFile: File,
     useRelativeImageUrls: Boolean = false,
   ) {
-    println("Encoding JSON data...")
+    Console.log("Encoding JSON data...")
     val allSessionIds = logsRepo.getSessionIds()
     val sessionToImageFiles = allSessionIds.associateWith { logsRepo.getImagesForSession(it) }
 
-    println("Generating lightweight session info metadata...")
+    Console.log("Generating lightweight session info metadata...")
     val skippedSessions = mutableListOf<SessionId>()
     val sessionInfoMap = allSessionIds.mapNotNull { sessionId ->
       val sessionInfo = logsRepo.getSessionInfo(sessionId)
       if (sessionInfo == null) {
-        println("  ⚠️  WARNING: Skipping session '$sessionId' - no session info available")
+        Console.log("  ⚠️  WARNING: Skipping session '$sessionId' - no session info available")
         skippedSessions.add(sessionId)
         null
       } else {
@@ -69,8 +70,8 @@ object WasmReport {
     }.toMap()
 
     if (skippedSessions.isNotEmpty()) {
-      println("  ⚠️  Skipped ${skippedSessions.size} session(s) due to missing session info:")
-      skippedSessions.forEach { println("     - $it") }
+      Console.log("  ⚠️  Skipped ${skippedSessions.size} session(s) due to missing session info:")
+      skippedSessions.forEach { Console.log("     - $it") }
     }
 
     // Only include valid sessions in the report
@@ -85,7 +86,7 @@ object WasmReport {
     val sessionToImageFilesStr = sessionToImageFiles.mapKeys { it.key.value }
 
     if (reportTemplateFile.exists()) {
-      println("Generating report from template: ${reportTemplateFile.absolutePath}")
+      Console.log("Generating report from template: ${reportTemplateFile.absolutePath}")
       generateFromTemplate(
         reportTemplateFile = reportTemplateFile,
         reportOutputFile = outputFile,
@@ -95,7 +96,7 @@ object WasmReport {
         perSessionData = perSessionData,
       )
     } else {
-      println("Generating report from raw WASM UI build artifacts...")
+      Console.log("Generating report from raw WASM UI build artifacts...")
       generateRaw(
         trailblazeUiProjectDir = trailblazeUiProjectDir,
         reportOutputFile = outputFile,
@@ -106,9 +107,9 @@ object WasmReport {
       )
     }
 
-    println("\n✅ Success!")
-    println("Embedded HTML created at: ${outputFile.absolutePath}")
-    println("Final file size: ${outputFile.length() / 1024}KB")
+    Console.log("\n✅ Success!")
+    Console.log("Embedded HTML created at: ${outputFile.absolutePath}")
+    Console.log("Final file size: ${outputFile.length() / 1024}KB")
   }
 
   private fun buildPerSessionData(
@@ -157,7 +158,7 @@ object WasmReport {
     }
 
     val elapsed = (System.currentTimeMillis() - startTime) / 1000.0
-    println("  ✅ Compressed ${perSessionData.size} sessions in ${elapsed.toInt()}s")
+    Console.log("  ✅ Compressed ${perSessionData.size} sessions in ${elapsed.toInt()}s")
 
     return Pair(
       compressedData.mapValues { it.value.first },
@@ -173,25 +174,25 @@ object WasmReport {
     sessionToImageFiles: Map<String, List<File>>,
     perSessionData: Map<String, PerSessionData>,
   ) {
-    println("Generating report from template: ${reportTemplateFile.absolutePath}")
+    Console.log("Generating report from template: ${reportTemplateFile.absolutePath}")
 
     val compressedSessionJson = compressStringToBase64(sessionJson)
     val compressedSessionInfoJson = compressStringToBase64(sessionInfoJson)
 
     val (compressedPerSessionLogs, compressedPerSessionYaml) = compressPerSessionData(perSessionData)
 
-    println("\nCompressing and encoding images...")
+    Console.log("\nCompressing and encoding images...")
     val compressedImages = compressImages(sessionToImageFiles)
 
     val templateContent = reportTemplateFile.readText()
 
-    println("\nExtracting and compressing JavaScript bundle from template...")
+    Console.log("\nExtracting and compressing JavaScript bundle from template...")
     val jsExtractRegex = """<script type="application/javascript">\s*([\s\S]*?)\s*</script>""".toRegex()
     val mainJsScript = jsExtractRegex.findAll(templateContent)
       .maxByOrNull { it.groupValues[1].length }
 
     if (mainJsScript == null) {
-      println("⚠️  WARNING: Could not find JavaScript bundle in template!")
+      Console.log("⚠️  WARNING: Could not find JavaScript bundle in template!")
     }
 
     val jsContent = mainJsScript?.groupValues?.get(1) ?: ""
@@ -213,7 +214,7 @@ object WasmReport {
       templateContent
     }
 
-    println("\nGenerating chunked script tags for lazy loading...")
+    Console.log("\nGenerating chunked script tags for lazy loading...")
     val chunkScripts = generateChunkedScriptTags(
       compressedPerSessionLogs,
       compressedPerSessionYaml,
@@ -225,7 +226,7 @@ object WasmReport {
 
     val matches = compressedDataRegex.findAll(output).count()
     if (matches == 0) {
-      println("⚠️  WARNING: Could not find window.trailblaze_report_compressed in template!")
+      Console.log("⚠️  WARNING: Could not find window.trailblaze_report_compressed in template!")
     }
 
     output = output.replace(compressedDataRegex, replacementBlock)
@@ -242,7 +243,7 @@ object WasmReport {
     sessionToImageFiles: Map<String, List<File>>,
     perSessionData: Map<String, PerSessionData>,
   ) {
-    println("Generating report from wasm ui build artifacts: ${trailblazeUiProjectDir.absolutePath}")
+    Console.log("Generating report from wasm ui build artifacts: ${trailblazeUiProjectDir.absolutePath}")
 
     require(trailblazeUiProjectDir.exists() && trailblazeUiProjectDir.isDirectory) {
       "Project directory does not exist or is not a directory: ${trailblazeUiProjectDir.canonicalPath}"
@@ -263,20 +264,20 @@ object WasmReport {
     val wasmFiles = buildDir.listFiles { _, name -> name.endsWith(".wasm") } ?: emptyArray()
     require(wasmFiles.isNotEmpty()) { "No WASM files found in ${buildDir.absolutePath}" }
 
-    println("Processing files:")
-    println("  JS: ${jsFile.name} (${jsFile.length() / 1024}KB)")
-    wasmFiles.forEach { println("  WASM: ${it.name} (${it.length() / 1024}KB)") }
+    Console.log("Processing files:")
+    Console.log("  JS: ${jsFile.name} (${jsFile.length() / 1024}KB)")
+    wasmFiles.forEach { Console.log("  WASM: ${it.name} (${it.length() / 1024}KB)") }
 
-    println("\nCompressing and encoding lightweight metadata...")
+    Console.log("\nCompressing and encoding lightweight metadata...")
     val compressedSessionJson = compressStringToBase64(sessionJson)
     val compressedSessionInfoJson = compressStringToBase64(sessionInfoJson)
 
-    println("\nCompressing per-session data for lazy loading...")
+    Console.log("\nCompressing per-session data for lazy loading...")
     val (compressedPerSessionLogs, compressedPerSessionYaml) = compressPerSessionData(perSessionData)
 
     val compressedImages = compressImages(sessionToImageFiles)
 
-    println("\nGenerating chunked script tags for lazy loading...")
+    Console.log("\nGenerating chunked script tags for lazy loading...")
     val chunkScripts = generateChunkedScriptTags(
       compressedPerSessionLogs,
       compressedPerSessionYaml,
@@ -299,7 +300,7 @@ object WasmReport {
         .replace("</body>", "$chunkScripts</body>")
     }
 
-    println("\nCompressing and encoding WASM files...")
+    Console.log("\nCompressing and encoding WASM files...")
     val wasmData = runBlocking(Dispatchers.IO) {
       wasmFiles.map { file ->
         async {
@@ -311,11 +312,11 @@ object WasmReport {
       }.awaitAll().toMap()
     }
 
-    println("\nCompressing JavaScript bundle...")
+    Console.log("\nCompressing JavaScript bundle...")
     val jsContent = jsFile.readText()
     val compressedJsBase64 = compressStringToBase64(jsContent)
 
-    println("Creating embedded HTML...")
+    Console.log("Creating embedded HTML...")
     val embeddedHtml = createEmbeddedHtml(htmlTemplate, compressedJsBase64, wasmData)
 
     reportOutputFile.writeText(embeddedHtml)
@@ -338,7 +339,7 @@ object WasmReport {
 
     // Check if the compressed data was already injected (it should be in generateRaw path)
     if (!replaced.contains("window.trailblaze_report_compressed")) {
-      println("⚠️  WARNING: window.trailblaze_report_compressed not found in template after script replacement!")
+      Console.log("⚠️  WARNING: window.trailblaze_report_compressed not found in template after script replacement!")
     }
 
     return replaced

@@ -11,6 +11,7 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import kotlinx.datetime.Clock
 import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.util.Console
 
 class TrailblazeLogServerClient(
   val httpClient: HttpClient,
@@ -25,7 +26,7 @@ class TrailblazeLogServerClient(
     } catch (e: Exception) {
       false
     }
-    println("isServerRunning $isRunning in ${Clock.System.now() - startTime}ms")
+    Console.log("isServerRunning $isRunning in ${Clock.System.now() - startTime}ms")
     return isRunning
   }
 

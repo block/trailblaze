@@ -6,6 +6,7 @@ import xyz.block.trailblaze.model.AppVersionInfo
 import xyz.block.trailblaze.model.TrailblazeOnDeviceInstrumentationTarget
 import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils.runProcess
 import java.io.File
+import xyz.block.trailblaze.util.Console
 
 object AndroidHostAdbUtils {
 
@@ -78,10 +79,10 @@ object AndroidHostAdbUtils {
         remotePort = remotePort
       )
     ) {
-      println("Port forward tcp:$localPort -> tcp:$remotePort already exists")
+      Console.log("Port forward tcp:$localPort -> tcp:$remotePort already exists")
       ProcessBuilder("echo", "Port forward already exists").start()
     } else {
-      println("Setting up port forward tcp:$localPort -> tcp:$remotePort")
+      Console.log("Setting up port forward tcp:$localPort -> tcp:$remotePort")
       createAdbCommandProcessBuilder(
         deviceId = deviceId,
         args = listOf("forward", "tcp:$localPort", "tcp:$remotePort"),
@@ -128,10 +129,10 @@ object AndroidHostAdbUtils {
   ): Process = try {
     // Check if forward already exists
     if (isPortReverseAlreadyActive(deviceId, localPort, remotePort)) {
-      println("Port reverse tcp:$localPort -> tcp:$remotePort already exists")
+      Console.log("Port reverse tcp:$localPort -> tcp:$remotePort already exists")
       ProcessBuilder("echo", "Port reverse already exists").start()
     } else {
-      println("Setting up port forward tcp:$localPort -> tcp:$remotePort")
+      Console.log("Setting up port forward tcp:$localPort -> tcp:$remotePort")
       createAdbCommandProcessBuilder(
         deviceId = deviceId,
         args = listOf("reverse", "tcp:$localPort", "tcp:$remotePort"),
@@ -142,7 +143,7 @@ object AndroidHostAdbUtils {
   }
 
   fun execAdbShellCommand(deviceId: TrailblazeDeviceId, args: List<String>): String {
-    println("adb shell ${args.joinToString(" ")}")
+    Console.log("adb shell ${args.joinToString(" ")}")
     return createAdbCommandProcessBuilder(
       deviceId = deviceId,
       args = listOf(
@@ -156,7 +157,7 @@ object AndroidHostAdbUtils {
       deviceId = deviceId,
       args = listOf("pidof", appId)
     )
-    println("pidof $appId: $output")
+    Console.log("pidof $appId: $output")
     val isRunning = output.trim().isNotEmpty()
     return isRunning
   }
@@ -176,19 +177,19 @@ object AndroidHostAdbUtils {
       val conditionResult: Boolean = try {
         condition()
       } catch (e: Exception) {
-        println("Ignored Exception while computing Condition [$conditionDescription], Exception [${e.message}]")
+        Console.log("Ignored Exception while computing Condition [$conditionDescription], Exception [${e.message}]")
         false
       }
       if (conditionResult) {
-        println("Condition [$conditionDescription] met after ${elapsedTime}ms")
+        Console.log("Condition [$conditionDescription] met after ${elapsedTime}ms")
         return true
       } else {
-        println("Condition [$conditionDescription] not yet met after ${elapsedTime}ms with timeout of ${maxWaitMs}ms")
+        Console.log("Condition [$conditionDescription] not yet met after ${elapsedTime}ms with timeout of ${maxWaitMs}ms")
         Thread.sleep(intervalMs)
         elapsedTime = Clock.System.now().toEpochMilliseconds() - startTime.toEpochMilliseconds()
       }
     }
-    println("Timed out (${maxWaitMs}ms limit) met [$conditionDescription] after ${elapsedTime}ms")
+    Console.log("Timed out (${maxWaitMs}ms limit) met [$conditionDescription] after ${elapsedTime}ms")
     return false
   }
 
@@ -249,7 +250,7 @@ object AndroidHostAdbUtils {
         ).contains("stopped=true")
       }
     } else {
-      println("App $appId does not have an active process, no need to force stop")
+      Console.log("App $appId does not have an active process, no need to force stop")
     }
   }
 
@@ -352,7 +353,7 @@ object AndroidHostAdbUtils {
       null
     }
   } catch (e: Exception) {
-    println("Failed to get version info for $packageName: ${e.message}")
+    Console.log("Failed to get version info for $packageName: ${e.message}")
     null
   }
 
@@ -371,7 +372,7 @@ object AndroidHostAdbUtils {
     )
 
     val result = processBuilder.runProcess { line ->
-      println("adb install output: $line")
+      Console.log("adb install output: $line")
     }
 
     // Check if installation was successful
@@ -379,7 +380,7 @@ object AndroidHostAdbUtils {
     val success = result.fullOutput.contains("Success", ignoreCase = true) && result.exitCode == 0
 
     if (!success) {
-      println("APK installation failed. Output: ${result.fullOutput}")
+      Console.log("APK installation failed. Output: ${result.fullOutput}")
     }
 
     return success

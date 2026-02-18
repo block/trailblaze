@@ -10,6 +10,7 @@ import xyz.block.trailblaze.http.DynamicLlmClient
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.util.HostAndroidDeviceConnectUtils
+import xyz.block.trailblaze.util.Console
 
 object TrailblazeHostYamlRunner {
 
@@ -97,7 +98,7 @@ object TrailblazeHostYamlRunner {
 
     return try {
       onProgressMessage("Executing YAML test...")
-      println("▶️ Starting runTrailblazeYamlSuspend for device: ${trailblazeDeviceId.instanceId}")
+      Console.log("▶️ Starting runTrailblazeYamlSuspend for device: ${trailblazeDeviceId.instanceId}")
       val sessionId = hostTbRunner.runTrailblazeYamlSuspend(
         yaml = runYamlRequest.yaml,
         forceStopApp = runOnHostParams.forceStopTargetApp,
@@ -105,7 +106,7 @@ object TrailblazeHostYamlRunner {
         trailblazeDeviceId = trailblazeDeviceId,
         sendSessionStartLog = runYamlRequest.config.sendSessionStartLog
       )
-      println("✅ runTrailblazeYamlSuspend completed successfully for device: ${trailblazeDeviceId.instanceId}")
+      Console.log("✅ runTrailblazeYamlSuspend completed successfully for device: ${trailblazeDeviceId.instanceId}")
       onProgressMessage("Test execution completed successfully")
 
       if (runYamlRequest.config.sendSessionEndLog) {
@@ -117,7 +118,7 @@ object TrailblazeHostYamlRunner {
        sessionId
     } catch (e: TrailblazeSessionCancelledException) {
       // Handle Trailblaze session cancellation - user cancelled via UI
-      println("🚫 TrailblazeSessionCancelledException caught for device: ${trailblazeDeviceId.instanceId}")
+      Console.log("🚫 TrailblazeSessionCancelledException caught for device: ${trailblazeDeviceId.instanceId}")
       onProgressMessage("Test session cancelled")
       // DON'T write log here - cancellation log is written by the UI layer
       // (JvmLiveSessionDataProvider.writeCancellationLog) to avoid duplicates
@@ -125,14 +126,14 @@ object TrailblazeHostYamlRunner {
       null
     } catch (e: CancellationException) {
       // Handle coroutine cancellation explicitly
-      println("🚫 CancellationException caught for device: ${trailblazeDeviceId.instanceId} - ${e.message}")
+      Console.log("🚫 CancellationException caught for device: ${trailblazeDeviceId.instanceId} - ${e.message}")
       onProgressMessage("Test execution cancelled")
       // DON'T write log here - cancellation log is already written by the UI layer
       // to avoid duplicate logs. Just do cleanup in finally block.
       // Re-throw to propagate cancellation
       throw e
     } catch (e: Exception) {
-      println("❌ Exception caught in runHostYaml for device: ${trailblazeDeviceId.instanceId} - ${e::class.simpleName}: ${e.message}")
+      Console.log("❌ Exception caught in runHostYaml for device: ${trailblazeDeviceId.instanceId} - ${e::class.simpleName}: ${e.message}")
       onProgressMessage("Test execution failed: ${e.message}")
         // End session using SessionManager
       sessionManager.endSession(session, isSuccess = false, exception = e)
@@ -140,11 +141,11 @@ object TrailblazeHostYamlRunner {
     } finally {
       // IMPORTANT: This ALWAYS executes, even when cancelled!
       // Ensures device manager state is updated and job is cleaned up
-      println("🧹 Finally block executing for device: ${trailblazeDeviceId.instanceId} - calling cancelSessionForDevice")
+      Console.log("🧹 Finally block executing for device: ${trailblazeDeviceId.instanceId} - calling cancelSessionForDevice")
       // Clear the session from the logging rule to prevent stale sessions
       hostTbRunner.loggingRule.setSession(null)
       deviceManager.cancelSessionForDevice(trailblazeDeviceId)
-      println("🏁 Finally block completed for device: ${trailblazeDeviceId.instanceId}")
+      Console.log("🏁 Finally block completed for device: ${trailblazeDeviceId.instanceId}")
     }
   }
 }

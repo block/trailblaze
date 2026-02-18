@@ -6,14 +6,16 @@ import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeScreenStateLog
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.report.utils.LogsRepo
+import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.rules.TrailblazeLoggingRule
 
 import xyz.block.trailblaze.util.GitUtils
 import java.io.File
+import xyz.block.trailblaze.util.Console
 
 class HostTrailblazeLoggingRule(
   override val trailblazeDeviceInfoProvider: () -> TrailblazeDeviceInfo,
-  logsBaseUrl: String = "https://localhost:8443",
+  logsBaseUrl: String = "https://localhost:${TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTPS_PORT}",
   additionalLogEmitter: LogEmitter? = null,
   logsDir: File? = null,
   private val logsRepo: LogsRepo = LogsRepo(resolveLogsDir(logsDir)),
@@ -33,7 +35,7 @@ class HostTrailblazeLoggingRule(
 ) {
 
   init {
-    println("Logs dir: ${logsRepo.logsDir.canonicalPath}")
+    Console.log("Logs dir: ${logsRepo.logsDir.canonicalPath}")
   }
 
   companion object {

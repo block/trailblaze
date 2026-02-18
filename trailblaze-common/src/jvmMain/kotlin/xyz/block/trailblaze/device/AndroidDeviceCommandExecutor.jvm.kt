@@ -2,6 +2,7 @@ package xyz.block.trailblaze.device
 
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.util.AndroidHostAdbUtils
+import xyz.block.trailblaze.util.Console
 
 /**
  * JVM implementation of AndroidDeviceCommandExecutor that delegates to AndroidHostAdbUtils.
@@ -99,7 +100,7 @@ actual class AndroidDeviceCommandExecutor actual constructor(
       error("Failed to write content to MediaStore entry $mediaStoreId: $stderr")
     }
 
-    println("Wrote ${content.size} bytes to MediaStore Downloads: $fileName (id=$mediaStoreId)")
+    Console.log("Wrote ${content.size} bytes to MediaStore Downloads: $fileName (id=$mediaStoreId)")
   }
 
   actual fun deleteFileFromDownloads(fileName: String) {
@@ -114,7 +115,7 @@ actual class AndroidDeviceCommandExecutor actual constructor(
       )
     } catch (e: Exception) {
       // Best-effort cleanup
-      println("Warning: could not delete MediaStore entry for $fileName: ${e.message}")
+      Console.log("Warning: could not delete MediaStore entry for $fileName: ${e.message}")
     }
   }
 

@@ -29,6 +29,7 @@ import xyz.block.trailblaze.logs.server.endpoints.LogScreenshotPostEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.PingEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.ReverseProxyEndpoint
 import xyz.block.trailblaze.report.utils.LogsRepo
+import xyz.block.trailblaze.util.Console
 import kotlin.io.encoding.ExperimentalEncodingApi
 
 /**
@@ -88,7 +89,7 @@ object ServerEndpoints {
       
       route("{...}") {
         handle {
-          println("Unhandled route: ${call.request.uri} [${call.request.httpMethod}]")
+          Console.log("Unhandled route: ${call.request.uri} [${call.request.httpMethod}]")
           call.respond(HttpStatusCode.NotFound)
         }
       }

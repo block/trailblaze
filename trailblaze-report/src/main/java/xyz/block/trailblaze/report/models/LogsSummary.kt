@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.report.models
 
 import kotlinx.serialization.Serializable
+import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 
 @Serializable
@@ -10,7 +11,11 @@ data class LogsSummary(
   val sessions: List<SessionSummary> = emptyList(),
 ) {
   companion object {
-    fun fromLogs(sessionMap: Map<String, List<TrailblazeLog>>, isStandaloneFileReport: Boolean): LogsSummary = LogsSummary(
+    fun fromLogs(
+      sessionMap: Map<String, List<TrailblazeLog>>,
+      isStandaloneFileReport: Boolean,
+      httpPort: Int = TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTP_PORT,
+    ): LogsSummary = LogsSummary(
       count = sessionMap.size,
       statusMessage = "",
       sessions = sessionMap.mapNotNull { (sessionId, logs) ->
@@ -19,6 +24,7 @@ data class LogsSummary(
             sessionId = sessionId,
             logs = logs,
             isStandaloneFileReport = isStandaloneFileReport,
+            httpPort = httpPort,
           )
         } else {
           null

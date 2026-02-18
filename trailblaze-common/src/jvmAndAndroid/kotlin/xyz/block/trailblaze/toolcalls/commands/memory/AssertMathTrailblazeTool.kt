@@ -10,6 +10,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.utils.ElementComparator
 import kotlin.math.abs
+import xyz.block.trailblaze.util.Console
 
 @Serializable
 @TrailblazeToolClass("assertMath")
@@ -62,7 +63,7 @@ data class AssertMathTrailblazeTool(
     memory: AgentMemory,
     elementComparator: ElementComparator,
   ): String {
-    println("Processing dynamic extractions in: $expression")
+    Console.log("Processing dynamic extractions in: $expression")
 
     var interpolatedExpression = expression
 
@@ -76,7 +77,7 @@ data class AssertMathTrailblazeTool(
       val fullMatch = match.value
       val prompt = match.groupValues[1]
 
-      println("Found dynamic extraction pattern: $fullMatch with prompt: $prompt")
+      Console.log("Found dynamic extraction pattern: $fullMatch with prompt: $prompt")
 
       // Extract the value using the prompt
       val extractedValue = elementComparator.getElementValue(prompt)
@@ -85,19 +86,19 @@ data class AssertMathTrailblazeTool(
         val numberValue = elementComparator.extractNumberFromString(extractedValue)
 
         if (numberValue != null) {
-          println("Extracted value $numberValue for prompt '$prompt'")
+          Console.log("Extracted value $numberValue for prompt '$prompt'")
 
           // Replace the pattern with the extracted value
           interpolatedExpression = interpolatedExpression.replace(fullMatch, numberValue.toString())
         } else {
-          println("Could not extract a number from: $extractedValue for prompt: $prompt")
+          Console.log("Could not extract a number from: $extractedValue for prompt: $prompt")
           throw TrailblazeToolExecutionException(
             message = "Could not extract a numeric value for prompt: $prompt",
             tool = this,
           )
         }
       } else {
-        println("Failed to find element for prompt: $prompt")
+        Console.log("Failed to find element for prompt: $prompt")
         throw TrailblazeToolExecutionException(
           message = "Failed to find element for prompt: $prompt",
           tool = this,
@@ -107,7 +108,7 @@ data class AssertMathTrailblazeTool(
 
     // Also process regular variable interpolation after dynamic extractions
     val finalExpression = memory.interpolateVariables(interpolatedExpression)
-    println("Final interpolated expression: $finalExpression")
+    Console.log("Final interpolated expression: $finalExpression")
 
     return finalExpression
   }

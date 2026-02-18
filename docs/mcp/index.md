@@ -45,7 +45,7 @@ Add a new Goose Extension with:
 - **Name**: `Trailblaze`
 - **Description**: `A tool to facilitate the creation and execution of mobile ui tests using natural language using the Trailblaze library.`
 - **Type**: `streamable_http`
-- **URI**: `http://localhost:52525/mcp`
+- **URI**: `http://localhost:52525/mcp` (use your configured HTTP port if different from the default)
 
 ![trailblaze-goose-extension.gif](../images-opensource/trailblaze-goose-extension.gif)
 
