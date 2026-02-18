@@ -60,8 +60,18 @@ object DesktopLogFileWriter {
 
   private fun rotateIfNeeded(logFile: File) {
     if (logFile.exists() && logFile.length() > MAX_LOG_SIZE_BYTES) {
-      val oldFile = File(logFile.parentFile, "${logFile.name}.old")
-      logFile.renameTo(oldFile)
+      val oldFileBaseName = "${logFile.name}.old"
+      val oldFile = File(logFile.parentFile, oldFileBaseName)
+      if (oldFile.exists()) {
+        val timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
+        val timestampedOldFile = File(logFile.parentFile, "${oldFileBaseName}-$timestamp")
+        if (!oldFile.renameTo(timestampedOldFile)) {
+          oldFile.delete()
+        }
+      }
+      if (!logFile.renameTo(oldFile)) {
+        logFile.delete()
+      }
     }
   }
 

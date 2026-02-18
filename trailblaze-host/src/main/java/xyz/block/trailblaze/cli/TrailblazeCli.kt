@@ -85,6 +85,11 @@ object TrailblazeCli {
     if (portIndex != -1 && portIndex + 1 < args.size) {
       args[portIndex + 1].toIntOrNull()?.let { return it }
     }
+    CliConfigHelper.readConfig()?.let { config ->
+      if (config.serverPort != TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTP_PORT) {
+        return config.serverPort
+      }
+    }
     System.getenv("TRAILBLAZE_PORT")?.toIntOrNull()?.let { return it }
     return TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTP_PORT
   }
