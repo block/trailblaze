@@ -366,6 +366,9 @@ However:
 - **Not all Maestro features are exposed** - only the subset needed for Trailblaze tools
 - **The driver is replaceable** - the architecture supports alternative implementations
 
+**Revyl integration:** A standalone agent, `RevylTrailblazeAgent`, implements `TrailblazeAgent` directly (no Maestro)
+and talks to Revyl cloud devices via HTTP. See [Revyl integration](revyl-integration.md) for details.
+
 ### Driver Interface
 
 Drivers must implement command execution:
