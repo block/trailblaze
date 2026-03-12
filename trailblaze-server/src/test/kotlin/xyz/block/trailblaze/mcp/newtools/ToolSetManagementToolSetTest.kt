@@ -9,6 +9,7 @@ import xyz.block.trailblaze.mcp.TrailblazeMcpMode
 import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
 import xyz.block.trailblaze.mcp.models.McpSessionId
 import xyz.block.trailblaze.mcp.toolsets.DynamicToolSetManager
+import xyz.block.trailblaze.mcp.toolsets.ToolLoadingStrategy
 import xyz.block.trailblaze.mcp.toolsets.ToolSetCategory
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import kotlin.reflect.KClass
@@ -150,15 +151,39 @@ class ToolSetManagementToolSetTest {
   }
 
   @Test
-  fun `resetToolCategories restores defaults`() {
+  fun `resetToolCategories restores defaults for ALL_TOOLS strategy`() {
     val sessionContext = createSessionContext(includePrimitiveTools = true)
+    // Default strategy is ALL_TOOLS
     val manager = createManager(sessionContext)
     manager.setCategories(setOf(ToolSetCategory.MEMORY))
     val toolSet = AdvancedToolSetManagementToolSet(toolSetManager = manager)
 
     toolSet.resetToolCategories()
-    val defaults = ToolSetCategory.getDefaultCategoriesForMode(sessionContext.mode)
+    val defaults = ToolSetCategory.getDefaultCategoriesForMode(
+      sessionContext.mode,
+      ToolLoadingStrategy.ALL_TOOLS,
+    )
     assertEquals(defaults, manager.getEnabledCategories())
+    assertEquals(true, manager.getEnabledCategories().contains(ToolSetCategory.ALL))
+  }
+
+  @Test
+  fun `resetToolCategories restores defaults for PROGRESSIVE strategy`() {
+    val sessionContext = createSessionContext(includePrimitiveTools = true).apply {
+      toolLoadingStrategy = ToolLoadingStrategy.PROGRESSIVE
+    }
+    val manager = createManager(sessionContext)
+    manager.setCategories(setOf(ToolSetCategory.MEMORY))
+    val toolSet = AdvancedToolSetManagementToolSet(toolSetManager = manager)
+
+    toolSet.resetToolCategories()
+    val defaults = ToolSetCategory.getDefaultCategoriesForMode(
+      sessionContext.mode,
+      ToolLoadingStrategy.PROGRESSIVE,
+    )
+    assertEquals(defaults, manager.getEnabledCategories())
+    assertEquals(true, manager.getEnabledCategories().contains(ToolSetCategory.CORE_INTERACTION))
+    assertEquals(true, manager.getEnabledCategories().contains(ToolSetCategory.OBSERVATION))
   }
 
   @Test

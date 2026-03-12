@@ -49,15 +49,19 @@ class DynamicToolSetManager(
    * - External clients use high-level tools like runPrompt() instead
    *
    * When `includePrimitiveTools = true` (for internal self-connection):
-   * - Default categories are enabled based on the session's mode
-   * - TRAILBLAZE_AS_AGENT only gets SESSION
-   * - MCP_CLIENT_AS_AGENT gets the default categories
+   * - Categories depend on the [ToolLoadingStrategy]:
+   *   - ALL_TOOLS: All categories enabled (maximum reliability)
+   *   - PROGRESSIVE: Default categories based on mode (CORE_INTERACTION + OBSERVATION)
+   * - TRAILBLAZE_AS_AGENT only gets SESSION regardless of strategy
    */
   private val lock = Any()
 
   private var enabledCategories: MutableSet<ToolSetCategory> =
     if (sessionContext.includePrimitiveTools) {
-      ToolSetCategory.getDefaultCategoriesForMode(sessionContext.mode).toMutableSet()
+      ToolSetCategory.getDefaultCategoriesForMode(
+        sessionContext.mode,
+        sessionContext.toolLoadingStrategy,
+      ).toMutableSet()
     } else {
       // External clients start with no primitive tools
       // They should use runPrompt() for UI automation
@@ -220,12 +224,17 @@ class DynamicToolSetManager(
   }
 
   /**
-   * Resets to the default categories for the current mode.
+   * Resets to the default categories for the current mode and loading strategy.
    * Respects the includePrimitiveTools setting.
    */
   fun resetToDefault(): String {
     return if (sessionContext.includePrimitiveTools) {
-      setCategories(ToolSetCategory.getDefaultCategoriesForMode(sessionContext.mode))
+      setCategories(
+        ToolSetCategory.getDefaultCategoriesForMode(
+          sessionContext.mode,
+          sessionContext.toolLoadingStrategy,
+        ),
+      )
     } else {
       setCategories(emptySet())
     }
@@ -233,14 +242,17 @@ class DynamicToolSetManager(
 
   /**
    * Called when the session mode changes.
-   * Resets categories to the default for the new mode.
+   * Resets categories to the default for the new mode and loading strategy.
    * Respects the includePrimitiveTools setting.
    */
   fun onModeChanged() {
     val changedTools: Set<KClass<out TrailblazeTool>>?
     synchronized(lock) {
       enabledCategories = if (sessionContext.includePrimitiveTools) {
-        ToolSetCategory.getDefaultCategoriesForMode(sessionContext.mode).toMutableSet()
+        ToolSetCategory.getDefaultCategoriesForMode(
+          sessionContext.mode,
+          sessionContext.toolLoadingStrategy,
+        ).toMutableSet()
       } else {
         mutableSetOf()
       }
@@ -257,8 +269,11 @@ class DynamicToolSetManager(
     val changedTools: Set<KClass<out TrailblazeTool>>?
     synchronized(lock) {
       if (sessionContext.includePrimitiveTools) {
-        // Enable default categories for the current mode
-        enabledCategories = ToolSetCategory.getDefaultCategoriesForMode(sessionContext.mode).toMutableSet()
+        // Enable default categories for the current mode and strategy
+        enabledCategories = ToolSetCategory.getDefaultCategoriesForMode(
+          sessionContext.mode,
+          sessionContext.toolLoadingStrategy,
+        ).toMutableSet()
       } else {
         // Disable all primitive tool categories
         enabledCategories = mutableSetOf()

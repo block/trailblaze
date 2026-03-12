@@ -16,6 +16,7 @@ import xyz.block.trailblaze.mcp.RecordedStep
 import xyz.block.trailblaze.mcp.RecordedStepType
 import xyz.block.trailblaze.mcp.RecordedToolCall
 import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
+import xyz.block.trailblaze.mcp.toolsets.ToolLoadingStrategy
 import xyz.block.trailblaze.mcp.toolsets.ToolSetCategory
 import xyz.block.trailblaze.mcp.toolsets.ToolSetCategoryMapping
 import xyz.block.trailblaze.toolcalls.toKoogToolDescriptor
@@ -324,22 +325,32 @@ class StepToolSet(
   }
 
   /**
-   * Selects tools based on the hint from the outer agent.
+   * Selects tools based on the hint from the outer agent and the loading strategy.
    *
-   * This enables the outer agent to control context size:
-   * - MINIMAL: ~6 tools (~600 tokens) - tap, swipe, inputText, pressBack
+   * When [ToolLoadingStrategy.ALL_TOOLS] (default):
+   * - No hint → all tools (same as STANDARD/ALL)
+   * - Explicit hints still respected for when callers want to override
+   *
+   * When [ToolLoadingStrategy.PROGRESSIVE]:
+   * - No hint → MINIMAL (~6 tools, ~600 tokens)
    * - NAVIGATION: +launchApp, openUrl, scrollUntilVisible
-   * - STANDARD: All tools (~17 tools, ~3,200 tokens)
-   *
-   * Default is MINIMAL for speed. The outer agent can request more when needed.
+   * - STANDARD/ALL: Full tool set (~17 tools, ~3,200 tokens)
    */
   private fun selectToolsForHint(toolHint: String?): List<TrailblazeToolDescriptor> {
     val hint = toolHint?.uppercase()?.trim()
+    val strategy = sessionContext?.toolLoadingStrategy ?: ToolLoadingStrategy.ALL_TOOLS
 
     val toolClasses = when (hint) {
-      "MINIMAL", null -> {
-        // Default: fastest option with essential tools only
+      "MINIMAL" -> {
+        // Explicitly requested minimal tools
         ToolSetCategoryMapping.getInnerAgentMinimalTools()
+      }
+      null -> {
+        // No hint: behavior depends on loading strategy
+        when (strategy) {
+          ToolLoadingStrategy.ALL_TOOLS -> ToolSetCategoryMapping.getToolClasses(ToolSetCategory.STANDARD)
+          ToolLoadingStrategy.PROGRESSIVE -> ToolSetCategoryMapping.getInnerAgentMinimalTools()
+        }
       }
       "NAVIGATION" -> {
         // MINIMAL + navigation tools (launchApp, openUrl, etc.)

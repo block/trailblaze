@@ -90,7 +90,10 @@ open class GenerateReportCliCommand :
     val summaryJsonFile = File(logsDir, "summary.json")
     summaryJsonFile.writeText(logsSummaryJson)
 
-    val rootWorkingDir = logsRepo.logsDir.parentFile
+    // Use explicit root dir if provided (e.g. from Gradle's generateReportTemplate task),
+    // otherwise fall back to inferring from the logs directory parent.
+    val rootWorkingDir = System.getProperty("trailblaze.rootDir")?.let { File(it) }
+      ?: logsRepo.logsDir.parentFile
 
     val trailblazeReportHtmlFile = File(logsDir, "trailblaze_report.html")
     Console.log("file://${trailblazeReportHtmlFile.absolutePath}")

@@ -4,7 +4,6 @@ import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import kotlin.test.Test
-import kotlin.test.assertEquals
 import kotlin.test.assertContains
 import kotlin.test.assertFalse
 
@@ -125,19 +124,17 @@ class ViewHierarchyCompactFormatterTest {
     assertContains(result, "  [2] Button \"OK\" (clickable)")
   }
 
-  // -- Empty structural nodes --
+  // -- All nodes included (no structural skipping) --
 
   @Test
-  fun `empty structural nodes are skipped and children promoted`() {
+  fun `structural nodes are included with their children properly indented`() {
     val root = ViewHierarchyTreeNode(
       nodeId = 1,
       className = "android.widget.FrameLayout",
-      // No text, no id, not interactable → structural
       children = listOf(
         ViewHierarchyTreeNode(
           nodeId = 2,
           className = "android.widget.LinearLayout",
-          // Also structural
           children = listOf(
             ViewHierarchyTreeNode(
               nodeId = 3,
@@ -155,14 +152,13 @@ class ViewHierarchyCompactFormatterTest {
       screenWidth = 1080,
       screenHeight = 1920,
     )
-    // Both structural parents should be skipped, button at top indent level
-    assertContains(result, "[3] Button \"Click me\" (clickable)")
-    assertFalse(result.contains("[1]"))
-    assertFalse(result.contains("[2]"))
+    assertContains(result, "[1] FrameLayout")
+    assertContains(result, "  [2] LinearLayout")
+    assertContains(result, "    [3] Button \"Click me\" (clickable)")
   }
 
   @Test
-  fun `structural node WITH resourceId is kept in compact mode`() {
+  fun `structural node WITH resourceId is kept`() {
     val root = ViewHierarchyTreeNode(
       nodeId = 1,
       className = "android.widget.FrameLayout",
@@ -201,7 +197,7 @@ class ViewHierarchyCompactFormatterTest {
       focusable = true,
       clickable = true,
     )
-    val line = ViewHierarchyCompactFormatter.formatSingleNode(node, fullHierarchy = false)
+    val line = ViewHierarchyCompactFormatter.formatSingleNode(node)
     assertContains(line, "clickable")
     assertContains(line, "focusable")
     assertContains(line, "scrollable")
@@ -219,7 +215,7 @@ class ViewHierarchyCompactFormatterTest {
       focusable = true,
       hintText = "Enter your email",
     )
-    val line = ViewHierarchyCompactFormatter.formatSingleNode(node, fullHierarchy = false)
+    val line = ViewHierarchyCompactFormatter.formatSingleNode(node)
     assertContains(line, "hint: \"Enter your email\"")
   }
 
@@ -228,7 +224,7 @@ class ViewHierarchyCompactFormatterTest {
   @Test
   fun `className strips package prefix`() {
     val node = ViewHierarchyTreeNode(nodeId = 1, className = "android.widget.Button")
-    val line = ViewHierarchyCompactFormatter.formatSingleNode(node, fullHierarchy = false)
+    val line = ViewHierarchyCompactFormatter.formatSingleNode(node)
     assertContains(line, "Button")
     assertFalse(line.contains("android.widget"))
   }
@@ -236,7 +232,7 @@ class ViewHierarchyCompactFormatterTest {
   @Test
   fun `null className becomes View`() {
     val node = ViewHierarchyTreeNode(nodeId = 1, className = null, text = "Hello")
-    val line = ViewHierarchyCompactFormatter.formatSingleNode(node, fullHierarchy = false)
+    val line = ViewHierarchyCompactFormatter.formatSingleNode(node)
     assertContains(line, "[1] View \"Hello\"")
   }
 
@@ -250,7 +246,7 @@ class ViewHierarchyCompactFormatterTest {
       text = "Primary",
       accessibilityText = "Secondary",
     )
-    val line = ViewHierarchyCompactFormatter.formatSingleNode(node, fullHierarchy = false)
+    val line = ViewHierarchyCompactFormatter.formatSingleNode(node)
     assertContains(line, "\"Primary\"")
     assertFalse(line.contains("\"Secondary\""))
   }
@@ -263,7 +259,7 @@ class ViewHierarchyCompactFormatterTest {
       accessibilityText = "Close",
       clickable = true,
     )
-    val line = ViewHierarchyCompactFormatter.formatSingleNode(node, fullHierarchy = false)
+    val line = ViewHierarchyCompactFormatter.formatSingleNode(node)
     assertContains(line, "\"Close\"")
   }
 
@@ -278,14 +274,14 @@ class ViewHierarchyCompactFormatterTest {
       clickable = true,
       resourceId = "my_button",
     )
-    val line = ViewHierarchyCompactFormatter.formatSingleNode(node, fullHierarchy = false)
+    val line = ViewHierarchyCompactFormatter.formatSingleNode(node)
     assertContains(line, "id: \"my_button\"")
   }
 
-  // -- Full hierarchy mode --
+  // -- Bounds and dimensions always included --
 
   @Test
-  fun `full hierarchy includes bounds and dimensions`() {
+  fun `bounds and dimensions always included when present`() {
     val node = ViewHierarchyTreeNode(
       nodeId = 1,
       className = "android.widget.Button",
@@ -295,14 +291,13 @@ class ViewHierarchyCompactFormatterTest {
       centerPoint = "540,960",
       dimensions = "200x48",
     )
-    val line = ViewHierarchyCompactFormatter.formatSingleNode(node, fullHierarchy = true)
+    val line = ViewHierarchyCompactFormatter.formatSingleNode(node)
     assertContains(line, "center: 540,960")
     assertContains(line, "size: 200x48")
-    assertContains(line, "enabled")
   }
 
   @Test
-  fun `full hierarchy shows disabled when enabled is false`() {
+  fun `disabled shown when enabled is false`() {
     val node = ViewHierarchyTreeNode(
       nodeId = 1,
       className = "android.widget.Button",
@@ -310,56 +305,29 @@ class ViewHierarchyCompactFormatterTest {
       clickable = true,
       enabled = false,
     )
-    val line = ViewHierarchyCompactFormatter.formatSingleNode(node, fullHierarchy = true)
+    val line = ViewHierarchyCompactFormatter.formatSingleNode(node)
     assertContains(line, "disabled")
+    assertFalse(line.contains("enabled"))
   }
 
   @Test
-  fun `full hierarchy keeps structural nodes`() {
-    val root = ViewHierarchyTreeNode(
-      nodeId = 1,
-      className = "android.widget.FrameLayout",
-      // No text, no id, not interactable → structural in compact
-      children = listOf(
-        ViewHierarchyTreeNode(
-          nodeId = 2,
-          className = "android.widget.Button",
-          text = "OK",
-          clickable = true,
-        ),
-      ),
-    )
-    val result = ViewHierarchyCompactFormatter.format(
-      root = root,
-      platform = TrailblazeDevicePlatform.ANDROID,
-      screenWidth = 1080,
-      screenHeight = 1920,
-      fullHierarchy = true,
-    )
-    // In full hierarchy mode, structural node should be kept
-    assertContains(result, "[1] FrameLayout")
-    assertContains(result, "[2] Button \"OK\"")
-  }
-
-  @Test
-  fun `compact mode does not include bounds or dimensions`() {
+  fun `enabled true does not add enabled attribute since it is the default`() {
     val node = ViewHierarchyTreeNode(
       nodeId = 1,
       className = "android.widget.Button",
-      text = "OK",
+      text = "Submit",
       clickable = true,
-      centerPoint = "540,960",
-      dimensions = "200x48",
+      enabled = true,
     )
-    val line = ViewHierarchyCompactFormatter.formatSingleNode(node, fullHierarchy = false)
-    assertFalse(line.contains("center:"))
-    assertFalse(line.contains("size:"))
+    val line = ViewHierarchyCompactFormatter.formatSingleNode(node)
+    assertFalse(line.contains("enabled"))
+    assertFalse(line.contains("disabled"))
   }
 
-  // -- Empty tree --
+  // -- Root-only tree --
 
   @Test
-  fun `empty tree produces header only`() {
+  fun `root-only tree still shows the root node`() {
     val root = ViewHierarchyTreeNode(nodeId = 1, className = "android.widget.FrameLayout")
     val result = ViewHierarchyCompactFormatter.format(
       root = root,
@@ -367,9 +335,7 @@ class ViewHierarchyCompactFormatterTest {
       screenWidth = 1080,
       screenHeight = 1920,
     )
-    // Only header lines, no element lines (root is structural and skipped)
-    val lines = result.lines().filter { it.isNotBlank() }
-    assertEquals(2, lines.size) // Platform + Screen
+    assertContains(result, "[1] FrameLayout")
   }
 
   @Test
@@ -383,8 +349,6 @@ class ViewHierarchyCompactFormatterTest {
       foregroundAppId = "com.example.app",
       deviceClassifiers = listOf(TrailblazeDeviceClassifier("tablet")),
     )
-    val lines = result.lines().filter { it.isNotBlank() }
-    assertEquals(4, lines.size) // Platform + Screen + App + Device
     assertContains(result, "Platform: Android")
     assertContains(result, "Screen: 1080x1920")
     assertContains(result, "App: com.example.app")

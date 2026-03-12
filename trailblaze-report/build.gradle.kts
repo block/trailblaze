@@ -37,6 +37,7 @@ val generateReportTemplate by tasks.registering(JavaExec::class) {
   val templateBuildDir = layout.buildDirectory.dir("report-template")
   doFirst { templateBuildDir.get().asFile.mkdirs() }
   args(templateBuildDir.get().asFile.absolutePath)
+  jvmArgs("-Dtrailblaze.rootDir=${rootProject.projectDir.absolutePath}")
   outputs.file(templateBuildDir.map { it.file("trailblaze_report.html") })
 }
 

@@ -22,6 +22,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import xyz.block.trailblaze.agent.TwoTierAgentConfig
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.mcp.models.McpSessionId
+import xyz.block.trailblaze.mcp.toolsets.ToolLoadingStrategy
 import xyz.block.trailblaze.util.Console
 
 /**
@@ -128,6 +129,17 @@ class TrailblazeMcpSessionContext(
    * - `MINIMAL`: Only device, blaze, verify, ask, trail. For external MCP clients.
    */
   var toolProfile: McpToolProfile = McpToolProfile.FULL,
+
+  /**
+   * Strategy for how tools are loaded and presented to the LLM.
+   *
+   * - `ALL_TOOLS` (default): All tool categories enabled upfront. Maximum reliability —
+   *   the LLM always has every tool available without needing to request more.
+   * - `PROGRESSIVE`: Start with minimal tools (CORE_INTERACTION + OBSERVATION) and let
+   *   the LLM request additional categories via the `tools()` MCP tool. Saves tokens
+   *   but requires the LLM to correctly identify when it needs more tools.
+   */
+  @Volatile var toolLoadingStrategy: ToolLoadingStrategy = ToolLoadingStrategy.ALL_TOOLS,
 
   /**
    * Transport mode for internal agent tool execution.
@@ -358,6 +370,7 @@ class TrailblazeMcpSessionContext(
     appendLine("Agent implementation: ${agentImplementation.name}")
     appendLine("Include primitive tools: $includePrimitiveTools")
     appendLine("Tool profile: ${toolProfile.name}")
+    appendLine("Tool loading strategy: ${toolLoadingStrategy.name}")
     twoTierAgentConfig?.let { config ->
       appendLine("Two-tier agent: ${if (config.enabled) "ENABLED" else "disabled"}")
       if (config.enabled) {

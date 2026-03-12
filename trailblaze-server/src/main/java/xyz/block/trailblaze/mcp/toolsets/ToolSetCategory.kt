@@ -14,6 +14,23 @@ import xyz.block.trailblaze.toolcalls.commands.TapOnPointTrailblazeTool
 import kotlin.reflect.KClass
 
 /**
+ * Strategy for how tools are loaded and presented to the LLM.
+ *
+ * - [ALL_TOOLS]: Send all tools upfront. No progressive disclosure. This is the default
+ *   to maximize reliability — the LLM always has every tool available.
+ * - [PROGRESSIVE]: Start with minimal tools and let the LLM request more categories
+ *   as needed via the `tools()` MCP tool. Saves tokens but may cause regressions
+ *   if the LLM doesn't request the right categories.
+ */
+enum class ToolLoadingStrategy {
+  /** Send all tools upfront. Default — maximizes reliability. */
+  ALL_TOOLS,
+
+  /** Start minimal, LLM requests more as needed. Saves tokens. */
+  PROGRESSIVE,
+}
+
+/**
  * Categories of tools that can be enabled/disabled for subagents.
  *
  * This enables two-tier tool management:
@@ -181,6 +198,23 @@ enum class ToolSetCategory(
     fun getDefaultCategoriesForMode(mode: TrailblazeMcpMode): Set<ToolSetCategory> = when (mode) {
       TrailblazeMcpMode.MCP_CLIENT_AS_AGENT -> DEFAULT_CATEGORIES
       TrailblazeMcpMode.TRAILBLAZE_AS_AGENT -> setOf(SESSION)
+    }
+
+    /**
+     * Returns the default categories for a given mode and loading strategy.
+     *
+     * When [ToolLoadingStrategy.ALL_TOOLS], all categories are enabled upfront.
+     * When [ToolLoadingStrategy.PROGRESSIVE], the minimal default set is used.
+     */
+    fun getDefaultCategoriesForMode(
+      mode: TrailblazeMcpMode,
+      strategy: ToolLoadingStrategy,
+    ): Set<ToolSetCategory> = when (strategy) {
+      ToolLoadingStrategy.ALL_TOOLS -> when (mode) {
+        TrailblazeMcpMode.MCP_CLIENT_AS_AGENT -> setOf(ALL)
+        TrailblazeMcpMode.TRAILBLAZE_AS_AGENT -> setOf(SESSION)
+      }
+      ToolLoadingStrategy.PROGRESSIVE -> getDefaultCategoriesForMode(mode)
     }
 
   }
