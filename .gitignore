@@ -51,6 +51,9 @@ local.settings.gradle
 # Generated Kotlin JS Config Files
 /kotlin-js-store/
 
+# Node
+node_modules/
+
 # Python
 __pycache__/
 *.pyc
