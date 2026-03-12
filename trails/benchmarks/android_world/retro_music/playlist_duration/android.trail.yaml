@@ -1,0 +1,52 @@
+# Android World Benchmark: RetroMusicPlaylistDuration
+# NOTE: Requires audio assets to be bundled in test APK at benchmarks/audio/
+# NOTE: Duration verification is approximate and depends on audio file metadata
+
+- config:
+    id: android-world-benchmarks/retro_music/playlist_duration
+    description: Create a playlist in Retro Music and verify total duration calculation
+
+- tools:
+    - androidworldbenchmarks_runAdbShell:
+        adbShellCommands:
+          - "rm -rf /sdcard/Music/*"
+    - androidworldbenchmarks_pushAssetToDevice:
+        assetPath: "benchmarks/audio/Sunset Dreams.mp3"
+        devicePath: "/sdcard/Music/Sunset Dreams.mp3"
+    - androidworldbenchmarks_pushAssetToDevice:
+        assetPath: "benchmarks/audio/Ocean Waves.mp3"
+        devicePath: "/sdcard/Music/Ocean Waves.mp3"
+    - androidworldbenchmarks_pushAssetToDevice:
+        assetPath: "benchmarks/audio/Mountain Echo.mp3"
+        devicePath: "/sdcard/Music/Mountain Echo.mp3"
+    - androidworldbenchmarks_pushAssetToDevice:
+        assetPath: "benchmarks/audio/City Lights.mp3"
+        devicePath: "/sdcard/Music/City Lights.mp3"
+    - androidworldbenchmarks_pushAssetToDevice:
+        assetPath: "benchmarks/audio/Forest Rain.mp3"
+        devicePath: "/sdcard/Music/Forest Rain.mp3"
+    - androidworldbenchmarks_runAdbShell:
+        adbShellCommands:
+          - "am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file:///sdcard/Music/"
+    - clearAppData:
+        packageName: "code.name.monkey.retromusic"
+
+- prompts:
+    - step: "Create a playlist in Retro Music titled \"Quick Workout\" with songs: Mountain Echo, City Lights. What is the total duration of the playlist?"
+
+- tools:
+    - androidworldbenchmarks_assertSqliteQuery:
+        dbPath: "/data/data/code.name.monkey.retromusic/databases/playlist.db"
+        query: "SELECT name FROM PlaylistEntity WHERE name = 'Quick Workout' LIMIT 1"
+        expectedOutput: "Quick Workout"
+        matchMode: "contains"
+        appPackageName: "code.name.monkey.retromusic"
+    - androidworldbenchmarks_assertSqliteQuery:
+        dbPath: "/data/data/code.name.monkey.retromusic/databases/playlist.db"
+        query: "SELECT title FROM SongEntity WHERE title IN ('Mountain Echo', 'City Lights') ORDER BY title"
+        expectedOutput: "City Lights|Mountain Echo"
+        matchMode: "contains"
+        appPackageName: "code.name.monkey.retromusic"
+
+# --- Benchmark Run History ---
+# [2026-03-11] Build #27 FAILED - Infrastructure: Missing test resource benchmarks/audio/Sunset Dreams.mp3.

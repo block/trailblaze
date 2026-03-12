@@ -6,6 +6,7 @@ import maestro.orchestra.Command
 import maestro.orchestra.TapOnPointV2Command
 import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.toolcalls.MapsToMaestroCommands
+import xyz.block.trailblaze.toolcalls.ReasoningTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 
 @Serializable
@@ -18,7 +19,8 @@ data class TapOnPointTrailblazeTool(
   val y: Int,
   @param:LLMDescription("A standard tap is default, but return 'true' to perform a long press instead.")
   val longPress: Boolean = false,
-) : MapsToMaestroCommands() {
+  override val reasoning: String? = null,
+) : MapsToMaestroCommands(), ReasoningTrailblazeTool {
   override fun toMaestroCommands(memory: AgentMemory): List<Command> = listOf(
     TapOnPointV2Command(
       point = "$x,$y",

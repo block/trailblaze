@@ -1,0 +1,257 @@
+package xyz.block.trailblaze.android.accessibility
+
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.datetime.Clock
+import xyz.block.trailblaze.api.AgentDriverAction
+import xyz.block.trailblaze.api.ScreenState
+import xyz.block.trailblaze.logs.client.TrailblazeLog
+import xyz.block.trailblaze.logs.client.TrailblazeLogger
+import xyz.block.trailblaze.logs.client.TrailblazeSession
+import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
+import xyz.block.trailblaze.logs.model.TraceId
+import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.util.Console
+
+/**
+ * Executes trail actions directly through the accessibility service, **without Maestro**.
+ *
+ * This is the Maestro-free trail runner. Instead of
+ * creating a Maestro instance and routing through Orchestra, it dispatches [AccessibilityAction]
+ * objects directly through [AccessibilityDeviceManager] with built-in event-based settle detection.
+ *
+ * Follows the same pattern as the Playwright agent:
+ * - Uses framework-native action types ([AccessibilityAction]) instead of MaestroCommand
+ * - Logs via [TrailblazeLog.AgentDriverLog] for tracing/debugging with screenshot overlays
+ * - Screen state captured via [AccessibilityServiceScreenState], not Maestro's view hierarchy
+ *
+ * ### Performance
+ * Per-action overhead drops from ~500-700ms (Maestro's screenshot sandwich) to ~100-150ms
+ * (event-based settle + single-pass tree capture), giving roughly a 4-5x speedup for trail
+ * playback. Logging (screenshot capture + file I/O) runs asynchronously on a background thread
+ * so it doesn't add to per-action latency.
+ */
+object AccessibilityTrailRunner {
+
+  /** Single-thread scope for async logging. Preserves log ordering within a session. */
+  private val loggingJob = SupervisorJob()
+  private val loggingScope = CoroutineScope(loggingJob + Dispatchers.IO.limitedParallelism(1))
+
+  /**
+   * Waits for all pending async log writes to complete. Call this at the end of test execution
+   * to ensure final logs and screenshots are flushed before the process exits.
+   */
+  fun flushLogs() {
+    runBlocking {
+      loggingJob.children.forEach { it.join() }
+    }
+  }
+
+  /**
+   * Runs a list of accessibility actions with standardized error handling and logging.
+   *
+   * Actions are executed sequentially on the calling thread. After each action completes
+   * and the UI settles, the settled screen state (view hierarchy + screenshot) is captured
+   * and logged asynchronously on a background thread so that the next action can start
+   * immediately.
+   */
+  fun runActions(
+    actions: List<AccessibilityAction>,
+    traceId: TraceId?,
+    trailblazeLogger: TrailblazeLogger,
+    sessionProvider: TrailblazeSessionProvider,
+    deviceManager: AccessibilityDeviceManager = AccessibilityDeviceManager(),
+  ): TrailblazeToolResult {
+    for (action in actions) {
+      val startTime = Clock.System.now()
+
+      // Execute action (gesture dispatch + event-based settle)
+      val (result, executionResult) =
+        try {
+          val execResult = deviceManager.execute(action)
+          TrailblazeToolResult.Success() to execResult
+        } catch (e: Exception) {
+          Console.log("Action failed: ${action.description}: ${e.message}")
+          TrailblazeToolResult.Error.ExceptionThrown(
+            errorMessage = "Failed action: ${action.description}. Error: ${e.message}",
+            stackTrace = e.stackTraceToString(),
+          ) to AccessibilityDeviceManager.ExecutionResult()
+        }
+
+      val durationMs =
+        Clock.System.now().toEpochMilliseconds() - startTime.toEpochMilliseconds()
+
+      // Capture the settled screen state (single-pass: one tree capture + UiAutomation
+      // screenshot with no rate limit). This is the post-action state after the UI has
+      // settled, so it reflects what the user would see.
+      val screenState = deviceManager.captureScreenStateForLogging()
+
+      // Map action to driver log format and log asynchronously
+      val driverAction = mapToAgentDriverAction(action, executionResult, result)
+      val session = sessionProvider.invoke()
+      logAsync(trailblazeLogger, session, screenState, driverAction, durationMs, startTime, traceId)
+
+      if (result is TrailblazeToolResult.Error) {
+        flushLogs()
+        return result
+      }
+    }
+    flushLogs()
+    return TrailblazeToolResult.Success()
+  }
+
+  /**
+   * Logs the action result asynchronously on a background thread. Screenshot file I/O and
+   * log emission happen off the critical path so the next action can start immediately.
+   */
+  private fun logAsync(
+    trailblazeLogger: TrailblazeLogger,
+    session: TrailblazeSession,
+    screenState: ScreenState,
+    driverAction: AgentDriverAction,
+    durationMs: Long,
+    timestamp: kotlinx.datetime.Instant,
+    traceId: TraceId?,
+  ) {
+    loggingScope.launch {
+      try {
+        val screenshotFilename = if (screenState.screenshotBytes?.isNotEmpty() == true) {
+          trailblazeLogger.logScreenState(session, screenState)
+        } else {
+          null
+        }
+
+        val log =
+          TrailblazeLog.AgentDriverLog(
+            viewHierarchy = screenState.viewHierarchy,
+            trailblazeNodeTree = screenState.trailblazeNodeTree,
+            screenshotFile = screenshotFilename,
+            action = driverAction,
+            durationMs = durationMs,
+            timestamp = timestamp,
+            session = session.sessionId,
+            deviceWidth = screenState.deviceWidth,
+            deviceHeight = screenState.deviceHeight,
+            traceId = traceId,
+          )
+        trailblazeLogger.log(session, log)
+      } catch (e: Exception) {
+        Console.log("Async logging failed: ${e.message}")
+      }
+    }
+  }
+
+  /**
+   * Maps an [AccessibilityAction] and its [AccessibilityDeviceManager.ExecutionResult] to an
+   * [AgentDriverAction] for unified logging and screenshot overlay visualization.
+   */
+  private fun mapToAgentDriverAction(
+    action: AccessibilityAction,
+    executionResult: AccessibilityDeviceManager.ExecutionResult,
+    toolResult: TrailblazeToolResult,
+  ): AgentDriverAction {
+    return when (action) {
+      is AccessibilityAction.Tap ->
+        AgentDriverAction.TapPoint(x = action.x, y = action.y)
+
+      is AccessibilityAction.TapRelative ->
+        AgentDriverAction.TapPoint(
+          x = executionResult.resolvedX ?: 0,
+          y = executionResult.resolvedY ?: 0,
+        )
+
+      is AccessibilityAction.LongPress ->
+        AgentDriverAction.LongPressPoint(x = action.x, y = action.y)
+
+      is AccessibilityAction.Swipe ->
+        AgentDriverAction.Swipe(
+          direction = inferSwipeDirection(action.startX, action.startY, action.endX, action.endY),
+          durationMs = action.durationMs,
+          startX = action.startX,
+          startY = action.startY,
+          endX = action.endX,
+          endY = action.endY,
+        )
+
+      is AccessibilityAction.SwipeDirection ->
+        AgentDriverAction.Swipe(
+          direction = action.direction.name,
+          durationMs = action.durationMs,
+        )
+
+      is AccessibilityAction.ScrollForward ->
+        AgentDriverAction.Scroll(forward = true)
+
+      is AccessibilityAction.ScrollBackward ->
+        AgentDriverAction.Scroll(forward = false)
+
+      is AccessibilityAction.InputText ->
+        AgentDriverAction.EnterText(text = action.text)
+
+      is AccessibilityAction.EraseText ->
+        AgentDriverAction.EraseText(characters = action.characters)
+
+      is AccessibilityAction.PressBack ->
+        AgentDriverAction.BackPress
+
+      is AccessibilityAction.PressHome ->
+        AgentDriverAction.PressHome
+
+      is AccessibilityAction.HideKeyboard ->
+        AgentDriverAction.HideKeyboard
+
+      is AccessibilityAction.TapOnElement -> {
+        val x = executionResult.resolvedX ?: 0
+        val y = executionResult.resolvedY ?: 0
+        if (action.longPress) {
+          AgentDriverAction.LongPressPoint(x = x, y = y)
+        } else {
+          AgentDriverAction.TapPoint(x = x, y = y)
+        }
+      }
+
+      is AccessibilityAction.AssertVisible ->
+        AgentDriverAction.AssertCondition(
+          conditionDescription = action.nodeSelector.description(),
+          x = executionResult.resolvedX ?: 0,
+          y = executionResult.resolvedY ?: 0,
+          isVisible = true,
+          succeeded = toolResult is TrailblazeToolResult.Success,
+        )
+
+      is AccessibilityAction.AssertNotVisible ->
+        AgentDriverAction.AssertCondition(
+          conditionDescription = action.nodeSelector.description(),
+          x = executionResult.resolvedX ?: 0,
+          y = executionResult.resolvedY ?: 0,
+          isVisible = false,
+          textToDisplay = action.nodeSelector.description(),
+          succeeded = toolResult is TrailblazeToolResult.Success,
+        )
+
+      is AccessibilityAction.LaunchApp ->
+        AgentDriverAction.LaunchApp(appId = action.appId)
+
+      is AccessibilityAction.WaitForSettle ->
+        AgentDriverAction.WaitForSettle(timeoutMs = action.timeoutMs)
+    }
+  }
+
+  private fun inferSwipeDirection(
+    startX: Int,
+    startY: Int,
+    endX: Int,
+    endY: Int,
+  ): String {
+    val deltaX = endX - startX
+    val deltaY = endY - startY
+    return if (kotlin.math.abs(deltaX) > kotlin.math.abs(deltaY)) {
+      if (deltaX > 0) "RIGHT" else "LEFT"
+    } else {
+      if (deltaY > 0) "DOWN" else "UP"
+    }
+  }
+}

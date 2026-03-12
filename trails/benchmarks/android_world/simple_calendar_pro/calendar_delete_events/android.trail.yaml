@@ -1,0 +1,45 @@
+# Android World Benchmark: calendar/delete_events
+- config:
+    id: android-world-benchmarks/simple_calendar_pro/calendar_delete_events
+    description: Delete all events titled 'Meeting with the Team' in Simple Calendar Pro
+
+- tools:
+  - androidworldbenchmarks_runAdbShell:
+      adbShellCommands:
+        - "settings put global auto_time 0"
+        - "date -s 20231015.153400"
+  - androidworldbenchmarks_executeSqliteOnDevice:
+      dbPath: /data/data/com.simplemobiletools.calendar.pro/databases/events.db
+      sqlStatements:
+        - "DELETE FROM events"
+        - "INSERT INTO events (start_ts, end_ts, title, description, repeat_interval, repeat_rule, reminder_1_minutes, reminder_2_minutes, reminder_3_minutes, reminder_1_type, reminder_2_type, reminder_3_type, repeat_limit, repetition_exceptions, attendees) VALUES (1697472000, 1697475600, 'Meeting with the Team', 'Team sync', 0, 0, -1, -1, -1, 0, 0, 0, 0, '[]', '')"
+        - "INSERT INTO events (start_ts, end_ts, title, description, repeat_interval, repeat_rule, reminder_1_minutes, reminder_2_minutes, reminder_3_minutes, reminder_1_type, reminder_2_type, reminder_3_type, repeat_limit, repetition_exceptions, attendees) VALUES (1697385600, 1697389200, 'Meeting with the Team', 'Team discussion', 0, 0, -1, -1, -1, 0, 0, 0, 0, '[]', '')"
+        - "INSERT INTO events (start_ts, end_ts, title, description, repeat_interval, repeat_rule, reminder_1_minutes, reminder_2_minutes, reminder_3_minutes, reminder_1_type, reminder_2_type, reminder_3_type, repeat_limit, repetition_exceptions, attendees) VALUES (1697299200, 1697302800, 'Team Building', 'Monthly event', 0, 0, -1, -1, -1, 0, 0, 0, 0, '[]', '')"
+        - "INSERT INTO events (start_ts, end_ts, title, description, repeat_interval, repeat_rule, reminder_1_minutes, reminder_2_minutes, reminder_3_minutes, reminder_1_type, reminder_2_type, reminder_3_type, repeat_limit, repetition_exceptions, attendees) VALUES (1697558400, 1697562000, 'One-on-One', 'Manager meeting', 0, 0, -1, -1, -1, 0, 0, 0, 0, '[]', '')"
+      appPackageName: com.simplemobiletools.calendar.pro
+
+- prompts:
+  - step: "In Simple Calendar Pro, delete all events titled 'Meeting with the Team'."
+
+- tools:
+  - androidworldbenchmarks_assertSqliteQuery:
+      dbPath: /data/data/com.simplemobiletools.calendar.pro/databases/events.db
+      query: "SELECT COUNT(*) FROM events WHERE title='Meeting with the Team'"
+      expectedOutput: "0"
+      matchMode: exact
+      appPackageName: com.simplemobiletools.calendar.pro
+  - androidworldbenchmarks_assertSqliteQuery:
+      dbPath: /data/data/com.simplemobiletools.calendar.pro/databases/events.db
+      query: "SELECT COUNT(*) FROM events WHERE title='Team Building'"
+      expectedOutput: "1"
+      matchMode: exact
+      appPackageName: com.simplemobiletools.calendar.pro
+  - androidworldbenchmarks_assertSqliteQuery:
+      dbPath: /data/data/com.simplemobiletools.calendar.pro/databases/events.db
+      query: "SELECT COUNT(*) FROM events WHERE title='One-on-One'"
+      expectedOutput: "1"
+      matchMode: exact
+      appPackageName: com.simplemobiletools.calendar.pro
+
+# --- Benchmark Run History ---
+# [2026-03-11] Build #27 FAILED - Agent limitation: ObjectiveFailed.

@@ -1,0 +1,23 @@
+# Android World Benchmark: BrightnessMinVerify
+- config:
+    id: android-world-benchmarks/system/brightness_min_verify
+    displayName: "System - Brightness Min Verify"
+    description: "Turn brightness to the min value."
+
+- tools:
+    - androidworldbenchmarks_runAdbShell:
+        adbShellCommands:
+          - "settings put system screen_brightness 1"
+
+- prompts:
+    - step: "Turn brightness to the min value."
+
+- tools:
+    - androidworldbenchmarks_assertAdbShellOutput:
+        command: "settings get system screen_brightness"
+        expectedOutput: "1"
+        matchMode: "exact"
+
+# --- Benchmark Run History ---
+# [2026-03-11] FAILED - Agent limitation: Brightness stayed at 22 (expected 1).
+#   Cascading failure — depends on brightness_min succeeding first.

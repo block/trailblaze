@@ -1,0 +1,109 @@
+- config:
+    id: sample-app/taps/tap-interactions
+    app: xyz.block.trailblaze.examples.sampleapp
+    platform: android
+    driver: ANDROID_ONDEVICE_ACCESSIBILITY
+- tools:
+  - launchApp:
+      appId: xyz.block.trailblaze.examples.sampleapp
+- prompts:
+  - step: Tap the "Tap Me" button 3 times and verify the tap count shows 3
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: Tap the 'Tap Me' button as required by the objective. This is the first tap out of three.
+          selector:
+            containsChild:
+              textRegex: Tap Me
+          nodeSelector:
+            androidAccessibility:
+              textRegex: Tap Me
+      - tapOnElementBySelector:
+          reason: This is the second tap on the 'Tap Me' button as required by the objective.
+          selector:
+            containsChild:
+              textRegex: Tap Me
+          nodeSelector:
+            androidAccessibility:
+              textRegex: Tap Me
+      - tapOnElementBySelector:
+          reason: This is the third and final tap on the 'Tap Me' button to reach a tap count of 3, per the objective.
+          selector:
+            containsChild:
+              textRegex: Tap Me
+          nodeSelector:
+            androidAccessibility:
+              textRegex: Tap Me
+      - assertVisibleBySelector:
+          reason: Confirm that the tap count displays as 3 after tapping the 'Tap Me' button three times.
+          selector:
+            textRegex: 'Tap Count: 3'
+          nodeSelector:
+            androidAccessibility:
+              textRegex: 'Tap Count: 3'
+  - step: Verify a button labeled "Now Enabled!" is visible and enabled
+    recording:
+      tools:
+      - assertVisibleBySelector:
+          reason: This is the clickable View containing the TextView labeled 'Now Enabled!', which is the button that needs to be verified as visible and enabled according to the objective.
+          selector:
+            containsChild:
+              textRegex: Now Enabled!
+          nodeSelector:
+            androidAccessibility:
+              textRegex: Now Enabled!
+  - step: Tap the button with accessibility description "accessibility_tap_button"
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: The element with nodeId 10 has the accessibility description 'accessibility_tap_button' as requested in the objective.
+          selector:
+            textRegex: accessibility_tap_button
+          nodeSelector:
+            androidAccessibility:
+              textRegex: A11y Tap
+  - step: Long press "Long Press Me", then dismiss the dialog by tapping "Copy"
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: To open the long press dialog, I need to long press the 'Long Press Me' button as the first step.
+          selector:
+            containsChild:
+              textRegex: Long Press Me
+          longPress: true
+          nodeSelector:
+            androidAccessibility:
+              textRegex: Long Press Me
+      - tapOnElementBySelector:
+          reason: The dialog displayed after the long press contains a 'Copy' button. Tapping 'Copy' will dismiss the dialog, completing the objective.
+          selector:
+            containsChild:
+              textRegex: Copy
+          nodeSelector:
+            androidAccessibility:
+              textRegex: Copy
+  - step: Tap "Toggle A" and verify it is selected
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: Tap on the 'Toggle A' button as required by the objective.
+          selector:
+            containsChild:
+              textRegex: Toggle A
+          nodeSelector:
+            androidAccessibility:
+              textRegex: Toggle A
+      - assertVisibleBySelector:
+          reason: After tapping on 'Toggle A', we need to verify that it is selected. The node has 'checked' property, which indicates a toggle or checkbox state.
+          selector:
+            checked: true
+          nodeSelector:
+            androidAccessibility:
+              textRegex: Toggle A
+  - step: Tap the "Nested Button" inside the parent container
+    recording:
+      tools:
+      - tapOnPoint:
+          x: 188
+          y: 997
+          reasoning: The clickable View with nodeId 28 is directly beneath the 'Parent Container' label, making it the likely 'Nested Button' within the parent container.

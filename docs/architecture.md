@@ -223,7 +223,7 @@ data class MyCustomTool(
 ) : ExecutableTrailblazeTool {
     override suspend fun execute(context: TrailblazeToolExecutionContext): TrailblazeToolResult {
         // Custom implementation
-        return TrailblazeToolResult.Success
+        return TrailblazeToolResult.Success()
     }
 }
 ```
@@ -436,11 +436,57 @@ ID).
 - Include `traceId` for correlation across tool calls
 - Log tool execution start, completion, and errors
 
+## Multi-Agent V3 Architecture
+
+Trailblaze implements innovations from [Mobile-Agent-v3](https://arxiv.org/abs/2508.15144) for state-of-the-art performance:
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        MULTI_AGENT_V3 Architecture                       │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  ┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐  │
+│  │   Planning Node   │───▶│   Decision Node  │───▶│  Execution Node  │  │
+│  │  (Decomposition)  │    │ (ScreenAnalyzer) │    │ (UiActionExecutor│  │
+│  └────────┬─────────┘    └────────┬─────────┘    └────────┬─────────┘  │
+│           │                       │                       │             │
+│           │              ┌────────▼─────────┐             │             │
+│           │              │  Exception Node  │             │             │
+│           │              │ (Popup/Ad/Error) │             │             │
+│           │              └────────┬─────────┘             │             │
+│           │                       │                       │             │
+│           ▼                       ▼                       ▼             │
+│  ┌────────────────────────────────────────────────────────────────┐    │
+│  │                       Reflection Node                          │    │
+│  │  • Loop detection   • Progress assessment   • Course correction│    │
+│  └────────────────────────────────────────────────────────────────┘    │
+│                                   │                                     │
+│                                   ▼                                     │
+│  ┌────────────────────────────────────────────────────────────────┐    │
+│  │                       Working Memory                           │    │
+│  │  • Facts store   • Key screenshots   • Cross-app clipboard     │    │
+│  └────────────────────────────────────────────────────────────────┘    │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Key Components
+
+| Component | File | Description |
+|-----------|------|-------------|
+| **PlanningNode** | `PlanningNode.kt` | Task decomposition and replanning |
+| **ReflectionNode** | `ReflectionNode.kt` | Self-assessment and backtracking |
+| **MemoryNode** | `MemoryNode.kt` | Cross-app memory operations |
+| **BlazeGoalPlanner** | `BlazeGoalPlanner.kt` | Orchestrates all nodes |
+| **MultiAgentV3Runner** | `MultiAgentV3Runner.kt` | High-level entry point |
+
+See the [Mobile-Agent-v3 Integration Plan](decisions/032b_mobile_agent_v3_integration.md) for detailed usage.
+
 ## Future Considerations
 
 The architecture is designed to support:
 
 - **Additional platform drivers** - Web, desktop, or custom UI frameworks
 - **Multiple LLM providers** - Currently supports OpenAI, extensible to others
-- **Enhanced recording** - Capture and replay interactions with higher fidelity
+- **Benchmark integration** - Run AndroidWorld/OSWorld against Trailblaze
 - **Distributed execution** - Coordinate agents across multiple devices

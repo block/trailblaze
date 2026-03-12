@@ -1,0 +1,60 @@
+- config:
+    title: "Test: Search and click specific results with duplicate text"
+    driver: PLAYWRIGHT_NATIVE
+- prompts:
+    # Navigate to the search page
+    - step: Navigate to ../../../examples/playwright-native/sample-app/search-duplicates.html
+
+    # Verify the page loaded
+    - step: Verify the heading "Product Search" is visible
+
+    # --- Search for "Wireless Mouse" and interact with duplicate results ---
+    - step: Type "Wireless Mouse" into the search input field
+    - step: Click the "Search" button
+    - step: Verify the text "4 results" is visible
+
+    # Click the Bluetooth, Black result — its aria-label is "Wireless Mouse - Bluetooth, Black - $29.99"
+    - step: Click the button labeled "Wireless Mouse - Bluetooth, Black - $29.99"
+    - step: Verify the text "Bluetooth, Black" is visible in the detail section at the bottom
+
+    # Click the Bluetooth, White result
+    - step: Click the button labeled "Wireless Mouse - Bluetooth, White - $29.99"
+    - step: Verify the text "Bluetooth, White" is visible in the detail section at the bottom
+
+    # Click the USB-A, Black result
+    - step: Click the button labeled "Wireless Mouse - USB-A, Black - $19.99"
+    - step: Verify the text "USB-A, Black" is visible in the detail section at the bottom
+
+    # Click the USB-C, Gray result
+    - step: Click the button labeled "Wireless Mouse - USB-C, Gray - $34.99"
+    - step: Verify the text "USB-C, Gray" is visible in the detail section at the bottom
+
+    # --- Search for "Keyboard" and interact with duplicate results ---
+    - step: Clear the search input field and type "Keyboard"
+    - step: Click the "Search" button
+    - step: Verify the text "3 results" is visible
+
+    # Click each keyboard result
+    - step: Click the button labeled "Keyboard - Mechanical, Full-size - $89.99"
+    - step: Verify the text "Mechanical, Full-size" is visible in the detail section at the bottom
+
+    - step: Click the button labeled "Keyboard - Membrane, Compact - $39.99"
+    - step: Verify the text "Membrane, Compact" is visible in the detail section at the bottom
+
+    - step: Click the button labeled "Keyboard - Mechanical, Compact - $79.99"
+    - step: Verify the text "Mechanical, Compact" is visible in the detail section at the bottom
+
+    # --- Search for "Monitor Stand" and interact with duplicate results ---
+    - step: Clear the search input field and type "Monitor Stand"
+    - step: Click the "Search" button
+    - step: Verify the text "3 results" is visible
+
+    # Click each Monitor Stand result
+    - step: Click the button labeled "Monitor Stand - Aluminum, Single - $49.99"
+    - step: Verify the text "Aluminum, Single" is visible in the detail section at the bottom
+
+    - step: Click the button labeled "Monitor Stand - Aluminum, Dual - $79.99"
+    - step: Verify the text "Aluminum, Dual" is visible in the detail section at the bottom
+
+    - step: Click the button labeled "Monitor Stand - Wood, Single - $59.99"
+    - step: Verify the text "Wood, Single" is visible in the detail section at the bottom

@@ -23,9 +23,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
+import kotlinx.serialization.json.JsonElement
 import xyz.block.trailblaze.logs.client.TrailblazeJson
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionStatus
@@ -73,7 +75,7 @@ fun LlmRequestDetailsFlat(
 }
 
 @Composable
-fun MaestroDriverDetailsFlat(log: TrailblazeLog.MaestroDriverLog) {
+fun AgentDriverDetailsFlat(log: TrailblazeLog.AgentDriverLog) {
   Column(modifier = Modifier.padding(horizontal = 16.dp)) {
     DetailSection("Class Name") {
       CodeBlock(log.action::class.simpleName ?: "Unknown")
@@ -334,7 +336,7 @@ fun DeviceSnapshotFlat(
   log: TrailblazeLog.TrailblazeSnapshotLog,
   sessionId: String,
   imageLoader: xyz.block.trailblaze.ui.images.ImageLoader,
-  onShowScreenshotModal: (imageModel: Any?, deviceWidth: Int, deviceHeight: Int, clickX: Int?, clickY: Int?, action: xyz.block.trailblaze.api.MaestroDriverActionType?) -> Unit,
+  onShowScreenshotModal: (imageModel: Any?, deviceWidth: Int, deviceHeight: Int, clickX: Int?, clickY: Int?, action: xyz.block.trailblaze.api.AgentDriverAction?) -> Unit,
   showInspectUI: (() -> Unit)?,
 ) {
   Column(modifier = Modifier.padding(horizontal = 16.dp)) {
@@ -392,6 +394,346 @@ fun DeviceSnapshotFlat(
     // Display device dimensions
     DetailSection("Device Dimensions") {
       CodeBlock("${log.deviceWidth} x ${log.deviceHeight}")
+    }
+  }
+}
+
+// MCP Log Detail Composables
+
+@Composable
+fun McpAgentRunDetailsFlat(log: TrailblazeLog.McpAgentRunLog) {
+  Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+    // Status indicator
+    Row(
+      verticalAlignment = Alignment.CenterVertically,
+      modifier = Modifier.padding(bottom = 8.dp)
+    ) {
+      Icon(
+        imageVector = if (log.successful) Icons.Filled.CheckCircle else Icons.Filled.Close,
+        contentDescription = if (log.successful) "Success" else "Failed",
+        tint = if (log.successful) Color(0xFF2E7D32) else Color(0xFFC62828),
+        modifier = Modifier.size(24.dp)
+      )
+      Spacer(modifier = Modifier.width(8.dp))
+      Text(
+        text = if (log.successful) "Agent Run Succeeded" else "Agent Run Failed",
+        style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.Bold,
+        color = if (log.successful) Color(0xFF2E7D32) else Color(0xFFC62828)
+      )
+    }
+
+    DetailSection("Objective") {
+      CodeBlock(log.objective)
+    }
+
+    DetailSection("Configuration") {
+      CodeBlock(
+        buildString {
+          appendLine("Transport Mode: ${log.transportMode}")
+          appendLine("LLM Strategy: ${log.llmStrategy}")
+        }
+      )
+    }
+
+    DetailSection("Execution Stats") {
+      CodeBlock(
+        buildString {
+          appendLine("Iterations: ${log.iterationCount}")
+          appendLine("Tool Calls: ${log.toolCallCount}")
+          appendLine("Duration: ${formatDuration(log.durationMs)}")
+        }
+      )
+    }
+
+    DetailSection("Result") {
+      CodeBlock(log.resultMessage)
+    }
+
+    if (log.actionsTaken.isNotEmpty()) {
+      DetailSection("Actions Taken") {
+        log.actionsTaken.forEach { action ->
+          CodeBlock(action)
+        }
+      }
+    }
+  }
+}
+
+@Composable
+fun McpAgentIterationDetailsFlat(log: TrailblazeLog.McpAgentIterationLog) {
+  Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+    DetailSection("Iteration #${log.iterationNumber}") {
+      CodeBlock(
+        buildString {
+          appendLine("Response Type: ${log.responseType}")
+          appendLine("Transport Mode: ${log.transportMode}")
+          appendLine("Duration: ${formatDuration(log.durationMs)}")
+        }
+      )
+    }
+
+    log.toolName?.let { toolName ->
+      DetailSection("Tool Called") {
+        CodeBlock(toolName)
+      }
+    }
+
+    log.toolArgs?.let { args ->
+      DetailSection("Tool Arguments") {
+        CodeBlock(args.toString())
+      }
+    }
+
+    log.toolSucceeded?.let { succeeded ->
+      DetailSection("Tool Result") {
+        Text(
+          text = if (succeeded) "✓ Success" else "✗ Failed",
+          color = if (succeeded) Color(0xFF2E7D32) else Color(0xFFC62828)
+        )
+      }
+    }
+
+    log.llmCompletion?.let { completion ->
+      DetailSection("LLM Completion") {
+        CodeBlock(completion)
+      }
+    }
+  }
+}
+
+@Composable
+fun McpSamplingDetailsFlat(log: TrailblazeLog.McpSamplingLog) {
+  Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+    // Status indicator
+    Row(
+      verticalAlignment = Alignment.CenterVertically,
+      modifier = Modifier.padding(bottom = 8.dp)
+    ) {
+      Icon(
+        imageVector = if (log.successful) Icons.Filled.CheckCircle else Icons.Filled.Close,
+        contentDescription = if (log.successful) "Success" else "Failed",
+        tint = if (log.successful) Color(0xFF2E7D32) else Color(0xFFC62828),
+        modifier = Modifier.size(24.dp)
+      )
+      Spacer(modifier = Modifier.width(8.dp))
+      Text(
+        text = if (log.successful) "Sampling Succeeded" else "Sampling Failed",
+        style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.Bold,
+        color = if (log.successful) Color(0xFF2E7D32) else Color(0xFFC62828)
+      )
+    }
+
+    DetailSection("Configuration") {
+      CodeBlock(
+        buildString {
+          appendLine("LLM Strategy: ${log.llmStrategy}")
+          appendLine("Model: ${log.modelName ?: "unknown"}")
+          appendLine("Screenshot Included: ${log.includedScreenshot}")
+          appendLine("Duration: ${formatDuration(log.durationMs)}")
+        }
+      )
+    }
+
+    DetailSection("System Prompt") {
+      CodeBlock(log.systemPrompt)
+    }
+
+    DetailSection("User Message") {
+      CodeBlock(log.userMessage)
+    }
+
+    DetailSection("Completion") {
+      CodeBlock(log.completion)
+    }
+
+    log.errorMessage?.let { error ->
+      DetailSection("Error") {
+        CodeBlock(error)
+      }
+    }
+
+    log.usageAndCost?.let { usage ->
+      DetailSection("Token Usage") {
+        CodeBlock(usage.toString())
+      }
+    }
+  }
+}
+
+@Composable
+fun McpAgentToolDetailsFlat(log: TrailblazeLog.McpAgentToolLog) {
+  Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+    // Status indicator
+    Row(
+      verticalAlignment = Alignment.CenterVertically,
+      modifier = Modifier.padding(bottom = 8.dp)
+    ) {
+      Icon(
+        imageVector = if (log.successful) Icons.Filled.CheckCircle else Icons.Filled.Close,
+        contentDescription = if (log.successful) "Success" else "Failed",
+        tint = if (log.successful) Color(0xFF2E7D32) else Color(0xFFC62828),
+        modifier = Modifier.size(24.dp)
+      )
+      Spacer(modifier = Modifier.width(8.dp))
+      Text(
+        text = "Tool: ${log.toolName}",
+        style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.Bold,
+        color = if (log.successful) Color(0xFF2E7D32) else Color(0xFFC62828)
+      )
+    }
+
+    DetailSection("Configuration") {
+      CodeBlock(
+        buildString {
+          appendLine("Transport Mode: ${log.transportMode}")
+          appendLine("Duration: ${formatDuration(log.durationMs)}")
+        }
+      )
+    }
+
+    DetailSection("Arguments") {
+      CodeBlock(log.toolArgs.toString())
+    }
+
+    DetailSection("Result") {
+      CodeBlock(log.resultOutput)
+    }
+  }
+}
+
+@Composable
+fun McpToolCallRequestDetailsFlat(log: TrailblazeLog.McpToolCallRequestLog) {
+  Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+    // Header
+    Row(
+      verticalAlignment = Alignment.CenterVertically,
+      modifier = Modifier.padding(bottom = 8.dp)
+    ) {
+      Text(
+        text = "📥 MCP Tool Request: ${log.toolName}",
+        style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.Bold,
+        color = Color(0xFF1976D2) // Blue for requests
+      )
+    }
+
+    DetailSection("Trace Info") {
+      CodeBlock(
+        buildString {
+          appendLine("TraceId: ${log.traceId.traceId}")
+          appendLine("MCP Session: ${log.mcpSessionId}")
+          appendLine("Timestamp: ${log.timestamp}")
+        }
+      )
+    }
+
+    DetailSection("Arguments") {
+      CodeBlock(log.toolArgs.toString())
+    }
+  }
+}
+
+@Composable
+fun McpToolCallResponseDetailsFlat(log: TrailblazeLog.McpToolCallResponseLog) {
+  Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+    // Status indicator
+    Row(
+      verticalAlignment = Alignment.CenterVertically,
+      modifier = Modifier.padding(bottom = 8.dp)
+    ) {
+      Icon(
+        imageVector = if (log.successful) Icons.Filled.CheckCircle else Icons.Filled.Close,
+        contentDescription = if (log.successful) "Success" else "Failed",
+        tint = if (log.successful) Color(0xFF2E7D32) else Color(0xFFC62828),
+        modifier = Modifier.size(24.dp)
+      )
+      Spacer(modifier = Modifier.width(8.dp))
+      Text(
+        text = "MCP Tool Response: ${log.toolName}",
+        style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.Bold,
+        color = if (log.successful) Color(0xFF2E7D32) else Color(0xFFC62828)
+      )
+    }
+
+    DetailSection("Trace Info") {
+      CodeBlock(
+        buildString {
+          appendLine("TraceId: ${log.traceId.traceId}")
+          appendLine("MCP Session: ${log.mcpSessionId}")
+          appendLine("Duration: ${formatDuration(log.durationMs)}")
+          appendLine("Success: ${log.successful}")
+          log.errorMessage?.let { appendLine("Error: $it") }
+        }
+      )
+    }
+
+    DetailSection("Result") {
+      CodeBlock(log.resultSummary.prettyPrint())
+    }
+  }
+}
+
+/** Pretty prints a JsonElement for display in UI */
+private fun JsonElement.prettyPrint(): String =
+  TrailblazeJson.defaultWithoutToolsInstance.encodeToString(JsonElement.serializer(), this)
+
+@Composable
+fun TrailblazeProgressDetailsFlat(log: TrailblazeLog.TrailblazeProgressLog) {
+  Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+    Text(
+      text = "Event Type",
+      style = MaterialTheme.typography.labelMedium,
+      color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    Text(
+      text = log.eventType,
+      style = MaterialTheme.typography.bodyMedium,
+      modifier = Modifier.padding(bottom = 12.dp)
+    )
+
+    Text(
+      text = "Description",
+      style = MaterialTheme.typography.labelMedium,
+      color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    Text(
+      text = log.description,
+      style = MaterialTheme.typography.bodyMedium,
+      modifier = Modifier.padding(bottom = 12.dp)
+    )
+
+    log.stepIndex?.let { step ->
+      Text(
+        text = "Step ${step + 1}${log.totalSteps?.let { " of $it" } ?: ""}",
+        style = MaterialTheme.typography.bodyMedium,
+        modifier = Modifier.padding(bottom = 8.dp)
+      )
+    }
+
+    log.progressPercent?.let { percent ->
+      Text(
+        text = "Progress: $percent%",
+        style = MaterialTheme.typography.bodyMedium,
+        modifier = Modifier.padding(bottom = 8.dp)
+      )
+    }
+
+    log.eventData?.takeIf { it.isNotEmpty() }?.let { data ->
+      Text(
+        text = "Event Data",
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+      )
+      Text(
+        text = data.prettyPrint(),
+        style = MaterialTheme.typography.bodySmall,
+        fontFamily = FontFamily.Monospace,
+        modifier = Modifier.padding(start = 8.dp, bottom = 4.dp)
+      )
     }
   }
 }

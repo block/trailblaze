@@ -12,13 +12,13 @@ import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.yaml.TrailComparator
 import xyz.block.trailblaze.yaml.TrailConfig
 import xyz.block.trailblaze.yaml.TrailSource
-import xyz.block.trailblaze.yaml.TrailblazeYaml
+import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Represents a trail (test case) identified by its directory path.
- * A trail can have multiple variants (e.g., trail.yaml, android.trail.yaml, ios-ipad.trail.yaml).
+ * A trail can have multiple variants (e.g., trailblaze.yaml, android.trail.yaml, ios-ipad.trail.yaml).
  *
  * @param id The trail identifier - relative path from trails root (e.g., "clock/set-alarm")
  * @param absolutePath The absolute path to the trail directory
@@ -30,7 +30,7 @@ data class Trail(
   val variants: List<TrailVariant>,
 ) {
   /**
-   * Returns the default variant (trail.yaml) if it exists.
+   * Returns the default variant (trailblaze.yaml) if it exists.
    */
   val defaultVariant: TrailVariant?
     get() = variants.find { it.isDefault }
@@ -128,7 +128,7 @@ data class Trail(
  * where the first classifier is typically the platform (android, ios, web)
  * and subsequent classifiers describe the device (phone, tablet, iphone, ipad).
  *
- * @param fileName The file name (e.g., "trail.yaml", "android-phone.trail.yaml")
+ * @param fileName The file name (e.g., "trailblaze.yaml", "android-phone.trail.yaml")
  * @param absolutePath The absolute path to this file
  * @param classifiers List of device classifiers parsed from filename (e.g., [android, phone])
  */
@@ -146,10 +146,10 @@ data class TrailVariant(
     get() = TrailConfigCache.getConfig(absolutePath)
 
   /**
-   * Whether this is the default trail.yaml file.
+   * Whether this is the default NL definition file (trailblaze.yaml).
    */
   val isDefault: Boolean
-    get() = fileName == TrailRecordings.TRAIL_DOT_YAML
+    get() = TrailRecordings.isNlDefinitionFile(fileName)
 
   /**
    * The platform classifier (first classifier), if any.
@@ -193,8 +193,8 @@ data class TrailVariant(
       val fileName = file.name
 
       // Parse classifiers from filename
-      // Format: {classifier1}-{classifier2}-....trail.yaml or trail.yaml
-      val classifiers = if (fileName == TrailRecordings.TRAIL_DOT_YAML) {
+      // Format: {classifier1}-{classifier2}-....trail.yaml or trailblaze.yaml
+      val classifiers = if (TrailRecordings.isNlDefinitionFile(fileName)) {
         emptyList()
       } else {
         val nameWithoutExtension = fileName.removeSuffix(".trail.yaml")
@@ -236,7 +236,7 @@ private fun String.classifierDisplayName(): String = when (lowercase()) {
  * 5. Pruning stale entries for deleted files to prevent unbounded growth
  */
 object TrailConfigCache {
-  private val trailblazeYaml = TrailblazeYaml.Default
+  private val trailblazeYaml = createTrailblazeYaml()
   private val trailComparator = TrailComparator.Default
 
   /**

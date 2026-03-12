@@ -7,8 +7,12 @@ import maestro.orchestra.Command
 import maestro.orchestra.Condition
 import maestro.orchestra.ElementSelector
 import xyz.block.trailblaze.AgentMemory
+import xyz.block.trailblaze.api.DriverNodeMatch
+import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.toolcalls.MapsToMaestroCommands
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
+import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
+import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.TrailblazeTools.REQUIRED_TEXT_DESCRIPTION
 
 @Serializable
@@ -52,4 +56,29 @@ data class AssertNotVisibleWithTextTrailblazeTool(
       ),
     ),
   )
+
+  override suspend fun execute(
+    toolExecutionContext: TrailblazeToolExecutionContext,
+  ): TrailblazeToolResult {
+    val agent = toolExecutionContext.maestroTrailblazeAgent
+    if (agent != null) {
+      val interpolatedText = toolExecutionContext.memory.interpolateVariables(text)
+      val nodeSelector = TrailblazeNodeSelector.withMatch(
+        DriverNodeMatch.AndroidAccessibility(
+          textRegex = interpolatedText,
+          resourceIdRegex = id,
+          isEnabled = enabled,
+          isSelected = selected,
+        ),
+        index = if (index == 0) null else index,
+      )
+      val result = agent.executeNodeSelectorAssertNotVisible(
+        nodeSelector = nodeSelector,
+        traceId = toolExecutionContext.traceId,
+      )
+      if (result != null) return result
+    }
+    // Fall back to Maestro command path
+    return super.execute(toolExecutionContext)
+  }
 }

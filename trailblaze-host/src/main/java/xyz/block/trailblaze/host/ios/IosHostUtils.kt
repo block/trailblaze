@@ -3,6 +3,7 @@ package xyz.block.trailblaze.host.ios
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.model.AppVersionInfo
 import xyz.block.trailblaze.util.CommandProcessResult
+import xyz.block.trailblaze.util.IosHostSimctlUtils
 import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils
 import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils.runProcess
 import java.io.File
@@ -65,37 +66,26 @@ object IosHostUtils {
   }
 
   fun clearAppDataContainer(deviceId: String, appId: String) {
-    val output = TrailblazeProcessBuilderUtils.createProcessBuilder(
-      listOf(
-        "xcrun",
-        "simctl",
-        "get_app_container",
-        deviceId,
-        appId,
-        "data",
-      ),
-    ).runProcess {}
-
-    output.outputLines.firstOrNull()?.let { dataContainerPath ->
-      val dataContainerDirectory = File(dataContainerPath)
-      if (dataContainerDirectory.exists() && dataContainerDirectory.isDirectory) {
-        Console.log("Clearing $appId data container under $dataContainerPath")
-        dataContainerDirectory.listFiles()?.forEach { it.deleteRecursively() }
-      }
-    }
+    IosHostSimctlUtils.clearAppDataContainer(deviceId = deviceId, appId = appId)
   }
 
   /**
    * Gets version information for an installed iOS app.
    *
    * Uses `xcrun simctl listapps` to find the app bundle path,
-   * then reads the Info.plist to extract version information.
+   * then reads the Info.plist once to extract all requested keys.
    *
    * @param trailblazeDeviceId The device ID for the simulator
    * @param appId The bundle identifier (e.g., "com.squareup.square")
+   * @param additionalPlistKeys Extra plist keys to read in the same pass (results available via
+   *   [AppVersionInfo.additionalPlistData])
    * @return AppVersionInfo with version details, or null if the app is not installed or parsing fails
    */
-  fun getAppVersionInfo(trailblazeDeviceId: TrailblazeDeviceId, appId: String): AppVersionInfo? {
+  fun getAppVersionInfo(
+    trailblazeDeviceId: TrailblazeDeviceId,
+    appId: String,
+    additionalPlistKeys: List<String> = emptyList(),
+  ): AppVersionInfo? {
     val deviceId = trailblazeDeviceId.instanceId
     return try {
       // Get the app path from listapps output
@@ -117,20 +107,19 @@ object IosHostUtils {
 
       val infoPlistPath = "$appPath/Info.plist"
 
-      // Read version info from Info.plist using defaults command
-      val versionCode = readPlistKey(infoPlistPath, "CFBundleVersion")
-      val versionName = readPlistKey(infoPlistPath, "CFBundleShortVersionString")
+      // Read plist once and extract all keys in a single pass
+      val plistXml = getPlistXmlContent(infoPlistPath) ?: return null
+      val versionCode = parseXmlPlistKey(plistXml, "CFBundleVersion") ?: return null
+      val versionName = parseXmlPlistKey(plistXml, "CFBundleShortVersionString")
+      val additionalData = additionalPlistKeys.associateWith { parseXmlPlistKey(plistXml, it) }
 
-      if (versionCode != null) {
-        AppVersionInfo(
-          trailblazeDeviceId = trailblazeDeviceId,
-          versionCode = versionCode,
-          versionName = versionName,
-          appBundlePath = appPath,
-        )
-      } else {
-        null
-      }
+      AppVersionInfo(
+        trailblazeDeviceId = trailblazeDeviceId,
+        versionCode = versionCode,
+        versionName = versionName,
+        appBundlePath = appPath,
+        additionalPlistData = additionalData,
+      )
     } catch (e: Exception) {
       Console.log("Failed to get version info for $appId: ${e.message}")
       null
@@ -197,27 +186,56 @@ object IosHostUtils {
    * Supports both XML plist format (parsed in Kotlin) and binary plist format
    * (converted using plutil, which is bundled with Xcode/macOS).
    *
-   * This can be used by app-specific implementations to read custom plist keys.
+   * If you need multiple keys from the same plist, use [readPlistKeys] instead
+   * to avoid redundant file reads / plutil conversions.
    *
    * @return The value for the key, or null if the key doesn't exist or an error occurs
    */
   fun readPlistKey(plistPath: String, key: String): String? {
     return try {
-      val file = File(plistPath)
-      if (!file.exists()) return null
-
-      val content = file.readText()
-
-      // Check if it's XML plist (starts with XML declaration or plist tag)
-      if (content.trimStart().startsWith("<?xml") || content.trimStart().startsWith("<!DOCTYPE plist") || content.trimStart().startsWith("<plist")) {
-        parseXmlPlistKey(content, key)
-      } else {
-        // Binary plist - convert to XML using plutil (bundled with Xcode/macOS)
-        convertBinaryPlistAndReadKey(plistPath, key)
-      }
+      val xmlContent = getPlistXmlContent(plistPath) ?: return null
+      parseXmlPlistKey(xmlContent, key)
     } catch (e: Exception) {
-      // Key doesn't exist or other error
       null
+    }
+  }
+
+  /**
+   * Reads multiple keys from a plist file in a single pass.
+   * The plist is read and (if binary) converted to XML only once.
+   *
+   * @return Map of key to value (value is null if the key doesn't exist)
+   */
+  fun readPlistKeys(plistPath: String, keys: List<String>): Map<String, String?> {
+    return try {
+      val xmlContent = getPlistXmlContent(plistPath)
+        ?: return keys.associateWith { null }
+      keys.associateWith { parseXmlPlistKey(xmlContent, it) }
+    } catch (e: Exception) {
+      keys.associateWith { null }
+    }
+  }
+
+  /**
+   * Returns the XML content of a plist file. If the file is a binary plist,
+   * it is converted to XML using plutil.
+   */
+  private fun getPlistXmlContent(plistPath: String): String? {
+    val file = File(plistPath)
+    if (!file.exists()) return null
+
+    val content = file.readText()
+    return if (content.trimStart().startsWith("<?xml") ||
+      content.trimStart().startsWith("<!DOCTYPE plist") ||
+      content.trimStart().startsWith("<plist")
+    ) {
+      content
+    } else {
+      // Binary plist - convert to XML using plutil (bundled with Xcode/macOS)
+      val output = TrailblazeProcessBuilderUtils.createProcessBuilder(
+        listOf("plutil", "-convert", "xml1", "-o", "-", plistPath),
+      ).runProcess {}
+      output.fullOutput
     }
   }
 
@@ -242,20 +260,4 @@ object IosHostUtils {
     return keyPattern.find(content)?.groupValues?.get(2)?.trim()
   }
 
-  /**
-   * Converts a binary plist to XML using plutil and extracts the key value.
-   * plutil is bundled with Xcode command line tools on macOS.
-   */
-  private fun convertBinaryPlistAndReadKey(plistPath: String, key: String): String? {
-    return try {
-      // Use plutil to convert binary plist to XML and output to stdout
-      val output = TrailblazeProcessBuilderUtils.createProcessBuilder(
-        listOf("plutil", "-convert", "xml1", "-o", "-", plistPath),
-      ).runProcess {}
-
-      parseXmlPlistKey(output.fullOutput, key)
-    } catch (e: Exception) {
-      null
-    }
-  }
 }

@@ -11,7 +11,7 @@ import assertk.assertions.isTrue
 import org.junit.Test
 
 class TrailComparatorTest {
-  private val trailblazeYaml = TrailblazeYaml()
+  private val trailblazeYaml = createTrailblazeYaml()
   private val comparator = TrailComparator()
 
   @Test

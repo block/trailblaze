@@ -4,6 +4,7 @@ import device.SimctlIOSDevice
 import ios.LocalIOSDevice
 import ios.devicectl.DeviceControlIOSDevice
 import ios.xctest.XCTestIOSDevice
+import maestro.DeviceOrientation
 import maestro.Driver
 import maestro.Maestro
 import maestro.device.Device
@@ -138,7 +139,7 @@ internal object HostIosDriverFactory {
     val xcTestDevice = XCTestIOSDevice(
       deviceId = deviceId,
       client = xcTestDriverClient,
-      getInstalledApps = { XCRunnerCLIUtils.listApps(deviceId) },
+      getInstalledApps = { XCRunnerCLIUtils().listApps(deviceId) },
     )
 
     val baseIosDriver = IOSDriver(
@@ -175,6 +176,20 @@ internal object HostIosDriverFactory {
       if (!driverReady) {
         Console.log("Warning: XCUITest driver may not be fully ready, but proceeding anyway")
       }
+    }
+
+    // Auto-rotate iPads to landscape.
+    // iPads are detected by their shortest screen dimension (>= 1536px).
+    // This must happen after driver init because creating a new XCTest session resets orientation.
+    try {
+      val info = maestro.deviceInfo()
+      val minDimension = minOf(info.widthPixels, info.heightPixels)
+      if (minDimension >= 1536) {
+        Console.log("iPad detected (${info.widthPixels}x${info.heightPixels}) — setting landscape orientation")
+        maestro.setOrientation(DeviceOrientation.LANDSCAPE_LEFT)
+      }
+    } catch (e: Exception) {
+      Console.log("Warning: Failed to detect device type or set orientation: ${e.message}")
     }
 
     // Cache the driver for reuse

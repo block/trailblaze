@@ -1,7 +1,6 @@
 package xyz.block.trailblaze.tracing
 
 import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.datetime.Clock
 import kotlinx.serialization.json.JsonObject
 import kotlin.concurrent.Volatile
@@ -18,18 +17,17 @@ class TrailblazeTraceRecorder(
 
   private val mutex = Mutex()
 
-  private suspend fun addSuspending(event: JsonObject) = mutex.withLock { events += event }
-
-  // For non-suspending call sites:
+  /**
+   * Adds a trace event. Uses a brief spin on the Mutex to guarantee no events are dropped.
+   * The critical section is O(1) list append, so contention resolves in nanoseconds.
+   * On single-threaded targets (wasmJs), tryLock always succeeds immediately.
+   */
   fun add(event: JsonObject) {
-    if (mutex.tryLock()) {
-      try {
-        events += event
-      } finally {
-        mutex.unlock()
-      }
-    } else {
-      // fall back (e.g., enqueue to a channel) or require calling from a suspending context
+    while (!mutex.tryLock()) { /* spin — critical section is ~10ns */ }
+    try {
+      events += event
+    } finally {
+      mutex.unlock()
     }
   }
 
@@ -52,7 +50,7 @@ class TrailblazeTraceRecorder(
       throw t
     } finally {
       val baseArgs = args.ifEmpty { emptyMap() }
-      val finalArgs = if (threw != null) baseArgs + ("error" to (threw.message ?: threw::class.simpleName!!)) else baseArgs
+      val finalArgs = if (threw != null) baseArgs + ("error" to (threw.message ?: threw::class.simpleName ?: "unknown")) else baseArgs
       add(CompleteEvent(name, cat, startWall, mark.elapsedNow(), pid, tid, "X", finalArgs).toJsonObject())
     }
     return result
@@ -77,20 +75,31 @@ class TrailblazeTraceRecorder(
       throw t
     } finally {
       val baseArgs = if (args.isEmpty()) emptyMap() else args
-      val finalArgs = if (threw != null) baseArgs + ("error" to ("SOMEERRORCLASS")) else baseArgs
+      val finalArgs = if (threw != null) baseArgs + ("error" to (threw.message ?: threw::class.simpleName ?: "unknown")) else baseArgs
       add(CompleteEvent(name, cat, startWall, mark.elapsedNow(), pid, tid, "X", finalArgs).toJsonObject())
     }
     return result
   }
 
   /** Build the JSON string ready for Perfetto. */
-  fun toJson(): String = TRACING_JSON_INSTANCE.encodeToString(events)
+  fun toJson(): String {
+    while (!mutex.tryLock()) { /* spin */ }
+    try {
+      return TRACING_JSON_INSTANCE.encodeToString(events.toList())
+    } finally {
+      mutex.unlock()
+    }
+  }
 
   /** Clear recorded events (keep metadata flags). */
-
   fun clear() {
-    events.clear()
-    seenThreads.clear()
-    processMetaEmitted = false
+    while (!mutex.tryLock()) { /* spin */ }
+    try {
+      events.clear()
+      seenThreads.clear()
+      processMetaEmitted = false
+    } finally {
+      mutex.unlock()
+    }
   }
 }

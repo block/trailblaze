@@ -8,10 +8,11 @@ import org.junit.Test
 import xyz.block.trailblaze.util.GitUtils
 import java.io.File
 import kotlin.test.assertTrue
+import xyz.block.trailblaze.util.Console
 
 /**
- * Validates that all *trail.yaml files in the git repository can be successfully parsed
- * using the TrailblazeYaml parser.
+ * Validates that all trail YAML files (trailblaze.yaml and *.trail.yaml) in the git repository
+ * can be successfully parsed using the TrailblazeYaml parser.
  */
 class TrailYamlValidationTest {
 
@@ -23,7 +24,7 @@ class TrailYamlValidationTest {
     val gitRoot = File(gitRootPath)
     val trailFiles = TrailYamlValidator.findAllTrailYamlFiles(gitRoot)
 
-    println("Found ${trailFiles.size} trail.yaml files to validate in git repository")
+    Console.log("Found ${trailFiles.size} trail YAML files to validate in git repository")
 
     // Parse all files in parallel using coroutines
     val results = trailFiles.map { file ->
@@ -37,30 +38,30 @@ class TrailYamlValidationTest {
 
     // Report results
     val successCount = results.size - failures.size
-    println("\n=== Trail YAML Validation Results ===")
-    println("Total files: ${trailFiles.size}")
-    println("Successful: $successCount")
-    println("Failed: ${failures.size}")
+    Console.log("\n=== Trail YAML Validation Results ===")
+    Console.log("Total files: ${trailFiles.size}")
+    Console.log("Successful: $successCount")
+    Console.log("Failed: ${failures.size}")
 
     // If there are failures, print details
     if (failures.isNotEmpty()) {
-      println("\n=== Failed Files ===")
+      Console.log("\n=== Failed Files ===")
       failures.forEachIndexed { index, failure ->
-        println("\n${index + 1}. ${failure.filePath}")
-        println("   Error: ${failure.errorMessage}")
-        println("   Exception: ${failure.exception::class.simpleName}: ${failure.exception.message}")
+        Console.log("\n${index + 1}. ${failure.filePath}")
+        Console.log("   Error: ${failure.errorMessage}")
+        Console.log("   Exception: ${failure.exception::class.simpleName}: ${failure.exception.message}")
       }
 
       // Fail the test with a summary
       val failureMessage = buildString {
-        appendLine("Failed to parse ${failures.size} trail.yaml file(s):")
+        appendLine("Failed to parse ${failures.size} trail YAML file(s):")
         failures.forEach { failure ->
           appendLine("  - ${failure.filePath}: ${failure.errorMessage}")
         }
       }
       assertTrue(false, failureMessage)
     } else {
-      println("\n✓ All trail.yaml files parsed successfully!")
+      Console.log("\n✓ All trail YAML files parsed successfully!")
     }
   }
 }

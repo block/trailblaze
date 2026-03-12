@@ -15,6 +15,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
   """
 Use this tool to press special keys that are not used for regular text input.
 Examples of when to use this tool:
+- Press back to navigate to the previous page or state (Android only).
 - Press enter to submit the current form or text input.
 - Press home to go to the device's home screen.
 - Press home to send the current app to the background.
@@ -25,6 +26,7 @@ data class PressKeyTrailblazeTool(
 ) : MapsToMaestroCommands() {
 
   enum class PressKeyCode {
+    BACK,
     ENTER,
     HOME,
   }
@@ -33,6 +35,7 @@ data class PressKeyTrailblazeTool(
     PressKeyCommand(
       code = keyCode.let { code ->
         when (code) {
+          PressKeyCode.BACK -> KeyCode.BACK
           PressKeyCode.ENTER -> KeyCode.ENTER
           PressKeyCode.HOME -> KeyCode.HOME
         }

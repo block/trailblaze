@@ -36,6 +36,7 @@ import maestro.orchestra.yaml.YamlCommandReader
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import java.io.File
+import xyz.block.trailblaze.util.Console
 
 /**
  * Maestro doesn't have a Yaml generator, only a parser.
@@ -838,11 +839,11 @@ class MaestroCommandToYamlSerializerTest {
     private fun convertCommandsToYamlAndParseAndCompare(commandToSerialize: Command, expected: Command) {
       val commands = listOf(commandToSerialize)
       val yamlString = MaestroYamlSerializer.toYaml(commands)
-      println(yamlString)
+      Console.log(yamlString)
 
       val flowFile = File.createTempFile("flow", ".yaml").apply { writeText(yamlString) }
       val parsedCommands = YamlCommandReader.readCommands(flowFile.toPath())
-      println(parsedCommands.joinToString("\n"))
+      Console.log(parsedCommands.joinToString("\n"))
 
       val parsedBasicCommands = parsedCommands
         // Filter out the "Apply Configuration" commands since they are not part of the original commands

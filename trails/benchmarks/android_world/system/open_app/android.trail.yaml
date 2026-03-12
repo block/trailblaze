@@ -1,0 +1,25 @@
+# Android World Benchmark: OpenApp
+- config:
+    id: android-world-benchmarks/system/open_app
+    displayName: "System - Open App"
+    description: "Open the camera app. Clear any pop-ups that may appear by granting all permissions that are required."
+
+- tools: []
+
+- prompts:
+    - step: "Open the camera app. Clear any pop-ups that may appear by granting all permissions that are required."
+
+- tools:
+    # Validation: camera app should be in the foreground
+    - assertVisibleBySelector:
+        reason: "Camera app should be open and visible"
+        selector:
+          textRegex: ".*"
+    - androidworldbenchmarks_assertAdbShellOutput:
+        command: "dumpsys window windows"
+        expectedOutput: "com.android.camera2"
+        matchMode: "contains"
+
+# --- Benchmark Run History ---
+# [2026-03-11] FAILED - gRPC UNAVAILABLE after 112s. Emulator instability.
+#   Not an agent failure — general emulator connection instability.

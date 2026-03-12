@@ -1,12 +1,30 @@
 package xyz.block.trailblaze.host.rules
 
+import ai.koog.agents.core.tools.ToolDescriptor
+import ai.koog.prompt.dsl.Prompt
+import ai.koog.prompt.message.AttachmentContent
+import ai.koog.prompt.message.ContentPart
+import ai.koog.prompt.message.Message
+import ai.koog.prompt.message.RequestMetaInfo
+import ai.koog.prompt.params.LLMParams
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 import org.junit.Rule
 import org.junit.rules.RuleChain
 import xyz.block.trailblaze.TrailblazeYamlUtil
+import xyz.block.trailblaze.agent.BlazeConfig
+import xyz.block.trailblaze.agent.DefaultProgressReporter
+import xyz.block.trailblaze.agent.InnerLoopScreenAnalyzer
+import xyz.block.trailblaze.agent.MultiAgentV3Runner
+import xyz.block.trailblaze.agent.MultiAgentV3TestAgentRunner
 import xyz.block.trailblaze.agent.TrailblazeElementComparator
 import xyz.block.trailblaze.agent.TrailblazeRunner
+import xyz.block.trailblaze.agent.blaze.PlannerLlmCall
+import xyz.block.trailblaze.agent.blaze.PlannerToolCallResult
+import xyz.block.trailblaze.api.ImageFormatDetector
+import xyz.block.trailblaze.api.TestAgentRunner
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
@@ -14,6 +32,7 @@ import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.host.HostMaestroTrailblazeAgent
 import xyz.block.trailblaze.host.MaestroHostRunnerImpl
+import xyz.block.trailblaze.host.agent.HostUiActionExecutor
 import xyz.block.trailblaze.host.devices.TrailblazeConnectedDevice
 import xyz.block.trailblaze.host.devices.TrailblazeDeviceService
 import xyz.block.trailblaze.host.devices.TrailblazeHostDeviceClassifier
@@ -23,32 +42,34 @@ import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
+import xyz.block.trailblaze.mcp.AgentImplementation
+import xyz.block.trailblaze.mcp.sampling.LocalLlmSamplingSource
 import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.rules.RetryRule
 import xyz.block.trailblaze.rules.TrailblazeLoggingRule
 import xyz.block.trailblaze.rules.TrailblazeRunnerUtil
+import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
-import xyz.block.trailblaze.util.TemplatingUtil
-import xyz.block.trailblaze.utils.Ext.asMaestroCommands
-import xyz.block.trailblaze.yaml.TrailYamlItem
-import xyz.block.trailblaze.yaml.TrailblazeYaml
-import kotlin.reflect.KClass
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.TemplatingUtil
+import xyz.block.trailblaze.yaml.TrailYamlItem
+import xyz.block.trailblaze.yaml.createTrailblazeYaml
+import kotlin.reflect.KClass
 
 abstract class BaseHostTrailblazeTest(
-  trailblazeDriverType: TrailblazeDriverType,
+  private val trailblazeDriverType: TrailblazeDriverType,
   val config: TrailblazeConfig = TrailblazeConfig.DEFAULT,
   val trailblazeLlmModel: TrailblazeLlmModel = DEFAULT_TRAILBLAZE_LLM_MODEL,
   val dynamicLlmClient: DynamicLlmClient = TrailblazeHostDynamicLlmClientProvider(
     trailblazeLlmModel = trailblazeLlmModel,
     trailblazeDynamicLlmTokenProvider = TrailblazeHostDynamicLlmTokenProvider,
   ),
-  systemPromptTemplate: String? = null,
+  protected val systemPromptTemplate: String? = null,
   trailblazeToolSet: TrailblazeToolSet? = null,
   customToolClasses: Set<KClass<out TrailblazeTool>> = setOf(),
   excludedToolClasses: Set<KClass<out TrailblazeTool>> = setOf(),
@@ -56,12 +77,44 @@ abstract class BaseHostTrailblazeTest(
   allSerializationToolClasses: Set<KClass<out TrailblazeTool>> = customToolClasses,
   maxRetries: Int = 0,
   appTarget: TrailblazeHostAppTarget? = null,
-  protected val trailblazeDeviceId: TrailblazeDeviceId = TrailblazeDeviceService.listConnectedTrailblazeDevices()
-    .firstOrNull { it.trailblazeDevicePlatform == trailblazeDriverType.platform }
-    ?: error("No connected ${trailblazeDriverType.platform} device found")
+  explicitDeviceId: TrailblazeDeviceId? = null,
 ) {
 
-  val hostRunner by lazy {
+  /**
+   * The resolved device ID for this test.
+   * Uses the explicitly provided ID, or auto-detects from connected devices.
+   * When multiple devices of the same platform are connected (multi-simulator mode),
+   * uses the Gradle worker ID to distribute tests across them.
+   */
+  protected val trailblazeDeviceId: TrailblazeDeviceId = explicitDeviceId
+    ?: resolveDeviceForTest(trailblazeDriverType)
+
+  companion object {
+    private fun resolveDeviceForTest(
+      trailblazeDriverType: TrailblazeDriverType,
+    ): TrailblazeDeviceId {
+      val connectedDevices = TrailblazeDeviceService.listConnectedTrailblazeDevices()
+        .filter { it.trailblazeDevicePlatform == trailblazeDriverType.platform }
+        .sortedBy { it.instanceId }
+
+      check(connectedDevices.isNotEmpty()) {
+        "No connected ${trailblazeDriverType.platform} device found"
+      }
+
+      if (connectedDevices.size == 1) return connectedDevices.first()
+
+      // Multiple devices detected — use Gradle worker ID to pick one
+      val workerId = System.getProperty("org.gradle.test.worker")?.toIntOrNull()
+      val index = if (workerId != null && workerId > 0) {
+        (workerId - 1) % connectedDevices.size
+      } else {
+        0
+      }
+      return connectedDevices[index]
+    }
+  }
+
+  val hostRunner: MaestroHostRunnerImpl by lazy {
     MaestroHostRunnerImpl(
       trailblazeDeviceId = trailblazeDeviceId,
       setOfMarkEnabled = config.setOfMarkEnabled,
@@ -69,6 +122,11 @@ abstract class BaseHostTrailblazeTest(
       sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
       appTarget = appTarget,
       deviceClassifiers = trailblazeDeviceClassifiers,
+      pendingViewHierarchyDetailsProvider = {
+        val details = trailblazeAgent.pendingViewHierarchyDetails
+        trailblazeAgent.pendingViewHierarchyDetails = emptySet()
+        details
+      },
     )
   }
 
@@ -142,26 +200,28 @@ abstract class BaseHostTrailblazeTest(
     )
   }
 
-  val toolRepo = TrailblazeToolRepo(
-    TrailblazeToolSet.DynamicTrailblazeToolSet(
-      "Dynamic Initial Tool Set",
-      (
-          trailblazeToolSet?.toolClasses
-            ?: TrailblazeToolSet.getLlmToolSet(config.setOfMarkEnabled).toolClasses
-          ) + customToolClasses - excludedToolClasses,
-    ),
-  )
+  /**
+   * Which agent implementation to use for this test.
+   * Configurable via the `trailblaze.agent` system property for CI toggle.
+   * Defaults to TRAILBLAZE_RUNNER (stable, battle-tested).
+   */
+  protected open val agentImplementation: AgentImplementation =
+    System.getProperty("trailblaze.agent", AgentImplementation.DEFAULT_NAME)
+      .let { AgentImplementation.valueOf(it) }
 
-  val trailblazeRunner: TrailblazeRunner by lazy {
-    TrailblazeRunner(
-      screenStateProvider = hostRunner.screenStateProvider,
-      agent = trailblazeAgent,
-      llmClient = dynamicLlmClient.createLlmClient(),
-      trailblazeLlmModel = trailblazeLlmModel,
-      trailblazeToolRepo = toolRepo,
-      systemPromptTemplate = systemPromptTemplate,
-      trailblazeLogger = loggingRule.logger,
-      sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
+  val toolRepo = if (trailblazeToolSet != null) {
+    // Explicit tool set override — bypass dynamic catalog
+    TrailblazeToolRepo(
+      trailblazeToolSet = TrailblazeToolSet.DynamicTrailblazeToolSet(
+        "Custom Tool Set",
+        trailblazeToolSet.toolClasses + customToolClasses - excludedToolClasses,
+      ),
+    )
+  } else {
+    TrailblazeToolRepo.withDynamicToolSets(
+      setOfMarkEnabled = config.setOfMarkEnabled,
+      customToolClasses = customToolClasses,
+      excludedToolClasses = excludedToolClasses,
     )
   }
 
@@ -174,7 +234,104 @@ abstract class BaseHostTrailblazeTest(
     )
   }
 
-  private val trailblazeYaml = TrailblazeYaml(
+  val trailblazeRunner: TestAgentRunner by lazy {
+    when (agentImplementation) {
+      AgentImplementation.MULTI_AGENT_V3 -> createV3Runner()
+      else -> createLegacyRunner()
+    }
+  }
+
+  private fun createLegacyRunner(): TrailblazeRunner {
+    return TrailblazeRunner(
+      screenStateProvider = hostRunner.screenStateProvider,
+      agent = trailblazeAgent,
+      llmClient = dynamicLlmClient.createLlmClient(),
+      trailblazeLlmModel = trailblazeLlmModel,
+      trailblazeToolRepo = toolRepo,
+      systemPromptTemplate = systemPromptTemplate,
+      trailblazeLogger = loggingRule.logger,
+      sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
+    )
+  }
+
+  private fun createV3Runner(): MultiAgentV3TestAgentRunner {
+    val llmClient = dynamicLlmClient.createLlmClient()
+    val samplingSource = LocalLlmSamplingSource(llmClient, trailblazeLlmModel)
+    val screenAnalyzer = InnerLoopScreenAnalyzer(
+      samplingSource = samplingSource,
+      model = trailblazeLlmModel,
+    )
+    val executor = HostUiActionExecutor(
+      agent = trailblazeAgent,
+      screenStateProvider = hostRunner.screenStateProvider,
+      toolRepo = toolRepo,
+      elementComparator = elementComparator,
+    )
+
+    val plannerLlmCall: PlannerLlmCall = { systemPrompt, userMessage, tools, traceId, screenshotBytes ->
+      val metaInfo = RequestMetaInfo.create(kotlin.time.Clock.System)
+      val userMsg = if (screenshotBytes != null && screenshotBytes.isNotEmpty()) {
+        Message.User(
+          parts = buildList {
+            add(ContentPart.Text(userMessage))
+            add(
+              ContentPart.Image(
+                content = AttachmentContent.Binary.Bytes(screenshotBytes),
+                format = ImageFormatDetector.detectFormat(screenshotBytes).mimeSubtype,
+              )
+            )
+          },
+          metaInfo = metaInfo,
+        )
+      } else {
+        Message.User(content = userMessage, metaInfo = metaInfo)
+      }
+      val koogPrompt = Prompt(
+        messages = listOf(
+          Message.System(content = systemPrompt, metaInfo = metaInfo),
+          userMsg,
+        ),
+        id = "host_test_planner",
+        params = LLMParams(toolChoice = LLMParams.ToolChoice.Required),
+      )
+      val responses = llmClient.execute(koogPrompt, trailblazeLlmModel.toKoogLlmModel(), tools)
+      val toolCall = responses.filterIsInstance<Message.Tool.Call>().firstOrNull()
+      val toolName = toolCall?.tool ?: tools.firstOrNull()?.name ?: "unknown"
+      val toolArgsJson = toolCall?.content ?: "{}"
+      val toolArgs = try {
+        Json.parseToJsonElement(toolArgsJson) as? JsonObject ?: JsonObject(emptyMap())
+      } catch (_: Exception) {
+        JsonObject(emptyMap())
+      }
+      PlannerToolCallResult.fromRaw(toolName, toolArgs)
+    }
+
+    val session = loggingRule.session ?: error("Session not available - ensure test is running")
+    val progressListener = loggingRule.logger.createProgressListener(session)
+    val progressReporter = DefaultProgressReporter(progressListener)
+
+    val availableToolsProvider = {
+      toolRepo.getCurrentToolDescriptors().map { it.toTrailblazeToolDescriptor() }
+    }
+
+    val v3Runner = MultiAgentV3Runner.create(
+      screenAnalyzer = screenAnalyzer,
+      executor = executor,
+      plannerLlmCall = plannerLlmCall,
+      config = BlazeConfig.DEFAULT,
+      progressReporter = progressReporter,
+      deviceId = trailblazeDeviceId,
+      availableToolsProvider = availableToolsProvider,
+    )
+
+    return MultiAgentV3TestAgentRunner(
+      v3Runner = v3Runner,
+      screenStateProvider = hostRunner.screenStateProvider,
+      sessionIdProvider = { loggingRule.session?.sessionId ?: SessionId.generate() },
+    )
+  }
+
+  private val trailblazeYaml = createTrailblazeYaml(
     customTrailblazeToolClasses = allSerializationToolClasses,
   )
 
@@ -182,7 +339,7 @@ abstract class BaseHostTrailblazeTest(
     TrailblazeRunnerUtil(
       trailblazeRunner = trailblazeRunner,
       runTrailblazeTool = { trailblazeTools: List<TrailblazeTool> ->
-        val result = trailblazeRunner.agent.runTrailblazeTools(
+        val result = trailblazeAgent.runTrailblazeTools(
           trailblazeTools,
           null,
           screenState = hostRunner.screenStateProvider(),
@@ -204,11 +361,6 @@ abstract class BaseHostTrailblazeTest(
   private suspend fun runTrail(trailItems: List<TrailYamlItem>, useRecordedSteps: Boolean) {
     for (item in trailItems) {
       val itemResult = when (item) {
-        is TrailYamlItem.MaestroTrailItem -> hostRunner.runMaestroCommands(
-          item.maestro.maestroCommands.asMaestroCommands(),
-          null,
-        )
-
         is TrailYamlItem.PromptsTrailItem -> trailblazeRunnerUtil.runPromptSuspend(item.promptSteps, useRecordedSteps)
         is TrailYamlItem.ToolTrailItem -> trailblazeRunnerUtil.runTrailblazeTool(item.tools.map { it.trailblazeTool })
         is TrailYamlItem.ConfigTrailItem -> item.config.context?.let { trailblazeRunner.appendToSystemPrompt(it) }

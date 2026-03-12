@@ -57,7 +57,7 @@ data class SessionSummary(
       }
         .map {
           when (it) {
-            is TrailblazeLog.MaestroDriverLog -> {
+            is TrailblazeLog.AgentDriverLog -> {
               it.copy(
                 viewHierarchy = ViewHierarchyTreeNode(),
                 screenshotFile = screenshotUrl(sessionId, it.screenshotFile, isStandaloneFileReport, httpPort),
@@ -81,15 +81,23 @@ data class SessionSummary(
             is TrailblazeLog.ObjectiveCompleteLog,
             is TrailblazeLog.AttemptAiFallbackLog,
             is TrailblazeLog.TrailblazeSnapshotLog,
+            is TrailblazeLog.AccessibilityActionLog,
+            is TrailblazeLog.McpAgentRunLog,
+            is TrailblazeLog.McpAgentIterationLog,
+            is TrailblazeLog.McpSamplingLog,
+            is TrailblazeLog.McpAgentToolLog,
+            is TrailblazeLog.McpToolCallRequestLog,
+            is TrailblazeLog.McpToolCallResponseLog,
+            is TrailblazeLog.TrailblazeProgressLog,
             -> it
           }
-        }.sortedBy { it.timestamp }
+        }.sortedBy { log -> log.timestamp }
 
       val sessionStartTimestamp = sortedLogs.first().timestamp
       val screenshotUrls: List<String> = sortedLogs.mapNotNull { log ->
         when (log) {
           is TrailblazeLog.TrailblazeLlmRequestLog -> log.screenshotFile
-          is TrailblazeLog.MaestroDriverLog -> {
+          is TrailblazeLog.AgentDriverLog -> {
             if (listOf(
                 AgentActionType.CLEAR_APP_STATE,
                 AgentActionType.KILL_APP,
@@ -139,6 +147,7 @@ data class SessionSummary(
               is AgentTaskStatus.InProgress -> addToCurrentGroup(log)
               is AgentTaskStatus.Failure,
               is AgentTaskStatus.Success,
+              is AgentTaskStatus.McpScreenAnalysis,
               -> addToCurrentGroup(log)
             }
           }
@@ -165,7 +174,7 @@ data class SessionSummary(
               elapsedTimeMs = log.timestamp.toEpochMilliseconds() - sessionStartTimestamp.toEpochMilliseconds(),
             )
 
-            is TrailblazeLog.MaestroDriverLog -> {
+            is TrailblazeLog.AgentDriverLog -> {
               val clickCoordinates: HasClickCoordinates? = if (log.action is HasClickCoordinates) {
                 (log.action as HasClickCoordinates)
               } else {
@@ -226,6 +235,14 @@ data class SessionSummary(
             is TrailblazeLog.ObjectiveCompleteLog,
             is TrailblazeLog.DelegatingTrailblazeToolLog,
             is TrailblazeLog.TrailblazeSnapshotLog,
+            is TrailblazeLog.AccessibilityActionLog,
+            is TrailblazeLog.McpAgentRunLog,
+            is TrailblazeLog.McpAgentIterationLog,
+            is TrailblazeLog.McpSamplingLog,
+            is TrailblazeLog.McpAgentToolLog,
+            is TrailblazeLog.McpToolCallRequestLog,
+            is TrailblazeLog.McpToolCallResponseLog,
+            is TrailblazeLog.TrailblazeProgressLog,
             -> null
           }
         }

@@ -1,5 +1,7 @@
 package xyz.block.trailblaze.yaml
 
+import xyz.block.trailblaze.util.Console
+
 /**
  * Represents a difference found when comparing two trail items.
  */
@@ -95,7 +97,7 @@ data class TrailComparisonResult(
  * val comparator = TrailComparator()
  * val result = comparator.compare(expectedTrailItems, actualTrailItems)
  * if (!result.isMatch) {
- *   println(result.toSummary())
+ *   Console.log(result.toSummary())
  * }
  * ```
  */
@@ -138,14 +140,14 @@ class TrailComparator {
    *
    * @param expectedYaml The expected/reference trail YAML
    * @param actualYaml The actual trail YAML
-   * @param trailblazeYaml The YAML parser to use (default: TrailblazeYaml.Default)
+   * @param trailblazeYaml The YAML parser to use (default: createTrailblazeYaml())
    * @param compareConfig Whether to compare config blocks (default: true)
    * @return A [TrailComparisonResult] containing any differences found
    */
   fun compare(
     expectedYaml: String,
     actualYaml: String,
-    trailblazeYaml: TrailblazeYaml = TrailblazeYaml.Default,
+    trailblazeYaml: TrailblazeYaml = createTrailblazeYaml(),
     compareConfig: Boolean = true,
   ): TrailComparisonResult {
     val expectedItems = trailblazeYaml.decodeTrail(expectedYaml)
@@ -183,7 +185,7 @@ class TrailComparator {
    */
   fun extractNaturalLanguageSteps(
     yaml: String,
-    trailblazeYaml: TrailblazeYaml = TrailblazeYaml.Default
+    trailblazeYaml: TrailblazeYaml = createTrailblazeYaml()
   ): List<String> {
     val trailItems = trailblazeYaml.decodeTrail(yaml)
     return extractNaturalLanguageSteps(trailItems)

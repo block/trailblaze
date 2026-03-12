@@ -23,21 +23,41 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mikepenz.markdown.m3.Markdown
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import xyz.block.trailblaze.logs.model.TrailblazeLlmMessage
 
+private val prettyJson = Json { prettyPrint = true }
+
+/** Try to parse a string as a JSON element. Returns null if it's not valid JSON. */
+private fun tryParseJson(text: String): JsonElement? {
+  return try {
+    val trimmed = text.trim()
+    if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+      Json.parseToJsonElement(trimmed)
+    } else {
+      null
+    }
+  } catch (_: Exception) {
+    null
+  }
+}
 
 @Composable
 fun LlmMessageComposable(message: TrailblazeLlmMessage) {
   val isUser = message.role == "user"
   val isAssistant = message.role == "assistant"
-  val isTool = message.role == "tool" || message.role == "function"
+  val isToolCall = message.role == "tool_call"
+  val isTool = message.role == "tool" || message.role == "function" || isToolCall
   val isSystem = message.role == "system"
 
   // Determine icon and colors based on role
@@ -71,6 +91,20 @@ fun LlmMessageComposable(message: TrailblazeLlmMessage) {
   val cleanedMessage = message.message
       ?.replace("data:image/(png|jpeg);base64,[A-Za-z0-9+/=]+".toRegex(), "[🖼️ Screenshot attached]")
     ?: ""
+
+  // For tool messages, try to pretty-print JSON content
+  val displayMessage = if (isTool) {
+    remember(cleanedMessage) {
+      val jsonElement = tryParseJson(cleanedMessage)
+      if (jsonElement != null) {
+        prettyJson.encodeToString(JsonElement.serializer(), jsonElement)
+      } else {
+        cleanedMessage
+      }
+    }
+  } else {
+    cleanedMessage
+  }
 
   // ChatGPT-style layout: User messages on the right, others on the left
   Row(
@@ -112,6 +146,7 @@ fun LlmMessageComposable(message: TrailblazeLlmMessage) {
           text = when {
             isUser -> "You"
             isAssistant -> "Assistant"
+            isToolCall -> "Tool: ${message.toolName ?: "unknown"}"
             isTool -> "Tool"
             isSystem -> "System"
             else -> message.role.replaceFirstChar { it.uppercaseChar() }
@@ -140,11 +175,24 @@ fun LlmMessageComposable(message: TrailblazeLlmMessage) {
           shadowElevation = if (isAssistant || isUser) 1.dp else 0.dp
         ) {
           SelectionContainer {
-            Markdown(
-              modifier = Modifier
-                .padding(16.dp),
-              content = cleanedMessage
-            )
+            if (isTool && tryParseJson(cleanedMessage) != null) {
+              // Render pretty-printed JSON with monospace font for tool messages
+              Text(
+                text = displayMessage,
+                modifier = Modifier.padding(16.dp),
+                style = MaterialTheme.typography.bodySmall.copy(
+                  fontFamily = FontFamily.Monospace,
+                  fontSize = 12.sp,
+                  lineHeight = 18.sp,
+                ),
+                color = MaterialTheme.colorScheme.onSurface,
+              )
+            } else {
+              Markdown(
+                modifier = Modifier.padding(16.dp),
+                content = displayMessage,
+              )
+            }
           }
         }
       }

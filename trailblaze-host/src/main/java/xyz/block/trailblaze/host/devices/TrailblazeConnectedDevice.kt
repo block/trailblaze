@@ -18,6 +18,9 @@ class TrailblazeConnectedDevice(
 ) {
   val initialMaestroDeviceInfo = maestroDriver.deviceInfo()
 
+  /** Returns the underlying Maestro driver for direct access (e.g., live preview streaming). */
+  fun getMaestroDriver(): Driver = maestroDriver
+
   val trailblazeDeviceId: TrailblazeDeviceId = TrailblazeDeviceId(
     instanceId = instanceId,
     trailblazeDevicePlatform = trailblazeDriverType.platform,

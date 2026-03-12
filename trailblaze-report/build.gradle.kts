@@ -28,6 +28,18 @@ tasks.register<JavaExec>("generateTestResultsArtifacts") {
   mainClass.set("xyz.block.trailblaze.report.GenerateTestResultsCliCommandKt")
 }
 
+val generateReportTemplate by tasks.registering(JavaExec::class) {
+  description = "Generates a blank report template HTML with embedded WASM UI"
+  group = "report"
+  dependsOn(":trailblaze-ui:wasmJsBrowserProductionWebpack")
+  classpath = sourceSets["main"].runtimeClasspath
+  mainClass.set("xyz.block.trailblaze.report.ReportMainKt")
+  val templateBuildDir = layout.buildDirectory.dir("report-template")
+  doFirst { templateBuildDir.get().asFile.mkdirs() }
+  args(templateBuildDir.get().asFile.absolutePath)
+  outputs.file(templateBuildDir.map { it.file("trailblaze_report.html") })
+}
+
 dependencies {
   implementation(project(":trailblaze-common"))
   implementation(project(":trailblaze-models"))

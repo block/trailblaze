@@ -1,0 +1,51 @@
+# Android World Benchmark: RetroMusicSavePlaylist
+# NOTE: Requires audio assets to be bundled in test APK at benchmarks/audio/
+
+- config:
+    id: android-world-benchmarks/retro_music/save_playlist
+    description: Create a playlist in Retro Music called "Evening Chill" with specific songs
+
+- tools:
+    - androidworldbenchmarks_runAdbShell:
+        adbShellCommands:
+          - "rm -rf /sdcard/Music/*"
+    - androidworldbenchmarks_pushAssetToDevice:
+        assetPath: "benchmarks/audio/Sunset Dreams.mp3"
+        devicePath: "/sdcard/Music/Sunset Dreams.mp3"
+    - androidworldbenchmarks_pushAssetToDevice:
+        assetPath: "benchmarks/audio/Ocean Waves.mp3"
+        devicePath: "/sdcard/Music/Ocean Waves.mp3"
+    - androidworldbenchmarks_pushAssetToDevice:
+        assetPath: "benchmarks/audio/Mountain Echo.mp3"
+        devicePath: "/sdcard/Music/Mountain Echo.mp3"
+    - androidworldbenchmarks_pushAssetToDevice:
+        assetPath: "benchmarks/audio/City Lights.mp3"
+        devicePath: "/sdcard/Music/City Lights.mp3"
+    - androidworldbenchmarks_pushAssetToDevice:
+        assetPath: "benchmarks/audio/Forest Rain.mp3"
+        devicePath: "/sdcard/Music/Forest Rain.mp3"
+    - androidworldbenchmarks_runAdbShell:
+        adbShellCommands:
+          - "am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file:///sdcard/Music/"
+    - clearAppData:
+        packageName: "code.name.monkey.retromusic"
+
+- prompts:
+    - step: "Create a playlist in Retro Music called \"Evening Chill\" with songs: Ocean Waves, Forest Rain"
+
+- tools:
+    - androidworldbenchmarks_assertSqliteQuery:
+        dbPath: "/data/data/code.name.monkey.retromusic/databases/playlist.db"
+        query: "SELECT name FROM PlaylistEntity WHERE name = 'Evening Chill' LIMIT 1"
+        expectedOutput: "Evening Chill"
+        matchMode: "contains"
+        appPackageName: "code.name.monkey.retromusic"
+    - androidworldbenchmarks_assertSqliteQuery:
+        dbPath: "/data/data/code.name.monkey.retromusic/databases/playlist.db"
+        query: "SELECT title FROM SongEntity WHERE title IN ('Ocean Waves', 'Forest Rain') ORDER BY title"
+        expectedOutput: "Forest Rain|Ocean Waves"
+        matchMode: "contains"
+        appPackageName: "code.name.monkey.retromusic"
+
+# --- Benchmark Run History ---
+# [2026-03-11] Build #27 FAILED - Infrastructure: Missing test resource benchmarks/audio/Sunset Dreams.mp3.

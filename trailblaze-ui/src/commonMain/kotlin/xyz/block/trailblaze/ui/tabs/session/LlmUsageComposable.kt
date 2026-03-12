@@ -277,6 +277,14 @@ fun LlmUsageComposable(
                   color = MaterialTheme.colorScheme.onSurfaceVariant,
                   textAlign = TextAlign.Center
                 )
+                if (llmSessionUsageAndCost.totalCacheReadInputTokens > 0) {
+                  Text(
+                    text = "${formatCommaNumber(llmSessionUsageAndCost.totalCacheReadInputTokens)} cached (${formatDouble(llmSessionUsageAndCost.cacheHitPercentage, 1)}%)",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.tertiary,
+                    textAlign = TextAlign.Center
+                  )
+                }
               }
 
               // Vertical Divider
@@ -317,7 +325,7 @@ fun LlmUsageComposable(
             HorizontalDivider()
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Cost Breakdown in Single Line
+            // Cost Breakdown
             Row(
               modifier = Modifier.fillMaxWidth(),
               horizontalArrangement = Arrangement.SpaceBetween,
@@ -333,7 +341,7 @@ fun LlmUsageComposable(
                   Text(
                     text = "$${
                       formatDouble(
-                        (llmSessionUsageAndCost.totalInputTokens * llmSessionUsageAndCost.llmModel.inputCostPerOneMillionTokens) / 1_000_000,
+                        llmSessionUsageAndCost.requestBreakdowns.sumOf { it.promptCost },
                         2
                       )
                     }",
@@ -359,6 +367,22 @@ fun LlmUsageComposable(
                     fontWeight = FontWeight.Medium
                   )
                 }
+
+                if (llmSessionUsageAndCost.totalCacheSavings > 0.0) {
+                  Column {
+                    Text(
+                      text = "Cache Savings",
+                      style = MaterialTheme.typography.labelSmall,
+                      color = MaterialTheme.colorScheme.tertiary
+                    )
+                    Text(
+                      text = "-$${formatDouble(llmSessionUsageAndCost.totalCacheSavings, 2)}",
+                      style = MaterialTheme.typography.bodyMedium,
+                      fontWeight = FontWeight.Medium,
+                      color = MaterialTheme.colorScheme.tertiary
+                    )
+                  }
+                }
               }
 
               Column(horizontalAlignment = Alignment.End) {
@@ -373,6 +397,13 @@ fun LlmUsageComposable(
                   fontWeight = FontWeight.Bold,
                   color = MaterialTheme.colorScheme.error
                 )
+                if (llmSessionUsageAndCost.totalCacheSavings > 0.0) {
+                  Text(
+                    text = "without cache: $${formatDouble(llmSessionUsageAndCost.totalCostWithoutCacheDiscount, 2)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                  )
+                }
               }
             }
           }
@@ -687,15 +718,25 @@ fun LlmUsageComposable(
                         style = MaterialTheme.typography.bodySmall,
                         fontWeight = FontWeight.SemiBold
                       )
-                      
-                      // Estimated tokens
-                      val estimatedTokens = request.inputTokenBreakdown?.totalEstimatedTokens
-                      Text(
-                        text = estimatedTokens?.let { formatCommaNumber(it) } ?: "-",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontSize = MaterialTheme.typography.bodySmall.fontSize * 0.9
-                      )
+
+                      if (request.cacheReadInputTokens > 0) {
+                        // Show cached token count
+                        Text(
+                          text = "${formatCommaNumber(request.cacheReadInputTokens)} cached",
+                          style = MaterialTheme.typography.bodySmall,
+                          color = MaterialTheme.colorScheme.tertiary,
+                          fontSize = MaterialTheme.typography.bodySmall.fontSize * 0.9
+                        )
+                      } else {
+                        // Estimated tokens (fallback when no cache data)
+                        val estimatedTokens = request.inputTokenBreakdown?.totalEstimatedTokens
+                        Text(
+                          text = estimatedTokens?.let { formatCommaNumber(it) } ?: "-",
+                          style = MaterialTheme.typography.bodySmall,
+                          color = MaterialTheme.colorScheme.onSurfaceVariant,
+                          fontSize = MaterialTheme.typography.bodySmall.fontSize * 0.9
+                        )
+                      }
                     }
                     
                     // Output Tokens

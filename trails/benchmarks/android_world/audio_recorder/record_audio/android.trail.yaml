@@ -1,0 +1,23 @@
+# Android World Benchmark: RecordAudio
+- config:
+    id: android-world-benchmarks/audio_recorder/record_audio
+    displayName: "Audio Recorder - Record Audio"
+    description: "Record an audio clip using Audio Recorder app and save it."
+
+- tools:
+    - androidworldbenchmarks_clearDirectory:
+        directoryPath: /storage/emulated/0/Android/data/com.dimowner.audiorecorder/files/Music/records
+
+- prompts:
+    - step: "Record an audio clip using Audio Recorder app and save it."
+
+- tools:
+    - launchApp:
+        appId: com.dimowner.audiorecorder
+    - androidworldbenchmarks_assertAdbShellOutput:
+        command: "ls /storage/emulated/0/Android/data/com.dimowner.audiorecorder/files/Music/records"
+        expectedOutput: "."
+        matchMode: "contains"
+
+# --- Benchmark Run History ---
+# [2026-03-11] FAILED - Audio Recorder app (com.dimowner.audiorecorder) not installed on emulator.

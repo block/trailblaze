@@ -2,14 +2,13 @@ package xyz.block.trailblaze.yaml.models
 
 import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.MaestroTrailblazeTool
 import xyz.block.trailblaze.yaml.DirectionStep
-import xyz.block.trailblaze.yaml.MaestroCommandList
 import xyz.block.trailblaze.yaml.PromptStep
 import xyz.block.trailblaze.yaml.ToolRecording
 import xyz.block.trailblaze.yaml.TrailConfig
 import xyz.block.trailblaze.yaml.TrailSource
 import xyz.block.trailblaze.yaml.TrailYamlItem
-import xyz.block.trailblaze.yaml.TrailYamlItem.MaestroTrailItem
 import xyz.block.trailblaze.yaml.VerificationStep
 import xyz.block.trailblaze.yaml.fromTrailblazeTool
 
@@ -25,6 +24,9 @@ class TrailblazeYamlBuilder {
     priority: String? = null,
     source: TrailSource? = null,
     metadata: Map<String, String>? = null,
+    app: String? = null,
+    driver: String? = null,
+    platform: String? = null,
   ) = apply {
     recordings.add(
       TrailYamlItem.ConfigTrailItem(
@@ -36,6 +38,9 @@ class TrailblazeYamlBuilder {
           description = description,
           priority = priority,
           metadata = metadata,
+          app = app,
+          driver = driver,
+          platform = platform,
         ),
       ),
     )
@@ -89,23 +94,7 @@ class TrailblazeYamlBuilder {
 
   fun maestro(
     commands: List<JsonObject>,
-  ) = apply {
-    // Null return means this is the first item in the yaml so just add a new tool trail item
-    when (val lastItem = recordings.lastOrNull()) {
-      is MaestroTrailItem -> {
-        recordings.removeAt(recordings.lastIndex)
-        val newToolTrailItem = lastItem.copy(
-          // This is gross, can we fix this nested copy?
-          maestro = lastItem.maestro.copy(
-            maestroCommands = lastItem.maestro.maestroCommands.plus(commands),
-          ),
-        )
-        recordings.add(newToolTrailItem)
-      }
-
-      else -> recordings.add(MaestroTrailItem(MaestroCommandList(commands)))
-    }
-  }
+  ) = tools(listOf(MaestroTrailblazeTool(commands)))
 
   fun build() = recordings
 

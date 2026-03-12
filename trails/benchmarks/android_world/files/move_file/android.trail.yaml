@@ -1,0 +1,35 @@
+# Android World Benchmark: Move File
+- config:
+    id: android-world-benchmarks/files/move_file
+    description: Move report.pdf from Download to Documents in Android filesystem
+- tools:
+    - androidworldbenchmarks_runAdbShell:
+        adbShellCommands:
+          - "rm -rf /storage/emulated/0/Download"
+          - "rm -rf /storage/emulated/0/Documents"
+          - "mkdir -p /storage/emulated/0/Download"
+          - "mkdir -p /storage/emulated/0/Documents"
+    - androidworldbenchmarks_createFileOnDevice:
+        devicePath: /storage/emulated/0/Download
+        fileName: report.pdf
+        content: PDF content placeholder
+    - androidworldbenchmarks_createFileOnDevice:
+        devicePath: /storage/emulated/0/Download
+        fileName: other_file.txt
+        content: Other files in Download
+    - androidworldbenchmarks_createFileOnDevice:
+        devicePath: /storage/emulated/0/Download
+        fileName: temp.tmp
+        content: Temporary file
+- prompts:
+    - step: Move the file report.pdf from Download within the sdk_gphone_x86_64 storage area to the Documents within the same sdk_gphone_x86_64 storage area in the Android filesystem.
+- tools:
+    - androidworldbenchmarks_assertFileExistsOnDevice:
+        filePath: /storage/emulated/0/Documents/report.pdf
+        shouldExist: true
+    - androidworldbenchmarks_assertFileExistsOnDevice:
+        filePath: /storage/emulated/0/Download/report.pdf
+        shouldExist: false
+
+# --- Benchmark Run History ---
+# [2026-03-11] Build #27 PASSED - Agent successfully moved file.

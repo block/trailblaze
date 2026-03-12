@@ -18,7 +18,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.grid.GridCells.Adaptive
-import androidx.compose.foundation.lazy.grid.GridCells.Fixed
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.rememberScrollState
@@ -50,12 +49,16 @@ import androidx.compose.ui.focus.focusTarget
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.encodeToJsonElement
+import kotlinx.serialization.json.jsonObject
+import xyz.block.trailblaze.api.AgentDriverAction
+import xyz.block.trailblaze.logs.client.TrailblazeJson
+import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.llm.LlmSessionUsageAndCost
 import xyz.block.trailblaze.llm.LlmUsageAndCostExt.computeUsageSummary
 import xyz.block.trailblaze.logs.client.TrailblazeLog
@@ -68,11 +71,9 @@ import xyz.block.trailblaze.ui.images.ImageLoader
 import xyz.block.trailblaze.ui.images.NetworkImageLoader
 import xyz.block.trailblaze.ui.recordings.ExistingTrail
 import xyz.block.trailblaze.ui.recordings.RecordedTrailsRepo
-import xyz.block.trailblaze.ui.tabs.session.group.LogGroupRow
-import xyz.block.trailblaze.ui.tabs.session.models.GroupedLog
 import xyz.block.trailblaze.ui.tabs.session.models.SessionDetail
 import xyz.block.trailblaze.ui.theme.LocalFontScale
-import xyz.block.trailblaze.ui.utils.LogUtils
+import xyz.block.trailblaze.ui.loadCaptureVideoMetadata
 import androidx.compose.foundation.lazy.grid.items as gridItems
 import xyz.block.trailblaze.util.Console
 
@@ -80,12 +81,7 @@ import xyz.block.trailblaze.util.Console
 fun SessionDetailComposable(
   sessionDetail: SessionDetail,
   toMaestroYaml: (JsonObject) -> String = { it.toString() },
-  toTrailblazeYaml: (toolName: String, trailblazeTool: TrailblazeTool) -> String = { toolName, trailblazeTool ->
-    buildString {
-      appendLine(toolName)
-      appendLine(trailblazeTool)
-    }
-  },
+  toTrailblazeYaml: (toolName: String, trailblazeTool: TrailblazeTool) -> String = ::formatTrailblazeToolForDisplay,
   generateRecordingYaml: () -> String,
   onBackClick: () -> Unit = {},
   imageLoader: ImageLoader = NetworkImageLoader(),
@@ -93,7 +89,7 @@ fun SessionDetailComposable(
   onShowDetails: (TrailblazeLog) -> Unit = {},
   onShowInspectUI: (TrailblazeLog) -> Unit = {},
   onShowChatHistory: (TrailblazeLog.TrailblazeLlmRequestLog) -> Unit = {},
-  onShowScreenshotModal: (imageModel: Any?, deviceWidth: Int, deviceHeight: Int, clickX: Int?, clickY: Int?, action: xyz.block.trailblaze.api.MaestroDriverActionType?) -> Unit = { _, _, _, _, _, _ -> },
+  onShowScreenshotModal: (imageModel: Any?, deviceWidth: Int, deviceHeight: Int, clickX: Int?, clickY: Int?, action: AgentDriverAction?) -> Unit = { _, _, _, _, _, _ -> },
   // Session control
   onCancelSession: () -> Unit = {},
   onDeleteSession: () -> Unit = {},
@@ -102,7 +98,7 @@ fun SessionDetailComposable(
   // Persistent UI state
   initialZoomOffset: Int = 0,
   initialFontScale: Float = 1f,
-  initialViewMode: SessionViewMode = SessionViewMode.List,
+  initialViewMode: SessionViewMode = SessionViewMode.Timeline,
   onZoomOffsetChanged: (Int) -> Unit = {},
   onFontScaleChanged: (Float) -> Unit = {},
   onViewModeChanged: (SessionViewMode) -> Unit = {},
@@ -124,8 +120,6 @@ fun SessionDetailComposable(
         onBackClick = onBackClick,
         viewMode = initialViewMode,
         onViewModeChanged = {}, // No-op for empty logs
-        alwaysAtBottom = false,
-        onAlwaysAtBottomChanged = {}, // No-op for empty logs
         isSessionInProgress = sessionDetail.session.latestStatus.isInProgress,
         onCancelSession = onCancelSession,
         onOpenLogsFolder = onOpenLogsFolder,
@@ -168,21 +162,9 @@ fun SessionDetailComposable(
     var showDeleteConfirmation by remember { mutableStateOf(false) }
 
     // Pre-compute heavy operations in background threads and cache results
-    var groupedLogs by remember { mutableStateOf<List<GroupedLog>>(emptyList()) }
     var llmUsageSummary by remember { mutableStateOf<LlmSessionUsageAndCost?>(null) }
     var recordingYamlCache by remember { mutableStateOf<String?>(null) }
-    var isLoadingGroupedLogs by remember { mutableStateOf(true) }
     var isLoadingRecordingYaml by remember { mutableStateOf(true) }
-
-    // Background computation for grouped logs (used in List view)
-    LaunchedEffect(sessionDetail.logs) {
-      isLoadingGroupedLogs = true
-      withContext(Dispatchers.Default) {
-        val computedGroupedLogs = LogUtils.groupLogsByLlmResponseId(sessionDetail.logs)
-        groupedLogs = computedGroupedLogs
-        isLoadingGroupedLogs = false
-      }
-    }
 
     // Background computation for LLM usage summary (used in LlmUsage view)
     LaunchedEffect(sessionDetail.logs) {
@@ -203,7 +185,7 @@ fun SessionDetailComposable(
       }
     }
 
-    LaunchedEffect(alwaysAtBottom, sessionDetail.logs) {
+    LaunchedEffect(alwaysAtBottom, sessionDetail.logs, viewMode) {
       if (alwaysAtBottom) {
         gridState.animateScrollToItem(sessionDetail.logs.lastIndex)
       }
@@ -225,32 +207,13 @@ fun SessionDetailComposable(
       val minCardWidth = 160.dp
       val targetCardWidth = 180.dp // Target card width for auto-sizing (less aggressive)
 
-      fun calculateListViewAvailableWidth(): Dp {
-        val maxIndentPadding = 32.dp // Worst case: 2 levels * 16.dp
-        val groupRowPadding = 24.dp // LogGroupRow Column: start(12dp) + end(12dp)
-        val flowRowEndPadding = 8.dp // FlowRow extra end padding
-        return maxWidth - maxIndentPadding - groupRowPadding - flowRowEndPadding
-      }
-
       // Calculate optimal cards per row based on target width
-      val optimalCardsPerRow = if (viewMode == SessionViewMode.List) {
-        // For List view, account for LogGroupRow padding and FlowRow constraints (worst case)
-        val flowRowSpacing = 8.dp // FlowRow horizontal spacing between items
-        val availableWidth = calculateListViewAvailableWidth()
-        ((availableWidth + flowRowSpacing) / (targetCardWidth + flowRowSpacing)).toInt().coerceAtLeast(1)
-      } else {
-        // Grid view calculation
+      val optimalCardsPerRow =
         ((maxWidth + gridSpacing) / (targetCardWidth + gridSpacing)).toInt().coerceAtLeast(1)
-      }
 
       // Calculate max cards that can fit with minimum width
-      val maxCards = if (viewMode == SessionViewMode.List) {
-        val flowRowSpacing = 8.dp
-        val availableWidth = calculateListViewAvailableWidth()
-        ((availableWidth + flowRowSpacing) / (minCardWidth + flowRowSpacing)).toInt().coerceAtLeast(1)
-      } else {
+      val maxCards =
         ((maxWidth + gridSpacing) / (minCardWidth + gridSpacing)).toInt().coerceAtLeast(1)
-      }
 
       // Manual zoom offset - positive means more cards, negative means fewer cards
       var zoomOffset by remember { mutableStateOf(initialZoomOffset) }
@@ -261,13 +224,7 @@ fun SessionDetailComposable(
       val autoCardsPerRow = if (optimalCardsPerRow < lastOptimalCount) {
         // Window got narrower - check if we can keep current count without making cards too small
         val currentCount = lastOptimalCount + zoomOffset
-        val wouldBeCardSize = if (viewMode == SessionViewMode.List) {
-          val flowRowSpacing = 8.dp
-          val availableWidth = calculateListViewAvailableWidth()
-          (availableWidth - (flowRowSpacing * (currentCount - 1))) / currentCount
-        } else {
-          (maxWidth - (gridSpacing * (currentCount - 1))) / currentCount
-        }
+        val wouldBeCardSize = (maxWidth - (gridSpacing * (currentCount - 1))) / currentCount
         // Keep current count if cards are still reasonably sized
         if (wouldBeCardSize >= minCardWidth && currentCount <= maxCards) {
           currentCount
@@ -284,28 +241,20 @@ fun SessionDetailComposable(
       val cardsPerRow = autoCardsPerRow.coerceIn(1, maxCards)
 
       // Calculate actual card size based on selected cards per row
-      val cardSize = if (viewMode == SessionViewMode.List) {
-        // In List view, account for LogGroupRow padding and FlowRow spacing (worst case)
-        val flowRowSpacing = 8.dp // FlowRow horizontal spacing between items
-        val availableWidth = calculateListViewAvailableWidth()
-        (availableWidth - (flowRowSpacing * (cardsPerRow - 1))) / cardsPerRow
-      } else {
-        (maxWidth - (gridSpacing * (cardsPerRow - 1))) / cardsPerRow
-      }
+      val cardSize = (maxWidth - (gridSpacing * (cardsPerRow - 1))) / cardsPerRow
 
       Box(modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize()) {
           CompositionLocalProvider(LocalFontScale provides fontSizeScale) {
             // Header
             SessionDetailHeader(
+              sessionDetail = sessionDetail,
               onBackClick = onBackClick,
               viewMode = viewMode,
               onViewModeChanged = { newMode ->
                 viewMode = newMode
                 onViewModeChanged(newMode)
               },
-              alwaysAtBottom = alwaysAtBottom,
-              onAlwaysAtBottomChanged = { alwaysAtBottom = it },
               isSessionInProgress = sessionDetail.session.latestStatus.isInProgress,
               onCancelSession = onCancelSession,
               onOpenLogsFolder = onOpenLogsFolder,
@@ -371,6 +320,11 @@ fun SessionDetailComposable(
               }
             }
 
+            // Extract agent implementation from the first LLM request log's context
+            val agentImplementation = sessionDetail.logs
+              .filterIsInstance<TrailblazeLog.TrailblazeLlmRequestLog>()
+              .firstNotNullOfOrNull { it.requestContext?.agentImplementation }
+
             // Session summary item
             SessionSummaryRow(
               status = sessionDetail.overallStatus,
@@ -385,6 +339,7 @@ fun SessionDetailComposable(
               } else null,
               trailConfig = sessionDetail.session.trailConfig,
               sessionInfo = sessionDetail.session,
+              agentImplementation = agentImplementation,
             )
 
             // Spacer item
@@ -402,7 +357,6 @@ fun SessionDetailComposable(
                     state = gridState,
                     modifier = Modifier.fillMaxSize()
                   ) {
-                    // Log items
                     gridItems(sessionDetail.logs) { log ->
                       LogCard(
                         log = log,
@@ -426,96 +380,6 @@ fun SessionDetailComposable(
                   }
                 }
 
-                SessionViewMode.List -> {
-                  if (isLoadingGroupedLogs) {
-                    Column(
-                      modifier = Modifier.fillMaxSize(),
-                      verticalArrangement = Arrangement.Center,
-                      horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                      Text(text = "Loading...")
-                    }
-                  } else {
-                    LazyVerticalGrid(
-                      columns = Fixed(1),
-                      horizontalArrangement = Arrangement.spacedBy(12.dp),
-                      verticalArrangement = Arrangement.spacedBy(0.dp),
-                      state = gridState,
-                      modifier = Modifier.fillMaxSize()
-                    ) {
-                      gridItems(groupedLogs) { groupedLog ->
-                        Column {
-                          when (groupedLog) {
-                            is GroupedLog.Single -> {
-                              LogListRow(
-                                log = groupedLog.log,
-                                sessionId = sessionDetail.session.sessionId.value,
-                                sessionStartTime = sessionDetail.session.timestamp,
-                                imageLoader = imageLoader,
-                                showDetails = { onShowDetails(groupedLog.log) },
-                                cardSize = cardSize,
-                                showInspectUI = when (groupedLog.log) {
-                                  is TrailblazeLog.TrailblazeLlmRequestLog -> {
-                                    { onShowInspectUI(groupedLog.log) }
-                                  }
-
-                                  is TrailblazeLog.MaestroDriverLog -> {
-                                    if (groupedLog.log.viewHierarchy != null) {
-                                      { onShowInspectUI(groupedLog.log) }
-                                    } else null
-                                  }
-
-                                  else -> null
-                                },
-                                showChatHistory = when (groupedLog.log) {
-                                  is TrailblazeLog.TrailblazeLlmRequestLog -> {
-                                    { onShowChatHistory(groupedLog.log) }
-                                  }
-
-                                  else -> null
-                                },
-                                onShowScreenshotModal = onShowScreenshotModal,
-                                onOpenInFinder = if (onOpenInFinder != null) {
-                                  { onOpenInFinder.invoke(groupedLog.log) }
-                                } else null
-                              )
-                            }
-
-                            is GroupedLog.Group -> {
-                              LogGroupRow(
-                                group = groupedLog,
-                                sessionId = sessionDetail.session.sessionId.value,
-                                sessionStartTime = sessionDetail.session.timestamp,
-                                toMaestroYaml = toMaestroYaml,
-                                toTrailblazeYaml = toTrailblazeYaml,
-                                imageLoader = imageLoader,
-                                cardSize = cardSize,
-                                showDetails = { log -> onShowDetails(log) },
-                                showInspectUI = { log -> onShowInspectUI(log) },
-                                showChatHistory = { log ->
-                                  if (log is TrailblazeLog.TrailblazeLlmRequestLog) onShowChatHistory(
-                                    log
-                                  )
-                                },
-                                onShowScreenshotModal = onShowScreenshotModal,
-                                onOpenInFinder = onOpenInFinder
-                              )
-                            }
-                          }
-                          if (groupedLog != groupedLogs.last()) {
-                            Box(
-                              modifier = Modifier
-                                .fillMaxWidth()
-                                .height(1.dp)
-                                .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.13f))
-                            )
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-
                 SessionViewMode.Recording -> {
                   if (isLoadingRecordingYaml) {
                     Column(
@@ -535,7 +399,6 @@ fun SessionDetailComposable(
                         .padding(end = 12.dp)
                     ) {
                       Row(
-
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                         modifier = Modifier.align(Alignment.CenterHorizontally)
                       ) {
@@ -745,7 +608,7 @@ fun SessionDetailComposable(
                 SessionViewMode.LlmUsage -> {
                   // Get LLM request logs to map index to actual log
                   val llmRequestLogs = sessionDetail.logs.filterIsInstance<TrailblazeLog.TrailblazeLlmRequestLog>()
-                  
+
                   LlmUsageComposable(
                     llmSessionUsageAndCost = llmUsageSummary,
                     gridState = gridState,
@@ -756,18 +619,49 @@ fun SessionDetailComposable(
                     }
                   )
                 }
+                SessionViewMode.Timeline -> {
+                  // Load video capture metadata for this session
+                  var combinedVideoMetadata by remember { mutableStateOf<VideoMetadata?>(null) }
+                  LaunchedEffect(sessionDetail.session.sessionId, sessionDetail.overallStatus) {
+                    combinedVideoMetadata =
+                      loadCaptureVideoMetadata(sessionDetail.session.sessionId.value)
+                    // Capture files are written after the session ends (in the finally block),
+                    // so they may not exist yet when overallStatus first changes. Retry once
+                    // after a short delay to catch late-arriving capture metadata.
+                    if (combinedVideoMetadata == null && sessionDetail.overallStatus?.isInProgress != true) {
+                      kotlinx.coroutines.delay(3000)
+                      combinedVideoMetadata =
+                        loadCaptureVideoMetadata(sessionDetail.session.sessionId.value)
+                    }
+                  }
+
+                  SessionCombinedView(
+                    logs = sessionDetail.logs,
+                    overallStatus = sessionDetail.overallStatus,
+                    sessionId = sessionDetail.session.sessionId.value,
+                    videoMetadata = combinedVideoMetadata,
+                    imageLoader = imageLoader,
+                    onShowScreenshotModal = { imageModel, dw, dh, cx, cy, action ->
+                      onShowScreenshotModal(imageModel, dw, dh, cx, cy, action)
+                    },
+                    onShowInspectUI = { log -> onShowInspectUI(log) },
+                    onShowChatHistory = { log -> onShowChatHistory(log) },
+                  )
+                }
               }
             }
           }
         }
-        // VerticalScrollbar always visible, mapped to gridState
-        VerticalScrollbar(
-          adapter = rememberScrollbarAdapter(gridState),
-          modifier = Modifier
-            .align(Alignment.CenterEnd)
-            .fillMaxHeight()
-            .padding(end = 2.dp)
-        )
+        // VerticalScrollbar — hidden in Timeline mode which has its own scrolling
+        if (viewMode != SessionViewMode.Timeline) {
+          VerticalScrollbar(
+            adapter = rememberScrollbarAdapter(gridState),
+            modifier = Modifier
+              .align(Alignment.CenterEnd)
+              .fillMaxHeight()
+              .padding(end = 2.dp)
+          )
+        }
 
         // Show retry FAB when session has failed
         val isSessionFailed = when (sessionDetail.overallStatus) {
@@ -795,5 +689,26 @@ fun SessionDetailComposable(
         }
       }
     }
+  }
+}
+private fun formatTrailblazeToolForDisplay(
+  toolName: String,
+  trailblazeTool: TrailblazeTool,
+): String {
+  val toolArgs = when (trailblazeTool) {
+    is OtherTrailblazeTool -> trailblazeTool.raw
+    else -> runCatching {
+      TrailblazeJson.defaultWithoutToolsInstance.encodeToJsonElement(trailblazeTool).jsonObject
+    }.getOrNull()
+  }?.filterKeys { key ->
+    key != "class" && key != "@class" && key != "type" && key != "toolName"
+  }?.let(::JsonObject) ?: JsonObject(emptyMap())
+  val prettyArgs = TrailblazeJson.defaultWithoutToolsInstance.encodeToString(
+    JsonObject.serializer(),
+    toolArgs,
+  )
+  return buildString {
+    appendLine(toolName)
+    append(prettyArgs)
   }
 }

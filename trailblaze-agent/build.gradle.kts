@@ -9,6 +9,7 @@ plugins {
 dependencies {
   api(project(":trailblaze-common"))
   api(libs.koog.agents.tools)
+  api(libs.koog.agents.planner) // Goal-oriented planner for trail execution
   api(libs.koog.prompt.llm)
   api(libs.koog.prompt.model)
 
@@ -27,6 +28,18 @@ dependencies {
 
 tasks.test {
   useJUnit() // Configure Gradle to use JUnit 4
+}
+
+tasks.register<Test>("updateSystemPromptBaselines") {
+  description = "Regenerate system prompt baseline files. Commit the updated files after running."
+  group = "verification"
+  testClassesDirs = tasks.test.get().testClassesDirs
+  classpath = tasks.test.get().classpath
+  useJUnit()
+  environment("UPDATE_BASELINES", "true")
+  filter {
+    includeTestsMatching("*.SystemPromptBaselineTest")
+  }
 }
 
 dependencyGuard {

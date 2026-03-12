@@ -32,6 +32,6 @@ data class RememberTextTrailblazeTool(
       )
 
     memory.remember(variable, extractedValue)
-    return TrailblazeToolResult.Success
+    return TrailblazeToolResult.Success()
   }
 }

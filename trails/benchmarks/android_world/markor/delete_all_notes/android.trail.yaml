@@ -1,0 +1,33 @@
+# Android World Benchmark: Delete All Notes
+- config:
+    id: android-world-benchmarks/markor/delete_all_notes
+    description: Delete all notes in Markor
+- tools:
+    - androidworldbenchmarks_clearDirectory:
+        directoryPath: /storage/emulated/0/Documents/Markor
+    - androidworldbenchmarks_createFileOnDevice:
+        devicePath: /storage/emulated/0/Documents/Markor
+        fileName: alpha.md
+        content: Alpha note content
+    - androidworldbenchmarks_createFileOnDevice:
+        devicePath: /storage/emulated/0/Documents/Markor
+        fileName: beta.txt
+        content: Beta note content
+    - androidworldbenchmarks_createFileOnDevice:
+        devicePath: /storage/emulated/0/Documents/Markor
+        fileName: gamma.md
+        content: Gamma note content
+    - androidworldbenchmarks_createFileOnDevice:
+        devicePath: /storage/emulated/0/Documents/Markor
+        fileName: delta.txt
+        content: Delta note content
+- prompts:
+    - step: Delete all my notes in Markor.
+- tools:
+    - androidworldbenchmarks_assertAdbShellOutput:
+        command: "ls -A /storage/emulated/0/Documents/Markor/"
+        expectedOutput: ""
+        matchMode: "exact"
+
+# --- Benchmark Run History ---
+# [2026-03-11] Build #27 FAILED - Agent limitation: ObjectiveFailed. Can't navigate Markor app.

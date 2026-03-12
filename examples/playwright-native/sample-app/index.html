@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Trailblaze Playwright Test Fixture</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 800px; margin: 40px auto; padding: 0 20px; }
+    h1 { color: #1a1a1a; }
+    nav { background: #f5f5f5; padding: 12px; border-radius: 8px; margin-bottom: 24px; }
+    nav a { margin-right: 16px; color: #0066cc; text-decoration: none; }
+    nav a:hover { text-decoration: underline; }
+    .card { border: 1px solid #ddd; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+    .card h2 { margin-top: 0; }
+    form label { display: block; margin-bottom: 4px; font-weight: 600; }
+    form input, form textarea, form select { display: block; width: 100%; margin-bottom: 12px; padding: 8px; box-sizing: border-box; }
+    form button { background: #0066cc; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; }
+    #form-result { margin-top: 12px; padding: 12px; background: #e8f5e9; border-radius: 4px; display: none; }
+    .hidden { display: none; }
+    #counter-value { font-size: 2em; font-weight: bold; }
+    .counter-btn { font-size: 1.2em; padding: 8px 16px; margin: 0 8px; cursor: pointer; }
+    ul#item-list li { padding: 4px 0; }
+    .scroll-layout { display: flex; gap: 16px; }
+    .scroll-panel { height: 200px; overflow-y: auto; border: 1px solid #ccc; border-radius: 4px; padding: 8px; }
+    .scroll-sidebar { width: 200px; flex-shrink: 0; }
+    .scroll-content { flex: 1; }
+    .scroll-panel a { display: block; padding: 6px 8px; color: #0066cc; text-decoration: none; }
+    .scroll-panel a:hover { background: #f0f0f0; }
+    .scroll-panel .scroll-item { padding: 8px; border-bottom: 1px solid #eee; }
+  </style>
+</head>
+<body>
+  <h1>Trailblaze Test Fixture</h1>
+  <nav aria-label="Main navigation">
+    <a href="#home" id="nav-home">Home</a>
+    <a href="#form" id="nav-form">Form</a>
+    <a href="#counter" id="nav-counter">Counter</a>
+    <a href="#about" id="nav-about">About</a>
+    <a href="#scroll" id="nav-scroll">Scroll</a>
+  </nav>
+
+  <!-- Home Section -->
+  <section id="section-home">
+    <div class="card">
+      <h2>Welcome</h2>
+      <p>This is a test fixture for validating Trailblaze Playwright-native tools.</p>
+    </div>
+    <div class="card">
+      <h2>Items</h2>
+      <ul id="item-list">
+        <li>Alpha</li>
+        <li>Bravo</li>
+        <li>Charlie</li>
+        <li>Delta</li>
+        <li>Echo</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- Form Section -->
+  <section id="section-form" class="hidden">
+    <div class="card">
+      <h2>Contact Form</h2>
+      <form id="contact-form">
+        <label for="name-input">Name</label>
+        <input type="text" id="name-input" placeholder="Enter your name" aria-label="Name">
+        <label for="email-input">Email</label>
+        <input type="email" id="email-input" placeholder="Enter your email" aria-label="Email">
+        <label for="category-select">Category</label>
+        <select id="category-select" aria-label="Category">
+          <option value="">Select a category</option>
+          <option value="support">Support</option>
+          <option value="sales">Sales</option>
+          <option value="feedback">Feedback</option>
+        </select>
+        <label for="message-input">Message</label>
+        <textarea id="message-input" rows="3" placeholder="Enter your message" aria-label="Message"></textarea>
+        <button type="submit">Submit</button>
+      </form>
+      <div id="form-result">
+        <strong>Form submitted!</strong>
+        <p id="form-summary"></p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Counter Section -->
+  <section id="section-counter" class="hidden">
+    <div class="card">
+      <h2>Counter</h2>
+      <p>Current value: <span id="counter-value">0</span></p>
+      <button class="counter-btn" id="decrement-btn" aria-label="Decrement">-</button>
+      <button class="counter-btn" id="increment-btn" aria-label="Increment">+</button>
+      <button class="counter-btn" id="reset-btn" aria-label="Reset">Reset</button>
+    </div>
+  </section>
+
+  <!-- About Section -->
+  <section id="section-about" class="hidden">
+    <div class="card">
+      <h2>About</h2>
+      <p>Trailblaze is an AI-powered UI testing framework for mobile and web apps.</p>
+      <p>Version: <span id="version">1.0.0</span></p>
+    </div>
+  </section>
+
+  <!-- Scroll Section -->
+  <section id="section-scroll" class="hidden">
+    <div class="card">
+      <h2>Scroll Containers</h2>
+      <p>Two independently scrollable panels for testing container-specific scrolling.</p>
+      <div class="scroll-layout">
+        <nav aria-label="Sidebar navigation" class="scroll-panel scroll-sidebar">
+          <a href="javascript:void(0)">Category 1</a>
+          <a href="javascript:void(0)">Category 2</a>
+          <a href="javascript:void(0)">Category 3</a>
+          <a href="javascript:void(0)">Category 4</a>
+          <a href="javascript:void(0)">Category 5</a>
+          <a href="javascript:void(0)">Category 6</a>
+          <a href="javascript:void(0)">Category 7</a>
+          <a href="javascript:void(0)">Category 8</a>
+          <a href="javascript:void(0)">Category 9</a>
+          <a href="javascript:void(0)">Category 10</a>
+          <a href="javascript:void(0)">Category 11</a>
+          <a href="javascript:void(0)">Category 12</a>
+          <a href="javascript:void(0)">Category 13</a>
+          <a href="javascript:void(0)">Category 14</a>
+          <a href="javascript:void(0)">Category 15</a>
+        </nav>
+        <div role="region" aria-label="Content panel" class="scroll-panel scroll-content">
+          <div class="scroll-item">Item 1</div>
+          <div class="scroll-item">Item 2</div>
+          <div class="scroll-item">Item 3</div>
+          <div class="scroll-item">Item 4</div>
+          <div class="scroll-item">Item 5</div>
+          <div class="scroll-item">Item 6</div>
+          <div class="scroll-item">Item 7</div>
+          <div class="scroll-item">Item 8</div>
+          <div class="scroll-item">Item 9</div>
+          <div class="scroll-item">Item 10</div>
+          <div class="scroll-item">Item 11</div>
+          <div class="scroll-item">Item 12</div>
+          <div class="scroll-item">Item 13</div>
+          <div class="scroll-item">Item 14</div>
+          <div class="scroll-item">Item 15</div>
+          <div class="scroll-item">Item 16</div>
+          <div class="scroll-item">Item 17</div>
+          <div class="scroll-item">Item 18</div>
+          <div class="scroll-item">Item 19</div>
+          <div class="scroll-item">Item 20</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <script>
+    // Simple SPA navigation
+    const sections = {
+      home: document.getElementById('section-home'),
+      form: document.getElementById('section-form'),
+      counter: document.getElementById('section-counter'),
+      about: document.getElementById('section-about'),
+      scroll: document.getElementById('section-scroll'),
+    };
+
+    function showSection(name) {
+      Object.values(sections).forEach(s => s.classList.add('hidden'));
+      if (sections[name]) sections[name].classList.remove('hidden');
+    }
+
+    document.querySelectorAll('nav[aria-label="Main navigation"] a').forEach(link => {
+      link.addEventListener('click', (e) => {
+        e.preventDefault();
+        const section = link.getAttribute('href').replace('#', '');
+        showSection(section);
+        window.location.hash = section;
+      });
+    });
+
+    // Handle initial hash and browser back/forward
+    function handleHash() {
+      const hash = window.location.hash.replace('#', '') || 'home';
+      showSection(hash);
+    }
+    handleHash();
+    window.addEventListener('hashchange', handleHash);
+
+    // Form handling
+    document.getElementById('contact-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const name = document.getElementById('name-input').value;
+      const email = document.getElementById('email-input').value;
+      const category = document.getElementById('category-select').value;
+      const message = document.getElementById('message-input').value;
+      const result = document.getElementById('form-result');
+      const summary = document.getElementById('form-summary');
+      summary.textContent = `Name: ${name}, Email: ${email}, Category: ${category}, Message: ${message}`;
+      result.style.display = 'block';
+    });
+
+    // Counter
+    let count = 0;
+    const counterDisplay = document.getElementById('counter-value');
+    document.getElementById('increment-btn').addEventListener('click', () => {
+      count++;
+      counterDisplay.textContent = count;
+    });
+    document.getElementById('decrement-btn').addEventListener('click', () => {
+      count--;
+      counterDisplay.textContent = count;
+    });
+    document.getElementById('reset-btn').addEventListener('click', () => {
+      count = 0;
+      counterDisplay.textContent = count;
+    });
+  </script>
+</body>
+</html>

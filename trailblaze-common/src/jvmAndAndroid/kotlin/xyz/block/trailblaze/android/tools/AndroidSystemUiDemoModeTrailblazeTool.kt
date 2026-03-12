@@ -37,7 +37,7 @@ data class AndroidSystemUiDemoModeTrailblazeTool(
       adbShellCommands.forEach { adbShellCommand ->
         adbExecutor.executeShellCommand(adbShellCommand)
       }
-      TrailblazeToolResult.Success
+      TrailblazeToolResult.Success()
     }
 
   }

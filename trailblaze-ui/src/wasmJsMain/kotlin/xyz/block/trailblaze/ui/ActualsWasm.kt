@@ -6,9 +6,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import getTrailblazeReportJsonFromBrowser
 import kotlinx.browser.window
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.serialization.json.Json
 import xyz.block.trailblaze.ui.images.ImageLoader
 import xyz.block.trailblaze.ui.images.NetworkImageLoader
+import xyz.block.trailblaze.ui.tabs.session.CaptureMetadataModel
+import xyz.block.trailblaze.ui.tabs.session.VideoMetadata
 import xyz.block.trailblaze.util.Console
 
 actual fun createLogsFileSystemImageLoader(): ImageLoader {
@@ -22,6 +27,36 @@ actual fun getCurrentUrl(): String? {
 
 actual fun getPlatform(): Platform {
     return Platform.WASM
+}
+
+actual fun openVideoInSystemPlayer(filePath: String) {
+    // Video playback not supported in browser
+}
+
+actual suspend fun loadCaptureVideoMetadata(sessionId: String): VideoMetadata? {
+    return try {
+        val json = loadCaptureMetadataJson(sessionId) ?: return null
+        val metadata = Json { ignoreUnknownKeys = true }
+            .decodeFromString<CaptureMetadataModel>(json)
+        val videoArtifact = metadata.artifacts.firstOrNull { it.type == "VIDEO" } ?: return null
+        VideoMetadata(
+            url = "",
+            filePath = sessionId, // Used as key prefix by WasmEmbeddedVideoFrameCache
+            startTimestampMs = videoArtifact.startTimestampMs,
+            endTimestampMs = videoArtifact.endTimestampMs,
+        )
+    } catch (e: Exception) {
+        Console.log("Failed to load capture video metadata for $sessionId: ${e.message}")
+        null
+    }
+}
+
+private suspend fun loadCaptureMetadataJson(sessionId: String): String? {
+    val deferred = CompletableDeferred<String?>()
+    getTrailblazeReportJsonFromBrowser("capture_metadata/$sessionId") { json ->
+        deferred.complete(if (json == "{}" || json.isBlank()) null else json)
+    }
+    return deferred.await()
 }
 
 @Composable

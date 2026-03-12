@@ -39,6 +39,26 @@ object OllamaTrailblazeLlmModelList : TrailblazeLlmModelList {
     )
   }
 
-  override val entries = OLLAMA_GPT_OSS_MODELS + OLLAMA_QWEN3_VL_MODELS
+  val OLLAMA_QWEN3_5_MODELS = listOf(
+    "0.8", 2, 4, 9, 27, 35, 122
+  ).map { "${it}b" }.plus("latest").map {
+    TrailblazeLlmModel(
+      trailblazeLlmProvider = TrailblazeLlmProvider.OLLAMA,
+      modelId = "qwen3.5:${it}",
+      inputCostPerOneMillionTokens = 0.0,
+      outputCostPerOneMillionTokens = 0.0,
+      capabilityIds = listOf(
+        LLMCapability.Temperature,
+        LLMCapability.Schema.JSON.Basic,
+        LLMCapability.Tools,
+        LLMCapability.Vision.Image,
+        LLMCapability.Document
+      ).map { it.id },
+      contextLength = 131_072L, // 128K context window
+      maxOutputTokens = 8_192L, // 8K output tokens (reduced from 64K to prevent Ollama server errors)
+    )
+  }
+
+  override val entries = OLLAMA_GPT_OSS_MODELS + OLLAMA_QWEN3_VL_MODELS + OLLAMA_QWEN3_5_MODELS
   override val provider: TrailblazeLlmProvider = TrailblazeLlmProvider.OLLAMA
 }

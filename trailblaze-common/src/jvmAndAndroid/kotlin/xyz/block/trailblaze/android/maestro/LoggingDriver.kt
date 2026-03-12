@@ -11,7 +11,7 @@ import maestro.SwipeDirection
 import maestro.TreeNode
 import maestro.ViewHierarchy
 import okio.Sink
-import xyz.block.trailblaze.api.MaestroDriverActionType
+import xyz.block.trailblaze.api.AgentDriverAction
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
@@ -48,9 +48,9 @@ class LoggingDriver(
     screenStateTemporarilyDisabledData.screenState
   } ?: screenStateProvider()
 
-  private inline fun <T> traceMaestroDriverAction(action: MaestroDriverActionType, block: () -> T): T = traceMaestroDriver(action::class.simpleName!!, block)
+  private inline fun <T> traceMaestroDriverAction(action: AgentDriverAction, block: () -> T): T = traceMaestroDriver(action::class.simpleName!!, block)
 
-  private fun logActionWithScreenshot(action: MaestroDriverActionType, block: () -> Unit = {}) {
+  private fun logActionWithScreenshot(action: AgentDriverAction, block: () -> Unit = {}) {
     val screenState = getCurrentScreenState()
     val startTime = Clock.System.now()
 
@@ -68,8 +68,9 @@ class LoggingDriver(
       null
     }
     
-    val log = TrailblazeLog.MaestroDriverLog(
+    val log = TrailblazeLog.AgentDriverLog(
       viewHierarchy = screenState.viewHierarchy,
+      trailblazeNodeTree = screenState.trailblazeNodeTree,
       screenshotFile = screenshotFilename,
       action = action,
       durationMs = executionTimeMs,
@@ -81,7 +82,7 @@ class LoggingDriver(
     trailblazeLogger.log(session, log)
   }
 
-  private fun logActionWithoutScreenshot(action: MaestroDriverActionType, block: () -> Unit = {}) {
+  private fun logActionWithoutScreenshot(action: AgentDriverAction, block: () -> Unit = {}) {
     val deviceInfo = delegate.deviceInfo()
     val startTime = Clock.System.now()
     val executionTimeMs = measureTimeMillis {
@@ -92,7 +93,7 @@ class LoggingDriver(
     
     // Get current session for logging
     val session = sessionProvider.invoke()
-    val log = TrailblazeLog.MaestroDriverLog(
+    val log = TrailblazeLog.AgentDriverLog(
       viewHierarchy = null,
       screenshotFile = null,
       action = action,
@@ -105,11 +106,11 @@ class LoggingDriver(
     trailblazeLogger.log(session, log)
   }
 
-  override fun addMedia(mediaFiles: List<File>) = logActionWithScreenshot(MaestroDriverActionType.AddMedia(mediaFiles.map { it.canonicalPath })) {
+  override fun addMedia(mediaFiles: List<File>) = logActionWithScreenshot(AgentDriverAction.AddMedia(mediaFiles.map { it.canonicalPath })) {
     delegate.addMedia(mediaFiles)
   }
 
-  override fun backPress() = logActionWithScreenshot(MaestroDriverActionType.BackPress) {
+  override fun backPress() = logActionWithScreenshot(AgentDriverAction.BackPress) {
     delegate.backPress()
   }
 
@@ -117,7 +118,7 @@ class LoggingDriver(
     delegate.capabilities()
   }
 
-  override fun clearAppState(appId: String) = logActionWithoutScreenshot(MaestroDriverActionType.ClearAppState(appId)) {
+  override fun clearAppState(appId: String) = logActionWithoutScreenshot(AgentDriverAction.ClearAppState(appId)) {
     delegate.clearAppState(appId)
   }
 
@@ -143,7 +144,7 @@ class LoggingDriver(
     delegate.hideKeyboard()
   }
 
-  override fun inputText(text: String) = logActionWithScreenshot(MaestroDriverActionType.EnterText(text)) {
+  override fun inputText(text: String) = logActionWithScreenshot(AgentDriverAction.EnterText(text)) {
     delegate.inputText(text)
   }
 
@@ -163,14 +164,14 @@ class LoggingDriver(
     delegate.isUnicodeInputSupported()
   }
 
-  override fun killApp(appId: String) = logActionWithoutScreenshot(MaestroDriverActionType.KillApp(appId)) {
+  override fun killApp(appId: String) = logActionWithoutScreenshot(AgentDriverAction.KillApp(appId)) {
     delegate.killApp(appId)
   }
 
   override fun launchApp(
     appId: String,
     launchArguments: Map<String, Any>,
-  ) = logActionWithoutScreenshot(MaestroDriverActionType.LaunchApp(appId)) {
+  ) = logActionWithoutScreenshot(AgentDriverAction.LaunchApp(appId)) {
     delegate.launchApp(appId, launchArguments)
   }
 
@@ -178,7 +179,7 @@ class LoggingDriver(
     delegate.setOrientation(orientation)
   }
 
-  override fun setAirplaneMode(enabled: Boolean) = logActionWithoutScreenshot(MaestroDriverActionType.AirplaneMode(enabled)) {
+  override fun setAirplaneMode(enabled: Boolean) = logActionWithoutScreenshot(AgentDriverAction.AirplaneMode(enabled)) {
     delegate.setAirplaneMode(enabled)
   }
 
@@ -193,7 +194,7 @@ class LoggingDriver(
     val filteredPermissions = permissions.filter { it.key != "all" }
     if (filteredPermissions.isNotEmpty()) {
       logActionWithoutScreenshot(
-        MaestroDriverActionType.GrantPermissions(
+        AgentDriverAction.GrantPermissions(
           appId = appId,
           permissions = permissions,
         ),
@@ -214,7 +215,7 @@ class LoggingDriver(
     delegate.startScreenRecording(out)
   }
 
-  override fun stopApp(appId: String) = logActionWithoutScreenshot(MaestroDriverActionType.StopApp(appId)) {
+  override fun stopApp(appId: String) = logActionWithoutScreenshot(AgentDriverAction.StopApp(appId)) {
     delegate.stopApp(appId)
   }
 
@@ -223,7 +224,7 @@ class LoggingDriver(
     end: Point,
     durationMs: Long,
   ) = logActionWithScreenshot(
-    MaestroDriverActionType.Swipe(
+    AgentDriverAction.Swipe(
       direction = inferSwipeDirection(start, end),
       durationMs = durationMs,
       startX = start.x,
@@ -260,7 +261,7 @@ class LoggingDriver(
     }
   }
 
-  override fun swipe(elementPoint: Point, direction: SwipeDirection, durationMs: Long) = logActionWithScreenshot(MaestroDriverActionType.Swipe(direction.name, durationMs)) {
+  override fun swipe(elementPoint: Point, direction: SwipeDirection, durationMs: Long) = logActionWithScreenshot(AgentDriverAction.Swipe(direction.name, durationMs)) {
     delegate.swipe(
       elementPoint = elementPoint,
       direction = direction,
@@ -268,7 +269,7 @@ class LoggingDriver(
     )
   }
 
-  override fun swipe(swipeDirection: SwipeDirection, durationMs: Long) = logActionWithScreenshot(MaestroDriverActionType.Swipe(swipeDirection.name, durationMs)) {
+  override fun swipe(swipeDirection: SwipeDirection, durationMs: Long) = logActionWithScreenshot(AgentDriverAction.Swipe(swipeDirection.name, durationMs)) {
     delegate.swipe(
       swipeDirection = swipeDirection,
       durationMs = durationMs,
@@ -282,7 +283,7 @@ class LoggingDriver(
     )
   }
 
-  override fun tap(point: Point) = logActionWithScreenshot(MaestroDriverActionType.TapPoint(point.x, point.y)) {
+  override fun tap(point: Point) = logActionWithScreenshot(AgentDriverAction.TapPoint(point.x, point.y)) {
     delegate.tap(point)
   }
 
@@ -302,7 +303,7 @@ class LoggingDriver(
     delegate.waitUntilScreenIsStatic(timeoutMs)
   }
 
-  override fun longPress(point: Point) = logActionWithScreenshot(MaestroDriverActionType.LongPressPoint(point.x, point.y)) {
+  override fun longPress(point: Point) = logActionWithScreenshot(AgentDriverAction.LongPressPoint(point.x, point.y)) {
     delegate.longPress(point)
   }
 

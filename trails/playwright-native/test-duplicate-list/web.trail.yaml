@@ -1,0 +1,166 @@
+- config:
+    title: 'Test: Click specific items in a list with duplicate text'
+    platform: web
+    driver: PLAYWRIGHT_NATIVE
+- prompts:
+  - step: Navigate to ../../../examples/playwright-native/sample-app/duplicate-list.html
+    recording:
+      tools:
+      - playwright_navigate:
+          url: ../../../examples/playwright-native/sample-app/duplicate-list.html
+          reasoning: The objective is to navigate to the specified relative URL. Since there are no interactive elements or navigation options visible on the current page, I will directly navigate to the provided URL to begin or complete the task.
+  - step: Verify the heading "Product List" is visible
+    recording:
+      tools:
+      - playwright_verify_element_visible:
+          ref: e1
+          element: heading 'Product List'
+          reasoning: The objective is to verify that the heading 'Product List' is visible, and element [e1] corresponds to that heading. This check confirms its presence on the screen.
+          nodeSelector:
+            web:
+              ariaRole: heading
+              ariaNameRegex: Product List
+  - step: Click the "View" button on the first "Premium Cable" item in the Electronics section
+    recording:
+      tools:
+      - playwright_click:
+          ref: e4
+          element: first View button in Electronics section
+          reasoning: This is the first 'View' button in the Electronics section, which corresponds to the first 'Premium Cable' item as per the objective.
+          nodeSelector:
+            index: 2
+  - step: Verify the text "elec-1" is visible in the detail panel
+    recording:
+      tools:
+      - playwright_verify_text_visible:
+          text: elec-1
+          reasoning: The objective requires verifying that the text 'elec-1' is visible in the detail panel. This verification directly checks if the required text is present anywhere on the page, including within a detail panel if visible.
+  - step: Click the "View" button on the second "Premium Cable" item in the Electronics section
+    recording:
+      tools:
+      - playwright_click:
+          ref: e5
+          element: View button for second Premium Cable in Electronics section
+          reasoning: This is the second 'View' button under the Electronics section, which matches the request to click the 'View' button for the second 'Premium Cable' item in that section.
+          nodeSelector:
+            web:
+              ariaRole: button
+              ariaNameRegex: View
+              nthIndex: 1
+  - step: Verify the text "elec-2" is visible in the detail panel
+    recording:
+      tools:
+      - playwright_verify_text_visible:
+          text: elec-2
+          reasoning: The objective is to verify that the text 'elec-2' is visible in the detail panel. Since the prior objective was to view the details for the second 'Premium Cable' in Electronics, I expect 'elec-2' to be present as an identifier in the detail section. I will verify its visibility on the current page.
+  - step: Click the "View" button on the "Standard Adapter" item in the Electronics section
+    recording:
+      tools:
+      - playwright_click:
+          ref: e6
+          element: View button for Standard Adapter in Electronics section
+          reasoning: This is the third 'View' button under the Electronics section, corresponding to the 'Standard Adapter' item, as per the layout and visual structure.
+          nodeSelector:
+            web:
+              ariaRole: button
+              ariaNameRegex: View
+              nthIndex: 2
+  - step: Verify the text "elec-3" is visible in the detail panel
+    recording:
+      tools:
+      - playwright_verify_text_visible:
+          text: elec-3
+          reasoning: The objective is to verify that the text 'elec-3' is visible in the detail panel. Since the prior step was clicking 'View' on an item in the Electronics section, the detail panel for that item should now display 'elec-3' if the implementation is correct. This action will check for the presence of that text.
+  - step: Click the "View" button on the "Premium Cable" item in the Office Supplies section
+    recording:
+      tools:
+      - playwright_click:
+          ref: e8
+          element: View button for Premium Cable (Office Supplies section)
+          reasoning: This is the first 'View' button under the 'Office Supplies' heading, matching the expected position for 'Premium Cable' in this section.
+          nodeSelector:
+            web:
+              ariaRole: button
+              ariaNameRegex: View
+              nthIndex: 3
+  - step: Verify the text "office-1" is visible in the detail panel
+    recording:
+      tools:
+      - playwright_verify_text_visible:
+          text: office-1
+          reasoning: The objective is to verify that the text 'office-1' is visible in the detail panel. Since the prior step was clicking 'View' on 'Premium Cable' under Office Supplies, the detail panel for that item should show 'office-1' if functioning correctly. I will verify the visibility of the text 'office-1' to meet the objective.
+  - step: Click the "View" button on the first "Standard Adapter" item in the Office Supplies section
+    recording:
+      tools:
+      - playwright_click:
+          ref: e9
+          element: View button for first Standard Adapter in Office Supplies
+          reasoning: Based on the hierarchy, [e9] is the second View button after the Office Supplies heading and represents the first Standard Adapter in that section. Clicking it fulfills the objective.
+          nodeSelector:
+            web:
+              ariaRole: button
+              ariaNameRegex: View
+              nthIndex: 4
+  - step: Verify the text "office-2" is visible in the detail panel
+    recording:
+      tools:
+      - playwright_verify_text_visible:
+          text: office-2
+          reasoning: The objective requires verification that the text 'office-2' is visible in the detail panel. I will check for its presence on the current screen to satisfy the requirement.
+  - step: Click the "View" button on the second "Standard Adapter" item in the Office Supplies section
+    recording:
+      tools:
+      - playwright_click:
+          ref: e10
+          element: View button for second Standard Adapter in Office Supplies
+          reasoning: Based on the hierarchy, e10 is the 'View' button corresponding to the second 'Standard Adapter' item in the 'Office Supplies' section. Clicking this fulfills the objective.
+          nodeSelector:
+            web:
+              ariaRole: button
+              ariaNameRegex: View
+              nthIndex: 5
+  - step: Verify the text "office-3" is visible in the detail panel
+    recording:
+      tools:
+      - playwright_verify_text_visible:
+          text: office-3
+          reasoning: The objective is to verify if the text 'office-3' is visible in the detail panel after clicking the 'View' button on the second 'Standard Adapter' in the Office Supplies section. This check will confirm if the required text is present on the screen.
+  - step: Click the "View" button on the first "Premium Cable" item in the Accessories section
+    recording:
+      tools:
+      - playwright_scroll:
+          amount: 400
+          reasoning: The Accessories section 'View' buttons are currently offscreen. Scrolling down will bring them into view so I can interact with the first 'View' button under Accessories.
+      - playwright_click:
+          ref: e12
+          element: First "View" button in Accessories section (for Premium Cable)
+          reasoning: The Accessories section's first Premium Cable corresponds to the first "View" button after the Accessories heading ([e12]). Clicking this will fulfill the objective as specified.
+          nodeSelector:
+            web:
+              ariaRole: button
+              ariaNameRegex: View
+              nthIndex: 6
+  - step: Verify the text "acc-1" is visible in the detail panel
+    recording:
+      tools:
+      - playwright_verify_text_visible:
+          text: acc-1
+          reasoning: 'The objective requires verifying that the text ''acc-1'' is visible in the detail panel. From the screenshot and the UI hierarchy, the detail panel at the bottom of the page contains the text ''Selected: Premium Cable — Accessories (ID: acc-1)'', so it should be present. This step will verify the visibility of ''acc-1''.'
+  - step: Click the "View" button on the second "Premium Cable" item in the Accessories section
+    recording:
+      tools:
+      - playwright_click:
+          ref: e13
+          element: View button (second Premium Cable in Accessories)
+          reasoning: Objective requires clicking the View button for the second Premium Cable in Accessories; based on element order, [e13] is the correct target.
+          nodeSelector:
+            web:
+              ariaRole: button
+              ariaNameRegex: View
+              nthIndex: 7
+  - step: Verify the text "acc-2" is visible in the detail panel
+    recording:
+      tools:
+      - playwright_verify_text_visible:
+          text: acc-2
+          reasoning: 'The objective requires verifying that the text ''acc-2'' is visible. There is a detail panel at the bottom of the screen showing ''Selected: Premium Cable — Accessories (ID: acc-2)''. I will verify the presence of ''acc-2'' in the visible details.'

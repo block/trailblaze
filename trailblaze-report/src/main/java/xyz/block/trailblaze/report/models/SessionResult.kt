@@ -44,6 +44,9 @@ data class SessionResult(
   val failure_reason: String? = null,
 
   // === Recording Info ===
+  /** Whether the trail YAML contained recorded steps (recording.tools blocks) */
+  val has_recorded_steps: Boolean = false,
+
   /** Whether a valid recording was found on disk for this platform */
   val recording_available: Boolean = false,
 

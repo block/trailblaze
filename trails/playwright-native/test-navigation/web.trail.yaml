@@ -1,0 +1,101 @@
+- config:
+    title: 'Test: Navigation and page structure'
+    platform: web
+    driver: PLAYWRIGHT_NATIVE
+- prompts:
+  - step: Navigate to ../../../examples/playwright-native/sample-app/index.html
+    recording:
+      tools:
+      - playwright_navigate:
+          url: ../../../examples/playwright-native/sample-app/index.html
+          reasoning: The current objective is to navigate to the specified URL. There are no interactive elements present now, so navigation is required to advance towards the objective.
+  - step: Verify the heading "Trailblaze Test Fixture" is visible
+    recording:
+      tools:
+      - playwright_verify_element_visible:
+          ref: e1
+          element: heading 'Trailblaze Test Fixture'
+          reasoning: The objective requires verifying that the heading 'Trailblaze Test Fixture' is visible, and the element [e1] matches this heading.
+          nodeSelector:
+            web:
+              ariaRole: heading
+              ariaNameRegex: Trailblaze Test Fixture
+  - step: Click on the "Form" navigation link
+    recording:
+      tools:
+      - playwright_click:
+          ref: e4
+          element: link "Form"
+          reasoning: The objective is to click the 'Form' navigation link. The element with ID e4 is labeled 'Form', so clicking it will fulfill the current objective.
+          nodeSelector:
+            web:
+              cssSelector: "#nav-form"
+  - step: Verify the heading "Contact Form" is visible
+    recording:
+      tools:
+      - playwright_verify_element_visible:
+          ref: e8
+          element: heading 'Contact Form'
+          reasoning: The current objective is to verify that the heading 'Contact Form' is visible. In the view hierarchy, [e8] corresponds to this heading, so I will verify its visibility to fulfill the objective.
+          nodeSelector:
+            web:
+              ariaRole: heading
+              ariaNameRegex: Contact Form
+  - step: Click on the "Counter" navigation link
+    recording:
+      tools:
+      - playwright_click:
+          ref: e5
+          element: link "Counter"
+          reasoning: The current state shows a navigation bar with a "Counter" link (element e5). To fulfill the objective, I will click this link. Upon a successful click, the objective can be marked complete even if the screen changes, as per instructions.
+          nodeSelector:
+            web:
+              cssSelector: "#nav-counter"
+  - step: Verify the heading "Counter" is visible
+    recording:
+      tools:
+      - playwright_verify_element_visible:
+          ref: e8
+          element: heading "Counter"
+          reasoning: The objective asks to verify the heading 'Counter' is visible. According to the view hierarchy, the element [e8] is the heading 'Counter', so verifying its visibility will fulfill the requirement.
+          nodeSelector:
+            web:
+              ariaRole: heading
+              ariaNameRegex: Counter
+  - step: Click on the "About" navigation link
+    recording:
+      tools:
+      - playwright_click:
+          ref: e6
+          element: link "About"
+          reasoning: The objective is to click the 'About' navigation link, which is present as [e6]. Clicking it will likely navigate to the About page, fulfilling the objective.
+          nodeSelector:
+            web:
+              cssSelector: "#nav-about"
+  - step: Verify the text "Trailblaze is an AI-powered UI testing framework" is visible
+    recording:
+      tools:
+      - playwright_verify_text_visible:
+          text: Trailblaze is an AI-powered UI testing framework
+          reasoning: The objective requires verifying the exact text 'Trailblaze is an AI-powered UI testing framework' is visible. I will check if this specific text appears on the page.
+  - step: Navigate back to the previous page state by clicking the "Home" navigation link
+    recording:
+      tools:
+      - playwright_click:
+          ref: e3
+          element: link "Home"
+          reasoning: The objective is to return to the previous page state by clicking the 'Home' navigation link. The element for 'Home' is present and clickable.
+          nodeSelector:
+            web:
+              cssSelector: "#nav-home"
+  - step: Verify the heading "Welcome" is visible
+    recording:
+      tools:
+      - playwright_verify_element_visible:
+          ref: e8
+          element: heading "Welcome"
+          reasoning: The objective is to verify that the heading "Welcome" is visible. The element with ID e8 matches this heading, so I will verify its visibility to complete the objective.
+          nodeSelector:
+            web:
+              ariaRole: heading
+              ariaNameRegex: Welcome

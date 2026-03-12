@@ -1,0 +1,27 @@
+# Android World Benchmark: Add Note Header
+- config:
+    id: android-world-benchmarks/markor/add_note_header
+    description: Add header to report.md and rename to final_report.md in Markor
+- tools:
+    - androidworldbenchmarks_clearDirectory:
+        directoryPath: /storage/emulated/0/Documents/Markor
+    - androidworldbenchmarks_createFileOnDevice:
+        devicePath: /storage/emulated/0/Documents/Markor
+        fileName: report.md
+        content: Q4 results exceeded expectations
+- prompts:
+    - step: 'Update the Markor note report.md by adding the following text, along with a new blank line before the existing content: "Executive Summary", and rename it to final_report.md.'
+- tools:
+    - androidworldbenchmarks_assertFileExistsOnDevice:
+        filePath: /storage/emulated/0/Documents/Markor/report.md
+        shouldExist: false
+    - androidworldbenchmarks_assertFileExistsOnDevice:
+        filePath: /storage/emulated/0/Documents/Markor/final_report.md
+        shouldExist: true
+    - androidworldbenchmarks_assertFileContent:
+        filePath: /storage/emulated/0/Documents/Markor/final_report.md
+        expectedContent: Executive Summary
+        matchMode: contains
+
+# --- Benchmark Run History ---
+# [2026-03-11] Build #27 FAILED - Agent limitation: ObjectiveFailed. Can't navigate Markor app.

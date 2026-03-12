@@ -1,0 +1,25 @@
+- config:
+    title: "Test: Add a todo item"
+    platform: compose
+- prompts:
+  - step: Type "Buy groceries" into the todo input field
+    recording:
+      tools:
+      - compose_type:
+          text: Buy groceries
+          testTag: todo_input
+  - step: Click the add button
+    recording:
+      tools:
+      - compose_click:
+          testTag: add_button
+  - step: Verify the text "1 items" is visible
+    recording:
+      tools:
+      - compose_verify_text_visible:
+          text: 1 items
+  - step: Verify the text "Buy groceries" is visible
+    recording:
+      tools:
+      - compose_verify_text_visible:
+          text: Buy groceries

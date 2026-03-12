@@ -1,0 +1,85 @@
+- config:
+    id: sample-app/forms/text-input
+    app: xyz.block.trailblaze.examples.sampleapp
+    platform: android
+    driver: ANDROID_ONDEVICE_ACCESSIBILITY
+- tools:
+  - launchApp:
+      appId: xyz.block.trailblaze.examples.sampleapp
+- prompts:
+  - step: Navigate to the "Forms" tab
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: The objective is to navigate to the 'Forms' tab, and the 'Forms' tab is represented by the element with nodeId 36.
+          selector:
+            containsChild:
+              textRegex: Forms
+          nodeSelector:
+            androidAccessibility:
+              classNameRegex: \Qandroid.view.View\E
+            index: 25
+  - step: Tap the "Name" field and type "Jane Doe"
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: To focus the 'Name' EditText field so that text can be entered as required by the objective.
+          selector:
+            containsChild:
+              textRegex: Name
+          nodeSelector:
+            androidAccessibility:
+              hintTextRegex: Name
+      - inputText:
+          text: Jane Doe
+  - step: Tap the "Email" field and type "jane@example.com"
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: To focus the 'Email' field so that text can be entered.
+          selector:
+            containsChild:
+              textRegex: Email
+          nodeSelector:
+            androidAccessibility:
+              hintTextRegex: Email
+      - inputText:
+          text: jane@example.com
+  - step: Tap the "Submit" button
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: The 'Submit' button is identified as a clickable view with the text 'Submit'. Tapping this will complete the objective.
+          selector:
+            containsChild:
+              textRegex: Submit
+          nodeSelector:
+            androidAccessibility:
+              textRegex: Submit
+  - step: Verify "Jane Doe" and "jane@example.com" appear in the submission result
+    recording:
+      tools:
+      - assertVisibleBySelector:
+          reason: 'This TextView contains both ''Name: Jane Doe'' and ''Email: jane@example.com'', confirming both pieces of information appear in the submission result.'
+          selector:
+            textRegex: |-
+              Name: Jane Doe
+              Email: jane@example.com
+          nodeSelector:
+            androidAccessibility:
+              textRegex: |-
+                \QName: Jane Doe
+                Email: jane@example.com\E
+  - step: Tap "Clear All" and verify "Jane Doe" is no longer visible
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: The objective is to tap the 'Clear All' button, which is represented by the TextView 'Clear All' (nodeId 13) within its parent clickable View (nodeId 12). Tapping nodeId 12 will trigger the Clear All action.
+          selector:
+            containsChild:
+              textRegex: Clear All
+          nodeSelector:
+            androidAccessibility:
+              textRegex: Clear All
+      - assertNotVisibleWithText:
+          text: Jane Doe

@@ -1,0 +1,30 @@
+- config:
+    title: "Test: Scroll within specific containers"
+    driver: PLAYWRIGHT_NATIVE
+- prompts:
+    # Navigate to the test fixture
+    - step: Navigate to ../../../examples/playwright-native/sample-app/index.html
+
+    # Go to the Scroll section
+    - step: Click on the "Scroll" navigation link
+
+    # Take a snapshot to see the page
+    - step: Take a snapshot of the current page
+
+    # Verify sidebar top item is visible
+    - step: Use the playwright_verify_text_visible tool to verify "Category 1" is visible
+
+    # Scroll down within the sidebar navigation
+    - step: Scroll down within the sidebar navigation container
+
+    # Verify a category that was previously hidden at the bottom is now visible
+    - step: Use the playwright_verify_text_visible tool to verify "Category 15" is visible
+
+    # Scroll down within the right content panel
+    - step: Scroll down within the content panel
+
+    # Verify a content item that was previously hidden is now visible
+    - step: Use the playwright_verify_text_visible tool to verify "Item 20" is visible
+
+    # Scroll back up within the content panel
+    - step: Scroll up within the content panel

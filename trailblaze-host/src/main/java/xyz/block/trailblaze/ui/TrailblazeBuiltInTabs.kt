@@ -4,6 +4,9 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import kotlinx.coroutines.flow.StateFlow
+import xyz.block.trailblaze.host.devices.PlaywrightInstallState
+import xyz.block.trailblaze.host.rules.TrailblazeHostDynamicLlmTokenProvider
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.llm.TrailblazeLlmModelList
 import xyz.block.trailblaze.model.DesktopAppRunYamlParams
@@ -19,6 +22,8 @@ import xyz.block.trailblaze.ui.tabs.home.HomeTabComposable
 import xyz.block.trailblaze.ui.tabs.sessions.SessionsTabComposableJvm
 import xyz.block.trailblaze.ui.tabs.sessions.YamlTabComposable
 import xyz.block.trailblaze.ui.tabs.settings.SettingsTabComposables
+import xyz.block.trailblaze.llm.providers.TrailblazeDynamicLlmTokenProvider
+import xyz.block.trailblaze.ui.tabs.recording.RecordingTabComposable
 import xyz.block.trailblaze.ui.tabs.trails.TrailsBrowserTabComposable
 import kotlin.system.exitProcess
 
@@ -34,11 +39,15 @@ object TrailblazeBuiltInTabs {
    */
   fun homeTab(
     trailblazeSettingsRepo: TrailblazeSettingsRepo,
+    deviceManager: TrailblazeDeviceManager,
+    additionalHomeContent: @Composable ColumnScope.() -> Unit = {},
   ): TrailblazeAppTab = TrailblazeAppTab(
     route = TrailblazeRoute.Home,
     content = {
       HomeTabComposable(
         trailblazeSettingsRepo = trailblazeSettingsRepo,
+        deviceManager = deviceManager,
+        additionalHomeContent = additionalHomeContent,
       )
     }
   )
@@ -136,6 +145,27 @@ object TrailblazeBuiltInTabs {
   )
 
   /**
+   * Creates the Record tab for interactive test recording.
+   * Streams a live device preview and captures user interactions as trail YAML.
+   */
+  fun recordTab(
+    deviceManager: TrailblazeDeviceManager,
+    currentTrailblazeLlmModelProvider: () -> TrailblazeLlmModel,
+    llmTokenProvider: TrailblazeDynamicLlmTokenProvider = TrailblazeHostDynamicLlmTokenProvider,
+    onSaveTrail: (String) -> Unit = {},
+  ): TrailblazeAppTab = TrailblazeAppTab(
+    route = TrailblazeRoute.Record,
+    content = {
+      RecordingTabComposable(
+        deviceManager = deviceManager,
+        currentTrailblazeLlmModelProvider = currentTrailblazeLlmModelProvider,
+        llmTokenProvider = llmTokenProvider,
+        onSaveTrail = onSaveTrail,
+      )
+    }
+  )
+
+  /**
    * Creates the Settings tab for app configuration.
    *
    * @param isProviderLocked Whether the LLM provider dropdown starts locked (disabled).
@@ -151,6 +181,8 @@ object TrailblazeBuiltInTabs {
     customEnvVarNames: List<String>,
     openGoose: () -> Unit = { TrailblazeDesktopUtil.openGoose() },
     isProviderLocked: Boolean = false,
+    playwrightInstallState: StateFlow<PlaywrightInstallState>? = null,
+    onInstallPlaywright: (() -> Unit)? = null,
   ): TrailblazeAppTab {
     val shellProfile = DesktopUtil.getShellProfileFile()
     return TrailblazeAppTab(
@@ -170,6 +202,8 @@ object TrailblazeBuiltInTabs {
           shellProfileName = shellProfile?.name,
           onQuitApp = { ExitApp.quit() },
           isProviderLocked = isProviderLocked,
+          playwrightInstallState = playwrightInstallState,
+          onInstallPlaywright = onInstallPlaywright,
         )
       }
     )

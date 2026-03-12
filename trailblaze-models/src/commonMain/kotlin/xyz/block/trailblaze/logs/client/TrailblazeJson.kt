@@ -7,7 +7,7 @@ import kotlinx.serialization.modules.SerializersModule
 import kotlinx.serialization.modules.SerializersModuleBuilder
 import kotlinx.serialization.serializer
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
-import xyz.block.trailblaze.api.MaestroDriverActionType
+import xyz.block.trailblaze.api.AgentDriverAction
 import xyz.block.trailblaze.logs.client.temp.registerTrailblazeToolSerializer
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.toolcalls.ToolName
@@ -34,9 +34,6 @@ object TrailblazeJson {
     serializersModule = SerializersModule {
       polymorphicDefaultSerializer(TrailblazeLog::class) { value ->
         value::class.serializer() as? KSerializer<TrailblazeLog>
-      }
-      polymorphicDefaultSerializer(MaestroDriverActionType::class) { value ->
-        value::class.serializer() as? KSerializer<MaestroDriverActionType>
       }
       polymorphicDefaultSerializer(TrailblazeToolResult::class) { value ->
         value::class.serializer() as? KSerializer<TrailblazeToolResult>

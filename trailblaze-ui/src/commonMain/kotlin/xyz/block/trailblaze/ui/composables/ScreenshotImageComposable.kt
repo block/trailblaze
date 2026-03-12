@@ -44,7 +44,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
-import xyz.block.trailblaze.api.MaestroDriverActionType
+import xyz.block.trailblaze.api.AgentDriverAction
 import xyz.block.trailblaze.ui.images.ImageLoader
 import xyz.block.trailblaze.ui.images.NetworkImageLoader
 
@@ -59,10 +59,10 @@ fun ScreenshotAnnotation(
   maxHeight: Dp,
   deviceWidth: Int,
   deviceHeight: Int,
-  action: MaestroDriverActionType? = null,
+  action: AgentDriverAction? = null,
   isHovered: Boolean = false,
 ) {
-  if (action is MaestroDriverActionType.AssertCondition) {
+  if (action is AgentDriverAction.AssertCondition) {
     val checkSize = 20.dp
     val backgroundSize = 28.dp
 
@@ -157,7 +157,7 @@ fun ScreenshotAnnotation(
         )
       }
     }
-  } else if (action is MaestroDriverActionType.Swipe) {
+  } else if (action is AgentDriverAction.Swipe) {
     // Check if we have start/end coordinates for animated swipe
     if (action.startX != null && action.startY != null && action.endX != null && action.endY != null) {
       // Animated swipe visualization showing arrow moving from start to end
@@ -257,7 +257,7 @@ fun ScreenshotImage(
   deviceHeight: Int,
   clickX: Int? = null,
   clickY: Int? = null,
-  action: MaestroDriverActionType? = null,
+  action: AgentDriverAction? = null,
   modifier: Modifier = Modifier,
   imageLoader: ImageLoader = NetworkImageLoader(),
   forceHighQuality: Boolean = false,
@@ -311,7 +311,7 @@ fun ScreenshotImage(
           action = action,
           isHovered = isHovered
         )
-      } else if (action is MaestroDriverActionType.Swipe) {
+      } else if (action is AgentDriverAction.Swipe) {
         // For swipe gestures, always show annotation in center even without click coordinates
         ScreenshotAnnotation(
           centerX = maxWidth / 2,
@@ -336,7 +336,7 @@ fun ScreenshotImageModal(
   deviceHeight: Int,
   clickX: Int?,
   clickY: Int?,
-  action: MaestroDriverActionType? = null,
+  action: AgentDriverAction? = null,
   onDismiss: () -> Unit,
 ) {
   FullScreenModalOverlay(onDismiss = onDismiss) {

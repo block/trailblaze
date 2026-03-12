@@ -102,21 +102,30 @@ object LlmTokenBreakdownEstimator {
       1.0
     }
 
+    val systemTokens = ((systemPromptChars / CHARS_PER_TOKEN) * scaleFactor).toLong()
+    val userTokens = ((userPromptChars / CHARS_PER_TOKEN) * scaleFactor).toLong()
+    var toolTokens = ((toolDescriptorChars / CHARS_PER_TOKEN) * scaleFactor).toLong()
+    val imageTokens = (estimatedImageTokens * scaleFactor).toLong()
+
+    // Distribute rounding remainder to the largest category (tools) so parts sum to total
+    val remainder = totalInputTokens - (systemTokens + userTokens + toolTokens + imageTokens)
+    toolTokens += remainder
+
     return LlmInputTokenBreakdown(
       systemPrompt = CategoryBreakdown(
-        tokens = ((systemPromptChars / CHARS_PER_TOKEN) * scaleFactor).toLong(),
+        tokens = systemTokens,
         count = systemMessageCount,
       ),
       userPrompt = CategoryBreakdown(
-        tokens = ((userPromptChars / CHARS_PER_TOKEN) * scaleFactor).toLong(),
+        tokens = userTokens,
         count = userMessageCount,
       ),
       toolDescriptors = CategoryBreakdown(
-        tokens = ((toolDescriptorChars / CHARS_PER_TOKEN) * scaleFactor).toLong(),
+        tokens = toolTokens,
         count = toolDescriptors.size,
       ),
       images = CategoryBreakdown(
-        tokens = (estimatedImageTokens * scaleFactor).toLong(),
+        tokens = imageTokens,
         count = totalImageCount,
       ),
       assistantMessageCount = assistantMessageCount,

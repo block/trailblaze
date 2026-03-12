@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.model
 
+import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.llm.RunYamlRequest
 
 /**
@@ -25,4 +26,6 @@ class DesktopAppRunYamlParams(
   val additionalInstrumentationArgs: Map<String, String>,
   /** Called when the trail execution completes (success, failure, or cancellation). */
   val onComplete: ((TrailExecutionResult) -> Unit)? = null,
+  /** RPC port for Compose driver connections. */
+  val composeRpcPort: Int = TrailblazeDevicePort.COMPOSE_DEFAULT_RPC_PORT,
 )

@@ -8,8 +8,12 @@ object FormattingUtils {
    * Useful for displaying durations, loading times, and performance metrics.
    */
   fun formatDuration(durationMs: Long): String {
-    val seconds = durationMs / 1000.0
-    return "${(seconds * 100).toInt() / 100.0}s"
+    val prefix = if (durationMs < 0) "-" else ""
+    val absSeconds = kotlin.math.abs(durationMs) / 1000.0
+    val truncated = (absSeconds * 100).toInt()
+    val whole = truncated / 100
+    val frac = truncated % 100
+    return "$prefix${whole}.${frac.toString().padStart(2, '0')}s"
   }
 
   /**
@@ -46,19 +50,23 @@ object FormattingUtils {
    * Pads with zeros or truncates as needed (e.g., 1234.4 with 2 decimals → "1,234.40").
    */
   fun formatDouble(value: Double, decimals: Int): String {
+    // Use integer arithmetic to avoid Double.toString() scientific notation (e.g. "5.0E-4")
     val factor = 10.0.pow(decimals)
-    val rounded = kotlin.math.round(value * factor) / factor
-    val str = rounded.toString()
-    val dotIndex = str.indexOf(".")
+    val scaledRounded = kotlin.math.round(value * factor).toLong()
+    val isNegative = scaledRounded < 0
+    val absScaled = kotlin.math.abs(scaledRounded)
+    val factorLong = factor.toLong()
 
-    val formattedStr = if (decimals <= 0) str.substringBefore(".") else when {
-      dotIndex < 0 -> str + "." + "0".repeat(decimals)
-      else -> {
-        val currentDecimals = str.length - dotIndex - 1
-        if (currentDecimals == decimals) str
-        else if (currentDecimals < decimals) str + "0".repeat(decimals - currentDecimals)
-        else str.substring(0, dotIndex + 1 + decimals)
-      }
+    val intPart = absScaled / factorLong
+    val fracPart = absScaled % factorLong
+
+    val prefix = if (isNegative) "-" else ""
+    val intStr = intPart.toString()
+
+    val formattedStr = if (decimals <= 0) {
+      "$prefix$intStr"
+    } else {
+      "$prefix$intStr.${fracPart.toString().padStart(decimals, '0')}"
     }
 
     // Add comma separators to the integer part
@@ -68,7 +76,7 @@ object FormattingUtils {
 
     val formattedIntegerPart = buildString {
       for ((i, c) in integerPart.reversed().withIndex()) {
-        if (i > 0 && i % 3 == 0) append(",")
+        if (i > 0 && i % 3 == 0 && c != '-') append(",")
         append(c)
       }
     }.reversed()

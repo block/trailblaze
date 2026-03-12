@@ -58,14 +58,17 @@ class ScrollUntilTextIsVisibleTrailblazeTool(
   override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult {
     val memory = toolExecutionContext.trailblazeAgent.memory
     val trailblazeDriverType = toolExecutionContext.trailblazeDeviceInfo.trailblazeDriverType
-    val scrollDuration = if (trailblazeDriverType == TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION) {
+    val scrollDuration = when (trailblazeDriverType) {
         /**
          * This matches Maestro's Swipe Implementation with the 400ms duration and is working well on-device Android.
          * https://github.com/mobile-dev-inc/Maestro/blob/0a38a9468cb769ecbc1edc76974fd2f8a8b0b64e/maestro-client/src/main/java/maestro/drivers/AndroidDriver.kt#L404
+         *
+         * The default (40ms) causes a "fling" that overshoots elements. The accessibility driver
+         * also uses the manual scroll loop, so it needs the same 400ms duration.
          */
-        "400"
-      } else {
-        ScrollUntilVisibleCommand.DEFAULT_SCROLL_DURATION
+        TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+        TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY -> "400"
+        else -> ScrollUntilVisibleCommand.DEFAULT_SCROLL_DURATION
       }
 
     val trailblazeElementSelector = TrailblazeElementSelector(
@@ -82,8 +85,16 @@ class ScrollUntilTextIsVisibleTrailblazeTool(
       centerElement = centerElement,
     )
 
-    return if (scrollStartPosition == TrailblazeScrollStartPosition.CENTER) {
-      // For default scrolling, we don't need to calculate custom start positions
+    // The accessibility driver always uses the manual scroll loop because Maestro's
+    // ScrollUntilVisibleCommand requires a Maestro Driver instance, which the accessibility
+    // path bypasses entirely. Non-center start positions also require the manual loop since
+    // Maestro's built-in command doesn't support custom scroll regions.
+    val useManualScrollLoop = scrollStartPosition != TrailblazeScrollStartPosition.CENTER ||
+      trailblazeDriverType == TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY
+
+    return if (!useManualScrollLoop) {
+      // For default scrolling with Maestro-compatible drivers, delegate to Maestro's
+      // ScrollUntilVisibleCommand which handles the scroll-check loop internally.
       toolExecutionContext.trailblazeAgent.runMaestroCommands(
         maestroCommands = listOf(scrollCommand),
         traceId = toolExecutionContext.traceId
@@ -152,7 +163,7 @@ class ScrollUntilTextIsVisibleTrailblazeTool(
           val visibility: Double = maestroUiElement.getVisiblePercentage(
             widthGrid, heightGrid
           )
-          Console.log("Scrolling try count: $retryCenterCount, DeviceWidth: ${widthGrid}, DeviceWidth: ${heightGrid}")
+          Console.log("Scrolling try count: $retryCenterCount, DeviceWidth: ${widthGrid}, DeviceHeight: ${heightGrid}")
           Console.log("Element bounds: ${bounds}")
           Console.log("Visibility Percent: $visibility")
           Console.log("Command centerElement: $maestroCommand.centerElement")
@@ -160,11 +171,11 @@ class ScrollUntilTextIsVisibleTrailblazeTool(
 
           if (maestroCommand.centerElement && visibility > 0.1 && retryCenterCount <= maxRetryCenterCount) {
             if (maestroUiElement.isElementNearScreenCenter(direction, widthGrid, heightGrid)) {
-              return TrailblazeToolResult.Success
+              return TrailblazeToolResult.Success()
             }
             retryCenterCount++
           } else if (visibility >= maestroCommand.visibilityPercentageNormalized) {
-            return TrailblazeToolResult.Success
+            return TrailblazeToolResult.Success()
           }
         }
       } catch (ignored: MaestroException.ElementNotFound) {

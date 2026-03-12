@@ -118,4 +118,48 @@ object BufferedImageUtils {
 
     return this.scale(scaleAmount)
   }
+
+  /**
+   * Rotates a BufferedImage 90 degrees clockwise.
+   * Used to correct iOS screenshots that arrive in portrait pixel orientation
+   * when the device is actually in LANDSCAPE_LEFT.
+   */
+  fun BufferedImage.rotateClockwise90(): BufferedImage {
+    val rotated = BufferedImage(height, width, type)
+    val g = rotated.createGraphics()
+    g.translate(height.toDouble(), 0.0)
+    g.rotate(Math.PI / 2)
+    g.drawImage(this, 0, 0, null)
+    g.dispose()
+    return rotated
+  }
+
+  /**
+   * Rotates a BufferedImage 90 degrees counter-clockwise.
+   * Used to correct iOS screenshots that arrive in portrait pixel orientation
+   * when the device is actually in LANDSCAPE_RIGHT.
+   */
+  fun BufferedImage.rotateCounterClockwise90(): BufferedImage {
+    val rotated = BufferedImage(height, width, type)
+    val g = rotated.createGraphics()
+    g.translate(0.0, width.toDouble())
+    g.rotate(-Math.PI / 2)
+    g.drawImage(this, 0, 0, null)
+    g.dispose()
+    return rotated
+  }
+
+  /**
+   * Rotates a BufferedImage 180 degrees.
+   * Used to correct iOS screenshots when the device is in UPSIDE_DOWN orientation.
+   */
+  fun BufferedImage.rotate180(): BufferedImage {
+    val rotated = BufferedImage(width, height, type)
+    val g = rotated.createGraphics()
+    g.translate(width.toDouble(), height.toDouble())
+    g.rotate(Math.PI)
+    g.drawImage(this, 0, 0, null)
+    g.dispose()
+    return rotated
+  }
 }

@@ -21,6 +21,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Error
@@ -70,6 +71,7 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.llm.TrailblazeReferrer
+import xyz.block.trailblaze.model.DeviceConnectionStatus
 import xyz.block.trailblaze.model.DesktopAppRunYamlParams
 import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
@@ -129,6 +131,10 @@ fun TrailsBrowserTabComposable(
   var showDeviceSelectionDialog by remember { mutableStateOf(false) }
   var trailNameToRun by remember { mutableStateOf<String?>(null) }
   var yamlContentToRun by remember { mutableStateOf<String?>(null) }
+
+  // Progress state for trail execution
+  var progressMessages by remember { mutableStateOf<List<String>>(emptyList()) }
+  var connectionStatus by remember { mutableStateOf<DeviceConnectionStatus?>(null) }
 
   var trails by remember { mutableStateOf<List<Trail>>(emptyList()) }
   var selectedTrailId by remember { mutableStateOf<String?>(null) }
@@ -581,7 +587,7 @@ fun TrailsBrowserTabComposable(
                   modifier = Modifier.clickable { showSortMenu = true }
                 ) {
                   Icon(
-                    imageVector = Icons.Filled.Sort,
+                    imageVector = Icons.AutoMirrored.Filled.Sort,
                     contentDescription = "Sort",
                     modifier = Modifier.size(16.dp),
                     tint = MaterialTheme.colorScheme.onSurfaceVariant
@@ -945,6 +951,8 @@ fun TrailsBrowserTabComposable(
         yamlContentToRun = yamlViewerContent
         showDeviceSelectionDialog = true
       },
+      progressMessages = progressMessages,
+      connectionStatus = connectionStatus,
       relativePath = runCatching {
         Paths.get(trailsDirectory.absolutePath).relativize(Paths.get(yamlViewerVariant!!.absolutePath)).toString()
       }.getOrElse { yamlViewerVariant!!.fileName }
@@ -975,6 +983,8 @@ fun TrailsBrowserTabComposable(
       },
       onRunTests = { selectedDevices: List<TrailblazeConnectedDeviceSummary>, forceStopApp: Boolean ->
         showDeviceSelectionDialog = false
+        progressMessages = emptyList()
+        connectionStatus = null
 
         val setOfMarkEnabledConfig = serverState.appConfig.setOfMarkEnabled
         val targetTestApp = deviceManager.getCurrentSelectedTargetApp()
@@ -1003,8 +1013,12 @@ fun TrailsBrowserTabComposable(
                 DesktopAppRunYamlParams(
                   forceStopTargetApp = forceStopApp,
                   runYamlRequest = runYamlRequest,
-                  onProgressMessage = { _ -> },
-                  onConnectionStatus = { _ -> },
+                  onProgressMessage = { message ->
+                    progressMessages = progressMessages + message
+                  },
+                  onConnectionStatus = { status ->
+                    connectionStatus = status
+                  },
                   targetTestApp = targetTestApp,
                   additionalInstrumentationArgs = additionalInstrumentationArgs(),
                   onComplete = { result ->
@@ -1014,7 +1028,7 @@ fun TrailsBrowserTabComposable(
                 )
               )
             } catch (e: Exception) {
-              // Handle error silently - the session will show the error
+              progressMessages = progressMessages + "Error: ${e.message}"
             }
           }
         }

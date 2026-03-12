@@ -63,16 +63,16 @@ class RecordedTrailsRepoJvm(
         // Prepend save subdirectory if configured, otherwise save at root
         directoryPath = trailPath
         // Filename is platform-classifiers (e.g., "ios-iphone.trail.yaml", "android.trail.yaml")
-        // If no suffix, use a timestamp to avoid overwriting
+        // If no suffix, use trailblaze.yaml
         fileName = if (suffix.isNotEmpty()) {
-          "${suffix.removePrefix("-")}.${TrailRecordings.TRAIL_DOT_YAML}"
+          "${suffix.removePrefix("-")}${TrailRecordings.DOT_TRAIL_DOT_YAML_FILE_SUFFIX}"
         } else {
-          TrailRecordings.TRAIL_DOT_YAML
+          TrailRecordings.DEFAULT_NL_DEFINITION_FILENAME
         }
       } else {
         // Fallback to session-based filename if no trailPath is provided
         directoryPath = ""
-        fileName = "${sessionInfo.sessionId}/$suffix.${TrailRecordings.TRAIL_DOT_YAML}"
+        fileName = "${sessionInfo.sessionId}/$suffix${TrailRecordings.DOT_TRAIL_DOT_YAML_FILE_SUFFIX}"
       }
 
       val recordingFile = File(File(trailsDirectory, directoryPath), fileName)
@@ -91,38 +91,6 @@ class RecordedTrailsRepoJvm(
     }
   }
 
-  override fun savePrompts(
-    yaml: String,
-    sessionInfo: SessionInfo,
-  ): Result<String> {
-    val trailConfig = sessionInfo.trailConfig ?: TrailConfig()
-
-    return try {
-      val directoryPath: String = if (trailConfig.id != null) {
-        // trailConfig.id is the trail path (e.g., "testrail/suite_123/section_456/case_789")
-        val trailPath = trailConfig.id!!
-        // Prepend save subdirectory if configured, otherwise save at root
-        trailPath
-      } else {
-        // Fallback to just the subdirectory if no trailPath is provided
-        ""
-      }
-
-      val promptsFile = File(File(trailsDirectory, directoryPath), TrailRecordings.TRAIL_DOT_YAML)
-
-      // Create parent directories if they don't exist
-      promptsFile.parentFile?.mkdirs()
-
-      // Write the YAML content
-      promptsFile.writeText(yaml)
-
-      Console.log("Prompts saved to: ${promptsFile.absolutePath}")
-      Result.success(promptsFile.absolutePath)
-    } catch (e: Exception) {
-      Console.log("Failed to save prompts: ${e.message}")
-      Result.failure(e)
-    }
-  }
 
   override fun getTrailsDirectory(): String {
     return trailsDirectory.absolutePath
@@ -141,12 +109,12 @@ class RecordedTrailsRepoJvm(
         return emptyList()
       }
 
-      // Find all *trail.yaml files in the directory:
-      // - trail.yaml (default file)
+      // Find all trail files in the directory:
+      // - trailblaze.yaml (NL definition file)
       // - {platform}-{classifier}.trail.yaml (platform-specific recordings, e.g., ios-iphone.trail.yaml)
       targetDir.listFiles()
         ?.filter { file ->
-          file.isFile && file.name.endsWith(TrailRecordings.TRAIL_DOT_YAML)
+          file.isFile && TrailRecordings.isTrailFile(file.name)
         }?.map { file ->
           val fileRelativePath = "$trailPath/${file.name}"
           ExistingTrail(
@@ -156,7 +124,7 @@ class RecordedTrailsRepoJvm(
           )
         }
         // Sort with trail.yaml first, then alphabetically
-        ?.sortedWith(compareBy({ it.fileName != TrailRecordings.TRAIL_DOT_YAML }, { it.fileName }))
+        ?.sortedWith(compareBy({ !TrailRecordings.isNlDefinitionFile(it.fileName) }, { it.fileName }))
         ?: emptyList()
     } catch (e: Exception) {
       Console.log("Failed to search for existing recordings: ${e.message}")
@@ -212,7 +180,7 @@ class RecordedTrailsRepoJvm(
         launch {
           fileWatcher.fileChanges.collect { event ->
             // Only emit events for .trail.yaml files
-            if (event.file.name.endsWith(TrailRecordings.TRAIL_DOT_YAML)) {
+            if (TrailRecordings.isTrailFile(event.file.name)) {
               val mappedChangeType = when (event.changeType) {
                 FileChangeEvent.ChangeType.CREATE -> TrailFileChangeType.CREATE
                 FileChangeEvent.ChangeType.DELETE -> TrailFileChangeType.DELETE

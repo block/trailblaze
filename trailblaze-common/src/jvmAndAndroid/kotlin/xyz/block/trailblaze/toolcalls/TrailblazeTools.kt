@@ -36,3 +36,9 @@ fun TrailblazeTool.getToolNameFromAnnotation(): String = if (this is OtherTrailb
     this::class.simpleName ?: "UnknownTool"
   }
 }
+
+fun TrailblazeTool.getIsRecordableFromAnnotation(): Boolean = try {
+  this::class.findAnnotation<TrailblazeToolClass>()?.isRecordable ?: true
+} catch (e: Exception) {
+  true
+}

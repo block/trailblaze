@@ -23,15 +23,36 @@ class TrailblazeToolRepo(
    * The initial set of tools that are registered in this repository.
    */
   trailblazeToolSet: TrailblazeToolSet,
+  /**
+   * Optional catalog for dynamic toolset switching. When set, the LLM can call
+   * `setActiveToolSets` to swap which tools are available.
+   */
+  val toolSetCatalog: List<ToolSetCatalogEntry>? = null,
 ) {
   val registeredTrailblazeToolClasses: MutableSet<KClass<out TrailblazeTool>> = trailblazeToolSet
     .asTools()
     .toMutableSet()
 
-  fun getRegisteredTrailblazeTools(): Set<KClass<out TrailblazeTool>> = registeredTrailblazeToolClasses
+  /**
+   * Tools that are not part of the catalog (e.g., app-specific custom tools).
+   * These are preserved across [setActiveToolSets] calls.
+   */
+  private val extraToolClasses: Set<KClass<out TrailblazeTool>> by lazy {
+    val catalogToolClasses = toolSetCatalog
+      ?.flatMap { it.toolClasses }
+      ?.toSet()
+      ?: emptySet()
+    registeredTrailblazeToolClasses.filter { it !in catalogToolClasses }.toSet()
+  }
+
+  fun getRegisteredTrailblazeTools(): Set<KClass<out TrailblazeTool>> = synchronized(registeredTrailblazeToolClasses) {
+    registeredTrailblazeToolClasses.toSet()
+  }
 
   fun asToolRegistry(trailblazeToolContextProvider: () -> TrailblazeToolExecutionContext): ToolRegistry = ToolRegistry {
-    tools(getRegisteredTrailblazeTools().toKoogTools(trailblazeToolContextProvider))
+    // Always include verify tools so assertion tool calls from verification steps
+    // can be resolved, even when dynamic toolsets limit registeredTrailblazeToolClasses.
+    tools((getRegisteredTrailblazeTools() + verifyTools).toKoogTools(trailblazeToolContextProvider))
   }
 
   private fun addTrailblazeTools(vararg trailblazeTool: KClass<out TrailblazeTool>) = synchronized(registeredTrailblazeToolClasses) {
@@ -63,6 +84,31 @@ class TrailblazeToolRepo(
     registeredTrailblazeToolClasses.clear()
   }
 
+  /**
+   * Replaces all registered tools with the resolved set from the given toolset IDs.
+   * Requires [toolSetCatalog] to be set.
+   */
+  fun setActiveToolSets(toolSetIds: List<String>): String {
+    val catalog = toolSetCatalog
+      ?: return "Dynamic toolsets not configured for this test."
+    val validIds = catalog.map { it.id }.toSet()
+    val invalidIds = toolSetIds.filter { it !in validIds }
+    if (invalidIds.isNotEmpty()) {
+      return "Unknown toolset IDs: $invalidIds. Valid IDs: ${validIds.filter { id -> !catalog.first { it.id == id }.alwaysEnabled }}"
+    }
+    val newToolClasses = TrailblazeToolSetCatalog.resolve(toolSetIds, catalog) + extraToolClasses
+    synchronized(registeredTrailblazeToolClasses) {
+      registeredTrailblazeToolClasses.clear()
+      registeredTrailblazeToolClasses.addAll(newToolClasses)
+    }
+    Console.log("Active toolsets changed to: $toolSetIds (${newToolClasses.size} tools)")
+    return buildString {
+      appendLine("Active tool sets updated.")
+      appendLine("Enabled sets: ${(toolSetIds + "core").distinct()}")
+      appendLine("Total tools available: ${newToolClasses.size}")
+    }
+  }
+
   fun toolCallToTrailblazeTool(toolMessage: Message.Tool): TrailblazeTool? = toolCallToTrailblazeTool(
     toolName = toolMessage.tool,
     toolContent = toolMessage.content,
@@ -73,13 +119,14 @@ class TrailblazeToolRepo(
     /** The JSON string of the tool arguments. */
     toolContent: String,
   ): TrailblazeTool {
+    val currentTools = getRegisteredTrailblazeTools()
     val trailblazeToolClass: KClass<out TrailblazeTool> =
-      registeredTrailblazeToolClasses.firstOrNull { toolKClass ->
+      currentTools.firstOrNull { toolKClass ->
         toolKClass.toKoogToolDescriptor()?.name == toolName
       } ?: error(
         buildString {
           appendLine("Could not find Trailblaze tool class for name: $toolName.")
-          appendLine("Registered tools: ${registeredTrailblazeToolClasses.map { it.simpleName }}")
+          appendLine("Registered tools: ${currentTools.map { it.simpleName }}")
         },
       )
 
@@ -87,8 +134,32 @@ class TrailblazeToolRepo(
     return TrailblazeJsonInstance.decodeFromString(trailblazeToolClass.serializer(), toolContent)
   }
 
-  fun getCurrentToolDescriptors(): List<ToolDescriptor> = registeredTrailblazeToolClasses.mapNotNull { toolClass ->
+  fun getCurrentToolDescriptors(): List<ToolDescriptor> = getRegisteredTrailblazeTools().mapNotNull { toolClass ->
     toolClass.toKoogToolDescriptor()
+  }
+
+  companion object {
+    /**
+     * Creates a [TrailblazeToolRepo] with dynamic toolset support.
+     *
+     * Starts with only core tools (from the catalog) plus any [customToolClasses].
+     * The LLM can enable additional toolsets at runtime via `setActiveToolSets`.
+     */
+    fun withDynamicToolSets(
+      setOfMarkEnabled: Boolean,
+      customToolClasses: Set<KClass<out TrailblazeTool>> = emptySet(),
+      excludedToolClasses: Set<KClass<out TrailblazeTool>> = emptySet(),
+      catalog: List<ToolSetCatalogEntry> = TrailblazeToolSetCatalog.defaultEntries(setOfMarkEnabled),
+    ): TrailblazeToolRepo {
+      val coreTools = TrailblazeToolSetCatalog.resolve(emptyList(), catalog)
+      return TrailblazeToolRepo(
+        trailblazeToolSet = TrailblazeToolSet.DynamicTrailblazeToolSet(
+          "Core Tool Set",
+          coreTools + customToolClasses - excludedToolClasses,
+        ),
+        toolSetCatalog = catalog,
+      )
+    }
   }
 
   // When running - verify: only provide the assertion tools and the objective status tool

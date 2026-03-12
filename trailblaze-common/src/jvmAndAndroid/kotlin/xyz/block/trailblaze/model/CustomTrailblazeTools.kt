@@ -1,9 +1,11 @@
 package xyz.block.trailblaze.model
 
 import xyz.block.trailblaze.toolcalls.ToolName
+import xyz.block.trailblaze.toolcalls.ToolSetCatalogEntry
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
+import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
 import xyz.block.trailblaze.toolcalls.toolName
 import kotlin.reflect.KClass
 
@@ -21,6 +23,8 @@ data class CustomTrailblazeTools(
     TrailblazeToolSet.getLlmToolSet(
       config.setOfMarkEnabled,
     ).toolClasses + registeredAppSpecificLlmTools,
+  /** Optional custom toolset catalog for dynamic toolset switching. */
+  val toolSetCatalog: List<ToolSetCatalogEntry>? = null,
 ) {
   fun allForSerializationTools(): Set<KClass<out TrailblazeTool>> = buildSet {
     addAll(registeredAppSpecificLlmTools)
@@ -29,6 +33,7 @@ data class CustomTrailblazeTools(
     addAll(initialToolRepoToolClasses)
     addAll(TrailblazeToolSet.DefaultLlmTrailblazeTools)
     addAll(TrailblazeToolSet.NonLlmTrailblazeTools)
+    addAll(TrailblazeToolSetCatalog.META_TOOLS)
   }
 
   fun allForSerializationToolsByName(): Map<ToolName, KClass<out TrailblazeTool>> = allForSerializationTools().associateBy { it.toolName() }

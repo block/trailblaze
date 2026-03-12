@@ -13,6 +13,32 @@ import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 object TrailblazeDeviceService {
 
   /**
+   * Cached connected devices list with time-bounded staleness.
+   * Device discovery (`xcrun simctl list`) is expensive (~300-500ms) and serializes
+   * on the CoreSimulator database lock, so we cache results for [CACHE_TTL_MS].
+   */
+  private const val CACHE_TTL_MS = 30_000L
+
+  private data class DeviceCache(
+    val devices: List<Device.Connected>,
+    val timestamp: Long,
+  )
+
+  @Volatile private var cache: DeviceCache? = null
+
+  private val cachedConnectedDevices: List<Device.Connected>
+    get() {
+      val now = System.currentTimeMillis()
+      val current = cache
+      if (current == null || now - current.timestamp > CACHE_TTL_MS) {
+        return DeviceService.listConnectedDevices().also {
+          cache = DeviceCache(it, now)
+        }
+      }
+      return current.devices
+    }
+
+  /**
    * Gets the first connected iOS Device.
    *
    * @param appTarget Optional - Configuration for the target application under test
@@ -21,7 +47,7 @@ object TrailblazeDeviceService {
     trailblazeDeviceId: TrailblazeDeviceId,
     appTarget: TrailblazeHostAppTarget? = null,
   ): TrailblazeConnectedDevice? {
-    val connectedDevice: Device.Connected = DeviceService.listConnectedDevices().firstOrNull {
+    val connectedDevice: Device.Connected = cachedConnectedDevices.firstOrNull {
       TrailblazeDeviceId(
         instanceId = it.instanceId,
         trailblazeDevicePlatform = it.platform.toTrailblazeDevicePlatform(),
@@ -44,7 +70,7 @@ object TrailblazeDeviceService {
   }
 
   fun listConnectedTrailblazeDevices(): Set<TrailblazeDeviceId> {
-    return DeviceService.listConnectedDevices().map {
+    return cachedConnectedDevices.map {
       TrailblazeDeviceId(
         instanceId = it.instanceId,
         trailblazeDevicePlatform = it.platform.toTrailblazeDevicePlatform(),
@@ -78,6 +104,8 @@ object TrailblazeDeviceService {
       appTarget = appTarget
     )
 
-    TrailblazeDevicePlatform.WEB -> HostWebDriverFactory().createWeb()
+    TrailblazeDevicePlatform.WEB -> error(
+      "Web tests use PLAYWRIGHT_NATIVE path (BasePlaywrightNativeTest), not TrailblazeDeviceService"
+    )
   }
 }

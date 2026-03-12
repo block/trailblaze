@@ -62,7 +62,7 @@ import xyz.block.trailblaze.yaml.TrailConfig
 import xyz.block.trailblaze.yaml.TrailSource
 import xyz.block.trailblaze.yaml.TrailSourceType
 import xyz.block.trailblaze.yaml.TrailYamlItem
-import xyz.block.trailblaze.yaml.TrailblazeYaml
+import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.yaml.VerificationStep
 import kotlin.math.roundToInt
 
@@ -92,7 +92,7 @@ fun YamlVisualEditor(
       VisualEditorParseResult.Empty
     } else {
       try {
-        val trailblazeYaml = TrailblazeYaml.Default
+        val trailblazeYaml = createTrailblazeYaml()
         val items = trailblazeYaml.decodeTrail(yamlContent)
         VisualEditorParseResult.Success(items)
       } catch (e: Exception) {
@@ -128,7 +128,7 @@ fun YamlVisualEditor(
   // Function to update the YAML content when items change
   fun updateYamlFromItems() {
     try {
-      val trailblazeYaml = TrailblazeYaml.Default
+      val trailblazeYaml = createTrailblazeYaml()
       val allItems = listOf(editedConfig) + editedItems
       val newYamlContent = trailblazeYaml.encodeToString(allItems)
       onYamlContentChange(newYamlContent)
@@ -366,10 +366,6 @@ private fun TrailYamlItemCard(
             onDelete = { showDeleteDialog = true }
           )
 
-          is TrailYamlItem.MaestroTrailItem -> MaestroItemContent(
-            item = item,
-            onDelete = { showDeleteDialog = true }
-          )
         }
       }
     }
@@ -972,48 +968,6 @@ private fun ToolItemContent(
   }
 }
 
-/**
- * Displays the content for a MaestroTrailItem.
- */
-@Composable
-private fun MaestroItemContent(
-  item: TrailYamlItem.MaestroTrailItem,
-  onDelete: () -> Unit,
-) {
-  Row(
-    modifier = Modifier.fillMaxWidth(),
-    verticalAlignment = Alignment.CenterVertically,
-    horizontalArrangement = Arrangement.SpaceBetween
-  ) {
-    Row(
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-      ItemTypeBadge(text = "MAESTRO", color = Color(0xFF9E9E9E))
-      Text(
-        text = "Maestro Commands",
-        style = MaterialTheme.typography.titleMedium,
-        fontWeight = FontWeight.Bold
-      )
-    }
-
-    IconButton(onClick = onDelete) {
-      Icon(
-        Icons.Filled.Delete,
-        contentDescription = "Delete Maestro",
-        tint = MaterialTheme.colorScheme.error
-      )
-    }
-  }
-
-  HorizontalDivider()
-
-  Text(
-    text = "Maestro command list",
-    style = MaterialTheme.typography.bodyMedium,
-    color = MaterialTheme.colorScheme.onSurfaceVariant
-  )
-}
 
 /**
  * A badge showing the item type with fixed width for consistent alignment.

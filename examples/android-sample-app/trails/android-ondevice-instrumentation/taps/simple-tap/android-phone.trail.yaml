@@ -1,0 +1,17 @@
+- config:
+    id: sample-app/taps/simple-tap
+    app: xyz.block.trailblaze.examples.sampleapp
+    platform: android
+    driver: ANDROID_ONDEVICE_INSTRUMENTATION
+- tools:
+  - launchApp:
+      appId: xyz.block.trailblaze.examples.sampleapp
+      launchMode: REINSTALL
+  - tapOnElementBySelector:
+      reason: The 'Tap Me' button needs to be tapped according to the objective, and it corresponds to nodeId 6 which wraps the relevant TextView.
+      selector:
+        containsChild:
+          textRegex: Tap Me
+      nodeSelector:
+        androidAccessibility:
+          textRegex: Tap Me

@@ -8,6 +8,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import xyz.block.trailblaze.util.Console
 
 class IosHostUtilsTest {
 
@@ -372,7 +373,7 @@ class IosHostUtilsTest {
     // This test requires a booted simulator with an app installed
     // Skip if no simulator is available
     val trailblazeDeviceId = getBootedSimulatorDeviceId() ?: run {
-      println("Skipping test: No booted simulator found")
+      Console.log("Skipping test: No booted simulator found")
       return
     }
 
@@ -380,10 +381,10 @@ class IosHostUtilsTest {
     val versionInfo = IosHostUtils.getAppVersionInfo(trailblazeDeviceId, "com.apple.Preferences")
 
     if (versionInfo != null) {
-      println("Retrieved version info:")
-      println("  trailblazeDeviceId: ${versionInfo.trailblazeDeviceId}")
-      println("  versionCode: ${versionInfo.versionCode}")
-      println("  versionName: ${versionInfo.versionName}")
+      Console.log("Retrieved version info:")
+      Console.log("  trailblazeDeviceId: ${versionInfo.trailblazeDeviceId}")
+      Console.log("  versionCode: ${versionInfo.versionCode}")
+      Console.log("  versionName: ${versionInfo.versionName}")
       // Note: buildNumber is app-specific (e.g., SQBuildNumber for Square apps)
       // and is populated by app-specific implementations, not the generic IosHostUtils
 
@@ -391,14 +392,14 @@ class IosHostUtilsTest {
       assertNotNull(versionInfo.versionName)
       assertTrue(versionInfo.versionCode.isNotBlank())
     } else {
-      println("App not installed on simulator ${trailblazeDeviceId.instanceId}")
+      Console.log("App not installed on simulator ${trailblazeDeviceId.instanceId}")
     }
   }
 
   @Test
   fun `getAppVersionInfo returns null for non-existent app`() {
     val trailblazeDeviceId = getBootedSimulatorDeviceId() ?: run {
-      println("Skipping test: No booted simulator found")
+      Console.log("Skipping test: No booted simulator found")
       return
     }
 

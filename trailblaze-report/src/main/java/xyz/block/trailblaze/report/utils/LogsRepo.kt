@@ -12,7 +12,6 @@ import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.model.isInProgress
-import xyz.block.trailblaze.report.utils.TrailblazeYamlSessionRecording.generateRecordedYaml
 import java.io.File
 import kotlin.reflect.KClass
 import kotlin.time.Duration
@@ -78,35 +77,67 @@ class LogsRepo(
       // Start watching session list immediately for reactive updates
       startWatchingSessionList()
 
-      // Initialize SessionInfo flow and keep it updated
+      // Initialize SessionInfo flow and keep it updated.
+      // Only create file watchers for in-progress sessions to avoid the overhead
+      // of watching hundreds of completed historical session directories.
       fileOperationScope.launch {
         sessionsFlow.collect { sessionIds ->
-          // Update SessionInfo for all sessions
-          _sessionInfoFlow.value = sessionIds.mapNotNull { getSessionInfo(it) }
+          // Read session info: use direct disk read (no watcher) for initial scan,
+          // cached flow (with watcher) for sessions we're already tracking.
+          val sessionInfos = sessionIds.mapNotNull { sessionId ->
+            if (sessionId in sessionInfoWatcherJobs) {
+              // Already watching — use the cached/reactive path
+              getSessionInfo(sessionId)
+            } else {
+              // Not yet watching — read directly from disk without creating a watcher
+              getSessionInfoDirect(sessionId)
+            }
+          }
+          _sessionInfoFlow.value = sessionInfos
 
           // Cancel watchers for removed sessions
           val removedSessions = sessionInfoWatcherJobs.keys - sessionIds.toSet()
           removedSessions.forEach { sessionId ->
             sessionInfoWatcherJobs[sessionId]?.cancel()
             sessionInfoWatcherJobs.remove(sessionId)
+            fileWatcherByTrailblazeSession.remove(sessionId)?.stopWatching()
+            _sessionLogsFlows.remove(sessionId)
           }
 
-          // Start watching new sessions' logs to detect status changes
-          sessionIds.forEach { sessionId ->
+          // Only start watching sessions that are in-progress (active).
+          // Completed sessions' logs won't change, so no need to watch them.
+          val activeSessionIds = sessionInfos
+            .filter { it.latestStatus.isInProgress }
+            .map { it.sessionId }
+            .toSet()
+
+          activeSessionIds.forEach { sessionId ->
             if (sessionId !in sessionInfoWatcherJobs) {
+              ensureWatchingSession(sessionId)
               sessionInfoWatcherJobs[sessionId] = fileOperationScope.launch {
                 getSessionLogsFlow(sessionId).collect {
-                  // When any session's logs change, refresh all SessionInfo
-                  _sessionInfoFlow.value = sessionsFlow.value.mapNotNull { getSessionInfo(it) }
+                  // When an active session's logs change, refresh SessionInfo
+                  _sessionInfoFlow.value = sessionsFlow.value.mapNotNull { sid ->
+                    if (sid in sessionInfoWatcherJobs) getSessionInfo(sid) else getSessionInfoDirect(sid)
+                  }
                 }
               }
             }
+          }
+
+          // Stop watching sessions that have completed since we last checked
+          val completedSessions = sessionInfoWatcherJobs.keys - activeSessionIds
+          completedSessions.forEach { sessionId ->
+            sessionInfoWatcherJobs[sessionId]?.cancel()
+            sessionInfoWatcherJobs.remove(sessionId)
+            fileWatcherByTrailblazeSession.remove(sessionId)?.stopWatching()
+            // Keep _sessionLogsFlows for completed sessions (cached data is still useful)
           }
         }
       }
     } else {
       // Single read mode: just initialize SessionInfo once without reactive updates
-      _sessionInfoFlow.value = _sessionsFlow.value.mapNotNull { getSessionInfo(it) }
+      _sessionInfoFlow.value = _sessionsFlow.value.mapNotNull { getSessionInfoDirect(it) }
       Console.log("[LogsRepo] Initialized in single-read mode with ${_sessionsFlow.value.size} sessions")
     }
   }
@@ -163,7 +194,7 @@ class LogsRepo(
    */
   private fun readLogFilesFromDisk(sessionId: SessionId): List<File> = File(logsDir, sessionId.value)
     .listFiles()
-    ?.filter { it.extension == "json" }
+    ?.filter { it.extension == "json" && it.name[0].isDigit() }
     ?: emptyList()
 
   /**
@@ -246,11 +277,10 @@ class LogsRepo(
    */
   fun getSessionLogsFlow(sessionId: SessionId): StateFlow<List<TrailblazeLog>> {
     return _sessionLogsFlows.getOrPut(sessionId) {
-      // Read from disk to initialize the flow (only happens once per session)
-      MutableStateFlow(getLogsForSession(sessionId)).also { flow ->
-        // Start watching this session to update the flow
-        startWatchingSessionForFlow(sessionId, flow)
-      }
+      // Read from disk to initialize the flow (only happens once per session).
+      // File watching is NOT started here — only active sessions get watchers,
+      // started explicitly via ensureWatchingSession().
+      MutableStateFlow(getLogsForSession(sessionId))
     }
   }
 
@@ -258,7 +288,7 @@ class LogsRepo(
    * Suspends for up to [timeout] (default 5 seconds) waiting for a log of type [T] matching [predicate]
    * to appear in the session logs.
    *
-   * Usage: `awaitLog<TrailblazeLog.MaestroDriverLog>(sessionId) { it.successful }`
+   * Usage: `awaitLog<TrailblazeLog.AgentDriverLog>(sessionId) { it.successful }`
    *
    * @param sessionId The session to watch logs for
    * @param timeout Maximum time to wait for the log (default 5 seconds)
@@ -293,6 +323,7 @@ class LogsRepo(
     predicate: (T) -> Boolean = { true }
   ): T? {
     val startIndex = if (skipExisting) getSessionLogsFlow(sessionId).value.size else 0
+    ensureWatchingSession(sessionId)
 
     return withTimeoutOrNull(timeout) {
       getSessionLogsFlow(sessionId)
@@ -303,6 +334,18 @@ class LogsRepo(
         }
         .first()
     }
+  }
+
+  /**
+   * Ensures a file watcher is running for the given session so its flow gets reactive updates.
+   * Creates the flow if it doesn't exist yet. No-op if a watcher is already active or if
+   * file system watching is disabled.
+   */
+  private fun ensureWatchingSession(sessionId: SessionId) {
+    val flow = _sessionLogsFlows.getOrPut(sessionId) {
+      MutableStateFlow(getLogsForSession(sessionId))
+    }
+    startWatchingSessionForFlow(sessionId, flow)
   }
 
   /**
@@ -415,12 +458,27 @@ class LogsRepo(
 
   override suspend fun getSessionInfoAsync(sessionName: SessionId): SessionInfo? = getSessionInfo(sessionName)
 
-  override suspend fun getSessionRecordingYaml(sessionId: SessionId): String =
-    getLogsForSessionAsync(sessionId).generateRecordedYaml()
+  /**
+   * Reads session info directly from disk without creating a file watcher.
+   *
+   * Use this for one-shot reads of completed/historical sessions where you don't
+   * need reactive updates. This avoids the overhead of creating a [FileWatchService]
+   * per session directory.
+   *
+   * @see getSessionInfo for the cached/reactive version
+   */
+  fun getSessionInfoDirect(sessionId: SessionId): SessionInfo? {
+    val allLogs = getLogsForSession(sessionId)
+    return buildSessionInfo(allLogs)
+  }
 
   fun getSessionInfo(sessionId: SessionId): SessionInfo? {
     // Use cached logs from the flow if available, otherwise read from disk
     val allLogs = getCachedLogsForSession(sessionId)
+    return buildSessionInfo(allLogs)
+  }
+
+  private fun buildSessionInfo(allLogs: List<TrailblazeLog>): SessionInfo? {
     if (allLogs.isEmpty()) {
       return null
     }
@@ -439,6 +497,8 @@ class LogsRepo(
 
     val lastSessionStatusLog = sessionStatusLogs
       .maxByOrNull { it.timestamp }
+
+    val startedStatus = sessionStartedLog?.sessionStatus as? SessionStatus.Started
 
     // Check if session is abandoned (in progress but >2 mins since last activity)
     if (sessionStartedLog != null && lastSessionStatusLog != null) {
@@ -468,46 +528,48 @@ class LogsRepo(
               message = "Session was abandoned after ${timeSinceLastActivity.milliseconds.inWholeMinutes} minutes of inactivity",
             )
 
-            // Return session info with Abandoned status
-            val startedStatus: SessionStatus.Started = sessionStartedLog.sessionStatus as SessionStatus.Started
             return SessionInfo(
               sessionId = sessionStartedLog.session,
               timestamp = sessionStartedLog.timestamp,
               latestStatus = abandonedSessionStatus,
-              testName = startedStatus.testMethodName,
-              testClass = startedStatus.testClassName,
-              trailblazeDeviceInfo = startedStatus.trailblazeDeviceInfo,
-              trailblazeDeviceId = startedStatus.trailblazeDeviceId,
-              trailConfig = startedStatus.trailConfig,
+              testName = startedStatus?.testMethodName,
+              testClass = startedStatus?.testClassName,
+              trailblazeDeviceInfo = startedStatus?.trailblazeDeviceInfo,
+              trailblazeDeviceId = startedStatus?.trailblazeDeviceId,
+              trailConfig = startedStatus?.trailConfig,
               durationMs = durationMs,
-              trailFilePath = startedStatus.trailFilePath,
-              hasRecordedSteps = startedStatus.hasRecordedSteps,
+              trailFilePath = startedStatus?.trailFilePath,
+              hasRecordedSteps = startedStatus?.hasRecordedSteps ?: false,
             )
           }
         }
       }
     }
 
-    return if (sessionStartedLog != null && lastSessionStatusLog != null) {
-      val startedStatus: SessionStatus.Started = sessionStartedLog.sessionStatus as SessionStatus.Started
-      val durationMs =
-        lastSessionStatusLog.timestamp.toEpochMilliseconds() - sessionStartedLog.timestamp.toEpochMilliseconds()
-      SessionInfo(
-        sessionId = sessionStartedLog.session,
-        timestamp = sessionStartedLog.timestamp,
-        latestStatus = lastSessionStatusLog.sessionStatus,
-        testName = startedStatus.testMethodName,
-        testClass = startedStatus.testClassName,
-        trailblazeDeviceInfo = startedStatus.trailblazeDeviceInfo,
-        trailblazeDeviceId = startedStatus.trailblazeDeviceId,
-        trailConfig = startedStatus.trailConfig,
-        durationMs = durationMs,
-        trailFilePath = startedStatus.trailFilePath,
-        hasRecordedSteps = startedStatus.hasRecordedSteps,
-      )
-    } else {
-      null
+    if (lastSessionStatusLog == null) {
+      return null
     }
+
+    // Use the first log's timestamp as fallback when there's no Started log
+    // (e.g., on-device instrumentation sessions that only emit Ended logs)
+    val firstLog = allLogs.first()
+    val referenceLog = sessionStartedLog ?: firstLog
+    val durationMs = lastSessionStatusLog.timestamp.toEpochMilliseconds() -
+      referenceLog.timestamp.toEpochMilliseconds()
+
+    return SessionInfo(
+      sessionId = referenceLog.session,
+      timestamp = referenceLog.timestamp,
+      latestStatus = lastSessionStatusLog.sessionStatus,
+      testName = startedStatus?.testMethodName,
+      testClass = startedStatus?.testClassName,
+      trailblazeDeviceInfo = startedStatus?.trailblazeDeviceInfo,
+      trailblazeDeviceId = startedStatus?.trailblazeDeviceId,
+      trailConfig = startedStatus?.trailConfig,
+      durationMs = durationMs,
+      trailFilePath = startedStatus?.trailFilePath,
+      hasRecordedSteps = startedStatus?.hasRecordedSteps ?: false,
+    )
   }
 
   private val countBySession = mutableMapOf<SessionId, Int>()
@@ -566,6 +628,28 @@ class LogsRepo(
       Console.log("Writing Screenshot to ${screenshotFile.absolutePath}")
       screenshotFile.writeBytes(bytes)
     }
+  }
+
+  /**
+   * Saves raw screenshot bytes to disk and returns the filename.
+   *
+   * @param sessionId The session ID to save the screenshot under
+   * @param bytes The screenshot bytes (PNG or JPEG)
+   * @param fileExtension The file extension (default "png")
+   * @return The filename of the saved screenshot
+   */
+  fun saveScreenshotBytes(
+    sessionId: SessionId,
+    bytes: ByteArray,
+    fileExtension: String = "png",
+  ): String {
+    val sessionDir = getSessionDir(sessionId)
+    val timestamp = Clock.System.now().toEpochMilliseconds()
+    val filename = "${sessionId.value}_${timestamp}.$fileExtension"
+    val screenshotFile = File(sessionDir, filename)
+    Console.log("Writing Screenshot to ${screenshotFile.absolutePath}")
+    screenshotFile.writeBytes(bytes)
+    return filename
   }
 
   /**

@@ -1,3 +1,5 @@
+@file:OptIn(kotlin.time.ExperimentalTime::class)
+
 package xyz.block.trailblaze.agent
 
 import ai.koog.prompt.executor.clients.LLMClient
@@ -8,7 +10,7 @@ import ai.koog.prompt.message.Message
 import ai.koog.prompt.message.RequestMetaInfo
 import ai.koog.prompt.params.LLMParams
 import kotlinx.coroutines.runBlocking
-import kotlinx.datetime.Clock
+import kotlin.time.Clock
 import kotlinx.serialization.json.Json
 import xyz.block.trailblaze.agent.util.ElementRetriever
 import xyz.block.trailblaze.api.ImageFormatDetector
@@ -42,8 +44,6 @@ class TrailblazeElementComparator(
     trailblazeLlmModel = trailblazeLlmModel,
     llmClient = llmClient,
     systemPromptTemplate = systemPromptToolTemplate,
-    userMessageTemplate = userPromptTemplate,
-    userObjectiveTemplate = userPromptTemplate,
     elementComparator = this,
     toolRepo = toolRepo,
   )

@@ -1,0 +1,26 @@
+# Android World Benchmark: ExpenseAddMultipleFromMarkor
+- config:
+    id: android-world-benchmarks/expense/add_multiple_from_markor
+    description: "Add the expenses listed in the file expenses.md in Markor to the Pro Expense app."
+- tools:
+    - androidworldbenchmarks_executeSqliteOnDevice:
+        dbPath: /data/data/com.arduia.expense/databases/accounting.db
+        sqlStatements:
+          - "DELETE FROM expense"
+        appPackageName: com.arduia.expense
+    - androidworldbenchmarks_createFileOnDevice:
+        devicePath: /storage/emulated/0/Documents/Markor
+        fileName: expenses.md
+        content: "Groceries, $45.00\nGas, $35.50\nParking, $8.00"
+- prompts:
+    - step: "Add the expenses listed in the file expenses.md in Markor to the Pro Expense app."
+- tools:
+    - androidworldbenchmarks_assertSqliteQuery:
+        dbPath: /data/data/com.arduia.expense/databases/accounting.db
+        query: "SELECT COUNT(*) FROM expense WHERE (name='Groceries' AND amount=4500) OR (name='Gas' AND amount=3550) OR (name='Parking' AND amount=800)"
+        expectedOutput: "3"
+        matchMode: exact
+        appPackageName: com.arduia.expense
+
+# --- Benchmark Run History ---
+# [2026-03-11] Build #27 FAILED - Agent limitation: ObjectiveFailed. Can't navigate Pro Expense app.

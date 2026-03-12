@@ -1,0 +1,26 @@
+# Android World Benchmark: osmand/favorite
+- config:
+    id: android-world-benchmarks/osmand/osmand_favorite
+    description: Add a favorite location marker for Balzers, Liechtenstein in the OsmAnd maps app
+
+- tools:
+  - androidworldbenchmarks_clearDirectory:
+      directoryPath: /data/media/0/Android/data/net.osmand/files/backup
+  - androidworldbenchmarks_runAdbShell:
+      adbShellCommands:
+        - "rm -f /data/media/0/Android/data/net.osmand/files/favorites/favorites.gpx"
+
+- prompts:
+  - step: "Add a favorite location marker for Balzers, Liechtenstein in the OsmAnd maps app."
+
+- tools:
+  - androidworldbenchmarks_assertFileContent:
+      filePath: /data/media/0/Android/data/net.osmand/files/favorites/favorites.gpx
+      expectedContent: "Balzers"
+      matchMode: contains
+
+# --- Benchmark Run History ---
+# [2026-03-11] FAILED - Agent limitation: ObjectiveFailed. Couldn't add
+#   favorite location in OsmAnd. Complex UI for adding favorites — agent
+#   couldn't navigate the multi-step favorite creation flow.
+# [2026-03-11] Build #27 FAILED - Agent limitation: ObjectiveFailed. Same as build #24.

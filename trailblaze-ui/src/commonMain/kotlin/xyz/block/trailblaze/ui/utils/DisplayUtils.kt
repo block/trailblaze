@@ -6,8 +6,8 @@ object DisplayUtils {
 
   fun getLogTypeDisplayName(log: TrailblazeLog): String {
     return when (log) {
-      is TrailblazeLog.TrailblazeLlmRequestLog -> "LLM Request"
-      is TrailblazeLog.MaestroDriverLog -> "Maestro Driver"
+      is TrailblazeLog.TrailblazeLlmRequestLog -> if (log.llmRequestLabel != null) "LLM: ${log.llmRequestLabel}" else "LLM Request"
+      is TrailblazeLog.AgentDriverLog -> "Driver Action"
       is TrailblazeLog.TrailblazeToolLog -> "Trailblaze Command"
       is TrailblazeLog.DelegatingTrailblazeToolLog -> "Delegating Trailblaze Tool"
       is TrailblazeLog.MaestroCommandLog -> "Maestro Command"
@@ -17,6 +17,14 @@ object DisplayUtils {
       is TrailblazeLog.ObjectiveCompleteLog -> "Objective Complete"
       is TrailblazeLog.AttemptAiFallbackLog -> "Attempt AI Fallback"
       is TrailblazeLog.TrailblazeSnapshotLog -> "Snapshot"
+      is TrailblazeLog.AccessibilityActionLog -> "Accessibility Action"
+      is TrailblazeLog.McpAgentRunLog -> "MCP Agent Run"
+      is TrailblazeLog.McpAgentIterationLog -> "MCP Agent Iteration"
+      is TrailblazeLog.McpSamplingLog -> "MCP Sampling"
+      is TrailblazeLog.McpAgentToolLog -> "MCP Tool"
+      is TrailblazeLog.McpToolCallRequestLog -> "MCP Tool Request"
+      is TrailblazeLog.McpToolCallResponseLog -> "MCP Tool Response"
+      is TrailblazeLog.TrailblazeProgressLog -> "Progress: ${log.eventType}"
     }
   }
 }

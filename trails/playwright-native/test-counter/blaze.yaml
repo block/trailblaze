@@ -1,0 +1,13 @@
+- config:
+    title: "Test: Counter interaction"
+    driver: PLAYWRIGHT_NATIVE
+- prompts:
+    - step: Navigate to ../../../examples/playwright-native/sample-app/index.html
+    - step: Click on the "Counter" navigation link
+    - step: Verify the counter value shows "0"
+    - step: Click the "Increment" button (the + button) three times
+    - step: Verify the counter value shows "3"
+    - step: Click the "Decrement" button (the - button) once
+    - step: Verify the counter value shows "2"
+    - step: Click the "Reset" button
+    - step: Verify the counter value shows "0"

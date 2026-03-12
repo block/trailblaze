@@ -1,45 +1,198 @@
 ---
-title: MCP & Goose
+title: MCP Integration
 ---
 
-Below are the instructions for using the Trailblaze MCP server with [Goose](https://github.com/block/goose).  
+Trailblaze exposes a clean **5-tool MCP API** for mobile UI automation and test authoring.
 
-Note: Trailblaze can work with any MCP client, we've just optimized for Goose. 
+## Quick Start
 
-## MCP Server
+```
+# Connect to a device
+device(action=ANDROID)
 
-Trailblaze includes an MCP server that uses **Streamable HTTP** transport. The endpoint accepts JSON-RPC requests via HTTP POST.
+# Take actions using natural language
+step("Tap the login button")
+step("Enter 'test@example.com' in the email field")
 
-### Connection Flow
+# Verify results
+verify("Welcome screen is visible")
 
-1. Client sends POST to `/mcp` with JSON-RPC request body
-2. Server creates a session (if new) and returns `Mcp-Session-Id` header
-3. Client includes `Mcp-Session-Id` header in subsequent requests
-4. Optional: Client can GET `/mcp` (with session header) for server-to-client streaming
-5. Client can DELETE `/mcp` (with session header) to terminate the session
+# Save your session as a reusable test
+trail(action=SAVE, name="login_test")
+```
 
-## Using Trailblaze with Goose
+## The 5 MCP Tools
 
-### 1. Download and Install the Goose Desktop App
+| Tool | Purpose | Example |
+|------|---------|---------|
+| `device` | Connect to a device | `device(action=ANDROID)` |
+| `step` | Take an action toward a goal | `step("Tap the submit button")` |
+| `verify` | Check if something is true | `verify("Error message is visible")` |
+| `ask` | Ask a question, get an answer | `ask("What is the current balance?")` |
+| `trail` | Manage trails (save/run/list) | `trail(action=SAVE, name="my_test")` |
 
-- Download the Goose Desktop app to run Trailblaze. [Installation Guide](https://block.github.io/goose/docs/getting-started/installation/) to set it up.
-- Configure your LLM API Keys to use Goose [LLM Provider Configuration](https://block.github.io/goose/docs/getting-started/providers).
+## Two Workflows
 
-### 2. Run Trailblaze
+### 1. Device Control (Exploration)
 
-This will start the Trailblaze server and web UI.
+For quick exploration and automation without creating reusable tests:
+
+```
+device(action=ANDROID)                    # Connect
+step("Open the Settings app")             # Interact
+step("Scroll down to About")
+ask("What Android version is shown?")     # Query
+```
+
+Your session is automatically recorded. Save it anytime with `trail(action=SAVE, name="...")`.
+
+### 2. Test Authoring
+
+For creating reusable test cases:
+
+```
+trail(action=START, name="checkout_flow", platform=ANDROID)   # Start named trail
+step("Add item to cart")
+step("Proceed to checkout")
+step("Enter payment details")
+verify("Order confirmation is displayed")
+trail(action=SAVE)                                            # Save the trail
+```
+
+Run saved trails later:
+```
+trail(action=RUN, name="checkout_flow")   # Deterministic replay
+```
+
+## Tool Reference
+
+### device
+
+Connect to a mobile device.
+
+| Action | Description |
+|--------|-------------|
+| `ANDROID` | Auto-connect to first Android device |
+| `IOS` | Auto-connect to first iOS device |
+| `LIST` | List available devices |
+| `CONNECT` | Connect by specific device ID |
+
+```
+device(action=ANDROID)
+device(action=LIST)
+device(action=CONNECT, deviceId="emulator-5554")
+```
+
+### step
+
+Execute an action using natural language. Trailblaze's inner agent analyzes the screen and performs the necessary UI interactions.
+
+```
+step("Tap the Login button")
+step("Enter 'hello@example.com' in the email field")
+step("Scroll down until the Submit button is visible")
+step("Swipe left to dismiss the notification")
+```
+
+Returns: Success/failure status with screen summary.
+
+### verify
+
+Check if a condition is true on the current screen.
+
+```
+verify("The welcome message is visible")
+verify("The cart shows 3 items")
+verify("No error messages are displayed")
+```
+
+Returns: `{ passed: true/false, reason: "..." }`
+
+### ask
+
+Ask a question about the current screen state.
+
+```
+ask("What is the title of this screen?")
+ask("How many items are in the list?")
+ask("What error message is shown?")
+```
+
+Returns: The answer as a string.
+
+### trail
+
+Manage trails (reusable test recordings).
+
+| Action | Description |
+|--------|-------------|
+| `START` | Begin a named trail (optionally connect to device) |
+| `SAVE` | Save current session as a trail file |
+| `RUN` | Execute a saved trail (deterministic, no AI) |
+| `LIST` | List available devices or trails |
+| `END` | End session without saving |
+
+```
+# Start a named trail
+trail(action=START, name="login_flow", platform=ANDROID)
+
+# Save session (works anytime, even without START)
+trail(action=SAVE, name="my_test")
+
+# Run a saved trail
+trail(action=RUN, name="login_flow")
+
+# List trails matching a filter
+trail(action=LIST, filter="login")
+
+# List available devices
+trail(action=LIST)
+```
+
+## Trail Files
+
+Trails are saved as `.trail.yaml` files in the `trails/` directory:
+
+```yaml
+- config:
+    id: login-flow
+    title: Login Flow
+    source:
+      type: HANDWRITTEN
+
+- prompts:
+    - step: "Tap the login button"
+      recording:
+        tools:
+          - tapOnElementByNodeId:
+              nodeId: 42
+    - verify: "Welcome message is visible"
+```
+
+**Deterministic execution**: When you run a trail with `trail(action=RUN)`, Trailblaze replays the recorded tool calls without AI. This ensures consistent, fast test execution.
+
+## Setup
+
+### Running the Server
 
 ```shell
 ./trailblaze
 ```
 
-![launch-trailblaze.gif](../images-opensource/launch-trailblaze.gif)
+This starts:
+- MCP server on `http://localhost:52525/mcp`
+- Web UI for monitoring
 
-### 3. Install the Goose Trailblaze Extension
+### Connecting from Goose
 
-Now that you have the server running, you can install the Trailblaze extension in Goose. You should only have to do this configuration once.
+1. Download [Goose Desktop](https://block.github.io/goose/docs/getting-started/installation/)
+2. Add a new extension:
+   - **ID**: `trailblaze`
+   - **Name**: `Trailblaze`
+   - **Type**: `streamable_http`
+   - **URI**: `http://localhost:52525/mcp`
 
-Add a new Goose Extension with:
+### Connecting from Firebender/Cursor
 
 - **ID**: `trailblaze`
 - **Name**: `Trailblaze`
@@ -47,26 +200,92 @@ Add a new Goose Extension with:
 - **Type**: `streamable_http`
 - **URI**: `http://localhost:52525/mcp` (use your configured HTTP port if different from the default)
 
-![trailblaze-goose-extension.gif](../images-opensource/trailblaze-goose-extension.gif)
+Add to `~/.firebender/firebender.json`:
 
-### 4. Start Trailblaze with Goose
+```json
+{
+  "mcp": {
+    "Trailblaze": {
+      "url": "http://localhost:52525/mcp"
+    }
+  }
+}
+```
 
-Within the Goose Desktop app, click `Open Goose`:
+Then click **Refresh All** in MCP settings.
 
-![desktop-open-goose.png](../images-opensource/desktop-open-goose.png)
+## Architecture
 
-### 5. Use Goose to Interact with Trailblaze
+```
+MCP Client (Claude, Goose, Firebender)
+              │
+    ┌─────────┴─────────┐
+    ▼                   ▼
+ device              trail
+(connect)         (test author)
+    │                   │
+    └─────────┬─────────┘
+              ▼
+      step / verify / ask
+    (inner agent executes)
+              │
+              ▼
+      Trail Recording Layer
+    (captures actions taken)
+              │
+              ▼
+        .trail.yaml file
+```
 
-![trailblaze-with-goose-android.gif](../images-opensource/trailblaze-with-goose-android.gif)
+The **inner agent** handles all screen analysis and UI interaction. MCP clients work with natural language - no need to deal with coordinates or view hierarchies.
 
-NOTE: The only available device type is `Android` in open source, and it will run on the device itself.
+## Advanced: Two-Tier Integration
+
+For MCP clients that want finer control, Trailblaze offers **two-tier tools** where your client acts as the outer agent (strategist) and Trailblaze provides screen analysis:
+
+| Tool | Purpose |
+|------|---------|
+| `getScreenAnalysis` | Ask Trailblaze to analyze screen and recommend an action |
+| `executeUiAction` | Execute a specific UI action |
+
+This enables:
+- **Cross-system orchestration** - Coordinate mobile UI with database, filesystem, API calls
+- **Custom replanning logic** - Your client decides when to retry or try alternatives
+- **Cost optimization** - Trailblaze uses a cheap vision model for screen analysis
+
+See the [Two-Tier Integration Guide](./two-tier-integration.md) for details.
+
+## Troubleshooting
+
+### Device not found
+
+```
+device(action=LIST)   # See what's available
+```
+
+- Android: Ensure USB debugging is enabled and `adb devices` shows your device
+- iOS: Ensure device is trusted and developer mode is enabled
+
+### Trail not found
+
+```
+trail(action=LIST, filter="login")   # Search for trails
+```
+
+Trails are stored in the `trails/` directory relative to where Trailblaze is running.
+
+### Tools not appearing
+
+After restarting Trailblaze:
+- In Goose: Re-enable the extension
+- In Firebender: Click "Refresh All" in MCP settings
 
 ## Development
 
-Start the [MCP Inspector](https://github.com/modelcontextprotocol/inspector) with:
+Test with the [MCP Inspector](https://github.com/modelcontextprotocol/inspector):
 
 ```shell
-DANGEROUSLY_OMIT_AUTH=true npm exec --loglevel=verbose @modelcontextprotocol/inspector
+DANGEROUSLY_OMIT_AUTH=true npm exec @modelcontextprotocol/inspector
 ```
 
-Add the Trailblaze MCP Server to the MCP Inspector using the Streamable HTTP transport type to explore all the available commands and responses.
+Add Trailblaze using Streamable HTTP transport: `http://localhost:52525/mcp`

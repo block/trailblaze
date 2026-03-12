@@ -1,0 +1,22 @@
+# Android World Benchmark: RecipeAddSingle
+- config:
+    id: android-world-benchmarks/recipe/add_single
+    description: "Add a recipe for 'Pasta Carbonara' in the Broccoli app with full details."
+- tools:
+    - androidworldbenchmarks_executeSqliteOnDevice:
+        dbPath: /data/data/com.flauschcode.broccoli/databases/broccoli
+        sqlStatements:
+          - "DELETE FROM recipes"
+        appPackageName: com.flauschcode.broccoli
+- prompts:
+    - step: "Add a recipe for 'Pasta Carbonara' in the Broccoli app with description 'Classic Italian pasta dish', servings '4', and preparation time '30 minutes'. Ingredients: spaghetti, eggs, pancetta, parmesan cheese, black pepper. Directions: Cook pasta. Fry pancetta. Mix eggs with cheese. Combine all and serve."
+- tools:
+    - androidworldbenchmarks_assertSqliteQuery:
+        dbPath: /data/data/com.flauschcode.broccoli/databases/broccoli
+        query: "SELECT title FROM recipes WHERE title='Pasta Carbonara'"
+        expectedOutput: "Pasta Carbonara"
+        matchMode: exact
+        appPackageName: com.flauschcode.broccoli
+
+# --- Benchmark Run History ---
+# [2026-03-11] Build #27 FAILED - Agent limitation: ObjectiveFailed. Can't navigate Broccoli app.

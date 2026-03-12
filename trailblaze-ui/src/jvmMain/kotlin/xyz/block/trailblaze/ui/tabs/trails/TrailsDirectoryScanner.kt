@@ -40,7 +40,7 @@ object TrailsDirectoryScanner {
     val files = currentDir.listFiles() ?: return
     
     // Find trail files in this directory
-    val trailFiles = files.filter { it.isFile && it.name.endsWith(TrailRecordings.TRAIL_DOT_YAML) }
+    val trailFiles = files.filter { it.isFile && TrailRecordings.isTrailFile(it.name) }
     
     // If this directory has trail files, it's a trail
     if (trailFiles.isNotEmpty()) {

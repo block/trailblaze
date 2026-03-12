@@ -1,0 +1,22 @@
+# Android World Benchmark: CreateDrawing
+- config:
+    id: android-world-benchmarks/simple_draw_pro/create_drawing
+    displayName: "Simple Draw Pro - Create Drawing"
+    description: "Create a new drawing in Simple Draw Pro. Name it sunset_sketch.png. Save it in the Pictures folder within the sdk_gphone_x86_64 storage area."
+
+- tools:
+    - androidworldbenchmarks_clearDirectory:
+        directoryPath: /storage/emulated/0/Pictures
+
+- prompts:
+    - step: "Create a new drawing in Simple Draw Pro. Name it sunset_sketch.png. Save it in the Pictures folder within the sdk_gphone_x86_64 storage area."
+
+- tools:
+    - launchApp:
+        appId: com.simplemobiletools.draw.pro
+    - androidworldbenchmarks_assertFileExistsOnDevice:
+        filePath: /storage/emulated/0/Pictures/sunset_sketch.png
+        shouldExist: true
+
+# --- Benchmark Run History ---
+# [2026-03-11] Build #27 FAILED - Agent limitation: ObjectiveFailed.

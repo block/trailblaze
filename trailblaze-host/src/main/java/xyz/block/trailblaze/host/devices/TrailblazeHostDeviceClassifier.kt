@@ -4,6 +4,7 @@ import maestro.DeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeAndroidDeviceCategory
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifiersProvider
+import xyz.block.trailblaze.devices.TrailblazeDeviceOrientation
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.devices.TrailblazeIosDeviceCategory
@@ -20,6 +21,9 @@ class TrailblazeHostDeviceClassifier(
     val initialMaestroDeviceInfo = maestroDeviceInfoProvider()
     val minPx = minOf(initialMaestroDeviceInfo.widthPixels, initialMaestroDeviceInfo.heightPixels)
     val isTablet = minPx >= 1536
+    val isLandscape = initialMaestroDeviceInfo.widthPixels > initialMaestroDeviceInfo.heightPixels
+    val orientation =
+      if (isLandscape) TrailblazeDeviceOrientation.LANDSCAPE else TrailblazeDeviceOrientation.PORTRAIT
 
     buildList {
       val platform = trailblazeDriverType.platform
@@ -47,6 +51,7 @@ class TrailblazeHostDeviceClassifier(
           // Other platforms not supported at this point
         }
       }
+      orientation.asDeviceClassifierOrNull()?.let { add(it) }
     }
   }
 

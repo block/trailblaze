@@ -15,6 +15,8 @@ value class TraceId @PublishedApi internal constructor(
       LLM,
       TOOL,
       MAESTRO,
+      /** MCP tool call from external client (Goose, Claude Desktop, etc.) */
+      MCP,
     }
 
     @OptIn(ExperimentalUuidApi::class)

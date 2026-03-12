@@ -1,0 +1,29 @@
+# Android World Benchmark: calendar/add_one_event_tomorrow
+- config:
+    id: android-world-benchmarks/simple_calendar_pro/calendar_add_one_event_tomorrow
+    description: Create a calendar event for tomorrow (2023-10-16) at 10h with title "Call with Bob" and description "Review annual report" lasting 30 mins
+
+- tools:
+  - androidworldbenchmarks_runAdbShell:
+      adbShellCommands:
+        - "settings put global auto_time 0"
+        - "date -s 20231015.153400"
+  - androidworldbenchmarks_executeSqliteOnDevice:
+      dbPath: /data/data/com.simplemobiletools.calendar.pro/databases/events.db
+      sqlStatements:
+        - "DELETE FROM events"
+      appPackageName: com.simplemobiletools.calendar.pro
+
+- prompts:
+  - step: "In Simple Calendar Pro, create a calendar event for tomorrow at 10h with the title 'Call with Bob' and the description 'Review annual report'. The event should last for 30 mins."
+
+- tools:
+  - androidworldbenchmarks_assertSqliteQuery:
+      dbPath: /data/data/com.simplemobiletools.calendar.pro/databases/events.db
+      query: "SELECT title FROM events WHERE title='Call with Bob'"
+      expectedOutput: "Call with Bob"
+      matchMode: exact
+      appPackageName: com.simplemobiletools.calendar.pro
+
+# --- Benchmark Run History ---
+# [2026-03-11] Build #27 FAILED - gRPC UNAVAILABLE after 120s. Emulator instability.

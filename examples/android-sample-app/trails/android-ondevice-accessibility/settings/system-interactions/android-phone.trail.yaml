@@ -1,0 +1,69 @@
+- config:
+    id: sample-app/settings/system-interactions
+    app: xyz.block.trailblaze.examples.sampleapp
+    platform: android
+    driver: ANDROID_ONDEVICE_ACCESSIBILITY
+- tools:
+  - launchApp:
+      appId: xyz.block.trailblaze.examples.sampleapp
+- prompts:
+  - step: Navigate to the "Settings" tab
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: The objective is to navigate to the 'Settings' tab, which is identified by the TextView 'Settings'. The clickable View with nodeId 48 in the bottom navigation bar represents this tab.
+          selector:
+            containsChild:
+              textRegex: Settings
+          nodeSelector:
+            androidAccessibility:
+              classNameRegex: \Qandroid.view.View\E
+            index: 28
+  - step: Enable the "Enable Notifications" switch and verify it is checked
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: To enable the 'Enable Notifications' switch as required by the objective.
+          selector:
+            containsChild:
+              textRegex: Enable Notifications
+          nodeSelector:
+            androidAccessibility:
+              classNameRegex: \Qandroid.view.View\E
+            index: 3
+      - assertVisibleBySelector:
+          reason: The 'Enable Notifications' switch is represented by node 5. It should be checked after toggling.
+          selector:
+            checked: true
+          nodeSelector:
+            androidAccessibility:
+              classNameRegex: \Qandroid.view.View\E
+            index: 3
+  - step: Verify the network status shows "Online" or "Offline" and an app version starting with "Version" is visible
+    recording:
+      tools:
+      - assertVisibleBySelector:
+          reason: To verify the network status shows 'Online' or 'Offline', confirming the status is clearly displayed.
+          selector:
+            textRegex: Online
+          nodeSelector:
+            androidAccessibility:
+              textRegex: Online
+      - assertVisibleBySelector:
+          reason: The objective requires verifying that an app version starting with 'Version' is visible. Node 19 shows 'Version 1.0'.
+          selector:
+            textRegex: Version 1.0
+          nodeSelector:
+            androidAccessibility:
+              textRegex: \QVersion 1.0\E
+  - step: Check the "Accept Terms" checkbox and verify it is checked
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: The objective is to check the 'Accept Terms' checkbox, which corresponds to the clickable view with nodeId 16. Tapping this should check the box.
+          selector:
+            containsChild:
+              textRegex: Accept Terms
+          nodeSelector:
+            androidAccessibility:
+              textRegex: Accept Terms

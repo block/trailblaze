@@ -23,29 +23,23 @@ class HttpRequestUtils(
   }
 
   suspend fun getRequest(urlPath: String): String {
-    return try {
-      val response = client.post("$baseUrl$urlPath") {
-        contentType(ContentType.Application.Json)
-      }
-
-      val responseBody = response.bodyAsText()
-      Console.log("Response Body: $responseBody")
-      Console.log("Response Code: ${response.status.value}")
-      Console.log("Response Message: ${response.status.description}")
-
-      if (response.status.value !in 200..299) {
-        """"Unexpected code ${response.status}""""
-      } else {
-        responseBody
-      }
-    } catch (e: Exception) {
-      val errorMessage = "Exception sending HTTP request to device. Error: ${e.message}"
-      errorMessage
+    val response = client.post("$baseUrl$urlPath") {
+      contentType(ContentType.Application.Json)
     }
+
+    val responseBody = response.bodyAsText()
+    Console.log("Response Body: $responseBody")
+    Console.log("Response Code: ${response.status.value}")
+    Console.log("Response Message: ${response.status.description}")
+
+    if (response.status.value !in 200..299) {
+      throw HttpRpcException("HTTP ${response.status.value}: ${response.status.description}", responseBody)
+    }
+    return responseBody
   }
 
   suspend fun postRequest(urlPath: String, jsonPostBody: String? = null): String {
-    return try {
+    try {
       val response = client.post("$baseUrl$urlPath") {
         contentType(ContentType.Application.Json)
         jsonPostBody?.let {
@@ -59,17 +53,15 @@ class HttpRequestUtils(
       Console.log("Response Message: ${response.status.description}")
 
       if (response.status.value !in 200..299) {
-        """"Unexpected code ${response.status}""""
-      } else {
-        responseBody
+        throw HttpRpcException("HTTP ${response.status.value}: ${response.status.description}", responseBody)
       }
-    } catch (e: Exception) {
-      val errorMessage = "Exception sending HTTP request to device. Error: ${e.message}"
-      errorMessage
+      return responseBody
     } finally {
       close()
     }
   }
+
+  class HttpRpcException(message: String, val responseBody: String?) : Exception(message)
 
   fun close() {
     client.close()

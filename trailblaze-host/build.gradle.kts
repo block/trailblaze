@@ -7,6 +7,14 @@ plugins {
   alias(libs.plugins.jetbrains.compose.multiplatform)
 }
 
+kotlin {
+  compilerOptions {
+    freeCompilerArgs.addAll(
+      "-opt-in=androidx.compose.ui.test.ExperimentalTestApi",
+    )
+  }
+}
+
 tasks.withType<Tar> {
   duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 }
@@ -15,8 +23,14 @@ tasks.withType<Zip> {
   duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 }
 
+configurations.all {
+  // Selenium comes transitively from Maestro and we do not use it.
+  exclude(group = "org.seleniumhq.selenium")
+}
+
 dependencies {
   api(project(":trailblaze-agent"))
+  implementation(project(":trailblaze-capture"))
 
   api(libs.maestro.orchestra)
   api(libs.maestro.client)
@@ -31,6 +45,10 @@ dependencies {
   api(libs.slf4j.api)
 
   implementation(project(":trailblaze-common"))
+  implementation(project(":trailblaze-compose"))
+  @OptIn(org.jetbrains.compose.ExperimentalComposeLibrary::class)
+  implementation(compose.uiTest)
+  implementation(project(":trailblaze-playwright"))
   implementation(project(":trailblaze-report"))
   implementation(project(":trailblaze-server"))
   implementation(project(":trailblaze-ui"))
@@ -60,13 +78,25 @@ dependencies {
   // We're not actually leveraging playwright now, so let's keep it out of the app
   implementation(libs.playwright)
 
-  testImplementation(project(":trailblaze-tracing"))
+  implementation(project(":trailblaze-tracing"))
   testImplementation(libs.kotlin.test.junit4)
   testImplementation(libs.assertk)
 }
 
 tasks.test {
   useJUnit()
+}
+
+tasks.register<Test>("updateSystemPromptBaselines") {
+  description = "Regenerate system prompt baseline files. Commit the updated files after running."
+  group = "verification"
+  testClassesDirs = tasks.test.get().testClassesDirs
+  classpath = tasks.test.get().classpath
+  useJUnit()
+  environment("UPDATE_BASELINES", "true")
+  filter {
+    includeTestsMatching("*.ComposedSystemPromptBaselineTest")
+  }
 }
 
 // Generate version.properties file with git version info

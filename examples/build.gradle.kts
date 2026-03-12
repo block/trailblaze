@@ -36,6 +36,8 @@ val isRunningTests = gradle.startParameter.taskNames.any { taskName ->
 
 val trailblazeDefaultHttpsPort = 8443
 val trailblazeHttpsPort = System.getenv("TRAILBLAZE_HTTPS_PORT")?.toIntOrNull() ?: trailblazeDefaultHttpsPort
+val openAiEnvVarName = "OPENAI_API_KEY"
+val openRouterEnvVarName = "OPENROUTER_API_KEY"
 
 android {
   namespace = "xyz.block.trailblaze.examples"
@@ -47,7 +49,7 @@ android {
     // Trailblaze Reverse Proxy to support Physical Devices and Ollama
     val isGitHubActions = (System.getenv("GITHUB_ACTIONS") == "true")
     val isTrailblazeServerRunning = isHttpsServerRunning(trailblazeHttpsPort)
-    val isOpenRouterApiKeyEnvVarSet = (System.getenv("OPENROUTER_API_KEY") != null)
+    val isOpenRouterApiKeyEnvVarSet = (System.getenv(openRouterEnvVarName) != null)
 
     if (isGitHubActions && isRunningTests) {
       if (!isTrailblazeServerRunning) {
@@ -56,19 +58,19 @@ android {
       if (isOpenRouterApiKeyEnvVarSet) {
         // Setting a dummy value so this LLM client is used, but it doesn't get in the logs as it's replaced by the reverse proxy
         val dummyValue = "OPENROUTER_API_KEY_GOES_HERE"
-        testInstrumentationRunnerArguments["OPENROUTER_API_KEY"] = dummyValue
+        testInstrumentationRunnerArguments[openRouterEnvVarName] = dummyValue
       } else {
         // This key will be replaced by the reverse proxy, but is required as a system environmenet variable
-        throw GradleException("OPENROUTER_API_KEY is not set. Please set it as a secret in GitHub Actions.")
+        throw GradleException("$openRouterEnvVarName is not set. Please set it as a secret in GitHub Actions.")
       }
     } else {
       // Local Development
-      System.getenv("OPENROUTER_API_KEY")?.let { apiKey ->
-        testInstrumentationRunnerArguments["OPENROUTER_API_KEY"] = apiKey
+      System.getenv(openRouterEnvVarName)?.let { apiKey ->
+        testInstrumentationRunnerArguments[openRouterEnvVarName] = apiKey
       }
 
-      System.getenv("OPENAI_API_KEY")?.let { apiKey ->
-        testInstrumentationRunnerArguments["OPENAI_API_KEY"] = apiKey
+      System.getenv(openAiEnvVarName)?.let { apiKey ->
+        testInstrumentationRunnerArguments[openAiEnvVarName] = apiKey
       }
     }
 
@@ -123,9 +125,6 @@ android {
   }
   lint {
     abortOnError = false
-  }
-  kotlinOptions {
-    jvmTarget = "17"
   }
 
   packaging {

@@ -46,4 +46,11 @@ class TrailblazeLogServerClient(
     contentType(ContentType.Image.PNG)
     setBody(screenshotBytes)
   }
+
+  suspend fun postTrace(sessionId: SessionId, traceJson: String): HttpResponse =
+    httpClient.post("$baseUrl/log/trace") {
+      parameter(key = "session", value = sessionId.value)
+      contentType(ContentType.Application.Json)
+      setBody(traceJson)
+    }
 }

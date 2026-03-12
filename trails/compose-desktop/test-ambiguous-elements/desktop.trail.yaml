@@ -1,0 +1,36 @@
+- config:
+    title: "Test: Ambiguous element disambiguation"
+    platform: compose
+- prompts:
+  - step: Type "Profile name" into the profile text field
+    recording:
+      tools:
+      - compose_type:
+          text: Profile name
+          testTag: profile_field
+  - step: Click the profile save button
+    recording:
+      tools:
+      - compose_click:
+          testTag: profile_save_button
+  - step: Verify the text "Profile saved!" is visible
+    recording:
+      tools:
+      - compose_verify_text_visible:
+          text: Profile saved!
+  - step: Type "Settings value" into the settings text field
+    recording:
+      tools:
+      - compose_type:
+          text: Settings value
+          testTag: settings_field
+  - step: Click the settings save button
+    recording:
+      tools:
+      - compose_click:
+          testTag: settings_save_button
+  - step: Verify the text "Settings saved!" is visible
+    recording:
+      tools:
+      - compose_verify_text_visible:
+          text: Settings saved!

@@ -1,0 +1,26 @@
+# Android World Benchmark: RecipeDeleteMultiple
+- config:
+    id: android-world-benchmarks/recipe/delete_multiple
+    description: "Delete the recipes 'Blueberry Muffins', 'Caesar Salad', and 'Grilled Salmon' from Broccoli app."
+- tools:
+    - androidworldbenchmarks_executeSqliteOnDevice:
+        dbPath: /data/data/com.flauschcode.broccoli/databases/broccoli
+        sqlStatements:
+          - "DELETE FROM recipes"
+          - "INSERT INTO recipes (title, description, servings, preparationTime, source, ingredients, directions, favorite, imageName) VALUES ('Blueberry Muffins', 'Fresh blueberry muffins', '12', '35 minutes', 'baking blog', 'flour, blueberries, sugar, eggs', 'Mix batter and bake', 0, NULL)"
+          - "INSERT INTO recipes (title, description, servings, preparationTime, source, ingredients, directions, favorite, imageName) VALUES ('Caesar Salad', 'Classic salad with croutons', '2', '10 minutes', 'restaurant', 'lettuce, croutons, dressing, parmesan', 'Toss and serve', 0, NULL)"
+          - "INSERT INTO recipes (title, description, servings, preparationTime, source, ingredients, directions, favorite, imageName) VALUES ('Grilled Salmon', 'Herb grilled salmon', '3', '25 minutes', 'cookbook', 'salmon, herbs, lemon', 'Grill and serve', 0, NULL)"
+          - "INSERT INTO recipes (title, description, servings, preparationTime, source, ingredients, directions, favorite, imageName) VALUES ('Pasta Alfredo', 'Creamy pasta dish', '3', '20 minutes', 'italian restaurant', 'pasta, cream, parmesan, butter', 'Mix sauce and serve', 0, NULL)"
+        appPackageName: com.flauschcode.broccoli
+- prompts:
+    - step: "Delete the following recipes from Broccoli app: Blueberry Muffins, Caesar Salad, Grilled Salmon."
+- tools:
+    - androidworldbenchmarks_assertSqliteQuery:
+        dbPath: /data/data/com.flauschcode.broccoli/databases/broccoli
+        query: "SELECT COUNT(*) FROM recipes WHERE title='Blueberry Muffins' OR title='Caesar Salad' OR title='Grilled Salmon'"
+        expectedOutput: "0"
+        matchMode: exact
+        appPackageName: com.flauschcode.broccoli
+
+# --- Benchmark Run History ---
+# [2026-03-11] Build #27 FAILED - Agent limitation: ObjectiveFailed. Can't navigate Broccoli app.

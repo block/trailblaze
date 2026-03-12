@@ -1,0 +1,24 @@
+# Android World Benchmark: BluetoothTurnOn
+- config:
+    id: android-world-benchmarks/system/bluetooth_turn_on
+    displayName: "System - Bluetooth Turn On"
+    description: "Turn bluetooth on."
+
+- tools:
+    - androidworldbenchmarks_runAdbShell:
+        adbShellCommands:
+          - "svc bluetooth disable"
+
+- prompts:
+    - step: "Turn bluetooth on."
+
+- tools:
+    - androidworldbenchmarks_assertAdbShellOutput:
+        command: "settings get global bluetooth_on"
+        expectedOutput: "1"
+        matchMode: "exact"
+
+# --- Benchmark Run History ---
+# [2026-03-11] FAILED - Agent limitation: Max LLM calls limit reached (50)
+#   after 175s. Agent exhausted retries trying to turn on bluetooth.
+#   Bluetooth settings navigation may be deeply nested or non-obvious.

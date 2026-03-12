@@ -1,0 +1,26 @@
+# Android World Benchmark: sms/send
+- config:
+    id: android-world-benchmarks/simple_sms_messenger/sms_send
+    description: Send a text message using Simple SMS Messenger to 555-234-5678 with message "Hey, are you coming to the party tonight?"
+
+- tools:
+  - androidworldbenchmarks_runAdbShell:
+      adbShellCommands:
+        - "content delete --uri content://sms"
+
+- prompts:
+  - step: "Send a text message using Simple SMS Messenger to 555-234-5678 with message: Hey, are you coming to the party tonight?"
+
+- tools:
+  - androidworldbenchmarks_assertAdbShellOutput:
+      command: "content query --uri content://sms --where \"address LIKE '%5552345678%' AND type=2\" --projection body"
+      expectedOutput: "party tonight"
+      matchMode: "contains"
+
+# --- Benchmark Run History ---
+# [2026-03-11] FAILED - SQLite assertion: unable to open mmssms.db.
+#   Emulator permission issue — SMS database not accessible for validation.
+#   Not an agent failure — infrastructure/emulator config problem.
+#   FIX: Migrated setup and validation from direct sqlite3 to content provider API.
+# [2026-03-11] Build #27 PASSED - Content provider migration fix worked! Was sqlite3 permission
+#   error in build #24.

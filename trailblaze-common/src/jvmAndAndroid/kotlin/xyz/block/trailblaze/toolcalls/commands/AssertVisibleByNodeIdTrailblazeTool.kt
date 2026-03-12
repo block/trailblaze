@@ -4,17 +4,18 @@ import ai.koog.agents.core.tools.annotations.LLMDescription
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import xyz.block.trailblaze.api.TrailblazeElementSelector
+import xyz.block.trailblaze.api.TrailblazeNodeSelectorGenerator
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.exception.TrailblazeToolExecutionException
 import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
+import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.viewmatcher.TapSelectorV2.findBestTrailblazeElementSelectorForTargetNode
 import xyz.block.trailblaze.viewmatcher.models.RelativeViewPositioningData
 import xyz.block.trailblaze.viewmatcher.models.toOrderedSpatialHints
 import xyz.block.trailblaze.yaml.TrailblazeYaml
-import xyz.block.trailblaze.util.Console
 
 @Serializable
 @TrailblazeToolClass(
@@ -75,9 +76,38 @@ data class AssertVisibleByNodeIdTrailblazeTool(
       spatialHints = relativelyPositionedViews.toOrderedSpatialHints(),
     )
     Console.log("Best Element Selector:\n${TrailblazeYaml.defaultYamlInstance.encodeToString(trailblazeElementSelector)}")
+
+    // Generate a rich TrailblazeNodeSelector if the screen state has a native tree.
+    // Node IDs don't align between ViewHierarchyTreeNode (pre-order DFS) and
+    // TrailblazeNode (post-order DFS from AccessibilityNode), so we match by
+    // center point coordinates instead.
+    val nodeSelector = screenState.trailblazeNodeTree?.let { trailblazeTree ->
+      val centerPoint = matchingNode.centerPoint
+      if (centerPoint != null) {
+        val (cx, cy) = centerPoint.split(",").map { it.toInt() }
+        val targetTrailblazeNode = trailblazeTree
+          .findAll { node -> node.bounds?.containsPoint(cx, cy) == true }
+          .minByOrNull { node ->
+            val b = node.bounds ?: return@minByOrNull Long.MAX_VALUE
+            b.width.toLong() * b.height.toLong()
+          }
+        targetTrailblazeNode?.let { target ->
+          try {
+            TrailblazeNodeSelectorGenerator.findBestSelector(trailblazeTree, target)
+          } catch (e: Exception) {
+            Console.log("WARNING: TrailblazeNodeSelector generation failed, falling back to legacy selector: ${e.message}")
+            null
+          }
+        }
+      } else {
+        null
+      }
+    }
+
     val bestTapTrailblazeToolForNode: ExecutableTrailblazeTool = AssertVisibleBySelectorTrailblazeTool(
       reason = reason,
       selector = trailblazeElementSelector,
+      nodeSelector = nodeSelector,
     )
     return listOf(bestTapTrailblazeToolForNode)
   }

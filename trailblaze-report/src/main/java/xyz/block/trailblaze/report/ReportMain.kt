@@ -223,7 +223,7 @@ fun moveJsonFilesToSessionDirs(logsDir: File) {
         }
         val screenshotFileInSessionDirPath = "${sessionId.value}/${log.screenshotFile}"
         when (log) {
-          is TrailblazeLog.MaestroDriverLog -> log.copy(
+          is TrailblazeLog.AgentDriverLog -> log.copy(
             screenshotFile = screenshotFileInSessionDirPath,
           )
 

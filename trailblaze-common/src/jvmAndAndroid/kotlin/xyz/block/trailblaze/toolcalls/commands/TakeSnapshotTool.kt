@@ -16,39 +16,57 @@ This tool will take a snapshot of the current page and save it with the provided
   """,
 )
 class TakeSnapshotTool(
-  @LLMDescription("Name for the screen being captured (e.g., 'login_screen', 'payment_confirmation').")
+  @param:LLMDescription("Name for the screen being captured (e.g., 'login_screen', 'payment_confirmation').")
   val screenName: String,
-  @LLMDescription("Optional description of what this snapshot captures or why it was taken.")
+  @param:LLMDescription("Optional description of what this snapshot captures or why it was taken.")
   val description: String? = null,
 ) : ExecutableTrailblazeTool {
-
-  override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult {
-    saveSnapshot(toolExecutionContext)
-    return TrailblazeToolResult.Success
+  companion object {
+    private const val NO_SCREEN_STATE_PROVIDER_MESSAGE =
+      "Snapshot '%s' not saved: no screen state provider available."
+    private const val NO_SCREENSHOT_AVAILABLE_MESSAGE =
+      "Snapshot '%s' captured (no screenshot available)."
+    private const val SNAPSHOT_SAVED_MESSAGE = "Snapshot '%s' saved as %s."
   }
 
-  private fun saveSnapshot(context: TrailblazeToolExecutionContext) {
+  override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult {
+    return try {
+      saveSnapshot(toolExecutionContext)
+    } catch (e: Exception) {
+      TrailblazeToolResult.Error.ExceptionThrown("Snapshot failed: ${e.message}")
+    }
+  }
+
+  private fun saveSnapshot(context: TrailblazeToolExecutionContext): TrailblazeToolResult {
     val descriptionText = description?.let { " - $it" } ?: ""
     Console.log("### Taking snapshot and saving as $screenName$descriptionText")
-    
-    // Get current session from the agent
-    val session = context.trailblazeAgent.sessionProvider.invoke()
-    
-    // Capture a fresh screenshot from the device using the screenStateProvider
     val screenStateProvider = context.screenStateProvider
     if (screenStateProvider == null) {
       Console.log("⚠️  No screenStateProvider available - snapshot not saved")
-      return
+      return TrailblazeToolResult.Success(
+        message = NO_SCREEN_STATE_PROVIDER_MESSAGE.format(screenName),
+      )
     }
-    
     val freshScreenState = screenStateProvider()
+    val session = context.sessionProvider.invoke()
 
-    val savedFilename = context.trailblazeAgent.trailblazeLogger.logSnapshot(session, freshScreenState, screenName)
-    
-    if (savedFilename == null) {
+    val savedFilename = context.trailblazeLogger.logSnapshot(
+      session = session,
+      screenState = freshScreenState,
+      displayName = screenName,
+      traceId = context.traceId,
+    )
+
+    return if (savedFilename == null) {
       Console.log("⚠️  No screenshot available - snapshot not saved")
+      TrailblazeToolResult.Success(
+        message = NO_SCREENSHOT_AVAILABLE_MESSAGE.format(screenName),
+      )
     } else {
       Console.log("✅ Snapshot saved: $savedFilename")
+      TrailblazeToolResult.Success(
+        message = SNAPSHOT_SAVED_MESSAGE.format(screenName, savedFilename),
+      )
     }
   }
 }

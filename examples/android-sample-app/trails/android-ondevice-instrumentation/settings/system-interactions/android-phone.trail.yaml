@@ -1,0 +1,49 @@
+- config:
+    id: sample-app/settings/system-interactions
+    app: xyz.block.trailblaze.examples.sampleapp
+    platform: android
+    driver: ANDROID_ONDEVICE_INSTRUMENTATION
+- tools:
+  - launchApp:
+      appId: xyz.block.trailblaze.examples.sampleapp
+      launchMode: REINSTALL
+- prompts:
+  - step: Navigate to the "Settings" tab
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: The user wants to navigate to the 'Settings' tab, which is represented by the clickable 'Settings' at the bottom right (nodeId 69).
+          selector:
+            containsChild:
+              textRegex: Settings
+  - step: Enable the "Enable Notifications" switch and verify it is checked
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: To enable the 'Enable Notifications' switch. The clickable switch is in the same container as the label.
+          selector:
+            containsChild:
+              textRegex: Enable Notifications
+      - assertVisibleBySelector:
+          reason: This is the clickable view containing the 'Enable Notifications' switch, and it is currently in the 'checked' state, which indicates notifications are enabled.
+          selector:
+            checked: true
+  - step: Verify the network status shows "Online" or "Offline" and an app version starting with "Version" is visible
+    recording:
+      tools:
+      - assertVisibleBySelector:
+          reason: To verify the network status shows 'Online' as required by the objective.
+          selector:
+            textRegex: Online
+      - assertVisibleBySelector:
+          reason: To verify that the app version starting with 'Version' is visible, as required by the objective.
+          selector:
+            textRegex: Version 1.0
+  - step: Check the "Accept Terms" checkbox and verify it is checked
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: The 'Accept Terms' checkbox should be checked to fulfill the objective. The clickable parent view for 'Accept Terms' is nodeId 37.
+          selector:
+            containsChild:
+              textRegex: Accept Terms

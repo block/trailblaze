@@ -16,6 +16,9 @@ abstract class ViewHierarchyFilter(
   protected val screenHeight: Int,
 ) {
 
+  /** Maximum number of offscreen elements to include in the filtered output. */
+  private val MAX_OFFSCREEN_ELEMENTS = 20
+
   /**
    * Bounds represents the rectangular bounds of a UI element.
    */
@@ -65,16 +68,72 @@ abstract class ViewHierarchyFilter(
   protected fun createFilteredRoot(
     viewHierarchy: ViewHierarchyTreeNode,
     visibleElements: List<ViewHierarchyTreeNode>,
+    allElements: List<ViewHierarchyTreeNode>,
   ): ViewHierarchyTreeNode {
     val interactableViewHierarchyTreeNodes: List<ViewHierarchyTreeNode> =
       findInteractableViewHierarchyTreeNodes(visibleElements)
 
+    // Deduplicate: remove nodes that appear both as top-level entries and as
+    // descendants of another top-level entry (due to aggregate() flattening
+    // while retaining .children references).
+    val deduplicated = deduplicateNodes(interactableViewHierarchyTreeNodes)
+
+    // Find interactable elements that are offscreen but near the viewport
+    // (within one screen dimension in each direction). These help the LLM
+    // know what's available if it scrolls.
+    val offscreenElements = allElements
+      .filter { elem ->
+        visibleElements.none { it === elem } &&
+          elem.bounds != null &&
+          isCompletelyOffscreen(elem.bounds) &&
+          isNearViewport(elem.bounds)
+      }
+    val offscreenInteractable = deduplicateNodes(
+      findInteractableViewHierarchyTreeNodes(offscreenElements),
+    )
+      .sortedBy { node -> distanceToViewport(node.bounds!!) }
+      .take(MAX_OFFSCREEN_ELEMENTS)
+
     return ViewHierarchyTreeNode(
-      children = interactableViewHierarchyTreeNodes,
+      children = deduplicated + offscreenInteractable,
       centerPoint = "${screenWidth / 2},${screenHeight / 2}",
       dimensions = "${screenWidth}x$screenHeight",
     )
   }
+
+  private fun deduplicateNodes(
+    nodes: List<ViewHierarchyTreeNode>,
+  ): List<ViewHierarchyTreeNode> = nodes.filterNot { candidate ->
+    nodes.any { parent ->
+      parent !== candidate && parent.hasDescendant(candidate)
+    }
+  }
+
+  private fun isCompletelyOffscreen(bounds: Bounds): Boolean =
+    bounds.x2 <= 0 || bounds.x1 >= screenWidth ||
+      bounds.y2 <= 0 || bounds.y1 >= screenHeight
+
+  private fun isNearViewport(bounds: Bounds): Boolean =
+    bounds.x2 > -screenWidth && bounds.x1 < screenWidth * 2 &&
+      bounds.y2 > -screenHeight && bounds.y1 < screenHeight * 2
+
+  private fun distanceToViewport(bounds: Bounds): Int {
+    val dx = when {
+      bounds.x2 <= 0 -> -bounds.x2
+      bounds.x1 >= screenWidth -> bounds.x1 - screenWidth
+      else -> 0
+    }
+    val dy = when {
+      bounds.y2 <= 0 -> -bounds.y2
+      bounds.y1 >= screenHeight -> bounds.y1 - screenHeight
+      else -> 0
+    }
+    return dx + dy
+  }
+
+
+  private fun ViewHierarchyTreeNode.hasDescendant(target: ViewHierarchyTreeNode): Boolean =
+    children.any { it === target || it.hasDescendant(target) }
 
   /**
    * Check if two bounds rectangles overlap.

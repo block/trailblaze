@@ -12,6 +12,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.llm.LlmProviderEnvVarUtil
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.llm.TrailblazeLlmModelList
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
@@ -20,11 +21,14 @@ import xyz.block.trailblaze.ui.desktoputil.DesktopUtil
 import xyz.block.trailblaze.ui.desktoputil.EnvVarSaveResult
 import xyz.block.trailblaze.ui.desktoputil.saveEnvVarToShellProfile
 import xyz.block.trailblaze.ui.desktoputil.ShellProfileRestartRequiredDialog
+import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.ui.TrailblazeSettingsRepo
 import xyz.block.trailblaze.ui.composables.SelectableText
 import xyz.block.trailblaze.ui.models.TrailblazeServerState
 import java.io.File
+import kotlinx.coroutines.flow.StateFlow
+import xyz.block.trailblaze.host.devices.PlaywrightInstallState
 import javax.swing.JFileChooser
 
 object SettingsTabComposables {
@@ -38,7 +42,9 @@ object SettingsTabComposables {
     platform: TrailblazeDevicePlatform,
     driversForPlatform: List<TrailblazeDriverType>,
     enabledDriverTypesMap: Map<TrailblazeDevicePlatform, TrailblazeDriverType>,
-    trailblazeSettingsRepo: TrailblazeSettingsRepo
+    trailblazeSettingsRepo: TrailblazeSettingsRepo,
+    playwrightInstallState: PlaywrightInstallState? = null,
+    onInstallPlaywright: (() -> Unit)? = null,
   ) {
     // Get the currently selected driver for this platform (null means "None")
     val selectedDriver = enabledDriverTypesMap[platform]
@@ -104,6 +110,58 @@ object SettingsTabComposables {
                 }
               }
             )
+          }
+        }
+      }
+
+      // Show Playwright browser install button for WEB platform
+      if (platform == TrailblazeDevicePlatform.WEB &&
+        enabledDriverTypesMap[platform] != null &&
+        playwrightInstallState != null &&
+        onInstallPlaywright != null
+      ) {
+        when (playwrightInstallState) {
+          is PlaywrightInstallState.NotInstalled, is PlaywrightInstallState.Error -> {
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+              OutlinedButton(onClick = onInstallPlaywright) {
+                Text("Install Browser")
+              }
+              if (playwrightInstallState is PlaywrightInstallState.Error) {
+                SelectableText(
+                  "Error: ${playwrightInstallState.message}",
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.error,
+                )
+              }
+            }
+          }
+          is PlaywrightInstallState.Installing, is PlaywrightInstallState.Checking -> {
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+              CircularProgressIndicator(
+                modifier = Modifier.size(16.dp),
+                strokeWidth = 2.dp,
+              )
+              SelectableText(
+                if (playwrightInstallState is PlaywrightInstallState.Installing) "Installing browser..." else "Checking...",
+                style = MaterialTheme.typography.bodySmall,
+              )
+            }
+          }
+          is PlaywrightInstallState.Installed -> {
+            SelectableText(
+              "Browser ready",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.primary,
+            )
+          }
+          is PlaywrightInstallState.Unknown -> {
+            // Don't show anything until check completes
           }
         }
       }
@@ -182,18 +240,14 @@ object SettingsTabComposables {
     shellProfileName: String? = null,
     onQuitApp: (() -> Unit)? = null,
     isProviderLocked: Boolean = false,
+    playwrightInstallState: StateFlow<PlaywrightInstallState>? = null,
+    onInstallPlaywright: (() -> Unit)? = null,
   ) {
 
     val serverState: TrailblazeServerState by trailblazeSettingsRepo.serverStateFlow.collectAsState()
     // Provider lock state: starts locked if isProviderLocked is true, can be unlocked via dialog
     var isProviderUnlocked by remember { mutableStateOf(!isProviderLocked) }
     var showProviderUnlockWarning by remember { mutableStateOf(false) }
-    // Capture the initial provider/model to snap back to on re-lock
-    val lockedProviderState = remember {
-      if (isProviderLocked) {
-        serverState.appConfig.let { it.llmProvider to it.llmModel }
-      } else null
-    }
     var showShellProfileRestartDialog by remember { mutableStateOf(false) }
     var restartDialogMessage by remember { mutableStateOf("") }
 
@@ -404,6 +458,48 @@ object SettingsTabComposables {
                         }
                       }
                     )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    PreferenceToggle(
+                      label = "Show Record Tab",
+                      description = "Show the Record tab for interactive test recording",
+                      checked = serverState.appConfig.showRecordTab,
+                      onCheckedChange = { checkedValue ->
+                        trailblazeSettingsRepo.updateAppConfig {
+                          it.copy(showRecordTab = checkedValue)
+                        }
+                      }
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    PreferenceToggle(
+                      label = "Show Device Status Panel",
+                      description = "Show floating device status overlay in the bottom-right corner",
+                      checked = serverState.appConfig.showDeviceStatusPanel,
+                      onCheckedChange = { checkedValue ->
+                        trailblazeSettingsRepo.updateAppConfig {
+                          it.copy(showDeviceStatusPanel = checkedValue)
+                        }
+                      }
+                    )
+                  }
+                }
+
+                // Capture Settings (local dev mode)
+                item {
+                  SettingsSection(title = "Local Dev Capture") {
+                    PreferenceToggle(
+                      label = "Capture Logcat",
+                      description = "Capture device logs filtered to app under test (Android logcat / iOS log stream)",
+                      checked = serverState.appConfig.captureLogcat,
+                      onCheckedChange = { checkedValue ->
+                        trailblazeSettingsRepo.updateAppConfig {
+                          it.copy(captureLogcat = checkedValue)
+                        }
+                      }
+                    )
                   }
                 }
 
@@ -420,6 +516,63 @@ object SettingsTabComposables {
                         }
                       }
                     )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Agent Implementation Selection
+                    var showAgentImplMenu by remember { mutableStateOf(false) }
+                    val agentImplOptions = listOf(
+                      AgentImplementation.TRAILBLAZE_RUNNER to "TrailblazeRunner (Legacy)",
+                      AgentImplementation.TWO_TIER_AGENT to "Two-Tier Agent",
+                      AgentImplementation.MULTI_AGENT_V3 to "Multi-Agent V3"
+                    )
+                    val currentAgentImplLabel =
+                      agentImplOptions.find { it.first == serverState.appConfig.agentImplementation }?.second
+                        ?: "TrailblazeRunner (Legacy)"
+
+                    Column(
+                      modifier = Modifier.fillMaxWidth(),
+                      verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                      SelectableText("Agent Implementation", style = MaterialTheme.typography.bodyMedium)
+                      SelectableText(
+                        text = "Controls which architecture handles the agent loop",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                      )
+                      ExposedDropdownMenuBox(
+                        expanded = showAgentImplMenu,
+                        onExpandedChange = { showAgentImplMenu = !showAgentImplMenu }
+                      ) {
+                        OutlinedTextField(
+                          modifier = Modifier.fillMaxWidth().menuAnchor(),
+                          value = currentAgentImplLabel,
+                          onValueChange = {},
+                          readOnly = true,
+                          trailingIcon = {
+                            ExposedDropdownMenuDefaults.TrailingIcon(
+                              expanded = showAgentImplMenu
+                            )
+                          }
+                        )
+                        DropdownMenu(
+                          expanded = showAgentImplMenu,
+                          onDismissRequest = { showAgentImplMenu = false }
+                        ) {
+                          agentImplOptions.forEach { (agentImpl, label) ->
+                            DropdownMenuItem(
+                              text = { SelectableText(label) },
+                              onClick = {
+                                showAgentImplMenu = false
+                                trailblazeSettingsRepo.updateAppConfig {
+                                  it.copy(agentImplementation = agentImpl)
+                                }
+                              }
+                            )
+                          }
+                        }
+                      }
+                    }
 
                     Spacer(modifier = Modifier.height(8.dp))
 
@@ -510,13 +663,8 @@ object SettingsTabComposables {
                           IconButton(
                             onClick = {
                               if (isProviderUnlocked) {
-                                // Re-lock and snap provider back to initial state
+                                // Re-lock provider switching without changing the current selection.
                                 isProviderUnlocked = false
-                                lockedProviderState?.let { (provider, model) ->
-                                  trailblazeSettingsRepo.updateAppConfig {
-                                    it.copy(llmProvider = provider, llmModel = model)
-                                  }
-                                }
                               } else {
                                 showProviderUnlockWarning = true
                               }
@@ -588,6 +736,9 @@ object SettingsTabComposables {
                     // Group drivers by platform
                     val driversByPlatform = allDriverTypes.groupBy { it.platform }
 
+                    // Collect the playwright install state
+                    val currentPlaywrightState = playwrightInstallState?.collectAsState()?.value
+
                     Column(
                       modifier = Modifier.fillMaxWidth(),
                       verticalArrangement = Arrangement.spacedBy(20.dp)
@@ -597,7 +748,9 @@ object SettingsTabComposables {
                           platform = platform,
                           driversForPlatform = driversForPlatform,
                           enabledDriverTypesMap = enabledDriverTypesMap,
-                          trailblazeSettingsRepo = trailblazeSettingsRepo
+                          trailblazeSettingsRepo = trailblazeSettingsRepo,
+                          playwrightInstallState = currentPlaywrightState,
+                          onInstallPlaywright = onInstallPlaywright,
                         )
                       }
                     }
@@ -618,7 +771,12 @@ object SettingsTabComposables {
 
                 // Environment variables section
                 item {
-                  val envVariableNames = (listOf("OPENAI_API_KEY") + customEnvVariableNames)
+                  val openAiEnvVarName =
+                    LlmProviderEnvVarUtil.getEnvironmentVariableKeyForProvider(
+                      TrailblazeLlmProvider.OPENAI
+                    )
+                  val envVariableNames =
+                    (listOfNotNull(openAiEnvVarName) + customEnvVariableNames)
 
                   OutlinedCard(modifier = Modifier.fillMaxWidth()) {
                     Column(

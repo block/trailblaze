@@ -49,7 +49,15 @@ actual object Console {
     }
   }
 
+  actual fun appendInfo(message: String) = appendLog(message)
+
+  actual fun info(message: String) = log(message)
+
   actual fun useStdErr() {
+    // No-op on Android — Logcat is always the output.
+  }
+
+  actual fun enableQuietMode() {
     // No-op on Android — Logcat is always the output.
   }
 }

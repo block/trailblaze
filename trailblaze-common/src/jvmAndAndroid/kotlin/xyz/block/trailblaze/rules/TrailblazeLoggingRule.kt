@@ -16,7 +16,9 @@ import xyz.block.trailblaze.logs.client.TrailblazeScreenStateLog
 import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.client.TrailblazeSessionManager
 import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
+import xyz.block.trailblaze.tracing.TrailblazeTraceExporter
 import xyz.block.trailblaze.tracing.TrailblazeTracer
 import xyz.block.trailblaze.util.Console
 
@@ -48,6 +50,13 @@ abstract class TrailblazeLoggingRule(
     private set
 
   /**
+   * Optional provider that captures the current screen state at the moment of failure.
+   * Set this after the test runner is initialized so that failure screenshots can be
+   * logged automatically when a test fails.
+   */
+  var failureScreenStateProvider: (() -> ScreenState)? = null
+
+  /**
    * Allows external session injection for non-JUnit usage (e.g., desktop app runner).
    * This enables using the logging infrastructure without going through JUnit rules.
    */
@@ -68,9 +77,14 @@ abstract class TrailblazeLoggingRule(
       val sessionId = session?.sessionId ?: SessionId("unknown")
       runBlocking(Dispatchers.IO) {
         if (isServerAvailable) {
-          val httpResult = trailblazeLogServerClient.postAgentLog(log)
-          if (httpResult.status.value != 200) {
-            Console.log("Error while posting agent log: ${httpResult.status.value} ${httpResult.bodyAsText()}")
+          try {
+            val httpResult = trailblazeLogServerClient.postAgentLog(log)
+            if (httpResult.status.value != 200) {
+              Console.log("Error while posting agent log: ${httpResult.status.value} ${httpResult.bodyAsText()}")
+            }
+          } catch (e: Exception) {
+            Console.log("Failed to post agent log to server: ${e.message}")
+            writeLogToDisk(sessionId, log)
           }
         } else {
           writeLogToDisk(sessionId, log)
@@ -101,7 +115,7 @@ abstract class TrailblazeLoggingRule(
   val trailblazeLogServerClient by lazy {
     TrailblazeLogServerClient(
       httpClient = TrailblazeHttpClientFactory.createInsecureTrustAllCertsHttpClient(
-        timeoutInSeconds = 5,
+        timeoutInSeconds = 2,
       ),
       baseUrl = logsBaseUrl,
     )
@@ -145,6 +159,11 @@ abstract class TrailblazeLoggingRule(
   }
 
   override fun afterTestExecution(description: Description, result: Result<Nothing?>) {
+    // Capture failure screenshot before ending the session
+    if (result.isFailure) {
+      captureFailureScreenshot()
+    }
+
     // End session if it exists
     session?.let { currentSession ->
       sessionManager.endSession(
@@ -153,14 +172,32 @@ abstract class TrailblazeLoggingRule(
         exception = result.exceptionOrNull(),
       )
     }
-    
+
     exportTraces()
   }
 
+  private fun captureFailureScreenshot() {
+    val currentSession = session ?: return
+    val provider = failureScreenStateProvider ?: return
+    try {
+      val screenState = provider()
+      logger.logSnapshot(currentSession, screenState, displayName = "failure_screenshot")
+      Console.log("📸 Failure screenshot captured for session ${currentSession.sessionId.value}")
+    } catch (e: Exception) {
+      Console.log("Failed to capture failure screenshot: ${e.message}")
+    }
+  }
+
   private fun exportTraces() {
-    val traceEventsJson = TrailblazeTracer.exportJson()
     val sessionId = session?.sessionId ?: SessionId("unknown")
-    writeTraceToDisk(sessionId, traceEventsJson)
+    runBlocking(Dispatchers.IO) {
+      TrailblazeTraceExporter.exportAndSave(
+        sessionId = sessionId,
+        client = trailblazeLogServerClient,
+        isServerAvailable = isServerAvailable,
+        writeToDisk = { traceJson -> writeTraceToDisk(sessionId, traceJson) },
+      )
+    }
   }
 }
 
@@ -173,13 +210,18 @@ private class ServerScreenStateLogger(
     // Send Log
     return runBlocking(Dispatchers.IO) {
       if (isServerAvailable) {
-        val logResult = trailblazeLogServerClient.postScreenshot(
-          screenshotFilename = screenState.fileName,
-          sessionId = screenState.sessionId,
-          screenshotBytes = screenState.screenState.screenshotBytes ?: ByteArray(0),
-        )
-        if (logResult.status.value != 200) {
-          Console.log("Error while posting agent log: ${logResult.status.value}")
+        try {
+          val logResult = trailblazeLogServerClient.postScreenshot(
+            screenshotFilename = screenState.fileName,
+            sessionId = screenState.sessionId,
+            screenshotBytes = screenState.screenState.screenshotBytes ?: ByteArray(0),
+          )
+          if (logResult.status.value != 200) {
+            Console.log("Error while posting screenshot: ${logResult.status.value}")
+          }
+        } catch (e: Exception) {
+          Console.log("Failed to post screenshot to server: ${e.message}")
+          writeScreenshotToDisk(screenState)
         }
       } else {
         writeScreenshotToDisk(screenState)

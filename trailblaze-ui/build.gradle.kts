@@ -8,7 +8,6 @@ import kotlin.io.encoding.ExperimentalEncodingApi
 plugins {
   alias(libs.plugins.compose.compiler)
   alias(libs.plugins.jetbrains.compose.multiplatform)
-  alias(libs.plugins.compose.hot.reload)
   alias(libs.plugins.kotlin.multiplatform)
   alias(libs.plugins.kotlin.serialization)
 }

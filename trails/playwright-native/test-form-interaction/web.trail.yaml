@@ -1,0 +1,89 @@
+- config:
+    title: 'Test: Form fill and submit'
+    platform: web
+    driver: PLAYWRIGHT_NATIVE
+- prompts:
+  - step: Navigate to ../../../examples/playwright-native/sample-app/index.html
+    recording:
+      tools:
+      - playwright_navigate:
+          url: ../../../examples/playwright-native/sample-app/index.html
+          reasoning: The objective is to navigate to the specific URL '../../../examples/playwright-native/sample-app/index.html', so I will perform a direct navigation to that URL.
+  - step: Click on the "Form" navigation link
+    recording:
+      tools:
+      - playwright_click:
+          ref: e4
+          element: link "Form"
+          reasoning: The objective is to click on the "Form" navigation link. The element with ID e4 corresponds to the "Form" link in the navigation, making it the correct target for this action.
+          nodeSelector:
+            web:
+              cssSelector: "#nav-form"
+  - step: Type "Trail Blaze" into the Name input field
+    recording:
+      tools:
+      - playwright_type:
+          text: Trail Blaze
+          ref: e9
+          element: Name input field
+          reasoning: The objective is to type 'Trail Blaze' into the Name input. e9 is the 'Name' textbox in the Contact Form.
+          nodeSelector:
+            web:
+              cssSelector: "#name-input"
+  - step: Type "trail@example.com" into the Email input field
+    recording:
+      tools:
+      - playwright_type:
+          text: trail@example.com
+          ref: e10
+          element: Email input field
+          reasoning: The current objective is to type 'trail@example.com' into the Email input field. The element with ID [e10] is labeled 'Email', making it the correct target for this action.
+          nodeSelector:
+            web:
+              cssSelector: "#email-input"
+  - step: Select "Feedback" from the Category dropdown
+    recording:
+      tools:
+      - playwright_select_option:
+          ref: e11
+          element: Category dropdown
+          values:
+          - Feedback
+          reasoning: The objective is to select 'Feedback' from the Category dropdown. Identified the correct combobox and option based on view hierarchy. This action should fulfill the requirement.
+          nodeSelector:
+            web:
+              cssSelector: "#category-select"
+  - step: Type "Trailblaze is great" into the Message textarea
+    recording:
+      tools:
+      - playwright_type:
+          text: Trailblaze is great
+          ref: e16
+          element: textbox Message
+          reasoning: The objective is to type 'Trailblaze is great' into the Message textarea, which corresponds to element [e16]. This action directly fulfills the objective.
+          nodeSelector:
+            web:
+              cssSelector: "#message-input"
+  - step: Click the "Submit" button
+    recording:
+      tools:
+      - playwright_click:
+          ref: e17
+          element: button "Submit"
+          reasoning: The current objective is to click the 'Submit' button. The view hierarchy lists 'e17' as the Submit button, so I will click it to complete the objective.
+          nodeSelector:
+            web:
+              ariaRole: button
+              ariaNameRegex: Submit
+  - step: Verify the text "Form submitted!" is visible
+    recording:
+      tools:
+      - playwright_verify_text_visible:
+          text: Form submitted!
+          reasoning: The current objective requires verifying that the text 'Form submitted!' is visible on the screen. The view hierarchy confirms the presence of this text in a 'strong' element. This action will assert its visibility.
+  - step: Verify the text "Trail Blaze" is visible in the form summary
+    recording:
+      tools:
+      - playwright_verify_text_visible:
+          text: Trail Blaze
+          reasoning: 'The objective requires verifying that ''Trail Blaze'' is visible in the form summary. The current screen contains a paragraph element that includes ''Name: Trail Blaze,'' which indicates the required text is present. Verifying this meets the objective.'

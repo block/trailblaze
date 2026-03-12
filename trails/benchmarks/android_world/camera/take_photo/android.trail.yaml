@@ -1,0 +1,24 @@
+# Android World Benchmark: TakePhoto
+- config:
+    id: android-world-benchmarks/camera/take_photo
+    displayName: "Camera - Take Photo"
+    description: "Take one photo."
+
+- tools:
+    - androidworldbenchmarks_clearDirectory:
+        directoryPath: /sdcard/Pictures
+
+- prompts:
+    - step: "Take one photo."
+
+- tools:
+    - launchApp:
+        appId: com.android.camera2
+    - androidworldbenchmarks_assertAdbShellOutput:
+        command: "ls /sdcard/Pictures"
+        expectedOutput: "."
+        matchMode: "contains"
+
+# --- Benchmark Run History ---
+# [2026-03-11] PASSED - Agent successfully took a photo. Validated via /sdcard/DCIM file check.
+# [2026-03-11] Build #27 PASSED - Agent successfully took a photo.

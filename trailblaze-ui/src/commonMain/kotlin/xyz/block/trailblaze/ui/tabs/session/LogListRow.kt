@@ -65,7 +65,7 @@ fun LogListRow(
   showInspectUI: (() -> Unit)? = null,
   showChatHistory: (() -> Unit)? = null,
   cardSize: androidx.compose.ui.unit.Dp? = null,
-  onShowScreenshotModal: (imageModel: Any?, deviceWidth: Int, deviceHeight: Int, clickX: Int?, clickY: Int?, action: xyz.block.trailblaze.api.MaestroDriverActionType?) -> Unit = { _, _, _, _, _, _ -> },
+  onShowScreenshotModal: (imageModel: Any?, deviceWidth: Int, deviceHeight: Int, clickX: Int?, clickY: Int?, action: xyz.block.trailblaze.api.AgentDriverAction?) -> Unit = { _, _, _, _, _, _ -> },
   onOpenInFinder: (() -> Unit)? = null,
 ) {
   val elapsedTimeMs = log.timestamp.toEpochMilliseconds() - sessionStartTime.toEpochMilliseconds()
@@ -90,7 +90,7 @@ fun LogListRow(
     )
 
     is TrailblazeLog.TrailblazeLlmRequestLog -> LogCardData(
-      title = "LLM Request",
+      title = if (log.llmRequestLabel != null) "LLM: ${log.llmRequestLabel}" else "LLM Request",
       duration = log.durationMs,
       elapsedTime = elapsedTimeMs,
       screenshotFile = log.screenshotFile,
@@ -98,8 +98,8 @@ fun LogListRow(
       deviceHeight = log.deviceHeight
     )
 
-    is TrailblazeLog.MaestroDriverLog -> LogCardData(
-      title = "Maestro Driver",
+    is TrailblazeLog.AgentDriverLog -> LogCardData(
+      title = "Driver",
       duration = null,
       elapsedTime = elapsedTimeMs,
       screenshotFile = log.screenshotFile,
@@ -144,6 +144,54 @@ fun LogListRow(
       screenshotFile = log.screenshotFile,
       deviceWidth = log.deviceWidth,
       deviceHeight = log.deviceHeight
+    )
+
+    is TrailblazeLog.AccessibilityActionLog -> LogCardData(
+      title = "Accessibility: ${log.actionDescription}",
+      duration = log.durationMs,
+      elapsedTime = elapsedTimeMs
+    )
+
+    is TrailblazeLog.McpAgentRunLog -> LogCardData(
+      title = "MCP Agent Run",
+      duration = log.durationMs,
+      elapsedTime = elapsedTimeMs
+    )
+
+    is TrailblazeLog.McpAgentIterationLog -> LogCardData(
+      title = "MCP Iteration",
+      duration = log.durationMs,
+      elapsedTime = elapsedTimeMs
+    )
+
+    is TrailblazeLog.McpSamplingLog -> LogCardData(
+      title = "MCP Sampling",
+      duration = log.durationMs,
+      elapsedTime = elapsedTimeMs
+    )
+
+    is TrailblazeLog.McpAgentToolLog -> LogCardData(
+      title = "MCP Tool",
+      duration = log.durationMs,
+      elapsedTime = elapsedTimeMs
+    )
+
+    is TrailblazeLog.McpToolCallRequestLog -> LogCardData(
+      title = "MCP Request: ${log.toolName}",
+      duration = null,
+      elapsedTime = elapsedTimeMs
+    )
+
+    is TrailblazeLog.McpToolCallResponseLog -> LogCardData(
+      title = if (log.successful) "MCP Response: ${log.toolName}" else "MCP Response: ${log.toolName} (FAILED)",
+      duration = log.durationMs,
+      elapsedTime = elapsedTimeMs
+    )
+
+    is TrailblazeLog.TrailblazeProgressLog -> LogCardData(
+      title = "Progress: ${log.eventType}",
+      duration = null,
+      elapsedTime = elapsedTimeMs
     )
   }
 
@@ -481,15 +529,15 @@ fun LogListRow(
             }
 
             Column(modifier = Modifier.padding(12.dp)) {
-              // Determine click coordinates for MaestroDriverLog TapPoint/LongPressPoint
+              // Determine click coordinates for AgentDriverLog TapPoint/LongPressPoint
               val (clickX, clickY) =
-                if (log is TrailblazeLog.MaestroDriverLog) {
+                if (log is TrailblazeLog.AgentDriverLog) {
                   val action = log.action
                   if (action is HasClickCoordinates) action.x to action.y else null to null
                 } else null to null
 
               // Extract action for screenshot overlay
-              val action = if (log is TrailblazeLog.MaestroDriverLog) log.action else null
+              val action = if (log is TrailblazeLog.AgentDriverLog) log.action else null
 
               ScreenshotImage(
                 sessionId = sessionId,

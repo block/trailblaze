@@ -32,8 +32,10 @@ import kotlinx.browser.window
 import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.logs.TrailblazeLogsDataProvider
 import xyz.block.trailblaze.logs.client.TrailblazeLog
+import xyz.block.trailblaze.logs.model.HasScreenshot
 import xyz.block.trailblaze.logs.model.SessionInfo
-import xyz.block.trailblaze.logs.model.getSessionInfo
+import xyz.block.trailblaze.yaml.TrailblazeYaml
+import xyz.block.trailblaze.yaml.generateRecordedYaml
 import xyz.block.trailblaze.ui.composables.FullScreenModalOverlay
 import xyz.block.trailblaze.ui.composables.ScreenshotImageModal
 import xyz.block.trailblaze.ui.navigation.WasmRoute
@@ -43,6 +45,7 @@ import xyz.block.trailblaze.ui.tabs.session.group.ChatHistoryDialog
 import xyz.block.trailblaze.ui.tabs.session.group.LogDetailsDialog
 import xyz.block.trailblaze.ui.tabs.session.models.SessionDetail
 import xyz.block.trailblaze.ui.tabs.testresults.TestResultsComposable
+import xyz.block.trailblaze.ui.InspectTrailblazeNodeSelectorHelper
 import xyz.block.trailblaze.util.Console
 
 // Central data provider instance
@@ -168,8 +171,9 @@ fun TrailblazeApp() {
 fun parseRoute(): String = window.location.hash.removePrefix("#")
 
 /**
- * Loader composable for WASM that fetches data from the data provider
- * and passes it to SessionListView
+ * Loader composable for WASM that fetches lightweight session info
+ * and passes it to SessionListView. Does NOT load full session logs
+ * upfront - those are loaded on-demand when viewing a session detail.
  */
 @Composable
 fun SessionListViewLoader(
@@ -177,7 +181,7 @@ fun SessionListViewLoader(
   onSessionClick: (SessionInfo) -> Unit,
   deleteSession: ((SessionInfo) -> Unit)? = null,
 ) {
-  var sessionLogsMap by remember { mutableStateOf<Map<String, List<TrailblazeLog>>?>(null) }
+  var sessions by remember { mutableStateOf<List<SessionInfo>?>(null) }
   var isLoading by remember { mutableStateOf(true) }
   var errorMessage by remember { mutableStateOf<String?>(null) }
 
@@ -187,29 +191,25 @@ fun SessionListViewLoader(
       errorMessage = null
 
       val startTime = window.performance.now()
-      Console.log("📋 [${startTime.toInt()}ms] Loading session list...")
+      Console.log("Loading session list...")
 
-      val sessionNames = dataProvider.getSessionIdsAsync()
+      val sessionIds = dataProvider.getSessionIdsAsync()
       val namesEndTime = window.performance.now()
-      Console.log("📝 [${namesEndTime.toInt()}ms] Got ${sessionNames.size} session IDs in ${(namesEndTime - startTime).toInt()}ms")
+      Console.log("Got ${sessionIds.size} session IDs in ${(namesEndTime - startTime).toInt()}ms")
 
       val infoStartTime = window.performance.now()
-      val logsMap = mutableMapOf<String, List<TrailblazeLog>>()
-      sessionNames.forEach { sessionName ->
-        val logs = dataProvider.getLogsForSessionAsync(sessionName)
-        if (logs.isNotEmpty()) {
-          logsMap[sessionName.value] = logs
-        }
-      }
-      sessionLogsMap = logsMap
+      val sessionInfos = sessionIds.mapNotNull { sessionId ->
+        dataProvider.getSessionInfoAsync(sessionId)
+      }.sortedByDescending { it.timestamp }
+      sessions = sessionInfos
 
       val infoEndTime = window.performance.now()
-      Console.log("✅ [${infoEndTime.toInt()}ms] Loaded ${logsMap.size} sessions in ${(infoEndTime - infoStartTime).toInt()}ms")
-      Console.log("🎉 [${infoEndTime.toInt()}ms] Total session list load time: ${(infoEndTime - startTime).toInt()}ms")
+      Console.log("Loaded ${sessionInfos.size} session infos in ${(infoEndTime - infoStartTime).toInt()}ms")
+      Console.log("Total session list load time: ${(infoEndTime - startTime).toInt()}ms")
     } catch (e: Exception) {
       errorMessage = "Failed to load sessions: ${e.message}"
-      Console.log("❌ Error loading sessions: ${e.message}")
-      sessionLogsMap = emptyMap()
+      Console.log("Error loading sessions: ${e.message}")
+      sessions = emptyList()
     } finally {
       isLoading = false
     }
@@ -251,48 +251,20 @@ fun SessionListViewLoader(
         )
       }
     }
-  } else if (sessionLogsMap != null) {
-    SessionListView(
-      sessionLogsMap = sessionLogsMap!!,
-      onSessionClick = onSessionClick,
-      deleteSession = deleteSession,
-    )
-  }
-}
-
-/**
- * Refactored SessionListView that accepts data directly (can be moved to commonMain)
- */
-@Composable
-fun SessionListView(
-  sessionLogsMap: Map<String, List<TrailblazeLog>>,
-  onSessionClick: (SessionInfo) -> Unit,
-  deleteSession: ((SessionInfo) -> Unit)? = null,
-) {
-  val sessions = remember(sessionLogsMap) {
-    sessionLogsMap.entries
-      .mapNotNull { (sessionId, logs) ->
-        if (logs.isNotEmpty()) {
-          logs.getSessionInfo()
-        } else {
-          null
-        }
-      }
-      .sortedByDescending { it.timestamp }
-  }
-
-  // Use the common composable with the loaded data
-  Column(
-    modifier = Modifier.fillMaxSize()
-  ) {
-    SessionListComposable(
-      sessions = sessions,
-      sessionClicked = onSessionClick,
-      deleteSession = deleteSession,
-      clearAllLogs = null,
-      openLogsFolder = null,
-      testResultsSummaryView = { TestResultsComposable(sessionLogsMap = sessionLogsMap) },
-    )
+  } else if (sessions != null) {
+    // Use the common composable with the loaded data
+    Column(
+      modifier = Modifier.fillMaxSize()
+    ) {
+      SessionListComposable(
+        sessions = sessions!!,
+        sessionClicked = onSessionClick,
+        deleteSession = deleteSession,
+        clearAllLogs = null,
+        openLogsFolder = null,
+        testResultsSummaryView = { TestResultsComposable(sessions = sessions!!) },
+      )
+    }
   }
 }
 
@@ -308,8 +280,9 @@ fun WasmSessionDetailView(
   var isLoading by remember(sessionName) { mutableStateOf(true) }
   var errorMessage by remember(sessionName) { mutableStateOf<String?>(null) }
   var sessionInfo by remember(sessionName) { mutableStateOf<SessionInfo?>(null) }
-  // Recording YAML state (pre-loaded from chunks)
-  var recordingYaml by remember(sessionName) { mutableStateOf<String?>(null) }
+
+  // YAML instance for recording generation (no tool serializers needed — tools are OtherTrailblazeTool in Wasm)
+  val trailblazeYaml = remember { TrailblazeYaml() }
 
   // Modal state
   var showDetailsDialog by remember { mutableStateOf(false) }
@@ -327,7 +300,7 @@ fun WasmSessionDetailView(
   var modalClickX by remember { mutableStateOf<Int?>(null) }
   var modalClickY by remember { mutableStateOf<Int?>(null) }
   var modalAction by remember {
-    mutableStateOf<xyz.block.trailblaze.api.MaestroDriverActionType?>(
+    mutableStateOf<xyz.block.trailblaze.api.AgentDriverAction?>(
       null
     )
   }
@@ -353,21 +326,7 @@ fun WasmSessionDetailView(
       val logsEndTime = window.performance.now()
       Console.log("📦 [${logsEndTime.toInt()}ms] Fetched ${fetchedLogs.size} logs in ${(logsEndTime - logsStartTime).toInt()}ms")
 
-      // Don't resolve screenshots immediately - they'll be loaded on-demand when rendered
-      // This significantly speeds up initial page load
       logs = fetchedLogs
-
-      // Load pre-generated recording YAML from chunks
-      val yamlStartTime = window.performance.now()
-      try {
-        recordingYaml = dataProvider.getSessionRecordingYaml(sessionId)
-        val yamlEndTime = window.performance.now()
-        Console.log("📝 [${yamlEndTime.toInt()}ms] Recording YAML loaded in ${(yamlEndTime - yamlStartTime).toInt()}ms")
-      } catch (e: Exception) {
-        Console.log("⚠️ Failed to load recording YAML: ${e.message}")
-        recordingYaml =
-          "# Error loading YAML: ${e.message}\n# YAML is pre-generated on the JVM and should be available in chunks."
-      }
 
       val totalTime = window.performance.now() - startTime
       Console.log(
@@ -381,6 +340,18 @@ fun WasmSessionDetailView(
       e.printStackTrace()
     } finally {
       isLoading = false
+    }
+  }
+
+  // Proactively preload all screenshots in the background so they're
+  // already cached when the user scrolls through the timeline.
+  LaunchedEffect(logs) {
+    if (logs.isEmpty()) return@LaunchedEffect
+    val screenshotRefs = logs.mapNotNull { log ->
+      (log as? HasScreenshot)?.screenshotFile
+    }.distinct()
+    if (screenshotRefs.isNotEmpty()) {
+      preloadScreenshots(screenshotRefs)
     }
   }
 
@@ -398,8 +369,11 @@ fun WasmSessionDetailView(
         toMaestroYaml = toMaestroYaml,
         onBackClick = onBackClick,
         generateRecordingYaml = {
-          // Return the pre-loaded YAML from chunks (already loaded in LaunchedEffect above)
-          recordingYaml ?: "# YAML not loaded yet..."
+          // Generate recording YAML on-the-fly from logs (no JVM pre-generation needed)
+          logs.generateRecordedYaml(
+            trailblazeYaml = trailblazeYaml,
+            sessionTrailConfig = sessionInfo?.trailConfig,
+          )
         },
         onShowDetails = { log ->
           currentLog = log
@@ -452,7 +426,7 @@ fun WasmSessionDetailView(
               modalAction = action
               showScreenshotModal = true
             },
-            showInspectUI = if (currentLog is TrailblazeLog.TrailblazeLlmRequestLog || currentLog is TrailblazeLog.MaestroDriverLog) {
+            showInspectUI = if (currentLog is TrailblazeLog.TrailblazeLlmRequestLog || currentLog is TrailblazeLog.AgentDriverLog || currentLog is TrailblazeLog.TrailblazeSnapshotLog) {
               {
                 currentInspectorLog = currentLog
                 showInspectUIDialog = true
@@ -476,7 +450,11 @@ fun WasmSessionDetailView(
             imageUrl = inspectorLog.screenshotFile
           }
 
-          is TrailblazeLog.MaestroDriverLog -> {
+          is TrailblazeLog.AgentDriverLog -> {
+            imageUrl = inspectorLog.screenshotFile
+          }
+
+          is TrailblazeLog.TrailblazeSnapshotLog -> {
             imageUrl = inspectorLog.screenshotFile
           }
 
@@ -502,18 +480,28 @@ fun WasmSessionDetailView(
             // Inspector content
             if (inspectorLog != null) {
               var viewHierarchy: xyz.block.trailblaze.api.ViewHierarchyTreeNode? = null
+              var trailblazeNodeTree: xyz.block.trailblaze.api.TrailblazeNode? = null
               var deviceWidth = 0
               var deviceHeight = 0
 
               when (inspectorLog) {
                 is TrailblazeLog.TrailblazeLlmRequestLog -> {
                   viewHierarchy = inspectorLog.viewHierarchy
+                  trailblazeNodeTree = inspectorLog.trailblazeNodeTree
                   deviceWidth = inspectorLog.deviceWidth
                   deviceHeight = inspectorLog.deviceHeight
                 }
 
-                is TrailblazeLog.MaestroDriverLog -> {
+                is TrailblazeLog.AgentDriverLog -> {
                   viewHierarchy = inspectorLog.viewHierarchy
+                  trailblazeNodeTree = inspectorLog.trailblazeNodeTree
+                  deviceWidth = inspectorLog.deviceWidth
+                  deviceHeight = inspectorLog.deviceHeight
+                }
+
+                is TrailblazeLog.TrailblazeSnapshotLog -> {
+                  viewHierarchy = inspectorLog.viewHierarchy
+                  trailblazeNodeTree = inspectorLog.trailblazeNodeTree
                   deviceWidth = inspectorLog.deviceWidth
                   deviceHeight = inspectorLog.deviceHeight
                 }
@@ -539,10 +527,18 @@ fun WasmSessionDetailView(
                   }
                 }
 
+                // Compute TrailblazeNode selectors directly — all deps are in commonMain
+                val computeTrailblazeNodeSelectors = remember(trailblazeNodeTree) {
+                  trailblazeNodeTree?.let {
+                    InspectTrailblazeNodeSelectorHelper.createSelectorComputeFunction(root = it)
+                  }
+                }
+
                 InspectViewHierarchyScreenComposable(
                   sessionId = sessionName,
                   viewHierarchy = viewHierarchy,
                   viewHierarchyFiltered = viewHierarchyFiltered,
+                  trailblazeNodeTree = trailblazeNodeTree,
                   imageUrl = imageUrl,
                   deviceWidth = deviceWidth,
                   deviceHeight = deviceHeight,
@@ -554,7 +550,8 @@ fun WasmSessionDetailView(
                   onClose = {
                     showInspectUIDialog = false
                     currentInspectorLog = null
-                  }
+                  },
+                  computeTrailblazeNodeSelectorOptions = computeTrailblazeNodeSelectors,
                 )
               } else {
                 Text(

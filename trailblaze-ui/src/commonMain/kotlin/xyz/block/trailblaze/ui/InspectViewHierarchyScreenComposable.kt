@@ -64,6 +64,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import kotlinx.serialization.json.Json
+import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.ui.composables.SelectableText
 import xyz.block.trailblaze.ui.images.ImageLoader
@@ -103,12 +104,36 @@ data class SelectorAnalysisResult(
   val propertyUniqueness: PropertyUniquenessDisplay?,
 )
 
+/**
+ * Data class representing a TrailblazeNodeSelector option with its strategy and YAML representation.
+ */
+data class TrailblazeNodeSelectorOptionDisplay(
+  val yamlSelector: String,
+  val strategy: String,
+  val isBest: Boolean = false,
+  val matchCount: Int = 1,
+  val matchingNodeIds: List<Long> = emptyList(),
+  /** Center point (x, y) that this selector would resolve to at tap time. */
+  val resolvedCenter: Pair<Int, Int>? = null,
+  /** Whether the resolved center falls within the target node's bounds. */
+  val hitsTarget: Boolean = true,
+)
+
+/**
+ * Combined result containing TrailblazeNode selector options.
+ */
+data class TrailblazeNodeSelectorAnalysisResult(
+  val selectorOptions: List<TrailblazeNodeSelectorOptionDisplay>,
+  val bestSelectorYaml: String?,
+)
+
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun InspectViewHierarchyScreenComposable(
   sessionId: String,
   viewHierarchy: ViewHierarchyTreeNode,
   viewHierarchyFiltered: ViewHierarchyTreeNode? = null,
+  trailblazeNodeTree: TrailblazeNode? = null,
   imageUrl: String?,
   deviceWidth: Int,
   deviceHeight: Int,
@@ -124,14 +149,21 @@ fun InspectViewHierarchyScreenComposable(
   onFontScaleChanged: (Float) -> Unit = {},
   onShowRawJsonChanged: (Boolean) -> Unit = {},
   onClose: () -> Unit = {},
-  // Callback to compute selector analysis (options + uniqueness) for a given node
-  // This is platform-specific and only available in JVM
+  // Callback to compute legacy ViewHierarchy selector analysis (JVM only — requires Maestro)
   computeSelectorOptions: ((ViewHierarchyTreeNode) -> SelectorAnalysisResult)? = null,
+  // Callback to compute TrailblazeNode selector analysis (multiplatform — works on JVM, WASM, desktop)
+  computeTrailblazeNodeSelectorOptions: ((TrailblazeNode) -> TrailblazeNodeSelectorAnalysisResult)? = null,
 ) {
   var selectedNode by remember { mutableStateOf<ViewHierarchyTreeNode?>(null) }
   var hoveredNode by remember { mutableStateOf<ViewHierarchyTreeNode?>(null) }
   var showFilteredHierarchy by remember { mutableStateOf(false) }
   var highlightedNodeIds by remember { mutableStateOf<Set<Long>>(emptySet()) }
+
+  // TrailblazeNode mode state — default to TrailblazeNode when available
+  var useTrailblazeNodeMode by remember { mutableStateOf(trailblazeNodeTree != null) }
+  var selectedTrailblazeNode by remember { mutableStateOf<TrailblazeNode?>(null) }
+  var hoveredTrailblazeNode by remember { mutableStateOf<TrailblazeNode?>(null) }
+  var trailblazeHighlightedNodeIds by remember { mutableStateOf<Set<Long>>(emptySet()) }
 
   // Calculate counts once - use unique node IDs to avoid counting duplicates
   val viewHierarchyCount = remember(viewHierarchy) {
@@ -179,8 +211,42 @@ fun InspectViewHierarchyScreenComposable(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically
       ) {
+        // Show toggle only when TrailblazeNode is available and user has switched to legacy
+        // (allows switching back). When TrailblazeNode is available, it's the default view.
+        if (trailblazeNodeTree != null && !useTrailblazeNodeMode) {
+          Button(
+            onClick = {
+              useTrailblazeNodeMode = true
+              selectedNode = null
+              hoveredNode = null
+            },
+            colors = ButtonDefaults.buttonColors(
+              containerColor = MaterialTheme.colorScheme.tertiary
+            ),
+            modifier = Modifier.height(36.dp),
+          ) {
+            Text("Switch to TrailblazeNode", style = MaterialTheme.typography.labelMedium)
+          }
+        }
+        if (useTrailblazeNodeMode && trailblazeNodeTree != null) {
+          Button(
+            onClick = {
+              useTrailblazeNodeMode = false
+              selectedTrailblazeNode = null
+              hoveredTrailblazeNode = null
+            },
+            colors = ButtonDefaults.buttonColors(
+              containerColor = Color.Transparent,
+              contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+            ),
+            modifier = Modifier.height(36.dp),
+          ) {
+            Text("Legacy View", style = MaterialTheme.typography.labelMedium)
+          }
+        }
+
         // Filter toggle button (only show if filtered hierarchy is available)
-        if (viewHierarchyFiltered != null) {
+        if (viewHierarchyFiltered != null && !useTrailblazeNodeMode) {
           Button(
             onClick = { showFilteredHierarchy = !showFilteredHierarchy },
             colors = ButtonDefaults.buttonColors(
@@ -272,18 +338,33 @@ fun InspectViewHierarchyScreenComposable(
             contentAlignment = Alignment.Center
           ) {
             if (imageUrl != null) {
-              ViewHierarchyInspector(
-                sessionId = sessionId,
-                screenshotFile = imageUrl,
-                viewHierarchy = activeHierarchy,
-                deviceWidth = deviceWidth,
-                deviceHeight = deviceHeight,
-                selectedNode = selectedNode,
-                hoveredNode = hoveredNode,
-                onNodeSelected = { selectedNode = it },
-                onNodeHovered = { hoveredNode = it },
-                imageLoader = imageLoader
-              )
+              if (useTrailblazeNodeMode && trailblazeNodeTree != null) {
+                TrailblazeNodeInspector(
+                  sessionId = sessionId,
+                  screenshotFile = imageUrl,
+                  trailblazeNodeTree = trailblazeNodeTree,
+                  deviceWidth = deviceWidth,
+                  deviceHeight = deviceHeight,
+                  selectedNode = selectedTrailblazeNode,
+                  hoveredNode = hoveredTrailblazeNode,
+                  onNodeSelected = { selectedTrailblazeNode = it },
+                  onNodeHovered = { hoveredTrailblazeNode = it },
+                  imageLoader = imageLoader
+                )
+              } else {
+                ViewHierarchyInspector(
+                  sessionId = sessionId,
+                  screenshotFile = imageUrl,
+                  viewHierarchy = activeHierarchy,
+                  deviceWidth = deviceWidth,
+                  deviceHeight = deviceHeight,
+                  selectedNode = selectedNode,
+                  hoveredNode = hoveredNode,
+                  onNodeSelected = { selectedNode = it },
+                  onNodeHovered = { hoveredNode = it },
+                  imageLoader = imageLoader
+                )
+              }
             } else {
               Text(
                 text = "No screenshot available",
@@ -309,16 +390,27 @@ fun InspectViewHierarchyScreenComposable(
             containerColor = MaterialTheme.colorScheme.surface
           )
         ) {
-          NodeDetailsPanel(
-            selectedNode = selectedNode,
-            hoveredNode = hoveredNode,
-            viewHierarchy = viewHierarchy,
-            fontScale = fontScale,
-            modifier = Modifier.fillMaxSize(),
-            computeSelectorOptions = computeSelectorOptions,
-            onNodeSelected = { selectedNode = it },
-            onHighlightedNodeIdsChange = { highlightedNodeIds = it }
-          )
+          if (useTrailblazeNodeMode && trailblazeNodeTree != null) {
+            TrailblazeNodeDetailsPanel(
+              selectedNode = selectedTrailblazeNode,
+              hoveredNode = hoveredTrailblazeNode,
+              fontScale = fontScale,
+              modifier = Modifier.fillMaxSize(),
+              computeSelectorOptions = computeTrailblazeNodeSelectorOptions,
+              onHighlightedNodeIdsChange = { trailblazeHighlightedNodeIds = it },
+            )
+          } else {
+            NodeDetailsPanel(
+              selectedNode = selectedNode,
+              hoveredNode = hoveredNode,
+              viewHierarchy = viewHierarchy,
+              fontScale = fontScale,
+              modifier = Modifier.fillMaxSize(),
+              computeSelectorOptions = computeSelectorOptions,
+              onNodeSelected = { selectedNode = it },
+              onHighlightedNodeIdsChange = { highlightedNodeIds = it }
+            )
+          }
         }
       }
 
@@ -369,7 +461,7 @@ fun InspectViewHierarchyScreenComposable(
               verticalAlignment = Alignment.CenterVertically
             ) {
               Text(
-                text = if (showRawJson) "Raw JSON" else "View Hierarchy",
+                text = if (showRawJson) "Raw JSON" else if (useTrailblazeNodeMode) "TrailblazeNode Tree" else "View Hierarchy",
                 style = MaterialTheme.typography.headlineSmall.copy(
                   fontSize = MaterialTheme.typography.headlineSmall.fontSize * fontScale
                 ),
@@ -380,34 +472,60 @@ fun InspectViewHierarchyScreenComposable(
               val clipboardManager = LocalClipboardManager.current
               Button(
                 onClick = {
-                  val jsonString = Json { prettyPrint = true }.encodeToString(activeHierarchy)
+                  val jsonString = if (useTrailblazeNodeMode && trailblazeNodeTree != null) {
+                    Json { prettyPrint = true }.encodeToString(TrailblazeNode.serializer(), trailblazeNodeTree)
+                  } else {
+                    Json { prettyPrint = true }.encodeToString(activeHierarchy)
+                  }
                   clipboardManager.setText(AnnotatedString(jsonString))
                 }
               ) {
-                Text("Copy View Hierarchy")
+                Text(if (useTrailblazeNodeMode) "Copy TrailblazeNode" else "Copy View Hierarchy")
               }
             }
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            if (showRawJson) {
-              RawJsonPanel(
-                viewHierarchy = activeHierarchy,
-                fontScale = fontScale,
-                modifier = Modifier.weight(1f).fillMaxWidth()
-              )
+            if (useTrailblazeNodeMode && trailblazeNodeTree != null) {
+              if (showRawJson) {
+                TrailblazeNodeRawJsonPanel(
+                  trailblazeNodeTree = trailblazeNodeTree,
+                  fontScale = fontScale,
+                  modifier = Modifier.weight(1f).fillMaxWidth()
+                )
+              } else {
+                TrailblazeNodeTreePanel(
+                  trailblazeNodeTree = trailblazeNodeTree,
+                  selectedNode = selectedTrailblazeNode,
+                  hoveredNode = hoveredTrailblazeNode,
+                  highlightedNodeIds = trailblazeHighlightedNodeIds,
+                  onNodeSelected = { selectedTrailblazeNode = it },
+                  fontScale = fontScale,
+                  modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                )
+              }
             } else {
-              ViewHierarchyTreePanel(
-                viewHierarchy = activeHierarchy,
-                selectedNode = selectedNode,
-                hoveredNode = hoveredNode,
-                highlightedNodeIds = highlightedNodeIds,
-                onNodeSelected = { selectedNode = it },
-                fontScale = fontScale,
-                modifier = Modifier
-                  .weight(1f)
-                  .fillMaxWidth()
-              )
+              if (showRawJson) {
+                RawJsonPanel(
+                  viewHierarchy = activeHierarchy,
+                  fontScale = fontScale,
+                  modifier = Modifier.weight(1f).fillMaxWidth()
+                )
+              } else {
+                ViewHierarchyTreePanel(
+                  viewHierarchy = activeHierarchy,
+                  selectedNode = selectedNode,
+                  hoveredNode = hoveredNode,
+                  highlightedNodeIds = highlightedNodeIds,
+                  onNodeSelected = { selectedNode = it },
+                  fontScale = fontScale,
+                  modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                )
+              }
             }
           }
         }

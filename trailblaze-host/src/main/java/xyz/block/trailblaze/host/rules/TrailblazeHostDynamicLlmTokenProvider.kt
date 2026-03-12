@@ -7,6 +7,7 @@ import ai.koog.prompt.executor.clients.openai.OpenAILLMClient
 import ai.koog.prompt.executor.clients.openrouter.OpenRouterLLMClient
 import ai.koog.prompt.executor.ollama.client.OllamaClient
 import io.ktor.client.HttpClient
+import xyz.block.trailblaze.llm.LlmProviderEnvVarUtil
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
 import xyz.block.trailblaze.llm.providers.TrailblazeDynamicLlmTokenProvider
 import xyz.block.trailblaze.mcp.utils.JvmLLMProvidersUtil
@@ -15,15 +16,16 @@ import xyz.block.trailblaze.mcp.utils.JvmLLMProvidersUtil
  * Retrieves LLM API tokens from environment variables
  */
 object TrailblazeHostDynamicLlmTokenProvider : TrailblazeDynamicLlmTokenProvider {
+  override fun supportedProviders(): Set<TrailblazeLlmProvider> = setOf(
+    TrailblazeLlmProvider.OLLAMA,
+    TrailblazeLlmProvider.OPENAI,
+    TrailblazeLlmProvider.GOOGLE,
+    TrailblazeLlmProvider.ANTHROPIC,
+    TrailblazeLlmProvider.OPEN_ROUTER,
+  )
 
-  override fun getApiTokenForProvider(llmProvider: TrailblazeLlmProvider): String? = when (llmProvider) {
-    TrailblazeLlmProvider.ANTHROPIC -> System.getenv("ANTHROPIC_API_KEY")
-    TrailblazeLlmProvider.DATABRICKS -> System.getenv("DATABRICKS_TOKEN")
-    TrailblazeLlmProvider.GOOGLE -> System.getenv("GOOGLE_API_KEY")
-    TrailblazeLlmProvider.OPENAI -> System.getenv("OPENAI_API_KEY")
-    TrailblazeLlmProvider.OPEN_ROUTER -> System.getenv("OPENROUTER_API_KEY")
-    else -> error("Currently unsupported provider: $llmProvider")
-  }
+  override fun getApiTokenForProvider(llmProvider: TrailblazeLlmProvider): String? =
+    LlmProviderEnvVarUtil.getEnvironmentVariableValueForProvider(llmProvider)
 
   override fun getLLMClientForProviderIfAvailable(
     trailblazeLlmProvider: TrailblazeLlmProvider,
@@ -59,7 +61,7 @@ object TrailblazeHostDynamicLlmTokenProvider : TrailblazeDynamicLlmTokenProvider
           apiKey = apiKey,
         )
 
-        else -> error("${trailblazeLlmProvider.id} LLM client not supported in this version")
+        else -> null
       }
     } else {
       null

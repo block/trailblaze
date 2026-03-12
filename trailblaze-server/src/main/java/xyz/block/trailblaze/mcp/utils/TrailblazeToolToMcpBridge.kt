@@ -51,6 +51,11 @@ class TrailblazeToolToMcpBridge(
   private val sessionContext: TrailblazeMcpSessionContext? = null,
   private val onProgressToken: ((McpSessionId, RequestId?) -> Unit)? = null,
 ) {
+  /**
+   * Tracks the names of TrailblazeTools currently registered with the MCP server.
+   * Used to remove stale tools when categories change.
+   */
+  private val registeredToolNames = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
   /**
    * Registers all tools from a [TrailblazeToolSet] as MCP tools.
@@ -70,6 +75,11 @@ class TrailblazeToolToMcpBridge(
 
   /**
    * Registers specific TrailblazeTool classes as MCP tools.
+   * 
+   * This method:
+   * 1. Removes any previously registered TrailblazeTools that are no longer needed
+   * 2. Registers the new set of tools
+   * 3. Triggers `tools/list_changed` notification via the SDK
    */
   @OptIn(InternalSerializationApi::class)
   fun registerTrailblazeTools(
@@ -79,6 +89,18 @@ class TrailblazeToolToMcpBridge(
   ) {
     Console.log("Registering ${toolClasses.size} TrailblazeTools as MCP tools")
 
+    // Get the names of tools to be registered
+    val newToolNames = toolClasses.mapNotNull { it.toKoogToolDescriptor()?.name }.toSet()
+
+    // Remove old tools that are no longer needed
+    val toolsToRemove = registeredToolNames - newToolNames
+    if (toolsToRemove.isNotEmpty()) {
+      Console.log("Removing ${toolsToRemove.size} stale tools: ${toolsToRemove.joinToString()}")
+      mcpServer.removeTools(toolsToRemove.toList())
+      registeredToolNames.removeAll(toolsToRemove)
+    }
+
+    // Register the new tools
     toolClasses.forEach { toolClass ->
       val descriptor = toolClass.toKoogToolDescriptor()
       if (descriptor == null) {
@@ -115,6 +137,13 @@ class TrailblazeToolToMcpBridge(
           mcpSessionId = mcpSessionId,
         )
       }
+      
+      // Track registered tool
+      registeredToolNames.add(descriptor.name)
+    }
+    
+    if (newToolNames.isNotEmpty()) {
+      Console.log("Registered ${newToolNames.size} TrailblazeTools")
     }
   }
 
@@ -125,7 +154,7 @@ class TrailblazeToolToMcpBridge(
     toolName: String,
     mcpSessionId: McpSessionId,
   ): CallToolResult {
-    // Extract progress token from request metadata
+    // Extract MCP progress token from request metadata (_meta.progressToken)
     val progressToken = request.meta?.get("progressToken")?.let { progressTokenValue ->
       when (progressTokenValue) {
         is JsonPrimitive -> {
@@ -133,14 +162,13 @@ class TrailblazeToolToMcpBridge(
           Console.log("progressToken for session $mcpSessionId = $tokenString")
           RequestId.StringId(tokenString)
         }
-
         else -> null
       }
     }
 
     // Notify about progress token (for session context updates)
     onProgressToken?.invoke(mcpSessionId, progressToken)
-    sessionContext?.progressToken = progressToken
+    sessionContext?.mcpProgressToken = progressToken
 
     Console.log("MCP Tool Called: $toolName")
 
@@ -176,19 +204,35 @@ class TrailblazeToolToMcpBridge(
       }
       Console.log("Tool result: $result")
 
+      // Format result using standardized format
+      val formattedResult = result.toToolResult(success = true)
+
+      // Build response with optional auto-screenshot
+      val contentBuilder = McpContentBuilder(sessionContext)
+        .addText(formattedResult.format())
+
+      // Add screenshot if auto-include is enabled
+      if (sessionContext?.autoIncludeScreenshotAfterAction == true) {
+        val screenState = mcpBridge.getCurrentScreenState()
+        contentBuilder.addScreenshot(screenState?.screenshotBytes)
+      }
+
       CallToolResult(
-        content = mutableListOf(
-          TextContent(result),
-        ),
-        isError = false,  // Explicitly set to false for success (some MCP clients require this)
+        content = contentBuilder.build(),
+        isError = false,
       )
     } catch (e: Exception) {
       Console.error("ERROR executing tool $toolName: ${e.message}")
       e.printStackTrace()
+
+      val errorResult = ToolResultSummary.failure(
+        action = "Failed to execute $toolName",
+        reason = e.message ?: "Unknown error",
+        nextHint = "Check device connection and try again",
+      )
+
       CallToolResult(
-        content = mutableListOf(
-          TextContent("Error executing tool: ${e.message}"),
-        ),
+        content = mutableListOf(TextContent(errorResult.format())),
         isError = true,
       )
     }

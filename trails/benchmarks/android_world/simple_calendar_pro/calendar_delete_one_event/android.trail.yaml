@@ -1,0 +1,37 @@
+# Android World Benchmark: calendar/delete_one_event
+- config:
+    id: android-world-benchmarks/simple_calendar_pro/calendar_delete_one_event
+    description: Delete the event titled 'Appointment for Campaign' in Simple Calendar Pro
+
+- tools:
+  - androidworldbenchmarks_runAdbShell:
+      adbShellCommands:
+        - "settings put global auto_time 0"
+        - "date -s 20231015.153400"
+  - androidworldbenchmarks_executeSqliteOnDevice:
+      dbPath: /data/data/com.simplemobiletools.calendar.pro/databases/events.db
+      sqlStatements:
+        - "DELETE FROM events"
+        - "INSERT INTO events (start_ts, end_ts, title, description, repeat_interval, repeat_rule, reminder_1_minutes, reminder_2_minutes, reminder_3_minutes, reminder_1_type, reminder_2_type, reminder_3_type, repeat_limit, repetition_exceptions, attendees) VALUES (1697472000, 1697475600, 'Appointment for Campaign', 'Review details', 0, 0, -1, -1, -1, 0, 0, 0, 0, '[]', '')"
+        - "INSERT INTO events (start_ts, end_ts, title, description, repeat_interval, repeat_rule, reminder_1_minutes, reminder_2_minutes, reminder_3_minutes, reminder_1_type, reminder_2_type, reminder_3_type, repeat_limit, repetition_exceptions, attendees) VALUES (1697385600, 1697389200, 'Call with HR', 'Discuss team', 0, 0, -1, -1, -1, 0, 0, 0, 0, '[]', '')"
+      appPackageName: com.simplemobiletools.calendar.pro
+
+- prompts:
+  - step: "In Simple Calendar Pro, delete the event titled 'Appointment for Campaign'."
+
+- tools:
+  - androidworldbenchmarks_assertSqliteQuery:
+      dbPath: /data/data/com.simplemobiletools.calendar.pro/databases/events.db
+      query: "SELECT title FROM events WHERE title='Appointment for Campaign'"
+      expectedOutput: ""
+      matchMode: exact
+      appPackageName: com.simplemobiletools.calendar.pro
+  - androidworldbenchmarks_assertSqliteQuery:
+      dbPath: /data/data/com.simplemobiletools.calendar.pro/databases/events.db
+      query: "SELECT title FROM events WHERE title='Call with HR'"
+      expectedOutput: "Call with HR"
+      matchMode: exact
+      appPackageName: com.simplemobiletools.calendar.pro
+
+# --- Benchmark Run History ---
+# [2026-03-11] Build #27 FAILED - Agent limitation: ObjectiveFailed.

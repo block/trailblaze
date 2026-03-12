@@ -25,8 +25,20 @@ expect object Console {
    *
    * On JVM, this goes to stdout (or stderr if [useStdErr] was called).
    * On Android, this goes to Logcat at INFO level.
+   *
+   * Suppressed when [enableQuietMode] is active. Use [info] for messages
+   * that must always be visible to the user.
    */
   fun log(message: String)
+
+  /**
+   * User-facing output that is always visible, even in quiet mode.
+   *
+   * Use this for progress messages, results, and other output that the
+   * end user should always see. Falls back to [log] on platforms that
+   * don't support quiet mode.
+   */
+  fun info(message: String)
 
   /**
    * Error output. Replaces `System.err.println()`.
@@ -46,6 +58,14 @@ expect object Console {
   fun appendLog(message: String)
 
   /**
+   * User-facing partial-line output without a trailing newline.
+   *
+   * Like [appendLog] but always visible (even in quiet mode), similar to [info].
+   * Useful for animated progress indicators in CLI output.
+   */
+  fun appendInfo(message: String)
+
+  /**
    * Redirect [log] output to stderr.
    *
    * Call once at startup when using STDIO MCP transport to keep stdout
@@ -55,4 +75,14 @@ expect object Console {
    * No-op on Android and wasmJs.
    */
   fun useStdErr()
+
+  /**
+   * Suppress [log] output and direct library noise (SLF4J, etc.) to /dev/null.
+   *
+   * After this call, only [info] and [error] produce visible terminal output.
+   * Use for CLI commands where clean, minimal output is desired.
+   *
+   * No-op on Android and wasmJs.
+   */
+  fun enableQuietMode()
 }

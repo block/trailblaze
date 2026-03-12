@@ -21,6 +21,7 @@ import androidx.compose.ui.unit.dp
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.logs.model.SessionStatus
+import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.yaml.TrailConfig
 import xyz.block.trailblaze.ui.composables.SelectableText
 import xyz.block.trailblaze.ui.composables.StatusBadge
@@ -35,6 +36,7 @@ fun SessionSummaryRow(
   totalDurationMs: Long? = null,
   trailConfig: TrailConfig? = null,
   sessionInfo: SessionInfo? = null,
+  agentImplementation: AgentImplementation? = null,
 ) {
   Card(
     modifier = Modifier.fillMaxWidth(),
@@ -69,6 +71,13 @@ fun SessionSummaryRow(
           Spacer(modifier = Modifier.width(16.dp))
           SelectableText(
             text = "Driver: ${driverType.name}",
+            style = MaterialTheme.typography.bodyMedium
+          )
+        }
+        agentImplementation?.let { agent ->
+          Spacer(modifier = Modifier.width(16.dp))
+          SelectableText(
+            text = "Agent: ${agent.name}",
             style = MaterialTheme.typography.bodyMedium
           )
         }

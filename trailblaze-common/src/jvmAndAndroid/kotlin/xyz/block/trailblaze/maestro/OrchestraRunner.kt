@@ -53,7 +53,7 @@ object OrchestraRunner {
     commands.forEach { maestroCommand ->
       val maestroCommandJsonObj = maestroCommand.asJsonObject()
       val startTime = Clock.System.now()
-      var result: TrailblazeToolResult = TrailblazeToolResult.Success
+      var result: TrailblazeToolResult = TrailblazeToolResult.Success()
 
       // Create callbacks that handle the common logging logic
       val callbacks = OrchestraCallbacks(
@@ -92,7 +92,7 @@ object OrchestraRunner {
         return result
       }
     }
-    return TrailblazeToolResult.Success
+    return TrailblazeToolResult.Success()
   }
 
   /**

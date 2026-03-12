@@ -37,10 +37,12 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlinx.datetime.Instant
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
+import xyz.block.trailblaze.logs.client.TrailblazeJson
 import xyz.block.trailblaze.api.HasClickCoordinates
-import xyz.block.trailblaze.api.MaestroDriverActionType
+import xyz.block.trailblaze.api.AgentDriverAction
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
@@ -65,7 +67,7 @@ fun LogCard(
   showInspectUI: (() -> Unit)? = null,
   showChatHistory: (() -> Unit)? = null,
   cardSize: androidx.compose.ui.unit.Dp? = null,
-  onShowScreenshotModal: (imageModel: Any?, deviceWidth: Int, deviceHeight: Int, clickX: Int?, clickY: Int?, action: MaestroDriverActionType?) -> Unit = { _, _, _, _, _, _ -> },
+  onShowScreenshotModal: (imageModel: Any?, deviceWidth: Int, deviceHeight: Int, clickX: Int?, clickY: Int?, action: AgentDriverAction?) -> Unit = { _, _, _, _, _, _ -> },
   onOpenInFinder: (() -> Unit)? = null,
 ) {
 
@@ -94,7 +96,7 @@ fun LogCard(
     )
 
     is TrailblazeLog.TrailblazeLlmRequestLog -> LogCardData(
-      title = "LLM Request",
+      title = if (log.llmRequestLabel != null) "LLM: ${log.llmRequestLabel}" else "LLM Request",
       duration = log.durationMs,
       elapsedTime = elapsedTimeMs,
       screenshotFile = log.screenshotFile,
@@ -102,8 +104,8 @@ fun LogCard(
       deviceHeight = log.deviceHeight,
     )
 
-    is TrailblazeLog.MaestroDriverLog -> LogCardData(
-      title = "Maestro Driver ${log.action.type.name}",
+    is TrailblazeLog.AgentDriverLog -> LogCardData(
+      title = "Driver ${log.action.type.name}",
       duration = log.durationMs,
       elapsedTime = elapsedTimeMs,
       screenshotFile = log.screenshotFile,
@@ -159,6 +161,103 @@ fun LogCard(
       deviceWidth = log.deviceWidth,
       deviceHeight = log.deviceHeight,
       preformattedText = log.displayName?.let { "Name: $it" }
+    )
+
+    is TrailblazeLog.AccessibilityActionLog -> LogCardData(
+      title = "Accessibility: ${log.actionDescription}",
+      duration = log.durationMs,
+      elapsedTime = elapsedTimeMs,
+      preformattedText = log.actionJsonObj.toString()
+    )
+
+    is TrailblazeLog.McpAgentRunLog -> LogCardData(
+      title = "MCP Agent: ${log.objective.take(50)}${if (log.objective.length > 50) "..." else ""}",
+      duration = log.durationMs,
+      elapsedTime = elapsedTimeMs,
+      preformattedText = buildString {
+        appendLine("Transport: ${log.transportMode}")
+        appendLine("Strategy: ${log.llmStrategy}")
+        appendLine("Iterations: ${log.iterationCount}")
+        appendLine("Tools Called: ${log.toolCallCount}")
+        appendLine("Success: ${log.successful}")
+        appendLine()
+        appendLine("Result: ${log.resultMessage}")
+      }
+    )
+
+    is TrailblazeLog.McpAgentIterationLog -> LogCardData(
+      title = "MCP Iteration #${log.iterationNumber}",
+      duration = log.durationMs,
+      elapsedTime = elapsedTimeMs,
+      preformattedText = buildString {
+        appendLine("Type: ${log.responseType}")
+        log.toolName?.let { appendLine("Tool: $it") }
+        log.llmCompletion?.let { appendLine("Completion: ${it.take(200)}...") }
+      }
+    )
+
+    is TrailblazeLog.McpSamplingLog -> LogCardData(
+      title = "MCP Sampling",
+      duration = log.durationMs,
+      elapsedTime = elapsedTimeMs,
+      preformattedText = buildString {
+        appendLine("Strategy: ${log.llmStrategy}")
+        appendLine("Model: ${log.modelName ?: "unknown"}")
+        appendLine("Screenshot: ${log.includedScreenshot}")
+        appendLine()
+        appendLine("Completion: ${log.completion.take(200)}...")
+      }
+    )
+
+    is TrailblazeLog.McpAgentToolLog -> LogCardData(
+      title = "MCP Tool: ${log.toolName}",
+      duration = log.durationMs,
+      elapsedTime = elapsedTimeMs,
+      preformattedText = buildString {
+        appendLine("Transport: ${log.transportMode}")
+        appendLine("Success: ${log.successful}")
+        appendLine("Args: ${log.toolArgs}")
+        appendLine()
+        appendLine("Result: ${log.resultOutput.take(500)}")
+      }
+    )
+
+    is TrailblazeLog.McpToolCallRequestLog -> LogCardData(
+      title = "MCP Request: ${log.toolName}",
+      duration = null,
+      elapsedTime = elapsedTimeMs,
+      preformattedText = buildString {
+        val args = log.toolArgs.toString()
+        if (args != "{}" && args.isNotEmpty()) {
+          appendLine(args.take(500))
+        }
+      }.takeIf { it.isNotBlank() }
+    )
+
+    is TrailblazeLog.McpToolCallResponseLog -> LogCardData(
+      title = if (log.successful) "MCP Response: ${log.toolName}" else "MCP Response: ${log.toolName} (FAILED)",
+      duration = log.durationMs,
+      elapsedTime = elapsedTimeMs,
+      preformattedText = buildString {
+        log.errorMessage?.let { appendLine("Error: $it\n") }
+        val result = log.resultSummary.prettyPrint().take(800)
+        if (result.isNotBlank()) {
+          appendLine(result)
+        }
+      }.takeIf { it.isNotBlank() }
+    )
+
+    is TrailblazeLog.TrailblazeProgressLog -> LogCardData(
+      title = "Progress: ${log.eventType}",
+      duration = log.durationMs.takeIf { it > 0 },
+      elapsedTime = elapsedTimeMs,
+      preformattedText = buildString {
+        appendLine(log.description)
+        log.stepIndex?.let { step ->
+          appendLine("Step ${step + 1}${log.totalSteps?.let { " of $it" } ?: ""}")
+        }
+        log.progressPercent?.let { appendLine("Progress: $it%") }
+      }
     )
   }
 
@@ -318,20 +417,20 @@ fun LogCard(
         // Add screenshot if available
         if (logData.screenshotFile != null && logData.deviceWidth != null && logData.deviceHeight != null) {
           Spacer(modifier = Modifier.height(8.dp))
-          // Determine click coordinates for MaestroDriverLog TapPoint/LongPressPoint
+          // Determine click coordinates for AgentDriverLog TapPoint/LongPressPoint
           val (clickX, clickY) =
-            if (log is TrailblazeLog.MaestroDriverLog) {
+            if (log is TrailblazeLog.AgentDriverLog) {
               val action = log.action
               if (action is HasClickCoordinates) action.x to action.y else null to null
             } else null to null
 
           // Extract action for screenshot overlay
-          val action = if (log is TrailblazeLog.MaestroDriverLog) log.action else null
+          val action = if (log is TrailblazeLog.AgentDriverLog) log.action else null
 
           // Check if this log has view hierarchy data for UI Inspector
           val hasViewHierarchy = when (log) {
             is TrailblazeLog.TrailblazeLlmRequestLog -> log.viewHierarchy != null
-            is TrailblazeLog.MaestroDriverLog -> log.viewHierarchy != null
+            is TrailblazeLog.AgentDriverLog -> log.viewHierarchy != null
             is TrailblazeLog.TrailblazeSnapshotLog -> true // Snapshot logs always have view hierarchy
             else -> false
           }
@@ -357,16 +456,16 @@ fun LogCard(
                     // Fall back to screenshot modal if no view hierarchy available
                     onShowScreenshotModal(
                       imageModel, deviceWidth, deviceHeight, clickXCoord, clickYCoord,
-                      action as? MaestroDriverActionType
+                      action as? AgentDriverAction
                     )
                   }
                 }
 
-                is TrailblazeLog.MaestroDriverLog -> {
+                is TrailblazeLog.AgentDriverLog -> {
                   // Maestro driver logs should open annotated screenshot modal when screenshot is clicked
                   onShowScreenshotModal(
                     imageModel, deviceWidth, deviceHeight, clickXCoord, clickYCoord,
-                    action as? MaestroDriverActionType
+                    action as? AgentDriverAction
                   )
                 }
 
@@ -377,7 +476,7 @@ fun LogCard(
                   } else {
                     onShowScreenshotModal(
                       imageModel, deviceWidth, deviceHeight, clickXCoord, clickYCoord,
-                      action as? MaestroDriverActionType
+                      action as? AgentDriverAction
                     )
                   }
                 }
@@ -390,7 +489,7 @@ fun LogCard(
             Spacer(modifier = Modifier.height(4.dp))
             val hintText = when (log) {
               is TrailblazeLog.TrailblazeLlmRequestLog -> "💡 Click screenshot to inspect UI elements"
-              is TrailblazeLog.MaestroDriverLog -> "💡 Click screenshot to view annotated screenshot"
+              is TrailblazeLog.AgentDriverLog -> "💡 Click screenshot to view annotated screenshot"
               else -> "💡 Click screenshot to inspect UI elements"
             }
             SelectableText(
@@ -420,7 +519,7 @@ fun LogCard(
           Row {
             // Add Inspect UI button for logs with view hierarchy (LLM Request logs, Maestro Driver logs, and Snapshot logs)
             if ((log is TrailblazeLog.TrailblazeLlmRequestLog ||
-                (log is TrailblazeLog.MaestroDriverLog && log.viewHierarchy != null) ||
+                (log is TrailblazeLog.AgentDriverLog && log.viewHierarchy != null) ||
                 log is TrailblazeLog.TrailblazeSnapshotLog) &&
               showInspectUI != null
             ) {
@@ -545,3 +644,7 @@ fun DetailSection(title: String, content: @Composable () -> Unit) {
     Spacer(modifier = Modifier.height(4.dp))
   }
 }
+
+/** Pretty prints a JsonElement for display in UI */
+private fun JsonElement.prettyPrint(): String =
+  TrailblazeJson.defaultWithoutToolsInstance.encodeToString(JsonElement.serializer(), this)

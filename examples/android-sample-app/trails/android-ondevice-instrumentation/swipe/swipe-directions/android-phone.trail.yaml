@@ -1,0 +1,38 @@
+- config:
+    id: sample-app/swipe/swipe-directions
+    app: xyz.block.trailblaze.examples.sampleapp
+    platform: android
+    driver: ANDROID_ONDEVICE_INSTRUMENTATION
+- tools:
+  - launchApp:
+      appId: xyz.block.trailblaze.examples.sampleapp
+      launchMode: REINSTALL
+- prompts:
+  - step: Navigate to the "Swipe" tab and verify "Page 1 of 5" is shown
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: Navigate to the 'Swipe' tab as instructed.
+          selector:
+            containsChild:
+              textRegex: Swipe
+      - assertVisibleBySelector:
+          reason: To verify that 'Page 1 of 5' is visible as required by the objective.
+          selector:
+            textRegex: Page 1 of 5
+  - step: Swipe forward to page 3, then swipe back to page 2
+    recording:
+      tools:
+      - swipe:
+          direction: LEFT
+      - swipe:
+          direction: LEFT
+      - swipe:
+          direction: RIGHT
+  - step: Verify "Page 2 of 5" is displayed
+    recording:
+      tools:
+      - assertVisibleBySelector:
+          reason: The objective is to verify that 'Page 2 of 5' is displayed. Node 38 corresponds to the TextView containing this text.
+          selector:
+            textRegex: Page 2 of 5

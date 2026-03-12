@@ -23,7 +23,7 @@ data object DumpMemoryTrailblazeTool : MemoryTrailblazeTool {
     elementComparator: ElementComparator,
   ): TrailblazeToolResult {
     memory.dump()
-    return TrailblazeToolResult.Success
+    return TrailblazeToolResult.Success()
   }
 }
 

@@ -28,6 +28,8 @@ object TrailblazeHttpClientFactory {
       trustAllCerts()
     }
     setTimeoutsInSeconds(timeoutInSeconds)
+    // Capture cached token counts from raw LLM API responses (workaround for Koog KG-656)
+    addInterceptor(CachedTokenCaptureInterceptor)
   }
 
   fun createDefaultHttpClient(

@@ -7,7 +7,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 object AgentMessages {
 
   fun TrailblazeToolResult.toContentString(toolName: String, toolArgs: JsonObject): String = when (this) {
-    is TrailblazeToolResult.Success -> successContentString(toolName, toolArgs)
+    is TrailblazeToolResult.Success -> successContentString(toolName, toolArgs, message)
     is TrailblazeToolResult.Error.MaestroValidationError -> validationErrorContentString(
       toolName,
       toolArgs,
@@ -35,7 +35,7 @@ object AgentMessages {
    * Overload for handling multiple tool names (used for delegating tools that execute multiple actual tools)
    */
   fun TrailblazeToolResult.toContentString(toolNames: List<String>, toolArgs: JsonObject): String = when (this) {
-    is TrailblazeToolResult.Success -> successContentString(toolNames, toolArgs)
+    is TrailblazeToolResult.Success -> successContentString(toolNames, toolArgs, message)
     is TrailblazeToolResult.Error.MaestroValidationError -> validationErrorContentString(
       toolNames,
       toolArgs,
@@ -63,7 +63,7 @@ object AgentMessages {
    * Overload for handling multiple tools with their individual arguments (used for delegating tools)
    */
   fun TrailblazeToolResult.toContentString(toolsWithArgs: Map<String, JsonObject>): String = when (this) {
-    is TrailblazeToolResult.Success -> successContentString(toolsWithArgs)
+    is TrailblazeToolResult.Success -> successContentString(toolsWithArgs, message)
     is TrailblazeToolResult.Error.MaestroValidationError -> validationErrorContentString(
       toolsWithArgs,
       errorMessage,
@@ -91,29 +91,43 @@ object AgentMessages {
     appendLine("Command: ${errorException.command}")
   }
 
-  private fun successContentString(toolName: String, toolArgs: JsonObject) = buildString {
-    appendLine("**Successfully used the `$toolName` tool on the device with the following parameters:**")
-    appendLine(asJsonCodeBlock(toolArgs))
+  private fun successContentString(toolName: String, toolArgs: JsonObject, message: String?) = buildString {
+    val resultMessage = message.asResultMessage()
+    if (resultMessage != null) {
+      appendLine("**Successfully used the `$toolName` tool.** $resultMessage")
+    } else {
+      appendLine("**Successfully used the `$toolName` tool on the device with the following parameters:**")
+      appendLine(asJsonCodeBlock(toolArgs))
+    }
   }
 
   /**
    * Overload for handling multiple tool names (used for delegating tools)
    */
-  private fun successContentString(toolNames: List<String>, toolArgs: JsonObject) = buildString {
-    if (toolNames.size == 1) {
+  private fun successContentString(toolNames: List<String>, toolArgs: JsonObject, message: String?) = buildString {
+    val resultMessage = message.asResultMessage()
+    if (resultMessage != null) {
+      val toolNamesStr = toolNames.joinToString(", ") { "`$it`" }
+      appendLine("**Successfully used $toolNamesStr.** $resultMessage")
+    } else if (toolNames.size == 1) {
       appendLine("**Successfully used the `${toolNames.first()}` tool on the device with the following parameters:**")
+      appendLine(asJsonCodeBlock(toolArgs))
     } else {
       appendLine("**Successfully executed the following tools on the device: ${toolNames.joinToString(", ") { "`$it`" }}**")
       appendLine("**Using these parameters:**")
+      appendLine(asJsonCodeBlock(toolArgs))
     }
-    appendLine(asJsonCodeBlock(toolArgs))
   }
 
   /**
    * Overload for handling multiple tools with their individual arguments
    */
-  private fun successContentString(toolsWithArgs: Map<String, JsonObject>) = buildString {
-    if (toolsWithArgs.size == 1) {
+  private fun successContentString(toolsWithArgs: Map<String, JsonObject>, message: String?) = buildString {
+    val resultMessage = message.asResultMessage()
+    if (resultMessage != null) {
+      val toolNamesStr = toolsWithArgs.keys.joinToString(", ") { "`$it`" }
+      appendLine("**Successfully used $toolNamesStr.** $resultMessage")
+    } else if (toolsWithArgs.size == 1) {
       val (toolName, toolArgs) = toolsWithArgs.entries.first()
       appendLine("**Successfully used the `$toolName` tool on the device with the following parameters:**")
       appendLine(asJsonCodeBlock(toolArgs))
@@ -132,6 +146,13 @@ object AgentMessages {
     appendLine(TrailblazeJson.defaultWithoutToolsInstance.encodeToString(jsonObject))
     appendLine("```")
   }
+  private fun String?.asResultMessage(): String? = this
+    ?.trim()
+    ?.takeIf { it.isNotEmpty() }
+    ?.takeUnless { message ->
+      // Ignore low-signal object dumps and fall back to structured tool + args context.
+      message.contains("OtherTrailblazeTool(") || message.contains("TrailblazeTool(")
+    }
 
   private fun validationErrorContentString(
     toolName: String,

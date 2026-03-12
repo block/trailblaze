@@ -1,0 +1,43 @@
+- config:
+    title: "Test: Manage multiple todos"
+    platform: compose
+- prompts:
+  - step: Type "Buy groceries" into the todo input field and click the add button
+    recording:
+      tools:
+      - compose_type:
+          text: Buy groceries
+          testTag: todo_input
+      - compose_click:
+          testTag: add_button
+  - step: Type "Walk the dog" into the todo input field and click the add button
+    recording:
+      tools:
+      - compose_type:
+          text: Walk the dog
+          testTag: todo_input
+      - compose_click:
+          testTag: add_button
+  - step: Type "Learn Compose" into the todo input field and click the add button
+    recording:
+      tools:
+      - compose_type:
+          text: Learn Compose
+          testTag: todo_input
+      - compose_click:
+          testTag: add_button
+  - step: Verify the text "3 items" is visible
+    recording:
+      tools:
+      - compose_verify_text_visible:
+          text: 3 items
+  - step: Delete the first todo item
+    recording:
+      tools:
+      - compose_click:
+          testTag: delete_button_0
+  - step: Verify the text "2 items" is visible
+    recording:
+      tools:
+      - compose_verify_text_visible:
+          text: 2 items

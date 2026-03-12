@@ -9,8 +9,15 @@ import xyz.block.trailblaze.AgentMemory
 abstract class MapsToMaestroCommands : ExecutableTrailblazeTool {
   abstract fun toMaestroCommands(memory: AgentMemory): List<Command>
 
-  override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult = toolExecutionContext.trailblazeAgent.runMaestroCommands(
-    maestroCommands = toMaestroCommands(toolExecutionContext.trailblazeAgent.memory),
-    traceId = toolExecutionContext.traceId,
-  )
+  override suspend fun execute(
+    toolExecutionContext: TrailblazeToolExecutionContext,
+  ): TrailblazeToolResult {
+    val agent =
+      toolExecutionContext.maestroTrailblazeAgent
+        ?: error("MapsToMaestroCommands requires MaestroTrailblazeAgent")
+    return agent.runMaestroCommands(
+      maestroCommands = toMaestroCommands(toolExecutionContext.memory),
+      traceId = toolExecutionContext.traceId,
+    )
+  }
 }

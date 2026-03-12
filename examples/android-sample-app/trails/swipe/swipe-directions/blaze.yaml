@@ -1,0 +1,11 @@
+- config:
+    id: "sample-app/swipe/swipe-directions"
+    app: "xyz.block.trailblaze.examples.sampleapp"
+- tools:
+    - launchApp:
+        appId: "xyz.block.trailblaze.examples.sampleapp"
+        launchMode: "REINSTALL"
+- prompts:
+    - step: Navigate to the "Swipe" tab and verify "Page 1 of 5" is shown
+    - step: Swipe forward to page 3, then swipe back to page 2
+    - step: Verify "Page 2 of 5" is displayed

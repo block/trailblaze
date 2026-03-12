@@ -24,13 +24,48 @@ Because Trailblaze uses [Maestro](https://github.com/mobile-dev-inc/maestro) Com
 enables a longer term vision of cross-platform ui testing while reusing the same authoring, agent
 and reporting capabilities.
 
-### Available Features
+### Core Features
 
-- AI-Powered Testing: More resilient tests using natural language test steps
-- On-Device Execution: Runs directly on Android devices using standard instrumentation tests (Espresso, UiAutomator)
-- Custom Agent Tools: Extend functionality by providing app-specific `TrailblazeTool`s to the agent
-- Detailed Reporting: Comprehensive test execution reports
-- Maestro Integration: Uses a custom build on-device driver for Maestro to leverage intuitive, platform-agnostic UI
-  interactions.
+- **AI-Powered Testing**: More resilient tests using natural language test steps
+- **On-Device Execution**: Runs directly on Android devices using standard instrumentation tests (Espresso, UiAutomator)
+- **Custom Agent Tools**: Extend functionality by providing app-specific `TrailblazeTool`s to the agent
+- **Detailed Reporting**: Comprehensive test execution reports
+- **Maestro Integration**: Uses a custom on-device driver for Maestro to leverage intuitive, platform-agnostic UI interactions
+
+### Multi-Agent V3 Features (Mobile-Agent-v3 Inspired)
+
+Trailblaze implements cutting-edge features from [Mobile-Agent-v3](https://arxiv.org/abs/2508.15144) research:
+
+| Feature | Description |
+|---------|-------------|
+| **Exception Handling** | Automatically handles popups, ads, loading states, and errors |
+| **Reflection & Self-Correction** | Detects stuck states and loops, backtracks when needed |
+| **Task Decomposition** | Breaks complex objectives into manageable subtasks |
+| **Cross-App Memory** | Remembers information across app switches for complex workflows |
+| **Enhanced Recording** | Captures pre/post conditions for more robust replay |
+| **Progress Reporting** | Real-time MCP progress events for IDE integrations |
+
+### Trail & Blaze Architecture
+
+Trailblaze's unique "**blaze once, trail forever**" workflow:
+
+- **Blaze Mode**: AI explores the app to achieve objectives, discovering the path dynamically
+- **Trail Mode**: Replay recorded actions deterministically with zero LLM cost
+- **Hybrid Mode**: Use recordings where available, fall back to AI when needed
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    First Run: BLAZE                          │
+│  AI explores → Records actions → Generates .trail.yaml      │
+└──────────────────────────┬──────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│                   Future Runs: TRAIL                         │
+│  Replay recordings → Zero LLM cost → Fast CI/CD execution   │
+└─────────────────────────────────────────────────────────────┘
+```
 
 ## Documentation at <a href="https://block.github.io/trailblaze">block.github.io/trailblaze</a>
+
+See [Mobile-Agent-v3 Features Guide](docs/mobile-agent-v3-features.md) for detailed usage examples.

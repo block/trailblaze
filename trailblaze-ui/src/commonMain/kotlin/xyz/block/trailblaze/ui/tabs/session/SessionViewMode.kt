@@ -1,26 +1,17 @@
 package xyz.block.trailblaze.ui.tabs.session
 
 enum class SessionViewMode {
+  Timeline,
   Grid,
-  List,
   LlmUsage,
   Recording;
 
-  fun toStringValue(): String = when (this) {
-    Grid -> "Grid"
-    List -> "List"
-    LlmUsage -> "LlmUsage"
-    Recording -> "Recording"
-  }
-
   companion object {
-    const val DEFAULT_VIEW_MODE = "List"
+    val DEFAULT = Timeline
 
     fun fromString(value: String): SessionViewMode = when (value) {
-      "Grid" -> Grid
-      "LlmUsage" -> LlmUsage
-      "Recording" -> Recording
-      else -> List
+      "List" -> Timeline // Legacy migration
+      else -> entries.find { it.name == value } ?: DEFAULT
     }
   }
 }

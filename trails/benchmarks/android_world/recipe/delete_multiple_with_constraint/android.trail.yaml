@@ -1,0 +1,29 @@
+# Android World Benchmark: RecipeDeleteMultipleWithConstraint
+- config:
+    id: android-world-benchmarks/recipe/delete_multiple_with_constraint
+    description: "Delete all recipes that take more than 30 minutes to prepare from the Broccoli app."
+- tools:
+    - androidworldbenchmarks_executeSqliteOnDevice:
+        dbPath: /data/data/com.flauschcode.broccoli/databases/broccoli
+        sqlStatements:
+          - "DELETE FROM recipes"
+          - "INSERT INTO recipes (title, description, servings, preparationTime, source, ingredients, directions, favorite, imageName) VALUES ('Quick Salad', 'Simple salad', '2', '10 minutes', 'quick recipes', 'lettuce, tomato', 'Mix', 0, NULL)"
+          - "INSERT INTO recipes (title, description, servings, preparationTime, source, ingredients, directions, favorite, imageName) VALUES ('Egg Sandwich', 'Quick breakfast', '1', '5 minutes', 'breakfast', 'eggs, bread', 'Cook and serve', 0, NULL)"
+          - "INSERT INTO recipes (title, description, servings, preparationTime, source, ingredients, directions, favorite, imageName) VALUES ('Beef Stew', 'Slow cooked stew', '6', '120 minutes', 'comfort food', 'beef, vegetables', 'Simmer 2 hours', 0, NULL)"
+          - "INSERT INTO recipes (title, description, servings, preparationTime, source, ingredients, directions, favorite, imageName) VALUES ('Grilled Cheese', 'Classic sandwich', '1', '5 minutes', 'sandwich shop', 'bread, cheese, butter', 'Grill and serve', 0, NULL)"
+          - "INSERT INTO recipes (title, description, servings, preparationTime, source, ingredients, directions, favorite, imageName) VALUES ('Coq au Vin', 'French chicken dish', '4', '90 minutes', 'french cookbook', 'chicken, wine, vegetables', 'Braise slowly', 0, NULL)"
+          - "INSERT INTO recipes (title, description, servings, preparationTime, source, ingredients, directions, favorite, imageName) VALUES ('Pasta Carbonara', 'Italian pasta', '3', '20 minutes', 'italy', 'pasta, eggs, bacon, cheese', 'Quick and easy', 0, NULL)"
+          - "INSERT INTO recipes (title, description, servings, preparationTime, source, ingredients, directions, favorite, imageName) VALUES ('Beef Wellington', 'Fancy beef dish', '4', '180 minutes', 'restaurant', 'beef, pastry, mushrooms', 'Complex preparation', 0, NULL)"
+        appPackageName: com.flauschcode.broccoli
+- prompts:
+    - step: "Delete all recipes that take more than 30 minutes to prepare from the Broccoli app."
+- tools:
+    - androidworldbenchmarks_assertSqliteQuery:
+        dbPath: /data/data/com.flauschcode.broccoli/databases/broccoli
+        query: "SELECT COUNT(*) FROM recipes WHERE preparationTime LIKE '%45%' OR preparationTime LIKE '%60%' OR preparationTime LIKE '%90%' OR preparationTime LIKE '%120%' OR preparationTime LIKE '%180%'"
+        expectedOutput: "0"
+        matchMode: exact
+        appPackageName: com.flauschcode.broccoli
+
+# --- Benchmark Run History ---
+# [2026-03-11] Build #27 FAILED - Agent limitation: ObjectiveFailed. Can't navigate Broccoli app.

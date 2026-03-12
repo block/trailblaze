@@ -1,0 +1,79 @@
+- config:
+    id: sample-app/taps/tap-interactions
+    app: xyz.block.trailblaze.examples.sampleapp
+    platform: android
+    driver: ANDROID_ONDEVICE_INSTRUMENTATION
+- tools:
+  - launchApp:
+      appId: xyz.block.trailblaze.examples.sampleapp
+- prompts:
+  - step: Tap the "Tap Me" button 3 times and verify the tap count shows 3
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: To increment the tap count by tapping the 'Tap Me' button. This is the first of three required taps.
+          selector:
+            containsChild:
+              textRegex: Tap Me
+      - tapOnElementBySelector:
+          reason: Need to tap the 'Tap Me' button a second time to increment the tap count toward 3.
+          selector:
+            containsChild:
+              textRegex: Tap Me
+      - tapOnElementBySelector:
+          reason: Tap the 'Tap Me' button a third time to reach a tap count of 3 as required by the objective.
+          selector:
+            containsChild:
+              textRegex: Tap Me
+      - assertVisibleBySelector:
+          reason: To verify that after tapping the 'Tap Me' button three times, the tap count displayed is 3 as required by the objective.
+          selector:
+            textRegex: 'Tap Count: 3'
+  - step: Verify a button labeled "Now Enabled!" is visible and enabled
+    recording:
+      tools:
+      - assertVisibleBySelector:
+          reason: The button labeled 'Now Enabled!' is a clickable view, indicating it should be enabled. We need to verify its visibility and enabled state to meet the objective.
+          selector:
+            containsChild:
+              textRegex: Now Enabled!
+  - step: Tap the button with accessibility description "accessibility_tap_button"
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: Node 31 is labeled with the accessibility description 'accessibility_tap_button', so tapping it fulfills the objective.
+          selector:
+            textRegex: accessibility_tap_button
+  - step: Long press "Long Press Me", then dismiss the dialog by tapping "Copy"
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: To trigger the long press dialog as required by the objective, I need to long press the 'Long Press Me' button which is represented by nodeId 34.
+          selector:
+            containsChild:
+              textRegex: Long Press Me
+          longPress: true
+      - tapOnElementBySelector:
+          reason: The 'Copy' button within the dialog is required to dismiss the dialog and complete the task. This button is clearly labeled and mapped to nodeId 30.
+          selector:
+            containsChild:
+              textRegex: Copy
+  - step: Tap "Toggle A" and verify it is selected
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: To perform the task, I need to tap on "Toggle A" which is represented by nodeId 41.
+          selector:
+            containsChild:
+              textRegex: Toggle A
+      - assertVisibleBySelector:
+          reason: '''Toggle A'' must be verified as selected. Node 41 is the clickable, checked view representing ''Toggle A''.'
+          selector:
+            checked: true
+  - step: Tap the "Nested Button" inside the parent container
+    recording:
+      tools:
+      - tapOnPoint:
+          x: 188
+          y: 997
+          reasoning: The objective requests to tap the "Nested Button" inside the parent container, and the element with nodeId 49 is directly below the label "Parent Container" and visually appears as a button inside that container.

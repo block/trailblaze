@@ -13,8 +13,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Code
@@ -28,7 +26,6 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -42,11 +39,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
@@ -58,8 +52,9 @@ import xyz.block.trailblaze.model.DeviceConnectionStatus
 import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.ui.TrailblazeSettingsRepo
+import xyz.block.trailblaze.ui.composables.ConnectionStatusPanel
 import xyz.block.trailblaze.ui.composables.DeviceSelectionDialog
-import xyz.block.trailblaze.ui.composables.SelectableText
+import xyz.block.trailblaze.ui.composables.ProgressMessagesPanel
 import xyz.block.trailblaze.ui.editors.yaml.YamlEditorMode
 import xyz.block.trailblaze.ui.editors.yaml.YamlTextEditor
 import xyz.block.trailblaze.ui.editors.yaml.YamlVisualEditor
@@ -395,122 +390,6 @@ private fun YamlEditorHeader(
   }
 }
 
-/**
- * Panel displaying progress messages during test execution.
- */
-@Composable
-private fun ProgressMessagesPanel(
-  progressMessages: List<String>,
-) {
-  OutlinedCard(
-    modifier = Modifier
-      .fillMaxWidth()
-      .height(200.dp)
-  ) {
-    Column(
-      modifier = Modifier
-        .fillMaxSize()
-        .padding(16.dp)
-    ) {
-      Text(
-        text = "Progress Messages",
-        style = MaterialTheme.typography.titleSmall,
-        fontWeight = FontWeight.Medium
-      )
-
-      Spacer(modifier = Modifier.height(8.dp))
-
-      val scrollState = rememberScrollState()
-
-      // Auto-scroll to bottom when messages change
-      LaunchedEffect(progressMessages.size) {
-        scrollState.animateScrollTo(scrollState.maxValue)
-      }
-
-      Box(
-        modifier = Modifier
-          .fillMaxSize()
-          .verticalScroll(scrollState)
-      ) {
-        Column {
-          progressMessages.forEach { message ->
-            SelectableText(
-              text = "• $message",
-              style = TextStyle(
-                fontFamily = FontFamily.Monospace,
-                fontSize = 12.sp
-              ),
-              modifier = Modifier.padding(vertical = 2.dp)
-            )
-          }
-        }
-      }
-    }
-  }
-}
-
-/**
- * Panel displaying the current device connection status.
- */
-@Composable
-private fun ConnectionStatusPanel(
-  status: DeviceConnectionStatus,
-) {
-  OutlinedCard(
-    modifier = Modifier.fillMaxWidth()
-  ) {
-    Column(
-      modifier = Modifier
-        .fillMaxWidth()
-        .padding(16.dp)
-    ) {
-      Text(
-        text = "Connection Status",
-        style = MaterialTheme.typography.titleSmall,
-        fontWeight = FontWeight.Medium
-      )
-
-      Spacer(modifier = Modifier.height(8.dp))
-
-      when (status) {
-        is DeviceConnectionStatus.WithTargetDevice.TrailblazeInstrumentationRunning -> {
-          Text(
-            text = "✓ Trailblaze running on device: ${status.trailblazeDeviceId}",
-            color = Color(0xFF4CAF50)
-          )
-        }
-
-        is DeviceConnectionStatus.DeviceConnectionError.ConnectionFailure -> {
-          Text(
-            text = "✗ Connection failed: ${status.errorMessage}",
-            color = Color(0xFFF44336)
-          )
-        }
-
-        is DeviceConnectionStatus.WithTargetDevice.StartingConnection -> {
-          Text(
-            text = "🔄 Starting connection to device: ${status.trailblazeDeviceId}",
-            color = Color(0xFF2196F3)
-          )
-        }
-
-        is DeviceConnectionStatus.DeviceConnectionError.NoConnection -> {
-          Text(
-            text = "⚪ No active connections",
-            color = Color(0xFF9E9E9E)
-          )
-        }
-
-        is DeviceConnectionStatus.DeviceConnectionError.ThereIsAlreadyAnActiveConnection -> {
-          Text(
-            text = "⚠️ Already connected to device: ${status.deviceId}",
-            color = Color(0xFFFF9800)
-          )
-        }
-      }
-    }
-  }
-}
 
 /**
  * Row containing run and stop controls for test execution.

@@ -1,9 +1,10 @@
 package xyz.block.trailblaze.toolcalls
 
-import ai.koog.agents.core.tools.SimpleTool
+import ai.koog.agents.core.tools.Tool
 import ai.koog.agents.core.tools.ToolDescriptor
 import ai.koog.agents.core.tools.ToolParameterDescriptor
 import kotlinx.serialization.KSerializer
+import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.serializer
 import kotlin.reflect.KClass
 import kotlin.reflect.full.starProjectedType
@@ -11,17 +12,23 @@ import kotlin.reflect.full.starProjectedType
 /**
  * Bridge between our [TrailblazeTool] definitions and Koog's tool system.
  * This allows us to define our tools using the [TrailblazeTool] interface.
+ *
+ * Extends [Tool] directly (rather than [ai.koog.agents.core.tools.SimpleTool]) so we can
+ * provide a pre-built [ToolDescriptor] via [toKoogToolDescriptor]. This avoids Koog's default
+ * serializer-based descriptor generation which recursively introspects the serial descriptor
+ * and causes [StackOverflowError] on self-referencing types like [TrailblazeNodeSelector][xyz.block.trailblaze.api.TrailblazeNodeSelector].
  */
 open class TrailblazeKoogTool<T : TrailblazeTool>(
   kClass: KClass<T>,
   private val executeTool: suspend (args: T) -> String,
-) : SimpleTool<T>(
+) : Tool<T, String>(
   argsSerializer = @Suppress("UNCHECKED_CAST") (serializer(kClass.starProjectedType) as KSerializer<T>),
-  name = kClass.toKoogToolDescriptor()?.name ?: error("Failed to create tool descriptor for $kClass"),
-  description = kClass.toKoogToolDescriptor()?.description ?: error("Failed to create tool descriptor for $kClass"),
+  resultSerializer = String.serializer(),
+  descriptor = kClass.toKoogToolDescriptor() ?: error("Failed to create tool descriptor for $kClass"),
 ) {
 
   override suspend fun execute(args: T): String = executeTool(args)
+  override fun encodeResultToString(result: String): String = result
 
   companion object {
     fun ToolParameterDescriptor.toTrailblazeToolParameterDescriptor(): TrailblazeToolParameterDescriptor =

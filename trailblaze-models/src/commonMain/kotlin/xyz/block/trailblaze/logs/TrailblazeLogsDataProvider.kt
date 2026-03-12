@@ -8,5 +8,4 @@ interface TrailblazeLogsDataProvider {
   suspend fun getSessionIdsAsync(): List<SessionId>
   suspend fun getLogsForSessionAsync(sessionId: SessionId?): List<TrailblazeLog>
   suspend fun getSessionInfoAsync(sessionName: SessionId): SessionInfo?
-  suspend fun getSessionRecordingYaml(sessionId: SessionId): String
 }

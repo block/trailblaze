@@ -31,10 +31,40 @@ object LogScreenshotPostEndpoint {
         return@post
       }
 
+      // Validate session ID to prevent path traversal BEFORE creating directories.
+      // getSessionDir() calls mkdirs(), so we must check first.
+      if (session.contains("..") || session.contains("/") || session.contains("\\") || session.contains("\u0000")) {
+        call.respond(HttpStatusCode.BadRequest, "Invalid session ID")
+        return@post
+      }
+      val sessionId = SessionId(session)
+      val candidateDir = File(logsRepo.logsDir, session)
+      val logsDirCanonical = logsRepo.logsDir.canonicalPath
+      if (!candidateDir.canonicalPath.startsWith(logsDirCanonical + File.separator) &&
+        candidateDir.canonicalPath != logsDirCanonical
+      ) {
+        call.respond(HttpStatusCode.BadRequest, "Invalid session ID")
+        return@post
+      }
+      val sessionDir = logsRepo.getSessionDir(sessionId)
+
+      // Validate filename to prevent path traversal (e.g., "../../etc/cron.d/malicious")
+      if (filename.contains("..") || filename.contains("/") || filename.contains("\\") || filename.contains("\u0000")) {
+        call.respond(HttpStatusCode.BadRequest, "Invalid filename")
+        return@post
+      }
+
       // Receive the image bytes from the body
       val imageBytes = call.receive<ByteArray>()
 
-      val logScreenshotFile = File(logsRepo.getSessionDir(SessionId(session)), filename)
+      val logScreenshotFile = File(sessionDir, filename)
+      // Defense-in-depth: verify resolved path stays within session directory
+      if (!logScreenshotFile.canonicalPath.startsWith(sessionDir.canonicalPath + File.separator) &&
+        logScreenshotFile.canonicalPath != sessionDir.canonicalPath
+      ) {
+        call.respond(HttpStatusCode.BadRequest, "Invalid filename")
+        return@post
+      }
       logScreenshotFile.writeBytes(imageBytes)
 
       val relativePath = logScreenshotFile.relativeTo(logsRepo.logsDir).path

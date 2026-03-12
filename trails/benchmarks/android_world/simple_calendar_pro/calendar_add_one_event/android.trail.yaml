@@ -1,0 +1,29 @@
+# Android World Benchmark: calendar/add_one_event
+- config:
+    id: android-world-benchmarks/simple_calendar_pro/calendar_add_one_event
+    description: Create a calendar event on 2023-10-20 at 14h with title "Meeting with Alice" and description "Discuss Q4 budget planning" lasting 60 mins
+
+- tools:
+  - androidworldbenchmarks_runAdbShell:
+      adbShellCommands:
+        - "settings put global auto_time 0"
+        - "date -s 20231015.153400"
+  - androidworldbenchmarks_executeSqliteOnDevice:
+      dbPath: /data/data/com.simplemobiletools.calendar.pro/databases/events.db
+      sqlStatements:
+        - "DELETE FROM events"
+      appPackageName: com.simplemobiletools.calendar.pro
+
+- prompts:
+  - step: "In Simple Calendar Pro, create a calendar event on 2023-10-20 at 14h with the title 'Meeting with Alice' and the description 'Discuss Q4 budget planning'. The event should last for 60 mins."
+
+- tools:
+  - androidworldbenchmarks_assertSqliteQuery:
+      dbPath: /data/data/com.simplemobiletools.calendar.pro/databases/events.db
+      query: "SELECT title FROM events WHERE title='Meeting with Alice'"
+      expectedOutput: "Meeting with Alice"
+      matchMode: exact
+      appPackageName: com.simplemobiletools.calendar.pro
+
+# --- Benchmark Run History ---
+# [2026-03-11] Build #27 FAILED - Agent limitation: ObjectiveFailed.

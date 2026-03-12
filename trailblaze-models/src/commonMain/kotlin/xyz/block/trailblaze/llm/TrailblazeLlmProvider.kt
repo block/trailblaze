@@ -15,6 +15,7 @@ data class TrailblazeLlmProvider(
     LLMProvider.Anthropic.id -> LLMProvider.Anthropic
     LLMProvider.Google.id -> LLMProvider.Google
     DATABRICKS_KOOG_LLM_PROVIDER.id -> DATABRICKS_KOOG_LLM_PROVIDER
+    MCP_SAMPLING_KOOG_LLM_PROVIDER.id -> MCP_SAMPLING_KOOG_LLM_PROVIDER
     else -> error("Unknown LLM provider: $id")
   }
 
@@ -24,6 +25,15 @@ data class TrailblazeLlmProvider(
       display = "Databricks",
     ) {}
 
+    /**
+     * Special provider for MCP Sampling where the client performs the LLM call.
+     * We don't know the actual provider/model used by the client.
+     */
+    val MCP_SAMPLING_KOOG_LLM_PROVIDER = object : LLMProvider(
+      id = "mcp_sampling",
+      display = "MCP Sampling (Client)",
+    ) {}
+
     val ANTHROPIC: TrailblazeLlmProvider = fromKoogLlmProvider(LLMProvider.Anthropic)
     val DATABRICKS: TrailblazeLlmProvider = fromKoogLlmProvider(DATABRICKS_KOOG_LLM_PROVIDER)
     val GOOGLE: TrailblazeLlmProvider = fromKoogLlmProvider(LLMProvider.Google)
@@ -31,10 +41,17 @@ data class TrailblazeLlmProvider(
     val OPENAI: TrailblazeLlmProvider = fromKoogLlmProvider(LLMProvider.OpenAI)
     val OPEN_ROUTER: TrailblazeLlmProvider = fromKoogLlmProvider(LLMProvider.OpenRouter)
 
+    /**
+     * Special provider for MCP Sampling where the MCP client performs the LLM call.
+     * Used when Trailblaze delegates LLM calls back to clients like Goose or Claude Desktop.
+     */
+    val MCP_SAMPLING: TrailblazeLlmProvider = fromKoogLlmProvider(MCP_SAMPLING_KOOG_LLM_PROVIDER)
+
     val ALL_PROVIDERS: List<TrailblazeLlmProvider> = listOf(
       ANTHROPIC,
       DATABRICKS,
       GOOGLE,
+      MCP_SAMPLING,
       OLLAMA,
       OPENAI,
       OPEN_ROUTER,

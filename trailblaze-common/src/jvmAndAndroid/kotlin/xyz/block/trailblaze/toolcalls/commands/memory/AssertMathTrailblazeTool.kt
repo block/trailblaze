@@ -48,7 +48,7 @@ data class AssertMathTrailblazeTool(
         tool = this,
       )
     }
-    return TrailblazeToolResult.Success
+    return TrailblazeToolResult.Success()
   }
 
   /**

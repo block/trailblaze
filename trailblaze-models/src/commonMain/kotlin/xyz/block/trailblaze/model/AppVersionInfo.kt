@@ -26,4 +26,6 @@ data class AppVersionInfo(
   val buildNumber: String? = null,
   /** Path to the app bundle (iOS) or APK data directory (Android). Used by app-specific code to read custom metadata. */
   val appBundlePath: String? = null,
+  /** Extra plist keys requested via [additionalPlistKeys] in getAppVersionInfo. */
+  val additionalPlistData: Map<String, String?> = emptyMap(),
 )

@@ -1,0 +1,24 @@
+# Android World Benchmark: RecipeDeleteSingle
+- config:
+    id: android-world-benchmarks/recipe/delete_single
+    description: "Delete the recipe 'Tomato Soup' from the Broccoli app."
+- tools:
+    - androidworldbenchmarks_executeSqliteOnDevice:
+        dbPath: /data/data/com.flauschcode.broccoli/databases/broccoli
+        sqlStatements:
+          - "DELETE FROM recipes"
+          - "INSERT INTO recipes (title, description, servings, preparationTime, source, ingredients, directions, favorite, imageName) VALUES ('Tomato Soup', 'Classic tomato soup', '4', '20 minutes', 'homemade', 'tomatoes, onion, garlic', 'Sauté and simmer', 0, NULL)"
+          - "INSERT INTO recipes (title, description, servings, preparationTime, source, ingredients, directions, favorite, imageName) VALUES ('Grilled Salmon', 'Fresh salmon fillet', '2', '25 minutes', 'recipe book', 'salmon, lemon, herbs', 'Grill 10 minutes', 0, NULL)"
+        appPackageName: com.flauschcode.broccoli
+- prompts:
+    - step: "Delete the recipe 'Tomato Soup' from the Broccoli app."
+- tools:
+    - androidworldbenchmarks_assertSqliteQuery:
+        dbPath: /data/data/com.flauschcode.broccoli/databases/broccoli
+        query: "SELECT COUNT(*) FROM recipes WHERE title='Tomato Soup'"
+        expectedOutput: "0"
+        matchMode: exact
+        appPackageName: com.flauschcode.broccoli
+
+# --- Benchmark Run History ---
+# [2026-03-11] Build #27 FAILED - Agent limitation: ObjectiveFailed. Can't navigate Broccoli app.

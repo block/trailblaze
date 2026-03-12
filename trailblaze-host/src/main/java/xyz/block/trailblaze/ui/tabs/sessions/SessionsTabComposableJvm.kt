@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Alarm
 import androidx.compose.material.icons.filled.ContactPhone
+import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
@@ -51,8 +53,11 @@ import xyz.block.trailblaze.ui.models.TrailblazeServerState
 import xyz.block.trailblaze.ui.recordings.RecordedTrailsRepo
 import xyz.block.trailblaze.ui.tabs.session.LiveSessionDetailComposableWithSelectorSupport
 import xyz.block.trailblaze.ui.tabs.home.ADD_CONTACT_YAML
+import xyz.block.trailblaze.ui.tabs.home.EXPLORE_TRAILBLAZE_RELEASES_YAML
 import xyz.block.trailblaze.ui.tabs.home.QuickStartCard
+import xyz.block.trailblaze.ui.tabs.home.SEARCH_WIKIPEDIA_YAML
 import xyz.block.trailblaze.ui.tabs.home.SET_ALARM_YAML
+import xyz.block.trailblaze.ui.models.TrailblazeServerState.TestingEnvironment
 import xyz.block.trailblaze.ui.tabs.session.SessionListComposable
 import xyz.block.trailblaze.ui.tabs.session.SessionViewMode
 import xyz.block.trailblaze.ui.tabs.testresults.TestResultsComposableJvm
@@ -62,7 +67,6 @@ import javax.swing.JFileChooser
 import javax.swing.SwingUtilities
 import javax.swing.filechooser.FileNameExtensionFilter
 import xyz.block.trailblaze.util.Console
-
 
 @Composable
 fun SessionsTabComposableJvm(
@@ -128,38 +132,73 @@ fun SessionsTabComposableJvm(
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
+          val testingEnvironment = serverState.appConfig.testingEnvironment
           Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(16.dp),
           ) {
-            QuickStartCard(
-              title = "Set an Alarm",
-              description = "Open the Clock app and set a new alarm for 7:30 AM",
-              icon = Icons.Filled.Alarm,
-              modifier = Modifier.weight(1f),
-              onClick = {
-                updateState(
-                  serverState.copy(
-                    appConfig = serverState.appConfig.copy(yamlContent = SET_ALARM_YAML)
-                  )
+            when (testingEnvironment) {
+              TestingEnvironment.WEB -> {
+                QuickStartCard(
+                  title = "Search Wikipedia",
+                  description = "Search Wikipedia for the Golden Gate Bridge and explore the article",
+                  icon = Icons.Filled.Search,
+                  modifier = Modifier.weight(1f),
+                  onClick = {
+                    updateState(
+                      serverState.copy(
+                        appConfig = serverState.appConfig.copy(yamlContent = SEARCH_WIKIPEDIA_YAML)
+                      )
+                    )
+                    navController.navigateToRoute(TrailblazeRoute.YamlRoute)
+                  },
                 )
-                navController.navigateToRoute(TrailblazeRoute.YamlRoute)
-              },
-            )
-            QuickStartCard(
-              title = "Add a Contact",
-              description = "Open the Contacts app and create a new contact",
-              icon = Icons.Filled.ContactPhone,
-              modifier = Modifier.weight(1f),
-              onClick = {
-                updateState(
-                  serverState.copy(
-                    appConfig = serverState.appConfig.copy(yamlContent = ADD_CONTACT_YAML)
-                  )
+                QuickStartCard(
+                  title = "Explore Trailblaze Releases",
+                  description = "Visit github.com/block/trailblaze, browse releases, and read the latest release notes",
+                  icon = Icons.Filled.Language,
+                  modifier = Modifier.weight(1f),
+                  onClick = {
+                    updateState(
+                      serverState.copy(
+                        appConfig = serverState.appConfig.copy(yamlContent = EXPLORE_TRAILBLAZE_RELEASES_YAML)
+                      )
+                    )
+                    navController.navigateToRoute(TrailblazeRoute.YamlRoute)
+                  },
                 )
-                navController.navigateToRoute(TrailblazeRoute.YamlRoute)
-              },
-            )
+              }
+              else -> {
+                QuickStartCard(
+                  title = "Set an Alarm",
+                  description = "Open the Clock app and set a new alarm for 7:30 AM",
+                  icon = Icons.Filled.Alarm,
+                  modifier = Modifier.weight(1f),
+                  onClick = {
+                    updateState(
+                      serverState.copy(
+                        appConfig = serverState.appConfig.copy(yamlContent = SET_ALARM_YAML)
+                      )
+                    )
+                    navController.navigateToRoute(TrailblazeRoute.YamlRoute)
+                  },
+                )
+                QuickStartCard(
+                  title = "Add a Contact",
+                  description = "Open the Contacts app and create a new contact",
+                  icon = Icons.Filled.ContactPhone,
+                  modifier = Modifier.weight(1f),
+                  onClick = {
+                    updateState(
+                      serverState.copy(
+                        appConfig = serverState.appConfig.copy(yamlContent = ADD_CONTACT_YAML)
+                      )
+                    )
+                    navController.navigateToRoute(TrailblazeRoute.YamlRoute)
+                  },
+                )
+              }
+            }
           }
         }
       },
@@ -285,7 +324,7 @@ fun SessionsTabComposableJvm(
         updateState(
           serverState.copy(
             appConfig = serverState.appConfig.copy(
-              currentSessionViewMode = newViewMode.toStringValue()
+              currentSessionViewMode = newViewMode.name
             )
           )
         )

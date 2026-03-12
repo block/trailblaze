@@ -6,8 +6,13 @@ import kotlinx.serialization.json.JsonObject
 @Serializable
 sealed interface TrailblazeToolResult {
 
+  /**
+   * The tool executed successfully.
+   * Optionally includes a [message] to relay back to the LLM as contextual feedback
+   * (e.g., "Clicked on element. Page navigated to ...").
+   */
   @Serializable
-  data object Success : TrailblazeToolResult
+  data class Success(val message: String? = null) : TrailblazeToolResult
 
   @Serializable
   sealed interface Error : TrailblazeToolResult {

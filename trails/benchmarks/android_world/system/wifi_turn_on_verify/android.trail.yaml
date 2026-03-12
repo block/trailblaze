@@ -1,0 +1,22 @@
+# Android World Benchmark: WifiTurnOnVerify
+- config:
+    id: android-world-benchmarks/system/wifi_turn_on_verify
+    displayName: "System - Wifi Turn On Verify"
+    description: "Turn wifi on."
+
+- tools:
+    - androidworldbenchmarks_runAdbShell:
+        adbShellCommands:
+          - "svc wifi enable"
+
+- prompts:
+    - step: "Turn wifi on."
+
+- tools:
+    - androidworldbenchmarks_assertAdbShellOutput:
+        command: "settings get global wifi_on"
+        expectedOutput: "1|2"
+        matchMode: "regex"
+
+# --- Benchmark Run History ---
+# [2026-03-11] PASSED - Agent successfully turned Wi-Fi on (verification variant).

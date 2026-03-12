@@ -16,6 +16,7 @@ Tap or long press on the UI at the provided coordinates.
 ### Optional Parameters
 - `longPress`: `Boolean`
   A standard tap is default, but return 'true' to perform a long press instead.
+- `reasoning`: `String`
 
 
 

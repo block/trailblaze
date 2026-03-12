@@ -1,0 +1,22 @@
+# Android World Benchmark: RecipeAddMultiple
+- config:
+    id: android-world-benchmarks/recipe/add_multiple
+    description: "Add multiple recipes to the Broccoli app."
+- tools:
+    - androidworldbenchmarks_executeSqliteOnDevice:
+        dbPath: /data/data/com.flauschcode.broccoli/databases/broccoli
+        sqlStatements:
+          - "DELETE FROM recipes"
+        appPackageName: com.flauschcode.broccoli
+- prompts:
+    - step: "Add the following recipes to the Broccoli app: 'Greek Salad' (serves 2, 15 min prep), 'Chicken Stir Fry' (serves 3, 25 min prep), and 'Banana Smoothie' (serves 1, 5 min prep)."
+- tools:
+    - androidworldbenchmarks_assertSqliteQuery:
+        dbPath: /data/data/com.flauschcode.broccoli/databases/broccoli
+        query: "SELECT COUNT(*) FROM recipes WHERE title='Greek Salad' OR title='Chicken Stir Fry' OR title='Banana Smoothie'"
+        expectedOutput: "3"
+        matchMode: exact
+        appPackageName: com.flauschcode.broccoli
+
+# --- Benchmark Run History ---
+# [2026-03-11] Build #27 FAILED - Agent limitation: ObjectiveFailed. Can't navigate Broccoli app.

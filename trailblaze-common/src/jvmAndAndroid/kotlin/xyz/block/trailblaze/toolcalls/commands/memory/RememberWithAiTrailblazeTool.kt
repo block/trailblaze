@@ -29,6 +29,6 @@ data class RememberWithAiTrailblazeTool(
     Console.log("UI Evaluation result: ${evaluation.result}, reason: ${evaluation.reason}")
 
     memory.remember(variable, evaluation.result)
-    return TrailblazeToolResult.Success
+    return TrailblazeToolResult.Success()
   }
 }

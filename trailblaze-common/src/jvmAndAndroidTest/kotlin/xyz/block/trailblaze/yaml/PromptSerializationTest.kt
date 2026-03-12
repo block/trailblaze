@@ -10,7 +10,7 @@ import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
 import xyz.block.trailblaze.yaml.TrailYamlItem.PromptsTrailItem
 
 class PromptSerializationTest {
-  private val trailblazeYaml = TrailblazeYaml()
+  private val trailblazeYaml = createTrailblazeYaml()
 
   @Test
   fun canDeserializePromptWithStepAndVerify() {
@@ -150,14 +150,14 @@ class PromptSerializationTest {
           text: Bingo
     """.trimIndent()
     val actualYaml = trailblazeYaml.encodeToString(trailItems)
-    assertThat(actualYaml).isEqualTo(expectedYaml)
+    assertThat(actualYaml).isEqualTo(expectedYaml + "\n")
   }
 
   /**
    * Regression test: When editing a step's text and saving, unrecognized tools
    * (OtherTrailblazeTool) should preserve their parameters during round-trip serialization.
    *
-   * This test verifies that custom tools not on the classpath (like square_launchAppSignedIn)
+   * This test verifies that custom tools not on the classpath (like myApp_launchSignedIn)
    * retain their nested parameters (like email, password) when the YAML is decoded and re-encoded.
    */
   @Test
@@ -203,6 +203,6 @@ class PromptSerializationTest {
     val reEncodedYaml = trailblazeYaml.encodeToString(trailItems)
 
     // Verify round-trip preserves the parameters
-    assertThat(reEncodedYaml).isEqualTo(yaml)
+    assertThat(reEncodedYaml).isEqualTo(yaml + "\n")
   }
 }

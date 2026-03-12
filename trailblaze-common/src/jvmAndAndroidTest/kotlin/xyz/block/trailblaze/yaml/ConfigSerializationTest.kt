@@ -1,17 +1,14 @@
 package xyz.block.trailblaze.yaml
 
 import assertk.assertThat
-import assertk.assertions.contains
 import assertk.assertions.isEqualTo
 import assertk.assertions.isNull
-import maestro.orchestra.LaunchAppCommand
 import org.junit.Test
-import xyz.block.trailblaze.utils.Ext.asMaestroCommands
 import xyz.block.trailblaze.yaml.TrailYamlItem
-import xyz.block.trailblaze.yaml.TrailblazeYaml
+import xyz.block.trailblaze.yaml.createTrailblazeYaml
 
 class ConfigSerializationTest {
-  private val trailblazeYaml = TrailblazeYaml()
+  private val trailblazeYaml = createTrailblazeYaml()
 
   // Config serialization
   @Test
@@ -64,24 +61,4 @@ class ConfigSerializationTest {
     }
   }
 
-  @Test
-  fun canDeserializeMaestro() {
-    val yaml = """
-- maestro:
-  - launchApp:
-      appId: com.android.settings
-      stopApp: false
-      clearState: false
-    """.trimIndent()
-
-    val trailItems = trailblazeYaml.decodeTrail(yaml)
-    with(trailItems) {
-      assertThat(size).isEqualTo(1)
-      with(get(0) as TrailYamlItem.MaestroTrailItem) {
-        assertThat(this.maestro.maestroCommands.asMaestroCommands()).contains(
-          LaunchAppCommand(appId = "com.android.settings", stopApp = false, clearState = false),
-        )
-      }
-    }
-  }
 }

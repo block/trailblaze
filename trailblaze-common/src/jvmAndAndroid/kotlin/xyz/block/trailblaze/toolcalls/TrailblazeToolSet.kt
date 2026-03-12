@@ -1,8 +1,12 @@
 package xyz.block.trailblaze.toolcalls
 
 import xyz.block.trailblaze.android.tools.AndroidSystemUiDemoModeTrailblazeTool
+import xyz.block.trailblaze.mobile.tools.ClearAppDataTrailblazeTool
+import xyz.block.trailblaze.android.tools.SetClipboardTrailblazeTool
+import xyz.block.trailblaze.android.tools.androidworldbenchmarks.AndroidWorldBenchmarksToolSet
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.toolcalls.commands.AssertNotVisibleWithTextTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.MaestroTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleByNodeIdTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleBySelectorTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleWithAccessibilityTextTrailblazeTool
@@ -19,6 +23,8 @@ import xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.OpenUrlTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.PressBackTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.PressKeyTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.PasteClipboardTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.RequestViewHierarchyDetailsTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.ScrollUntilTextIsVisibleTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.SwipeTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.SwipeWithRelativeCoordinatesTool
@@ -69,10 +75,13 @@ abstract class TrailblazeToolSet(
         NetworkConnectionTrailblazeTool::class,
         ObjectiveStatusTrailblazeTool::class,
         OpenUrlTrailblazeTool::class,
+        PasteClipboardTrailblazeTool::class,
         PressBackTrailblazeTool::class,
         PressKeyTrailblazeTool::class,
+        RequestViewHierarchyDetailsTrailblazeTool::class,
         TakeSnapshotTool::class,
         ScrollUntilTextIsVisibleTrailblazeTool::class,
+        SetClipboardTrailblazeTool::class,
         SwipeTrailblazeTool::class,
         WaitForIdleSyncTrailblazeTool::class,
       ),
@@ -98,7 +107,8 @@ abstract class TrailblazeToolSet(
       name = if (setOfMarkEnabled) "Set-of-Mark LLM Tools" else "Device Control LLM Tools",
       toolClasses = getSetOfMarkToolSet(setOfMarkEnabled).toolClasses +
           RememberTrailblazeToolSet.toolClasses +
-          VerifyToolSet.toolClasses,
+          VerifyToolSet.toolClasses +
+          TrailblazeToolSetCatalog.META_TOOLS,
     )
 
     val AllDefaultTrailblazeToolSets: Set<TrailblazeToolSet> = setOf(
@@ -106,16 +116,18 @@ abstract class TrailblazeToolSet(
       RememberTrailblazeToolSet,
       DefaultSetOfMarkTrailblazeToolSet,
       VerifyToolSet,
-    ).also {
-      Console.log("All Built In Trailblaze Tool Sets: $it")
-    }
+    )
 
     val NonLlmTrailblazeTools: Set<KClass<out TrailblazeTool>> = setOf(
+      // Raw Maestro command passthrough - not for LLM, only for legacy/escape-hatch usage
+      MaestroTrailblazeTool::class,
+
       // Used by recordings, but shouldn't be registered directly to the LLM
       AssertVisibleBySelectorTrailblazeTool::class,
       TapOnByElementSelector::class,
       SwipeWithRelativeCoordinatesTool::class,
       AndroidSystemUiDemoModeTrailblazeTool::class,
+      ClearAppDataTrailblazeTool::class,
 
       // Deprecated Tools - Tap On by Property
       LongPressOnElementWithTextTrailblazeTool::class,
@@ -133,7 +145,9 @@ abstract class TrailblazeToolSet(
       AllDefaultTrailblazeToolSets.flatMap { it.asTools() }.toSet()
 
     val AllBuiltInTrailblazeToolsForSerialization: Set<KClass<out TrailblazeTool>> =
-      DefaultLlmTrailblazeTools + NonLlmTrailblazeTools
+      DefaultLlmTrailblazeTools + NonLlmTrailblazeTools +
+          AndroidWorldBenchmarksToolSet.toolClasses +
+          TrailblazeToolSetCatalog.META_TOOLS
 
     val AllBuiltInTrailblazeToolsForSerializationByToolName = AllBuiltInTrailblazeToolsForSerialization
       .associateBy { it.toolName() }

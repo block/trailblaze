@@ -4,6 +4,9 @@ import ai.koog.prompt.executor.clients.LLMClient
 import ai.koog.prompt.executor.clients.LLMClientException
 import ai.koog.prompt.message.Message
 import ai.koog.prompt.params.LLMParams
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
@@ -23,7 +26,13 @@ import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.logs.model.TraceId.Companion.TraceOrigin
+import xyz.block.trailblaze.mcp.AgentImplementation
+import xyz.block.trailblaze.mcp.LlmCallStrategy
+import xyz.block.trailblaze.toolcalls.ToolSetCatalogEntry
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
+import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
+import xyz.block.trailblaze.tracing.TrailblazeTracer
+import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.TemplatingUtil
 import xyz.block.trailblaze.yaml.DirectionStep
 import xyz.block.trailblaze.yaml.PromptStep
@@ -48,13 +57,21 @@ class TrailblazeRunner(
   val trailblazeLogger: TrailblazeLogger,
   private val sessionProvider: TrailblazeSessionProvider,
   systemPromptTemplate: String? = null,
-  userObjectiveTemplate: String = defaultUserObjective,
-  userMessageTemplate: String = defaultUserMessage,
 ) : TestAgentRunner {
 
   private val tracingLlmClient: LLMClient = TracingLlmClient(llmClient)
 
-  private var currentSystemPrompt: String = systemPromptTemplate ?: defaultSystemPrompt
+  private var currentSystemPrompt: String = composeSystemPrompt(
+    platformPrompt = systemPromptTemplate,
+    toolSetCatalog = trailblazeToolRepo.toolSetCatalog,
+  )
+
+  /**
+   * Tracks descriptions of previously completed steps across multiple run() calls.
+   * This allows subsequent steps to include context about what was already accomplished,
+   * so the LLM can reason about the current state relative to previous actions.
+   */
+  private val completedStepDescriptions = mutableListOf<String>()
 
   private val elementComparator = TrailblazeElementComparator(
     screenStateProvider = screenStateProvider,
@@ -65,8 +82,6 @@ class TrailblazeRunner(
 
   private val llmClientHelper = TrailblazeKoogLlmClientHelper(
     systemPromptTemplate = currentSystemPrompt,
-    userObjectiveTemplate = userObjectiveTemplate,
-    userMessageTemplate = userMessageTemplate,
     trailblazeLlmModel = trailblazeLlmModel,
     llmClient = tracingLlmClient,
     elementComparator = elementComparator,
@@ -95,38 +110,54 @@ class TrailblazeRunner(
     stepStatus: PromptStepStatus,
   ): AgentTaskStatus {
     logObjectiveStart(prompt)
-    llmClientHelper.setForceStepStatusUpdate(false)
     val stepToolStrategy = prompt.getToolStrategy()
     do {
-      stepStatus.prepareNextStep()
+      TrailblazeTracer.trace("prepareNextStep", "agent") {
+        stepStatus.prepareNextStep()
+      }
       val requestStartTimeMs = Clock.System.now()
 
-      val koogLlmRequestMessages: List<Message> = llmClientHelper.createNextChatRequest(
-        stepStatus = stepStatus,
-      )
+      val koogLlmRequestMessages: List<Message> = TrailblazeTracer.trace("createNextChatRequest", "agent") {
+        llmClientHelper.createNextChatRequest(
+          stepStatus = stepStatus,
+          previouslyCompletedStepDescriptions = completedStepDescriptions,
+        )
+      }
 
       val traceId = TraceId.generate(TraceOrigin.LLM)
 
       val toolDescriptors = trailblazeToolRepo.getToolDescriptorsForStep(prompt)
-      val koogLlmResponseMessages: List<Message.Response> = try {
-        // Call LLM directly (we're already in suspend context)
-        llmClientHelper.callLlm(
-          KoogLlmRequestData(
-            messages = koogLlmRequestMessages,
-            toolDescriptors = toolDescriptors,
-            toolChoice = if (llmClientHelper.getShouldForceToolCall()) {
-              LLMParams.ToolChoice.Required
-            } else {
-              LLMParams.ToolChoice.Auto
-            },
-          ),
-        )
-      } catch (e: LLMClientException) {
-        throw TrailblazeException(
-          "LLM call failed for ${trailblazeLlmModel.modelId} (${trailblazeLlmModel.trailblazeLlmProvider.id}) with Exception Message: ${e.message}",
-          e
-        )
+      Console.appendInfo("  LLM ")
+      val llmCallStartTime = Clock.System.now()
+      val koogLlmResponseMessages: List<Message.Response> = coroutineScope {
+        val dotJob = launch {
+          while (true) {
+            delay(1000)
+            Console.appendInfo(".")
+          }
+        }
+        try {
+          llmClientHelper.callLlm(
+            KoogLlmRequestData(
+              messages = koogLlmRequestMessages,
+              toolDescriptors = toolDescriptors,
+              toolChoice = if (llmClientHelper.getShouldForceToolCall()) {
+                LLMParams.ToolChoice.Required
+              } else {
+                LLMParams.ToolChoice.Auto
+              },
+            ),
+          )
+        } catch (e: LLMClientException) {
+          throw TrailblazeException(
+            "LLM call failed for ${trailblazeLlmModel.modelId} (${trailblazeLlmModel.trailblazeLlmProvider.id}) with Exception Message: ${e.message}",
+            e
+          )
+        } finally {
+          dotJob.cancel()
+        }
       }
+      val llmCallDuration = Clock.System.now() - llmCallStartTime
 
       val session = sessionProvider.invoke()
       trailblazeLogger.logLlmRequest(
@@ -137,16 +168,35 @@ class TrailblazeRunner(
         startTime = requestStartTimeMs,
         trailblazeLlmModel = trailblazeLlmModel,
         toolDescriptors = toolDescriptors,
+        requestContext = TrailblazeLog.LlmRequestContext(
+          agentImplementation = AgentImplementation.TRAILBLAZE_RUNNER,
+          llmCallStrategy = LlmCallStrategy.DIRECT,
+          agentTier = null, // No tier concept in legacy YAML-based runner
+        ),
         traceId = traceId,
+        llmRequestLabel = "Screen Analyzer",
       )
 
-      stepToolStrategy.processToolMessages(
-        llmResponses = koogLlmResponseMessages,
-        stepStatus = stepStatus,
-        agent = agent,
-        helper = llmClientHelper,
-        traceId = traceId,
-      )
+      val llmCallSeconds = llmCallDuration.inWholeMilliseconds / 1000.0
+      val llmCallTimeStr = if (llmCallSeconds % 1.0 == 0.0) {
+        "${llmCallSeconds.toLong()}s"
+      } else {
+        "${"%.1f".format(llmCallSeconds)}s"
+      }
+      val toolNames = koogLlmResponseMessages
+        .filterIsInstance<Message.Tool>()
+        .joinToString(", ") { it.tool }
+      val toolInfo = if (toolNames.isNotEmpty()) " -> $toolNames" else ""
+      Console.info(" $llmCallTimeStr$toolInfo")
+      TrailblazeTracer.trace("processToolMessages", "agent", mapOf("tools" to (toolInfo.removePrefix(" -> ")))) {
+        stepToolStrategy.processToolMessages(
+          llmResponses = koogLlmResponseMessages,
+          stepStatus = stepStatus,
+          agent = agent,
+          helper = llmClientHelper,
+          traceId = traceId,
+        )
+      }
 
       if (stepStatus.currentStep >= maxSteps) {
         // Create exception for logging and throwing
@@ -161,7 +211,14 @@ class TrailblazeRunner(
     } while (!stepStatus.isFinished())
 
     logObjectiveComplete(stepStatus)
-    return stepStatus.currentStatus.value
+
+    // Record this step as completed so subsequent steps have context
+    val status = stepStatus.currentStatus.value
+    if (status is ObjectiveComplete) {
+      completedStepDescriptions.add(prompt.prompt)
+    }
+
+    return status
   }
 
   override fun recover(
@@ -240,15 +297,37 @@ class TrailblazeRunner(
   )
 
   companion object {
-    val defaultUserObjective = TemplatingUtil.getResourceAsText(
-      "trailblaze_user_objective_template.md",
+    val baseSystemPrompt = TemplatingUtil.getResourceAsText(
+      "trailblaze_base_system_prompt.md",
     )!!
-    val defaultUserMessage = TemplatingUtil.getResourceAsText(
-      "trailblaze_current_screen_user_prompt_template.md",
-    )!!
-    val defaultSystemPrompt = TemplatingUtil.getResourceAsText(
+
+    val defaultPlatformPrompt = TemplatingUtil.getResourceAsText(
       "trailblaze_system_prompt.md",
     )!!
+
+    /**
+     * The base system prompt is always included. The platform/app-specific prompt
+     * is appended after it. If no platform prompt is provided, the default mobile
+     * prompt is used.
+     *
+     * When a [toolSetCatalog] is provided, the available toolset summary is inlined
+     * into the prompt so the LLM knows what's available without an extra round trip.
+     */
+    fun composeSystemPrompt(
+      platformPrompt: String? = null,
+      toolSetCatalog: List<ToolSetCatalogEntry>? = null,
+    ): String = buildString {
+      append(baseSystemPrompt)
+      append("\n\n")
+      append(platformPrompt ?: defaultPlatformPrompt)
+      if (toolSetCatalog != null) {
+        append("\n\n")
+        append(TrailblazeToolSetCatalog.formatCatalogSummary(toolSetCatalog).trimEnd())
+      }
+    }
+
+    @Deprecated("Use composeSystemPrompt() instead", ReplaceWith("composeSystemPrompt()"))
+    val defaultSystemPrompt: String get() = composeSystemPrompt()
   }
 }
 

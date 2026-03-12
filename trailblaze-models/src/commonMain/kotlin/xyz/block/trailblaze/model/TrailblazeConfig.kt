@@ -25,6 +25,8 @@ const val AI_FALLBACK_DEFAULT: Boolean = false
  *                            if false, uses Device Control tools.
  * @property aiFallback If true, allows AI fallback when recorded steps fail;
  *                      if false, disables AI fallback (useful for debugging recorded steps).
+ * @property browserHeadless If true, the Playwright browser runs headless (no visible window);
+ *                           if false, the browser window is shown on screen.
  */
 @Serializable
 data class TrailblazeConfig(
@@ -34,6 +36,7 @@ data class TrailblazeConfig(
   /** Provide a non-null session ID to override the default session ID generation. */
   val overrideSessionId: SessionId? = null,
   val aiFallback: Boolean = AI_FALLBACK_DEFAULT,
+  val browserHeadless: Boolean = true,
 ) {
   companion object {
     /**

@@ -7,7 +7,6 @@ import ai.koog.prompt.llm.LLMProvider
 import xyz.block.trailblaze.http.DynamicLlmClient
 import xyz.block.trailblaze.http.TrailblazeHttpClientFactory
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
-import xyz.block.trailblaze.llm.TrailblazeLlmProvider
 import xyz.block.trailblaze.llm.providers.TrailblazeDynamicLlmTokenProvider
 
 /**
@@ -23,13 +22,7 @@ class TrailblazeHostDynamicLlmClientProvider(
   )
 
   private val llmClients: Map<LLMProvider, LLMClient> = buildMap {
-    listOf(
-      TrailblazeLlmProvider.OLLAMA,
-      TrailblazeLlmProvider.OPENAI,
-      TrailblazeLlmProvider.GOOGLE,
-      TrailblazeLlmProvider.ANTHROPIC,
-      TrailblazeLlmProvider.OPEN_ROUTER
-    ).forEach { llmProvider ->
+    trailblazeDynamicLlmTokenProvider.supportedProviders().forEach { llmProvider ->
       trailblazeDynamicLlmTokenProvider.getLLMClientForProviderIfAvailable(
         llmProvider,
         baseClient

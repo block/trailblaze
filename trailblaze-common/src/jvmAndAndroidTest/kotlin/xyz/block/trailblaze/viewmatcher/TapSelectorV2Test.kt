@@ -9,6 +9,7 @@ import xyz.block.trailblaze.viewmatcher.models.RelativePosition
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import xyz.block.trailblaze.util.Console
 
 /**
  * Tests for TapSelectorV2 - generates element selectors for UI automation.
@@ -810,9 +811,9 @@ class TapSelectorV2Test {
       }
     }
 
-    println("Strategy descriptions:")
+    Console.log("Strategy descriptions:")
     directOptions.forEach { option ->
-      println("  - ${option.strategy}")
+      Console.log("  - ${option.strategy}")
     }
   }
 

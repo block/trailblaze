@@ -3,8 +3,13 @@ package xyz.block.trailblaze.yaml
 import assertk.assertThat
 import assertk.assertions.isEqualTo
 import assertk.assertions.isInstanceOf
+import assertk.assertions.isNotNull
 import maestro.SwipeDirection
 import org.junit.Test
+import xyz.block.trailblaze.api.DriverNodeMatch
+import xyz.block.trailblaze.api.TrailblazeElementSelector
+import xyz.block.trailblaze.api.TrailblazeNodeSelector
+import xyz.block.trailblaze.toolcalls.commands.AssertVisibleBySelectorTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.EraseTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.HideKeyboardTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
@@ -26,10 +31,11 @@ import xyz.block.trailblaze.toolcalls.commands.memory.AssertNotEqualsTrailblazeT
 import xyz.block.trailblaze.toolcalls.commands.memory.RememberNumberTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.memory.RememberTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.memory.RememberWithAiTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.MaestroTrailblazeTool
 import xyz.block.trailblaze.yaml.TrailSerializerTest.TotallyCustomTool
 
 class ToolSerializationTest {
-  private val trailblazeYaml = TrailblazeYaml(setOf(TotallyCustomTool::class))
+  private val trailblazeYaml = createTrailblazeYaml(setOf(TotallyCustomTool::class))
 
   // Tool deserialization tests
   @Test
@@ -590,7 +596,7 @@ class ToolSerializationTest {
     val yaml = """
 - tools:
     - launchApp:
-        appId: com.squareup.cash.beta.debug
+        appId: com.example.myapp.debug
     """.trimIndent()
 
     val trailItems = trailblazeYaml.decodeTrail(yaml)
@@ -601,7 +607,7 @@ class ToolSerializationTest {
         TrailblazeToolYamlWrapper(
           name = "wait",
           trailblazeTool = LaunchAppTrailblazeTool(
-            appId = "com.squareup.cash.beta.debug",
+            appId = "com.example.myapp.debug",
             launchMode = LaunchMode.REINSTALL,
           ),
         )
@@ -614,7 +620,7 @@ class ToolSerializationTest {
     val yaml = """
 - tools:
     - launchApp:
-        appId: com.squareup.cash.beta.debug
+        appId: com.example.myapp.debug
         launchMode: REINSTALL
     """.trimIndent()
 
@@ -626,7 +632,7 @@ class ToolSerializationTest {
         TrailblazeToolYamlWrapper(
           name = "wait",
           trailblazeTool = LaunchAppTrailblazeTool(
-            appId = "com.squareup.cash.beta.debug",
+            appId = "com.example.myapp.debug",
             launchMode = LaunchMode.REINSTALL,
           ),
         )
@@ -639,7 +645,7 @@ class ToolSerializationTest {
     val yaml = """
 - tools:
     - launchApp:
-        appId: com.squareup.cash.beta.debug
+        appId: com.example.myapp.debug
         launchMode: RESUME
     """.trimIndent()
 
@@ -651,7 +657,7 @@ class ToolSerializationTest {
         TrailblazeToolYamlWrapper(
           name = "wait",
           trailblazeTool = LaunchAppTrailblazeTool(
-            appId = "com.squareup.cash.beta.debug",
+            appId = "com.example.myapp.debug",
             launchMode = LaunchMode.RESUME,
           ),
         )
@@ -664,7 +670,7 @@ class ToolSerializationTest {
     val yaml = """
 - tools:
     - launchApp:
-        appId: com.squareup.cash.beta.debug
+        appId: com.example.myapp.debug
         launchMode: FORCE_RESTART
     """.trimIndent()
 
@@ -676,7 +682,7 @@ class ToolSerializationTest {
         TrailblazeToolYamlWrapper(
           name = "wait",
           trailblazeTool = LaunchAppTrailblazeTool(
-            appId = "com.squareup.cash.beta.debug",
+            appId = "com.example.myapp.debug",
             launchMode = LaunchMode.FORCE_RESTART,
           ),
         )
@@ -813,6 +819,165 @@ class ToolSerializationTest {
             selected = null,
           ),
         )
+      }
+    }
+  }
+
+  @Test
+  fun deserializeMaestroTool() {
+    val yaml = """
+- tools:
+    - maestro:
+        commands:
+          - extendedWaitUntil:
+              notVisible: Gift card added to cart
+              timeout: 20000
+    """.trimIndent()
+
+    val trailItems = trailblazeYaml.decodeTrail(yaml)
+    with(trailItems) {
+      assertThat(size).isEqualTo(1)
+      with(get(0) as TrailYamlItem.ToolTrailItem) {
+        assertThat(tools.size).isEqualTo(1)
+        assertThat(tools[0].name).isEqualTo("maestro")
+        assertThat(tools[0].trailblazeTool).isInstanceOf(MaestroTrailblazeTool::class)
+        with(tools[0].trailblazeTool as MaestroTrailblazeTool) {
+          assertThat(commands.size).isEqualTo(1)
+          assertThat(commands[0]["extendedWaitUntil"].toString())
+            .isEqualTo("""{"notVisible":"Gift card added to cart","timeout":20000}""")
+        }
+      }
+    }
+  }
+
+  @Test
+  fun deserializeMaestroToolMultipleCommands() {
+    val yaml = """
+- tools:
+    - maestro:
+        commands:
+          - assertVisible:
+              text: Hello
+          - tapOn:
+              text: OK
+    """.trimIndent()
+
+    val trailItems = trailblazeYaml.decodeTrail(yaml)
+    with(trailItems) {
+      assertThat(size).isEqualTo(1)
+      with(get(0) as TrailYamlItem.ToolTrailItem) {
+        assertThat(tools.size).isEqualTo(1)
+        with(tools[0].trailblazeTool as MaestroTrailblazeTool) {
+          assertThat(commands.size).isEqualTo(2)
+        }
+      }
+    }
+  }
+
+  @Test
+  fun maestroToolRoundTrip() {
+    val yaml = """
+- tools:
+    - maestro:
+        commands:
+          - extendedWaitUntil:
+              notVisible: Gift card added to cart
+              timeout: 20000
+    """.trimIndent()
+
+    val trailItems = trailblazeYaml.decodeTrail(yaml)
+    val reEncoded = trailblazeYaml.encodeToString(trailItems)
+
+    val reDecoded = trailblazeYaml.decodeTrail(reEncoded)
+    with(reDecoded) {
+      assertThat(size).isEqualTo(1)
+      with(get(0) as TrailYamlItem.ToolTrailItem) {
+        assertThat(tools.size).isEqualTo(1)
+        assertThat(tools[0].name).isEqualTo("maestro")
+        with(tools[0].trailblazeTool as MaestroTrailblazeTool) {
+          assertThat(commands.size).isEqualTo(1)
+        }
+      }
+    }
+  }
+
+  @Test
+  fun deserializeMaestroSetOrientation() {
+    val yaml = """
+- tools:
+    - maestro:
+        commands:
+          - setOrientation: LANDSCAPE_LEFT
+    """.trimIndent()
+
+    val trailItems = trailblazeYaml.decodeTrail(yaml)
+    with(trailItems) {
+      assertThat(size).isEqualTo(1)
+      with(get(0) as TrailYamlItem.ToolTrailItem) {
+        assertThat(tools.size).isEqualTo(1)
+        assertThat(tools[0].name).isEqualTo("maestro")
+        assertThat(tools[0].trailblazeTool).isInstanceOf(MaestroTrailblazeTool::class)
+        with(tools[0].trailblazeTool as MaestroTrailblazeTool) {
+          assertThat(commands.size).isEqualTo(1)
+          assertThat(commands[0].containsKey("setOrientation")).isEqualTo(true)
+          assertThat(commands[0]["setOrientation"].toString()).isEqualTo("\"LANDSCAPE_LEFT\"")
+        }
+      }
+    }
+  }
+
+  @Test
+  fun maestroSetOrientationRoundTrip() {
+    val yaml = """
+- tools:
+    - maestro:
+        commands:
+          - setOrientation: LANDSCAPE_LEFT
+    """.trimIndent()
+
+    val trailItems = trailblazeYaml.decodeTrail(yaml)
+    val reEncoded = trailblazeYaml.encodeToString(trailItems)
+
+    val reDecoded = trailblazeYaml.decodeTrail(reEncoded)
+    with(reDecoded) {
+      assertThat(size).isEqualTo(1)
+      with(get(0) as TrailYamlItem.ToolTrailItem) {
+        assertThat(tools.size).isEqualTo(1)
+        assertThat(tools[0].name).isEqualTo("maestro")
+        with(tools[0].trailblazeTool as MaestroTrailblazeTool) {
+          assertThat(commands.size).isEqualTo(1)
+          assertThat(commands[0].containsKey("setOrientation")).isEqualTo(true)
+        }
+      }
+    }
+  }
+
+  @Test
+  fun deserializeAssertVisibleBySelectorWithNodeSelector() {
+    val yaml = """
+- tools:
+    - assertVisibleBySelector:
+        reason: The ALARM tab should be visible.
+        selector:
+          textRegex: ALARM
+        nodeSelector:
+          androidAccessibility:
+            textRegex: ALARM
+            resourceIdRegex: "android:id/text1"
+    """.trimIndent()
+
+    val trailItems = trailblazeYaml.decodeTrail(yaml)
+    with(trailItems) {
+      assertThat(size).isEqualTo(1)
+      with(get(0) as TrailYamlItem.ToolTrailItem) {
+        assertThat(tools.size).isEqualTo(1)
+        val tool = tools[0].trailblazeTool as AssertVisibleBySelectorTrailblazeTool
+        assertThat(tool.reason).isEqualTo("The ALARM tab should be visible.")
+        assertThat(tool.selector.textRegex).isEqualTo("ALARM")
+        assertThat(tool.nodeSelector).isNotNull()
+        val match = tool.nodeSelector!!.driverMatch as DriverNodeMatch.AndroidAccessibility
+        assertThat(match.textRegex).isEqualTo("ALARM")
+        assertThat(match.resourceIdRegex).isEqualTo("android:id/text1")
       }
     }
   }

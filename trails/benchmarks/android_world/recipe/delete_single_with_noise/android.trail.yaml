@@ -1,0 +1,28 @@
+# Android World Benchmark: RecipeDeleteSingleWithNoise
+- config:
+    id: android-world-benchmarks/recipe/delete_single_with_noise
+    description: "Delete the recipe 'Vegetable Curry' from the Broccoli app."
+- tools:
+    - androidworldbenchmarks_executeSqliteOnDevice:
+        dbPath: /data/data/com.flauschcode.broccoli/databases/broccoli
+        sqlStatements:
+          - "DELETE FROM recipes"
+          - "INSERT INTO recipes (title, description, servings, preparationTime, source, ingredients, directions, favorite, imageName) VALUES ('Vegetable Curry', 'Spiced vegetable curry', '4', '40 minutes', 'cookbook', 'vegetables, curry paste, coconut milk', 'Simmer all ingredients', 0, NULL)"
+          - "INSERT INTO recipes (title, description, servings, preparationTime, source, ingredients, directions, favorite, imageName) VALUES ('Pasta Primavera', 'Fresh pasta with vegetables', '2', '20 minutes', 'recipe blog', 'pasta, vegetables, olive oil', 'Cook and combine', 0, NULL)"
+          - "INSERT INTO recipes (title, description, servings, preparationTime, source, ingredients, directions, favorite, imageName) VALUES ('Beef Tacos', 'Mexican beef tacos', '4', '15 minutes', 'family recipe', 'ground beef, tortillas, toppings', 'Brown beef and assemble', 0, NULL)"
+          - "INSERT INTO recipes (title, description, servings, preparationTime, source, ingredients, directions, favorite, imageName) VALUES ('Caesar Salad', 'Classic salad', '2', '10 minutes', 'restaurant', 'lettuce, croutons, dressing', 'Toss ingredients', 0, NULL)"
+          - "INSERT INTO recipes (title, description, servings, preparationTime, source, ingredients, directions, favorite, imageName) VALUES ('Salmon Teriyaki', 'Japanese salmon dish', '3', '30 minutes', 'cookbook', 'salmon, soy sauce, ginger', 'Glaze and bake', 0, NULL)"
+          - "INSERT INTO recipes (title, description, servings, preparationTime, source, ingredients, directions, favorite, imageName) VALUES ('Chocolate Cake', 'Rich chocolate cake', '6', '45 minutes', 'baking blog', 'flour, cocoa, eggs, butter', 'Mix and bake', 0, NULL)"
+        appPackageName: com.flauschcode.broccoli
+- prompts:
+    - step: "Delete the recipe 'Vegetable Curry' from the Broccoli app."
+- tools:
+    - androidworldbenchmarks_assertSqliteQuery:
+        dbPath: /data/data/com.flauschcode.broccoli/databases/broccoli
+        query: "SELECT COUNT(*) FROM recipes WHERE title='Vegetable Curry'"
+        expectedOutput: "0"
+        matchMode: exact
+        appPackageName: com.flauschcode.broccoli
+
+# --- Benchmark Run History ---
+# [2026-03-11] Build #27 FAILED - Agent limitation: ObjectiveFailed. Can't navigate Broccoli app.

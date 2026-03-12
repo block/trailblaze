@@ -1,61 +1,68 @@
 package xyz.block.trailblaze.logs.server.endpoints
 
-import io.ktor.http.HttpStatusCode
-import io.ktor.server.request.receive
-import io.ktor.server.response.respond
-import io.ktor.server.routing.Routing
-import io.ktor.server.routing.post
 import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.llm.RunYamlRequest
 
 /**
  * Request from CLI to run a trail file.
- * This is a simplified, serializable version of DesktopAppRunYamlParams.
+ *
+ * Supports two modes:
+ * 1. **Fully resolved** — provide [runYamlRequest] with device, LLM, and YAML already resolved.
+ * 2. **Raw CLI params** — provide [yamlContent] (or [trailFilePath]) plus optional CLI flags.
+ *    The daemon resolves the device and LLM from its own state.
  */
 @Serializable
 data class CliRunRequest(
-  /** The RunYamlRequest containing all execution parameters */
-  val runYamlRequest: RunYamlRequest,
+  /** Fully resolved request (used for direct execution). */
+  val runYamlRequest: RunYamlRequest? = null,
   /** Whether to force stop the target app before running the trail. */
   val forceStopTargetApp: Boolean = false,
-)
+
+  // --- Raw CLI parameter mode (daemon resolves device/LLM) ---
+
+  /** YAML content to execute. */
+  val yamlContent: String? = null,
+  /** Path to the trail file (for metadata/test naming). */
+  val trailFilePath: String? = null,
+  /** Override test name. */
+  val testName: String? = null,
+  /** Driver type override (e.g., "ANDROID_ONDEVICE_INSTRUMENTATION"). */
+  val driverType: String? = null,
+  /** Target device ID override. */
+  val deviceId: String? = null,
+  /** LLM provider override (e.g., "openai", "anthropic"). */
+  val llmProvider: String? = null,
+  /** LLM model override (e.g., "gpt-4.1"). */
+  val llmModel: String? = null,
+  /** Use recorded tool sequences instead of LLM inference. */
+  val useRecordedSteps: Boolean = false,
+  /** Enable Set of Mark mode. */
+  val setOfMark: Boolean = true,
+  /** Show the browser window (for web trails). */
+  val showBrowser: Boolean = false,
+) {
+  /**
+   * Validates that at least one execution mode is specified:
+   * either [runYamlRequest] (fully resolved) or [yamlContent]/[trailFilePath] (raw CLI params).
+   */
+  fun validate() {
+    require(runYamlRequest != null || yamlContent != null || trailFilePath != null) {
+      "CliRunRequest must specify either runYamlRequest, yamlContent, or trailFilePath"
+    }
+  }
+}
 
 /**
  * Response from the run endpoint.
  */
 @Serializable
 data class CliRunResponse(
-  /** Whether the run was started successfully */
+  /** Whether the run completed successfully */
   val success: Boolean,
   /** Session ID for tracking the run */
   val sessionId: String? = null,
   /** Error message if failed */
   val error: String? = null,
+  /** Device classifiers from the session (e.g., ["android"], ["ios", "iphone"]) for recording filename. */
+  val deviceClassifiers: List<String> = emptyList(),
 )
-
-/**
- * Endpoint to trigger a trail run from the CLI.
- * POST [CliEndpoints.RUN]
- */
-object CliRunEndpoint {
-
-  fun register(
-    routing: Routing,
-    onRunRequest: (CliRunRequest) -> CliRunResponse,
-  ) = with(routing) {
-    post(CliEndpoints.RUN) {
-      try {
-        val request = call.receive<CliRunRequest>()
-        val response = onRunRequest(request)
-        
-        val statusCode = if (response.success) HttpStatusCode.OK else HttpStatusCode.BadRequest
-        call.respond(statusCode, response)
-      } catch (e: Exception) {
-        call.respond(
-          HttpStatusCode.InternalServerError,
-          CliRunResponse(success = false, error = e.message ?: "Unknown error")
-        )
-      }
-    }
-  }
-}

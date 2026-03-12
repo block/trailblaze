@@ -9,11 +9,13 @@ object KoogToolExt {
 
   fun Set<KClass<out TrailblazeTool>>.toKoogTools(
     trailblazeToolContextProvider: () -> TrailblazeToolExecutionContext,
-  ): List<TrailblazeKoogTool<out TrailblazeTool>> = this.map { trailblazeToolClass ->
-    trailblazeToolClass.toKoogTool(
-      trailblazeToolContextProvider = trailblazeToolContextProvider,
-    )
-  }
+  ): List<TrailblazeKoogTool<out TrailblazeTool>> = this
+    .filter { it.trailblazeToolClassAnnotation().isForLlm }
+    .map { trailblazeToolClass ->
+      trailblazeToolClass.toKoogTool(
+        trailblazeToolContextProvider = trailblazeToolContextProvider,
+      )
+    }
 
   fun KClass<out TrailblazeTool>.toKoogTool(
     trailblazeToolContextProvider: () -> TrailblazeToolExecutionContext,

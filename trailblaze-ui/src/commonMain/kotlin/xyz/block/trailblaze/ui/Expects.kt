@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.ui
 
 import xyz.block.trailblaze.ui.images.ImageLoader
+import xyz.block.trailblaze.ui.tabs.session.VideoMetadata
 
 enum class Platform {
     WASM,
@@ -23,3 +24,11 @@ expect fun getPlatform(): Platform
 // On JVM: Returns imageLoader.getImageModel directly
 @androidx.compose.runtime.Composable
 expect fun resolveImageModel(sessionId: String, screenshotFile: String?, imageLoader: ImageLoader): Any?
+
+// Platform-specific function to load video capture metadata for a session.
+// On JVM: reads capture_metadata.json from the session logs directory.
+// On WASM: returns null (video playback not supported in browser).
+/** Opens the given video file in the system's default video player (JVM only; no-op on WASM). */
+expect fun openVideoInSystemPlayer(filePath: String)
+
+expect suspend fun loadCaptureVideoMetadata(sessionId: String): VideoMetadata?

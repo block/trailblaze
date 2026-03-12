@@ -13,9 +13,15 @@ object CliEndpoints {
   /** Get daemon status */
   const val STATUS = "/cli/status"
   
-  /** Trigger a trail run */
-  const val RUN = "/cli/run"
-  
+  /** Submit a trail run asynchronously — returns a runId immediately */
+  const val RUN_ASYNC = "/cli/run-async"
+
+  /** Poll for the status of an async run */
+  const val RUN_STATUS = "/cli/run-status"
+
+  /** Cancel an in-flight async run */
+  const val RUN_CANCEL = "/cli/run-cancel"
+
   /** Request daemon shutdown */
   const val SHUTDOWN = "/cli/shutdown"
   

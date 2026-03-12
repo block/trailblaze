@@ -1,0 +1,28 @@
+# Android World Benchmark: sms/reply
+- config:
+    id: android-world-benchmarks/simple_sms_messenger/sms_reply
+    description: Reply to 555-111-2222 with message "Thanks for the update!" in Simple SMS Messenger
+
+- tools:
+  - androidworldbenchmarks_runAdbShell:
+      adbShellCommands:
+        - "content delete --uri content://sms"
+  - androidworldbenchmarks_sendSmsToDevice:
+      fromNumber: "5551112222"
+      message: "Check out this new feature"
+
+- prompts:
+  - step: "Reply to 555-111-2222 with message: Thanks for the update! in Simple SMS Messenger"
+
+- tools:
+  - androidworldbenchmarks_assertAdbShellOutput:
+      command: "content query --uri content://sms --where \"address LIKE '%5551112222%' AND type=2 AND body LIKE '%Thanks%update%'\" --projection body"
+      expectedOutput: "Thanks for the update"
+      matchMode: "contains"
+
+# --- Benchmark Run History ---
+# [2026-03-11] FAILED - SQLite assertion: unable to open mmssms.db.
+#   Emulator permission issue — not an agent failure.
+#   FIX: Migrated setup and validation from direct sqlite3 to content provider API.
+# [2026-03-11] Build #27 PASSED - Content provider migration fix worked! Was sqlite3 permission
+#   error in build #24.

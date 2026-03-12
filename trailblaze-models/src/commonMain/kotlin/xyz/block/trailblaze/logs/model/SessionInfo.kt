@@ -5,6 +5,8 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.Transient
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
+import xyz.block.trailblaze.llm.LlmSessionUsageAndCost
+import xyz.block.trailblaze.llm.LlmUsageAndCostExt.computeUsageSummary
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.yaml.TrailConfig
 
@@ -22,6 +24,7 @@ data class SessionInfo(
   val testName: String? = null,
   val testClass: String? = null,
   val trailConfig: TrailConfig? = null,
+  val llmUsageSummary: LlmSessionUsageAndCost? = null,
 ) {
   // Use config title if available, otherwise fall back to method name, class name, or session ID
   @Transient
@@ -67,5 +70,6 @@ fun List<TrailblazeLog>.getSessionInfo(): SessionInfo? {
     durationMs = durationMs,
     trailFilePath = sessionStartedInfo?.trailFilePath,
     hasRecordedSteps = sessionStartedInfo?.hasRecordedSteps ?: false,
+    llmUsageSummary = this.computeUsageSummary(),
   )
 }

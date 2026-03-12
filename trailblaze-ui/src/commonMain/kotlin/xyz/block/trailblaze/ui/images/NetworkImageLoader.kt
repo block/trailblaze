@@ -61,14 +61,14 @@ class NetworkImageLoader(
           Platform.WASM -> {
             val currentUrl: String? = getCurrentUrl()
             if (currentUrl?.startsWith("http") == true) {
-                // Check if we're on Buildkite artifacts
-                if (currentUrl.contains("buildkiteartifacts.com")) {
-                    // For Buildkite, construct full URL using the base path of current URL
-                    // Current URL format: https://web.buildkiteartifacts.com/ba3.../trailblaze_report.html
-                    // Image URL should be: https://web.buildkiteartifacts.com/ba3.../$sessionId/$filename
+                // Check if we're on a remote CI artifacts host (not localhost)
+                if (!currentUrl.contains("localhost") && !currentUrl.contains("127.0.0.1")) {
+                    // Construct full URL using the base path of the current URL
+                    // e.g., https://artifacts.example.com/build123/trailblaze_report.html
+                    //     -> https://artifacts.example.com/build123/$filename
                     val baseUrl = currentUrl.substringBeforeLast('/')
                     val fullUrl = "$baseUrl/$filename"
-                    Console.log("🔗 Buildkite artifact URL constructed: $fullUrl")
+                    Console.log("🔗 CI artifact URL constructed: $fullUrl")
                     fullUrl
                 } else {
                     // Use localhost static server

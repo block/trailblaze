@@ -1,0 +1,23 @@
+# Android World Benchmark: BluetoothTurnOffVerify
+- config:
+    id: android-world-benchmarks/system/bluetooth_turn_off_verify
+    displayName: "System - Bluetooth Turn Off Verify"
+    description: "Turn bluetooth off."
+
+- tools:
+    - androidworldbenchmarks_runAdbShell:
+        adbShellCommands:
+          - "svc bluetooth disable"
+
+- prompts:
+    - step: "Turn bluetooth off."
+
+- tools:
+    - androidworldbenchmarks_assertAdbShellOutput:
+        command: "settings get global bluetooth_on"
+        expectedOutput: "0"
+        matchMode: "exact"
+
+# --- Benchmark Run History ---
+# [2026-03-11] FAILED - gRPC UNAVAILABLE. Emulator instability.
+#   Not an agent failure — general emulator connection instability.

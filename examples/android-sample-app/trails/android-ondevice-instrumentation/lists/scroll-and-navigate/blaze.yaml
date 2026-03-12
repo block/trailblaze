@@ -1,0 +1,12 @@
+- config:
+    id: "sample-app/lists/scroll-and-navigate"
+    app: "xyz.block.trailblaze.examples.sampleapp"
+- tools:
+    - launchApp:
+        appId: "xyz.block.trailblaze.examples.sampleapp"
+        launchMode: "REINSTALL"
+- prompts:
+    - step: Navigate to the "Lists" tab
+    - step: Scroll down to "Item 25" and tap it
+    - step: Verify "Detail for Item 25" is shown, then go back to the list
+    - step: Scroll down to "Item 50" and verify it is visible

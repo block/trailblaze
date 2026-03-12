@@ -13,7 +13,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import xyz.block.trailblaze.yaml.TrailblazeYaml
+import xyz.block.trailblaze.yaml.createTrailblazeYaml
 
 /**
  * Validates YAML content.
@@ -33,7 +33,7 @@ fun validateYaml(content: String): String? {
 
   return try {
     // Try to parse with default tools
-    val trailblazeYaml = TrailblazeYaml.Default
+    val trailblazeYaml = createTrailblazeYaml()
     trailblazeYaml.decodeTrail(content)
     null // No error
   } catch (e: Exception) {

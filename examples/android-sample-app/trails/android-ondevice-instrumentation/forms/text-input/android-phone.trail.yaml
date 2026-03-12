@@ -1,0 +1,65 @@
+- config:
+    id: sample-app/forms/text-input
+    app: xyz.block.trailblaze.examples.sampleapp
+    platform: android
+    driver: ANDROID_ONDEVICE_INSTRUMENTATION
+- tools:
+  - launchApp:
+      appId: xyz.block.trailblaze.examples.sampleapp
+      launchMode: REINSTALL
+- prompts:
+  - step: Navigate to the "Forms" tab
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: 'The ''Forms'' tab (nodeId: 84) is clearly labeled and is part of the bottom navigation bar, which is standard for switching between app sections.'
+          selector:
+            containsChild:
+              textRegex: Forms
+  - step: Tap the "Name" field and type "Jane Doe"
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: The nodeId 53 represents the 'Name' EditText field, which needs to be focused to type 'Jane Doe'.
+          selector:
+            containsChild:
+              textRegex: Name
+      - inputText:
+          text: Jane Doe
+  - step: Tap the "Email" field and type "jane@example.com"
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: To focus the 'Email' field so text can be entered into it.
+          selector:
+            containsChild:
+              textRegex: Email
+      - inputText:
+          text: jane@example.com
+  - step: Tap the "Submit" button
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: The 'Submit' button corresponds to the TextView 'Submit' within a clickable parent view (nodeId 58). Tapping this parent view should activate the button.
+          selector:
+            containsChild:
+              textRegex: Submit
+  - step: Verify "Jane Doe" and "jane@example.com" appear in the submission result
+    recording:
+      tools:
+      - assertVisibleBySelector:
+          reason: 'It displays both ''Name: Jane Doe'' and ''Email: jane@example.com'' in the submission result section.'
+          selector:
+            textRegex: |-
+              Name: Jane Doe
+              Email: jane@example.com
+  - step: Tap "Clear All" and verify "Jane Doe" is no longer visible
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: The objective requests to tap "Clear All" to remove submission results associated with Jane Doe.
+          selector:
+            containsChild:
+              textRegex: Clear All
+      - assertNotVisibleWithText:
+          text: Jane Doe

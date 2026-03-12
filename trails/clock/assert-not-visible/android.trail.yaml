@@ -1,0 +1,39 @@
+# Accessibility assertion test: assertNotVisible by text.
+# Verifies that elements NOT on screen are correctly reported as not visible.
+# assertNotVisibleWithText constructs DriverNodeMatch.AndroidAccessibility
+# internally from its text/id fields, so no nodeSelector field is needed.
+- config:
+    id: "clock/assert-not-visible"
+    driver: ANDROID_ONDEVICE_ACCESSIBILITY
+- prompts:
+    - step: Launch the Clock app
+      recording:
+        tools:
+          - launchApp:
+              appId: com.android.deskclock
+    - verify: There is no "Delete" button visible on the alarm list screen
+      recording:
+        tools:
+          - assertNotVisibleWithText:
+              text: Delete
+    - verify: There is no "Cancel" button visible
+      recording:
+        tools:
+          - assertNotVisibleWithText:
+              text: Cancel
+    - step: Tap on the STOPWATCH tab
+      recording:
+        tools:
+          - tapOnElementBySelector:
+              reason: Navigate to STOPWATCH to change context for next assertion.
+              selector:
+                textRegex: STOPWATCH
+              nodeSelector:
+                androidAccessibility:
+                  textRegex: STOPWATCH
+                  resourceIdRegex: "android:id/text1"
+    - verify: The ALARM tab content is no longer visible - no add alarm FAB
+      recording:
+        tools:
+          - assertNotVisibleWithText:
+              text: Add alarm

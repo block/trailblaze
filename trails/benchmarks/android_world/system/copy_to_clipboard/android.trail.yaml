@@ -1,0 +1,24 @@
+# Android World Benchmark: CopyToClipboard
+- config:
+    id: android-world-benchmarks/system/copy_to_clipboard
+    displayName: "System - Copy To Clipboard"
+    description: "Copy the following text to the clipboard: The quick brown fox jumps over the lazy dog"
+
+- tools: []
+
+- prompts:
+    - step: "Copy the following text to the clipboard: The quick brown fox jumps over the lazy dog"
+
+# Clipboard validation note: Reading the clipboard from ADB requires the
+# Clipper utility app or API 31+ (cmd clipboard). This trail targets API 33+.
+- tools:
+    - androidworldbenchmarks_assertAdbShellOutput:
+        command: "cmd clipboard get_primary_clip"
+        expectedOutput: "The quick brown fox jumps over the lazy dog"
+        matchMode: "contains"
+
+# --- Benchmark Run History ---
+# [2026-03-11] FAILED - Emulator limitation: "cmd clipboard get_primary_clip"
+#   returned "No shell command implementation". ClipboardShellCommand not
+#   registered on this emulator image. Needs emulator image update or
+#   alternative validation approach.

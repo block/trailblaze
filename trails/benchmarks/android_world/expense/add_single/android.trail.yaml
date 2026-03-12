@@ -1,0 +1,22 @@
+# Android World Benchmark: ExpenseAddSingle
+- config:
+    id: android-world-benchmarks/expense/add_single
+    description: "Add a single expense for 'Coffee' with amount $4.50 in the Pro Expense app."
+- tools:
+    - androidworldbenchmarks_executeSqliteOnDevice:
+        dbPath: /data/data/com.arduia.expense/databases/accounting.db
+        sqlStatements:
+          - "DELETE FROM expense"
+        appPackageName: com.arduia.expense
+- prompts:
+    - step: "Add an expense for 'Coffee' with amount $4.50 in the Pro Expense app."
+- tools:
+    - androidworldbenchmarks_assertSqliteQuery:
+        dbPath: /data/data/com.arduia.expense/databases/accounting.db
+        query: "SELECT name, amount FROM expense WHERE name='Coffee' AND amount=450"
+        expectedOutput: "Coffee|450"
+        matchMode: regex
+        appPackageName: com.arduia.expense
+
+# --- Benchmark Run History ---
+# [2026-03-11] Build #27 FAILED - Agent limitation: ObjectiveFailed. Can't navigate Pro Expense app.

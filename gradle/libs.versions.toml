@@ -4,6 +4,7 @@ assertk = "0.28.1"
 clikt = "5.0.3"
 coil3 = "3.3.0"
 compose-hot-reload = "1.1.0-alpha02"
+androidx-lifecycle-compose = "2.9.5"
 compose-navigation = "2.9.1"
 core = "1.7.0"
 coroutines = "1.10.2"
@@ -18,20 +19,21 @@ androidx-test-monitor = "1.8.0"
 gson = "2.13.2"
 jackson = "2.18.2"
 jansi = "2.4.1"
-jetbrains-compose-multiplatform = "1.9.3"
+jetbrains-compose-multiplatform = "1.11.0-alpha03"
 compose-material-icons-extended = "1.7.3"
 jsoup = "1.21.2"
 junit = "4.13.2"
+junit5 = "5.11.4"
 kaml = "0.104.0"
-koog = "0.6.0"
+koog = "0.6.4"
 kotlin-csv = "1.10.0"
-kotlin = "2.2.21"
+kotlin = "2.3.10"
 kotlinpoet = "2.2.0"
-kotlinx-datetime = "0.7.1-0.6.x-compat" # Compat Required https://github.com/JetBrains/koog/issues/1129
-kotlinx-serialization = "1.9.0"
+kotlinx-datetime = "0.7.1-0.6.x-compat" # Compat build providing kotlinx.datetime.Clock alongside kotlin.time.Clock
+kotlinx-serialization = "1.10.0"
 ktor = "3.3.3"
 logback = "1.5.21"
-maestro = "2.0.6"
+maestro = "2.3.0"
 mcp-sdk = "0.8.3"
 multiplatformMarkdownRenderer = "0.38.1"
 multiplatformSettings = "1.3.0"
@@ -50,6 +52,7 @@ truth = "1.4.5"
 uiautomator = "2.3.0"
 vanniktech-maven-publish = "0.35.0"
 dependency-guard = "0.5.0"
+wire = "5.3.3"
 
 [libraries]
 android-gradle = { group = "com.android.tools.build", name = "gradle", version.ref = "agp" }
@@ -64,6 +67,8 @@ clikt = { module = "com.github.ajalt.clikt:clikt", version.ref = "clikt" }
 coil3-compose = { module = "io.coil-kt.coil3:coil-compose", version.ref = "coil3" }
 coil3-network-ktor = { module = "io.coil-kt.coil3:coil-network-ktor3", version.ref = "coil3" }
 compose-navigation = { module = "org.jetbrains.androidx.navigation:navigation-compose", version.ref = "compose-navigation" }
+lifecycle-runtime-compose = { module = "org.jetbrains.androidx.lifecycle:lifecycle-runtime-compose", version.ref = "androidx-lifecycle-compose" }
+lifecycle-viewmodel-compose = { module = "org.jetbrains.androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "androidx-lifecycle-compose" }
 datafaker = { module = "net.datafaker:datafaker", version.ref = "datafaker" }
 exp4j = { module = "net.objecthunter:exp4j", version.ref = "exp4j" }
 coroutines = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
@@ -76,6 +81,7 @@ jackson-module-kotlin = { module = "com.fasterxml.jackson.module:jackson-module-
 jansi = { module = "org.fusesource.jansi:jansi", version.ref = "jansi" }
 jsoup = { module = "org.jsoup:jsoup", version.ref = "jsoup" }
 junit = { module = "junit:junit", version.ref = "junit" }
+junit5-jupiter-engine = { module = "org.junit.jupiter:junit-jupiter-engine", version.ref = "junit5" }
 kaml = { module = "com.charleskorn.kaml:kaml", version.ref = "kaml" }
 kotlin-compiler-embeddable = { module = "org.jetbrains.kotlin:kotlin-compiler-embeddable", version.ref = "kotlin" }
 kotlin-gradle = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
@@ -102,13 +108,16 @@ ktor-server-core = { module = "io.ktor:ktor-server-core", version.ref = "ktor" }
 ktor-server-core-jvm = { module = "io.ktor:ktor-server-core-jvm", version.ref = "ktor" }
 ktor-server-netty = { module = "io.ktor:ktor-server-netty", version.ref = "ktor" }
 ktor-server-cors = { module = "io.ktor:ktor-server-cors", version.ref = "ktor" }
+ktor-server-sse = { module = "io.ktor:ktor-server-sse", version.ref = "ktor" }
 ktor-server-jetty = { module = "io.ktor:ktor-server-jetty", version.ref = "ktor" }
 ktor-server-tomcat = { module = "io.ktor:ktor-server-tomcat", version.ref = "ktor" }
 ktor-server-jetty-jakarta = { module = "io.ktor:ktor-server-jetty-jakarta", version.ref = "ktor" }
 ktor-server-test-host = { module = "io.ktor:ktor-server-test-host", version.ref = "ktor" }
 ktor-network-tls-certificates = { module = "io.ktor:ktor-network-tls-certificates", version.ref = "ktor" }
 koog-agents = { module = "ai.koog:koog-agents", version.ref = "koog" }
+koog-agents-mcp = { module = "ai.koog:agents-mcp", version.ref = "koog" }
 koog-agents-tools = { module = "ai.koog:agents-tools", version.ref = "koog" }
+koog-agents-planner = { module = "ai.koog:agents-planner", version.ref = "koog" }
 koog-prompt-executor-clients = { module = "ai.koog:prompt-executor-clients", version.ref = "koog" }
 koog-prompt-executor-llms = { module = "ai.koog:prompt-executor-llms", version.ref = "koog" }
 koog-prompt-executor-anthropic = { module = "ai.koog:prompt-executor-anthropic-client", version.ref = "koog" }
@@ -139,6 +148,9 @@ multiplatform-markdown-renderer-m3 = { module = "com.mikepenz:multiplatform-mark
 multiplatform-settings = { module = "com.russhwolf:multiplatform-settings", version.ref = "multiplatformSettings" }
 material-icons-extended = { module = "org.jetbrains.compose.material:material-icons-extended", version.ref = "compose-material-icons-extended" }
 okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
+wire-runtime = { module = "com.squareup.wire:wire-runtime", version.ref = "wire" }
+wire-grpc-client = { module = "com.squareup.wire:wire-grpc-client", version.ref = "wire" }
+wire-moshi-adapter = { module = "com.squareup.wire:wire-moshi-adapter", version.ref = "wire" }
 okhttp-mockwebserver = { module = "com.squareup.okhttp3:mockwebserver", version.ref = "okhttp" }
 okio = { module = "com.squareup.okio:okio", version.ref = "okio" }
 picocli = { module = "info.picocli:picocli", version.ref = "picocli" }
@@ -161,7 +173,7 @@ vanniktech-maven-publish = { id = "com.vanniktech.maven.publish.base", version.r
 dokka = { id = "org.jetbrains.dokka", version.ref = "dokka" }
 jetbrains-compose-multiplatform = { id = "org.jetbrains.compose", version.ref = "jetbrains-compose-multiplatform" }
 compose-compiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
-compose-hot-reload = { id = "org.jetbrains.compose.hot-reload", version.ref = "compose-hot-reload" }
 paparazzi = { id = "app.cash.paparazzi", version.ref = "paparazzi" }
 spotless = { id = "com.diffplug.spotless", version.ref = "spotless" }
 dagp = { id = "com.autonomousapps.dependency-analysis", version.ref = "dagp" }
+wire = { id = "com.squareup.wire", version.ref = "wire" }

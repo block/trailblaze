@@ -2,14 +2,18 @@ package xyz.block.trailblaze.host.devices
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.playwright.PlaywrightBrowserManager
 import xyz.block.trailblaze.util.Console
 
 /**
@@ -23,9 +27,7 @@ sealed class WebBrowserState {
   data object Launching : WebBrowserState()
 
   /** Browser is running and ready for tests */
-  data class Running(
-    val connectedDevice: TrailblazeConnectedDevice,
-  ) : WebBrowserState()
+  data object Running : WebBrowserState()
 
   /** Browser encountered an error */
   data class Error(val message: String) : WebBrowserState()
@@ -36,14 +38,11 @@ sealed class WebBrowserState {
  *
  * Unlike Android/iOS devices which are discovered via USB/network, web browsers
  * are launched on-demand by the user. This manager provides a UI-friendly wrapper
- * around [HostWebDriverFactory] to:
+ * around [PlaywrightBrowserManager] to:
  * - Launch the browser with a visible window (non-headless)
  * - Track browser state reactively via StateFlow
  * - Detect browser close/crash
  * - Provide the browser as a "device" for test execution
- *
- * Note: Currently supports a single browser instance (managed by HostWebDriverFactory).
- * Multiple browser support could be added in the future if needed.
  *
  * Usage:
  * ```
@@ -56,6 +55,10 @@ sealed class WebBrowserState {
 class WebBrowserManager {
 
   private val scope = CoroutineScope(Dispatchers.IO)
+  val playwrightInstaller = PlaywrightBrowserInstaller()
+
+  /** The PlaywrightBrowserManager instance when a browser is running. */
+  private var browserManager: PlaywrightBrowserManager? = null
 
   init {
     // Register shutdown hook to close browser when the app exits
@@ -64,82 +67,85 @@ class WebBrowserManager {
       if (isRunning()) {
         Console.log("WebBrowserManager: Closing browser on app shutdown")
         try {
-          HostWebDriverFactory.clearCache()
+          browserManager?.close()
+          browserManager = null
         } catch (e: Exception) {
           Console.log("WebBrowserManager: Error closing browser on shutdown: ${e.message}")
         }
       }
     })
+
+    // Check Playwright browser installation status on startup
+    playwrightInstaller.checkInstallStatus()
   }
+
+  private val launchMutex = Mutex()
 
   private val _browserState = MutableStateFlow<WebBrowserState>(WebBrowserState.Idle)
 
   /** Current state of the browser */
   val browserStateFlow: StateFlow<WebBrowserState> = _browserState.asStateFlow()
 
-  /** The currently running browser device, if any */
-  private var currentDevice: TrailblazeConnectedDevice? = null
-
   /**
-   * Launches a new web browser instance.
+   * Launches a new web browser instance asynchronously on [Dispatchers.IO].
    *
    * The browser will be visible (non-headless) for debugging purposes.
-   * TODO: Add headless parameter if needed for CI/automated scenarios.
    *
    * If a browser is already running, this will reuse the existing instance.
    *
-   * @return The connected device representing the browser, or null if launch failed
+   * @param onComplete optional callback invoked (on [Dispatchers.IO]) after the browser is ready.
    */
-  fun launchBrowser(): TrailblazeConnectedDevice? {
-    // If already running, return existing device
-    val existingState = _browserState.value
-    if (existingState is WebBrowserState.Running) {
-      Console.log("WebBrowserManager: Browser already running, reusing existing instance")
-      return existingState.connectedDevice
-    }
+  fun launchBrowser(onComplete: (() -> Unit)? = null) {
+    scope.launch {
+      launchMutex.withLock {
+        // If already running, reuse existing instance
+        if (_browserState.value is WebBrowserState.Running) {
+          Console.log("WebBrowserManager: Browser already running, reusing existing instance")
+          onComplete?.invoke()
+          return@withLock
+        }
 
-    // Update state to launching
-    _browserState.value = WebBrowserState.Launching
+        // Update state to launching
+        _browserState.value = WebBrowserState.Launching
 
-    return try {
-      // Launch browser - always visible for now
-      // TODO: Add headless parameter if needed for CI scenarios
-      val connectedDevice = HostWebDriverFactory().createWeb(headless = false)
+        try {
+          // Launch browser - always visible for desktop app usage
+          val newBrowserManager = PlaywrightBrowserManager(headless = false)
+          browserManager = newBrowserManager
 
-      currentDevice = connectedDevice
+          // Update state to running
+          _browserState.value = WebBrowserState.Running
 
-      // Update state to running
-      _browserState.value = WebBrowserState.Running(connectedDevice = connectedDevice)
+          // Start monitoring for browser close/crash
+          startBrowserMonitor()
 
-      // Start monitoring for browser close/crash
-      startBrowserMonitor()
-
-      Console.log("WebBrowserManager: Launched browser instance")
-      connectedDevice
-    } catch (e: Exception) {
-      Console.log("WebBrowserManager: Failed to launch browser: ${e.message}")
-      e.printStackTrace()
-      _browserState.value = WebBrowserState.Error(e.message ?: "Unknown error launching browser")
-      null
+          Console.log("WebBrowserManager: Launched browser instance")
+          onComplete?.invoke()
+        } catch (e: Exception) {
+          Console.log("WebBrowserManager: Failed to launch browser: ${e.message}")
+          _browserState.value = WebBrowserState.Error(e.message ?: "Unknown error launching browser")
+        }
+      }
     }
   }
 
   /**
-   * Closes the browser instance.
+   * Closes the browser instance asynchronously on [Dispatchers.IO].
+   *
+   * @param onComplete optional callback invoked (on [Dispatchers.IO]) after the browser is closed.
    */
-  fun closeBrowser() {
-    val device = currentDevice
-    if (device != null) {
+  fun closeBrowser(onComplete: (() -> Unit)? = null) {
+    scope.launch {
       try {
-        // Use the factory's clearCache to properly close the browser
-        HostWebDriverFactory.clearCache()
+        browserManager?.close()
         Console.log("WebBrowserManager: Closed browser instance")
       } catch (e: Exception) {
         Console.log("WebBrowserManager: Error closing browser: ${e.message}")
       }
+      browserManager = null
+      _browserState.value = WebBrowserState.Idle
+      onComplete?.invoke()
     }
-    currentDevice = null
-    _browserState.value = WebBrowserState.Idle
   }
 
   /**
@@ -151,17 +157,10 @@ class WebBrowserManager {
     if (state !is WebBrowserState.Running) return null
 
     return TrailblazeConnectedDeviceSummary(
-      trailblazeDriverType = TrailblazeDriverType.WEB_PLAYWRIGHT_HOST,
-      instanceId = HostWebDriverFactory.DEFAULT_PLAYWRIGHT_WEB_TRAILBLAZE_DEVICE_ID.instanceId,
+      trailblazeDriverType = TrailblazeDriverType.PLAYWRIGHT_NATIVE,
+      instanceId = PLAYWRIGHT_NATIVE_INSTANCE_ID,
       description = "Chrome Browser",
     )
-  }
-
-  /**
-   * Gets the connected device for the running browser, if any.
-   */
-  fun getConnectedDevice(): TrailblazeConnectedDevice? {
-    return currentDevice
   }
 
   /**
@@ -170,13 +169,18 @@ class WebBrowserManager {
   fun isRunning(): Boolean = _browserState.value is WebBrowserState.Running
 
   /**
+   * Returns the current [PlaywrightBrowserManager] if a browser is running, or null.
+   * Used by interactive recording to create a [DeviceScreenStream].
+   */
+  fun getPageManager(): PlaywrightBrowserManager? = browserManager
+
+  /**
    * Monitors the browser for disconnection/crash.
    */
   private fun startBrowserMonitor() {
     scope.launch {
       while (isActive && _browserState.value is WebBrowserState.Running) {
         try {
-          // Check if the browser is still connected by checking the cached driver
           val isConnected = checkBrowserConnected()
           if (!isConnected) {
             Console.log("WebBrowserManager: Browser disconnected (user closed or crashed)")
@@ -197,17 +201,39 @@ class WebBrowserManager {
    * Checks if the browser is still connected.
    */
   private fun checkBrowserConnected(): Boolean {
-    return HostWebDriverFactory.isBrowserConnected()
+    val manager = browserManager ?: return false
+    return try {
+      // If the page is accessible, the browser is still connected
+      manager.currentPage.url()
+      true
+    } catch (_: Exception) {
+      false
+    }
   }
 
   private fun handleBrowserDisconnected() {
-    currentDevice = null
     _browserState.value = WebBrowserState.Idle
-    // Clear the factory cache since the browser is gone
     try {
-      HostWebDriverFactory.clearCache()
-    } catch (e: Exception) {
+      browserManager?.close()
+    } catch (_: Exception) {
       // Ignore - browser is already gone
     }
+    browserManager = null
+  }
+
+  fun close() {
+    playwrightInstaller.close()
+    scope.cancel()
+    try {
+      browserManager?.close()
+    } catch (_: Exception) {
+      // Ignore - best-effort cleanup
+    }
+    browserManager = null
+    _browserState.value = WebBrowserState.Idle
+  }
+
+  companion object {
+    const val PLAYWRIGHT_NATIVE_INSTANCE_ID = "playwright-native"
   }
 }

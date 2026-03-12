@@ -18,6 +18,7 @@ import xyz.block.trailblaze.setofmark.android.AndroidBitmapUtils.scale
 import xyz.block.trailblaze.setofmark.android.AndroidBitmapUtils.toByteArray
 import xyz.block.trailblaze.setofmark.android.AndroidCanvasSetOfMark
 import xyz.block.trailblaze.tracing.TrailblazeTracer.traceRecorder
+import xyz.block.trailblaze.viewhierarchy.ViewHierarchyCompactFormatter
 import xyz.block.trailblaze.viewhierarchy.ViewHierarchyFilter
 import xyz.block.trailblaze.viewhierarchy.ViewHierarchyTreeNodeUtils
 import java.io.ByteArrayOutputStream
@@ -38,19 +39,24 @@ class AndroidOnDeviceUiAutomatorScreenState(
   maxAttempts: Int = 1,
   includeScreenshot: Boolean = true,
   deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
+  private val fullHierarchy: Boolean = false,
 ) : ScreenState {
 
   override var deviceWidth: Int = -1
   override var deviceHeight: Int = -1
   override var viewHierarchyOriginal: ViewHierarchyTreeNode
+  private val foregroundAppId: String?
 
   // Store only the clean screenshot bytes (compressed)
   private var _screenshotBytes: ByteArray = ByteArray(0)
 
   init {
-    val (displayWidth, displayHeight) = withUiDevice { displayWidth to displayHeight }
+    val (displayWidth, displayHeight, currentPackage) = withUiDevice {
+      Triple(displayWidth, displayHeight, currentPackageName)
+    }
     deviceWidth = displayWidth
     deviceHeight = displayHeight
+    foregroundAppId = currentPackage
 
     var matched = false
     var attempts = 0
@@ -98,6 +104,17 @@ class AndroidOnDeviceUiAutomatorScreenState(
   }
 
   override val trailblazeDevicePlatform: TrailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID
+
+  override val viewHierarchyTextRepresentation: String
+    get() = ViewHierarchyCompactFormatter.format(
+      root = viewHierarchy,
+      platform = trailblazeDevicePlatform,
+      screenWidth = deviceWidth,
+      screenHeight = deviceHeight,
+      foregroundAppId = foregroundAppId,
+      deviceClassifiers = deviceClassifiers,
+      fullHierarchy = fullHierarchy,
+    )
 
   override val deviceClassifiers: List<TrailblazeDeviceClassifier> = deviceClassifiers
 
@@ -149,11 +166,16 @@ class AndroidOnDeviceUiAutomatorScreenState(
       val bitmap = android.graphics.BitmapFactory.decodeByteArray(_screenshotBytes, 0, _screenshotBytes.size)
         ?: return _screenshotBytes
       
+      // Create a mutable copy for annotation. Recycle original immediately.
+      val annotatedBitmap = bitmap.copy(Bitmap.Config.ARGB_8888, true)
+      bitmap.recycle()
+
+      // bitmap.copy() can return null under memory pressure
+      if (annotatedBitmap == null) {
+        return _screenshotBytes
+      }
+
       try {
-        // Create a mutable copy for annotation
-        val annotatedBitmap = bitmap.copy(Bitmap.Config.ARGB_8888, true)
-        bitmap.recycle() // Recycle the decoded bitmap
-        
         // Apply set-of-mark annotations
         // Pass device dimensions so coordinates can be scaled to match bitmap size
         AndroidCanvasSetOfMark.drawSetOfMarkOnBitmap(
@@ -172,14 +194,14 @@ class AndroidOnDeviceUiAutomatorScreenState(
           deviceWidth = deviceWidth,
           deviceHeight = deviceHeight,
         )
-        
+
         // Convert to bytes and clean up
         val bytes = annotatedBitmap.toByteArray()
         annotatedBitmap.recycle()
-        
+
         return bytes
       } catch (e: Exception) {
-        bitmap.recycle()
+        annotatedBitmap.recycle()
         throw e
       }
     }

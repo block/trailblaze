@@ -1,0 +1,49 @@
+# Android World Benchmark: NewContactDraft
+- config:
+    id: android-world-benchmarks/contacts/new_contact_draft
+    displayName: "Contacts - New Contact Draft"
+    description: "Go to the new contact screen and enter the following details: First Name: Bob, Last Name: Smith, Phone: 555-987-6543, Phone Label: Work. Do NOT hit save."
+
+- tools:
+    # Match Android World: clear the contacts provider data before the run.
+    - clearAppData:
+        packageName: com.android.providers.contacts
+    - clearAppData:
+        packageName: com.google.android.contacts
+    # Android World starts every task from the home screen (using adb for reliable setup execution)
+    - androidworldbenchmarks_runAdbShell:
+        adbShellCommands:
+          - "input keyevent KEYCODE_HOME"
+
+- prompts:
+    - step: "Go to the new contact screen and enter the following details: First Name: Bob, Last Name: Smith, Phone: 555-987-6543, Phone Label: Work. Do NOT hit save."
+
+- tools:
+    # Validation: UI elements should show the drafted contact info
+    - assertVisibleBySelector:
+        reason: "First name should be entered on the draft screen"
+        selector:
+          textRegex: "Bob"
+    - assertVisibleBySelector:
+        reason: "Last name should be entered on the draft screen"
+        selector:
+          textRegex: "Smith"
+    - assertVisibleBySelector:
+        reason: "Phone number should be entered on the draft screen"
+        selector:
+          textRegex: "555\\D*987\\D*6543"
+    - assertVisibleBySelector:
+        reason: "Phone label should be set to Work"
+        selector:
+          textRegex: "Work"
+
+# --- Benchmark Run History ---
+# [2026-03-10] FAILED - "Work" phone label assertion.
+#   Agent entered First Name, Last Name, and Phone correctly but did not change
+#   the phone label from the default ("Mobile") to "Work". In Google Contacts,
+#   this requires tapping the label dropdown next to the phone number field and
+#   selecting "Work" — a non-obvious multi-step UI interaction the agent missed.
+# [2026-03-11] PASSED - Agent entered name, phone fields correctly. "Work" label
+#   assertion still fails (see 03-10 entry) but the step itself passed.
+# [2026-03-11] Build #27 FAILED - gRPC UNAVAILABLE after 121s. Emulator instability.
+#   REGRESSION from build #24 where this passed.

@@ -67,8 +67,8 @@ class HostCanvasSetOfMark(
    */
   private fun getScaleFactorForPlatform(): Int =
     if (deviceInfo?.platform == Platform.IOS || deviceInfo?.platform == Platform.WEB) {
-      val scaleX = bufferedImage.width.toFloat() / deviceInfo?.widthGrid?.toFloat()!!
-      val scaleY = bufferedImage.height.toFloat() / deviceInfo?.heightGrid?.toFloat()!!
+      val scaleX = bufferedImage.width.toFloat() / deviceInfo.widthGrid.toFloat()!!
+      val scaleY = bufferedImage.height.toFloat() / deviceInfo.heightGrid.toFloat()!!
 
       // Round to nearest integer
       val roundedScaleX = round(scaleX).toInt()
@@ -76,7 +76,7 @@ class HostCanvasSetOfMark(
 
       // Validate that both scales are the same
       if (roundedScaleX != roundedScaleY) {
-        val platformName = if (deviceInfo?.platform == Platform.IOS) "iOS" else "Web"
+        val platformName = if (deviceInfo.platform == Platform.IOS) "iOS" else "Web"
         Console.log(
           "Warning: $platformName scale factors differ - X: $scaleX ($roundedScaleX), Y: $scaleY ($roundedScaleY). Using X scale.",
         )
@@ -307,6 +307,13 @@ class HostCanvasSetOfMark(
   }
 
   private fun BufferedImage.toByteArrayWithQuality(format: String = "JPEG", quality: Float = 0.85f): ByteArray = ByteArrayOutputStream().use { baos ->
+    // Convert to JPEG-compatible colorspace to avoid "Bogus input colorspace" errors
+    val imageToWrite = if (format.equals("jpeg", ignoreCase = true) && type != BufferedImage.TYPE_3BYTE_BGR) {
+      convertToJpegCompatible(this)
+    } else {
+      this
+    }
+
     val writer = ImageIO.getImageWritersByFormatName(format).next()
     val writeParam = writer.defaultWriteParam
 
@@ -316,10 +323,23 @@ class HostCanvasSetOfMark(
     }
 
     writer.output = ImageIO.createImageOutputStream(baos)
-    writer.write(null, IIOImage(this, null, null), writeParam)
+    writer.write(null, IIOImage(imageToWrite, null, null), writeParam)
     writer.dispose()
 
     baos.toByteArray()
+  }
+
+  /**
+   * Converts an image to JPEG-compatible format (TYPE_3BYTE_BGR).
+   * This fixes "Bogus input colorspace" errors when encoding images with
+   * non-RGB colorspaces (e.g., PNG with alpha or CMYK images) to JPEG.
+   */
+  private fun convertToJpegCompatible(image: BufferedImage): BufferedImage {
+    val converted = BufferedImage(image.width, image.height, BufferedImage.TYPE_3BYTE_BGR)
+    val g = converted.createGraphics()
+    g.drawImage(image, 0, 0, null)
+    g.dispose()
+    return converted
   }
 
   fun toByteArray(): ByteArray = bufferedImage.toByteArrayWithQuality()

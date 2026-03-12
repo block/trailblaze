@@ -69,11 +69,23 @@ class TrailblazeAndroidLoggingRule(
   },
 ) {
 
+  /**
+   * Override the driver type reported in session logs. Set this before calling
+   * [AndroidTrailblazeRule.runSuspend] so that the [SessionStatus.Started] log
+   * reflects the actual runtime driver (e.g., when `--driver ANDROID_ONDEVICE_ACCESSIBILITY`
+   * is passed via CLI or `-e trailblaze.driverType` instrumentation arg).
+   *
+   * Defaults to the value from the `trailblaze.driverType` instrumentation arg if set,
+   * otherwise [TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION].
+   */
+  var driverTypeOverride: TrailblazeDriverType =
+    InstrumentationArgUtil.driverType() ?: TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION
+
   override val trailblazeDeviceInfoProvider: () -> TrailblazeDeviceInfo = {
     val displayMetrics = getDisplayMetrics()
     TrailblazeDeviceInfo(
       trailblazeDeviceId = trailblazeDeviceIdProvider(),
-      trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+      trailblazeDriverType = driverTypeOverride,
       locale = getCurrentLocale().toLanguageTag(),
       orientation = getDeviceOrientation(),
       widthPixels = displayMetrics.widthPixels,

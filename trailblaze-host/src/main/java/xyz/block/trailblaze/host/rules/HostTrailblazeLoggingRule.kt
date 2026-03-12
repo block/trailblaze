@@ -6,8 +6,8 @@ import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeScreenStateLog
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.report.utils.LogsRepo
-import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.rules.TrailblazeLoggingRule
+import xyz.block.trailblaze.ui.TrailblazePortManager
 
 import xyz.block.trailblaze.util.GitUtils
 import java.io.File
@@ -15,7 +15,7 @@ import xyz.block.trailblaze.util.Console
 
 class HostTrailblazeLoggingRule(
   override val trailblazeDeviceInfoProvider: () -> TrailblazeDeviceInfo,
-  logsBaseUrl: String = "https://localhost:${TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTPS_PORT}",
+  logsBaseUrl: String = "https://localhost:${TrailblazePortManager.resolveEffectiveHttpsPort()}",
   additionalLogEmitter: LogEmitter? = null,
   logsDir: File? = null,
   private val logsRepo: LogsRepo = LogsRepo(resolveLogsDir(logsDir)),

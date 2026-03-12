@@ -17,8 +17,9 @@ class TrailblazeRunnerUtil(
   fun runPrompt(
     prompts: List<PromptStep>,
     useRecordedSteps: Boolean,
+    onStepProgress: ((stepIndex: Int, totalSteps: Int, stepText: String) -> Unit)? = null,
   ): TrailblazeToolResult = runBlocking {
-    runPromptSuspend(prompts, useRecordedSteps)
+    runPromptSuspend(prompts, useRecordedSteps, onStepProgress)
   }
 
   /**
@@ -28,14 +29,16 @@ class TrailblazeRunnerUtil(
   suspend fun runPromptSuspend(
     prompts: List<PromptStep>,
     useRecordedSteps: Boolean,
+    onStepProgress: ((stepIndex: Int, totalSteps: Int, stepText: String) -> Unit)? = null,
   ): TrailblazeToolResult {
-    for (prompt in prompts) {
+    for ((index, prompt) in prompts.withIndex()) {
+      onStepProgress?.invoke(index + 1, prompts.size, prompt.prompt)
       val promptResult: TrailblazeToolResult =
         if (useRecordedSteps && prompt.canPromptStepUseRecording()) {
           runTrailblazeTool(prompt.recording!!.tools.map { it.trailblazeTool })
         } else {
           when (val status = trailblazeRunner.runSuspend(prompt)) {
-            is ObjectiveComplete -> TrailblazeToolResult.Success
+            is ObjectiveComplete -> TrailblazeToolResult.Success()
             is AgentTaskStatus.Failure -> {
               throw TrailblazeException(
                 buildString {
@@ -48,7 +51,12 @@ class TrailblazeRunnerUtil(
 
             is AgentTaskStatus.InProgress -> {
               // Still in progress
-              TrailblazeToolResult.Success
+              TrailblazeToolResult.Success()
+            }
+
+            is AgentTaskStatus.McpScreenAnalysis -> {
+              // MCP screen analysis - treat as success (analysis completed)
+              TrailblazeToolResult.Success()
             }
           }
         }
@@ -56,7 +64,7 @@ class TrailblazeRunnerUtil(
         throw TrailblazeException("Failed to successfully run prompt $prompt with error ${promptResult.errorMessage}")
       }
     }
-    return TrailblazeToolResult.Success
+    return TrailblazeToolResult.Success()
   }
 
   private fun PromptStep.canPromptStepUseRecording() = recordable && recording != null

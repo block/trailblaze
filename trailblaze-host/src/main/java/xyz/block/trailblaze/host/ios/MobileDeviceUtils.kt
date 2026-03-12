@@ -19,9 +19,15 @@ object MobileDeviceUtils {
    *
    * @param trailblazeDeviceId The device to query
    * @param appId The app package name (Android) or bundle identifier (iOS)
+   * @param additionalPlistKeys Extra iOS plist keys to read in the same pass (ignored for Android/Web).
+   *   Results are available via [AppVersionInfo.additionalPlistData].
    * @return AppVersionInfo with version details, or null if not installed or unsupported platform
    */
-  fun getAppVersionInfo(trailblazeDeviceId: TrailblazeDeviceId, appId: String): AppVersionInfo? {
+  fun getAppVersionInfo(
+    trailblazeDeviceId: TrailblazeDeviceId,
+    appId: String,
+    additionalPlistKeys: List<String> = emptyList(),
+  ): AppVersionInfo? {
     return when (trailblazeDeviceId.trailblazeDevicePlatform) {
       TrailblazeDevicePlatform.ANDROID -> AndroidHostAdbUtils.getAppVersionInfo(
         deviceId = trailblazeDeviceId,
@@ -31,6 +37,7 @@ object MobileDeviceUtils {
       TrailblazeDevicePlatform.IOS -> IosHostUtils.getAppVersionInfo(
         trailblazeDeviceId = trailblazeDeviceId,
         appId = appId,
+        additionalPlistKeys = additionalPlistKeys,
       )
 
       TrailblazeDevicePlatform.WEB -> null

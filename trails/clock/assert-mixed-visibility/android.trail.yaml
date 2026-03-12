@@ -1,0 +1,116 @@
+# Accessibility assertion test: mixed assert visible + assert not visible.
+# End-to-end flow that creates an alarm, verifies it exists, deletes it,
+# and verifies it's gone. Exercises both assertion paths through the
+# accessibility driver with native nodeSelector matching.
+- config:
+    id: "clock/assert-mixed-visibility"
+    driver: ANDROID_ONDEVICE_ACCESSIBILITY
+- prompts:
+    - step: Launch the Clock app
+      recording:
+        tools:
+          - launchApp:
+              appId: com.android.deskclock
+    - step: Navigate to the ALARM tab
+      recording:
+        tools:
+          - tapOnElementBySelector:
+              reason: Switch to the ALARM tab.
+              selector:
+                textRegex: ALARM
+              nodeSelector:
+                androidAccessibility:
+                  textRegex: ALARM
+                  resourceIdRegex: "android:id/text1"
+    - verify: The add alarm button is visible
+      recording:
+        tools:
+          - assertVisibleBySelector:
+              reason: The FAB to add a new alarm should be present.
+              selector:
+                idRegex: "com.android.deskclock:id/fab"
+              nodeSelector:
+                androidAccessibility:
+                  contentDescriptionRegex: Add alarm
+                  resourceIdRegex: "com.android.deskclock:id/fab"
+                  isClickable: true
+    - step: Add a new alarm
+      recording:
+        tools:
+          - tapOnElementBySelector:
+              reason: Tap the add alarm FAB.
+              selector:
+                textRegex: Add alarm
+              nodeSelector:
+                androidAccessibility:
+                  contentDescriptionRegex: Add alarm
+                  resourceIdRegex: "com.android.deskclock:id/fab"
+                  isClickable: true
+    - step: Select 8 as the hour and 00 as the minutes and confirm with OK
+      recording:
+        tools:
+          - tapOnElementBySelector:
+              reason: Select 8 as the hour.
+              selector:
+                textRegex: "8"
+              nodeSelector:
+                androidAccessibility:
+                  textRegex: "8"
+          - tapOnElementBySelector:
+              reason: Select 00 as the minutes.
+              selector:
+                textRegex: "00"
+              nodeSelector:
+                androidAccessibility:
+                  textRegex: "00"
+          - tapOnElementBySelector:
+              reason: Confirm the alarm time.
+              selector:
+                textRegex: OK
+              nodeSelector:
+                androidAccessibility:
+                  textRegex: OK
+                  resourceIdRegex: "android:id/button1"
+                  isClickable: true
+    - step: If a notification permission dialog appears, tap DON'T ALLOW
+    - verify: The new 8:00 AM alarm is visible in the alarm list
+      recording:
+        tools:
+          - assertVisibleBySelector:
+              reason: The newly created alarm should show 8:00 in the alarm list.
+              selector:
+                textRegex: "8:00"
+              nodeSelector:
+                androidAccessibility:
+                  textRegex: "8:00"
+    - verify: There is no Delete button visible yet (alarm not expanded)
+      recording:
+        tools:
+          - assertNotVisibleWithText:
+              text: Delete
+    - step: Expand the alarm and delete it
+      recording:
+        tools:
+          - tapOnElementBySelector:
+              reason: Expand the alarm to access delete.
+              selector:
+                textRegex: Expand alarm
+              nodeSelector:
+                androidAccessibility:
+                  contentDescriptionRegex: Expand alarm
+                  resourceIdRegex: "com.android.deskclock:id/arrow"
+                  isClickable: true
+          - tapOnElementBySelector:
+              reason: Delete the alarm.
+              selector:
+                textRegex: Delete
+              nodeSelector:
+                androidAccessibility:
+                  textRegex: Delete
+                  resourceIdRegex: "com.android.deskclock:id/delete"
+                  isClickable: true
+    - verify: The 8:00 AM alarm is no longer visible
+      recording:
+        tools:
+          - assertNotVisibleWithText:
+              text: "8:00"

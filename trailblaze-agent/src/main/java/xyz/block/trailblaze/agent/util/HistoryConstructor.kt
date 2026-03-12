@@ -1,8 +1,10 @@
+@file:OptIn(kotlin.time.ExperimentalTime::class)
+
 package xyz.block.trailblaze.agent.util
 
 import ai.koog.prompt.message.Message
 import ai.koog.prompt.message.RequestMetaInfo
-import kotlinx.datetime.Clock
+import kotlin.time.Clock
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -42,7 +44,7 @@ fun PromptRecordingResult.Failure.toLlmResponseHistory(): MutableList<Message> {
   return history
 }
 
-private fun TrailblazeToolYamlWrapper.generateContentString() = TrailblazeToolResult.Success.toContentString(
+private fun TrailblazeToolYamlWrapper.generateContentString() = TrailblazeToolResult.Success().toContentString(
   toolName = name,
   toolArgs = JsonObject(getToolArgs()),
 )

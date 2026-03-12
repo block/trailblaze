@@ -13,6 +13,7 @@ import xyz.block.trailblaze.ui.MainTrailblazeApp
 import xyz.block.trailblaze.ui.TrailblazeAnalytics
 import xyz.block.trailblaze.ui.TrailblazeDesktopApp
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
+import xyz.block.trailblaze.util.Console
 
 /**
  * The Open Source Trailblaze Desktop App
@@ -20,6 +21,9 @@ import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 class OpenSourceTrailblazeDesktopApp : TrailblazeDesktopApp(
   desktopAppConfig = OpenSourceTrailblazeDesktopAppConfig()
 ) {
+  /** Public access to config for CLI commands */
+  val config: OpenSourceTrailblazeDesktopAppConfig
+    get() = desktopAppConfig as OpenSourceTrailblazeDesktopAppConfig
 
   fun createDynamicClient(trailblazeLlmModel: TrailblazeLlmModel): TrailblazeHostDynamicLlmClientProvider {
     return TrailblazeHostDynamicLlmClientProvider(
@@ -29,6 +33,7 @@ class OpenSourceTrailblazeDesktopApp : TrailblazeDesktopApp(
   }
 
   override fun startTrailblazeDesktopApp(headless: Boolean) {
+    installRunHandler()
     MainTrailblazeApp(
       trailblazeSavedSettingsRepo = desktopAppConfig.trailblazeSettingsRepo,
       logsRepo = desktopAppConfig.logsRepo,
@@ -76,6 +81,7 @@ class OpenSourceTrailblazeDesktopApp : TrailblazeDesktopApp(
   val mcpBridge: TrailblazeMcpBridge by lazy {
     TrailblazeMcpBridgeImpl(
       trailblazeDeviceManager = deviceManager,
+      logsRepo = desktopAppConfig.logsRepo,
     )
   }
 
@@ -85,6 +91,18 @@ class OpenSourceTrailblazeDesktopApp : TrailblazeDesktopApp(
       mcpBridge = mcpBridge,
       trailsDirProvider = { desktopAppConfig.trailblazeSettingsRepo.getCurrentTrailsDir() },
       targetTestAppProvider = { TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget },
+      // Wire up LLM client/model for Koog agent's local sampling fallback
+      llmClientProvider = {
+        try {
+          val currentModel = desktopAppConfig.getCurrentLlmModel()
+          createDynamicClient(currentModel).createLlmClient()
+        } catch (e: Exception) {
+          // LLM not configured - will fall back to MCP client sampling
+          Console.log("[MCP Server] LLM client not available: ${e.message}")
+          null
+        }
+      },
+      llmModelProvider = { desktopAppConfig.getCurrentLlmModel() },
     )
   }
 

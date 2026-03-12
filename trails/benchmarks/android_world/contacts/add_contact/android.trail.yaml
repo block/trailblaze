@@ -1,0 +1,34 @@
+# Android World Benchmark: AddContact
+- config:
+    id: android-world-benchmarks/contacts/add_contact
+    displayName: "Contacts - Add Contact"
+    description: "Create a new contact for Alice Johnson. Their number is 555-123-4567."
+
+- tools:
+    # Match Android World: clear the contacts provider data before the run.
+    - clearAppData:
+        packageName: com.android.providers.contacts
+    - clearAppData:
+        packageName: com.google.android.contacts
+    # Android World starts every task from the home screen (using adb for reliable setup execution)
+    - androidworldbenchmarks_runAdbShell:
+        adbShellCommands:
+          - "input keyevent KEYCODE_HOME"
+
+- prompts:
+    - step: "Create a new contact for Alice Johnson. Their number is 555-123-4567."
+
+- tools:
+    - androidworldbenchmarks_assertAdbShellOutput:
+        command: "content query --uri content://contacts/phones --projection display_name:number"
+        expectedOutput: "Alice Johnson.*555\\D*123\\D*4567"
+        matchMode: "regex"
+
+# --- Benchmark Run History ---
+# [2026-03-10] PASSED - Agent successfully created contact and saved it.
+#   Validated via adb content provider query. Straightforward task with no
+#   tricky UI interactions required.
+# [2026-03-11] FAILED - gRPC UNAVAILABLE after 121s. Emulator instability.
+#   Not an agent failure — gRPC uses adb tunneling, so this is general
+#   emulator connection instability.
+# [2026-03-11] Build #27 FAILED - gRPC UNAVAILABLE after 121s. Emulator instability.

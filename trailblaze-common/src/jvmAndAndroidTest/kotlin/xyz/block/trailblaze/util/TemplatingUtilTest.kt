@@ -9,7 +9,7 @@ class TemplatingUtilTest {
   @Test
   fun replaceVariables() {
     val template = """Something {{var1}} and {{var2}}""".trimIndent()
-    println(template)
+    Console.log(template)
     TemplatingUtil.renderTemplate(
       template = template,
       values = mapOf(
@@ -17,14 +17,14 @@ class TemplatingUtilTest {
         "var2" to "value2",
       ),
     ).also {
-      println(it)
+      Console.log(it)
     }
   }
 
   @Test
   fun missingRequiredValues() {
     val template = """Something {{var1}} and {{var2}}""".trimIndent()
-    println(template)
+    Console.log(template)
     val exception = assertThrows(IllegalStateException::class.java) {
       TemplatingUtil.renderTemplate(
         template = template,

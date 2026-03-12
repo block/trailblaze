@@ -1,0 +1,63 @@
+- config:
+    id: sample-app/lists/scroll-and-navigate
+    app: xyz.block.trailblaze.examples.sampleapp
+    platform: android
+    driver: ANDROID_ONDEVICE_ACCESSIBILITY
+- tools:
+  - launchApp:
+      appId: xyz.block.trailblaze.examples.sampleapp
+- prompts:
+  - step: Navigate to the "Lists" tab
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: The 'Lists' tab is clearly labeled and is the target of the current objective. Tapping it will navigate to the 'Lists' section as required.
+          selector:
+            containsChild:
+              textRegex: Lists
+          nodeSelector:
+            androidAccessibility:
+              classNameRegex: \Qandroid.view.View\E
+            index: 26
+  - step: Scroll down to "Item 25" and tap it
+    recording:
+      tools:
+      - scrollUntilTextIsVisible:
+          text: Item 25
+      - tapOnElementBySelector:
+          reason: The objective requires tapping on 'Item 25', which is now visible and corresponds to nodeId 12.
+          selector:
+            textRegex: Item 25
+          nodeSelector:
+            androidAccessibility:
+              textRegex: Item 25
+  - step: Verify "Detail for Item 25" is shown, then go back to the list
+    recording:
+      tools:
+      - assertVisibleBySelector:
+          reason: To verify that the detail screen for Item 25 is displayed as required by the objective.
+          selector:
+            textRegex: Detail for Item 25
+          nodeSelector:
+            androidAccessibility:
+              textRegex: Detail for Item 25
+      - tapOnElementBySelector:
+          reason: The detail for Item 25 has been verified as visible. Now, to return to the list, tap the back arrow icon which is conventionally used for navigating back.
+          selector:
+            containsChild:
+              textRegex: Back
+          nodeSelector:
+            androidAccessibility:
+              contentDescriptionRegex: Back
+  - step: Scroll down to "Item 50" and verify it is visible
+    recording:
+      tools:
+      - scrollUntilTextIsVisible:
+          text: Item 50
+      - assertVisibleBySelector:
+          reason: Verifying that 'Item 50' is visible after scrolling as per the objective.
+          selector:
+            textRegex: Item 50
+          nodeSelector:
+            androidAccessibility:
+              textRegex: Item 50

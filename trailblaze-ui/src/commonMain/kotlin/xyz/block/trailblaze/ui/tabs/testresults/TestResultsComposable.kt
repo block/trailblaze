@@ -6,15 +6,14 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import xyz.block.trailblaze.logs.client.TrailblazeLog
+import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.logs.model.SessionStatus
-import xyz.block.trailblaze.logs.model.getSessionInfo
 import xyz.block.trailblaze.ui.composables.InteractivePieChart
 import xyz.block.trailblaze.ui.composables.PieChartCenterContent
 import xyz.block.trailblaze.ui.composables.PieChartSegment
@@ -25,35 +24,23 @@ import xyz.block.trailblaze.ui.composables.PieChartSegment
  */
 @Composable
 fun TestResultsComposable(
-  sessionLogsMap: Map<String, List<TrailblazeLog>>,
+  sessions: List<SessionInfo>,
 ) {
-  // Compute session infos from the provided logs map
-  val sessionInfos = remember(sessionLogsMap) {
-    sessionLogsMap.entries
-      .mapNotNull { (_, logs) ->
-        if (logs.isNotEmpty()) {
-          logs.getSessionInfo()
-        } else {
-          null
-        }
-      }
-  }
-
   // Calculate aggregate statistics
-  val totalTests = sessionInfos.size
-  val succeededTests = sessionInfos.count {
+  val totalTests = sessions.size
+  val succeededTests = sessions.count {
     it.latestStatus is SessionStatus.Ended.Succeeded ||
         it.latestStatus is SessionStatus.Ended.SucceededWithFallback
   }
-  val failedTests = sessionInfos.count {
+  val failedTests = sessions.count {
     it.latestStatus is SessionStatus.Ended.Failed ||
         it.latestStatus is SessionStatus.Ended.FailedWithFallback ||
         it.latestStatus is SessionStatus.Ended.MaxCallsLimitReached
   }
-  val cancelledTests = sessionInfos.count { it.latestStatus is SessionStatus.Ended.Cancelled }
-  val timeoutTests = sessionInfos.count { it.latestStatus is SessionStatus.Ended.TimeoutReached }
-  val inProgressTests = sessionInfos.count { it.latestStatus is SessionStatus.Started }
-  val unknownTests = sessionInfos.count { it.latestStatus is SessionStatus.Unknown }
+  val cancelledTests = sessions.count { it.latestStatus is SessionStatus.Ended.Cancelled }
+  val timeoutTests = sessions.count { it.latestStatus is SessionStatus.Ended.TimeoutReached }
+  val inProgressTests = sessions.count { it.latestStatus is SessionStatus.Started }
+  val unknownTests = sessions.count { it.latestStatus is SessionStatus.Unknown }
 
   Column(
     modifier = Modifier

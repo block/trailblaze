@@ -2,6 +2,7 @@ package xyz.block.trailblaze.ui.model
 
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.Hiking
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.List
@@ -106,6 +107,14 @@ interface TrailblazeRoute {
     override val displayName = "Trails"
     override val icon: @Composable () -> Unit = {
       Icon(Icons.Filled.Hiking, contentDescription = "Trails")
+    }
+  }
+
+  @Serializable
+  data object Record : TrailblazeRoute {
+    override val displayName = "Record"
+    override val icon: @Composable () -> Unit = {
+      Icon(Icons.Filled.FiberManualRecord, contentDescription = "Record")
     }
   }
 }

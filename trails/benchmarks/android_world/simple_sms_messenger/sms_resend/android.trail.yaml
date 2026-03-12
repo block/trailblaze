@@ -1,0 +1,32 @@
+# Android World Benchmark: sms/resend
+- config:
+    id: android-world-benchmarks/simple_sms_messenger/sms_resend
+    description: Resend the message I just sent to Alice in Simple SMS Messenger
+
+- tools:
+  - androidworldbenchmarks_runAdbShell:
+      adbShellCommands:
+        - "content delete --uri content://sms"
+  - androidworldbenchmarks_addContactToDevice:
+      name: "Alice"
+      phoneNumber: "5551234567"
+  - androidworldbenchmarks_runAdbShell:
+      adbShellCommands:
+        - "content insert --uri content://sms --bind address:s:5551234567 --bind \"body:s:Don't forget the meeting at 2pm\" --bind type:i:2 --bind read:i:1"
+
+- prompts:
+  - step: "Resend the message I just sent to Alice in Simple SMS Messenger"
+
+- tools:
+  - androidworldbenchmarks_assertAdbShellOutput:
+      command: "content query --uri content://sms --where \"address LIKE '%5551234567%' AND body LIKE '%forget the meeting%' AND type=2\" --projection body"
+      expectedOutput: "Row: 1"
+      matchMode: "contains"
+
+# --- Benchmark Run History ---
+# [2026-03-11] FAILED - Setup failure: addContactToDevice tool rejected raw contact insert.
+#   Precondition error before agent prompt. Needs tool-level fix for contact insertion.
+#   FIX: Migrated SMS cleanup, seed insert, and validation from direct sqlite3 to
+#   content provider API. Validation checks for 2+ rows via "Row: 1" presence.
+# [2026-03-11] Build #27 FAILED - Infrastructure: addContactToDevice tool still fails.
+#   Same as build #24. Needs tool-level fix.

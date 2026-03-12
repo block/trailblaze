@@ -1,0 +1,9 @@
+{
+  "name": "trailblaze-electron-test-fixture",
+  "version": "1.0.0",
+  "private": true,
+  "main": "main.js",
+  "dependencies": {
+    "electron": "^33.0.0"
+  }
+}

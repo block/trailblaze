@@ -1,0 +1,26 @@
+# Android World Benchmark: Delete File
+- config:
+    id: android-world-benchmarks/files/delete_file
+    description: Delete old_backup.zip from Download folder in Android filesystem
+- tools:
+    - androidworldbenchmarks_createFileOnDevice:
+        devicePath: /storage/emulated/0/Download
+        fileName: old_backup.zip
+        content: backup data
+    - androidworldbenchmarks_createFileOnDevice:
+        devicePath: /storage/emulated/0/Download
+        fileName: recent_backup.zip
+        content: recent backup
+    - androidworldbenchmarks_createFileOnDevice:
+        devicePath: /storage/emulated/0/Download
+        fileName: readme.txt
+        content: Read me file
+- prompts:
+    - step: Delete the file old_backup.zip from the Android filesystem located in the Download folder within the sdk_gphone_x86_64 storage area.
+- tools:
+    - androidworldbenchmarks_assertFileExistsOnDevice:
+        filePath: /storage/emulated/0/Download/old_backup.zip
+        shouldExist: false
+
+# --- Benchmark Run History ---
+# [2026-03-11] Build #27 PASSED - Agent successfully deleted file.

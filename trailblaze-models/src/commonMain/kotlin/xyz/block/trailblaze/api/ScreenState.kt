@@ -6,11 +6,11 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 interface ScreenState {
   /**
    * Returns the clean screenshot bytes without any debugging annotations.
-   * This is the primary screenshot stored in memory and is always unmarked.
-   * 
-   * **Memory Optimization**: All implementations store only this clean screenshot.
-   * Annotated versions are generated on-demand via annotatedScreenshotBytes.
-   * 
+   *
+   * Implementations may apply scaling (via [ScreenshotScalingConfig]) to produce
+   * consistently-sized output for logging and storage. Annotated versions with
+   * set-of-mark overlays are available via [annotatedScreenshotBytes].
+   *
    * - Always returns the clean, unmarked screenshot
    * - Used for logging, snapshots, and compliance documentation
    * - May be null if screenshot capture failed
@@ -41,7 +41,33 @@ interface ScreenState {
 
   val viewHierarchy: ViewHierarchyTreeNode
 
+  /**
+   * Optional platform-native text representation of the view hierarchy for LLM consumption.
+   *
+   * When non-null, this text is sent to the LLM instead of JSON-serializing [viewHierarchy].
+   * This allows platform-specific drivers (e.g., Playwright) to provide optimized, compact
+   * representations that are far smaller than the generic [ViewHierarchyTreeNode] JSON tree.
+   *
+   * - Returns `null` by default, which signals the LLM prompt builder to fall back to
+   *   JSON-serializing [viewHierarchy] (the existing behavior for Maestro-based drivers).
+   * - Implementations should return a human-readable text format suitable for LLM consumption.
+   */
+  val viewHierarchyTextRepresentation: String?
+    get() = null
+
   val trailblazeDevicePlatform: TrailblazeDevicePlatform
 
   val deviceClassifiers: List<TrailblazeDeviceClassifier>
+
+  /**
+   * Optional driver-native view tree using [TrailblazeNode] with rich [DriverNodeDetail].
+   *
+   * Non-null for drivers that produce native view trees (accessibility, Playwright, Compose).
+   * Used by [TrailblazeNodeSelectorGenerator] at recording time and
+   * [TrailblazeNodeSelectorResolver] at playback time.
+   *
+   * Null for Maestro-based drivers that only produce [ViewHierarchyTreeNode].
+   */
+  val trailblazeNodeTree: TrailblazeNode?
+    get() = null
 }

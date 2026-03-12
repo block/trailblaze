@@ -1,0 +1,22 @@
+# Android World Benchmark: ExpenseAddMultiple
+- config:
+    id: android-world-benchmarks/expense/add_multiple
+    description: "Add multiple expenses in Pro Expense app: 'Lunch' for $12.99, 'Bus fare' for $2.50, and 'Movie ticket' for $15.00."
+- tools:
+    - androidworldbenchmarks_executeSqliteOnDevice:
+        dbPath: /data/data/com.arduia.expense/databases/accounting.db
+        sqlStatements:
+          - "DELETE FROM expense"
+        appPackageName: com.arduia.expense
+- prompts:
+    - step: "Add the following expenses in Pro Expense app: 'Lunch' for $12.99, 'Bus fare' for $2.50, and 'Movie ticket' for $15.00."
+- tools:
+    - androidworldbenchmarks_assertSqliteQuery:
+        dbPath: /data/data/com.arduia.expense/databases/accounting.db
+        query: "SELECT COUNT(*) FROM expense WHERE (name='Lunch' AND amount=1299) OR (name='Bus fare' AND amount=250) OR (name='Movie ticket' AND amount=1500)"
+        expectedOutput: "3"
+        matchMode: exact
+        appPackageName: com.arduia.expense
+
+# --- Benchmark Run History ---
+# [2026-03-11] Build #27 FAILED - Agent limitation: ObjectiveFailed. Can't navigate Pro Expense app.

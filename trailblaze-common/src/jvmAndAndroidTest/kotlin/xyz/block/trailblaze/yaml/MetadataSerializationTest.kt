@@ -1,14 +1,14 @@
 package xyz.block.trailblaze.yaml
 
 import org.junit.Test
-import xyz.block.trailblaze.yaml.TrailblazeYaml
+import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 
 class MetadataSerializationTest {
 
-  private val trailblazeYaml = TrailblazeYaml()
+  private val trailblazeYaml = createTrailblazeYaml()
 
   @Test
   fun `can parse YAML with config-based metadata`() {

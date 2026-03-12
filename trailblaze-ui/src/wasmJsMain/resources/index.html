@@ -78,6 +78,10 @@
         window.trailblaze_report = {};
         window.trailblaze_report_decompression_in_progress = {};
 
+        // Key prefixes for hierarchical lookup
+        const SESSION_PREFIX = 'session/';
+        const CAPTURE_METADATA_PREFIX = 'capture_metadata/';
+
         // Lazy decompression on first access - supports hierarchical keys like "session/SESSION_ID/logs"
         window.getTrailblazeReportJsonFromBrowser = async function (key, callback) {
             console.log("getTrailblazeReportJsonFromBrowser called with key: " + key);
@@ -107,34 +111,30 @@
             // Try to find compressed data - support both flat and hierarchical keys
             let compressedData = null;
 
-            // Direct lookup for flat keys (sessions, session_detail, session_yaml)
+            // Direct lookup for flat keys (sessions, session_detail)
             // Skip if the key is explicitly null (legacy fields removed)
             if (window.trailblaze_report_compressed &&
                 window.trailblaze_report_compressed[key] !== null &&
                 window.trailblaze_report_compressed[key] !== undefined) {
                 compressedData = window.trailblaze_report_compressed[key];
             }
-            // Hierarchical lookup for per-session keys (session/SESSION_ID/logs, session/SESSION_ID/yaml)
-            else if (key.startsWith('session/')) {
+            // Hierarchical lookup for per-session keys (session/SESSION_ID/logs)
+            else if (key.startsWith(SESSION_PREFIX)) {
                 const parts = key.split('/');
                 if (parts.length === 3) {
                     const sessionId = parts[1];
-                    const dataType = parts[2]; // 'logs' or 'yaml'
+                    const dataType = parts[2]; // 'logs'
 
-                    // Try to load from chunk if not already in memory
                     if (dataType === 'logs') {
                         compressedData = window.trailblaze_report_compressed.per_session_logs[sessionId];
-                        if (!compressedData && window.loadChunkById) {
-                            const chunkId = 'chunk-logs-' + sessionId.replace(/\//g, '-');
-                            compressedData = window.loadChunkById(chunkId);
-                        }
-                    } else if (dataType === 'yaml') {
-                        compressedData = window.trailblaze_report_compressed.per_session_yaml[sessionId];
-                        if (!compressedData && window.loadChunkById) {
-                            const chunkId = 'chunk-yaml-' + sessionId.replace(/\//g, '-');
-                            compressedData = window.loadChunkById(chunkId);
-                        }
                     }
+                }
+            }
+            // Capture metadata lookup (capture_metadata/SESSION_ID)
+            else if (key.startsWith(CAPTURE_METADATA_PREFIX)) {
+                const sessionId = key.substring(CAPTURE_METADATA_PREFIX.length);
+                if (window.trailblaze_report_compressed.capture_metadata) {
+                    compressedData = window.trailblaze_report_compressed.capture_metadata[sessionId];
                 }
             }
 
@@ -157,14 +157,17 @@
                         console.log(key + " decompressed successfully");
 
                         // Free memory: delete compressed source after decompression
-                        if (key.startsWith('session/')) {
+                        if (key.startsWith(SESSION_PREFIX)) {
                             const parts = key.split('/');
                             const sessionId = parts[1];
                             const dataType = parts[2];
                             if (dataType === 'logs' && window.trailblaze_report_compressed.per_session_logs) {
                                 delete window.trailblaze_report_compressed.per_session_logs[sessionId];
-                            } else if (dataType === 'yaml' && window.trailblaze_report_compressed.per_session_yaml) {
-                                delete window.trailblaze_report_compressed.per_session_yaml[sessionId];
+                            }
+                        } else if (key.startsWith(CAPTURE_METADATA_PREFIX)) {
+                            const sessionId = key.substring(CAPTURE_METADATA_PREFIX.length);
+                            if (window.trailblaze_report_compressed.capture_metadata) {
+                                delete window.trailblaze_report_compressed.capture_metadata[sessionId];
                             }
                         }
 
@@ -185,7 +188,14 @@
             } else {
                 console.error("No compressed data found for key: " + key);
                 console.error("Available compressed keys:", Object.keys(window.trailblaze_report_compressed || {}));
-                callback("{}");
+                // Return type-appropriate empty fallback:
+                // /logs -> [] (Kotlin expects List)
+                // /yaml -> "" (Kotlin expects String)
+                // other -> {}
+                var fallback = "{}";
+                if (key.endsWith('/logs')) fallback = "[]";
+                else if (key.endsWith('/yaml')) fallback = '""';
+                callback(fallback);
             }
         }
 
@@ -229,13 +239,14 @@
                     return;
                 }
 
-                let compressedImage = window.trailblaze_report_compressed.images[imageKey];
-
-                // Try to load from chunk if not in memory
-                if (!compressedImage && window.loadChunkById) {
-                    const chunkId = 'chunk-image-' + imageKey.replace(/\//g, '-').replace(/\./g, '-').replace(/_/g, '-');
-                    compressedImage = window.loadChunkById(chunkId);
+                // Resolve image aliases (deduplicated video frames point to a canonical key)
+                let resolvedKey = imageKey;
+                if (window.trailblaze_report_compressed.image_aliases &&
+                    window.trailblaze_report_compressed.image_aliases[imageKey]) {
+                    resolvedKey = window.trailblaze_report_compressed.image_aliases[imageKey];
                 }
+
+                let compressedImage = window.trailblaze_report_compressed.images[resolvedKey];
 
                 if (!compressedImage) {
                     console.warn('Image not found:', imageKey);
@@ -250,8 +261,20 @@
                     const format = imageKey.endsWith('.png') ? 'png' : 'jpeg';
                     const dataUrl = `data:image/${format};base64,${base64Data}`;
 
-                    // Free memory: delete compressed source after decompression
-                    delete window.trailblaze_report_compressed.images[imageKey];
+                    // Free memory: delete compressed source after decompression.
+                    // Don't delete if this is a canonical image that aliases may still reference.
+                    if (resolvedKey === imageKey) {
+                        // Only safe to delete if no aliases point to this key
+                        const aliases = window.trailblaze_report_compressed.image_aliases;
+                        const isCanonicalTarget = aliases && Object.values(aliases).includes(imageKey);
+                        if (!isCanonicalTarget) {
+                            delete window.trailblaze_report_compressed.images[imageKey];
+                        }
+                    }
+                    // Clean up the alias entry since it's been resolved
+                    if (resolvedKey !== imageKey && window.trailblaze_report_compressed.image_aliases) {
+                        delete window.trailblaze_report_compressed.image_aliases[imageKey];
+                    }
 
                     // Call all pending callbacks
                     const callbacks = decompressingImages.get(imageKey);
@@ -265,21 +288,13 @@
                 });
             };
 
-            // Wait for chunks to be ready if they aren't yet
-            if (!window.chunksReady) {
-                console.log('⏳ Waiting for chunks to be ready before loading image:', imageKey);
-                window.onChunksReady = window.onChunksReady || (() => {
-                });
-                const originalOnChunksReady = window.onChunksReady;
-                window.onChunksReady = () => {
-                    originalOnChunksReady();
-                    loadImage();
-                };
-                return;
-            }
-
-            // Chunks are ready, load immediately
+            // Load immediately - all data is inline in the compressed data block
             loadImage();
+        };
+        // Browser-level image preloading - triggers download and caches in browser HTTP cache
+        window.preloadImageInBrowser = function(url) {
+            const img = new Image();
+            img.src = url;
         };
     </script>
     <script type="application/javascript" src="composeApp.js"></script>

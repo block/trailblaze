@@ -9,9 +9,11 @@ import xyz.block.trailblaze.http.TrailblazeHttpClientFactory
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcRequest.Companion.toRpcPath
 import xyz.block.trailblaze.mcp.utils.HttpRequestUtils
+import xyz.block.trailblaze.mcp.utils.HttpRequestUtils.HttpRpcException
 import java.io.IOException
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
+import xyz.block.trailblaze.util.Console
 
 /**
  * This is a pseudo-RPC client that communicates with the on-device server.
@@ -46,8 +48,8 @@ class OnDeviceRpcClient(
    * // Response type is automatically inferred!
    * val result = rpcCall(DeviceStatusRequest) // Returns RpcResult<DeviceStatusResponse>
    * when (result) {
-   *   is RpcResult.Success -> println(result.data)
-   *   is RpcResult.Failure -> println(result.message)
+   *   is RpcResult.Success -> Console.log(result.data)
+   *   is RpcResult.Failure -> Console.log(result.message)
    * }
    * ```
    */
@@ -66,6 +68,14 @@ class OnDeviceRpcClient(
       )
       val response: TResponse = TrailblazeJsonInstance.decodeFromString(responseJson)
       RpcResult.Success(response)
+    } catch (e: HttpRpcException) {
+      RpcResult.Failure(
+        errorType = RpcResult.ErrorType.HTTP_ERROR,
+        message = "Server error during RPC call: ${e.message}",
+        details = e.responseBody,
+        method = methodName,
+        url = fullUrl
+      )
     } catch (e: SerializationException) {
       RpcResult.Failure(
         errorType = RpcResult.ErrorType.SERIALIZATION_ERROR,
@@ -83,16 +93,10 @@ class OnDeviceRpcClient(
         url = fullUrl
       )
     } catch (e: Exception) {
-      // Check if it's an HTTP error by examining the message
-      val errorType = if (e.message?.contains("HTTP", ignoreCase = true) == true) {
-        RpcResult.ErrorType.HTTP_ERROR
-      } else {
-        RpcResult.ErrorType.UNKNOWN_ERROR
-      }
       RpcResult.Failure(
-        errorType = errorType,
-        message = "RPC call failed",
-        details = e.message,
+        errorType = RpcResult.ErrorType.UNKNOWN_ERROR,
+        message = "RPC call failed: ${e.message}",
+        details = e.stackTraceToString(),
         method = methodName,
         url = fullUrl
       )
@@ -113,8 +117,8 @@ class OnDeviceRpcClient(
    * ```
    * rpcCall(
    *   request = runYamlRequest,
-   *   onSuccess = { response -> println("Started: ${response.message}") },
-   *   onFailure = { failure -> println("Error: ${failure.message}") }
+   *   onSuccess = { response -> Console.log("Started: ${response.message}") },
+   *   onFailure = { failure -> Console.log("Error: ${failure.message}") }
    * )
    * ```
    */

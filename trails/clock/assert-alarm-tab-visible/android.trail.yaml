@@ -1,0 +1,35 @@
+# Accessibility assertion test: basic assertVisible with nodeSelector.
+# Launches the Clock app and verifies the ALARM tab and FAB are visible
+# using driver-native AndroidAccessibility selectors.
+- config:
+    id: "clock/assert-alarm-tab-visible"
+    driver: ANDROID_ONDEVICE_ACCESSIBILITY
+- prompts:
+    - step: Launch the Clock app
+      recording:
+        tools:
+          - launchApp:
+              appId: com.android.deskclock
+    - verify: The ALARM tab is visible
+      recording:
+        tools:
+          - assertVisibleBySelector:
+              reason: The ALARM tab should be visible on the Clock app's main screen.
+              selector:
+                textRegex: ALARM
+              nodeSelector:
+                androidAccessibility:
+                  textRegex: ALARM
+                  resourceIdRegex: "android:id/text1"
+    - verify: The add alarm button is visible
+      recording:
+        tools:
+          - assertVisibleBySelector:
+              reason: The FAB button to add a new alarm should be visible.
+              selector:
+                idRegex: "com.android.deskclock:id/fab"
+              nodeSelector:
+                androidAccessibility:
+                  contentDescriptionRegex: Add alarm
+                  resourceIdRegex: "com.android.deskclock:id/fab"
+                  isClickable: true

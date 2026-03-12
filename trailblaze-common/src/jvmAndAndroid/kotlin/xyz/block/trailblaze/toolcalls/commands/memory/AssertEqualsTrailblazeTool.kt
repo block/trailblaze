@@ -33,6 +33,6 @@ data class AssertEqualsTrailblazeTool(
         tool = this,
       )
     }
-    return TrailblazeToolResult.Success
+    return TrailblazeToolResult.Success()
   }
 }

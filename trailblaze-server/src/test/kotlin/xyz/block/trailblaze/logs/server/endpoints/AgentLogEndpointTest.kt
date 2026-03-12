@@ -24,6 +24,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import java.io.File
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import xyz.block.trailblaze.util.Console
 
 class AgentLogEndpointTest {
 
@@ -58,7 +59,7 @@ class AgentLogEndpointTest {
     )
 
     val json = TrailblazeJsonInstance.encodeToString(TrailblazeLog.serializer(), log)
-    println("Serialized TrailblazeAgentTaskStatusChangeLog: $json")
+    Console.log("Serialized TrailblazeAgentTaskStatusChangeLog: $json")
 
     val response = client.post("/agentlog") {
       contentType(ContentType.Application.Json)
@@ -97,15 +98,15 @@ class AgentLogEndpointTest {
         }
     """.trimIndent()
 
-    println("Testing TrailblazeToolLog JSON: $toolLogJson")
+    Console.log("Testing TrailblazeToolLog JSON: $toolLogJson")
 
     val response = client.post("/agentlog") {
       contentType(ContentType.Application.Json)
       setBody(toolLogJson)
     }
 
-    println("Response status: ${response.status}")
-    println("Response body: ${response.bodyAsText()}")
+    Console.log("Response status: ${response.status}")
+    Console.log("Response body: ${response.bodyAsText()}")
 
     assertEquals(HttpStatusCode.OK, response.status)
   }
@@ -126,14 +127,14 @@ class AgentLogEndpointTest {
       ),
       traceId = TraceId.generate(TraceOrigin.MAESTRO),
       successful = true,
-      trailblazeToolResult = TrailblazeToolResult.Success,
+      trailblazeToolResult = TrailblazeToolResult.Success(),
       session = xyz.block.trailblaze.logs.model.SessionId("test-session"),
       timestamp = Clock.System.now(),
       durationMs = 300L,
     )
 
     val json = TrailblazeJsonInstance.encodeToString(TrailblazeLog.serializer(), log)
-    println("Serialized MaestroCommandLog: $json")
+    Console.log("Serialized MaestroCommandLog: $json")
 
     val response = client.post("/agentlog") {
       contentType(ContentType.Application.Json)
@@ -166,15 +167,15 @@ class AgentLogEndpointTest {
         }
     """.trimIndent()
 
-    println("Testing ObjectiveStartLog JSON: $objectiveStartJson")
+    Console.log("Testing ObjectiveStartLog JSON: $objectiveStartJson")
 
     val response = client.post("/agentlog") {
       contentType(ContentType.Application.Json)
       setBody(objectiveStartJson)
     }
 
-    println("Response status: ${response.status}")
-    println("Response body: ${response.bodyAsText()}")
+    Console.log("Response status: ${response.status}")
+    Console.log("Response body: ${response.bodyAsText()}")
 
     assertEquals(HttpStatusCode.OK, response.status)
   }
@@ -205,15 +206,15 @@ class AgentLogEndpointTest {
         }
     """.trimIndent()
 
-    println("Testing DelegatingTrailblazeToolLog JSON: $delegatingToolJson")
+    Console.log("Testing DelegatingTrailblazeToolLog JSON: $delegatingToolJson")
 
     val response = client.post("/agentlog") {
       contentType(ContentType.Application.Json)
       setBody(delegatingToolJson)
     }
 
-    println("Response status: ${response.status}")
-    println("Response body: ${response.bodyAsText()}")
+    Console.log("Response status: ${response.status}")
+    Console.log("Response body: ${response.bodyAsText()}")
 
     assertEquals(HttpStatusCode.OK, response.status)
   }
@@ -250,15 +251,15 @@ class AgentLogEndpointTest {
         }
     """.trimIndent()
 
-    println("Testing ObjectiveCompleteLog JSON: $objectiveCompleteJson")
+    Console.log("Testing ObjectiveCompleteLog JSON: $objectiveCompleteJson")
 
     val response = client.post("/agentlog") {
       contentType(ContentType.Application.Json)
       setBody(objectiveCompleteJson)
     }
 
-    println("Response status: ${response.status}")
-    println("Response body: ${response.bodyAsText()}")
+    Console.log("Response status: ${response.status}")
+    Console.log("Response body: ${response.bodyAsText()}")
 
     assertEquals(HttpStatusCode.OK, response.status)
   }
@@ -282,8 +283,8 @@ class AgentLogEndpointTest {
       setBody(invalidJson)
     }
 
-    println("Invalid JSON response status: ${response.status}")
-    println("Invalid JSON response body: ${response.bodyAsText()}")
+    Console.log("Invalid JSON response status: ${response.status}")
+    Console.log("Invalid JSON response body: ${response.bodyAsText()}")
 
     assertEquals(HttpStatusCode.InternalServerError, response.status)
   }
@@ -313,15 +314,15 @@ class AgentLogEndpointTest {
         }
     """.trimIndent()
 
-    println("Testing JSON without type discriminator: $jsonWithoutType")
+    Console.log("Testing JSON without type discriminator: $jsonWithoutType")
 
     val response = client.post("/agentlog") {
       contentType(ContentType.Application.Json)
       setBody(jsonWithoutType)
     }
 
-    println("No type discriminator response status: ${response.status}")
-    println("No type discriminator response body: ${response.bodyAsText()}")
+    Console.log("No type discriminator response status: ${response.status}")
+    Console.log("No type discriminator response body: ${response.bodyAsText()}")
 
     // This should fail with the serialization error we found
     assertEquals(HttpStatusCode.InternalServerError, response.status)

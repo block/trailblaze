@@ -1,0 +1,25 @@
+# Android World Benchmark: WifiTurnOffVerify
+- config:
+    id: android-world-benchmarks/system/wifi_turn_off_verify
+    displayName: "System - Wifi Turn Off Verify"
+    description: "Turn wifi off."
+
+- tools:
+    - androidworldbenchmarks_runAdbShell:
+        adbShellCommands:
+          - "svc wifi disable"
+
+- prompts:
+    - step: "Turn wifi off."
+
+- tools:
+    - androidworldbenchmarks_assertAdbShellOutput:
+        command: "settings get global wifi_on"
+        expectedOutput: "0"
+        matchMode: "exact"
+
+# --- Benchmark Run History ---
+# [2026-03-11] FAILED - gRPC UNAVAILABLE. Emulator connection dropped.
+#   gRPC uses adb reverse/forward tunneling (localhost), so Wi-Fi state
+#   should not affect it. Likely general emulator instability, not caused
+#   by the Wi-Fi toggle itself.

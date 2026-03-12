@@ -4,6 +4,8 @@ import kotlinx.serialization.json.Json
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.client.TrailblazeJson
+import xyz.block.trailblaze.mcp.AgentImplementation
+import xyz.block.trailblaze.ui.TrailblazePortManager
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.ui.models.TrailblazeServerState.SavedTrailblazeAppConfig
 import java.io.File
@@ -37,6 +39,20 @@ object CliConfigHelper {
       Console.error("Error reading config: ${e.message}")
       null
     }
+  }
+  
+  /**
+   * Resolves the effective HTTP port using CLI settings.
+   */
+  fun resolveEffectiveHttpPort(): Int {
+    return TrailblazePortManager.resolveEffectiveHttpPort(::readConfig)
+  }
+  
+  /**
+   * Resolves the effective HTTPS port using CLI settings.
+   */
+  fun resolveEffectiveHttpsPort(): Int {
+    return TrailblazePortManager.resolveEffectiveHttpsPort(::readConfig)
   }
   
   /**
@@ -80,8 +96,10 @@ object CliConfigHelper {
   fun parseAndroidDriver(driver: String): TrailblazeDriverType? {
     return when (driver.uppercase()) {
       "HOST", "ANDROID_HOST" -> TrailblazeDriverType.ANDROID_HOST
-      "ONDEVICE", "INSTRUMENTATION", "ANDROID_ONDEVICE_INSTRUMENTATION" -> 
+      "ONDEVICE", "INSTRUMENTATION", "ANDROID_ONDEVICE_INSTRUMENTATION" ->
         TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION
+      "ACCESSIBILITY", "ANDROID_ONDEVICE_ACCESSIBILITY" ->
+        TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY
       else -> null
     }
   }
@@ -96,4 +114,14 @@ object CliConfigHelper {
     }
   }
   
+  /**
+   * Parse agent implementation string.
+   */
+  fun parseAgent(agent: String): AgentImplementation? {
+    return try {
+      AgentImplementation.valueOf(agent.uppercase())
+    } catch (e: IllegalArgumentException) {
+      null
+    }
+  }
 }

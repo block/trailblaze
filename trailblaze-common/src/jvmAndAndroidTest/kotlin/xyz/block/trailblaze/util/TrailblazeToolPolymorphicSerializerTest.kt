@@ -15,6 +15,7 @@ import xyz.block.trailblaze.toolcalls.commands.TapOnElementByNodeIdTrailblazeToo
 import xyz.block.trailblaze.toolcalls.commands.WaitForIdleSyncTrailblazeTool
 import xyz.block.trailblaze.toolcalls.toolName
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 
 @LLMDescription("A custom tool for tests")
 @TrailblazeToolClass("testTrailblazeTool")
@@ -30,12 +31,12 @@ class TrailblazeToolPolymorphicSerializerTest {
       TapOnElementByNodeIdTrailblazeTool(
         nodeId = 5,
         longPress = false,
-        reason = "The Reason",
+        reasoning = "The Reason",
         relativelyPositionedViews = emptyList(),
       ),
     )
     val normalJson = TrailblazeJsonInstance.encodeToString<List<TrailblazeTool>>(trailblazeTools)
-    println(normalJson)
+    Console.log(normalJson)
   }
 
   @Test
@@ -45,15 +46,15 @@ class TrailblazeToolPolymorphicSerializerTest {
       TapOnElementByNodeIdTrailblazeTool(
         nodeId = 5,
         longPress = false,
-        reason = "The Reason",
+        reasoning = "The Reason",
         relativelyPositionedViews = emptyList(),
       ),
     )
 
     val json = TrailblazeJsonInstance.encodeToString(tools)
-    println("Encoded: $json")
+    Console.log("Encoded: $json")
     val decoded = TrailblazeJsonInstance.decodeFromString<List<TrailblazeTool>>(json)
-    println("Decoded: $decoded")
+    Console.log("Decoded: $decoded")
 
     assertEquals(
       expected = tools,
@@ -68,7 +69,7 @@ class TrailblazeToolPolymorphicSerializerTest {
       TapOnElementByNodeIdTrailblazeTool(
         nodeId = 5,
         longPress = false,
-        reason = "The Reason",
+        reasoning = "The Reason",
         relativelyPositionedViews = emptyList(),
       ),
       OtherTrailblazeTool(toolName = "someTool", raw = JsonObject(mapOf("someKey" to JsonPrimitive("someValue")))),
@@ -80,10 +81,57 @@ class TrailblazeToolPolymorphicSerializerTest {
       ),
     )
     val encoded = jsonInstance.encodeToString<List<TrailblazeTool>>(expectedTrailblazeTools)
-    println("Encoded: $encoded")
+    Console.log("Encoded: $encoded")
 
     val decoded = jsonInstance.decodeFromString<List<TrailblazeTool>>(encoded)
     assertEquals(decoded, expectedTrailblazeTools)
+  }
+
+  @Test
+  fun `TapOnElementByNodeId deserializes old JSON with reason field`() {
+    // Old recordings used "reason" instead of "reasoning". The @JsonNames annotation
+    // ensures backward compatibility.
+    val oldJson = """
+      {
+        "name": "tapOnElementByNodeId",
+        "nodeId": 42,
+        "reason": "Old recording reason",
+        "longPress": false
+      }
+    """.trimIndent()
+    val decoded = TrailblazeJsonInstance.decodeFromString<TapOnElementByNodeIdTrailblazeTool>(oldJson)
+    assertEquals(42L, decoded.nodeId)
+    assertEquals("Old recording reason", decoded.reasoning)
+    assertEquals(false, decoded.longPress)
+  }
+
+  @Test
+  fun `TapOnElementByNodeId deserializes JSON with reasoning field`() {
+    val newJson = """
+      {
+        "name": "tapOnElementByNodeId",
+        "nodeId": 42,
+        "reasoning": "New reasoning field",
+        "longPress": false
+      }
+    """.trimIndent()
+    val decoded = TrailblazeJsonInstance.decodeFromString<TapOnElementByNodeIdTrailblazeTool>(newJson)
+    assertEquals(42L, decoded.nodeId)
+    assertEquals("New reasoning field", decoded.reasoning)
+  }
+
+  @Test
+  fun `TapOnElementByNodeId deserializes JSON without reason or reasoning`() {
+    // Some old recordings may not have either field at all.
+    val minimalJson = """
+      {
+        "name": "tapOnElementByNodeId",
+        "nodeId": 42
+      }
+    """.trimIndent()
+    val decoded = TrailblazeJsonInstance.decodeFromString<TapOnElementByNodeIdTrailblazeTool>(minimalJson)
+    assertEquals(42L, decoded.nodeId)
+    assertNull(decoded.reasoning)
   }
 
   @Test
@@ -97,7 +145,7 @@ class TrailblazeToolPolymorphicSerializerTest {
       raw = rawJson,
     )
     val json = TrailblazeJsonInstance.encodeToString(someTrailblazeTool)
-    println(json)
+    Console.log(json)
     assertEquals(
       json,
       """

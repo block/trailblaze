@@ -1,0 +1,287 @@
+- config:
+    title: 'Test: Search and click specific results with duplicate text'
+    platform: web
+    driver: PLAYWRIGHT_NATIVE
+- prompts:
+  - step: Navigate to ../../../examples/playwright-native/sample-app/search-duplicates.html
+    recording:
+      tools:
+      - playwright_navigate:
+          url: ../../../examples/playwright-native/sample-app/search-duplicates.html
+          reasoning: The objective is to navigate to the specified URL. Since there are no interactive elements on the current screen, direct navigation using the target URL is the correct next step.
+  - step: Verify the heading "Product Search" is visible
+    recording:
+      tools:
+      - playwright_verify_element_visible:
+          ref: e1
+          element: heading 'Product Search'
+          reasoning: The current objective is to verify that the heading 'Product Search' is visible. The view hierarchy confirms that this heading is present as element [e1]. I will verify its visibility to satisfy the objective.
+          nodeSelector:
+            web:
+              ariaRole: heading
+              ariaNameRegex: Product Search
+  - step: Type "Wireless Mouse" into the search input field
+    recording:
+      tools:
+      - playwright_type:
+          text: Wireless Mouse
+          ref: e2
+          element: textbox 'Search products'
+          reasoning: The objective is to type 'Wireless Mouse' into the search input field. The element with ID e2 is labeled 'Search products' and is the appropriate textbox for this action.
+          nodeSelector:
+            web:
+              cssSelector: "#search-input"
+  - step: Click the "Search" button
+    recording:
+      tools:
+      - playwright_click:
+          ref: e3
+          element: button "Search"
+          reasoning: The objective is to click the 'Search' button. The view hierarchy shows a button labeled 'Search' with element ID e3, which is the clear target for this action.
+          nodeSelector:
+            web:
+              cssSelector: "#search-btn"
+  - step: Verify the text "4 results" is visible
+    recording:
+      tools:
+      - playwright_verify_text_visible:
+          text: 4 results
+          reasoning: The objective is to verify that the text '4 results' is visible on the page. This text appears just above the search results on the current screen.
+  - step: Click the button labeled "Wireless Mouse - Bluetooth, Black - $29.99"
+    recording:
+      tools:
+      - playwright_click:
+          ref: e5
+          element: listitem 'Wireless Mouse - Bluetooth, Black - $29.99'
+          reasoning: The objective is to click the button labeled 'Wireless Mouse - Bluetooth, Black - $29.99'. In the view hierarchy, e5 is the list item with the matching label. Clicking this should fulfill the objective.
+          nodeSelector:
+            web:
+              ariaRole: listitem
+              ariaNameRegex: \QWireless Mouse - Bluetooth, Black - $29.99\E
+  - step: Verify the text "Bluetooth, Black" is visible in the detail section at the bottom
+    recording:
+      tools:
+      - playwright_verify_text_visible:
+          text: Bluetooth, Black
+          reasoning: 'The objective is to verify that the text "Bluetooth, Black" is visible in the detail section at the bottom of the screen. I can see "Viewing: Wireless Mouse — Bluetooth, Black, $29.99 (ID: 1)" at the bottom, which contains the required text. Directly verifying the presence of "Bluetooth, Black" fulfills the objective.'
+  - step: Click the button labeled "Wireless Mouse - Bluetooth, White - $29.99"
+    recording:
+      tools:
+      - playwright_click:
+          ref: e6
+          element: listitem 'Wireless Mouse - Bluetooth, White - $29.99'
+          reasoning: The objective requires clicking the button labeled 'Wireless Mouse - Bluetooth, White - $29.99'. The element with ID e6 matches this description, so clicking it will fulfill the objective.
+          nodeSelector:
+            web:
+              ariaRole: listitem
+              ariaNameRegex: \QWireless Mouse - Bluetooth, White - $29.99\E
+  - step: Verify the text "Bluetooth, White" is visible in the detail section at the bottom
+    recording:
+      tools:
+      - playwright_verify_text_visible:
+          text: Bluetooth, White
+          reasoning: The objective requires verifying that 'Bluetooth, White' is visible in the detail section at the bottom. The detail section is shown with the 'Viewing:' label, and the visible text 'Bluetooth, White' should be present in this section to fulfill the objective.
+      - playwright_verify_text_visible:
+          text: Bluetooth, White
+          reasoning: The objective is to verify that the text 'Bluetooth, White' appears in the detail section at the bottom. The view hierarchy shows the detail section at the bottom ('Viewing:'), and the screenshot shows 'Bluetooth, White' is included in that section.
+  - step: Click the button labeled "Wireless Mouse - USB-A, Black - $19.99"
+    recording:
+      tools:
+      - playwright_click:
+          ref: e7
+          element: listitem 'Wireless Mouse - USB-A, Black - $19.99'
+          reasoning: The objective is to click the button/list item labeled 'Wireless Mouse - USB-A, Black - $19.99'. The element [e7] matches this label exactly, so clicking it will complete the task.
+          nodeSelector:
+            web:
+              ariaRole: listitem
+              ariaNameRegex: \QWireless Mouse - USB-A, Black - $19.99\E
+  - step: Verify the text "USB-A, Black" is visible in the detail section at the bottom
+    recording:
+      tools:
+      - playwright_verify_text_visible:
+          text: USB-A, Black
+          reasoning: The objective is to verify that the text 'USB-A, Black' is visible in the detail section at the bottom. The visible detail section appears to be below the product list, confirming product selection. I am verifying the presence of this text as required.
+  - step: Click the button labeled "Wireless Mouse - USB-C, Gray - $34.99"
+    recording:
+      tools:
+      - playwright_click:
+          ref: e8
+          element: listitem "Wireless Mouse - USB-C, Gray - $34.99"
+          reasoning: Objective directs to click the button labeled 'Wireless Mouse - USB-C, Gray - $34.99'; 'e8' is the corresponding list item, which is likely clickable.
+          nodeSelector:
+            web:
+              ariaRole: listitem
+              ariaNameRegex: \QWireless Mouse - USB-C, Gray - $34.99\E
+  - step: Verify the text "USB-C, Gray" is visible in the detail section at the bottom
+    recording:
+      tools:
+      - playwright_verify_text_visible:
+          text: USB-C, Gray
+          reasoning: 'The objective requires verifying that the text ''USB-C, Gray'' is visible in the detail section at the bottom. I observe the relevant detail (''Viewing: Wireless Mouse — USB-C, Gray, $34.99 (ID: 4)'') at the bottom. Verifying visibility of the text ''USB-C, Gray'' ensures the detail section is displaying the required information.'
+  - step: Clear the search input field and type "Keyboard"
+    recording:
+      tools:
+      - playwright_type:
+          text: Keyboard
+          ref: e2
+          element: textbox 'Search products'
+          reasoning: The current objective is to clear the search input field and type 'Keyboard'. I will clear the textbox 'Search products' and enter the required text.
+          nodeSelector:
+            web:
+              cssSelector: "#search-input"
+      - playwright_type:
+          text: Keyboard
+          ref: e2
+          element: textbox 'Search products'
+          reasoning: To fulfill the objective, I need to clear the search input field and type 'Keyboard'. I will clear the input first and then enter the required text.
+          nodeSelector:
+            web:
+              cssSelector: "#search-input"
+  - step: Click the "Search" button
+    recording:
+      tools:
+      - playwright_click:
+          ref: e3
+          element: button "Search"
+          reasoning: The current objective is to click the "Search" button. The button with element ID e3 matches this label. Clicking it should trigger the search action.
+          nodeSelector:
+            web:
+              cssSelector: "#search-btn"
+  - step: Verify the text "3 results" is visible
+    recording:
+      tools:
+      - playwright_verify_text_visible:
+          text: 3 results
+          reasoning: The objective is to verify that the text '3 results' is visible. This text indicates the number of product search results and verifying its presence ensures the correct UI feedback for the search query.
+  - step: Click the button labeled "Keyboard - Mechanical, Full-size - $89.99"
+    recording:
+      tools:
+      - playwright_click:
+          ref: e5
+          element: Keyboard - Mechanical, Full-size - $89.99 list item
+          reasoning: The list item [e5] matches the label 'Keyboard - Mechanical, Full-size - $89.99' from the objective. Clicking it will fulfill the objective to click this button or interactive target.
+          nodeSelector:
+            web:
+              ariaRole: listitem
+              ariaNameRegex: \QKeyboard - Mechanical, Full-size - $89.99\E
+  - step: Verify the text "Mechanical, Full-size" is visible in the detail section at the bottom
+    recording:
+      tools:
+      - playwright_verify_text_visible:
+          text: Mechanical, Full-size
+          reasoning: The objective requires verifying that the text "Mechanical, Full-size" is visible in the detail section at the bottom. The UI screenshot confirms this text is visible in the detail view. Verifying the presence of this specific text on the page will meet the objective.
+  - step: Click the button labeled "Keyboard - Membrane, Compact - $39.99"
+    recording:
+      tools:
+      - playwright_click:
+          ref: e6
+          element: Keyboard - Membrane, Compact - $39.99 list item
+          reasoning: The objective is to click the button labeled 'Keyboard - Membrane, Compact - $39.99'. In this UI, product options are rendered as selectable list items. e6 matches the target label, so I will click it to fulfill the objective.
+          nodeSelector:
+            web:
+              ariaRole: listitem
+              ariaNameRegex: \QKeyboard - Membrane, Compact - $39.99\E
+  - step: Verify the text "Membrane, Compact" is visible in the detail section at the bottom
+    recording:
+      tools:
+      - playwright_verify_text_visible:
+          text: Membrane, Compact
+          reasoning: The objective is to verify that the text 'Membrane, Compact' is visible in the detail section at the bottom. From the screenshot, the detail section at the bottom indeed includes this text as part of the 'Viewing' label.
+  - step: Click the button labeled "Keyboard - Mechanical, Compact - $79.99"
+    recording:
+      tools:
+      - playwright_click:
+          ref: e7
+          element: listitem "Keyboard - Mechanical, Compact - $79.99"
+          reasoning: The objective is to click the button labeled 'Keyboard - Mechanical, Compact - $79.99'. The corresponding listitem with this exact label is [e7], so I will click it to complete the action.
+          nodeSelector:
+            web:
+              ariaRole: listitem
+              ariaNameRegex: \QKeyboard - Mechanical, Compact - $79.99\E
+  - step: Verify the text "Mechanical, Compact" is visible in the detail section at the bottom
+    recording:
+      tools:
+      - playwright_verify_text_visible:
+          text: Mechanical, Compact
+          reasoning: The objective asks to verify that the text 'Mechanical, Compact' is visible in the detail section at the bottom. This text appears within the detail line starting with 'Viewing:' at the bottom of the screen. Verifying the visibility of the exact text fulfills the objective.
+      - playwright_verify_text_visible:
+          text: Mechanical, Compact
+          reasoning: The objective requires confirming the text 'Mechanical, Compact' is visible in the detail section at the bottom. The page structure and screenshot show this text appears in the green-highlighted 'Viewing:' area at the bottom, so verifying its visibility will complete the objective.
+  - step: Clear the search input field and type "Monitor Stand"
+    recording:
+      tools:
+      - playwright_type:
+          text: Monitor Stand
+          ref: e2
+          element: textbox "Search products"
+          reasoning: To complete the objective, I need to clear the current text in the search input and type 'Monitor Stand' in its place.
+          nodeSelector:
+            web:
+              cssSelector: "#search-input"
+  - step: Click the "Search" button
+    recording:
+      tools:
+      - playwright_click:
+          ref: e3
+          element: button "Search"
+          reasoning: The objective is to click the 'Search' button. The element [e3] is labeled as the 'Search' button, making it the correct target for this task. I expect this action to trigger the product search.
+          nodeSelector:
+            web:
+              cssSelector: "#search-btn"
+  - step: Verify the text "3 results" is visible
+    recording:
+      tools:
+      - playwright_verify_text_visible:
+          text: 3 results
+          reasoning: The objective is to verify that the text '3 results' is visible on the current screen. This matches the requirement and confirms correct UI feedback for the search results.
+  - step: Click the button labeled "Monitor Stand - Aluminum, Single - $49.99"
+    recording:
+      tools:
+      - playwright_click:
+          ref: e5
+          element: listitem "Monitor Stand - Aluminum, Single - $49.99"
+          reasoning: The objective is to click the button labeled 'Monitor Stand - Aluminum, Single - $49.99'. The list item e5 matches this label, and I expect that clicking it will execute the desired action or possibly reveal more product details.
+          nodeSelector:
+            web:
+              ariaRole: listitem
+              ariaNameRegex: \QMonitor Stand - Aluminum, Single - $49.99\E
+  - step: Verify the text "Aluminum, Single" is visible in the detail section at the bottom
+    recording:
+      tools:
+      - playwright_verify_text_visible:
+          text: Aluminum, Single
+          reasoning: The objective is to verify that the detail section at the bottom displays the text 'Aluminum, Single.' The screenshot shows a bottom section with summary text containing this phrase, so verifying its presence will complete the objective.
+  - step: Click the button labeled "Monitor Stand - Aluminum, Dual - $79.99"
+    recording:
+      tools:
+      - playwright_click:
+          ref: e6
+          element: listitem "Monitor Stand - Aluminum, Dual - $79.99"
+          reasoning: The objective clearly requests clicking the button labeled 'Monitor Stand - Aluminum, Dual - $79.99'. In the current view, this matches the list item with ID e6. I expect this action to select or show details for this product.
+          nodeSelector:
+            web:
+              ariaRole: listitem
+              ariaNameRegex: \QMonitor Stand - Aluminum, Dual - $79.99\E
+  - step: Verify the text "Aluminum, Dual" is visible in the detail section at the bottom
+    recording:
+      tools:
+      - playwright_verify_text_visible:
+          text: Aluminum, Dual
+          reasoning: The objective requires verifying that the text 'Aluminum, Dual' appears in the detail section at the bottom of the page. Observing the UI, the 'Viewing:' area contains this text, so verifying its visibility will satisfy the requirement.
+  - step: Click the button labeled "Monitor Stand - Wood, Single - $59.99"
+    recording:
+      tools:
+      - playwright_click:
+          ref: e7
+          element: Monitor Stand - Wood, Single - $59.99
+          reasoning: The current objective is to click the button labeled 'Monitor Stand - Wood, Single - $59.99'. The element [e7] matches this label, so clicking it should fulfill the objective.
+          nodeSelector:
+            web:
+              ariaRole: listitem
+              ariaNameRegex: \QMonitor Stand - Wood, Single - $59.99\E
+  - step: Verify the text "Wood, Single" is visible in the detail section at the bottom
+    recording:
+      tools:
+      - playwright_verify_text_visible:
+          text: Wood, Single
+          reasoning: The objective asks to verify that the text 'Wood, Single' is visible in the detail section at the bottom. The detail area appears to contain this text, so verifying its visibility fulfills the objective.

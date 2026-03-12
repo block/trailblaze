@@ -26,11 +26,12 @@ import xyz.block.trailblaze.toolcalls.commands.TapOnElementWithTextTrailblazeToo
 import xyz.block.trailblaze.utils.Ext.asJsonObject
 import xyz.block.trailblaze.utils.Ext.asJsonObjects
 import xyz.block.trailblaze.yaml.models.TrailblazeYamlBuilder
-import xyz.block.trailblaze.yaml.serializers.TrailblazeToolYamlWrapperSerializer
 import kotlin.test.assertEquals
+import xyz.block.trailblaze.util.Console
 
+@OptIn(ExperimentalSerializationApi::class)
 class TrailSerializerTest {
-  private val trailblazeYaml = TrailblazeYaml(setOf(TotallyCustomTool::class))
+  private val trailblazeYaml = createTrailblazeYaml(setOf(TotallyCustomTool::class))
   private val trailblazeYamlInstance = trailblazeYaml.getInstance()
 
   @Test
@@ -41,9 +42,9 @@ class TrailSerializerTest {
         launchMode = LaunchMode.FORCE_RESTART,
       ),
     )
-    println(yaml)
+    Console.log(yaml)
     val decoded = trailblazeYamlInstance.decodeFromString(LaunchAppTrailblazeTool.serializer(), yaml)
-    println(decoded)
+    Console.log(decoded.toString())
   }
 
   @Serializable
@@ -99,7 +100,7 @@ class TrailSerializerTest {
       originalValue,
     )
 
-    println("--- YAML ---\n$yaml\n---")
+    Console.log("--- YAML ---\n$yaml\n---")
 
     val decoded: List<TrailYamlItem> = trailblazeYamlInstance.decodeFromString(
       ListSerializer(
@@ -109,36 +110,7 @@ class TrailSerializerTest {
       yaml,
     )
 
-    println(decoded)
-  }
-
-  @Test
-  fun trailItemMaestro() {
-    val originalValue = TrailYamlItem.MaestroTrailItem(
-      MaestroCommandList(
-        listOf(
-          AssertConditionCommand(
-            Condition(
-              visible = ElementSelector(
-                textRegex = "Hello World",
-              ),
-            ),
-          ),
-          SwipeCommand(SwipeDirection.UP),
-          BackPressCommand(),
-        ).map { it.asJsonObject() },
-      ),
-    )
-    val yamlInstance = trailblazeYaml.getInstance()
-    val yaml: String = yamlInstance.encodeToString(originalValue)
-    println(yaml)
-
-    @OptIn(ExperimentalSerializationApi::class)
-    val deserializer = yamlInstance.serializersModule.getContextual(
-      TrailYamlItem::class,
-    ) as DeserializationStrategy<TrailYamlItem>
-    val decoded: TrailYamlItem = yamlInstance.decodeFromString(deserializer, yaml)
-    println(decoded)
+    Console.log(decoded.toString())
   }
 
   @Test
@@ -155,13 +127,13 @@ class TrailSerializerTest {
       trailToolItemSerializer,
       trailToolItem,
     )
-    println(yaml)
+    Console.log(yaml)
 
     val deserialized: TrailYamlItem.ToolTrailItem = trailblazeYamlInstance.decodeFromString(
       trailToolItemSerializer,
       yaml,
     )
-    println(deserialized)
+    Console.log(deserialized.toString())
 
     assertEquals(trailToolItem, deserialized)
   }
@@ -197,39 +169,41 @@ class TrailSerializerTest {
       trailToolItemSerializer as SerializationStrategy<TrailYamlItem>,
       trailToolItem,
     )
-    println(yaml)
+    Console.log(yaml)
 
     val deserialized: TrailYamlItem = trailblazeYamlInstance.decodeFromString(
       trailToolItemSerializer,
       yaml,
     )
-    println(deserialized)
+    Console.log(deserialized.toString())
   }
 
   @Test
   fun singleToolTest() {
     val trailblazeTool = TapOnElementWithTextTrailblazeTool("Email")
+    val toolWrapperSerializer = trailblazeYamlInstance.serializersModule.getContextual(TrailblazeToolYamlWrapper::class)
+      ?: error("Missing contextual serializer for TrailblazeToolYamlWrapper")
     val yaml = trailblazeYamlInstance.encodeToString(
-      trailblazeYaml.trailblazeToolYamlWrapperSerializer,
+      toolWrapperSerializer,
       fromTrailblazeTool(trailblazeTool),
     )
-    println(yaml)
+    Console.log(yaml)
 
     val deserialized: TrailblazeToolYamlWrapper =
       trailblazeYamlInstance.decodeFromString(
-        TrailblazeToolYamlWrapperSerializer(
-          allTrailblazeToolClasses = trailblazeYaml.allTrailblazeToolClasses,
-        ),
+        toolWrapperSerializer,
         yaml,
       )
-    println(deserialized)
+    Console.log(deserialized.toString())
 
     assertEquals(trailblazeTool, deserialized.trailblazeTool)
   }
 
   @Test
   fun toolListTest() {
-    val listOfToolsSerializer = ListSerializer(trailblazeYaml.trailblazeToolYamlWrapperSerializer)
+    val toolWrapperSerializer = trailblazeYamlInstance.serializersModule.getContextual(TrailblazeToolYamlWrapper::class)
+      ?: error("Missing contextual serializer for TrailblazeToolYamlWrapper")
+    val listOfToolsSerializer = ListSerializer(toolWrapperSerializer)
 
     val trailblazeTools = listOf(
       TapOnElementWithTextTrailblazeTool("ONE"),
@@ -239,12 +213,12 @@ class TrailSerializerTest {
       listOfToolsSerializer,
       trailblazeTools.map { fromTrailblazeTool(it) },
     )
-    println(yaml)
+    Console.log(yaml)
 
     val deserialized: List<TrailblazeToolYamlWrapper> = trailblazeYamlInstance.decodeFromString(
       listOfToolsSerializer,
       yaml,
     )
-    println(deserialized)
+    Console.log(deserialized.toString())
   }
 }

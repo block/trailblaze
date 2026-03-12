@@ -3,6 +3,7 @@ package xyz.block.trailblaze.ui.tabs.home
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -18,6 +19,8 @@ import androidx.compose.material.icons.filled.Alarm
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ContactPhone
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -28,6 +31,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -55,8 +59,11 @@ import xyz.block.trailblaze.ui.model.LocalNavController
 import xyz.block.trailblaze.ui.model.TrailblazeRoute
 import xyz.block.trailblaze.ui.model.navigateToRoute
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
+import xyz.block.trailblaze.ui.TrailblazeDeviceManager
+import xyz.block.trailblaze.ui.composables.WebBrowserControlPanel
 import xyz.block.trailblaze.ui.icons.Android
 import xyz.block.trailblaze.ui.icons.Apple
+import xyz.block.trailblaze.ui.models.TrailblazeServerState.TestingEnvironment
 import xyz.block.trailblaze.ui.utils.toolavailability.AdbStatus
 import xyz.block.trailblaze.ui.utils.toolavailability.IosStatus
 import xyz.block.trailblaze.ui.utils.toolavailability.ToolAvailability
@@ -65,9 +72,23 @@ import xyz.block.trailblaze.ui.utils.toolavailability.ToolAvailabilityChecker
 @Composable
 fun HomeTabComposable(
   trailblazeSettingsRepo: TrailblazeSettingsRepo,
+  deviceManager: TrailblazeDeviceManager,
+  additionalHomeContent: @Composable ColumnScope.() -> Unit = {},
 ) {
   val navController = LocalNavController.current
   var toolAvailability by remember { mutableStateOf<ToolAvailability?>(null) }
+
+  val serverState by trailblazeSettingsRepo.serverStateFlow.collectAsState()
+  val testingEnvironment = serverState.appConfig.testingEnvironment
+
+  // Show onboarding dialog on first launch (when no environment has been chosen)
+  if (testingEnvironment == null) {
+    EnvironmentOnboardingDialog(
+      onEnvironmentSelected = { environment ->
+        trailblazeSettingsRepo.applyTestingEnvironment(environment)
+      },
+    )
+  }
 
   LaunchedEffect(Unit) {
     toolAvailability = ToolAvailabilityChecker.check()
@@ -89,9 +110,32 @@ fun HomeTabComposable(
       )
       Spacer(modifier = Modifier.height(8.dp))
       Text(
-        text = "AI-powered UI testing for mobile apps. Get started by running a sample test on a connected device.",
+        text = when (testingEnvironment) {
+          TestingEnvironment.WEB -> "AI-powered UI testing for web applications. Get started by running a sample test in a browser."
+          else -> "AI-powered UI testing for mobile apps. Get started by running a sample test on a connected device."
+        },
         style = MaterialTheme.typography.bodyLarge,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+    }
+
+    // Testing Environment section
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+      Text(
+        text = "Testing Environment",
+        style = MaterialTheme.typography.headlineSmall,
+        fontWeight = FontWeight.SemiBold,
+      )
+      Text(
+        text = "Select your testing focus. This configures device targets and environment settings.",
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+      EnvironmentPicker(
+        selectedEnvironment = testingEnvironment,
+        onEnvironmentSelected = { environment ->
+          trailblazeSettingsRepo.applyTestingEnvironment(environment)
+        },
       )
     }
 
@@ -103,7 +147,10 @@ fun HomeTabComposable(
         fontWeight = FontWeight.SemiBold,
       )
       Text(
-        text = "Try a sample test to see Trailblaze in action.",
+        text = when (testingEnvironment) {
+          TestingEnvironment.WEB -> "Try a sample web test to see Trailblaze in action."
+          else -> "Try a sample test to see Trailblaze in action."
+        },
         style = MaterialTheme.typography.bodyMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
       )
@@ -112,26 +159,52 @@ fun HomeTabComposable(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(16.dp),
       ) {
-        QuickStartCard(
-          title = "Set an Alarm",
-          description = "Open the Clock app and set a new alarm for 7:30 AM",
-          icon = Icons.Filled.Alarm,
-          modifier = Modifier.weight(1f),
-          onClick = {
-            trailblazeSettingsRepo.updateAppConfig { it.copy(yamlContent = SET_ALARM_YAML) }
-            navController.navigateToRoute(TrailblazeRoute.YamlRoute)
-          },
-        )
-        QuickStartCard(
-          title = "Add a Contact",
-          description = "Open the Contacts app and create a new contact",
-          icon = Icons.Filled.ContactPhone,
-          modifier = Modifier.weight(1f),
-          onClick = {
-            trailblazeSettingsRepo.updateAppConfig { it.copy(yamlContent = ADD_CONTACT_YAML) }
-            navController.navigateToRoute(TrailblazeRoute.YamlRoute)
-          },
-        )
+        when (testingEnvironment) {
+          TestingEnvironment.WEB -> {
+            QuickStartCard(
+              title = "Search Wikipedia",
+              description = "Search Wikipedia for the Golden Gate Bridge and explore the article",
+              icon = Icons.Filled.Search,
+              modifier = Modifier.weight(1f),
+              onClick = {
+                trailblazeSettingsRepo.updateAppConfig { it.copy(yamlContent = SEARCH_WIKIPEDIA_YAML) }
+                navController.navigateToRoute(TrailblazeRoute.YamlRoute)
+              },
+            )
+            QuickStartCard(
+              title = "Explore Trailblaze Releases",
+              description = "Visit github.com/block/trailblaze, browse releases, and read the latest release notes",
+              icon = Icons.Filled.Language,
+              modifier = Modifier.weight(1f),
+              onClick = {
+                trailblazeSettingsRepo.updateAppConfig { it.copy(yamlContent = EXPLORE_TRAILBLAZE_RELEASES_YAML) }
+                navController.navigateToRoute(TrailblazeRoute.YamlRoute)
+              },
+            )
+          }
+          else -> {
+            QuickStartCard(
+              title = "Set an Alarm",
+              description = "Open the Clock app and set a new alarm for 7:30 AM",
+              icon = Icons.Filled.Alarm,
+              modifier = Modifier.weight(1f),
+              onClick = {
+                trailblazeSettingsRepo.updateAppConfig { it.copy(yamlContent = SET_ALARM_YAML) }
+                navController.navigateToRoute(TrailblazeRoute.YamlRoute)
+              },
+            )
+            QuickStartCard(
+              title = "Add a Contact",
+              description = "Open the Contacts app and create a new contact",
+              icon = Icons.Filled.ContactPhone,
+              modifier = Modifier.weight(1f),
+              onClick = {
+                trailblazeSettingsRepo.updateAppConfig { it.copy(yamlContent = ADD_CONTACT_YAML) }
+                navController.navigateToRoute(TrailblazeRoute.YamlRoute)
+              },
+            )
+          }
+        }
       }
     }
 
@@ -143,34 +216,47 @@ fun HomeTabComposable(
         fontWeight = FontWeight.SemiBold,
       )
 
-      val availability = toolAvailability
-      if (availability == null) {
-        Row(
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-          CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-          Text(
-            text = "Checking environment...",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+      when (testingEnvironment) {
+        TestingEnvironment.WEB -> {
+          // Web environment: show browser control panel
+          WebBrowserControlPanel(
+            deviceManager = deviceManager,
           )
         }
-      } else {
-        Row(
-          modifier = Modifier.fillMaxWidth(),
-          horizontalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
-          AdbStatusCard(
-            adbStatus = availability.adbStatus,
-            modifier = Modifier.weight(1f),
-          )
-          IosStatusCard(
-            iosStatus = availability.iosStatus,
-            modifier = Modifier.weight(1f),
-          )
+        else -> {
+          // Mobile or unset: show ADB + iOS status cards
+          val availability = toolAvailability
+          if (availability == null) {
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+              CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+              Text(
+                text = "Checking environment...",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+            }
+          } else {
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+              AdbStatusCard(
+                adbStatus = availability.adbStatus,
+                modifier = Modifier.weight(1f),
+              )
+              IosStatusCard(
+                iosStatus = availability.iosStatus,
+                modifier = Modifier.weight(1f),
+              )
+            }
+          }
         }
       }
+      // Additional content from downstream builds (e.g., authentication cards)
+      additionalHomeContent()
     }
   }
 }

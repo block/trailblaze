@@ -20,13 +20,15 @@ class AndroidViewHierarchyFilter(
         y2 = screenHeight,
       )
 
+    val allElements = viewHierarchy.aggregate()
+
     val visibleViewHierarchyTreeNodes: List<ViewHierarchyTreeNode> =
       findVisibleViewHierarchyTreeNodes(
-        viewHierarchy.aggregate(),
+        allElements,
         rootBounds,
       )
 
-    return createFilteredRoot(viewHierarchy, visibleViewHierarchyTreeNodes)
+    return createFilteredRoot(viewHierarchy, visibleViewHierarchyTreeNodes, allElements)
   }
 
   override fun findVisibleViewHierarchyTreeNodes(

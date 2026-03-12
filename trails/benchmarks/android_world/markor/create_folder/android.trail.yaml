@@ -1,0 +1,24 @@
+# Android World Benchmark: Create Folder
+- config:
+    id: android-world-benchmarks/markor/create_folder
+    description: Create a new folder in Markor named ProjectAlpha
+- tools:
+    - androidworldbenchmarks_clearDirectory:
+        directoryPath: /storage/emulated/0/Documents/Markor
+    - androidworldbenchmarks_createFileOnDevice:
+        devicePath: /storage/emulated/0/Documents/Markor
+        fileName: todo.md
+        content: Buy groceries
+    - androidworldbenchmarks_createFileOnDevice:
+        devicePath: /storage/emulated/0/Documents/Markor
+        fileName: ideas.txt
+        content: App concept
+- prompts:
+    - step: Create a new folder in Markor named ProjectAlpha.
+- tools:
+    - androidworldbenchmarks_assertFileExistsOnDevice:
+        filePath: /storage/emulated/0/Documents/Markor/ProjectAlpha
+        shouldExist: true
+
+# --- Benchmark Run History ---
+# [2026-03-11] Build #27 FAILED - Agent limitation: ObjectiveFailed. Can't navigate Markor app.

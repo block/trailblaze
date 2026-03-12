@@ -4,7 +4,7 @@ import maestro.Maestro
 import maestro.orchestra.AssertConditionCommand
 import maestro.orchestra.MaestroCommand
 import org.slf4j.LoggerFactory
-import xyz.block.trailblaze.api.MaestroDriverActionType
+import xyz.block.trailblaze.api.AgentDriverAction
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeElementSelector
 import xyz.block.trailblaze.logs.client.TrailblazeLog
@@ -110,10 +110,11 @@ class AssertionLogger(
         val session = sessionProvider.invoke()
         val screenshotFilename = trailblazeLogger.logScreenState(session, screenState)
         
-        val log = TrailblazeLog.MaestroDriverLog(
+        val log = TrailblazeLog.AgentDriverLog(
           viewHierarchy = screenState.viewHierarchy,
+          trailblazeNodeTree = screenState.trailblazeNodeTree,
           screenshotFile = screenshotFilename,
-          action = MaestroDriverActionType.AssertCondition(
+          action = AgentDriverAction.AssertCondition(
             conditionDescription = assertionFilterDescription,
             x = elementCenterX,
             y = elementCenterY,

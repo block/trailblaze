@@ -1,0 +1,23 @@
+# Android World Benchmark: BrightnessMax
+- config:
+    id: android-world-benchmarks/system/brightness_max
+    displayName: "System - Brightness Max"
+    description: "Turn brightness to the max value."
+
+- tools:
+    - androidworldbenchmarks_runAdbShell:
+        adbShellCommands:
+          - "settings put system screen_brightness 1"
+
+- prompts:
+    - step: "Turn brightness to the max value."
+
+- tools:
+    - androidworldbenchmarks_assertAdbShellOutput:
+        command: "settings get system screen_brightness"
+        expectedOutput: "255"
+        matchMode: "exact"
+
+# --- Benchmark Run History ---
+# [2026-03-11] FAILED - Agent limitation: Brightness was 22, expected 255.
+#   Agent couldn't drag slider to maximum. Same imprecise slider interaction.

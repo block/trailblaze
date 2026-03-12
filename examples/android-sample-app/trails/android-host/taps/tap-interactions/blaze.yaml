@@ -1,0 +1,14 @@
+- config:
+    id: "sample-app/taps/tap-interactions"
+    app: "xyz.block.trailblaze.examples.sampleapp"
+- tools:
+    - launchApp:
+        appId: "xyz.block.trailblaze.examples.sampleapp"
+        launchMode: "REINSTALL"
+- prompts:
+    - step: Tap the "Tap Me" button 3 times and verify the tap count shows 3
+    - step: Verify a button labeled "Now Enabled!" is visible and enabled
+    - step: Tap the button with accessibility description "accessibility_tap_button"
+    - step: Long press "Long Press Me", then dismiss the dialog by tapping "Copy"
+    - step: Tap "Toggle A" and verify it is selected
+    - step: Tap the "Nested Button" inside the parent container

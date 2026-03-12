@@ -47,8 +47,11 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
-import xyz.block.trailblaze.ui.desktoputil.DesktopUtil
+import xyz.block.trailblaze.model.DeviceConnectionStatus
+import xyz.block.trailblaze.ui.composables.ConnectionStatusPanel
 import xyz.block.trailblaze.ui.composables.FullScreenModalOverlay
+import xyz.block.trailblaze.ui.composables.ProgressMessagesPanel
+import xyz.block.trailblaze.ui.desktoputil.DesktopUtil
 import xyz.block.trailblaze.ui.editors.yaml.YamlEditorMode
 import xyz.block.trailblaze.ui.editors.yaml.YamlTextEditor
 import xyz.block.trailblaze.ui.editors.yaml.YamlVisualEditor
@@ -75,6 +78,8 @@ fun TrailYamlEditorModal(
   onSave: (String) -> Result<Unit>,
   onDismiss: () -> Unit,
   onRun: ((String) -> Unit)? = null,
+  progressMessages: List<String> = emptyList(),
+  connectionStatus: DeviceConnectionStatus? = null,
   relativePath: String? = null,
 ) {
   var localContent by remember(initialContent) { mutableStateOf(initialContent) }
@@ -195,10 +200,20 @@ fun TrailYamlEditorModal(
           )
         }
       }
-      
+
+      // Progress Messages Panel
+      if (progressMessages.isNotEmpty()) {
+        ProgressMessagesPanel(progressMessages)
+      }
+
+      // Connection Status Panel
+      connectionStatus?.let { status ->
+        ConnectionStatusPanel(status)
+      }
+
       Spacer(modifier = Modifier.height(16.dp))
     }
-    
+
     if (showCloseConfirmation) {
       AlertDialog(
         onDismissRequest = { showCloseConfirmation = false },

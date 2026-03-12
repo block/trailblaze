@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Duplicate Text List</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 800px; margin: 40px auto; padding: 0 20px; }
+    h1 { color: #1a1a1a; }
+    .card { border: 1px solid #ddd; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+    .card h2 { margin-top: 0; }
+    .list-item {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 12px; border-bottom: 1px solid #eee; cursor: pointer;
+    }
+    .list-item:hover { background: #f5f5f5; }
+    .list-item .item-name { font-weight: 600; }
+    .list-item .item-category { color: #666; font-size: 0.9em; }
+    .list-item button {
+      background: #0066cc; color: white; border: none;
+      padding: 6px 14px; border-radius: 4px; cursor: pointer;
+    }
+    .list-item button:hover { background: #0052a3; }
+    #detail-panel {
+      margin-top: 16px; padding: 16px; background: #e8f5e9;
+      border-radius: 8px; display: none;
+    }
+    #detail-panel.visible { display: block; }
+    .section-label { color: #888; font-size: 0.85em; text-transform: uppercase; letter-spacing: 0.5px; padding: 8px 12px; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <h1>Product List</h1>
+  <p>A list of products where several items share the same name but belong to different categories.</p>
+
+  <div class="card">
+    <h2>Electronics</h2>
+    <div class="section-label">Electronics</div>
+    <div class="list-item" data-id="elec-1">
+      <div>
+        <span class="item-name">Premium Cable</span>
+        <span class="item-category">Electronics</span>
+      </div>
+      <button onclick="selectItem('elec-1', 'Premium Cable', 'Electronics')">View</button>
+    </div>
+    <div class="list-item" data-id="elec-2">
+      <div>
+        <span class="item-name">Premium Cable</span>
+        <span class="item-category">Electronics</span>
+      </div>
+      <button onclick="selectItem('elec-2', 'Premium Cable', 'Electronics')">View</button>
+    </div>
+    <div class="list-item" data-id="elec-3">
+      <div>
+        <span class="item-name">Standard Adapter</span>
+        <span class="item-category">Electronics</span>
+      </div>
+      <button onclick="selectItem('elec-3', 'Standard Adapter', 'Electronics')">View</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Office Supplies</h2>
+    <div class="section-label">Office Supplies</div>
+    <div class="list-item" data-id="office-1">
+      <div>
+        <span class="item-name">Premium Cable</span>
+        <span class="item-category">Office Supplies</span>
+      </div>
+      <button onclick="selectItem('office-1', 'Premium Cable', 'Office Supplies')">View</button>
+    </div>
+    <div class="list-item" data-id="office-2">
+      <div>
+        <span class="item-name">Standard Adapter</span>
+        <span class="item-category">Office Supplies</span>
+      </div>
+      <button onclick="selectItem('office-2', 'Standard Adapter', 'Office Supplies')">View</button>
+    </div>
+    <div class="list-item" data-id="office-3">
+      <div>
+        <span class="item-name">Standard Adapter</span>
+        <span class="item-category">Office Supplies</span>
+      </div>
+      <button onclick="selectItem('office-3', 'Standard Adapter', 'Office Supplies')">View</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Accessories</h2>
+    <div class="section-label">Accessories</div>
+    <div class="list-item" data-id="acc-1">
+      <div>
+        <span class="item-name">Premium Cable</span>
+        <span class="item-category">Accessories</span>
+      </div>
+      <button onclick="selectItem('acc-1', 'Premium Cable', 'Accessories')">View</button>
+    </div>
+    <div class="list-item" data-id="acc-2">
+      <div>
+        <span class="item-name">Premium Cable</span>
+        <span class="item-category">Accessories</span>
+      </div>
+      <button onclick="selectItem('acc-2', 'Premium Cable', 'Accessories')">View</button>
+    </div>
+  </div>
+
+  <div id="detail-panel">
+    <strong>Selected:</strong>
+    <span id="detail-name"></span> —
+    <span id="detail-category"></span>
+    (ID: <span id="detail-id"></span>)
+  </div>
+
+  <script>
+    function selectItem(id, name, category) {
+      document.getElementById('detail-name').textContent = name;
+      document.getElementById('detail-category').textContent = category;
+      document.getElementById('detail-id').textContent = id;
+      document.getElementById('detail-panel').classList.add('visible');
+    }
+  </script>
+</body>
+</html>

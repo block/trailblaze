@@ -7,6 +7,7 @@ import ai.koog.prompt.executor.clients.LLMClient
 
 import ai.koog.prompt.llm.LLMProvider
 import ai.koog.prompt.llm.LLModel
+import ai.koog.prompt.message.LLMChoice
 import ai.koog.prompt.message.Message
 import ai.koog.prompt.streaming.StreamFrame
 import kotlinx.coroutines.flow.Flow
@@ -45,7 +46,7 @@ class TracingLlmClient(private val delegate: LLMClient) : LLMClient {
     prompt: Prompt,
     model: LLModel,
     tools: List<ToolDescriptor>,
-  ): List<List<Message.Response>> = traceLlmClient("executeMultipleChoices") {
+  ): List<LLMChoice> = traceLlmClient("executeMultipleChoices") {
     delegate.executeMultipleChoices(prompt, model, tools)
   }
 

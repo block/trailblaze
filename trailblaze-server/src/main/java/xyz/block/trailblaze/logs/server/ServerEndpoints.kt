@@ -1,6 +1,5 @@
 package xyz.block.trailblaze.logs.server
 
-import io.ktor.http.Headers
 import io.ktor.http.HttpStatusCode
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.Application
@@ -15,21 +14,24 @@ import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.server.endpoints.AgentLogEndpoint
-import xyz.block.trailblaze.logs.server.endpoints.CliRunEndpoint
+import xyz.block.trailblaze.logs.server.endpoints.CliRunAsyncEndpoint
+import xyz.block.trailblaze.logs.server.endpoints.CliRunManager
 import xyz.block.trailblaze.logs.server.endpoints.CliRunRequest
 import xyz.block.trailblaze.logs.server.endpoints.CliRunResponse
-import xyz.block.trailblaze.logs.server.endpoints.CliShutdownEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.CliShowWindowEndpoint
+import xyz.block.trailblaze.logs.server.endpoints.CliShutdownEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.CliStatusEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.CliStatusResponse
 import xyz.block.trailblaze.logs.server.endpoints.DeleteLogsEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.GetEndpointSessionDetail
 import xyz.block.trailblaze.logs.server.endpoints.HomeEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.LogScreenshotPostEndpoint
+import xyz.block.trailblaze.logs.server.endpoints.LogTracePostEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.PingEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.ReverseProxyEndpoint
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.util.Console
+import io.ktor.server.application.ApplicationStopped
 import kotlin.io.encoding.ExperimentalEncodingApi
 
 /**
@@ -37,7 +39,7 @@ import kotlin.io.encoding.ExperimentalEncodingApi
  */
 data class CliEndpointCallbacks(
   /** Called when CLI requests a trail run */
-  val onRunRequest: (CliRunRequest) -> CliRunResponse,
+  val onRunRequest: suspend (CliRunRequest) -> CliRunResponse,
   /** Called when CLI requests shutdown */
   val onShutdownRequest: () -> Unit,
   /** Called when CLI requests to show the window */
@@ -76,17 +78,23 @@ object ServerEndpoints {
       AgentLogEndpoint.register(this, logsRepo)
       DeleteLogsEndpoint.register(this, logsRepo)
       LogScreenshotPostEndpoint.register(this, logsRepo)
+      LogTracePostEndpoint.register(this, logsRepo)
       ReverseProxyEndpoint.register(this, logsRepo)
       staticFiles("/static", logsRepo.logsDir)
-      
+
       // CLI endpoints (only registered if callbacks provided)
       cliCallbacks?.let { callbacks ->
-        CliRunEndpoint.register(this, callbacks.onRunRequest)
+        val runManager = CliRunManager(callbacks.onRunRequest)
+        // Close the CliRunManager when the application stops to cancel its coroutine scope
+        environment.monitor.subscribe(ApplicationStopped) {
+          runManager.close()
+        }
+        CliRunAsyncEndpoint.register(this, runManager)
         CliShutdownEndpoint.register(this, callbacks.onShutdownRequest)
         CliShowWindowEndpoint.register(this, callbacks.onShowWindowRequest)
         CliStatusEndpoint.register(this, callbacks.statusProvider)
       }
-      
+
       route("{...}") {
         handle {
           Console.log("Unhandled route: ${call.request.uri} [${call.request.httpMethod}]")

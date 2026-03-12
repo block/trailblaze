@@ -8,14 +8,18 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.HasScreenshot
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.report.utils.LogsRepo
-import xyz.block.trailblaze.report.utils.TrailblazeYamlSessionRecording.generateRecordedYaml
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.Writer
+import java.util.concurrent.TimeUnit
 import java.util.zip.GZIPOutputStream
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
@@ -26,7 +30,6 @@ import xyz.block.trailblaze.util.Console
  */
 data class PerSessionData(
   val logs: List<TrailblazeLog>,
-  val yaml: String,
   val imageKeys: List<String>,
 )
 
@@ -34,6 +37,9 @@ data class PerSessionData(
  * Generates the Trailblaze report in a WASM-compatible HTML format.
  */
 object WasmReport {
+
+  /** Low FPS for WASM embedded frames to keep report file size reasonable. */
+  private const val WASM_VIDEO_FPS = 2
 
   private val compactJsonReformatter = Json {
     prettyPrint = false
@@ -82,8 +88,26 @@ object WasmReport {
     // Only build data for sessions that have valid session info
     val perSessionData = buildPerSessionData(logsRepo, validSessionIds, sessionToImageFiles)
 
-    // Convert SessionId keys to String for template generation
-    val sessionToImageFilesStr = sessionToImageFiles.mapKeys { it.key.value }
+    // Extract video frames for embedding in WASM reports (trimmed to test execution window)
+    Console.log("\nExtracting video frames for WASM embedding...")
+    val (videoFrameImages, videoTrimInfo) = extractVideoFrames(logsRepo, validSessionIds)
+
+    // Load capture_metadata.json for each session, adjusting timestamps to trimmed window
+    Console.log("\nLoading capture metadata...")
+    val captureMetadataMap = loadCaptureMetadata(logsRepo, validSessionIds, videoTrimInfo)
+    val compressedCaptureMetadata = captureMetadataMap.mapValues { (_, json) ->
+      compressStringToBase64(json)
+    }
+
+    // When useRelativeImageUrls is true, skip image embedding entirely so the report stays
+    // small. This is useful for very large CI runs where embedding hundreds of screenshots
+    // would produce a multi-gigabyte HTML file.
+    val sessionToImageFilesStr = if (useRelativeImageUrls) {
+      Console.log("⚠️  useRelativeImageUrls=true: skipping image embedding in report")
+      emptyMap()
+    } else {
+      sessionToImageFiles.mapKeys { it.key.value }
+    }
 
     if (reportTemplateFile.exists()) {
       Console.log("Generating report from template: ${reportTemplateFile.absolutePath}")
@@ -94,6 +118,8 @@ object WasmReport {
         sessionInfoJson = sessionInfoJson,
         sessionToImageFiles = sessionToImageFilesStr,
         perSessionData = perSessionData,
+        videoFrameImages = videoFrameImages,
+        compressedCaptureMetadata = compressedCaptureMetadata,
       )
     } else {
       Console.log("Generating report from raw WASM UI build artifacts...")
@@ -104,6 +130,8 @@ object WasmReport {
         sessionInfoJson = sessionInfoJson,
         sessionToImageFiles = sessionToImageFilesStr,
         perSessionData = perSessionData,
+        videoFrameImages = videoFrameImages,
+        compressedCaptureMetadata = compressedCaptureMetadata,
       )
     }
 
@@ -121,38 +149,22 @@ object WasmReport {
     val imageFiles = sessionToImageFiles[sessionId] ?: emptyList()
     val logsWithKeys = replaceScreenshotPathsWithImageKeys(logs, sessionId.value)
 
-    val yamlRecording = try {
-      logs.generateRecordedYaml()
-    } catch (e: Exception) {
-      buildString {
-        appendLine("Exception while generating recorded YAML:")
-        appendLine(e.message)
-        appendLine(e.stackTraceToString())
-      }
-    }
-
     sessionId.value to PerSessionData(
       logs = logsWithKeys,
-      yaml = yamlRecording,
       imageKeys = imageFiles.map { "${sessionId.value}/${it.name}" },
     )
   }
 
   private fun compressPerSessionData(
     perSessionData: Map<String, PerSessionData>,
-  ): Pair<Map<String, String>, Map<String, String>> {
+  ): Map<String, String> {
     val startTime = System.currentTimeMillis()
 
-    val compressedData = runBlocking(Dispatchers.Default) {
+    val compressedLogs = runBlocking(Dispatchers.Default) {
       perSessionData.entries.map { (sessionId, data) ->
         async {
           val logsJson = compactJson(TrailblazeJsonInstance.encodeToString(data.logs))
-          val yamlJson = compactJson(TrailblazeJsonInstance.encodeToString(data.yaml))
-
-          sessionId to Pair(
-            compressStringToBase64(logsJson),
-            compressStringToBase64(yamlJson),
-          )
+          sessionId to compressStringToBase64(logsJson)
         }
       }.awaitAll().toMap()
     }
@@ -160,10 +172,7 @@ object WasmReport {
     val elapsed = (System.currentTimeMillis() - startTime) / 1000.0
     Console.log("  ✅ Compressed ${perSessionData.size} sessions in ${elapsed.toInt()}s")
 
-    return Pair(
-      compressedData.mapValues { it.value.first },
-      compressedData.mapValues { it.value.second },
-    )
+    return compressedLogs
   }
 
   private fun generateFromTemplate(
@@ -173,66 +182,83 @@ object WasmReport {
     sessionInfoJson: String,
     sessionToImageFiles: Map<String, List<File>>,
     perSessionData: Map<String, PerSessionData>,
+    videoFrameImages: Map<String, ByteArray> = emptyMap(),
+    compressedCaptureMetadata: Map<String, String> = emptyMap(),
   ) {
     Console.log("Generating report from template: ${reportTemplateFile.absolutePath}")
 
     val compressedSessionJson = compressStringToBase64(sessionJson)
     val compressedSessionInfoJson = compressStringToBase64(sessionInfoJson)
 
-    val (compressedPerSessionLogs, compressedPerSessionYaml) = compressPerSessionData(perSessionData)
+    val compressedPerSessionLogs = compressPerSessionData(perSessionData)
 
     Console.log("\nCompressing and encoding images...")
-    val compressedImages = compressImages(sessionToImageFiles)
+    val compressedImages = compressImages(sessionToImageFiles, videoFrameImages)
 
-    val templateContent = reportTemplateFile.readText()
+    // The template already contains working WASM loader, webpack patch, and JS loader scripts
+    // from the generateRaw() build step. We only need to replace the compressed data block
+    // with one that includes the real session data. All per-session data (logs, images)
+    // is inlined directly in the object literal so it's available synchronously before the
+    // WASM app starts — no chunk loading or chunksReady mechanism needed.
+    // Recording YAML is generated on-the-fly in the Wasm UI from the session logs.
 
-    Console.log("\nExtracting and compressing JavaScript bundle from template...")
-    val jsExtractRegex = """<script type="application/javascript">\s*([\s\S]*?)\s*</script>""".toRegex()
-    val mainJsScript = jsExtractRegex.findAll(templateContent)
-      .maxByOrNull { it.groupValues[1].length }
+    // Read the template into memory. The template itself is small (just HTML + WASM/JS bundles,
+    // typically a few MB). The session data block (especially images) can be several GB on large
+    // CI runs, so we must NOT accumulate the full result as a String — that would hit Java's
+    // 2 GB array size limit. Instead, we apply all removals to the small template first, find
+    // the insertion point, then stream-write the three parts directly to disk.
+    var templateContent = reportTemplateFile.readText()
 
-    if (mainJsScript == null) {
-      Console.log("⚠️  WARNING: Could not find JavaScript bundle in template!")
-    }
+    // Strip any legacy chunk scripts from template (loadChunkById, octet-stream tags, etc.).
+    // These patterns target the original template HTML only (never the data block), so applying
+    // them before inserting the data block is safe and keeps the template small.
+    val newChunkBlockRegex =
+      Regex("""<!-- TRAILBLAZE_CHUNKS_START -->[\s\S]*?<!-- TRAILBLAZE_CHUNKS_END -->\s*""")
+    val oldChunkBlockRegex =
+      Regex("""<script>\s*\n?\s*window\.loadChunkById[\s\S]*?window\.chunksReady\s*=\s*true;[\s\S]*?</script>\s*\n?""")
+    val octetStreamRegex =
+      Regex("""<script\s+type="application/octet-stream"\s+id="chunk-[^"]*">[^<]*</script>\s*""")
+    templateContent = templateContent.replace(newChunkBlockRegex, "")
+    templateContent = templateContent.replace(oldChunkBlockRegex, "")
+    templateContent = templateContent.replace(octetStreamRegex, "")
 
-    val jsContent = mainJsScript?.groupValues?.get(1) ?: ""
-    val compressedJsBase64 = if (jsContent.isNotEmpty()) {
-      compressStringToBase64(jsContent)
-    } else {
-      ""
-    }
-
-    val wasmFileRegex = """["']([^"']+\.wasm)["']""".toRegex()
-    val wasmFiles = wasmFileRegex.findAll(jsContent)
-      .map { it.groupValues[1].substringAfterLast('/') }
-      .toSet()
-      .associateWith { "" }
-
-    var output = if (mainJsScript != null) {
-      templateContent.replace(mainJsScript.value, createJsLoaderScript(compressedJsBase64, wasmFiles))
-    } else {
-      templateContent
-    }
-
-    Console.log("\nGenerating chunked script tags for lazy loading...")
-    val chunkScripts = generateChunkedScriptTags(
-      compressedPerSessionLogs,
-      compressedPerSessionYaml,
-      compressedImages,
-    )
-
+    // Locate the placeholder in the cleaned template.
+    Console.log("\nReplacing compressed data block with new session data...")
     val compressedDataRegex = """window\.trailblaze_report_compressed\s*=\s*\{[\s\S]*?\};""".toRegex()
-    val replacementBlock = createCompressedDataBlock(compressedSessionJson, compressedSessionInfoJson)
+    val matchResult = compressedDataRegex.find(templateContent)
 
-    val matches = compressedDataRegex.findAll(output).count()
-    if (matches == 0) {
+    if (matchResult == null) {
       Console.log("⚠️  WARNING: Could not find window.trailblaze_report_compressed in template!")
     }
 
-    output = output.replace(compressedDataRegex, replacementBlock)
-    output = output.replace("</body>", "$chunkScripts</body>")
-
-    reportOutputFile.writeText(output)
+    // Stream-write the output in three parts to avoid building a 2 GB+ String in memory:
+    //   1. Template content before the data-block placeholder.
+    //   2. The data block, written entry-by-entry via writeCompressedDataBlock().
+    //   3. Template content after the placeholder.
+    reportOutputFile.bufferedWriter(Charsets.UTF_8).use { writer ->
+      if (matchResult == null) {
+        // No placeholder found — write template as-is (graceful degradation).
+        writer.write(templateContent)
+      } else {
+        val afterMatchStart = matchResult.range.last + 1
+        // Part 1: everything before the placeholder.
+        writer.write(templateContent, 0, matchResult.range.first)
+        // Part 2: data block (images written one entry at a time — never one giant String).
+        writeCompressedDataBlock(
+          writer = writer,
+          compressedSessionJson = compressedSessionJson,
+          compressedSessionInfoJson = compressedSessionInfoJson,
+          compressedPerSessionLogs = compressedPerSessionLogs,
+          compressedImages = compressedImages,
+          compressedCaptureMetadata = compressedCaptureMetadata,
+          imageAliases = imageAliases,
+        )
+        // Part 3: everything after the placeholder.
+        if (afterMatchStart < templateContent.length) {
+          writer.write(templateContent, afterMatchStart, templateContent.length - afterMatchStart)
+        }
+      }
+    }
   }
 
   private fun generateRaw(
@@ -242,6 +268,8 @@ object WasmReport {
     sessionInfoJson: String,
     sessionToImageFiles: Map<String, List<File>>,
     perSessionData: Map<String, PerSessionData>,
+    videoFrameImages: Map<String, ByteArray> = emptyMap(),
+    compressedCaptureMetadata: Map<String, String> = emptyMap(),
   ) {
     Console.log("Generating report from wasm ui build artifacts: ${trailblazeUiProjectDir.absolutePath}")
 
@@ -272,33 +300,30 @@ object WasmReport {
     val compressedSessionJson = compressStringToBase64(sessionJson)
     val compressedSessionInfoJson = compressStringToBase64(sessionInfoJson)
 
-    Console.log("\nCompressing per-session data for lazy loading...")
-    val (compressedPerSessionLogs, compressedPerSessionYaml) = compressPerSessionData(perSessionData)
+    Console.log("\nCompressing per-session data...")
+    val compressedPerSessionLogs = compressPerSessionData(perSessionData)
 
-    val compressedImages = compressImages(sessionToImageFiles)
+    val compressedImages = compressImages(sessionToImageFiles, videoFrameImages)
 
-    Console.log("\nGenerating chunked script tags for lazy loading...")
-    val chunkScripts = generateChunkedScriptTags(
-      compressedPerSessionLogs,
-      compressedPerSessionYaml,
-      compressedImages,
-    )
-
-    val htmlTemplate = indexHtmlFile.readText().let { html ->
-      html
-        .replace(
-          "window.trailblaze_report = {};",
-          buildString {
-            appendLine("window.trailblaze_report = {};")
-            appendLine(createCompressedDataBlock(compressedSessionJson, compressedSessionInfoJson))
-          },
-        )
-        .replace(
-          "window.trailblaze_report_compressed = {};",
-          "// window.trailblaze_report_compressed already initialized above",
-        )
-        .replace("</body>", "$chunkScripts</body>")
-    }
+    val htmlTemplate = indexHtmlFile.readText()
+      .replace(
+        "window.trailblaze_report = {};",
+        buildString {
+          appendLine("window.trailblaze_report = {};")
+          appendLine(createCompressedDataBlock(
+            compressedSessionJson,
+            compressedSessionInfoJson,
+            compressedPerSessionLogs,
+            compressedImages,
+            compressedCaptureMetadata,
+            imageAliases,
+          ))
+        },
+      )
+      .replace(
+        "window.trailblaze_report_compressed = {};",
+        "// window.trailblaze_report_compressed already initialized above",
+      )
 
     Console.log("\nCompressing and encoding WASM files...")
     val wasmData = runBlocking(Dispatchers.IO) {
@@ -348,17 +373,103 @@ object WasmReport {
   private fun createCompressedDataBlock(
     compressedSessionJson: String,
     compressedSessionInfoJson: String,
+    compressedPerSessionLogs: Map<String, String> = emptyMap(),
+    compressedImages: Map<String, String> = emptyMap(),
+    compressedCaptureMetadata: Map<String, String> = emptyMap(),
+    imageAliases: Map<String, String> = emptyMap(),
   ): String = buildString {
     append("window.trailblaze_report_compressed = {\n")
     append("  sessions: \"$compressedSessionJson\",\n")
     append("  session_info: \"$compressedSessionInfoJson\",\n")
     append("  session_detail: null,\n")
-    append("  session_yaml: null,\n")
-    append("  per_session_logs: {},\n")
-    append("  per_session_yaml: {},\n")
-    append("  images: {}\n")
+    append("  per_session_logs: {")
+    append(compressedPerSessionLogs.entries.joinToString(",") { (id, data) ->
+      val escapedId = id.replace("\\", "\\\\").replace("\"", "\\\"")
+      "\"$escapedId\":\"$data\""
+    })
+    append("},\n")
+    append("  capture_metadata: {")
+    append(compressedCaptureMetadata.entries.joinToString(",") { (id, data) ->
+      val escapedId = id.replace("\\", "\\\\").replace("\"", "\\\"")
+      "\"$escapedId\":\"$data\""
+    })
+    append("},\n")
+    append("  images: {")
+    append(compressedImages.entries.joinToString(",") { (key, data) ->
+      val escapedKey = key.replace("\\", "\\\\").replace("\"", "\\\"")
+      "\"$escapedKey\":\"$data\""
+    })
+    append("},\n")
+    append("  image_aliases: {")
+    append(imageAliases.entries.joinToString(",") { (alias, canonical) ->
+      val escapedAlias = alias.replace("\\", "\\\\").replace("\"", "\\\"")
+      val escapedCanonical = canonical.replace("\\", "\\\\").replace("\"", "\\\"")
+      "\"$escapedAlias\":\"$escapedCanonical\""
+    })
+    append("}\n")
     append("};\n\n")
     append(getDefaultTransformImageUrlFunction())
+  }
+
+  /**
+   * Writes the compressed data block directly to a [Writer], entry-by-entry, to avoid
+   * accumulating a potentially 2 GB+ String in memory on large CI runs.
+   *
+   * This is the streaming equivalent of [createCompressedDataBlock] and must be kept in sync
+   * with it. Use this overload inside [generateFromTemplate] where the output is streamed to disk.
+   */
+  private fun writeCompressedDataBlock(
+    writer: Writer,
+    compressedSessionJson: String,
+    compressedSessionInfoJson: String,
+    compressedPerSessionLogs: Map<String, String> = emptyMap(),
+    compressedImages: Map<String, String> = emptyMap(),
+    compressedCaptureMetadata: Map<String, String> = emptyMap(),
+    imageAliases: Map<String, String> = emptyMap(),
+  ) {
+    writer.write("window.trailblaze_report_compressed = {\n")
+    writer.write("  sessions: \"$compressedSessionJson\",\n")
+    writer.write("  session_info: \"$compressedSessionInfoJson\",\n")
+    writer.write("  session_detail: null,\n")
+    writer.write("  per_session_logs: {")
+    var first = true
+    compressedPerSessionLogs.forEach { (id, data) ->
+      if (!first) writer.write(",")
+      first = false
+      val escapedId = id.replace("\\", "\\\\").replace("\"", "\\\"")
+      writer.write("\"$escapedId\":\"$data\"")
+    }
+    writer.write("},\n")
+    writer.write("  capture_metadata: {")
+    first = true
+    compressedCaptureMetadata.forEach { (id, data) ->
+      if (!first) writer.write(",")
+      first = false
+      val escapedId = id.replace("\\", "\\\\").replace("\"", "\\\"")
+      writer.write("\"$escapedId\":\"$data\"")
+    }
+    writer.write("},\n")
+    writer.write("  images: {")
+    first = true
+    compressedImages.forEach { (key, data) ->
+      if (!first) writer.write(",")
+      first = false
+      val escapedKey = key.replace("\\", "\\\\").replace("\"", "\\\"")
+      writer.write("\"$escapedKey\":\"$data\"")
+    }
+    writer.write("},\n")
+    writer.write("  image_aliases: {")
+    first = true
+    imageAliases.forEach { (alias, canonical) ->
+      if (!first) writer.write(",")
+      first = false
+      val escapedAlias = alias.replace("\\", "\\\\").replace("\"", "\\\"")
+      val escapedCanonical = canonical.replace("\\", "\\\\").replace("\"", "\\\"")
+      writer.write("\"$escapedAlias\":\"$escapedCanonical\"")
+    }
+    writer.write("}\n")
+    writer.write("};\n\n")
+    writer.write(getDefaultTransformImageUrlFunction())
   }
 
   private fun getDefaultTransformImageUrlFunction(): String = """
@@ -442,66 +553,65 @@ object WasmReport {
 
   private fun compressStringToBase64(text: String): String = Base64.encode(compressBytes(text.toByteArray(Charsets.UTF_8)))
 
-  private fun compressImages(sessionToImageFiles: Map<String, List<File>>): Map<String, String> {
+  private fun compressImages(
+    sessionToImageFiles: Map<String, List<File>>,
+    videoFrameImages: Map<String, ByteArray> = emptyMap(),
+  ): Map<String, String> {
     val allImagePairs = sessionToImageFiles.flatMap { (sessionId, imageFiles) ->
       imageFiles.map { sessionId to it }
     }
-
-    return runBlocking(Dispatchers.Default) {
-      allImagePairs.map { (sessionId, imageFile) ->
-        async {
-          val imageKey = "$sessionId/${imageFile.name}"
-          val imageBytes = imageFile.readBytes()
-          val compressed = compressBytes(imageBytes)
-          val base64Compressed = Base64.encode(compressed)
-          imageKey to base64Compressed
+    val totalItems = allImagePairs.size + videoFrameImages.size
+    if (totalItems == 0) return emptyMap()
+    val imageCompressionParallelism = resolveImageCompressionParallelism()
+    Console.log("  Using image compression parallelism: $imageCompressionParallelism")
+    val compressedImages = LinkedHashMap<String, String>(totalItems)
+    val imageCompressorDispatcher = Dispatchers.IO.limitedParallelism(imageCompressionParallelism)
+    runBlocking {
+      // Compress regular screenshot files
+      allImagePairs
+        .chunked(imageCompressionParallelism)
+        .forEach { batch ->
+          batch.map { (sessionId, imageFile) ->
+            async(imageCompressorDispatcher) {
+              val imageKey = "$sessionId/${imageFile.name}"
+              val imageBytes = imageFile.readBytes()
+              val compressed = compressBytes(imageBytes)
+              val base64Compressed = Base64.encode(compressed)
+              imageKey to base64Compressed
+            }
+          }.awaitAll().forEach { (imageKey, base64Compressed) ->
+            compressedImages[imageKey] = base64Compressed
+          }
         }
-      }.awaitAll().toMap()
-    }
-  }
 
-  private fun generateChunkedScriptTags(
-    compressedPerSessionLogs: Map<String, String>,
-    compressedPerSessionYaml: Map<String, String>,
-    compressedImages: Map<String, String>,
-  ): String = buildString {
-    appendLine("<script>")
-    appendLine("window.loadChunkById = function(chunkId) {")
-    appendLine("  const scriptElement = document.getElementById(chunkId);")
-    appendLine("  if (!scriptElement) {")
-    appendLine("    console.error('Chunk not found:', chunkId);")
-    appendLine("    return null;")
-    appendLine("  }")
-    appendLine("  const data = scriptElement.textContent;")
-    appendLine("  scriptElement.remove();")
-    appendLine("  return data;")
-    appendLine("};")
-    appendLine("</script>")
-    appendLine()
-
-    compressedPerSessionLogs.forEach { (sessionId, compressed) ->
-      val chunkId = "chunk-logs-${sessionId.replace("/", "-")}"
-      appendLine("<script type=\"application/octet-stream\" id=\"$chunkId\">$compressed</script>")
-    }
-
-    compressedPerSessionYaml.forEach { (sessionId, compressed) ->
-      val chunkId = "chunk-yaml-${sessionId.replace("/", "-")}"
-      appendLine("<script type=\"application/octet-stream\" id=\"$chunkId\">$compressed</script>")
-    }
-
-    val imagesBySession = compressedImages.entries.groupBy { it.key.substringBefore("/") }
-    imagesBySession.forEach { (_, images) ->
-      images.forEach { (imageKey, compressed) ->
-        val chunkId = "chunk-image-${imageKey.replace("/", "-").replace(".", "-").replace("_", "-")}"
-        appendLine("<script type=\"application/octet-stream\" id=\"$chunkId\">$compressed</script>")
+      // Compress video frame byte arrays
+      if (videoFrameImages.isNotEmpty()) {
+        Console.log("  Compressing ${videoFrameImages.size} video frames...")
+        videoFrameImages.entries.toList()
+          .chunked(imageCompressionParallelism)
+          .forEach { batch ->
+            batch.map { (imageKey, imageBytes) ->
+              async(imageCompressorDispatcher) {
+                val compressed = compressBytes(imageBytes)
+                val base64Compressed = Base64.encode(compressed)
+                imageKey to base64Compressed
+              }
+            }.awaitAll().forEach { (imageKey, base64Compressed) ->
+              compressedImages[imageKey] = base64Compressed
+            }
+          }
       }
     }
-
-    appendLine("<script>")
-    appendLine("console.log('📦 All chunks loaded:', document.querySelectorAll('[id^=\"chunk-\"]').length, 'chunks');")
-    appendLine("window.chunksReady = true;")
-    appendLine("if (window.onChunksReady) window.onChunksReady();")
-    appendLine("</script>")
+    return compressedImages
+  }
+ 
+  private fun resolveImageCompressionParallelism(): Int {
+    val envParallelism = System.getenv("TRAILBLAZE_REPORT_IMAGE_COMPRESSION_PARALLELISM")
+      ?.toIntOrNull()
+      ?.takeIf { it > 0 }
+    if (envParallelism != null) return envParallelism
+    val cores = Runtime.getRuntime().availableProcessors().coerceAtLeast(1)
+    return minOf(cores, 4)
   }
 
   private fun createWasmLoaderScript(wasmData: Map<String, String>): String {
@@ -721,6 +831,277 @@ object WasmReport {
     """.trimIndent()
   }
 
+  /**
+   * Per-session info about the trimmed video window (test execution only, not full capture).
+   */
+  private data class TrimmedVideoInfo(
+    val trimmedStartMs: Long,
+    val trimmedEndMs: Long,
+  )
+
+  /**
+   * Extracts video frames at [WASM_VIDEO_FPS] for each session that has a video capture.
+   * Frames are trimmed to the test execution window (first log event to last log event)
+   * to avoid wasting space on pre-test and post-test dead time.
+   *
+   * Returns a pair of:
+   * - Map of image keys to JPEG byte arrays
+   * - Map of session ID to [TrimmedVideoInfo] for adjusting capture metadata
+   */
+  /**
+   * Image aliases for deduplication: maps an image key to a canonical key that holds the actual
+   * data. When multiple video frames are identical (e.g. static UI), only the canonical frame is
+   * stored and the rest are aliases.
+   */
+  private val imageAliases = LinkedHashMap<String, String>()
+
+  private fun extractVideoFrames(
+    logsRepo: LogsRepo,
+    sessionIds: List<SessionId>,
+  ): Pair<Map<String, ByteArray>, Map<String, TrimmedVideoInfo>> {
+    val frames = LinkedHashMap<String, ByteArray>()
+    val trimInfo = LinkedHashMap<String, TrimmedVideoInfo>()
+    for (sessionId in sessionIds) {
+      val sessionDir = File(logsRepo.logsDir, sessionId.value)
+      val metadataFile = File(sessionDir, "capture_metadata.json")
+      if (!metadataFile.exists()) continue
+
+      try {
+        val metadata = compactJsonReformatter.decodeFromString<JsonElement>(metadataFile.readText())
+        val artifacts = metadata.jsonObject["artifacts"]?.jsonArray ?: continue
+
+        // Prefer sprite sheet (VIDEO_FRAMES) over raw video (VIDEO)
+        val spritesArtifact = artifacts.firstOrNull { entry ->
+          entry.jsonObject["type"]?.jsonPrimitive?.content == "VIDEO_FRAMES"
+        }
+        if (spritesArtifact != null) {
+          extractFromSpriteSheet(sessionId, sessionDir, spritesArtifact, logsRepo, frames, trimInfo)
+          continue
+        }
+
+        val videoArtifact = artifacts.firstOrNull { entry ->
+          entry.jsonObject["type"]?.jsonPrimitive?.content == "VIDEO"
+        } ?: continue
+        extractFromVideo(sessionId, sessionDir, videoArtifact, logsRepo, frames, trimInfo)
+      } catch (e: Exception) {
+        Console.log("  WARNING: Failed to extract video frames for ${sessionId.value}: ${e.message}")
+      }
+    }
+    Console.log("  Total video frames: ${frames.size} unique + ${imageAliases.size} aliased (${frames.size + imageAliases.size} logical)")
+    return frames to trimInfo
+  }
+
+  /** Crops individual frames from a pre-built sprite sheet — no ffmpeg needed. */
+  private fun extractFromSpriteSheet(
+    sessionId: SessionId,
+    sessionDir: File,
+    artifact: JsonElement,
+    logsRepo: LogsRepo,
+    frames: MutableMap<String, ByteArray>,
+    trimInfo: MutableMap<String, TrimmedVideoInfo>,
+  ) {
+    val filename = artifact.jsonObject["filename"]?.jsonPrimitive?.content ?: return
+    val startMs = artifact.jsonObject["startTimestampMs"]?.jsonPrimitive?.content?.toLongOrNull() ?: return
+    val endMs = artifact.jsonObject["endTimestampMs"]?.jsonPrimitive?.content?.toLongOrNull() ?: return
+    val spriteFile = File(sessionDir, filename)
+    if (!spriteFile.exists()) return
+
+    // Parse sprite metadata
+    val metaFile = File(sessionDir, "video_sprites.txt")
+    if (!metaFile.exists()) return
+    val props = metaFile.readLines().associate {
+      val (k, v) = it.split("=", limit = 2)
+      k.trim() to v.trim()
+    }
+    val fps = props["fps"]?.toIntOrNull() ?: return
+    val frameCount = props["frames"]?.toIntOrNull() ?: return
+    val frameHeight = props["height"]?.toIntOrNull() ?: return
+    val columns = props["columns"]?.toIntOrNull() ?: 1
+    val frameMap = props["frameMap"]?.split(",")?.map { it.toInt() }
+    val uniqueFrameCount = props["uniqueFrames"]?.toIntOrNull()
+    val rows = props["rows"]?.toIntOrNull() ?: (uniqueFrameCount ?: frameCount)
+
+    Console.log("  Loading sprite sheet for ${sessionId.value}/$filename ($frameCount frames at ${fps}fps)")
+
+    // Trim to test execution window
+    val logs = logsRepo.getLogsForSession(sessionId)
+    val sortedLogs = logs.sortedBy { it.timestamp }
+    val firstLogMs = sortedLogs.firstOrNull()?.timestamp?.toEpochMilliseconds()
+    val lastLogMs = sortedLogs.lastOrNull()?.timestamp?.toEpochMilliseconds()
+    val trimStartMs = if (firstLogMs != null) maxOf(startMs, firstLogMs) else startMs
+    val trimEndMs = if (lastLogMs != null) minOf(endMs, lastLogMs) else endMs
+
+    // Calculate which frames fall in the trimmed window
+    val totalDurationMs = endMs - startMs
+    val firstFrameIndex = if (totalDurationMs > 0) {
+      ((trimStartMs - startMs) * fps / 1000).toInt().coerceIn(0, frameCount - 1)
+    } else 0
+    val lastFrameIndex = if (totalDurationMs > 0) {
+      ((trimEndMs - startMs) * fps / 1000).toInt().coerceIn(0, frameCount - 1)
+    } else frameCount - 1
+
+    // Load the sprite sheet image
+    val spriteImage = javax.imageio.ImageIO.read(spriteFile) ?: return
+    val spriteWidth = spriteImage.width
+
+    // Crop each frame and write as JPEG bytes, deduplicating via frameMap.
+    // When frameMap is present, multiple logical frames may map to the same physical sprite
+    // position — we only crop a physical frame once and alias the rest.
+    val frameWidth = spriteWidth / columns
+    var outputIndex = 1
+    val physicalToCropKey = mutableMapOf<Int, String>() // physical index -> first image key
+    var aliasCount = 0
+    for (i in firstFrameIndex..lastFrameIndex) {
+      val physicalIndex = frameMap?.getOrNull(i) ?: i
+      val imageKey = "${sessionId.value}/vf_%06d.jpg".format(outputIndex)
+
+      val existingKey = physicalToCropKey[physicalIndex]
+      if (existingKey != null) {
+        // This logical frame is identical to a previously cropped frame — alias it.
+        imageAliases[imageKey] = existingKey
+        aliasCount++
+      } else {
+        // Crop this physical frame from the sprite grid.
+        val col = physicalIndex / rows
+        val row = physicalIndex % rows
+        val x = col * frameWidth
+        val y = row * frameHeight
+        val w = frameWidth.coerceAtMost(spriteImage.width - x)
+        val h = frameHeight.coerceAtMost(spriteImage.height - y)
+        if (w <= 0 || h <= 0) break
+        val frameImage = spriteImage.getSubimage(x, y, w, h)
+        val baos = ByteArrayOutputStream()
+        javax.imageio.ImageIO.write(frameImage, "jpg", baos)
+        frames[imageKey] = baos.toByteArray()
+        physicalToCropKey[physicalIndex] = imageKey
+      }
+      outputIndex++
+    }
+    trimInfo[sessionId.value] = TrimmedVideoInfo(trimStartMs, trimEndMs)
+    val totalCropped = outputIndex - 1
+    Console.log(
+      "    Cropped $totalCropped frames from sprite sheet (frames $firstFrameIndex..$lastFrameIndex)" +
+        if (aliasCount > 0) ", $aliasCount aliased as duplicates" else ""
+    )
+  }
+
+  /** Extracts frames from a raw video file using ffmpeg (legacy path). */
+  private fun extractFromVideo(
+    sessionId: SessionId,
+    sessionDir: File,
+    artifact: JsonElement,
+    logsRepo: LogsRepo,
+    frames: MutableMap<String, ByteArray>,
+    trimInfo: MutableMap<String, TrimmedVideoInfo>,
+  ) {
+    val videoFilename = artifact.jsonObject["filename"]?.jsonPrimitive?.content ?: return
+    val videoStartMs = artifact.jsonObject["startTimestampMs"]?.jsonPrimitive?.content?.toLongOrNull() ?: return
+    val videoEndMs = artifact.jsonObject["endTimestampMs"]?.jsonPrimitive?.content?.toLongOrNull() ?: return
+    val videoFile = File(sessionDir, videoFilename)
+    if (!videoFile.exists()) return
+
+    val logs = logsRepo.getLogsForSession(sessionId)
+    val sortedLogs = logs.sortedBy { it.timestamp }
+    val firstLogMs = sortedLogs.firstOrNull()?.timestamp?.toEpochMilliseconds()
+    val lastLogMs = sortedLogs.lastOrNull()?.timestamp?.toEpochMilliseconds()
+    val trimStartMs = if (firstLogMs != null) maxOf(videoStartMs, firstLogMs) else videoStartMs
+    val trimEndMs = if (lastLogMs != null) minOf(videoEndMs, lastLogMs) else videoEndMs
+    val seekOffsetSec = (trimStartMs - videoStartMs) / 1000.0
+    val durationSec = (trimEndMs - trimStartMs) / 1000.0
+
+    Console.log("  Extracting frames from ${sessionId.value}/$videoFilename at ${WASM_VIDEO_FPS}fps...")
+    Console.log("    Video: ${(videoEndMs - videoStartMs) / 1000.0}s, trimmed to test window: ${durationSec}s (offset: ${seekOffsetSec}s)")
+
+    val tempDir = java.nio.file.Files.createTempDirectory("trailblaze_wasm_frames_").toFile()
+    try {
+      val command = mutableListOf(
+        "ffmpeg",
+        "-i", videoFile.absolutePath,
+        "-ss", "%.3f".format(seekOffsetSec),
+        "-t", "%.3f".format(durationSec),
+        "-vf", "fps=$WASM_VIDEO_FPS,scale=-2:360",
+        "-q:v", "5",
+        "-loglevel", "error",
+        "${tempDir.absolutePath}/vf_%06d.jpg",
+      )
+      val process = ProcessBuilder(command).redirectErrorStream(true).start()
+      process.inputStream.bufferedReader().readText()
+      process.waitFor(120, TimeUnit.SECONDS)
+
+      val frameFiles = tempDir.listFiles { _, name -> name.startsWith("vf_") && name.endsWith(".jpg") }
+        ?.sortedBy { it.name } ?: emptyList()
+
+      for (frameFile in frameFiles) {
+        val imageKey = "${sessionId.value}/${frameFile.name}"
+        frames[imageKey] = frameFile.readBytes()
+      }
+      trimInfo[sessionId.value] = TrimmedVideoInfo(trimStartMs, trimEndMs)
+      Console.log("    Extracted ${frameFiles.size} frames")
+    } finally {
+      tempDir.deleteRecursively()
+    }
+  }
+
+  /**
+   * Loads capture_metadata.json for each session that has one.
+   * When [trimInfo] is provided, the VIDEO artifact timestamps are adjusted to the
+   * test execution window so the UI timeline only covers the active test period.
+   * Returns a map of session ID to the JSON string content.
+   */
+  private fun loadCaptureMetadata(
+    logsRepo: LogsRepo,
+    sessionIds: List<SessionId>,
+    trimInfo: Map<String, TrimmedVideoInfo> = emptyMap(),
+  ): Map<String, String> {
+    val result = LinkedHashMap<String, String>()
+    for (sessionId in sessionIds) {
+      val sessionDir = File(logsRepo.logsDir, sessionId.value)
+      val metadataFile = File(sessionDir, "capture_metadata.json")
+      if (!metadataFile.exists()) continue
+      try {
+        val metadata = compactJsonReformatter.decodeFromString<JsonElement>(metadataFile.readText())
+        val trim = trimInfo[sessionId.value]
+        val adjusted = if (trim != null) {
+          // Rewrite VIDEO artifact timestamps to the trimmed test window
+          val artifacts = metadata.jsonObject["artifacts"]?.jsonArray ?: metadata.jsonObject["artifacts"]
+          val newArtifacts = artifacts?.jsonArray?.map { artifact ->
+            val obj = artifact.jsonObject
+            if (obj["type"]?.jsonPrimitive?.content == "VIDEO" || obj["type"]?.jsonPrimitive?.content == "VIDEO_FRAMES") {
+              kotlinx.serialization.json.buildJsonObject {
+                obj.forEach { (key, value) ->
+                  when (key) {
+                    "startTimestampMs" -> put(key, kotlinx.serialization.json.JsonPrimitive(trim.trimmedStartMs))
+                    "endTimestampMs" -> put(key, kotlinx.serialization.json.JsonPrimitive(trim.trimmedEndMs))
+                    else -> put(key, value)
+                  }
+                }
+              }
+            } else {
+              artifact
+            }
+          }
+          if (newArtifacts != null) {
+            kotlinx.serialization.json.buildJsonObject {
+              metadata.jsonObject.forEach { (key, value) ->
+                if (key == "artifacts") {
+                  put(key, kotlinx.serialization.json.JsonArray(newArtifacts))
+                } else {
+                  put(key, value)
+                }
+              }
+            }
+          } else metadata
+        } else metadata
+        val json = compactJsonReformatter.encodeToString(JsonElement.serializer(), adjusted)
+        result[sessionId.value] = json
+        Console.log("  Loaded capture metadata for ${sessionId.value}${if (trim != null) " (trimmed to test window)" else ""}")
+      } catch (e: Exception) {
+        Console.log("  WARNING: Failed to load capture metadata for ${sessionId.value}: ${e.message}")
+      }
+    }
+    return result
+  }
+
   private fun replaceScreenshotPathsWithImageKeys(
     logs: List<TrailblazeLog>,
     sessionId: String,
@@ -732,8 +1113,9 @@ object WasmReport {
         val imageKey = "$sessionId/$filename"
 
         when (log) {
-          is TrailblazeLog.MaestroDriverLog -> log.copy(screenshotFile = imageKey)
+          is TrailblazeLog.AgentDriverLog -> log.copy(screenshotFile = imageKey)
           is TrailblazeLog.TrailblazeLlmRequestLog -> log.copy(screenshotFile = imageKey)
+          is TrailblazeLog.TrailblazeSnapshotLog -> log.copy(screenshotFile = imageKey)
           else -> log
         }
       } else {

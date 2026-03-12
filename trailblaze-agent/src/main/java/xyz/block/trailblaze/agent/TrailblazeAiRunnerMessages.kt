@@ -6,105 +6,93 @@ import xyz.block.trailblaze.yaml.VerificationStep
 
 object TrailblazeAiRunnerMessages {
 
+  private val CONDITIONAL_PATTERNS = listOf("if there is", "if there's", "if the", "if a ", "if an ")
+
+  private val MULTI_STEP_PATTERNS = listOf(" and then ", " then ", " followed by ", " after that ")
+
+  private fun isConditionalObjective(prompt: String): Boolean =
+    CONDITIONAL_PATTERNS.any { prompt.lowercase().startsWith(it) }
+
+  private fun isMultiStepObjective(prompt: String): Boolean =
+    MULTI_STEP_PATTERNS.any { prompt.lowercase().contains(it) }
+
   fun getReminderMessage(
     promptStep: PromptStep,
-    forceStepStatusUpdate: Boolean,
-    actionsPerformedThisObjective: List<String> = emptyList(),
+    completedObjectiveDescriptions: List<String> = emptyList(),
+    latestObjectiveStatus: String? = null,
   ): String {
-    // Determine the prefix based on the type of prompt step
+    val prompt = promptStep.prompt
+    val isVerification = promptStep is VerificationStep
+    val isConditional = isConditionalObjective(prompt)
+    val isMultiStep = isMultiStepObjective(prompt)
+
     val prefix = when (promptStep) {
       is VerificationStep -> "Verify"
       is DirectionStep -> "Task"
     }
 
-    // Add verification-specific instructions
-    val verificationNote = if (promptStep is VerificationStep) {
-      """
-        
-        NOTE: This is a VERIFICATION task. Your job is to ONLY confirm what is currently 
-        visible on the screen. DO NOT attempt to alter the screen state, click anything, 
-        or make any changes. If you are asked to verify that something exists on the 
-        screen but it doesn't, fail the objective immediately.
-      """.trimIndent()
-    } else {
-      ""
-    }
+    return buildString {
+      // Prior objective context — only show the last one for awareness
+      val completedObjectives = completedObjectiveDescriptions.distinct()
+      if (completedObjectives.isNotEmpty()) {
+        val lastCompleted = completedObjectives.last()
+        val totalCompleted = completedObjectives.size
+        appendLine("## PRIOR OBJECTIVE (COMPLETED)")
+        appendLine("- [x] $lastCompleted")
+        if (totalCompleted > 1) {
+          appendLine("- (${totalCompleted - 1} earlier objective(s) also completed in this flow)")
+        }
+        appendLine()
+      }
 
-    // Build actions summary if there are actions performed
-    val actionsSummary = if (actionsPerformedThisObjective.isNotEmpty()) {
-      val actionsList = actionsPerformedThisObjective.mapIndexed { i, action ->
-        "${i + 1}. $action"
-      }.joinToString("\n")
-      """
-        ## ACTIONS PERFORMED SO FAR FOR THIS OBJECTIVE
+      // Show in-progress status from within the current step
+      latestObjectiveStatus
+        ?.takeIf { it != "COMPLETED" }
+        ?.let { status ->
+          appendLine("## LAST STATUS UPDATE")
+          appendLine("Your last status: $status")
+          appendLine()
+        }
 
-        The following ${actionsPerformedThisObjective.size} action(s) have been performed during this objective:
-        $actionsList
+      // Current objective
+      appendLine("## CURRENT OBJECTIVE")
+      appendLine()
+      appendLine("> $prefix $prompt")
 
-        Review these actions to determine if the FULL objective has been completed.
-        If more actions are needed to complete the objective, mark as "IN_PROGRESS".
+      // Verification-specific note
+      if (isVerification) {
+        appendLine()
+        appendLine("NOTE: This is a VERIFICATION objective. Your job is to ONLY confirm what is currently visible on the screen. DO NOT attempt to alter the screen state, click anything, or make any changes. If you are asked to verify that something exists on the screen but it doesn't, fail the objective immediately.")
+      }
 
-      """.trimIndent()
-    } else {
-      ""
-    }
+      appendLine()
+      appendLine("Focus ONLY on completing this specific objective. Do NOT perform actions beyond its scope.")
 
-    // Add objectives information if available
-    // Reminder message - depending on whether we need to force a task status update
-    val reminderMessage = if (forceStepStatusUpdate) {
-      """
-        ## ACTION REQUIRED: REPORT TASK STATUS
+      // objectiveStatus instructions
+      appendLine()
+      appendLine("You may chain multiple tool calls to complete this objective. Once the objective is fully done (or if you need to report progress), call the objectiveStatus tool:")
+      appendLine("- status=\"IN_PROGRESS\" if you need to take more actions to complete this objective")
+      appendLine("- status=\"COMPLETED\" if you have fully accomplished ALL parts of this objective")
+      appendLine("- status=\"FAILED\" if the objective cannot be completed after multiple attempts")
 
-        $actionsSummary
-        You just performed an action using a tool and the tool execution returned SUCCESS.
-        You MUST now report the status of the current objective item by calling the objectiveStatus tool with one of the following statuses:
-        - status="IN_PROGRESS" if you're still working on this specific objective item and need to take more actions
-        - status="COMPLETED" if you've fully accomplished ALL instructions in the current objective item
-        - status="FAILED" if this specific objective item cannot be completed after multiple attempts, or if clear error indicators are visible.
-
-        IMPORTANT GUIDANCE FOR COMPLETION EVALUATION:
-        - If the objective contains MULTIPLE STEPS (e.g., "do X, then Y"), you must complete ALL steps before marking as "COMPLETED"
-        - A single successful tool call does NOT mean the objective is complete - carefully read the full objective to ensure all parts are done
-        - Only mark as "COMPLETED" when you have performed ALL actions necessary to fulfill the objective
-        - If you've only completed part of a multi-step objective, mark as "IN_PROGRESS" and continue with the remaining steps
-
-        CRITICAL GUIDANCE FOR SINGLE-ACTION TASKS:
-        - A SINGLE-ACTION task is one where the objective describes ONE discrete action (e.g., "Tap on Settings button", "Click Submit button")
-        - "Input passcode", "Enter value", or similar objectives that require multiple inputs (like tapping 4 digits) are NOT single-action tasks
-        - Only mark as "COMPLETED" when you have performed ALL actions necessary to fulfill the objective, not just the first tool call
-        - For single-action tasks, you do NOT need to verify that specific UI elements are still visible after the action - the screen naturally changes after interactions
-        - Only mark as "FAILED" if there are clear ERROR INDICATORS (error dialogs, error messages, crash screens, etc.)
-
-        GUIDANCE FOR MULTI-STEP TASKS:
-        - If the tool call returned SUCCESS, you should be permissive in evaluating whether that specific action worked
-        - The screen state changing (even if different from what you expected) often indicates the action worked
-        - Don't fail the task just because you can't find the exact element you expected - the UI may have changed in ways you didn't anticipate
-        - Focus on whether the tool executed without errors, not on whether the resulting screen matches your exact expectations
-        - Only mark as "FAILED" if there are clear error indicators (error dialogs, error messages, etc.) or if you've tried multiple different approaches
-
-        Include a detailed message explaining what you just did and your assessment of the situation.
-
-        IMPORTANT: You CANNOT perform any other action until you report progress using objectiveStatus.
-
-        ## CURRENT TASK
-
-        Current objective item to focus on is:
-
-        > $prefix ${promptStep.prompt}$verificationNote
-      """.trimIndent()
-    } else {
-      """
-        ## CURRENT TASK
-        
-        Your current objective item to focus on is:
-        
-        > $prefix ${promptStep.prompt}$verificationNote
-        
-        IMPORTANT: Focus ONLY on completing this specific objective item. 
-        After you complete this objective item, call the objectiveStatus tool IMMEDIATELY.
-        DO NOT proceed to the next objective item until this one is complete and you've called objectiveStatus.
-      """.trimIndent()
-    }
-    return reminderMessage
+      // Dynamic completion guidance — only include what's relevant
+      appendLine()
+      appendLine("COMPLETION GUIDANCE:")
+      if (isConditional) {
+        appendLine("- This is a CONDITIONAL objective. If the condition is not met (e.g., the element is not present), mark COMPLETED — the absence means the condition was correctly evaluated, not a failure.")
+      }
+      if (isMultiStep) {
+        appendLine("- This is a MULTI-STEP objective. Complete ALL steps before marking COMPLETED.")
+      }
+      if (!isMultiStep && !isVerification) {
+        appendLine("- For single-action objectives, mark COMPLETED after the action succeeds — do NOT require the tapped element to still be visible (screens naturally change after taps).")
+      }
+      appendLine("- If a tool returned SUCCESS, be permissive — a changed screen usually means the action worked.")
+      if (isConditional) {
+        appendLine("- Only mark FAILED if there are clear error indicators (error dialogs, crash screens) or you have tried multiple different approaches and none succeeded.")
+      } else {
+        appendLine("- Mark FAILED if the required element or target cannot be found on the current screen, if there are clear error indicators (error dialogs, crash screens), or if you have tried multiple different approaches and none succeeded.")
+      }
+    }.trim()
   }
 }

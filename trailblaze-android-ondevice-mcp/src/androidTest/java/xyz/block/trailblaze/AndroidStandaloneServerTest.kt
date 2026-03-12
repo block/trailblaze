@@ -16,7 +16,6 @@ import xyz.block.trailblaze.http.DynamicLlmClient
 import xyz.block.trailblaze.http.TrailblazeHttpClientFactory
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
-import xyz.block.trailblaze.logs.client.TrailblazeSession
 
 /**
  * This would be the single test that runs the MCP server.  It blocks the instrumentation test
@@ -37,6 +36,8 @@ class AndroidStandaloneServerTest : BaseAndroidStandaloneServerTest() {
 
   override fun handleRunRequest(runYamlRequest: RunYamlRequest) {
     this.trailblazeDeviceId = runYamlRequest.trailblazeDeviceId
+    // Propagate the runtime driver type so session logs reflect the actual driver
+    runYamlRequest.driverType?.let { trailblazeLoggingRule.driverTypeOverride = it }
     val androidTrailblazeRule = AndroidTrailblazeRule(
       trailblazeLlmModel = runYamlRequest.trailblazeLlmModel,
       llmClient = getDynamicLlmClient(runYamlRequest.trailblazeLlmModel).createLlmClient(),
@@ -82,17 +83,12 @@ class AndroidStandaloneServerTest : BaseAndroidStandaloneServerTest() {
   fun startServer() {
     val onDeviceRpcServer = OnDeviceRpcServer(
       sessionManager = trailblazeLoggingRule.sessionManager,
-      runTrailblazeYaml = { runYamlRequest: RunYamlRequest, session: TrailblazeSession ->
-        // Set the session on the logging rule so it's available to all components
-        // that use sessionProvider (AndroidTrailblazeRule and its subcomponents)
-        trailblazeLoggingRule.setSession(session)
-        try {
-          handleRunRequest(runYamlRequest)
-        } finally {
-          // Clear the session after execution to prevent stale sessions
-          trailblazeLoggingRule.setSession(null)
-        }
-        session // Return the session unchanged
+      runTrailblazeYaml = createRunTrailblazeYamlCallback(),
+      runTwoTierAgent = createRunTwoTierAgentCallback(),
+      trailblazeDeviceInfoProvider = { deviceId ->
+        // Set the lateinit property early so the logging rule's provider can access it
+        this.trailblazeDeviceId = deviceId
+        trailblazeLoggingRule.trailblazeDeviceInfoProvider()
       },
     )
     onDeviceRpcServer.startServer(port = adbReversePort, wait = true)

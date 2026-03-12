@@ -1,0 +1,31 @@
+# Android World Benchmark: sms/reply_most_recent
+- config:
+    id: android-world-benchmarks/simple_sms_messenger/sms_reply_most_recent
+    description: Reply to the most recent text message using Simple SMS Messenger with message "Got it, thanks!"
+
+- tools:
+  - androidworldbenchmarks_runAdbShell:
+      adbShellCommands:
+        - "content delete --uri content://sms"
+  - androidworldbenchmarks_sendSmsToDevice:
+      fromNumber: "5559998888"
+      message: "Random noise msg"
+  - androidworldbenchmarks_sendSmsToDevice:
+      fromNumber: "5553334444"
+      message: "Please confirm the meeting time"
+
+- prompts:
+  - step: "Reply to the most recent text message using Simple SMS Messenger with message: Got it, thanks!"
+
+- tools:
+  - androidworldbenchmarks_assertAdbShellOutput:
+      command: "content query --uri content://sms --where \"address LIKE '%5553334444%' AND type=2\" --projection body"
+      expectedOutput: "Got it"
+      matchMode: "contains"
+
+# --- Benchmark Run History ---
+# [2026-03-11] FAILED - Agent limitation: ObjectiveFailed. Agent couldn't reply to
+#   the most recent message. May have struggled identifying which conversation was
+#   most recent when multiple threads exist.
+#   FIX: Migrated setup and validation from direct sqlite3 to content provider API.
+# [2026-03-11] Build #27 FAILED - Agent limitation: ObjectiveFailed. Same as build #24.

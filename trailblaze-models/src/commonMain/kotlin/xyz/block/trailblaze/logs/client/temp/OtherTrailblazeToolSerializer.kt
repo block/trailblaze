@@ -55,7 +55,14 @@ class OtherTrailblazeToolSerializer(private val allToolClasses: Map<ToolName, KC
         }
         put("class", JsonPrimitive(toolClassOnClasspathName))
       }
-      lenientJson.decodeFromString(toolClassOnClasspath.serializer(), newObj.toString())
+      try {
+        lenientJson.decodeFromString(toolClassOnClasspath.serializer(), newObj.toString())
+      } catch (_: Exception) {
+        // Typed deserialization can fail when args have incompatible types (e.g. lowercase
+        // enum values from benchmark tools vs uppercase enums in the main tool definition).
+        // Fall back to OtherTrailblazeTool so the log is still visible in the viewer.
+        lenientJson.decodeFromString<OtherTrailblazeTool>(jsonObject.toString())
+      }
     } else {
       lenientJson.decodeFromString<OtherTrailblazeTool>(jsonObject.toString())
     }
@@ -71,9 +78,10 @@ class OtherTrailblazeToolSerializer(private val allToolClasses: Map<ToolName, KC
     val otherTrailblazeToolData: OtherTrailblazeTool = value as? OtherTrailblazeTool
       ?: if (standardSerializer != null && toolName != null) {
         val objJson = lenientJson.encodeToString(standardSerializer, value)
+        val rawJsonObject = lenientJson.parseToJsonElement(objJson).jsonObject
         OtherTrailblazeTool(
           toolName,
-          lenientJson.decodeFromString<JsonObject>(objJson),
+          rawJsonObject,
         )
       } else {
         error("You are attempting to serialize a TrailblazeTool that has not be configured for the TrailblazeJson instance: $valueClass for content $value.  Please be sure to register this class.")

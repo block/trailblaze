@@ -1,18 +1,24 @@
 package xyz.block.trailblaze.toolcalls.commands
 
 import ai.koog.agents.core.tools.annotations.LLMDescription
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonNames
+import xyz.block.trailblaze.api.TrailblazeNodeSelectorGenerator
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.exception.TrailblazeToolExecutionException
 import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
+import xyz.block.trailblaze.toolcalls.ReasoningTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
+import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.viewmatcher.TapSelectorV2.findBestTrailblazeElementSelectorForTargetNodeWithStrategy
 import xyz.block.trailblaze.viewmatcher.models.RelativeViewPositioningData
 import xyz.block.trailblaze.viewmatcher.models.toOrderedSpatialHints
 import xyz.block.trailblaze.viewmatcher.strategies.IndexStrategy
 
+@OptIn(ExperimentalSerializationApi::class)
 @Serializable
 @TrailblazeToolClass(
   name = "tapOnElementByNodeId",
@@ -22,8 +28,6 @@ import xyz.block.trailblaze.viewmatcher.strategies.IndexStrategy
   "Tap/click on a specific view target by it's `nodeId`.",
 )
 data class TapOnElementByNodeIdTrailblazeTool(
-  @param:LLMDescription("Reasoning on why this view was chosen. Do NOT restate the nodeId.")
-  val reason: String,
   @param:LLMDescription("The `nodeId` of the tap target in the view hierarchy.")
   val nodeId: Long,
   @param:LLMDescription(
@@ -44,7 +48,10 @@ data class TapOnElementByNodeIdTrailblazeTool(
   val relativelyPositionedViews: List<RelativeViewPositioningData> = emptyList(),
   @param:LLMDescription("A standard tap is default, but return 'true' to perform a long press instead.")
   val longPress: Boolean = false,
-) : DelegatingTrailblazeTool {
+  // @JsonNames("reason") allows deserializing old recordings that used the "reason" field name.
+  @JsonNames("reason")
+  override val reasoning: String? = null,
+) : DelegatingTrailblazeTool, ReasoningTrailblazeTool {
 
   override fun toExecutableTrailblazeTools(executionContext: TrailblazeToolExecutionContext): List<ExecutableTrailblazeTool> {
     val trailblazeTool = this
@@ -92,16 +99,51 @@ data class TapOnElementByNodeIdTrailblazeTool(
               x = x,
               y = y,
               longPress = longPress,
+              reasoning = reasoning,
             ),
           )
         }
       }
     }
 
+    // Generate a rich TrailblazeNodeSelector if the screen state has a native tree.
+    // This provides richer element matching using driver-specific properties
+    // (className, inputType, collectionItemInfo, labeledByText, etc.)
+    //
+    // Node IDs don't align between ViewHierarchyTreeNode (pre-order DFS) and
+    // TrailblazeNode (post-order DFS from AccessibilityNode), so we match by
+    // center point coordinates instead. Both trees are built from the same
+    // AccessibilityNodeInfo root, so bounds are identical.
+    val nodeSelector = screenState.trailblazeNodeTree?.let { trailblazeTree ->
+      val centerPoint = matchingNode.centerPoint
+      if (centerPoint != null) {
+        val (cx, cy) = centerPoint.split(",").map { it.toInt() }
+        // Find all TrailblazeNodes whose bounds contain the center point,
+        // then pick the smallest (most specific) match.
+        val targetTrailblazeNode = trailblazeTree
+          .findAll { node -> node.bounds?.containsPoint(cx, cy) == true }
+          .minByOrNull { node ->
+            val b = node.bounds ?: return@minByOrNull Long.MAX_VALUE
+            b.width.toLong() * b.height.toLong()
+          }
+        targetTrailblazeNode?.let { target ->
+          try {
+            TrailblazeNodeSelectorGenerator.findBestSelector(trailblazeTree, target)
+          } catch (e: Exception) {
+            Console.log("WARNING: TrailblazeNodeSelector generation failed, falling back to legacy selector: ${e.message}")
+            null
+          }
+        }
+      } else {
+        null
+      }
+    }
+
     val bestTapTrailblazeToolForNode: ExecutableTrailblazeTool = TapOnByElementSelector(
-      reason = reason,
+      reason = reasoning,
       selector = selectorWithStrategy.selector,
       longPress = longPress,
+      nodeSelector = nodeSelector,
     )
 
     return listOf(bestTapTrailblazeToolForNode)

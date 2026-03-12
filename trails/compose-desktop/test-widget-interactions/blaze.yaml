@@ -1,0 +1,10 @@
+- config:
+    title: "Test: Widget interactions"
+    platform: compose
+- prompts:
+    - step: Click the dark mode switch to toggle it on
+    - step: Click the "Option B" radio button to select it
+    - step: Click the counter button three times
+    - step: 'Verify the text "Clicked: 3" is visible'
+    - step: Scroll the list to index 20
+    - step: Verify the text "Item 20" is visible

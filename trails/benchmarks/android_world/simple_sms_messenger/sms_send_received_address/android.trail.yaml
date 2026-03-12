@@ -1,0 +1,34 @@
+# Android World Benchmark: sms/send_received_address
+- config:
+    id: android-world-benchmarks/simple_sms_messenger/sms_send_received_address
+    description: Text the address of the event to Alice that Bob just sent in Simple SMS Messenger
+
+- tools:
+  - androidworldbenchmarks_runAdbShell:
+      adbShellCommands:
+        - "content delete --uri content://sms"
+  - androidworldbenchmarks_addContactToDevice:
+      name: "Alice"
+      phoneNumber: "5551234567"
+  - androidworldbenchmarks_addContactToDevice:
+      name: "Bob"
+      phoneNumber: "5559876543"
+  - androidworldbenchmarks_sendSmsToDevice:
+      fromNumber: "5559876543"
+      message: "The event is at 123 Main St Girdwood, AK, 99587"
+
+- prompts:
+  - step: "Text the address of the event to Alice that Bob just sent me in Simple SMS Messenger"
+
+- tools:
+  - androidworldbenchmarks_assertAdbShellOutput:
+      command: "content query --uri content://sms --where \"address LIKE '%5551234567%' AND type=2\" --projection body"
+      expectedOutput: "123 Main St"
+      matchMode: "contains"
+
+# --- Benchmark Run History ---
+# [2026-03-11] FAILED - Setup failure: addContactToDevice tool rejected raw contact insert.
+#   Precondition error before agent prompt. Needs tool-level fix for contact insertion.
+#   FIX: Migrated SMS cleanup and validation from direct sqlite3 to content provider API.
+# [2026-03-11] Build #27 FAILED - Infrastructure: addContactToDevice tool still fails.
+#   Same as build #24. Needs tool-level fix.

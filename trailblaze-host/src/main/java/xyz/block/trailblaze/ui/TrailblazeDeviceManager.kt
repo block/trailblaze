@@ -3,7 +3,6 @@ package xyz.block.trailblaze.ui
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -14,21 +13,26 @@ import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import java.util.concurrent.Callable
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import maestro.Driver
 import xyz.block.trailblaze.api.ScreenState
-import xyz.block.trailblaze.api.TrailblazeElementSelector
+import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
-import xyz.block.trailblaze.host.devices.HostWebDriverFactory
-import xyz.block.trailblaze.host.devices.HostWebDriverFactory.Companion.DEFAULT_PLAYWRIGHT_WEB_TRAILBLAZE_DEVICE_ID
 import xyz.block.trailblaze.host.devices.WebBrowserManager
 import xyz.block.trailblaze.host.devices.WebBrowserState
+import xyz.block.trailblaze.host.screenstate.HostMaestroDriverScreenState
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.llm.TrailblazeReferrer
@@ -36,25 +40,27 @@ import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeSessionManager
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
+import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateRequest
+import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRpcClient
+import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
 import xyz.block.trailblaze.model.AppVersionInfo
 import xyz.block.trailblaze.model.DesktopAppRunYamlParams
 import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.AssertVisibleBySelectorTrailblazeTool
 import xyz.block.trailblaze.ui.composables.DeviceClassifierIconProvider
 import xyz.block.trailblaze.ui.devices.DeviceManagerState
 import xyz.block.trailblaze.ui.devices.DeviceState
 import xyz.block.trailblaze.ui.models.AppIconProvider
-import xyz.block.trailblaze.yaml.TrailblazeYaml
+import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.yaml.models.TrailblazeYamlBuilder
+import java.util.Base64
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
-import maestro.device.Device as MaestroDevice
-import maestro.device.DeviceService as MaestroDeviceService
-import maestro.device.Platform as MaestroPlatform
+import xyz.block.trailblaze.host.rules.BasePlaywrightElectronTest
+import xyz.block.trailblaze.host.rules.BasePlaywrightNativeTest
 import xyz.block.trailblaze.util.Console
 
 /**
@@ -88,35 +94,36 @@ class TrailblazeDeviceManager(
   val webBrowserStateFlow: StateFlow<WebBrowserState> = webBrowserManager.browserStateFlow
 
   /**
-   * Launches a web browser for testing.
+   * Launches a web browser for testing asynchronously.
    * The browser will appear as a device in the device list once running.
-   *
-   * @return true if the browser was launched successfully
+   * Browser state can be observed via [webBrowserStateFlow].
    */
-  fun launchWebBrowser(): Boolean {
-    val device = webBrowserManager.launchBrowser()
-    if (device != null) {
+  fun launchWebBrowser() {
+    webBrowserManager.launchBrowser {
       // Refresh device list to include the new browser
       loadDevices()
-      return true
     }
-    return false
   }
 
   /**
-   * Closes the web browser.
+   * Closes the web browser asynchronously.
    * The browser will be removed from the device list.
    */
   fun closeWebBrowser() {
-    webBrowserManager.closeBrowser()
-    // Refresh device list to remove the browser
-    loadDevices()
+    webBrowserManager.closeBrowser {
+      // Refresh device list to remove the browser
+      loadDevices()
+    }
   }
 
   private val targetDeviceFilter: (List<TrailblazeConnectedDeviceSummary>) -> List<TrailblazeConnectedDeviceSummary> =
     { connectedDeviceSummaries ->
       connectedDeviceSummaries.filter { connectedDeviceSummary ->
-        settingsRepo.getEnabledDriverTypes().contains(connectedDeviceSummary.trailblazeDriverType)
+        // Virtual devices (no hardware) — always available.
+        connectedDeviceSummary.trailblazeDriverType == TrailblazeDriverType.PLAYWRIGHT_NATIVE ||
+          connectedDeviceSummary.trailblazeDriverType == TrailblazeDriverType.PLAYWRIGHT_ELECTRON ||
+          connectedDeviceSummary.trailblazeDriverType == TrailblazeDriverType.COMPOSE ||
+          settingsRepo.getEnabledDriverTypes().contains(connectedDeviceSummary.trailblazeDriverType)
       }
     }
 
@@ -149,6 +156,9 @@ class TrailblazeDeviceManager(
     _appVersionInfoByDeviceFlow.asStateFlow()
 
   private val loadDevicesScope = CoroutineScope(Dispatchers.IO)
+
+  // Mutex to coalesce concurrent loadDevices calls — if one is running, others wait for it.
+  private val loadDevicesMutex = kotlinx.coroutines.sync.Mutex()
 
   // Track session IDs we've already processed to detect new sessions
   private val knownSessionIds = mutableSetOf<SessionId>()
@@ -183,7 +193,8 @@ class TrailblazeDeviceManager(
     sendSessionEndLog: Boolean,
     existingSessionId: SessionId?,
     forceStopTargetApp: Boolean = false,
-    referrer: TrailblazeReferrer
+    referrer: TrailblazeReferrer,
+    agentImplementation: AgentImplementation = AgentImplementation.DEFAULT,
   ) {
     val settingsState = settingsRepo.serverStateFlow.value
     val runYamlRequest = RunYamlRequest(
@@ -202,7 +213,8 @@ class TrailblazeDeviceManager(
         setOfMarkEnabled = settingsState.appConfig.setOfMarkEnabled,
       ),
       trailblazeDeviceId = trailblazeDeviceId,
-      referrer = referrer
+      referrer = referrer,
+      agentImplementation = agentImplementation,
     )
     val params = DesktopAppRunYamlParams(
       forceStopTargetApp = forceStopTargetApp,
@@ -266,6 +278,8 @@ class TrailblazeDeviceManager(
 
     // Clear the session from the sessions flow
     _activeDeviceSessionsFlow.value -= trailblazeDeviceId
+    closeAndRemovePlaywrightNativeTestForDevice(trailblazeDeviceId)
+    closeAndRemovePlaywrightElectronTestForDevice(trailblazeDeviceId)
 
     Console.log("Ended session $sessionId for device: ${trailblazeDeviceId.instanceId}")
 
@@ -290,7 +304,7 @@ class TrailblazeDeviceManager(
     trailblazeTool: TrailblazeTool,
     referrer: TrailblazeReferrer
   ) {
-    val yaml = TrailblazeYaml.Default.encodeToString(
+    val yaml = createTrailblazeYaml().encodeToString(
       TrailblazeYamlBuilder()
         .tools(listOf(trailblazeTool))
         .build()
@@ -326,59 +340,122 @@ class TrailblazeDeviceManager(
   }
 
   /**
-   * This does a always successful assertion which captures the view hierarchy and screenshot.
-   *
-   * This allows us to query the screen state and use the data written to the log file.
+   * Captures the current screen state for a device using the appropriate method:
+   * - For on-device Android instrumentation: Uses RPC to call GetScreenStateRequestHandler
+   * - For host drivers: Uses HostMaestroDriverScreenState with the active driver
+   * - For accessibility: Not currently supported
    *
    * This method is used from the MCP server.
    */
   suspend fun getCurrentScreenState(trailblazeDeviceId: TrailblazeDeviceId): ScreenState? {
-    CoroutineScope(currentCoroutineContext()).launch {
-      runTool(
-        trailblazeDeviceId = trailblazeDeviceId,
-        trailblazeTool = AssertVisibleBySelectorTrailblazeTool(
-          selector = TrailblazeElementSelector(
-            index = "0"
-          )
-        ),
-        referrer = TrailblazeReferrer.MCP
-      )
-    }
-    val sessionIdForDevice = awaitSessionForDevice(trailblazeDeviceId)
-    sessionIdForDevice?.let { sessionId ->
-      val newLog = logsRepo.awaitLog<TrailblazeLog.MaestroDriverLog>(
-        sessionId = sessionId,
-        skipExisting = true
-      ) { log ->
-        // some logic will go here, true for default
-        true
+    val deviceState = getDeviceState(trailblazeDeviceId) ?: return null
+    val driverType = deviceState.device.trailblazeDriverType
 
+    return when (driverType) {
+      TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION -> {
+        // Use RPC for on-device Android instrumentation
+        getCurrentScreenStateViaRpc(trailblazeDeviceId)
       }
-      if (newLog != null) {
-        val screenshotFile = logsRepo.getScreenshotFile(newLog)
-        if (screenshotFile != null) {
-          val viewHierarchy = newLog.viewHierarchy!!
-          return object : ScreenState {
-            override val screenshotBytes: ByteArray = screenshotFile.readBytes()
-            override val deviceWidth: Int = newLog.deviceWidth
-            override val deviceHeight: Int = newLog.deviceHeight
-            override val viewHierarchyOriginal: ViewHierarchyTreeNode = viewHierarchy
-            override val viewHierarchy: ViewHierarchyTreeNode = viewHierarchy
-            override val trailblazeDevicePlatform: TrailblazeDevicePlatform =
+      TrailblazeDriverType.ANDROID_HOST,
+      TrailblazeDriverType.IOS_HOST,
+      TrailblazeDriverType.PLAYWRIGHT_NATIVE,
+      TrailblazeDriverType.PLAYWRIGHT_ELECTRON -> {
+        // Use direct Maestro driver access for host drivers
+        getCurrentScreenStateViaDriver(trailblazeDeviceId)
+      }
+      TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+      TrailblazeDriverType.COMPOSE -> {
+        // Not currently supported for direct screen capture
+        Console.log("⚠️ Screen state capture not supported for ${driverType.name} driver")
+        null
+      }
+    }
+  }
+  
+  /**
+   * Captures screen state via RPC for on-device Android instrumentation.
+   */
+  private suspend fun getCurrentScreenStateViaRpc(trailblazeDeviceId: TrailblazeDeviceId): ScreenState? {
+    return try {
+      val rpcClient = OnDeviceRpcClient(
+        trailblazeDeviceId = trailblazeDeviceId,
+        sendProgressMessage = { },
+      )
+      
+      val request = GetScreenStateRequest(
+        includeScreenshot = true,
+        filterViewHierarchy = false,
+        setOfMarkEnabled = false,
+      )
+      
+      when (val result = rpcClient.rpcCall(request)) {
+        is RpcResult.Success -> {
+          val response = result.data
+          val screenshotBytes = response.screenshotBase64?.let { 
+            Base64.getDecoder().decode(it)
+          }
+          
+          object : ScreenState {
+            override val screenshotBytes: ByteArray? = screenshotBytes
+            override val deviceWidth: Int = response.deviceWidth
+            override val deviceHeight: Int = response.deviceHeight
+            override val viewHierarchyOriginal: ViewHierarchyTreeNode = response.viewHierarchy
+            override val viewHierarchy: ViewHierarchyTreeNode = response.viewHierarchy
+            override val trailblazeDevicePlatform: TrailblazeDevicePlatform = 
               trailblazeDeviceId.trailblazeDevicePlatform
             override val deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList()
           }
         }
+        is RpcResult.Failure -> {
+          Console.log("❌ Failed to get screen state via RPC: ${result.message}")
+          null
+        }
       }
+    } catch (e: Exception) {
+      Console.log("❌ Exception getting screen state via RPC: ${e.message}")
+      e.printStackTrace()
+      null
     }
-    return null
+  }
+  
+  /**
+   * Captures screen state via direct Maestro driver access for host drivers.
+   */
+  private fun getCurrentScreenStateViaDriver(trailblazeDeviceId: TrailblazeDeviceId): ScreenState? {
+    val driver = getActiveDriverForDevice(trailblazeDeviceId) ?: return null
+    
+    return try {
+      HostMaestroDriverScreenState(
+        maestroDriver = driver,
+        setOfMarkEnabled = false,
+        filterViewHierarchy = false,
+      )
+    } catch (e: Exception) {
+      Console.log("❌ Exception getting screen state via driver: ${e.message}")
+      e.printStackTrace()
+      null
+    }
   }
 
   /**
    * Load available devices from the system (suspend version).
    * This will update the deviceStateFlow with the discovered devices and cache installed app IDs.
    */
-  suspend fun loadDevicesSuspend(): List<TrailblazeConnectedDeviceSummary> {
+  suspend fun loadDevicesSuspend(applyDriverFilter: Boolean = true): List<TrailblazeConnectedDeviceSummary> {
+    // Coalesce concurrent calls: if a load is already running, wait for it instead of starting another.
+    if (!loadDevicesMutex.tryLock()) {
+      loadDevicesMutex.withLock { /* wait for the running call to finish */ }
+      return deviceStateFlow.value.devices.values.map { it.device }
+    }
+
+    try {
+      return loadDevicesSuspendImpl(applyDriverFilter)
+    } finally {
+      loadDevicesMutex.unlock()
+    }
+  }
+
+  private suspend fun loadDevicesSuspendImpl(applyDriverFilter: Boolean): List<TrailblazeConnectedDeviceSummary> {
     withContext(Dispatchers.Default) {
       updateDeviceState { currDeviceState ->
         currDeviceState.copy(isLoading = true, error = null)
@@ -386,57 +463,107 @@ class TrailblazeDeviceManager(
     }
 
     try {
-      val devices: List<MaestroDevice.Connected> = MaestroDeviceService.listConnectedDevices()
+      // Run Android and iOS discovery in parallel via direct CLI calls with timeouts.
+      val androidFuture = CompletableFuture.supplyAsync {
+        listConnectedAdbDevices()
+      }
+      val iosFuture = CompletableFuture.supplyAsync {
+        listBootedIosSimulators()
+      }
+
+      val androidDevices = try {
+        androidFuture.get(10, TimeUnit.SECONDS)
+      } catch (e: Exception) {
+        Console.log("Android device discovery timed out or failed: ${e.message}")
+        emptyList()
+      }
+      val iosSimulators = try {
+        iosFuture.get(10, TimeUnit.SECONDS)
+      } catch (e: Exception) {
+        Console.log("iOS device discovery timed out or failed: ${e.message}")
+        emptyList()
+      }
 
       val allDevices = buildList {
-        // Connected iOS and Android Devices
-        devices.forEach { maestroConnectedDevice: MaestroDevice.Connected ->
-          when (maestroConnectedDevice.platform) {
-            MaestroPlatform.ANDROID -> {
-              add(
-                TrailblazeConnectedDeviceSummary(
-                  trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
-                  instanceId = maestroConnectedDevice.instanceId,
-                  description = maestroConnectedDevice.description,
-                )
-              )
-              add(
-                TrailblazeConnectedDeviceSummary(
-                  trailblazeDriverType = TrailblazeDriverType.ANDROID_HOST,
-                  instanceId = maestroConnectedDevice.instanceId,
-                  description = maestroConnectedDevice.description,
-                )
-              )
-            }
+        // Connected Android Devices
+        androidDevices.forEach { (instanceId, description) ->
+          add(
+            TrailblazeConnectedDeviceSummary(
+              trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+              instanceId = instanceId,
+              description = description,
+            )
+          )
+          add(
+            TrailblazeConnectedDeviceSummary(
+              trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+              instanceId = instanceId,
+              description = description,
+            )
+          )
+          add(
+            TrailblazeConnectedDeviceSummary(
+              trailblazeDriverType = TrailblazeDriverType.ANDROID_HOST,
+              instanceId = instanceId,
+              description = description,
+            )
+          )
+        }
 
-            MaestroPlatform.IOS -> {
-              add(
-                TrailblazeConnectedDeviceSummary(
-                  trailblazeDriverType = TrailblazeDriverType.IOS_HOST,
-                  instanceId = maestroConnectedDevice.instanceId,
-                  description = maestroConnectedDevice.description,
-                )
-              )
-            }
-
-            MaestroPlatform.WEB -> {
-              // Web devices from Maestro DeviceService are not used - we manage web browsers ourselves
-              // via WebBrowserManager
-            }
-          }
+        // Connected iOS Simulators
+        iosSimulators.forEach { (udid, name) ->
+          add(
+            TrailblazeConnectedDeviceSummary(
+              trailblazeDriverType = TrailblazeDriverType.IOS_HOST,
+              instanceId = udid,
+              description = name,
+            )
+          )
         }
 
         // Include web browser device only if the browser is currently running
         webBrowserManager.getRunningBrowserSummary()?.let { browserSummary ->
           add(browserSummary)
         }
+
+        // Playwright-native is a virtual device (no hardware connection needed) —
+        // always include it so web trails work from both GUI and CLI.
+        add(
+          TrailblazeConnectedDeviceSummary(
+            trailblazeDriverType = TrailblazeDriverType.PLAYWRIGHT_NATIVE,
+            instanceId = PLAYWRIGHT_NATIVE_INSTANCE_ID,
+            description = "Playwright Browser (Native)",
+          )
+        )
+
+        // Playwright-electron is a virtual device for Electron app testing via CDP.
+        add(
+          TrailblazeConnectedDeviceSummary(
+            trailblazeDriverType = TrailblazeDriverType.PLAYWRIGHT_ELECTRON,
+            instanceId = PLAYWRIGHT_ELECTRON_INSTANCE_ID,
+            description = "Playwright Electron (CDP)",
+          )
+        )
+
+        // Compose is a virtual device (connects via RPC to a running Compose app) —
+        // always include it so compose trails work from both GUI and CLI.
+        add(
+          TrailblazeConnectedDeviceSummary(
+            trailblazeDriverType = TrailblazeDriverType.COMPOSE,
+            instanceId = "compose",
+            description = "Compose (RPC)",
+          )
+        )
       }
 
-      val filteredDevices = targetDeviceFilter(allDevices)
+      val filteredDevices = if (applyDriverFilter) targetDeviceFilter(allDevices) else allDevices
 
-      // Query installed app IDs for each device
+      // Query installed app IDs for each device (with per-device timeout to avoid hanging)
       val installedAppIdsByDevice: Map<TrailblazeDeviceId, Set<String>> = filteredDevices.associate { device ->
-        device.trailblazeDeviceId to installedAppIdsProviderBlocking(device.trailblazeDeviceId)
+        val appIds = runWithTimeout(10, device.instanceId, "installed apps") {
+          installedAppIdsProviderBlocking(device.trailblazeDeviceId)
+        } ?: emptySet()
+        device.trailblazeDeviceId to appIds
       }
       _installedAppIdsByDeviceFlow.value = installedAppIdsByDevice
 
@@ -450,10 +577,11 @@ class TrailblazeDeviceManager(
       val appVersionInfoByDevice = mutableMapOf<DeviceAppKey, AppVersionInfo>()
       filteredDevices.forEach { device ->
         val installedAppIds = installedAppIdsByDevice[device.trailblazeDeviceId] ?: emptySet()
-        // Only query version info for relevant apps (intersection of installed and target apps)
         val appsToQuery = installedAppIds.intersect(relevantAppIds)
         appsToQuery.forEach { appId ->
-          val versionInfo = appVersionInfoProviderBlocking(device.trailblazeDeviceId, appId)
+          val versionInfo = runWithTimeout(10, device.instanceId, "version info for $appId") {
+            appVersionInfoProviderBlocking(device.trailblazeDeviceId, appId)
+          }
           if (versionInfo != null) {
             appVersionInfoByDevice[DeviceAppKey(device.trailblazeDeviceId, appId)] = versionInfo
           }
@@ -463,7 +591,6 @@ class TrailblazeDeviceManager(
 
       withContext(Dispatchers.Default) {
         updateDeviceState { currState ->
-          // Create DeviceState for each device (sessions tracked separately in activeDeviceSessionsFlow)
           val newDeviceStates: Map<TrailblazeDeviceId, DeviceState> = filteredDevices.associate { device ->
             device.trailblazeDeviceId to DeviceState(device = device)
           }
@@ -542,10 +669,20 @@ class TrailblazeDeviceManager(
   fun getCurrentSelectedTargetApp(): TrailblazeHostAppTarget? = settingsRepo.getCurrentSelectedTargetApp()
 
   // Store running test instances per device - allows forceful driver shutdown
-  private val maestroDriverByDeviceMap: MutableMap<TrailblazeDeviceId, Driver> = mutableMapOf()
+  private val maestroDriverByDeviceMap: MutableMap<TrailblazeDeviceId, Driver> =
+    java.util.concurrent.ConcurrentHashMap()
+
+  // Store running Playwright-native test instances per device for browser reuse across MCP calls
+  private val playwrightNativeTestByDeviceMap: MutableMap<TrailblazeDeviceId, BasePlaywrightNativeTest> =
+    java.util.concurrent.ConcurrentHashMap()
+
+  // Store running Playwright-electron test instances per device for session reuse
+  private val playwrightElectronTestByDeviceMap: MutableMap<TrailblazeDeviceId, BasePlaywrightElectronTest> =
+    java.util.concurrent.ConcurrentHashMap()
 
   // Store running coroutine jobs per device - allows cancellation of test execution
-  private val coroutineScopeByDevice: MutableMap<TrailblazeDeviceId, CoroutineScope> = mutableMapOf()
+  private val coroutineScopeByDevice: MutableMap<TrailblazeDeviceId, CoroutineScope> =
+    java.util.concurrent.ConcurrentHashMap()
 
   /**
    * Cancels the current session on a device.
@@ -560,6 +697,8 @@ class TrailblazeDeviceManager(
     Console.log("FORCEFULLY CANCELLING test on device: ${trailblazeDeviceId.instanceId}")
 
     closeAndRemoveMaestroDriverForDevice(trailblazeDeviceId)
+    closeAndRemovePlaywrightNativeTestForDevice(trailblazeDeviceId)
+    closeAndRemovePlaywrightElectronTestForDevice(trailblazeDeviceId)
 
     // Step 2: Cancel the coroutine job (stop any remaining work)
     cancelAndRemoveCoroutineScopeForDeviceIfActive(trailblazeDeviceId)
@@ -569,30 +708,13 @@ class TrailblazeDeviceManager(
   }
 
   private fun closeAndRemoveMaestroDriverForDevice(trailblazeDeviceId: TrailblazeDeviceId) {
-    // Step 1: Get the running test and KILL its driver (kills child processes)
+    // Get the running test and KILL its driver (kills child processes)
     maestroDriverByDeviceMap[trailblazeDeviceId]?.let { maestroDriver ->
       try {
-        // For web browsers managed by WebBrowserManager, don't close the browser - just reset the session.
-        // This allows the browser to stay open between test runs for debugging.
-        // The user can explicitly close the browser via the UI when done.
-        val isWebBrowserManagedByUs = trailblazeDeviceId == DEFAULT_PLAYWRIGHT_WEB_TRAILBLAZE_DEVICE_ID &&
-            webBrowserManager.isRunning()
-
-        if (isWebBrowserManagedByUs) {
-          Console.log("Web browser managed by WebBrowserManager - keeping browser open, resetting session")
-          // Reset the browser session (clear cookies, navigate to about:blank, etc.)
-          // but don't close the browser window.
-          // The driver in maestroDriverByDeviceMap is wrapped in a LoggingDriver, so we need to
-          // get the actual MaestroPlaywrightDriver from the HostWebDriverFactory's cache.
-          // Calling getOrCreateDriver with resetSession=true will reset the session without closing.
-          HostWebDriverFactory.getOrCreateDriver(headless = false, resetSession = true)
-          Console.log("Browser session reset successfully")
-        } else {
-          Console.log("Forcefully closing driver for device: ${trailblazeDeviceId.instanceId}")
-          // This closes the underlying driver and kills child processes (XCUITest, adb, etc.)
-          maestroDriver.close()
-          Console.log("Driver closed successfully for device: ${trailblazeDeviceId.instanceId}")
-        }
+        Console.log("Forcefully closing driver for device: ${trailblazeDeviceId.instanceId}")
+        // This closes the underlying driver and kills child processes (XCUITest, adb, etc.)
+        maestroDriver.close()
+        Console.log("Driver closed successfully for device: ${trailblazeDeviceId.instanceId}")
       } catch (e: Exception) {
         Console.log("Error closing driver (continuing anyway): ${e.message}")
         // Continue with coroutine cancellation even if driver close fails
@@ -600,6 +722,25 @@ class TrailblazeDeviceManager(
         maestroDriverByDeviceMap.remove(trailblazeDeviceId)
       }
     } ?: Console.log("No Maestro Driver found for device: ${trailblazeDeviceId.instanceId}")
+  }
+
+  private fun closeAndRemovePlaywrightNativeTestForDevice(trailblazeDeviceId: TrailblazeDeviceId) {
+    playwrightNativeTestByDeviceMap.remove(trailblazeDeviceId)?.let { test ->
+      try {
+        test.close()
+        Console.log("Playwright-native test closed for device: ${trailblazeDeviceId.instanceId}")
+      } catch (e: Exception) {
+        Console.log("Error closing Playwright-native test (continuing anyway): ${e.message}")
+      }
+    }
+  }
+
+  /**
+   * Clears only the coroutine scope for a device WITHOUT closing the driver.
+   * Use this for MCP sessions where the driver should stay alive between tool calls.
+   */
+  fun clearCoroutineScopeForDevice(trailblazeDeviceId: TrailblazeDeviceId) {
+    coroutineScopeByDevice.remove(trailblazeDeviceId)
   }
 
   private fun cancelAndRemoveCoroutineScopeForDeviceIfActive(trailblazeDeviceId: TrailblazeDeviceId) {
@@ -653,8 +794,65 @@ class TrailblazeDeviceManager(
     }
   }
 
+  /**
+   * Gets an existing coroutine scope for the device, or creates a new one if none exists.
+   * Unlike [createNewCoroutineScopeForDevice], this does NOT cancel any existing scope.
+   * Use this for MCP sessions where multiple tool calls should share a persistent connection.
+   */
+  fun getOrCreateCoroutineScopeForDevice(trailblazeDeviceId: TrailblazeDeviceId): CoroutineScope {
+    return coroutineScopeByDevice[trailblazeDeviceId]?.takeIf { it.isActive }
+      ?: CoroutineScope(Dispatchers.IO).also {
+        coroutineScopeByDevice[trailblazeDeviceId] = it
+      }
+  }
+
   fun setActiveDriverForDevice(trailblazeDeviceId: TrailblazeDeviceId, maestroDriver: Driver) {
     maestroDriverByDeviceMap[trailblazeDeviceId] = maestroDriver
+  }
+
+  /**
+   * Returns the active Maestro driver for the specified device, if one exists.
+   * The driver is set when a test/tool execution starts.
+   */
+  fun getActiveDriverForDevice(trailblazeDeviceId: TrailblazeDeviceId): Driver? {
+    return maestroDriverByDeviceMap[trailblazeDeviceId]
+  }
+
+  fun setActivePlaywrightNativeTest(
+    trailblazeDeviceId: TrailblazeDeviceId,
+    test: BasePlaywrightNativeTest,
+  ) {
+    playwrightNativeTestByDeviceMap[trailblazeDeviceId] = test
+  }
+
+  fun getActivePlaywrightNativeTest(
+    trailblazeDeviceId: TrailblazeDeviceId,
+  ): BasePlaywrightNativeTest? {
+    return playwrightNativeTestByDeviceMap[trailblazeDeviceId]
+  }
+
+  fun setActivePlaywrightElectronTest(
+    trailblazeDeviceId: TrailblazeDeviceId,
+    test: BasePlaywrightElectronTest,
+  ) {
+    playwrightElectronTestByDeviceMap[trailblazeDeviceId] = test
+  }
+
+  fun getActivePlaywrightElectronTest(
+    trailblazeDeviceId: TrailblazeDeviceId,
+  ): BasePlaywrightElectronTest? {
+    return playwrightElectronTestByDeviceMap[trailblazeDeviceId]
+  }
+
+  private fun closeAndRemovePlaywrightElectronTestForDevice(trailblazeDeviceId: TrailblazeDeviceId) {
+    playwrightElectronTestByDeviceMap.remove(trailblazeDeviceId)?.let { test ->
+      try {
+        test.close()
+        Console.log("Playwright-electron test closed for device: ${trailblazeDeviceId.instanceId}")
+      } catch (e: Exception) {
+        Console.log("Error closing Playwright-electron test (continuing anyway): ${e.message}")
+      }
+    }
   }
 
   fun getInstalledAppIdsFlow(trailblazeDeviceId: TrailblazeDeviceId): StateFlow<Set<String>> {
@@ -664,6 +862,97 @@ class TrailblazeDeviceManager(
         SharingStarted.Eagerly,
         installedAppIdsByDeviceFlow.value[trailblazeDeviceId] ?: emptySet()
       )
+  }
+
+  companion object {
+    const val PLAYWRIGHT_NATIVE_INSTANCE_ID = "playwright-native"
+    const val PLAYWRIGHT_ELECTRON_INSTANCE_ID = "playwright-electron"
+
+    private const val DEVICE_DISCOVERY_TIMEOUT_SECONDS = 10L
+
+    /**
+     * Runs a blocking operation with a timeout. Returns null if it times out or fails.
+     */
+    private fun <T> runWithTimeout(timeoutSeconds: Long, deviceId: String, label: String, block: () -> T): T? {
+      val executor = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "device-query-$deviceId").apply { isDaemon = true }
+      }
+      return try {
+        executor.submit(Callable { block() })
+          .get(timeoutSeconds, TimeUnit.SECONDS)
+      } catch (e: TimeoutException) {
+        Console.log("[loadDevices] $label for $deviceId TIMED OUT after ${timeoutSeconds}s")
+        null
+      } catch (e: Exception) {
+        Console.log("[loadDevices] $label for $deviceId FAILED: ${e.message}")
+        null
+      } finally {
+        executor.shutdownNow()
+      }
+    }
+
+    /**
+     * Lists connected Android devices via `adb devices`.
+     * Returns list of (instanceId, description) pairs.
+     */
+    internal fun listConnectedAdbDevices(): List<Pair<String, String>> {
+      return try {
+        val process = ProcessBuilder("adb", "devices")
+          .redirectErrorStream(true)
+          .start()
+        val finished = process.waitFor(DEVICE_DISCOVERY_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        if (!finished) {
+          process.destroyForcibly()
+          Console.log("[loadDevices] [Android] adb devices timed out after ${DEVICE_DISCOVERY_TIMEOUT_SECONDS}s")
+          return emptyList()
+        }
+        val output = process.inputStream.bufferedReader().readText()
+        // Parse lines like "emulator-5554\tdevice" — skip header and blank/unauthorized lines
+        output.lines()
+          .drop(1) // skip "List of devices attached" header
+          .mapNotNull { line ->
+            val parts = line.split("\t")
+            if (parts.size == 2 && parts[1].trim() == "device") {
+              val instanceId = parts[0].trim()
+              instanceId to instanceId
+            } else null
+          }
+      } catch (e: Exception) {
+        Console.log("[loadDevices] [Android] adb devices failed: ${e.message}")
+        emptyList()
+      }
+    }
+
+    /**
+     * Lists booted iOS simulators via `xcrun simctl list devices booted`.
+     * Returns list of (udid, description) pairs.
+     */
+    internal fun listBootedIosSimulators(): List<Pair<String, String>> {
+      return try {
+        val process = ProcessBuilder("xcrun", "simctl", "list", "devices", "booted")
+          .redirectErrorStream(true)
+          .start()
+        val finished = process.waitFor(10, TimeUnit.SECONDS)
+        if (!finished) {
+          process.destroyForcibly()
+          Console.log("[loadDevices] [iOS] xcrun simctl timed out after 10s")
+          return emptyList()
+        }
+        val output = process.inputStream.bufferedReader().readText()
+        // Parse lines like "    iPad (A16) (6171FEAD-...) (Booted)"
+        val deviceRegex = Regex("""^\s+(.+?)\s+\(([0-9A-Fa-f-]{36})\)\s+\(Booted\)""")
+        output.lines().mapNotNull { line ->
+          deviceRegex.find(line)?.let { match ->
+            val name = match.groupValues[1]
+            val udid = match.groupValues[2]
+            udid to name
+          }
+        }
+      } catch (e: Exception) {
+        Console.log("[loadDevices] [iOS] xcrun simctl failed: ${e.message}")
+        emptyList()
+      }
+    }
   }
 }
 

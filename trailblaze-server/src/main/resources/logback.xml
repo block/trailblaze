@@ -7,8 +7,10 @@
         </encoder>
     </appender>
 
-    <!-- Suppress CORS INFO logs -->
-    <logger name="io.ktor.server.plugins.cors.CORS" level="WARN"/>
+    <!-- Suppress noisy framework logs -->
+    <logger name="io.ktor" level="WARN"/>
+    <logger name="io.netty" level="WARN"/>
+    <logger name="org.eclipse.jetty" level="WARN"/>
 
     <!-- Root logger -->
     <root level="INFO">

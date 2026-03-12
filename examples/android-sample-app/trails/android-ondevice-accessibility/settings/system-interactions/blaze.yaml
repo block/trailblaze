@@ -1,0 +1,12 @@
+- config:
+    id: "sample-app/settings/system-interactions"
+    app: "xyz.block.trailblaze.examples.sampleapp"
+- tools:
+    - launchApp:
+        appId: "xyz.block.trailblaze.examples.sampleapp"
+        launchMode: "REINSTALL"
+- prompts:
+    - step: Navigate to the "Settings" tab
+    - step: Enable the "Enable Notifications" switch and verify it is checked
+    - step: Verify the network status shows "Online" or "Offline" and an app version starting with "Version" is visible
+    - step: Check the "Accept Terms" checkbox and verify it is checked

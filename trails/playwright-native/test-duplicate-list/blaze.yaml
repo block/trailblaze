@@ -1,0 +1,41 @@
+- config:
+    title: "Test: Click specific items in a list with duplicate text"
+    driver: PLAYWRIGHT_NATIVE
+- prompts:
+    # Navigate to the duplicate-list page
+    - step: Navigate to ../../../examples/playwright-native/sample-app/duplicate-list.html
+
+    # Verify the page loaded
+    - step: Verify the heading "Product List" is visible
+
+    # --- Click the first "Premium Cable" View button (in Electronics, first row) ---
+    - step: Click the "View" button on the first "Premium Cable" item in the Electronics section
+    - step: Verify the text "elec-1" is visible in the detail panel
+
+    # --- Click the second "Premium Cable" View button (in Electronics, second row) ---
+    - step: Click the "View" button on the second "Premium Cable" item in the Electronics section
+    - step: Verify the text "elec-2" is visible in the detail panel
+
+    # --- Click "Standard Adapter" View button in Electronics ---
+    - step: Click the "View" button on the "Standard Adapter" item in the Electronics section
+    - step: Verify the text "elec-3" is visible in the detail panel
+
+    # --- Click the "Premium Cable" View button in Office Supplies ---
+    - step: Click the "View" button on the "Premium Cable" item in the Office Supplies section
+    - step: Verify the text "office-1" is visible in the detail panel
+
+    # --- Click the first "Standard Adapter" View button in Office Supplies ---
+    - step: Click the "View" button on the first "Standard Adapter" item in the Office Supplies section
+    - step: Verify the text "office-2" is visible in the detail panel
+
+    # --- Click the second "Standard Adapter" View button in Office Supplies ---
+    - step: Click the "View" button on the second "Standard Adapter" item in the Office Supplies section
+    - step: Verify the text "office-3" is visible in the detail panel
+
+    # --- Click the first "Premium Cable" View button in Accessories ---
+    - step: Click the "View" button on the first "Premium Cable" item in the Accessories section
+    - step: Verify the text "acc-1" is visible in the detail panel
+
+    # --- Click the second "Premium Cable" View button in Accessories ---
+    - step: Click the "View" button on the second "Premium Cable" item in the Accessories section
+    - step: Verify the text "acc-2" is visible in the detail panel

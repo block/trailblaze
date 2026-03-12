@@ -1,0 +1,19 @@
+# Android World Benchmark: Create Note From Clipboard
+- config:
+    id: android-world-benchmarks/markor/create_note_from_clipboard
+    description: Create a note in Markor by pasting from clipboard
+- tools:
+    - androidworldbenchmarks_clearDirectory:
+        directoryPath: /storage/emulated/0/Documents/Markor
+    - setClipboard:
+        text: "Pasted from clipboard: important data"
+- prompts:
+    - step: Create a note in Markor named clipboard_note.md. Perform a paste operation in the note and save the note.
+- tools:
+    - androidworldbenchmarks_assertFileContent:
+        filePath: /storage/emulated/0/Documents/Markor/clipboard_note.md
+        expectedContent: "Pasted from clipboard: important data"
+        matchMode: fuzzy
+
+# --- Benchmark Run History ---
+# [2026-03-11] Build #27 FAILED - Agent limitation: ObjectiveFailed. Can't navigate Markor app.

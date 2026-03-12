@@ -1,0 +1,33 @@
+# Android World Benchmark: Delete Newest Note
+- config:
+    id: android-world-benchmarks/markor/delete_newest_note
+    description: Delete the newest note in Markor
+- tools:
+    - androidworldbenchmarks_clearDirectory:
+        directoryPath: /storage/emulated/0/Documents/Markor
+    - androidworldbenchmarks_createFileOnDevice:
+        devicePath: /storage/emulated/0/Documents/Markor
+        fileName: old_note.md
+        content: Old content
+    - androidworldbenchmarks_runAdbShell:
+        adbShellCommands:
+          - "touch -t 202310140000 /storage/emulated/0/Documents/Markor/old_note.md"
+    - androidworldbenchmarks_createFileOnDevice:
+        devicePath: /storage/emulated/0/Documents/Markor
+        fileName: recent_note.md
+        content: Recent content
+    - androidworldbenchmarks_runAdbShell:
+        adbShellCommands:
+          - "touch -t 202310151500 /storage/emulated/0/Documents/Markor/recent_note.md"
+- prompts:
+    - step: Delete the newest note in Markor.
+- tools:
+    - androidworldbenchmarks_assertFileExistsOnDevice:
+        filePath: /storage/emulated/0/Documents/Markor/recent_note.md
+        shouldExist: false
+    - androidworldbenchmarks_assertFileExistsOnDevice:
+        filePath: /storage/emulated/0/Documents/Markor/old_note.md
+        shouldExist: true
+
+# --- Benchmark Run History ---
+# [2026-03-11] Build #27 FAILED - Agent limitation: ObjectiveFailed. Can't navigate Markor app.

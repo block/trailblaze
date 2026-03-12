@@ -20,7 +20,19 @@ enum class TrailblazeDriverType(
     platform = TrailblazeDevicePlatform.IOS,
     isHost = true,
   ),
-  WEB_PLAYWRIGHT_HOST(
+  PLAYWRIGHT_NATIVE(
+    platform = TrailblazeDevicePlatform.WEB,
+    isHost = true,
+  ),
+  PLAYWRIGHT_ELECTRON(
+    platform = TrailblazeDevicePlatform.WEB,
+    isHost = true,
+  ),
+  // COMPOSE intentionally uses WEB platform: Compose Desktop testing reuses the web
+  // platform's view hierarchy filtering and device infrastructure. Adding a separate
+  // DESKTOP platform would require updating all exhaustive `when` expressions on
+  // TrailblazeDevicePlatform across the codebase (e.g., ViewHierarchyFilter.create).
+  COMPOSE(
     platform = TrailblazeDevicePlatform.WEB,
     isHost = true,
   ),

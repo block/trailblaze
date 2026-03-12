@@ -19,6 +19,7 @@
 
 package xyz.block.trailblaze.android.maestro.orchestra
 
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
 import maestro.ElementFilter
 import maestro.Filters
@@ -34,6 +35,7 @@ import maestro.orchestra.AirplaneValue
 import maestro.orchestra.ApplyConfigurationCommand
 import maestro.orchestra.AssertCommand
 import maestro.orchestra.AssertConditionCommand
+import maestro.orchestra.AssertScreenshotCommand
 import maestro.orchestra.BackPressCommand
 import maestro.orchestra.ClearKeychainCommand
 import maestro.orchestra.ClearStateCommand
@@ -63,8 +65,10 @@ import maestro.orchestra.RunScriptCommand
 import maestro.orchestra.ScrollCommand
 import maestro.orchestra.ScrollUntilVisibleCommand
 import maestro.orchestra.SetAirplaneModeCommand
+import maestro.orchestra.SetClipboardCommand
 import maestro.orchestra.SetLocationCommand
 import maestro.orchestra.SetOrientationCommand
+import maestro.orchestra.SetPermissionsCommand
 import maestro.orchestra.StartRecordingCommand
 import maestro.orchestra.StopAppCommand
 import maestro.orchestra.StopRecordingCommand
@@ -80,7 +84,6 @@ import maestro.orchestra.error.UnicodeNotSupportedError
 import maestro.orchestra.filter.FilterWithDescription
 import maestro.orchestra.filter.TraitFilters
 import maestro.orchestra.geo.Traveller
-import maestro.orchestra.util.Env.evaluateScripts
 import maestro.orchestra.yaml.YamlCommandReader
 import maestro.toSwipeDirection
 import maestro.utils.Insight
@@ -89,18 +92,19 @@ import maestro.utils.MaestroTimer
 import maestro.utils.NoopInsights
 import maestro.utils.StringUtils.toRegexSafe
 import okhttp3.OkHttpClient
+import okio.BufferedSink
 import okio.buffer
 import okio.sink
 import org.slf4j.LoggerFactory
+import xyz.block.trailblaze.android.maestro.DeviceClipboardUtil
 import xyz.block.trailblaze.android.maestro.FakeJsEngine
 import java.io.File
 import java.lang.Long.max
 import java.nio.file.Path
-import kotlin.coroutines.coroutineContext
 
 /**
- * Last Update from Maestro v2.0.6
- * https://github.com/mobile-dev-inc/Maestro/blob/v2.0.6/maestro-orchestra/src/main/java/maestro/orchestra/Orchestra.kt
+ * Last Update from Maestro v2.3.0
+ * https://github.com/mobile-dev-inc/Maestro/blob/cli-2.3.0/maestro-orchestra/src/main/java/maestro/orchestra/Orchestra.kt
  * SEE THE README.md in this package for details on modifications from OSS version
  */
 class Orchestra(
@@ -192,7 +196,7 @@ class Orchestra(
       initJsEngine(config)
     }
 
-    if (!coroutineContext.isActive) {
+    if (!currentCoroutineContext().isActive) {
       logger.info("Flow cancelled, skipping initAndroidChromeDevTools...")
     } else {
       initAndroidChromeDevTools(config)
@@ -200,7 +204,7 @@ class Orchestra(
 
     commands
       .forEachIndexed { index, command ->
-        if (!coroutineContext.isActive) {
+        if (!currentCoroutineContext().isActive) {
           logger.info("[Command execution] Command skipped due to cancellation: $command")
           onCommandSkipped(index, command)
           return@forEachIndexed
@@ -210,6 +214,10 @@ class Orchestra(
         flowController.waitIfPaused()
 
         onCommandStart(index, command)
+
+        // Skip jsEngine.onLogMessage and command.evaluateScripts(jsEngine) —
+        // FakeJsEngine is a no-op, and Maestro's Env.evaluateScripts uses a lookbehind
+        // regex that is incompatible with Android's ICU regex engine.
 
         val callback: (Insight) -> Unit = { insight ->
           updateMetadata(
@@ -280,7 +288,7 @@ class Orchestra(
   ): Boolean {
     val command = maestroCommand.asCommand()
 
-    if (!coroutineContext.isActive) {
+    if (!currentCoroutineContext().isActive) {
       throw CommandSkipped
     }
 
@@ -302,14 +310,19 @@ class Orchestra(
       is HideKeyboardCommand -> hideKeyboardCommand()
       is ScrollCommand -> scrollVerticalCommand()
       is CopyTextFromCommand -> copyTextFromCommand(command)
+      is SetClipboardCommand -> setClipboardCommand(command)
       is ScrollUntilVisibleCommand -> scrollUntilVisible(command)
       is PasteTextCommand -> pasteText()
       is SwipeCommand -> swipeCommand(command)
       is AssertCommand -> assertCommand(command)
+      is AssertScreenshotCommand -> throw MaestroException.InvalidCommand(
+        "assertScreenshot is not supported in on-device execution"
+      )
       is AssertConditionCommand -> assertConditionCommand(command)
       is InputTextCommand -> inputTextCommand(command)
       is InputRandomCommand -> inputTextRandomCommand(command)
       is LaunchAppCommand -> launchAppCommand(command)
+      is SetPermissionsCommand -> setPermissionsCommand(command)
       is OpenLinkCommand -> openLinkCommand(command, config)
       is PressKeyCommand -> pressKeyCommand(command)
       is EraseTextCommand -> eraseTextCommand(command)
@@ -393,24 +406,16 @@ class Orchestra(
   }
 
   private fun evalScriptCommand(command: EvalScriptCommand): Boolean {
-    command.scriptString.evaluateScripts(jsEngine)
-
-    // We do not actually know if there were any mutations, but we assume there were
-    return true
+    // JavaScript evaluation is not supported on-device (FakeJsEngine is a no-op).
+    // Log a warning so callers know their script was not executed.
+    logger.warn("evalScript is not supported in on-device execution, skipping: ${command.scriptString}")
+    return false
   }
 
-  private fun runScriptCommand(command: RunScriptCommand): Boolean = if (evaluateCondition(command.condition, commandOptional = command.optional)) {
-    jsEngine.evaluateScript(
-      script = command.script,
-      env = command.env,
-      sourceName = command.sourceDescription,
-      runInSubScope = true,
-    )
-
-    // We do not actually know if there were any mutations, but we assume there were
-    true
-  } else {
-    throw CommandSkipped
+  private fun runScriptCommand(command: RunScriptCommand): Boolean {
+    // JavaScript evaluation is not supported on-device (FakeJsEngine is a no-op).
+    logger.warn("runScript is not supported in on-device execution, skipping: ${command.sourceDescription}")
+    return false
   }
 
   private fun waitForAnimationToEndCommand(command: WaitForAnimationToEndCommand): Boolean {
@@ -420,6 +425,9 @@ class Orchestra(
   }
 
   private fun defineVariablesCommand(command: DefineVariablesCommand): Boolean {
+    // FakeJsEngine.putEnv is a no-op, so variables defined here will not be
+    // substituted in later commands. This is acceptable because on-device flows
+    // construct commands programmatically rather than via YAML variable interpolation.
     command.env.forEach { (name, value) ->
       jsEngine.putEnv(name, value)
     }
@@ -541,6 +549,20 @@ class Orchestra(
 
   private fun hideKeyboardCommand(): Boolean {
     maestro.hideKeyboard()
+
+    // Throw error in case keyboard is still visible
+    if (maestro.isKeyboardVisible()) {
+      throw MaestroException.HideKeyboardFailure(
+        "Couldn't hide the keyboard. This can happen if the app uses a custom input or doesn't expose a standard dismiss action.",
+        debugMessage = """
+                    Instead of hideKeyboard, try tapping on non-interactive element to hide keyboard. Example:
+
+                    - tapOn:
+                        text: 'Static Text on your screen'
+        """.trimIndent(),
+      )
+    }
+
     return true
   }
 
@@ -565,12 +587,12 @@ class Orchestra(
     var mutating = false
 
     val checkCondition: () -> Boolean = {
+      // Skip evaluateScripts — see comment in executeCommands
       command.condition
-        ?.evaluateScripts(jsEngine)
         ?.let { evaluateCondition(it, commandOptional = command.optional) } != false
     }
 
-    while (checkCondition() && counter < maxRuns) {
+    while (checkCondition() && counter < maxRuns && currentCoroutineContext().isActive) {
       if (counter > 0) {
         command.commands.forEach { resetCommand(it) }
       }
@@ -736,16 +758,10 @@ class Orchestra(
         .mapIndexed { index, command ->
           onCommandStart(index, command)
 
-          val evaluatedCommand = command.evaluateScripts(jsEngine)
-          val metadata = getMetadata(command)
-            .copy(
-              evaluatedCommand = evaluatedCommand,
-            )
-          updateMetadata(command, metadata)
-
+          // Skip command.evaluateScripts(jsEngine) — see comment in executeCommands
           return@mapIndexed try {
             try {
-              executeCommand(evaluatedCommand, config)
+              executeCommand(command, config)
                 .also {
                   onCommandComplete(index, command)
                 }
@@ -822,21 +838,30 @@ class Orchestra(
 
   private fun takeScreenshotCommand(command: TakeScreenshotCommand): Boolean {
     val pathStr = command.path + ".png"
-    val file = screenshotsDir
-      ?.let { it.resolve(pathStr).toFile() }
-      ?: File(pathStr)
+    val fileSink = getFileSink(screenshotsDir, pathStr)
 
-    maestro.takeScreenshot(file, false)
-
+    val cropOn = command.cropOn
+    if (cropOn == null) {
+      maestro.takeScreenshot(fileSink, false)
+    } else {
+      val elementResult = findElement(cropOn, optional = command.optional)
+      val bounds = elementResult.element.bounds
+      if (bounds.width <= 0 || bounds.height <= 0) {
+        throw MaestroException.AssertionFailure(
+          message = "Cannot crop screenshot: element '${cropOn.description()}' has invalid dimensions (width: ${bounds.width}, height: ${bounds.height}). The element must have positive width and height to crop the screenshot.",
+          hierarchyRoot = maestro.viewHierarchy().root,
+          debugMessage = "The takeScreenshot command with cropOn requires an element with positive dimensions. The found element has bounds: x=${bounds.x}, y=${bounds.y}, width=${bounds.width}, height=${bounds.height}.",
+        )
+      }
+      maestro.takeScreenshot(fileSink, false, bounds)
+    }
     return false
   }
 
   private fun startRecordingCommand(command: StartRecordingCommand): Boolean {
     val pathStr = command.path + ".mp4"
-    val file = screenshotsDir
-      ?.let { it.resolve(pathStr).toFile() }
-      ?: File(pathStr)
-    screenRecording = maestro.startScreenRecording(file.sink().buffer())
+    val fileSink = getFileSink(screenshotsDir, pathStr)
+    screenRecording = maestro.startScreenRecording(fileSink)
     return false
   }
 
@@ -876,12 +901,18 @@ class Orchestra(
       if (command.clearState == true) {
         maestro.clearAppState(command.appId)
       }
+    } catch (e: Exception) {
+      logger.error("Failed to clear state", e)
+      throw MaestroException.UnableToClearState("Unable to clear state for app ${command.appId}: ${e.message}", e)
+    }
 
+    try {
       // For testing convenience, default to allow all on app launch
       val permissions = command.permissions ?: mapOf("all" to "allow")
       maestro.setPermissions(command.appId, permissions)
     } catch (e: Exception) {
-      throw MaestroException.UnableToClearState("Unable to clear state for app ${command.appId}: ${e.message}", e)
+      logger.error("Failed to set permissions", e)
+      throw MaestroException.UnableToSetPermissions("Unable to set permissions for app ${command.appId}: ${e.message}", e)
     }
 
     try {
@@ -891,7 +922,18 @@ class Orchestra(
         stopIfRunning = command.stopApp ?: true,
       )
     } catch (e: Exception) {
-      throw MaestroException.UnableToLaunchApp("Unable to launch app ${command.appId}: ${e.message}", e)
+      logger.error("Failed to launch app", e)
+      throw MaestroException.UnableToLaunchApp("Unable to launch app ${command.appId}", cause = e)
+    }
+
+    return true
+  }
+
+  private fun setPermissionsCommand(command: SetPermissionsCommand): Boolean {
+    try {
+      maestro.setPermissions(command.appId, command.permissions)
+    } catch (e: Exception) {
+      throw MaestroException.UnableToSetPermissions("Unable to set permissions for app ${command.appId}: ${e.message}", e)
     }
 
     return true
@@ -1317,6 +1359,14 @@ class Orchestra(
     return true
   }
 
+  private fun setClipboardCommand(command: SetClipboardCommand): Boolean {
+    copiedText = command.text
+    jsEngine.setCopiedText(copiedText)
+    DeviceClipboardUtil.setClipboard(command.text)
+
+    return true
+  }
+
   private fun resolveText(attributes: MutableMap<String, String>): String? = if (!attributes["text"].isNullOrEmpty()) {
     attributes["text"]
   } else if (!attributes["hintText"].isNullOrEmpty()) {
@@ -1328,6 +1378,23 @@ class Orchestra(
   private fun pasteText(): Boolean {
     copiedText?.let { maestro.inputText(it) }
     return true
+  }
+
+  private fun getFileSink(parentPath: Path?, filePathStr: String): BufferedSink {
+    // Work out relative v absolute input
+    val resolvedFile = parentPath?.resolve(filePathStr)?.toFile() ?: File(filePathStr)
+    val absoluteFile = resolvedFile.absoluteFile
+    val parentDir = absoluteFile.parentFile
+
+    if (parentDir != null && (parentDir.exists() || parentDir.mkdirs())) {
+      return resolvedFile
+        .sink()
+        .buffer()
+    } else {
+      throw MaestroException.DestinationIsNotWritable(
+        "Unable to create directory for file: ${parentDir?.absolutePath}",
+      )
+    }
   }
 
   private suspend fun executeDefineVariablesCommands(

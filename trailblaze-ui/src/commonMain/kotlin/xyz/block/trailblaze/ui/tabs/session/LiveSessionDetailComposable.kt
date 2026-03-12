@@ -44,6 +44,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
+import xyz.block.trailblaze.ui.InspectTrailblazeNodeSelectorHelper
 import xyz.block.trailblaze.ui.InspectViewHierarchyScreenComposable
 import xyz.block.trailblaze.ui.composables.FullScreenModalOverlay
 import xyz.block.trailblaze.ui.composables.ScreenshotImageModal
@@ -70,7 +71,7 @@ fun LiveSessionDetailComposable(
   // Persistent UI state
   initialZoomOffset: Int = 0,
   initialFontScale: Float = 1f,
-  initialViewMode: SessionViewMode = SessionViewMode.List,
+  initialViewMode: SessionViewMode = SessionViewMode.Timeline,
   onZoomOffsetChanged: (Int) -> Unit = {},
   onFontScaleChanged: (Float) -> Unit = {},
   onViewModeChanged: (SessionViewMode) -> Unit = {},
@@ -86,10 +87,13 @@ fun LiveSessionDetailComposable(
   onOpenInFinder: ((TrailblazeLog) -> Unit)? = null,
   // Platform-specific: Reveal recording file in Finder/Explorer
   onRevealRecordingInFinder: ((String) -> Unit)? = null,
-  // Platform-specific: Compute selector analysis for a node (JVM only)
+  // Platform-specific: Compute legacy ViewHierarchy selector analysis (JVM only — requires Maestro)
   computeSelectorOptions: ((xyz.block.trailblaze.api.ViewHierarchyTreeNode) -> xyz.block.trailblaze.ui.SelectorAnalysisResult)? = null,
-  // Platform-specific: Factory to create selector compute functions for a given log (JVM only)
+  // Platform-specific: Factory to create legacy selector compute functions for a given log (JVM only — requires Maestro)
   createSelectorFunctionForLog: ((TrailblazeLog) -> ((xyz.block.trailblaze.api.ViewHierarchyTreeNode) -> xyz.block.trailblaze.ui.SelectorAnalysisResult)?)? = null,
+  // Factory to create TrailblazeNode selector compute functions for a given log (multiplatform)
+  // If not provided, falls back to computing directly via InspectTrailblazeNodeSelectorHelper
+  createTrailblazeNodeSelectorFunctionForLog: ((TrailblazeLog) -> ((xyz.block.trailblaze.api.TrailblazeNode) -> xyz.block.trailblaze.ui.TrailblazeNodeSelectorAnalysisResult)?)? = null,
   // Recordings
   recordedTrailsRepo: RecordedTrailsRepo? = null,
   // Retry callback - called when user clicks retry FAB on a failed session
@@ -111,7 +115,7 @@ fun LiveSessionDetailComposable(
   var modalClickX by remember { mutableStateOf<Int?>(null) }
   var modalClickY by remember { mutableStateOf<Int?>(null) }
   var modalAction by remember {
-    mutableStateOf<xyz.block.trailblaze.api.MaestroDriverActionType?>(
+    mutableStateOf<xyz.block.trailblaze.api.AgentDriverAction?>(
       null
     )
   }
@@ -129,14 +133,14 @@ fun LiveSessionDetailComposable(
     val firstLogWithDeviceInfo = logs.firstOrNull { log: TrailblazeLog ->
       when (log) {
         is TrailblazeLog.TrailblazeLlmRequestLog -> true
-        is TrailblazeLog.MaestroDriverLog -> true
+        is TrailblazeLog.AgentDriverLog -> true
         else -> false
       }
     }
 
     val (deviceName, deviceType) = when (firstLogWithDeviceInfo) {
       is TrailblazeLog.TrailblazeLlmRequestLog -> "Device ${firstLogWithDeviceInfo.deviceWidth}x${firstLogWithDeviceInfo.deviceHeight}" to "Mobile"
-      is TrailblazeLog.MaestroDriverLog -> "Device ${firstLogWithDeviceInfo.deviceWidth}x${firstLogWithDeviceInfo.deviceHeight}" to "Mobile"
+      is TrailblazeLog.AgentDriverLog -> "Device ${firstLogWithDeviceInfo.deviceWidth}x${firstLogWithDeviceInfo.deviceHeight}" to "Mobile"
       else -> null to null
     }
 
@@ -174,7 +178,7 @@ fun LiveSessionDetailComposable(
     showChatHistoryDialog = true
   }
 
-  val handleShowScreenshotModal: (Any?, Int, Int, Int?, Int?, xyz.block.trailblaze.api.MaestroDriverActionType?) -> Unit =
+  val handleShowScreenshotModal: (Any?, Int, Int, Int?, Int?, xyz.block.trailblaze.api.AgentDriverAction?) -> Unit =
     { imageModel, deviceWidth, deviceHeight, clickX, clickY, action ->
       modalImageModel = imageModel
       modalDeviceWidth = deviceWidth
@@ -337,6 +341,7 @@ fun LiveSessionDetailComposable(
         if (inspectorLog != null) {
           var viewHierarchy: xyz.block.trailblaze.api.ViewHierarchyTreeNode? = null
           var viewHierarchyFiltered: xyz.block.trailblaze.api.ViewHierarchyTreeNode? = null
+          var trailblazeNodeTree: xyz.block.trailblaze.api.TrailblazeNode? = null
           var imageUrl: String? = null
           var deviceWidth = 0
           var deviceHeight = 0
@@ -345,18 +350,21 @@ fun LiveSessionDetailComposable(
             is TrailblazeLog.TrailblazeLlmRequestLog -> {
               viewHierarchy = inspectorLog.viewHierarchy
               viewHierarchyFiltered = inspectorLog.viewHierarchyFiltered
+              trailblazeNodeTree = inspectorLog.trailblazeNodeTree
               imageUrl = inspectorLog.screenshotFile
               deviceWidth = inspectorLog.deviceWidth
               deviceHeight = inspectorLog.deviceHeight
             }
-            is TrailblazeLog.MaestroDriverLog -> {
+            is TrailblazeLog.AgentDriverLog -> {
               viewHierarchy = inspectorLog.viewHierarchy
+              trailblazeNodeTree = inspectorLog.trailblazeNodeTree
               imageUrl = inspectorLog.screenshotFile
               deviceWidth = inspectorLog.deviceWidth
               deviceHeight = inspectorLog.deviceHeight
             }
             is TrailblazeLog.TrailblazeSnapshotLog -> {
               viewHierarchy = inspectorLog.viewHierarchy
+              trailblazeNodeTree = inspectorLog.trailblazeNodeTree
               imageUrl = inspectorLog.screenshotFile
               deviceWidth = inspectorLog.deviceWidth
               deviceHeight = inspectorLog.deviceHeight
@@ -376,11 +384,20 @@ fun LiveSessionDetailComposable(
             val logSpecificComputeSelectorOptions = remember(inspectorLog) {
               createSelectorFunctionForLog?.invoke(inspectorLog)
             }
+            val logSpecificTrailblazeNodeSelectorOptions = remember(inspectorLog) {
+              // Use platform-specific factory if provided, otherwise compute directly
+              // (all TrailblazeNode selector deps are in commonMain, so this works on WASM too)
+              createTrailblazeNodeSelectorFunctionForLog?.invoke(inspectorLog)
+                ?: trailblazeNodeTree?.let {
+                  InspectTrailblazeNodeSelectorHelper.createSelectorComputeFunction(root = it)
+                }
+            }
 
             InspectViewHierarchyScreenComposable(
               sessionId = session.sessionId.value,
               viewHierarchy = viewHierarchy,
               viewHierarchyFiltered = viewHierarchyFiltered,
+              trailblazeNodeTree = trailblazeNodeTree,
               imageUrl = imageUrl,
               deviceWidth = deviceWidth,
               deviceHeight = deviceHeight,
@@ -401,7 +418,8 @@ fun LiveSessionDetailComposable(
                 showInspectUIDialog = false
                 currentInspectorLog = null
               },
-              computeSelectorOptions = logSpecificComputeSelectorOptions
+              computeSelectorOptions = logSpecificComputeSelectorOptions,
+              computeTrailblazeNodeSelectorOptions = logSpecificTrailblazeNodeSelectorOptions,
             )
           } else {
             Text(

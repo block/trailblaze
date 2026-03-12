@@ -16,7 +16,41 @@ data class TrailConfig(
    * organization use a short name for the app, or a package ID (e.g., "com.example.app") if
    * desired. Not required.
    */
-  val targetApp: String? = null,
+  val app: String? = null,
+  /**
+   * Optional platform hint for device selection. When set, the CLI will auto-select a device
+   * matching this platform. This is a freeform string used as a first classifier — it does not
+   * need to map to [xyz.block.trailblaze.devices.TrailblazeDevicePlatform] values since internal
+   * platforms may exist. Common values: "android", "ios", "web".
+   */
+  val platform: String? = null,
+  /**
+   * Optional driver type for device selection. When set, the CLI will select a device with the
+   * matching driver. This is more explicit than [platform] and takes precedence over it. Valid
+   * values correspond to [xyz.block.trailblaze.devices.TrailblazeDriverType] names (e.g.,
+   * "PLAYWRIGHT_NATIVE", "ANDROID_HOST", "IOS_HOST").
+   */
+  val driver: String? = null,
+  /** Optional Electron app configuration for [TrailblazeDriverType.PLAYWRIGHT_ELECTRON] trails. */
+  val electron: ElectronAppConfig? = null,
+)
+
+@Serializable
+data class ElectronAppConfig(
+  /** Path to the Electron app executable. If null, [cdpUrl] must be set. */
+  val command: String? = null,
+  /** Additional command-line arguments for the Electron app. */
+  val args: List<String> = emptyList(),
+  /** Environment variables to set when launching the Electron app. */
+  val env: Map<String, String> = emptyMap(),
+  /** CDP remote debugging port (default 9222). */
+  val cdpPort: Int = 9222,
+  /** If set, attach to an already-running app at this CDP URL (skip launch). */
+  val cdpUrl: String? = null,
+  /** Seconds to wait for the CDP endpoint to become available. */
+  val cdpTimeoutSeconds: Int = 30,
+  /** Run the Electron app without showing a visible window. Sets ELECTRON_HEADLESS=true env var. */
+  val headless: Boolean = false,
 )
 
 @Serializable

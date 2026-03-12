@@ -31,6 +31,6 @@ data class AssertWithAiTrailblazeTool(
     if (!evaluation.result) {
       throw TrailblazeToolExecutionException(message = "AI assertion failed: $interpolatedPrompt", tool = this)
     }
-    return TrailblazeToolResult.Success
+    return TrailblazeToolResult.Success()
   }
 }

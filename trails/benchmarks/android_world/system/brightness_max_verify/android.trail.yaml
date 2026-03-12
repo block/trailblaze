@@ -1,0 +1,23 @@
+# Android World Benchmark: BrightnessMaxVerify
+- config:
+    id: android-world-benchmarks/system/brightness_max_verify
+    displayName: "System - Brightness Max Verify"
+    description: "Turn brightness to the max value."
+
+- tools:
+    - androidworldbenchmarks_runAdbShell:
+        adbShellCommands:
+          - "settings put system screen_brightness 255"
+
+- prompts:
+    - step: "Turn brightness to the max value."
+
+- tools:
+    - androidworldbenchmarks_assertAdbShellOutput:
+        command: "settings get system screen_brightness"
+        expectedOutput: "255"
+        matchMode: "exact"
+
+# --- Benchmark Run History ---
+# [2026-03-11] FAILED - Agent limitation: Brightness stayed at 22 (expected 255).
+#   Cascading failure — depends on brightness_max succeeding first.

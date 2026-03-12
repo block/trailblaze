@@ -1,0 +1,20 @@
+# Android World Benchmark: Create Note
+- config:
+    id: android-world-benchmarks/markor/create_note
+    description: Create a new note in Markor named meeting_notes.md with specific text
+- tools:
+    - androidworldbenchmarks_clearDirectory:
+        directoryPath: /storage/emulated/0/Documents/Markor
+- prompts:
+    - step: "Create a new note in Markor named meeting_notes.md with the following text: Remember to discuss Q4 budget planning and team restructuring proposals"
+- tools:
+    - androidworldbenchmarks_assertFileExistsOnDevice:
+        filePath: /storage/emulated/0/Documents/Markor/meeting_notes.md
+        shouldExist: true
+    - androidworldbenchmarks_assertFileContent:
+        filePath: /storage/emulated/0/Documents/Markor/meeting_notes.md
+        expectedContent: Remember to discuss Q4 budget planning and team restructuring proposals
+        matchMode: contains
+
+# --- Benchmark Run History ---
+# [2026-03-11] Build #27 FAILED - Agent limitation: ObjectiveFailed. Can't navigate Markor app.

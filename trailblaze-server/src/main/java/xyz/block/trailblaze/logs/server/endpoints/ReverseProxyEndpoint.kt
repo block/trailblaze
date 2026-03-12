@@ -1,10 +1,5 @@
 package xyz.block.trailblaze.logs.server.endpoints
 
-import io.ktor.client.HttpClient
-import io.ktor.client.engine.okhttp.OkHttp
-import io.ktor.client.plugins.logging.LogLevel
-import io.ktor.client.plugins.logging.Logger
-import io.ktor.client.plugins.logging.Logging
 import io.ktor.client.request.bearerAuth
 import io.ktor.client.request.request
 import io.ktor.client.request.setBody
@@ -19,6 +14,7 @@ import io.ktor.server.response.respond
 import io.ktor.server.routing.Routing
 import io.ktor.server.routing.route
 import io.ktor.utils.io.toByteArray
+import xyz.block.trailblaze.http.TrailblazeHttpClientFactory
 import xyz.block.trailblaze.http.ReverseProxyHeaders
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
 import xyz.block.trailblaze.mcp.utils.JvmLLMProvidersUtil.getEnvironmentVariableValueForLlmProvider
@@ -30,17 +26,7 @@ import xyz.block.trailblaze.util.Console
  */
 object ReverseProxyEndpoint {
 
-  val client = HttpClient(OkHttp) {
-    install(Logging) {
-      logger = object : Logger {
-        override fun log(message: String) {
-          // Log the request and response details
-          Console.log("ReverseProxy: $message")
-        }
-      }
-      level = LogLevel.NONE
-    }
-  }
+  val client = TrailblazeHttpClientFactory.createDefaultHttpClient(timeoutInSeconds = 120)
 
   fun register(routing: Routing, logsRepo: LogsRepo) = with(routing) {
     route("/reverse-proxy") {

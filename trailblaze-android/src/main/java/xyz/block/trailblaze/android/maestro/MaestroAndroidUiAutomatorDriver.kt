@@ -86,7 +86,7 @@ object MaestroAndroidUiAutomatorDriver : Driver {
 
   override fun eraseText(charactersToErase: Int) {
     // No delay required for each tap so just directly deleting the number of characters
-    (0..charactersToErase).forEach { i ->
+    repeat(charactersToErase) {
       withUiDevice { pressDelete() }
     }
   }

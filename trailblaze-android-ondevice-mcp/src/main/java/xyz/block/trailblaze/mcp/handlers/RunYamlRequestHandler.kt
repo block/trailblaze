@@ -4,34 +4,72 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
+import xyz.block.trailblaze.agent.TrailblazeProgressEvent
+import xyz.block.trailblaze.devices.TrailblazeDeviceId
+import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.llm.RunYamlResponse
 import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.client.TrailblazeSessionManager
 import xyz.block.trailblaze.logs.model.SessionStatus
+import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.RpcHandler
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
+import xyz.block.trailblaze.mcp.progress.ProgressSessionManager
+import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.toSnakeCaseIdentifier
-import xyz.block.trailblaze.yaml.TrailblazeYaml
+import xyz.block.trailblaze.yaml.createTrailblazeYaml
 
 /**
- * Handler for YAML test execution requests.
+ * Handler for test execution requests.
+ *
+ * Routes requests based on [RunYamlRequest.agentImplementation]:
+ * - [AgentImplementation.TRAILBLAZE_RUNNER]: Legacy YAML-based TrailblazeRunner
+ * - [AgentImplementation.TWO_TIER_AGENT]: Modern two-tier agent architecture
+ * - [AgentImplementation.MULTI_AGENT_V3]: Mobile-Agent-v3 inspired implementation
+ *
  * Manages session lifecycle and executes tests in the background.
  *
- * Uses explicit session management with TrailblazeSessionManager.
+ * ## Progress Reporting
+ *
+ * When [progressManager] is provided, the handler emits progress events:
+ * - [TrailblazeProgressEvent.ExecutionStarted] when execution begins
+ * - [TrailblazeProgressEvent.ExecutionCompleted] when execution finishes
+ *
+ * Additional progress events (step progress, reflection, etc.) are emitted
+ * by the agent implementations themselves via the [progressManager].
  */
 class RunYamlRequestHandler(
   private val backgroundScope: CoroutineScope,
   private val getCurrentJob: () -> Job?,
   private val setCurrentJob: (Job?) -> Unit,
   private val sessionManager: TrailblazeSessionManager,
-  private val runTrailblazeYaml: suspend (RunYamlRequest, TrailblazeSession) -> TrailblazeSession
+  /** Callback to run via TrailblazeRunner (legacy YAML processing) */
+  private val runTrailblazeYaml: suspend (RunYamlRequest, TrailblazeSession) -> TrailblazeSession,
+  /** Callback to run via two-tier agent architecture */
+  private val runTwoTierAgent: suspend (RunYamlRequest, TrailblazeSession) -> TrailblazeSession,
+  /** Provider for device info including classifiers - used in session start logs.
+   *  Accepts the device ID from the request so callers can initialize state before
+   *  building the info (e.g., setting lateinit properties). */
+  private val trailblazeDeviceInfoProvider: (TrailblazeDeviceId) -> TrailblazeDeviceInfo,
+  /** Optional progress manager for emitting progress events to MCP clients */
+  private val progressManager: ProgressSessionManager? = null,
+  /** Callback to run via MultiAgentV3 (optional) - if not provided, falls back to TWO_TIER_AGENT */
+  private val runMultiAgentV3Callback: (suspend (RunYamlRequest, TrailblazeSession) -> TrailblazeSession)? =
+    null,
 ) : RpcHandler<RunYamlRequest, RunYamlResponse> {
 
+  /** Tracks the session associated with the currently running job, so we can end the correct
+   *  session when a new request arrives and cancels the previous one. */
+  @Volatile private var currentRunningSession: TrailblazeSession? = null
+
   override suspend fun handle(request: RunYamlRequest): RpcResult<RunYamlResponse> {
+    // Create a single YAML parser instance for consistent usage throughout the handler
+    val trailblazeYaml = createTrailblazeYaml()
+
     // Extract config values for session naming
     val trailConfig = try {
-      TrailblazeYaml.Default.extractTrailConfig(request.yaml)
+      trailblazeYaml.extractTrailConfig(request.yaml)
     } catch (e: Exception) {
       null
     }
@@ -52,29 +90,124 @@ class RunYamlRequestHandler(
       sessionManager.startSession(newSessionId)
     }
 
+    // Emit session start log with device info and classifiers.
+    // This must happen BEFORE any tool logs to establish the session context.
+    // The handler emits this for ALL agent implementations to ensure the report
+    // generator can always find a Started log (required for test result generation).
+    val shouldEmitStartLogHere = request.config.sendSessionStartLog
+
+    if (shouldEmitStartLogHere) {
+      val deviceInfo = trailblazeDeviceInfoProvider(request.trailblazeDeviceId)
+      val hasRecordedSteps = try {
+        trailblazeYaml.hasRecordedSteps(
+          trailblazeYaml.decodeTrail(request.yaml)
+        )
+      } catch (e: Exception) {
+        false
+      }
+
+      sessionManager.emitSessionStartLog(
+        session = session,
+        trailConfig = trailConfig,
+        trailFilePath = null,
+        hasRecordedSteps = hasRecordedSteps,
+        testMethodName = request.testName,
+        testClassName = "OnDeviceRpc",
+        trailblazeDeviceInfo = deviceInfo,
+        trailblazeDeviceId = request.trailblazeDeviceId,
+        rawYaml = request.yaml,
+      )
+    }
+
+    // Extract objective from YAML for progress reporting
+    val objective = trailConfig?.title ?: trailConfig?.id ?: request.testName
+
     return try {
-      // Cancel any currently running job before starting a new session
+      // Cancel any currently running job before starting a new session.
+      // We use currentRunningSession to track which session belongs to the previous job,
+      // so we end the correct (old) session — not the newly created one.
       getCurrentJob()?.let { job ->
         if (job.isActive) {
+          val previousSession = currentRunningSession
           // Launch cancellation in background to avoid blocking the response
           backgroundScope.launch {
             job.cancelAndJoin()
           }
-          // Send end log for the interrupted session with cancellation status
-          sessionManager.endSession(
-            session = session,
-            endedStatus = SessionStatus.Ended.Cancelled(
-              durationMs = 0L,
-              cancellationMessage = "Session cancelled after the user started a new session.",
-            ),
-          )
+          // Send end log for the interrupted (previous) session with cancellation status
+          if (previousSession != null) {
+            sessionManager.endSession(
+              session = previousSession,
+              endedStatus = SessionStatus.Ended.Cancelled(
+                durationMs = 0L,
+                cancellationMessage = "Session cancelled after the user started a new session.",
+              ),
+            )
+          }
         }
       }
+
+      val startTimeMs = System.currentTimeMillis()
+
       // Launch the job in the background scope so it doesn't block the response
       val job = backgroundScope.launch {
         try {
-          // Pass session to runner and get updated session back
-          val finalSession = runTrailblazeYaml(request, session)
+          // Emit execution started progress event
+          progressManager?.onProgressEvent(
+            TrailblazeProgressEvent.ExecutionStarted(
+              timestamp = startTimeMs,
+              sessionId = session.sessionId,
+              deviceId = request.trailblazeDeviceId,
+              objective = objective,
+              agentImplementation = request.agentImplementation,
+              hasTaskPlan = request.agentImplementation == AgentImplementation.MULTI_AGENT_V3,
+            )
+          )
+
+          // Route to appropriate agent implementation
+          // For TRAILBLAZE_RUNNER, suppress the Started log in the callback since
+          // the handler already emitted it above via sessionManager.emitSessionStartLog().
+          val finalSession = when (request.agentImplementation) {
+            AgentImplementation.TRAILBLAZE_RUNNER -> {
+              Console.log("[RunYamlRequestHandler] Using TRAILBLAZE_RUNNER (legacy)")
+              val requestWithStartLogSuppressed = request.copy(
+                config = request.config.copy(sendSessionStartLog = false),
+              )
+              runTrailblazeYaml(requestWithStartLogSuppressed, session)
+            }
+
+            AgentImplementation.TWO_TIER_AGENT -> {
+              Console.log("[RunYamlRequestHandler] Using TWO_TIER_AGENT")
+              runTwoTierAgent(request, session)
+            }
+
+            AgentImplementation.MULTI_AGENT_V3 -> {
+              if (runMultiAgentV3Callback != null) {
+                Console.log("[RunYamlRequestHandler] Using MULTI_AGENT_V3")
+                runMultiAgentV3Callback.invoke(request, session)
+              } else {
+                Console.log(
+                  "[RunYamlRequestHandler] Using MULTI_AGENT_V3 (fallback to TWO_TIER_AGENT)"
+                )
+                runTwoTierAgent(request, session)
+              }
+            }
+          }
+
+          val endTimeMs = System.currentTimeMillis()
+
+          // Emit execution completed progress event
+          progressManager?.onProgressEvent(
+            TrailblazeProgressEvent.ExecutionCompleted(
+              timestamp = endTimeMs,
+              sessionId = session.sessionId,
+              deviceId = request.trailblazeDeviceId,
+              success = true,
+              totalDurationMs = endTimeMs - startTimeMs,
+              totalActions = 0, // Action count tracked by agent implementations
+              errorMessage = null,
+            )
+          )
+
           if (request.config.sendSessionEndLog) {
             sessionManager.endSession(
               session = finalSession,
@@ -85,6 +218,22 @@ class RunYamlRequestHandler(
           }
         } catch (e: Exception) {
           e.printStackTrace()
+
+          val endTimeMs = System.currentTimeMillis()
+
+          // Emit execution failed progress event
+          progressManager?.onProgressEvent(
+            TrailblazeProgressEvent.ExecutionCompleted(
+              timestamp = endTimeMs,
+              sessionId = session.sessionId,
+              deviceId = request.trailblazeDeviceId,
+              success = false,
+              totalDurationMs = endTimeMs - startTimeMs,
+              totalActions = 0,
+              errorMessage = e.message ?: "Unknown error",
+            )
+          )
+
           sessionManager.endSession(
             session = session,
             isSuccess = false,
@@ -93,6 +242,7 @@ class RunYamlRequestHandler(
         }
       }
 
+      currentRunningSession = session
       setCurrentJob(job)
 
       RpcResult.Success(
@@ -113,4 +263,5 @@ class RunYamlRequestHandler(
       )
     }
   }
+
 }

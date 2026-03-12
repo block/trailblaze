@@ -1,0 +1,34 @@
+# Android World Benchmark: StopwatchPaused
+#
+# From android_world ClockStopWatchPausedVerify:
+# - Setup: Clear clock app data (resets stopwatch to 00:00:00, paused state)
+# - Prompt: "Pause the stopwatch."
+# - Validation: DeskClock activity is foreground, "Start" button visible,
+#   and "Stopwatch" text appears at least twice.
+- config:
+    id: android-world-benchmarks/clock/stopwatch_paused
+    displayName: "Clock - Stopwatch Paused"
+    description: "Pause the stopwatch."
+
+- tools:
+    - clearAppData:
+        packageName: com.google.android.deskclock
+    # Android World starts every task from the home screen (using adb for reliable setup execution)
+    - androidworldbenchmarks_runAdbShell:
+        adbShellCommands:
+          - "input keyevent KEYCODE_HOME"
+
+- prompts:
+    - step: "Pause the stopwatch."
+
+- tools:
+    # Validation: "Start" button is visible (stopwatch is paused, not running)
+    - assertVisibleBySelector:
+        reason: "Stopwatch should be paused — 'Start' button must be visible"
+        selector:
+          textRegex: "Start"
+
+# --- Benchmark Run History ---
+# [2026-03-11] FAILED - Agent limitation: ObjectiveFailed. Agent couldn't
+#   pause the stopwatch. May have failed to find or tap the pause button.
+# [2026-03-11] Build #27 FAILED - Agent limitation: ObjectiveFailed. Same as build #24.

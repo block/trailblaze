@@ -18,6 +18,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -30,6 +31,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import xyz.block.trailblaze.host.devices.PlaywrightInstallState
 import xyz.block.trailblaze.host.devices.WebBrowserState
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.ui.icons.BrowserChrome
@@ -48,6 +50,7 @@ fun WebBrowserControlPanel(
   modifier: Modifier = Modifier,
 ) {
   val browserState by deviceManager.webBrowserStateFlow.collectAsState()
+  val playwrightState by deviceManager.webBrowserManager.playwrightInstaller.installState.collectAsState()
 
   Card(
     modifier = modifier.fillMaxWidth(),
@@ -84,7 +87,18 @@ fun WebBrowserControlPanel(
       when (val state = browserState) {
         is WebBrowserState.Idle -> {
           IdleBrowserContent(
-            onLaunch = { deviceManager.launchWebBrowser() }
+            playwrightState = playwrightState,
+            onLaunch = {
+              // If browsers need to be installed, install first then auto-launch
+              when (playwrightState) {
+                is PlaywrightInstallState.NotInstalled, is PlaywrightInstallState.Error -> {
+                  deviceManager.webBrowserManager.playwrightInstaller.installBrowsers(
+                    onComplete = { deviceManager.launchWebBrowser() }
+                  )
+                }
+                else -> deviceManager.launchWebBrowser()
+              }
+            },
           )
         }
 
@@ -111,6 +125,7 @@ fun WebBrowserControlPanel(
 
 @Composable
 private fun IdleBrowserContent(
+  playwrightState: PlaywrightInstallState,
   onLaunch: () -> Unit,
 ) {
   Column(
@@ -122,17 +137,113 @@ private fun IdleBrowserContent(
       color = MaterialTheme.colorScheme.onSurfaceVariant
     )
 
-    Button(
-      onClick = onLaunch,
-      modifier = Modifier.semantics { contentDescription = "Launch Web Browser Button" }
-    ) {
-      Icon(
-        imageVector = Icons.Default.PlayArrow,
-        contentDescription = null,
-        modifier = Modifier.size(18.dp)
-      )
-      Spacer(modifier = Modifier.width(8.dp))
-      Text("Launch Web Browser")
+    // Show install progress or launch button based on Playwright install state
+    when (playwrightState) {
+      is PlaywrightInstallState.Installing -> {
+        // Download in progress — show progress bar and status
+        Column(
+          verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+          ) {
+            CircularProgressIndicator(
+              modifier = Modifier.size(18.dp),
+              strokeWidth = 2.dp,
+            )
+            Text(
+              text = "Installing browser... ${playwrightState.progressPercent}%",
+              style = MaterialTheme.typography.bodyMedium,
+              color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+          }
+
+          // Linear progress bar
+          if (playwrightState.progressPercent > 0) {
+            LinearProgressIndicator(
+              progress = { playwrightState.progressPercent / 100f },
+              modifier = Modifier.fillMaxWidth(),
+            )
+          } else {
+            LinearProgressIndicator(
+              modifier = Modifier.fillMaxWidth(),
+            )
+          }
+
+          Text(
+            text = playwrightState.statusMessage,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+          )
+        }
+      }
+
+      is PlaywrightInstallState.NotInstalled -> {
+        // Browser not installed — show install button alongside launch
+        Column(
+          verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+          Button(
+            onClick = onLaunch,
+            modifier = Modifier.semantics { contentDescription = "Launch Web Browser Button" }
+          ) {
+            Icon(
+              imageVector = Icons.Default.PlayArrow,
+              contentDescription = null,
+              modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Install & Launch Web Browser")
+          }
+          Text(
+            text = "Browser binaries will be downloaded before launching (~150 MB).",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+          )
+        }
+      }
+
+      is PlaywrightInstallState.Error -> {
+        // Install failed — show retry
+        Column(
+          verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+          Button(
+            onClick = onLaunch,
+            modifier = Modifier.semantics { contentDescription = "Launch Web Browser Button" }
+          ) {
+            Icon(
+              imageVector = Icons.Default.PlayArrow,
+              contentDescription = null,
+              modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Retry Install & Launch")
+          }
+          Text(
+            text = playwrightState.message,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+          )
+        }
+      }
+
+      else -> {
+        // Installed, Unknown, or Checking — show normal launch button
+        Button(
+          onClick = onLaunch,
+          modifier = Modifier.semantics { contentDescription = "Launch Web Browser Button" }
+        ) {
+          Icon(
+            imageVector = Icons.Default.PlayArrow,
+            contentDescription = null,
+            modifier = Modifier.size(18.dp)
+          )
+          Spacer(modifier = Modifier.width(8.dp))
+          Text("Launch Web Browser")
+        }
+      }
     }
   }
 }

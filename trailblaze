@@ -146,8 +146,41 @@ elif [ "$STDIO_MODE" = true ]; then
     # STDIO MCP mode: suppress Gradle's task output so stdout is clean for JSON-RPC.
     # The Java application handles stderr redirection via Console.useStdErr().
     ./gradlew -q --console=plain ${TRAILBLAZE_MODULE}:run --args="$ARGS"
+elif [ "$1" = "run" ] && ! is_daemon_running; then
+    # Auto-start daemon on first 'run' command so subsequent runs reuse it.
+    # The RunCommand in Kotlin will detect the daemon and delegate via HTTP,
+    # avoiding the overhead of a second Gradle JVM per trail.
+    echo "Starting Trailblaze daemon..."
+    DAEMON_ARGS="--headless"
+    if [ -n "$PORT_ARGS" ]; then
+        DAEMON_ARGS="$PORT_ARGS $DAEMON_ARGS"
+    fi
+    nohup ./gradlew ${TRAILBLAZE_MODULE}:run --args="$DAEMON_ARGS" > /dev/null 2>&1 &
+
+    # Wait for daemon to be ready
+    echo -n "Waiting for daemon"
+    max_attempts=60
+    attempts=0
+    while [ $attempts -lt $max_attempts ]; do
+        if is_daemon_running; then
+            echo ""
+            echo "Daemon ready."
+            break
+        fi
+        echo -n "."
+        sleep 1
+        attempts=$((attempts + 1))
+    done
+
+    if ! is_daemon_running; then
+        echo ""
+        echo "Warning: Daemon did not start in time. Falling back to direct execution."
+    fi
+
+    # Now run the CLI command — RunCommand will detect the daemon and delegate
+    ./gradlew ${TRAILBLAZE_MODULE}:run --args="$ARGS"
 elif [ -n "$ARGS" ]; then
-    # CLI command mode (run, config, auth, etc.)
+    # CLI command mode (config, auth, etc.)
     ./gradlew ${TRAILBLAZE_MODULE}:run --args="$ARGS"
 else
     # Default mode: check if already running, otherwise start in background

@@ -9,7 +9,7 @@ import xyz.block.trailblaze.toolcalls.MapsToMaestroCommands
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 
 @Serializable
-@TrailblazeToolClass("pressBack")
+@TrailblazeToolClass("pressBack", isForLlm = false)
 @LLMDescription(
   """
 Presses the virtual back button on an Android device.

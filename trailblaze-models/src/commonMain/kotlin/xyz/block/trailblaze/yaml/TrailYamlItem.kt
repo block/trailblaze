@@ -27,26 +27,9 @@ sealed interface TrailYamlItem {
     val tools: List<@Contextual TrailblazeToolYamlWrapper>,
   ) : TrailYamlItem
 
-  /**
-   * maestro
-   *
-   * This is used to represent a list of Maestro commands in the trail.
-   *
-   * @deprecated Use Trailblaze tools instead of raw Maestro commands.
-   * Tools can be recorded, processed by the agent, and provide consistent cross-platform behavior.
-   * See Trailblaze Decision 002 for details.
-   */
-  @Deprecated("Use Trailblaze tools instead of raw Maestro commands. See Trailblaze Decision 002.")
-  @Serializable
-  data class MaestroTrailItem(
-    @Contextual
-    val maestro: MaestroCommandList,
-  ) : TrailYamlItem
-
   companion object {
     val KEYWORD_PROMPTS = "prompts"
     val KEYWORD_TOOLS = "tools"
-    val KEYWORD_MAESTRO = "maestro"
     val KEYWORD_CONFIG = "config"
   }
 

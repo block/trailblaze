@@ -7,18 +7,18 @@ import maestro.orchestra.MaestroCommand
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.toolcalls.GenericGsonJsonSerializer
-import java.util.regex.Pattern
 import xyz.block.trailblaze.util.Console
+import java.util.regex.Pattern
 
 object Ext {
 
   fun JsonObject.asMaestroCommand(): Command? = try {
-    val maestroCommand = TrailblazeJsonInstance.decodeFromString(
+    TrailblazeJsonInstance.decodeFromString(
       GenericGsonJsonSerializer(MaestroCommand::class),
-      TrailblazeJsonInstance.encodeToString(this),
-    )
-    maestroCommand.asCommand()
+      this.toString(),
+    ).asCommand()
   } catch (e: Exception) {
+    Console.error("Failed to deserialize MaestroCommand from JSON: ${e.message}")
     null
   }
 
@@ -32,7 +32,15 @@ object Ext {
     error(e)
   }
 
-  fun List<JsonObject>.asMaestroCommands(): List<Command> = this.mapNotNull { it.asMaestroCommand() }
+  /**
+   * Converts raw Maestro command JsonObjects to executable Commands via Gson deserialization.
+   * Previously used MaestroYamlParser but Maestro 2.3.0 YAML parser no longer accepts
+   * the Gson property names (e.g. "launchAppCommand" vs "launchApp").
+   */
+  fun List<JsonObject>.asMaestroCommands(): List<Command> {
+    if (isEmpty()) return emptyList()
+    return mapNotNull { it.asMaestroCommand() }
+  }
 
   fun List<Command>.asJsonObjects(): List<JsonObject> = this.map { it.asJsonObject() }
 
@@ -89,7 +97,7 @@ object Ext {
         className = getAttributeIfNotBlank("class"),
         dimensions = bounds?.let { "${it.width}x${it.height}" },
         clickable = clickable ?: false,
-        enabled = enabled ?: false,
+        enabled = enabled ?: true,
         focusable = getAttributeIfNotBlank("focusable") == "true",
         focused = focused ?: false,
         hintText = getAttributeIfNotBlank("hintText"),

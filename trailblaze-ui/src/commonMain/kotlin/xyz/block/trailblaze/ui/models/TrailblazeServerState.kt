@@ -5,9 +5,11 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.llm.providers.OpenAITrailblazeLlmModelList
+import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.model.AI_FALLBACK_DEFAULT
 import xyz.block.trailblaze.ui.editors.yaml.YamlVisualEditorView
 import xyz.block.trailblaze.ui.editors.yaml.YamlEditorMode
+import xyz.block.trailblaze.ui.tabs.session.SessionViewMode
 
 @Serializable
 data class TrailblazeServerState(
@@ -30,6 +32,8 @@ data class TrailblazeServerState(
     val llmModel: String = DEFAULT_DESKTOP_APP_MODEL_LLM_MODEL.modelId, // Default to GPT-4.1 model
     val setOfMarkEnabled: Boolean = true,
     val aiFallbackEnabled: Boolean = AI_FALLBACK_DEFAULT,
+    /** Agent implementation to use. Defaults to [AgentImplementation.DEFAULT]. */
+    val agentImplementation: AgentImplementation = AgentImplementation.DEFAULT,
     val yamlContent: String = """
 - prompts:
     - step: click back
@@ -42,7 +46,7 @@ data class TrailblazeServerState(
     val sessionDetailFontScale: Float = 1f, // Font size scale
     // Current session navigation state (cleared on app restart)
     val currentSessionId: String? = null, // Currently selected session
-    val currentSessionViewMode: String = "List", // Current view mode (List/Grid/LlmUsage/Recording)
+    val currentSessionViewMode: String = SessionViewMode.DEFAULT.name, // Current view mode
     // UI Inspector preferences
     val uiInspectorScreenshotWidth: Int = DEFAULT_UI_INSPECTOR_SCREENSHOT_WIDTH,
     val uiInspectorDetailsWeight: Float = DEFAULT_UI_INSPECTOR_DETAILS_WEIGHT,
@@ -62,8 +66,13 @@ data class TrailblazeServerState(
     // Tab visibility settings
     val showTrailsTab: Boolean = true, // Default true for backward compatibility
     val showDevicesTab: Boolean = false, // Default hidden - can be enabled in Settings
+    val showRecordTab: Boolean = false, // Default hidden - can be enabled in Settings
+    val showDeviceStatusPanel: Boolean = false, // Floating device status overlay in bottom-right
     // Navigation rail expanded/collapsed state
     val navRailExpanded: Boolean = true, // Default to expanded
+    val testingEnvironment: TestingEnvironment? = null,
+    // Local dev capture settings
+    val captureLogcat: Boolean = false,
     // Last navigation route (restored on app restart)
     val lastRoute: String? = null, // Qualified class name of the last visited route
   ) {
@@ -79,6 +88,12 @@ data class TrailblazeServerState(
     Light,
     Dark,
     System
+  }
+
+  @Serializable
+  enum class TestingEnvironment(val displayName: String) {
+    MOBILE("Mobile"),
+    WEB("Web"),
   }
 
   companion object {

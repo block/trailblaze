@@ -1,0 +1,21 @@
+# Android World Benchmark: Edit Note
+- config:
+    id: android-world-benchmarks/markor/edit_note
+    description: Edit meeting_notes.md in Markor and add text to the top
+- tools:
+    - androidworldbenchmarks_clearDirectory:
+        directoryPath: /storage/emulated/0/Documents/Markor
+    - androidworldbenchmarks_createFileOnDevice:
+        devicePath: /storage/emulated/0/Documents/Markor
+        fileName: meeting_notes.md
+        content: Discuss budget next quarter
+- prompts:
+    - step: Edit meeting_notes.md in Markor. Add to the top of the note Important Update
+- tools:
+    - androidworldbenchmarks_assertFileContent:
+        filePath: /storage/emulated/0/Documents/Markor/meeting_notes.md
+        expectedContent: Important Update
+        matchMode: contains
+
+# --- Benchmark Run History ---
+# [2026-03-11] Build #27 FAILED - Agent limitation: ObjectiveFailed. Can't navigate Markor app.

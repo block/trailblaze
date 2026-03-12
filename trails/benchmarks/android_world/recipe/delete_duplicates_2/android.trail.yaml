@@ -1,0 +1,28 @@
+# Android World Benchmark: RecipeDeleteDuplicates2
+- config:
+    id: android-world-benchmarks/recipe/delete_duplicates_2
+    description: "Remove all duplicate recipe entries from the Broccoli app. For recipes with the same title, keep only one copy."
+- tools:
+    - androidworldbenchmarks_executeSqliteOnDevice:
+        dbPath: /data/data/com.flauschcode.broccoli/databases/broccoli
+        sqlStatements:
+          - "DELETE FROM recipes"
+          - "INSERT INTO recipes (title, description, servings, preparationTime, source, ingredients, directions, favorite, imageName) VALUES ('Tiramisu', 'Italian dessert', '8', '30 minutes', 'dessert cookbook', 'mascarpone, cocoa, ladyfingers', 'Layer and chill', 0, NULL)"
+          - "INSERT INTO recipes (title, description, servings, preparationTime, source, ingredients, directions, favorite, imageName) VALUES ('Tiramisu', 'Italian dessert', '8', '30 minutes', 'dessert cookbook', 'mascarpone, cocoa, ladyfingers', 'Layer and chill', 0, NULL)"
+          - "INSERT INTO recipes (title, description, servings, preparationTime, source, ingredients, directions, favorite, imageName) VALUES ('Pad Thai', 'Thai noodles', '3', '25 minutes', 'thai', 'noodles, shrimp, egg', 'Stir fry', 0, NULL)"
+          - "INSERT INTO recipes (title, description, servings, preparationTime, source, ingredients, directions, favorite, imageName) VALUES ('Pad Thai', 'Thai noodles', '3', '25 minutes', 'thai', 'noodles, shrimp, egg', 'Stir fry', 0, NULL)"
+          - "INSERT INTO recipes (title, description, servings, preparationTime, source, ingredients, directions, favorite, imageName) VALUES ('Pad Thai', 'Thai noodles', '3', '25 minutes', 'thai', 'noodles, shrimp, egg', 'Stir fry', 0, NULL)"
+          - "INSERT INTO recipes (title, description, servings, preparationTime, source, ingredients, directions, favorite, imageName) VALUES ('Apple Pie', 'Classic apple pie', '6', '60 minutes', 'dessert', 'apples, crust, sugar', 'Bake', 0, NULL)"
+        appPackageName: com.flauschcode.broccoli
+- prompts:
+    - step: "Remove all duplicate recipe entries from the Broccoli app. For recipes with the same title, keep only one copy."
+- tools:
+    - androidworldbenchmarks_assertSqliteQuery:
+        dbPath: /data/data/com.flauschcode.broccoli/databases/broccoli
+        query: "SELECT COUNT(*) FROM recipes WHERE title='Tiramisu'"
+        expectedOutput: "1"
+        matchMode: exact
+        appPackageName: com.flauschcode.broccoli
+
+# --- Benchmark Run History ---
+# [2026-03-11] Build #27 FAILED - Agent limitation: ObjectiveFailed. Can't navigate Broccoli app.

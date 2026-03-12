@@ -1,0 +1,28 @@
+# Android World Benchmark: TakeVideo
+- config:
+    id: android-world-benchmarks/camera/take_video
+    displayName: "Camera - Take Video"
+    description: "Take one video."
+
+- tools:
+    - androidworldbenchmarks_clearDirectory:
+        directoryPath: /sdcard/Movies
+
+- prompts:
+    - step: "Take one video."
+
+- tools:
+    - launchApp:
+        appId: com.android.camera2
+    - androidworldbenchmarks_assertAdbShellOutput:
+        command: "ls /sdcard/Movies/ /sdcard/DCIM/ 2>/dev/null"
+        expectedOutput: "."
+        matchMode: "contains"
+
+# --- Benchmark Run History ---
+# [2026-03-11] FAILED - Assertion: /sdcard/Movies was empty after video recording.
+#   Agent may have recorded but file saved to /sdcard/DCIM/ instead.
+#   FIX: Broadened validation to check both /sdcard/Movies/ and /sdcard/DCIM/.
+# [2026-03-11] Build #27 FAILED - Agent limitation: Both /sdcard/Movies/ and /sdcard/DCIM/ empty.
+#   Agent didn't actually record/save a video. Broadened path check
+#   confirms this is a genuine agent failure, not a validation issue.

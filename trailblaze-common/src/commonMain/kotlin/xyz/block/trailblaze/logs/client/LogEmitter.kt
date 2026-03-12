@@ -1,5 +1,7 @@
 package xyz.block.trailblaze.logs.client
 
+import xyz.block.trailblaze.util.Console
+
 /**
  * Interface for emitting log events.
  * Implementations handle delivery to different backends (server, disk, console, etc.)
@@ -13,7 +15,7 @@ package xyz.block.trailblaze.logs.client
  * ```kotlin
  * val emitter = LogEmitter { log ->
  *     // Send to server, write to disk, etc.
- *     println("Log: ${log::class.simpleName}")
+ *     Console.log("Log: ${log::class.simpleName}")
  * }
  * ```
  */

@@ -1,8 +1,9 @@
 package xyz.block.trailblaze.android
 
 import androidx.test.platform.app.InstrumentationRegistry
-import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
+import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.util.Console
 
 object InstrumentationArgUtil {
 
@@ -69,5 +70,20 @@ object InstrumentationArgUtil {
   fun isAiFallbackEnabled(): Boolean? {
     // Returns null if not set, allowing config to be the default
     return instrumentationArguments.getString("trailblaze.aiFallbackEnabled")?.toBoolean()
+  }
+
+  /**
+   * Returns the driver type from instrumentation args, or null if not set.
+   *
+   * Pass via: `-e trailblaze.driverType ANDROID_ONDEVICE_ACCESSIBILITY`
+   */
+  fun driverType(): TrailblazeDriverType? {
+    val value = instrumentationArguments.getString("trailblaze.driverType") ?: return null
+    return try {
+      TrailblazeDriverType.valueOf(value)
+    } catch (e: IllegalArgumentException) {
+      Console.log("Unknown driver type: $value, falling back to default")
+      null
+    }
   }
 }

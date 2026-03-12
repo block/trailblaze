@@ -8,11 +8,12 @@ import java.io.OutputStream
 import java.io.PrintStream
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
+import xyz.block.trailblaze.util.Console
 
 /**
  * Tees System.out and System.err to a log file in `~/.trailblaze/desktop-logs/`.
  *
- * This ensures that `println()` output is captured regardless of how Trailblaze is
+ * This ensures that `Console.log()` output is captured regardless of how Trailblaze is
  * launched — IDE run config, JAR, or the shell wrapper script. The shell script's
  * own tee/nohup piping still works fine alongside this; the file will simply receive
  * writes from both layers (which is harmless since they are append-only).
@@ -55,23 +56,13 @@ object DesktopLogFileWriter {
     System.setOut(PrintStream(TeeOutputStream(System.out, fileOut), /* autoFlush = */ true))
     System.setErr(PrintStream(TeeOutputStream(System.err, fileOut), /* autoFlush = */ true))
 
-    println("[DesktopLogFileWriter] Logging to ${logFile.absolutePath}")
+    Console.log("[DesktopLogFileWriter] Logging to ${logFile.absolutePath}")
   }
 
   private fun rotateIfNeeded(logFile: File) {
     if (logFile.exists() && logFile.length() > MAX_LOG_SIZE_BYTES) {
-      val oldFileBaseName = "${logFile.name}.old"
-      val oldFile = File(logFile.parentFile, oldFileBaseName)
-      if (oldFile.exists()) {
-        val timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))
-        val timestampedOldFile = File(logFile.parentFile, "${oldFileBaseName}-$timestamp")
-        if (!oldFile.renameTo(timestampedOldFile)) {
-          oldFile.delete()
-        }
-      }
-      if (!logFile.renameTo(oldFile)) {
-        logFile.delete()
-      }
+      val oldFile = File(logFile.parentFile, "${logFile.name}.old")
+      logFile.renameTo(oldFile)
     }
   }
 

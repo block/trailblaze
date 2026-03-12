@@ -1,0 +1,28 @@
+# Android World Benchmark: RecipeDeleteDuplicates3
+- config:
+    id: android-world-benchmarks/recipe/delete_duplicates_3
+    description: "In the Broccoli app, find and remove any recipes that appear more than once, keeping a single copy of each."
+- tools:
+    - androidworldbenchmarks_executeSqliteOnDevice:
+        dbPath: /data/data/com.flauschcode.broccoli/databases/broccoli
+        sqlStatements:
+          - "DELETE FROM recipes"
+          - "INSERT INTO recipes (title, description, servings, preparationTime, source, ingredients, directions, favorite, imageName) VALUES ('Margherita Pizza', 'Italian pizza', '2', '30 minutes', 'pizzeria', 'dough, tomato, mozzarella, basil', 'Bake at high temp', 0, NULL)"
+          - "INSERT INTO recipes (title, description, servings, preparationTime, source, ingredients, directions, favorite, imageName) VALUES ('Margherita Pizza', 'Italian pizza', '2', '30 minutes', 'pizzeria', 'dough, tomato, mozzarella, basil', 'Bake at high temp', 0, NULL)"
+          - "INSERT INTO recipes (title, description, servings, preparationTime, source, ingredients, directions, favorite, imageName) VALUES ('Margherita Pizza', 'Italian pizza', '2', '30 minutes', 'pizzeria', 'dough, tomato, mozzarella, basil', 'Bake at high temp', 0, NULL)"
+          - "INSERT INTO recipes (title, description, servings, preparationTime, source, ingredients, directions, favorite, imageName) VALUES ('Gazpacho', 'Cold soup', '4', '20 minutes', 'spanish', 'tomatoes, cucumber, bell pepper', 'Blend and chill', 0, NULL)"
+          - "INSERT INTO recipes (title, description, servings, preparationTime, source, ingredients, directions, favorite, imageName) VALUES ('Gazpacho', 'Cold soup', '4', '20 minutes', 'spanish', 'tomatoes, cucumber, bell pepper', 'Blend and chill', 0, NULL)"
+          - "INSERT INTO recipes (title, description, servings, preparationTime, source, ingredients, directions, favorite, imageName) VALUES ('Moussaka', 'Greek eggplant dish', '6', '90 minutes', 'greek', 'eggplant, ground meat, bechamel', 'Layer and bake', 0, NULL)"
+        appPackageName: com.flauschcode.broccoli
+- prompts:
+    - step: "In the Broccoli app, find and remove any recipes that appear more than once, keeping a single copy of each."
+- tools:
+    - androidworldbenchmarks_assertSqliteQuery:
+        dbPath: /data/data/com.flauschcode.broccoli/databases/broccoli
+        query: "SELECT COUNT(*) FROM recipes WHERE title='Gazpacho'"
+        expectedOutput: "1"
+        matchMode: exact
+        appPackageName: com.flauschcode.broccoli
+
+# --- Benchmark Run History ---
+# [2026-03-11] Build #27 FAILED - Agent limitation: ObjectiveFailed. Can't navigate Broccoli app.

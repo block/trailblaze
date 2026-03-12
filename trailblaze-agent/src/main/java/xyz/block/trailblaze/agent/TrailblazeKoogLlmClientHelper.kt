@@ -1,3 +1,5 @@
+@file:OptIn(kotlin.time.ExperimentalTime::class)
+
 package xyz.block.trailblaze.agent
 
 import ai.koog.agents.core.tools.Tool
@@ -13,11 +15,12 @@ import ai.koog.prompt.message.Message
 import ai.koog.prompt.message.RequestMetaInfo
 import ai.koog.prompt.params.LLMParams
 import kotlinx.coroutines.delay
-import kotlinx.datetime.Clock
+import kotlin.time.Clock
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import xyz.block.trailblaze.MaestroTrailblazeAgent
+import xyz.block.trailblaze.TrailblazeAgentContext
 import xyz.block.trailblaze.agent.model.PromptStepStatus
 import xyz.block.trailblaze.api.ImageFormatDetector
 import xyz.block.trailblaze.api.ScreenState
@@ -32,9 +35,9 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.SetActiveToolSetsTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.Status
 import xyz.block.trailblaze.toolcalls.getToolNameFromAnnotation
-import xyz.block.trailblaze.toolcalls.toolName
 import xyz.block.trailblaze.util.TemplatingUtil
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
@@ -50,8 +53,6 @@ data class ToolExecutionResult(
 
 class TrailblazeKoogLlmClientHelper(
   var systemPromptTemplate: String,
-  val userObjectiveTemplate: String,
-  val userMessageTemplate: String,
   val trailblazeLlmModel: TrailblazeLlmModel,
   val llmClient: LLMClient,
   val elementComparator: TrailblazeElementComparator,
@@ -94,12 +95,6 @@ class TrailblazeKoogLlmClientHelper(
     return "$devicePart - $dimensions"
   }
 
-  private var forceStepStatusUpdate = false
-
-  fun setForceStepStatusUpdate(force: Boolean) {
-    forceStepStatusUpdate = force
-  }
-
   fun handleTrailblazeToolForPrompt(
     trailblazeTool: TrailblazeTool,
     traceId: TraceId,
@@ -107,18 +102,21 @@ class TrailblazeKoogLlmClientHelper(
     agent: TrailblazeAgent,
   ): ToolExecutionResult = when (trailblazeTool) {
     is ObjectiveStatusTrailblazeTool -> {
-      setForceStepStatusUpdate(false)
+      step.addObjectiveStatusUpdate(
+        status = trailblazeTool.status.name,
+      )
 
       when (trailblazeTool.status) {
         Status.IN_PROGRESS -> ToolExecutionResult(
-          result = TrailblazeToolResult.Success,
+          result = TrailblazeToolResult.Success(),
           executedTools = listOf(trailblazeTool),
         )
+
         Status.FAILED -> {
           step.markAsFailed(llmExplanation = trailblazeTool.explanation)
           // Using objective to determine when we're done, not the tool result
           ToolExecutionResult(
-            result = TrailblazeToolResult.Success,
+            result = TrailblazeToolResult.Success(),
             executedTools = listOf(trailblazeTool),
           )
         }
@@ -126,11 +124,19 @@ class TrailblazeKoogLlmClientHelper(
         Status.COMPLETED -> {
           step.markAsComplete(llmExplanation = trailblazeTool.explanation)
           ToolExecutionResult(
-            result = TrailblazeToolResult.Success,
+            result = TrailblazeToolResult.Success(),
             executedTools = listOf(trailblazeTool),
           )
         }
       }
+    }
+
+    is SetActiveToolSetsTrailblazeTool -> {
+      val result = toolRepo.setActiveToolSets(trailblazeTool.toolSetIds)
+      ToolExecutionResult(
+        result = TrailblazeToolResult.Success(message = result),
+        executedTools = listOf(trailblazeTool),
+      )
     }
 
     else -> {
@@ -141,7 +147,6 @@ class TrailblazeKoogLlmClientHelper(
         elementComparator = elementComparator,
         screenStateProvider = screenStateProvider,
       )
-      setForceStepStatusUpdate(true)
       Console.log("\u001B[33m\n[ACTION_TAKEN] Tool executed: ${trailblazeTool.javaClass.simpleName}\u001B[0m")
 
       // Return both the result and the executed tools (which may differ for delegating tools)
@@ -172,14 +177,19 @@ class TrailblazeKoogLlmClientHelper(
     step: PromptStepStatus,
     agent: TrailblazeAgent,
   ) {
+    val agentContext = agent as? TrailblazeAgentContext
+      ?: error("Agent ${agent::class.simpleName} must implement TrailblazeAgentContext")
+    val maestroAgent = agent as? MaestroTrailblazeAgent
     val toolRegistry = toolRepo.asToolRegistry {
       TrailblazeToolExecutionContext(
-        trailblazeAgent = agent as MaestroTrailblazeAgent,
         screenState = step.currentScreenState,
         traceId = traceId,
-        trailblazeDeviceInfo = agent.trailblazeDeviceInfoProvider(),
-        sessionProvider = agent.sessionProvider,
+        trailblazeDeviceInfo = agentContext.trailblazeDeviceInfoProvider(),
+        sessionProvider = agentContext.sessionProvider,
         screenStateProvider = screenStateProvider,
+        trailblazeLogger = agentContext.trailblazeLogger,
+        memory = agentContext.memory,
+        maestroTrailblazeAgent = maestroAgent,
       )
     }
     val toolName = tool.tool
@@ -209,6 +219,7 @@ class TrailblazeKoogLlmClientHelper(
         },
       )
     } catch (exception: Exception) {
+      Console.log("[ERROR] Tool execution failed for '$toolName': ${exception.message}")
       ToolExecutionResult(
         result = TrailblazeToolResult.Error.ExceptionThrown.fromThrowable(
           throwable = exception,
@@ -216,10 +227,6 @@ class TrailblazeKoogLlmClientHelper(
         executedTools = emptyList(),
       )
     }
-
-    // Use the actual executed tool names and arguments instead of the LLM's tool call
-    // This is important for delegating tools like tapOnElementByNodeId which delegate to other tools
-    val actualToolNamesExecuted = toolExecutionResult.executedTools.map { it.getToolNameFromAnnotation() }
 
     // Serialize each executed tool to get its actual arguments
     val executedToolsWithArgs = toolExecutionResult.executedTools.associate { executedTool ->
@@ -245,17 +252,6 @@ class TrailblazeKoogLlmClientHelper(
       }.let { JsonObject(it) }
 
       executedTool.getToolNameFromAnnotation() to flattenedArgs
-    }
-
-    // Record the action performed for context in status checks (skip for objectiveStatus)
-    if (toolName != ObjectiveStatusTrailblazeTool::class.toolName().toolName && toolExecutionResult.result is TrailblazeToolResult.Success) {
-      val reason = toolArgs["reason"]?.toString()?.trim('"') ?: ""
-      val actionDescription = if (reason.isNotEmpty()) {
-        "$toolName: $reason"
-      } else {
-        "Executed $toolName"
-      }
-      step.addActionPerformed(actionDescription)
     }
 
     step.addCompletedToolCallToChatHistory(
@@ -313,6 +309,7 @@ class TrailblazeKoogLlmClientHelper(
 
   fun createNextChatRequest(
     stepStatus: PromptStepStatus,
+    previouslyCompletedStepDescriptions: List<String> = emptyList(),
   ): List<Message> = buildList {
     add(
       Message.System(
@@ -325,14 +322,11 @@ class TrailblazeKoogLlmClientHelper(
         metaInfo = RequestMetaInfo.create(Clock.System),
       ),
     )
+    // Standalone objective message — keeps the current task prominent and easy for the LLM
+    // to focus on, separate from the context/instructions in the reminder message below.
     add(
       Message.User(
-        content = TemplatingUtil.renderTemplate(
-          template = userObjectiveTemplate,
-          values = mapOf(
-            "objective" to stepStatus.promptStep.prompt,
-          ),
-        ),
+        content = "**Objective**\n\n${stepStatus.promptStep.prompt}",
         metaInfo = RequestMetaInfo.create(Clock.System),
       ),
     )
@@ -340,8 +334,8 @@ class TrailblazeKoogLlmClientHelper(
       Message.User(
         content = TrailblazeAiRunnerMessages.getReminderMessage(
           promptStep = stepStatus.promptStep,
-          forceStepStatusUpdate = forceStepStatusUpdate,
-          actionsPerformedThisObjective = stepStatus.getActionsPerformed(),
+          completedObjectiveDescriptions = previouslyCompletedStepDescriptions,
+          latestObjectiveStatus = stepStatus.getLatestObjectiveStatus(),
         ),
         metaInfo = RequestMetaInfo.create(Clock.System),
       ),
@@ -350,21 +344,24 @@ class TrailblazeKoogLlmClientHelper(
     // Add previous LLM responses
     addAll(stepStatus.getLimitedHistory())
 
-    val viewHierarchyJson = Json.encodeToString(
-      serializer = ViewHierarchyTreeNode.serializer(),
-      value = stepStatus.currentScreenState.viewHierarchy,
-    )
+    // Prefer platform-native text representation (e.g., Playwright's compact ARIA list)
+    // over JSON-serializing the generic ViewHierarchyTreeNode tree.
+    val viewHierarchyText = stepStatus.currentScreenState.viewHierarchyTextRepresentation
+      ?: Json.encodeToString(
+        serializer = ViewHierarchyTreeNode.serializer(),
+        value = stepStatus.currentScreenState.viewHierarchy,
+      )
     add(
       Message.User(
         parts = buildList {
           add(
             ContentPart.Text(
-              text = TemplatingUtil.renderTemplate(
-                template = userMessageTemplate,
-                values = mapOf(
-                  "view_hierarchy" to viewHierarchyJson,
-                ),
-              ),
+              text = buildString {
+                appendLine("Here is the view hierarchy of the user interface at this moment:")
+                appendLine("```")
+                appendLine(viewHierarchyText)
+                appendLine("```")
+              },
             ),
           )
           val screenshotBytes = stepStatus.currentScreenState.annotatedScreenshotBytes
@@ -374,6 +371,7 @@ class TrailblazeKoogLlmClientHelper(
               LLMCapability.Vision.Image.id,
             )
           ) {
+            Console.log("[SCREENSHOT] Size: ${screenshotBytes.size} bytes (${screenshotBytes.size / 1024}KB)")
             add(
               ContentPart.Image(
                 content = AttachmentContent.Binary.Bytes(screenshotBytes),

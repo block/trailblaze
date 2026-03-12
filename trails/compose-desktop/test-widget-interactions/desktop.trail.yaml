@@ -1,0 +1,39 @@
+- config:
+    title: "Test: Widget interactions"
+    platform: compose
+- prompts:
+  - step: Click the dark mode switch to toggle it on
+    recording:
+      tools:
+      - compose_click:
+          testTag: dark_mode_switch
+  - step: Click the "Option B" radio button to select it
+    recording:
+      tools:
+      - compose_click:
+          testTag: radio_option_b
+  - step: Click the counter button three times
+    recording:
+      tools:
+      - compose_click:
+          testTag: counter_button
+      - compose_click:
+          testTag: counter_button
+      - compose_click:
+          testTag: counter_button
+  - step: 'Verify the text "Clicked: 3" is visible'
+    recording:
+      tools:
+      - compose_verify_text_visible:
+          text: "Clicked: 3"
+  - step: Scroll the list to index 20
+    recording:
+      tools:
+      - compose_scroll:
+          testTag: scrollable_list
+          index: 20
+  - step: Verify the text "Item 20" is visible
+    recording:
+      tools:
+      - compose_verify_text_visible:
+          text: Item 20

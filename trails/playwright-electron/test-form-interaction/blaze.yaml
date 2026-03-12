@@ -1,0 +1,14 @@
+# Form interaction test for the Electron driver.
+# No initial navigate step — the Electron app pre-loads index.html via main.js.
+- config:
+    title: "Electron Form Interaction Test"
+    driver: PLAYWRIGHT_ELECTRON
+- prompts:
+    - step: Click on the "Form" navigation link
+    - step: Type "Trail Blaze" into the Name input field
+    - step: Type "trail@example.com" into the Email input field
+    - step: Select "Feedback" from the Category dropdown
+    - step: Type "Trailblaze is great" into the Message textarea
+    - step: Click the "Submit" button
+    - step: Verify the text "Form submitted!" is visible
+    - step: Verify the text "Trail Blaze" is visible in the form summary

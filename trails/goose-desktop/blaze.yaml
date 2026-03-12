@@ -1,0 +1,20 @@
+# Launch Goose, send a prompt, and verify the response.
+- config:
+    title: "Goose Desktop - Prompt and Verify Response"
+    driver: PLAYWRIGHT_ELECTRON
+    electron:
+      command: /Applications/Goose.app/Contents/MacOS/Goose
+      env:
+        ENABLE_PLAYWRIGHT: "true"
+      cdpTimeoutSeconds: 60
+- prompts:
+    - step: >
+        Launch the Goose desktop application using the playwright_desktop_launchGoose tool
+        and verify it started successfully.
+    - step: >
+        Find the chat input field and type the prompt:
+        "the capital of the state of virginia is __________"
+        Then submit the prompt by pressing Enter.
+    - step: >
+        Wait for Goose to respond, then verify that the word "Richmond"
+        appears somewhere in the response.

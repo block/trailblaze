@@ -19,7 +19,15 @@ actual object Console {
     println(message)
   }
 
+  actual fun appendInfo(message: String) = appendLog(message)
+
+  actual fun info(message: String) = log(message)
+
   actual fun useStdErr() {
+    // No-op in browser — console.log is always the output.
+  }
+
+  actual fun enableQuietMode() {
     // No-op in browser — console.log is always the output.
   }
 }

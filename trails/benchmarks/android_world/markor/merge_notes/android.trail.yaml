@@ -1,0 +1,37 @@
+# Android World Benchmark: Merge Notes
+- config:
+    id: android-world-benchmarks/markor/merge_notes
+    description: Merge contents of file1.md, file2.md, and file3.md into merged.md
+- tools:
+    - androidworldbenchmarks_clearDirectory:
+        directoryPath: /storage/emulated/0/Documents/Markor
+    - androidworldbenchmarks_createFileOnDevice:
+        devicePath: /storage/emulated/0/Documents/Markor
+        fileName: file1.md
+        content: Alpha content
+    - androidworldbenchmarks_createFileOnDevice:
+        devicePath: /storage/emulated/0/Documents/Markor
+        fileName: file2.md
+        content: Beta content
+    - androidworldbenchmarks_createFileOnDevice:
+        devicePath: /storage/emulated/0/Documents/Markor
+        fileName: file3.md
+        content: Gamma content
+- prompts:
+    - step: Merge the contents of Markor notes file1.md, file2.md and file3.md (in the same order) into a new Markor note named merged.md and save it. Add a new line between the content of each note.
+- tools:
+    - androidworldbenchmarks_assertFileContent:
+        filePath: /storage/emulated/0/Documents/Markor/merged.md
+        expectedContent: Alpha content
+        matchMode: contains
+    - androidworldbenchmarks_assertFileContent:
+        filePath: /storage/emulated/0/Documents/Markor/merged.md
+        expectedContent: Beta content
+        matchMode: contains
+    - androidworldbenchmarks_assertFileContent:
+        filePath: /storage/emulated/0/Documents/Markor/merged.md
+        expectedContent: Gamma content
+        matchMode: contains
+
+# --- Benchmark Run History ---
+# [2026-03-11] Build #27 FAILED - Agent limitation: ObjectiveFailed. Can't navigate Markor app.

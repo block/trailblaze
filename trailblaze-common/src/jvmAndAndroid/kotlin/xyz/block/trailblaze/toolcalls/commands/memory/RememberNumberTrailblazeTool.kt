@@ -39,6 +39,6 @@ data class RememberNumberTrailblazeTool(
       )
 
     memory.remember(variable, numberOutput)
-    return TrailblazeToolResult.Success
+    return TrailblazeToolResult.Success()
   }
 }

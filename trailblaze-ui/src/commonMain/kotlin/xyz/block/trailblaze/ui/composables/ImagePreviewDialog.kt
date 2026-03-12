@@ -44,7 +44,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
-import xyz.block.trailblaze.api.MaestroDriverActionType
+import xyz.block.trailblaze.api.AgentDriverAction
 
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
@@ -54,7 +54,7 @@ fun ImagePreviewDialog(
   deviceHeight: Int,
   clickX: Int? = null,
   clickY: Int? = null,
-  action: MaestroDriverActionType? = null,
+  action: AgentDriverAction? = null,
   onDismiss: () -> Unit,
 ) {
   // Zoom and pan state
@@ -248,7 +248,7 @@ fun ImagePreviewDialog(
                 action = action,
                 isHovered = isHovered
               )
-            } else if (action is MaestroDriverActionType.Swipe) {
+            } else if (action is AgentDriverAction.Swipe) {
               // For swipe gestures, always show annotation in center even without click coordinates
               ScreenshotAnnotation(
                 centerX = finalWidth / 2,

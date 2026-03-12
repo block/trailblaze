@@ -1,0 +1,29 @@
+# Android World Benchmark: calendar/add_repeating_event
+- config:
+    id: android-world-benchmarks/simple_calendar_pro/calendar_add_repeating_event
+    description: Create a recurring calendar event starting on 2023-10-18 at 15h with title "Catch up on Budget Planning", recurring weekly forever, lasting 30 mins, with description "Strategize about marketing strategies"
+
+- tools:
+  - androidworldbenchmarks_runAdbShell:
+      adbShellCommands:
+        - "settings put global auto_time 0"
+        - "date -s 20231015.153400"
+  - androidworldbenchmarks_executeSqliteOnDevice:
+      dbPath: /data/data/com.simplemobiletools.calendar.pro/databases/events.db
+      sqlStatements:
+        - "DELETE FROM events"
+      appPackageName: com.simplemobiletools.calendar.pro
+
+- prompts:
+  - step: "In Simple Calendar Pro, create a recurring calendar event titled 'Catch up on Budget Planning' starting on 2023-10-18 at 15h. The event recurs weekly, forever, and lasts for 30 minutes each occurrence. The event description should be 'Strategize about marketing strategies'."
+
+- tools:
+  - androidworldbenchmarks_assertSqliteQuery:
+      dbPath: /data/data/com.simplemobiletools.calendar.pro/databases/events.db
+      query: "SELECT title FROM events WHERE title='Catch up on Budget Planning' AND repeat_interval=604800"
+      expectedOutput: "Catch up on Budget Planning"
+      matchMode: exact
+      appPackageName: com.simplemobiletools.calendar.pro
+
+# --- Benchmark Run History ---
+# [2026-03-11] Build #27 FAILED - Agent limitation: ObjectiveFailed.

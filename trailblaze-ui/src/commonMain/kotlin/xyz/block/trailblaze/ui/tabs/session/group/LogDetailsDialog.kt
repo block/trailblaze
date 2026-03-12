@@ -42,9 +42,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import xyz.block.trailblaze.agent.AgentTier
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionStatus
+import xyz.block.trailblaze.mcp.AgentImplementation
+import xyz.block.trailblaze.mcp.LlmCallStrategy
 import xyz.block.trailblaze.ui.tabs.chat.LlmMessageComposable
 import xyz.block.trailblaze.ui.utils.DisplayUtils
 import xyz.block.trailblaze.ui.utils.FormattingUtils.formatCommaNumber
@@ -55,7 +58,7 @@ fun LogDetailsDialog(
   log: TrailblazeLog,
   sessionId: String,
   imageLoader: xyz.block.trailblaze.ui.images.ImageLoader,
-  onShowScreenshotModal: (imageModel: Any?, deviceWidth: Int, deviceHeight: Int, clickX: Int?, clickY: Int?, action: xyz.block.trailblaze.api.MaestroDriverActionType?) -> Unit,
+  onShowScreenshotModal: (imageModel: Any?, deviceWidth: Int, deviceHeight: Int, clickX: Int?, clickY: Int?, action: xyz.block.trailblaze.api.AgentDriverAction?) -> Unit,
   showInspectUI: (() -> Unit)?,
   onDismiss: () -> Unit,
 ) {
@@ -116,9 +119,9 @@ fun LogDetailsDialog(
         }
       }
 
-      is TrailblazeLog.MaestroDriverLog -> {
+      is TrailblazeLog.AgentDriverLog -> {
         item {
-          MaestroDriverDetailsFlat(log)
+          AgentDriverDetailsFlat(log)
         }
       }
 
@@ -183,6 +186,57 @@ fun LogDetailsDialog(
           )
         }
       }
+
+      is TrailblazeLog.AccessibilityActionLog -> {
+        item {
+          Text(
+            text = "Action: ${log.actionDescription}\n${log.actionJsonObj}",
+            style = MaterialTheme.typography.bodySmall,
+          )
+        }
+      }
+
+      is TrailblazeLog.McpAgentRunLog -> {
+        item {
+          McpAgentRunDetailsFlat(log)
+        }
+      }
+
+      is TrailblazeLog.McpAgentIterationLog -> {
+        item {
+          McpAgentIterationDetailsFlat(log)
+        }
+      }
+
+      is TrailblazeLog.McpSamplingLog -> {
+        item {
+          McpSamplingDetailsFlat(log)
+        }
+      }
+
+      is TrailblazeLog.McpAgentToolLog -> {
+        item {
+          McpAgentToolDetailsFlat(log)
+        }
+      }
+
+      is TrailblazeLog.McpToolCallRequestLog -> {
+        item {
+          McpToolCallRequestDetailsFlat(log)
+        }
+      }
+
+      is TrailblazeLog.McpToolCallResponseLog -> {
+        item {
+          McpToolCallResponseDetailsFlat(log)
+        }
+      }
+
+      is TrailblazeLog.TrailblazeProgressLog -> {
+        item {
+          TrailblazeProgressDetailsFlat(log)
+        }
+      }
     }
 
     // Bottom padding
@@ -214,12 +268,131 @@ fun ChatHistoryDialog(
         verticalAlignment = Alignment.CenterVertically
       ) {
         Text(
-          text = "LLM Request Details",
+          text = if (log.llmRequestLabel != null) "LLM: ${log.llmRequestLabel}" else "LLM Request Details",
           style = MaterialTheme.typography.headlineSmall,
           fontWeight = FontWeight.Bold
         )
         IconButton(onClick = onDismiss) {
           Icon(Icons.Default.ArrowBack, contentDescription = "Close")
+        }
+      }
+    }
+
+    // LLM Request Configuration Section
+    item {
+      Card(
+        modifier = Modifier
+          .fillMaxWidth()
+          .padding(horizontal = 16.dp, vertical = 8.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+      ) {
+        Column(
+          modifier = Modifier
+            .fillMaxWidth()
+            .padding(16.dp)
+        ) {
+          Text(
+            text = "LLM Request Configuration",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold
+          )
+          Spacer(modifier = Modifier.height(12.dp))
+          
+          // Model info
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+          ) {
+            Text("Model:", fontWeight = FontWeight.Medium)
+            Text(log.trailblazeLlmModel.modelId)
+          }
+          Spacer(modifier = Modifier.height(4.dp))
+          
+          // Request Context (agent architecture, tier, strategy)
+          log.requestContext?.let { ctx ->
+            // Agent Implementation
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+              Text("Agent Architecture:", fontWeight = FontWeight.Medium)
+              Text(
+                text = ctx.agentImplementation.name,
+                color = when (ctx.agentImplementation) {
+                  AgentImplementation.TWO_TIER_AGENT -> Color(0xFF2E7D32)
+                  AgentImplementation.TRAILBLAZE_RUNNER -> Color(0xFF1976D2)
+                  AgentImplementation.MULTI_AGENT_V3 -> Color(0xFF7B1FA2) // Purple for V3
+                }
+              )
+            }
+            Spacer(modifier = Modifier.height(4.dp))
+            
+            // Agent Tier (for two-tier architecture)
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+              Text("Agent Tier:", fontWeight = FontWeight.Medium)
+              Text(
+                text = when (ctx.agentTier) {
+                  AgentTier.INNER -> "INNER (Screen Analysis)"
+                  AgentTier.OUTER -> "OUTER (Planning/Reasoning)"
+                  null -> "N/A"
+                },
+                color = when (ctx.agentTier) {
+                  AgentTier.INNER -> Color(0xFF9C27B0) // Purple for inner
+                  AgentTier.OUTER -> Color(0xFF2196F3) // Blue for outer
+                  null -> MaterialTheme.colorScheme.onSurfaceVariant
+                }
+              )
+            }
+            Spacer(modifier = Modifier.height(4.dp))
+            
+            // LLM Call Strategy
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+              Text("LLM Call Strategy:", fontWeight = FontWeight.Medium)
+              Text(
+                text = ctx.llmCallStrategy.name,
+                color = when (ctx.llmCallStrategy) {
+                  LlmCallStrategy.DIRECT -> Color(0xFF2E7D32)
+                  LlmCallStrategy.MCP_SAMPLING -> Color(0xFFFF9800)
+                }
+              )
+            }
+            Spacer(modifier = Modifier.height(4.dp))
+          }
+          
+          // Duration
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+          ) {
+            Text("Duration:", fontWeight = FontWeight.Medium)
+            Text("${log.durationMs}ms")
+          }
+          
+          // Token usage if available
+          log.llmRequestUsageAndCost?.inputTokenBreakdown?.let { breakdown ->
+            Spacer(modifier = Modifier.height(8.dp))
+            HorizontalDivider()
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+              text = "Token Usage",
+              style = MaterialTheme.typography.labelMedium,
+              fontWeight = FontWeight.Bold
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+              Text("Input Tokens:", fontWeight = FontWeight.Medium)
+              Text(formatCommaNumber(breakdown.totalEstimatedTokens))
+            }
+          }
         }
       }
     }

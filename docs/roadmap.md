@@ -2,25 +2,33 @@
 title: Roadmap
 ---
 
+### Recently Completed ✓
+
+- **Multi-Agent V3 Features** ([Mobile-Agent-v3 inspired](decisions/032b_mobile_agent_v3_integration.md)):
+  - Exception Handling: Automatic popup, ad, and error recovery
+  - Reflection: Self-correction when stuck or looping
+  - Task Decomposition: Break complex objectives into subtasks
+  - Cross-App Memory: Remember facts across app switches
+  - Enhanced Recording: Pre/post conditions for robust replay
+  - Progress Reporting: Real-time MCP events for IDE integrations
+- **Trail/Blaze Architecture**: "Blaze once, trail forever" workflow
+- **Standardized YAML Format**: Express tests mixing natural language and static steps
+- **Recording**: Save agent actions, replay deterministically to save costs
+
 ### Upcoming Features
 
-- Standardized YAML Format: This will provide a static way to express your Trailblaze tests mixing natural language
-  objectives and static steps
-- Recording: Save any agent tools and ui interactions, then play them back to save costs during future runs.
-- Test Failure Recovery with AI: When a recorded test fails, use the AI Agent to recover and complete the objectives.
-  Then leverage the reporting tools to show divergence from the original path.
-- MCP Server: Interactively create new tests and manage your test suite.
-- LLM call proxying support (optional): Provide support for proxying traffic to the LLM, removing the requirement of
-  passing an API key the mobile device as an execution argument.
+- **Benchmark Integration**: Run AndroidWorld/OSWorld benchmarks against Trailblaze
+- **LLM Call Proxying** (optional): Proxy LLM traffic to remove API key requirement on device
+- **Self-Evolving Data**: Auto-generate trail files from successful benchmark runs
 
 ### Longer Term Vision
 
 - iOS testing support
 - Web testing support
-- Host mode execution: Execute the tests in an environment connected to a device or emulator to allow more flexibility
-  in test execution.
+- Host mode execution: Execute tests connected to a device or emulator for more flexibility
 
 ### Overall Vision
 
 - Create an open platform for authoring and executing tests using agentic AI
 - Enable teams to ship faster by lowering the bar to test execution
+- Achieve competitive performance on standard benchmarks (AndroidWorld 70%+, OSWorld 35%+)

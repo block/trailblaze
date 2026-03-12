@@ -7,6 +7,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
+import xyz.block.trailblaze.util.Console
 
 @OptIn(InternalAgentToolsApi::class)
 class KoogToolRegistryTest {
@@ -22,22 +23,24 @@ class KoogToolRegistryTest {
     )
     val toolRegistry = toolRepo.asToolRegistry({
       TrailblazeToolExecutionContext(
-        trailblazeAgent = trailblazeAgent,
         traceId = null,
         screenState = null,
         trailblazeDeviceInfo = trailblazeAgent.trailblazeDeviceInfoProvider(),
         sessionProvider = trailblazeAgent.sessionProvider,
+        trailblazeLogger = trailblazeAgent.trailblazeLogger,
+        memory = trailblazeAgent.memory,
+        maestroTrailblazeAgent = trailblazeAgent,
       )
     })
     val inputTextTool = toolRegistry.getTool("inputText")
-    println("Koog Tool: $inputTextTool")
-    println("descriptor: ${inputTextTool.descriptor}")
+    Console.log("Koog Tool: $inputTextTool")
+    Console.log("descriptor: ${inputTextTool.descriptor}")
     val trailblazeToolArgs = InputTextTrailblazeTool("hello world")
     val result = runBlocking {
       inputTextTool.executeUnsafe(args = trailblazeToolArgs)
     }
-    println("Result: $result")
-    println("InputTextTool args: $trailblazeToolArgs")
-    println("Tools: " + toolRegistry.tools.map { it.name })
+    Console.log("Result: $result")
+    Console.log("InputTextTool args: $trailblazeToolArgs")
+    Console.log("Tools: " + toolRegistry.tools.map { it.name })
   }
 }

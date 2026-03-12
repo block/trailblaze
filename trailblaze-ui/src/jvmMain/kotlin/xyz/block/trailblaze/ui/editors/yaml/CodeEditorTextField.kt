@@ -236,6 +236,12 @@ private fun handleKeyEvent(
       true
     }
 
+    // Ctrl/Cmd+/ - Toggle comment
+    isModifierPressed && keyEvent.key == Key.Slash && !keyEvent.isShiftPressed && !isAltPressed -> {
+      toggleComment(value, onValueChange)
+      true
+    }
+
     // Ctrl/Cmd+Z - Undo
     isModifierPressed && keyEvent.key == Key.Z && !keyEvent.isShiftPressed && !isAltPressed -> {
       val previousState = history.undo(value)
@@ -417,6 +423,92 @@ private fun unindentLines(
     newSelStart
   } else {
     maxOf(newSelStart, selEnd - totalRemoved)
+  }
+
+  onValueChange(
+    value.copy(
+      text = newText,
+      selection = TextRange(newSelStart, newSelEnd),
+    ),
+  )
+}
+
+/**
+ * Toggle YAML line comments on the selected lines (or the current line if no selection).
+ * If all affected lines are commented, uncomments them; otherwise, comments them all.
+ * Preserves indentation by inserting/removing "# " after leading whitespace.
+ */
+private fun toggleComment(
+  value: TextFieldValue,
+  onValueChange: (TextFieldValue) -> Unit,
+) {
+  val text = value.text
+  if (text.isEmpty()) return
+
+  val selection = value.selection
+  val selStart = selection.min
+  val selEnd = if (selection.collapsed) selStart else selection.max
+
+  // Find the full line range covering the selection
+  val firstLineStart = if (selStart == 0) 0 else text.lastIndexOf('\n', selStart - 1) + 1
+  val lastLineEnd = text.indexOf('\n', selEnd).let { if (it == -1) text.length else it }
+
+  if (firstLineStart > lastLineEnd || firstLineStart >= text.length) return
+
+  val selectedRegion = text.substring(firstLineStart, lastLineEnd)
+  val lines = selectedRegion.split('\n')
+
+  // Determine if we should uncomment: all non-blank lines must start with optional whitespace + "#"
+  val allCommented = lines.all { line ->
+    line.isBlank() || line.trimStart().startsWith("# ") || line.trimStart() == "#"
+  }
+
+  var totalDelta = 0
+  var firstLineDelta = 0
+  var firstLineProcessed = false
+
+  val newLines = lines.map { line ->
+    if (line.isBlank()) {
+      line
+    } else if (allCommented) {
+      // Uncomment: remove the first "# " (or lone "#") after leading whitespace
+      val indent = line.takeWhile { it == ' ' }
+      val rest = line.substring(indent.length)
+      val uncommented = when {
+        rest.startsWith("# ") -> indent + rest.removePrefix("# ")
+        rest.startsWith("#") -> indent + rest.removePrefix("#")
+        else -> line
+      }
+      val delta = line.length - uncommented.length
+      totalDelta -= delta
+      if (!firstLineProcessed) {
+        firstLineDelta = -delta
+        firstLineProcessed = true
+      }
+      uncommented
+    } else {
+      // Comment: add "# " after leading whitespace
+      val indent = line.takeWhile { it == ' ' }
+      val commented = indent + "# " + line.substring(indent.length)
+      val delta = commented.length - line.length
+      totalDelta += delta
+      if (!firstLineProcessed) {
+        firstLineDelta = delta
+        firstLineProcessed = true
+      }
+      commented
+    }
+  }
+
+  val newRegion = newLines.joinToString("\n")
+  val newText = text.substring(0, firstLineStart) + newRegion + text.substring(lastLineEnd)
+
+  // Adjust selection
+  val newSelStart = maxOf(firstLineStart, selStart + firstLineDelta)
+  val newSelEnd = if (selection.collapsed) {
+    newSelStart
+  } else {
+    maxOf(newSelStart, selEnd + totalDelta)
   }
 
   onValueChange(

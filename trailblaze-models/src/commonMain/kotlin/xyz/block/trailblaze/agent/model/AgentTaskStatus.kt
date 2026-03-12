@@ -34,4 +34,19 @@ sealed interface AgentTaskStatus : HasAgentTaskStatusData {
       override val statusData: AgentTaskStatusData,
     ) : Failure
   }
+
+  /**
+   * Status for MCP inner-agent screen analysis.
+   *
+   * Used when the MCP tools (step, verify, ask) call the inner screen analyzer.
+   * This enables emitting TrailblazeLlmRequestLog from the two-tier agent flow.
+   */
+  @Serializable
+  data class McpScreenAnalysis(
+    override val statusData: AgentTaskStatusData,
+    /** The recommended action from screen analysis */
+    val recommendedAction: String? = null,
+    /** Confidence level of the analysis */
+    val confidence: String? = null,
+  ) : AgentTaskStatus
 }

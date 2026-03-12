@@ -8,6 +8,10 @@ import xyz.block.trailblaze.llm.TrailblazeLlmProvider
  * Provides API tokens dynamically for different LLM providers (e.g., from environment variables).
  */
 interface TrailblazeDynamicLlmTokenProvider {
+  /**
+   * Providers this token provider can create clients for.
+   */
+  fun supportedProviders(): Set<TrailblazeLlmProvider>
   fun getApiTokenForProvider(llmProvider: TrailblazeLlmProvider): String?
 
   fun getLLMClientForProviderIfAvailable(

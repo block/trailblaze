@@ -1,0 +1,27 @@
+# Android World Benchmark: Change Note Content
+- config:
+    id: android-world-benchmarks/markor/change_note_content
+    description: Update draft.md content and rename to final.md in Markor
+- tools:
+    - androidworldbenchmarks_clearDirectory:
+        directoryPath: /storage/emulated/0/Documents/Markor
+    - androidworldbenchmarks_createFileOnDevice:
+        devicePath: /storage/emulated/0/Documents/Markor
+        fileName: draft.md
+        content: Work in progress notes
+- prompts:
+    - step: Update the content of draft.md to "Final version of the proposal" in Markor and change its name to final.md.
+- tools:
+    - androidworldbenchmarks_assertFileExistsOnDevice:
+        filePath: /storage/emulated/0/Documents/Markor/draft.md
+        shouldExist: false
+    - androidworldbenchmarks_assertFileExistsOnDevice:
+        filePath: /storage/emulated/0/Documents/Markor/final.md
+        shouldExist: true
+    - androidworldbenchmarks_assertFileContent:
+        filePath: /storage/emulated/0/Documents/Markor/final.md
+        expectedContent: Final version of the proposal
+        matchMode: contains
+
+# --- Benchmark Run History ---
+# [2026-03-11] Build #27 FAILED - Agent limitation: ObjectiveFailed. Can't navigate Markor app.

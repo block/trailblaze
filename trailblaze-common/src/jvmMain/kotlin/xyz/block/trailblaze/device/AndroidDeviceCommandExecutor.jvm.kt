@@ -1,8 +1,10 @@
 package xyz.block.trailblaze.device
 
+import java.io.File
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.util.AndroidHostAdbUtils
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils.runProcess
 
 /**
  * JVM implementation of AndroidDeviceCommandExecutor that delegates to AndroidHostAdbUtils.
@@ -158,6 +160,104 @@ actual class AndroidDeviceCommandExecutor actual constructor(
     return AndroidHostAdbUtils.listInstalledPackages(deviceId)
   }
 
+  actual fun addContact(contact: DeviceContact) {
+    // Insert raw contact
+    val rawContactInsertOutput = shellCommand(
+      "content", "insert",
+      "--uri", CONTACTS_RAW_URI,
+      "--bind", "account_type:s:${contact.accountType.orEmpty()}",
+      "--bind", "account_name:s:${contact.accountName.orEmpty()}",
+    )
+
+    // Query for the newly inserted raw contact ID
+    val rawContactId = parseInsertedContentId(rawContactInsertOutput)
+      ?: queryLastRawContactId()
+      ?: error("Failed to insert raw contact for '${contact.displayName}'")
+
+    // Insert display name
+    shellCommand(
+      "content", "insert",
+      "--uri", CONTACTS_DATA_URI,
+      "--bind", "raw_contact_id:i:$rawContactId",
+      "--bind", "mimetype:s:vnd.android.cursor.item/name",
+      "--bind", "data1:s:${contact.displayName}",
+    )
+
+    // Insert phone number
+    shellCommand(
+      "content", "insert",
+      "--uri", CONTACTS_DATA_URI,
+      "--bind", "raw_contact_id:i:$rawContactId",
+      "--bind", "mimetype:s:vnd.android.cursor.item/phone_v2",
+      "--bind", "data1:s:${contact.phoneNumber}",
+      "--bind", "data2:i:${contact.phoneType}",
+    )
+  }
+
+  actual fun insertSmsIntoInbox(message: DeviceSmsMessage) {
+    shellCommand(
+      "content", "insert",
+      "--uri", "content://sms",
+      "--bind", "address:s:${message.fromNumber}",
+      "--bind", "body:s:${message.body}",
+      "--bind", "type:i:1", // MESSAGE_TYPE_INBOX
+      "--bind", "read:i:${if (message.isRead) 1 else 0}",
+      "--bind", "date:l:${message.dateMillis}",
+      "--bind", "date_sent:l:${message.dateSentMillis}",
+    )
+  }
+
+  actual fun setClipboard(text: String) {
+    // Each arg is passed individually via ProcessBuilder → adb, so no shell
+    // escaping is needed — adb passes args directly to `am` on the device.
+    shellCommand(
+      "am", "broadcast",
+      "-a", "clipper.set",
+      "--es", "text", text,
+    )
+  }
+
+  actual fun copyTestResourceToDevice(resourcePath: String, devicePath: String) {
+    // Read resource from classpath (equivalent of test APK assets on JVM)
+    val inputStream = this::class.java.classLoader?.getResourceAsStream(resourcePath)
+      ?: Thread.currentThread().contextClassLoader?.getResourceAsStream(resourcePath)
+      ?: error("Test resource not found on classpath: $resourcePath")
+
+    val tempFile = File.createTempFile("trailblaze_push_", ".tmp")
+    try {
+      tempFile.outputStream().use { output ->
+        inputStream.use { input -> input.copyTo(output) }
+      }
+
+      // Ensure parent directory exists on device
+      val parentDir = File(devicePath).parent
+      if (parentDir != null) {
+        shellCommand("mkdir", "-p", parentDir)
+      }
+
+      // Push file to device via adb push
+      AndroidHostAdbUtils.createAdbCommandProcessBuilder(
+        deviceId = deviceId,
+        args = listOf("push", tempFile.absolutePath, devicePath),
+      ).runProcess {}
+    } finally {
+      tempFile.delete()
+    }
+  }
+
+  private fun queryLastRawContactId(): String? {
+    val output = shellCommand(
+      "content", "query",
+      "--uri", CONTACTS_RAW_URI,
+      "--projection", "_id",
+      "--sort", "_id DESC LIMIT 1",
+    )
+    return ID_PATTERN.find(output)?.groupValues?.get(1)
+  }
+  private fun parseInsertedContentId(insertOutput: String): String? {
+    return INSERTED_CONTENT_ID_PATTERN.find(insertOutput)?.groupValues?.get(1)
+  }
+
   companion object {
     /**
      * MediaStore Downloads collection URI — equivalent to
@@ -167,6 +267,9 @@ actual class AndroidDeviceCommandExecutor actual constructor(
      * so files inserted here are immediately visible to apps reading via ContentResolver.
      */
     private const val MEDIASTORE_DOWNLOADS_URI = "content://media/external_primary/downloads"
+    private const val CONTACTS_RAW_URI = "content://com.android.contacts/raw_contacts"
+    private const val CONTACTS_DATA_URI = "content://com.android.contacts/data"
+    private val INSERTED_CONTENT_ID_PATTERN = Regex("""content://[^\\s]+/(\\d+)""")
 
     private val ID_PATTERN = Regex("""_id=(\d+)""")
   }

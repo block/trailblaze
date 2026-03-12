@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.client.TrailblazeJson
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
@@ -25,19 +26,11 @@ class TrailblazeSettingsRepo(
   private val trailblazeJson: Json = TrailblazeJson.defaultWithoutToolsInstance
 
   fun saveConfig(trailblazeSettings: SavedTrailblazeAppConfig) {
-    Console.log(
-      "Saving Settings to: ${settingsFile.absolutePath}\n ${
-        trailblazeJson.encodeToString(
-          trailblazeSettings,
-        )
-      }",
+    val serialized = trailblazeJson.encodeToString(
+      SavedTrailblazeAppConfig.serializer(),
+      trailblazeSettings,
     )
-    settingsFile.writeText(
-      trailblazeJson.encodeToString(
-        SavedTrailblazeAppConfig.serializer(),
-        trailblazeSettings,
-      ),
-    )
+    settingsFile.writeText(serialized)
   }
 
   fun load(
@@ -50,15 +43,13 @@ class TrailblazeSettingsRepo(
     ).copy(
       // Clear session-specific state on app restart
       currentSessionId = null,
-      currentSessionViewMode = SessionViewMode.DEFAULT_VIEW_MODE,
+      currentSessionViewMode = SessionViewMode.DEFAULT.name,
     )
   } catch (e: Exception) {
     Console.log("Error loading settings, using default: ${e.message}")
     initialConfig.also {
       saveConfig(initialConfig)
     }
-  }.also {
-    Console.log("Loaded settings: $it")
   }
 
   fun updateState(stateUpdater: (TrailblazeServerState) -> TrailblazeServerState) {
@@ -68,6 +59,36 @@ class TrailblazeSettingsRepo(
   fun updateAppConfig(appConfigUpdater: (SavedTrailblazeAppConfig) -> SavedTrailblazeAppConfig) {
     updateState { currentState: TrailblazeServerState ->
       currentState.copy(appConfig = appConfigUpdater(currentState.appConfig))
+    }
+  }
+
+  fun applyTestingEnvironment(environment: TrailblazeServerState.TestingEnvironment) {
+    updateAppConfig { config ->
+      val existingDriverTypes = config.selectedTrailblazeDriverTypes
+      val driverTypes = when (environment) {
+        TrailblazeServerState.TestingEnvironment.MOBILE -> {
+          val defaultDriverTypes = mapOf(
+            TrailblazeDevicePlatform.ANDROID to TrailblazeDriverType.ANDROID_HOST,
+            TrailblazeDevicePlatform.IOS to TrailblazeDriverType.IOS_HOST,
+          )
+          defaultDriverTypes.mapValues { (platform, defaultDriverType) ->
+            existingDriverTypes[platform] ?: defaultDriverType
+          }
+        }
+        TrailblazeServerState.TestingEnvironment.WEB -> {
+          val defaultDriverTypes = mapOf(
+            TrailblazeDevicePlatform.WEB to TrailblazeDriverType.PLAYWRIGHT_NATIVE,
+          )
+          defaultDriverTypes.mapValues { (platform, defaultDriverType) ->
+            existingDriverTypes[platform] ?: defaultDriverType
+          }
+        }
+      }
+      config.copy(
+        testingEnvironment = environment,
+        selectedTrailblazeDriverTypes = driverTypes,
+        showDevicesTab = environment == TrailblazeServerState.TestingEnvironment.WEB,
+      )
     }
   }
 

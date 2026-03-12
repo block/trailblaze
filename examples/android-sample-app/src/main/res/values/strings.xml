@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Trailblaze Sample</string>
+    <string name="tab_taps">Taps</string>
+    <string name="tab_forms">Forms</string>
+    <string name="tab_lists">Lists</string>
+    <string name="tab_swipe">Swipe</string>
+    <string name="tab_settings">Settings</string>
+
+    <!-- Taps Screen -->
+    <string name="tap_me">Tap Me</string>
+    <string name="tapped_snackbar">Tapped!</string>
+    <string name="long_press_me">Long Press Me</string>
+    <string name="copy">Copy</string>
+    <string name="delete">Delete</string>
+    <string name="disabled_button">Disabled Until 3 Taps</string>
+    <string name="enabled_button">Now Enabled!</string>
+    <string name="toggle_a">Toggle A</string>
+    <string name="toggle_b">Toggle B</string>
+
+    <!-- Forms Screen -->
+    <string name="name_label">Name</string>
+    <string name="email_label">Email</string>
+    <string name="phone_label">Phone</string>
+    <string name="notes_label">Notes</string>
+    <string name="submit">Submit</string>
+    <string name="clear_all">Clear All</string>
+
+    <!-- Swipe Screen -->
+    <string name="page_label">Page %1$d</string>
+
+    <!-- Settings Screen -->
+    <string name="enable_notifications">Enable Notifications</string>
+    <string name="dark_mode">Dark Mode</string>
+    <string name="open_documentation">Open Documentation</string>
+    <string name="network_status">Network Status</string>
+    <string name="online">Online</string>
+    <string name="offline">Offline</string>
+    <string name="accept_terms">Accept Terms</string>
+</resources>

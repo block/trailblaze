@@ -1,0 +1,27 @@
+# Android World Benchmark: ExpenseDeleteMultiple2
+- config:
+    id: android-world-benchmarks/expense/delete_multiple_2
+    description: "Delete all expenses in the Food category from Pro Expense app."
+- tools:
+    - androidworldbenchmarks_executeSqliteOnDevice:
+        dbPath: /data/data/com.arduia.expense/databases/accounting.db
+        sqlStatements:
+          - "DELETE FROM expense"
+          - "INSERT INTO expense (name, amount, category, created_date, modified_date) VALUES ('Burger', 1200, 3, 1697300000, 1697300000)"
+          - "INSERT INTO expense (name, amount, category, created_date, modified_date) VALUES ('Pizza', 1500, 3, 1697250000, 1697250000)"
+          - "INSERT INTO expense (name, amount, category, created_date, modified_date) VALUES ('Salary', 500000, 2, 1697200000, 1697200000)"
+          - "INSERT INTO expense (name, amount, category, created_date, modified_date) VALUES ('Rent', 120000, 4, 1697100000, 1697100000)"
+          - "INSERT INTO expense (name, amount, category, created_date, modified_date) VALUES ('Sushi', 2800, 3, 1697000000, 1697000000)"
+        appPackageName: com.arduia.expense
+- prompts:
+    - step: "Delete all expenses in the Food category from Pro Expense app."
+- tools:
+    - androidworldbenchmarks_assertSqliteQuery:
+        dbPath: /data/data/com.arduia.expense/databases/accounting.db
+        query: "SELECT name FROM expense WHERE category=3"
+        expectedOutput: ""
+        matchMode: exact
+        appPackageName: com.arduia.expense
+
+# --- Benchmark Run History ---
+# [2026-03-11] Build #27 FAILED - Agent limitation: ObjectiveFailed. Can't navigate Pro Expense app.

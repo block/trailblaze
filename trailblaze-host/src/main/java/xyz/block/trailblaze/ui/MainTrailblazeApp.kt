@@ -62,23 +62,24 @@ import xyz.block.trailblaze.ui.model.navigateToRoute
 import xyz.block.trailblaze.ui.models.TrailblazeServerState
 import xyz.block.trailblaze.ui.tabs.devdebug.DevDebugWindow
 import xyz.block.trailblaze.ui.theme.TrailblazeTheme
+import xyz.block.trailblaze.cli.DaemonClient
 import xyz.block.trailblaze.util.Console
 import java.awt.Desktop
 import java.awt.GraphicsEnvironment
 import java.awt.Window
 
 
+private data class WindowStateSnapshot(
+  val width: Int,
+  val height: Int,
+  val position: WindowPosition,
+)
+
 class MainTrailblazeApp(
   val trailblazeSavedSettingsRepo: TrailblazeSettingsRepo,
   val logsRepo: LogsRepo,
   val trailblazeMcpServerProvider: () -> TrailblazeMcpServer,
 ) {
-
-  private data class WindowStateSnapshot(
-    val width: Int,
-    val height: Int,
-    val position: WindowPosition,
-  )
 
   fun runTrailblazeApp(
     /**
@@ -116,13 +117,17 @@ class MainTrailblazeApp(
     }
 
     CoroutineScope(Dispatchers.IO).launch {
-      // Start Server — use portManager so runtime CLI overrides are respected
+      // Start Server — use portManager so runtime CLI overrides are respected.
+      // Skip if a daemon is already running (e.g., started by `trailblaze mcp --stdio`).
       val portManager = trailblazeSavedSettingsRepo.portManager
-      trailblazeMcpServer.startStreamableHttpMcpServer(
-        port = portManager.httpPort,
-        httpsPort = portManager.httpsPort,
-        wait = false,
-      )
+      val daemon = DaemonClient(port = portManager.httpPort)
+      if (!daemon.isRunning()) {
+        trailblazeMcpServer.startStreamableHttpMcpServer(
+          port = portManager.httpPort,
+          httpsPort = portManager.httpsPort,
+          wait = false,
+        )
+      }
 
       // Auto Launch Goose if enabled
       val appConfig = trailblazeSavedSettingsRepo.serverStateFlow.value.appConfig
@@ -262,201 +267,205 @@ class MainTrailblazeApp(
       } // end if (windowVisible)
     }
   }
+}
 
-  @Composable
-  private fun TrailblazeAppContent(
-    allTabs: () -> List<TrailblazeAppTab>,
-    inProgressCount: Int,
-    firstSessionStatus: xyz.block.trailblaze.logs.model.SessionStatus?,
-    currentServerState: TrailblazeServerState,
-    trailblazeSavedSettingsRepo: TrailblazeSettingsRepo,
-    windowState: WindowState,
-    deviceManager: TrailblazeDeviceManager,
+@Composable
+fun TrailblazeAppContent(
+  allTabs: () -> List<TrailblazeAppTab>,
+  inProgressCount: Int,
+  firstSessionStatus: xyz.block.trailblaze.logs.model.SessionStatus?,
+  currentServerState: TrailblazeServerState,
+  trailblazeSavedSettingsRepo: TrailblazeSettingsRepo,
+  windowState: WindowState,
+  deviceManager: TrailblazeDeviceManager,
+) {
+
+  val navController = LocalNavController.current
+
+  // Get all tabs that should be registered in NavHost (stable, computed once)
+  // This ensures NavHost doesn't rebuild when visibility settings change
+  val allRegisteredTabs = remember { allTabs() }
+
+  // Get visible tabs for the navigation rail (reactive to tab visibility settings)
+  // This filters which tabs appear in the UI without rebuilding NavHost
+  val visibleTabs = remember(
+    currentServerState.appConfig.showTrailsTab,
+    currentServerState.appConfig.showDevicesTab,
+    currentServerState.appConfig.showRecordTab,
   ) {
-
-    val navController = LocalNavController.current
-
-    // Get all tabs that should be registered in NavHost (stable, computed once)
-    // This ensures NavHost doesn't rebuild when visibility settings change
-    val allRegisteredTabs = remember { allTabs() }
-
-    // Get visible tabs for the navigation rail (reactive to tab visibility settings)
-    // This filters which tabs appear in the UI without rebuilding NavHost
-    val visibleTabs = remember(
-      currentServerState.appConfig.showTrailsTab,
-      currentServerState.appConfig.showDevicesTab,
-    ) {
-      allTabs().filter { tab ->
-        when (tab.route) {
-          TrailblazeRoute.Trails -> currentServerState.appConfig.showTrailsTab
-          TrailblazeRoute.Devices -> currentServerState.appConfig.showDevicesTab
-          else -> true
-        }
+    allTabs().filter { tab ->
+      when (tab.route) {
+        TrailblazeRoute.Trails -> currentServerState.appConfig.showTrailsTab
+        TrailblazeRoute.Devices -> currentServerState.appConfig.showDevicesTab
+        TrailblazeRoute.Record -> currentServerState.appConfig.showRecordTab
+        else -> true
       }
     }
+  }
 
-    // Build navigation tabs from the visible list
-    val navigationTabsWithNav = visibleTabs.map { tab ->
-      val route = tab.route
-      NavigationTab(
-        route = route,
-        label = route.displayName,
-        icon = if (route == TrailblazeRoute.Sessions) {
-          {
-            IconWithBadges(
-              icon = route.icon, inProgressCount = inProgressCount,
-              firstSessionStatus = firstSessionStatus
-            )
+  // Build navigation tabs from the visible list
+  val navigationTabsWithNav = visibleTabs.map { tab ->
+    val route = tab.route
+    NavigationTab(
+      route = route,
+      label = route.displayName,
+      icon = if (route == TrailblazeRoute.Sessions) {
+        {
+          IconWithBadges(
+            icon = route.icon, inProgressCount = inProgressCount,
+            firstSessionStatus = firstSessionStatus
+          )
+        }
+      } else {
+        route.icon
+      },
+      isEnabled = route.isEnabled,
+    )
+  }
+
+  // Load devices on app startup to populate the device status panel
+  LaunchedEffect(Unit) {
+    deviceManager.loadDevices()
+  }
+
+  TrailblazeTheme(themeMode = currentServerState.appConfig.themeMode) {
+    // Show pop-out window based on config value (reactive)
+    if (currentServerState.appConfig.showDebugPopOutWindow) {
+      DevDebugWindow(
+        deviceManager = deviceManager,
+        onCloseRequest = {
+          trailblazeSavedSettingsRepo.updateAppConfig {
+            it.copy(showDebugPopOutWindow = false)
           }
-        } else {
-          route.icon
-        },
-        isEnabled = route.isEnabled,
+        }
       )
     }
 
-    // Load devices on app startup to populate the device status panel
-    LaunchedEffect(Unit) {
-      deviceManager.loadDevices()
+    var railExpanded by remember { mutableStateOf(currentServerState.appConfig.navRailExpanded) }
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    // Get current route from nav controller
+    val navBackStackEntry by navController.currentBackStackEntryAsState()
+    val currentRouteString = navBackStackEntry?.destination?.route
+
+    // Helper to check if a tab is selected
+    fun isRouteSelected(tabRoute: TrailblazeRoute): Boolean {
+      // All routes use type-safe navigation, so we check against qualified name
+      return currentRouteString == tabRoute::class.qualifiedName
     }
 
-    TrailblazeTheme(themeMode = currentServerState.appConfig.themeMode) {
-      // Show pop-out window based on config value (reactive)
-      if (currentServerState.appConfig.showDebugPopOutWindow) {
-        DevDebugWindow(
-          deviceManager = deviceManager,
-          onCloseRequest = {
-            trailblazeSavedSettingsRepo.updateAppConfig {
-              it.copy(showDebugPopOutWindow = false)
-            }
-          }
+    // Save window state changes
+    LaunchedEffect(windowState) {
+      snapshotFlow {
+        WindowStateSnapshot(
+          windowState.size.width.value.toInt(),
+          windowState.size.height.value.toInt(),
+          windowState.position
         )
-      }
+      }.collect { snapshot ->
+        val posX = (snapshot.position as? WindowPosition.Absolute)?.x?.value?.toInt()
+        val posY = (snapshot.position as? WindowPosition.Absolute)?.y?.value?.toInt()
 
-      var railExpanded by remember { mutableStateOf(currentServerState.appConfig.navRailExpanded) }
-      val snackbarHostState = remember { SnackbarHostState() }
-
-      // Get current route from nav controller
-      val navBackStackEntry by navController.currentBackStackEntryAsState()
-      val currentRouteString = navBackStackEntry?.destination?.route
-
-      // Helper to check if a tab is selected
-      fun isRouteSelected(tabRoute: TrailblazeRoute): Boolean {
-        // All routes use type-safe navigation, so we check against qualified name
-        return currentRouteString == tabRoute::class.qualifiedName
-      }
-
-      // Save window state changes
-      LaunchedEffect(windowState) {
-        snapshotFlow {
-          WindowStateSnapshot(
-            windowState.size.width.value.toInt(),
-            windowState.size.height.value.toInt(),
-            windowState.position
+        trailblazeSavedSettingsRepo.updateAppConfig { currAppConfig ->
+          currAppConfig.copy(
+            windowWidth = snapshot.width,
+            windowHeight = snapshot.height,
+            windowX = posX,
+            windowY = posY,
           )
-        }.collect { snapshot ->
-          val posX = (snapshot.position as? WindowPosition.Absolute)?.x?.value?.toInt()
-          val posY = (snapshot.position as? WindowPosition.Absolute)?.y?.value?.toInt()
-
-          trailblazeSavedSettingsRepo.updateAppConfig { currAppConfig ->
-            currAppConfig.copy(
-              windowWidth = snapshot.width,
-              windowHeight = snapshot.height,
-              windowX = posX,
-              windowY = posY,
-            )
-          }
         }
       }
+    }
 
-      // Save the current route whenever navigation changes
-      LaunchedEffect(currentRouteString) {
-        if (currentRouteString != null) {
-          trailblazeSavedSettingsRepo.updateAppConfig { currAppConfig ->
-            currAppConfig.copy(lastRoute = currentRouteString)
-          }
+    // Save the current route whenever navigation changes
+    LaunchedEffect(currentRouteString) {
+      if (currentRouteString != null) {
+        trailblazeSavedSettingsRepo.updateAppConfig { currAppConfig ->
+          currAppConfig.copy(lastRoute = currentRouteString)
         }
       }
+    }
 
-      Scaffold(
-        snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
-      ) { innerPadding ->
-        Box(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
-          Row(modifier = Modifier.fillMaxSize()) {
-            NavigationRail {
-              IconButton(onClick = {
-                railExpanded = !railExpanded
-                trailblazeSavedSettingsRepo.updateAppConfig {
-                  it.copy(navRailExpanded = railExpanded)
-                }
-              }) {
-                Icon(
-                  imageVector = if (railExpanded) Icons.Filled.KeyboardArrowLeft else Icons.Filled.KeyboardArrowRight,
-                  contentDescription = if (railExpanded) "Collapse" else "Expand"
+    Scaffold(
+      snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
+    ) { innerPadding ->
+      Box(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
+        Row(modifier = Modifier.fillMaxSize()) {
+          NavigationRail {
+            IconButton(onClick = {
+              railExpanded = !railExpanded
+              trailblazeSavedSettingsRepo.updateAppConfig {
+                it.copy(navRailExpanded = railExpanded)
+              }
+            }) {
+              Icon(
+                imageVector = if (railExpanded) Icons.Filled.KeyboardArrowLeft else Icons.Filled.KeyboardArrowRight,
+                contentDescription = if (railExpanded) "Collapse" else "Expand"
+              )
+            }
+            navigationTabsWithNav.forEach { tab ->
+              if (tab.isEnabled) {
+                // Check if this tab's route matches the current route
+                val selected = isRouteSelected(tab.route)
+                NavigationRailItem(
+                  selected = selected,
+                  onClick = {
+                    // Special handling for Sessions tab: if already on Sessions and viewing a session detail,
+                    // clicking Sessions again should go back to the list view
+                    if (tab.route == TrailblazeRoute.Sessions && selected) {
+                      val serverState = trailblazeSavedSettingsRepo.serverStateFlow.value
+                      if (serverState.appConfig.currentSessionId != null) {
+                        // Clear the current session to go back to list
+                        trailblazeSavedSettingsRepo.updateState {
+                          serverState.copy(
+                            appConfig = serverState.appConfig.copy(currentSessionId = null)
+                          )
+                        }
+                      }
+                    } else {
+                      navController.navigateToRoute(tab.route)
+                    }
+                  },
+                  icon = tab.icon,
+                  label = if (railExpanded) ({ Text(tab.label) }) else null
                 )
               }
-              navigationTabsWithNav.forEach { tab ->
-                if (tab.isEnabled) {
-                  // Check if this tab's route matches the current route
-                  val selected = isRouteSelected(tab.route)
-                  NavigationRailItem(
-                    selected = selected,
-                    onClick = {
-                      // Special handling for Sessions tab: if already on Sessions and viewing a session detail,
-                      // clicking Sessions again should go back to the list view
-                      if (tab.route == TrailblazeRoute.Sessions && selected) {
-                        val serverState = trailblazeSavedSettingsRepo.serverStateFlow.value
-                        if (serverState.appConfig.currentSessionId != null) {
-                          // Clear the current session to go back to list
-                          trailblazeSavedSettingsRepo.updateState {
-                            serverState.copy(
-                              appConfig = serverState.appConfig.copy(currentSessionId = null)
-                            )
-                          }
-                        }
-                      } else {
-                        navController.navigateToRoute(tab.route)
-                      }
-                    },
-                    icon = tab.icon,
-                    label = if (railExpanded) ({ Text(tab.label) }) else null
-                  )
-                }
-              }
             }
-            Column(
-              modifier = Modifier
-                .weight(1f)
-                .fillMaxSize()
-                .padding(0.dp)
-            ) {
-              // NavHost - all tabs are registered here (stable, doesn't change with visibility settings)
-              // Use the saved lastRoute if valid, otherwise fall back to the first tab (defaults to Sessions)
-              val validRoutes = allRegisteredTabs.map { it.route::class.qualifiedName }.toSet()
-              val defaultRoute = allRegisteredTabs.firstOrNull()?.let { it.route::class.qualifiedName }
-                ?: TrailblazeRoute.Sessions::class.qualifiedName!!
-              val savedRoute = currentServerState.appConfig.lastRoute
-              val startRoute = if (savedRoute != null && savedRoute in validRoutes) savedRoute else defaultRoute
+          }
+          Column(
+            modifier = Modifier
+              .weight(1f)
+              .fillMaxSize()
+              .padding(0.dp)
+          ) {
+            // NavHost - all tabs are registered here (stable, doesn't change with visibility settings)
+            // Use the saved lastRoute if valid, otherwise fall back to the first tab (defaults to Sessions)
+            val validRoutes = allRegisteredTabs.map { it.route::class.qualifiedName }.toSet()
+            val defaultRoute = allRegisteredTabs.firstOrNull()?.let { it.route::class.qualifiedName }
+              ?: TrailblazeRoute.Sessions::class.qualifiedName!!
+            val savedRoute = currentServerState.appConfig.lastRoute
+            val startRoute = if (savedRoute != null && savedRoute in validRoutes) savedRoute else defaultRoute
 
-              NavHost(
-                navController = navController,
-                startDestination = startRoute,
-                enterTransition = { EnterTransition.None },
-                exitTransition = { ExitTransition.None }
-              ) {
-                // Register all tabs (including hidden ones) so navigation always works
-                // Visibility is controlled by the navigation rail, not by route registration
-                allRegisteredTabs.forEach { tab ->
-                  val routeString = tab.route::class.qualifiedName ?: tab.route.toString()
-                  composable(routeString) {
-                    tab.content()
-                  }
+            NavHost(
+              navController = navController,
+              startDestination = startRoute,
+              enterTransition = { EnterTransition.None },
+              exitTransition = { ExitTransition.None }
+            ) {
+              // Register all tabs (including hidden ones) so navigation always works
+              // Visibility is controlled by the navigation rail, not by route registration
+              allRegisteredTabs.forEach { tab ->
+                val routeString = tab.route::class.qualifiedName ?: tab.route.toString()
+                composable(routeString) {
+                  tab.content()
                 }
               }
             }
           }
+        }
 
-          // Device status panel - collapsible in bottom-right corner
+        // Device status panel - collapsible in bottom-right corner (hidden by default)
+        if (currentServerState.appConfig.showDeviceStatusPanel) {
           DeviceStatusPanel(
             deviceManager = deviceManager,
             onSessionClick = { sessionId ->

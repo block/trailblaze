@@ -1,0 +1,30 @@
+# Android World Benchmark: RecipeDeleteMultipleWithNoise
+- config:
+    id: android-world-benchmarks/recipe/delete_multiple_with_noise
+    description: "Delete the recipes 'French Toast' and 'Mushroom Risotto' from Broccoli app."
+- tools:
+    - androidworldbenchmarks_executeSqliteOnDevice:
+        dbPath: /data/data/com.flauschcode.broccoli/databases/broccoli
+        sqlStatements:
+          - "DELETE FROM recipes"
+          - "INSERT INTO recipes (title, description, servings, preparationTime, source, ingredients, directions, favorite, imageName) VALUES ('French Toast', 'Classic French toast breakfast', '2', '15 minutes', 'breakfast recipe', 'bread, eggs, milk, cinnamon', 'Dip and cook', 0, NULL)"
+          - "INSERT INTO recipes (title, description, servings, preparationTime, source, ingredients, directions, favorite, imageName) VALUES ('Mushroom Risotto', 'Creamy risotto', '4', '45 minutes', 'italian cookbook', 'arborio rice, mushrooms, broth, wine', 'Stir and serve', 0, NULL)"
+          - "INSERT INTO recipes (title, description, servings, preparationTime, source, ingredients, directions, favorite, imageName) VALUES ('Pad Thai', 'Thai noodle dish', '3', '25 minutes', 'thai restaurant', 'noodles, shrimp, egg, peanuts', 'Stir fry and toss', 0, NULL)"
+          - "INSERT INTO recipes (title, description, servings, preparationTime, source, ingredients, directions, favorite, imageName) VALUES ('Chicken Parmesan', 'Italian chicken dish', '4', '35 minutes', 'italian kitchen', 'chicken, tomato sauce, cheese', 'Bread, fry, and bake', 0, NULL)"
+          - "INSERT INTO recipes (title, description, servings, preparationTime, source, ingredients, directions, favorite, imageName) VALUES ('Greek Salad', 'Mediterranean salad', '3', '10 minutes', 'salad bar', 'tomatoes, cucumber, feta, olives', 'Mix and serve', 0, NULL)"
+          - "INSERT INTO recipes (title, description, servings, preparationTime, source, ingredients, directions, favorite, imageName) VALUES ('Beef Stew', 'Hearty beef stew', '6', '120 minutes', 'comfort food', 'beef, potatoes, carrots, celery', 'Slow cook', 0, NULL)"
+          - "INSERT INTO recipes (title, description, servings, preparationTime, source, ingredients, directions, favorite, imageName) VALUES ('Sushi Rolls', 'Japanese sushi', '2', '40 minutes', 'sushi restaurant', 'rice, nori, fish, vegetables', 'Roll and slice', 0, NULL)"
+          - "INSERT INTO recipes (title, description, servings, preparationTime, source, ingredients, directions, favorite, imageName) VALUES ('Vegetable Soup', 'Minestrone soup', '5', '50 minutes', 'soup cookbook', 'vegetables, broth, beans', 'Simmer and serve', 0, NULL)"
+        appPackageName: com.flauschcode.broccoli
+- prompts:
+    - step: "Delete the following recipes from Broccoli app: French Toast, Mushroom Risotto."
+- tools:
+    - androidworldbenchmarks_assertSqliteQuery:
+        dbPath: /data/data/com.flauschcode.broccoli/databases/broccoli
+        query: "SELECT COUNT(*) FROM recipes WHERE title='French Toast' OR title='Mushroom Risotto'"
+        expectedOutput: "0"
+        matchMode: exact
+        appPackageName: com.flauschcode.broccoli
+
+# --- Benchmark Run History ---
+# [2026-03-11] Build #27 FAILED - Agent limitation: ObjectiveFailed. Can't navigate Broccoli app.

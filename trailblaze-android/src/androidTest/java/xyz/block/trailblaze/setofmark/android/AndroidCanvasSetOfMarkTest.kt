@@ -10,6 +10,7 @@ import xyz.block.trailblaze.android.uiautomator.AndroidOnDeviceUiAutomatorScreen
 import xyz.block.trailblaze.viewhierarchy.ViewHierarchyTreeNodeUtils
 import java.io.ByteArrayOutputStream
 import java.io.File
+import xyz.block.trailblaze.util.Console
 
 /**
  * See https://github.com/takahirom/arbigent/blob/11b7887248ee131ab91a222f0f6d4ef80328853c/arbigent-core/src/main/java/io/github/takahirom/arbigent/ArbigentCanvas.kt#L32
@@ -57,9 +58,9 @@ class AndroidCanvasSetOfMarkTest {
       testAppFilesDir,
       "${Clock.System.now().toEpochMilliseconds()}.png",
     ).also { it.createNewFile() }
-    println("screenshotFile: ${screenshotFile.canonicalPath}")
+    Console.log("screenshotFile: ${screenshotFile.canonicalPath}")
     screenshotFile.also { file ->
-      println("Writing to ${file.canonicalPath}")
+      Console.log("Writing to ${file.canonicalPath}")
       val byteArrayOutputStream = ByteArrayOutputStream()
       originalScreenshotBitmap.compress(Bitmap.CompressFormat.PNG, 100, byteArrayOutputStream)
       file.writeBytes(byteArrayOutputStream.toByteArray())

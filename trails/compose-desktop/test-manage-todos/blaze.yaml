@@ -1,0 +1,10 @@
+- config:
+    title: "Test: Manage multiple todos"
+    platform: compose
+- prompts:
+    - step: Type "Buy groceries" into the todo input field and click the add button
+    - step: Type "Walk the dog" into the todo input field and click the add button
+    - step: Type "Learn Compose" into the todo input field and click the add button
+    - step: Verify the text "3 items" is visible
+    - step: Delete the first todo item
+    - step: Verify the text "2 items" is visible

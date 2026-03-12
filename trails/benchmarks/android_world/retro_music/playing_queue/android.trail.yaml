@@ -1,0 +1,45 @@
+# Android World Benchmark: RetroMusicPlayingQueue
+# NOTE: Requires audio assets to be bundled in test APK at benchmarks/audio/
+
+- config:
+    id: android-world-benchmarks/retro_music/playing_queue
+    description: Add songs to the playing queue in Retro Music in a specific order
+
+- tools:
+    - androidworldbenchmarks_runAdbShell:
+        adbShellCommands:
+          - "rm -rf /sdcard/Music/*"
+    - androidworldbenchmarks_pushAssetToDevice:
+        assetPath: "benchmarks/audio/Sunset Dreams.mp3"
+        devicePath: "/sdcard/Music/Sunset Dreams.mp3"
+    - androidworldbenchmarks_pushAssetToDevice:
+        assetPath: "benchmarks/audio/Ocean Waves.mp3"
+        devicePath: "/sdcard/Music/Ocean Waves.mp3"
+    - androidworldbenchmarks_pushAssetToDevice:
+        assetPath: "benchmarks/audio/Mountain Echo.mp3"
+        devicePath: "/sdcard/Music/Mountain Echo.mp3"
+    - androidworldbenchmarks_pushAssetToDevice:
+        assetPath: "benchmarks/audio/City Lights.mp3"
+        devicePath: "/sdcard/Music/City Lights.mp3"
+    - androidworldbenchmarks_pushAssetToDevice:
+        assetPath: "benchmarks/audio/Forest Rain.mp3"
+        devicePath: "/sdcard/Music/Forest Rain.mp3"
+    - androidworldbenchmarks_runAdbShell:
+        adbShellCommands:
+          - "am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file:///sdcard/Music/"
+    - clearAppData:
+        packageName: "code.name.monkey.retromusic"
+
+- prompts:
+    - step: "Add the following songs to the playing queue in Retro Music, in this order: City Lights, Forest Rain, Sunset Dreams"
+
+- tools:
+    - androidworldbenchmarks_assertSqliteQuery:
+        dbPath: "/data/data/code.name.monkey.retromusic/databases/music_playback_state.db"
+        query: "SELECT song_title FROM playing_queue ORDER BY queue_position"
+        expectedOutput: "City Lights|Forest Rain|Sunset Dreams"
+        matchMode: "contains"
+        appPackageName: "code.name.monkey.retromusic"
+
+# --- Benchmark Run History ---
+# [2026-03-11] Build #27 FAILED - Infrastructure: Missing test resource benchmarks/audio/Sunset Dreams.mp3.

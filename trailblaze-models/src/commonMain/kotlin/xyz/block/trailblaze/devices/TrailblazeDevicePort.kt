@@ -11,11 +11,17 @@ object TrailblazeDevicePort {
   /** Default HTTP port for the Trailblaze server */
   const val TRAILBLAZE_DEFAULT_HTTP_PORT = 52525
 
+  /** Default MCP endpoint URL for self-connection (localhost with default HTTP port) */
+  const val DEFAULT_MCP_URL = "http://localhost:$TRAILBLAZE_DEFAULT_HTTP_PORT/mcp"
+
   /** Default HTTPS port for the Trailblaze server */
   const val TRAILBLAZE_DEFAULT_HTTPS_PORT = 8443
 
   /** Android on-device uses this to route calls back to host */
   const val TRAILBLAZE_DEFAULT_ADB_REVERSE_PORT = 52526
+
+  /** Default RPC port for the Compose Desktop driver */
+  const val COMPOSE_DEFAULT_RPC_PORT = 52600
 
   private const val PORT_RANGE_START = 52527
   private const val PORT_RANGE_SIZE = 7000

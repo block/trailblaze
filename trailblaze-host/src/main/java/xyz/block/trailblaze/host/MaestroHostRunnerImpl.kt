@@ -22,6 +22,7 @@ import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.maestro.OrchestraRunner
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.viewhierarchy.NativeViewHierarchyDetail
 import java.io.File
 import xyz.block.trailblaze.util.Console
 
@@ -41,6 +42,7 @@ class MaestroHostRunnerImpl(
    */
   appTarget: TrailblazeHostAppTarget? = null,
   private val deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
+  private val pendingViewHierarchyDetailsProvider: (() -> Set<NativeViewHierarchyDetail>)? = null,
 ) : MaestroHostRunner {
   val connectedDevice: TrailblazeConnectedDevice by lazy {
     TrailblazeDeviceService.getConnectedDevice(
@@ -62,10 +64,13 @@ class MaestroHostRunnerImpl(
   override val screenStateProvider: () -> ScreenState = {
     callCount++
     Console.log("screenStateProvider call count: $callCount")
+    // Consume pending view hierarchy details (one-shot, auto-reverts)
+    val pendingDetails = pendingViewHierarchyDetailsProvider?.invoke() ?: emptySet()
     HostMaestroDriverScreenState(
       maestroDriver = loggingDriver,
       setOfMarkEnabled = setOfMarkEnabled,
       deviceClassifiers = deviceClassifiers,
+      fullHierarchy = NativeViewHierarchyDetail.FULL_HIERARCHY in pendingDetails,
     )
   }
 

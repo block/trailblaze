@@ -1,0 +1,27 @@
+# Android World Benchmark: RecipeDeleteDuplicates
+- config:
+    id: android-world-benchmarks/recipe/delete_duplicates
+    description: "Delete duplicate recipes in Broccoli app, keeping only one of each."
+- tools:
+    - androidworldbenchmarks_executeSqliteOnDevice:
+        dbPath: /data/data/com.flauschcode.broccoli/databases/broccoli
+        sqlStatements:
+          - "DELETE FROM recipes"
+          - "INSERT INTO recipes (title, description, servings, preparationTime, source, ingredients, directions, favorite, imageName) VALUES ('Brownie Cake', 'Chocolate brownies', '8', '40 minutes', 'baking', 'chocolate, eggs, flour', 'Bake', 0, NULL)"
+          - "INSERT INTO recipes (title, description, servings, preparationTime, source, ingredients, directions, favorite, imageName) VALUES ('Brownie Cake', 'Chocolate brownies', '8', '40 minutes', 'baking', 'chocolate, eggs, flour', 'Bake', 0, NULL)"
+          - "INSERT INTO recipes (title, description, servings, preparationTime, source, ingredients, directions, favorite, imageName) VALUES ('Lemon Pie', 'Tangy lemon pie', '6', '50 minutes', 'dessert', 'lemon, eggs, crust', 'Bake until golden', 0, NULL)"
+          - "INSERT INTO recipes (title, description, servings, preparationTime, source, ingredients, directions, favorite, imageName) VALUES ('Lemon Pie', 'Tangy lemon pie', '6', '50 minutes', 'dessert', 'lemon, eggs, crust', 'Bake until golden', 0, NULL)"
+          - "INSERT INTO recipes (title, description, servings, preparationTime, source, ingredients, directions, favorite, imageName) VALUES ('Lemon Pie', 'Tangy lemon pie', '6', '50 minutes', 'dessert', 'lemon, eggs, crust', 'Bake until golden', 0, NULL)"
+        appPackageName: com.flauschcode.broccoli
+- prompts:
+    - step: "Delete duplicate recipes in Broccoli app, keeping only one of each."
+- tools:
+    - androidworldbenchmarks_assertSqliteQuery:
+        dbPath: /data/data/com.flauschcode.broccoli/databases/broccoli
+        query: "SELECT COUNT(*) FROM recipes WHERE title='Lemon Pie'"
+        expectedOutput: "1"
+        matchMode: exact
+        appPackageName: com.flauschcode.broccoli
+
+# --- Benchmark Run History ---
+# [2026-03-11] Build #27 FAILED - Agent limitation: ObjectiveFailed. Can't navigate Broccoli app.

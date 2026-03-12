@@ -22,7 +22,7 @@ class TrailFilesToolSet(
   }
 
   private fun listAllTestCases(dir: File): List<String> {
-    val trailFiles = dir.walkTopDown().filter { it.name.endsWith(TrailRecordings.TRAIL_DOT_YAML) }.toList()
+    val trailFiles = dir.walkTopDown().filter { TrailRecordings.isTrailFile(it.name) }.toList()
     return trailFiles.map {
       it.relativeTo(dir).path
     }

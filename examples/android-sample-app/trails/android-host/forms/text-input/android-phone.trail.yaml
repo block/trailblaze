@@ -1,0 +1,73 @@
+- config:
+    id: sample-app/forms/text-input
+    app: xyz.block.trailblaze.examples.sampleapp
+    platform: android
+    driver: ANDROID_HOST
+- tools:
+  - launchApp:
+      appId: xyz.block.trailblaze.examples.sampleapp
+      launchMode: REINSTALL
+- prompts:
+  - step: Navigate to the "Forms" tab
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: The objective is to navigate to the 'Forms' tab, which is represented
+            by the node with 'Forms' text.
+          selector:
+            containsChild:
+              textRegex: Forms
+  - step: Tap the "Name" field and type "Jane Doe"
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: To focus the 'Name' input field so that text can be entered as required
+            by the objective.
+          selector:
+            containsChild:
+              textRegex: Name
+      - inputText:
+          text: Jane Doe
+  - step: Tap the "Email" field and type "jane@example.com"
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: The "Email" field is represented by the EditText node (nodeId 56)
+            beneath the "Name" field.
+          selector:
+            containsChild:
+              textRegex: Email
+      - inputText:
+          text: jane@example.com
+  - step: Tap the "Submit" button
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: The "Submit" button is identified by the clickable View nodeId 58,
+            which contains the TextView "Submit". Tapping this will complete the objective.
+          selector:
+            containsChild:
+              textRegex: Submit
+  - step: Verify "Jane Doe" and "jane@example.com" appear in the submission result
+    recording:
+      tools:
+      - assertVisibleBySelector:
+          reason: Verify the submitted name appears in the result.
+          selector:
+            textRegex: Jane Doe
+      - assertVisibleBySelector:
+          reason: Verify the submitted email appears in the result.
+          selector:
+            textRegex: jane@example.com
+  - step: Tap "Clear All" and verify "Jane Doe" is no longer visible
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: To clear the form and submission result as required by the objective,
+            I will tap the 'Clear All' button, which is shown as nodeId 60 in the
+            view hierarchy.
+          selector:
+            containsChild:
+              textRegex: Clear All
+      - assertNotVisibleWithText:
+          text: Jane Doe

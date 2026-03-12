@@ -1,3 +1,5 @@
+@file:OptIn(kotlin.time.ExperimentalTime::class)
+
 package xyz.block.trailblaze.agent.model
 
 import ai.koog.prompt.message.Message
@@ -20,20 +22,17 @@ data class PromptStepStatus(
 ) {
   val taskId = TaskId.generate()
 
-  // Track actions performed during this objective for context in status checks
-  private val actionsPerformedThisObjective: MutableList<String> = mutableListOf()
+  private var latestObjectiveStatus: String? = null
 
-  fun addActionPerformed(description: String) {
-    actionsPerformedThisObjective.add(description)
+  fun addObjectiveStatusUpdate(status: String) {
+    latestObjectiveStatus = status
   }
 
-  fun getActionsPerformed(): List<String> = actionsPerformedThisObjective.toList()
+  fun getLatestObjectiveStatus(): String? = latestObjectiveStatus
 
-  fun clearActions() {
-    actionsPerformedThisObjective.clear()
+  fun getLimitedHistory(): List<Message> {
+    return koogLlmResponseHistory.takeLast(5)
   }
-
-  fun getLimitedHistory(): List<Message> = koogLlmResponseHistory.takeLast(5)
 
   private fun getHistorySize() = koogLlmResponseHistory.size
 
@@ -137,7 +136,7 @@ data class PromptStepStatus(
     koogLlmResponseHistory.add(
       Message.User(
         content = contentString,
-        metaInfo = RequestMetaInfo.create(Clock.System),
+        metaInfo = RequestMetaInfo.create(kotlin.time.Clock.System),
       ),
     )
   }
@@ -157,7 +156,7 @@ data class PromptStepStatus(
     koogLlmResponseHistory.add(
       Message.User(
         content = contentString,
-        metaInfo = RequestMetaInfo.create(Clock.System),
+        metaInfo = RequestMetaInfo.create(kotlin.time.Clock.System),
       ),
     )
   }
@@ -175,7 +174,7 @@ data class PromptStepStatus(
     koogLlmResponseHistory.add(
       Message.User(
         content = contentString,
-        metaInfo = RequestMetaInfo.create(Clock.System),
+        metaInfo = RequestMetaInfo.create(kotlin.time.Clock.System),
       ),
     )
   }
@@ -184,7 +183,7 @@ data class PromptStepStatus(
     koogLlmResponseHistory.add(
       Message.Assistant(
         content = llmContent,
-        metaInfo = ResponseMetaInfo.create(Clock.System),
+        metaInfo = ResponseMetaInfo.create(kotlin.time.Clock.System),
       ),
     )
   }

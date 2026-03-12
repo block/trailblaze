@@ -8,14 +8,14 @@ package xyz.block.trailblaze.api
  *
  * See https://platform.openai.com/docs/guides/images-vision?api-mode=responses
  *
- * @property maxDimension1 Maximum dimension for the longer side (typically 768)
- * @property maxDimension2 Maximum dimension for the shorter side (typically 512)
+ * @property maxDimension1 Maximum dimension for the longer side
+ * @property maxDimension2 Maximum dimension for the shorter side
  * @property imageFormat Format for the screenshot output ("PNG" or "JPEG")
  * @property compressionQuality Compression quality (0.0 to 1.0). Only applicable for JPEG format.
  */
 data class ScreenshotScalingConfig(
-  val maxDimension1: Int = 1024,
-  val maxDimension2: Int = 512,
+  val maxDimension1: Int = 1536,
+  val maxDimension2: Int = 768,
   val imageFormat: TrailblazeImageFormat = TrailblazeImageFormat.JPEG,
   val compressionQuality: Float = 0.80f,
 ) {

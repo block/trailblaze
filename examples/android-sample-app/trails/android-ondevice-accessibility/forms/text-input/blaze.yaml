@@ -1,0 +1,14 @@
+- config:
+    id: "sample-app/forms/text-input"
+    app: "xyz.block.trailblaze.examples.sampleapp"
+- tools:
+    - launchApp:
+        appId: "xyz.block.trailblaze.examples.sampleapp"
+        launchMode: "REINSTALL"
+- prompts:
+    - step: Navigate to the "Forms" tab
+    - step: Tap the "Name" field and type "Jane Doe"
+    - step: Tap the "Email" field and type "jane@example.com"
+    - step: Tap the "Submit" button
+    - step: Verify "Jane Doe" and "jane@example.com" appear in the submission result
+    - step: Tap "Clear All" and verify "Jane Doe" is no longer visible

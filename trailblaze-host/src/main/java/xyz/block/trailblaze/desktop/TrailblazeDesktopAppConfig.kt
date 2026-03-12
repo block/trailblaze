@@ -3,6 +3,7 @@ package xyz.block.trailblaze.desktop
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.runtime.Composable
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
+import xyz.block.trailblaze.host.devices.WebBrowserManager
 import xyz.block.trailblaze.host.ios.MobileDeviceUtils
 import xyz.block.trailblaze.llm.LlmProviderEnvVarUtil
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
@@ -12,6 +13,8 @@ import xyz.block.trailblaze.model.AppVersionInfo
 import xyz.block.trailblaze.model.DesktopAppRunYamlParams
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
+import xyz.block.trailblaze.host.rules.TrailblazeHostDynamicLlmTokenProvider
+import xyz.block.trailblaze.llm.providers.TrailblazeDynamicLlmTokenProvider
 import xyz.block.trailblaze.ui.TrailblazeBuiltInTabs
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
@@ -51,10 +54,11 @@ abstract class TrailblazeDesktopAppConfig(
   open fun getLlmTokenStatus(provider: TrailblazeLlmProvider): LlmTokenStatus {
     // Default implementation checks environment variables for standard open source providers
     val envVarName = getEnvironmentVariableForProvider(provider)
+    val envVarValue = LlmProviderEnvVarUtil.getEnvironmentVariableValueForProvider(provider)
 
     return when {
       envVarName == null -> LlmTokenStatus.Available(provider) // Provider doesn't need a token (e.g., Ollama)
-      System.getenv(envVarName)?.isNotBlank() == true -> LlmTokenStatus.Available(provider)
+      envVarValue?.isNotBlank() == true -> LlmTokenStatus.Available(provider)
       else -> LlmTokenStatus.NotAvailable(provider)
     }
   }
@@ -91,9 +95,23 @@ abstract class TrailblazeDesktopAppConfig(
   }
 
   /**
+   * LLM token provider used by the recording tab to authenticate LLM calls.
+   * Override in subclasses to provide custom auth (e.g., Databricks SSO).
+   * Defaults to the open source provider which reads from environment variables.
+   */
+  open val llmTokenProvider: TrailblazeDynamicLlmTokenProvider
+    get() = TrailblazeHostDynamicLlmTokenProvider
+
+  /**
    * Additional global settings content to render in the Settings tab.
    */
   open val globalSettingsContent: @Composable ColumnScope.(TrailblazeServerState) -> Unit = {}
+
+  /**
+   * Additional content to render on the Home tab.
+   * Override in subclasses to inject custom sections (e.g., authentication cards).
+   */
+  open val homeAdditionalContent: @Composable ColumnScope.() -> Unit = {}
 
   /**
    * Additional instrumentation args to pass to YAML runs for this configuration.
@@ -148,6 +166,32 @@ abstract class TrailblazeDesktopAppConfig(
   }
 
   /**
+   * Resolves a [TrailblazeLlmModel] from explicit provider/model ID strings.
+   * Used by the CLI `--llm-provider` / `--llm-model` flags.
+   *
+   * Searches all available model lists for a matching entry. If [providerId] is given,
+   * only models from that provider are considered. If [modelId] is given, it must match
+   * exactly. Returns null if no match is found.
+   */
+  fun resolveLlmModel(providerId: String?, modelId: String?): TrailblazeLlmModel? {
+    val allModelLists = getAllSupportedLlmModelLists()
+    val providerLists = if (providerId != null) {
+      allModelLists.filter { it.provider.id.equals(providerId, ignoreCase = true) }
+    } else {
+      allModelLists
+    }
+    if (modelId != null) {
+      for (list in providerLists) {
+        val match = list.entries.firstOrNull { it.modelId.equals(modelId, ignoreCase = true) }
+        if (match != null) return match
+      }
+      return null
+    }
+    // Provider given but no model — return first model from that provider
+    return providerLists.firstOrNull()?.entries?.firstOrNull()
+  }
+
+  /**
    * Returns the list of tabs for this desktop app configuration.
    * Override in subclasses to customize which tabs are shown.
    *
@@ -166,6 +210,7 @@ abstract class TrailblazeDesktopAppConfig(
       additionalInstrumentationArgsProvider = additionalInstrumentationArgsProvider,
       globalSettingsContent = globalSettingsContent,
       customEnvVarNames = customEnvVarNames,
+      webBrowserManager = deviceManager.webBrowserManager,
     )
   }
 
@@ -185,10 +230,13 @@ abstract class TrailblazeDesktopAppConfig(
     customEnvVarNames: List<String>,
     openGoose: (() -> Unit)? = null,
     isProviderLocked: Boolean = false,
+    webBrowserManager: WebBrowserManager? = null,
   ): List<TrailblazeAppTab> {
     return listOf(
       TrailblazeBuiltInTabs.homeTab(
         trailblazeSettingsRepo = trailblazeSettingsRepo,
+        deviceManager = deviceManager,
+        additionalHomeContent = homeAdditionalContent,
       ),
       TrailblazeBuiltInTabs.sessionsTab(
         logsRepo = logsRepo,
@@ -207,6 +255,11 @@ abstract class TrailblazeDesktopAppConfig(
         deviceManager = deviceManager,
         trailblazeSettingsRepo = trailblazeSettingsRepo,
       ),
+      TrailblazeBuiltInTabs.recordTab(
+        deviceManager = deviceManager,
+        currentTrailblazeLlmModelProvider = { getCurrentLlmModel() },
+        llmTokenProvider = llmTokenProvider,
+      ),
       TrailblazeBuiltInTabs.yamlTab(
         deviceManager = deviceManager,
         trailblazeSettingsRepo = trailblazeSettingsRepo,
@@ -222,6 +275,8 @@ abstract class TrailblazeDesktopAppConfig(
         customEnvVarNames = customEnvVarNames,
         openGoose = openGoose ?: { TrailblazeDesktopUtil.openGoose() },
         isProviderLocked = isProviderLocked,
+        playwrightInstallState = webBrowserManager?.playwrightInstaller?.installState,
+        onInstallPlaywright = webBrowserManager?.let { { it.playwrightInstaller.installBrowsers() } },
       ),
     )
   }

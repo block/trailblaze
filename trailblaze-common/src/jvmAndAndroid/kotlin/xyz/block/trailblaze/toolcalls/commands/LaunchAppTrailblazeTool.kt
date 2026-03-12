@@ -1,12 +1,16 @@
 package xyz.block.trailblaze.toolcalls.commands
 
 import ai.koog.agents.core.tools.annotations.LLMDescription
+import kotlinx.coroutines.delay
 import kotlinx.serialization.Serializable
 import maestro.orchestra.Command
 import maestro.orchestra.LaunchAppCommand
 import xyz.block.trailblaze.AgentMemory
+import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.toolcalls.MapsToMaestroCommands
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
+import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
+import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 
 @Serializable
 @TrailblazeToolClass("launchApp")
@@ -26,6 +30,22 @@ Available App Launch Modes:
   )
   val launchMode: LaunchMode = LaunchMode.REINSTALL,
 ) : MapsToMaestroCommands() {
+
+  override suspend fun execute(
+    toolExecutionContext: TrailblazeToolExecutionContext,
+  ): TrailblazeToolResult {
+    val result = super.execute(toolExecutionContext)
+    // On Android on-device drivers (instrumentation + accessibility), allow the app time to
+    // fully render after launch so the next view hierarchy snapshot is stable. Without this,
+    // slower emulators (especially in CI) often produce unstable hierarchies due to launch
+    // animations and initial layout. Host/Playwright/Compose drivers handle settle internally.
+    val driverType = toolExecutionContext.trailblazeDeviceInfo.trailblazeDriverType
+    if (driverType in TrailblazeDriverType.ANDROID_ON_DEVICE_DRIVER_TYPES) {
+      delay(2000)
+    }
+    return result
+  }
+
   override fun toMaestroCommands(memory: AgentMemory): List<Command> = listOf(
     LaunchAppCommand(
       appId = appId,

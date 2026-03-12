@@ -5,30 +5,47 @@ import xyz.block.trailblaze.llm.TrailblazeLlmModel.Companion.toTrailblazeLlmMode
 import xyz.block.trailblaze.llm.TrailblazeLlmModelList
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
 
+/* https://openai.com/api/pricing/ */
 object OpenAITrailblazeLlmModelList : TrailblazeLlmModelList {
+
+
+  /** 50% discount on cached inputs */
+  const val OPENAI_CACHED_INPUT_DISCOUNT_MULTIPLIER_50_PERCENT = 0.50
 
   val OPENAI_GPT_5_2 = OpenAIModels.Chat.GPT5_2.toTrailblazeLlmModel(
     inputCostPerOneMillionTokens = 1.75,
     outputCostPerOneMillionTokens = 14.00,
+    cachedInputDiscountMultiplier = OPENAI_CACHED_INPUT_DISCOUNT_MULTIPLIER_50_PERCENT,
+  )
+
+  val OPENAI_GPT_5_4 = OpenAIModels.Chat.GPT5_2.toTrailblazeLlmModel(
+    inputCostPerOneMillionTokens = 2.50,
+    outputCostPerOneMillionTokens = 15.00,
+    cachedInputDiscountMultiplier = OPENAI_CACHED_INPUT_DISCOUNT_MULTIPLIER_50_PERCENT,
   )
 
   val OPENAI_GPT_5 = OpenAIModels.Chat.GPT5.toTrailblazeLlmModel(
     inputCostPerOneMillionTokens = 1.25,
     outputCostPerOneMillionTokens = 10.00,
+    cachedInputDiscountMultiplier = OPENAI_CACHED_INPUT_DISCOUNT_MULTIPLIER_50_PERCENT,
   )
 
   val OPENAI_GPT_5_MINI = OpenAIModels.Chat.GPT5Mini.toTrailblazeLlmModel(
     inputCostPerOneMillionTokens = 0.25,
     outputCostPerOneMillionTokens = 12.00,
+    cachedInputDiscountMultiplier = OPENAI_CACHED_INPUT_DISCOUNT_MULTIPLIER_50_PERCENT,
   )
 
   val OPENAI_GPT_4_1 = OpenAIModels.Chat.GPT4_1.toTrailblazeLlmModel(
     inputCostPerOneMillionTokens = 2.00,
     outputCostPerOneMillionTokens = 8.00,
+    cachedInputDiscountMultiplier = OPENAI_CACHED_INPUT_DISCOUNT_MULTIPLIER_50_PERCENT,
   )
+
   val OPENAI_GPT_4_1_MINI = OpenAIModels.Chat.GPT4_1Mini.toTrailblazeLlmModel(
     inputCostPerOneMillionTokens = 0.40,
     outputCostPerOneMillionTokens = 1.60,
+    cachedInputDiscountMultiplier = OPENAI_CACHED_INPUT_DISCOUNT_MULTIPLIER_50_PERCENT,
   )
 
   override val entries = listOf(

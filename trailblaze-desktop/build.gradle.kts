@@ -25,6 +25,7 @@ dependencies {
   implementation(compose.components.resources)
   implementation(libs.koog.prompt.executor.clients)
   implementation(libs.ktor.network.tls.certificates)
+  implementation(libs.picocli) // For CLI interface
 }
 
 // Task to copy the APK to resources
@@ -90,9 +91,16 @@ compose.desktop {
 }
 afterEvaluate {
   tasks.withType<JavaExec> {
+    // Run from the repository root so relative paths (e.g., merchant-factory/trails/) resolve correctly.
+    workingDir = rootProject.projectDir
     // Forward stdin to the JVM process so STDIO MCP transport can read JSON-RPC
     // from the parent process's stdin (e.g., `./trailblaze mcp --stdio`).
     standardInput = System.`in`
+
+    // Use the repo root as the working directory so that System.getProperty("user.dir")
+    // matches where the user invoked `./trailblaze`, not the Gradle subproject directory.
+    // This ensures {{CWD}} in trail files resolves correctly during development.
+    workingDir = rootProject.projectDir
 
     if (System.getProperty("os.name").contains("Mac")) {
       jvmArgs("--add-opens", "java.desktop/sun.awt=ALL-UNNAMED")

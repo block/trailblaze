@@ -1,0 +1,24 @@
+# Android World Benchmark: BluetoothTurnOff
+- config:
+    id: android-world-benchmarks/system/bluetooth_turn_off
+    displayName: "System - Bluetooth Turn Off"
+    description: "Turn bluetooth off."
+
+- tools:
+    - androidworldbenchmarks_runAdbShell:
+        adbShellCommands:
+          - "svc bluetooth enable"
+
+- prompts:
+    - step: "Turn bluetooth off."
+
+- tools:
+    - androidworldbenchmarks_assertAdbShellOutput:
+        command: "settings get global bluetooth_on"
+        expectedOutput: "0"
+        matchMode: "exact"
+
+# --- Benchmark Run History ---
+# [2026-03-11] FAILED - Agent limitation: bluetooth_on still 1 after agent
+#   attempted. Couldn't navigate to and toggle the bluetooth off switch.
+#   Similar navigation difficulty as bluetooth_turn_on.

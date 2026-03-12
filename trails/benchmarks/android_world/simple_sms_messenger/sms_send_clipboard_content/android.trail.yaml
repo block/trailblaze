@@ -1,0 +1,27 @@
+# Android World Benchmark: sms/send_clipboard_content
+- config:
+    id: android-world-benchmarks/simple_sms_messenger/sms_send_clipboard_content
+    description: Send a message to 555-777-8888 with the clipboard content in Simple SMS Messenger
+
+- tools:
+  - androidworldbenchmarks_runAdbShell:
+      adbShellCommands:
+        - "content delete --uri content://sms"
+  - setClipboard:
+      text: "Meeting moved to 3pm tomorrow"
+
+- prompts:
+  - step: "Send a message to 555-777-8888 with the clipboard content in Simple SMS Messenger"
+
+- tools:
+  - androidworldbenchmarks_assertAdbShellOutput:
+      command: "content query --uri content://sms --where \"address LIKE '%5557778888%' AND type=2\" --projection body"
+      expectedOutput: "Meeting moved to 3pm"
+      matchMode: "contains"
+
+# --- Benchmark Run History ---
+# [2026-03-11] FAILED - Agent limitation: ObjectiveFailed. Agent couldn't send
+#   clipboard content via SMS. May have struggled with clipboard paste interaction
+#   or navigating Simple SMS Messenger's compose flow.
+#   FIX: Migrated setup and validation from direct sqlite3 to content provider API.
+# [2026-03-11] Build #27 FAILED - Agent limitation: ObjectiveFailed. Same as build #24.

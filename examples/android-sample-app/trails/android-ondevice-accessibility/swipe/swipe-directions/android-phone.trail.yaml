@@ -1,0 +1,47 @@
+- config:
+    id: sample-app/swipe/swipe-directions
+    app: xyz.block.trailblaze.examples.sampleapp
+    platform: android
+    driver: ANDROID_ONDEVICE_ACCESSIBILITY
+- tools:
+  - launchApp:
+      appId: xyz.block.trailblaze.examples.sampleapp
+- prompts:
+  - step: Navigate to the "Swipe" tab and verify "Page 1 of 5" is shown
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: To navigate to the 'Swipe' tab as per the objective, I need to tap the 'Swipe' tab element.
+          selector:
+            containsChild:
+              textRegex: Swipe
+          nodeSelector:
+            androidAccessibility:
+              classNameRegex: \Qandroid.view.View\E
+            index: 27
+      - assertVisibleBySelector:
+          reason: To verify that 'Page 1 of 5' is shown on the 'Swipe' tab as required by the objective.
+          selector:
+            textRegex: Page 1 of 5
+          nodeSelector:
+            androidAccessibility:
+              textRegex: Page 1 of 5
+  - step: Swipe forward to page 3, then swipe back to page 2
+    recording:
+      tools:
+      - swipe:
+          direction: LEFT
+      - swipe:
+          direction: LEFT
+      - swipe:
+          direction: RIGHT
+  - step: Verify "Page 2 of 5" is displayed
+    recording:
+      tools:
+      - assertVisibleBySelector:
+          reason: The text 'Page 2 of 5' should be visible to confirm that we are on the correct page as required by the objective.
+          selector:
+            textRegex: Page 2 of 5
+          nodeSelector:
+            androidAccessibility:
+              textRegex: Page 2 of 5

@@ -40,7 +40,7 @@ class FakeTrailblazeAgent(
   override suspend fun executeMaestroCommands(
     commands: List<Command>,
     traceId: TraceId?,
-  ): TrailblazeToolResult = TrailblazeToolResult.Success
+  ): TrailblazeToolResult = TrailblazeToolResult.Success()
 
   override fun runTrailblazeTools(
     tools: List<TrailblazeTool>,

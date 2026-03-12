@@ -1,8 +1,11 @@
 package xyz.block.trailblaze.logs.client
 
 import kotlinx.datetime.Clock
+import xyz.block.trailblaze.devices.TrailblazeDeviceId
+import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
+import xyz.block.trailblaze.yaml.TrailConfig
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -95,6 +98,67 @@ class TrailblazeSessionManager(
       startTime = Clock.System.now(),
       metadata = metadata,
     )
+  }
+
+  /**
+   * Emits a session start log with device info and classifiers.
+   * Call this immediately after creating a session to establish the session context
+   * before any other logs are emitted.
+   *
+   * ## Example
+   * ```kotlin
+   * val session = sessionManager.startSession("MyTest")
+   * sessionManager.emitSessionStartLog(
+   *     session = session,
+   *     trailConfig = trailConfig,
+   *     trailFilePath = "/path/to/test.trail.yaml",
+   *     hasRecordedSteps = true,
+   *     testMethodName = "testLogin",
+   *     testClassName = "LoginTest",
+   *     trailblazeDeviceInfo = deviceInfoProvider(),
+   *     trailblazeDeviceId = deviceId,
+   *     rawYaml = yamlContent,
+   * )
+   * ```
+   *
+   * @param session The session to emit the start log for
+   * @param trailConfig Optional trail configuration extracted from YAML
+   * @param trailFilePath Optional path to the trail file
+   * @param hasRecordedSteps Whether the trail has recorded steps
+   * @param testMethodName The test method name for logging
+   * @param testClassName The test class name for logging
+   * @param trailblazeDeviceInfo Device info including classifiers
+   * @param trailblazeDeviceId Optional device ID
+   * @param rawYaml Optional raw YAML content
+   */
+  fun emitSessionStartLog(
+    session: TrailblazeSession,
+    trailConfig: TrailConfig?,
+    trailFilePath: String?,
+    hasRecordedSteps: Boolean,
+    testMethodName: String,
+    testClassName: String,
+    trailblazeDeviceInfo: TrailblazeDeviceInfo,
+    trailblazeDeviceId: TrailblazeDeviceId? = null,
+    rawYaml: String? = null,
+  ) {
+    val sessionStartedStatus = SessionStatus.Started(
+      trailConfig = trailConfig,
+      trailFilePath = trailFilePath,
+      hasRecordedSteps = hasRecordedSteps,
+      testMethodName = testMethodName,
+      testClassName = testClassName,
+      trailblazeDeviceInfo = trailblazeDeviceInfo,
+      trailblazeDeviceId = trailblazeDeviceId,
+      rawYaml = rawYaml,
+    )
+
+    val startLog = TrailblazeLog.TrailblazeSessionStatusChangeLog(
+      sessionStatus = sessionStartedStatus,
+      session = session.sessionId,
+      timestamp = Clock.System.now(),
+    )
+    logEmitter.emit(startLog)
   }
 
   /**

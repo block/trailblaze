@@ -1,0 +1,23 @@
+# Android World Benchmark: RecordAudioWithFilename
+- config:
+    id: android-world-benchmarks/audio_recorder/record_audio_with_filename
+    displayName: "Audio Recorder - Record Audio With Filename"
+    description: "Record an audio clip and save it with name \"meeting_notes\" using Audio Recorder app."
+
+- tools:
+    - androidworldbenchmarks_clearDirectory:
+        directoryPath: /storage/emulated/0/Android/data/com.dimowner.audiorecorder/files/Music/records
+
+- prompts:
+    - step: "Record an audio clip and save it with name \"meeting_notes\" using Audio Recorder app."
+
+- tools:
+    - launchApp:
+        appId: com.dimowner.audiorecorder
+    - androidworldbenchmarks_assertAdbShellOutput:
+        command: "ls /storage/emulated/0/Android/data/com.dimowner.audiorecorder/files/Music/records"
+        expectedOutput: "meeting_notes"
+        matchMode: "contains"
+
+# --- Benchmark Run History ---
+# [2026-03-11] FAILED - Audio Recorder app (com.dimowner.audiorecorder) not installed on emulator.

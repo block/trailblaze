@@ -26,15 +26,13 @@ fi
 # Generate docs
 ./gradlew :docs:generator:run
 
-# Verify the contents of `GENERATED_DOCS_FOLDER` have not caused any diffs
-git diff --exit-code $GENERATED_DOCS_FOLDER_RELATIVE_PATH
-
-# If there are diffs, print the diffs and exit with a non-zero exit code
-if [ $? -ne 0 ]; then
+# Verify generated docs and CLI.md have not caused any diffs
+# CLI.md is written to docs/ (not docs/generated/) by CliDocsGenerator
+if ! git diff --exit-code $GENERATED_DOCS_FOLDER_RELATIVE_PATH docs/CLI.md; then
     echo "Error: Documentation changes detected!"
     echo "Please run './gradlew :docs:generator:run' to regenerate the docs"
-    echo "and commit the changes to $GENERATED_DOCS_FOLDER"
+    echo "and commit the changes"
     exit 1
 else
     echo "✓ No documentation changes detected"
-fi 
+fi

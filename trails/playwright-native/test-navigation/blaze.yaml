@@ -1,0 +1,14 @@
+- config:
+    title: "Test: Navigation and page structure"
+    driver: PLAYWRIGHT_NATIVE
+- prompts:
+    - step: Navigate to ../../../examples/playwright-native/sample-app/index.html
+    - step: Verify the heading "Trailblaze Test Fixture" is visible
+    - step: Click on the "Form" navigation link
+    - step: Verify the heading "Contact Form" is visible
+    - step: Click on the "Counter" navigation link
+    - step: Verify the heading "Counter" is visible
+    - step: Click on the "About" navigation link
+    - step: Verify the text "Trailblaze is an AI-powered UI testing framework" is visible
+    - step: Navigate back to the previous page state by clicking the "Home" navigation link
+    - step: Verify the heading "Welcome" is visible

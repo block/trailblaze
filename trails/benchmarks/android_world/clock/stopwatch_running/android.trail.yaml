@@ -1,0 +1,37 @@
+# Android World Benchmark: StopwatchRunning
+#
+# From android_world ClockStopWatchRunning:
+# - Setup: Clear clock app data (resets stopwatch to 00:00:00, paused state)
+# - Prompt: "Run the stopwatch."
+# - Validation: DeskClock activity is foreground, "Pause" and "Lap" buttons visible.
+- config:
+    id: android-world-benchmarks/clock/stopwatch_running
+    displayName: "Clock - Stopwatch Running"
+    description: "Run the stopwatch."
+
+- tools:
+    - clearAppData:
+        packageName: com.google.android.deskclock
+    # Android World starts every task from the home screen (using adb for reliable setup execution)
+    - androidworldbenchmarks_runAdbShell:
+        adbShellCommands:
+          - "input keyevent KEYCODE_HOME"
+
+- prompts:
+    - step: "Run the stopwatch."
+
+- tools:
+    # Validation: "Pause" button visible (stopwatch is running)
+    - assertVisibleBySelector:
+        reason: "Stopwatch should be running — 'Pause' button must be visible"
+        selector:
+          textRegex: "Pause"
+    # Validation: "Lap" button visible (stopwatch is running)
+    - assertVisibleBySelector:
+        reason: "Stopwatch should be running — 'Lap' button must be visible"
+        selector:
+          textRegex: "Lap"
+
+# --- Benchmark Run History ---
+# [2026-03-11] PASSED - Agent successfully started the stopwatch.
+# [2026-03-11] Build #27 PASSED - Agent successfully started the stopwatch.

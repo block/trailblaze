@@ -35,19 +35,6 @@ interface RecordedTrailsRepo {
   ): Result<String>
 
   /**
-   * Saves a prompts YAML to disk as the source of truth file (trail.yaml).
-   * This file contains the natural language test steps without recordings.
-   *
-   * @param yaml The YAML content to save
-   * @param sessionInfo The session info containing trail configuration (uses trailConfig.id for path)
-   * @return Result with the absolute path to the saved file on success, or an error message on failure
-   */
-  fun savePrompts(
-    yaml: String,
-    sessionInfo: SessionInfo,
-  ): Result<String>
-
-  /**
    * Gets configured trails directory
    */
   fun getTrailsDirectory(): String
