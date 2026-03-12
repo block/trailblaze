@@ -51,5 +51,7 @@ local.settings.gradle
 # Generated Kotlin JS Config Files
 /kotlin-js-store/
 
-# Python SDK virtual environment
+# Python
+__pycache__/
+*.pyc
 /sdks/python/.venv/
