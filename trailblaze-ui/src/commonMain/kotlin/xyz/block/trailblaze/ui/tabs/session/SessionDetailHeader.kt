@@ -66,6 +66,8 @@ internal fun SessionDetailHeader(
   onFontScaleChanged: (Float) -> Unit,
   cardsPerRow: Int,
   maxCards: Int,
+  overallStatus: xyz.block.trailblaze.logs.model.SessionStatus? = null,
+  agentImplementation: xyz.block.trailblaze.mcp.AgentImplementation? = null,
 ) {
   Row(
     modifier = Modifier.fillMaxWidth(),
@@ -73,7 +75,8 @@ internal fun SessionDetailHeader(
     verticalAlignment = Alignment.CenterVertically
   ) {
     Row(
-      verticalAlignment = Alignment.CenterVertically
+      verticalAlignment = Alignment.CenterVertically,
+      modifier = Modifier.weight(1f, fill = false)
     ) {
       IconButton(onClick = onBackClick) {
         Icon(
@@ -83,6 +86,20 @@ internal fun SessionDetailHeader(
         )
       }
       Spacer(modifier = Modifier.width(8.dp))
+      // Status badge
+      overallStatus?.let {
+        StatusBadge(status = it)
+        Spacer(modifier = Modifier.width(8.dp))
+      }
+      // Device platform icon
+      sessionDetail?.session?.trailblazeDeviceInfo?.let { deviceInfo ->
+        Icon(
+          imageVector = deviceInfo.platform.getIcon(),
+          contentDescription = deviceInfo.platform.name,
+          modifier = Modifier.size(20.dp)
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+      }
       Column {
         // Title: use test name if available, otherwise "Trailblaze Logs"
         val title = sessionDetail?.let {
@@ -97,13 +114,14 @@ internal fun SessionDetailHeader(
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
         )
-        // Subtitle: device info, driver, classifiers, duration
+        // Subtitle: device info, driver, agent, classifiers, duration
         if (sessionDetail != null) {
           val subtitleParts = mutableListOf<String>()
           sessionDetail.deviceName?.let { subtitleParts.add(it) }
           sessionDetail.session.trailblazeDeviceInfo?.trailblazeDriverType?.let {
             subtitleParts.add(it.name)
           }
+          agentImplementation?.let { subtitleParts.add(it.name) }
           sessionDetail.session.trailblazeDeviceInfo?.classifiers
             ?.takeIf { it.isNotEmpty() }
             ?.let { subtitleParts.add(it.joinToString(", ")) }
@@ -115,6 +133,18 @@ internal fun SessionDetailHeader(
               color = MaterialTheme.colorScheme.onSurfaceVariant,
               maxLines = 1,
               overflow = TextOverflow.Ellipsis,
+            )
+          }
+          // Trail path (testClass::testName) if different from title
+          val trailPath = listOfNotNull(
+            sessionDetail.session.testClass,
+            sessionDetail.session.testName
+          ).joinToString("::")
+          if (trailPath.isNotEmpty() && trailPath != title) {
+            SelectableText(
+              text = trailPath,
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
             )
           }
         }

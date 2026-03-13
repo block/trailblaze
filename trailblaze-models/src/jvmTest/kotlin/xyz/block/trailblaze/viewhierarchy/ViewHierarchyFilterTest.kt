@@ -139,7 +139,7 @@ class ViewHierarchyFilterTest {
   }
 
   @Test
-  fun `compact formatter annotates offscreen elements`() {
+  fun `compact formatter filters out offscreen elements by default`() {
     // On-screen button
     val onScreen = node(nodeId = 1, text = "Visible", clickable = true, bounds = makeBounds(0, 0, 200, 50))
     // Offscreen button just below the viewport
@@ -161,6 +161,44 @@ class ViewHierarchyFilterTest {
       screenHeight = screenHeight,
     )
 
+    // The on-screen element should be present without (offscreen)
+    val visibleLine = formatted.lines().first { it.contains("\"Visible\"") }
+    assertFalse(visibleLine.contains("(offscreen)"), "On-screen element should not be annotated")
+
+    // The offscreen element should be filtered out
+    assertFalse(
+      formatted.contains("\"Below\""),
+      "Offscreen element should be filtered out, but got:\n$formatted",
+    )
+
+    // Summary line should be present
+    assertContains(formatted, "offscreen elements hidden", message = "Should have summary line")
+  }
+
+  @Test
+  fun `compact formatter includes offscreen elements when includeOffscreen is true`() {
+    // On-screen button
+    val onScreen = node(nodeId = 1, text = "Visible", clickable = true, bounds = makeBounds(0, 0, 200, 50))
+    // Offscreen button just below the viewport
+    val belowViewport = node(nodeId = 2, text = "Below", clickable = true, bounds = makeBounds(0, screenHeight, 200, screenHeight + 50))
+    val root = node(
+      nodeId = 3,
+      className = "android.widget.FrameLayout",
+      children = listOf(onScreen, belowViewport),
+      bounds = makeBounds(0, 0, screenWidth, screenHeight),
+    )
+
+    val filter = ViewHierarchyFilter.create(screenWidth, screenHeight, TrailblazeDevicePlatform.ANDROID)
+    val result = filter.filterInteractableViewHierarchyTreeNodes(root)
+
+    val formatted = ViewHierarchyCompactFormatter.format(
+      root = result,
+      platform = TrailblazeDevicePlatform.ANDROID,
+      screenWidth = screenWidth,
+      screenHeight = screenHeight,
+      includeOffscreen = true,
+    )
+
     // The on-screen element should NOT have (offscreen)
     val visibleLine = formatted.lines().first { it.contains("\"Visible\"") }
     assertFalse(visibleLine.contains("(offscreen)"), "On-screen element should not be annotated")
@@ -168,5 +206,11 @@ class ViewHierarchyFilterTest {
     // The offscreen element should have (offscreen)
     val offscreenLine = formatted.lines().first { it.contains("\"Below\"") }
     assertContains(offscreenLine, "(offscreen)", message = "Offscreen element should be annotated")
+
+    // No summary line when includeOffscreen is true
+    assertFalse(
+      formatted.contains("offscreen elements hidden"),
+      "Should not have summary line when includeOffscreen is true",
+    )
   }
 }

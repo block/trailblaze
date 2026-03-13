@@ -11,7 +11,9 @@ data class TrailblazeDeviceInfo(
   val metadata: Map<String, String> = emptyMap(),
   val locale: String? = null,
   val classifiers: List<TrailblazeDeviceClassifier> = emptyList(),
-  val orientation: TrailblazeDeviceOrientation? = null,
+  val orientation: TrailblazeDeviceOrientation =
+    if (widthPixels > heightPixels) TrailblazeDeviceOrientation.LANDSCAPE else TrailblazeDeviceOrientation.PORTRAIT
 ) {
   val platform = trailblazeDriverType.platform
+
 }

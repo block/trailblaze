@@ -11,6 +11,10 @@ Available detail types:
   coordinates (center: x,y), dimensions (size: WxH), and enabled/disabled state.
   Useful for spatial reasoning, determining element positions, understanding layout
   structure, or disambiguating visually similar elements by location.
+- OFFSCREEN_ELEMENTS: Include all elements regardless of screen position.
+  By default, elements outside the screen are filtered out to save tokens. Request this
+  to see all elements with offscreen ones annotated as (offscreen). Useful when you need
+  to find elements that require scrolling to reach.
 
 ### Command Class
 `xyz.block.trailblaze.toolcalls.commands.RequestViewHierarchyDetailsTrailblazeTool`
@@ -20,7 +24,8 @@ Available detail types:
 - `include`: `{
   "itemsType": {
     "entries": [
-      "FULL_HIERARCHY"
+      "FULL_HIERARCHY",
+      "OFFSCREEN_ELEMENTS"
     ],
     "name": "ENUM"
   },

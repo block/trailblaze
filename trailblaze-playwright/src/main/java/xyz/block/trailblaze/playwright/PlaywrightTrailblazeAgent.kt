@@ -34,7 +34,7 @@ import xyz.block.trailblaze.playwright.tools.PlaywrightNativeVerifyListVisibleTo
 import xyz.block.trailblaze.playwright.tools.PlaywrightNativeVerifyTextVisibleTool
 import xyz.block.trailblaze.playwright.tools.PlaywrightNativeVerifyValueTool
 import xyz.block.trailblaze.playwright.tools.PlaywrightNativeWaitTool
-import xyz.block.trailblaze.toolcalls.commands.TakeSnapshotTool
+
 import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
@@ -232,12 +232,19 @@ class PlaywrightTrailblazeAgent(
       // Capture screen state BEFORE execution for the screenshot overlay
       val preScreenState = try { browserManager.getScreenState() } catch (_: Exception) { null }
 
+      // Resolve element coordinates BEFORE execution for logging. After a click causes
+      // navigation, the element no longer exists on the page, so post-click resolution
+      // would return (0, 0).
+      val preResolvedCenter = resolveToolCenter(tool, effectiveContext)
+
+      // Log AgentDriverLog with pre-action screenshot BEFORE execution so the
+      // timeline shows the tap coordinates on the pre-click screenshot.
       val timeBeforeExecution = Clock.System.now()
+      logAgentDriverAction(tool, preScreenState, timeBeforeExecution, preResolvedCenter, effectiveContext.traceId)
+
       val result = TrailblazeTracer.traceSuspend("executeWithPlaywright:$toolName", "tool") {
         tool.executeWithPlaywright(browserManager.currentPage, effectiveContext)
       }
-      val executionTimeMs =
-        Clock.System.now().toEpochMilliseconds() - timeBeforeExecution.toEpochMilliseconds()
 
       // Enrich tool with TrailblazeNodeSelector before logging so recordings capture
       // rich selectors (ARIA role+name, CSS selector, data-testid, nth-index).
@@ -250,9 +257,6 @@ class PlaywrightTrailblazeAgent(
       }
       logToolExecution(enrichedTool, timeBeforeExecution, effectiveContext, result)
 
-      // Log AgentDriverLog with pre-action screenshot for visualization
-      logAgentDriverAction(tool, result, preScreenState, executionTimeMs, timeBeforeExecution, effectiveContext)
-
       if (result.isSuccess()) {
         TrailblazeTracer.trace("postActionSettle", "tool") {
           if (skipPostActionDomStability) {
@@ -264,21 +268,6 @@ class PlaywrightTrailblazeAgent(
             browserManager.waitForPageReady(domStabilityTimeoutMs = RECORDING_DOM_STABILITY_TIMEOUT_MS)
           } else {
             browserManager.waitForPageReady()
-          }
-        }
-
-        TrailblazeTracer.traceSuspend("logSnapshot", "tool") {
-          try {
-            val snapshotResult =
-              TakeSnapshotTool(
-                screenName = "web_action_${toolName.lowercase()}",
-                description = "Auto-captured after Playwright tool execution.",
-              ).execute(effectiveContext)
-            if (!snapshotResult.isSuccess()) {
-              Console.log("  [warn] Snapshot capture failed for tool: $toolName")
-            }
-          } catch (e: Exception) {
-            Console.log("  [warn] Snapshot logging failed: ${e.message}")
           }
         }
       }
@@ -431,11 +420,10 @@ class PlaywrightTrailblazeAgent(
    */
   private fun logAgentDriverAction(
     tool: PlaywrightExecutableTool,
-    result: TrailblazeToolResult,
     preScreenState: ScreenState?,
-    executionTimeMs: Long,
-    startTime: kotlinx.datetime.Instant,
-    context: TrailblazeToolExecutionContext,
+    timestamp: kotlinx.datetime.Instant,
+    preResolvedCenter: Pair<Int, Int>,
+    traceId: TraceId?,
   ) {
     if (preScreenState == null) return
     try {
@@ -446,19 +434,19 @@ class PlaywrightTrailblazeAgent(
         null
       }
 
-      val action = mapToolToAgentDriverAction(tool, result, context)
+      val action = mapToolToAgentDriverAction(tool, preResolvedCenter)
 
       val log = TrailblazeLog.AgentDriverLog(
         viewHierarchy = preScreenState.viewHierarchy,
         trailblazeNodeTree = preScreenState.trailblazeNodeTree,
         screenshotFile = screenshotFilename,
         action = action,
-        durationMs = executionTimeMs,
-        timestamp = startTime,
+        durationMs = 0,
+        timestamp = timestamp,
         session = session.sessionId,
         deviceWidth = preScreenState.deviceWidth,
         deviceHeight = preScreenState.deviceHeight,
-        traceId = context.traceId,
+        traceId = traceId,
       )
       trailblazeLogger.log(session, log)
     } catch (e: Exception) {
@@ -472,19 +460,14 @@ class PlaywrightTrailblazeAgent(
    */
   private fun mapToolToAgentDriverAction(
     tool: PlaywrightExecutableTool,
-    result: TrailblazeToolResult,
-    context: TrailblazeToolExecutionContext,
+    preResolvedCenter: Pair<Int, Int>,
   ): AgentDriverAction {
-    val succeeded = result.isSuccess()
+    val (x, y) = preResolvedCenter
     return when (tool) {
-      is PlaywrightNativeClickTool -> {
-        val (x, y) = resolveElementCenter(tool.ref, context)
+      is PlaywrightNativeClickTool ->
         AgentDriverAction.TapPoint(x = x, y = y)
-      }
-      is PlaywrightNativeHoverTool -> {
-        val (x, y) = resolveElementCenter(tool.ref, context)
+      is PlaywrightNativeHoverTool ->
         AgentDriverAction.TapPoint(x = x, y = y)
-      }
       is PlaywrightNativeTypeTool ->
         AgentDriverAction.EnterText(text = tool.text)
       is PlaywrightNativeScrollTool ->
@@ -495,47 +478,37 @@ class PlaywrightTrailblazeAgent(
       }
       is PlaywrightNativePressKeyTool ->
         AgentDriverAction.OtherAction(AgentActionType.WEB_ACTION)
-      is PlaywrightNativeSelectOptionTool -> {
-        val (x, y) = resolveElementCenter(tool.ref, context)
+      is PlaywrightNativeSelectOptionTool ->
         AgentDriverAction.TapPoint(x = x, y = y)
-      }
-      is PlaywrightNativeVerifyTextVisibleTool -> {
-        val (x, y) = resolveTextCenter(tool.text)
+      is PlaywrightNativeVerifyTextVisibleTool ->
         AgentDriverAction.AssertCondition(
           conditionDescription = "Verify text visible: ${tool.text}",
           x = x, y = y,
           isVisible = true,
           textToDisplay = tool.text,
-          succeeded = succeeded,
+          succeeded = true,
         )
-      }
-      is PlaywrightNativeVerifyElementVisibleTool -> {
-        val (x, y) = resolveElementCenter(tool.ref, context)
+      is PlaywrightNativeVerifyElementVisibleTool ->
         AgentDriverAction.AssertCondition(
           conditionDescription = "Verify element visible: ${tool.element.ifBlank { tool.ref }}",
           x = x, y = y,
           isVisible = true,
-          succeeded = succeeded,
+          succeeded = true,
         )
-      }
-      is PlaywrightNativeVerifyListVisibleTool -> {
-        val (x, y) = resolveElementCenter(tool.ref, context)
+      is PlaywrightNativeVerifyListVisibleTool ->
         AgentDriverAction.AssertCondition(
           conditionDescription = "Verify list: ${tool.element.ifBlank { tool.ref }}",
           x = x, y = y,
           isVisible = true,
-          succeeded = succeeded,
+          succeeded = true,
         )
-      }
-      is PlaywrightNativeVerifyValueTool -> {
-        val (x, y) = resolveElementCenter(tool.ref, context)
+      is PlaywrightNativeVerifyValueTool ->
         AgentDriverAction.AssertCondition(
           conditionDescription = "Verify ${tool.type.name.lowercase()}: ${tool.element.ifBlank { tool.ref }} = '${tool.expected}'",
           x = x, y = y,
           isVisible = true,
-          succeeded = succeeded,
+          succeeded = true,
         )
-      }
       is PlaywrightNativeWaitTool ->
         AgentDriverAction.WaitForSettle(timeoutMs = tool.seconds * 1000L)
       else -> AgentDriverAction.OtherAction(AgentActionType.WEB_ACTION)
@@ -543,37 +516,33 @@ class PlaywrightTrailblazeAgent(
   }
 
   /**
-   * Resolves an element ref to center coordinates via Playwright's `boundingBox()`.
-   * Uses [PlaywrightExecutableTool.resolveRef] which handles element IDs (e.g., "e11"),
-   * CSS selectors, and ARIA descriptors — matching the same resolution path as the tools.
-   * Returns (0, 0) if the element can't be found or doesn't have a bounding box.
+   * Resolves center coordinates for a tool's target element BEFORE execution.
+   * This must happen pre-execution because clicks can cause navigation, after which
+   * the target element no longer exists on the page.
+   * Returns (0, 0) if the tool has no target or the element can't be resolved.
    */
-  private fun resolveElementCenter(
-    ref: String,
+  private fun resolveToolCenter(
+    tool: PlaywrightExecutableTool,
     context: TrailblazeToolExecutionContext,
   ): Pair<Int, Int> {
     return try {
-      val locator = PlaywrightExecutableTool.resolveRef(browserManager.currentPage, ref, context)
-      val box = locator.first().boundingBox()
-      if (box != null) {
-        val centerX = (box.x + box.width / 2).toInt()
-        val centerY = (box.y + box.height / 2).toInt()
-        centerX to centerY
-      } else {
-        0 to 0
+      val ref = when (tool) {
+        is PlaywrightNativeClickTool -> tool.ref
+        is PlaywrightNativeHoverTool -> tool.ref
+        is PlaywrightNativeSelectOptionTool -> tool.ref
+        is PlaywrightNativeVerifyElementVisibleTool -> tool.ref
+        is PlaywrightNativeVerifyListVisibleTool -> tool.ref
+        is PlaywrightNativeVerifyValueTool -> tool.ref
+        is PlaywrightNativeVerifyTextVisibleTool -> null
+        else -> null
       }
-    } catch (_: Exception) {
-      0 to 0
-    }
-  }
-
-  /**
-   * Resolves text content to center coordinates via Playwright's `getByText().boundingBox()`.
-   * Returns (0, 0) if the text can't be found on the page.
-   */
-  private fun resolveTextCenter(text: String): Pair<Int, Int> {
-    return try {
-      val locator = browserManager.currentPage.getByText(text)
+      val locator = if (ref != null) {
+        PlaywrightExecutableTool.resolveRef(browserManager.currentPage, ref, context)
+      } else if (tool is PlaywrightNativeVerifyTextVisibleTool) {
+        browserManager.currentPage.getByText(tool.text)
+      } else {
+        return 0 to 0
+      }
       val box = locator.first().boundingBox()
       if (box != null) {
         val centerX = (box.x + box.width / 2).toInt()

@@ -24,7 +24,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ElevatedCard
+import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -112,7 +112,7 @@ fun HomeTabComposable(
       Text(
         text = when (testingEnvironment) {
           TestingEnvironment.WEB -> "AI-powered UI testing for web applications. Get started by running a sample test in a browser."
-          else -> "AI-powered UI testing for mobile apps. Get started by running a sample test on a connected device."
+          else -> "AI-powered UI testing. Get started by running a sample test on a connected device."
         },
         style = MaterialTheme.typography.bodyLarge,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -322,7 +322,7 @@ private fun AdbStatusCard(adbStatus: AdbStatus, modifier: Modifier = Modifier) {
     )
   }
 
-  ElevatedCard(modifier = modifier) {
+  OutlinedCard(modifier = modifier) {
     Column(
       modifier = Modifier.padding(20.dp),
       verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -423,7 +423,7 @@ private fun AdbStatusCard(adbStatus: AdbStatus, modifier: Modifier = Modifier) {
 
 @Composable
 private fun IosStatusCard(iosStatus: IosStatus, modifier: Modifier = Modifier) {
-  ElevatedCard(modifier = modifier) {
+  OutlinedCard(modifier = modifier) {
     Column(
       modifier = Modifier.padding(20.dp),
       verticalArrangement = Arrangement.spacedBy(8.dp),

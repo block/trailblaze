@@ -117,6 +117,107 @@ class DeviceManagerToolSetTest {
     assertContains(result, "No Android")
   }
 
+  // ── LIST action - description shown ─────────────────────────────────────
+
+  @Test
+  fun `device LIST includes device description`() = runTest {
+    val bridge = DeviceTestBridge(devices = setOf(androidDevice))
+    val toolSet = DeviceManagerToolSet(
+      sessionContext = createSessionContext(),
+      mcpBridge = bridge,
+    )
+
+    val result = toolSet.device(
+      action = DeviceManagerToolSet.DeviceAction.LIST,
+    )
+
+    assertContains(result, "Pixel 6 API 34")
+  }
+
+  // ── INFO action ─────────────────────────────────────────────────────────
+
+  @Test
+  fun `device INFO returns summary of connected device`() = runTest {
+    val bridge = DeviceTestBridge(
+      devices = setOf(androidDevice),
+      driverType = TrailblazeDriverType.ANDROID_HOST,
+    )
+    val toolSet = DeviceManagerToolSet(
+      sessionContext = createSessionContext(),
+      mcpBridge = bridge,
+    )
+    // Connect first
+    toolSet.device(action = DeviceManagerToolSet.DeviceAction.ANDROID)
+
+    val result = toolSet.device(
+      action = DeviceManagerToolSet.DeviceAction.INFO,
+    )
+
+    assertContains(result, "emulator-5554")
+    assertContains(result, "Android")
+    assertContains(result, "ANDROID_HOST")
+  }
+
+  @Test
+  fun `device INFO returns error when no device connected`() = runTest {
+    val bridge = DeviceTestBridge(devices = setOf(androidDevice))
+    val toolSet = DeviceManagerToolSet(
+      sessionContext = createSessionContext(),
+      mcpBridge = bridge,
+    )
+
+    val result = toolSet.device(
+      action = DeviceManagerToolSet.DeviceAction.INFO,
+    )
+
+    assertContains(result, "No device connected")
+  }
+
+  @Test
+  fun `device INFO APPS returns installed apps`() = runTest {
+    val bridge = DeviceTestBridge(
+      devices = setOf(androidDevice),
+      installedApps = setOf("com.example.app1", "com.example.app2"),
+    )
+    val toolSet = DeviceManagerToolSet(
+      sessionContext = createSessionContext(),
+      mcpBridge = bridge,
+    )
+    toolSet.device(action = DeviceManagerToolSet.DeviceAction.ANDROID)
+
+    val result = toolSet.device(
+      action = DeviceManagerToolSet.DeviceAction.INFO,
+      detail = DeviceManagerToolSet.DeviceDetail.APPS,
+    )
+
+    assertContains(result, "com.example.app1")
+    assertContains(result, "com.example.app2")
+    assertContains(result, "2")
+  }
+
+  @Test
+  fun `device INFO FULL returns summary and apps`() = runTest {
+    val bridge = DeviceTestBridge(
+      devices = setOf(androidDevice),
+      driverType = TrailblazeDriverType.ANDROID_HOST,
+      installedApps = setOf("com.example.app"),
+    )
+    val toolSet = DeviceManagerToolSet(
+      sessionContext = createSessionContext(),
+      mcpBridge = bridge,
+    )
+    toolSet.device(action = DeviceManagerToolSet.DeviceAction.ANDROID)
+
+    val result = toolSet.device(
+      action = DeviceManagerToolSet.DeviceAction.INFO,
+      detail = DeviceManagerToolSet.DeviceDetail.FULL,
+    )
+
+    assertContains(result, "emulator-5554")
+    assertContains(result, "ANDROID_HOST")
+    assertContains(result, "com.example.app")
+  }
+
   // ── CONNECT action ────────────────────────────────────────────────────────
 
   @Test
@@ -157,6 +258,8 @@ class DeviceManagerToolSetTest {
  */
 class DeviceTestBridge(
   private val devices: Set<TrailblazeConnectedDeviceSummary> = emptySet(),
+  private val driverType: TrailblazeDriverType? = null,
+  private val installedApps: Set<String> = emptySet(),
 ) : TrailblazeMcpBridge {
 
   var lastSelectedDeviceId: TrailblazeDeviceId? = null
@@ -169,7 +272,7 @@ class DeviceTestBridge(
   }
 
   override suspend fun executeTrailblazeTool(tool: TrailblazeTool): String = "[OK]"
-  override suspend fun getInstalledAppIds(): Set<String> = emptySet()
+  override suspend fun getInstalledAppIds(): Set<String> = installedApps
   override fun getAvailableAppTargets(): Set<TrailblazeHostAppTarget> = emptySet()
   override suspend fun runYaml(yaml: String, startNewSession: Boolean, agentImplementation: AgentImplementation) = ""
   override fun getCurrentlySelectedDeviceId(): TrailblazeDeviceId? = lastSelectedDeviceId
@@ -177,7 +280,7 @@ class DeviceTestBridge(
   override fun getDirectScreenStateProvider(): ((ScreenshotScalingConfig) -> ScreenState)? = null
   override suspend fun endSession(): Boolean = true
   override fun isOnDeviceInstrumentation(): Boolean = false
-  override fun getDriverType(): TrailblazeDriverType? = null
+  override fun getDriverType(): TrailblazeDriverType? = if (lastSelectedDeviceId != null) driverType else null
   override suspend fun getScreenStateViaRpc(
     includeScreenshot: Boolean,
     filterViewHierarchy: Boolean,

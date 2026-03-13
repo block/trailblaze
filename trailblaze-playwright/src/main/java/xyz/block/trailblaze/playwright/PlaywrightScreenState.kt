@@ -3,6 +3,7 @@ package xyz.block.trailblaze.playwright
 import com.microsoft.playwright.Locator
 import com.microsoft.playwright.Page
 import com.microsoft.playwright.options.ScreenshotAnimations
+import xyz.block.trailblaze.api.DriverNodeDetail
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ScreenshotScalingConfig
 import xyz.block.trailblaze.api.TrailblazeImageFormat
@@ -127,8 +128,9 @@ class PlaywrightScreenState(
       } else {
         enrichCompactElementList(compactAriaElements)
       }
-      val elementsText = TrailblazeTracer.trace("annotateOffscreenElements", "screenState") {
-        annotateOffscreenElements(baseText, compactAriaElements)
+      val includeOffscreen = ViewHierarchyDetail.OFFSCREEN_ELEMENTS in requestedDetails
+      val elementsText = TrailblazeTracer.trace("handleOffscreenElements", "screenState") {
+        handleOffscreenElements(baseText, compactAriaElements, includeOffscreen)
       }
       val pageContext = TrailblazeTracer.trace("buildPageContextHeader", "screenState") {
         buildPageContextHeader()
@@ -317,9 +319,14 @@ class PlaywrightScreenState(
   }
 
   /**
-   * Annotates elements in the compact list with `(offscreen)` when they are outside
-   * the current viewport. This runs on **every turn** as a default behavior — no tool
-   * call needed.
+   * Handles offscreen elements in the compact list based on the [includeOffscreen] flag.
+   *
+   * - **Default** ([includeOffscreen] = false): Removes offscreen element lines from the
+   *   text and appends a summary line showing how many were hidden. Also removes landmark
+   *   header lines (e.g., `navigation:`) that become empty after all their children are
+   *   filtered out.
+   * - **OFFSCREEN_ELEMENTS requested** ([includeOffscreen] = true): Keeps all elements
+   *   and annotates offscreen ones with `(offscreen)` (legacy behavior).
    *
    * Uses Playwright's native locator resolution via [PlaywrightAriaSnapshot.resolveElementRef]
    * to check each element's bounding box. This guarantees correct ARIA role matching
@@ -332,9 +339,10 @@ class PlaywrightScreenState(
    * Elements whose position can't be determined (e.g., detached from DOM) are left
    * unchanged — the LLM can infer from the screenshot whether they're visible.
    */
-  private fun annotateOffscreenElements(
+  private fun handleOffscreenElements(
     text: String,
     compact: PlaywrightAriaSnapshot.CompactAriaElements,
+    includeOffscreen: Boolean,
   ): String {
     if (compact.elementIdMapping.isEmpty()) return text
 
@@ -366,16 +374,66 @@ class PlaywrightScreenState(
 
     if (offscreenIds.isEmpty()) return text
 
-    // Annotate offscreen elements in the text
-    return text.lines().joinToString("\n") { line ->
-      val match = ELEMENT_ID_PATTERN.find(line) ?: return@joinToString line
-      val elementId = "e${match.groupValues[1]}"
-      if (elementId in offscreenIds) {
-        "$line (offscreen)"
-      } else {
-        line
+    if (includeOffscreen) {
+      // Annotate offscreen elements with "(offscreen)" but keep them in the list
+      return text.lines().joinToString("\n") { line ->
+        val match = ELEMENT_ID_PATTERN.find(line) ?: return@joinToString line
+        val elementId = "e${match.groupValues[1]}"
+        if (elementId in offscreenIds) {
+          "$line (offscreen)"
+        } else {
+          line
+        }
       }
     }
+
+    // Default: remove offscreen element lines and empty landmark headers
+    val filteredLines = mutableListOf<String>()
+    val lines = text.lines()
+    var i = 0
+    while (i < lines.size) {
+      val line = lines[i]
+      val match = ELEMENT_ID_PATTERN.find(line)
+      if (match != null) {
+        val elementId = "e${match.groupValues[1]}"
+        if (elementId in offscreenIds) {
+          i++
+          continue // skip offscreen element lines
+        }
+      }
+      filteredLines.add(line)
+      i++
+    }
+
+    // Remove landmark header lines that have no remaining children.
+    // A landmark header is a line like "navigation:" or "  main:" followed by indented
+    // element lines. If all children were removed, the header is now empty.
+    // Loop until stable to handle nested landmarks (e.g., navigation: > banner: where
+    // both become empty after offscreen elements are removed).
+    var result = filteredLines.toMutableList()
+    var changed = true
+    while (changed) {
+      changed = false
+      val pass = mutableListOf<String>()
+      for (j in result.indices) {
+        val line = result[j]
+        if (LANDMARK_HEADER_PATTERN.matches(line)) {
+          // Check if the next non-blank line is indented more (i.e., a child)
+          val nextContentLine = result.subList(j + 1, result.size)
+            .firstOrNull { it.isNotBlank() }
+          if (nextContentLine == null || !nextContentLine.startsWith(line.takeWhile { it == ' ' } + "  ")) {
+            changed = true
+            continue // skip empty landmark header
+          }
+        }
+        pass.add(line)
+      }
+      result = pass
+    }
+
+    val hiddenCount = offscreenIds.size
+    result.add("($hiddenCount offscreen elements hidden — request OFFSCREEN_ELEMENTS for full list)")
+    return result.joinToString("\n")
   }
 
   /**
@@ -741,7 +799,8 @@ class PlaywrightScreenState(
 
   /** Full tree for logging/backward compatibility — not sent to the LLM. */
   override val viewHierarchyOriginal: ViewHierarchyTreeNode by lazy {
-    PlaywrightAriaSnapshot.ariaSnapshotToViewHierarchy(ariaSnapshotYaml)
+    val tree = PlaywrightAriaSnapshot.ariaSnapshotToViewHierarchy(ariaSnapshotYaml)
+    enrichViewHierarchyWithBounds(tree)
   }
 
   override val viewHierarchy: ViewHierarchyTreeNode by lazy {
@@ -750,20 +809,27 @@ class PlaywrightScreenState(
 
   /**
    * Native [TrailblazeNode] tree with [DriverNodeDetail.Web][xyz.block.trailblaze.api.DriverNodeDetail.Web]
-   * detail, built from the ARIA snapshot and enriched with bounds from a single DOM evaluation.
+   * detail, built from the ARIA snapshot and enriched with bounds.
    *
-   * Computed lazily — only built when recording/playback pipelines access it.
-   * The existing [elementIdMapping] and [viewHierarchyTextRepresentation] continue
-   * to serve LLM runtime independently.
+   * First tries the fast DOM-walk approach via [PlaywrightTrailblazeNodeMapper.mapWithBounds].
+   * If that produces no bounds (e.g., Compose Web Wasm where accessibility overlay elements
+   * have zero-size DOM rects), falls back to locator-based [boundingBox] resolution which
+   * goes through Playwright's accessibility tree.
    */
   override val trailblazeNodeTree: TrailblazeNode? by lazy {
     TrailblazeTracer.trace("trailblazeNodeTree", "screenState") {
-      PlaywrightTrailblazeNodeMapper.mapWithBounds(
+      val tree = PlaywrightTrailblazeNodeMapper.mapWithBounds(
         yaml = ariaSnapshotYaml,
         page = page,
         viewportWidth = viewportWidth,
         viewportHeight = viewportHeight,
       )
+      // If DOM walk produced no bounds, fall back to locator-based resolution
+      if (tree != null && !tree.hasAnyBounds()) {
+        enrichTrailblazeNodeWithLocatorBounds(tree)
+      } else {
+        tree
+      }
     }
   }
 
@@ -790,6 +856,128 @@ class PlaywrightScreenState(
       else -> "desktop"
     }
 
+  /**
+   * Enriches a [ViewHierarchyTreeNode] tree with bounds from the live page.
+   *
+   * Uses Playwright's locator-based [boundingBox] API (via ARIA descriptors) rather than
+   * raw DOM [getBoundingClientRect]. This is critical for Compose Web Wasm pages where
+   * accessibility overlay elements have zero-size DOM rects but valid positions in
+   * Playwright's internal accessibility tree.
+   *
+   * Populates [ViewHierarchyTreeNode.centerPoint] and [ViewHierarchyTreeNode.dimensions] so
+   * the UI Inspector's hover overlay can highlight elements on the screenshot.
+   */
+  private fun enrichViewHierarchyWithBounds(
+    tree: ViewHierarchyTreeNode,
+  ): ViewHierarchyTreeNode {
+    // Build ARIA descriptor occurrence counts to disambiguate duplicate elements
+    val descriptorOccurrences = mutableMapOf<String, Int>()
+    return enrichNodeWithLocatorBounds(tree, descriptorOccurrences)
+  }
+
+  private fun enrichNodeWithLocatorBounds(
+    node: ViewHierarchyTreeNode,
+    descriptorOccurrences: MutableMap<String, Int>,
+  ): ViewHierarchyTreeNode {
+    val role = node.className ?: "generic"
+    val name = node.text
+
+    // Build ARIA descriptor matching the format PlaywrightAriaSnapshot.resolveRef expects
+    val descriptor = when {
+      name != null && role == "text" -> "text: $name"
+      name != null -> "$role \"$name\""
+      else -> role
+    }
+
+    // Track nth occurrence for disambiguation of duplicate descriptors
+    val nthIndex = descriptorOccurrences.getOrDefault(descriptor, 0)
+    descriptorOccurrences[descriptor] = nthIndex + 1
+
+    // Resolve bounds via Playwright's accessibility-tree-aware locator API
+    var centerPoint: String? = null
+    var dimensions: String? = null
+    try {
+      val elementRef = PlaywrightAriaSnapshot.ElementRef(descriptor, nthIndex)
+      val locator = PlaywrightAriaSnapshot.resolveElementRef(page, elementRef)
+      if (locator.count() > 0) {
+        val box = locator.boundingBox(
+          Locator.BoundingBoxOptions().setTimeout(captureTimeoutMs),
+        )
+        if (box != null && box.width > 0 && box.height > 0) {
+          val cx = (box.x + box.width / 2).toInt()
+          val cy = (box.y + box.height / 2).toInt()
+          centerPoint = "$cx,$cy"
+          dimensions = "${box.width.toInt()}x${box.height.toInt()}"
+        }
+      }
+    } catch (_: Exception) {
+      // Resolution failed — leave without bounds
+    }
+
+    // Enrich children recursively
+    val enrichedChildren = node.children.map { child ->
+      enrichNodeWithLocatorBounds(child, descriptorOccurrences)
+    }
+
+    return if (centerPoint != null) {
+      node.copy(
+        children = enrichedChildren,
+        centerPoint = centerPoint,
+        dimensions = dimensions,
+      )
+    } else {
+      node.copy(children = enrichedChildren)
+    }
+  }
+
+  /** Returns true if any node in the tree has non-null bounds. */
+  private fun TrailblazeNode.hasAnyBounds(): Boolean =
+    bounds != null || children.any { it.hasAnyBounds() }
+
+  /**
+   * Enriches a [TrailblazeNode] tree with bounds using Playwright's locator-based
+   * [boundingBox] API. Fallback for when the DOM-walk approach in
+   * [PlaywrightTrailblazeNodeMapper.mapWithBounds] returns no bounds (e.g., Compose Wasm).
+   */
+  private fun enrichTrailblazeNodeWithLocatorBounds(root: TrailblazeNode): TrailblazeNode {
+    return enrichTrailblazeNode(root)
+  }
+
+  private fun enrichTrailblazeNode(node: TrailblazeNode): TrailblazeNode {
+    val detail = node.driverDetail as? DriverNodeDetail.Web
+    val descriptor = detail?.ariaDescriptor
+    var resolvedBounds: TrailblazeNode.Bounds? = null
+
+    if (descriptor != null) {
+      try {
+        val elementRef = PlaywrightAriaSnapshot.ElementRef(descriptor, detail.nthIndex)
+        val locator = PlaywrightAriaSnapshot.resolveElementRef(page, elementRef)
+        if (locator.count() > 0) {
+          val box = locator.boundingBox(
+            Locator.BoundingBoxOptions().setTimeout(captureTimeoutMs),
+          )
+          if (box != null && box.width > 0 && box.height > 0) {
+            resolvedBounds = TrailblazeNode.Bounds(
+              left = box.x.toInt(),
+              top = box.y.toInt(),
+              right = (box.x + box.width).toInt(),
+              bottom = (box.y + box.height).toInt(),
+            )
+          }
+        }
+      } catch (_: Exception) {
+        // Resolution failed — leave without bounds
+      }
+    }
+
+    val enrichedChildren = node.children.map { enrichTrailblazeNode(it) }
+
+    return node.copy(
+      children = enrichedChildren,
+      bounds = resolvedBounds ?: node.bounds,
+    )
+  }
+
   companion object {
 
     /**
@@ -804,6 +992,11 @@ class PlaywrightScreenState(
 
     /** Pattern matching element ID references like [e42] in compact element list text. */
     private val ELEMENT_ID_PATTERN = Regex("""\[e(\d+)]""")
+
+    /** Pattern matching ARIA landmark/container header lines like "navigation:", "  main:", or "navigation "Top nav":" */
+    private val LANDMARK_HEADER_PATTERN = Regex(
+      """^\s*(?:navigation|main|banner|contentinfo|complementary|form|dialog|region|list|table)(?:\s+".*?")?:\s*$""",
+    )
 
     /**
      * Scales a BufferedImage to fit within the specified dimensions while maintaining

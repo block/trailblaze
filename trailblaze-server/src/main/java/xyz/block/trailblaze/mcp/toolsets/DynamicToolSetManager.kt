@@ -135,8 +135,8 @@ class DynamicToolSetManager(
 
       val previousCategories = enabledCategories.toSet()
       enabledCategories = filteredCategories.ifEmpty {
-        // Ensure at least default categories for this mode
-        ToolSetCategory.getDefaultCategoriesForMode(sessionContext.mode)
+        // Ensure at least default categories for this mode and strategy
+        ToolSetCategory.getDefaultCategoriesForMode(sessionContext.mode, sessionContext.toolLoadingStrategy)
       }.toMutableSet()
 
       val added = enabledCategories - previousCategories

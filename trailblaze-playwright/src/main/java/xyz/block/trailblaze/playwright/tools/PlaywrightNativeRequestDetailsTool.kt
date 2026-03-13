@@ -47,13 +47,17 @@ Available detail types:
   Also discovers elements that are invisible in the default compact list (e.g., unnamed
   divs with id or data-testid attributes) and lists them with their CSS selectors.
   Use the css= prefix in ref fields to target these elements (e.g., ref: 'css=#my-panel').
+- OFFSCREEN_ELEMENTS: Include all elements regardless of viewport position.
+  By default, elements outside the viewport are filtered out to save tokens. Request this
+  to see all elements with offscreen ones annotated as (offscreen). Useful when you need
+  to find elements that require scrolling to reach.
 """,
 )
 class PlaywrightNativeRequestDetailsTool(
   @param:LLMDescription(
     "List of detail types to include in the next view hierarchy. " +
-      "Supported: [\"BOUNDS\"], [\"CSS_SELECTORS\"], or both [\"BOUNDS\", \"CSS_SELECTORS\"]. " +
-      "Example: [\"CSS_SELECTORS\"] to discover elements without ARIA semantics.",
+      "Supported: BOUNDS, CSS_SELECTORS, OFFSCREEN_ELEMENTS (or any combination). " +
+      "Example: [\"OFFSCREEN_ELEMENTS\"] to see all elements including those outside the viewport.",
   )
   val include: List<ViewHierarchyDetail>,
   override val reasoning: String? = null,

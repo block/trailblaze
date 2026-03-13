@@ -5,6 +5,8 @@ import xyz.block.trailblaze.agent.TrailConfig
 import xyz.block.trailblaze.agent.TrailExecutionMode
 import xyz.block.trailblaze.agent.TrailResult
 import xyz.block.trailblaze.agent.UiActionExecutor
+import xyz.block.trailblaze.logs.client.LogEmitter
+import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.yaml.DirectionStep
 import xyz.block.trailblaze.yaml.PromptStep
 import xyz.block.trailblaze.yaml.ToolRecording
@@ -50,6 +52,8 @@ import xyz.block.trailblaze.yaml.ToolRecording
  * @param executor UI action executor for running tools on the device
  * @param screenAnalyzer Screen analyzer for AI fallback (required unless DETERMINISTIC)
  * @param config Trail execution configuration
+ * @param logEmitter Optional log emitter for objective lifecycle events
+ * @param sessionId Optional session ID for log correlation
  * @return Result containing success/failure status, final state, and timing
  */
 suspend fun trail(
@@ -57,6 +61,8 @@ suspend fun trail(
   executor: UiActionExecutor,
   screenAnalyzer: ScreenAnalyzer? = null,
   config: TrailConfig = TrailConfig.DEFAULT,
+  logEmitter: LogEmitter? = null,
+  sessionId: SessionId? = null,
 ): TrailResult {
   // Validate configuration
   if (config.mode != TrailExecutionMode.DETERMINISTIC && screenAnalyzer == null) {
@@ -76,7 +82,7 @@ suspend fun trail(
   return when (config.mode) {
     TrailExecutionMode.DETERMINISTIC -> {
       // Fast path: zero LLM calls, recordings only
-      val deterministicExecutor = DeterministicTrailExecutor(executor, config)
+      val deterministicExecutor = DeterministicTrailExecutor(executor, config, logEmitter, sessionId)
       deterministicExecutor.execute(steps)
     }
 

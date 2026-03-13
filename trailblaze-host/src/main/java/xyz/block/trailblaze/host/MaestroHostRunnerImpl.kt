@@ -71,6 +71,7 @@ class MaestroHostRunnerImpl(
       setOfMarkEnabled = setOfMarkEnabled,
       deviceClassifiers = deviceClassifiers,
       fullHierarchy = NativeViewHierarchyDetail.FULL_HIERARCHY in pendingDetails,
+      includeOffscreen = NativeViewHierarchyDetail.OFFSCREEN_ELEMENTS in pendingDetails,
     )
   }
 

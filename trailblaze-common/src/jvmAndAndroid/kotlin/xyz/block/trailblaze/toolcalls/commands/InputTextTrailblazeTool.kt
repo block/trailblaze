@@ -2,12 +2,11 @@ package xyz.block.trailblaze.toolcalls.commands
 
 import ai.koog.agents.core.tools.annotations.LLMDescription
 import kotlinx.serialization.Serializable
-import maestro.orchestra.Command
-import maestro.orchestra.HideKeyboardCommand
 import maestro.orchestra.InputTextCommand
-import xyz.block.trailblaze.AgentMemory
-import xyz.block.trailblaze.toolcalls.MapsToMaestroCommands
+import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
+import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
+import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.TrailblazeTools.REQUIRED_TEXT_DESCRIPTION
 
 @Serializable
@@ -22,10 +21,17 @@ This will type characters into the currently focused text field. This is useful 
 )
 data class InputTextTrailblazeTool(
   @param:LLMDescription(REQUIRED_TEXT_DESCRIPTION) val text: String,
-) : MapsToMaestroCommands() {
+) : ExecutableTrailblazeTool {
 
-  override fun toMaestroCommands(memory: AgentMemory): List<Command> = listOf(
-    InputTextCommand(text),
-    HideKeyboardCommand(),
-  )
+  override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult {
+    val maestroCommands = listOf(InputTextCommand(text)) +
+      HideKeyboardTrailblazeTool.hideKeyboardCommands(
+        platform = toolExecutionContext.screenState?.trailblazeDevicePlatform,
+        orientation = toolExecutionContext.trailblazeDeviceInfo.orientation,
+      )
+    return toolExecutionContext.trailblazeAgent.runMaestroCommands(
+      maestroCommands = maestroCommands,
+      traceId = toolExecutionContext.traceId,
+    )
+  }
 }

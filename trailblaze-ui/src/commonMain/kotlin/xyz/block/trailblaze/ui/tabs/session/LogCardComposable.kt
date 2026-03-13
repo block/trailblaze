@@ -247,6 +247,12 @@ fun LogCard(
       }.takeIf { it.isNotBlank() }
     )
 
+    is TrailblazeLog.McpAskLog -> LogCardData(
+      title = "MCP Ask",
+      duration = null,
+      elapsedTime = elapsedTimeMs,
+    )
+
     is TrailblazeLog.TrailblazeProgressLog -> LogCardData(
       title = "Progress: ${log.eventType}",
       duration = log.durationMs.takeIf { it > 0 },

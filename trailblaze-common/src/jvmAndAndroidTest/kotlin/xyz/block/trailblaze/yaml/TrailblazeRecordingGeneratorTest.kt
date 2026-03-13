@@ -32,10 +32,11 @@ import xyz.block.trailblaze.toolcalls.commands.WaitForIdleSyncTrailblazeTool
  *
  * These tests verify:
  * 1. Logs within objective windows produce prompts with recordings
- * 2. Logs outside objective windows produce flat tool entries
- * 3. Non-recordable tools are excluded
- * 4. DelegatingTrailblazeToolLog entries are skipped
- * 5. Round-trip: trail YAML → simulated logs → generateRecordedYaml → matching YAML
+ * 2. Orphaned tool logs (outside windows) attach to the last prompt step's recording
+ * 3. Orphaned tool logs with no preceding prompt produce flat tool entries
+ * 4. Non-recordable tools are excluded
+ * 5. DelegatingTrailblazeToolLog entries are skipped
+ * 6. Round-trip: trail YAML → simulated logs → generateRecordedYaml → matching YAML
  */
 class TrailblazeRecordingGeneratorTest {
   private val trailblazeYaml = createTrailblazeYaml()
@@ -237,7 +238,9 @@ class TrailblazeRecordingGeneratorTest {
   }
 
   @Test
-  fun toolsOutsideObjectiveWindowProduceFlatToolList() {
+  fun toolsWithNoPrecedingPromptProduceFlatToolList() {
+    // When there's no preceding prompt step, orphaned tools still produce a flat
+    // ToolTrailItem (e.g., launchApp before any objectives)
     val logs = listOf(
       toolLog(InputTextTrailblazeTool(text = "hello"), "inputText"),
       toolLog(PressBackTrailblazeTool, "pressBack"),
@@ -252,6 +255,58 @@ class TrailblazeRecordingGeneratorTest {
       |  - pressBack: {}
     """.trimMargin() + "\n"
     assertThat(yaml).isEqualTo(expected)
+  }
+
+  @Test
+  fun orphanedToolAfterObjectiveWindowAttachesToLastPromptStep() {
+    // Simulates the MCP path where tool logs are emitted asynchronously and
+    // land after the ObjectiveCompleteLog in the sorted log list
+    val step = DirectionStep(step = "Tap the button")
+    val logs = listOf(
+      objectiveStart(step),
+      objectiveComplete(step),
+      // Tool logged after the window (async emission in MCP path)
+      toolLog(
+        TapOnByElementSelector(
+          reason = "Tap button",
+          selector = TrailblazeElementSelector(textRegex = "Button"),
+        ),
+        "tapOnElementBySelector",
+      ),
+    )
+
+    val yaml = logs.generateRecordedYaml(trailblazeYaml)
+
+    val decoded = trailblazeYaml.decodeTrail(yaml)
+    assertThat(decoded.size).isEqualTo(1)
+    val prompts = decoded[0] as TrailYamlItem.PromptsTrailItem
+    assertThat(prompts.promptSteps[0].prompt).isEqualTo("Tap the button")
+    assertThat(prompts.promptSteps[0].recording!!.tools.size).isEqualTo(1)
+    assertThat(prompts.promptSteps[0].recording!!.tools[0].name).isEqualTo("tapOnElementBySelector")
+  }
+
+  @Test
+  fun multipleOrphanedToolsAttachToCorrectPrecedingSteps() {
+    // Each orphaned tool attaches to the most recently emitted prompt step
+    val step1 = DirectionStep(step = "Enter text")
+    val step2 = DirectionStep(step = "Press back")
+    val logs = listOf(
+      objectiveStart(step1),
+      objectiveComplete(step1),
+      toolLog(InputTextTrailblazeTool(text = "hello"), "inputText"),
+      objectiveStart(step2),
+      objectiveComplete(step2),
+      toolLog(PressBackTrailblazeTool, "pressBack"),
+    )
+
+    val yaml = logs.generateRecordedYaml(trailblazeYaml)
+
+    val decoded = trailblazeYaml.decodeTrail(yaml)
+    assertThat(decoded.size).isEqualTo(1)
+    val prompts = decoded[0] as TrailYamlItem.PromptsTrailItem
+    assertThat(prompts.promptSteps.size).isEqualTo(2)
+    assertThat(prompts.promptSteps[0].recording!!.tools[0].name).isEqualTo("inputText")
+    assertThat(prompts.promptSteps[1].recording!!.tools[0].name).isEqualTo("pressBack")
   }
 
   @Test

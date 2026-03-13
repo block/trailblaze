@@ -1,10 +1,13 @@
 package xyz.block.trailblaze.cli
 
+import java.awt.GraphicsEnvironment
 import kotlinx.coroutines.runBlocking
 import picocli.CommandLine
 import picocli.CommandLine.Command
+import picocli.CommandLine.IVersionProvider
 import picocli.CommandLine.Option
 import picocli.CommandLine.Parameters
+import xyz.block.trailblaze.TrailblazeVersion
 import xyz.block.trailblaze.capture.CaptureOptions
 import xyz.block.trailblaze.capture.CaptureSession
 import xyz.block.trailblaze.compose.driver.rpc.ComposeRpcServer
@@ -56,8 +59,8 @@ import kotlin.time.Duration.Companion.seconds
  *   trailblaze                     - Launch GUI (default)
  *   trailblaze --headless          - Start headless MCP server  
  *   trailblaze run <file>          - Run a .trail.yaml file
- *   trailblaze mcp                 - Start MCP server (Streamable HTTP)
- *   trailblaze mcp --stdio         - Start MCP server (STDIO transport)
+ *   trailblaze mcp                 - Start MCP server (STDIO transport + tray icon)
+ *   trailblaze mcp --http          - Start MCP server (Streamable HTTP)
  *   trailblaze list-devices        - List connected devices
  *   trailblaze -p 52526            - Launch on a custom port (allows multiple instances)
  *   trailblaze --help              - Show all commands and options
@@ -106,10 +109,16 @@ object TrailblazeCli {
     // Skip for STDIO MCP mode: stdout must be a pristine JSON-RPC stream.
     // The DesktopLogFileWriter tee would wrap stdout and leak non-JSON output
     // (its own "Logging to ..." message) before Console.useStdErr() runs.
-    val isStdioMode = args.contains("mcp") && args.contains("--stdio")
+    val isStdioMode = args.contains("mcp") && !args.contains("--http")
     if (!isStdioMode) {
       val httpPort = resolvePortFromArgs(args)
       DesktopLogFileWriter.install(httpPort = httpPort)
+    }
+
+    // Support `sq` CLI integration: output JSON describing subcommands and exit.
+    if (args.contains("--describe-commands")) {
+      println(describeCommands())
+      return
     }
 
     val cli = TrailblazeCliCommand(appProvider, configProvider)
@@ -134,6 +143,44 @@ object TrailblazeCli {
     System.getenv(TrailblazePortManager.HTTP_PORT_ENV_VAR)?.toIntOrNull()?.let { return it }
     return TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTP_PORT
   }
+
+  /**
+   * Returns JSON describing the CLI's subcommands for `sq` CLI integration.
+   *
+   * The `sq` CLI calls `trailblaze --describe-commands` to discover subcommands
+   * and display them in `sq trailblaze` help output.
+   */
+  private fun describeCommands(): String {
+    data class CommandInfo(val name: String, val summary: String)
+
+    val commands = listOf(
+      CommandInfo("run", "Run a .trail.yaml file or directory of trail files on a connected device"),
+      CommandInfo("mcp", "Start the MCP server"),
+      CommandInfo("list-devices", "List all connected devices"),
+      CommandInfo("config", "View and modify Trailblaze configuration"),
+      CommandInfo("status", "Check if the Trailblaze daemon is running"),
+      CommandInfo("stop", "Stop the Trailblaze daemon"),
+      CommandInfo("help", "Display help information about the specified command"),
+    )
+
+    val commandsJson = commands.joinToString(",\n    ") { cmd ->
+      """{"name": "${cmd.name}", "summary": "${cmd.summary}"}"""
+    }
+
+    return """{
+  "name": "trailblaze",
+  "summary": "AI-powered UI automation",
+  "commands": [
+    $commandsJson
+  ]
+}"""
+  }
+}
+
+/** Provides the version string dynamically from [TrailblazeVersion]. */
+class TrailblazeVersionProvider : IVersionProvider {
+  override fun getVersion(): Array<String> =
+    arrayOf("Trailblaze ${TrailblazeVersion.displayVersion}")
 }
 
 /**
@@ -142,8 +189,8 @@ object TrailblazeCli {
 @Command(
   name = "trailblaze",
   mixinStandardHelpOptions = true,
-  version = ["Trailblaze 1.0"],
-  description = ["Trailblaze - AI-powered mobile UI automation"],
+  versionProvider = TrailblazeVersionProvider::class,
+  description = ["Trailblaze - AI-powered UI automation"],
   subcommands = [
     RunCommand::class,
     McpCommand::class,
@@ -151,7 +198,7 @@ object TrailblazeCli {
     ConfigCommand::class,
     StatusCommand::class,
     StopCommand::class,
-    AuthCommand::class,
+    CommandLine.HelpCommand::class,
   ]
 )
 class TrailblazeCliCommand(
@@ -229,7 +276,7 @@ class TrailblazeCliCommand(
           return CommandLine.ExitCode.OK
         }
 
-        // Daemon is running but has no window (e.g., started by `trailblaze mcp --stdio`).
+        // Daemon is running but has no window (e.g., started by `trailblaze mcp`).
         // Start the desktop GUI alongside the existing daemon — it will skip starting
         // a second HTTP server since the daemon is already handling that.
         Console.log("Trailblaze server is running. Starting desktop GUI...")
@@ -320,8 +367,15 @@ class RunCommand : Callable<Int> {
   var showBrowser: Boolean = false
 
   @Option(
+    names = ["--llm"],
+    description = ["LLM provider/model shorthand (e.g., openai/gpt-4-1). " +
+        "Mutually exclusive with --llm-provider and --llm-model."]
+  )
+  var llm: String? = null
+
+  @Option(
     names = ["--llm-provider"],
-    description = ["LLM provider override (e.g.,  openai, anthropic, google)"]
+    description = ["LLM provider override (e.g., openai, anthropic, google)"]
   )
   var llmProvider: String? = null
 
@@ -405,6 +459,21 @@ class RunCommand : Callable<Int> {
     // Console.info() and Console.error() remain visible for user-facing output.
     if (!verbose) {
       Console.enableQuietMode()
+    }
+
+    // Resolve --llm shorthand: splits "provider/model" into llmProvider + llmModel.
+    if (llm != null) {
+      if (llmProvider != null || llmModel != null) {
+        Console.error("Error: --llm is mutually exclusive with --llm-provider and --llm-model.")
+        return CommandLine.ExitCode.USAGE
+      }
+      val parts = llm!!.split("/", limit = 2)
+      if (parts.size != 2 || parts[0].isBlank() || parts[1].isBlank()) {
+        Console.error("Error: --llm must be in provider/model format (e.g., openai/gpt-4-1).")
+        return CommandLine.ExitCode.USAGE
+      }
+      llmProvider = parts[0]
+      llmModel = parts[1]
     }
 
     // Validate trail file/directory exists
@@ -1354,14 +1423,15 @@ class RunCommand : Callable<Int> {
 /**
  * Start the MCP server with a specified transport.
  *
- * By default, starts a Streamable HTTP server on the configured port.
- * Use `--stdio` to start with STDIO transport for MCP client integrations
- * (e.g., Claude Desktop, Firebender, Goose).
+ * By default, starts an STDIO server for MCP client integrations
+ * (e.g., Claude Code, Claude Desktop, Firebender, Goose) with a menu bar
+ * tray icon so you can open the Trailblaze desktop app and view logs.
+ * Use `--http` to start a standalone Streamable HTTP server instead.
  *
  * Examples:
- *   trailblaze mcp                  - Start HTTP MCP server on default port
- *   trailblaze mcp --stdio          - Start STDIO MCP server (stdin/stdout)
- *   trailblaze mcp --port 8080      - Start HTTP MCP server on port 8080
+ *   trailblaze mcp                  - Start STDIO MCP server with tray icon
+ *   trailblaze mcp --http           - Start Streamable HTTP MCP server
+ *   trailblaze mcp --http -p 8080   - Start HTTP MCP server on port 8080
  */
 @Command(
   name = "mcp",
@@ -1374,60 +1444,29 @@ class McpCommand : Callable<Int> {
   private lateinit var parent: TrailblazeCliCommand
 
   @Option(
-    names = ["--stdio"],
-    description = ["Use STDIO transport (stdin/stdout) instead of HTTP. Required for MCP client integrations."]
+    names = ["--http"],
+    description = ["Use Streamable HTTP transport instead of STDIO. Starts a standalone HTTP MCP server."]
   )
-  var stdio: Boolean = false
+  var http: Boolean = false
 
   @Option(
     names = ["--tool-profile"],
-    description = ["Tool profile: FULL or MINIMAL (only device/blaze/verify/ask/trail). Defaults to MINIMAL for --stdio, FULL for HTTP."],
+    description = ["Tool profile: FULL or MINIMAL (only device/blaze/verify/ask/trail). Defaults to MINIMAL for STDIO, FULL for HTTP."],
   )
   var toolProfile: String? = null
 
   override fun call(): Int {
-    // MCP is always headless — no GUI needed
-    System.setProperty("java.awt.headless", "true")
-
     // Resolve tool profile: env var > CLI flag > transport-based default
     // STDIO defaults to MINIMAL (external MCP clients), HTTP defaults to FULL (internal use)
-    val transportDefault = if (stdio) McpToolProfile.MINIMAL else McpToolProfile.FULL
+    val transportDefault = if (http) McpToolProfile.FULL else McpToolProfile.MINIMAL
     val resolvedProfile = System.getenv("TRAILBLAZE_TOOL_PROFILE")?.let {
       McpToolProfile.valueOf(it.uppercase())
     } ?: toolProfile?.let { McpToolProfile.valueOf(it.uppercase()) } ?: transportDefault
 
-    if (stdio) {
-      // Capture the current stdout BEFORE redirecting — DesktopLogFileWriter may have
-      // already wrapped it with a tee (JSON-RPC goes to both stdout and log file).
-      // After Console.useStdErr(), System.out is redirected to stderr, so we must
-      // save the reference now for the STDIO transport.
-      val stdoutForTransport = System.out
+    if (http) {
+      // Streamable HTTP transport (explicit opt-in)
+      System.setProperty("java.awt.headless", "true")
 
-      // Redirect all console output to stderr BEFORE app initialization so that
-      // settings loading, device scanning, and other startup output doesn't
-      // contaminate stdout (which must be a clean JSON-RPC stream).
-      Console.useStdErr()
-      Console.log("Trailblaze MCP server starting with STDIO transport (profile=${resolvedProfile.name})...")
-
-      val app = parent.appProvider()
-
-      // Apply port overrides before starting the daemon
-      if (parent.hasPortOverride()) {
-        app.applyPortOverrides(httpPort = parent.getEffectivePort(), httpsPort = parent.getEffectiveHttpsPort())
-      }
-
-      // Start the HTTP daemon for device log ingestion (if not already running).
-      // defaultToolProfile stays FULL for HTTP sessions; the STDIO session gets
-      // its own profile via the toolProfile parameter below.
-      app.ensureServerRunning()
-
-      runBlocking {
-        app.trailblazeMcpServer.startStdioMcpServer(
-          stdout = stdoutForTransport,
-          toolProfile = resolvedProfile,
-        )
-      }
-    } else {
       val app = parent.appProvider()
       app.trailblazeMcpServer.defaultToolProfile = resolvedProfile
       val port = parent.getEffectivePort()
@@ -1444,6 +1483,87 @@ class McpCommand : Callable<Int> {
         httpsPort = httpsPort,
         wait = true,
       )
+    } else {
+      // STDIO transport (default) — used by MCP client integrations.
+      // Capture the current stdout BEFORE redirecting — DesktopLogFileWriter may have
+      // already wrapped it with a tee (JSON-RPC goes to both stdout and log file).
+      // After Console.useStdErr(), System.out is redirected to stderr, so we must
+      // save the reference now for the STDIO transport.
+      val stdoutForTransport = System.out
+
+      // Redirect all console output to stderr BEFORE app initialization so that
+      // settings loading, device scanning, and other startup output doesn't
+      // contaminate stdout (which must be a clean JSON-RPC stream).
+      Console.useStdErr()
+
+      // Install file logging AFTER useStdErr so that Console.log output is saved
+      // to ~/.trailblaze/desktop-logs/trailblaze.log. This is safe because System.out
+      // is now stderr, so DesktopLogFileWriter tees stderr→file (not the STDIO pipe).
+      DesktopLogFileWriter.install(httpPort = parent.getEffectivePort())
+
+      Console.log("Trailblaze MCP server starting with STDIO transport (profile=${resolvedProfile.name})...")
+
+      val app = parent.appProvider()
+
+      // Apply port overrides before starting the daemon
+      if (parent.hasPortOverride()) {
+        app.applyPortOverrides(httpPort = parent.getEffectivePort(), httpsPort = parent.getEffectiveHttpsPort())
+      }
+
+      // Start the HTTP daemon for device log ingestion (if not already running).
+      // Returns true if this process started the daemon (we own it),
+      // false if another process already had it running.
+      val ownsDaemon = app.ensureServerRunning()
+
+      if (ownsDaemon && !GraphicsEnvironment.isHeadless()) {
+        // This process owns the daemon — show tray icon with window hidden.
+        // The Compose Desktop event loop must run on the main thread (macOS AppKit
+        // requirement), so we launch the STDIO server on a background thread.
+        // NON-daemon so the JVM stays alive even if the desktop app exits early.
+        val stdioThread = Thread {
+          runBlocking {
+            app.trailblazeMcpServer.startStdioMcpServer(
+              stdout = stdoutForTransport,
+              toolProfile = resolvedProfile,
+            )
+          }
+          // Client disconnected — request graceful shutdown via the Compose event loop.
+          // onShutdownRequest is wired to exitApplication() inside the Compose app block,
+          // which cleanly tears down the UI, runs shutdown hooks, and exits the process.
+          app.trailblazeMcpServer.onShutdownRequest?.invoke() ?: exitProcess(0)
+        }
+        stdioThread.isDaemon = false // Must be non-daemon: if the desktop app crashes or
+        // exits early, the JVM must stay alive to keep the STDIO pipe open for MCP.
+        stdioThread.name = "mcp-stdio"
+        stdioThread.start()
+
+        // Start the desktop app on the main thread (tray icon visible, window hidden).
+        // The HTTP server is already running via ensureServerRunning(), so
+        // startTrailblazeDesktopApp will detect the daemon and skip starting another.
+        // Wrapped in try-catch: if the desktop app crashes, the STDIO server must keep
+        // running (the non-daemon thread above keeps the JVM alive).
+        try {
+          app.startTrailblazeDesktopApp(headless = true)
+        } catch (e: Exception) {
+          Console.error("[MCP] Desktop app exited with error: ${e.message}")
+          Console.error("[MCP] STDIO MCP server continues running without tray icon.")
+          // Block the main thread so the JVM doesn't exit.
+          // The STDIO thread will call exitProcess(0) when the client disconnects.
+          stdioThread.join()
+        }
+      } else {
+        // Secondary STDIO client (daemon owned by another process), or no display.
+        // Run STDIO server directly — no tray icon needed.
+        if (!ownsDaemon) {
+          Console.log("Daemon already running on port ${parent.getEffectivePort()} — running as headless STDIO client")
+        }
+        runBlocking {
+          app.trailblazeMcpServer.startStdioMcpServer(
+            stdout = stdoutForTransport,
+            toolProfile = resolvedProfile,
+          )
+        }
+      }
     }
 
     return CommandLine.ExitCode.OK
@@ -1498,159 +1618,224 @@ class ListDevicesCommand : Callable<Int> {
 
 /**
  * View and modify Trailblaze configuration.
- * 
+ *
  * Examples:
- *   trailblaze config                           - Show current config
- *   trailblaze config --android-driver HOST     - Set Android to host mode
- *   trailblaze config --llm-provider openai     - Set LLM provider
- *   trailblaze config --agent TWO_TIER_AGENT    - Set agent implementation
+ *   trailblaze config                                 - Show all settings + auth status
+ *   trailblaze config llm                             - Show current LLM provider/model
+ *   trailblaze config llm openai/gpt-4-1              - Set LLM provider and model
+ *   trailblaze config llm-provider anthropic           - Set LLM provider
+ *   trailblaze config agent TWO_TIER_AGENT             - Set agent implementation
+ *   trailblaze config models                           - List available LLM models
+ *   trailblaze config agents                           - List available agents
+ *   trailblaze config drivers                          - List available drivers
  */
 @Command(
   name = "config",
   mixinStandardHelpOptions = true,
-  description = ["View and modify Trailblaze configuration"]
+  description = ["View and modify Trailblaze configuration"],
+  subcommands = [
+    ConfigModelsCommand::class,
+    ConfigAgentsCommand::class,
+    ConfigDriversCommand::class,
+  ],
 )
 class ConfigCommand : Callable<Int> {
 
-  @Option(
-    names = ["--android-driver"],
-    description = ["Android driver: HOST or ONDEVICE (instrumentation)"]
-  )
-  var androidDriver: String? = null
+  @CommandLine.ParentCommand
+  private lateinit var parent: TrailblazeCliCommand
 
-  @Option(
-    names = ["--ios-driver"],
-    description = ["iOS driver: HOST (only option for iOS)"]
-  )
-  var iosDriver: String? = null
+  @Parameters(index = "0", arity = "0..1", description = ["Config key to get or set"])
+  var key: String? = null
 
-  @Option(
-    names = ["--llm-provider"],
-    description = ["LLM provider: openai, anthropic, google, ollama, openrouter, etc."]
-  )
-  var llmProvider: String? = null
+  @Parameters(index = "1", arity = "0..1", description = ["Value to set"])
+  var value: String? = null
 
-  @Option(
-    names = ["--llm-model"],
-    description = ["LLM model ID (e.g., gpt-4-1, claude-sonnet-4-20250514, goose-gpt-4-1)"]
-  )
-  var llmModel: String? = null
-
-  @Option(
-    names = ["--agent"],
-    description = ["Agent implementation: TRAILBLAZE_RUNNER, TWO_TIER_AGENT, MULTI_AGENT_V3"]
-  )
-  var agent: String? = null
-
-  @Option(
-    names = ["--set-of-mark"],
-    description = ["Enable/disable Set of Mark mode"],
-    negatable = true
-  )
-  var setOfMark: Boolean? = null
-
-  @Option(
-    names = ["--ai-fallback"],
-    description = ["Enable/disable AI fallback when recorded steps fail"],
-    negatable = true
-  )
-  var aiFallback: Boolean? = null
+  fun getConfigProvider(): TrailblazeDesktopAppConfig = parent.configProvider()
 
   override fun call(): Int {
-    // Use lightweight config helper - no full app initialization needed
-    var currentConfig = CliConfigHelper.getOrCreateConfig()
-
-    // Check if any settings are being changed
-    val hasChanges = androidDriver != null || iosDriver != null ||
-        llmProvider != null || llmModel != null ||
-        agent != null || setOfMark != null || aiFallback != null
-
-    if (hasChanges) {
-      // Update Android driver
-      androidDriver?.let { driver ->
-        val driverType = CliConfigHelper.parseAndroidDriver(driver)
-        if (driverType == null) {
-          Console.error("Invalid Android driver: $driver")
-          Console.error("Valid options: HOST, ONDEVICE")
-          return CommandLine.ExitCode.SOFTWARE
-        }
-        currentConfig = currentConfig.copy(
-          selectedTrailblazeDriverTypes = currentConfig.selectedTrailblazeDriverTypes +
-              (TrailblazeDevicePlatform.ANDROID to driverType)
-        )
-        Console.log("Set Android driver: $driverType")
-      }
-
-      // Update iOS driver
-      iosDriver?.let { driver ->
-        val driverType = CliConfigHelper.parseIosDriver(driver)
-        if (driverType == null) {
-          Console.error("Invalid iOS driver: $driver")
-          Console.error("Valid options: HOST")
-          return CommandLine.ExitCode.SOFTWARE
-        }
-        currentConfig = currentConfig.copy(
-          selectedTrailblazeDriverTypes = currentConfig.selectedTrailblazeDriverTypes +
-              (TrailblazeDevicePlatform.IOS to driverType)
-        )
-        Console.log("Set iOS driver: $driverType")
-      }
-
-      // Update LLM provider
-      llmProvider?.let { provider ->
-        currentConfig = currentConfig.copy(llmProvider = provider.lowercase())
-        Console.log("Set LLM provider: ${provider.lowercase()}")
-      }
-
-      // Update LLM model
-      llmModel?.let { model ->
-        currentConfig = currentConfig.copy(llmModel = model)
-        Console.log("Set LLM model: $model")
-      }
-
-      // Update agent implementation
-      agent?.let { agentName ->
-        val impl = CliConfigHelper.parseAgent(agentName)
-        if (impl == null) {
-          System.err.println("Invalid agent: $agentName")
-          System.err.println("Valid options: ${AgentImplementation.entries.joinToString(", ") { it.name }}")
-          return 1
-        }
-        currentConfig = currentConfig.copy(agentImplementation = impl)
-        Console.log("Set agent: $impl")
-      }
-
-      // Update Set of Mark
-      setOfMark?.let { enabled ->
-        currentConfig = currentConfig.copy(setOfMarkEnabled = enabled)
-        Console.log("Set Set of Mark: $enabled")
-      }
-
-      // Update AI fallback
-      aiFallback?.let { enabled ->
-        currentConfig = currentConfig.copy(aiFallbackEnabled = enabled)
-        Console.log("Set AI fallback: $enabled")
-      }
-
-      // Save the updated config
-      CliConfigHelper.writeConfig(currentConfig)
-      Console.log("\nConfiguration saved.")
+    if (key == null) {
+      // No args: show all config + auth status (requires configProvider)
+      return showAllConfig()
     }
 
-    // Show current configuration
+    val configKey = CONFIG_KEYS[key]
+    if (configKey == null) {
+      Console.error("Unknown config key: $key")
+      Console.error("Valid keys: ${CONFIG_KEYS.keys.joinToString(", ")}")
+      return CommandLine.ExitCode.USAGE
+    }
+
+    if (value == null) {
+      // Key only: show that key's value
+      val currentConfig = CliConfigHelper.getOrCreateConfig()
+      Console.log(configKey.get(currentConfig))
+      return CommandLine.ExitCode.OK
+    }
+
+    // Key + value: set and save
+    val currentConfig = CliConfigHelper.getOrCreateConfig()
+    val updatedConfig = configKey.set(currentConfig, value!!)
+    if (updatedConfig == null) {
+      Console.error("Invalid value for $key: $value")
+      Console.error("Valid values: ${configKey.validValues}")
+      return CommandLine.ExitCode.USAGE
+    }
+    CliConfigHelper.writeConfig(updatedConfig)
+    Console.log("Set $key: ${configKey.get(updatedConfig)}")
+    return CommandLine.ExitCode.OK
+  }
+
+  private fun showAllConfig(): Int {
+    val currentConfig = CliConfigHelper.getOrCreateConfig()
+
     Console.log("")
     Console.log("Current Configuration:")
     Console.log("-".repeat(60))
-    Console.log("  Android driver:  ${currentConfig.selectedTrailblazeDriverTypes[TrailblazeDevicePlatform.ANDROID] ?: "not set"}")
-    Console.log("  iOS driver:      ${currentConfig.selectedTrailblazeDriverTypes[TrailblazeDevicePlatform.IOS] ?: "not set"}")
-    Console.log("  LLM provider:    ${currentConfig.llmProvider}")
-    Console.log("  LLM model:       ${currentConfig.llmModel}")
-    Console.log("  Agent:           ${currentConfig.agentImplementation}")
-    Console.log("  Set of Mark:     ${currentConfig.setOfMarkEnabled}")
-    Console.log("  AI fallback:     ${currentConfig.aiFallbackEnabled}")
+    for (configKey in CONFIG_KEYS.values) {
+      Console.log("  %-16s %s".format(configKey.name + ":", configKey.get(currentConfig)))
+    }
     Console.log("")
     Console.log("Settings file: ${CliConfigHelper.getSettingsFile().absolutePath}")
 
+    // Show auth status (requires configProvider — triggers full init)
+    Console.log("")
+    val config = getConfigProvider()
+    val tokenStatuses = config.getAllLlmTokenStatuses()
+
+    if (tokenStatuses.isNotEmpty()) {
+      Console.log("LLM Authentication Status:")
+      Console.log("-".repeat(60))
+
+      tokenStatuses.forEach { (provider, status) ->
+        val statusIcon = when (status) {
+          is LlmTokenStatus.Available -> "+"
+          is LlmTokenStatus.Expired -> "!"
+          is LlmTokenStatus.NotAvailable -> "-"
+        }
+        val statusText = when (status) {
+          is LlmTokenStatus.Available -> "Available"
+          is LlmTokenStatus.Expired -> "Expired (may need refresh)"
+          is LlmTokenStatus.NotAvailable -> "Not configured"
+        }
+        Console.log("  [$statusIcon] ${provider.display}: $statusText")
+      }
+
+      val missingProviders = tokenStatuses.filter { it.value is LlmTokenStatus.NotAvailable }
+      if (missingProviders.isNotEmpty()) {
+        Console.log("")
+        Console.log("To configure missing providers, set the appropriate environment variables:")
+        missingProviders.forEach { (provider, _) ->
+          val envVar = config.getEnvironmentVariableForProvider(provider)
+          if (envVar != null) {
+            Console.log("  ${provider.display}: Set $envVar")
+          }
+        }
+      }
+      Console.log("")
+    }
+
+    // Force exit to terminate background services started by configProvider
+    exitProcess(CommandLine.ExitCode.OK)
+  }
+}
+
+/**
+ * List available LLM models grouped by provider.
+ */
+@Command(
+  name = "models",
+  mixinStandardHelpOptions = true,
+  description = ["List available LLM models by provider"],
+)
+class ConfigModelsCommand : Callable<Int> {
+
+  @CommandLine.ParentCommand
+  private lateinit var parent: ConfigCommand
+
+  override fun call(): Int {
+    val config = parent.getConfigProvider()
+    val modelLists = config.getAllSupportedLlmModelLists()
+
+    Console.log("")
+    Console.log("Available LLM Models:")
+    Console.log("=".repeat(60))
+
+    for (modelList in modelLists.sortedBy { it.provider.id }) {
+      Console.log("")
+      Console.log("${modelList.provider.display} (${modelList.provider.id}):")
+      Console.log("-".repeat(40))
+      for (model in modelList.entries) {
+        val contextK = model.contextLength / 1000
+        val caps = model.capabilities.joinToString(", ") { it.id }
+        Console.log("  %-35s %6dK  %s".format(model.modelId, contextK, caps))
+      }
+    }
+
+    Console.log("")
+
+    // Force exit to terminate background services started by configProvider
+    exitProcess(CommandLine.ExitCode.OK)
+  }
+}
+
+/**
+ * List available agent implementations.
+ */
+@Command(
+  name = "agents",
+  mixinStandardHelpOptions = true,
+  description = ["List available agent implementations"],
+)
+class ConfigAgentsCommand : Callable<Int> {
+
+  override fun call(): Int {
+    val currentConfig = CliConfigHelper.getOrCreateConfig()
+
+    Console.log("")
+    Console.log("Available Agents:")
+    Console.log("-".repeat(60))
+
+    for (agent in AgentImplementation.entries) {
+      val current = if (agent == currentConfig.agentImplementation) " (current)" else ""
+      val isDefault = if (agent == AgentImplementation.DEFAULT) " [default]" else ""
+      Console.log("  ${agent.name}$current$isDefault")
+    }
+
+    Console.log("")
+    return CommandLine.ExitCode.OK
+  }
+}
+
+/**
+ * List available driver types grouped by platform.
+ */
+@Command(
+  name = "drivers",
+  mixinStandardHelpOptions = true,
+  description = ["List available driver types"],
+)
+class ConfigDriversCommand : Callable<Int> {
+
+  override fun call(): Int {
+    val currentConfig = CliConfigHelper.getOrCreateConfig()
+
+    Console.log("")
+    Console.log("Available Drivers:")
+    Console.log("=".repeat(60))
+
+    for (platform in TrailblazeDevicePlatform.entries) {
+      Console.log("")
+      Console.log("${platform.displayName}:")
+      Console.log("-".repeat(40))
+      val drivers = TrailblazeDriverType.entries.filter { it.platform == platform }
+      val currentDriver = currentConfig.selectedTrailblazeDriverTypes[platform]
+      for (driver in drivers) {
+        val current = if (driver == currentDriver) " (current)" else ""
+        Console.log("  ${driver.name}$current")
+      }
+    }
+
+    Console.log("")
     return CommandLine.ExitCode.OK
   }
 }
@@ -1754,71 +1939,6 @@ class StopCommand : Callable<Int> {
     }
 
     return CommandLine.ExitCode.OK
-  }
-}
-
-/**
- * Check and display LLM authentication status.
- *
- * This command shows the token status for all configured LLM providers.
- *
- * Examples:
- *   trailblaze auth                  - Show token status for all providers
- */
-@Command(
-  name = "auth",
-  mixinStandardHelpOptions = true,
-  description = ["Check and display LLM authentication status"]
-)
-class AuthCommand : Callable<Int> {
-
-  @CommandLine.ParentCommand
-  private lateinit var parent: TrailblazeCliCommand
-
-  override fun call(): Int {
-    val config = parent.configProvider()
-    val tokenStatuses = config.getAllLlmTokenStatuses()
-
-    if (tokenStatuses.isEmpty()) {
-      Console.log("No LLM providers configured.")
-      exitProcess(CommandLine.ExitCode.OK)
-    }
-
-    Console.log("")
-    Console.log("LLM Provider Authentication Status:")
-    Console.log("-".repeat(60))
-
-    tokenStatuses.forEach { (provider, status) ->
-      val statusIcon = when (status) {
-        is LlmTokenStatus.Available -> "✅"
-        is LlmTokenStatus.Expired -> "⚠️"
-        is LlmTokenStatus.NotAvailable -> "❌"
-      }
-      val statusText = when (status) {
-        is LlmTokenStatus.Available -> "Available"
-        is LlmTokenStatus.Expired -> "Expired (may need refresh)"
-        is LlmTokenStatus.NotAvailable -> "Not configured"
-      }
-      Console.log("  $statusIcon ${provider.display}: $statusText")
-    }
-
-    Console.log("")
-
-    // Provide helpful hints for unconfigured providers
-    val missingProviders = tokenStatuses.filter { it.value is LlmTokenStatus.NotAvailable }
-    if (missingProviders.isNotEmpty()) {
-      Console.log("To configure missing providers, set the appropriate environment variables:")
-      missingProviders.forEach { (provider, _) ->
-        val envVar = config.getEnvironmentVariableForProvider(provider)
-        if (envVar != null) {
-          Console.log("  ${provider.display}: Set $envVar")
-        }
-      }
-      Console.log("")
-    }
-
-    // Force exit to terminate any background services
-    exitProcess(CommandLine.ExitCode.OK)
   }
 }
 

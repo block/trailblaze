@@ -2,8 +2,10 @@ package xyz.block.trailblaze.toolcalls.commands
 
 import ai.koog.agents.core.tools.annotations.LLMDescription
 import kotlinx.serialization.Serializable
+import maestro.orchestra.Command
 import maestro.orchestra.HideKeyboardCommand
 import maestro.orchestra.SwipeCommand
+import xyz.block.trailblaze.devices.TrailblazeDeviceOrientation
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
@@ -24,8 +26,10 @@ class HideKeyboardTrailblazeTool : ExecutableTrailblazeTool {
   override fun hashCode(): Int = System.identityHashCode(this)
 
   override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult {
-    val isIOS = toolExecutionContext.screenState?.trailblazeDevicePlatform == TrailblazeDevicePlatform.IOS
-    val maestroCommands = if (isIOS) gentleScroll() else listOf(HideKeyboardCommand())
+    val maestroCommands = hideKeyboardCommands(
+      platform = toolExecutionContext.screenState?.trailblazeDevicePlatform,
+      orientation = toolExecutionContext.trailblazeDeviceInfo.orientation,
+    )
 
     return toolExecutionContext.trailblazeAgent.runMaestroCommands(
       maestroCommands = maestroCommands,
@@ -33,18 +37,35 @@ class HideKeyboardTrailblazeTool : ExecutableTrailblazeTool {
     )
   }
 
-  /**
-   * Scrolls down the back up by a small amount and returns to the original position.
-   * This dismisses the keyboard on iOS since Maestro's command is flaky on that platform.
-   */
-  private fun gentleScroll() = listOf(
-    SwipeCommand(
-      startRelative = "50%,50%",
-      endRelative = "50%,55%",
-    ),
-    SwipeCommand(
-      startRelative = "50%,50%",
-      endRelative = "50%,45%",
-    ),
-  )
+  companion object {
+    fun hideKeyboardCommands(
+      platform: TrailblazeDevicePlatform?,
+      orientation: TrailblazeDeviceOrientation,
+    ): List<Command> {
+      return if (platform == TrailblazeDevicePlatform.IOS) {
+        hideIosKeyboardWithGentleScrollCommands(orientation)
+      } else {
+        listOf(HideKeyboardCommand())
+      }
+    }
+    
+    /**
+     * Dismisses the keyboard on iOS landscape with a fast downward swipe above the keyboard.
+     * Maestro's native hideKeyboard swipes at 50%,50% which lands on the keyboard
+     * in iPad landscape, so we swipe at 50%,30% (above center-y) instead.
+     */
+    fun hideIosKeyboardWithGentleScrollCommands(orientation: TrailblazeDeviceOrientation): List<Command> {
+      return when (orientation) {
+        TrailblazeDeviceOrientation.LANDSCAPE -> listOf(
+          SwipeCommand(
+            startRelative = "50%,30%",
+            endRelative = "50%,33%",
+            duration = 50,
+          )
+        )
+
+        TrailblazeDeviceOrientation.PORTRAIT -> listOf(HideKeyboardCommand())
+      }
+    }
+  }
 }

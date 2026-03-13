@@ -161,6 +161,10 @@ class BaseComposeTest(
             is TrailblazeToolResult.Error -> throw TrailblazeException(toolResult.errorMessage)
           }
         },
+        trailblazeLogger = loggingRule.logger,
+        sessionProvider = {
+          loggingRule.session ?: error("Session not available - ensure test is running")
+        },
       )
 
     val trailItems: List<TrailYamlItem> = trailblazeYaml.decodeTrail(yaml)

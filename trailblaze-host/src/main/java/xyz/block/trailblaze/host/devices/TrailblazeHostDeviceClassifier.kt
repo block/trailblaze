@@ -51,7 +51,6 @@ class TrailblazeHostDeviceClassifier(
           // Other platforms not supported at this point
         }
       }
-      orientation.asDeviceClassifierOrNull()?.let { add(it) }
     }
   }
 

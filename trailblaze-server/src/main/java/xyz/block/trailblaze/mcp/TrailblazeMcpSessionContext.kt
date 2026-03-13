@@ -37,12 +37,13 @@ enum class McpToolProfile {
   /** All tools — internal use, test authoring, full access. */
   FULL,
 
-  /** Only device, blaze, verify, ask, trail — for external MCP clients. */
+  /** Only device, blaze, verify, ask, trail, trailEdit — for external MCP clients. */
   MINIMAL;
 
   companion object {
     /** Tool names exposed in MINIMAL mode. */
-    val MINIMAL_TOOL_NAMES = setOf("device", "blaze", "verify", "ask", "trail")
+    val MINIMAL_TOOL_NAMES =
+      setOf("device", "blaze", "verify", "ask", "trail", "trailEdit", "config")
   }
 }
 

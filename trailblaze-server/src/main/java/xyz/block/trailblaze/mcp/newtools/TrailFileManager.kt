@@ -237,26 +237,71 @@ class TrailFileManager(
   }
 
   /**
-   * Lists trail files matching an optional filter.
-   *
-   * @param filter Optional filter string (matches file or directory name)
-   * @return List of relative paths to matching trail files
+   * Info about a trail file returned from [listTrails].
    */
-  fun listTrails(filter: String? = null): List<String> {
-    val dir = File(trailsDirectory)
-    if (!dir.exists()) return emptyList()
+  data class TrailInfo(
+    val path: String,
+    val title: String?,
+  )
 
-    return dir.walkTopDown()
+  /**
+   * Result of a paginated [listTrails] call.
+   */
+  data class TrailListPage(
+    val trails: List<TrailInfo>,
+    val totalCount: Int,
+    val page: Int,
+    val pageSize: Int,
+    val hasMore: Boolean,
+  )
+
+  /**
+   * Lists trail files matching an optional filter, with pagination.
+   *
+   * @param filter Optional filter string (matches file path, directory name, or trail title)
+   * @param page 1-based page number (default 1)
+   * @param pageSize Number of results per page (default 20)
+   * @return Paginated list of trail info with titles
+   */
+  fun listTrails(filter: String? = null, page: Int = 1, pageSize: Int = 20): TrailListPage {
+    val dir = File(trailsDirectory)
+    if (!dir.exists()) return TrailListPage(
+      trails = emptyList(), totalCount = 0, page = page, pageSize = pageSize, hasMore = false,
+    )
+
+    val allTrails = dir.walkTopDown()
       .filter { it.isFile && it.name.endsWith(".trail.yaml") }
-      .filter { file ->
-        if (filter == null) return@filter true
-        file.name.contains(filter, ignoreCase = true) ||
-          file.parentFile?.name?.contains(filter, ignoreCase = true) == true ||
-          file.relativeTo(dir).path.contains(filter, ignoreCase = true)
+      .map { file ->
+        val relativePath = file.relativeTo(dir).path
+        val title = try {
+          val yamlContent = file.readText()
+          val trailItems = trailblazeYaml.decodeTrail(yamlContent)
+          trailblazeYaml.extractTrailConfig(trailItems)?.title
+        } catch (_: Exception) {
+          null
+        }
+        TrailInfo(path = relativePath, title = title)
       }
-      .map { it.relativeTo(dir).path }
-      .sorted()
+      .filter { info ->
+        if (filter == null) return@filter true
+        info.path.contains(filter, ignoreCase = true) ||
+          info.title?.contains(filter, ignoreCase = true) == true
+      }
+      .sortedBy { it.path }
       .toList()
+
+    val totalCount = allTrails.size
+    val startIndex = ((page - 1) * pageSize).coerceAtMost(totalCount)
+    val endIndex = (startIndex + pageSize).coerceAtMost(totalCount)
+    val pageTrails = allTrails.subList(startIndex, endIndex)
+
+    return TrailListPage(
+      trails = pageTrails,
+      totalCount = totalCount,
+      page = page,
+      pageSize = pageSize,
+      hasMore = endIndex < totalCount,
+    )
   }
 
   /**
@@ -288,8 +333,175 @@ class TrailFileManager(
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
+  // Trail editing
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Result of an edit operation on a trail file.
+   */
+  data class EditResult(
+    val success: Boolean,
+    val filePath: String? = null,
+    val totalSteps: Int = 0,
+    val recordedSteps: Int = 0,
+    val unrecordedSteps: Int = 0,
+    val changes: List<String> = emptyList(),
+    val error: String? = null,
+  )
+
+  /**
+   * Lightweight representation of a trail step for editing and inspection.
+   */
+  data class EditableStep(
+    val prompt: String,
+    val type: String, // "step" or "verify"
+    val recording: ToolRecording?,
+  )
+
+  /**
+   * Loads a trail and returns its config and normalized flat list of editable steps.
+   *
+   * Normalizes both formats:
+   * - Embedded recording (PromptStep with recording field) → direct mapping
+   * - Separate blocks (PromptsTrailItem + ToolTrailItem) → merges tools into last prompt
+   */
+  fun getEditableSteps(filePath: String): Pair<TrailConfig?, List<EditableStep>>? {
+    val loadResult = loadTrail(filePath)
+    if (!loadResult.success || loadResult.trailItems == null) return null
+
+    val steps = normalizeToEditableSteps(loadResult.trailItems)
+    return Pair(loadResult.config, steps)
+  }
+
+  /**
+   * Writes an edited trail back to disk.
+   *
+   * Always produces the embedded recording format (recordings inside PromptStep).
+   */
+  fun saveEditedSteps(
+    filePath: String,
+    config: TrailConfig?,
+    steps: List<EditableStep>,
+  ): EditResult {
+    return try {
+      val file = validateWithinTrailsDir(File(filePath), filePath)
+      val items = reconstructTrailItems(config, steps)
+      val yamlContent = trailblazeYaml.encodeToString(items)
+      file.writeText(yamlContent)
+
+      val recorded = steps.count { it.recording != null }
+      EditResult(
+        success = true,
+        filePath = filePath,
+        totalSteps = steps.size,
+        recordedSteps = recorded,
+        unrecordedSteps = steps.size - recorded,
+      )
+    } catch (e: Exception) {
+      Console.log("[TrailFileManager] Error saving edited trail: ${e.message}")
+      EditResult(success = false, error = "Failed to save edited trail: ${e.message}")
+    }
+  }
+
+  /**
+   * Normalizes trail items from any format into a flat list of [EditableStep]s.
+   *
+   * Handles:
+   * - PromptStep with embedded recording → maps directly
+   * - PromptsTrailItem followed by ToolTrailItem → attaches tools to last prompt
+   * - Standalone ToolTrailItem → skipped (no natural language intent)
+   */
+  private fun normalizeToEditableSteps(trailItems: List<TrailYamlItem>): List<EditableStep> {
+    val steps = mutableListOf<EditableStep>()
+    var i = 0
+    while (i < trailItems.size) {
+      when (val item = trailItems[i]) {
+        is TrailYamlItem.PromptsTrailItem -> {
+          // Check if any steps already have embedded recordings
+          val hasEmbeddedRecordings = item.promptSteps.any { it.recording != null }
+
+          if (hasEmbeddedRecordings) {
+            // Embedded format: each PromptStep maps directly
+            for (promptStep in item.promptSteps) {
+              steps.add(promptStep.toEditableStep())
+            }
+          } else {
+            // Separate blocks format: check if next item is a ToolTrailItem
+            val nextItem = trailItems.getOrNull(i + 1)
+            if (nextItem is TrailYamlItem.ToolTrailItem) {
+              // Attach tools to the last prompt step
+              for ((idx, promptStep) in item.promptSteps.withIndex()) {
+                val recording = if (idx == item.promptSteps.lastIndex) {
+                  ToolRecording(nextItem.tools)
+                } else {
+                  null
+                }
+                steps.add(EditableStep(
+                  prompt = promptStep.prompt,
+                  type = if (promptStep is VerificationStep) "verify" else "step",
+                  recording = recording,
+                ))
+              }
+              i++ // Skip the ToolTrailItem we just consumed
+            } else {
+              // Prompts with no following tools — all AI-driven
+              for (promptStep in item.promptSteps) {
+                steps.add(promptStep.toEditableStep())
+              }
+            }
+          }
+        }
+        is TrailYamlItem.ToolTrailItem -> {
+          // Standalone tools (not preceded by prompts) — skip or represent as synthetic step
+          // These are rare; typically tools follow prompts.
+        }
+        is TrailYamlItem.ConfigTrailItem -> {
+          // Config handled separately, skip here
+        }
+      }
+      i++
+    }
+    return steps
+  }
+
+  /**
+   * Reconstructs trail YAML items from config + edited steps.
+   *
+   * Produces the embedded recording format: a single [PromptsTrailItem]
+   * with all steps containing their recordings inline.
+   */
+  private fun reconstructTrailItems(
+    config: TrailConfig?,
+    steps: List<EditableStep>,
+  ): List<TrailYamlItem> {
+    val items = mutableListOf<TrailYamlItem>()
+
+    if (config != null) {
+      items.add(TrailYamlItem.ConfigTrailItem(config))
+    }
+
+    if (steps.isNotEmpty()) {
+      val promptSteps = steps.map { it.toPromptStep() }
+      items.add(TrailYamlItem.PromptsTrailItem(promptSteps))
+    }
+
+    return items
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
   // Private helpers
   // ─────────────────────────────────────────────────────────────────────────────
+
+  private fun PromptStep.toEditableStep() = EditableStep(
+    prompt = prompt,
+    type = if (this is VerificationStep) "verify" else "step",
+    recording = recording,
+  )
+
+  private fun EditableStep.toPromptStep(): PromptStep = when (type) {
+    "verify" -> VerificationStep(verify = prompt, recording = recording)
+    else -> DirectionStep(step = prompt, recording = recording)
+  }
 
   /**
    * Converts recorded steps to trail YAML format.
@@ -317,10 +529,11 @@ class TrailFileManager(
     )
     items.add(TrailYamlItem.ConfigTrailItem(config))
 
-    // Convert recorded steps to prompt steps
-    val promptSteps = steps.map { step ->
-      convertRecordedStepToPromptStep(step)
-    }
+    // Convert recorded steps to prompt steps (ASK steps are excluded — only
+    // blaze/verify steps are persisted as trail steps)
+    val promptSteps = steps
+      .filter { it.type != RecordedStepType.ASK }
+      .map { step -> convertRecordedStepToPromptStep(step) }
 
     // Add prompts item
     items.add(TrailYamlItem.PromptsTrailItem(promptSteps))

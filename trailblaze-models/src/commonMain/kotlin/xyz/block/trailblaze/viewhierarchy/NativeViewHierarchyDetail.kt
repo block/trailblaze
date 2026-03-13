@@ -13,4 +13,13 @@ import kotlinx.serialization.Serializable
 enum class NativeViewHierarchyDetail {
   /** Include all nodes (even structural), bounds, dimensions, and enabled state. */
   FULL_HIERARCHY,
+
+  /**
+   * Include all elements regardless of screen position.
+   *
+   * By default, elements outside the visible screen area are filtered out of the compact
+   * element list to save tokens. When this detail type is requested, all elements are
+   * included and offscreen ones are annotated with `(offscreen)`.
+   */
+  OFFSCREEN_ELEMENTS,
 }

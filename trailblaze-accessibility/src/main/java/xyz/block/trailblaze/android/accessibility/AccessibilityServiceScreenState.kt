@@ -33,6 +33,7 @@ class AccessibilityServiceScreenState(
   private val setOfMarkEnabled: Boolean = true,
   private val includeScreenshot: Boolean = true,
   deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
+  private val includeOffscreen: Boolean = false,
 ) : ScreenState {
 
   override var deviceWidth: Int = -1
@@ -81,6 +82,7 @@ class AccessibilityServiceScreenState(
       screenWidth = deviceWidth,
       screenHeight = deviceHeight,
       deviceClassifiers = deviceClassifiers,
+      includeOffscreen = includeOffscreen,
     )
 
   override val deviceClassifiers: List<TrailblazeDeviceClassifier> = deviceClassifiers

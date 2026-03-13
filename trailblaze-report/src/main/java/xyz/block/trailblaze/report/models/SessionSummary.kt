@@ -89,6 +89,7 @@ data class SessionSummary(
             is TrailblazeLog.McpToolCallRequestLog,
             is TrailblazeLog.McpToolCallResponseLog,
             is TrailblazeLog.TrailblazeProgressLog,
+            is TrailblazeLog.McpAskLog,
             -> it
           }
         }.sortedBy { log -> log.timestamp }
@@ -243,6 +244,7 @@ data class SessionSummary(
             is TrailblazeLog.McpToolCallRequestLog,
             is TrailblazeLog.McpToolCallResponseLog,
             is TrailblazeLog.TrailblazeProgressLog,
+            is TrailblazeLog.McpAskLog,
             -> null
           }
         }

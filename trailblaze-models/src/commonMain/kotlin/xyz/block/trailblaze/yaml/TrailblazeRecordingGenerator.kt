@@ -115,13 +115,30 @@ fun List<TrailblazeLog>.generateRecordedYaml(
         }
 
         is TrailblazeLog.TrailblazeToolLog -> {
+          // Orphaned tool logs (outside an ObjectiveStart/Complete window) are
+          // attached to the last prompt step's recording. This handles the MCP
+          // path where tool logs may be emitted asynchronously and land outside
+          // the objective window in the sorted log list.
           if (currentLog.isRecordable) {
             val wrapper = wrapTrailblazeTool(currentLog.trailblazeTool, currentLog.toolName)
             val lastItem = items.lastOrNull()
-            if (lastItem is TrailYamlItem.ToolTrailItem) {
-              items[items.lastIndex] = lastItem.copy(tools = lastItem.tools + wrapper)
+            if (lastItem is TrailYamlItem.PromptsTrailItem && lastItem.promptSteps.isNotEmpty()) {
+              val lastStep = lastItem.promptSteps.last()
+              val existingTools = lastStep.recording?.tools ?: emptyList()
+              val updatedRecording = ToolRecording(existingTools + wrapper)
+              val updatedStep = when (lastStep) {
+                is DirectionStep -> lastStep.copy(recording = updatedRecording)
+                is VerificationStep -> lastStep.copy(recording = updatedRecording)
+              }
+              val updatedSteps = lastItem.promptSteps.dropLast(1) + updatedStep
+              items[items.lastIndex] = lastItem.copy(promptSteps = updatedSteps)
             } else {
-              items.add(TrailYamlItem.ToolTrailItem(listOf(wrapper)))
+              // No preceding prompt step — standalone tool (rare, but preserve it)
+              if (lastItem is TrailYamlItem.ToolTrailItem) {
+                items[items.lastIndex] = lastItem.copy(tools = lastItem.tools + wrapper)
+              } else {
+                items.add(TrailYamlItem.ToolTrailItem(listOf(wrapper)))
+              }
             }
           }
         }

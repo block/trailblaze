@@ -4,6 +4,7 @@ import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ScreenshotScalingConfig
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.llm.DirectAgentConfig
 import xyz.block.trailblaze.logs.model.SessionId
@@ -209,4 +210,71 @@ interface TrailblazeMcpBridge {
    * Returns the ID of the currently selected target app, or null if none is selected.
    */
   fun getCurrentAppTargetId(): String?
+
+  /**
+   * Returns the configured driver type for the given platform from the app settings.
+   * This is the driver type selected in the desktop app UI or via `trailblaze config`.
+   *
+   * @param platform The platform to look up the configured driver type for
+   * @return The configured driver type, or null if no driver is configured for this platform
+   */
+  fun getConfiguredDriverType(platform: TrailblazeDevicePlatform): TrailblazeDriverType? = null
+
+  /**
+   * Releases the persistent device connection and cached state for a specific device.
+   * Called during MCP session cleanup to free resources without ending the Trailblaze session.
+   *
+   * @param deviceId The device whose persistent connection should be closed
+   */
+  fun releasePersistentDeviceConnection(deviceId: TrailblazeDeviceId) {}
+
+  /**
+   * Sets the bridge's active device selection without validation or connection setup.
+   * Used by the MCP tool handler to restore per-session device context before each tool call,
+   * ensuring HTTP multi-session doesn't cross-wire device operations.
+   *
+   * @param deviceId The device to set as active for the current tool call
+   */
+  fun selectDeviceForSession(deviceId: TrailblazeDeviceId) {}
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Configuration access (for config MCP tool)
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Sets the configured driver type for a platform in the persisted app config.
+   *
+   * @return null on success, or an error message
+   */
+  fun setConfiguredDriverType(
+    platform: TrailblazeDevicePlatform,
+    driverType: TrailblazeDriverType,
+  ): String? = "Not implemented"
+
+  /**
+   * Returns the current LLM provider and model IDs from the persisted app config.
+   *
+   * @return Pair of (providerId, modelId), or null if not available
+   */
+  fun getLlmConfig(): Pair<String, String>? = null
+
+  /**
+   * Updates the LLM provider and/or model in the persisted app config.
+   * Pass null for either parameter to keep the current value.
+   *
+   * @return null on success, or an error message
+   */
+  fun setLlmConfig(provider: String?, model: String?): String? = "Not implemented"
+
+  /**
+   * Returns the current agent implementation from the persisted app config.
+   */
+  fun getAgentImplementation(): AgentImplementation? = null
+
+  /**
+   * Updates the agent implementation in the persisted app config.
+   *
+   * @return null on success, or an error message
+   */
+  fun setAgentImplementation(implementation: AgentImplementation): String? = "Not implemented"
 }

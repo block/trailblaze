@@ -24,7 +24,7 @@ data class ScreenshotScalingConfig(
     /**
      * Default screenshot scaling configuration.
      * Images will be scaled to fit within the max dimensions while maintaining aspect ratio.
-     * Uses PNG format with no compression quality setting.
+     * Uses JPEG format with 80% compression quality.
      */
     val DEFAULT = ScreenshotScalingConfig()
   }

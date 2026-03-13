@@ -7,7 +7,8 @@
 #   ./trailblaze --dev        - Start in foreground (for development)
 #   ./trailblaze stop         - Stop the running daemon
 #   ./trailblaze status       - Check if daemon is running
-#   ./trailblaze mcp --stdio  - Start STDIO MCP server (for AI clients)
+#   ./trailblaze mcp          - Start STDIO MCP server with tray icon (for AI clients)
+#   ./trailblaze mcp --http   - Start Streamable HTTP MCP server
 #   ./trailblaze <command>    - Run other CLI commands (run, config, etc.)
 #
 # Environment variables:
@@ -102,14 +103,19 @@ fi
 # and detect STDIO mode for MCP transport.
 DEV_MODE=false
 STDIO_MODE=false
+HAS_MCP=false
+HAS_HTTP=false
 ARGS=""
 for arg in "$@"; do
     if [ "$arg" = "--dev" ]; then
         DEV_MODE=true
         continue
     fi
-    if [ "$arg" = "--stdio" ]; then
-        STDIO_MODE=true
+    if [ "$arg" = "mcp" ]; then
+        HAS_MCP=true
+    fi
+    if [ "$arg" = "--http" ]; then
+        HAS_HTTP=true
     fi
 
     resolved_arg=$(to_absolute_path "$arg")
@@ -119,6 +125,11 @@ for arg in "$@"; do
         ARGS="$ARGS $resolved_arg"
     fi
 done
+
+# STDIO mode: `mcp` subcommand without `--http` flag
+if [ "$HAS_MCP" = true ] && [ "$HAS_HTTP" = false ]; then
+    STDIO_MODE=true
+fi
 
 # Prepend port args (top-level flags go before subcommands)
 if [ -n "$PORT_ARGS" ]; then

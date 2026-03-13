@@ -11,9 +11,6 @@ object TrailblazeAndroidOnDeviceClassifier : TrailblazeDeviceClassifiersProvider
     buildList {
       add(TrailblazeDevicePlatform.ANDROID.asTrailblazeDeviceClassifier())
       addAll(AndroidTrailblazeDeviceInfoUtil.getConsumerAndroidClassifiers())
-      AndroidTrailblazeDeviceInfoUtil.getDeviceOrientation().asDeviceClassifierOrNull()?.let {
-        add(it)
-      }
     }
   }
 

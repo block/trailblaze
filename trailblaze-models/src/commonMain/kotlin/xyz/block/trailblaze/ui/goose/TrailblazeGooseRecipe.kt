@@ -33,7 +33,7 @@ val TrailblazeGooseExtension = createTrailblazeGooseExtension()
  */
 val baseGooseRecipe = GooseRecipe(
   title = "Trailblaze",
-  description = "Trailblaze AI-powered mobile testing framework",
+  description = "Trailblaze AI-powered UI testing framework",
   instructions = """
     Provide Trailblaze with prompts (natural language) instructing Trailblaze what it should do on the device.
     Assume that the user will ask you to do something on the device unless their request matches an available tool.

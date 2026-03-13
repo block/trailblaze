@@ -36,13 +36,18 @@ Available detail types:
   coordinates (center: x,y), dimensions (size: WxH), and enabled/disabled state.
   Useful for spatial reasoning, determining element positions, understanding layout
   structure, or disambiguating visually similar elements by location.
+- OFFSCREEN_ELEMENTS: Include all elements regardless of screen position.
+  By default, elements outside the screen are filtered out to save tokens. Request this
+  to see all elements with offscreen ones annotated as (offscreen). Useful when you need
+  to find elements that require scrolling to reach.
 """,
 )
 class RequestViewHierarchyDetailsTrailblazeTool(
   @param:LLMDescription(
     "List of detail types to include in the next view hierarchy. " +
-      "Supported: [\"FULL_HIERARCHY\"]. " +
-      "Example: [\"FULL_HIERARCHY\"] to see all nodes with bounds and dimensions.",
+      "Supported: FULL_HIERARCHY, OFFSCREEN_ELEMENTS (or both). " +
+      "Example: [\"FULL_HIERARCHY\"] to see all nodes with bounds and dimensions, " +
+      "or [\"OFFSCREEN_ELEMENTS\"] to see elements outside the visible screen area.",
   )
   val include: List<NativeViewHierarchyDetail>,
   override val reasoning: String? = null,

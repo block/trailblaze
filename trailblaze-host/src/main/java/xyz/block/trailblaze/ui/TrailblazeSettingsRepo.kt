@@ -68,7 +68,7 @@ class TrailblazeSettingsRepo(
       val driverTypes = when (environment) {
         TrailblazeServerState.TestingEnvironment.MOBILE -> {
           val defaultDriverTypes = mapOf(
-            TrailblazeDevicePlatform.ANDROID to TrailblazeDriverType.ANDROID_HOST,
+            TrailblazeDevicePlatform.ANDROID to TrailblazeDriverType.DEFAULT_ANDROID_ON_DEVICE,
             TrailblazeDevicePlatform.IOS to TrailblazeDriverType.IOS_HOST,
           )
           defaultDriverTypes.mapValues { (platform, defaultDriverType) ->

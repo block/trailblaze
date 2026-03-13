@@ -4,7 +4,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.material3.ElevatedCard
+import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -67,7 +67,7 @@ fun QuickStartCard(
   modifier: Modifier = Modifier,
   onClick: () -> Unit,
 ) {
-  ElevatedCard(
+  OutlinedCard(
     onClick = onClick,
     modifier = modifier,
   ) {

@@ -235,7 +235,7 @@ class PlaywrightScreenStateBoundsTest {
   }
 
   @Test
-  fun `elements below viewport fold are annotated as offscreen`() {
+  fun `elements below viewport fold are filtered out by default`() {
     page.setContent(tallPageHtml)
 
     val screenState = PlaywrightScreenState(
@@ -245,7 +245,65 @@ class PlaywrightScreenStateBoundsTest {
     )
 
     val text = screenState.viewHierarchyTextRepresentation!!
-    // Elements below the 2000px spacer should be offscreen
+    // Elements below the 2000px spacer should be absent from the output
+    assertFalse(
+      text.contains("\"Offscreen Heading\""),
+      "'Offscreen Heading' should be filtered out, but got:\n$text",
+    )
+    assertFalse(
+      text.contains("\"Offscreen Button\""),
+      "'Offscreen Button' should be filtered out, but got:\n$text",
+    )
+    assertFalse(
+      text.contains("\"Offscreen Link\""),
+      "'Offscreen Link' should be filtered out, but got:\n$text",
+    )
+    // Should have a summary line indicating hidden elements
+    assertTrue(
+      text.contains("offscreen elements hidden"),
+      "Should have summary line about hidden offscreen elements, but got:\n$text",
+    )
+    assertTrue(
+      text.contains("request OFFSCREEN_ELEMENTS"),
+      "Summary line should mention OFFSCREEN_ELEMENTS detail type, but got:\n$text",
+    )
+  }
+
+  @Test
+  fun `all elements in viewport page have no offscreen annotations or summary`() {
+    // The basic testHtml fits entirely within 1280x800 viewport
+    page.setContent(testHtml)
+
+    val screenState = PlaywrightScreenState(
+      page = page,
+      viewportWidth = 1280,
+      viewportHeight = 800,
+    )
+
+    val text = screenState.viewHierarchyTextRepresentation!!
+    assertFalse(
+      text.contains("(offscreen)"),
+      "Small page should have no offscreen annotations, but got:\n$text",
+    )
+    assertFalse(
+      text.contains("offscreen elements hidden"),
+      "Small page should have no offscreen summary line, but got:\n$text",
+    )
+  }
+
+  @Test
+  fun `offscreen elements included when OFFSCREEN_ELEMENTS detail requested`() {
+    page.setContent(tallPageHtml)
+
+    val screenState = PlaywrightScreenState(
+      page = page,
+      viewportWidth = 1280,
+      viewportHeight = 800,
+      requestedDetails = setOf(ViewHierarchyDetail.OFFSCREEN_ELEMENTS),
+    )
+
+    val text = screenState.viewHierarchyTextRepresentation!!
+    // Offscreen elements should be present and annotated
     val offscreenHeadingLine = text.lines().find { it.contains("\"Offscreen Heading\"") }
     assertNotNull(offscreenHeadingLine, "Should find 'Offscreen Heading' in:\n$text")
     assertTrue(
@@ -260,29 +318,18 @@ class PlaywrightScreenStateBoundsTest {
       "'Offscreen Button' should be annotated as offscreen: $offscreenButtonLine",
     )
 
-    val offscreenLinkLine = text.lines().find { it.contains("\"Offscreen Link\"") }
-    assertNotNull(offscreenLinkLine, "Should find 'Offscreen Link' in:\n$text")
-    assertTrue(
-      offscreenLinkLine.contains("(offscreen)"),
-      "'Offscreen Link' should be annotated as offscreen: $offscreenLinkLine",
-    )
-  }
-
-  @Test
-  fun `all elements in viewport page have no offscreen annotations`() {
-    // The basic testHtml fits entirely within 1280x800 viewport
-    page.setContent(testHtml)
-
-    val screenState = PlaywrightScreenState(
-      page = page,
-      viewportWidth = 1280,
-      viewportHeight = 800,
-    )
-
-    val text = screenState.viewHierarchyTextRepresentation!!
+    // Visible elements should NOT have offscreen annotation
+    val visibleButtonLine = text.lines().find { it.contains("\"Visible Button\"") }
+    assertNotNull(visibleButtonLine, "Should find 'Visible Button' in:\n$text")
     assertFalse(
-      text.contains("(offscreen)"),
-      "Small page should have no offscreen elements, but got:\n$text",
+      visibleButtonLine.contains("(offscreen)"),
+      "'Visible Button' should not be offscreen: $visibleButtonLine",
+    )
+
+    // Should NOT have the summary line since all elements are included
+    assertFalse(
+      text.contains("offscreen elements hidden"),
+      "Should not have hidden summary when OFFSCREEN_ELEMENTS requested, but got:\n$text",
     )
   }
 
@@ -294,7 +341,7 @@ class PlaywrightScreenStateBoundsTest {
       page = page,
       viewportWidth = 1280,
       viewportHeight = 800,
-      requestedDetails = setOf(ViewHierarchyDetail.BOUNDS),
+      requestedDetails = setOf(ViewHierarchyDetail.BOUNDS, ViewHierarchyDetail.OFFSCREEN_ELEMENTS),
     )
 
     val text = screenState.viewHierarchyTextRepresentation!!

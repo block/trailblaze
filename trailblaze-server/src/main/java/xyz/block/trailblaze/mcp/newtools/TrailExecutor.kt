@@ -1,8 +1,12 @@
 package xyz.block.trailblaze.mcp.newtools
 
 import kotlinx.datetime.Clock
+import kotlinx.datetime.Instant
 import kotlinx.serialization.Serializable
+import xyz.block.trailblaze.logs.client.ObjectiveLogHelper
+import xyz.block.trailblaze.logs.client.LogEmitter
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
+import xyz.block.trailblaze.logs.model.TaskId
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
 import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
@@ -120,6 +124,7 @@ class TrailExecutorImpl(
   private val mcpBridge: TrailblazeMcpBridge,
   private val sessionContext: TrailblazeMcpSessionContext?,
   private val trailsDirectory: String = "./trails",
+  private val logEmitter: LogEmitter? = null,
 ) : TrailExecutor {
 
   private val trailblazeYaml = TrailblazeYaml.Default
@@ -236,10 +241,15 @@ class TrailExecutorImpl(
 
       onProgress?.invoke("Step ${stepIndex + 1}/${promptSteps.size + toolItems.sumOf { it.tools.size }}: [${stepType}] ${promptStep.prompt.take(50)}...")
 
+      val stepStartTime = Clock.System.now()
+      val stepTaskId = TaskId.generate()
+      emitObjectiveStart(promptStep)
+
       val result = executePromptStep(promptStep, stepIndex, onProgress)
       stepResults.add(result)
 
       if (!result.passed) {
+        emitObjectiveComplete(promptStep, stepTaskId, stepStartTime, success = false, failureReason = result.error)
         return TrailExecutionResult(
           passed = false,
           stepsExecuted = stepIndex + 1,
@@ -249,6 +259,8 @@ class TrailExecutorImpl(
           stepResults = stepResults,
         )
       }
+
+      emitObjectiveComplete(promptStep, stepTaskId, stepStartTime, success = true, failureReason = null)
       stepIndex++
     }
 
@@ -330,6 +342,34 @@ class TrailExecutorImpl(
       stepType = stepType,
       passed = true,
       toolsExecuted = toolsExecuted,
+    )
+  }
+
+  private fun emitObjectiveStart(step: PromptStep) {
+    val emitter = logEmitter ?: return
+    val sessionId = mcpBridge.getActiveSessionId() ?: return
+    emitter.emit(ObjectiveLogHelper.createStartLog(step, sessionId))
+  }
+
+  private fun emitObjectiveComplete(
+    step: PromptStep,
+    taskId: TaskId,
+    stepStartTime: Instant,
+    success: Boolean,
+    failureReason: String?,
+  ) {
+    val emitter = logEmitter ?: return
+    val sessionId = mcpBridge.getActiveSessionId() ?: return
+    emitter.emit(
+      ObjectiveLogHelper.createCompleteLog(
+        step = step,
+        taskId = taskId,
+        stepStartTime = stepStartTime,
+        sessionId = sessionId,
+        success = success,
+        failureReason = failureReason,
+        explanation = if (success) "Completed via deterministic recording" else (failureReason ?: "Recording execution failed"),
+      ),
     )
   }
 

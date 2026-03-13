@@ -21,7 +21,7 @@ import xyz.block.trailblaze.util.Console
 class OnDeviceRpcClient(
   trailblazeDeviceId: TrailblazeDeviceId,
   private val sendProgressMessage: (String) -> Unit = {},
-) {
+) : AutoCloseable {
 
   @PublishedApi
   internal val baseUrl = "http://localhost:${trailblazeDeviceId.getTrailblazeOnDeviceSpecificPort()}"
@@ -156,5 +156,9 @@ class OnDeviceRpcClient(
     val timeElapsed = Clock.System.now().epochSeconds - startTimeSeconds
     sendProgressMessage("Failed to verify on-device is running after 5 attempts over $timeElapsed seconds")
     return false
+  }
+
+  override fun close() {
+    httpRequestUtils.close()
   }
 }

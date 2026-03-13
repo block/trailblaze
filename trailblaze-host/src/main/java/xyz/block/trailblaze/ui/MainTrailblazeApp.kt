@@ -118,7 +118,7 @@ class MainTrailblazeApp(
 
     CoroutineScope(Dispatchers.IO).launch {
       // Start Server — use portManager so runtime CLI overrides are respected.
-      // Skip if a daemon is already running (e.g., started by `trailblaze mcp --stdio`).
+      // Skip if a daemon is already running (e.g., started by `trailblaze mcp`).
       val portManager = trailblazeSavedSettingsRepo.portManager
       val daemon = DaemonClient(port = portManager.httpPort)
       if (!daemon.isRunning()) {
@@ -192,9 +192,9 @@ class MainTrailblazeApp(
             onClick = ::exitApplication
           )
           Separator()
-          // Version at the bottom (grayed out, like Cyprus app)
+          // Version + port info at the bottom (grayed out, like Cyprus app)
           Item(
-            text = TrailblazeVersion.displayVersion,
+            text = "${TrailblazeVersion.displayVersion} (port ${trailblazeSavedSettingsRepo.portManager.httpPort})",
             enabled = false,
             onClick = {}
           )

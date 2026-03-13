@@ -40,6 +40,7 @@ class AndroidOnDeviceUiAutomatorScreenState(
   includeScreenshot: Boolean = true,
   deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
   private val fullHierarchy: Boolean = false,
+  private val includeOffscreen: Boolean = false,
 ) : ScreenState {
 
   override var deviceWidth: Int = -1
@@ -113,6 +114,7 @@ class AndroidOnDeviceUiAutomatorScreenState(
       screenHeight = deviceHeight,
       foregroundAppId = foregroundAppId,
       deviceClassifiers = deviceClassifiers,
+      includeOffscreen = includeOffscreen,
       fullHierarchy = fullHierarchy,
     )
 

@@ -63,37 +63,43 @@ class TrailblazeToolYamlWrapperSerializer(
   ) {
     val trailblazeTool = value.trailblazeTool
 
-    val knownSerializer = toolSerializersByName[value.name]
-    if (knownSerializer != null) {
-      val trailblazeToolSerializer = knownSerializer as KSerializer<TrailblazeTool>
-      encoder.encodeSerializableValue(
-        MapSerializer(String.serializer(), trailblazeToolSerializer),
-        mapOf(value.name to trailblazeTool),
-      )
-    } else if (trailblazeTool is OtherTrailblazeTool) {
+    if (trailblazeTool is OtherTrailblazeTool) {
+      // OtherTrailblazeTool wraps raw tool call data (e.g., from MCP session recording).
+      // Always use its own serializer — even if a known serializer exists for the tool name —
+      // because the known serializer expects the concrete tool class and would throw a
+      // ClassCastException (e.g., OtherTrailblazeTool cannot be cast to TapOnElementByNodeIdTrailblazeTool).
       val trailblazeToolSerializer = OtherTrailblazeTool.serializer() as KSerializer<TrailblazeTool>
       encoder.encodeSerializableValue(
         MapSerializer(String.serializer(), trailblazeToolSerializer),
         mapOf(value.name to trailblazeTool),
       )
     } else {
-      // Concrete TrailblazeTool subclass without a registered YAML serializer —
-      // serialize to JSON first to capture all fields, then wrap as OtherTrailblazeTool.
-      @OptIn(InternalSerializationApi::class)
-      val raw = try {
-        val concreteSerializer = trailblazeTool::class.serializer() as KSerializer<TrailblazeTool>
-        val lenientJson = Json { encodeDefaults = false; ignoreUnknownKeys = true }
-        val jsonStr = lenientJson.encodeToString(concreteSerializer, trailblazeTool)
-        lenientJson.decodeFromString<JsonObject>(jsonStr)
-      } catch (_: Exception) {
-        JsonObject(emptyMap())
+      val knownSerializer = toolSerializersByName[value.name]
+      if (knownSerializer != null) {
+        val trailblazeToolSerializer = knownSerializer as KSerializer<TrailblazeTool>
+        encoder.encodeSerializableValue(
+          MapSerializer(String.serializer(), trailblazeToolSerializer),
+          mapOf(value.name to trailblazeTool),
+        )
+      } else {
+        // Concrete TrailblazeTool subclass without a registered YAML serializer —
+        // serialize to JSON first to capture all fields, then wrap as OtherTrailblazeTool.
+        @OptIn(InternalSerializationApi::class)
+        val raw = try {
+          val concreteSerializer = trailblazeTool::class.serializer() as KSerializer<TrailblazeTool>
+          val lenientJson = Json { encodeDefaults = false; ignoreUnknownKeys = true }
+          val jsonStr = lenientJson.encodeToString(concreteSerializer, trailblazeTool)
+          lenientJson.decodeFromString<JsonObject>(jsonStr)
+        } catch (_: Exception) {
+          JsonObject(emptyMap())
+        }
+        val fallback = OtherTrailblazeTool(toolName = value.name, raw = raw)
+        val trailblazeToolSerializer = OtherTrailblazeTool.serializer() as KSerializer<TrailblazeTool>
+        encoder.encodeSerializableValue(
+          MapSerializer(String.serializer(), trailblazeToolSerializer),
+          mapOf(value.name to fallback),
+        )
       }
-      val fallback = OtherTrailblazeTool(toolName = value.name, raw = raw)
-      val trailblazeToolSerializer = OtherTrailblazeTool.serializer() as KSerializer<TrailblazeTool>
-      encoder.encodeSerializableValue(
-        MapSerializer(String.serializer(), trailblazeToolSerializer),
-        mapOf(value.name to fallback),
-      )
     }
   }
 }

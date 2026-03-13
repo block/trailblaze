@@ -47,7 +47,13 @@ class PlaywrightNativeClickTool(
       val (locator, error) =
         PlaywrightExecutableTool.validateAndResolveRef(page, ref, description, context, nodeSelector)
       if (error != null) return error
-      locator!!.click()
+      val box = locator!!.first().boundingBox()
+        ?: return TrailblazeToolResult.Error.ExceptionThrown(
+          "Element '$description' has no bounding box (not visible or zero-sized).",
+        )
+      val centerX = box.x + box.width / 2
+      val centerY = box.y + box.height / 2
+      page.mouse().click(centerX, centerY)
 
       val urlAfter = page.url()
       val navigated = urlBefore != urlAfter

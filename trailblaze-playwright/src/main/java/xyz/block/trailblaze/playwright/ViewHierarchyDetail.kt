@@ -45,4 +45,13 @@ enum class ViewHierarchyDetail {
    * ```
    */
   CSS_SELECTORS,
+
+  /**
+   * Include all elements regardless of viewport position.
+   *
+   * By default, elements outside the current viewport are filtered out of the compact
+   * element list to save tokens. When this detail type is requested, all elements are
+   * included and offscreen ones are annotated with `(offscreen)`.
+   */
+  OFFSCREEN_ELEMENTS,
 }

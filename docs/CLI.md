@@ -1,6 +1,6 @@
 # Trailblaze CLI
 
-Trailblaze - AI-powered mobile UI automation
+Trailblaze - AI-powered UI automation
 
 ## Usage
 
@@ -28,7 +28,6 @@ trailblaze [OPTIONS] [COMMAND]
 | `config` | View and modify Trailblaze configuration |
 | `status` | Check if the Trailblaze daemon is running |
 | `stop` | Stop the Trailblaze daemon |
-| `auth` | Check and display LLM authentication status |
 
 ---
 
@@ -60,7 +59,8 @@ trailblaze run [OPTIONS] <<trailFile>>
 | `-v`, `--verbose` | Enable verbose output | - |
 | `--driver` | Driver type to use (e.g., PLAYWRIGHT_NATIVE, ANDROID_HOST). Overrides driver from trail config. | - |
 | `--show-browser` | Show the browser window (default: headless). Useful for debugging web trails. | - |
-| `--llm-provider` | LLM provider override (e.g.,  openai, anthropic, google) | - |
+| `--llm` | LLM provider/model shorthand (e.g., openai/gpt-4-1). Mutually exclusive with --llm-provider and --llm-model. | - |
+| `--llm-provider` | LLM provider override (e.g., openai, anthropic, google) | - |
 | `--llm-model` | LLM model ID override (e.g., gemini-3-flash, gpt-4-1) | - |
 | `--no-report` | Skip HTML report generation after execution | - |
 | `--no-record` | Skip saving the recording back to the trail source directory | - |
@@ -91,8 +91,8 @@ trailblaze mcp [OPTIONS]
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--stdio` | Use STDIO transport (stdin/stdout) instead of HTTP. Required for MCP client integrations. | - |
-| `--tool-profile` | Tool profile: FULL or MINIMAL (only device/blaze/verify/ask/trail). Defaults to MINIMAL for --stdio, FULL for HTTP. | - |
+| `--http` | Use Streamable HTTP transport instead of STDIO. Starts a standalone HTTP MCP server. | - |
+| `--tool-profile` | Tool profile: FULL or MINIMAL (only device/blaze/verify/ask/trail). Defaults to MINIMAL for STDIO, FULL for HTTP. | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
 
@@ -119,25 +119,51 @@ trailblaze list-devices [OPTIONS]
 
 ### `trailblaze config`
 
-View and modify Trailblaze configuration
+View and modify Trailblaze configuration using positional arguments.
 
 **Synopsis:**
 
 ```
-trailblaze config [OPTIONS]
+trailblaze config                           # Show all settings + auth status
+trailblaze config <key>                     # Show a specific key's value
+trailblaze config <key> <value>             # Set a config value
+trailblaze config models                    # List available LLM models by provider
+trailblaze config agents                    # List available agent implementations
+trailblaze config drivers                   # List available driver types
+```
+
+**Config Keys:**
+
+| Key | Description | Valid Values |
+|-----|-------------|-------------|
+| `llm` | LLM provider and model (shorthand) | `provider/model` (e.g., `openai/gpt-4-1`) |
+| `llm-provider` | LLM provider | `openai`, `anthropic`, `google`, `ollama`, `openrouter`, etc. |
+| `llm-model` | LLM model ID | e.g., `gpt-4-1`, `claude-sonnet-4-20250514` |
+| `agent` | Agent implementation | `TRAILBLAZE_RUNNER`, `TWO_TIER_AGENT`, `MULTI_AGENT_V3` |
+| `android-driver` | Android driver type | `HOST`, `ONDEVICE`, `ACCESSIBILITY` |
+| `ios-driver` | iOS driver type | `HOST` |
+| `set-of-mark` | Enable/disable Set of Mark mode | `true`, `false` |
+| `ai-fallback` | Enable/disable AI fallback | `true`, `false` |
+
+**Examples:**
+
+```bash
+trailblaze config                                    # Show all settings + auth status
+trailblaze config llm                                # Show "openai/gpt-4-1"
+trailblaze config llm anthropic/claude-sonnet-4-6    # Set both provider + model
+trailblaze config llm-provider openai                # Set provider only
+trailblaze config llm-model gpt-4-1                  # Set model only
+trailblaze config agent TWO_TIER_AGENT               # Set agent implementation
+trailblaze config set-of-mark false                  # Disable Set of Mark
+trailblaze config models                             # List available LLM models
+trailblaze config agents                             # List agent implementations
+trailblaze config drivers                            # List driver types
 ```
 
 **Options:**
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--android-driver` | Android driver: HOST or ONDEVICE (instrumentation) | - |
-| `--ios-driver` | iOS driver: HOST (only option for iOS) | - |
-| `--llm-provider` | LLM provider: openai, anthropic, google, ollama, openrouter, etc. | - |
-| `--llm-model` | LLM model ID (e.g., gpt-4-1, claude-sonnet-4-20250514, goose-gpt-4-1) | - |
-| `--agent` | Agent implementation: TRAILBLAZE_RUNNER, TWO_TIER_AGENT, MULTI_AGENT_V3 | - |
-| `--set-of-mark` | Enable/disable Set of Mark mode | - |
-| `--ai-fallback` | Enable/disable AI fallback when recorded steps fail | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
 
@@ -177,25 +203,6 @@ trailblaze stop [OPTIONS]
 | Option | Description | Default |
 |--------|-------------|---------|
 | `-f`, `--force` | Force stop (kill process) if graceful shutdown fails | - |
-| `-h`, `--help` | Show this help message and exit. | - |
-| `-V`, `--version` | Print version information and exit. | - |
-
----
-
-### `trailblaze auth`
-
-Check and display LLM authentication status
-
-**Synopsis:**
-
-```
-trailblaze auth [OPTIONS]
-```
-
-**Options:**
-
-| Option | Description | Default |
-|--------|-------------|---------|
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
 

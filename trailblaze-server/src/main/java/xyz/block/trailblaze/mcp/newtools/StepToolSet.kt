@@ -3,6 +3,7 @@ package xyz.block.trailblaze.mcp.newtools
 import ai.koog.agents.core.tools.annotations.LLMDescription
 import ai.koog.agents.core.tools.annotations.Tool
 import ai.koog.agents.core.tools.reflect.ToolSet
+import kotlinx.datetime.Clock
 import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.agent.Confidence
 import xyz.block.trailblaze.agent.ExecutionResult
@@ -10,7 +11,12 @@ import xyz.block.trailblaze.agent.RecommendationContext
 import xyz.block.trailblaze.agent.ScreenAnalyzer
 import xyz.block.trailblaze.agent.UiActionExecutor
 import xyz.block.trailblaze.api.ScreenState
+import xyz.block.trailblaze.logs.client.LogEmitter
+import xyz.block.trailblaze.logs.client.ObjectiveLogHelper
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
+import xyz.block.trailblaze.logs.client.TrailblazeLog
+import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.logs.model.TaskId
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.mcp.RecordedStep
 import xyz.block.trailblaze.mcp.RecordedStepType
@@ -23,6 +29,8 @@ import xyz.block.trailblaze.toolcalls.toKoogToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.yaml.DirectionStep
+import xyz.block.trailblaze.yaml.VerificationStep
 
 /**
  * Primary MCP tools for UI automation:
@@ -38,6 +46,10 @@ class StepToolSet(
   private val sessionContext: TrailblazeMcpSessionContext? = null,
   /** Provider for available UI tools. The analyzer uses these for type-safe recommendations. */
   private val availableToolsProvider: () -> List<TrailblazeToolDescriptor> = { emptyList() },
+  /** Emits objective logs to LogsRepo for log-based trail generation. */
+  private val logEmitter: LogEmitter? = null,
+  /** Provides the active Trailblaze session ID for log emission. */
+  private val sessionIdProvider: (() -> SessionId?)? = null,
 ) : ToolSet {
 
   @LLMDescription(
@@ -122,9 +134,16 @@ class StepToolSet(
 
     // HIGH or MEDIUM confidence → execute
     if (analysis.confidence == Confidence.HIGH || analysis.confidence == Confidence.MEDIUM) {
+      val stepStartTime = Clock.System.now()
+      val promptStep = DirectionStep(step = goal)
+
+      // Emit objective start log for log-based trail generation
+      emitObjectiveStart(promptStep)
+
       val executionResult = try {
         executor.execute(analysis.recommendedTool, analysis.recommendedArgs, traceId)
       } catch (e: Exception) {
+        emitObjectiveComplete(promptStep, stepStartTime, success = false, failureReason = e.message)
         return StepResult(
           executed = false,
           error = "Action failed: ${e.message}",
@@ -150,6 +169,14 @@ class StepToolSet(
           ) to false
         }
       }
+
+      // Emit objective complete log for log-based trail generation
+      emitObjectiveComplete(
+        step = promptStep,
+        stepStartTime = stepStartTime,
+        success = success,
+        failureReason = if (!success) result.error else null,
+      )
 
       // Record the step (success or failure)
       sessionContext?.recordStep(
@@ -184,10 +211,10 @@ class StepToolSet(
   @LLMDescription(
     """
     Check if something is true.
-    
+
     verify(assertion="The login button is visible")
     verify(assertion="The welcome message shows 'Hello John'")
-    
+
     Returns passed (true/false) with confidence level.
     """
   )
@@ -197,12 +224,17 @@ class StepToolSet(
     assertion: String,
   ): String {
     val traceId = TraceId.generate(TraceId.Companion.TraceOrigin.LLM)
+    val stepStartTime = Clock.System.now()
+    val promptStep = VerificationStep(verify = assertion)
 
     val screenState = screenStateProvider()
       ?: return VerifyResult(
         passed = false,
         error = "No device connected.",
       ).toJson()
+
+    // Emit objective start log for log-based trail generation
+    emitObjectiveStart(promptStep)
 
     // Use the analyzer to check the assertion
     val recommendationContext = RecommendationContext(
@@ -220,6 +252,7 @@ class StepToolSet(
         availableTools = availableToolsProvider(),
       )
     } catch (e: Exception) {
+      emitObjectiveComplete(promptStep, stepStartTime, success = false, failureReason = e.message)
       return VerifyResult(
         passed = false,
         error = "Failed to analyze screen: ${e.message}",
@@ -240,6 +273,9 @@ class StepToolSet(
       screenSummary = analysis.screenSummary,
     )
 
+    // Emit objective complete log
+    emitObjectiveComplete(promptStep, stepStartTime, success = result.passed)
+
     // Record the verification
     sessionContext?.recordStep(
       RecordedStep(
@@ -257,11 +293,11 @@ class StepToolSet(
   @LLMDescription(
     """
     Ask a question, get an answer.
-    
+
     ask(question="What's the current balance?")
     ask(question="What buttons are visible?")
     ask(question="Is there an error message?")
-    
+
     Unlike verify(), this returns information - not pass/fail.
     """
   )
@@ -271,6 +307,7 @@ class StepToolSet(
     question: String,
   ): String {
     val traceId = TraceId.generate(TraceId.Companion.TraceOrigin.LLM)
+    val startTime = Clock.System.now()
 
     val screenState = screenStateProvider()
       ?: return AskResult(
@@ -293,6 +330,7 @@ class StepToolSet(
         availableTools = availableToolsProvider(),
       )
     } catch (e: Exception) {
+      emitAskLog(question, null, null, e.message, traceId, startTime)
       return AskResult(
         answer = null,
         error = "Failed to analyze screen: ${e.message}",
@@ -310,16 +348,9 @@ class StepToolSet(
       screenSummary = analysis.screenSummary,
     )
 
-    // Record the question
-    sessionContext?.recordStep(
-      RecordedStep(
-        type = RecordedStepType.ASK,
-        input = question,
-        toolCalls = emptyList(), // Ask doesn't execute tools
-        result = result.answer ?: "",
-        success = true,
-      ),
-    )
+    // Ask is for the outer agent's situational awareness only — not recorded in trails.
+    // Only blaze() and verify() are tracked as trail steps.
+    emitAskLog(question, result.answer, result.screenSummary, null, traceId, startTime)
 
     return result.toJson()
   }
@@ -348,7 +379,7 @@ class StepToolSet(
       null -> {
         // No hint: behavior depends on loading strategy
         when (strategy) {
-          ToolLoadingStrategy.ALL_TOOLS -> ToolSetCategoryMapping.getToolClasses(ToolSetCategory.STANDARD)
+          ToolLoadingStrategy.ALL_TOOLS -> ToolSetCategoryMapping.getToolClasses(ToolSetCategory.ALL)
           ToolLoadingStrategy.PROGRESSIVE -> ToolSetCategoryMapping.getInnerAgentMinimalTools()
         }
       }
@@ -375,6 +406,61 @@ class StepToolSet(
     }
 
     return toolClasses.mapNotNull { it.toKoogToolDescriptor()?.toTrailblazeToolDescriptor() }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Objective log emission for log-based trail generation
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  private fun emitObjectiveStart(step: xyz.block.trailblaze.yaml.PromptStep) {
+    val emitter = logEmitter ?: return
+    val sessionId = sessionIdProvider?.invoke() ?: return
+    emitter.emit(ObjectiveLogHelper.createStartLog(step, sessionId))
+  }
+
+  private fun emitObjectiveComplete(
+    step: xyz.block.trailblaze.yaml.PromptStep,
+    stepStartTime: kotlinx.datetime.Instant,
+    success: Boolean,
+    failureReason: String? = null,
+  ) {
+    val emitter = logEmitter ?: return
+    val sessionId = sessionIdProvider?.invoke() ?: return
+    emitter.emit(
+      ObjectiveLogHelper.createCompleteLog(
+        step = step,
+        taskId = TaskId.generate(),
+        stepStartTime = stepStartTime,
+        sessionId = sessionId,
+        success = success,
+        failureReason = failureReason,
+      ),
+    )
+  }
+
+  private fun emitAskLog(
+    question: String,
+    answer: String?,
+    screenSummary: String?,
+    errorMessage: String?,
+    traceId: TraceId,
+    startTime: kotlinx.datetime.Instant,
+  ) {
+    val emitter = logEmitter ?: return
+    val sessionId = sessionIdProvider?.invoke() ?: return
+    val now = Clock.System.now()
+    emitter.emit(
+      TrailblazeLog.McpAskLog(
+        question = question,
+        answer = answer,
+        screenSummary = screenSummary,
+        errorMessage = errorMessage,
+        traceId = traceId,
+        durationMs = (now - startTime).inWholeMilliseconds,
+        session = sessionId,
+        timestamp = now,
+      ),
+    )
   }
 }
 

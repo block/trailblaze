@@ -76,7 +76,7 @@ class PlaywrightScreenStateEdgeCaseTest {
   }
 
   @Test
-  fun `element just below viewport fold IS marked offscreen`() {
+  fun `element just below viewport fold is filtered out by default`() {
     val html = """
       <!DOCTYPE html>
       <html>
@@ -95,12 +95,11 @@ class PlaywrightScreenStateEdgeCaseTest {
     )
 
     val text = screenState.viewHierarchyTextRepresentation!!
-    val buttonLine = text.lines().find { it.contains("\"Below Fold\"") }
-    assertNotNull(buttonLine, "Should find Below Fold in:\n$text")
-    assertTrue(
-      buttonLine.contains("(offscreen)"),
-      "Element below fold should be offscreen: $buttonLine",
+    assertFalse(
+      text.contains("\"Below Fold\""),
+      "Offscreen element should be filtered out, but got:\n$text",
     )
+    assertContains(text, "offscreen elements hidden")
   }
 
   @Test

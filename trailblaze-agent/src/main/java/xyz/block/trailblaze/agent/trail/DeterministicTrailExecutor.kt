@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.agent.trail
 
+import kotlinx.datetime.Clock
 import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.agent.ExecutionResult
 import xyz.block.trailblaze.agent.TrailConfig
@@ -7,7 +8,11 @@ import xyz.block.trailblaze.agent.TrailExecutionMode
 import xyz.block.trailblaze.agent.TrailResult
 import xyz.block.trailblaze.agent.TrailState
 import xyz.block.trailblaze.agent.UiActionExecutor
+import xyz.block.trailblaze.logs.client.LogEmitter
+import xyz.block.trailblaze.logs.client.ObjectiveLogHelper
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
+import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.logs.model.TaskId
 import xyz.block.trailblaze.yaml.PromptStep
 import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
 
@@ -53,10 +58,14 @@ import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
  *
  * @property executor The UI action executor for running tools
  * @property config Trail execution configuration (mode should be DETERMINISTIC)
+ * @property logEmitter Optional log emitter for objective lifecycle events
+ * @property sessionId Optional session ID for log correlation
  */
 class DeterministicTrailExecutor(
   private val executor: UiActionExecutor,
   private val config: TrailConfig = TrailConfig.DETERMINISTIC,
+  private val logEmitter: LogEmitter? = null,
+  private val sessionId: SessionId? = null,
 ) {
 
   /**
@@ -99,10 +108,15 @@ class DeterministicTrailExecutor(
     )
 
     for ((index, step) in steps.withIndex()) {
+      val stepStartTime = Clock.System.now()
+      val stepTaskId = TaskId.generate()
+      emitObjectiveStart(step)
+
       val stepResult = executeStep(state, step, index)
       state = stepResult
 
       if (state.failed) {
+        emitObjectiveComplete(step, stepTaskId, stepStartTime, success = false, failureReason = state.failureReason)
         return TrailResult(
           success = false,
           state = state,
@@ -110,6 +124,8 @@ class DeterministicTrailExecutor(
           errorMessage = state.failureReason,
         )
       }
+
+      emitObjectiveComplete(step, stepTaskId, stepStartTime, success = true, failureReason = null)
     }
 
     return TrailResult(
@@ -175,6 +191,34 @@ class DeterministicTrailExecutor(
         "Recording failed at step $stepIndex, tool $toolIndex (${tool.name}): ${result.error}"
       )
     }
+  }
+
+  private fun emitObjectiveStart(step: PromptStep) {
+    val emitter = logEmitter ?: return
+    val session = sessionId ?: return
+    emitter.emit(ObjectiveLogHelper.createStartLog(step, session))
+  }
+
+  private fun emitObjectiveComplete(
+    step: PromptStep,
+    taskId: TaskId,
+    stepStartTime: kotlinx.datetime.Instant,
+    success: Boolean,
+    failureReason: String?,
+  ) {
+    val emitter = logEmitter ?: return
+    val session = sessionId ?: return
+    emitter.emit(
+      ObjectiveLogHelper.createCompleteLog(
+        step = step,
+        taskId = taskId,
+        stepStartTime = stepStartTime,
+        sessionId = session,
+        success = success,
+        failureReason = failureReason,
+        explanation = if (success) "Completed via deterministic recording" else (failureReason ?: "Recording execution failed"),
+      ),
+    )
   }
 
   /**

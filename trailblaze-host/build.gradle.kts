@@ -108,8 +108,21 @@ val generateVersionProperties by tasks.registering {
     val dir = outputDir.get().asFile
     dir.mkdirs()
     val propsFile = File(dir, "version.properties")
+    val gitTagVersion = rootProject.extra["gitTagVersion"] as String
     val gitVersionFull = rootProject.extra["gitVersionFull"] as String
-    propsFile.writeText("version=$gitVersionFull\n")
+    // Prefer: 1) semver from git tag, 2) explicit -Pversion from CLI, 3) git timestamp
+    val cliVersion = project.version.toString()
+    val version = when {
+      gitTagVersion.isNotEmpty() -> gitTagVersion
+      !cliVersion.endsWith("-SNAPSHOT") && cliVersion != "unspecified" -> cliVersion
+      else -> gitVersionFull
+    }
+    val variant = rootProject.findProperty("trailblaze.variant")?.toString() ?: ""
+    val content = buildString {
+      appendLine("version=$version")
+      if (variant.isNotEmpty()) appendLine("variant=$variant")
+    }
+    propsFile.writeText(content)
   }
 }
 

@@ -246,7 +246,12 @@ fun SessionDetailComposable(
       Box(modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize()) {
           CompositionLocalProvider(LocalFontScale provides fontSizeScale) {
-            // Header
+            // Extract agent implementation from the first LLM request log's context
+            val agentImplementation = sessionDetail.logs
+              .filterIsInstance<TrailblazeLog.TrailblazeLlmRequestLog>()
+              .firstNotNullOfOrNull { it.requestContext?.agentImplementation }
+
+            // Header (consolidated: status, device, driver, agent, classifiers, duration, trail path)
             SessionDetailHeader(
               sessionDetail = sessionDetail,
               onBackClick = onBackClick,
@@ -272,77 +277,10 @@ fun SessionDetailComposable(
               },
               cardsPerRow = cardsPerRow,
               maxCards = maxCards,
-            )
-
-            // Test Information Section
-            val testTitle = sessionDetail.session.trailConfig?.title
-            val testDescription = sessionDetail.session.trailConfig?.description
-            val testClass = sessionDetail.session.testClass
-            val testName = sessionDetail.session.testName
-
-            if (testTitle != null || testDescription != null || testClass != null || testName != null) {
-              Spacer(modifier = Modifier.height(16.dp))
-              Column(
-                modifier = Modifier
-                  .fillMaxWidth()
-                  .background(
-                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                    shape = RoundedCornerShape(8.dp)
-                  )
-                  .padding(16.dp)
-              ) {
-                if (testTitle != null) {
-                  SelectableText(
-                    text = testTitle,
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary
-                  )
-                  Spacer(modifier = Modifier.height(8.dp))
-                }
-
-                if (testDescription != null) {
-                  SelectableText(
-                    text = testDescription,
-                    style = MaterialTheme.typography.bodyLarge,
-                  )
-                  Spacer(modifier = Modifier.height(12.dp))
-                }
-
-                if (testClass != null && testName != null) {
-                  SelectableText(
-                    text = "$testClass::$testName",
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                  )
-                }
-              }
-            }
-
-            // Extract agent implementation from the first LLM request log's context
-            val agentImplementation = sessionDetail.logs
-              .filterIsInstance<TrailblazeLog.TrailblazeLlmRequestLog>()
-              .firstNotNullOfOrNull { it.requestContext?.agentImplementation }
-
-            // Session summary item
-            SessionSummaryRow(
-              status = sessionDetail.overallStatus,
-              deviceName = sessionDetail.deviceName,
-              deviceType = sessionDetail.deviceType,
-              totalDurationMs = if (sessionDetail.logs.isNotEmpty()) {
-                val firstLog = sessionDetail.logs.minByOrNull { it.timestamp }
-                val lastLog = sessionDetail.logs.maxByOrNull { it.timestamp }
-                if (firstLog != null && lastLog != null) {
-                  lastLog.timestamp.toEpochMilliseconds() - firstLog.timestamp.toEpochMilliseconds()
-                } else null
-              } else null,
-              trailConfig = sessionDetail.session.trailConfig,
-              sessionInfo = sessionDetail.session,
+              overallStatus = sessionDetail.overallStatus,
               agentImplementation = agentImplementation,
             )
 
-            // Spacer item
             Spacer(modifier = Modifier.height(16.dp))
 
             Column(

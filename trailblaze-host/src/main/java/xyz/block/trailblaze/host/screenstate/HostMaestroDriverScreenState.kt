@@ -37,6 +37,7 @@ class HostMaestroDriverScreenState(
   maxAttempts: Int = 10,
   override val deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
   private val fullHierarchy: Boolean = false,
+  private val includeOffscreen: Boolean = false,
 ) : ScreenState {
 
   private val deviceInfo: DeviceInfo = maestroDriver.deviceInfo()
@@ -46,7 +47,6 @@ class HostMaestroDriverScreenState(
   private var matched = false
   private var attempts = 0
   private var stableRelabeledViewHierarchy: ViewHierarchyTreeNode? = null
-  private var stableRawScreenshotBytes: ByteArray? = null
   private var stableBufferedImage: BufferedImage? = null
 
   init {
@@ -84,8 +84,6 @@ class HostMaestroDriverScreenState(
       } else {
         bufferedImage
       }
-      val wasRotated = finalImage !== bufferedImage
-      stableRawScreenshotBytes = if (wasRotated) finalImage.toByteArray() else screenshotBytes
       stableBufferedImage = finalImage
 
       if (vh1 == vh2) {
@@ -129,6 +127,7 @@ class HostMaestroDriverScreenState(
       screenWidth = deviceWidth,
       screenHeight = deviceHeight,
       deviceClassifiers = deviceClassifiers,
+      includeOffscreen = includeOffscreen,
       fullHierarchy = fullHierarchy,
     )
 

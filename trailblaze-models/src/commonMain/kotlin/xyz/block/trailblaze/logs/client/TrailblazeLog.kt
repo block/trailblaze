@@ -514,6 +514,35 @@ sealed interface TrailblazeLog {
     HasTraceId,
     HasDuration
 
+  /**
+   * Log entry for an `ask()` call — the outer agent asking a question about the screen.
+   *
+   * Ask calls are for situational awareness (not actions or verifications) and are
+   * excluded from trail file generation. They appear in the session viewer for
+   * debugging and understanding agent reasoning.
+   */
+  @Serializable
+  data class McpAskLog(
+    /** The question asked by the outer agent */
+    val question: String,
+
+    /** The answer derived from screen analysis */
+    val answer: String?,
+
+    /** Summary of what's on screen */
+    val screenSummary: String?,
+
+    /** Error message if the ask failed */
+    val errorMessage: String? = null,
+
+    override val traceId: TraceId?,
+    override val durationMs: Long,
+    override val session: SessionId,
+    override val timestamp: Instant,
+  ) : TrailblazeLog,
+    HasTraceId,
+    HasDuration
+
   // endregion
 
   // region Progress Reporting Logs (Phase 6)

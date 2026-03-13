@@ -16,6 +16,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import java.net.HttpURLConnection
+import java.net.URI
 import java.util.concurrent.Callable
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Executors
@@ -29,6 +31,7 @@ import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.host.devices.WebBrowserManager
 import xyz.block.trailblaze.host.devices.WebBrowserState
@@ -119,7 +122,7 @@ class TrailblazeDeviceManager(
   private val targetDeviceFilter: (List<TrailblazeConnectedDeviceSummary>) -> List<TrailblazeConnectedDeviceSummary> =
     { connectedDeviceSummaries ->
       connectedDeviceSummaries.filter { connectedDeviceSummary ->
-        // Virtual devices (no hardware) — always available.
+        // Virtual devices (no hardware) — always available if they made it into the list.
         connectedDeviceSummary.trailblazeDriverType == TrailblazeDriverType.PLAYWRIGHT_NATIVE ||
           connectedDeviceSummary.trailblazeDriverType == TrailblazeDriverType.PLAYWRIGHT_ELECTRON ||
           connectedDeviceSummary.trailblazeDriverType == TrailblazeDriverType.COMPOSE ||
@@ -463,12 +466,18 @@ class TrailblazeDeviceManager(
     }
 
     try {
-      // Run Android and iOS discovery in parallel via direct CLI calls with timeouts.
+      // Run all device discovery in parallel via direct CLI calls with timeouts.
       val androidFuture = CompletableFuture.supplyAsync {
         listConnectedAdbDevices()
       }
       val iosFuture = CompletableFuture.supplyAsync {
         listBootedIosSimulators()
+      }
+      val electronCdpFuture = CompletableFuture.supplyAsync {
+        isElectronCdpAvailable()
+      }
+      val composeRpcFuture = CompletableFuture.supplyAsync {
+        isComposeRpcAvailable()
       }
 
       val androidDevices = try {
@@ -482,6 +491,16 @@ class TrailblazeDeviceManager(
       } catch (e: Exception) {
         Console.log("iOS device discovery timed out or failed: ${e.message}")
         emptyList()
+      }
+      val electronAvailable = try {
+        electronCdpFuture.get(1, TimeUnit.SECONDS)
+      } catch (e: Exception) {
+        false
+      }
+      val composeAvailable = try {
+        composeRpcFuture.get(1, TimeUnit.SECONDS)
+      } catch (e: Exception) {
+        false
       }
 
       val allDevices = buildList {
@@ -536,24 +555,27 @@ class TrailblazeDeviceManager(
           )
         )
 
-        // Playwright-electron is a virtual device for Electron app testing via CDP.
-        add(
-          TrailblazeConnectedDeviceSummary(
-            trailblazeDriverType = TrailblazeDriverType.PLAYWRIGHT_ELECTRON,
-            instanceId = PLAYWRIGHT_ELECTRON_INSTANCE_ID,
-            description = "Playwright Electron (CDP)",
+        // Playwright-electron — only show if CDP endpoint is responding.
+        if (electronAvailable) {
+          add(
+            TrailblazeConnectedDeviceSummary(
+              trailblazeDriverType = TrailblazeDriverType.PLAYWRIGHT_ELECTRON,
+              instanceId = PLAYWRIGHT_ELECTRON_INSTANCE_ID,
+              description = "Playwright Electron (CDP)",
+            )
           )
-        )
+        }
 
-        // Compose is a virtual device (connects via RPC to a running Compose app) —
-        // always include it so compose trails work from both GUI and CLI.
-        add(
-          TrailblazeConnectedDeviceSummary(
-            trailblazeDriverType = TrailblazeDriverType.COMPOSE,
-            instanceId = "compose",
-            description = "Compose (RPC)",
+        // Compose — only show if the RPC server is responding.
+        if (composeAvailable) {
+          add(
+            TrailblazeConnectedDeviceSummary(
+              trailblazeDriverType = TrailblazeDriverType.COMPOSE,
+              instanceId = "compose",
+              description = "Compose (RPC)",
+            )
           )
-        )
+        }
       }
 
       val filteredDevices = if (applyDriverFilter) targetDeviceFilter(allDevices) else allDevices
@@ -888,6 +910,45 @@ class TrailblazeDeviceManager(
         null
       } finally {
         executor.shutdownNow()
+      }
+    }
+
+    /**
+     * Quick probe to check if an Electron app's CDP endpoint is responding.
+     * Uses a 500ms connect/read timeout — if nothing is listening, this fails fast.
+     */
+    internal fun isElectronCdpAvailable(): Boolean {
+      var connection: HttpURLConnection? = null
+      return try {
+        val port = System.getenv("TRAILBLAZE_ELECTRON_CDP_PORT")?.toIntOrNull() ?: 9222
+        val url = URI("http://localhost:$port/json/version").toURL()
+        connection = url.openConnection() as HttpURLConnection
+        connection.connectTimeout = 500
+        connection.readTimeout = 500
+        connection.responseCode == 200
+      } catch (_: Exception) {
+        false
+      } finally {
+        connection?.disconnect()
+      }
+    }
+
+    /**
+     * Quick probe to check if the Compose RPC server is responding.
+     * Uses a 500ms connect/read timeout — if nothing is listening, this fails fast.
+     */
+    internal fun isComposeRpcAvailable(): Boolean {
+      var connection: HttpURLConnection? = null
+      return try {
+        val url = URI("http://localhost:${TrailblazeDevicePort.COMPOSE_DEFAULT_RPC_PORT}/ping").toURL()
+        connection = url.openConnection() as HttpURLConnection
+        connection.connectTimeout = 500
+        connection.readTimeout = 500
+        connection.responseCode == 200
+      } catch (_: Exception) {
+        false
+      } finally {
+        connection?.disconnect()
       }
     }
 

@@ -174,6 +174,14 @@ class McpProgressNotifier(
       )
     }
 
+    is TrailblazeLog.McpAskLog -> {
+      val answer = log.answer?.take(100) ?: log.errorMessage ?: "no answer"
+      ProgressNotificationData(
+        message = "Ask: ${log.question} → $answer",
+        category = "ask",
+      )
+    }
+
     // Log types we don't surface as progress notifications (yet)
     is TrailblazeLog.AccessibilityActionLog,
     is TrailblazeLog.TrailblazeAgentTaskStatusChangeLog,

@@ -237,6 +237,8 @@ fun LogDetailsDialog(
           TrailblazeProgressDetailsFlat(log)
         }
       }
+
+      is TrailblazeLog.McpAskLog -> {}
     }
 
     // Bottom padding

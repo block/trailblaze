@@ -9,6 +9,7 @@ import xyz.block.trailblaze.agent.blaze.createFullFeaturedBlazeGoalPlanner
 import xyz.block.trailblaze.agent.blaze.initialBlazeState
 import xyz.block.trailblaze.agent.trail.DeterministicTrailExecutor
 import xyz.block.trailblaze.agent.trail.DefaultConditionChecker
+import xyz.block.trailblaze.logs.client.LogEmitter
 import xyz.block.trailblaze.agent.trail.EnhancedRecording
 import xyz.block.trailblaze.agent.trail.RecordingValidator
 import xyz.block.trailblaze.agent.trail.RecoveryStrategy
@@ -76,6 +77,7 @@ class MultiAgentV3Runner private constructor(
   private val deviceId: TrailblazeDeviceId?,
   private val recordingValidator: RecordingValidator? = null,
   private val availableToolsProvider: () -> List<TrailblazeToolDescriptor> = { emptyList() },
+  private val logEmitter: LogEmitter? = null,
 ) {
 
   /**
@@ -533,7 +535,7 @@ class MultiAgentV3Runner private constructor(
     return when (config.mode) {
       TrailExecutionMode.DETERMINISTIC -> {
         // Fast path: zero LLM calls, recordings only
-        val deterministicExecutor = DeterministicTrailExecutor(executor, config)
+        val deterministicExecutor = DeterministicTrailExecutor(executor, config, logEmitter, sessionId)
         val result = deterministicExecutor.execute(steps)
         reportTrailSteps(sessionId, result)
         result.copy(targetDeviceId = deviceId)
@@ -741,6 +743,7 @@ class MultiAgentV3Runner private constructor(
       deviceId: TrailblazeDeviceId? = null,
       recordingValidator: RecordingValidator? = null,
       availableToolsProvider: () -> List<TrailblazeToolDescriptor> = { emptyList() },
+      logEmitter: LogEmitter? = null,
     ): MultiAgentV3Runner {
       // Create the full-featured blaze planner with all Phase 1-6 capabilities
       val blazePlanner = createFullFeaturedBlazeGoalPlanner(
@@ -760,6 +763,7 @@ class MultiAgentV3Runner private constructor(
         deviceId = deviceId,
         recordingValidator = recordingValidator,
         availableToolsProvider = availableToolsProvider,
+        logEmitter = logEmitter,
       )
     }
 
@@ -774,6 +778,7 @@ class MultiAgentV3Runner private constructor(
      * @param progressReporter Progress reporter for MCP clients (optional)
      * @param deviceId Device ID for parallel execution tracking (optional)
      * @param recordingValidator Recording validator for EnhancedRecording support (optional)
+     * @param logEmitter Optional log emitter for objective lifecycle events during deterministic execution
      * @return Configured MultiAgentV3Runner
      */
     fun createWithPlanner(
@@ -784,6 +789,7 @@ class MultiAgentV3Runner private constructor(
       deviceId: TrailblazeDeviceId? = null,
       recordingValidator: RecordingValidator? = null,
       availableToolsProvider: () -> List<TrailblazeToolDescriptor> = { emptyList() },
+      logEmitter: LogEmitter? = null,
     ): MultiAgentV3Runner = MultiAgentV3Runner(
       blazePlanner = blazePlanner,
       screenAnalyzer = screenAnalyzer,
@@ -792,6 +798,7 @@ class MultiAgentV3Runner private constructor(
       deviceId = deviceId,
       recordingValidator = recordingValidator,
       availableToolsProvider = availableToolsProvider,
+      logEmitter = logEmitter,
     )
   }
 }

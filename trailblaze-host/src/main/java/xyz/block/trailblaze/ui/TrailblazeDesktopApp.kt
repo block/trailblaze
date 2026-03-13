@@ -72,13 +72,16 @@ abstract class TrailblazeDesktopApp(
    * This is called automatically when operations that need the server are performed
    * (e.g., OAuth callbacks, log collection). If the server is already running
    * (either from this app instance or a daemon), this is a no-op.
+   *
+   * @return `true` if this call started a new server (this process owns the daemon),
+   *   `false` if a daemon was already running (another process owns it).
    */
-  open fun ensureServerRunning() {
+  open fun ensureServerRunning(): Boolean {
     val serverPort = portManager.httpPort
     val serverHttpsPort = portManager.httpsPort
     val daemon = DaemonClient(port = serverPort)
     if (daemon.isRunning()) {
-      return // Server already running
+      return false // Server already running — we don't own it
     }
 
     Console.log("Starting Trailblaze server...")
@@ -100,8 +103,10 @@ abstract class TrailblazeDesktopApp(
 
     if (daemon.isRunning()) {
       Console.log("Server started on port $serverPort")
+      return true
     } else {
       Console.error("Warning: Server may not have started properly")
+      return false
     }
   }
 

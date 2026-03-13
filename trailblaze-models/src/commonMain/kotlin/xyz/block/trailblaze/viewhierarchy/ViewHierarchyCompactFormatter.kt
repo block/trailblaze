@@ -24,6 +24,9 @@ object ViewHierarchyCompactFormatter {
    * @param screenHeight The screen height in pixels.
    * @param foregroundAppId The foreground app package name, if known.
    * @param deviceClassifiers Device classifiers (e.g. "phone", "tablet", "ipad").
+   * @param includeOffscreen When true, offscreen elements are included with an `(offscreen)`
+   *   annotation. When false (default), offscreen elements are filtered out and a summary
+   *   line is appended showing how many were hidden.
    * @param fullHierarchy Retained for API compatibility; all properties are now always included.
    */
   fun format(
@@ -33,6 +36,7 @@ object ViewHierarchyCompactFormatter {
     screenHeight: Int,
     foregroundAppId: String? = null,
     deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
+    includeOffscreen: Boolean = false,
     @Suppress("UNUSED_PARAMETER") fullHierarchy: Boolean = false,
   ): String = buildString {
     // Context header
@@ -46,8 +50,23 @@ object ViewHierarchyCompactFormatter {
     }
     appendLine()
 
-    // Format the tree
-    formatNode(this, root, indent = 0, screenWidth = screenWidth, screenHeight = screenHeight)
+    // Format the tree, tracking offscreen elements that are filtered out
+    val offscreenCount = intArrayOf(0)
+    formatNode(
+      this, root,
+      indent = 0,
+      screenWidth = screenWidth,
+      screenHeight = screenHeight,
+      includeOffscreen = includeOffscreen,
+      offscreenCount = offscreenCount,
+    )
+
+    if (!includeOffscreen && offscreenCount[0] > 0) {
+      appendLine(
+        "(${offscreenCount[0]} offscreen elements hidden" +
+          " — request OFFSCREEN_ELEMENTS for full list)",
+      )
+    }
   }.trimEnd()
 
   private fun formatNode(
@@ -56,14 +75,32 @@ object ViewHierarchyCompactFormatter {
     indent: Int,
     screenWidth: Int,
     screenHeight: Int,
+    includeOffscreen: Boolean,
+    offscreenCount: IntArray,
   ) {
+    val nodeIsOffscreen = isOffscreen(node, screenWidth, screenHeight)
+
+    if (nodeIsOffscreen && !includeOffscreen) {
+      // Count this node and all descendants as hidden
+      offscreenCount[0] += countNodes(node)
+      return
+    }
+
     val indentStr = "  ".repeat(indent)
-    val offscreen = if (isOffscreen(node, screenWidth, screenHeight)) " (offscreen)" else ""
+    val offscreen = if (nodeIsOffscreen) " (offscreen)" else ""
     sb.appendLine("$indentStr${formatSingleNode(node)}$offscreen")
 
     for (child in node.children) {
-      formatNode(sb, child, indent + 1, screenWidth, screenHeight)
+      formatNode(sb, child, indent + 1, screenWidth, screenHeight, includeOffscreen, offscreenCount)
     }
+  }
+
+  private fun countNodes(node: ViewHierarchyTreeNode): Int {
+    var count = 1
+    for (child in node.children) {
+      count += countNodes(child)
+    }
+    return count
   }
 
   private fun isOffscreen(node: ViewHierarchyTreeNode, screenWidth: Int, screenHeight: Int): Boolean {

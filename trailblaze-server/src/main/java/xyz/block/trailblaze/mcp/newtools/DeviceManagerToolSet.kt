@@ -9,6 +9,8 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.mcp.AgentImplementation
+import xyz.block.trailblaze.mcp.DeviceAlreadyClaimedException
+import xyz.block.trailblaze.mcp.DeviceClaimRegistry
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
 import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
 import xyz.block.trailblaze.mcp.ViewHierarchyVerbosity
@@ -35,6 +37,7 @@ import xyz.block.trailblaze.yaml.models.TrailblazeYamlBuilder
 class DeviceManagerToolSet(
   private val sessionContext: TrailblazeMcpSessionContext?,
   private val mcpBridge: TrailblazeMcpBridge,
+  private val deviceClaimRegistry: DeviceClaimRegistry? = null,
   private val toolSetCatalog: List<ToolSetCatalogEntry> = TrailblazeToolSetCatalog.defaultEntries(true),
   private val onActiveToolSetsChanged: (activeToolSetIds: List<String>, catalog: List<ToolSetCatalogEntry>) -> Unit = { _, _ -> },
 ) : ToolSet {
@@ -51,15 +54,32 @@ class DeviceManagerToolSet(
     ANDROID,
     /** Auto-connect to the first available iOS device */
     IOS,
+    /** Show info about the currently connected device */
+    INFO,
+  }
+
+  /**
+   * Detail level for the INFO action.
+   */
+  enum class DeviceDetail {
+    /** Basic device summary (default) */
+    SUMMARY,
+    /** List installed app IDs */
+    APPS,
+    /** Full info including installed apps */
+    FULL,
   }
 
   @LLMDescription(
     """
-    Connect to a mobile device.
+    Connect to a mobile device or get device info.
 
     device(action=ANDROID) → connect to Android
     device(action=IOS) → connect to iOS
     device(action=LIST) → see available devices
+    device(action=INFO) → info about the connected device
+    device(action=INFO, detail=APPS) → list installed apps
+    device(action=INFO, detail=FULL) → full info including apps
 
     Your session is recorded automatically.
     Save it anytime as a reusable test: trail(action=SAVE, name="my_test")
@@ -67,10 +87,14 @@ class DeviceManagerToolSet(
   )
   @Tool
   suspend fun device(
-    @LLMDescription("Action: LIST, CONNECT, ANDROID, or IOS")
+    @LLMDescription("Action: LIST, CONNECT, ANDROID, IOS, or INFO")
     action: DeviceAction,
     @LLMDescription("Device ID (only for CONNECT action)")
     deviceId: String? = null,
+    @LLMDescription("Force takeover if device is claimed by another session (default: false)")
+    force: Boolean = false,
+    @LLMDescription("Detail level for INFO action: SUMMARY (default), APPS, or FULL")
+    detail: DeviceDetail = DeviceDetail.SUMMARY,
   ): String {
     return when (action) {
       DeviceAction.LIST -> {
@@ -78,10 +102,74 @@ class DeviceManagerToolSet(
         if (devices.isEmpty()) {
           "No devices available. Connect an Android device/emulator or start an iOS simulator."
         } else {
+          // Group by physical device (instanceId + platform) to avoid showing
+          // duplicate entries for different driver types of the same device.
+          // Show only the device matching the configured driver type per platform.
+          val configuredAndroid = mcpBridge.getConfiguredDriverType(TrailblazeDevicePlatform.ANDROID)
+          val configuredIos = mcpBridge.getConfiguredDriverType(TrailblazeDevicePlatform.IOS)
+
+          val deduped = devices
+            .groupBy { it.instanceId to it.platform }
+            .map { (_, variants) ->
+              val platform = variants.first().platform
+              val configuredType = when (platform) {
+                TrailblazeDevicePlatform.ANDROID -> configuredAndroid
+                TrailblazeDevicePlatform.IOS -> configuredIos
+                else -> null
+              }
+              // Prefer the variant matching the configured driver type
+              variants.find { it.trailblazeDriverType == configuredType } ?: variants.first()
+            }
+
           buildString {
             appendLine("Available devices:")
-            devices.forEach { device ->
-              appendLine("  - ${device.instanceId} (${device.platform.displayName})")
+            deduped.forEach { device ->
+              appendLine("  - ${device.instanceId} (${device.platform.displayName}) - ${device.description}")
+            }
+          }
+        }
+      }
+
+      DeviceAction.INFO -> {
+        val currentDeviceId = mcpBridge.getCurrentlySelectedDeviceId()
+          ?: return "No device connected. Use device(action=ANDROID) or device(action=IOS) to connect first."
+
+        when (detail) {
+          DeviceDetail.SUMMARY -> {
+            val driverType = mcpBridge.getDriverType()
+            buildString {
+              appendLine("Connected device:")
+              appendLine("  Instance ID: ${currentDeviceId.instanceId}")
+              appendLine("  Platform: ${currentDeviceId.trailblazeDevicePlatform.displayName}")
+              if (driverType != null) {
+                appendLine("  Driver: $driverType")
+              }
+            }
+          }
+          DeviceDetail.APPS -> {
+            val apps = mcpBridge.getInstalledAppIds()
+            if (apps.isEmpty()) {
+              "No installed apps found on device."
+            } else {
+              buildString {
+                appendLine("Installed apps (${apps.size}):")
+                apps.sorted().forEach { appendLine("  - $it") }
+              }
+            }
+          }
+          DeviceDetail.FULL -> {
+            val driverType = mcpBridge.getDriverType()
+            val apps = mcpBridge.getInstalledAppIds()
+            buildString {
+              appendLine("Connected device:")
+              appendLine("  Instance ID: ${currentDeviceId.instanceId}")
+              appendLine("  Platform: ${currentDeviceId.trailblazeDevicePlatform.displayName}")
+              if (driverType != null) {
+                appendLine("  Driver: $driverType")
+              }
+              appendLine()
+              appendLine("Installed apps (${apps.size}):")
+              apps.sorted().forEach { appendLine("  - $it") }
             }
           }
         }
@@ -95,29 +183,66 @@ class DeviceManagerToolSet(
         val device = devices.find { it.instanceId == deviceId }
           ?: return "Error: Device '$deviceId' not found. Use LIST to see available devices."
 
-        connectToDeviceUnified(device.trailblazeDeviceId)
+        connectToDeviceUnified(device.trailblazeDeviceId, force)
       }
 
       DeviceAction.ANDROID -> {
         val devices = mcpBridge.getAvailableDevices()
-        val androidDevice = devices.find { it.platform == TrailblazeDevicePlatform.ANDROID }
+        val configuredDriverType = mcpBridge.getConfiguredDriverType(TrailblazeDevicePlatform.ANDROID)
+        // Prefer the device matching the configured driver type from settings.
+        // Fall back to any Android device if no configured type matches.
+        val androidDevice = if (configuredDriverType != null) {
+          devices.find { it.trailblazeDriverType == configuredDriverType }
+            ?: devices.find { it.platform == TrailblazeDevicePlatform.ANDROID }
+        } else {
+          devices.find { it.platform == TrailblazeDevicePlatform.ANDROID }
+        }
           ?: return "No Android device available. Connect an Android device or start an emulator."
 
-        connectToDeviceUnified(androidDevice.trailblazeDeviceId)
+        connectToDeviceUnified(androidDevice.trailblazeDeviceId, force)
       }
 
       DeviceAction.IOS -> {
         val devices = mcpBridge.getAvailableDevices()
-        val iosDevice = devices.find { it.platform == TrailblazeDevicePlatform.IOS }
+        val configuredDriverType = mcpBridge.getConfiguredDriverType(TrailblazeDevicePlatform.IOS)
+        val iosDevice = if (configuredDriverType != null) {
+          devices.find { it.trailblazeDriverType == configuredDriverType }
+            ?: devices.find { it.platform == TrailblazeDevicePlatform.IOS }
+        } else {
+          devices.find { it.platform == TrailblazeDevicePlatform.IOS }
+        }
           ?: return "No iOS device available. Start an iOS simulator."
 
-        connectToDeviceUnified(iosDevice.trailblazeDeviceId)
+        connectToDeviceUnified(iosDevice.trailblazeDeviceId, force)
       }
     }
   }
 
-  private suspend fun connectToDeviceUnified(trailblazeDeviceId: TrailblazeDeviceId): String {
-    mcpBridge.selectDevice(trailblazeDeviceId)
+  private suspend fun connectToDeviceUnified(
+    trailblazeDeviceId: TrailblazeDeviceId,
+    force: Boolean = false,
+  ): String {
+    // Check exclusive device claim before connecting
+    val mcpSessionId = sessionContext?.mcpSessionId?.sessionId
+    if (deviceClaimRegistry != null && mcpSessionId != null) {
+      try {
+        deviceClaimRegistry.claim(trailblazeDeviceId, mcpSessionId, force)
+      } catch (e: DeviceAlreadyClaimedException) {
+        return "Error: ${e.message}"
+      }
+    }
+
+    try {
+      mcpBridge.selectDevice(trailblazeDeviceId)
+    } catch (e: Exception) {
+      // Release only the specific claim we just acquired — not all session claims.
+      // The session may have a valid claim on a different device that should be preserved.
+      if (deviceClaimRegistry != null && mcpSessionId != null) {
+        deviceClaimRegistry.release(trailblazeDeviceId, mcpSessionId)
+      }
+      throw e
+    }
+
     sessionContext?.setAssociatedDevice(trailblazeDeviceId)
     // Ensure a session exists and emit the session start log on connect
     mcpBridge.ensureSessionAndGetId()

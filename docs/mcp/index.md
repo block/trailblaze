@@ -2,7 +2,7 @@
 title: MCP Integration
 ---
 
-Trailblaze exposes a clean **5-tool MCP API** for mobile UI automation and test authoring.
+Trailblaze exposes a clean **5-tool MCP API** for UI automation and test authoring.
 
 ## Quick Start
 
@@ -253,7 +253,7 @@ This enables:
 - **Custom replanning logic** - Your client decides when to retry or try alternatives
 - **Cost optimization** - Trailblaze uses a cheap vision model for screen analysis
 
-See the [Two-Tier Integration Guide](./two-tier-integration.md) for details.
+See the migration guide under `docs/decisions/009_migration_guide.md` for details.
 
 ## Troubleshooting
 

@@ -89,6 +89,7 @@ open class AndroidTrailblazeRule(
       setOfMarkEnabled = config.setOfMarkEnabled,
       deviceClassifiers = trailblazeLoggingRule.trailblazeDeviceInfoProvider().classifiers,
       fullHierarchy = NativeViewHierarchyDetail.FULL_HIERARCHY in pendingDetails,
+      includeOffscreen = NativeViewHierarchyDetail.OFFSCREEN_ELEMENTS in pendingDetails,
     )
   }
 
@@ -123,6 +124,8 @@ open class AndroidTrailblazeRule(
     TrailblazeRunnerUtil(
       trailblazeRunner = trailblazeRunner,
       runTrailblazeTool = ::runTrailblazeTool,
+      trailblazeLogger = trailblazeLoggingRule.logger,
+      sessionProvider = { trailblazeLoggingRule.session ?: error("Session not available - ensure test is running") },
     )
   }
 

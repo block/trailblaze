@@ -6,7 +6,7 @@
 site_name: Trailblaze
 repo_name: Trailblaze
 repo_url: https://github.com/block/trailblaze
-site_description: "AI-powered mobile testing framework."
+site_description: "AI-powered UI testing framework."
 site_author: Block, Inc.
 remote_branch: gh-pages
 

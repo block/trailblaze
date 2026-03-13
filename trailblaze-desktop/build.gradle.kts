@@ -94,7 +94,7 @@ afterEvaluate {
     // Run from the repository root so relative paths (e.g., merchant-factory/trails/) resolve correctly.
     workingDir = rootProject.projectDir
     // Forward stdin to the JVM process so STDIO MCP transport can read JSON-RPC
-    // from the parent process's stdin (e.g., `./trailblaze mcp --stdio`).
+    // from the parent process's stdin (e.g., `./trailblaze mcp`).
     standardInput = System.`in`
 
     // Use the repo root as the working directory so that System.getProperty("user.dir")
