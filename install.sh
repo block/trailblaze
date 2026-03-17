@@ -105,8 +105,15 @@ echo ""
 echo "Trailblaze $VERSION installed to $BIN_DIR"
 echo ""
 if [ "$ALREADY_IN_PATH" = false ]; then
-  echo "Run this to start using it now:"
-  echo "  $PATH_LINE"
+  if [ -n "$RC_FILE" ]; then
+    echo "To start using it now, run:"
+    echo ""
+    echo "  source $RC_FILE"
+  else
+    echo "To start using it now, run:"
+    echo ""
+    echo "  $PATH_LINE"
+  fi
   echo ""
 fi
 echo "Then:"

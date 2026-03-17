@@ -15,6 +15,8 @@ import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.host.rules.TrailblazeHostDynamicLlmTokenProvider
 import xyz.block.trailblaze.llm.providers.TrailblazeDynamicLlmTokenProvider
+import kotlinx.coroutines.flow.StateFlow
+import xyz.block.trailblaze.logs.server.McpServerDebugState
 import xyz.block.trailblaze.ui.TrailblazeBuiltInTabs
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
@@ -203,6 +205,8 @@ abstract class TrailblazeDesktopAppConfig(
     deviceManager: TrailblazeDeviceManager,
     yamlRunner: (DesktopAppRunYamlParams) -> Unit,
     additionalInstrumentationArgsProvider: suspend () -> Map<String, String> = { additionalInstrumentationArgs() },
+    mcpServerDebugStateFlow: StateFlow<McpServerDebugState>? = null,
+    recommendTrailblazeAsAgent: Boolean = false,
   ): List<TrailblazeAppTab> {
     return getStandardTabs(
       deviceManager = deviceManager,
@@ -211,6 +215,8 @@ abstract class TrailblazeDesktopAppConfig(
       globalSettingsContent = globalSettingsContent,
       customEnvVarNames = customEnvVarNames,
       webBrowserManager = deviceManager.webBrowserManager,
+      mcpServerDebugStateFlow = mcpServerDebugStateFlow,
+      recommendTrailblazeAsAgent = recommendTrailblazeAsAgent,
     )
   }
 
@@ -231,53 +237,78 @@ abstract class TrailblazeDesktopAppConfig(
     openGoose: (() -> Unit)? = null,
     isProviderLocked: Boolean = false,
     webBrowserManager: WebBrowserManager? = null,
+    mcpServerDebugStateFlow: StateFlow<McpServerDebugState>? = null,
+    recommendTrailblazeAsAgent: Boolean = false,
   ): List<TrailblazeAppTab> {
-    return listOf(
-      TrailblazeBuiltInTabs.homeTab(
-        trailblazeSettingsRepo = trailblazeSettingsRepo,
-        deviceManager = deviceManager,
-        additionalHomeContent = homeAdditionalContent,
-      ),
-      TrailblazeBuiltInTabs.sessionsTab(
-        logsRepo = logsRepo,
-        trailblazeSettingsRepo = trailblazeSettingsRepo,
-        deviceManager = deviceManager,
-        recordedTrailsRepo = recordedTrailsRepo,
-      ),
-      TrailblazeBuiltInTabs.trailsTab(
-        trailblazeSettingsRepo = trailblazeSettingsRepo,
-        deviceManager = deviceManager,
-        currentTrailblazeLlmModelProvider = { getCurrentLlmModel() },
-        yamlRunner = yamlRunner,
-        additionalInstrumentationArgs = additionalInstrumentationArgsProvider,
-      ),
-      TrailblazeBuiltInTabs.devicesTab(
-        deviceManager = deviceManager,
-        trailblazeSettingsRepo = trailblazeSettingsRepo,
-      ),
-      TrailblazeBuiltInTabs.recordTab(
-        deviceManager = deviceManager,
-        currentTrailblazeLlmModelProvider = { getCurrentLlmModel() },
-        llmTokenProvider = llmTokenProvider,
-      ),
-      TrailblazeBuiltInTabs.yamlTab(
-        deviceManager = deviceManager,
-        trailblazeSettingsRepo = trailblazeSettingsRepo,
-        currentTrailblazeLlmModelProvider = { getCurrentLlmModel() },
-        yamlRunner = yamlRunner,
-        additionalInstrumentationArgs = additionalInstrumentationArgsProvider,
-      ),
-      TrailblazeBuiltInTabs.settingsTab(
-        trailblazeSettingsRepo = trailblazeSettingsRepo,
-        logsRepo = logsRepo,
-        globalSettingsContent = globalSettingsContent,
-        availableModelLists = getCurrentlyAvailableLlmModelLists(),
-        customEnvVarNames = customEnvVarNames,
-        openGoose = openGoose ?: { TrailblazeDesktopUtil.openGoose() },
-        isProviderLocked = isProviderLocked,
-        playwrightInstallState = webBrowserManager?.playwrightInstaller?.installState,
-        onInstallPlaywright = webBrowserManager?.let { { it.playwrightInstaller.installBrowsers() } },
-      ),
-    )
+    return buildList {
+      add(
+        TrailblazeBuiltInTabs.homeTab(
+          trailblazeSettingsRepo = trailblazeSettingsRepo,
+          deviceManager = deviceManager,
+          additionalHomeContent = homeAdditionalContent,
+        )
+      )
+      add(
+        TrailblazeBuiltInTabs.sessionsTab(
+          logsRepo = logsRepo,
+          trailblazeSettingsRepo = trailblazeSettingsRepo,
+          deviceManager = deviceManager,
+          recordedTrailsRepo = recordedTrailsRepo,
+        )
+      )
+      if (mcpServerDebugStateFlow != null) {
+        add(
+          TrailblazeBuiltInTabs.mcpTab(
+            mcpServerDebugStateFlow = mcpServerDebugStateFlow,
+            trailblazeSettingsRepo = trailblazeSettingsRepo,
+            recommendTrailblazeAsAgent = recommendTrailblazeAsAgent,
+          )
+        )
+      }
+      add(
+        TrailblazeBuiltInTabs.trailsTab(
+          trailblazeSettingsRepo = trailblazeSettingsRepo,
+          deviceManager = deviceManager,
+          currentTrailblazeLlmModelProvider = { getCurrentLlmModel() },
+          yamlRunner = yamlRunner,
+          additionalInstrumentationArgs = additionalInstrumentationArgsProvider,
+        )
+      )
+      add(
+        TrailblazeBuiltInTabs.devicesTab(
+          deviceManager = deviceManager,
+          trailblazeSettingsRepo = trailblazeSettingsRepo,
+        )
+      )
+      add(
+        TrailblazeBuiltInTabs.recordTab(
+          deviceManager = deviceManager,
+          currentTrailblazeLlmModelProvider = { getCurrentLlmModel() },
+          llmTokenProvider = llmTokenProvider,
+        )
+      )
+      add(
+        TrailblazeBuiltInTabs.yamlTab(
+          deviceManager = deviceManager,
+          trailblazeSettingsRepo = trailblazeSettingsRepo,
+          currentTrailblazeLlmModelProvider = { getCurrentLlmModel() },
+          yamlRunner = yamlRunner,
+          additionalInstrumentationArgs = additionalInstrumentationArgsProvider,
+        )
+      )
+      add(
+        TrailblazeBuiltInTabs.settingsTab(
+          trailblazeSettingsRepo = trailblazeSettingsRepo,
+          logsRepo = logsRepo,
+          globalSettingsContent = globalSettingsContent,
+          availableModelLists = getCurrentlyAvailableLlmModelLists(),
+          customEnvVarNames = customEnvVarNames,
+          openGoose = openGoose ?: { TrailblazeDesktopUtil.openGoose() },
+          isProviderLocked = isProviderLocked,
+          playwrightInstallState = webBrowserManager?.playwrightInstaller?.installState,
+          onInstallPlaywright = webBrowserManager?.let { { it.playwrightInstaller.installBrowsers() } },
+        )
+      )
+    }
   }
 }

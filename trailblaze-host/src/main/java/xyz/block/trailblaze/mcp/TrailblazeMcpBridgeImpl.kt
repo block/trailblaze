@@ -110,6 +110,13 @@ class TrailblazeMcpBridgeImpl(
   private val onDeviceAgentReady = ConcurrentHashMap.newKeySet<String>()
 
   /**
+   * Tracks devices whose driver creation failed. Keyed by device instanceId,
+   * value is the error message. Cleared when a new connection attempt starts.
+   * Used by [getDriverConnectionStatus] to report failures instead of returning null.
+   */
+  private val driverCreationFailures = ConcurrentHashMap<String, String>()
+
+  /**
    * Tracks the last driver type used to connect each device.
    * Used to detect driver type switches — when the configured driver type changes,
    * we must kill stale instrumentation processes before establishing a new connection.
@@ -162,11 +169,14 @@ class TrailblazeMcpBridgeImpl(
       // instrumentation process — HOST uses Maestro's instrumentation, while on-device
       // drivers use the Trailblaze runner. Only one can be active at a time, so we
       // must kill everything when first connecting or switching driver types.
-      HostAndroidDeviceConnectUtils.forceStopAllAndroidInstrumentationProcesses(
-        trailblazeOnDeviceInstrumentationTargetTestApps = trailblazeDeviceManager.availableAppTargets
-          .map { it.getTrailblazeOnDeviceInstrumentationTarget() }.toSet(),
-        deviceId = trailblazeDeviceId,
-      )
+      // Only applies to Android devices — iOS and Web don't use Android instrumentation.
+      if (trailblazeDeviceId.trailblazeDevicePlatform == TrailblazeDevicePlatform.ANDROID) {
+        HostAndroidDeviceConnectUtils.forceStopAllAndroidInstrumentationProcesses(
+          trailblazeOnDeviceInstrumentationTargetTestApps = trailblazeDeviceManager.availableAppTargets
+            .map { it.getTrailblazeOnDeviceInstrumentationTarget() }.toSet(),
+          deviceId = trailblazeDeviceId,
+        )
+      }
       if (isDriverTypeSwitch) {
         // Close the old persistent Maestro driver if present
         Console.log("[MCP Bridge] Closing persistent HOST driver for $key (switching to $configuredDriverType)")
@@ -204,12 +214,20 @@ class TrailblazeMcpBridgeImpl(
           }
         } else {
           driverCreationStartTimes[key] = System.currentTimeMillis()
+          driverCreationFailures.remove(key)
           val driverThread = Thread {
             try {
               synchronized(persistentDeviceLocks.computeIfAbsent(key) { Any() }) {
                 if (!persistentDevices.containsKey(key)) {
-                  createPersistentDevice(trailblazeDeviceId)?.let { device ->
-                    persistentDevices[key] = device
+                  when (val result = createPersistentDevice(trailblazeDeviceId)) {
+                    is PersistentDeviceResult.Success -> {
+                      persistentDevices[key] = result.device
+                      driverCreationFailures.remove(key)
+                    }
+                    is PersistentDeviceResult.Failure -> {
+                      driverCreationFailures[key] = "Driver initialization failed: ${result.reason}. " +
+                        "Try reconnecting with device(action=${trailblazeDeviceId.trailblazeDevicePlatform.name})."
+                    }
                   }
                 }
               }
@@ -284,7 +302,15 @@ class TrailblazeMcpBridgeImpl(
    *
    * @return The connected device, or a sentinel null that will not be stored by computeIfAbsent.
    */
-  private fun createPersistentDevice(trailblazeDeviceId: TrailblazeDeviceId): TrailblazeConnectedDevice? {
+  /**
+   * Result of attempting to create a persistent device connection.
+   */
+  private sealed class PersistentDeviceResult {
+    data class Success(val device: TrailblazeConnectedDevice) : PersistentDeviceResult()
+    data class Failure(val reason: String) : PersistentDeviceResult()
+  }
+
+  private fun createPersistentDevice(trailblazeDeviceId: TrailblazeDeviceId): PersistentDeviceResult {
     return try {
       val driverType = getConfiguredDriverType(trailblazeDeviceId.trailblazeDevicePlatform)
         ?: error("No configured driver type for ${trailblazeDeviceId.trailblazeDevicePlatform}")
@@ -293,11 +319,14 @@ class TrailblazeMcpBridgeImpl(
         driverType = driverType,
         appTarget = trailblazeDeviceManager.getCurrentSelectedTargetApp(),
       )
-      connectedDevice
+      if (connectedDevice != null) {
+        PersistentDeviceResult.Success(connectedDevice)
+      } else {
+        PersistentDeviceResult.Failure("Device service returned null for $trailblazeDeviceId")
+      }
     } catch (e: Exception) {
-      // Don't fail device selection if persistent connection fails - fallback will be used
-      Console.log("[MCP Bridge] Persistent device connection failed (fallback will be used): ${e.message}")
-      null
+      Console.log("[MCP Bridge] Persistent device connection failed: ${e.message}")
+      PersistentDeviceResult.Failure(e.message ?: "Unknown error")
     }
   }
 
@@ -432,6 +461,7 @@ class TrailblazeMcpBridgeImpl(
   override fun releasePersistentDeviceConnection(deviceId: TrailblazeDeviceId) {
     cachedScreenStates.remove(deviceId.instanceId)
     onDeviceAgentReady.remove(deviceId.instanceId)
+    driverCreationFailures.remove(deviceId.instanceId)
     closePersistentDevice(deviceId)
     Console.log("[MCP Bridge] Released persistent connection for device ${deviceId.instanceId}")
   }
@@ -580,6 +610,9 @@ class TrailblazeMcpBridgeImpl(
       val elapsedSeconds = (System.currentTimeMillis() - startTime) / 1000
       return "Device driver is still initializing (${elapsedSeconds}s elapsed). Try again shortly."
     }
+
+    // Driver creation failed — report the error so the LLM doesn't retry device()
+    driverCreationFailures[key]?.let { return it }
 
     return null
   }
@@ -975,7 +1008,22 @@ class TrailblazeMcpBridgeImpl(
   override fun selectAppTarget(appTargetId: String): String? {
     val matchingTarget = trailblazeDeviceManager.availableAppTargets.findById(appTargetId)
       ?: return null
+
+    val previousTarget = trailblazeDeviceManager.settingsRepo.getCurrentSelectedTargetApp()
     trailblazeDeviceManager.settingsRepo.targetAppSelected(matchingTarget)
+
+    // When the app target changes and either the old or new target has a custom iOS driver,
+    // release the iOS persistent device connection so it gets recreated with the correct
+    // driver wrapper (e.g., SquareTrailblazeIosDriver with custom contentDescriptor).
+    if (previousTarget?.id != appTargetId) {
+      val iosDriverChanged = previousTarget?.hasCustomIosDriver == true || matchingTarget.hasCustomIosDriver
+      val deviceId = getEffectiveDeviceId()
+      if (iosDriverChanged && deviceId != null && deviceId.trailblazeDevicePlatform == TrailblazeDevicePlatform.IOS) {
+        Console.log("[MCP Bridge] App target changed from ${previousTarget?.id} to $appTargetId (custom iOS driver involved) — releasing iOS persistent device for ${deviceId.instanceId}")
+        releasePersistentDeviceConnection(deviceId)
+      }
+    }
+
     return matchingTarget.displayName
   }
 

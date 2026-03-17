@@ -311,8 +311,6 @@ sealed interface DriverNodeMatch {
 
   /**
    * Matches against [DriverNodeDetail.IosMaestro] nodes.
-   */
-  /**
    * Only includes properties that iOS natively provides. Excludes clickable, enabled,
    * and checked which Maestro infers/defaults rather than reading from UIKit.
    */

@@ -267,31 +267,110 @@ class BridgeUiActionExecutor(
     }
   }
 
-  /** Extracts actionable element labels from the rich [TrailblazeNode] tree (accessibility driver). */
+  /**
+   * Extracts actionable element labels from the rich [TrailblazeNode] tree.
+   * Handles all [DriverNodeDetail] variants (Android, iOS/Maestro, Web, Compose).
+   */
   private fun describeFromTrailblazeNode(root: TrailblazeNode): List<String> {
     return root.aggregate().mapNotNull { node ->
-      val detail = node.driverDetail as? DriverNodeDetail.AndroidAccessibility ?: return@mapNotNull null
-
-      // Skip nodes not important for accessibility (decorative/structural)
-      if (!detail.isImportantForAccessibility) return@mapNotNull null
-      // Skip system UI
-      if (detail.packageName?.startsWith(SYSTEM_UI_PACKAGE) == true) return@mapNotNull null
-      // Skip non-actionable
-      val actionable = detail.isClickable || detail.isEditable || detail.isScrollable || detail.isCheckable
-      if (!actionable) return@mapNotNull null
-
-      val rawLabel = detail.text?.takeIf { it.isNotBlank() }
-        ?: detail.contentDescription?.takeIf { it.isNotBlank() }
-        ?: detail.hintText?.takeIf { it.isNotBlank() }
-        ?: return@mapNotNull null
-      val label = rawLabel.truncate(MAX_LABEL_LENGTH)
-      val type = inferElementTypeFromDetail(detail)
-      if (type != null) "[$type] $label" else label
+      when (val detail = node.driverDetail) {
+        is DriverNodeDetail.AndroidAccessibility -> describeAndroidAccessibilityNode(detail)
+        is DriverNodeDetail.AndroidMaestro -> describeAndroidMaestroNode(detail)
+        is DriverNodeDetail.IosMaestro -> describeIosMaestroNode(detail)
+        is DriverNodeDetail.Web -> describeWebNode(detail)
+        is DriverNodeDetail.Compose -> describeComposeNode(detail)
+      }
     }.distinct()
   }
 
+  /** Extracts a label from an [DriverNodeDetail.AndroidAccessibility] node, or null if not actionable. */
+  private fun describeAndroidAccessibilityNode(detail: DriverNodeDetail.AndroidAccessibility): String? {
+    if (!detail.isImportantForAccessibility) return null
+    if (detail.packageName?.startsWith("com.android.systemui") == true) return null
+    val actionable = detail.isClickable || detail.isEditable || detail.isScrollable || detail.isCheckable
+    if (!actionable) return null
+
+    val rawLabel = detail.text?.takeIf { it.isNotBlank() }
+      ?: detail.contentDescription?.takeIf { it.isNotBlank() }
+      ?: detail.hintText?.takeIf { it.isNotBlank() }
+      ?: return null
+    val label = rawLabel.truncate(MAX_LABEL_LENGTH)
+    val type = inferTypeFromAndroidAccessibility(detail)
+    return if (type != null) "[$type] $label" else label
+  }
+
+  /** Extracts a label from an [DriverNodeDetail.AndroidMaestro] node, or null if not actionable. */
+  private fun describeAndroidMaestroNode(detail: DriverNodeDetail.AndroidMaestro): String? {
+    val actionable = detail.clickable || detail.scrollable
+    if (!actionable) return null
+
+    val rawLabel = detail.text?.takeIf { it.isNotBlank() }
+      ?: detail.accessibilityText?.takeIf { it.isNotBlank() }
+      ?: detail.hintText?.takeIf { it.isNotBlank() }
+      ?: return null
+    val label = rawLabel.truncate(MAX_LABEL_LENGTH)
+    val type = inferTypeFromAndroidMaestro(detail)
+    return if (type != null) "[$type] $label" else label
+  }
+
+  /** Extracts a label from an [DriverNodeDetail.IosMaestro] node, or null if not actionable. */
+  private fun describeIosMaestroNode(detail: DriverNodeDetail.IosMaestro): String? {
+    val actionable = detail.clickable || detail.scrollable
+    if (!actionable) return null
+
+    val rawLabel = detail.text?.takeIf { it.isNotBlank() }
+      ?: detail.accessibilityText?.takeIf { it.isNotBlank() }
+      ?: detail.hintText?.takeIf { it.isNotBlank() }
+      ?: return null
+    val label = rawLabel.truncate(MAX_LABEL_LENGTH)
+    val type = inferTypeFromIosMaestro(detail)
+    return if (type != null) "[$type] $label" else label
+  }
+
+  /** Infers element type from [DriverNodeDetail.IosMaestro] properties. */
+  private fun inferTypeFromIosMaestro(detail: DriverNodeDetail.IosMaestro): String? {
+    if (!detail.hintText.isNullOrBlank()) return ELEMENT_TYPE_INPUT
+    if (detail.scrollable) return ELEMENT_TYPE_SCROLL
+    if (detail.checked) return ELEMENT_TYPE_CHECKBOX
+    val cls = detail.className?.substringAfterLast('.', "")?.lowercase() ?: return null
+    return when {
+      CLS_BUTTON in cls -> ELEMENT_TYPE_BUTTON
+      CLS_SWITCH in cls || CLS_TOGGLE in cls -> ELEMENT_TYPE_TOGGLE
+      CLS_TAB in cls -> ELEMENT_TYPE_TAB
+      CLS_RADIO in cls -> ELEMENT_TYPE_RADIO
+      CLS_TEXTFIELD in cls || "textview" in cls || "searchfield" in cls -> ELEMENT_TYPE_INPUT
+      CLS_IMAGE in cls && detail.clickable -> ELEMENT_TYPE_ICON
+      else -> null
+    }
+  }
+
+  /** Extracts a label from a [DriverNodeDetail.Web] node, or null if not actionable. */
+  private fun describeWebNode(detail: DriverNodeDetail.Web): String? {
+    if (!detail.isInteractive) return null
+
+    val rawLabel = detail.ariaName?.takeIf { it.isNotBlank() } ?: return null
+    val label = rawLabel.truncate(MAX_LABEL_LENGTH)
+    val type = detail.ariaRole
+    return if (type != null) "[$type] $label" else label
+  }
+
+  /** Extracts a label from a [DriverNodeDetail.Compose] node, or null if not actionable. */
+  private fun describeComposeNode(detail: DriverNodeDetail.Compose): String? {
+    val actionable = detail.hasClickAction || detail.hasScrollAction ||
+      detail.role != null || detail.editableText != null
+    if (!actionable) return null
+
+    val rawLabel = detail.editableText?.takeIf { it.isNotBlank() }
+      ?: detail.text?.takeIf { it.isNotBlank() }
+      ?: detail.contentDescription?.takeIf { it.isNotBlank() }
+      ?: return null
+    val label = rawLabel.truncate(MAX_LABEL_LENGTH)
+    val type = detail.role?.lowercase()
+    return if (type != null) "[$type] $label" else label
+  }
+
   /** Infers element type from [DriverNodeDetail.AndroidAccessibility] properties. */
-  private fun inferElementTypeFromDetail(detail: DriverNodeDetail.AndroidAccessibility): String? {
+  private fun inferTypeFromAndroidAccessibility(detail: DriverNodeDetail.AndroidAccessibility): String? {
     if (detail.isEditable) return ELEMENT_TYPE_INPUT
     if (detail.isScrollable) return ELEMENT_TYPE_SCROLL
     if (detail.isCheckable) return ELEMENT_TYPE_CHECKBOX
@@ -302,6 +381,23 @@ class BridgeUiActionExecutor(
       CLS_TAB in cls -> ELEMENT_TYPE_TAB
       CLS_BUTTON in cls -> ELEMENT_TYPE_BUTTON
       CLS_IMAGE in cls && detail.isClickable -> ELEMENT_TYPE_ICON
+      else -> null
+    }
+  }
+
+  /** Infers element type from [DriverNodeDetail.AndroidMaestro] properties. */
+  private fun inferTypeFromAndroidMaestro(detail: DriverNodeDetail.AndroidMaestro): String? {
+    if (!detail.hintText.isNullOrBlank()) return ELEMENT_TYPE_INPUT
+    if (detail.scrollable) return ELEMENT_TYPE_SCROLL
+    if (detail.checked) return ELEMENT_TYPE_CHECKBOX
+    val cls = detail.className?.substringAfterLast('.', "")?.lowercase() ?: return null
+    return when {
+      CLS_BUTTON in cls -> ELEMENT_TYPE_BUTTON
+      CLS_SWITCH in cls || CLS_TOGGLE in cls -> ELEMENT_TYPE_TOGGLE
+      CLS_TAB in cls -> ELEMENT_TYPE_TAB
+      CLS_RADIO in cls -> ELEMENT_TYPE_RADIO
+      CLS_EDITTEXT in cls || CLS_TEXTFIELD in cls || CLS_TEXTINPUT in cls -> ELEMENT_TYPE_INPUT
+      CLS_IMAGE in cls && detail.clickable -> ELEMENT_TYPE_ICON
       else -> null
     }
   }

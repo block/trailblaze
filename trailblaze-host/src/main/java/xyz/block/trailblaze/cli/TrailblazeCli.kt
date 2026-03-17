@@ -115,16 +115,17 @@ object TrailblazeCli {
       DesktopLogFileWriter.install(httpPort = httpPort)
     }
 
+    val cli = TrailblazeCliCommand(appProvider, configProvider)
+    val commandLine = CommandLine(cli)
+      .setCaseInsensitiveEnumValuesAllowed(true)
+
     // Support `sq` CLI integration: output JSON describing subcommands and exit.
     if (args.contains("--describe-commands")) {
-      println(describeCommands())
+      println(commandLine.describeCommands())
       return
     }
 
-    val cli = TrailblazeCliCommand(appProvider, configProvider)
-    val exitCode = CommandLine(cli)
-      .setCaseInsensitiveEnumValuesAllowed(true)
-      .execute(*args)
+    val exitCode = commandLine.execute(*args)
     if (exitCode != 0) {
       exitProcess(exitCode)
     }
@@ -144,37 +145,6 @@ object TrailblazeCli {
     return TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTP_PORT
   }
 
-  /**
-   * Returns JSON describing the CLI's subcommands for `sq` CLI integration.
-   *
-   * The `sq` CLI calls `trailblaze --describe-commands` to discover subcommands
-   * and display them in `sq trailblaze` help output.
-   */
-  private fun describeCommands(): String {
-    data class CommandInfo(val name: String, val summary: String)
-
-    val commands = listOf(
-      CommandInfo("run", "Run a .trail.yaml file or directory of trail files on a connected device"),
-      CommandInfo("mcp", "Start the MCP server"),
-      CommandInfo("list-devices", "List all connected devices"),
-      CommandInfo("config", "View and modify Trailblaze configuration"),
-      CommandInfo("status", "Check if the Trailblaze daemon is running"),
-      CommandInfo("stop", "Stop the Trailblaze daemon"),
-      CommandInfo("help", "Display help information about the specified command"),
-    )
-
-    val commandsJson = commands.joinToString(",\n    ") { cmd ->
-      """{"name": "${cmd.name}", "summary": "${cmd.summary}"}"""
-    }
-
-    return """{
-  "name": "trailblaze",
-  "summary": "AI-powered UI automation",
-  "commands": [
-    $commandsJson
-  ]
-}"""
-  }
 }
 
 /** Provides the version string dynamically from [TrailblazeVersion]. */
@@ -690,57 +660,11 @@ class RunCommand : Callable<Int> {
       }
     })
 
-    // Start capture streams before the run (uses temp dir, moved to session dir after).
-    // Skip when delegating to a daemon — the daemon's DesktopYamlRunner handles capture,
-    // and running two screenrecord/simctl processes on the same device causes conflicts.
-    val isDelegatingToDaemon = true // This method is only called when delegating
-    val capturePlatform = driverType?.let { dt ->
-      TrailblazeDriverType.entries.find { it.name.equals(dt, ignoreCase = true) }?.platform?.name
-    } ?: "ANDROID"
-    val captureSession = if (isDelegatingToDaemon) null else CaptureSession.fromOptions(captureOptions, capturePlatform)
-    val captureTempDir = if (captureSession != null) {
-      val trailConfig = try { createTrailblazeYaml().extractTrailConfig(yamlContent) } catch (_: Exception) { null }
-      val appId = trailConfig?.app
-      val captureDeviceId = deviceId ?: run {
-        Console.log("Warning: no --device-id specified for capture, defaulting to emulator-5554")
-        "emulator-5554"
-      }
-      val tempDir = File(System.getProperty("java.io.tmpdir"), "trailblaze-capture-${System.currentTimeMillis()}")
-      tempDir.mkdirs()
-      captureSession.startAll(tempDir, captureDeviceId, appId)
-      tempDir
-    } else null
+    // Capture is handled by the daemon's DesktopYamlRunner — running two screenrecord/simctl
+    // processes on the same device causes conflicts, so we skip capture in the CLI delegate path.
 
     val response = daemon.run(request) { progress ->
       Console.info(progress)
-    }
-
-    // Stop captures and move artifacts into the session directory.
-    // Uses copyTo+delete as fallback because renameTo fails across filesystems
-    // (e.g., java.io.tmpdir on /var vs workspace on /Volumes in CI).
-    if (captureSession != null && captureTempDir != null) {
-      try {
-        val artifacts = captureSession.stopAll()
-        val sid = response.sessionId
-        if (sid != null && artifacts.isNotEmpty()) {
-          val sessionDir = File("logs", sid)
-          if (sessionDir.exists()) {
-            // Move all files from the capture temp dir (artifacts, metadata, sprite metadata, etc.)
-            captureTempDir.listFiles()?.forEach { file ->
-              val dest = File(sessionDir, file.name)
-              if (!moveFile(file, dest)) {
-                Console.info("Warning: failed to move ${file.name} to ${dest.absolutePath}")
-              } else {
-                Console.info("Capture: ${file.name} -> ${dest.absolutePath}")
-              }
-            }
-          } else {
-            Console.info("Warning: session directory does not exist: ${sessionDir.absolutePath}")
-          }
-        }
-      } finally {
-        captureTempDir.deleteRecursively()
-      }
     }
 
     if (response.success) {
@@ -1436,7 +1360,8 @@ class RunCommand : Callable<Int> {
 @Command(
   name = "mcp",
   mixinStandardHelpOptions = true,
-  description = ["Start the MCP server"]
+  description = ["Start the MCP server"],
+  subcommands = [McpInstallCommand::class]
 )
 class McpCommand : Callable<Int> {
 

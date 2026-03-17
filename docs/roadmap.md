@@ -4,7 +4,7 @@ title: Roadmap
 
 ### Recently Completed ✓
 
-- **Multi-Agent V3 Features** ([Mobile-Agent-v3 inspired](decisions/032b_mobile_agent_v3_integration.md)):
+- **Multi-Agent V3 Features** ([Mobile-Agent-v3 inspired](https://arxiv.org/abs/2508.15144)):
   - Exception Handling: Automatic popup, ad, and error recovery
   - Reflection: Self-correction when stuck or looping
   - Task Decomposition: Break complex objectives into subtasks

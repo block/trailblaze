@@ -480,7 +480,7 @@ Trailblaze implements innovations from [Mobile-Agent-v3](https://arxiv.org/abs/2
 | **BlazeGoalPlanner** | `BlazeGoalPlanner.kt` | Orchestrates all nodes |
 | **MultiAgentV3Runner** | `MultiAgentV3Runner.kt` | High-level entry point |
 
-See the [Mobile-Agent-v3 Integration Plan](decisions/032b_mobile_agent_v3_integration.md) for detailed usage.
+See the [Mobile-Agent-v3 paper](https://arxiv.org/abs/2508.15144) for background on this architecture.
 
 ## Future Considerations
 

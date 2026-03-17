@@ -65,7 +65,7 @@ object TrailblazeNodeSelectorGenerator {
         namedWebStrategies(root, target, detail, parentMap)
       is DriverNodeDetail.Compose ->
         namedComposeStrategies(root, target, detail, parentMap)
-      is DriverNodeDetail.IosMaestro -> emptyList()
+      is DriverNodeDetail.IosMaestro -> emptyList() // TODO: implement iOS selector strategies
     }
 
     val results = mutableListOf<NamedSelector>()
@@ -119,7 +119,7 @@ object TrailblazeNodeSelectorGenerator {
         namedStructuralWebStrategies(root, target, detail, parentMap)
       is DriverNodeDetail.Compose ->
         namedStructuralComposeStrategies(root, target, detail, parentMap)
-      is DriverNodeDetail.IosMaestro -> emptyList()
+      is DriverNodeDetail.IosMaestro -> emptyList() // TODO: implement iOS structural strategies
     }
 
     for ((name, strategy) in namedStrategies) {
@@ -162,7 +162,7 @@ object TrailblazeNodeSelectorGenerator {
         webStrategies(root, target, detail, parentMap)
       is DriverNodeDetail.Compose ->
         composeStrategies(root, target, detail, parentMap)
-      is DriverNodeDetail.IosMaestro -> emptyList()
+      is DriverNodeDetail.IosMaestro -> emptyList() // TODO: implement iOS selector strategies
     }
 
     for (strategy in strategies) {

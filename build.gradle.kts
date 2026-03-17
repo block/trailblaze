@@ -85,6 +85,8 @@ subprojects
     it.afterEvaluate {
       if (it.plugins.hasPlugin("com.vanniktech.maven.publish.base")) {
         it.extensions.getByType(MavenPublishBaseExtension::class.java).also { publishing ->
+          publishing.publishToMavenCentral()
+          publishing.signAllPublications()
           publishing.pom {
             url.set("https://www.github.com/block/trailblaze")
             name = "trailblaze"

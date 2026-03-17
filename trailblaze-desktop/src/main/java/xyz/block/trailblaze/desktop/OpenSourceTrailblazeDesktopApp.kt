@@ -43,6 +43,7 @@ class OpenSourceTrailblazeDesktopApp : TrailblazeDesktopApp(
         desktopAppConfig.getTabs(
           deviceManager = deviceManager,
           yamlRunner = { desktopYamlRunner.runYaml(it) },
+          mcpServerDebugStateFlow = trailblazeMcpServer.mcpServerDebugStateFlow,
         )
       },
       deviceManager = deviceManager,

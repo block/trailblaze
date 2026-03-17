@@ -252,6 +252,13 @@ class DeviceManagerToolSet(
       }
     }
 
+    // When force=true on iOS, release any existing persistent driver so selectDevice
+    // creates a fresh one. iOS Maestro drivers can't be reused across MCP sessions
+    // (the XCTest connection goes stale), unlike Android which handles reconnection.
+    if (force && trailblazeDeviceId.trailblazeDevicePlatform == TrailblazeDevicePlatform.IOS) {
+      mcpBridge.releasePersistentDeviceConnection(trailblazeDeviceId)
+    }
+
     try {
       mcpBridge.selectDevice(trailblazeDeviceId)
     } catch (e: Exception) {
@@ -385,7 +392,7 @@ Call with an empty list to reset to only the core tools.""",
     val validIds = toolSetCatalog.map { it.id }.toSet()
     val invalidIds = toolSetIds.filter { it !in validIds }
     if (invalidIds.isNotEmpty()) {
-      return "Unknown toolset IDs: $invalidIds. Valid IDs: ${validIds.filter { id -> !toolSetCatalog.first { it.id == id }.alwaysEnabled }}"
+      return "Unknown toolset IDs: $invalidIds. Valid IDs: ${validIds.filter { id -> toolSetCatalog.firstOrNull { it.id == id }?.alwaysEnabled != true }}"
     }
 
     onActiveToolSetsChanged(toolSetIds, toolSetCatalog)

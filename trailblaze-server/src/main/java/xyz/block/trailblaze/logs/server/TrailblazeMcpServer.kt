@@ -255,7 +255,10 @@ class TrailblazeMcpServer(
     )
   }
 
-  var hostMcpToolRegistry = ToolRegistry.Companion {}
+  private val hostMcpToolRegistryBySession = ConcurrentHashMap<String, ToolRegistry>()
+
+  // Track registered TrailblazeTool names per MCP session so mode changes can clean up expanded toolsets
+  private val registeredTrailblazeToolNamesBySession = ConcurrentHashMap<String, MutableSet<String>>()
 
   fun getSessionContext(mcpSessionId: McpSessionId): TrailblazeMcpSessionContext? =
     sessionContexts[mcpSessionId.sessionId]
@@ -285,7 +288,7 @@ class TrailblazeMcpServer(
     mcpServer: Server,
     mcpSessionId: McpSessionId,
   ) {
-    hostMcpToolRegistry = hostMcpToolRegistry.plus(newToolRegistry)
+    hostMcpToolRegistryBySession[mcpSessionId.sessionId] = newToolRegistry
 
     Console.log("[MCP] Registering ${newToolRegistry.tools.size} tools from Koog registry")
     newToolRegistry.tools.forEach { tool: Tool<*, *> ->
@@ -366,6 +369,10 @@ class TrailblazeMcpServer(
 
         @Suppress("UNCHECKED_CAST")
         val koogTool = newToolRegistry.getTool(toolName)
+          ?: return@addTool CallToolResult(
+            content = mutableListOf(TextContent("Error: Tool '$toolName' not found in registry")),
+            isError = true,
+          )
 
         // Convert request arguments to JsonObject
         val argumentsJsonObject = when (val args = request.arguments) {
@@ -615,9 +622,10 @@ class TrailblazeMcpServer(
         sessionContexts[generatedSessionId] = sessionContext
         sessionCreationTimes[generatedSessionId] = System.currentTimeMillis()
 
-        // Wire up mode change callback for this session
+        // Wire up mode change callback for this session — re-register tools when mode changes
         sessionContext.onModeChanged = { newMode ->
-          Console.log("[MCP SESSION] Mode changed to ${newMode.name} for session $generatedSessionId")
+          Console.log("[MCP SESSION] Mode changed to ${newMode.name} for session $generatedSessionId — re-registering tools")
+          registerTools(mcpServer, mcpSessionId, sessionContext)
           emitDebugState()
         }
 
@@ -668,6 +676,8 @@ class TrailblazeMcpServer(
         sessionServerSessions.remove(closedSessionId)
         activeTransports.remove(closedSessionId)
         sseNotificationChannels.remove(closedSessionId)?.close()
+        registeredTrailblazeToolNamesBySession.remove(closedSessionId)
+        hostMcpToolRegistryBySession.remove(closedSessionId)
 
         emitDebugState()
       }
@@ -897,8 +907,16 @@ class TrailblazeMcpServer(
     Console.log("[MCP] registerTools called. Profile: ${sessionContext.toolProfile}, isMinimal: $isMinimalProfile")
     val toolSetCatalog = TrailblazeToolSetCatalog.defaultEntries(setOfMarkEnabled = true)
 
-    // Track currently registered TrailblazeTool names so we can remove them on toolset changes
-    val registeredTrailblazeToolNames = mutableSetOf<String>()
+    // Get or create the per-session set of registered TrailblazeTool names.
+    // Using instance-scoped tracking ensures mode changes can clean up previously expanded toolsets.
+    val registeredTrailblazeToolNames = registeredTrailblazeToolNamesBySession
+      .getOrPut(mcpSessionId.sessionId) { mutableSetOf() }
+
+    // On re-registration (mode change), remove previously registered TrailblazeTools first
+    if (registeredTrailblazeToolNames.isNotEmpty()) {
+      mcpServer.removeTools(registeredTrailblazeToolNames.toList())
+      registeredTrailblazeToolNames.clear()
+    }
 
     // Create the TrailblazeTool bridge for device control tools
     val trailblazeToolBridge = TrailblazeToolToMcpBridge(
@@ -1074,7 +1092,8 @@ class TrailblazeMcpServer(
       // Tools come from DeviceManagerToolSet (device + extras we don't want),
       // StepTool (blaze/verify/ask), and TrailTool (trail).
       val allowedTools = McpToolProfile.MINIMAL_TOOL_NAMES
-      val allRegisteredNames = hostMcpToolRegistry.tools.map { it.descriptor.name }.toSet()
+      val sessionRegistry = hostMcpToolRegistryBySession[mcpSessionId.sessionId]
+      val allRegisteredNames = (sessionRegistry?.tools ?: emptyList()).map { it.descriptor.name }.toSet()
       val toolsToRemove = allRegisteredNames - allowedTools
       if (toolsToRemove.isNotEmpty()) {
         mcpServer.removeTools(toolsToRemove.toList())
@@ -1312,6 +1331,8 @@ class TrailblazeMcpServer(
 
       sessionContexts.remove(mcpSessionId.sessionId)
       sessionCreationTimes.remove(mcpSessionId.sessionId)
+      registeredTrailblazeToolNamesBySession.remove(mcpSessionId.sessionId)
+      hostMcpToolRegistryBySession.remove(mcpSessionId.sessionId)
       done.complete()
     }
     done.join()

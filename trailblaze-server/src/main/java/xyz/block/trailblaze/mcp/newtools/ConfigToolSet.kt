@@ -11,6 +11,7 @@ import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.McpToolProfile
 import xyz.block.trailblaze.mcp.ScreenshotFormat
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
+import xyz.block.trailblaze.mcp.TrailblazeMcpMode
 import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
 import xyz.block.trailblaze.mcp.ViewHierarchyVerbosity
 import xyz.block.trailblaze.mcp.toolsets.ToolLoadingStrategy
@@ -218,6 +219,12 @@ class ConfigToolSet(
         sessionContext?.toolProfile = profile
         null
       }
+      KEY_MODE -> {
+        val modeValue = TrailblazeMcpMode.entries.find { it.name.equals(value, ignoreCase = true) }
+          ?: return "Invalid mode: $value"
+        sessionContext?.setModeAndNotify(modeValue)
+        null
+      }
       else -> "Unknown config key: $key"
     }
   }
@@ -240,6 +247,7 @@ class ConfigToolSet(
     const val KEY_SCREENSHOT_FORMAT = "screenshotFormat"
     const val KEY_VIEW_HIERARCHY_VERBOSITY = "viewHierarchyVerbosity"
     const val KEY_TOOL_LOADING_STRATEGY = "toolLoadingStrategy"
+    const val KEY_MODE = "mode"
     const val KEY_TOOL_PROFILE = "toolProfile"
 
     internal fun getAllConfigValues(
@@ -273,6 +281,7 @@ class ConfigToolSet(
 
       // Session-level settings
       sessionContext?.let { ctx ->
+        values[KEY_MODE] = ctx.mode.name
         values[KEY_SCREENSHOT_FORMAT] = ctx.screenshotFormat.name
         values[KEY_VIEW_HIERARCHY_VERBOSITY] = ctx.viewHierarchyVerbosity.name
         values[KEY_TOOL_LOADING_STRATEGY] = ctx.toolLoadingStrategy.name
@@ -283,6 +292,14 @@ class ConfigToolSet(
     }
 
     internal val CONFIG_KEYS = listOf(
+      ConfigKeyDef(
+        key = KEY_MODE,
+        description =
+          "Operating mode: MCP_CLIENT_AS_AGENT (client LLM reasons and calls device primitives) " +
+            "or TRAILBLAZE_AS_AGENT (Trailblaze reasons internally via runPrompt/blaze/verify tools, " +
+            "requires LLM configured in Settings)",
+        validValues = TrailblazeMcpMode.entries.map { it.name },
+      ),
       ConfigKeyDef(
         key = KEY_TARGET_APP,
         description = "Target app for device connections and custom tools",

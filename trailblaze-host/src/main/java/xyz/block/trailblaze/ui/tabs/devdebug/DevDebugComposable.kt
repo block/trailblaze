@@ -452,11 +452,9 @@ private fun McpSessionsDebugTab(mcpServerDebugStateFlow: StateFlow<McpServerDebu
         )
       }
 
-      if (mcpState.isRunning && mcpState.serverStartTimeMillis > 0) {
-        val uptimeSeconds = (System.currentTimeMillis() - mcpState.serverStartTimeMillis) / 1000
-        val uptimeMinutes = uptimeSeconds / 60
+      if (mcpState.isRunning) {
         Text(
-          text = "Uptime: ${uptimeMinutes}m ${uptimeSeconds % 60}s",
+          text = "MCP Enabled",
           style = MaterialTheme.typography.bodySmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

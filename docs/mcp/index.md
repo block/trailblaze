@@ -176,14 +176,55 @@ Trails are saved as `.trail.yaml` files in the `trails/` directory:
 ### Running the Server
 
 ```shell
-./trailblaze
+trailblaze
 ```
 
 This starts:
 - MCP server on `http://localhost:52525/mcp`
 - Web UI for monitoring
 
+### Quick Setup with `trailblaze mcp install`
+
+The fastest way to configure your MCP client:
+
+```shell
+trailblaze mcp install claude    # Configure Claude Desktop
+trailblaze mcp install cursor    # Configure Cursor
+trailblaze mcp install goose     # Print Goose configuration instructions
+trailblaze mcp install            # Configure all supported tools
+```
+
+### Connecting from Claude Desktop
+
+Run `trailblaze mcp install claude`, or manually add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "trailblaze": {
+      "url": "http://localhost:52525/mcp"
+    }
+  }
+}
+```
+
+### Connecting from Cursor
+
+Run `trailblaze mcp install cursor`, or manually add to `~/.cursor/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "trailblaze": {
+      "url": "http://localhost:52525/mcp"
+    }
+  }
+}
+```
+
 ### Connecting from Goose
+
+Run `trailblaze mcp install goose` for instructions, or manually configure:
 
 1. Download [Goose Desktop](https://block.github.io/goose/docs/getting-started/installation/)
 2. Add a new extension:
@@ -192,13 +233,15 @@ This starts:
    - **Type**: `streamable_http`
    - **URI**: `http://localhost:52525/mcp`
 
-### Connecting from Firebender/Cursor
+Or add to `~/.config/goose/config.yaml` under `mcpServers`:
 
-- **ID**: `trailblaze`
-- **Name**: `Trailblaze`
-- **Description**: `A tool to facilitate the creation and execution of mobile ui tests using natural language using the Trailblaze library.`
-- **Type**: `streamable_http`
-- **URI**: `http://localhost:52525/mcp` (use your configured HTTP port if different from the default)
+```yaml
+trailblaze:
+  type: streamable_http
+  url: http://localhost:52525/mcp
+```
+
+### Connecting from Firebender
 
 Add to `~/.firebender/firebender.json`:
 

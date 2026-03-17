@@ -59,6 +59,13 @@ abstract class TrailblazeHostAppTarget(
    *   NOTE: It is typed as [Any] because it's in KMP code and Maestro is JVM Only.
    * @return Return the original [originalIosDriver] or your custom "IOSDriver"
    */
+  /**
+   * Whether this app target provides a custom iOS driver via [getCustomIosDriverFactory].
+   * When true, switching to/from this target requires releasing the persistent iOS device
+   * connection so the driver gets recreated with the correct wrapper.
+   */
+  open val hasCustomIosDriver: Boolean = false
+
   open fun getCustomIosDriverFactory(trailblazeDeviceId: TrailblazeDeviceId, originalIosDriver: Any): Any =
     originalIosDriver
 

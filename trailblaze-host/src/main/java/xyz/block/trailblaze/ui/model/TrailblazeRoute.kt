@@ -11,6 +11,7 @@ import androidx.compose.material.icons.filled.Smartphone
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.compositionLocalOf
+import xyz.block.trailblaze.ui.icons.McpLogo
 import androidx.navigation.NavHostController
 import kotlinx.serialization.Serializable
 
@@ -115,6 +116,14 @@ interface TrailblazeRoute {
     override val displayName = "Record"
     override val icon: @Composable () -> Unit = {
       Icon(Icons.Filled.FiberManualRecord, contentDescription = "Record")
+    }
+  }
+
+  @Serializable
+  data object Mcp : TrailblazeRoute {
+    override val displayName = "MCP"
+    override val icon: @Composable () -> Unit = {
+      Icon(McpLogo, contentDescription = "MCP")
     }
   }
 }

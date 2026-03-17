@@ -237,14 +237,20 @@ class McpProxy(
   }
 
   /**
-   * Find the trailblaze launcher script relative to the working directory.
+   * Find the trailblaze launcher script next to the running JAR,
+   * falling back to well-known relative paths for local development.
    */
   private fun findLauncher(): File? {
-    val candidates = listOf(
-      File("trailblaze"),
-      File("opensource/trailblaze"),
-    )
-    return candidates.firstOrNull { it.exists() && it.canExecute() }
+    // Launcher next to the JAR (install.sh / release builds).
+    val jarDir = McpProxy::class.java.protectionDomain?.codeSource?.location?.toURI()?.let { File(it).parentFile }
+    if (jarDir != null) {
+      val launcher = File(jarDir, "trailblaze")
+      if (launcher.exists() && launcher.canExecute()) return launcher
+    }
+
+    // Fallback: relative to CWD (local development from repo root).
+    return listOf(File("trailblaze"), File("opensource/trailblaze"))
+      .firstOrNull { it.exists() && it.canExecute() }
   }
 
   /**

@@ -104,7 +104,7 @@ $THIS_DOC_IS_GENERATED_MESSAGE
     }
 
     private fun createFunctionsIndexPage(toolSets: Set<TrailblazeToolSet>) {
-        val map = toolSets.associate { it.name to it.toolClasses.map { it.toolName().toolName }.toSet() }
+        val map = toolSets.associate { it.name to it.toolClasses.filter { it.toKoogToolDescriptor() != null }.map { it.toolName().toolName }.toSet() }
 
         File(generatedDir, "TOOLS.md").also { file ->
             val text = buildString {

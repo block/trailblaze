@@ -23,8 +23,10 @@ import xyz.block.trailblaze.ui.tabs.sessions.SessionsTabComposableJvm
 import xyz.block.trailblaze.ui.tabs.sessions.YamlTabComposable
 import xyz.block.trailblaze.ui.tabs.settings.SettingsTabComposables
 import xyz.block.trailblaze.llm.providers.TrailblazeDynamicLlmTokenProvider
+import xyz.block.trailblaze.ui.tabs.mcp.McpTabComposable
 import xyz.block.trailblaze.ui.tabs.recording.RecordingTabComposable
 import xyz.block.trailblaze.ui.tabs.trails.TrailsBrowserTabComposable
+import xyz.block.trailblaze.logs.server.McpServerDebugState
 import kotlin.system.exitProcess
 
 /**
@@ -161,6 +163,25 @@ object TrailblazeBuiltInTabs {
         currentTrailblazeLlmModelProvider = currentTrailblazeLlmModelProvider,
         llmTokenProvider = llmTokenProvider,
         onSaveTrail = onSaveTrail,
+      )
+    }
+  )
+
+  /**
+   * Creates the MCP tab which shows server status, active sessions,
+   * and setup instructions for MCP clients like Claude Code and Goose.
+   */
+  fun mcpTab(
+    mcpServerDebugStateFlow: StateFlow<McpServerDebugState>,
+    trailblazeSettingsRepo: TrailblazeSettingsRepo,
+    recommendTrailblazeAsAgent: Boolean = false,
+  ): TrailblazeAppTab = TrailblazeAppTab(
+    route = TrailblazeRoute.Mcp,
+    content = {
+      McpTabComposable(
+        mcpServerDebugStateFlow = mcpServerDebugStateFlow,
+        trailblazeSettingsRepo = trailblazeSettingsRepo,
+        recommendTrailblazeAsAgent = recommendTrailblazeAsAgent,
       )
     }
   )

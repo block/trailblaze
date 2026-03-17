@@ -86,6 +86,7 @@ Start the MCP server
 
 ```
 trailblaze mcp [OPTIONS]
+trailblaze mcp install
 ```
 
 **Options:**
@@ -95,6 +96,32 @@ trailblaze mcp [OPTIONS]
 | `--http` | Use Streamable HTTP transport instead of STDIO. Starts a standalone HTTP MCP server. | - |
 | `--direct`, `--no-daemon` | Run as an in-process MCP server over STDIO instead of the default proxy mode. Bypasses the Trailblaze daemon and runs everything in a single process. Use this for environments where the HTTP daemon cannot run. | - |
 | `--tool-profile` | Tool profile: FULL or MINIMAL (only device/blaze/verify/ask/trail). Defaults to MINIMAL for STDIO, FULL for HTTP. | - |
+| `-h`, `--help` | Show this help message and exit. | - |
+| `-V`, `--version` | Print version information and exit. | - |
+
+---
+
+### `trailblaze mcp install`
+
+Install MCP configuration for AI coding tools
+
+**Synopsis:**
+
+```
+trailblaze mcp install [OPTIONS] [<<target>>]
+```
+
+**Arguments:**
+
+| Argument | Description | Required |
+|----------|-------------|----------|
+| `<<target>>` | Target tool: claude, cursor, goose (omit to install all) | No |
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--port` | MCP endpoint port (default: 52525) | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
 
