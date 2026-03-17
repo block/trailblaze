@@ -13,6 +13,8 @@ import xyz.block.trailblaze.android.maestro.LoggingDriver
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.host.devices.TrailblazeConnectedDevice
 import xyz.block.trailblaze.host.devices.TrailblazeDeviceService
 import xyz.block.trailblaze.host.screenstate.HostMaestroDriverScreenState
@@ -45,9 +47,15 @@ class MaestroHostRunnerImpl(
   private val pendingViewHierarchyDetailsProvider: (() -> Set<NativeViewHierarchyDetail>)? = null,
 ) : MaestroHostRunner {
   val connectedDevice: TrailblazeConnectedDevice by lazy {
+    val hostDriverType = when (trailblazeDeviceId.trailblazeDevicePlatform) {
+      TrailblazeDevicePlatform.ANDROID -> TrailblazeDriverType.ANDROID_HOST
+      TrailblazeDevicePlatform.IOS -> TrailblazeDriverType.IOS_HOST
+      TrailblazeDevicePlatform.WEB -> error("Web tests do not use MaestroHostRunnerImpl")
+    }
     TrailblazeDeviceService.getConnectedDevice(
       trailblazeDeviceId = trailblazeDeviceId,
-      appTarget = appTarget
+      driverType = hostDriverType,
+      appTarget = appTarget,
     ) ?: error(
       "No connected device matching $trailblazeDeviceId found.",
     )

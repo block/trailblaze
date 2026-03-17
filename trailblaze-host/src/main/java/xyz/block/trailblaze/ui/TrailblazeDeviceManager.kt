@@ -355,6 +355,7 @@ class TrailblazeDeviceManager(
     val driverType = deviceState.device.trailblazeDriverType
 
     return when (driverType) {
+      TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
       TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION -> {
         // Use RPC for on-device Android instrumentation
         getCurrentScreenStateViaRpc(trailblazeDeviceId)
@@ -366,7 +367,6 @@ class TrailblazeDeviceManager(
         // Use direct Maestro driver access for host drivers
         getCurrentScreenStateViaDriver(trailblazeDeviceId)
       }
-      TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
       TrailblazeDriverType.COMPOSE -> {
         // Not currently supported for direct screen capture
         Console.log("⚠️ Screen state capture not supported for ${driverType.name} driver")

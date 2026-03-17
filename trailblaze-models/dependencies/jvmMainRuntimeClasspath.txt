@@ -75,8 +75,8 @@ it.krzeminski:snakeyaml-engine-kmp:4.0.1
 net.thauvin.erik.urlencoder:urlencoder-lib-jvm:1.6.0
 net.thauvin.erik.urlencoder:urlencoder-lib:1.6.0
 org.jetbrains.kotlin:kotlin-bom:2.3.10
-org.jetbrains.kotlin:kotlin-reflect:2.3.10
-org.jetbrains.kotlin:kotlin-stdlib:2.3.10
+org.jetbrains.kotlin:kotlin-reflect:2.3.20
+org.jetbrains.kotlin:kotlin-stdlib:2.3.20
 org.jetbrains.kotlinx:kotlinx-coroutines-bom:1.10.2
 org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:1.10.2
 org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2

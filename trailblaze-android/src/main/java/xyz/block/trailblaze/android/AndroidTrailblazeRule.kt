@@ -296,7 +296,7 @@ open class AndroidTrailblazeRule(
      */
     @Deprecated("Only use this on-device when no deviceId is available (like in a connectedDebugAndroidTest)")
     val DEFAULT_JUNIT_TEST_ANDROID_ON_DEVICE_TRAILBLAZE_DEVICE_ID = TrailblazeDeviceId(
-      instanceId = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION.name,
+      instanceId = TrailblazeDriverType.DEFAULT_ANDROID_ON_DEVICE.name,
       trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
     )
   }

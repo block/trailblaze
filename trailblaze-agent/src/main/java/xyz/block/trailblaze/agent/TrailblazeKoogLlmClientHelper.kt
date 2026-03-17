@@ -35,7 +35,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.SetActiveToolSetsTrailblazeTool
+import xyz.block.trailblaze.toolcalls.ConfigTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.Status
 import xyz.block.trailblaze.toolcalls.getToolNameFromAnnotation
 import xyz.block.trailblaze.util.TemplatingUtil
@@ -131,10 +131,9 @@ class TrailblazeKoogLlmClientHelper(
       }
     }
 
-    is SetActiveToolSetsTrailblazeTool -> {
-      val result = toolRepo.setActiveToolSets(trailblazeTool.toolSetIds)
+    is ConfigTrailblazeTool -> {
       ToolExecutionResult(
-        result = TrailblazeToolResult.Success(message = result),
+        result = trailblazeTool.execute(toolRepo),
         executedTools = listOf(trailblazeTool),
       )
     }

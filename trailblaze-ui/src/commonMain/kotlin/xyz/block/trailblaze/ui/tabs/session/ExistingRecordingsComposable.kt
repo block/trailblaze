@@ -98,9 +98,7 @@ private fun ExistingRecordingItem(
       verticalAlignment = Alignment.CenterVertically,
       modifier = Modifier.weight(1f)
     ) {
-      val devicePlatform = TrailblazeDevicePlatform.entries.firstOrNull {
-        it.name.equals(trail.platform?.classifier, ignoreCase = true)
-      }
+      val devicePlatform = trail.platform?.classifier?.let { TrailblazeDevicePlatform.fromString(it) }
 
       // Platform indicator icon
       when (devicePlatform) {

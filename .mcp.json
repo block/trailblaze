@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "trailblaze": {
+      "command": "./trailblaze",
+      "args": ["mcp"],
+      "env": {
+      }
+    }
+  }
+}

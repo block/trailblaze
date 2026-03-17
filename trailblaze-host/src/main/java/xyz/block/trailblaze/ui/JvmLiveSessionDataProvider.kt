@@ -3,7 +3,7 @@ package xyz.block.trailblaze.ui
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
-import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionInfo
@@ -42,7 +42,7 @@ class JvmLiveSessionDataProvider(
       // Check if this is an on-device session
       val driverType = deviceInfo.trailblazeDriverType
 
-      if (driverType == TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION) {
+      if (!driverType.isHost && driverType.platform == TrailblazeDevicePlatform.ANDROID) {
         // For on-device tests, send cancel request to the device's RPC server
         withContext(Dispatchers.IO) {
           sessionInfo.trailblazeDeviceId?.let { trailblazeDeviceId ->

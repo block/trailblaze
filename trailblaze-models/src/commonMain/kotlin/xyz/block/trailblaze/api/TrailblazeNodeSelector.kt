@@ -51,6 +51,9 @@ data class TrailblazeNodeSelector(
   /** Compose driver matcher. */
   val compose: DriverNodeMatch.Compose? = null,
 
+  /** iOS Maestro accessibility hierarchy matcher. */
+  val iosMaestro: DriverNodeMatch.IosMaestro? = null,
+
   // --- Spatial relationships ---
 
   /** Target must be below (lower Y) an element matching this selector. */
@@ -90,7 +93,7 @@ data class TrailblazeNodeSelector(
    */
   @kotlinx.serialization.Transient
   val driverMatch: DriverNodeMatch?
-    get() = androidAccessibility ?: androidMaestro ?: web ?: compose
+    get() = androidAccessibility ?: androidMaestro ?: web ?: compose ?: iosMaestro
 
   companion object {
     /**
@@ -112,6 +115,7 @@ data class TrailblazeNodeSelector(
       androidMaestro = match as? DriverNodeMatch.AndroidMaestro,
       web = match as? DriverNodeMatch.Web,
       compose = match as? DriverNodeMatch.Compose,
+      iosMaestro = match as? DriverNodeMatch.IosMaestro,
       below = below,
       above = above,
       leftOf = leftOf,
@@ -297,6 +301,42 @@ sealed interface DriverNodeMatch {
       cssSelector?.let { parts.add("css=$it") }
       dataTestId?.let { parts.add("testid=\"$it\"") }
       nthIndex?.let { parts.add("nth=$it") }
+      append(parts.joinToString(", "))
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // iOS Maestro matcher
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Matches against [DriverNodeDetail.IosMaestro] nodes.
+   */
+  /**
+   * Only includes properties that iOS natively provides. Excludes clickable, enabled,
+   * and checked which Maestro infers/defaults rather than reading from UIKit.
+   */
+  @Serializable
+  @SerialName("iosMaestro")
+  data class IosMaestro(
+    val textRegex: String? = null,
+    val resourceIdRegex: String? = null,
+    val accessibilityTextRegex: String? = null,
+    val classNameRegex: String? = null,
+    val hintTextRegex: String? = null,
+    val focused: Boolean? = null,
+    val selected: Boolean? = null,
+  ) : DriverNodeMatch {
+
+    override fun description(): String = buildString {
+      val parts = mutableListOf<String>()
+      textRegex?.let { parts.add("\"$it\"") }
+      resourceIdRegex?.let { parts.add("id~\"$it\"") }
+      accessibilityTextRegex?.let { parts.add("a11y~\"$it\"") }
+      classNameRegex?.let { parts.add("class~\"$it\"") }
+      hintTextRegex?.let { parts.add("hint~\"$it\"") }
+      focused?.let { parts.add(if (it) "focused" else "not focused") }
+      selected?.let { parts.add(if (it) "selected" else "not selected") }
       append(parts.joinToString(", "))
     }
   }

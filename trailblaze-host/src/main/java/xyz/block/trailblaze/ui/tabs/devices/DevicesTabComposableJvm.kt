@@ -32,6 +32,7 @@ import kotlinx.coroutines.withContext
 import maestro.Driver
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.host.devices.TrailblazeDeviceService
 import xyz.block.trailblaze.host.devices.WebBrowserState
 import xyz.block.trailblaze.host.recording.MaestroDeviceScreenStream
@@ -93,6 +94,7 @@ fun DevicesTabComposable(
     if (selectedMobileDevice != null) {
       MobileDevicePreviewPanel(
         deviceId = selectedMobileDevice.trailblazeDeviceId,
+        driverType = selectedMobileDevice.trailblazeDriverType,
         deviceDescription = selectedMobileDevice.description,
       )
     }
@@ -152,6 +154,7 @@ private sealed interface MobilePreviewState {
 @Composable
 private fun MobileDevicePreviewPanel(
   deviceId: TrailblazeDeviceId,
+  driverType: TrailblazeDriverType,
   deviceDescription: String,
 ) {
   var previewState by remember(deviceId) { mutableStateOf<MobilePreviewState>(MobilePreviewState.Disconnected) }
@@ -190,7 +193,7 @@ private fun MobileDevicePreviewPanel(
             scope.launch {
               try {
                 val connectedDevice = withContext(Dispatchers.IO) {
-                  TrailblazeDeviceService.getConnectedDevice(deviceId)
+                  TrailblazeDeviceService.getConnectedDevice(deviceId, driverType)
                 }
                 if (connectedDevice != null) {
                   val driver = connectedDevice.getMaestroDriver()

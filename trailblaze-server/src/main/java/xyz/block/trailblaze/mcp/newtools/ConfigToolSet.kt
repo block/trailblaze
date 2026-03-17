@@ -162,7 +162,7 @@ class ConfigToolSet(
   // Config key definitions
   // ─────────────────────────────────────────────────────────────────────────────
 
-  private data class ConfigKeyDef(
+  internal data class ConfigKeyDef(
     val key: String,
     val description: String,
     val validValues: List<String>? = null,
@@ -171,74 +171,48 @@ class ConfigToolSet(
   private fun findConfigKey(key: String): ConfigKeyDef? =
     CONFIG_KEYS.find { it.key.equals(key, ignoreCase = true) }
 
-  private fun getAllConfigValues(): Map<String, String> {
-    val values = mutableMapOf<String, String>()
-
-    // Global settings (from bridge → settings repo)
-    mcpBridge.getConfiguredDriverType(TrailblazeDevicePlatform.ANDROID)?.let {
-      values["androidDriver"] = it.name
-    }
-    mcpBridge.getConfiguredDriverType(TrailblazeDevicePlatform.IOS)?.let {
-      values["iosDriver"] = it.name
-    }
-    mcpBridge.getConfiguredDriverType(TrailblazeDevicePlatform.WEB)?.let {
-      values["webDriver"] = it.name
-    }
-
-    // LLM settings from bridge
-    mcpBridge.getLlmConfig()?.let { (provider, model) ->
-      values["llmProvider"] = provider
-      values["llmModel"] = model
-    }
-
-    // Global agent implementation from bridge
-    mcpBridge.getAgentImplementation()?.let { values["agentImplementation"] = it.name }
-
-    // Session-level settings
-    sessionContext?.let { ctx ->
-      values["screenshotFormat"] = ctx.screenshotFormat.name
-      values["viewHierarchyVerbosity"] = ctx.viewHierarchyVerbosity.name
-      values["toolLoadingStrategy"] = ctx.toolLoadingStrategy.name
-      values["toolProfile"] = ctx.toolProfile.name
-    }
-
-    return values
-  }
+  private fun getAllConfigValues(): Map<String, String> =
+    Companion.getAllConfigValues(sessionContext, mcpBridge)
 
   private fun applyConfigValue(key: String, value: String): String? {
     return when (key) {
-      "androidDriver" -> setDriverType(TrailblazeDevicePlatform.ANDROID, value)
-      "iosDriver" -> setDriverType(TrailblazeDevicePlatform.IOS, value)
-      "webDriver" -> setDriverType(TrailblazeDevicePlatform.WEB, value)
-      "llmProvider" -> mcpBridge.setLlmConfig(provider = value, model = null)
-      "llmModel" -> mcpBridge.setLlmConfig(provider = null, model = value)
-      "agentImplementation" -> {
+      KEY_TARGET_APP -> {
+        mcpBridge.selectAppTarget(value)
+          ?: return "Unknown app target '$value'. Available: ${mcpBridge.getAvailableAppTargets().joinToString { it.id }}"
+        null // success
+      }
+      KEY_ANDROID_DRIVER -> setDriverType(TrailblazeDevicePlatform.ANDROID, value)
+      KEY_IOS_DRIVER -> setDriverType(TrailblazeDevicePlatform.IOS, value)
+      KEY_WEB_DRIVER -> setDriverType(TrailblazeDevicePlatform.WEB, value)
+      KEY_LLM_PROVIDER -> mcpBridge.setLlmConfig(provider = value, model = null)
+      KEY_LLM_MODEL -> mcpBridge.setLlmConfig(provider = null, model = value)
+      KEY_AGENT_IMPLEMENTATION -> {
         val impl = AgentImplementation.entries.find { it.name.equals(value, ignoreCase = true) }
           ?: return "Invalid implementation: $value"
         sessionContext?.agentImplementation = impl
         mcpBridge.setAgentImplementation(impl)
       }
-      "screenshotFormat" -> {
+      KEY_SCREENSHOT_FORMAT -> {
         val format = ScreenshotFormat.entries.find { it.name.equals(value, ignoreCase = true) }
           ?: return "Invalid screenshot format: $value"
         sessionContext?.screenshotFormat = format
         null
       }
-      "viewHierarchyVerbosity" -> {
+      KEY_VIEW_HIERARCHY_VERBOSITY -> {
         val verbosity =
           ViewHierarchyVerbosity.entries.find { it.name.equals(value, ignoreCase = true) }
             ?: return "Invalid verbosity: $value"
         sessionContext?.viewHierarchyVerbosity = verbosity
         null
       }
-      "toolLoadingStrategy" -> {
+      KEY_TOOL_LOADING_STRATEGY -> {
         val strategy =
           ToolLoadingStrategy.entries.find { it.name.equals(value, ignoreCase = true) }
             ?: return "Invalid strategy: $value"
         sessionContext?.toolLoadingStrategy = strategy
         null
       }
-      "toolProfile" -> {
+      KEY_TOOL_PROFILE -> {
         val profile = McpToolProfile.entries.find { it.name.equals(value, ignoreCase = true) }
           ?: return "Invalid tool profile: $value"
         sessionContext?.toolProfile = profile
@@ -249,65 +223,121 @@ class ConfigToolSet(
   }
 
   private fun setDriverType(platform: TrailblazeDevicePlatform, value: String): String? {
-    val driverType = TrailblazeDriverType.entries.find {
-      it.name.equals(value, ignoreCase = true) && it.platform == platform
-    } ?: return "Invalid ${platform.displayName} driver type: $value"
+    val driverType = TrailblazeDriverType.fromString(value)
+      ?: return "Invalid ${platform.displayName} driver type: $value"
     return mcpBridge.setConfiguredDriverType(platform, driverType)
   }
 
   companion object {
-    private val CONFIG_KEYS = listOf(
+    // Config key constants
+    const val KEY_TARGET_APP = "targetApp"
+    const val KEY_ANDROID_DRIVER = "androidDriver"
+    const val KEY_IOS_DRIVER = "iosDriver"
+    const val KEY_WEB_DRIVER = "webDriver"
+    const val KEY_LLM_PROVIDER = "llmProvider"
+    const val KEY_LLM_MODEL = "llmModel"
+    const val KEY_AGENT_IMPLEMENTATION = "agentImplementation"
+    const val KEY_SCREENSHOT_FORMAT = "screenshotFormat"
+    const val KEY_VIEW_HIERARCHY_VERBOSITY = "viewHierarchyVerbosity"
+    const val KEY_TOOL_LOADING_STRATEGY = "toolLoadingStrategy"
+    const val KEY_TOOL_PROFILE = "toolProfile"
+
+    internal fun getAllConfigValues(
+      sessionContext: TrailblazeMcpSessionContext?,
+      mcpBridge: TrailblazeMcpBridge,
+    ): Map<String, String> {
+      val values = mutableMapOf<String, String>()
+
+      // Target app selection
+      mcpBridge.getCurrentAppTargetId()?.let { values[KEY_TARGET_APP] = it }
+
+      // Global settings (from bridge → settings repo)
+      mcpBridge.getConfiguredDriverType(TrailblazeDevicePlatform.ANDROID)?.let {
+        values[KEY_ANDROID_DRIVER] = it.name
+      }
+      mcpBridge.getConfiguredDriverType(TrailblazeDevicePlatform.IOS)?.let {
+        values[KEY_IOS_DRIVER] = it.name
+      }
+      mcpBridge.getConfiguredDriverType(TrailblazeDevicePlatform.WEB)?.let {
+        values[KEY_WEB_DRIVER] = it.name
+      }
+
+      // LLM settings from bridge
+      mcpBridge.getLlmConfig()?.let { (provider, model) ->
+        values[KEY_LLM_PROVIDER] = provider
+        values[KEY_LLM_MODEL] = model
+      }
+
+      // Global agent implementation from bridge
+      mcpBridge.getAgentImplementation()?.let { values[KEY_AGENT_IMPLEMENTATION] = it.name }
+
+      // Session-level settings
+      sessionContext?.let { ctx ->
+        values[KEY_SCREENSHOT_FORMAT] = ctx.screenshotFormat.name
+        values[KEY_VIEW_HIERARCHY_VERBOSITY] = ctx.viewHierarchyVerbosity.name
+        values[KEY_TOOL_LOADING_STRATEGY] = ctx.toolLoadingStrategy.name
+        values[KEY_TOOL_PROFILE] = ctx.toolProfile.name
+      }
+
+      return values
+    }
+
+    internal val CONFIG_KEYS = listOf(
       ConfigKeyDef(
-        key = "androidDriver",
+        key = KEY_TARGET_APP,
+        description = "Target app for device connections and custom tools",
+      ),
+      ConfigKeyDef(
+        key = KEY_ANDROID_DRIVER,
         description = "Android device driver type",
         validValues = TrailblazeDriverType.entries
           .filter { it.platform == TrailblazeDevicePlatform.ANDROID }
           .map { it.name },
       ),
       ConfigKeyDef(
-        key = "iosDriver",
+        key = KEY_IOS_DRIVER,
         description = "iOS device driver type",
         validValues = TrailblazeDriverType.entries
           .filter { it.platform == TrailblazeDevicePlatform.IOS }
           .map { it.name },
       ),
       ConfigKeyDef(
-        key = "webDriver",
+        key = KEY_WEB_DRIVER,
         description = "Web device driver type",
         validValues = TrailblazeDriverType.entries
           .filter { it.platform == TrailblazeDevicePlatform.WEB }
           .map { it.name },
       ),
       ConfigKeyDef(
-        key = "llmProvider",
+        key = KEY_LLM_PROVIDER,
         description = "LLM provider (e.g., openai, anthropic, google, ollama)",
       ),
       ConfigKeyDef(
-        key = "llmModel",
+        key = KEY_LLM_MODEL,
         description = "LLM model ID (e.g., gpt-4.1, claude-sonnet-4-20250514)",
       ),
       ConfigKeyDef(
-        key = "agentImplementation",
+        key = KEY_AGENT_IMPLEMENTATION,
         description = "Agent architecture for automation",
         validValues = AgentImplementation.entries.map { it.name },
       ),
       ConfigKeyDef(
-        key = "screenshotFormat",
+        key = KEY_SCREENSHOT_FORMAT,
         description = "How screenshots are included in tool responses",
         validValues = ScreenshotFormat.entries.map { it.name },
       ),
       ConfigKeyDef(
-        key = "viewHierarchyVerbosity",
+        key = KEY_VIEW_HIERARCHY_VERBOSITY,
         description = "Detail level for view hierarchy data",
         validValues = ViewHierarchyVerbosity.entries.map { it.name },
       ),
       ConfigKeyDef(
-        key = "toolLoadingStrategy",
+        key = KEY_TOOL_LOADING_STRATEGY,
         description = "How tools are loaded (ALL_TOOLS or PROGRESSIVE)",
         validValues = ToolLoadingStrategy.entries.map { it.name },
       ),
       ConfigKeyDef(
-        key = "toolProfile",
+        key = KEY_TOOL_PROFILE,
         description = "Which tools are exposed (FULL or MINIMAL)",
         validValues = McpToolProfile.entries.map { it.name },
       ),

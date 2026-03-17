@@ -89,11 +89,11 @@ object ScreenStateCaptureUtil {
         )?.let { rpcResponse ->
           return@withTimeoutOrNull RpcScreenStateAdapter(rpcResponse)
         }
-        // RPC failed, try fallback...
       }
 
       // Priority 2: Direct provider (most reliable for HOST mode)
-      mcpBridge.getDirectScreenStateProvider()?.let { provider ->
+      val directProvider = mcpBridge.getDirectScreenStateProvider()
+      directProvider?.let { provider ->
         try {
           return@withTimeoutOrNull provider(screenshotScalingConfig)
         } catch (_: Exception) {

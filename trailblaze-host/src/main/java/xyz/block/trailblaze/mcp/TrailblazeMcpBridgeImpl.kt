@@ -3,10 +3,10 @@ package xyz.block.trailblaze.mcp
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ScreenshotScalingConfig
-import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
@@ -16,19 +16,29 @@ import xyz.block.trailblaze.host.devices.TrailblazeConnectedDevice
 import xyz.block.trailblaze.host.devices.TrailblazeDeviceService
 import xyz.block.trailblaze.host.devices.TrailblazeHostDeviceClassifier
 import xyz.block.trailblaze.host.screenstate.HostMaestroDriverScreenState
-import xyz.block.trailblaze.model.TrailblazeHostAppTarget
+import xyz.block.trailblaze.llm.RunYamlRequest
+import xyz.block.trailblaze.llm.RunYamlResponse
+import xyz.block.trailblaze.llm.TrailblazeReferrer
+import xyz.block.trailblaze.model.TrailblazeConfig
+import xyz.block.trailblaze.model.findById
+import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
-import xyz.block.trailblaze.llm.TrailblazeReferrer
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateRequest
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateResponse
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRpcClient
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
-import xyz.block.trailblaze.logs.client.TrailblazeLog
+import xyz.block.trailblaze.model.TrailblazeHostAppTarget
+import xyz.block.trailblaze.model.TrailblazeOnDeviceInstrumentationTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
+import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.TapOnElementByNodeIdTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.TapOnPointTrailblazeTool
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
+import xyz.block.trailblaze.util.AccessibilityServiceSetupUtils
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.HostAndroidDeviceConnectUtils
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.yaml.models.TrailblazeYamlBuilder
 import java.util.concurrent.ConcurrentHashMap
@@ -38,6 +48,8 @@ import kotlin.time.Duration
 
 private const val DEFAULT_DEVICE_WIDTH = 1080
 private const val DEFAULT_DEVICE_HEIGHT = 2400
+/** Time to wait after sending a single tool via RPC for the on-device agent to execute it. */
+private const val ON_DEVICE_TOOL_SETTLE_MS = 500L
 
 class TrailblazeMcpBridgeImpl(
   private val trailblazeDeviceManager: TrailblazeDeviceManager,
@@ -87,6 +99,25 @@ class TrailblazeMcpBridgeImpl(
    */
   private val driverCreationLatches = ConcurrentHashMap<String, CountDownLatch>()
 
+  /** Tracks when driver creation started for each device (epoch millis). */
+  private val driverCreationStartTimes = ConcurrentHashMap<String, Long>()
+
+  /**
+   * Tracks which devices have their on-device agent verified as running.
+   * Analogous to [persistentDevices] for HOST mode — used by [getDriverConnectionStatus]
+   * to suppress "still initializing" messages once the agent is ready.
+   */
+  private val onDeviceAgentReady = ConcurrentHashMap.newKeySet<String>()
+
+  /**
+   * Tracks the last driver type used to connect each device.
+   * Used to detect driver type switches — when the configured driver type changes,
+   * we must kill stale instrumentation processes before establishing a new connection.
+   * Without this, leftover processes from a previous driver type block the new one
+   * (only one instrumentation process can be active per device).
+   */
+  private val lastConnectedDriverType = ConcurrentHashMap<TrailblazeDeviceId, TrailblazeDriverType>()
+
   /**
    * Flow for reactively observing the selected device ID.
    */
@@ -108,14 +139,45 @@ class TrailblazeMcpBridgeImpl(
   override suspend fun selectDevice(trailblazeDeviceId: TrailblazeDeviceId): TrailblazeConnectedDeviceSummary {
     assertDeviceIsSelected(trailblazeDeviceId)
 
-    // Create persistent Maestro driver connection on a background thread with a timeout.
-    // The Maestro driver install + startup can take 30-90s (installs APK, starts instrumentation).
-    // We use a real thread + CountDownLatch because the blocking driver creation code
-    // (synchronized blocks, Thread.sleep) is not cooperative with coroutine cancellation.
-    // If the driver isn't ready within the timeout, the tool call returns success anyway —
-    // the driver continues creating in the background and will be available for later calls.
+    // Only create a persistent Maestro HOST driver for host-side driver types.
+    // On-device drivers (ACCESSIBILITY, INSTRUMENTATION) have their own on-device agent
+    // that provides screen state via RPC — creating a Maestro HOST driver would kill
+    // the running on-device service and break screen state capture.
+    val configuredDriverType = getConfiguredDriverType(trailblazeDeviceId.trailblazeDevicePlatform)
+    val needsPersistentDriver = configuredDriverType?.isHost != false
+
     val key = trailblazeDeviceId.instanceId
-    if (!persistentDevices.containsKey(key)) {
+
+    // Detect first connection or driver type switch.
+    // All three Android driver types use an instrumentation process, and only one can
+    // be active at a time. When connecting for the first time or switching driver types,
+    // we must kill stale instrumentation processes to avoid conflicts (e.g., a leftover
+    // accessibility driver blocking the HOST Maestro gRPC connection).
+    val previousDriverType = lastConnectedDriverType[trailblazeDeviceId]
+    val isFirstConnection = previousDriverType == null
+    val isDriverTypeSwitch = previousDriverType != null && previousDriverType != configuredDriverType
+    if (isFirstConnection || isDriverTypeSwitch) {
+      Console.log("[MCP Bridge] Cleaning up stale instrumentation for $key (first=$isFirstConnection, switch=${isDriverTypeSwitch}, prev=$previousDriverType, new=$configuredDriverType)")
+      // All Android driver types (HOST, ACCESSIBILITY, INSTRUMENTATION) use an
+      // instrumentation process — HOST uses Maestro's instrumentation, while on-device
+      // drivers use the Trailblaze runner. Only one can be active at a time, so we
+      // must kill everything when first connecting or switching driver types.
+      HostAndroidDeviceConnectUtils.forceStopAllAndroidInstrumentationProcesses(
+        trailblazeOnDeviceInstrumentationTargetTestApps = trailblazeDeviceManager.availableAppTargets
+          .map { it.getTrailblazeOnDeviceInstrumentationTarget() }.toSet(),
+        deviceId = trailblazeDeviceId,
+      )
+      if (isDriverTypeSwitch) {
+        // Close the old persistent Maestro driver if present
+        Console.log("[MCP Bridge] Closing persistent HOST driver for $key (switching to $configuredDriverType)")
+        closePersistentDevice(trailblazeDeviceId)
+        // Clear on-device agent ready flag
+        Console.log("[MCP Bridge] Clearing on-device agent ready flag for $key (switching to $configuredDriverType)")
+        onDeviceAgentReady.remove(key)
+      }
+    }
+
+    if (needsPersistentDriver && !persistentDevices.containsKey(key)) {
       // Reuse existing latch if driver creation is already in progress (e.g., preselectDeviceForSession
       // already started it). This prevents spawning redundant daemon threads.
       val existingLatch = driverCreationLatches[key]
@@ -124,7 +186,7 @@ class TrailblazeMcpBridgeImpl(
         if (!existingLatch.await(DEVICE_CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
           Console.log(
             "[MCP Bridge] Persistent device connection still initializing for $key " +
-              "after ${DEVICE_CONNECT_TIMEOUT_SECONDS}s — continuing without it"
+                "after ${DEVICE_CONNECT_TIMEOUT_SECONDS}s — continuing without it"
           )
         }
       } else {
@@ -137,10 +199,11 @@ class TrailblazeMcpBridgeImpl(
           if (!raceLatch.await(DEVICE_CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
             Console.log(
               "[MCP Bridge] Persistent device connection still initializing for $key " +
-                "after ${DEVICE_CONNECT_TIMEOUT_SECONDS}s — continuing without it"
+                  "after ${DEVICE_CONNECT_TIMEOUT_SECONDS}s — continuing without it"
             )
           }
         } else {
+          driverCreationStartTimes[key] = System.currentTimeMillis()
           val driverThread = Thread {
             try {
               synchronized(persistentDeviceLocks.computeIfAbsent(key) { Any() }) {
@@ -153,6 +216,7 @@ class TrailblazeMcpBridgeImpl(
             } finally {
               latch.countDown()
               driverCreationLatches.remove(key)
+              driverCreationStartTimes.remove(key)
             }
           }
           driverThread.name = "mcp-driver-init-$key"
@@ -162,11 +226,21 @@ class TrailblazeMcpBridgeImpl(
           if (!latch.await(DEVICE_CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
             Console.log(
               "[MCP Bridge] Persistent device connection still initializing for $key " +
-                "after ${DEVICE_CONNECT_TIMEOUT_SECONDS}s — continuing without it"
+                  "after ${DEVICE_CONNECT_TIMEOUT_SECONDS}s — continuing without it"
             )
           }
         }
       }
+    } else if (!needsPersistentDriver && !onDeviceAgentReady.contains(key)) {
+      // On-device driver (ACCESSIBILITY, INSTRUMENTATION) — ensure the on-device agent is running.
+      // This installs the test APK, starts instrumentation, and enables the accessibility service.
+      // Analogous to creating a persistent Maestro driver for HOST mode above.
+      ensureOnDeviceAgentRunning(trailblazeDeviceId, configuredDriverType)
+    }
+
+    // Track the driver type used for this connection so we can detect switches later
+    if (configuredDriverType != null) {
+      lastConnectedDriverType[trailblazeDeviceId] = configuredDriverType
     }
 
     return trailblazeDeviceManager.getDeviceState(trailblazeDeviceId)?.device
@@ -180,6 +254,14 @@ class TrailblazeMcpBridgeImpl(
      * it continues initializing in the background and will be available for later calls.
      */
     private const val DEVICE_CONNECT_TIMEOUT_SECONDS = 5L
+
+    /**
+     * How long to wait for the on-device agent to start during device connect.
+     * Longer than HOST mode because it may need to install APK, start instrumentation,
+     * enable accessibility service, and verify the RPC server. If the agent still isn't
+     * ready, the driver status provider reports progress.
+     */
+    private const val ON_DEVICE_AGENT_TIMEOUT_SECONDS = 30L
 
     /**
      * How long getDirectScreenStateProvider() waits for an in-progress driver creation
@@ -204,9 +286,12 @@ class TrailblazeMcpBridgeImpl(
    */
   private fun createPersistentDevice(trailblazeDeviceId: TrailblazeDeviceId): TrailblazeConnectedDevice? {
     return try {
+      val driverType = getConfiguredDriverType(trailblazeDeviceId.trailblazeDevicePlatform)
+        ?: error("No configured driver type for ${trailblazeDeviceId.trailblazeDevicePlatform}")
       val connectedDevice = TrailblazeDeviceService.getConnectedDevice(
         trailblazeDeviceId = trailblazeDeviceId,
-        appTarget = trailblazeDeviceManager.getCurrentSelectedTargetApp()
+        driverType = driverType,
+        appTarget = trailblazeDeviceManager.getCurrentSelectedTargetApp(),
       )
       connectedDevice
     } catch (e: Exception) {
@@ -240,8 +325,113 @@ class TrailblazeMcpBridgeImpl(
     }
   }
 
+  /**
+   * Ensures the on-device agent is running for on-device driver types (ACCESSIBILITY, INSTRUMENTATION).
+   *
+   * This is the on-device counterpart to creating a persistent Maestro driver for HOST mode.
+   * It installs the test APK, starts instrumentation, enables the accessibility service (if needed),
+   * and verifies the RPC server is reachable.
+   *
+   * Uses the same latch/timeout pattern as HOST mode driver creation:
+   * - Background thread does the setup
+   * - Waits up to [ON_DEVICE_AGENT_TIMEOUT_SECONDS] for completion
+   * - If still initializing, [getDriverConnectionStatus] reports progress
+   */
+  private fun ensureOnDeviceAgentRunning(
+    trailblazeDeviceId: TrailblazeDeviceId,
+    driverType: TrailblazeDriverType?,
+  ) {
+    val key = trailblazeDeviceId.instanceId
+
+    // Reuse existing latch if setup is already in progress
+    val existingLatch = driverCreationLatches[key]
+    if (existingLatch != null) {
+      if (!existingLatch.await(ON_DEVICE_AGENT_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+        Console.log(
+          "[MCP Bridge] On-device agent still initializing for $key " +
+              "after ${ON_DEVICE_AGENT_TIMEOUT_SECONDS}s — continuing without it"
+        )
+      }
+      return
+    }
+
+    val latch = CountDownLatch(1)
+    val raceLatch = driverCreationLatches.putIfAbsent(key, latch)
+    if (raceLatch != null) {
+      if (!raceLatch.await(ON_DEVICE_AGENT_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+        Console.log(
+          "[MCP Bridge] On-device agent still initializing for $key " +
+              "after ${ON_DEVICE_AGENT_TIMEOUT_SECONDS}s — continuing without it"
+        )
+      }
+      return
+    }
+
+    driverCreationStartTimes[key] = System.currentTimeMillis()
+    val agentThread = Thread {
+      try {
+        val appTarget = trailblazeDeviceManager.getCurrentSelectedTargetApp()
+        val target = appTarget?.getTrailblazeOnDeviceInstrumentationTarget()
+          ?: TrailblazeOnDeviceInstrumentationTarget.DEFAULT_ANDROID_ON_DEVICE
+
+        Console.log("[MCP Bridge] Starting on-device agent for $key (driver=${driverType?.name})")
+
+        // Install APK and start instrumentation (reuses existing agent if already running)
+        runBlocking {
+          HostAndroidDeviceConnectUtils.connectToInstrumentationAndInstallAppIfNotAvailable(
+            sendProgressMessage = { Console.log("[MCP Bridge] [$key] $it") },
+            deviceId = trailblazeDeviceId,
+            trailblazeOnDeviceInstrumentationTarget = target,
+          )
+        }
+
+        // For accessibility driver, enable the service after instrumentation starts
+        if (driverType == TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY) {
+          AccessibilityServiceSetupUtils.ensureAccessibilityServiceReady(
+            deviceId = trailblazeDeviceId,
+            hostPackage = target.testAppId,
+            sendProgressMessage = { Console.log("[MCP Bridge] [$key] $it") },
+          )
+        }
+
+        // Verify the RPC server is reachable
+        runBlocking {
+          val rpcClient = OnDeviceRpcClient(
+            trailblazeDeviceId = trailblazeDeviceId,
+            sendProgressMessage = { Console.log("[MCP Bridge] [$key] $it") },
+          )
+          try {
+            rpcClient.verifyServerIsRunning()
+          } finally {
+            rpcClient.close()
+          }
+        }
+
+        onDeviceAgentReady.add(key)
+        Console.log("[MCP Bridge] On-device agent ready for $key")
+      } catch (e: Exception) {
+        Console.log("[MCP Bridge] On-device agent setup failed for $key: ${e.message}")
+      } finally {
+        latch.countDown()
+        driverCreationLatches.remove(key)
+        driverCreationStartTimes.remove(key)
+      }
+    }
+    agentThread.name = "mcp-ondevice-init-$key"
+    agentThread.isDaemon = true
+    agentThread.start()
+
+    if (!latch.await(ON_DEVICE_AGENT_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+      Console.log(
+        "[MCP Bridge] On-device agent still initializing for $key " +
+            "after ${ON_DEVICE_AGENT_TIMEOUT_SECONDS}s — continuing without it"
+      )
+    }
+  }
+
   override fun releasePersistentDeviceConnection(deviceId: TrailblazeDeviceId) {
     cachedScreenStates.remove(deviceId.instanceId)
+    onDeviceAgentReady.remove(deviceId.instanceId)
     closePersistentDevice(deviceId)
     Console.log("[MCP Bridge] Released persistent connection for device ${deviceId.instanceId}")
   }
@@ -367,17 +557,41 @@ class TrailblazeMcpBridgeImpl(
    */
   override fun isOnDeviceInstrumentation(): Boolean {
     val deviceId = getEffectiveDeviceId() ?: return false
-    val deviceState = trailblazeDeviceManager.getDeviceState(deviceId)
-    return deviceState?.device?.trailblazeDriverType == TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION
+    // Use the CONFIGURED driver type, not the device state's driver type.
+    // The device state map is keyed by TrailblazeDeviceId (instanceId + platform) which
+    // doesn't include driver type, so all three Android driver variants map to the same key
+    // and the last one (HOST) overwrites the others. The configured driver type from settings
+    // is the source of truth for which driver mode is active.
+    val driverType = getConfiguredDriverType(deviceId.trailblazeDevicePlatform)
+      ?: return false
+    return driverType.platform == TrailblazeDevicePlatform.ANDROID && !driverType.isHost
+  }
+
+  override fun getDriverConnectionStatus(deviceId: TrailblazeDeviceId?): String? {
+    val id = deviceId ?: getEffectiveDeviceId() ?: return null
+    val key = id.instanceId
+
+    // Driver is ready — no status to report (HOST persistent driver or on-device agent)
+    if (persistentDevices.containsKey(key) || onDeviceAgentReady.contains(key)) return null
+
+    // Driver creation is in progress — report elapsed time
+    val startTime = driverCreationStartTimes[key]
+    if (startTime != null && driverCreationLatches.containsKey(key)) {
+      val elapsedSeconds = (System.currentTimeMillis() - startTime) / 1000
+      return "Device driver is still initializing (${elapsedSeconds}s elapsed). Try again shortly."
+    }
+
+    return null
   }
 
   /**
    * Gets the driver type for the currently selected device.
+   * Uses the configured driver type from settings (source of truth), not the device state
+   * which may have the wrong driver type due to map key collisions.
    */
   override fun getDriverType(): TrailblazeDriverType? {
     val deviceId = getEffectiveDeviceId() ?: return null
-    val deviceState = trailblazeDeviceManager.getDeviceState(deviceId)
-    return deviceState?.device?.trailblazeDriverType
+    return getConfiguredDriverType(deviceId.trailblazeDevicePlatform)
   }
 
   /**
@@ -399,7 +613,7 @@ class TrailblazeMcpBridgeImpl(
     if (!isOnDeviceInstrumentation()) {
       return null
     }
-    
+
     val rpcClient = OnDeviceRpcClient(
       trailblazeDeviceId = deviceId,
       sendProgressMessage = { },
@@ -438,11 +652,9 @@ class TrailblazeMcpBridgeImpl(
   override suspend fun executeTrailblazeTool(tool: TrailblazeTool): String {
     val trailblazeDeviceId = assertDeviceIsSelected()
 
-    // Clear cached screen state before executing - the screen will have changed
-    cachedScreenStates.remove(trailblazeDeviceId.instanceId)
-
     // Use custom executor if provided, otherwise convert to YAML and run
     if (trailblazeToolExecutor != null) {
+      cachedScreenStates.remove(trailblazeDeviceId.instanceId)
       return trailblazeToolExecutor.invoke(tool, trailblazeDeviceId)
     }
 
@@ -457,16 +669,154 @@ class TrailblazeMcpBridgeImpl(
 
     Console.log("Generated YAML:\n$yaml")
 
-    // Reuse the existing session if available, otherwise runYaml will create one
+    // For on-device drivers, send the YAML directly via RPC and wait for completion.
+    // The standard runYaml() path is fire-and-forget (launches a coroutine and returns
+    // as soon as the session is created), so tool actions like taps return "executed"
+    // before the on-device agent actually performs them.
+    if (isOnDeviceInstrumentation()) {
+      val result = executeToolViaRpc(tool, trailblazeDeviceId, yaml)
+      cachedScreenStates.remove(trailblazeDeviceId.instanceId)
+      return result
+    }
+
+    // HOST driver path: clear cache since screen will change
+    cachedScreenStates.remove(trailblazeDeviceId.instanceId)
     val sessionId = runYaml(yaml, startNewSession = false)
 
     return "Executed ${tool::class.simpleName} on device ${trailblazeDeviceId.instanceId} (session: $sessionId)"
   }
 
+  /**
+   * Executes a tool on the on-device agent via direct RPC, waiting for completion.
+   *
+   * For node-ID-based tools (e.g., tapOnElementByNodeId), resolves the element's
+   * coordinates from the HOST-side screen state and converts to a coordinate-based
+   * tool. This is necessary because node IDs are assigned per-capture and differ
+   * between the HOST screen state (used by blaze for planning) and the on-device
+   * screen state (used for execution).
+   */
+  private suspend fun executeToolViaRpc(
+    tool: TrailblazeTool,
+    trailblazeDeviceId: TrailblazeDeviceId,
+    yaml: String,
+  ): String {
+    // For tapOnElementByNodeId, resolve coordinates from the HOST screen state
+    // so we can use coordinate-based tap on-device (avoids node ID mismatch).
+    val resolvedTool = resolveToolForOnDevice(tool, trailblazeDeviceId)
+    val resolvedYaml = if (resolvedTool !== tool) {
+      Console.log("[executeToolViaRpc] Resolved ${tool::class.simpleName} -> ${resolvedTool::class.simpleName}")
+      createTrailblazeYaml().encodeToString(
+        TrailblazeYamlBuilder().tools(listOf(resolvedTool)).build()
+      )
+    } else {
+      yaml
+    }
+
+    val rpcClient = OnDeviceRpcClient(
+      trailblazeDeviceId = trailblazeDeviceId,
+      sendProgressMessage = { Console.log("[executeToolViaRpc] $it") },
+    )
+
+    return try {
+      val sessionResolution = trailblazeDeviceManager.getOrCreateSessionResolution(
+        trailblazeDeviceId = trailblazeDeviceId,
+        forceNewSession = false,
+        sessionIdPrefix = "yaml",
+      )
+
+      val driverType = getConfiguredDriverType(trailblazeDeviceId.trailblazeDevicePlatform)
+      val request = RunYamlRequest(
+        yaml = resolvedYaml,
+        testName = "tool_${resolvedTool::class.simpleName}",
+        trailFilePath = null,
+        targetAppName = null,
+        useRecordedSteps = false,
+        trailblazeLlmModel = trailblazeDeviceManager.currentTrailblazeLlmModelProvider(),
+        trailblazeDeviceId = trailblazeDeviceId,
+        referrer = TrailblazeReferrer.MCP,
+        driverType = driverType,
+        config = TrailblazeConfig(
+          setOfMarkEnabled = false,
+          overrideSessionId = sessionResolution.sessionId,
+          sendSessionStartLog = sessionResolution.isNewSession,
+          sendSessionEndLog = false,
+        ),
+      )
+
+      Console.log("[executeToolViaRpc] Sending ${resolvedTool::class.simpleName} to on-device agent")
+      when (val result: RpcResult<RunYamlResponse> = rpcClient.rpcCall(request)) {
+        is RpcResult.Success -> {
+          Console.log("[executeToolViaRpc] On-device execution started: ${result.data.sessionId}")
+          // Brief settle time for single-tool execution
+          kotlinx.coroutines.delay(ON_DEVICE_TOOL_SETTLE_MS)
+          "Executed ${resolvedTool::class.simpleName} on device ${trailblazeDeviceId.instanceId} (session: ${result.data.sessionId})"
+        }
+        is RpcResult.Failure -> {
+          Console.log("[executeToolViaRpc] RPC failed: ${result.message}")
+          error("On-device tool execution failed: ${result.message}")
+        }
+      }
+    } finally {
+      rpcClient.close()
+    }
+  }
+
+  /**
+   * Resolves node-ID-based tools to coordinate-based equivalents using the HOST screen state.
+   * This bridges the node ID mismatch between HOST-captured and on-device screen states.
+   */
+  private suspend fun resolveToolForOnDevice(
+    tool: TrailblazeTool,
+    trailblazeDeviceId: TrailblazeDeviceId,
+  ): TrailblazeTool {
+    if (tool !is TapOnElementByNodeIdTrailblazeTool) return tool
+
+    // Capture view hierarchy via RPC to resolve element coordinates.
+    val rpcResponse = try {
+      getScreenStateViaRpc(includeScreenshot = false, filterViewHierarchy = false)
+    } catch (e: Exception) {
+      Console.log("[resolveToolForOnDevice] Screen state capture failed: ${e.message}")
+      null
+    } ?: run {
+      Console.log("[resolveToolForOnDevice] No screen state available, sending tool as-is")
+      return tool
+    }
+
+    val matchingNode = ViewHierarchyTreeNode.dfs(rpcResponse.viewHierarchy) {
+      it.nodeId == tool.nodeId
+    }
+
+    if (matchingNode == null) {
+      Console.log("[resolveToolForOnDevice] Node ${tool.nodeId} not found in HOST screen state")
+      return tool
+    }
+
+    val centerStr = matchingNode.centerPoint
+    if (centerStr == null) {
+      Console.log("[resolveToolForOnDevice] Node ${tool.nodeId} has no centerPoint")
+      return tool
+    }
+
+    val parts = centerStr.split(",").mapNotNull { it.trim().toIntOrNull() }
+    if (parts.size != 2) {
+      Console.log("[resolveToolForOnDevice] Could not parse centerPoint: $centerStr")
+      return tool
+    }
+
+    val (x, y) = parts
+    Console.log("[resolveToolForOnDevice] Resolved nodeId=${tool.nodeId} -> tapOnPoint($x, $y)")
+    return TapOnPointTrailblazeTool(
+      x = x,
+      y = y,
+      longPress = tool.longPress,
+    )
+  }
+
   override suspend fun endSession(): Boolean {
     val deviceId = assertDeviceIsSelected()
-    // Clear cached screen state and persistent device for this device
+    // Clear cached screen state, persistent device, and on-device agent status for this device
     cachedScreenStates.remove(deviceId.instanceId)
+    onDeviceAgentReady.remove(deviceId.instanceId)
     closePersistentDevice(deviceId)
     val endedSessionId = trailblazeDeviceManager.endSessionForDevice(deviceId)
     return endedSessionId != null
@@ -623,7 +973,7 @@ class TrailblazeMcpBridgeImpl(
   }
 
   override fun selectAppTarget(appTargetId: String): String? {
-    val matchingTarget = trailblazeDeviceManager.availableAppTargets.firstOrNull { it.id == appTargetId }
+    val matchingTarget = trailblazeDeviceManager.availableAppTargets.findById(appTargetId)
       ?: return null
     trailblazeDeviceManager.settingsRepo.targetAppSelected(matchingTarget)
     return matchingTarget.displayName

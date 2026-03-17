@@ -54,6 +54,8 @@ class DeviceManagerToolSet(
     ANDROID,
     /** Auto-connect to the first available iOS device */
     IOS,
+    /** Connect to the web browser (Playwright) */
+    WEB,
     /** Show info about the currently connected device */
     INFO,
   }
@@ -72,10 +74,14 @@ class DeviceManagerToolSet(
 
   @LLMDescription(
     """
-    Connect to a mobile device or get device info.
+    Connect to a device or get device info.
+
+    A single Android or iOS device is auto-connected at session start.
+    Use this tool only if you need to switch devices or connect manually:
 
     device(action=ANDROID) → connect to Android
     device(action=IOS) → connect to iOS
+    device(action=WEB) → connect to web browser (always available)
     device(action=LIST) → see available devices
     device(action=INFO) → info about the connected device
     device(action=INFO, detail=APPS) → list installed apps
@@ -87,7 +93,7 @@ class DeviceManagerToolSet(
   )
   @Tool
   suspend fun device(
-    @LLMDescription("Action: LIST, CONNECT, ANDROID, IOS, or INFO")
+    @LLMDescription("Action: LIST, CONNECT, ANDROID, IOS, WEB, or INFO")
     action: DeviceAction,
     @LLMDescription("Device ID (only for CONNECT action)")
     deviceId: String? = null,
@@ -100,7 +106,7 @@ class DeviceManagerToolSet(
       DeviceAction.LIST -> {
         val devices = mcpBridge.getAvailableDevices()
         if (devices.isEmpty()) {
-          "No devices available. Connect an Android device/emulator or start an iOS simulator."
+          "Error: No devices available. Connect an Android device/emulator or start an iOS simulator. Web browser is always available via device(action=WEB)."
         } else {
           // Group by physical device (instanceId + platform) to avoid showing
           // duplicate entries for different driver types of the same device.
@@ -132,7 +138,7 @@ class DeviceManagerToolSet(
 
       DeviceAction.INFO -> {
         val currentDeviceId = mcpBridge.getCurrentlySelectedDeviceId()
-          ?: return "No device connected. Use device(action=ANDROID) or device(action=IOS) to connect first."
+          ?: return "Error: No device connected. Use device(action=LIST) to see available devices, then connect with ANDROID, IOS, WEB, or CONNECT."
 
         when (detail) {
           DeviceDetail.SUMMARY -> {
@@ -197,7 +203,7 @@ class DeviceManagerToolSet(
         } else {
           devices.find { it.platform == TrailblazeDevicePlatform.ANDROID }
         }
-          ?: return "No Android device available. Connect an Android device or start an emulator."
+          ?: return "Error: No Android device available. Connect an Android device or start an emulator."
 
         connectToDeviceUnified(androidDevice.trailblazeDeviceId, force)
       }
@@ -211,9 +217,23 @@ class DeviceManagerToolSet(
         } else {
           devices.find { it.platform == TrailblazeDevicePlatform.IOS }
         }
-          ?: return "No iOS device available. Start an iOS simulator."
+          ?: return "Error: No iOS device available. Start an iOS simulator."
 
         connectToDeviceUnified(iosDevice.trailblazeDeviceId, force)
+      }
+
+      DeviceAction.WEB -> {
+        val devices = mcpBridge.getAvailableDevices()
+        val configuredDriverType = mcpBridge.getConfiguredDriverType(TrailblazeDevicePlatform.WEB)
+        val webDevice = if (configuredDriverType != null) {
+          devices.find { it.trailblazeDriverType == configuredDriverType }
+            ?: devices.find { it.platform == TrailblazeDevicePlatform.WEB }
+        } else {
+          devices.find { it.platform == TrailblazeDevicePlatform.WEB }
+        }
+          ?: return "Error: No web browser available."
+
+        connectToDeviceUnified(webDevice.trailblazeDeviceId, force)
       }
     }
   }
@@ -255,15 +275,11 @@ class DeviceManagerToolSet(
   // Individual tools from main (with TOOL_* constant pattern)
   // ─────────────────────────────────────────────────────────────────────────────
 
-  @LLMDescription("Installed apps")
-  @Tool(TOOL_GET_INSTALLED_APPS)
   suspend fun getInstalledApps(): String {
     val packages = mcpBridge.getInstalledAppIds()
     return packages.sorted().joinToString("\n")
   }
 
-  @LLMDescription("List available app targets.")
-  @Tool(TOOL_LIST_DEVICES)
   suspend fun listConnectedDevices(): String {
     return TrailblazeJsonInstance.encodeToString(
       mcpBridge.getAvailableAppTargets().map { it.id }
@@ -273,26 +289,24 @@ class DeviceManagerToolSet(
   @LLMDescription("Connect to the attached device using Trailblaze.")
   @Tool(TOOL_CONNECT_DEVICE)
   suspend fun connectToDevice(trailblazeDeviceId: TrailblazeDeviceId): String {
-    return TrailblazeJsonInstance.encodeToString(
-      mcpBridge.selectDevice(trailblazeDeviceId)
-    )
+    val result = mcpBridge.selectDevice(trailblazeDeviceId)
+    sessionContext?.setAssociatedDevice(trailblazeDeviceId)
+    mcpBridge.ensureSessionAndGetId()
+    sessionContext?.startImplicitRecording()
+    return TrailblazeJsonInstance.encodeToString(result)
   }
 
-  @LLMDescription("Get available app targets.")
-  @Tool(TOOL_GET_APP_TARGETS)
   fun getAvailableAppTargets(): String {
     return TrailblazeJsonInstance.encodeToString(
       mcpBridge.getAvailableAppTargets().map { it.id }
     )
   }
 
-  @LLMDescription("Get the currently selected target app ID.")
-  @Tool(TOOL_GET_CURRENT_TARGET)
   fun getCurrentTargetApp(): String {
     return mcpBridge.getCurrentAppTargetId() ?: "No target app selected."
   }
 
-  @LLMDescription("Switch the current target app. Use `${TOOL_GET_APP_TARGETS}` to see valid app target IDs.")
+  @LLMDescription("Switch the current target app. Read the trailblaze://devices/connected resource to see valid app target IDs.")
   @Tool(TOOL_SWITCH_TARGET)
   fun switchTargetApp(
     @LLMDescription("The ID of the app target to switch to (e.g., 'myApp', 'otherApp'). Must match one of the available app target IDs.")
@@ -469,7 +483,7 @@ class ObservationToolSet(
     verbosity: ViewHierarchyVerbosity? = null,
   ): String {
     val screenState = getScreenStateDirectly()
-      ?: return "No screen state available. Is a device connected?"
+      ?: return "Error: No screen state available. Is a device connected?"
 
     val effectiveVerbosity = verbosity
       ?: sessionContext?.viewHierarchyVerbosity
@@ -518,7 +532,7 @@ class ObservationToolSet(
     verbosity: ViewHierarchyVerbosity? = null,
   ): String {
     val screenState = getScreenStateDirectly()
-      ?: return "No screen state available. Is a device connected?"
+      ?: return "Error: No screen state available. Is a device connected?"
 
     val effectiveVerbosity = verbosity
       ?: sessionContext?.viewHierarchyVerbosity

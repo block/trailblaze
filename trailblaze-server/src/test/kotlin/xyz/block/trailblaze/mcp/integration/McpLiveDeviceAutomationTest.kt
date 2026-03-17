@@ -78,7 +78,7 @@ class McpLiveDeviceAutomationTest {
 
     // Check for connected devices
     val devicesResult = client.listConnectedDevices()
-    if (!devicesResult.isSuccess || devicesResult.content.contains("No connected devices")) {
+    if (!devicesResult.isSuccess) {
       Console.log("No devices connected: ${devicesResult.content}")
       assumeTrue("No Android device connected - run 'adb devices' to verify", false)
       return@runBlocking

@@ -28,6 +28,7 @@ trailblaze [OPTIONS] [COMMAND]
 | `config` | View and modify Trailblaze configuration |
 | `status` | Check if the Trailblaze daemon is running |
 | `stop` | Stop the Trailblaze daemon |
+| `help` | When no COMMAND is given, the usage help for the main command is displayed. |
 
 ---
 
@@ -92,6 +93,7 @@ trailblaze mcp [OPTIONS]
 | Option | Description | Default |
 |--------|-------------|---------|
 | `--http` | Use Streamable HTTP transport instead of STDIO. Starts a standalone HTTP MCP server. | - |
+| `--direct`, `--no-daemon` | Run as an in-process MCP server over STDIO instead of the default proxy mode. Bypasses the Trailblaze daemon and runs everything in a single process. Use this for environments where the HTTP daemon cannot run. | - |
 | `--tool-profile` | Tool profile: FULL or MINIMAL (only device/blaze/verify/ask/trail). Defaults to MINIMAL for STDIO, FULL for HTTP. | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
@@ -119,37 +121,49 @@ trailblaze list-devices [OPTIONS]
 
 ### `trailblaze config`
 
-View and modify Trailblaze configuration using positional arguments.
+View and modify Trailblaze configuration
 
 **Synopsis:**
 
 ```
-trailblaze config                           # Show all settings + auth status
-trailblaze config <key>                     # Show a specific key's value
-trailblaze config <key> <value>             # Set a config value
-trailblaze config models                    # List available LLM models by provider
-trailblaze config agents                    # List available agent implementations
-trailblaze config drivers                   # List available driver types
+trailblaze config [OPTIONS] [<<key>>] [<<value>>]
+trailblaze config models
+trailblaze config agents
+trailblaze config drivers
 ```
+
+**Arguments:**
+
+| Argument | Description | Required |
+|----------|-------------|----------|
+| `<<key>>` | Config key to get or set | No |
+| `<<value>>` | Value to set | No |
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `-h`, `--help` | Show this help message and exit. | - |
+| `-V`, `--version` | Print version information and exit. | - |
 
 **Config Keys:**
 
 | Key | Description | Valid Values |
 |-----|-------------|-------------|
-| `llm` | LLM provider and model (shorthand) | `provider/model` (e.g., `openai/gpt-4-1`) |
-| `llm-provider` | LLM provider | `openai`, `anthropic`, `google`, `ollama`, `openrouter`, etc. |
-| `llm-model` | LLM model ID | e.g., `gpt-4-1`, `claude-sonnet-4-20250514` |
-| `agent` | Agent implementation | `TRAILBLAZE_RUNNER`, `TWO_TIER_AGENT`, `MULTI_AGENT_V3` |
-| `android-driver` | Android driver type | `HOST`, `ONDEVICE`, `ACCESSIBILITY` |
-| `ios-driver` | iOS driver type | `HOST` |
-| `set-of-mark` | Enable/disable Set of Mark mode | `true`, `false` |
-| `ai-fallback` | Enable/disable AI fallback | `true`, `false` |
+| `llm` | LLM provider and model (shorthand: provider/model) | provider/model (e.g., openai/gpt-4-1, anthropic/claude-sonnet-4-20250514) |
+| `llm-provider` | LLM provider | openai, anthropic, google, ollama, openrouter, etc. |
+| `llm-model` | LLM model ID | e.g., gpt-4-1, claude-sonnet-4-20250514, gemini-3-flash |
+| `agent` | Agent implementation | TRAILBLAZE_RUNNER, TWO_TIER_AGENT, MULTI_AGENT_V3 |
+| `android-driver` | Android driver type | HOST, ONDEVICE, ACCESSIBILITY |
+| `ios-driver` | iOS driver type | HOST |
+| `set-of-mark` | Enable/disable Set of Mark mode | true, false |
+| `ai-fallback` | Enable/disable AI fallback when recorded steps fail | true, false |
 
 **Examples:**
 
 ```bash
-trailblaze config                                    # Show all settings + auth status
-trailblaze config llm                                # Show "openai/gpt-4-1"
+trailblaze config                                    # Show all settings
+trailblaze config llm                                # Show current LLM provider/model
 trailblaze config llm anthropic/claude-sonnet-4-6    # Set both provider + model
 trailblaze config llm-provider openai                # Set provider only
 trailblaze config llm-model gpt-4-1                  # Set model only
@@ -158,6 +172,56 @@ trailblaze config set-of-mark false                  # Disable Set of Mark
 trailblaze config models                             # List available LLM models
 trailblaze config agents                             # List agent implementations
 trailblaze config drivers                            # List driver types
+```
+
+---
+
+### `trailblaze config models`
+
+List available LLM models by provider
+
+**Synopsis:**
+
+```
+trailblaze config models [OPTIONS]
+```
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `-h`, `--help` | Show this help message and exit. | - |
+| `-V`, `--version` | Print version information and exit. | - |
+
+---
+
+### `trailblaze config agents`
+
+List available agent implementations
+
+**Synopsis:**
+
+```
+trailblaze config agents [OPTIONS]
+```
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `-h`, `--help` | Show this help message and exit. | - |
+| `-V`, `--version` | Print version information and exit. | - |
+
+---
+
+### `trailblaze config drivers`
+
+List available driver types
+
+**Synopsis:**
+
+```
+trailblaze config drivers [OPTIONS]
 ```
 
 **Options:**
@@ -205,6 +269,30 @@ trailblaze stop [OPTIONS]
 | `-f`, `--force` | Force stop (kill process) if graceful shutdown fails | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
+
+---
+
+### `trailblaze help`
+
+When no COMMAND is given, the usage help for the main command is displayed. If a COMMAND is specified, the help for that command is shown.
+
+**Synopsis:**
+
+```
+trailblaze help [OPTIONS] [<COMMAND>]
+```
+
+**Arguments:**
+
+| Argument | Description | Required |
+|----------|-------------|----------|
+| `<COMMAND>` | The COMMAND to display the usage help message for. | No |
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `-h`, `--help` | Show usage help for the help command and exit. | - |
 
 <hr/>
 

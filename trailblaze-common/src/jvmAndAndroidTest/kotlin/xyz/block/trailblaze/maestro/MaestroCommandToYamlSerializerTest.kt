@@ -856,4 +856,26 @@ class MaestroCommandToYamlSerializerTest {
       )
     }
   }
+
+  @Test
+  fun `optional assertVisible parses correctly for loading percentage`() {
+    val commands = MaestroYamlParser.parseYaml(
+      """
+      - assertVisible:
+          text: (100|[1-9]?[0-9])%
+          optional: true
+      - extendedWaitUntil:
+          notVisible: (100|[1-9]?[0-9])%
+          timeout: 45000
+      """.trimIndent()
+    )
+
+    assert(commands.isNotEmpty()) { "Should parse at least one command" }
+
+    // First command: optional assertVisible — Maestro parses this as AssertConditionCommand
+    val assertCmd = commands.first { it is AssertConditionCommand } as AssertConditionCommand
+    assertEquals(true, assertCmd.optional)
+    assert(assertCmd.condition.visible != null) { "Should have visible condition" }
+    assertEquals("(100|[1-9]?[0-9])%", assertCmd.condition.visible?.textRegex)
+  }
 }

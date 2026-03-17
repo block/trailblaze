@@ -47,8 +47,10 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import xyz.block.trailblaze.TrailblazeVersion
+import xyz.block.trailblaze.logs.server.McpServerDebugState
 import xyz.block.trailblaze.logs.server.TrailblazeMcpServer
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.ui.composables.DeviceStatusPanel
@@ -261,6 +263,7 @@ class MainTrailblazeApp(
             trailblazeSavedSettingsRepo = trailblazeSavedSettingsRepo,
             windowState = windowState,
             deviceManager = deviceManager,
+            mcpServerDebugStateFlow = trailblazeMcpServer.mcpServerDebugStateFlow,
           )
         }
       }
@@ -278,6 +281,7 @@ fun TrailblazeAppContent(
   trailblazeSavedSettingsRepo: TrailblazeSettingsRepo,
   windowState: WindowState,
   deviceManager: TrailblazeDeviceManager,
+  mcpServerDebugStateFlow: StateFlow<McpServerDebugState>,
 ) {
 
   val navController = LocalNavController.current
@@ -333,11 +337,12 @@ fun TrailblazeAppContent(
     if (currentServerState.appConfig.showDebugPopOutWindow) {
       DevDebugWindow(
         deviceManager = deviceManager,
+        mcpServerDebugStateFlow = mcpServerDebugStateFlow,
         onCloseRequest = {
           trailblazeSavedSettingsRepo.updateAppConfig {
             it.copy(showDebugPopOutWindow = false)
           }
-        }
+        },
       )
     }
 

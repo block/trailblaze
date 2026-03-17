@@ -3,7 +3,9 @@ package xyz.block.trailblaze.mcp.sampling
 import ai.koog.prompt.executor.clients.LLMClient
 import xyz.block.trailblaze.agent.SamplingSource
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
+import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
+import xyz.block.trailblaze.report.utils.LogsRepo
 
 /**
  * Resolves which sampling source to use based on availability.
@@ -25,6 +27,8 @@ class SamplingSourceResolver(
   private val sessionContext: TrailblazeMcpSessionContext,
   private val llmClient: LLMClient?,
   private val llmModel: TrailblazeLlmModel?,
+  private val logsRepo: LogsRepo? = null,
+  private val sessionIdProvider: (() -> SessionId?)? = null,
 ) {
 
   private val mcpSource: McpClientSamplingSource by lazy {
@@ -32,7 +36,12 @@ class SamplingSourceResolver(
   }
 
   private val localSource: LocalLlmSamplingSource by lazy {
-    LocalLlmSamplingSource(llmClient, llmModel)
+    LocalLlmSamplingSource(
+      llmClient = llmClient,
+      llmModel = llmModel,
+      logsRepo = logsRepo,
+      sessionIdProvider = sessionIdProvider,
+    )
   }
 
   /**

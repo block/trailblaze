@@ -157,12 +157,30 @@ object HostAndroidDeviceConnectUtils {
     trailblazeDeviceId: TrailblazeDeviceId,
     additionalInstrumentationArgs: Map<String, String> = emptyMap(),
     sendProgressMessage: (String) -> Unit,
+    forceRestart: Boolean = false,
   ): DeviceConnectionStatus {
     val trailblazeOnDeviceInstrumentationTarget = trailblazeOnDeviceInstrumentationTarget
     val completableDeferred: CompletableDeferred<DeviceConnectionStatus> = CompletableDeferred()
     var hasCallbackBeenCalled = false
 
-    // Always force stop and reinstall to ensure a clean slate
+    // Check if the on-device server is already running. If so, reuse it instead of
+    // force-stopping and reinstalling, which would clobber any active connections
+    // (e.g., MCP screen-state queries, accessibility driver).
+    val alreadyRunning = !forceRestart && AndroidHostAdbUtils.isAppRunning(
+      deviceId = trailblazeDeviceId,
+      appId = trailblazeOnDeviceInstrumentationTarget.testAppId,
+    )
+
+    if (alreadyRunning) {
+      sendProgressMessage("On-device server already running — reusing existing connection.")
+      Console.log("On-device server already running for ${trailblazeOnDeviceInstrumentationTarget.testAppId}, skipping force-stop/reinstall.")
+      return DeviceConnectionStatus.WithTargetDevice.TrailblazeInstrumentationRunning(
+        trailblazeDeviceId = trailblazeDeviceId,
+      )
+    }
+
+    // Server not running (or force restart requested) — clean slate setup
+    sendProgressMessage("On-device server not running — starting fresh...")
     forceStopAllAndroidInstrumentationProcesses(
       trailblazeOnDeviceInstrumentationTargetTestApps = setOf(trailblazeOnDeviceInstrumentationTarget),
       deviceId = trailblazeDeviceId,
@@ -308,17 +326,20 @@ object HostAndroidDeviceConnectUtils {
     trailblazeOnDeviceInstrumentationTarget: TrailblazeOnDeviceInstrumentationTarget,
     additionalInstrumentationArgs: Map<String, String> = emptyMap(),
     httpsPort: Int = TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTPS_PORT,
+    forceRestart: Boolean = false,
   ): DeviceConnectionStatus {
     val devicePort = deviceId.getTrailblazeOnDeviceSpecificPort()
     adbPortForward(deviceId, devicePort)
     adbPortReverse(deviceId, httpsPort)
 
-    // connectToInstrumentation will handle uninstall and reinstall for a clean slate
+    // Reuses existing on-device server if already running; only force-stops and
+    // reinstalls when the server is not running (or forceRestart is true).
     return HostAndroidDeviceConnectUtils.connectToInstrumentation(
       trailblazeOnDeviceInstrumentationTarget = trailblazeOnDeviceInstrumentationTarget,
       trailblazeDeviceId = deviceId,
       sendProgressMessage = sendProgressMessage,
       additionalInstrumentationArgs = additionalInstrumentationArgs,
+      forceRestart = forceRestart,
     )
   }
 }

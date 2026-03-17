@@ -65,6 +65,7 @@ object TrailblazeNodeSelectorGenerator {
         namedWebStrategies(root, target, detail, parentMap)
       is DriverNodeDetail.Compose ->
         namedComposeStrategies(root, target, detail, parentMap)
+      is DriverNodeDetail.IosMaestro -> emptyList()
     }
 
     val results = mutableListOf<NamedSelector>()
@@ -118,6 +119,7 @@ object TrailblazeNodeSelectorGenerator {
         namedStructuralWebStrategies(root, target, detail, parentMap)
       is DriverNodeDetail.Compose ->
         namedStructuralComposeStrategies(root, target, detail, parentMap)
+      is DriverNodeDetail.IosMaestro -> emptyList()
     }
 
     for ((name, strategy) in namedStrategies) {
@@ -160,6 +162,7 @@ object TrailblazeNodeSelectorGenerator {
         webStrategies(root, target, detail, parentMap)
       is DriverNodeDetail.Compose ->
         composeStrategies(root, target, detail, parentMap)
+      is DriverNodeDetail.IosMaestro -> emptyList()
     }
 
     for (strategy in strategies) {
@@ -799,6 +802,18 @@ object TrailblazeNodeSelectorGenerator {
         null
       }
     }
+    is DriverNodeDetail.IosMaestro -> {
+      val rid = detail.resourceId
+      val className = detail.className
+      if (rid != null || className != null) {
+        DriverNodeMatch.IosMaestro(
+          resourceIdRegex = rid?.let { escapeForSelector(it) },
+          classNameRegex = className?.let { escapeForSelector(it) },
+        )
+      } else {
+        null
+      }
+    }
   }
 
   /**
@@ -1334,6 +1349,18 @@ object TrailblazeNodeSelectorGenerator {
       val text = detail.resolveText()?.takeIf { it.isNotBlank() }
       if (tag != null || text != null) {
         DriverNodeMatch.Compose(testTag = tag, textRegex = text?.let { escapeForSelector(it) })
+      } else {
+        null
+      }
+    }
+    is DriverNodeDetail.IosMaestro -> {
+      val text = detail.resolveText()?.takeIf { it.isNotBlank() }
+      val rid = detail.resourceId
+      if (text != null || rid != null) {
+        DriverNodeMatch.IosMaestro(
+          textRegex = text?.let { escapeForSelector(it) },
+          resourceIdRegex = rid?.let { escapeForSelector(it) },
+        )
       } else {
         null
       }

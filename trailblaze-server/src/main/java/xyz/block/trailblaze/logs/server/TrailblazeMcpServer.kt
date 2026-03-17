@@ -18,6 +18,7 @@ import io.ktor.server.routing.delete
 import io.ktor.server.routing.post
 import io.ktor.server.routing.routing
 import io.ktor.server.sse.SSE
+import io.ktor.server.sse.heartbeat
 import io.ktor.server.sse.sse
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
@@ -36,10 +37,16 @@ import io.modelcontextprotocol.kotlin.sdk.types.TextContent
 import io.modelcontextprotocol.kotlin.sdk.types.ToolSchema
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.asContextElement
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlin.time.Duration.Companion.seconds
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.io.asSink
 import kotlinx.io.asSource
@@ -47,6 +54,9 @@ import kotlinx.io.buffered
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonPrimitive
+import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.server.ServerEndpoints.logsServerKtorEndpoints
@@ -54,14 +64,17 @@ import xyz.block.trailblaze.logs.server.SslConfig.configureForSelfSignedSsl
 import xyz.block.trailblaze.logs.server.endpoints.CliRunRequest
 import xyz.block.trailblaze.logs.server.endpoints.CliRunResponse
 import xyz.block.trailblaze.logs.server.endpoints.CliStatusResponse
+import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.DeviceClaimRegistry
 import xyz.block.trailblaze.mcp.McpDeviceContext
 import xyz.block.trailblaze.mcp.McpToolProfile
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
+import xyz.block.trailblaze.mcp.TrailblazeMcpMode
 import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
 import xyz.block.trailblaze.mcp.models.McpSessionId
 import xyz.block.trailblaze.mcp.newtools.ConfigToolSet
 import xyz.block.trailblaze.mcp.newtools.StepToolSet
+import xyz.block.trailblaze.mcp.resources.registerResources
 import xyz.block.trailblaze.mcp.newtools.DeviceManagerToolSet
 import xyz.block.trailblaze.mcp.newtools.TrailTool
 import xyz.block.trailblaze.mcp.agent.BridgeUiActionExecutor
@@ -92,6 +105,30 @@ import xyz.block.trailblaze.logs.model.TraceId
 import kotlinx.datetime.Clock
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import kotlin.coroutines.EmptyCoroutineContext
+
+/**
+ * Snapshot of a single MCP session for debug UI display.
+ */
+data class McpSessionSnapshot(
+  val sessionId: String,
+  val mode: TrailblazeMcpMode,
+  val associatedDeviceId: TrailblazeDeviceId?,
+  val clientName: String?,
+  val toolProfile: McpToolProfile,
+  val agentImplementation: AgentImplementation,
+  val isRecording: Boolean,
+  val currentTrailName: String?,
+  val createdAtMillis: Long?,
+)
+
+/**
+ * Observable state of the MCP server for debug UI.
+ */
+data class McpServerDebugState(
+  val isRunning: Boolean = false,
+  val serverStartTimeMillis: Long = 0L,
+  val sessions: List<McpSessionSnapshot> = emptyList(),
+)
 
 class TrailblazeMcpServer(
   val logsRepo: LogsRepo,
@@ -143,6 +180,9 @@ class TrailblazeMcpServer(
      */
     private const val MCP_TOOL_EXECUTION_TIMEOUT_MS = 5 * 60 * 1000L
 
+    /** Interval between SSE keepalive comments to prevent idle connection timeouts. */
+    private val SSE_HEARTBEAT_PERIOD = 15.seconds
+
     /**
      * Thread-local to track the current MCP session ID during request processing.
      * This allows tools to look up the correct session context for sending notifications.
@@ -182,6 +222,39 @@ class TrailblazeMcpServer(
   // Track server startup time for uptime reporting
   private var serverStartTimeMillis: Long = 0L
 
+  // Observable debug state for the Dev Debug UI
+  private val _mcpServerDebugStateFlow = MutableStateFlow(McpServerDebugState())
+  val mcpServerDebugStateFlow: StateFlow<McpServerDebugState> =
+    _mcpServerDebugStateFlow.asStateFlow()
+
+  private fun emitDebugState() {
+    val sessions =
+      sessionContexts.map { (id, ctx) ->
+        McpSessionSnapshot(
+          sessionId = id,
+          mode = ctx.mode,
+          associatedDeviceId = ctx.associatedDeviceId,
+          clientName = ctx.mcpClientName,
+          toolProfile = ctx.toolProfile,
+          agentImplementation = ctx.agentImplementation,
+          isRecording = ctx.isRecordingActive(),
+          currentTrailName = ctx.getCurrentTrailName(),
+          createdAtMillis = sessionCreationTimes[id],
+        )
+      }
+    val newState =
+      McpServerDebugState(
+        isRunning = serverStartTimeMillis > 0,
+        serverStartTimeMillis = serverStartTimeMillis,
+        sessions = sessions,
+      )
+    _mcpServerDebugStateFlow.value = newState
+    Console.log(
+      "[MCP DEBUG] State updated: running=${newState.isRunning}, " +
+        "sessions=${sessions.size} [${sessions.joinToString { "${it.clientName ?: "?"} -> ${it.associatedDeviceId?.instanceId ?: "no-device"}" }}]"
+    )
+  }
+
   var hostMcpToolRegistry = ToolRegistry.Companion {}
 
   fun getSessionContext(mcpSessionId: McpSessionId): TrailblazeMcpSessionContext? =
@@ -214,7 +287,9 @@ class TrailblazeMcpServer(
   ) {
     hostMcpToolRegistry = hostMcpToolRegistry.plus(newToolRegistry)
 
+    Console.log("[MCP] Registering ${newToolRegistry.tools.size} tools from Koog registry")
     newToolRegistry.tools.forEach { tool: Tool<*, *> ->
+      try {
       // Build properties JsonObject directly (following Koog pattern)
       val properties = buildJsonObject {
         (tool.descriptor.requiredParameters + tool.descriptor.optionalParameters).forEach { param ->
@@ -250,11 +325,8 @@ class TrailblazeMcpServer(
         // lastActiveMcpSessionId (safe because STDIO has exactly one session).
         // We do NOT use lastActiveMcpSessionId for HTTP multi-session because it could
         // route to the wrong session under concurrency.
-        val currentMcpSession = currentMcpSessionId.get()
-          ?: lastActiveMcpSessionId?.also {
-            // Only safe for STDIO (single session). Log at debug level since STDIO always hits this.
-            Console.log("[MCP] Using STDIO session fallback for tool ${tool.descriptor.name}: $it")
-          }
+        val threadLocalSession = currentMcpSessionId.get()
+        val currentMcpSession = threadLocalSession ?: lastActiveMcpSessionId
         val activeMcpSessionContext = currentMcpSession?.let { sessionContexts[it] }
 
         // Store MCP progress token for this session (used for notifications/progress)
@@ -268,13 +340,25 @@ class TrailblazeMcpServer(
           }
         }
 
+        // Lazily populate client name from SDK handshake (covers STDIO path
+        // and any HTTP race conditions where onSessionInitialized fires
+        // before handleInitialize sets clientVersion)
+        if (activeMcpSessionContext?.mcpClientName == null) {
+          activeMcpSessionContext?.mcpServerSession?.clientVersion?.name?.let { name ->
+            activeMcpSessionContext.mcpClientName = name
+            Console.log("[MCP] Client identified: $name (session=$currentMcpSession)")
+            emitDebugState()
+          }
+        }
+
         // Build a coroutine context element that propagates the per-session device ID
         // to the IO thread during tool execution. asContextElement sets the ThreadLocal when
         // the coroutine resumes on the IO thread and restores it on suspension/completion,
         // preventing races between concurrent HTTP sessions.
         // NOTE: Do NOT call mcpBridge.selectDeviceForSession() here — that would set the
         // ThreadLocal on the handler thread (Netty event loop), which races with other sessions.
-        val deviceIdContext = activeMcpSessionContext?.associatedDeviceId?.let { deviceId ->
+        val associatedDevice = activeMcpSessionContext?.associatedDeviceId
+        val deviceIdContext = associatedDevice?.let { deviceId ->
           McpDeviceContext.currentDeviceId.asContextElement(deviceId)
         } ?: EmptyCoroutineContext
 
@@ -345,9 +429,17 @@ class TrailblazeMcpServer(
 
           val durationMs = System.currentTimeMillis() - startTime
 
+          // Detect error responses from tools that return error strings
+          // rather than throwing exceptions (e.g., "Error: No Android device available")
+          // Also detect structured JSON errors (e.g., {"success":false,"error":"..."})
+          val isToolError = toolResponseMessage.startsWith("Error:") ||
+            toolResponseMessage.startsWith("Failed:") ||
+            hasJsonErrorField(toolResponseMessage)
+
           // Log RESPONSE (after processing complete)
           val resultPreview = toolResponseMessage.take(200)
-          Console.log("[MCP] <- $toolName OK (${durationMs}ms, trace=${traceId.traceId}) $resultPreview${if (toolResponseMessage.length > 200) "..." else ""}")
+          val statusTag = if (isToolError) "TOOL_ERROR" else "OK"
+          Console.log("[MCP] <- $toolName $statusTag (${durationMs}ms, trace=${traceId.traceId}) $resultPreview${if (toolResponseMessage.length > 200) "..." else ""}")
 
           // Save RESPONSE log to disk
           saveToolCallResponseLog(
@@ -355,9 +447,9 @@ class TrailblazeMcpServer(
             mcpSessionId = mcpSessionIdForLog,
             sessionIdForLog = sessionIdForLog,
             traceId = traceId,
-            successful = true,
+            successful = !isToolError,
             resultSummary = toolResponseMessage.take(2000).toJsonElement(),
-            errorMessage = null,
+            errorMessage = if (isToolError) toolResponseMessage else null,
             durationMs = durationMs,
           )
 
@@ -365,13 +457,20 @@ class TrailblazeMcpServer(
             content = mutableListOf(
               TextContent(toolResponseMessage),
             ),
-            isError = false,  // Explicitly set to false for success (some MCP clients require this)
+            isError = isToolError,
           )
         } catch (e: Throwable) {
           // Catch Throwable (not just Exception) to also handle Error subclasses
           // (OutOfMemoryError, StackOverflowError, etc.) that would otherwise
           // propagate to the MCP SDK and close the transport connection.
           val durationMs = System.currentTimeMillis() - startTime
+
+          // Log CancellationException specifically — these can indicate the STDIO
+          // transport died or the coroutine scope was cancelled externally.
+          if (e is kotlinx.coroutines.CancellationException) {
+            Console.error("[MCP] ← $toolName CANCELLED (${durationMs}ms, trace=${traceId.traceId}) — coroutine was cancelled. Cause: ${e.cause?.let { "${it::class.simpleName}: ${it.message}" } ?: "no cause"}")
+            Console.error("[MCP]   Stack: ${e.stackTraceToString().take(1000)}")
+          }
 
           // Return error result instead of throwing - allows LLM to see the error
           // Include exception class name for better debugging when message is null
@@ -400,6 +499,10 @@ class TrailblazeMcpServer(
             isError = true,
           )
         }
+      }
+      Console.log("[MCP] Registered tool: ${tool.descriptor.name}")
+      } catch (e: Exception) {
+        Console.error("[MCP] FAILED to register tool '${tool.descriptor.name}': ${e::class.simpleName}: ${e.message}")
       }
     }
   }
@@ -430,6 +533,7 @@ class TrailblazeMcpServer(
     wait: Boolean = false,
   ): EmbeddedServer<*, *> {
     serverStartTimeMillis = System.currentTimeMillis()
+    emitDebugState()
     Console.log("═══════════════════════════════════════════════════════════")
     Console.log("Starting Trailblaze MCP Server (Streamable HTTP)")
     Console.log("  HTTP Port:  $port")
@@ -458,7 +562,9 @@ class TrailblazeMcpServer(
      * Creates a new MCP server, transport, and session for a connecting client.
      * Each client gets its own server + transport combination to enable multi-session support.
      */
-    suspend fun createSessionForClient(): StreamableHttpServerTransport {
+    suspend fun createSessionForClient(
+      toolProfileOverride: McpToolProfile? = null,
+    ): StreamableHttpServerTransport {
       // Create a fresh MCP server for this client
       val mcpServer: Server = configureMcpServer()
 
@@ -471,7 +577,7 @@ class TrailblazeMcpServer(
       //
       // GET/SSE for server-to-client notifications is handled separately.
       val transport = StreamableHttpServerTransport(
-        enableJsonResponse = true,
+        StreamableHttpServerTransport.Configuration(enableJsonResponse = true),
       )
 
       // Variable to hold the ServerSession after createSession returns.
@@ -496,14 +602,23 @@ class TrailblazeMcpServer(
         val sessionContext = TrailblazeMcpSessionContext(
           mcpServerSession = serverSessionHolder,
           mcpSessionId = mcpSessionId,
-          toolProfile = defaultToolProfile,
+          toolProfile = toolProfileOverride ?: defaultToolProfile,
         )
+
+        // Populate client name from the SDK's initialize handshake.
+        // clientVersion is set by handleInitialize() before onSessionInitialized fires.
+        serverSessionHolder?.clientVersion?.name?.let { name ->
+          sessionContext.mcpClientName = name
+          Console.log("[MCP SESSION] Client identified: $name")
+        }
+
         sessionContexts[generatedSessionId] = sessionContext
         sessionCreationTimes[generatedSessionId] = System.currentTimeMillis()
 
         // Wire up mode change callback for this session
         sessionContext.onModeChanged = { newMode ->
           Console.log("[MCP SESSION] Mode changed to ${newMode.name} for session $generatedSessionId")
+          emitDebugState()
         }
 
         // Register tools with the REAL per-session context.
@@ -512,6 +627,14 @@ class TrailblazeMcpServer(
         // throwaway placeholder. Safe to call here because the client can only invoke
         // tools after the initialize handshake completes.
         registerTools(mcpServer, mcpSessionId, sessionContext)
+
+        // Auto-connect to single mobile device (non-blocking)
+        sessionContext.sendProgressNotificationsScope.launch {
+          autoConnectSingleDevice(sessionContext)
+          emitDebugState()
+        }
+
+        emitDebugState()
       }
 
       transport.setOnSessionClosed { closedSessionId ->
@@ -545,6 +668,8 @@ class TrailblazeMcpServer(
         sessionServerSessions.remove(closedSessionId)
         activeTransports.remove(closedSessionId)
         sseNotificationChannels.remove(closedSessionId)?.close()
+
+        emitDebugState()
       }
 
       // Connect the server to the transport — this enables the transport to process requests.
@@ -642,8 +767,16 @@ class TrailblazeMcpServer(
               }
             } else {
               // No session ID - new client, create session
-              Console.log("[MCP] Creating new session for client...")
-              createSessionForClient()
+              // Check for tool profile override header (sent by MCP proxy for external clients)
+              val profileOverride = call.request.headers["X-Tool-Profile"]?.let { header ->
+                try {
+                  McpToolProfile.valueOf(header.uppercase())
+                } catch (_: IllegalArgumentException) {
+                  null
+                }
+              }
+              Console.log("[MCP] Creating new session for client (profileOverride=$profileOverride)...")
+              createSessionForClient(toolProfileOverride = profileOverride)
             }
 
             // Set the current MCP session ID for tools to look up the correct session context.
@@ -703,6 +836,13 @@ class TrailblazeMcpServer(
             notificationChannel.trySend(jsonRpcMessage)
           }
 
+          // Send periodic SSE comment keepalives to prevent idle connection timeouts
+          // (Ktor's default ~45s) from killing the stream. The heartbeat sends `: heartbeat`
+          // comments which are ignored by SSE clients but keep the TCP connection alive.
+          heartbeat {
+            period = SSE_HEARTBEAT_PERIOD
+          }
+
           try {
             // Stream notifications as SSE events
             // Note: Using default event type (no explicit "event:" field) for broader compatibility
@@ -754,6 +894,7 @@ class TrailblazeMcpServer(
     sessionContext: TrailblazeMcpSessionContext,
   ) {
     val isMinimalProfile = sessionContext.toolProfile == McpToolProfile.MINIMAL
+    Console.log("[MCP] registerTools called. Profile: ${sessionContext.toolProfile}, isMinimal: $isMinimalProfile")
     val toolSetCatalog = TrailblazeToolSetCatalog.defaultEntries(setOfMarkEnabled = true)
 
     // Track currently registered TrailblazeTool names so we can remove them on toolset changes
@@ -851,21 +992,58 @@ class TrailblazeMcpServer(
         // Primary automation tools - step, verify, ask (with recording support)
         // Note: Inner agent ALWAYS needs tools, even when includePrimitiveTools=false
         // We use ToolSetCategoryMapping directly to get core tools for the inner agent.
-        val innerAgentTools = ToolSetCategoryMapping.getToolClasses(ToolSetCategory.STANDARD)
-          .mapNotNull { it.toKoogToolDescriptor()?.toTrailblazeToolDescriptor() }
-        Console.log("[TrailblazeMcpServer] Inner agent has ${innerAgentTools.size} tools available")
+        val builtInTools = ToolSetCategoryMapping.getToolClasses(ToolSetCategory.STANDARD)
+        // Provider that dynamically includes custom tools from the current app target.
+        // This is a lambda so it picks up target app/driver changes during the session.
+        val innerAgentToolsProvider = {
+          val customToolClasses = try {
+            val driverType = mcpBridge.getDriverType()
+            val appTargetId = mcpBridge.getCurrentAppTargetId()
+            val appTarget = if (appTargetId != null) {
+              mcpBridge.getAvailableAppTargets().firstOrNull { it.id == appTargetId }
+            } else null
+            val tools = if (appTarget != null && driverType != null) {
+              appTarget.getCustomToolsForDriver(driverType)
+            } else emptySet()
+            Console.log("[TrailblazeMcpServer] Custom tools for $appTargetId/$driverType: ${tools.map { it.simpleName }}")
+            tools
+          } catch (e: Exception) {
+            Console.log("[TrailblazeMcpServer] Custom tool loading failed: ${e.message}")
+            emptySet()
+          }
+          val allTools = (builtInTools + customToolClasses)
+            .mapNotNull { it.toKoogToolDescriptor()?.toTrailblazeToolDescriptor() }
+          Console.log("[TrailblazeMcpServer] Inner agent total tools: ${allTools.size} (custom: ${customToolClasses.size})")
+          allTools
+        }
+        Console.log("[TrailblazeMcpServer] Inner agent tools provider registered (built-in: ${builtInTools.size})")
 
         tools(
           StepToolSet(
             screenAnalyzer = screenAnalyzer,
             executor = uiActionExecutor,
             screenStateProvider = {
-              runBlocking { ScreenStateCaptureUtil.captureScreenState(mcpBridge) }
+              // Capture the device ID from the current thread's context before entering
+              // runBlocking, which creates a new coroutine scope that doesn't inherit
+              // the parent's ThreadLocal-based context element.
+              val deviceId = McpDeviceContext.currentDeviceId.get()
+              try {
+                runBlocking(
+                  deviceId?.let { McpDeviceContext.currentDeviceId.asContextElement(it) }
+                    ?: EmptyCoroutineContext
+                ) {
+                  ScreenStateCaptureUtil.captureScreenState(mcpBridge)
+                }
+              } catch (e: Throwable) {
+                Console.error("[MCP] screenStateProvider: FAILED — ${e::class.simpleName}: ${e.message}")
+                null
+              }
             },
             sessionContext = sessionContext,
-            availableToolsProvider = { innerAgentTools },
+            availableToolsProvider = innerAgentToolsProvider,
             logEmitter = trailLogEmitter,
             sessionIdProvider = activeSessionIdProvider,
+            driverStatusProvider = { mcpBridge.getDriverConnectionStatus() },
           ).asTools(TrailblazeJsonInstance),
         )
         Console.log("[TrailblazeMcpServer] blaze(), verify(), ask() tools registered")
@@ -904,7 +1082,71 @@ class TrailblazeMcpServer(
       }
     }
 
+    // Register MCP resources
+    registerResources(mcpServer, sessionContext, mcpBridge, trailsDirProvider)
+
     mcpServer.onClose { }
+  }
+
+  /**
+   * Auto-connects to a device if there is exactly one Android or iOS device available.
+   * Called during session initialization to skip the manual device() handshake.
+   *
+   * Web browser is always available but not auto-connected — it's a fallback the LLM
+   * can choose explicitly via device(action=WEB).
+   */
+  private suspend fun autoConnectSingleDevice(
+    sessionContext: TrailblazeMcpSessionContext,
+  ) {
+    // Skip if the session already has a device (explicit device() call won the race)
+    if (sessionContext.associatedDeviceId != null) {
+      Console.log("[MCP] Auto-connect skipped: session already has device ${sessionContext.associatedDeviceId?.instanceId}")
+      return
+    }
+    try {
+      val devices = mcpBridge.getAvailableDevices()
+      val mobileDevices = devices
+        .filter {
+          it.platform == TrailblazeDevicePlatform.ANDROID ||
+            it.platform == TrailblazeDevicePlatform.IOS
+        }
+        // Deduplicate by instanceId+platform (multiple driver types for same device)
+        .groupBy { it.instanceId to it.platform }
+        .map { (_, variants) ->
+          val platform = variants.first().platform
+          val configuredType = mcpBridge.getConfiguredDriverType(platform)
+          if (configuredType != null) {
+            variants.find { it.trailblazeDriverType == configuredType } ?: variants.first()
+          } else {
+            variants.first()
+          }
+        }
+
+      if (mobileDevices.size == 1) {
+        val device = mobileDevices.first()
+        Console.log("[MCP] Auto-connecting to single ${device.platform.displayName} device: ${device.instanceId}")
+
+        val deviceId = device.trailblazeDeviceId
+        val mcpSessionId = sessionContext.mcpSessionId.sessionId
+        deviceClaimRegistry.claim(deviceId, mcpSessionId, force = false)
+
+        try {
+          mcpBridge.selectDevice(deviceId)
+        } catch (e: Exception) {
+          deviceClaimRegistry.release(deviceId, mcpSessionId)
+          throw e
+        }
+
+        sessionContext.setAssociatedDevice(deviceId)
+        mcpBridge.ensureSessionAndGetId()
+        sessionContext.startImplicitRecording()
+        Console.log("[MCP] Auto-connected to ${device.instanceId} (${device.platform.displayName})")
+      } else {
+        Console.log("[MCP] Auto-connect skipped: ${mobileDevices.size} mobile devices found (need exactly 1)")
+      }
+    } catch (e: Exception) {
+      Console.log("[MCP] Auto-connect failed (non-fatal): ${e::class.simpleName}: ${e.message}")
+    }
   }
 
   /**
@@ -1019,6 +1261,22 @@ class TrailblazeMcpServer(
     sessionContexts[mcpSessionId.sessionId] = sessionContext
     sessionCreationTimes[mcpSessionId.sessionId] = System.currentTimeMillis()
 
+    // Register tools BEFORE creating the session/transport to avoid a race condition.
+    // The MCP client can send tool calls immediately after the initialize handshake,
+    // so tools must already be registered when the session goes live.
+    // (The HTTP server avoids this by registering in onSessionInitialized, which fires
+    // after handshake but before tool calls are accepted.)
+    lastActiveMcpSessionId = mcpSessionId.sessionId
+    try {
+      registerTools(mcpServer, mcpSessionId, sessionContext)
+    } catch (e: Exception) {
+      Console.error("[MCP STDIO] FATAL: Failed to register tools: ${e::class.simpleName}: ${e.message}")
+      throw e
+    }
+
+    // Auto-connect to single mobile device before going live
+    autoConnectSingleDevice(sessionContext)
+
     val transport = StdioServerTransport(
       System.`in`.asSource().buffered(),
       stdout.asSink().buffered(),
@@ -1026,15 +1284,17 @@ class TrailblazeMcpServer(
 
     val session = mcpServer.createSession(transport)
     sessionContext.mcpServerSession = session
-    // Set lastActiveMcpSessionId for STDIO — safe because STDIO has exactly one session.
-    // This is the fallback used by tool execution when the thread-local is not set.
-    lastActiveMcpSessionId = mcpSessionId.sessionId
-    registerTools(mcpServer, mcpSessionId, sessionContext)
 
     Console.log("STDIO MCP server ready — waiting for JSON-RPC on stdin")
 
     val done = Job()
     session.onClose {
+      Console.error("[MCP STDIO] Session closing — STDIO transport connection ended")
+      Console.error("[MCP STDIO]   Session: ${mcpSessionId.sessionId}")
+      Console.error("[MCP STDIO]   Associated device: ${sessionContext.associatedDeviceId?.instanceId ?: "none"}")
+      Thread.currentThread().let { t ->
+        Console.error("[MCP STDIO]   Close triggered on thread: ${t.name} (id=${t.id})")
+      }
       // Cancel running automation and release resources for this STDIO session
       sessionContext.associatedDeviceId?.let { deviceId ->
         Console.log("Cancelling automation on device ${deviceId.instanceId} due to STDIO session closure")
@@ -1101,6 +1361,22 @@ class TrailblazeMcpServer(
     }
 
     return sessionId ?: SessionId(fallbackMcpSessionId)
+  }
+
+  /**
+   * Detects structured JSON error payloads from tools that return JSON with an "error" field
+   * (e.g., ConfigToolSet returns `{"success":false,"error":"Unknown config key"}`).
+   * Returns false for non-JSON strings or JSON without a non-null "error" field.
+   */
+  private fun hasJsonErrorField(message: String): Boolean {
+    if (!message.startsWith("{")) return false
+    return try {
+      val obj = Json.parseToJsonElement(message) as? JsonObject ?: return false
+      val errorValue = obj["error"]?.jsonPrimitive?.contentOrNull
+      !errorValue.isNullOrEmpty()
+    } catch (_: Exception) {
+      false
+    }
   }
 
   private suspend fun preselectDeviceForSession(action: String?, args: JsonObject) {

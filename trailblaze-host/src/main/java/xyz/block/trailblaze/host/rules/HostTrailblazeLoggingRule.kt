@@ -18,7 +18,7 @@ class HostTrailblazeLoggingRule(
   logsBaseUrl: String = "https://localhost:${TrailblazePortManager.resolveEffectiveHttpsPort()}",
   additionalLogEmitter: LogEmitter? = null,
   logsDir: File? = null,
-  private val logsRepo: LogsRepo = LogsRepo(resolveLogsDir(logsDir)),
+  val logsRepo: LogsRepo = LogsRepo(resolveLogsDir(logsDir)),
 ) : TrailblazeLoggingRule(
   logsBaseUrl = logsBaseUrl,
   additionalLogEmitter = additionalLogEmitter,

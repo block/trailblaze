@@ -309,18 +309,9 @@ class PlaywrightBrowserManager(
     // Initialize Playwright on the dedicated thread to ensure thread affinity.
     // All subsequent Playwright API calls must happen on this same thread.
     try {
-      // Direct the Playwright driver extraction to a stable cache directory instead of the
-      // system temp dir (/var/folders/.../T/ on macOS). The system temp dir is periodically
-      // cleaned by the OS, which can delete the extracted Node.js driver files while the
-      // desktop app is still running, causing "Cannot find module .../package/cli.js" errors.
-      // See: https://github.com/microsoft/playwright-java/issues/1294
-      if (System.getProperty("playwright.driver.tmpdir") == null) {
-        val cacheDir = java.nio.file.Path.of(
-          System.getProperty("user.home"), ".cache", "trailblaze", "playwright-driver"
-        )
-        java.nio.file.Files.createDirectories(cacheDir)
-        System.setProperty("playwright.driver.tmpdir", cacheDir.toString())
-      }
+      // Ensure the Playwright driver is available (downloads on first use if driver-bundle
+      // is not on the classpath, e.g., when running from the uber JAR).
+      PlaywrightDriverManager.ensureDriverAvailable()
       runBlocking(playwrightDispatcher) {
         playwright = Playwright.create()
         val browserType =

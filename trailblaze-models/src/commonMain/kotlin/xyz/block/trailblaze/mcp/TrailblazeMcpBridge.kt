@@ -117,6 +117,14 @@ interface TrailblazeMcpBridge {
   fun getDriverType(): TrailblazeDriverType? = null
 
   /**
+   * Returns the status of the device driver connection for the given device.
+   *
+   * @return null if no connection is in progress or the device is ready,
+   *         or a human-readable status string like "Device driver initializing (12s elapsed)"
+   */
+  fun getDriverConnectionStatus(deviceId: TrailblazeDeviceId? = null): String? = null
+
+  /**
    * Gets screen state via RPC for on-device instrumentation mode.
    * This calls the GetScreenStateRequest endpoint on the on-device agent.
    *

@@ -142,6 +142,7 @@ abstract class BaseHostTrailblazeTest(
   private val connectedDevice: TrailblazeConnectedDevice by lazy {
     TrailblazeDeviceService.getConnectedDevice(
       trailblazeDeviceId = trailblazeDeviceId,
+      driverType = trailblazeDriverType,
       appTarget = appTarget,
     ) ?: error("No connected device matching $trailblazeDeviceId found.")
   }
@@ -164,11 +165,13 @@ abstract class BaseHostTrailblazeTest(
     )
   }
 
-  val loggingRule: TrailblazeLoggingRule = HostTrailblazeLoggingRule(
+  val hostLoggingRule: HostTrailblazeLoggingRule = HostTrailblazeLoggingRule(
     trailblazeDeviceInfoProvider = {
       trailblazeDeviceInfo
     },
   )
+
+  val loggingRule: TrailblazeLoggingRule = hostLoggingRule
 
   /**
    * RuleChain ensures RetryRule is the outermost rule, wrapping all other rules.
@@ -256,7 +259,12 @@ abstract class BaseHostTrailblazeTest(
 
   private fun createV3Runner(): MultiAgentV3TestAgentRunner {
     val llmClient = dynamicLlmClient.createLlmClient()
-    val samplingSource = LocalLlmSamplingSource(llmClient, trailblazeLlmModel)
+    val samplingSource = LocalLlmSamplingSource(
+      llmClient = llmClient,
+      llmModel = trailblazeLlmModel,
+      logsRepo = hostLoggingRule.logsRepo,
+      sessionIdProvider = { loggingRule.session?.sessionId },
+    )
     val screenAnalyzer = InnerLoopScreenAnalyzer(
       samplingSource = samplingSource,
       model = trailblazeLlmModel,

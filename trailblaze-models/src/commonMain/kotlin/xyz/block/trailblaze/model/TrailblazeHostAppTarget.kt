@@ -176,3 +176,6 @@ abstract class TrailblazeHostAppTarget(
   }
 }
 
+fun Iterable<TrailblazeHostAppTarget>.findById(id: String): TrailblazeHostAppTarget? =
+  firstOrNull { it.id.equals(id, ignoreCase = true) }
+

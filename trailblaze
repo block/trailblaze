@@ -1,231 +1,33 @@
 #!/bin/bash
 
-# Trailblaze launcher script
-# 
-# Usage:
-#   ./trailblaze              - Start in background
-#   ./trailblaze --dev        - Start in foreground (for development)
-#   ./trailblaze stop         - Stop the running daemon
-#   ./trailblaze status       - Check if daemon is running
-#   ./trailblaze mcp          - Start STDIO MCP server with tray icon (for AI clients)
-#   ./trailblaze mcp --http   - Start Streamable HTTP MCP server
-#   ./trailblaze <command>    - Run other CLI commands (run, config, etc.)
-#
-# Environment variables:
-#   TRAILBLAZE_PORT           - HTTP port (default: 52525). Override to run multiple instances.
-#   TRAILBLAZE_HTTPS_PORT     - HTTPS port (default: 8443). Override to run multiple instances.
-#   TRAILBLAZE_MODULE         - Gradle module (default: :trailblaze-desktop)
-#
-# Logs are saved automatically by the JVM to ~/.trailblaze/desktop-logs/
-# (port-specific filenames for parallel instances).
+# Trailblaze launcher (development)
+# Overrides execution to use Gradle, then sources the base launcher for all other logic.
 
-# Allow override of Gradle module (for internal/enterprise variants)
 TRAILBLAZE_MODULE="${TRAILBLAZE_MODULE:-:trailblaze-desktop}"
 
-TRAILBLAZE_DEFAULT_PORT=52525
-TRAILBLAZE_DEFAULT_HTTPS_PORT=8443
-TRAILBLAZE_PORT="${TRAILBLAZE_PORT:-$TRAILBLAZE_DEFAULT_PORT}"
-TRAILBLAZE_HTTPS_PORT="${TRAILBLAZE_HTTPS_PORT:-$TRAILBLAZE_DEFAULT_HTTPS_PORT}"
-
-# Check if daemon is already running
-is_daemon_running() {
-    curl -s --connect-timeout 1 "http://localhost:${TRAILBLAZE_PORT}/ping" > /dev/null 2>&1
+tb_run() {
+  if [ -n "$1" ]; then
+    ./gradlew ${TRAILBLAZE_MODULE}:run --args="$1"
+  else
+    ./gradlew ${TRAILBLAZE_MODULE}:run
+  fi
 }
 
-# Show the window by calling the API
-show_window() {
-    curl -s -X POST "http://localhost:${TRAILBLAZE_PORT}/cli/show-window" \
-        -H "Content-Type: application/json" \
-        -d '{}' > /dev/null 2>&1
+tb_run_background() {
+  if [ -n "$1" ]; then
+    nohup ./gradlew ${TRAILBLAZE_MODULE}:run --args="$1" > /dev/null 2>&1 &
+  else
+    nohup ./gradlew ${TRAILBLAZE_MODULE}:run > /dev/null 2>&1 &
+  fi
 }
 
-# Stop the daemon (fast path: no JVM startup needed)
-stop_daemon() {
-    if ! is_daemon_running; then
-        echo "Trailblaze is not running."
-        return 0
-    fi
-    
-    echo "Stopping Trailblaze..."
-    curl -s -X POST "http://localhost:${TRAILBLAZE_PORT}/cli/shutdown" \
-        -H "Content-Type: application/json" \
-        -d '{}' > /dev/null 2>&1
-    
-    # Wait for daemon to stop
-    attempts=0
-    while is_daemon_running && [ $attempts -lt 10 ]; do
-        sleep 0.5
-        attempts=$((attempts + 1))
-    done
-    
-    if is_daemon_running; then
-        echo "Daemon did not stop gracefully."
-        return 1
-    else
-        echo "Trailblaze stopped."
-        return 0
-    fi
+tb_run_exec_quiet() {
+  exec ./gradlew -q --console=plain ${TRAILBLAZE_MODULE}:run --args="$1"
 }
 
-# Get daemon status (fast path: no JVM startup needed)
-get_status() {
-    if is_daemon_running; then
-        echo "Trailblaze is running on port ${TRAILBLAZE_PORT}."
-        curl -s "http://localhost:${TRAILBLAZE_PORT}/cli/status" 2>/dev/null | cat
-        echo ""
-    else
-        echo "Trailblaze is not running."
-    fi
+tb_run_background_quiet() {
+  nohup ./gradlew -q --console=plain ${TRAILBLAZE_MODULE}:run --args="$1" > /dev/null 2>&1 &
 }
 
-# Convert a path to absolute if it exists as a file
-to_absolute_path() {
-    local path="$1"
-    if [ -f "$path" ]; then
-        echo "$(cd "$(dirname "$path")" && pwd)/$(basename "$path")"
-    elif [ -d "$path" ]; then
-        echo "$(cd "$path" && pwd)"
-    else
-        echo "$path"
-    fi
-}
-
-# Build port flags to pass to the CLI when ports are overridden via env vars
-PORT_ARGS=""
-if [ "$TRAILBLAZE_PORT" != "$TRAILBLAZE_DEFAULT_PORT" ]; then
-    PORT_ARGS="--port $TRAILBLAZE_PORT"
-fi
-if [ "$TRAILBLAZE_HTTPS_PORT" != "$TRAILBLAZE_DEFAULT_HTTPS_PORT" ]; then
-    PORT_ARGS="$PORT_ARGS --https-port $TRAILBLAZE_HTTPS_PORT"
-fi
-
-# Process arguments: strip --dev flag, resolve file paths to absolute,
-# and detect STDIO mode for MCP transport.
-DEV_MODE=false
-STDIO_MODE=false
-HAS_MCP=false
-HAS_HTTP=false
-ARGS=""
-for arg in "$@"; do
-    if [ "$arg" = "--dev" ]; then
-        DEV_MODE=true
-        continue
-    fi
-    if [ "$arg" = "mcp" ]; then
-        HAS_MCP=true
-    fi
-    if [ "$arg" = "--http" ]; then
-        HAS_HTTP=true
-    fi
-
-    resolved_arg=$(to_absolute_path "$arg")
-    if [ -z "$ARGS" ]; then
-        ARGS="$resolved_arg"
-    else
-        ARGS="$ARGS $resolved_arg"
-    fi
-done
-
-# STDIO mode: `mcp` subcommand without `--http` flag
-if [ "$HAS_MCP" = true ] && [ "$HAS_HTTP" = false ]; then
-    STDIO_MODE=true
-fi
-
-# Prepend port args (top-level flags go before subcommands)
-if [ -n "$PORT_ARGS" ]; then
-    if [ -z "$ARGS" ]; then
-        ARGS="$PORT_ARGS"
-    else
-        ARGS="$PORT_ARGS $ARGS"
-    fi
-fi
-
-# Run the app
-if [ "$DEV_MODE" = true ]; then
-    # Development mode: foreground with logs visible in terminal
-    echo "Starting Trailblaze in dev mode (foreground)..."
-    if [ -z "$ARGS" ]; then
-        ./gradlew ${TRAILBLAZE_MODULE}:run
-    else
-        ./gradlew ${TRAILBLAZE_MODULE}:run --args="$ARGS"
-    fi
-elif [ "$1" = "stop" ]; then
-    stop_daemon
-elif [ "$1" = "status" ]; then
-    get_status
-elif [ "$STDIO_MODE" = true ]; then
-    # STDIO MCP mode: suppress Gradle's task output so stdout is clean for JSON-RPC.
-    # The Java application handles stderr redirection via Console.useStdErr().
-    ./gradlew -q --console=plain ${TRAILBLAZE_MODULE}:run --args="$ARGS"
-elif [ "$1" = "run" ] && ! is_daemon_running; then
-    # Auto-start daemon on first 'run' command so subsequent runs reuse it.
-    # The RunCommand in Kotlin will detect the daemon and delegate via HTTP,
-    # avoiding the overhead of a second Gradle JVM per trail.
-    echo "Starting Trailblaze daemon..."
-    DAEMON_ARGS="--headless"
-    if [ -n "$PORT_ARGS" ]; then
-        DAEMON_ARGS="$PORT_ARGS $DAEMON_ARGS"
-    fi
-    nohup ./gradlew ${TRAILBLAZE_MODULE}:run --args="$DAEMON_ARGS" > /dev/null 2>&1 &
-
-    # Wait for daemon to be ready
-    echo -n "Waiting for daemon"
-    max_attempts=60
-    attempts=0
-    while [ $attempts -lt $max_attempts ]; do
-        if is_daemon_running; then
-            echo ""
-            echo "Daemon ready."
-            break
-        fi
-        echo -n "."
-        sleep 1
-        attempts=$((attempts + 1))
-    done
-
-    if ! is_daemon_running; then
-        echo ""
-        echo "Warning: Daemon did not start in time. Falling back to direct execution."
-    fi
-
-    # Now run the CLI command — RunCommand will detect the daemon and delegate
-    ./gradlew ${TRAILBLAZE_MODULE}:run --args="$ARGS"
-elif [ -n "$ARGS" ]; then
-    # CLI command mode (config, auth, etc.)
-    ./gradlew ${TRAILBLAZE_MODULE}:run --args="$ARGS"
-else
-    # Default mode: check if already running, otherwise start in background
-    if is_daemon_running; then
-        echo "Trailblaze is already running."
-        show_window
-        echo "Use the menu bar icon to show the window."
-    else
-        echo "Starting Trailblaze..."
-        
-        # Start in background
-        if [ -n "$PORT_ARGS" ]; then
-            nohup ./gradlew ${TRAILBLAZE_MODULE}:run --args="${PORT_ARGS}" > /dev/null 2>&1 &
-        else
-            nohup ./gradlew ${TRAILBLAZE_MODULE}:run > /dev/null 2>&1 &
-        fi
-        
-        # Poll for daemon to become available
-        echo -n "Waiting for Trailblaze to start"
-        max_attempts=30
-        attempts=0
-        while [ $attempts -lt $max_attempts ]; do
-            if is_daemon_running; then
-                echo ""
-                echo "Trailblaze is ready! Check the menu bar icon."
-                exit 0
-            fi
-            echo -n "."
-            sleep 1
-            attempts=$((attempts + 1))
-        done
-        
-        echo ""
-        echo "Trailblaze is starting in the background (taking longer than expected)."
-        echo "Check the menu bar icon or run './trailblaze --dev' for verbose output."
-    fi
-fi
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/scripts/trailblaze"

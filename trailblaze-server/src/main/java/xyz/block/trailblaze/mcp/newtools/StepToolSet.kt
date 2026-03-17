@@ -50,6 +50,8 @@ class StepToolSet(
   private val logEmitter: LogEmitter? = null,
   /** Provides the active Trailblaze session ID for log emission. */
   private val sessionIdProvider: (() -> SessionId?)? = null,
+  /** Returns driver connection status when the driver is still initializing. */
+  private val driverStatusProvider: (() -> String?)? = null,
 ) : ToolSet {
 
   @LLMDescription(
@@ -60,7 +62,11 @@ class StepToolSet(
     blaze(goal="Enter email test@example.com")
     blaze(goal="Open Settings app", toolHint="NAVIGATION")
 
-    Returns what happened. If uncertain, returns options for you to decide.
+    Returns what happened plus a screenSummary showing visible text and actionable
+    elements (e.g. "[button] Login | [input] Email"). This summary is compact and
+    does NOT include layout, position, or list structure — use ask() if you need to
+    know where elements are on screen or how they relate to each other.
+    If uncertain, returns options for you to decide.
     """
   )
   @Tool
@@ -77,7 +83,8 @@ class StepToolSet(
     val screenState = screenStateProvider()
       ?: return StepResult(
         executed = false,
-        error = "No device connected. Use device(action=ANDROID) or device(action=IOS) first.",
+        error = driverStatusProvider?.invoke()
+          ?: "No device connected. Use device(action=ANDROID), device(action=IOS), or device(action=WEB) first.",
       ).toJson()
 
     val recommendationContext = RecommendationContext(
@@ -215,7 +222,7 @@ class StepToolSet(
     verify(assertion="The login button is visible")
     verify(assertion="The welcome message shows 'Hello John'")
 
-    Returns passed (true/false) with confidence level.
+    Returns passed (true/false) with confidence level and a screenSummary.
     """
   )
   @Tool
@@ -230,7 +237,8 @@ class StepToolSet(
     val screenState = screenStateProvider()
       ?: return VerifyResult(
         passed = false,
-        error = "No device connected.",
+        error = driverStatusProvider?.invoke()
+          ?: "No device connected. Use device(action=ANDROID), device(action=IOS), or device(action=WEB) first.",
       ).toJson()
 
     // Emit objective start log for log-based trail generation
@@ -310,11 +318,15 @@ class StepToolSet(
     val startTime = Clock.System.now()
 
     val screenState = screenStateProvider()
-      ?: return AskResult(
+    if (screenState == null) {
+      val driverStatus = driverStatusProvider?.invoke()
+        ?: "No device connected. Use device(action=ANDROID), device(action=IOS), or device(action=WEB) first."
+      Console.error("[ask] Screen state is null — driverStatus=$driverStatus")
+      return AskResult(
         answer = null,
-        error = "No device connected.",
+        error = driverStatus,
       ).toJson()
-
+    }
     val recommendationContext = RecommendationContext(
       objective = "Answer this question: $question",
       progressSummary = null,
@@ -330,6 +342,7 @@ class StepToolSet(
         availableTools = availableToolsProvider(),
       )
     } catch (e: Exception) {
+      Console.error("[ask] screenAnalyzer.analyze() FAILED: ${e::class.simpleName}: ${e.message}")
       emitAskLog(question, null, null, e.message, traceId, startTime)
       return AskResult(
         answer = null,
@@ -405,7 +418,11 @@ class StepToolSet(
       }
     }
 
-    return toolClasses.mapNotNull { it.toKoogToolDescriptor()?.toTrailblazeToolDescriptor() }
+    val builtInTools = toolClasses.mapNotNull { it.toKoogToolDescriptor()?.toTrailblazeToolDescriptor() }
+    // Include custom tools from the app target (e.g., myApp_launchSignedIn)
+    val customTools = availableToolsProvider()
+    val builtInNames = builtInTools.map { it.name }.toSet()
+    return builtInTools + customTools.filter { it.name !in builtInNames }
   }
 
   // ─────────────────────────────────────────────────────────────────────────────

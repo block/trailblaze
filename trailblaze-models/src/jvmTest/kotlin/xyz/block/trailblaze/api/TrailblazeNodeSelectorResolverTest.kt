@@ -708,4 +708,119 @@ class TrailblazeNodeSelectorResolverTest {
     val result = TrailblazeNodeSelectorResolver.resolve(root, selector)
     assertIs<TrailblazeNodeSelectorResolver.ResolveResult.NoMatch>(result)
   }
+
+  // ======================================================================
+  // IosMaestro variant matching
+  // ======================================================================
+
+  @Test
+  fun `IosMaestro - match by resourceId`() {
+    nextId = 1L
+    val target = nodeOf(
+      detail = DriverNodeDetail.IosMaestro(resourceId = "login_button", text = "Log In"),
+    )
+    val other = nodeOf(
+      detail = DriverNodeDetail.IosMaestro(resourceId = "signup_button", text = "Sign Up"),
+    )
+    val root = nodeOf(
+      detail = DriverNodeDetail.IosMaestro(),
+      children = listOf(target, other),
+    )
+
+    val selector = TrailblazeNodeSelector.withMatch(
+      DriverNodeMatch.IosMaestro(resourceIdRegex = "login_button"),
+    )
+    val result = TrailblazeNodeSelectorResolver.resolve(root, selector)
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(result)
+    assertEquals(target.nodeId, result.node.nodeId)
+  }
+
+  @Test
+  fun `IosMaestro - match by text resolveText priority`() {
+    nextId = 1L
+    // resolveText() priority: text > hintText > accessibilityText
+    val target = nodeOf(
+      detail = DriverNodeDetail.IosMaestro(accessibilityText = "Back button"),
+    )
+    val other = nodeOf(
+      detail = DriverNodeDetail.IosMaestro(text = "Next"),
+    )
+    val root = nodeOf(
+      detail = DriverNodeDetail.IosMaestro(),
+      children = listOf(target, other),
+    )
+
+    val selector = TrailblazeNodeSelector.withMatch(
+      DriverNodeMatch.IosMaestro(textRegex = "Back button"),
+    )
+    val result = TrailblazeNodeSelectorResolver.resolve(root, selector)
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(result)
+    assertEquals(target.nodeId, result.node.nodeId)
+  }
+
+  @Test
+  fun `IosMaestro - match by boolean state`() {
+    nextId = 1L
+    val target = nodeOf(
+      detail = DriverNodeDetail.IosMaestro(text = "Item", selected = true),
+    )
+    val other = nodeOf(
+      detail = DriverNodeDetail.IosMaestro(text = "Item", selected = false),
+    )
+    val root = nodeOf(
+      detail = DriverNodeDetail.IosMaestro(),
+      children = listOf(target, other),
+    )
+
+    val selector = TrailblazeNodeSelector.withMatch(
+      DriverNodeMatch.IosMaestro(textRegex = "Item", selected = true),
+    )
+    val result = TrailblazeNodeSelectorResolver.resolve(root, selector)
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(result)
+    assertEquals(target.nodeId, result.node.nodeId)
+  }
+
+  @Test
+  fun `IosMaestro - match by className and hintText`() {
+    nextId = 1L
+    val target = nodeOf(
+      detail = DriverNodeDetail.IosMaestro(
+        className = "UITextField",
+        hintText = "Email address",
+      ),
+    )
+    val other = nodeOf(
+      detail = DriverNodeDetail.IosMaestro(
+        className = "UITextField",
+        hintText = "Password",
+      ),
+    )
+    val root = nodeOf(
+      detail = DriverNodeDetail.IosMaestro(),
+      children = listOf(target, other),
+    )
+
+    val selector = TrailblazeNodeSelector.withMatch(
+      DriverNodeMatch.IosMaestro(
+        classNameRegex = "UITextField",
+        hintTextRegex = "Email address",
+      ),
+    )
+    val result = TrailblazeNodeSelectorResolver.resolve(root, selector)
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(result)
+    assertEquals(target.nodeId, result.node.nodeId)
+  }
+
+  @Test
+  fun `cross-driver IosMaestro selector on Android tree returns NoMatch`() {
+    nextId = 1L
+    val target = node(detail = DriverNodeDetail.AndroidAccessibility(text = "Submit"))
+    val root = node(children = listOf(target))
+
+    val selector = TrailblazeNodeSelector.withMatch(
+      DriverNodeMatch.IosMaestro(textRegex = "Submit"),
+    )
+    val result = TrailblazeNodeSelectorResolver.resolve(root, selector)
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.NoMatch>(result)
+  }
 }

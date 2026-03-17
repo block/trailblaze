@@ -79,7 +79,7 @@ class TrailblazeAndroidLoggingRule(
    * otherwise [TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION].
    */
   var driverTypeOverride: TrailblazeDriverType =
-    InstrumentationArgUtil.driverType() ?: TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION
+    InstrumentationArgUtil.driverType() ?: TrailblazeDriverType.DEFAULT_ANDROID_ON_DEVICE
 
   override val trailblazeDeviceInfoProvider: () -> TrailblazeDeviceInfo = {
     val displayMetrics = getDisplayMetrics()

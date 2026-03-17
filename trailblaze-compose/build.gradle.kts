@@ -19,8 +19,7 @@ dependencies {
   api(project(":trailblaze-agent"))
 
   api(compose.desktop.currentOs)
-  @OptIn(org.jetbrains.compose.ExperimentalComposeLibrary::class)
-  api(compose.uiTest)
+  api(libs.compose.ui.test.junit4)
 
   implementation(libs.kotlinx.serialization.json)
   implementation(libs.kotlinx.datetime)
@@ -37,6 +36,8 @@ dependencyGuard {
   configuration("runtimeClasspath") {
     modules = true
 
-    baselineMap = rootProject.extra["trailblazePlatformBaselineMap"] as (String) -> String
+    @Suppress("UNCHECKED_CAST")
+    val map = rootProject.extra["trailblazePlatformBaselineMap"] as (String) -> String
+    baselineMap = map
   }
 }

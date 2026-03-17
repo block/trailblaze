@@ -2,8 +2,10 @@ package xyz.block.trailblaze.toolcalls.commands
 
 import ai.koog.agents.core.tools.annotations.LLMDescription
 import kotlinx.serialization.Serializable
-import xyz.block.trailblaze.toolcalls.TrailblazeTool
+import xyz.block.trailblaze.toolcalls.ConfigTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
+import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
+import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 
 @Serializable
 @TrailblazeToolClass(
@@ -21,7 +23,12 @@ data class SetActiveToolSetsTrailblazeTool(
     "The list of toolset IDs to enable (e.g. ['navigation', 'text-editing']). Core tools are always included.",
   )
   val toolSetIds: List<String>,
-) : TrailblazeTool {
+) : ConfigTrailblazeTool {
+  override fun execute(toolRepo: TrailblazeToolRepo): TrailblazeToolResult {
+    val message = toolRepo.setActiveToolSets(toolSetIds)
+    return TrailblazeToolResult.Success(message = message)
+  }
+
   companion object {
     const val TOOL_NAME = "setActiveToolSets"
   }

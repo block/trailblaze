@@ -149,7 +149,7 @@ abstract class TrailblazeServerTestBase {
       // Step 4: Check for devices if required
       if (requireDevice) {
         val devicesResult = client.listConnectedDevices()
-        if (!devicesResult.isSuccess || devicesResult.content.contains("No connected devices")) {
+        if (!devicesResult.isSuccess) {
           Console.log("[TrailblazeServerTestBase] No devices connected: ${devicesResult.content}")
           val platform = devicePlatform ?: "any"
           assumeTrue("No $platform device connected. Connect a device and try again.", false)

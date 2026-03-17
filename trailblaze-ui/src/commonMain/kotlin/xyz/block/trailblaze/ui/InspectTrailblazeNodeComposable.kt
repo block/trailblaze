@@ -201,6 +201,7 @@ private fun DrawScope.drawTrailblazeNodeOverlay(
     is DriverNodeDetail.AndroidMaestro -> detail.clickable || detail.focusable || detail.scrollable
     is DriverNodeDetail.Web -> detail.isInteractive
     is DriverNodeDetail.Compose -> detail.hasClickAction || detail.hasScrollAction
+    is DriverNodeDetail.IosMaestro -> detail.clickable || detail.focusable || detail.scrollable
   }
 
   if (isInteractive) {
@@ -310,8 +311,9 @@ private fun TrailblazeNodeTreeItem(
       // Show driver type badge
       Spacer(modifier = Modifier.width(8.dp))
       val driverBadge = when (node.driverDetail) {
-        is DriverNodeDetail.AndroidAccessibility -> "a11y"
-        is DriverNodeDetail.AndroidMaestro -> "maestro"
+        is DriverNodeDetail.AndroidAccessibility -> "android"
+        is DriverNodeDetail.AndroidMaestro -> "android"
+        is DriverNodeDetail.IosMaestro -> "ios"
         is DriverNodeDetail.Web -> "web"
         is DriverNodeDetail.Compose -> "compose"
       }
@@ -377,6 +379,15 @@ private fun resolveDisplayText(node: TrailblazeNode): String {
         !detail.contentDescription.isNullOrBlank() -> "[${detail.contentDescription}]"
         !detail.testTag.isNullOrBlank() -> "#${detail.testTag}"
         !detail.role.isNullOrBlank() -> "<${detail.role}>"
+        else -> "(empty)"
+      }
+    }
+    is DriverNodeDetail.IosMaestro -> {
+      when {
+        !detail.text.isNullOrBlank() -> "\"${detail.text}\""
+        !detail.accessibilityText.isNullOrBlank() -> "[${detail.accessibilityText}]"
+        !detail.resourceId.isNullOrBlank() -> "#${detail.resourceId}"
+        !detail.className.isNullOrBlank() -> "<${detail.className?.substringAfterLast(".")}>"
         else -> "(empty)"
       }
     }
@@ -471,9 +482,10 @@ internal fun TrailblazeNodeDetailsPanel(
 
         // Driver-specific properties
         val driverLabel = when (displayNode.driverDetail) {
-          is DriverNodeDetail.AndroidAccessibility -> "Android Accessibility Properties"
-          is DriverNodeDetail.AndroidMaestro -> "Android Maestro Properties"
-          is DriverNodeDetail.Web -> "Web (Playwright) Properties"
+          is DriverNodeDetail.AndroidAccessibility -> "Android Properties"
+          is DriverNodeDetail.AndroidMaestro -> "Android Properties"
+          is DriverNodeDetail.IosMaestro -> "iOS Properties"
+          is DriverNodeDetail.Web -> "Web Properties"
           is DriverNodeDetail.Compose -> "Compose Properties"
         }
         Text(
@@ -729,6 +741,7 @@ private fun DriverNodeDetailProperties(
     is DriverNodeDetail.AndroidMaestro -> AndroidMaestroProperties(detail, fontScale)
     is DriverNodeDetail.Web -> WebProperties(detail, fontScale)
     is DriverNodeDetail.Compose -> ComposeProperties(detail, fontScale)
+    is DriverNodeDetail.IosMaestro -> IosMaestroProperties(detail, fontScale)
   }
 }
 
@@ -907,6 +920,44 @@ private fun ComposeProperties(
       "Password" to detail.isPassword,
       "Has Click Action" to detail.hasClickAction,
       "Has Scroll Action" to detail.hasScrollAction,
+    ),
+    fontScale = fontScale
+  )
+}
+
+@Composable
+private fun IosMaestroProperties(
+  detail: DriverNodeDetail.IosMaestro,
+  fontScale: Float,
+) {
+  detail.text?.let { TrailblazeDetailRow(label = "Text", value = it, fontScale = fontScale) }
+  detail.accessibilityText?.let { TrailblazeDetailRow(label = "Accessibility Text", value = it, fontScale = fontScale) }
+  detail.resourceId?.let { TrailblazeDetailRow(label = "Resource ID", value = it, fontScale = fontScale) }
+  detail.className?.let { TrailblazeDetailRow(label = "Class", value = it, fontScale = fontScale) }
+  detail.hintText?.let { TrailblazeDetailRow(label = "Hint", value = it, fontScale = fontScale) }
+
+  Spacer(modifier = Modifier.height(8.dp))
+  Text(
+    text = "State",
+    style = MaterialTheme.typography.titleSmall.copy(
+      fontSize = MaterialTheme.typography.titleSmall.fontSize * fontScale
+    ),
+    fontWeight = FontWeight.SemiBold
+  )
+  Spacer(modifier = Modifier.height(4.dp))
+
+  TrailblazePropertiesGrid(
+    properties = listOf(
+      "Clickable" to detail.clickable,
+      "Enabled" to detail.enabled,
+      "Focused" to detail.focused,
+      "Checked" to detail.checked,
+      "Selected" to detail.selected,
+      "Focusable" to detail.focusable,
+      "Scrollable" to detail.scrollable,
+      "Password" to detail.password,
+      "Visible" to detail.visible,
+      "Ignore Bounds Filtering" to detail.ignoreBoundsFiltering,
     ),
     fontScale = fontScale
   )

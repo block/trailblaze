@@ -17,7 +17,7 @@ data class DirectAgentConfig(
    * Maximum agent iterations per objective.
    * Each iteration is one LLM call + tool execution cycle.
    */
-  val maxIterationsPerObjective: Int = 10,
+  val maxIterationsPerObjective: Int = 25,
 
   /**
    * Whether to include screenshots in agent context.

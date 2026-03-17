@@ -25,8 +25,7 @@ dependencies {
   testImplementation(project(":trailblaze-tracing"))
 
   testImplementation(compose.desktop.currentOs)
-  @OptIn(org.jetbrains.compose.ExperimentalComposeLibrary::class)
-  testImplementation(compose.uiTest)
+  testImplementation(libs.compose.ui.test.junit4)
 
   testImplementation(libs.koog.prompt.executor.openai)
   testImplementation(libs.koog.prompt.executor.clients)

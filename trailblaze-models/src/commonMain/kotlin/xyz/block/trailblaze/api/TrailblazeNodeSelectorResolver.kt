@@ -176,6 +176,8 @@ object TrailblazeNodeSelectorResolver {
       detail is DriverNodeDetail.Web && matchesWeb(detail, match)
     is DriverNodeMatch.Compose ->
       detail is DriverNodeDetail.Compose && matchesCompose(detail, match)
+    is DriverNodeMatch.IosMaestro ->
+      detail is DriverNodeDetail.IosMaestro && matchesIosMaestro(detail, match)
   }
 
   private fun matchesAndroidAccessibility(
@@ -258,6 +260,20 @@ object TrailblazeNodeSelectorResolver {
     if (!requireEqual(match.isFocused, detail.isFocused)) return false
     if (!requireEqual(match.isSelected, detail.isSelected)) return false
     if (!requireEqual(match.isPassword, detail.isPassword)) return false
+    return true
+  }
+
+  private fun matchesIosMaestro(
+    detail: DriverNodeDetail.IosMaestro,
+    match: DriverNodeMatch.IosMaestro,
+  ): Boolean {
+    if (!requirePattern(match.textRegex, detail.resolveText())) return false
+    if (!requirePattern(match.resourceIdRegex, detail.resourceId)) return false
+    if (!requirePattern(match.accessibilityTextRegex, detail.accessibilityText)) return false
+    if (!requirePattern(match.classNameRegex, detail.className)) return false
+    if (!requirePattern(match.hintTextRegex, detail.hintText)) return false
+    if (!requireEqual(match.focused, detail.focused)) return false
+    if (!requireEqual(match.selected, detail.selected)) return false
     return true
   }
 

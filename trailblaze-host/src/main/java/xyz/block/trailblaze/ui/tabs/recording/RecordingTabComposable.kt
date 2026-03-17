@@ -347,7 +347,7 @@ private suspend fun connectToDevice(
       }
       TrailblazeDevicePlatform.ANDROID, TrailblazeDevicePlatform.IOS -> {
         val connectedDevice = withContext(Dispatchers.IO) {
-          TrailblazeDeviceService.getConnectedDevice(device.trailblazeDeviceId)
+          TrailblazeDeviceService.getConnectedDevice(device.trailblazeDeviceId, device.trailblazeDriverType)
         } ?: return ConnectionState.Error("Device not found: ${device.instanceId}")
 
         val driver = connectedDevice.getMaestroDriver()

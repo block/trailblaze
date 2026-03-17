@@ -10,4 +10,9 @@ enum class TrailblazeDevicePlatform(val displayName: String) {
   ;
 
   fun asTrailblazeDeviceClassifier(): TrailblazeDeviceClassifier = TrailblazeDeviceClassifier(this.name.lowercase())
+
+  companion object {
+    fun fromString(value: String): TrailblazeDevicePlatform? =
+      entries.find { it.name.equals(value, ignoreCase = true) }
+  }
 }

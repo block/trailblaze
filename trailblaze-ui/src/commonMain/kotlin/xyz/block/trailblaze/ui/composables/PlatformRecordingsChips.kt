@@ -156,9 +156,7 @@ fun PlatformGroupChip(
 ) {
   // Get the platform icon painter
   val deviceClassifierIconProvider = LocalDeviceClassifierIcons.current
-  val platform = TrailblazeDevicePlatform.entries.find {
-    it.name.equals(platformKey, ignoreCase = true)
-  }
+  val platform = TrailblazeDevicePlatform.fromString(platformKey)
   val platformIconPainter: Painter = platform?.let { rememberVectorPainter(it.getIcon()) }
     ?: deviceClassifierIconProvider.getPainter(TrailblazeDeviceClassifier(platformKey))
     ?: rememberVectorPainter(Icons.Filled.Description)

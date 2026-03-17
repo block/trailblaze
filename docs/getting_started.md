@@ -1,6 +1,16 @@
 ---
 title: Getting Started
 ---
+### System Requirements
+
+| | macOS | Linux |
+|---|---|---|
+| **Desktop App (GUI)** | Supported | Not supported |
+| **Headless / CLI / MCP** | Supported | Supported |
+
+- **JDK 17+** is required on all platforms
+- **Android SDK** with `adb` on your PATH for on-device testing
+
 ### Start the Trailblaze Desktop App
 Clone the repo and run the desktop app locally.
 ```bash

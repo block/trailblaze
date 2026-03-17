@@ -8,6 +8,7 @@ import xyz.block.trailblaze.agent.UiActionExecutor
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeAgent
 import xyz.block.trailblaze.logs.model.TraceId
+import xyz.block.trailblaze.toolcalls.ConfigTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
@@ -49,6 +50,24 @@ class HostUiActionExecutor(
           error = deserializationError ?: "Unknown tool: $toolName",
           recoverable = true, // Let the planner retry with a different tool/args
         )
+      }
+
+      // Intercept config tools (e.g. setActiveToolSets) that modify the agent's
+      // available tool set. These operate on the TrailblazeToolRepo, not the device.
+      if (tool is ConfigTrailblazeTool) {
+        val configResult = tool.execute(toolRepo)
+        Console.log("[HostUiActionExecutor] ConfigTool $toolName: $configResult")
+        val durationMs = System.currentTimeMillis() - startTime
+        return when (configResult) {
+          is TrailblazeToolResult.Success -> ExecutionResult.Success(
+            screenSummaryAfter = "Config tool executed",
+            durationMs = durationMs,
+          )
+          is TrailblazeToolResult.Error -> ExecutionResult.Failure(
+            error = configResult.errorMessage,
+            recoverable = true,
+          )
+        }
       }
 
       val screenState = screenStateProvider()

@@ -8,6 +8,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Rule
 import xyz.block.trailblaze.AndroidMaestroTrailblazeAgent
+import xyz.block.trailblaze.MaestroTrailblazeAgent
 import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.TrailblazeAndroidLoggingRule
 import xyz.block.trailblaze.agent.AgentResult
@@ -19,17 +20,19 @@ import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
+import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.http.DynamicLlmClient
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.mcp.LlmCallStrategy
 import xyz.block.trailblaze.model.CustomTrailblazeTools
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
+import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
-import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.TrailblazeYaml
+import xyz.block.trailblaze.yaml.createTrailblazeYaml
 
 /**
  * Base standalone runner test for On-Device Android Trailblaze Tests
@@ -92,19 +95,14 @@ abstract class BaseAndroidStandaloneServerTest {
       ?: TrailblazeDevicePort.TRAILBLAZE_DEFAULT_ADB_REVERSE_PORT
 
   /**
-   * Handles a [RunYamlRequest] using [DirectMcpAgent] (the Koog-based agent).
+   * Creates the [MaestroTrailblazeAgent] to use in [handleRunDirectAgentRequest].
    *
-   * This extracts natural language prompts from the YAML and executes them
-   * using the DirectMcpAgent, which provides faster, more direct execution
-   * compared to the TrailblazeRunner path.
+   * Subclasses can override this to provide a different agent implementation (e.g.,
+   * [xyz.block.trailblaze.android.accessibility.AccessibilityTrailblazeAgent] for accessibility
+   * mode).
    */
-  fun handleRunDirectAgentRequest(runYamlRequest: RunYamlRequest) {
-    this.trailblazeDeviceId = runYamlRequest.trailblazeDeviceId
-
-    val llmClient = getDynamicLlmClient(runYamlRequest.trailblazeLlmModel).createLlmClient()
-
-    // Create the on-device components
-    val trailblazeAgent = AndroidMaestroTrailblazeAgent(
+  protected open fun createAgentForDirectRun(runYamlRequest: RunYamlRequest): MaestroTrailblazeAgent =
+    AndroidMaestroTrailblazeAgent(
       trailblazeLogger = trailblazeLoggingRule.logger,
       trailblazeDeviceInfoProvider = trailblazeLoggingRule.trailblazeDeviceInfoProvider,
       sessionProvider = {
@@ -112,23 +110,56 @@ abstract class BaseAndroidStandaloneServerTest {
       },
     )
 
-    val screenStateProvider: () -> ScreenState = {
-      AndroidOnDeviceUiAutomatorScreenState(
-        includeScreenshot = runYamlRequest.directAgentConfig.includeScreenshots,
-        filterViewHierarchy = true,
-        setOfMarkEnabled = runYamlRequest.config.setOfMarkEnabled,
-      )
-    }
+  /**
+   * Creates the screen state provider to use in [handleRunDirectAgentRequest].
+   *
+   * Subclasses can override this to provide accessibility-based screen state (e.g., return
+   * `{ accessibilityAgent.getScreenState() }` for accessibility mode).
+   */
+  protected open fun createScreenStateProviderForDirectRun(
+    runYamlRequest: RunYamlRequest,
+    agent: MaestroTrailblazeAgent,
+  ): () -> ScreenState = {
+    AndroidOnDeviceUiAutomatorScreenState(
+      includeScreenshot = runYamlRequest.directAgentConfig.includeScreenshots,
+      filterViewHierarchy = true,
+      setOfMarkEnabled = runYamlRequest.config.setOfMarkEnabled,
+    )
+  }
 
-    val customToolsForTargetApp = getCustomToolsForTargetApp(runYamlRequest.targetAppName?.lowercase())
+  /**
+   * Handles a [RunYamlRequest] using [DirectMcpAgent] (the Koog-based agent).
+   *
+   * Executes any [TrailYamlItem.ToolTrailItem] setup steps first (e.g., launchApp), then runs
+   * each [TrailYamlItem.PromptsTrailItem] objective using the DirectMcpAgent.
+   */
+  fun handleRunDirectAgentRequest(runYamlRequest: RunYamlRequest) {
+    this.trailblazeDeviceId = runYamlRequest.trailblazeDeviceId
+
+    val llmClient = getDynamicLlmClient(runYamlRequest.trailblazeLlmModel).createLlmClient()
+
+    val trailblazeAgent = createAgentForDirectRun(runYamlRequest)
+    val screenStateProvider = createScreenStateProviderForDirectRun(runYamlRequest, trailblazeAgent)
+
+    // Resolve the target app name: prefer the explicit request field, fall back to the trail
+    // config's `app` field. This ensures custom tools (e.g., myApp_launchSignedIn) are
+    // registered even when the host doesn't set targetAppName in the RunYamlRequest.
+    val trailblazeYaml = createTrailblazeYaml()
+    val trailConfig = try { trailblazeYaml.extractTrailConfig(runYamlRequest.yaml) } catch (_: Exception) { null }
+    val resolvedTargetApp = runYamlRequest.targetAppName ?: trailConfig?.app
+    val customToolsForTargetApp = getCustomToolsForTargetApp(resolvedTargetApp?.lowercase())
     val trailblazeToolRepo = TrailblazeToolRepo(
-      trailblazeToolSet = TrailblazeToolSet.getSetOfMarkToolSet(
+      trailblazeToolSet = TrailblazeToolSet.getLlmToolSet(
         runYamlRequest.config.setOfMarkEnabled,
       ),
     )
-    // Add app-specific custom tools if available
-    customToolsForTargetApp?.initialToolRepoToolClasses?.let { customTools ->
-      trailblazeToolRepo.registeredTrailblazeToolClasses.addAll(customTools)
+    // Add app-specific custom tools if available.
+    // Both initialToolRepoToolClasses AND registeredAppSpecificLlmTools must be added —
+    // some app targets (e.g., Square) put tools only in registeredAppSpecificLlmTools
+    // with an empty initialToolRepoToolClasses when using dynamic tool set catalogs.
+    customToolsForTargetApp?.let { customTools ->
+      trailblazeToolRepo.registeredTrailblazeToolClasses.addAll(customTools.initialToolRepoToolClasses)
+      trailblazeToolRepo.registeredTrailblazeToolClasses.addAll(customTools.registeredAppSpecificLlmTools)
     }
 
     val elementComparator = TrailblazeElementComparator(
@@ -153,12 +184,38 @@ abstract class BaseAndroidStandaloneServerTest {
       maxIterations = runYamlRequest.directAgentConfig.maxIterationsPerObjective,
       includeScreenshots = runYamlRequest.directAgentConfig.includeScreenshots,
       llmCallStrategy = LlmCallStrategy.DIRECT,
+      trailblazeToolRepo = trailblazeToolRepo,
+      trailblazeLogger = trailblazeLoggingRule.logger,
+      sessionProvider = {
+        trailblazeLoggingRule.session ?: error("Session not available - ensure test is running")
+      },
+      trailblazeLlmModel = runYamlRequest.trailblazeLlmModel,
     )
 
-    // Extract prompts from the YAML
-    val objectives = extractPromptsFromYaml(runYamlRequest.yaml)
+    val trailItems = createTrailblazeYaml(
+      customTrailblazeToolClasses = customToolsForTargetApp?.allForSerializationTools() ?: emptySet(),
+    ).decodeTrail(runYamlRequest.yaml)
+    Console.log("[DirectAgent] Target app: $resolvedTargetApp, custom tools: ${customToolsForTargetApp != null}")
+    val toolItems = trailItems.filterIsInstance<TrailYamlItem.ToolTrailItem>()
+    val objectives = trailItems.filterIsInstance<TrailYamlItem.PromptsTrailItem>()
+      .flatMap { it.promptSteps.map { step -> step.prompt } }
 
     startInTestCoroutineScope {
+      // Execute setup tool steps (e.g., launchApp) before running prompt objectives
+      for (toolItem in toolItems) {
+        val toolResult = trailblazeAgent.runTrailblazeTools(
+          tools = toolItem.tools.map { it.trailblazeTool },
+          screenState = screenStateProvider(),
+          elementComparator = elementComparator,
+          screenStateProvider = screenStateProvider,
+        )
+        if (toolResult.result is TrailblazeToolResult.Error) {
+          throw TrailblazeException(
+            "Tool setup step failed: ${(toolResult.result as TrailblazeToolResult.Error).errorMessage}"
+          )
+        }
+      }
+
       for (objective in objectives) {
         val result = directMcpAgent.run(objective)
         when (result) {
@@ -172,21 +229,6 @@ abstract class BaseAndroidStandaloneServerTest {
             throw TrailblazeException("[DirectMcpAgent] Objective error: ${result.message}")
           }
         }
-      }
-    }
-  }
-
-  /**
-   * Extracts natural language prompts from a Trailblaze YAML string.
-   *
-   * Looks for [TrailYamlItem.PromptsTrailItem] entries and extracts their prompt text.
-   */
-  private fun extractPromptsFromYaml(yaml: String): List<String> {
-    val items = TrailblazeYaml.Default.decodeTrail(yaml)
-    return items.flatMap { item ->
-      when (item) {
-        is TrailYamlItem.PromptsTrailItem -> item.promptSteps.map { it.prompt }
-        else -> emptyList()
       }
     }
   }

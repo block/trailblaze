@@ -1,4 +1,4 @@
-name: Build Desktop App
+name: Build Desktop JAR
 
 on:
   # Runs on PRs targeting the default branch
@@ -10,6 +10,8 @@ on:
   # Runs after merging to the default branch
   push:
     branches: [ "main" ]
+    tags:
+      - 'v*'
 
   # Allows manual triggering from Actions tab
   workflow_dispatch:
@@ -19,7 +21,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-macos-app:
+  build-jar:
     runs-on: macos-latest
     timeout-minutes: 45
 
@@ -42,43 +44,28 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Build Desktop App
-        run: ./gradlew :trailblaze-desktop:createDistributable
+      - name: Build Shrunk Uber JAR
+        run: ./gradlew :trailblaze-desktop:shrinkUberJar -Ptrailblaze.proguard=true
 
-      - name: Ad-hoc Sign App
-        run: |
-          APP_PATH="trailblaze-desktop/build/compose/binaries/main/app/Trailblaze.app"
-          echo "Signing app bundle with ad-hoc signature..."
-          codesign --force --deep --sign - "$APP_PATH"
-          
-          # Verify signing
-          codesign --verify --verbose "$APP_PATH"
-          echo "App successfully signed"
-
-      - name: Package .app file
-        id: package-app
-        run: |
-          APP_PATH="trailblaze-desktop/build/compose/binaries/main/app/Trailblaze.app"
-          echo "Found .app at: $APP_PATH"
-          
-          # Get directory size for logging
-          du -sh "$APP_PATH"
-          
-          # Create zip archive preserving the .app bundle structure
-          cd trailblaze-desktop/build/compose/binaries/main/app
-          ZIP_NAME="Trailblaze-macos.zip"
-          zip -r -y "$ZIP_NAME" Trailblaze.app
-          
-          # Move zip to root for easier artifact path
-          mv "$ZIP_NAME" "$GITHUB_WORKSPACE/"
-          echo "zip_path=$GITHUB_WORKSPACE/$ZIP_NAME" >> $GITHUB_OUTPUT
-          echo "Created zip: $ZIP_NAME"
-          ls -lh "$GITHUB_WORKSPACE/$ZIP_NAME"
-
-      - name: Upload App Artifact
+      - name: Upload Shrunk JAR Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: trailblaze-desktop-macos-app
-          path: ${{ steps.package-app.outputs.zip_path }}
+          name: trailblaze-desktop-jar
+          path: trailblaze-desktop/build/compose/jars-shrunk/trailblaze.jar
           if-no-files-found: error
           retention-days: 30
+
+      - name: Upload Full Uber JAR Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: trailblaze-desktop-uber-jar
+          path: trailblaze-desktop/build/compose/jars/*.jar
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2
+        with:
+          files: trailblaze-desktop/build/compose/jars-shrunk/trailblaze.jar
+          generate_release_notes: true

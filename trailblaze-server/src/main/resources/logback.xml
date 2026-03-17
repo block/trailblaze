@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <configuration>
     <!-- Console appender -->
-    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+    <appender name="STDERR" class="ch.qos.logback.core.ConsoleAppender">
+        <target>System.err</target>
         <encoder>
             <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
         </encoder>
@@ -14,6 +15,6 @@
 
     <!-- Root logger -->
     <root level="INFO">
-        <appender-ref ref="STDOUT"/>
+        <appender-ref ref="STDERR"/>
     </root>
 </configuration>

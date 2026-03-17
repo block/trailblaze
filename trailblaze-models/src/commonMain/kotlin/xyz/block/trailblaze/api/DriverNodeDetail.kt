@@ -466,6 +466,69 @@ sealed interface DriverNodeDetail {
   }
 
   // ---------------------------------------------------------------------------
+  // iOS via Maestro accessibility hierarchy
+  // ---------------------------------------------------------------------------
+
+  /**
+   * iOS view properties as captured by Maestro's TreeNode on iOS.
+   *
+   * Same shape as [AndroidMaestro] plus iOS-specific properties ([visible],
+   * [ignoreBoundsFiltering]). Used for all iOS paths: both the Square custom
+   * hierarchy (which produces the same fidelity as Maestro's TreeNode) and
+   * the Maestro accessibility fallback.
+   */
+  @Serializable
+  @SerialName("iosMaestro")
+  data class IosMaestro(
+    /** **Matchable.** Primary text content. */
+    val text: String? = null,
+    /** **Matchable.** Resource ID (accessibility identifier on iOS). */
+    val resourceId: String? = null,
+    /** **Matchable.** Accessibility content description. */
+    val accessibilityText: String? = null,
+    /** **Matchable.** View class name (e.g., "UIButton"). */
+    val className: String? = null,
+    /** **Matchable.** Input hint text. */
+    val hintText: String? = null,
+    /** **Display-only.** iOS has no direct "clickable" — Maestro infers this. */
+    val clickable: Boolean = false,
+    /** **Display-only.** Often `null` from Maestro on iOS, defaulted to `true`. */
+    val enabled: Boolean = true,
+    /** **Matchable.** Accessibility focus state. */
+    val focused: Boolean = false,
+    /** **Display-only.** iOS has no native "checked" — Maestro infers from traits/value. */
+    val checked: Boolean = false,
+    /** **Matchable.** Maps from `isSelected` accessibility trait. */
+    val selected: Boolean = false,
+    /** **Display-only.** Inferred, not a direct UIKit property. */
+    val focusable: Boolean = false,
+    /** **Display-only.** Rarely useful for disambiguation. */
+    val scrollable: Boolean = false,
+    /** **Display-only.** Rarely useful for disambiguation. */
+    val password: Boolean = false,
+    /** **Display-only.** iOS visibility flag for element filtering. */
+    val visible: Boolean = true,
+    /** **Display-only.** iOS flag to skip bounds-based filtering. */
+    val ignoreBoundsFiltering: Boolean = false,
+  ) : DriverNodeDetail {
+
+    override val matchablePropertyNames: Set<String>
+      get() = MATCHABLE_PROPERTIES
+
+    /** Resolves text priority: text > hintText > accessibilityText (Maestro convention). */
+    fun resolveText(): String? = text ?: hintText ?: accessibilityText
+
+    companion object {
+      /** Only properties that iOS natively provides. Excludes clickable, enabled, checked
+       *  which Maestro infers/defaults rather than reading from UIKit. */
+      val MATCHABLE_PROPERTIES: Set<String> = setOf(
+        "text", "resourceId", "accessibilityText", "className", "hintText",
+        "focused", "selected",
+      )
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Compose SemanticsNode (Desktop/Android Compose)
   // ---------------------------------------------------------------------------
 

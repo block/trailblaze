@@ -1,0 +1,316 @@
+#!/bin/bash
+
+# Trailblaze launcher
+#
+# Usage:
+#   ./trailblaze              - Start in background
+#   ./trailblaze --dev        - Start in foreground (for development)
+#   ./trailblaze stop         - Stop the running daemon
+#   ./trailblaze status       - Check if daemon is running
+#   ./trailblaze mcp          - Start MCP server (STDIO proxy to daemon, default)
+#   ./trailblaze mcp --http   - Start Streamable HTTP MCP server
+#   ./trailblaze mcp --direct - Start in-process STDIO MCP server (no daemon proxy)
+#   ./trailblaze <command>    - Run other CLI commands (run, config, etc.)
+#
+# Environment variables:
+#   TRAILBLAZE_PORT           - HTTP port (default: 52525). Override to run multiple instances.
+#   TRAILBLAZE_HTTPS_PORT     - HTTPS port (default: 8443). Override to run multiple instances.
+#   TRAILBLAZE_JAR            - Path to the uber JAR (default: trailblaze.jar next to this script)
+#
+# Logs are saved automatically by the JVM to ~/.trailblaze/desktop-logs/
+# (port-specific filenames for parallel instances).
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# ---------------------------------------------------------------------------
+# JDK version check
+# ---------------------------------------------------------------------------
+
+JAVA_VERSION=$(java -version 2>&1 | head -1 | sed -E 's/.*"([0-9]+).*/\1/')
+if [ -n "$JAVA_VERSION" ] && [ "$JAVA_VERSION" -lt 17 ] 2>/dev/null; then
+  echo "ERROR: Trailblaze requires JDK 17 or later, but found JDK ${JAVA_VERSION}." >&2
+  exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# Execution
+# ---------------------------------------------------------------------------
+
+# JVM args required for Compose Desktop on macOS — Skiko's JNI native code needs
+# access to internal AWT classes. Without these, java -jar crashes with SIGSEGV.
+TRAILBLAZE_JVM_ARGS=""
+if [[ "$(uname)" == "Darwin" ]]; then
+  TRAILBLAZE_JVM_ARGS="--add-opens java.desktop/sun.awt=ALL-UNNAMED --add-opens java.desktop/sun.lwawt=ALL-UNNAMED --add-opens java.desktop/sun.lwawt.macosx=ALL-UNNAMED"
+fi
+
+TRAILBLAZE_JAR="${TRAILBLAZE_JAR:-$SCRIPT_DIR/trailblaze.jar}"
+
+# Execution functions — overridable by defining them before sourcing this script.
+if ! declare -f tb_run > /dev/null 2>&1; then
+  tb_run() {
+    if [ -n "$1" ]; then
+      java $TRAILBLAZE_JVM_ARGS -jar "$TRAILBLAZE_JAR" $1
+    else
+      java $TRAILBLAZE_JVM_ARGS -jar "$TRAILBLAZE_JAR"
+    fi
+  }
+
+  tb_run_background() {
+    if [ -n "$1" ]; then
+      nohup java $TRAILBLAZE_JVM_ARGS -jar "$TRAILBLAZE_JAR" $1 > /dev/null 2>&1 &
+    else
+      nohup java $TRAILBLAZE_JVM_ARGS -jar "$TRAILBLAZE_JAR" > /dev/null 2>&1 &
+    fi
+  }
+
+  tb_run_exec_quiet() {
+    exec java $TRAILBLAZE_JVM_ARGS -jar "$TRAILBLAZE_JAR" $1
+  }
+
+  tb_run_background_quiet() {
+    nohup java $TRAILBLAZE_JVM_ARGS -jar "$TRAILBLAZE_JAR" $1 > /dev/null 2>&1 &
+  }
+fi
+
+# ---------------------------------------------------------------------------
+# Port configuration
+# ---------------------------------------------------------------------------
+
+TRAILBLAZE_DEFAULT_PORT=52525
+TRAILBLAZE_DEFAULT_HTTPS_PORT=8443
+TRAILBLAZE_PORT="${TRAILBLAZE_PORT:-$TRAILBLAZE_DEFAULT_PORT}"
+TRAILBLAZE_HTTPS_PORT="${TRAILBLAZE_HTTPS_PORT:-$TRAILBLAZE_DEFAULT_HTTPS_PORT}"
+
+# ---------------------------------------------------------------------------
+# Daemon management
+# ---------------------------------------------------------------------------
+
+is_daemon_running() {
+    curl -s --connect-timeout 1 "http://localhost:${TRAILBLAZE_PORT}/ping" > /dev/null 2>&1
+}
+
+show_window() {
+    curl -s -X POST "http://localhost:${TRAILBLAZE_PORT}/cli/show-window" \
+        -H "Content-Type: application/json" \
+        -d '{}' > /dev/null 2>&1
+}
+
+stop_daemon() {
+    if ! is_daemon_running; then
+        echo "Trailblaze is not running."
+        return 0
+    fi
+
+    echo "Stopping Trailblaze..."
+    curl -s -X POST "http://localhost:${TRAILBLAZE_PORT}/cli/shutdown" \
+        -H "Content-Type: application/json" \
+        -d '{}' > /dev/null 2>&1
+
+    attempts=0
+    while is_daemon_running && [ $attempts -lt 10 ]; do
+        sleep 0.5
+        attempts=$((attempts + 1))
+    done
+
+    if is_daemon_running; then
+        echo "Daemon did not stop gracefully."
+        return 1
+    else
+        echo "Trailblaze stopped."
+        return 0
+    fi
+}
+
+get_status() {
+    if is_daemon_running; then
+        echo "Trailblaze is running on port ${TRAILBLAZE_PORT}."
+        curl -s "http://localhost:${TRAILBLAZE_PORT}/cli/status" 2>/dev/null | cat
+        echo ""
+    else
+        echo "Trailblaze is not running."
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Path resolution helper
+# ---------------------------------------------------------------------------
+
+to_absolute_path() {
+    local path="$1"
+    if [ -f "$path" ]; then
+        echo "$(cd "$(dirname "$path")" && pwd)/$(basename "$path")"
+    elif [ -d "$path" ]; then
+        echo "$(cd "$path" && pwd)"
+    else
+        echo "$path"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Argument parsing
+# ---------------------------------------------------------------------------
+
+# Build port flags to pass to the CLI when ports are overridden via env vars
+PORT_ARGS=""
+if [ "$TRAILBLAZE_PORT" != "$TRAILBLAZE_DEFAULT_PORT" ]; then
+    PORT_ARGS="--port $TRAILBLAZE_PORT"
+fi
+if [ "$TRAILBLAZE_HTTPS_PORT" != "$TRAILBLAZE_DEFAULT_HTTPS_PORT" ]; then
+    PORT_ARGS="$PORT_ARGS --https-port $TRAILBLAZE_HTTPS_PORT"
+fi
+
+# Process arguments: strip --dev flag, resolve file paths to absolute,
+# and detect STDIO mode for MCP transport.
+DEV_MODE=false
+STDIO_MODE=false
+HAS_MCP=false
+HAS_HTTP=false
+HAS_DIRECT=false
+ARGS=""
+for arg in "$@"; do
+    if [ "$arg" = "--dev" ]; then
+        DEV_MODE=true
+        continue
+    fi
+    if [ "$arg" = "mcp" ]; then
+        HAS_MCP=true
+    fi
+    if [ "$arg" = "--http" ]; then
+        HAS_HTTP=true
+    fi
+    if [ "$arg" = "--direct" ] || [ "$arg" = "--no-daemon" ]; then
+        HAS_DIRECT=true
+    fi
+
+    resolved_arg=$(to_absolute_path "$arg")
+    if [ -z "$ARGS" ]; then
+        ARGS="$resolved_arg"
+    else
+        ARGS="$ARGS $resolved_arg"
+    fi
+done
+
+# STDIO mode: `mcp` subcommand without `--http` flag (includes --bridge mode)
+if [ "$HAS_MCP" = true ] && [ "$HAS_HTTP" = false ]; then
+    STDIO_MODE=true
+fi
+
+# Prepend port args (top-level flags go before subcommands)
+if [ -n "$PORT_ARGS" ]; then
+    if [ -z "$ARGS" ]; then
+        ARGS="$PORT_ARGS"
+    else
+        ARGS="$PORT_ARGS $ARGS"
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+# Main logic
+# ---------------------------------------------------------------------------
+
+if [ "$DEV_MODE" = true ]; then
+    # Development mode: foreground with logs visible in terminal
+    echo "Starting Trailblaze in dev mode (foreground)..."
+    tb_run "$ARGS"
+elif [ "$1" = "stop" ]; then
+    stop_daemon
+elif [ "$1" = "status" ]; then
+    get_status
+elif [ "$STDIO_MODE" = true ]; then
+    # STDIO MCP mode: quiet output so only JSON-RPC goes to stdout.
+
+    # Auto-start daemon if not running (proxy needs it)
+    if ! is_daemon_running; then
+        echo "[mcp] Starting Trailblaze daemon..." >&2
+        DAEMON_ARGS="--headless"
+        if [ "$TRAILBLAZE_PORT" != "$TRAILBLAZE_DEFAULT_PORT" ]; then
+            DAEMON_ARGS="--port $TRAILBLAZE_PORT $DAEMON_ARGS"
+        fi
+        if [ "$TRAILBLAZE_HTTPS_PORT" != "$TRAILBLAZE_DEFAULT_HTTPS_PORT" ]; then
+            DAEMON_ARGS="--https-port $TRAILBLAZE_HTTPS_PORT $DAEMON_ARGS"
+        fi
+
+        tb_run_background_quiet "$DAEMON_ARGS"
+        echo "[mcp] Daemon starting (PID $!)..." >&2
+
+        attempts=0
+        while [ $attempts -lt 60 ]; do
+            if is_daemon_running; then
+                echo "[mcp] Daemon ready." >&2
+                break
+            fi
+            sleep 1
+            attempts=$((attempts + 1))
+        done
+
+        if ! is_daemon_running; then
+            echo "[mcp] Warning: daemon did not start in time." >&2
+        fi
+    fi
+
+    tb_run_exec_quiet "$ARGS"
+elif [ "$1" = "run" ] && ! is_daemon_running; then
+    # Auto-start daemon on first 'run' command so subsequent runs reuse it.
+    echo "Starting Trailblaze daemon..."
+    DAEMON_ARGS="--headless"
+    if [ -n "$PORT_ARGS" ]; then
+        DAEMON_ARGS="$PORT_ARGS $DAEMON_ARGS"
+    fi
+    tb_run_background "$DAEMON_ARGS"
+
+    # Wait for daemon to be ready
+    echo -n "Waiting for daemon"
+    max_attempts=60
+    attempts=0
+    while [ $attempts -lt $max_attempts ]; do
+        if is_daemon_running; then
+            echo ""
+            echo "Daemon ready."
+            break
+        fi
+        echo -n "."
+        sleep 1
+        attempts=$((attempts + 1))
+    done
+
+    if ! is_daemon_running; then
+        echo ""
+        echo "Warning: Daemon did not start in time. Falling back to direct execution."
+    fi
+
+    # Now run the CLI command — RunCommand will detect the daemon and delegate
+    tb_run "$ARGS"
+elif [ -n "$ARGS" ]; then
+    # CLI command mode (config, auth, etc.)
+    tb_run "$ARGS"
+else
+    # Default mode: check if already running, otherwise start in background
+    if is_daemon_running; then
+        echo "Trailblaze is already running."
+        show_window
+        echo "Use the menu bar icon to show the window."
+    else
+        echo "Starting Trailblaze..."
+
+        tb_run_background "$PORT_ARGS"
+
+        # Poll for daemon to become available
+        echo -n "Waiting for Trailblaze to start"
+        max_attempts=30
+        attempts=0
+        while [ $attempts -lt $max_attempts ]; do
+            if is_daemon_running; then
+                echo ""
+                echo "Trailblaze is ready! Check the menu bar icon."
+                exit 0
+            fi
+            echo -n "."
+            sleep 1
+            attempts=$((attempts + 1))
+        done
+
+        echo ""
+        echo "Trailblaze is starting in the background (taking longer than expected)."
+        echo "Check the menu bar icon or run './trailblaze --dev' for verbose output."
+    fi
+fi

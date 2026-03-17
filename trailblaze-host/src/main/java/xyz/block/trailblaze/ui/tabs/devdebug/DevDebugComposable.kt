@@ -20,16 +20,19 @@ import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.rememberWindowState
+import kotlinx.coroutines.flow.StateFlow
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.logs.server.McpServerDebugState
+import xyz.block.trailblaze.logs.server.McpSessionSnapshot
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.ui.composables.CodeBlock
 import xyz.block.trailblaze.ui.devices.DeviceState
 
 private enum class DebugTab(val title: String) {
   DEVICE_MANAGER("Device Manager"),
-  // Add more tabs here as needed
+  MCP_SESSIONS("MCP Sessions"),
 }
 
 /**
@@ -39,7 +42,8 @@ private enum class DebugTab(val title: String) {
 @Composable
 fun DevDebugWindow(
   deviceManager: TrailblazeDeviceManager,
-  onCloseRequest: () -> Unit
+  mcpServerDebugStateFlow: StateFlow<McpServerDebugState>,
+  onCloseRequest: () -> Unit,
 ) {
   Window(
     onCloseRequest = onCloseRequest,
@@ -47,7 +51,11 @@ fun DevDebugWindow(
     state = rememberWindowState(size = DpSize(800.dp, 900.dp))
   ) {
     MaterialTheme {
-      DevDebugContent(deviceManager = deviceManager, showPopOutButton = false)
+      DevDebugContent(
+        deviceManager = deviceManager,
+        mcpServerDebugStateFlow = mcpServerDebugStateFlow,
+        showPopOutButton = false,
+      )
     }
   }
 }
@@ -55,8 +63,9 @@ fun DevDebugWindow(
 @Composable
 private fun DevDebugContent(
   deviceManager: TrailblazeDeviceManager,
+  mcpServerDebugStateFlow: StateFlow<McpServerDebugState>,
   showPopOutButton: Boolean,
-  onPopOut: () -> Unit = {}
+  onPopOut: () -> Unit = {},
 ) {
   var selectedTabIndex by remember { mutableIntStateOf(0) }
   val tabs = DebugTab.entries
@@ -96,6 +105,7 @@ private fun DevDebugContent(
     // Tab Content
     when (tabs[selectedTabIndex]) {
       DebugTab.DEVICE_MANAGER -> DeviceManagerDebugTab(deviceManager)
+      DebugTab.MCP_SESSIONS -> McpSessionsDebugTab(mcpServerDebugStateFlow)
     }
   }
 }
@@ -386,5 +396,205 @@ private fun DeviceDataSection(
         content()
       }
     }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MCP Sessions Debug Tab
+// ─────────────────────────────────────────────────────────────────────────────
+
+@Composable
+private fun McpSessionsDebugTab(mcpServerDebugStateFlow: StateFlow<McpServerDebugState>) {
+  val mcpState by mcpServerDebugStateFlow.collectAsState()
+
+  Column(
+    modifier = Modifier.fillMaxSize().padding(16.dp),
+    verticalArrangement = Arrangement.spacedBy(12.dp),
+  ) {
+    // Server Status Row
+    Row(
+      horizontalArrangement = Arrangement.spacedBy(16.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Row(
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Text(
+          text = "Server:",
+          style = MaterialTheme.typography.bodyMedium,
+          fontWeight = FontWeight.Medium,
+        )
+        Text(
+          text = if (mcpState.isRunning) "Running" else "Stopped",
+          style = MaterialTheme.typography.bodyMedium,
+          color =
+            if (mcpState.isRunning) MaterialTheme.colorScheme.primary
+            else MaterialTheme.colorScheme.error,
+        )
+      }
+
+      Row(
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Text(
+          text = "Sessions:",
+          style = MaterialTheme.typography.bodyMedium,
+          fontWeight = FontWeight.Medium,
+        )
+        Text(
+          text = "${mcpState.sessions.size}",
+          style = MaterialTheme.typography.bodyMedium,
+          color =
+            if (mcpState.sessions.isNotEmpty()) MaterialTheme.colorScheme.tertiary
+            else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+      }
+
+      if (mcpState.isRunning && mcpState.serverStartTimeMillis > 0) {
+        val uptimeSeconds = (System.currentTimeMillis() - mcpState.serverStartTimeMillis) / 1000
+        val uptimeMinutes = uptimeSeconds / 60
+        Text(
+          text = "Uptime: ${uptimeMinutes}m ${uptimeSeconds % 60}s",
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+      }
+    }
+
+    HorizontalDivider()
+
+    // Session List
+    Column(
+      modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+      verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+      if (mcpState.sessions.isEmpty()) {
+        Card(
+          modifier = Modifier.fillMaxWidth(),
+          colors =
+            CardDefaults.cardColors(
+              containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+            ),
+        ) {
+          Text(
+            text = "No active MCP sessions. Connect an MCP client to see sessions here.",
+            modifier = Modifier.padding(16.dp),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
+      } else {
+        mcpState.sessions.forEach { session -> McpSessionCard(session) }
+      }
+    }
+  }
+}
+
+@Composable
+private fun McpSessionCard(session: McpSessionSnapshot) {
+  var expanded by remember { mutableStateOf(true) }
+
+  Card(
+    modifier = Modifier.fillMaxWidth(),
+    colors =
+      CardDefaults.cardColors(
+        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+      ),
+  ) {
+    Column {
+      // Session Header
+      Row(
+        modifier =
+          Modifier.fillMaxWidth().clickable { expanded = !expanded }.padding(16.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Column {
+          Text(
+            text = session.clientName ?: "Unknown Client",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+          )
+          Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(
+              text = session.mode.name,
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.primary,
+            )
+            Text(
+              text = session.toolProfile.name,
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.secondary,
+            )
+            session.associatedDeviceId?.let { deviceId ->
+              Text(
+                text = deviceId.instanceId,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.tertiary,
+              )
+            }
+            if (session.isRecording) {
+              Text(
+                text = "REC ${session.currentTrailName ?: ""}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+              )
+            }
+          }
+        }
+        Icon(
+          imageVector =
+            if (expanded) Icons.Default.KeyboardArrowUp
+            else Icons.Default.KeyboardArrowDown,
+          contentDescription = if (expanded) "Collapse" else "Expand",
+          modifier = Modifier.size(24.dp),
+        )
+      }
+
+      // Expanded Details
+      AnimatedVisibility(visible = expanded) {
+        Column(
+          modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
+          verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+          McpSessionDetailRow("Session ID", session.sessionId)
+          McpSessionDetailRow("Mode", session.mode.name)
+          McpSessionDetailRow("Tool Profile", session.toolProfile.name)
+          McpSessionDetailRow("Agent", session.agentImplementation.name)
+          McpSessionDetailRow(
+            "Device",
+            session.associatedDeviceId?.instanceId ?: "None"
+          )
+          McpSessionDetailRow("Recording", if (session.isRecording) "Yes" else "No")
+          session.currentTrailName?.let { McpSessionDetailRow("Trail", it) }
+          session.createdAtMillis?.let { createdAt ->
+            val ageSeconds = (System.currentTimeMillis() - createdAt) / 1000
+            val ageMinutes = ageSeconds / 60
+            McpSessionDetailRow("Age", "${ageMinutes}m ${ageSeconds % 60}s")
+          }
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun McpSessionDetailRow(label: String, value: String) {
+  Row(
+    horizontalArrangement = Arrangement.spacedBy(8.dp),
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    Text(
+      text = "$label:",
+      style = MaterialTheme.typography.bodySmall,
+      fontWeight = FontWeight.Medium,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Text(
+      text = value,
+      style = MaterialTheme.typography.bodySmall,
+    )
   }
 }

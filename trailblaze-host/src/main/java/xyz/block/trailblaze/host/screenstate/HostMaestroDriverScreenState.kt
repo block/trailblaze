@@ -7,6 +7,7 @@ import maestro.filterOutOfBounds
 import okio.Buffer
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ScreenshotScalingConfig
+import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode.Companion.relabelWithFreshIds
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
@@ -22,6 +23,7 @@ import xyz.block.trailblaze.utils.Ext.toViewHierarchyTreeNode
 import xyz.block.trailblaze.viewhierarchy.ViewHierarchyCompactFormatter
 import xyz.block.trailblaze.viewhierarchy.ViewHierarchyFilter
 import xyz.block.trailblaze.viewhierarchy.ViewHierarchyTreeNodeUtils
+import xyz.block.trailblaze.viewmatcher.matching.toTrailblazeNodeIosMaestro
 import java.awt.image.BufferedImage
 import java.io.ByteArrayInputStream
 import javax.imageio.ImageIO
@@ -47,6 +49,7 @@ class HostMaestroDriverScreenState(
   private var matched = false
   private var attempts = 0
   private var stableRelabeledViewHierarchy: ViewHierarchyTreeNode? = null
+  private var stableTrailblazeNodeTree: TrailblazeNode? = null
   private var stableBufferedImage: BufferedImage? = null
 
   init {
@@ -62,6 +65,11 @@ class HostMaestroDriverScreenState(
 
       // Relabel for drawing and returning
       stableRelabeledViewHierarchy = vh1?.relabelWithFreshIds()
+
+      // Build TrailblazeNode tree for iOS Maestro path
+      if (deviceInfo.platform == Platform.IOS) {
+        stableTrailblazeNodeTree = rawTree1.toTrailblazeNodeIosMaestro()
+      }
 
       // Take the screenshot (raw, without set of mark)
       val sink = Buffer()
@@ -99,6 +107,9 @@ class HostMaestroDriverScreenState(
 
   override val viewHierarchyOriginal: ViewHierarchyTreeNode = stableRelabeledViewHierarchy
     ?: throw IllegalStateException("Failed to get stable view hierarchy from Maestro driver after $maxAttempts attempts.")
+
+  override val trailblazeNodeTree: TrailblazeNode?
+    get() = stableTrailblazeNodeTree
 
   /**
    * Returns the filtered view hierarchy.

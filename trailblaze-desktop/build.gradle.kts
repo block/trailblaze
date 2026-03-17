@@ -8,6 +8,35 @@ plugins {
   alias(libs.plugins.dependency.guard)
 }
 
+// JVM args required for Compose Desktop on macOS — Skiko's JNI native code needs
+// access to internal AWT classes. Without these, `java -jar` crashes with SIGSEGV.
+// The canonical source for these is opensource/scripts/trailblaze (used at runtime).
+// They're duplicated here for native distributions (DMG) and development run tasks.
+val macOsJvmArgs = listOf(
+  "--add-opens", "java.desktop/sun.awt=ALL-UNNAMED",
+  "--add-opens", "java.desktop/sun.lwawt=ALL-UNNAMED",
+  "--add-opens", "java.desktop/sun.lwawt.macosx=ALL-UNNAMED",
+)
+
+// Exclude heavy transitive dependencies not needed in the uber JAR.
+// See trailblaze-host/build.gradle.kts for detailed "Why" comments on each exclusion.
+configurations.all {
+  exclude(group = "ai.koog", module = "prompt-executor-bedrock-client")
+  exclude(group = "ai.koog", module = "prompt-executor-dashscope-client")
+  exclude(group = "ai.koog", module = "prompt-executor-deepseek-client")
+  exclude(group = "ai.koog", module = "prompt-executor-mistralai-client")
+  exclude(group = "ai.koog", module = "prompt-cache-redis")
+  exclude(group = "aws.sdk.kotlin")
+  exclude(group = "aws.smithy.kotlin")
+  exclude(group = "io.lettuce")
+  exclude(group = "redis.clients.authentication")
+  // Note: io.micrometer is NOT excluded — maestro-utils MetricsProvider depends on it.
+  exclude(group = "io.projectreactor")
+  exclude(group = "org.apache.httpcomponents.client5")
+  exclude(group = "org.apache.httpcomponents.core5")
+  exclude(group = "io.ktor", module = "ktor-client-apache5")
+}
+
 dependencies {
   implementation(project(":trailblaze-agent"))
   implementation(project(":trailblaze-common"))
@@ -18,11 +47,11 @@ dependencies {
   implementation(project(":trailblaze-ui"))
 
   implementation(compose.desktop.currentOs)
-  implementation(compose.ui)
-  implementation(compose.runtime)
-  implementation(compose.foundation)
-  implementation(compose.material3)
-  implementation(compose.components.resources)
+  implementation(libs.compose.ui)
+  implementation(libs.compose.runtime)
+  implementation(libs.compose.foundation)
+  implementation(libs.compose.material3)
+  implementation(libs.compose.components.resources)
   implementation(libs.koog.prompt.executor.clients)
   implementation(libs.ktor.network.tls.certificates)
   implementation(libs.picocli) // For CLI interface
@@ -59,6 +88,7 @@ tasks.named("processResources") {
 compose.desktop {
   application {
     mainClass = "xyz.block.trailblaze.desktop.Trailblaze"
+    jvmArgs += macOsJvmArgs
 
     nativeDistributions {
       targetFormats(
@@ -87,9 +117,94 @@ compose.desktop {
         }
       }
     }
+
+    // ProGuard shrinking is configured as a standalone post-processing task below
+    // (not using the Compose plugin's built-in ProGuard, which lags behind Kotlin versions).
+    // Build with: ./gradlew :trailblaze-desktop:shrinkUberJar -Ptrailblaze.proguard=true
   }
 }
+
+// ---------------------------------------------------------------------------
+// ProGuard shrinking (standalone task with correct kotlin-metadata-jvm version)
+// Enable with: -Ptrailblaze.proguard=true
+// ---------------------------------------------------------------------------
+val useProguard = project.findProperty("trailblaze.proguard") == "true"
+
+val kotlinVersion = libs.versions.kotlin.asProvider().get()
+val proguardClasspath: Configuration by configurations.creating {
+  isTransitive = true
+  resolutionStrategy { force("org.jetbrains.kotlin:kotlin-metadata-jvm:$kotlinVersion") }
+}
+dependencies { proguardClasspath(libs.proguard.gradle) }
+
+val shrinkUberJar by tasks.registering(JavaExec::class) {
+  description = "Shrinks the uber JAR with ProGuard to remove unused classes"
+  group = "distribution"
+  dependsOn("packageUberJarForCurrentOS")
+  onlyIf { useProguard }
+
+  classpath = proguardClasspath
+  mainClass.set("proguard.ProGuard")
+
+  val outputJar = layout.buildDirectory.file("compose/jars-shrunk/trailblaze.jar")
+  outputs.file(outputJar)
+
+  val javaHome = System.getProperty("java.home")
+  doFirst {
+    outputJar.get().asFile.parentFile.mkdirs()
+    val jarsDir = layout.buildDirectory.dir("compose/jars").get().asFile
+    val actualJar = jarsDir.listFiles()?.firstOrNull { it.extension == "jar" }
+      ?: error("No uber JAR found in ${jarsDir.absolutePath}")
+
+    val jmodsArgs = File("$javaHome/jmods").listFiles { f -> f.extension == "jmod" }
+      ?.sorted()
+      ?.flatMap { listOf("-libraryjars", "${it.absolutePath}(!**.jar;!module-info.class)") }
+      ?: error("No jmod files found in $javaHome/jmods")
+
+    args(
+      "-include", project.file("proguard-rules.pro").absolutePath,
+      "-injars", actualJar.absolutePath,
+      "-outjars", outputJar.get().asFile.absolutePath,
+      *jmodsArgs.toTypedArray(),
+    )
+  }
+}
+
+// Task to build release artifacts.
+// Use -Ptrailblaze.proguard=true to produce a ProGuard-shrunk JAR.
+val releaseArtifacts by tasks.registering(Copy::class) {
+  description = "Builds the release JAR artifact for distribution"
+  group = "distribution"
+
+  if (useProguard) {
+    dependsOn(shrinkUberJar)
+    from(layout.buildDirectory.dir("compose/jars-shrunk")) { include("*.jar") }
+  } else {
+    dependsOn("packageUberJarForCurrentOS")
+    from(layout.buildDirectory.dir("compose/jars")) { include("*.jar") }
+  }
+
+  val releaseDir = layout.buildDirectory.dir("release")
+  into(releaseDir)
+  rename(".*", "trailblaze.jar")
+  duplicatesStrategy = DuplicatesStrategy.INCLUDE
+
+  // Copy the launcher script alongside the JAR. In java -jar mode (the default),
+  // it passes the --add-opens JVM flags required for macOS Compose Desktop.
+  doLast {
+    val launcher = project.file("../scripts/trailblaze")
+    val dest = releaseDir.get().asFile.resolve("trailblaze")
+    launcher.copyTo(dest, overwrite = true)
+    dest.setExecutable(true)
+  }
+}
+
 afterEvaluate {
+  // The uber JAR exceeds 65 535 entries; enable zip64 so packaging succeeds.
+  tasks.named("packageUberJarForCurrentOS") {
+    (this as org.gradle.api.tasks.bundling.Zip).isZip64 = true
+  }
+
   tasks.withType<JavaExec> {
     // Run from the repository root so relative paths (e.g., merchant-factory/trails/) resolve correctly.
     workingDir = rootProject.projectDir
@@ -97,21 +212,16 @@ afterEvaluate {
     // from the parent process's stdin (e.g., `./trailblaze mcp`).
     standardInput = System.`in`
 
-    // Use the repo root as the working directory so that System.getProperty("user.dir")
-    // matches where the user invoked `./trailblaze`, not the Gradle subproject directory.
-    // This ensures {{CWD}} in trail files resolves correctly during development.
-    workingDir = rootProject.projectDir
-
     if (System.getProperty("os.name").contains("Mac")) {
-      jvmArgs("--add-opens", "java.desktop/sun.awt=ALL-UNNAMED")
-      jvmArgs("--add-opens", "java.desktop/sun.lwawt=ALL-UNNAMED")
-      jvmArgs("--add-opens", "java.desktop/sun.lwawt.macosx=ALL-UNNAMED")
+      jvmArgs(*macOsJvmArgs.toTypedArray())
     }
   }
 }
 
 dependencyGuard {
   configuration("runtimeClasspath") {
-    baselineMap = rootProject.extra["trailblazePlatformBaselineMap"] as (String) -> String
+    @Suppress("UNCHECKED_CAST")
+    val map = rootProject.extra["trailblazePlatformBaselineMap"] as (String) -> String
+    baselineMap = map
   }
 }

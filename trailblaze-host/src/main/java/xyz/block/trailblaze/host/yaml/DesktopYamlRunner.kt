@@ -167,10 +167,6 @@ class DesktopYamlRunner(
           TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY -> {
             val trailblazeOnDeviceInstrumentationTarget = targetTestApp?.getTrailblazeOnDeviceInstrumentationTarget()
               ?: trailblazeHostAppTarget.getTrailblazeOnDeviceInstrumentationTarget()
-            HostAndroidDeviceConnectUtils.forceStopAllAndroidInstrumentationProcesses(
-              trailblazeOnDeviceInstrumentationTargetTestApps = setOf(trailblazeOnDeviceInstrumentationTarget),
-              deviceId = connectedTrailblazeDevice.trailblazeDeviceId,
-            )
 
             val onDeviceRpc = OnDeviceRpcClient(
               trailblazeDeviceId = trailblazeDeviceId,

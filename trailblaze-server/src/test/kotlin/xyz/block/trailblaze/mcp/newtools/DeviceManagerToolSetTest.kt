@@ -218,6 +218,44 @@ class DeviceManagerToolSetTest {
     assertContains(result, "com.example.app")
   }
 
+  // ── WEB action ──────────────────────────────────────────────────────────
+
+  @Test
+  fun `device WEB connects to web browser`() = runTest {
+    val webDevice = TrailblazeConnectedDeviceSummary(
+      trailblazeDriverType = TrailblazeDriverType.PLAYWRIGHT_NATIVE,
+      instanceId = "playwright-native",
+      description = "Playwright Browser (Native)",
+    )
+    val bridge = DeviceTestBridge(devices = setOf(androidDevice, webDevice))
+    val toolSet = DeviceManagerToolSet(
+      sessionContext = createSessionContext(),
+      mcpBridge = bridge,
+    )
+
+    val result = toolSet.device(
+      action = DeviceManagerToolSet.DeviceAction.WEB,
+    )
+
+    assertContains(result, "playwright-native")
+    assertEquals("playwright-native", bridge.lastSelectedDeviceId?.instanceId)
+  }
+
+  @Test
+  fun `device WEB returns error when no web devices`() = runTest {
+    val bridge = DeviceTestBridge(devices = setOf(androidDevice))
+    val toolSet = DeviceManagerToolSet(
+      sessionContext = createSessionContext(),
+      mcpBridge = bridge,
+    )
+
+    val result = toolSet.device(
+      action = DeviceManagerToolSet.DeviceAction.WEB,
+    )
+
+    assertContains(result, "No web browser")
+  }
+
   // ── CONNECT action ────────────────────────────────────────────────────────
 
   @Test

@@ -45,5 +45,8 @@ enum class TrailblazeDriverType(
       ANDROID_ONDEVICE_INSTRUMENTATION,
       ANDROID_ONDEVICE_ACCESSIBILITY,
     )
+
+    fun fromString(value: String): TrailblazeDriverType? =
+      entries.find { it.name.equals(value, ignoreCase = true) }
   }
 }

@@ -96,9 +96,19 @@ object TrailblazeDeviceService {
 
   fun getConnectedDevice(
     trailblazeDeviceId: TrailblazeDeviceId,
+    driverType: TrailblazeDriverType,
     appTarget: TrailblazeHostAppTarget? = null,
   ): TrailblazeConnectedDevice? = when (trailblazeDeviceId.trailblazeDevicePlatform) {
-    TrailblazeDevicePlatform.ANDROID -> getConnectedHostAndroidDevice(trailblazeDeviceId)
+    TrailblazeDevicePlatform.ANDROID -> {
+      // On-device Android drivers (ACCESSIBILITY, INSTRUMENTATION) communicate via RPC and
+      // do not need a Maestro host driver. Creating one would be wasteful and can interfere
+      // with the running on-device service.
+      if (driverType in TrailblazeDriverType.ANDROID_ON_DEVICE_DRIVER_TYPES) {
+        null
+      } else {
+        getConnectedHostAndroidDevice(trailblazeDeviceId)
+      }
+    }
     TrailblazeDevicePlatform.IOS -> getConnectedIosDevice(
       trailblazeDeviceId = trailblazeDeviceId,
       appTarget = appTarget

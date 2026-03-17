@@ -88,15 +88,18 @@ class PlaywrightBrowserInstaller {
           val javaBin = File(javaHome, "bin/java").absolutePath
           val classPath = System.getProperty("java.class.path")
 
-          // Pass playwright.driver.tmpdir to the subprocess so it uses a stable cache
-          // directory instead of the system temp dir (which macOS cleans periodically).
+          // Forward Playwright system properties to the subprocess so it finds the driver
+          // in the same location (stable cache or externally downloaded).
           val driverTmpdir = System.getProperty("playwright.driver.tmpdir")
+          val cliDir = System.getProperty("playwright.cli.dir")
           val process = ProcessBuilder(
             buildList {
               add(javaBin)
               add("-cp")
               add(classPath)
-              if (driverTmpdir != null) {
+              if (cliDir != null) {
+                add("-Dplaywright.cli.dir=$cliDir")
+              } else if (driverTmpdir != null) {
                 add("-Dplaywright.driver.tmpdir=$driverTmpdir")
               }
               add("com.microsoft.playwright.CLI")

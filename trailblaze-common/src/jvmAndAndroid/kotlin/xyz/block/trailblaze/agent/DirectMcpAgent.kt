@@ -24,8 +24,10 @@ import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeToolParameterDescriptor
+import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeToolDescriptor
+import xyz.block.trailblaze.toolcalls.ConfigTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.toolcalls.toKoogToolDescriptor
 import xyz.block.trailblaze.utils.ElementComparator
@@ -83,6 +85,13 @@ class DirectMcpAgent(
   private val llmCallStrategy: LlmCallStrategy = LlmCallStrategy.DIRECT,
   /** Which tier this agent represents (OUTER for planning, INNER would use ScreenAnalyzer) */
   private val agentTier: AgentTier = AgentTier.OUTER,
+  /**
+   * Tool repository that provides the available tools to the LLM. Uses the same tool set
+   * as TrailblazeRunner/KoogLlmClientHelper — typically getLlmToolSet(setOfMarkEnabled=true)
+   * which includes tapOnElementByNodeId, verification tools, and all standard UI tools.
+   * When null, falls back to getLlmToolSet(setOfMarkEnabled=true).
+   */
+  private val trailblazeToolRepo: TrailblazeToolRepo? = null,
 ) {
 
   companion object {
@@ -102,14 +111,20 @@ class DirectMcpAgent(
     fun getSystemPrompt(platform: String) = """You are a mobile UI automation assistant for $platform.
 
 You MUST respond with a tool call. Available tools include:
-- UI interaction tools: tapOnElementByNodeId, tapOnPoint, swipe, inputText, pressBack, pressKey (for HOME/ENTER), hideKeyboard, eraseText
-- Navigation tools: launchApp, openUrl, scrollUntilTextIsVisible
+- Tap: tapOnElementByNodeId (use nodeIds from the view hierarchy, shown as [nodeId: X])
+- Other UI: swipe, inputText, pressBack, pressKey (for HOME/ENTER), hideKeyboard, eraseText
+- Navigation: launchApp, openUrl, scrollUntilTextIsVisible
+- Verification: assertVisibleWithNodeId (to check if an element is visible)
 - Control flow: objectiveStatus (to report COMPLETED, IN_PROGRESS, or FAILED status)
 
 GUIDELINES:
-- ALWAYS use tapOnElementByNodeId with nodeIds from the view hierarchy (shown as [nodeId: X])
-- Only use tapOnPoint as a last resort when no suitable nodeId is available
-- IMPORTANT: Call objectiveStatus with status=COMPLETED AS SOON AS the objective is achieved. Check the current screen state - if it shows the goal is already accomplished (e.g., you're already on the home screen), report COMPLETED immediately.
+- ALWAYS use tapOnElementByNodeId with the nodeId of the element you want to tap
+- Before tapping buttons, call hideKeyboard if a keyboard may be covering them
+- CRITICAL COMPLETION RULES:
+  1. After performing the requested action (tap, type, swipe, etc.), call objectiveStatus(COMPLETED) on the NEXT iteration.
+  2. If an assertion call succeeds (shown as "→ SUCCESS" in history), the verification is done — call objectiveStatus(COMPLETED).
+  3. Do NOT call the same tool repeatedly. If "ACTIONS TAKEN SO FAR" shows a tool already succeeded, move on.
+  4. Do NOT repeat assertions for the same element — one successful check is enough.
 - Call objectiveStatus with status=FAILED only if you determine the objective cannot be completed after reasonable attempts"""
   }
 
@@ -125,11 +140,12 @@ GUIDELINES:
   suspend fun run(objective: String): AgentResult {
     val actions = mutableListOf<String>()
     var iteration = 0
-
-    // Get available tools for this agent
-    val tools = getAvailableToolDescriptors()
+    var lastSuccessfulToolSignature: String? = null
+    var consecutiveSuccessCount = 0
 
     while (iteration < maxIterations) {
+      // Fetch tool descriptors each iteration so setActiveToolSets changes take effect
+      val tools = getAvailableToolDescriptors()
       iteration++
 
       // 1. Capture current screen state
@@ -148,8 +164,8 @@ GUIDELINES:
       val filtered = vhFilter.filterInteractableViewHierarchyTreeNodes(screenState.viewHierarchyOriginal)
       val viewHierarchyDescription = buildViewHierarchyDescription(filtered)
 
-      // 3. Build user message with screen state
-      val userMessage = buildUserMessage(objective, viewHierarchyDescription, iteration)
+      // 3. Build user message with screen state and action history
+      val userMessage = buildUserMessage(objective, viewHierarchyDescription, iteration, actions)
 
       // 4. Get LLM tool call (tool-only pattern)
       // Generate trace ID for this iteration - links LLM request to resulting tool calls
@@ -182,10 +198,10 @@ GUIDELINES:
         is SamplingResult.ToolCall -> {
           val toolName = samplingResult.toolName
           val args = samplingResult.arguments
-          actions.add("$toolName($args)")
 
           // Check for control flow tools (objectiveStatus with COMPLETED/FAILED terminates the loop)
           if (toolName == TOOL_OBJECTIVE_STATUS) {
+            actions.add("$toolName($args)")
             val status = args["status"]?.jsonPrimitive?.content?.uppercase()
             val explanation = args["explanation"]?.jsonPrimitive?.content ?: "No explanation provided"
 
@@ -214,7 +230,19 @@ GUIDELINES:
               // Execute UI tool via TrailblazeAgent
               val tool = mapToTrailblazeTool(toolName, args)
               if (tool == null) {
+                actions.add("$toolName($args) → UNKNOWN TOOL")
                 Console.log("[DirectMcpAgent] Unknown tool: $toolName")
+                continue
+              }
+
+              // Handle tool-config tools (e.g. setActiveToolSets) that modify the
+              // agent's available tool set. These are intercepted here because they
+              // operate on the TrailblazeToolRepo, not the device driver.
+              if (tool is ConfigTrailblazeTool) {
+                val result: TrailblazeToolResult = trailblazeToolRepo?.let { tool.execute(it) }
+                  ?: TrailblazeToolResult.Success(message = "Dynamic toolsets not configured.")
+                actions.add("$toolName($args) → $result")
+                Console.log("[DirectMcpAgent] ToolConfig $toolName: $result")
                 continue
               }
 
@@ -234,12 +262,42 @@ GUIDELINES:
                 screenStateProvider = wrappedScreenStateProvider,
               )
 
+              // Build a stable signature for duplicate detection — strip the
+              // free-text "reasoning" field so that tapOnPoint(x=360,y=128)
+              // matches even when the reasoning text differs between calls.
+              val stableArgs = args.filterKeys { it != "reasoning" }
+              val toolSignature = "$toolName($stableArgs)"
               when (val toolResult = result.result) {
                 is TrailblazeToolResult.Success -> {
+                  actions.add("$toolSignature → SUCCESS")
                   Console.log("[DirectMcpAgent] Tool $toolName succeeded")
+
+                  // Detect repeated successful calls to the same tool — the LLM is
+                  // stuck in a loop (common with assertVisible* tools). Auto-complete
+                  // if the same tool succeeds 2+ times consecutively.
+                  if (toolSignature == lastSuccessfulToolSignature) {
+                    consecutiveSuccessCount++
+                    if (consecutiveSuccessCount >= 2) {
+                      Console.log(
+                        "[DirectMcpAgent] Auto-completing: $toolName succeeded " +
+                          "$consecutiveSuccessCount times consecutively"
+                      )
+                      return AgentResult.Success(
+                        summary = "Auto-completed after $toolName succeeded repeatedly",
+                        iterations = iteration,
+                        actionsTaken = actions,
+                      )
+                    }
+                  } else {
+                    lastSuccessfulToolSignature = toolSignature
+                    consecutiveSuccessCount = 1
+                  }
                 }
                 is TrailblazeToolResult.Error -> {
+                  actions.add("$toolSignature → FAILED: ${toolResult.errorMessage}")
                   Console.log("[DirectMcpAgent] Tool $toolName failed: ${toolResult.errorMessage}")
+                  lastSuccessfulToolSignature = null
+                  consecutiveSuccessCount = 0
                 }
               }
             }
@@ -295,6 +353,7 @@ GUIDELINES:
     objective: String,
     viewHierarchy: String,
     iteration: Int,
+    previousActions: List<String> = emptyList(),
   ): String = buildString {
     // Sanitize objective to prevent prompt injection via embedded control characters
     val sanitizedObjective = objective.take(MAX_OBJECTIVE_LENGTH).replace(Regex("[\r\n]+"), " ")
@@ -302,6 +361,11 @@ GUIDELINES:
     appendLine()
     appendLine("ITERATION: $iteration of $maxIterations")
     appendLine()
+    if (previousActions.isNotEmpty()) {
+      appendLine("ACTIONS TAKEN SO FAR:")
+      previousActions.forEach { appendLine("  - $it") }
+      appendLine()
+    }
     appendLine("CURRENT SCREEN STATE:")
     appendLine(viewHierarchy)
     appendLine()
@@ -443,9 +507,13 @@ GUIDELINES:
    * Includes UI interaction tools and objectiveStatus for control flow (COMPLETED/FAILED terminates the loop).
    */
   private fun getAvailableToolDescriptors(): List<TrailblazeToolDescriptor> {
-    // Get tool descriptors from the default device control tool set
-    // This includes: tapOnPoint, swipe, inputText, pressBack, pressKey, hideKeyboard, objectiveStatus, etc.
-    return TrailblazeToolSet.DeviceControlTrailblazeToolSet.asTools().mapNotNull { toolClass ->
+    // Use the tool repo if provided (matches the tool set configured by the caller, e.g.
+    // getLlmToolSet(setOfMarkEnabled) which includes tapOnElementByNodeId, verification tools,
+    // and all standard UI tools). Falls back to getLlmToolSet(true) for Set-of-Mark tools.
+    if (trailblazeToolRepo != null) {
+      return trailblazeToolRepo.getCurrentToolDescriptors().map { it.toTrailblazeToolDescriptor() }
+    }
+    return TrailblazeToolSet.getLlmToolSet(setOfMarkEnabled = true).asTools().mapNotNull { toolClass ->
       toolClass.toKoogToolDescriptor()?.toTrailblazeToolDescriptor()
     }
   }
