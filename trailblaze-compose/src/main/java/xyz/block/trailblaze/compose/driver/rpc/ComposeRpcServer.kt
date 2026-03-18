@@ -1,7 +1,5 @@
 package xyz.block.trailblaze.compose.driver.rpc
 
-import androidx.compose.ui.test.ComposeUiTest
-import androidx.compose.ui.test.ExperimentalTestApi
 import io.ktor.http.HttpStatusCode
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.install
@@ -18,6 +16,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.compose.driver.ComposeTrailblazeAgent.Companion.DEFAULT_VIEWPORT_HEIGHT
 import xyz.block.trailblaze.compose.driver.ComposeTrailblazeAgent.Companion.DEFAULT_VIEWPORT_WIDTH
+import xyz.block.trailblaze.compose.target.ComposeTestTarget
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
@@ -25,16 +24,15 @@ import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
 /**
  * Embedded HTTP server that exposes Compose test operations over RPC.
  *
- * This server wraps a [ComposeUiTest] instance and provides two endpoints:
+ * This server wraps a [ComposeTestTarget] instance and provides two endpoints:
  * - `GET /ping` — health check
  * - `POST /rpc/GetScreenStateRequest` — captures screenshot + view hierarchy + semantics text
  * - `POST /rpc/ExecuteToolsRequest` — deserializes and executes compose tools
  *
- * A shared [Mutex] prevents concurrent tool execution against [ComposeUiTest].
+ * A shared [Mutex] prevents concurrent tool execution against [ComposeTestTarget].
  */
-@OptIn(ExperimentalTestApi::class)
 class ComposeRpcServer(
-  private val composeUiTest: ComposeUiTest,
+  private val target: ComposeTestTarget,
   private val port: Int = COMPOSE_DEFAULT_PORT,
   private val viewportWidth: Int = DEFAULT_VIEWPORT_WIDTH,
   private val viewportHeight: Int = DEFAULT_VIEWPORT_HEIGHT,
@@ -60,7 +58,7 @@ class ComposeRpcServer(
 
             registerRpcHandler(
               GetScreenStateHandler(
-                composeUiTest = composeUiTest,
+                target = target,
                 mutex = mutex,
                 viewportWidth = viewportWidth,
                 viewportHeight = viewportHeight,
@@ -69,7 +67,7 @@ class ComposeRpcServer(
 
             registerRpcHandler(
               ExecuteToolsHandler(
-                composeUiTest = composeUiTest,
+                target = target,
                 mutex = mutex,
                 viewportWidth = viewportWidth,
                 viewportHeight = viewportHeight,

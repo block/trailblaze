@@ -1,15 +1,13 @@
 package xyz.block.trailblaze.compose.driver.tools
 
 import ai.koog.agents.core.tools.annotations.LLMDescription
-import androidx.compose.ui.test.ComposeUiTest
-import androidx.compose.ui.test.ExperimentalTestApi
 import kotlinx.serialization.Serializable
+import xyz.block.trailblaze.compose.target.ComposeTestTarget
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.util.Console
 
-@OptIn(ExperimentalTestApi::class)
 @Serializable
 @TrailblazeToolClass("compose_verify_element_visible")
 @LLMDescription(
@@ -29,7 +27,7 @@ class ComposeVerifyElementVisibleTool(
 ) : ComposeExecutableTool {
 
   override suspend fun executeWithCompose(
-    composeUiTest: ComposeUiTest,
+    target: ComposeTestTarget,
     context: TrailblazeToolExecutionContext,
   ): TrailblazeToolResult {
     val description = element.ifBlank { elementId ?: testTag ?: "unknown" }
@@ -40,7 +38,7 @@ class ComposeVerifyElementVisibleTool(
           ?: return TrailblazeToolResult.Error.ExceptionThrown(
             "Must provide elementId or testTag to identify the element."
           )
-      val nodes = composeUiTest.onAllNodes(matcher).fetchSemanticsNodes()
+      val nodes = ComposeExecutableTool.findNodes(target, matcher)
       if (nodes.isEmpty()) {
         TrailblazeToolResult.Error.ExceptionThrown(
           "Assertion failed: element '$description' is not visible."

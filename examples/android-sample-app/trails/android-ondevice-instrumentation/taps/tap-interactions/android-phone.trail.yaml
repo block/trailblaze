@@ -6,6 +6,7 @@
 - tools:
   - launchApp:
       appId: xyz.block.trailblaze.examples.sampleapp
+      launchMode: REINSTALL
 - prompts:
   - step: Tap the "Tap Me" button 3 times and verify the tap count shows 3
     recording:

@@ -3,6 +3,7 @@ package xyz.block.trailblaze.android
 import androidx.test.platform.app.InstrumentationRegistry
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.util.Console
 
 object InstrumentationArgUtil {
@@ -31,6 +32,27 @@ object InstrumentationArgUtil {
   }
 
   fun getInstrumentationArg(key: String): String? = instrumentationArguments.getString(key)
+
+  /**
+   * Returns the first [TrailblazeLlmModel] whose corresponding instrumentation arg key is set.
+   *
+   * Example:
+   * ```
+   * InstrumentationArgUtil.resolveTrailblazeLlmModel(
+   *     "OPENROUTER_API_KEY" to OpenRouterTrailblazeLlmModelList.GPT_OSS_120B_FREE,
+   *     "OPENAI_API_KEY" to OpenAITrailblazeLlmModelList.OPENAI_GPT_4_1,
+   * )
+   * ```
+   */
+  fun resolveTrailblazeLlmModel(
+    vararg candidates: Pair<String, TrailblazeLlmModel>,
+  ): TrailblazeLlmModel {
+    for ((key, model) in candidates) {
+      if (getInstrumentationArg(key) != null) return model
+    }
+    val keys = candidates.joinToString(" or ") { it.first }
+    error("Could not configure TrailblazeLlmModel — set $keys")
+  }
 
   fun logsEndpoint(): String {
     val httpsPort = InstrumentationRegistry.getArguments().getString(

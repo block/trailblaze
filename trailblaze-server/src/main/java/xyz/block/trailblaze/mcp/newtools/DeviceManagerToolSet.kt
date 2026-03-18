@@ -11,11 +11,11 @@ import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.DeviceAlreadyClaimedException
 import xyz.block.trailblaze.mcp.DeviceClaimRegistry
+import xyz.block.trailblaze.mcp.McpToolProfile
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
 import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
 import xyz.block.trailblaze.mcp.ViewHierarchyVerbosity
 import xyz.block.trailblaze.mcp.utils.ScreenStateCaptureUtil
-import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.toolcalls.ToolSetCatalogEntry
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
 import xyz.block.trailblaze.viewhierarchy.ViewHierarchyFilter
@@ -91,7 +91,7 @@ class DeviceManagerToolSet(
     Save it anytime as a reusable test: trail(action=SAVE, name="my_test")
     """
   )
-  @Tool
+  @Tool(McpToolProfile.TOOL_DEVICE)
   suspend fun device(
     @LLMDescription("Action: LIST, CONNECT, ANDROID, IOS, WEB, or INFO")
     action: DeviceAction,
@@ -101,6 +101,8 @@ class DeviceManagerToolSet(
     force: Boolean = false,
     @LLMDescription("Detail level for INFO action: SUMMARY (default), APPS, or FULL")
     detail: DeviceDetail = DeviceDetail.SUMMARY,
+    @LLMDescription("Optional display name for this session (shown in the Trailblaze report)")
+    testName: String? = null,
   ): String {
     return when (action) {
       DeviceAction.LIST -> {
@@ -189,7 +191,7 @@ class DeviceManagerToolSet(
         val device = devices.find { it.instanceId == deviceId }
           ?: return "Error: Device '$deviceId' not found. Use LIST to see available devices."
 
-        connectToDeviceUnified(device.trailblazeDeviceId, force)
+        connectToDeviceUnified(device.trailblazeDeviceId, force, testName)
       }
 
       DeviceAction.ANDROID -> {
@@ -205,7 +207,7 @@ class DeviceManagerToolSet(
         }
           ?: return "Error: No Android device available. Connect an Android device or start an emulator."
 
-        connectToDeviceUnified(androidDevice.trailblazeDeviceId, force)
+        connectToDeviceUnified(androidDevice.trailblazeDeviceId, force, testName)
       }
 
       DeviceAction.IOS -> {
@@ -219,7 +221,7 @@ class DeviceManagerToolSet(
         }
           ?: return "Error: No iOS device available. Start an iOS simulator."
 
-        connectToDeviceUnified(iosDevice.trailblazeDeviceId, force)
+        connectToDeviceUnified(iosDevice.trailblazeDeviceId, force, testName)
       }
 
       DeviceAction.WEB -> {
@@ -233,7 +235,7 @@ class DeviceManagerToolSet(
         }
           ?: return "Error: No web browser available."
 
-        connectToDeviceUnified(webDevice.trailblazeDeviceId, force)
+        connectToDeviceUnified(webDevice.trailblazeDeviceId, force, testName)
       }
     }
   }
@@ -241,6 +243,7 @@ class DeviceManagerToolSet(
   private suspend fun connectToDeviceUnified(
     trailblazeDeviceId: TrailblazeDeviceId,
     force: Boolean = false,
+    testName: String? = null,
   ): String {
     // Check exclusive device claim before connecting
     val mcpSessionId = sessionContext?.mcpSessionId?.sessionId
@@ -272,9 +275,15 @@ class DeviceManagerToolSet(
 
     sessionContext?.setAssociatedDevice(trailblazeDeviceId)
     // Ensure a session exists and emit the session start log on connect
-    mcpBridge.ensureSessionAndGetId()
+    mcpBridge.ensureSessionAndGetId(testName)
     // Start implicit recording - user can save later with trail(action=SAVE, name="...")
     sessionContext?.startImplicitRecording()
+
+    // For WEB: browser may still be initializing (downloading Playwright/Chromium).
+    // Surface the status so the MCP client knows to call device(action=WEB) again.
+    val driverStatus = mcpBridge.getDriverConnectionStatus(trailblazeDeviceId)
+    if (driverStatus != null) return driverStatus
+
     return "Connected to ${trailblazeDeviceId.instanceId} (${trailblazeDeviceId.trailblazeDevicePlatform.displayName}). Session recording - save anytime with trail(action=SAVE, name='...')"
   }
 

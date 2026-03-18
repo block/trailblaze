@@ -321,9 +321,8 @@ fun ChatHistoryDialog(
               Text(
                 text = ctx.agentImplementation.name,
                 color = when (ctx.agentImplementation) {
-                  AgentImplementation.TWO_TIER_AGENT -> Color(0xFF2E7D32)
                   AgentImplementation.TRAILBLAZE_RUNNER -> Color(0xFF1976D2)
-                  AgentImplementation.MULTI_AGENT_V3 -> Color(0xFF7B1FA2) // Purple for V3
+                  AgentImplementation.MULTI_AGENT_V3 -> Color(0xFF7B1FA2)
                 }
               )
             }

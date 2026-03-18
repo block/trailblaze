@@ -67,6 +67,7 @@ class TrailStepPlanner(
   private val screenAnalyzer: ScreenAnalyzer?,
   private val executor: UiActionExecutor,
   private val availableToolsProvider: () -> List<TrailblazeToolDescriptor> = { emptyList() },
+  private val initialActionHistory: List<String> = emptyList(),
 ) {
 
   /** Cost for executing a recorded action (cheap, fast, deterministic) */
@@ -220,7 +221,7 @@ class TrailStepPlanner(
     var currentState = state
     var attempts = 0
     val maxAttempts = config.maxRetries + 1
-    val actionHistory = mutableListOf<String>()
+    val actionHistory = initialActionHistory.toMutableList()
 
     while (attempts < maxAttempts) {
       attempts++

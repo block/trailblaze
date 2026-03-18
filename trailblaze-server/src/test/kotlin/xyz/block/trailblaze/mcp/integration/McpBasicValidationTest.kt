@@ -185,7 +185,7 @@ class McpBasicValidationTest {
       val modeResult = client.setMode(TrailblazeMcpMode.TRAILBLAZE_AS_AGENT)
       Console.log("setMode result: ${modeResult.content}")
       
-      val agentResult = client.setAgentImplementation(AgentImplementation.TWO_TIER_AGENT)
+      val agentResult = client.setAgentImplementation(AgentImplementation.MULTI_AGENT_V3)
       Console.log("setAgentImplementation result: ${agentResult.content}")
       
       // Run a very simple prompt
@@ -215,7 +215,7 @@ class McpBasicValidationTest {
       val modeResult = client.setMode(TrailblazeMcpMode.TRAILBLAZE_AS_AGENT)
       Console.log("setMode result: ${modeResult.content}")
       
-      val agentResult = client.setAgentImplementation(AgentImplementation.TWO_TIER_AGENT)
+      val agentResult = client.setAgentImplementation(AgentImplementation.MULTI_AGENT_V3)
       Console.log("setAgentImplementation result: ${agentResult.content}")
       
       // Run a very simple prompt

@@ -7,20 +7,7 @@ import kotlinx.serialization.Serializable
  *
  * This controls which architecture handles the agent loop:
  * - [TRAILBLAZE_RUNNER]: Legacy YAML-based implementation (stable, well-tested)
- * - [TWO_TIER_AGENT]: Modern two-tier architecture with separate inner/outer agents
- *
- * ## Two-Tier Architecture
- *
- * The two-tier architecture separates concerns:
- * - **Inner Agent**: Cheap vision model for screen analysis (ScreenAnalyzerImpl)
- * - **Outer Agent**: Expensive reasoning model for planning and decision-making
- *
- * Who plays the outer agent depends on the [TrailblazeMcpMode]:
- * - [TrailblazeMcpMode.TRAILBLAZE_AS_AGENT]: Trailblaze's KoogStrategistAgent is outer
- * - [TrailblazeMcpMode.MCP_CLIENT_AS_AGENT]: MCP client (Goose, etc.) is outer,
- *   calling getNextActionRecommendation() and executeUiAction() tools
- *
- * @see TrailblazeMcpMode
+ * - [MULTI_AGENT_V3]: Modern multi-agent architecture with inner/outer agent separation
  */
 @Serializable
 enum class AgentImplementation {
@@ -36,24 +23,6 @@ enum class AgentImplementation {
    * This is the stable option for backward compatibility.
    */
   TRAILBLAZE_RUNNER,
-
-  /**
-   * Two-tier agent architecture (recommended).
-   *
-   * Uses separate inner and outer agents for optimal cost and performance:
-   * - **Inner agent** (ScreenAnalyzerImpl): Cheap vision model analyzes screens
-   * - **Outer agent**: Expensive reasoning model makes decisions
-   *
-   * The outer agent can be either:
-   * - Trailblaze's KoogStrategistAgent (when using runPrompt)
-   * - An external MCP client (when client calls getNextActionRecommendation/executeUiAction)
-   *
-   * Benefits:
-   * - Cost optimization: cheap model handles repetitive screen analysis
-   * - Flexibility: works with Trailblaze or external clients as outer agent
-   * - Better observability: clear separation of analysis vs. decision-making
-   */
-  TWO_TIER_AGENT,
 
   /**
    * Multi-agent architecture inspired by Mobile-Agent-v3.

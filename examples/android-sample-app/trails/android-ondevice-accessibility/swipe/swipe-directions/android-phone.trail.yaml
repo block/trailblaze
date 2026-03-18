@@ -11,21 +11,15 @@
     recording:
       tools:
       - tapOnElementBySelector:
-          reason: To navigate to the 'Swipe' tab as per the objective, I need to tap the 'Swipe' tab element.
+          reason: To navigate to the 'Swipe' tab, I need to tap on the tab labeled 'Swipe'. The corresponding nodeId is 49.
           selector:
             containsChild:
               textRegex: Swipe
           nodeSelector:
             androidAccessibility:
               classNameRegex: \Qandroid.view.View\E
-            index: 27
-      - assertVisibleBySelector:
-          reason: To verify that 'Page 1 of 5' is shown on the 'Swipe' tab as required by the objective.
-          selector:
-            textRegex: Page 1 of 5
-          nodeSelector:
-            androidAccessibility:
-              textRegex: Page 1 of 5
+              collectionItemRowIndex: 0
+              collectionItemColumnIndex: 3
   - step: Swipe forward to page 3, then swipe back to page 2
     recording:
       tools:
@@ -39,7 +33,7 @@
     recording:
       tools:
       - assertVisibleBySelector:
-          reason: The text 'Page 2 of 5' should be visible to confirm that we are on the correct page as required by the objective.
+          reason: The current objective is to verify that 'Page 2 of 5' is displayed. Node 9 is a TextView containing 'Page 2 of 5', making it the correct element to check for visibility.
           selector:
             textRegex: Page 2 of 5
           nodeSelector:

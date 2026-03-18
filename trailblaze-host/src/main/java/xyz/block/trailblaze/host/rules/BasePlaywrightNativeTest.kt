@@ -57,6 +57,13 @@ class BasePlaywrightNativeTest(
   val trailblazeDeviceId: TrailblazeDeviceId,
   val idlingConfig: PlaywrightNativeIdlingConfig = PlaywrightNativeIdlingConfig(),
   val analyticsUrlPatterns: List<String> = emptyList(),
+  /**
+   * Optional existing browser manager to reuse instead of launching a new browser.
+   * When provided, no new browser is launched — all Playwright operations go through
+   * the given manager. Used by the MCP WEB device path to connect to a browser that
+   * was already launched (e.g. via WebBrowserManager in the desktop app).
+   */
+  existingBrowserManager: PlaywrightPageManager? = null,
 ) {
 
   init {
@@ -67,7 +74,11 @@ class BasePlaywrightNativeTest(
     )
   }
 
-  val browserManager: PlaywrightPageManager = PlaywrightBrowserManager(
+  // When an existing browser is provided, the caller owns its lifecycle — close() will not
+  // shut it down. When we create the browser ourselves, we own it and close() will shut it down.
+  private val ownsTheBrowser: Boolean = existingBrowserManager == null
+
+  val browserManager: PlaywrightPageManager = existingBrowserManager ?: PlaywrightBrowserManager(
     headless = config.browserHeadless,
     idlingConfig = idlingConfig,
     analyticsUrlPatterns = analyticsUrlPatterns,
@@ -219,7 +230,9 @@ class BasePlaywrightNativeTest(
   }
 
   fun close() {
-    browserManager.close()
+    if (ownsTheBrowser) {
+      browserManager.close()
+    }
   }
 
   companion object {

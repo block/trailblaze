@@ -71,10 +71,15 @@ data class TrailblazeServerState(
     // Navigation rail expanded/collapsed state
     val navRailExpanded: Boolean = true, // Default to expanded
     val testingEnvironment: TestingEnvironment? = null,
+    // Web browser visibility for MCP sessions (true = show browser window, false = headless)
+    // Defaults to true so desktop app users can see the browser as tests run.
+    val showWebBrowser: Boolean = true,
     // Local dev capture settings
     val captureLogcat: Boolean = false,
     // Last navigation route (restored on app restart)
     val lastRoute: String? = null, // Qualified class name of the last visited route
+    // Self-test server: expose the live desktop window as a Compose RPC test target
+    val enableSelfTestServer: Boolean = true,
   ) {
 
     companion object {

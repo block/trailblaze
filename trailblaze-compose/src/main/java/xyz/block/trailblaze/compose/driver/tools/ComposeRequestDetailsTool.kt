@@ -1,9 +1,9 @@
 package xyz.block.trailblaze.compose.driver.tools
 
 import ai.koog.agents.core.tools.annotations.LLMDescription
-import androidx.compose.ui.test.ComposeUiTest
 import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.compose.driver.ComposeViewHierarchyDetail
+import xyz.block.trailblaze.compose.target.ComposeTestTarget
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
@@ -45,7 +45,7 @@ class ComposeRequestDetailsTool(
 ) : ComposeExecutableTool {
 
   override suspend fun executeWithCompose(
-    composeUiTest: ComposeUiTest,
+    target: ComposeTestTarget,
     context: TrailblazeToolExecutionContext,
   ): TrailblazeToolResult {
     Console.log("### Requesting enriched view hierarchy: ${include.joinToString(", ")}")

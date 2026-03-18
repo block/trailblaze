@@ -93,6 +93,7 @@ class TrailblazeMcpIntegrationTest {
         mcpBridge = testBridge,
         trailsDirProvider = { File(System.getProperty("java.io.tmpdir"), "trailblaze-test-trails") },
         targetTestAppProvider = { TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget },
+        llmModelListsProvider = { emptySet() },
       )
 
       server = mcpServer.startStreamableHttpMcpServer(port = testPort, wait = false)

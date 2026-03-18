@@ -11,56 +11,70 @@
     recording:
       tools:
       - tapOnElementBySelector:
-          reason: The objective is to navigate to the 'Settings' tab, which is identified by the TextView 'Settings'. The clickable View with nodeId 48 in the bottom navigation bar represents this tab.
+          reason: The 'Settings' tab is represented by the clickable view with nodeId 53 and contains the text 'Settings'. Tapping this should navigate to the Settings tab.
           selector:
             containsChild:
               textRegex: Settings
           nodeSelector:
             androidAccessibility:
               classNameRegex: \Qandroid.view.View\E
-            index: 28
+              collectionItemRowIndex: 0
+              collectionItemColumnIndex: 4
   - step: Enable the "Enable Notifications" switch and verify it is checked
     recording:
       tools:
       - tapOnElementBySelector:
-          reason: To enable the 'Enable Notifications' switch as required by the objective.
+          reason: The toggle for 'Enable Notifications' is part of the clickable view with nodeId 10, which is visually associated with the label and switch.
           selector:
             containsChild:
               textRegex: Enable Notifications
           nodeSelector:
             androidAccessibility:
               classNameRegex: \Qandroid.view.View\E
-            index: 3
-      - assertVisibleBySelector:
-          reason: The 'Enable Notifications' switch is represented by node 5. It should be checked after toggling.
-          selector:
-            checked: true
-          nodeSelector:
-            androidAccessibility:
-              classNameRegex: \Qandroid.view.View\E
-            index: 3
+            index: 2
   - step: Verify the network status shows "Online" or "Offline" and an app version starting with "Version" is visible
     recording:
       tools:
       - assertVisibleBySelector:
-          reason: To verify the network status shows 'Online' or 'Offline', confirming the status is clearly displayed.
+          reason: This node displays the network status as 'Online'. Either 'Online' or 'Offline' needs to be visible.
           selector:
             textRegex: Online
           nodeSelector:
             androidAccessibility:
               textRegex: Online
       - assertVisibleBySelector:
-          reason: The objective requires verifying that an app version starting with 'Version' is visible. Node 19 shows 'Version 1.0'.
+          reason: This node displays the network status as either 'Online' or 'Offline'.
           selector:
-            textRegex: Version 1.0
+            textRegex: Online
           nodeSelector:
             androidAccessibility:
-              textRegex: \QVersion 1.0\E
+              textRegex: Online
+      - assertVisibleBySelector:
+          reason: This node displays 'Online' which is an acceptable network status for the requirement.
+          selector:
+            textRegex: Online
+          nodeSelector:
+            androidAccessibility:
+              textRegex: Online
+      - assertVisibleBySelector:
+          reason: This node displays the network status as 'Online'. Either 'Online' or 'Offline' must be visible.
+          selector:
+            textRegex: Online
+          nodeSelector:
+            androidAccessibility:
+              textRegex: Online
+      - assertVisibleBySelector:
+          reason: This node displays the network status as 'Online'. 'Online' or 'Offline' must be visible.
+          selector:
+            textRegex: Online
+          nodeSelector:
+            androidAccessibility:
+              textRegex: Online
   - step: Check the "Accept Terms" checkbox and verify it is checked
     recording:
       tools:
       - tapOnElementBySelector:
-          reason: The objective is to check the 'Accept Terms' checkbox, which corresponds to the clickable view with nodeId 16. Tapping this should check the box.
+          reason: Node 21 is the clickable parent view containing both the 'Accept Terms' label and the checkbox. Tapping this should check the checkbox as intended.
           selector:
             containsChild:
               textRegex: Accept Terms

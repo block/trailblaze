@@ -255,6 +255,7 @@ class MultiAgentV3Runner private constructor(
     steps: List<PromptStep>,
     config: TrailConfig = TrailConfig.DEFAULT,
     sessionId: SessionId = SessionId.generate(),
+    initialActionHistory: List<String> = emptyList(),
   ): TrailResult {
     val startTime = System.currentTimeMillis()
 
@@ -267,7 +268,7 @@ class MultiAgentV3Runner private constructor(
     )
 
     return try {
-      val result = executeTrail(steps, config, sessionId)
+      val result = executeTrail(steps, config, sessionId, initialActionHistory)
 
       // Report execution completed
       progressReporter?.onExecutionCompleted(
@@ -517,6 +518,7 @@ class MultiAgentV3Runner private constructor(
     steps: List<PromptStep>,
     config: TrailConfig,
     sessionId: SessionId,
+    initialActionHistory: List<String> = emptyList(),
   ): TrailResult {
     // Check if we have the necessary components
     if (executor == null) {
@@ -556,7 +558,7 @@ class MultiAgentV3Runner private constructor(
           )
         }
 
-        val result = executePlannerBased(steps, config, sessionId, screenAnalyzer, executor)
+        val result = executePlannerBased(steps, config, sessionId, screenAnalyzer, executor, initialActionHistory)
         result.copy(targetDeviceId = deviceId)
       }
     }
@@ -571,9 +573,10 @@ class MultiAgentV3Runner private constructor(
     sessionId: SessionId,
     screenAnalyzer: ScreenAnalyzer,
     executor: UiActionExecutor,
+    initialActionHistory: List<String> = emptyList(),
   ): TrailResult {
     val startTime = System.currentTimeMillis()
-    val planner = TrailStepPlanner(steps, config, screenAnalyzer, executor, availableToolsProvider)
+    val planner = TrailStepPlanner(steps, config, screenAnalyzer, executor, availableToolsProvider, initialActionHistory)
     var state = initialTrailState(steps)
 
     while (!state.isComplete && !state.failed) {

@@ -21,6 +21,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
 import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.compose.driver.tools.ComposeClickTool
+import xyz.block.trailblaze.compose.target.ComposeUiTestTarget
 import xyz.block.trailblaze.compose.driver.tools.ComposeTypeTool
 import xyz.block.trailblaze.compose.driver.tools.ComposeVerifyElementVisibleTool
 import xyz.block.trailblaze.compose.driver.tools.ComposeVerifyTextVisibleTool
@@ -121,7 +122,7 @@ class ComposeToolsTest {
     setContent { SampleTodoApp() }
     waitForIdle()
 
-    val screenState = ComposeScreenState(this, 1280, 800)
+    val screenState = ComposeScreenState(ComposeUiTestTarget(this@runComposeUiTest), 1280, 800)
     val bytes = screenState.screenshotBytes
 
     assertThat(bytes).isNotNull()
@@ -133,7 +134,7 @@ class ComposeToolsTest {
     setContent { SampleTodoApp() }
     waitForIdle()
 
-    val screenState = ComposeScreenState(this, 1280, 800)
+    val screenState = ComposeScreenState(ComposeUiTestTarget(this@runComposeUiTest), 1280, 800)
     val textRep = screenState.viewHierarchyTextRepresentation
 
     assertThat(textRep).isNotNull()
@@ -148,7 +149,7 @@ class ComposeToolsTest {
     setContent { SampleTodoApp() }
     waitForIdle()
 
-    val screenState = ComposeScreenState(this, 1280, 800)
+    val screenState = ComposeScreenState(ComposeUiTestTarget(this@runComposeUiTest), 1280, 800)
     val tree = screenState.viewHierarchy
 
     val allNodes = tree.aggregate()
@@ -169,7 +170,7 @@ class ComposeToolsTest {
 
     val clickTool = ComposeClickTool(testTag = "add_button")
     val result = runBlocking {
-      clickTool.executeWithCompose(this@runComposeUiTest, stubContext())
+      clickTool.executeWithCompose(ComposeUiTestTarget(this@runComposeUiTest), stubContext())
     }
 
     assertThat(result).isInstanceOf(TrailblazeToolResult.Success::class)
@@ -191,7 +192,7 @@ class ComposeToolsTest {
       testTag = "todo_input",
     )
     val result = runBlocking {
-      typeTool.executeWithCompose(this@runComposeUiTest, stubContext())
+      typeTool.executeWithCompose(ComposeUiTestTarget(this@runComposeUiTest), stubContext())
     }
 
     assertThat(result).isInstanceOf(TrailblazeToolResult.Success::class)
@@ -217,7 +218,7 @@ class ComposeToolsTest {
       clearFirst = true,
     )
     val result = runBlocking {
-      typeTool.executeWithCompose(this@runComposeUiTest, stubContext())
+      typeTool.executeWithCompose(ComposeUiTestTarget(this@runComposeUiTest), stubContext())
     }
     assertThat(result).isInstanceOf(TrailblazeToolResult.Success::class)
 
@@ -237,7 +238,7 @@ class ComposeToolsTest {
 
     val verifyTool = ComposeVerifyTextVisibleTool(text = "0 items")
     val result = runBlocking {
-      verifyTool.executeWithCompose(this@runComposeUiTest, stubContext())
+      verifyTool.executeWithCompose(ComposeUiTestTarget(this@runComposeUiTest), stubContext())
     }
 
     assertThat(result).isInstanceOf(TrailblazeToolResult.Success::class)
@@ -250,7 +251,7 @@ class ComposeToolsTest {
 
     val verifyTool = ComposeVerifyTextVisibleTool(text = "this text does not exist")
     val result = runBlocking {
-      verifyTool.executeWithCompose(this@runComposeUiTest, stubContext())
+      verifyTool.executeWithCompose(ComposeUiTestTarget(this@runComposeUiTest), stubContext())
     }
 
     assertThat(result).isInstanceOf(TrailblazeToolResult.Error::class)
@@ -264,7 +265,7 @@ class ComposeToolsTest {
     // Initially "0 items"
     val before = runBlocking {
       ComposeVerifyTextVisibleTool(text = "0 items")
-        .executeWithCompose(this@runComposeUiTest, stubContext())
+        .executeWithCompose(ComposeUiTestTarget(this@runComposeUiTest), stubContext())
     }
     assertThat(before).isInstanceOf(TrailblazeToolResult.Success::class)
 
@@ -276,7 +277,7 @@ class ComposeToolsTest {
     // Now "1 items"
     val after = runBlocking {
       ComposeVerifyTextVisibleTool(text = "1 items")
-        .executeWithCompose(this@runComposeUiTest, stubContext())
+        .executeWithCompose(ComposeUiTestTarget(this@runComposeUiTest), stubContext())
     }
     assertThat(after).isInstanceOf(TrailblazeToolResult.Success::class)
   }
@@ -290,7 +291,7 @@ class ComposeToolsTest {
 
     val verifyTool = ComposeVerifyElementVisibleTool(testTag = "add_button")
     val result = runBlocking {
-      verifyTool.executeWithCompose(this@runComposeUiTest, stubContext())
+      verifyTool.executeWithCompose(ComposeUiTestTarget(this@runComposeUiTest), stubContext())
     }
 
     assertThat(result).isInstanceOf(TrailblazeToolResult.Success::class)
@@ -303,7 +304,7 @@ class ComposeToolsTest {
 
     val verifyTool = ComposeVerifyElementVisibleTool(testTag = "nonexistent_tag")
     val result = runBlocking {
-      verifyTool.executeWithCompose(this@runComposeUiTest, stubContext())
+      verifyTool.executeWithCompose(ComposeUiTestTarget(this@runComposeUiTest), stubContext())
     }
 
     assertThat(result).isInstanceOf(TrailblazeToolResult.Error::class)
@@ -320,35 +321,35 @@ class ComposeToolsTest {
     // Type a todo
     val typeResult = runBlocking {
       ComposeTypeTool(text = "Learn Compose", testTag = "todo_input")
-        .executeWithCompose(this@runComposeUiTest, ctx)
+        .executeWithCompose(ComposeUiTestTarget(this@runComposeUiTest), ctx)
     }
     assertThat(typeResult).isInstanceOf(TrailblazeToolResult.Success::class)
 
     // Click add
     val clickResult = runBlocking {
       ComposeClickTool(testTag = "add_button")
-        .executeWithCompose(this@runComposeUiTest, ctx)
+        .executeWithCompose(ComposeUiTestTarget(this@runComposeUiTest), ctx)
     }
     assertThat(clickResult).isInstanceOf(TrailblazeToolResult.Success::class)
 
     // Verify the todo item is visible
     val verifyItem = runBlocking {
       ComposeVerifyTextVisibleTool(text = "Learn Compose")
-        .executeWithCompose(this@runComposeUiTest, ctx)
+        .executeWithCompose(ComposeUiTestTarget(this@runComposeUiTest), ctx)
     }
     assertThat(verifyItem).isInstanceOf(TrailblazeToolResult.Success::class)
 
     // Verify counter updated
     val verifyCount = runBlocking {
       ComposeVerifyTextVisibleTool(text = "1 items")
-        .executeWithCompose(this@runComposeUiTest, ctx)
+        .executeWithCompose(ComposeUiTestTarget(this@runComposeUiTest), ctx)
     }
     assertThat(verifyCount).isInstanceOf(TrailblazeToolResult.Success::class)
 
     // Verify the todo item element exists by testTag
     val verifyElement = runBlocking {
       ComposeVerifyElementVisibleTool(testTag = "todo_item_0")
-        .executeWithCompose(this@runComposeUiTest, ctx)
+        .executeWithCompose(ComposeUiTestTarget(this@runComposeUiTest), ctx)
     }
     assertThat(verifyElement).isInstanceOf(TrailblazeToolResult.Success::class)
   }

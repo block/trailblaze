@@ -2,6 +2,7 @@ package xyz.block.trailblaze.ui
 
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import kotlinx.coroutines.flow.StateFlow
@@ -13,6 +14,8 @@ import xyz.block.trailblaze.model.DesktopAppRunYamlParams
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.ui.desktoputil.DesktopUtil
 import xyz.block.trailblaze.ui.desktoputil.ExitApp
+import xyz.block.trailblaze.ui.model.LocalRunYamlRequestFactory
+import xyz.block.trailblaze.ui.model.RunYamlRequestFactory
 import xyz.block.trailblaze.ui.model.TrailblazeAppTab
 import xyz.block.trailblaze.ui.model.TrailblazeRoute
 import xyz.block.trailblaze.ui.models.TrailblazeServerState
@@ -94,17 +97,23 @@ object TrailblazeBuiltInTabs {
       val serverState by trailblazeSettingsRepo.serverStateFlow.collectAsState()
       val effectiveTrailsDir = TrailblazeDesktopUtil.getEffectiveTrailsDirectory(serverState.appConfig)
 
-      TrailsBrowserTabComposable(
-        trailsDirectoryPath = effectiveTrailsDir,
-        deviceManager = deviceManager,
-        trailblazeSettingsRepo = trailblazeSettingsRepo,
-        currentTrailblazeLlmModelProvider = currentTrailblazeLlmModelProvider,
-        yamlRunner = yamlRunner,
-        additionalInstrumentationArgs = additionalInstrumentationArgs,
-        onChangeDirectory = { newPath ->
-          trailblazeSettingsRepo.updateAppConfig { it.copy(trailsDirectory = newPath) }
-        }
-      )
+      CompositionLocalProvider(
+        LocalRunYamlRequestFactory provides RunYamlRequestFactory(
+          appConfig = serverState.appConfig,
+          llmModel = currentTrailblazeLlmModelProvider(),
+        )
+      ) {
+        TrailsBrowserTabComposable(
+          trailsDirectoryPath = effectiveTrailsDir,
+          deviceManager = deviceManager,
+          trailblazeSettingsRepo = trailblazeSettingsRepo,
+          yamlRunner = yamlRunner,
+          additionalInstrumentationArgs = additionalInstrumentationArgs,
+          onChangeDirectory = { newPath ->
+            trailblazeSettingsRepo.updateAppConfig { it.copy(trailsDirectory = newPath) }
+          }
+        )
+      }
     }
   )
 
@@ -136,13 +145,21 @@ object TrailblazeBuiltInTabs {
   ): TrailblazeAppTab = TrailblazeAppTab(
     route = TrailblazeRoute.YamlRoute,
     content = {
-      YamlTabComposable(
-        deviceManager = deviceManager,
-        trailblazeSettingsRepo = trailblazeSettingsRepo,
-        currentTrailblazeLlmModelProvider = currentTrailblazeLlmModelProvider,
-        yamlRunner = yamlRunner,
-        additionalInstrumentationArgs = additionalInstrumentationArgs,
-      )
+      val serverState by trailblazeSettingsRepo.serverStateFlow.collectAsState()
+
+      CompositionLocalProvider(
+        LocalRunYamlRequestFactory provides RunYamlRequestFactory(
+          appConfig = serverState.appConfig,
+          llmModel = currentTrailblazeLlmModelProvider(),
+        )
+      ) {
+        YamlTabComposable(
+          deviceManager = deviceManager,
+          trailblazeSettingsRepo = trailblazeSettingsRepo,
+          yamlRunner = yamlRunner,
+          additionalInstrumentationArgs = additionalInstrumentationArgs,
+        )
+      }
     }
   )
 

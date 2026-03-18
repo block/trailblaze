@@ -1,7 +1,5 @@
 package xyz.block.trailblaze.compose.driver.rpc
 
-import androidx.compose.ui.test.ComposeUiTest
-import androidx.compose.ui.test.ExperimentalTestApi
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -9,6 +7,7 @@ import kotlinx.datetime.Clock
 import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.compose.driver.ComposeScreenState
 import xyz.block.trailblaze.compose.driver.tools.ComposeExecutableTool
+import xyz.block.trailblaze.compose.target.ComposeTestTarget
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
@@ -28,9 +27,8 @@ import xyz.block.trailblaze.toolcalls.isSuccess
  * Tools are executed sequentially. Execution stops on the first error, returning partial results.
  * Only [ComposeExecutableTool] types are supported.
  */
-@OptIn(ExperimentalTestApi::class)
 class ExecuteToolsHandler(
-  private val composeUiTest: ComposeUiTest,
+  private val target: ComposeTestTarget,
   private val mutex: Mutex,
   private val viewportWidth: Int,
   private val viewportHeight: Int,
@@ -59,7 +57,7 @@ class ExecuteToolsHandler(
         }
 
         try {
-          val result = tool.executeWithCompose(composeUiTest, context)
+          val result = tool.executeWithCompose(target, context)
           results.add(result)
           if (!result.isSuccess()) break
         } catch (e: CancellationException) {
@@ -77,13 +75,13 @@ class ExecuteToolsHandler(
   private fun createToolExecutionContext(): TrailblazeToolExecutionContext {
     val screenState =
       ComposeScreenState(
-        composeUiTest = composeUiTest,
+        target = target,
         viewportWidth = viewportWidth,
         viewportHeight = viewportHeight,
       )
     val freshScreenStateProvider: () -> ComposeScreenState = {
       ComposeScreenState(
-        composeUiTest = composeUiTest,
+        target = target,
         viewportWidth = viewportWidth,
         viewportHeight = viewportHeight,
       )

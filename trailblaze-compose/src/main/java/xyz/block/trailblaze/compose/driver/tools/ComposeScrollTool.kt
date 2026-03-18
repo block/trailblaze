@@ -1,17 +1,14 @@
 package xyz.block.trailblaze.compose.driver.tools
 
 import ai.koog.agents.core.tools.annotations.LLMDescription
-import androidx.compose.ui.test.ComposeUiTest
-import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.hasScrollAction
-import androidx.compose.ui.test.performScrollToIndex
 import kotlinx.serialization.Serializable
+import xyz.block.trailblaze.compose.target.ComposeTestTarget
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.util.Console
 
-@OptIn(ExperimentalTestApi::class)
 @Serializable
 @TrailblazeToolClass("compose_scroll")
 @LLMDescription(
@@ -33,7 +30,7 @@ class ComposeScrollTool(
 ) : ComposeExecutableTool {
 
   override suspend fun executeWithCompose(
-    composeUiTest: ComposeUiTest,
+    target: ComposeTestTarget,
     context: TrailblazeToolExecutionContext,
   ): TrailblazeToolResult {
     val description = elementId ?: testTag ?: text ?: "scrollable container"
@@ -43,12 +40,9 @@ class ComposeScrollTool(
         ComposeExecutableTool.resolveElement(elementId, testTag, text, context)
           ?: hasScrollAction()
       val nthIndex = ComposeExecutableTool.getNthIndex(elementId, context)
-      if (nthIndex > 0) {
-        composeUiTest.onAllNodes(matcher).get(nthIndex).performScrollToIndex(index)
-      } else {
-        composeUiTest.onNode(matcher).performScrollToIndex(index)
-      }
-      composeUiTest.waitForIdle()
+      val node = ComposeExecutableTool.findNode(target, matcher, nthIndex)
+      target.scrollToIndex(node, index)
+      target.waitForIdle()
       TrailblazeToolResult.Success(message = "Scrolled '$description' to index $index.")
     } catch (e: Exception) {
       TrailblazeToolResult.Error.ExceptionThrown("Scroll failed on '$description': ${e.message}")

@@ -68,12 +68,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
-import xyz.block.trailblaze.llm.RunYamlRequest
-import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.llm.TrailblazeReferrer
 import xyz.block.trailblaze.model.DeviceConnectionStatus
 import xyz.block.trailblaze.model.DesktopAppRunYamlParams
-import xyz.block.trailblaze.model.TrailblazeConfig
+import xyz.block.trailblaze.ui.model.LocalRunYamlRequestFactory
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.ui.TrailblazeSettingsRepo
 import xyz.block.trailblaze.ui.composables.DeviceSelectionDialog
@@ -107,7 +105,6 @@ sealed class TrailSortOption(val displayName: String) {
  * @param trailsDirectoryPath The path to the trails directory to browse
  * @param deviceManager The device manager for accessing connected devices
  * @param trailblazeSettingsRepo The settings repository for accessing app state
- * @param currentTrailblazeLlmModelProvider Provider for the current LLM model
  * @param yamlRunner The runner for executing YAML tests
  * @param additionalInstrumentationArgs Provider for additional instrumentation args
  * @param onChangeDirectory Callback when the user wants to change the trails directory.
@@ -118,7 +115,6 @@ fun TrailsBrowserTabComposable(
   trailsDirectoryPath: String,
   deviceManager: TrailblazeDeviceManager,
   trailblazeSettingsRepo: TrailblazeSettingsRepo,
-  currentTrailblazeLlmModelProvider: () -> TrailblazeLlmModel,
   yamlRunner: (DesktopAppRunYamlParams) -> Unit,
   additionalInstrumentationArgs: suspend () -> Map<String, String>,
   onChangeDirectory: ((String) -> Unit)? = null,
@@ -959,10 +955,10 @@ fun TrailsBrowserTabComposable(
     )
   }
 
+  val requestFactory = LocalRunYamlRequestFactory.current
+
   // Device Selection Dialog for running trails
   if (showDeviceSelectionDialog && yamlContentToRun != null) {
-    val currentLlmModel = currentTrailblazeLlmModelProvider()
-
     DeviceSelectionDialog(
       deviceManager = deviceManager,
       settingsRepo = trailblazeSettingsRepo,
@@ -986,25 +982,15 @@ fun TrailsBrowserTabComposable(
         progressMessages = emptyList()
         connectionStatus = null
 
-        val setOfMarkEnabledConfig = serverState.appConfig.setOfMarkEnabled
         val targetTestApp = deviceManager.getCurrentSelectedTargetApp()
 
         // Run on each selected device
         selectedDevices.forEach { device ->
-          val runYamlRequest = RunYamlRequest(
-            testName = trailNameToRun ?: "Trail from Browser",
+          val runYamlRequest = requestFactory.create(
+            device = device,
             yaml = yamlContentToRun!!,
-            trailblazeLlmModel = currentLlmModel,
-            useRecordedSteps = true,
-            targetAppName = serverState.appConfig.selectedTargetAppId,
-            config = TrailblazeConfig(
-              setOfMarkEnabled = setOfMarkEnabledConfig,
-              aiFallback = serverState.appConfig.aiFallbackEnabled,
-              overrideSessionId = null,
-            ),
-            trailFilePath = null,
-            trailblazeDeviceId = device.trailblazeDeviceId,
-            referrer = TrailblazeReferrer(id = "trails_tab", display = "Trails Tab")
+            testName = trailNameToRun ?: "Trail from Browser",
+            referrer = TrailblazeReferrer(id = "trails_tab", display = "Trails Tab"),
           )
 
           coroutineScope.launch(Dispatchers.IO) {

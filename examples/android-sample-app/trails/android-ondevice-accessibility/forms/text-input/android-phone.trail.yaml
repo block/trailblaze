@@ -11,19 +11,20 @@
     recording:
       tools:
       - tapOnElementBySelector:
-          reason: The objective is to navigate to the 'Forms' tab, and the 'Forms' tab is represented by the element with nodeId 36.
+          reason: The 'Forms' tab is identified by the node containing the 'Forms' text. Tapping this node should navigate to the 'Forms' tab as requested by the objective.
           selector:
             containsChild:
               textRegex: Forms
           nodeSelector:
             androidAccessibility:
               classNameRegex: \Qandroid.view.View\E
-            index: 25
+              collectionItemRowIndex: 0
+              collectionItemColumnIndex: 1
   - step: Tap the "Name" field and type "Jane Doe"
     recording:
       tools:
       - tapOnElementBySelector:
-          reason: To focus the 'Name' EditText field so that text can be entered as required by the objective.
+          reason: The 'Name' field is an EditText with nodeId 10. Tapping it will focus the input field to allow text entry.
           selector:
             containsChild:
               textRegex: Name
@@ -36,7 +37,7 @@
     recording:
       tools:
       - tapOnElementBySelector:
-          reason: To focus the 'Email' field so that text can be entered.
+          reason: The 'Email' field corresponds to the EditText with nodeId 12. To type an email address, the field must first be focused.
           selector:
             containsChild:
               textRegex: Email
@@ -49,7 +50,7 @@
     recording:
       tools:
       - tapOnElementBySelector:
-          reason: The 'Submit' button is identified as a clickable view with the text 'Submit'. Tapping this will complete the objective.
+          reason: The element with nodeId 14 contains the 'Submit' text and is clickable, which matches the objective to tap the 'Submit' button.
           selector:
             containsChild:
               textRegex: Submit
@@ -60,7 +61,7 @@
     recording:
       tools:
       - assertVisibleBySelector:
-          reason: 'This TextView contains both ''Name: Jane Doe'' and ''Email: jane@example.com'', confirming both pieces of information appear in the submission result.'
+          reason: 'This node contains the text ''Name: Jane Doe\nEmail: jane@example.com'', which confirms both ''Jane Doe'' and ''jane@example.com'' appear in the submission result.'
           selector:
             textRegex: |-
               Name: Jane Doe
@@ -74,7 +75,7 @@
     recording:
       tools:
       - tapOnElementBySelector:
-          reason: The objective is to tap the 'Clear All' button, which is represented by the TextView 'Clear All' (nodeId 13) within its parent clickable View (nodeId 12). Tapping nodeId 12 will trigger the Clear All action.
+          reason: Tapping the 'Clear All' button is the required action to attempt clearing out the form and submission result, as per the objective.
           selector:
             containsChild:
               textRegex: Clear All

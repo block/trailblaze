@@ -19,6 +19,7 @@ import kotlin.time.Duration.Companion.INFINITE
 import xyz.block.trailblaze.compose.driver.rpc.ComposeRpcClient
 import xyz.block.trailblaze.compose.driver.rpc.ComposeRpcServer
 import xyz.block.trailblaze.compose.driver.tools.ComposeToolSet
+import xyz.block.trailblaze.compose.target.ComposeUiTestTarget
 import xyz.block.trailblaze.logs.client.TrailblazeJson
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
@@ -41,7 +42,7 @@ fun main(args: Array<String>) {
       else -> error("Unknown sample app '$sampleApp'. Use 'todo' or 'showcase'.")
     }
     waitForIdle()
-    val server = ComposeRpcServer(this, port = ComposeRpcServer.COMPOSE_DEFAULT_PORT)
+    val server = ComposeRpcServer(ComposeUiTestTarget(this), port = ComposeRpcServer.COMPOSE_DEFAULT_PORT)
     server.start(wait = false)
     val previewWindow = createPreviewWindow(sampleApp)
     val previewThread =

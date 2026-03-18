@@ -8,12 +8,15 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.logs.client.LogEmitter
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.logs.model.getSessionStartedInfo
+import xyz.block.trailblaze.mcp.McpToolProfile
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
 import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.report.utils.TrailblazeYamlSessionRecording.generateRecordedYaml
 import java.io.File
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.yaml.TrailConfig
 
 /**
  * Trail management tool for test authoring and playback.
@@ -26,7 +29,7 @@ import xyz.block.trailblaze.util.Console
  * - END: End session (discard if not saved)
  */
 @Suppress("unused")
-class TrailTool(
+class TrailMcpTool(
   private val sessionContext: TrailblazeMcpSessionContext?,
   private val mcpBridge: TrailblazeMcpBridge,
   private val trailsDirectory: String = "./trails",
@@ -82,7 +85,7 @@ class TrailTool(
     Tip: Sessions are always recorded. Save anytime to create a reusable test!
     """
   )
-  @Tool
+  @Tool(McpToolProfile.TOOL_TRAIL)
   suspend fun trail(
     @LLMDescription("Action: START, SAVE, RUN, LIST, or END")
     action: TrailAction,
@@ -204,10 +207,29 @@ class TrailTool(
     Console.log("│ Platform: ${platform?.displayName ?: "unknown"}")
     Console.log("└──────────────────────────────────────────────────────────────────────────────")
 
+    // Extract session info from Started log to include platform/driver/app in the recording
+    val startedStatus = logs.getSessionStartedInfo()
+    val sessionTrailConfig = startedStatus?.let { started ->
+      val originalConfig = started.trailConfig
+      TrailConfig(
+        id = originalConfig?.id,
+        title = originalConfig?.title,
+        description = originalConfig?.description,
+        priority = originalConfig?.priority,
+        context = originalConfig?.context,
+        source = originalConfig?.source,
+        metadata = originalConfig?.metadata,
+        app = originalConfig?.app,
+        electron = originalConfig?.electron,
+        driver = started.trailblazeDeviceInfo.trailblazeDriverType.name,
+        platform = started.trailblazeDeviceInfo.platform.name.lowercase(),
+      )
+    } ?: platform?.let { p -> TrailConfig(platform = p.name.lowercase()) }
+
     val yamlContent = try {
-      logs.generateRecordedYaml()
+      logs.generateRecordedYaml(sessionTrailConfig = sessionTrailConfig)
     } catch (e: Exception) {
-      Console.log("[TrailTool] Log-based generation failed: ${e.message}")
+      Console.log("[TrailMcpTool] Log-based generation failed: ${e.message}")
       return TrailSaveResult(
         saved = false,
         error = "Failed to generate trail from logs: ${e.message}",
@@ -238,7 +260,7 @@ class TrailTool(
       val filePath = File(trailDir, fileName)
       filePath.writeText(yamlContent)
 
-      Console.log("[TrailTool] Saved trail from logs to: ${filePath.absolutePath}")
+      Console.log("[TrailMcpTool] Saved trail from logs to: ${filePath.absolutePath}")
       TrailSaveResult(
         saved = true,
         name = trailName,
@@ -479,7 +501,7 @@ class TrailTool(
     - trailEdit(operation=CLEAR_RECORDING, name="login_flow") → clears ALL recordings
     """
   )
-  @Tool
+  @Tool(McpToolProfile.TOOL_TRAIL_EDIT)
   suspend fun trailEdit(
     @LLMDescription("Edit operation: GET, INSERT, REPLACE, DELETE, MOVE, or CLEAR_RECORDING")
     operation: TrailEditOperation,

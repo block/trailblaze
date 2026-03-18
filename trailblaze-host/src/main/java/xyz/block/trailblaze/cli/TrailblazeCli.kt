@@ -26,6 +26,7 @@ import xyz.block.trailblaze.logs.model.getSessionStatus
 import xyz.block.trailblaze.logs.server.endpoints.CliRunRequest
 import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.McpToolProfile
+import xyz.block.trailblaze.mcp.TrailblazeMcpMode
 import xyz.block.trailblaze.model.DesktopAppRunYamlParams
 import xyz.block.trailblaze.model.DeviceConnectionStatus
 import xyz.block.trailblaze.model.TrailExecutionResult
@@ -57,11 +58,13 @@ import kotlin.time.Duration.Companion.seconds
  * 
  * Usage:
  *   trailblaze                     - Launch GUI (default)
- *   trailblaze --headless          - Start headless MCP server  
+ *   trailblaze desktop             - Launch GUI (explicit subcommand)
+ *   trailblaze desktop --headless  - Start headless MCP server
+ *   trailblaze --headless          - Start headless MCP server (legacy, on root command)
  *   trailblaze run <file>          - Run a .trail.yaml file
  *   trailblaze mcp                 - Start MCP server (STDIO transport + tray icon)
  *   trailblaze mcp --http          - Start MCP server (Streamable HTTP)
- *   trailblaze list-devices        - List connected devices
+ *   trailblaze devices             - List connected devices
  *   trailblaze -p 52526            - Launch on a custom port (allows multiple instances)
  *   trailblaze --help              - Show all commands and options
  */
@@ -110,7 +113,8 @@ object TrailblazeCli {
     // The DesktopLogFileWriter tee would wrap stdout and leak non-JSON output
     // (its own "Logging to ..." message) before Console.useStdErr() runs.
     val isStdioMode = args.contains("mcp") && !args.contains("--http")
-    if (!isStdioMode) {
+    val isDescribeCommands = args.contains("--describe-commands")
+    if (!isStdioMode && !isDescribeCommands) {
       val httpPort = resolvePortFromArgs(args)
       DesktopLogFileWriter.install(httpPort = httpPort)
     }
@@ -162,9 +166,10 @@ class TrailblazeVersionProvider : IVersionProvider {
   versionProvider = TrailblazeVersionProvider::class,
   description = ["Trailblaze - AI-powered UI automation"],
   subcommands = [
+    DesktopCommand::class,
     RunCommand::class,
     McpCommand::class,
-    ListDevicesCommand::class,
+    DevicesCommand::class,
     ConfigCommand::class,
     StatusCommand::class,
     StopCommand::class,
@@ -224,7 +229,12 @@ class TrailblazeCliCommand(
         getEffectiveHttpsPort() != TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTPS_PORT
   }
 
-  override fun call(): Int {
+  override fun call(): Int = launchDesktop(headless)
+
+  /**
+   * Core desktop launch logic shared by the root command (no-args) and [DesktopCommand].
+   */
+  internal fun launchDesktop(headless: Boolean): Int {
     // Check if Trailblaze is already running
     val daemon = DaemonClient(port = getEffectivePort())
     if (daemon.isRunning()) {
@@ -266,6 +276,31 @@ class TrailblazeCliCommand(
 }
 
 /**
+ * Launch the Trailblaze desktop application.
+ *
+ * This is the explicit subcommand equivalent of running `trailblaze` with no arguments.
+ * Use this when integrating with a distribution system that requires an explicit subcommand.
+ */
+@Command(
+  name = "desktop",
+  mixinStandardHelpOptions = true,
+  description = ["Launch the Trailblaze desktop application"]
+)
+class DesktopCommand : Callable<Int> {
+
+  @CommandLine.ParentCommand
+  private lateinit var parent: TrailblazeCliCommand
+
+  @Option(
+    names = ["--headless"],
+    description = ["Start in headless mode (MCP server only, no GUI)"]
+  )
+  var headless: Boolean = false
+
+  override fun call(): Int = parent.launchDesktop(headless || parent.headless)
+}
+
+/**
  * Run a .trail.yaml file or directory of trail files on a connected device.
  */
 @Command(
@@ -301,7 +336,7 @@ class RunCommand : Callable<Int> {
 
   @Option(
     names = ["-a", "--agent"],
-    description = ["Agent: TRAILBLAZE_RUNNER, TWO_TIER_AGENT, MULTI_AGENT_V3. Default: ${AgentImplementation.DEFAULT_NAME}"]
+    description = ["Agent: TRAILBLAZE_RUNNER, MULTI_AGENT_V3. Default: ${AgentImplementation.DEFAULT_NAME}"]
   )
   var agent: String = AgentImplementation.DEFAULT.name
 
@@ -1398,12 +1433,17 @@ class McpCommand : Callable<Int> {
       McpToolProfile.valueOf(it.uppercase())
     } ?: toolProfile?.let { McpToolProfile.valueOf(it.uppercase()) } ?: transportDefault
 
+    // OSS CLI always starts in MCP_CLIENT_AS_AGENT — the external client is the agent.
+    // TRAILBLAZE_AS_AGENT is the server default for deployments with a configured LLM.
+    val resolvedMode = TrailblazeMcpMode.MCP_CLIENT_AS_AGENT
+
     if (http) {
       // Streamable HTTP transport (explicit opt-in)
       System.setProperty("java.awt.headless", "true")
 
       val app = parent.appProvider()
       app.trailblazeMcpServer.defaultToolProfile = resolvedProfile
+      app.trailblazeMcpServer.defaultMode = resolvedMode
       val port = parent.getEffectivePort()
       val httpsPort = parent.getEffectiveHttpsPort()
       Console.log("Trailblaze MCP server starting with HTTP transport on port $port (profile=${resolvedProfile.name})...")
@@ -1442,6 +1482,7 @@ class McpCommand : Callable<Int> {
       Console.log("Trailblaze MCP server starting with direct STDIO transport (profile=${resolvedProfile.name})...")
 
       val app = parent.appProvider()
+      app.trailblazeMcpServer.defaultMode = resolvedMode
 
       // Apply port overrides before starting the daemon
       if (parent.hasPortOverride()) {
@@ -1516,11 +1557,11 @@ class McpCommand : Callable<Int> {
  * List all connected devices.
  */
 @Command(
-  name = "list-devices",
+  name = "devices",
   mixinStandardHelpOptions = true,
   description = ["List all connected devices"]
 )
-class ListDevicesCommand : Callable<Int> {
+class DevicesCommand : Callable<Int> {
 
   @CommandLine.ParentCommand
   private lateinit var parent: TrailblazeCliCommand
@@ -1566,7 +1607,7 @@ class ListDevicesCommand : Callable<Int> {
  *   trailblaze config llm                             - Show current LLM provider/model
  *   trailblaze config llm openai/gpt-4-1              - Set LLM provider and model
  *   trailblaze config llm-provider anthropic           - Set LLM provider
- *   trailblaze config agent TWO_TIER_AGENT             - Set agent implementation
+ *   trailblaze config agent MULTI_AGENT_V3              - Set agent implementation
  *   trailblaze config models                           - List available LLM models
  *   trailblaze config agents                           - List available agents
  *   trailblaze config drivers                          - List available drivers
@@ -1884,7 +1925,7 @@ class StopCommand : Callable<Int> {
   }
 }
 
-// Extension property to access appProvider from RunCommand/ListDevicesCommand
+// Extension property to access appProvider from RunCommand/DevicesCommand/DesktopCommand
 private val TrailblazeCliCommand.appProvider: () -> TrailblazeDesktopApp
   get() = this.let {
     val field = TrailblazeCliCommand::class.java.getDeclaredField("appProvider")

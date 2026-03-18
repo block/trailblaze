@@ -8,12 +8,12 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
 /**
- * Serialization roundtrip tests for two-tier agent data models.
+ * Serialization roundtrip tests for agent data models.
  *
  * Ensures all models can be serialized to JSON and deserialized back
  * without data loss, which is critical for MCP transport.
  */
-class TwoTierModelsSerializationTest {
+class AgentModelsSerializationTest {
 
   private val json = Json {
     prettyPrint = true

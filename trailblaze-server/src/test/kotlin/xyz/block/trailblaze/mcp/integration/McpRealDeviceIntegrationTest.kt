@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.mcp.integration
 
 import kotlinx.coroutines.runBlocking
+import org.junit.After
 import org.junit.Assume.assumeTrue
 import org.junit.Test
 import xyz.block.trailblaze.devices.TrailblazeDriverType
@@ -22,7 +23,6 @@ import kotlin.test.assertTrue
  *
  * ## Agent Implementations Tested
  * - TRAILBLAZE_RUNNER
- * - TWO_TIER_AGENT
  * - MULTI_AGENT_V3
  *
  * ## Running in CI
@@ -49,17 +49,11 @@ class McpRealDeviceIntegrationTest : TrailblazeServerTestBase() {
   @Test fun `blaze - ANDROID_HOST x TRAILBLAZE_RUNNER`() =
     blazeTest(TrailblazeDriverType.ANDROID_HOST, AgentImplementation.TRAILBLAZE_RUNNER)
 
-  @Test fun `blaze - ANDROID_HOST x TWO_TIER_AGENT`() =
-    blazeTest(TrailblazeDriverType.ANDROID_HOST, AgentImplementation.TWO_TIER_AGENT)
-
   @Test fun `blaze - ANDROID_HOST x MULTI_AGENT_V3`() =
     blazeTest(TrailblazeDriverType.ANDROID_HOST, AgentImplementation.MULTI_AGENT_V3)
 
   @Test fun `blaze - ANDROID_ONDEVICE_INSTRUMENTATION x TRAILBLAZE_RUNNER`() =
     blazeTest(TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION, AgentImplementation.TRAILBLAZE_RUNNER)
-
-  @Test fun `blaze - ANDROID_ONDEVICE_INSTRUMENTATION x TWO_TIER_AGENT`() =
-    blazeTest(TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION, AgentImplementation.TWO_TIER_AGENT)
 
   @Test fun `blaze - ANDROID_ONDEVICE_INSTRUMENTATION x MULTI_AGENT_V3`() =
     blazeTest(TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION, AgentImplementation.MULTI_AGENT_V3)
@@ -67,11 +61,35 @@ class McpRealDeviceIntegrationTest : TrailblazeServerTestBase() {
   @Test fun `blaze - ANDROID_ONDEVICE_ACCESSIBILITY x TRAILBLAZE_RUNNER`() =
     blazeTest(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY, AgentImplementation.TRAILBLAZE_RUNNER)
 
-  @Test fun `blaze - ANDROID_ONDEVICE_ACCESSIBILITY x TWO_TIER_AGENT`() =
-    blazeTest(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY, AgentImplementation.TWO_TIER_AGENT)
-
   @Test fun `blaze - ANDROID_ONDEVICE_ACCESSIBILITY x MULTI_AGENT_V3`() =
     blazeTest(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY, AgentImplementation.MULTI_AGENT_V3)
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Lifecycle
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * End the MCP session before the base class closes the HTTP client.
+   *
+   * Calling endSession triggers [TrailblazeDeviceManager.endSessionForDevice] which:
+   *   1. Writes a terminal SessionStatus.Ended.Succeeded log so the Trailblaze report
+   *      shows PASSED instead of ERROR/TIMEOUT.
+   *   2. Releases the device claim so the next test can connect without hitting
+   *      DeviceAlreadyClaimedException.
+   *
+   * This @After runs before TrailblazeServerTestBase.baseTearDown (JUnit 4 runs subclass
+   * @After methods first), so the session is properly closed before client.close().
+   */
+  @After
+  fun tearDown() = runBlocking {
+    if (isClientInitialized()) {
+      try {
+        client.callTool("endSession", emptyMap())
+      } catch (_: Exception) {
+        // Non-fatal — base teardown will still close the client
+      }
+    }
+  }
 
   // ═══════════════════════════════════════════════════════════════════════════
   // Test Implementations
@@ -89,7 +107,7 @@ class McpRealDeviceIntegrationTest : TrailblazeServerTestBase() {
     setDriverType(driverType.name)
 
     // 2. Connect to device
-    val connectResult = client.callTool("device", mapOf("action" to "ANDROID"))
+    val connectResult = client.callTool("device", mapOf("action" to "ANDROID", "testName" to tag))
     assumeTrue("No Android device available", connectResult.isSuccess)
 
     // 3. Set agent implementation
@@ -107,8 +125,8 @@ class McpRealDeviceIntegrationTest : TrailblazeServerTestBase() {
 
     // 5. Verify the result
     val verifyResult = client.callTool(
-      "verify",
-      mapOf("assertion" to "The home screen or launcher is visible"),
+      "blaze",
+      mapOf("goal" to "The home screen or launcher is visible", "hint" to "VERIFY"),
     )
     Console.log("[$tag] Verify result: ${verifyResult.content.take(500)}")
     assertFalse(

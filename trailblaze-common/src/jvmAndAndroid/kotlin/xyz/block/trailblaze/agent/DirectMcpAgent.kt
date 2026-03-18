@@ -80,7 +80,7 @@ class DirectMcpAgent(
   private val sessionProvider: TrailblazeSessionProvider? = null,
   private val trailblazeLlmModel: TrailblazeLlmModel? = null,
   /** Which agent architecture this agent is part of */
-  private val agentImplementation: AgentImplementation = AgentImplementation.TWO_TIER_AGENT,
+  private val agentImplementation: AgentImplementation = AgentImplementation.MULTI_AGENT_V3,
   /** How LLM calls are made (DIRECT or MCP_SAMPLING) */
   private val llmCallStrategy: LlmCallStrategy = LlmCallStrategy.DIRECT,
   /** Which tier this agent represents (OUTER for planning, INNER would use ScreenAnalyzer) */

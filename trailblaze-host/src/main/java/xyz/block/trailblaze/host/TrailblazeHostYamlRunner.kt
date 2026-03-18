@@ -1,12 +1,30 @@
 package xyz.block.trailblaze.host
 
+import ai.koog.prompt.dsl.Prompt
+import ai.koog.prompt.message.AttachmentContent
+import ai.koog.prompt.message.ContentPart
+import ai.koog.prompt.message.Message
+import ai.koog.prompt.message.RequestMetaInfo
+import ai.koog.prompt.params.LLMParams
 import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.datetime.Clock
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import xyz.block.trailblaze.agent.BlazeConfig
+import xyz.block.trailblaze.agent.DefaultProgressReporter
+import xyz.block.trailblaze.agent.InnerLoopScreenAnalyzer
+import xyz.block.trailblaze.agent.MultiAgentV3Runner
+import xyz.block.trailblaze.agent.TrailConfig
 import xyz.block.trailblaze.agent.TrailblazeElementComparator
 import xyz.block.trailblaze.agent.TrailblazeRunner
+import xyz.block.trailblaze.agent.blaze.PlannerLlmCall
+import xyz.block.trailblaze.agent.blaze.PlannerToolCallResult
+import xyz.block.trailblaze.api.ImageFormatDetector
+import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.compose.driver.ComposeTrailblazeAgent
 import xyz.block.trailblaze.compose.driver.rpc.ComposeRpcClient
 import xyz.block.trailblaze.compose.driver.rpc.ComposeRpcTrailblazeAgent
@@ -23,32 +41,36 @@ import xyz.block.trailblaze.host.rules.BaseComposeTest
 import xyz.block.trailblaze.host.rules.BaseHostTrailblazeTest
 import xyz.block.trailblaze.host.rules.BasePlaywrightElectronTest
 import xyz.block.trailblaze.host.rules.BasePlaywrightNativeTest
-import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.host.rules.HostTrailblazeLoggingRule
 import xyz.block.trailblaze.host.yaml.RunOnHostParams
-import xyz.block.trailblaze.rules.TrailblazeLoggingRule
-import xyz.block.trailblaze.tracing.TrailblazeTraceExporter
+import xyz.block.trailblaze.http.DynamicLlmClient
+import xyz.block.trailblaze.llm.RunYamlRequest
+import xyz.block.trailblaze.llm.TrailblazeReferrer
 import xyz.block.trailblaze.logs.client.TrailblazeJson
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
+import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRpcClient
+import xyz.block.trailblaze.mcp.sampling.LocalLlmSamplingSource
+import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.playwright.tools.PlaywrightNativeToolSet
 import xyz.block.trailblaze.report.utils.TrailblazeYamlSessionRecording.generateRecordedYaml
 import xyz.block.trailblaze.recordings.TrailRecordings
+import xyz.block.trailblaze.rules.TrailblazeLoggingRule
 import xyz.block.trailblaze.rules.TrailblazeRunnerUtil
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
+import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.toolcalls.toolName
-import xyz.block.trailblaze.util.GitUtils
-import xyz.block.trailblaze.http.DynamicLlmClient
-import xyz.block.trailblaze.llm.TrailblazeReferrer
+import xyz.block.trailblaze.tracing.TrailblazeTraceExporter
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
-import xyz.block.trailblaze.util.HostAndroidDeviceConnectUtils
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.GitUtils
+import xyz.block.trailblaze.util.HostAndroidDeviceConnectUtils
 import xyz.block.trailblaze.yaml.ElectronAppConfig
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
@@ -176,9 +198,12 @@ object TrailblazeHostYamlRunner {
       trailblazeDeviceId = trailblazeDeviceId,
     )
 
-    // Reset the browser session when reusing so we start from a clean page state.
+    // Reset the browser session only when starting a new Trailblaze session.
+    // In interactive blaze() mode each call is one step within the same session
+    // (sendSessionStartLog=false), so we must NOT reset between steps — that would
+    // navigate to about:blank and lose the current page state.
     // Must run on the Playwright thread to maintain thread affinity.
-    if (isReusingTest) {
+    if (isReusingTest && runYamlRequest.config.sendSessionStartLog) {
       withContext(playwrightTest.browserManager.playwrightDispatcher) {
         playwrightTest.browserManager.resetSession()
       }
@@ -441,11 +466,10 @@ object TrailblazeHostYamlRunner {
     val runYamlRequest = runOnHostParams.runYamlRequest
     val port = runOnHostParams.composeRpcPort
 
-    val sessionSuffix = UUID.randomUUID().toString().take(8)
-    val trailblazeDeviceId = TrailblazeDeviceId(
-      instanceId = "compose-$sessionSuffix",
-      trailblazeDevicePlatform = TrailblazeDevicePlatform.WEB,
-    )
+    // Use the request's device ID so it matches the coroutine scope registered by
+    // DesktopYamlRunner. Creating a new ID here would cause cancelSessionForDevice()
+    // to miss the coroutine scope, making the cancel button ineffective.
+    val trailblazeDeviceId = runYamlRequest.trailblazeDeviceId
 
     onProgressMessage("Connecting to Compose app on port $port...")
 
@@ -804,6 +828,230 @@ object TrailblazeHostYamlRunner {
         deviceManager.cancelSessionForDevice(trailblazeDeviceId)
       }
       Console.log("🏁 Finally block completed for device: ${trailblazeDeviceId.instanceId}")
+    }
+  }
+
+  /**
+   * Runs MULTI_AGENT_V3 on the host, driving the on-device accessibility agent via
+   * [OnDeviceRpcClient] one tool call at a time.
+   *
+   * Caller is responsible for instrumentation setup (install APK, start server,
+   * enable accessibility service) before calling this function.
+   *
+   * @param dynamicLlmClient LLM client for screen analysis and planning
+   * @param onDeviceRpc Already-connected RPC client to the on-device server
+   * @param runYamlRequest The original run request (used for config, model, trail YAML)
+   * @param trailblazeDeviceId The Android device being tested
+   * @param onProgressMessage Callback for progress messages
+   * @param targetTestApp Optional app target (provides custom tool classes)
+   * @return The host session ID on completion, or null on failure/cancellation
+   */
+  suspend fun runHostV3WithAccessibilityYaml(
+    dynamicLlmClient: DynamicLlmClient,
+    onDeviceRpc: OnDeviceRpcClient,
+    runYamlRequest: RunYamlRequest,
+    trailblazeDeviceId: TrailblazeDeviceId,
+    onProgressMessage: (String) -> Unit,
+    targetTestApp: TrailblazeHostAppTarget?,
+  ): SessionId? {
+    val customToolClasses = targetTestApp
+      ?.getCustomToolsForDriver(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY)
+      ?: emptySet()
+    val excludedToolClasses = targetTestApp
+      ?.getExcludedToolsForDriver(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY)
+      ?: emptySet()
+
+    val trailblazeYaml = createTrailblazeYaml(
+      customTrailblazeToolClasses = customToolClasses,
+    )
+
+    // Decode trail YAML to extract prompt steps for V3
+    val trailItems = try {
+      trailblazeYaml.decodeTrail(runYamlRequest.yaml)
+    } catch (e: Exception) {
+      onProgressMessage("Failed to decode trail YAML: ${e.message}")
+      return null
+    }
+    val trailConfig = trailblazeYaml.extractTrailConfig(trailItems)
+    val promptSteps = trailItems
+      .filterIsInstance<TrailYamlItem.PromptsTrailItem>()
+      .flatMap { it.promptSteps }
+
+    if (promptSteps.isEmpty()) {
+      onProgressMessage("No prompt steps found in trail YAML for V3 execution")
+      return null
+    }
+
+    // Set up host-side logging (session start/end logs are emitted here, not on-device)
+    val loggingRule = HostTrailblazeLoggingRule(
+      trailblazeDeviceInfoProvider = {
+        TrailblazeDeviceInfo(
+          trailblazeDeviceId = trailblazeDeviceId,
+          trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+          widthPixels = 0,
+          heightPixels = 0,
+          classifiers = listOf(
+            TrailblazeDeviceClassifier("android"),
+            TrailblazeDeviceClassifier("accessibility"),
+          ),
+        )
+      },
+    )
+
+    val sessionManager = loggingRule.sessionManager
+    val overrideSessionId = runYamlRequest.config.overrideSessionId
+    val session = if (overrideSessionId != null) {
+      sessionManager.createSessionWithId(overrideSessionId)
+    } else {
+      sessionManager.startSession(runYamlRequest.testName)
+    }
+    loggingRule.setSession(session)
+
+    if (runYamlRequest.config.sendSessionStartLog) {
+      val deviceInfo = loggingRule.trailblazeDeviceInfoProvider()
+      loggingRule.logger.log(
+        session,
+        TrailblazeLog.TrailblazeSessionStatusChangeLog(
+          sessionStatus = SessionStatus.Started(
+            trailConfig = trailConfig,
+            trailFilePath = runYamlRequest.trailFilePath,
+            testClassName = "HostAccessibilityV3",
+            testMethodName = "run",
+            trailblazeDeviceInfo = deviceInfo,
+            rawYaml = runYamlRequest.yaml,
+            hasRecordedSteps = trailblazeYaml.hasRecordedSteps(trailItems),
+            trailblazeDeviceId = trailblazeDeviceId,
+          ),
+          session = session.sessionId,
+          timestamp = Clock.System.now(),
+        ),
+      )
+    }
+
+    // Build V3 runner components
+    val llmClient = dynamicLlmClient.createLlmClient()
+    val trailblazeLlmModel = runYamlRequest.trailblazeLlmModel
+
+    val samplingSource = LocalLlmSamplingSource(
+      llmClient = llmClient,
+      llmModel = trailblazeLlmModel,
+      logsRepo = loggingRule.logsRepo,
+      sessionIdProvider = { loggingRule.session?.sessionId },
+    )
+
+    val screenAnalyzer = InnerLoopScreenAnalyzer(
+      samplingSource = samplingSource,
+      model = trailblazeLlmModel,
+    )
+
+    val toolRepo = TrailblazeToolRepo.withDynamicToolSets(
+      setOfMarkEnabled = runYamlRequest.config.setOfMarkEnabled,
+      customToolClasses = customToolClasses,
+      excludedToolClasses = excludedToolClasses,
+    )
+
+    val executor = HostAccessibilityRpcClient(
+      rpcClient = onDeviceRpc,
+      toolRepo = toolRepo,
+      runYamlRequestTemplate = runYamlRequest,
+    )
+
+    val plannerLlmCall: PlannerLlmCall = { systemPrompt, userMessage, tools, _, screenshotBytes ->
+      val metaInfo = RequestMetaInfo.create(kotlin.time.Clock.System)
+      val userMsg = if (screenshotBytes != null && screenshotBytes.isNotEmpty()) {
+        Message.User(
+          parts = buildList {
+            add(ContentPart.Text(userMessage))
+            add(
+              ContentPart.Image(
+                content = AttachmentContent.Binary.Bytes(screenshotBytes),
+                format = ImageFormatDetector.detectFormat(screenshotBytes).mimeSubtype,
+              ),
+            )
+          },
+          metaInfo = metaInfo,
+        )
+      } else {
+        Message.User(content = userMessage, metaInfo = metaInfo)
+      }
+      val koogPrompt = Prompt(
+        messages = listOf(
+          Message.System(content = systemPrompt, metaInfo = metaInfo),
+          userMsg,
+        ),
+        id = "host_accessibility_v3_planner",
+        params = LLMParams(toolChoice = LLMParams.ToolChoice.Required),
+      )
+      val responses = llmClient.execute(koogPrompt, trailblazeLlmModel.toKoogLlmModel(), tools)
+      val toolCall = responses.filterIsInstance<Message.Tool.Call>().firstOrNull()
+      val toolArgsJson = toolCall?.content ?: "{}"
+      val toolArgs = try {
+        Json.parseToJsonElement(toolArgsJson) as? JsonObject ?: JsonObject(emptyMap())
+      } catch (_: Exception) {
+        JsonObject(emptyMap())
+      }
+      PlannerToolCallResult.fromRaw(toolCall?.tool ?: tools.firstOrNull()?.name ?: "unknown", toolArgs)
+    }
+
+    val progressListener = loggingRule.logger.createProgressListener(session)
+    val progressReporter = DefaultProgressReporter(progressListener)
+    val availableToolsProvider = {
+      toolRepo.getCurrentToolDescriptors().map { it.toTrailblazeToolDescriptor() }
+    }
+
+    val v3Runner = MultiAgentV3Runner.create(
+      screenAnalyzer = screenAnalyzer,
+      executor = executor,
+      plannerLlmCall = plannerLlmCall,
+      config = BlazeConfig.DEFAULT,
+      progressReporter = progressReporter,
+      deviceId = trailblazeDeviceId,
+      availableToolsProvider = availableToolsProvider,
+    )
+
+    onProgressMessage("Starting V3 runner on host with accessibility driver (${promptSteps.size} steps)...")
+
+    return try {
+      val result = v3Runner.trail(
+        steps = promptSteps,
+        config = TrailConfig.AI_ONLY,
+        sessionId = session.sessionId,
+      )
+      onProgressMessage(
+        if (result.success) "V3 trail completed successfully"
+        else "V3 trail failed: ${result.errorMessage}",
+      )
+
+      if (runYamlRequest.config.sendSessionEndLog) {
+        sessionManager.endSession(session, isSuccess = result.success)
+      }
+
+      generateAndSaveRecording(
+        sessionId = session.sessionId,
+        customToolClasses = customToolClasses,
+      )
+
+      session.sessionId
+    } catch (e: TrailblazeSessionCancelledException) {
+      onProgressMessage("V3 accessibility session cancelled")
+      null
+    } catch (e: CancellationException) {
+      onProgressMessage("V3 accessibility execution cancelled")
+      throw e
+    } catch (e: Exception) {
+      Console.log(
+        "[TrailblazeHostYamlRunner] V3 accessibility exception: ${e::class.simpleName}: ${e.message}",
+      )
+      onProgressMessage("V3 accessibility execution failed: ${e.message}")
+      captureFailureScreenshot(session, loggingRule) {
+        runBlocking { executor.captureScreenState() } ?: error("No screen state available")
+      }
+      sessionManager.endSession(session, isSuccess = false, exception = e)
+      null
+    } finally {
+      exportAndSaveTrace(session.sessionId, loggingRule)
+      loggingRule.setSession(null)
+      executor.close()
     }
   }
 

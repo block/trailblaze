@@ -30,6 +30,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
 import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.compose.driver.tools.ComposeClickTool
+import xyz.block.trailblaze.compose.target.ComposeUiTestTarget
 import xyz.block.trailblaze.compose.driver.tools.ComposeRequestDetailsTool
 import xyz.block.trailblaze.compose.driver.tools.ComposeScrollTool
 import xyz.block.trailblaze.compose.driver.tools.ComposeTypeTool
@@ -73,7 +74,7 @@ class ComposeEvalSuiteTest {
     // Toggle switch via tool and verify checked becomes true
     val result = runBlocking {
       ComposeClickTool(testTag = "dark_mode_switch")
-        .executeWithCompose(this@runComposeUiTest, stubContext())
+        .executeWithCompose(ComposeUiTestTarget(this@runComposeUiTest), stubContext())
     }
     assertThat(result).isInstanceOf(TrailblazeToolResult.Success::class)
 
@@ -256,7 +257,7 @@ class ComposeEvalSuiteTest {
 
     val result = runBlocking {
       ComposeClickTool(text = "Clicked: 0")
-        .executeWithCompose(this@runComposeUiTest, stubContext())
+        .executeWithCompose(ComposeUiTestTarget(this@runComposeUiTest), stubContext())
     }
     assertThat(result).isInstanceOf(TrailblazeToolResult.Success::class)
 
@@ -272,7 +273,7 @@ class ComposeEvalSuiteTest {
 
     val result = runBlocking {
       ComposeClickTool(testTag = "counter_button", text = "Clicked: 0")
-        .executeWithCompose(this@runComposeUiTest, stubContext())
+        .executeWithCompose(ComposeUiTestTarget(this@runComposeUiTest), stubContext())
     }
     assertThat(result).isInstanceOf(TrailblazeToolResult.Success::class)
 
@@ -287,7 +288,7 @@ class ComposeEvalSuiteTest {
 
     val result = runBlocking {
       ComposeClickTool()
-        .executeWithCompose(this@runComposeUiTest, stubContext())
+        .executeWithCompose(ComposeUiTestTarget(this@runComposeUiTest), stubContext())
     }
     assertThat(result).isInstanceOf(TrailblazeToolResult.Error::class)
   }
@@ -302,7 +303,7 @@ class ComposeEvalSuiteTest {
         text = "World",
         testTag = "append_field",
         clearFirst = false,
-      ).executeWithCompose(this@runComposeUiTest, stubContext())
+      ).executeWithCompose(ComposeUiTestTarget(this@runComposeUiTest), stubContext())
     }
     assertThat(result).isInstanceOf(TrailblazeToolResult.Success::class)
 
@@ -320,7 +321,7 @@ class ComposeEvalSuiteTest {
 
     val result = runBlocking {
       ComposeTypeTool(text = "secret123", testTag = "password_field")
-        .executeWithCompose(this@runComposeUiTest, stubContext())
+        .executeWithCompose(ComposeUiTestTarget(this@runComposeUiTest), stubContext())
     }
     assertThat(result).isInstanceOf(TrailblazeToolResult.Success::class)
   }
@@ -332,7 +333,7 @@ class ComposeEvalSuiteTest {
 
     val result = runBlocking {
       ComposeScrollTool(testTag = "scrollable_list", index = 25)
-        .executeWithCompose(this@runComposeUiTest, stubContext())
+        .executeWithCompose(ComposeUiTestTarget(this@runComposeUiTest), stubContext())
     }
     assertThat(result).isInstanceOf(TrailblazeToolResult.Success::class)
   }
@@ -345,7 +346,7 @@ class ComposeEvalSuiteTest {
     // Use text matcher to find the scrollable list by its content
     val result = runBlocking {
       ComposeScrollTool(testTag = "scrollable_list", index = 20)
-        .executeWithCompose(this@runComposeUiTest, stubContext())
+        .executeWithCompose(ComposeUiTestTarget(this@runComposeUiTest), stubContext())
     }
     assertThat(result).isInstanceOf(TrailblazeToolResult.Success::class)
   }
@@ -357,7 +358,7 @@ class ComposeEvalSuiteTest {
 
     val result = runBlocking {
       ComposeWaitTool(seconds = 1)
-        .executeWithCompose(this@runComposeUiTest, stubContext())
+        .executeWithCompose(ComposeUiTestTarget(this@runComposeUiTest), stubContext())
     }
     assertThat(result).isInstanceOf(TrailblazeToolResult.Success::class)
     assertThat((result as TrailblazeToolResult.Success).message!!).isEqualTo("Waited 1 seconds.")
@@ -373,7 +374,7 @@ class ComposeEvalSuiteTest {
     val tool = ComposeWaitTool(seconds = 99)
     // Verify the coercion by checking the result message
     val result = runBlocking {
-      tool.executeWithCompose(this@runComposeUiTest, stubContext())
+      tool.executeWithCompose(ComposeUiTestTarget(this@runComposeUiTest), stubContext())
     }
     assertThat(result).isInstanceOf(TrailblazeToolResult.Success::class)
     assertThat((result as TrailblazeToolResult.Success).message!!).contains("Waited 30 seconds.")
@@ -385,7 +386,7 @@ class ComposeEvalSuiteTest {
     waitForIdle()
 
     val ctx = stubContext(
-      screenStateProvider = { ComposeScreenState(this@runComposeUiTest, 1280, 800) }
+      screenStateProvider = { ComposeScreenState(ComposeUiTestTarget(this@runComposeUiTest), 1280, 800) }
     )
     val result = runBlocking {
       TakeSnapshotTool(screenName = "showcase").execute(ctx)
@@ -408,7 +409,7 @@ class ComposeEvalSuiteTest {
     // Click to toggle
     runBlocking {
       ComposeClickTool(testTag = "dark_mode_switch")
-        .executeWithCompose(this@runComposeUiTest, stubContext())
+        .executeWithCompose(ComposeUiTestTarget(this@runComposeUiTest), stubContext())
     }
 
     // Now checked
@@ -425,7 +426,7 @@ class ComposeEvalSuiteTest {
     // Click Option B
     runBlocking {
       ComposeClickTool(testTag = "radio_option_b")
-        .executeWithCompose(this@runComposeUiTest, stubContext())
+        .executeWithCompose(ComposeUiTestTarget(this@runComposeUiTest), stubContext())
     }
 
     val tree = ComposeSemanticTreeMapper.map(onRoot().fetchSemanticsNode())
@@ -445,7 +446,7 @@ class ComposeEvalSuiteTest {
     // Click Settings tab
     runBlocking {
       ComposeClickTool(testTag = "tab_settings")
-        .executeWithCompose(this@runComposeUiTest, stubContext())
+        .executeWithCompose(ComposeUiTestTarget(this@runComposeUiTest), stubContext())
     }
 
     val tree = ComposeSemanticTreeMapper.map(onRoot().fetchSemanticsNode())
@@ -649,7 +650,7 @@ class ComposeEvalSuiteTest {
 
     val result = runBlocking {
       ComposeRequestDetailsTool(include = listOf(ComposeViewHierarchyDetail.BOUNDS))
-        .executeWithCompose(this@runComposeUiTest, stubContext())
+        .executeWithCompose(ComposeUiTestTarget(this@runComposeUiTest), stubContext())
     }
     assertThat(result).isInstanceOf(TrailblazeToolResult.Success::class)
     assertThat((result as TrailblazeToolResult.Success).message!!).contains("BOUNDS")
@@ -662,7 +663,7 @@ class ComposeEvalSuiteTest {
 
     val result = runBlocking {
       ComposeRequestDetailsTool(include = emptyList())
-        .executeWithCompose(this@runComposeUiTest, stubContext())
+        .executeWithCompose(ComposeUiTestTarget(this@runComposeUiTest), stubContext())
     }
     assertThat(result).isInstanceOf(TrailblazeToolResult.Error::class)
   }
@@ -674,13 +675,13 @@ class ComposeEvalSuiteTest {
 
     // Without BOUNDS requested, the compact list should NOT have bounds annotations
     val withoutBounds =
-      ComposeScreenState(this@runComposeUiTest, 1280, 800, requestedDetails = emptySet())
+      ComposeScreenState(ComposeUiTestTarget(this@runComposeUiTest), 1280, 800, requestedDetails = emptySet())
     assertThat(withoutBounds.semanticsTreeText).isNotEmpty()
     assertThat(withoutBounds.semanticsTreeText).doesNotContain("{x:")
 
     // With BOUNDS requested, the compact list SHOULD have bounds annotations
     val withBounds = ComposeScreenState(
-      this@runComposeUiTest, 1280, 800,
+      ComposeUiTestTarget(this@runComposeUiTest), 1280, 800,
       requestedDetails = setOf(ComposeViewHierarchyDetail.BOUNDS),
     )
     assertThat(withBounds.semanticsTreeText).contains("{x:")

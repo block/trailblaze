@@ -214,20 +214,33 @@ object ComposeSemanticTreeMapper {
   fun buildCompactElementList(
     rootNode: SemanticsNode,
     includeBounds: Boolean = false,
+  ): CompactComposeElements = buildCompactElementList(listOf(rootNode), includeBounds)
+
+  /**
+   * Builds a compact element list from multiple root nodes.
+   *
+   * Each root is processed in order with shared element ID numbering, so popups/dialogs
+   * contribute elements alongside the main window content.
+   */
+  fun buildCompactElementList(
+    rootNodes: List<SemanticsNode>,
+    includeBounds: Boolean = false,
   ): CompactComposeElements {
     var nextElementId = 1
     val elementIdMapping = mutableMapOf<String, ComposeElementRef>()
     val descriptorOccurrences = mutableMapOf<String, Int>()
 
     val text = buildString {
-      appendCompactNode(
-        node = rootNode,
-        indent = 0,
-        nextElementId = { nextElementId++ },
-        elementIdMapping = elementIdMapping,
-        descriptorOccurrences = descriptorOccurrences,
-        includeBounds = includeBounds,
-      )
+      for (rootNode in rootNodes) {
+        appendCompactNode(
+          node = rootNode,
+          indent = 0,
+          nextElementId = { nextElementId++ },
+          elementIdMapping = elementIdMapping,
+          descriptorOccurrences = descriptorOccurrences,
+          includeBounds = includeBounds,
+        )
+      }
     }
 
     return CompactComposeElements(

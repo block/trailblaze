@@ -9,6 +9,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.Rule
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.compose.target.ComposeUiTestTarget
 import xyz.block.trailblaze.host.rules.BaseComposeTest
 import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.util.TrailYamlTemplateResolver
@@ -75,7 +76,7 @@ class ComposeDesktopEvalTests {
 
       runBlocking {
         composeTest.runTestWithCompose(
-          composeUiTest = this@runComposeUiTest,
+          target = ComposeUiTestTarget(this@runComposeUiTest),
           yaml = yaml,
           trailFilePath = trailFile.absolutePath,
           useRecordedSteps = true,

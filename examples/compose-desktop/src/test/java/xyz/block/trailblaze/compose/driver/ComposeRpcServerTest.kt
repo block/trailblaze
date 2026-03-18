@@ -17,6 +17,7 @@ import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.compose.driver.rpc.ComposeRpcClient
 import xyz.block.trailblaze.compose.driver.rpc.ComposeRpcServer
 import xyz.block.trailblaze.compose.driver.rpc.ExecuteToolsRequest
+import xyz.block.trailblaze.compose.target.ComposeUiTestTarget
 import xyz.block.trailblaze.compose.driver.tools.ComposeClickTool
 import xyz.block.trailblaze.compose.driver.tools.ComposeToolSet
 import xyz.block.trailblaze.compose.driver.tools.ComposeTypeTool
@@ -57,7 +58,7 @@ class ComposeRpcServerTest {
     waitForIdle()
 
     val port = findAvailablePort()
-    val server = ComposeRpcServer(this, port = port)
+    val server = ComposeRpcServer(ComposeUiTestTarget(this), port = port)
     val client = ComposeRpcClient("http://localhost:$port")
     server.start(wait = false)
     try {
@@ -75,7 +76,7 @@ class ComposeRpcServerTest {
     waitForIdle()
 
     val port = findAvailablePort()
-    val server = ComposeRpcServer(this, port = port)
+    val server = ComposeRpcServer(ComposeUiTestTarget(this), port = port)
     val client = ComposeRpcClient("http://localhost:$port")
     server.start(wait = false)
     try {
@@ -108,7 +109,7 @@ class ComposeRpcServerTest {
     waitForIdle()
 
     val port = findAvailablePort()
-    val server = ComposeRpcServer(this, port = port)
+    val server = ComposeRpcServer(ComposeUiTestTarget(this), port = port)
     val client = ComposeRpcClient("http://localhost:$port")
     server.start(wait = false)
     try {
@@ -136,7 +137,7 @@ class ComposeRpcServerTest {
     waitForIdle()
 
     val port = findAvailablePort()
-    val server = ComposeRpcServer(this, port = port)
+    val server = ComposeRpcServer(ComposeUiTestTarget(this), port = port)
     val client = ComposeRpcClient("http://localhost:$port")
     server.start(wait = false)
     try {
@@ -158,7 +159,7 @@ class ComposeRpcServerTest {
     waitForIdle()
 
     val port = findAvailablePort()
-    val server = ComposeRpcServer(this, port = port)
+    val server = ComposeRpcServer(ComposeUiTestTarget(this), port = port)
     val client = ComposeRpcClient("http://localhost:$port")
     server.start(wait = false)
     try {
@@ -211,7 +212,7 @@ class ComposeRpcServerTest {
     waitForIdle()
 
     val port = findAvailablePort()
-    val server = ComposeRpcServer(this, port = port)
+    val server = ComposeRpcServer(ComposeUiTestTarget(this), port = port)
     val client = ComposeRpcClient("http://localhost:$port")
     server.start(wait = false)
     try {
@@ -253,7 +254,7 @@ class ComposeRpcServerTest {
     waitForIdle()
 
     val port = findAvailablePort()
-    val server = ComposeRpcServer(this, port = port)
+    val server = ComposeRpcServer(ComposeUiTestTarget(this), port = port)
     val client = ComposeRpcClient("http://localhost:$port")
     server.start(wait = false)
     try {

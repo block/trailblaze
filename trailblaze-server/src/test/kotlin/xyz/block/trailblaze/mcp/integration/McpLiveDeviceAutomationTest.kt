@@ -165,8 +165,8 @@ class McpLiveDeviceAutomationTest {
     // Set mode to TRAILBLAZE_AS_AGENT
     client.setMode(TrailblazeMcpMode.TRAILBLAZE_AS_AGENT)
 
-    // Ensure using TWO_TIER_AGENT (should be default)
-    client.setAgentImplementation(AgentImplementation.TWO_TIER_AGENT)
+    // Ensure using MULTI_AGENT_V3
+    client.setAgentImplementation(AgentImplementation.MULTI_AGENT_V3)
 
     Console.log("\n--- Running Agent Automation ---")
     Console.log("Objective: 'Press the home button and verify you're on the home screen'")
@@ -184,7 +184,7 @@ class McpLiveDeviceAutomationTest {
     // Connect to device
     connectToCurrentDevice()
     client.setMode(TrailblazeMcpMode.TRAILBLAZE_AS_AGENT)
-    client.setAgentImplementation(AgentImplementation.TWO_TIER_AGENT)
+    client.setAgentImplementation(AgentImplementation.MULTI_AGENT_V3)
 
     Console.log("\n--- Running Multi-Step Automation ---")
     val steps = listOf(
@@ -204,7 +204,7 @@ class McpLiveDeviceAutomationTest {
   }
 
   @Test
-  fun `can compare KOOG_DIRECT_AGENT vs TRAILBLAZE_RUNNER`() = runBlocking {
+  fun `can compare MULTI_AGENT_V3 vs TRAILBLAZE_RUNNER`() = runBlocking {
     // Connect to device
     connectToCurrentDevice()
     client.setMode(TrailblazeMcpMode.TRAILBLAZE_AS_AGENT)
@@ -213,14 +213,14 @@ class McpLiveDeviceAutomationTest {
 
     Console.log("\n=== Agent Comparison Test ===")
 
-    // Test with TWO_TIER_AGENT
-    Console.log("\n[1] Testing TWO_TIER_AGENT...")
-    client.setAgentImplementation(AgentImplementation.TWO_TIER_AGENT)
-    val koogStart = System.currentTimeMillis()
-    val koogResult = client.runPrompt(simpleTask)
-    val koogTime = System.currentTimeMillis() - koogStart
-    Console.log("TWO_TIER_AGENT: ${if (koogResult.isSuccess) "SUCCESS" else "FAILED"} in ${koogTime}ms")
-    Console.log("  Result: ${koogResult.content.take(200)}...")
+    // Test with MULTI_AGENT_V3
+    Console.log("\n[1] Testing MULTI_AGENT_V3...")
+    client.setAgentImplementation(AgentImplementation.MULTI_AGENT_V3)
+    val v3Start = System.currentTimeMillis()
+    val v3Result = client.runPrompt(simpleTask)
+    val v3Time = System.currentTimeMillis() - v3Start
+    Console.log("MULTI_AGENT_V3: ${if (v3Result.isSuccess) "SUCCESS" else "FAILED"} in ${v3Time}ms")
+    Console.log("  Result: ${v3Result.content.take(200)}...")
 
     // Test with TRAILBLAZE_RUNNER
     Console.log("\n[2] Testing TRAILBLAZE_RUNNER...")
@@ -232,11 +232,11 @@ class McpLiveDeviceAutomationTest {
     Console.log("  Result: ${runnerResult.content.take(200)}...")
 
     Console.log("\n=== Comparison Summary ===")
-    Console.log("TWO_TIER_AGENT: ${koogTime}ms")
+    Console.log("MULTI_AGENT_V3: ${v3Time}ms")
     Console.log("TRAILBLAZE_RUNNER: ${runnerTime}ms")
 
     // Both should succeed
-    assertTrue(koogResult.isSuccess || runnerResult.isSuccess, "At least one agent should succeed")
+    assertTrue(v3Result.isSuccess || runnerResult.isSuccess, "At least one agent should succeed")
   }
 
   // ==========================================================================
@@ -245,14 +245,14 @@ class McpLiveDeviceAutomationTest {
 
   @Test
   fun `session config shows correct agent implementation`() = runBlocking {
-    // Set to TWO_TIER_AGENT
-    client.setAgentImplementation(AgentImplementation.TWO_TIER_AGENT)
+    // Set to MULTI_AGENT_V3
+    client.setAgentImplementation(AgentImplementation.MULTI_AGENT_V3)
 
     val config = client.getSessionConfig()
 
     assertTrue(config.isSuccess, "Should get config: ${config.content}")
     assertTrue(
-      config.content.contains("TWO_TIER_AGENT") || config.content.contains("Agent implementation"),
+      config.content.contains("MULTI_AGENT_V3") || config.content.contains("Agent implementation"),
       "Config should show agent implementation: ${config.content}",
     )
     Console.log("Session config:\n${config.content}")

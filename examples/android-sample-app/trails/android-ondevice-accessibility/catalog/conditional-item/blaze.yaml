@@ -1,0 +1,14 @@
+- config:
+    id: "sample-app/catalog/conditional-item"
+    app: "xyz.block.trailblaze.examples.sampleapp"
+    platform: android
+    driver: ANDROID_ONDEVICE_ACCESSIBILITY
+- tools:
+    - launchApp:
+        appId: "xyz.block.trailblaze.examples.sampleapp"
+- prompts:
+    - step: Navigate to the "Catalog" tab
+    - verify: '"Pumpkin Spice" is not visible on the screen'
+    - step: Tap "Show seasonal" to reveal seasonal items
+    - step: Verify "Pumpkin Spice" is now visible and tap it
+    - verify: A dialog showing "Pumpkin Spice" is visible

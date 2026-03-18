@@ -5,6 +5,7 @@ import ai.koog.agents.core.tools.annotations.Tool
 import ai.koog.agents.core.tools.reflect.ToolSet
 import kotlinx.datetime.Clock
 import kotlinx.serialization.Serializable
+import xyz.block.trailblaze.mcp.McpToolProfile
 import xyz.block.trailblaze.agent.Confidence
 import xyz.block.trailblaze.agent.ExecutionResult
 import xyz.block.trailblaze.agent.RecommendationContext
@@ -22,20 +23,20 @@ import xyz.block.trailblaze.mcp.RecordedStep
 import xyz.block.trailblaze.mcp.RecordedStepType
 import xyz.block.trailblaze.mcp.RecordedToolCall
 import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
-import xyz.block.trailblaze.mcp.toolsets.ToolLoadingStrategy
 import xyz.block.trailblaze.mcp.toolsets.ToolSetCategory
 import xyz.block.trailblaze.mcp.toolsets.ToolSetCategoryMapping
 import xyz.block.trailblaze.toolcalls.toKoogToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
+import xyz.block.trailblaze.toolcalls.TrailblazeTool
+import kotlin.reflect.KClass
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.DirectionStep
 import xyz.block.trailblaze.yaml.VerificationStep
 
 /**
  * Primary MCP tools for UI automation:
- * - blaze: Take an action toward a goal
- * - verify: Assert something is true (pass/fail)
+ * - blaze: Take an action toward a goal (or verify with hint="VERIFY")
  * - ask: Ask a question and get an answer
  */
 @Suppress("unused")
@@ -52,33 +53,43 @@ class StepToolSet(
   private val sessionIdProvider: (() -> SessionId?)? = null,
   /** Returns driver connection status when the driver is still initializing. */
   private val driverStatusProvider: (() -> String?)? = null,
+  /**
+   * Optional override for the tool classes used by the inner agent.
+   *
+   * When provided and returns non-null, these classes replace the default
+   * [ToolSetCategoryMapping.getToolClasses] selection. This enables driver-specific
+   * tool sets (e.g., Compose tools) to be injected without a direct module dependency.
+   */
+  private val toolClassesOverrideProvider: (() -> Set<KClass<out TrailblazeTool>>?)? = null,
 ) : ToolSet {
 
   @LLMDescription(
     """
-    Take a step toward your goal.
+    Take a step toward your goal, or verify an assertion.
 
     blaze(goal="Tap the login button")
     blaze(goal="Enter email test@example.com")
-    blaze(goal="Open Settings app", toolHint="NAVIGATION")
+    blaze(goal="The login button is visible", hint="VERIFY")
 
     Returns what happened plus a screenSummary showing visible text and actionable
     elements (e.g. "[button] Login | [input] Email"). This summary is compact and
     does NOT include layout, position, or list structure — use ask() if you need to
     know where elements are on screen or how they relate to each other.
     If uncertain, returns options for you to decide.
+    With hint="VERIFY", checks an assertion using read-only tools and returns passed (true/false).
     """
   )
-  @Tool
+  @Tool(McpToolProfile.TOOL_BLAZE)
   suspend fun blaze(
-    @LLMDescription("What you want to accomplish (e.g., 'Tap the login button')")
+    @LLMDescription("What you want to accomplish (e.g., 'Tap the login button') or assert (e.g., 'The login button is visible')")
     goal: String,
     @LLMDescription("Context from previous steps (optional)")
     context: String? = null,
-    @LLMDescription("Tool hint: MINIMAL (tap/swipe/type), NAVIGATION (+launchApp), STANDARD (all). Default: MINIMAL for speed.")
-    toolHint: String? = null,
+    @LLMDescription("hint=\"VERIFY\" to check an assertion using read-only tools (returns passed: true/false). Omit for normal action.")
+    hint: String? = null,
   ): String {
     val traceId = TraceId.generate(TraceId.Companion.TraceOrigin.LLM)
+    val isVerify = BlazeHint.from(hint) == BlazeHint.VERIFY
 
     val screenState = screenStateProvider()
       ?: return StepResult(
@@ -87,16 +98,22 @@ class StepToolSet(
           ?: "No device connected. Use device(action=ANDROID), device(action=IOS), or device(action=WEB) first.",
       ).toJson()
 
+    val promptStep = if (isVerify) VerificationStep(verify = goal) else DirectionStep(step = goal)
+    val stepStartTime = Clock.System.now()
+
     val recommendationContext = RecommendationContext(
       objective = goal,
       progressSummary = context,
-      hint = null,
+      hint = if (isVerify) "Verify this assertion using read-only tools only. Do not tap, swipe, or type." else null,
       attemptNumber = 1,
     )
 
-    // Select tools based on hint from outer agent (defaults to MINIMAL for speed)
-    val tools = selectToolsForHint(toolHint)
-    
+    val tools = selectToolsForHint(hint)
+
+    // Emit objective start BEFORE analyze so that tool calls made by the inner agent
+    // during analysis are correctly associated with this objective in the report.
+    emitObjectiveStart(promptStep)
+
     val analysis = try {
       // Pass selected tools so the LLM can call them directly (type-safe)
       screenAnalyzer.analyze(
@@ -106,6 +123,7 @@ class StepToolSet(
         availableTools = tools,
       )
     } catch (e: Exception) {
+      emitObjectiveComplete(promptStep, stepStartTime, success = false, failureReason = e.message)
       return StepResult(
         executed = false,
         error = "Failed to analyze screen: ${e.message}",
@@ -114,45 +132,50 @@ class StepToolSet(
 
     Console.log("")
     Console.log("┌──────────────────────────────────────────────────────────────────────────────")
-    Console.log("│ [blaze] Goal: $goal")
+    if (isVerify) {
+      Console.log("│ [verify] $goal")
+      Console.log("│ Result: ${if (analysis.objectiveAppearsAchieved) "PASSED" else if (analysis.objectiveAppearsImpossible) "FAILED" else "UNCERTAIN"}")
+    } else {
+      Console.log("│ [blaze] Goal: $goal")
+    }
     Console.log("│ Screen: ${analysis.screenSummary}")
     Console.log("│ Confidence: ${analysis.confidence}")
     Console.log("└──────────────────────────────────────────────────────────────────────────────")
 
-    // Already done?
+    // Already done / assertion passed?
     if (analysis.objectiveAppearsAchieved) {
+      emitObjectiveComplete(promptStep, stepStartTime, success = true)
       return StepResult(
         executed = false,
         done = true,
-        result = "Goal already achieved",
+        passed = if (isVerify) true else null,
+        result = if (isVerify) "Assertion passed" else "Goal already achieved",
         screenSummary = analysis.screenSummary,
       ).toJson()
     }
 
-    // Impossible? Check if inner agent suggests different tools
+    // Impossible / assertion failed?
     if (analysis.objectiveAppearsImpossible) {
+      val failureReason = if (isVerify) "Assertion failed: ${analysis.reasoning}" else "Cannot achieve goal: ${analysis.reasoning}"
+      emitObjectiveComplete(promptStep, stepStartTime, success = false, failureReason = failureReason)
       return StepResult(
         executed = false,
-        error = "Cannot achieve goal: ${analysis.reasoning}",
+        passed = if (isVerify) false else null,
+        error = failureReason,
         screenSummary = analysis.screenSummary,
-        suggestedToolHint = analysis.suggestedToolHint, // Inner agent may suggest different tools
+        suggestedHint = if (!isVerify) analysis.suggestedHint else null,
       ).toJson()
     }
 
     // HIGH or MEDIUM confidence → execute
     if (analysis.confidence == Confidence.HIGH || analysis.confidence == Confidence.MEDIUM) {
-      val stepStartTime = Clock.System.now()
-      val promptStep = DirectionStep(step = goal)
-
-      // Emit objective start log for log-based trail generation
-      emitObjectiveStart(promptStep)
-
       val executionResult = try {
         executor.execute(analysis.recommendedTool, analysis.recommendedArgs, traceId)
       } catch (e: Exception) {
         emitObjectiveComplete(promptStep, stepStartTime, success = false, failureReason = e.message)
         return StepResult(
           executed = false,
+          passed = if (isVerify) false else null,
           error = "Action failed: ${e.message}",
           screenSummary = analysis.screenSummary,
         ).toJson()
@@ -163,6 +186,7 @@ class StepToolSet(
           Console.log("│ ✓ Executed: ${analysis.recommendedTool}")
           StepResult(
             executed = true,
+            passed = if (isVerify) true else null,
             result = analysis.reasoning.take(200),
             screenSummary = executionResult.screenSummaryAfter,
           ) to true
@@ -171,6 +195,7 @@ class StepToolSet(
           Console.log("│ ✗ Failed: ${executionResult.error}")
           StepResult(
             executed = true,
+            passed = if (isVerify) false else null,
             error = executionResult.error,
             screenSummary = analysis.screenSummary,
           ) to false
@@ -188,7 +213,7 @@ class StepToolSet(
       // Record the step (success or failure)
       sessionContext?.recordStep(
         RecordedStep(
-          type = RecordedStepType.STEP,
+          type = if (isVerify) RecordedStepType.VERIFY else RecordedStepType.STEP,
           input = goal,
           toolCalls = listOf(
             RecordedToolCall(
@@ -205,97 +230,15 @@ class StepToolSet(
 
     // LOW confidence → return options (inner agent may also suggest different tools)
     Console.log("│ ? Low confidence - needs guidance")
+    emitObjectiveComplete(promptStep, stepStartTime, success = false, failureReason = "Low confidence: ${analysis.reasoning}")
     return StepResult(
       executed = false,
       needsInput = true,
       result = "Uncertain: ${analysis.reasoning}",
       screenSummary = analysis.screenSummary,
       suggestion = analysis.recommendedTool,
-      suggestedToolHint = analysis.suggestedToolHint, // Inner agent may suggest different tools
+      suggestedHint = analysis.suggestedHint,
     ).toJson()
-  }
-
-  @LLMDescription(
-    """
-    Check if something is true.
-
-    verify(assertion="The login button is visible")
-    verify(assertion="The welcome message shows 'Hello John'")
-
-    Returns passed (true/false) with confidence level and a screenSummary.
-    """
-  )
-  @Tool
-  suspend fun verify(
-    @LLMDescription("What to verify (e.g., 'The login button is visible')")
-    assertion: String,
-  ): String {
-    val traceId = TraceId.generate(TraceId.Companion.TraceOrigin.LLM)
-    val stepStartTime = Clock.System.now()
-    val promptStep = VerificationStep(verify = assertion)
-
-    val screenState = screenStateProvider()
-      ?: return VerifyResult(
-        passed = false,
-        error = driverStatusProvider?.invoke()
-          ?: "No device connected. Use device(action=ANDROID), device(action=IOS), or device(action=WEB) first.",
-      ).toJson()
-
-    // Emit objective start log for log-based trail generation
-    emitObjectiveStart(promptStep)
-
-    // Use the analyzer to check the assertion
-    val recommendationContext = RecommendationContext(
-      objective = "Verify: $assertion",
-      progressSummary = null,
-      hint = "Just check if this is true, don't take any action",
-      attemptNumber = 1,
-    )
-
-    val analysis = try {
-      screenAnalyzer.analyze(
-        context = recommendationContext,
-        screenState = screenState,
-        traceId = traceId,
-        availableTools = availableToolsProvider(),
-      )
-    } catch (e: Exception) {
-      emitObjectiveComplete(promptStep, stepStartTime, success = false, failureReason = e.message)
-      return VerifyResult(
-        passed = false,
-        error = "Failed to analyze screen: ${e.message}",
-      ).toJson()
-    }
-
-    Console.log("")
-    Console.log("┌──────────────────────────────────────────────────────────────────────────────")
-    Console.log("│ [verify] $assertion")
-    Console.log("│ Result: ${if (analysis.objectiveAppearsAchieved) "PASSED" else "FAILED"}")
-    Console.log("│ Confidence: ${analysis.confidence}")
-    Console.log("└──────────────────────────────────────────────────────────────────────────────")
-
-    val result = VerifyResult(
-      passed = analysis.objectiveAppearsAchieved,
-      confidence = analysis.confidence.name,
-      details = analysis.reasoning,
-      screenSummary = analysis.screenSummary,
-    )
-
-    // Emit objective complete log
-    emitObjectiveComplete(promptStep, stepStartTime, success = result.passed)
-
-    // Record the verification
-    sessionContext?.recordStep(
-      RecordedStep(
-        type = RecordedStepType.VERIFY,
-        input = assertion,
-        toolCalls = emptyList(), // Verify doesn't execute tools
-        result = if (result.passed) "PASSED" else "FAILED",
-        success = result.passed,
-      ),
-    )
-
-    return result.toJson()
   }
 
   @LLMDescription(
@@ -306,10 +249,10 @@ class StepToolSet(
     ask(question="What buttons are visible?")
     ask(question="Is there an error message?")
 
-    Unlike verify(), this returns information - not pass/fail.
+    Unlike blaze(hint="VERIFY"), this returns information - not pass/fail.
     """
   )
-  @Tool
+  @Tool(McpToolProfile.TOOL_ASK)
   suspend fun ask(
     @LLMDescription("Your question (e.g., 'What's the current balance?')")
     question: String,
@@ -362,67 +305,39 @@ class StepToolSet(
     )
 
     // Ask is for the outer agent's situational awareness only — not recorded in trails.
-    // Only blaze() and verify() are tracked as trail steps.
+    // Only blaze() calls (including hint="VERIFY") are tracked as trail steps.
     emitAskLog(question, result.answer, result.screenSummary, null, traceId, startTime)
 
     return result.toJson()
   }
 
   /**
-   * Selects tools based on the hint from the outer agent and the loading strategy.
+   * Selects tools for the inner agent based on the hint.
    *
-   * When [ToolLoadingStrategy.ALL_TOOLS] (default):
-   * - No hint → all tools (same as STANDARD/ALL)
-   * - Explicit hints still respected for when callers want to override
+   * - hint="VERIFY": read-only assertion tools (OBSERVATION + VERIFICATION)
+   * - everything else: all available tools
    *
-   * When [ToolLoadingStrategy.PROGRESSIVE]:
-   * - No hint → MINIMAL (~6 tools, ~600 tokens)
-   * - NAVIGATION: +launchApp, openUrl, scrollUntilVisible
-   * - STANDARD/ALL: Full tool set (~17 tools, ~3,200 tokens)
+   * When [toolClassesOverrideProvider] returns non-null, those classes are used instead of
+   * the default [ToolSetCategoryMapping] selection. This allows driver-specific tool sets
+   * (e.g., Compose tools) to replace native tools that don't work with that driver.
    */
-  private fun selectToolsForHint(toolHint: String?): List<TrailblazeToolDescriptor> {
-    val hint = toolHint?.uppercase()?.trim()
-    val strategy = sessionContext?.toolLoadingStrategy ?: ToolLoadingStrategy.ALL_TOOLS
-
-    val toolClasses = when (hint) {
-      "MINIMAL" -> {
-        // Explicitly requested minimal tools
-        ToolSetCategoryMapping.getInnerAgentMinimalTools()
-      }
-      null -> {
-        // No hint: behavior depends on loading strategy
-        when (strategy) {
-          ToolLoadingStrategy.ALL_TOOLS -> ToolSetCategoryMapping.getToolClasses(ToolSetCategory.ALL)
-          ToolLoadingStrategy.PROGRESSIVE -> ToolSetCategoryMapping.getInnerAgentMinimalTools()
-        }
-      }
-      "NAVIGATION" -> {
-        // MINIMAL + navigation tools (launchApp, openUrl, etc.)
-        ToolSetCategoryMapping.getInnerAgentMinimalTools() +
-          ToolSetCategoryMapping.getToolClasses(ToolSetCategory.NAVIGATION)
-      }
-      "STANDARD", "ALL" -> {
-        // Full tool set (slower but more capable)
-        ToolSetCategoryMapping.getToolClasses(ToolSetCategory.STANDARD)
-      }
-      else -> {
-        // Try to parse as a category name
-        val category = ToolSetCategory.entries.find { it.name.equals(hint, ignoreCase = true) }
-        if (category != null) {
-          ToolSetCategoryMapping.getToolClasses(category)
-        } else {
-          // Unknown hint, fall back to minimal
-          Console.log("[StepTool] Unknown toolHint '$toolHint', using MINIMAL")
-          ToolSetCategoryMapping.getInnerAgentMinimalTools()
-        }
-      }
+  private fun selectToolsForHint(hint: String?): List<TrailblazeToolDescriptor> {
+    val overrideClasses = toolClassesOverrideProvider?.invoke()
+    val toolClasses = if (overrideClasses != null) {
+      overrideClasses
+    } else if (BlazeHint.from(hint) == BlazeHint.VERIFY) {
+      ToolSetCategoryMapping.getToolClasses(ToolSetCategory.OBSERVATION) +
+        ToolSetCategoryMapping.getToolClasses(ToolSetCategory.VERIFICATION)
+    } else {
+      ToolSetCategoryMapping.getToolClasses(ToolSetCategory.ALL)
     }
-
-    val builtInTools = toolClasses.mapNotNull { it.toKoogToolDescriptor()?.toTrailblazeToolDescriptor() }
-    // Include custom tools from the app target (e.g., myApp_launchSignedIn)
-    val customTools = availableToolsProvider()
-    val builtInNames = builtInTools.map { it.name }.toSet()
-    return builtInTools + customTools.filter { it.name !in builtInNames }
+    val tools = availableToolsProvider()
+    if (tools.isNotEmpty()) {
+      return tools
+    }
+    // Fallback when no device-specific tools are available (e.g. no device connected yet).
+    return ToolSetCategoryMapping.getToolClasses(ToolSetCategory.ALL)
+      .mapNotNull { it.toKoogToolDescriptor()?.toTrailblazeToolDescriptor() }
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -491,23 +406,14 @@ data class StepResult(
   val screenSummary: String? = null,
   val suggestion: String? = null,
   /**
-   * If the inner agent couldn't find an appropriate tool, it suggests a different tool set.
-   * The outer agent can retry with `toolHint=suggestedToolHint`.
-   * 
-   * Examples: "NAVIGATION" (needs launchApp), "VERIFICATION" (needs assert tools)
+   * If the inner agent couldn't find an appropriate tool, it suggests a different hint.
+   * The outer agent can retry with `hint=suggestedHint`.
    */
-  val suggestedToolHint: String? = null,
-) {
-  fun toJson(): String = TrailblazeJsonInstance.encodeToString(serializer(), this)
-}
-
-@Serializable
-data class VerifyResult(
-  val passed: Boolean,
-  val confidence: String? = null,
-  val details: String? = null,
-  val error: String? = null,
-  val screenSummary: String? = null,
+  val suggestedHint: String? = null,
+  /**
+   * For blaze(hint="VERIFY"): true = assertion passed, false = assertion failed, null = not a verify call.
+   */
+  val passed: Boolean? = null,
 ) {
   fun toJson(): String = TrailblazeJsonInstance.encodeToString(serializer(), this)
 }
@@ -519,4 +425,16 @@ data class AskResult(
   val screenSummary: String? = null,
 ) {
   fun toJson(): String = TrailblazeJsonInstance.encodeToString(serializer(), this)
+}
+
+/** Recognized values for the [StepToolSet.blaze] `hint` parameter. */
+enum class BlazeHint {
+  /** Read-only assertion check — returns [StepResult.passed]. */
+  VERIFY;
+
+  companion object {
+    /** Parses a hint string from the LLM, case-insensitively. Returns null for unrecognized values. */
+    fun from(value: String?): BlazeHint? =
+      value?.trim()?.uppercase()?.let { upper -> entries.firstOrNull { it.name == upper } }
+  }
 }

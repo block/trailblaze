@@ -1,4 +1,4 @@
-package xyz.block.trailblaze.ui
+package xyz.block.trailblaze.util
 
 /**
  * Represents the operating system type for the desktop application.
@@ -44,3 +44,11 @@ fun isWindows(): Boolean = DesktopOsType.current() == DesktopOsType.WINDOWS
  * Returns true if the current OS is Linux.
  */
 fun isLinux(): Boolean = DesktopOsType.current() == DesktopOsType.LINUX
+
+/**
+ * Returns true if the current CPU architecture is ARM (aarch64 / arm64).
+ */
+fun isArm(): Boolean {
+  val arch = System.getProperty("os.arch").lowercase()
+  return arch.contains("aarch64") || arch.contains("arm64")
+}

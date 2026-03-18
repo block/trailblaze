@@ -235,4 +235,66 @@ class TrailblazeNodeMapperTest {
     assertEquals(false, detail.isClickable)
     assertEquals(0, detail.inputType)
   }
+
+  // --- filterImportantForAccessibility ---
+
+  private fun node(
+    id: Long,
+    important: Boolean,
+    children: List<TrailblazeNode> = emptyList(),
+  ): TrailblazeNode = TrailblazeNode(
+    nodeId = id,
+    driverDetail = DriverNodeDetail.AndroidAccessibility(isImportantForAccessibility = important),
+    children = children,
+  )
+
+  @Test
+  fun `filterImportantForAccessibility keeps all-important tree unchanged`() {
+    val root = node(1, true, listOf(node(2, true), node(3, true)))
+    val result = root.filterImportantForAccessibility()
+    assertEquals(2, result.children.size)
+    assertEquals(2L, result.children[0].nodeId)
+    assertEquals(3L, result.children[1].nodeId)
+  }
+
+  @Test
+  fun `filterImportantForAccessibility drops non-important leaf`() {
+    val root = node(1, true, listOf(node(2, false)))
+    val result = root.filterImportantForAccessibility()
+    assertEquals(0, result.children.size)
+  }
+
+  @Test
+  fun `filterImportantForAccessibility promotes children of non-important node`() {
+    val root = node(1, true, listOf(
+      node(2, false, listOf(node(3, true), node(4, true))),
+    ))
+    val result = root.filterImportantForAccessibility()
+    assertEquals(2, result.children.size)
+    assertEquals(3L, result.children[0].nodeId)
+    assertEquals(4L, result.children[1].nodeId)
+  }
+
+  @Test
+  fun `filterImportantForAccessibility always keeps the root`() {
+    val root = node(1, false, listOf(node(2, true)))
+    val result = root.filterImportantForAccessibility()
+    assertEquals(1L, result.nodeId)
+    assertEquals(1, result.children.size)
+    assertEquals(2L, result.children[0].nodeId)
+  }
+
+  @Test
+  fun `filterImportantForAccessibility promotes through deep non-important chain`() {
+    val root = node(1, true, listOf(
+      node(2, false, listOf(
+        node(3, false, listOf(
+          node(4, true),
+        )),
+      )),
+    ))
+    val result = root.filterImportantForAccessibility()
+    assertEquals(1, result.children.size)
+    assertEquals(4L, result.children[0].nodeId)
+  }
 }

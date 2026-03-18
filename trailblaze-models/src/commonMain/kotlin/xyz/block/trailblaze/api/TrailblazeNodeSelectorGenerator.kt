@@ -16,9 +16,18 @@ package xyz.block.trailblaze.api
  * (contentDescription, hintText, text, resourceId+text, labeledByText).
  * **Type + state (11-16):** paneTitle, className, className + state flags, isPassword,
  * inputType, stateDescription — for elements without unique text.
- * **Hierarchy (17-19):** childOf parent, collectionItemInfo, containsChild.
+ * **Hierarchy (17-19):** childOf parent, containsChild, collectionItemInfo.
  * **Spatial (20):** Positional relationships to uniquely identifiable neighbors.
  * **Fallback (21):** Index-based positioning as a last resort.
+ *
+ * ## Compose strategy cascade (simplest to most complex)
+ *
+ * **Identity (1):** testTag (developer-assigned, most stable).
+ * **Text (2-7):** Precise field matching — contentDescription, text, role, toggleableState.
+ * editableText is skipped (user-entered content, not stable identity).
+ * **Hierarchy (8-9):** childOf parent, containsChild.
+ * **Spatial (10):** Positional relationships to uniquely identifiable neighbors.
+ * **Fallback (11):** Index-based positioning as a last resort.
  *
  * ## Recording flow
  * The caller provides the full tree and the target node. The generator returns the
@@ -484,7 +493,14 @@ object TrailblazeNodeSelectorGenerator {
         TrailblazeNodeSelector.withMatch(targetMatch, childOf = parentSelector)
       }
     },
-    // Strategy 18: collectionItemInfo (semantic list/grid position)
+    // Strategy 18: containsChild (unique child content)
+    {
+      findUniqueChildSelector(root, target)?.let { childSelector ->
+        val targetMatch = buildTargetMatch(detail)
+        TrailblazeNodeSelector.withMatch(targetMatch, containsChild = childSelector)
+      }
+    },
+    // Strategy 19: collectionItemInfo (semantic list/grid position)
     {
       detail.collectionItemInfo?.let { ci ->
         val targetMatch = buildTargetMatch(detail)?.let { m ->
@@ -494,13 +510,6 @@ object TrailblazeNodeSelectorGenerator {
           )
         }
         targetMatch?.let { selectorWith(it) }
-      }
-    },
-    // Strategy 19: containsChild (unique child content)
-    {
-      findUniqueChildSelector(root, target)?.let { childSelector ->
-        val targetMatch = buildTargetMatch(detail)
-        TrailblazeNodeSelector.withMatch(targetMatch, containsChild = childSelector)
       }
     },
 
@@ -622,37 +631,113 @@ object TrailblazeNodeSelectorGenerator {
     detail: DriverNodeDetail.Compose,
     parentMap: Map<Long, TrailblazeNode>,
   ): List<() -> TrailblazeNodeSelector?> = listOf(
-    // Strategy 1: testTag (most stable)
+    // Strategy 1: testTag (most stable, developer-assigned)
     {
       detail.testTag?.let { tag ->
         selectorWith(DriverNodeMatch.Compose(testTag = tag))
       }
     },
-    // Strategy 2: role + text
+
+    // === Precise text strategies (use specific fields, not resolveText) ===
+
+    // Strategy 2: contentDescription alone (icon buttons, images with no text)
     {
-      val text = detail.resolveText()?.takeIf { it.isNotBlank() }
-      val role = detail.role
-      if (text != null) {
-        selectorWith(DriverNodeMatch.Compose(role = role, textRegex = escapeForSelector(text)))
+      if (detail.text == null && detail.contentDescription != null) {
+        detail.contentDescription.takeIf { it.isNotBlank() }?.let { desc ->
+          selectorWith(DriverNodeMatch.Compose(contentDescriptionRegex = escapeForSelector(desc)))
+        }
       } else {
         null
       }
     },
-    // Strategy 3: childOf parent
+    // Strategy 3: contentDescription + role
     {
-      findUniqueParentSelector(root, target, parentMap)?.let { parentSelector ->
-        val text = detail.resolveText()?.takeIf { it.isNotBlank() }
-        val match = if (text != null) {
-          DriverNodeMatch.Compose(textRegex = escapeForSelector(text))
+      if (detail.text == null && detail.contentDescription != null && detail.role != null) {
+        selectorWith(
+          DriverNodeMatch.Compose(
+            contentDescriptionRegex = escapeForSelector(detail.contentDescription),
+            role = detail.role,
+          ),
+        )
+      } else {
+        null
+      }
+    },
+    // Strategy 4: text alone (static display text; skip for editable fields whose content changes)
+    {
+      if (detail.editableText == null) {
+        detail.text?.takeIf { it.isNotBlank() }?.let { text ->
+          selectorWith(DriverNodeMatch.Compose(textRegex = escapeForSelector(text)))
+        }
+      } else {
+        null
+      }
+    },
+    // Strategy 5: text + role
+    {
+      if (detail.editableText == null) {
+        val text = detail.text?.takeIf { it.isNotBlank() }
+        val role = detail.role
+        if (text != null && role != null) {
+          selectorWith(
+            DriverNodeMatch.Compose(
+              textRegex = escapeForSelector(text),
+              role = role,
+            ),
+          )
         } else {
           null
         }
-        TrailblazeNodeSelector.withMatch(match, childOf = parentSelector)
+      } else {
+        null
       }
     },
-    // Strategy 4: below a uniquely identifiable sibling
+    // Strategy 6: role alone (single-instance widgets: unique Checkbox, Switch, ProgressIndicator)
+    {
+      detail.role?.let { role ->
+        selectorWith(DriverNodeMatch.Compose(role = role))
+      }
+    },
+    // Strategy 7: role + toggleableState (stable toggle state labels like "On" / "Off")
+    {
+      val role = detail.role
+      val state = detail.toggleableState?.takeIf { it.isNotBlank() }
+      if (role != null && state != null) {
+        selectorWith(DriverNodeMatch.Compose(role = role, toggleableState = state))
+      } else {
+        null
+      }
+    },
+
+    // === Hierarchy strategies ===
+
+    // Strategy 8: childOf unique parent
+    {
+      findUniqueParentSelector(root, target, parentMap)?.let { parentSelector ->
+        val targetMatch = buildTargetMatch(detail)
+        TrailblazeNodeSelector.withMatch(targetMatch, childOf = parentSelector)
+      }
+    },
+    // Strategy 9: containsChild (unique child content)
+    {
+      findUniqueChildSelector(root, target)?.let { childSelector ->
+        val targetMatch = buildTargetMatch(detail)
+        TrailblazeNodeSelector.withMatch(targetMatch, containsChild = childSelector)
+      }
+    },
+
+    // === Spatial strategies ===
+
+    // Strategy 10: spatial relationship to a uniquely identifiable sibling
     {
       findSpatialSelector(root, target, parentMap)
+    },
+
+    // === Index fallback ===
+
+    // Strategy 11: index as last resort
+    {
+      computeIndexSelectorForMatch(root, target, buildTargetMatch(detail))
     },
   )
 
@@ -734,9 +819,16 @@ object TrailblazeNodeSelectorGenerator {
     val strategies = composeStrategies(root, target, detail, parentMap)
     val names = listOf(
       "Test tag",
-      "Role + text",
+      "Content description",
+      "Content description + role",
+      "Text",
+      "Text + role",
+      "Role",
+      "Role + toggleable state",
       "Child of parent",
+      "Contains child",
       "Spatial relationship",
+      "Index fallback",
     )
     return names.zip(strategies)
   }
@@ -1346,9 +1438,17 @@ object TrailblazeNodeSelectorGenerator {
     }
     is DriverNodeDetail.Compose -> {
       val tag = detail.testTag
-      val text = detail.resolveText()?.takeIf { it.isNotBlank() }
-      if (tag != null || text != null) {
-        DriverNodeMatch.Compose(testTag = tag, textRegex = text?.let { escapeForSelector(it) })
+      // Skip editableText — user-entered content is not stable identity.
+      val text = if (detail.editableText == null) detail.text?.takeIf { it.isNotBlank() } else null
+      val desc = detail.contentDescription?.takeIf { it.isNotBlank() && text == null }
+      val role = detail.role
+      if (tag != null || text != null || desc != null || role != null) {
+        DriverNodeMatch.Compose(
+          testTag = tag,
+          role = role,
+          textRegex = text?.let { escapeForSelector(it) },
+          contentDescriptionRegex = desc?.let { escapeForSelector(it) },
+        )
       } else {
         null
       }

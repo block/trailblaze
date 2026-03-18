@@ -21,6 +21,7 @@ import kotlinx.serialization.json.Json
 import xyz.block.trailblaze.llm.LlmUsageAndCostExt.computeUsageSummary
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionStatus
+import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.report.models.CiRunMetadata
 import xyz.block.trailblaze.report.models.CiSummaryReport
 import xyz.block.trailblaze.report.models.ExecutionMode
@@ -30,11 +31,10 @@ import xyz.block.trailblaze.report.models.SOURCE_TYPE_GENERATED
 import xyz.block.trailblaze.report.models.SessionRecordingInfo
 import xyz.block.trailblaze.report.models.SessionResult
 import xyz.block.trailblaze.report.utils.LogsRepo
+import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.TrailConfig
-import xyz.block.trailblaze.yaml.TrailSourceType
 import java.io.File
 import kotlin.io.path.Path
-import xyz.block.trailblaze.util.Console
 
 /**
  * CLI command to generate test results YAML/JSON from a logs directory.
@@ -147,7 +147,10 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
         val outcome = mapStatusToOutcome(sessionInfo.latestStatus)
         val title = sessionInfo.trailConfig?.title
           ?: sessionInfo.trailConfig?.id
-          ?: sessionInfo.testName
+          ?: sessionInfo.trailFilePath?.removePrefix("trails/")?.removeSuffix(TrailRecordings.DOT_TRAIL_DOT_YAML_FILE_SUFFIX)
+          ?: sessionInfo.testName?.takeIf { it.isNotBlank() }?.let { name ->
+            sessionInfo.testClass?.substringAfterLast(".")?.let { cls -> "$cls/$name" } ?: name
+          }
           ?: sessionId.value
         val sessionRecordingInfo = SessionRecordingInfo.fromLogs(logs)
         // Get timestamps

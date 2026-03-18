@@ -38,8 +38,8 @@ import xyz.block.trailblaze.mcp.respondRpcError
  *
  * Routes requests based on [RunYamlRequest.agentImplementation]:
  * - TRAILBLAZE_RUNNER: Uses [runTrailblazeYaml] callback (traditional YAML-based agent)
- * - TWO_TIER_AGENT: Uses [runTwoTierAgent] callback (OuterLoopAgent + InnerLoopScreenAnalyzer)
- * - MULTI_AGENT_V3: Mobile-Agent-v3 inspired implementation with progress reporting
+ * - MULTI_AGENT_V3: Not supported on-device; falls back to TRAILBLAZE_RUNNER.
+ *   V3 is intended to run on the host.
  *
  * ## Progress Reporting
  *
@@ -50,14 +50,12 @@ import xyz.block.trailblaze.mcp.respondRpcError
  *
  * @param sessionManager Manages session lifecycle and logging
  * @param runTrailblazeYaml Callback to execute via TrailblazeRunner (YAML processing)
- * @param runTwoTierAgent Callback to execute via two-tier agent (OuterLoopAgent)
  * @param trailblazeDeviceInfoProvider Provider for device info including classifiers - used in session start logs
  * @param progressManager Optional manager for tracking and emitting progress events
  */
 class OnDeviceRpcServer(
   private val sessionManager: TrailblazeSessionManager,
   private val runTrailblazeYaml: suspend (RunYamlRequest, TrailblazeSession) -> TrailblazeSession,
-  private val runTwoTierAgent: suspend (RunYamlRequest, TrailblazeSession) -> TrailblazeSession,
   private val trailblazeDeviceInfoProvider: (TrailblazeDeviceId) -> TrailblazeDeviceInfo,
   private val progressManager: ProgressSessionManager = ProgressSessionManager(),
 ) {
@@ -89,7 +87,6 @@ class OnDeviceRpcServer(
             getCurrentJob = { currPromptJob },
             setCurrentJob = { job -> currPromptJob = job },
             runTrailblazeYaml = runTrailblazeYaml,
-            runTwoTierAgent = runTwoTierAgent,
             trailblazeDeviceInfoProvider = trailblazeDeviceInfoProvider,
             progressManager = progressManager,
           )

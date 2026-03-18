@@ -1,12 +1,9 @@
 package xyz.block.trailblaze.compose.driver
 
-import androidx.compose.ui.test.ComposeUiTest
-import androidx.compose.ui.test.ExperimentalTestApi
-import androidx.compose.ui.test.captureToImage
-import androidx.compose.ui.test.onRoot
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
+import xyz.block.trailblaze.compose.target.ComposeTestTarget
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.util.Console
@@ -14,25 +11,27 @@ import xyz.block.trailblaze.util.Console
 /**
  * ScreenState implementation for Compose testing.
  *
- * Captures the UI state via ComposeUiTest's semantics tree and screenshot APIs.
- * The semantics tree is mapped to [ViewHierarchyTreeNode] for compatibility with
- * the existing LLM prompt construction pipeline.
+ * Captures the UI state via a [ComposeTestTarget]'s semantics tree and screenshot APIs. The
+ * semantics tree is mapped to [ViewHierarchyTreeNode] for compatibility with the existing LLM
+ * prompt construction pipeline.
  */
-@OptIn(ExperimentalTestApi::class)
 class ComposeScreenState(
-  private val composeUiTest: ComposeUiTest,
+  private val target: ComposeTestTarget,
   private val viewportWidth: Int,
   private val viewportHeight: Int,
   private val requestedDetails: Set<ComposeViewHierarchyDetail> = emptySet(),
 ) : ScreenState {
 
   /** Shared lazy root node to avoid fetching the semantics tree multiple times. */
-  private val rootSemanticsNode by lazy { composeUiTest.onRoot().fetchSemanticsNode() }
+  private val rootSemanticsNode by lazy { target.rootSemanticsNode() }
+
+  /** All root nodes (main window + popups/dialogs) for complete UI coverage. */
+  private val allRootNodes by lazy { target.allRootSemanticsNodes() }
 
   /** Compact element list with element IDs for disambiguation. */
   val compactElements: ComposeSemanticTreeMapper.CompactComposeElements by lazy {
     val includeBounds = ComposeViewHierarchyDetail.BOUNDS in requestedDetails
-    ComposeSemanticTreeMapper.buildCompactElementList(rootSemanticsNode, includeBounds)
+    ComposeSemanticTreeMapper.buildCompactElementList(allRootNodes, includeBounds)
   }
 
   /** Maps element IDs (e.g., `"e1"`) to [ComposeSemanticTreeMapper.ComposeElementRef]s. */
@@ -54,7 +53,7 @@ class ComposeScreenState(
 
   private val capturedImage by lazy {
     try {
-      composeUiTest.onRoot().captureToImage()
+      target.captureScreenshot()
     } catch (e: Exception) {
       Console.log("Warning: Screenshot capture failed: ${e.message}")
       null

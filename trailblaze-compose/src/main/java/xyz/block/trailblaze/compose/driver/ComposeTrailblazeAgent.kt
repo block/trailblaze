@@ -1,8 +1,6 @@
 package xyz.block.trailblaze.compose.driver
 
-import androidx.compose.ui.test.ComposeUiTest
-import androidx.compose.ui.test.ExperimentalTestApi
-import androidx.compose.ui.test.SemanticsNodeInteraction
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.hasText
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.runBlocking
@@ -22,6 +20,7 @@ import xyz.block.trailblaze.compose.driver.tools.ComposeTypeTool
 import xyz.block.trailblaze.compose.driver.tools.ComposeVerifyElementVisibleTool
 import xyz.block.trailblaze.compose.driver.tools.ComposeVerifyTextVisibleTool
 import xyz.block.trailblaze.compose.driver.tools.ComposeWaitTool
+import xyz.block.trailblaze.compose.target.ComposeTestTarget
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.logs.client.TrailblazeLog
@@ -44,18 +43,17 @@ import xyz.block.trailblaze.utils.ElementComparator
 /**
  * Compose implementation of [TrailblazeAgent].
  *
- * This agent executes tools directly against a Compose [ComposeUiTest] without any
- * Maestro or Playwright dependency. It uses the Compose semantics tree for element
- * identification and ComposeUiTest APIs for interaction.
+ * This agent executes tools directly against a [ComposeTestTarget] without any Maestro or
+ * Playwright dependency. It uses the Compose semantics tree for element identification and
+ * ComposeTestTarget APIs for interaction.
  *
  * Tools that implement [ComposeExecutableTool] are executed via
- * [ComposeExecutableTool.executeWithCompose] with the current ComposeUiTest.
- * Generic [ExecutableTrailblazeTool] instances (like TakeSnapshotTool) are
- * executed via the standard [ExecutableTrailblazeTool.execute] path.
+ * [ComposeExecutableTool.executeWithCompose] with the current ComposeTestTarget. Generic
+ * [ExecutableTrailblazeTool] instances (like TakeSnapshotTool) are executed via the standard
+ * [ExecutableTrailblazeTool.execute] path.
  */
-@OptIn(ExperimentalTestApi::class)
 class ComposeTrailblazeAgent(
-  val composeUiTest: ComposeUiTest,
+  val target: ComposeTestTarget,
   override val trailblazeLogger: TrailblazeLogger,
   override val trailblazeDeviceInfoProvider: () -> TrailblazeDeviceInfo,
   override val sessionProvider: TrailblazeSessionProvider,
@@ -67,8 +65,8 @@ class ComposeTrailblazeAgent(
     /**
      * Default viewport width for the Compose desktop test window.
      *
-     * 1280x800 (16:10) approximates a typical desktop application window.
-     * This is used as the capture dimensions for screenshots and element coordinate mapping.
+     * 1280x800 (16:10) approximates a typical desktop application window. This is used as the
+     * capture dimensions for screenshots and element coordinate mapping.
      */
     const val DEFAULT_VIEWPORT_WIDTH = 1280
 
@@ -83,7 +81,7 @@ class ComposeTrailblazeAgent(
 
   val screenStateProvider: () -> ScreenState = {
     val details = pendingDetailRequests.getAndSet(emptySet())
-    ComposeScreenState(composeUiTest, viewportWidth, viewportHeight, requestedDetails = details)
+    ComposeScreenState(target, viewportWidth, viewportHeight, requestedDetails = details)
   }
 
   fun clearMemory() {
@@ -208,7 +206,7 @@ class ComposeTrailblazeAgent(
     val preScreenState = try { screenStateProvider() } catch (_: Throwable) { null }
 
     val timeBeforeExecution = Clock.System.now()
-    val result = tool.executeWithCompose(composeUiTest, context)
+    val result = tool.executeWithCompose(target, context)
     val executionTimeMs =
       Clock.System.now().toEpochMilliseconds() - timeBeforeExecution.toEpochMilliseconds()
     logToolExecution(tool, timeBeforeExecution, context, result)
@@ -384,12 +382,12 @@ class ComposeTrailblazeAgent(
       val matcher = ComposeExecutableTool.resolveElement(elementId, testTag, text, context)
         ?: return 0 to 0
       val nthIndex = ComposeExecutableTool.getNthIndex(elementId, context)
-      val node: SemanticsNodeInteraction = if (nthIndex > 0) {
-        composeUiTest.onAllNodes(matcher).get(nthIndex)
+      val matchingNodes = target.allSemanticsNodes().filter { matcher.matches(it) }
+      val semanticsNode = if (nthIndex > 0 && nthIndex < matchingNodes.size) {
+        matchingNodes[nthIndex]
       } else {
-        composeUiTest.onNode(matcher)
+        matchingNodes.firstOrNull() ?: return 0 to 0
       }
-      val semanticsNode = node.fetchSemanticsNode()
       val bounds = semanticsNode.boundsInWindow
       val centerX = ((bounds.left + bounds.right) / 2).toInt()
       val centerY = ((bounds.top + bounds.bottom) / 2).toInt()
@@ -405,7 +403,8 @@ class ComposeTrailblazeAgent(
    */
   private fun resolveComposeTextCenter(text: String): Pair<Int, Int> {
     return try {
-      val nodes = composeUiTest.onAllNodes(hasText(text, substring = false)).fetchSemanticsNodes()
+      val textMatcher = hasText(text, substring = false)
+      val nodes = target.allSemanticsNodes().filter { textMatcher.matches(it) }
       if (nodes.isNotEmpty()) {
         val bounds = nodes.first().boundsInWindow
         val centerX = ((bounds.left + bounds.right) / 2).toInt()

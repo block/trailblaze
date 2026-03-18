@@ -253,18 +253,23 @@ class BridgeUiActionExecutor(
       describeFromViewHierarchy(screenState.viewHierarchyOriginal)
     }
 
-    if (actionableItems.isEmpty()) return "No actionable elements visible"
-
-    return buildString {
-      for (item in actionableItems) {
-        if (length + item.length + 4 > MAX_SUMMARY_LENGTH) {
-          append("...")
-          break
+    val elementsSummary = if (actionableItems.isEmpty()) {
+      "No actionable elements visible"
+    } else {
+      buildString {
+        for (item in actionableItems) {
+          if (length + item.length + 4 > MAX_SUMMARY_LENGTH) {
+            append("...")
+            break
+          }
+          if (isNotEmpty()) append(" | ")
+          append(item)
         }
-        if (isNotEmpty()) append(" | ")
-        append(item)
       }
     }
+
+    val pageContext = screenState.pageContextSummary
+    return if (pageContext != null) "$pageContext\n$elementsSummary" else elementsSummary
   }
 
   /**

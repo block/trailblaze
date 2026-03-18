@@ -84,7 +84,6 @@ class AndroidStandaloneServerTest : BaseAndroidStandaloneServerTest() {
     val onDeviceRpcServer = OnDeviceRpcServer(
       sessionManager = trailblazeLoggingRule.sessionManager,
       runTrailblazeYaml = createRunTrailblazeYamlCallback(),
-      runTwoTierAgent = createRunTwoTierAgentCallback(),
       trailblazeDeviceInfoProvider = { deviceId ->
         // Set the lateinit property early so the logging rule's provider can access it
         this.trailblazeDeviceId = deviceId

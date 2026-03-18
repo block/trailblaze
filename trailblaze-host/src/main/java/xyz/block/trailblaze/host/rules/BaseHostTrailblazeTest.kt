@@ -32,7 +32,7 @@ import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.host.HostMaestroTrailblazeAgent
 import xyz.block.trailblaze.host.MaestroHostRunnerImpl
-import xyz.block.trailblaze.host.agent.HostUiActionExecutor
+import xyz.block.trailblaze.agent.AgentUiActionExecutor
 import xyz.block.trailblaze.host.devices.TrailblazeConnectedDevice
 import xyz.block.trailblaze.host.devices.TrailblazeDeviceService
 import xyz.block.trailblaze.host.devices.TrailblazeHostDeviceClassifier
@@ -269,7 +269,7 @@ abstract class BaseHostTrailblazeTest(
       samplingSource = samplingSource,
       model = trailblazeLlmModel,
     )
-    val executor = HostUiActionExecutor(
+    val executor = AgentUiActionExecutor(
       agent = trailblazeAgent,
       screenStateProvider = hostRunner.screenStateProvider,
       toolRepo = toolRepo,

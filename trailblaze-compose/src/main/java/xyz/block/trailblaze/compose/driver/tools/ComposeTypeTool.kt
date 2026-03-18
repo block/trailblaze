@@ -1,17 +1,13 @@
 package xyz.block.trailblaze.compose.driver.tools
 
 import ai.koog.agents.core.tools.annotations.LLMDescription
-import androidx.compose.ui.test.ComposeUiTest
-import androidx.compose.ui.test.ExperimentalTestApi
-import androidx.compose.ui.test.performTextClearance
-import androidx.compose.ui.test.performTextInput
 import kotlinx.serialization.Serializable
+import xyz.block.trailblaze.compose.target.ComposeTestTarget
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.util.Console
 
-@OptIn(ExperimentalTestApi::class)
 @Serializable
 @TrailblazeToolClass("compose_type")
 @LLMDescription(
@@ -40,7 +36,7 @@ class ComposeTypeTool(
 ) : ComposeExecutableTool {
 
   override suspend fun executeWithCompose(
-    composeUiTest: ComposeUiTest,
+    target: ComposeTestTarget,
     context: TrailblazeToolExecutionContext,
   ): TrailblazeToolResult {
     val interpolatedText = context.memory.interpolateVariables(text)
@@ -53,17 +49,12 @@ class ComposeTypeTool(
             "Must provide elementId, testTag, or existingText to identify the element."
           )
       val nthIndex = ComposeExecutableTool.getNthIndex(elementId, context)
-      val node =
-        if (nthIndex > 0) {
-          composeUiTest.onAllNodes(matcher).get(nthIndex)
-        } else {
-          composeUiTest.onNode(matcher)
-        }
+      val node = ComposeExecutableTool.findNode(target, matcher, nthIndex)
       if (clearFirst) {
-        node.performTextClearance()
+        target.clearText(node)
       }
-      node.performTextInput(interpolatedText)
-      composeUiTest.waitForIdle()
+      target.typeText(node, interpolatedText)
+      target.waitForIdle()
       val action = if (clearFirst) "Filled" else "Typed"
       TrailblazeToolResult.Success(message = "$action '$interpolatedText' into '$description'.")
     } catch (e: Exception) {

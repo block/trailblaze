@@ -414,79 +414,99 @@ fun SessionProgressComposable(
               remember(logs, progressItem.startedAt, progressItem.completedAt) {
                 buildProgressItemScreenshotItems(logs = logs, item = progressItem)
               }
-            if (index > 0) {
-              HorizontalDivider(
-                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
-              )
-            }
-            Box(
-              modifier =
-                Modifier.onGloballyPositioned { coords ->
-                  timelineState?.objectiveOffsets?.put(
-                    index,
-                    coords.positionInParent().y.toInt(),
-                  )
-                },
-            ) {
-              when (progressItem) {
-                is ProgressItem.ObjectiveItem -> {
-                  ObjectiveStepRow(
-                    stepNumber = progressItem.stepNumber,
-                    objective = progressItem.objective,
-                    sessionStartTime = sessionStartTime,
-                    isExpanded = isExpanded,
-                    toTrailblazeYaml = toTrailblazeYaml,
-                    onToggleExpanded = {
-                      onAutoFollowDisabled?.invoke()
-                      expandedObjectives[index] = !isExpanded
-                      selectedObjectiveIndex = if (!isExpanded) index else null
-                      if (!isExpanded && timelineState != null) {
-                        val startMs =
-                          progressItem.objective.startedAt?.toEpochMilliseconds()
-                        if (startMs != null) {
-                          timelineState.scrubTimestampMs = startMs
+            // A ToolBlockItem that immediately follows an ObjectiveItem contains late-arriving
+            // tool logs that semantically belong to that objective (fire-and-forget timing in
+            // MCP mode). It renders inside ObjectiveStepRow — skip it as a standalone row.
+            val isChildToolBlock =
+              progressItem is ProgressItem.ToolBlockItem &&
+                progressItems.getOrNull(index - 1) is ProgressItem.ObjectiveItem
+            // Look ahead: pass any immediately following ToolBlockItem into ObjectiveStepRow so
+            // it renders inside the expanded section rather than as a sibling row.
+            val childToolBlock =
+              if (progressItem is ProgressItem.ObjectiveItem)
+                progressItems.getOrNull(index + 1) as? ProgressItem.ToolBlockItem
+              else null
+            val childToolBlockScreenshots =
+              remember(logs, childToolBlock?.startedAt, childToolBlock?.completedAt) {
+                childToolBlock?.let { buildProgressItemScreenshotItems(logs, it) } ?: emptyList()
+              }
+            if (!isChildToolBlock) {
+              if (index > 0) {
+                HorizontalDivider(
+                  color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                )
+              }
+              Box(
+                modifier =
+                  Modifier.onGloballyPositioned { coords ->
+                    timelineState?.objectiveOffsets?.put(
+                      index,
+                      coords.positionInParent().y.toInt(),
+                    )
+                  },
+              ) {
+                when (progressItem) {
+                  is ProgressItem.ObjectiveItem -> {
+                    ObjectiveStepRow(
+                      stepNumber = progressItem.stepNumber,
+                      objective = progressItem.objective,
+                      sessionStartTime = sessionStartTime,
+                      isExpanded = isExpanded,
+                      toTrailblazeYaml = toTrailblazeYaml,
+                      onToggleExpanded = {
+                        onAutoFollowDisabled?.invoke()
+                        expandedObjectives[index] = !isExpanded
+                        selectedObjectiveIndex = if (!isExpanded) index else null
+                        if (!isExpanded && timelineState != null) {
+                          val startMs =
+                            progressItem.objective.startedAt?.toEpochMilliseconds()
+                          if (startMs != null) {
+                            timelineState.scrubTimestampMs = startMs
+                          }
                         }
-                      }
-                    },
-                    objectiveScreenshots = itemScreenshots,
-                    selectedScreenshotIndex = screenshotSelections[index] ?: 0,
-                    onScreenshotSelected = { screenshotSelections[index] = it },
-                    sessionId = sessionId,
-                    imageLoader = imageLoader,
-                    logs = logs,
-                    onShowDetails = onShowDetails,
-                    onShowInspectUI = onShowInspectUI,
-                    onShowChatHistory = onShowChatHistory,
-                    onShowScreenshotModal = onShowScreenshotModal,
-                    onColumnsPerRowChanged = { cols -> galleryColumnsPerRow[index] = cols },
-                  )
-                }
-                is ProgressItem.ToolBlockItem -> {
-                  ToolBlockRow(
-                    toolBlock = progressItem,
-                    sessionStartTime = sessionStartTime,
-                    isExpanded = isExpanded,
-                    toTrailblazeYaml = toTrailblazeYaml,
-                    onToggleExpanded = {
-                      onAutoFollowDisabled?.invoke()
-                      expandedObjectives[index] = !isExpanded
-                      selectedObjectiveIndex = if (!isExpanded) index else null
-                      if (!isExpanded && timelineState != null) {
-                        val startMs = progressItem.startedAt?.toEpochMilliseconds()
-                        if (startMs != null) {
-                          timelineState.scrubTimestampMs = startMs
+                      },
+                      objectiveScreenshots = itemScreenshots,
+                      selectedScreenshotIndex = screenshotSelections[index] ?: 0,
+                      onScreenshotSelected = { screenshotSelections[index] = it },
+                      sessionId = sessionId,
+                      imageLoader = imageLoader,
+                      logs = logs,
+                      onShowDetails = onShowDetails,
+                      onShowInspectUI = onShowInspectUI,
+                      onShowChatHistory = onShowChatHistory,
+                      onShowScreenshotModal = onShowScreenshotModal,
+                      onColumnsPerRowChanged = { cols -> galleryColumnsPerRow[index] = cols },
+                      childToolBlock = childToolBlock,
+                      childToolBlockScreenshots = childToolBlockScreenshots,
+                    )
+                  }
+                  is ProgressItem.ToolBlockItem -> {
+                    ToolBlockRow(
+                      toolBlock = progressItem,
+                      sessionStartTime = sessionStartTime,
+                      isExpanded = isExpanded,
+                      toTrailblazeYaml = toTrailblazeYaml,
+                      onToggleExpanded = {
+                        onAutoFollowDisabled?.invoke()
+                        expandedObjectives[index] = !isExpanded
+                        selectedObjectiveIndex = if (!isExpanded) index else null
+                        if (!isExpanded && timelineState != null) {
+                          val startMs = progressItem.startedAt?.toEpochMilliseconds()
+                          if (startMs != null) {
+                            timelineState.scrubTimestampMs = startMs
+                          }
                         }
-                      }
-                    },
-                    toolBlockScreenshots = itemScreenshots,
-                    selectedScreenshotIndex = screenshotSelections[index] ?: 0,
-                    onScreenshotSelected = { screenshotSelections[index] = it },
-                    sessionId = sessionId,
-                    imageLoader = imageLoader,
-                    onShowDetails = onShowDetails,
-                    onShowScreenshotModal = onShowScreenshotModal,
-                    onColumnsPerRowChanged = { cols -> galleryColumnsPerRow[index] = cols },
-                  )
+                      },
+                      toolBlockScreenshots = itemScreenshots,
+                      selectedScreenshotIndex = screenshotSelections[index] ?: 0,
+                      onScreenshotSelected = { screenshotSelections[index] = it },
+                      sessionId = sessionId,
+                      imageLoader = imageLoader,
+                      onShowDetails = onShowDetails,
+                      onShowScreenshotModal = onShowScreenshotModal,
+                      onColumnsPerRowChanged = { cols -> galleryColumnsPerRow[index] = cols },
+                    )
+                  }
                 }
               }
             }
@@ -730,7 +750,10 @@ private fun ObjectiveStepRow(
     ((Any?, Int, Int, Int?, Int?, AgentDriverAction?) -> Unit)? =
     null,
   onColumnsPerRowChanged: ((Int) -> Unit)? = null,
+  childToolBlock: ProgressItem.ToolBlockItem? = null,
+  childToolBlockScreenshots: List<ScreenshotTimelineItem> = emptyList(),
 ) {
+  var childToolBlockExpanded by remember { mutableStateOf(false) }
   val isPending = objective.status == ObjectiveStatus.Pending
   val isActive = objective.status == ObjectiveStatus.InProgress
   val statusColor =
@@ -886,117 +909,142 @@ private fun ObjectiveStepRow(
       enter = expandVertically() + fadeIn(),
       exit = shrinkVertically() + fadeOut(),
     ) {
-      Column(
-        modifier =
-          Modifier.fillMaxWidth()
-            .padding(start = 52.dp, end = 16.dp, top = 0.dp, bottom = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-      ) {
-        // Full prompt
-        Text(
-          text = objective.prompt.trim(),
-          style = MaterialTheme.typography.bodySmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-
-        // Tool call count + duration line
-        val toolCount = objective.toolCallCount
-        val duration = objectiveDurationMs(objective)
-        if (toolCount > 0 || duration != null) {
-          val parts = mutableListOf<String>()
-          if (toolCount > 0) parts.add("$toolCount tool call${if (toolCount != 1) "s" else ""}")
-          if (duration != null) parts.add(formatDuration(duration))
+      Column(modifier = Modifier.fillMaxWidth()) {
+        Column(
+          modifier =
+            Modifier.fillMaxWidth()
+              .padding(start = 52.dp, end = 16.dp, top = 0.dp, bottom = 16.dp),
+          verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+          // Full prompt
           Text(
-            text = parts.joinToString(" \u2022 "),
-            style = MaterialTheme.typography.labelSmall,
+            text = objective.prompt.trim(),
+            style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
           )
-        }
 
-        // Failure suggestion
-        if (objective.status == ObjectiveStatus.Failed) {
-          val suggestion = buildFailureSuggestion(objective)
-          if (suggestion != null) {
+          // Tool call count + duration line
+          val toolCount = objective.toolCallCount
+          val duration = objectiveDurationMs(objective)
+          if (toolCount > 0 || duration != null) {
+            val parts = mutableListOf<String>()
+            if (toolCount > 0) parts.add("$toolCount tool call${if (toolCount != 1) "s" else ""}")
+            if (duration != null) parts.add(formatDuration(duration))
+            Text(
+              text = parts.joinToString(" \u2022 "),
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
+
+          // Failure suggestion
+          if (objective.status == ObjectiveStatus.Failed) {
+            val suggestion = buildFailureSuggestion(objective)
+            if (suggestion != null) {
+              Box(
+                modifier =
+                  Modifier.fillMaxWidth()
+                    .background(
+                      MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.6f),
+                      RoundedCornerShape(8.dp),
+                    )
+                    .padding(12.dp),
+              ) {
+                Text(
+                  text = suggestion,
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onErrorContainer,
+                )
+              }
+            }
+          }
+
+          // Screenshots gallery
+          if (objectiveScreenshots.isNotEmpty()) {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+              SectionLabel("EVENTS")
+              ScreenshotGallery(
+                items = objectiveScreenshots,
+                sessionStartTime = sessionStartTime,
+                selectedIndex = selectedScreenshotIndex,
+                onSelectedIndexChanged = onScreenshotSelected,
+                sessionId = sessionId,
+                imageLoader = imageLoader,
+                onFullScreenClick = onScreenshotClick,
+                toTrailblazeYaml = toTrailblazeYaml,
+                onShowDetails = onShowDetails,
+                onShowInspectUI = onShowInspectUI,
+                onShowChatHistory = onShowChatHistory,
+                onColumnsPerRowChanged = onColumnsPerRowChanged,
+              )
+            }
+          }
+
+          // LLM explanation (objective result) — shown at the bottom of every completed objective
+          if (objective.status.isTerminal && objective.llmExplanation != null) {
+            val isSuccess = objective.status == ObjectiveStatus.Succeeded
+            val accentColor =
+              if (isSuccess) SessionProgressColors.succeeded
+              else MaterialTheme.colorScheme.error
             Box(
               modifier =
                 Modifier.fillMaxWidth()
                   .background(
-                    MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.6f),
+                    accentColor.copy(alpha = 0.08f),
                     RoundedCornerShape(8.dp),
                   )
                   .padding(12.dp),
             ) {
-              Text(
-                text = suggestion,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onErrorContainer,
-              )
-            }
-          }
-        }
-
-        // Screenshots gallery
-        if (objectiveScreenshots.isNotEmpty()) {
-          Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            SectionLabel("EVENTS")
-            ScreenshotGallery(
-              items = objectiveScreenshots,
-              sessionStartTime = sessionStartTime,
-              selectedIndex = selectedScreenshotIndex,
-              onSelectedIndexChanged = onScreenshotSelected,
-              sessionId = sessionId,
-              imageLoader = imageLoader,
-              onFullScreenClick = onScreenshotClick,
-              toTrailblazeYaml = toTrailblazeYaml,
-              onShowDetails = onShowDetails,
-              onShowInspectUI = onShowInspectUI,
-              onShowChatHistory = onShowChatHistory,
-              onColumnsPerRowChanged = onColumnsPerRowChanged,
-            )
-          }
-        }
-
-        // LLM explanation (objective result) — shown at the bottom of every completed objective
-        if (objective.status.isTerminal && objective.llmExplanation != null) {
-          val isSuccess = objective.status == ObjectiveStatus.Succeeded
-          val accentColor =
-            if (isSuccess) SessionProgressColors.succeeded
-            else MaterialTheme.colorScheme.error
-          Box(
-            modifier =
-              Modifier.fillMaxWidth()
-                .background(
-                  accentColor.copy(alpha = 0.08f),
-                  RoundedCornerShape(8.dp),
-                )
-                .padding(12.dp),
-          ) {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-              Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-              ) {
-                Icon(
-                  imageVector =
-                    if (isSuccess) Icons.Filled.CheckCircle
-                    else Icons.Filled.Cancel,
-                  contentDescription = if (isSuccess) "Succeeded" else "Failed",
-                  tint = accentColor,
-                  modifier = Modifier.size(16.dp),
-                )
+              Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                  Icon(
+                    imageVector =
+                      if (isSuccess) Icons.Filled.CheckCircle
+                      else Icons.Filled.Cancel,
+                    contentDescription = if (isSuccess) "Succeeded" else "Failed",
+                    tint = accentColor,
+                    modifier = Modifier.size(16.dp),
+                  )
+                  Text(
+                    text = if (isSuccess) "Objective Passed" else "Objective Failed",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = accentColor,
+                  )
+                }
                 Text(
-                  text = if (isSuccess) "Objective Passed" else "Objective Failed",
-                  style = MaterialTheme.typography.labelMedium,
-                  fontWeight = FontWeight.SemiBold,
-                  color = accentColor,
+                  text = objective.llmExplanation,
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onSurface,
                 )
               }
-              Text(
-                text = objective.llmExplanation,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface,
-              )
             }
+          }
+        }
+
+        // Child tool block: late-arriving MCP tools rendered inside the expanded objective section
+        if (childToolBlock != null) {
+          HorizontalDivider(
+            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f),
+          )
+          Box(modifier = Modifier.padding(start = 16.dp)) {
+            ToolBlockRow(
+              toolBlock = childToolBlock,
+              sessionStartTime = sessionStartTime,
+              isExpanded = childToolBlockExpanded,
+              toTrailblazeYaml = toTrailblazeYaml,
+              onToggleExpanded = { childToolBlockExpanded = !childToolBlockExpanded },
+              toolBlockScreenshots = childToolBlockScreenshots,
+              selectedScreenshotIndex = 0,
+              onScreenshotSelected = {},
+              sessionId = sessionId,
+              imageLoader = imageLoader,
+              onShowDetails = onShowDetails,
+              onShowScreenshotModal = onShowScreenshotModal,
+            )
           }
         }
       }

@@ -19,6 +19,7 @@ import xyz.block.trailblaze.llm.TrailblazeReferrer
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.model.getSessionStatus
+import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRpcClient
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
 import xyz.block.trailblaze.model.DesktopAppRunYamlParams
@@ -162,9 +163,34 @@ class DesktopYamlRunner(
 
         val trailblazeHostAppTarget = trailblazeHostAppTargetProvider()
 
-        sessionId = when (trailblazeDriverType) {
-          TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
-          TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY -> {
+        sessionId = when {
+          // V3 on host with accessibility driver: run planner/analyzer on the host JVM,
+          // send individual tool calls to the on-device accessibility server via RPC.
+          trailblazeDriverType == TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY &&
+            runYamlRequest.agentImplementation == AgentImplementation.MULTI_AGENT_V3 -> {
+            val trailblazeOnDeviceInstrumentationTarget = targetTestApp?.getTrailblazeOnDeviceInstrumentationTarget()
+              ?: trailblazeHostAppTarget.getTrailblazeOnDeviceInstrumentationTarget()
+
+            val onDeviceRpc = OnDeviceRpcClient(
+              trailblazeDeviceId = trailblazeDeviceId,
+              sendProgressMessage = prefixedProgressMessage,
+            )
+
+            runV3WithAccessibilityOnHost(
+              onDeviceRpc = onDeviceRpc,
+              dynamicLlmClient = dynamicLlmClientProvider(runYamlRequest.trailblazeLlmModel),
+              runYamlRequest = runYamlRequest.copy(driverType = trailblazeDriverType),
+              connectedTrailblazeDevice = connectedTrailblazeDevice,
+              trailblazeOnDeviceInstrumentationTarget = trailblazeOnDeviceInstrumentationTarget,
+              onProgressMessage = prefixedProgressMessage,
+              onConnectionStatus = onConnectionStatus,
+              additionalInstrumentationArgs = additionalInstrumentationArgs,
+              targetTestApp = targetTestApp,
+            )
+          }
+
+          trailblazeDriverType == TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION ||
+            trailblazeDriverType == TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY -> {
             val trailblazeOnDeviceInstrumentationTarget = targetTestApp?.getTrailblazeOnDeviceInstrumentationTarget()
               ?: trailblazeHostAppTarget.getTrailblazeOnDeviceInstrumentationTarget()
 
@@ -264,6 +290,55 @@ class DesktopYamlRunner(
         if (executionResult is TrailExecutionResult.Cancelled) {
           throw CancellationException("Test cancelled for device ${trailblazeDeviceId.instanceId}")
         }
+      }
+    }
+  }
+
+  /**
+   * Connects instrumentation on-device and runs MULTI_AGENT_V3 on the host, using the
+   * on-device accessibility driver for individual tool execution.
+   *
+   * Handles the same instrumentation setup as [runYamlOnDevice] but delegates execution
+   * to [TrailblazeHostYamlRunner.runHostV3WithAccessibilityYaml] instead of forwarding
+   * the full trail YAML to the device.
+   */
+  private suspend fun runV3WithAccessibilityOnHost(
+    onDeviceRpc: OnDeviceRpcClient,
+    dynamicLlmClient: DynamicLlmClient,
+    runYamlRequest: RunYamlRequest,
+    connectedTrailblazeDevice: TrailblazeConnectedDeviceSummary,
+    trailblazeOnDeviceInstrumentationTarget: TrailblazeOnDeviceInstrumentationTarget,
+    onProgressMessage: (String) -> Unit,
+    onConnectionStatus: (DeviceConnectionStatus) -> Unit,
+    additionalInstrumentationArgs: Map<String, String>,
+    targetTestApp: TrailblazeHostAppTarget?,
+  ): SessionId? {
+    return withContext(Dispatchers.IO) {
+      val status = HostAndroidDeviceConnectUtils.connectToInstrumentationAndInstallAppIfNotAvailable(
+        sendProgressMessage = onProgressMessage,
+        deviceId = connectedTrailblazeDevice.trailblazeDeviceId,
+        trailblazeOnDeviceInstrumentationTarget = trailblazeOnDeviceInstrumentationTarget,
+        additionalInstrumentationArgs = additionalInstrumentationArgs,
+      )
+
+      AccessibilityServiceSetupUtils.ensureAccessibilityServiceReady(
+        deviceId = connectedTrailblazeDevice.trailblazeDeviceId,
+        hostPackage = trailblazeOnDeviceInstrumentationTarget.testAppId,
+        sendProgressMessage = onProgressMessage,
+      )
+
+      withContext(Dispatchers.Default) {
+        onConnectionStatus(status)
+        onDeviceRpc.verifyServerIsRunning()
+
+        TrailblazeHostYamlRunner.runHostV3WithAccessibilityYaml(
+          dynamicLlmClient = dynamicLlmClient,
+          onDeviceRpc = onDeviceRpc,
+          runYamlRequest = runYamlRequest,
+          trailblazeDeviceId = connectedTrailblazeDevice.trailblazeDeviceId,
+          onProgressMessage = onProgressMessage,
+          targetTestApp = targetTestApp,
+        )
       }
     }
   }

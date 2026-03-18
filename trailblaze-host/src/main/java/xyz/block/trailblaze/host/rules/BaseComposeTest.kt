@@ -1,11 +1,11 @@
 package xyz.block.trailblaze.host.rules
 
-import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import kotlinx.datetime.Clock
 import xyz.block.trailblaze.agent.TrailblazeElementComparator
 import xyz.block.trailblaze.agent.TrailblazeRunner
 import xyz.block.trailblaze.compose.driver.ComposeTrailblazeAgent
+import xyz.block.trailblaze.compose.target.ComposeTestTarget
 import xyz.block.trailblaze.compose.driver.tools.ComposeToolSet
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
@@ -102,7 +102,7 @@ class BaseComposeTest(
    * Call this from within a `runComposeUiTest { }` block, passing the ComposeUiTest.
    */
   suspend fun runTestWithCompose(
-    composeUiTest: ComposeUiTest,
+    target: ComposeTestTarget,
     yaml: String,
     trailFilePath: String? = null,
     useRecordedSteps: Boolean = true,
@@ -110,7 +110,7 @@ class BaseComposeTest(
   ): SessionId {
     val agent =
       ComposeTrailblazeAgent(
-        composeUiTest = composeUiTest,
+        target = target,
         trailblazeLogger = loggingRule.logger,
         trailblazeDeviceInfoProvider = { trailblazeDeviceInfo },
         sessionProvider = {

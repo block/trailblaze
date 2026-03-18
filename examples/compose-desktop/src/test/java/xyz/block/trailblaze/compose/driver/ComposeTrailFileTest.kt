@@ -32,6 +32,8 @@ import xyz.block.trailblaze.toolcalls.toolName
 import xyz.block.trailblaze.utils.ElementComparator
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
+import xyz.block.trailblaze.compose.target.ComposeTestTarget
+import xyz.block.trailblaze.compose.target.ComposeUiTestTarget
 import xyz.block.trailblaze.util.Console
 
 /**
@@ -66,7 +68,7 @@ class ComposeTrailFileTest {
     override fun extractNumberFromString(input: String) = error("unused")
   }
 
-  private fun createAgent(composeUiTest: ComposeUiTest): ComposeTrailblazeAgent {
+  private fun createAgent(target: ComposeTestTarget): ComposeTrailblazeAgent {
     val deviceInfo = TrailblazeDeviceInfo(
       trailblazeDeviceId = TrailblazeDeviceId(
         instanceId = "trail-file-test",
@@ -77,7 +79,7 @@ class ComposeTrailFileTest {
       heightPixels = 800,
     )
     return ComposeTrailblazeAgent(
-      composeUiTest = composeUiTest,
+      target = target,
       trailblazeLogger = TrailblazeLogger.createNoOp(),
       trailblazeDeviceInfoProvider = { deviceInfo },
       sessionProvider = {
@@ -144,7 +146,7 @@ class ComposeTrailFileTest {
         text: 1 items
     """.trimIndent()
 
-    val result = executeToolTrailItems(createAgent(this), yaml)
+    val result = executeToolTrailItems(createAgent(ComposeUiTestTarget(this)), yaml)
     assertThat(result).isInstanceOf(TrailblazeToolResult.Success::class)
   }
 
@@ -169,7 +171,7 @@ class ComposeTrailFileTest {
         text: 0 items
     """.trimIndent()
 
-    val result = executeToolTrailItems(createAgent(this), yaml)
+    val result = executeToolTrailItems(createAgent(ComposeUiTestTarget(this)), yaml)
     assertThat(result).isInstanceOf(TrailblazeToolResult.Success::class)
   }
 
@@ -188,7 +190,7 @@ class ComposeTrailFileTest {
         testTag: item_count
     """.trimIndent()
 
-    val result = executeToolTrailItems(createAgent(this), yaml)
+    val result = executeToolTrailItems(createAgent(ComposeUiTestTarget(this)), yaml)
     assertThat(result).isInstanceOf(TrailblazeToolResult.Success::class)
   }
 
@@ -211,7 +213,7 @@ class ComposeTrailFileTest {
         screenName: after_add_todo
     """.trimIndent()
 
-    val result = executeToolTrailItems(createAgent(this), yaml)
+    val result = executeToolTrailItems(createAgent(ComposeUiTestTarget(this)), yaml)
     assertThat(result).isInstanceOf(TrailblazeToolResult.Success::class)
 
     // Also verify we can capture a screenshot directly
@@ -232,7 +234,7 @@ class ComposeTrailFileTest {
         text: this text does not exist anywhere
     """.trimIndent()
 
-    val result = executeToolTrailItems(createAgent(this), yaml)
+    val result = executeToolTrailItems(createAgent(ComposeUiTestTarget(this)), yaml)
     assertThat(result).isInstanceOf(TrailblazeToolResult.Error::class)
   }
 
@@ -247,7 +249,7 @@ class ComposeTrailFileTest {
         testTag: completely_nonexistent_tag
     """.trimIndent()
 
-    val result = executeToolTrailItems(createAgent(this), yaml)
+    val result = executeToolTrailItems(createAgent(ComposeUiTestTarget(this)), yaml)
     assertThat(result).isInstanceOf(TrailblazeToolResult.Error::class)
   }
 
@@ -266,11 +268,11 @@ class ComposeTrailFileTest {
         testTag: todo_input
     """.trimIndent()
 
-    val result = executeToolTrailItems(createAgent(this), yaml)
+    val result = executeToolTrailItems(createAgent(ComposeUiTestTarget(this)), yaml)
     assertThat(result).isInstanceOf(TrailblazeToolResult.Error::class)
 
     // Verify the type tool was never executed — input should still be empty
-    val screenState = ComposeScreenState(this, 1280, 800)
+    val screenState = ComposeScreenState(ComposeUiTestTarget(this), 1280, 800)
     val tree = screenState.viewHierarchy.aggregate()
     val input = tree.find { it.resourceId == "todo_input" }
     assertThat(input).isNotNull()
@@ -314,7 +316,7 @@ class ComposeTrailFileTest {
 
     // Replay the recorded tools through the agent — same path as
     // TrailblazeRunnerUtil.runPromptSuspend with useRecordedSteps=true.
-    val agent = createAgent(this)
+    val agent = createAgent(ComposeUiTestTarget(this))
     for (promptStep in promptsItem.promptSteps) {
       val recording = promptStep.recording
       assertThat(recording).isNotNull()
@@ -363,7 +365,7 @@ class ComposeTrailFileTest {
       .isEqualTo("User should add a todo and verify it appears")
 
     // Tools still execute correctly
-    val result = executeToolTrailItems(createAgent(this), yaml)
+    val result = executeToolTrailItems(createAgent(ComposeUiTestTarget(this)), yaml)
     assertThat(result).isInstanceOf(TrailblazeToolResult.Success::class)
   }
 
@@ -398,7 +400,7 @@ class ComposeTrailFileTest {
     assertThat(trailItems[1]).isInstanceOf(TrailYamlItem.ToolTrailItem::class)
     assertThat(trailItems[2]).isInstanceOf(TrailYamlItem.ToolTrailItem::class)
 
-    val result = executeToolTrailItems(createAgent(this), yaml)
+    val result = executeToolTrailItems(createAgent(ComposeUiTestTarget(this)), yaml)
     assertThat(result).isInstanceOf(TrailblazeToolResult.Success::class)
   }
 
@@ -490,7 +492,7 @@ class ComposeTrailFileTest {
       ),
     )
 
-    val agent = createAgent(this)
+    val agent = createAgent(ComposeUiTestTarget(this))
     val reportEntries = mutableListOf<ReportEntry>()
 
     for (step in steps) {
@@ -568,7 +570,7 @@ class ComposeTrailFileTest {
       """.trimIndent() to "Verified 2 items remain",
     )
 
-    val agent = createAgent(this)
+    val agent = createAgent(ComposeUiTestTarget(this))
     val framesDir = File("build/reports/compose-trail/frames")
     framesDir.mkdirs()
 

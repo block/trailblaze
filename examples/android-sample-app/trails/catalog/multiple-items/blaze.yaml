@@ -1,0 +1,13 @@
+- config:
+    id: "sample-app/catalog/multiple-items"
+    app: "xyz.block.trailblaze.examples.sampleapp"
+- tools:
+    - launchApp:
+        appId: "xyz.block.trailblaze.examples.sampleapp"
+        launchMode: "REINSTALL"
+- prompts:
+    - step: Navigate to the "Catalog" tab
+    - verify: '"Coffee", "Coffee Latte", and "Coffee Americano" are all visible in the list'
+    - step: Tap on "Coffee Americano" specifically
+    - verify: A dialog showing "Coffee Americano" is visible
+    - step: Tap "Dismiss" to close the dialog

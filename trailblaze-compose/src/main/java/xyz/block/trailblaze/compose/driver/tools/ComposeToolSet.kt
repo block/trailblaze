@@ -4,6 +4,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet.DynamicTrailblazeToolSet
 import xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TakeSnapshotTool
+import xyz.block.trailblaze.toolcalls.toolName
 
 /**
  * Tool sets for the Compose agent.
@@ -49,4 +50,10 @@ object ComposeToolSet {
           TrailblazeToolSet.RememberTrailblazeToolSet.toolClasses +
           setOf(ComposeRequestDetailsTool::class),
     )
+
+  /** Compose tool classes keyed by tool name, for JSON serialization registration. */
+  val toolClassesByToolName by lazy {
+    LlmToolSet.toolClasses.associateBy { it.toolName() }
+  }
+
 }

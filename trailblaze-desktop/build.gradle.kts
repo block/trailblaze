@@ -40,6 +40,7 @@ configurations.all {
 dependencies {
   implementation(project(":trailblaze-agent"))
   implementation(project(":trailblaze-common"))
+  implementation(project(":trailblaze-compose"))
   implementation(project(":trailblaze-host"))
   implementation(project(":trailblaze-models"))
   implementation(project(":trailblaze-report"))

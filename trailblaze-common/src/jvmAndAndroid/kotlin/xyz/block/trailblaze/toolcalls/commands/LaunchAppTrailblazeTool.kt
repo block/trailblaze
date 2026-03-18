@@ -6,6 +6,7 @@ import kotlinx.serialization.Serializable
 import maestro.orchestra.Command
 import maestro.orchestra.LaunchAppCommand
 import xyz.block.trailblaze.AgentMemory
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.toolcalls.MapsToMaestroCommands
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
@@ -34,7 +35,17 @@ Available App Launch Modes:
   override suspend fun execute(
     toolExecutionContext: TrailblazeToolExecutionContext,
   ): TrailblazeToolResult {
-    val result = super.execute(toolExecutionContext)
+    // iOS system apps (Calendar, Contacts, etc.) cannot have their state cleared — the OS
+    // prohibits uninstalling them. Skip clearState upfront rather than catching the error.
+    // All Apple system apps use the com.apple.* prefix, which third-party apps cannot use.
+    val isIosSystemApp = toolExecutionContext.trailblazeDeviceInfo.platform == TrailblazeDevicePlatform.IOS &&
+      appId.startsWith("com.apple.")
+    val result = if (launchMode == LaunchMode.REINSTALL && isIosSystemApp) {
+      copy(launchMode = LaunchMode.FORCE_RESTART).execute(toolExecutionContext)
+    } else {
+      super.execute(toolExecutionContext)
+    }
+
     // On Android on-device drivers (instrumentation + accessibility), allow the app time to
     // fully render after launch so the next view hierarchy snapshot is stable. Without this,
     // slower emulators (especially in CI) often produce unstable hierarchies due to launch

@@ -44,12 +44,10 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
-import xyz.block.trailblaze.llm.RunYamlRequest
-import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.llm.TrailblazeReferrer
 import xyz.block.trailblaze.model.DesktopAppRunYamlParams
 import xyz.block.trailblaze.model.DeviceConnectionStatus
-import xyz.block.trailblaze.model.TrailblazeConfig
+import xyz.block.trailblaze.ui.model.LocalRunYamlRequestFactory
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.ui.TrailblazeSettingsRepo
 import xyz.block.trailblaze.ui.composables.ConnectionStatusPanel
@@ -72,13 +70,11 @@ import xyz.block.trailblaze.ui.editors.yaml.validateYaml
  */
 @Composable
 fun YamlTabComposable(
-  currentTrailblazeLlmModelProvider: () -> TrailblazeLlmModel,
   trailblazeSettingsRepo: TrailblazeSettingsRepo,
   deviceManager: TrailblazeDeviceManager,
   yamlRunner: (DesktopAppRunYamlParams) -> Unit,
   additionalInstrumentationArgs: (suspend () -> Map<String, String>),
 ) {
-  val currentTrailblazeLlmModel = currentTrailblazeLlmModelProvider()
   val serverState by trailblazeSettingsRepo.serverStateFlow.collectAsState()
   val savedYamlContent = serverState.appConfig.yamlContent
   val savedEditorMode = serverState.appConfig.yamlEditorMode
@@ -238,6 +234,8 @@ fun YamlTabComposable(
       )
     }
 
+    val requestFactory = LocalRunYamlRequestFactory.current
+
     // Device Selection Dialog
     if (showDeviceSelectionDialog) {
       DeviceSelectionDialog(
@@ -291,20 +289,11 @@ fun YamlTabComposable(
           val targetTestApp = deviceManager.getCurrentSelectedTargetApp()
           // Run on each selected device
           selectedDevices.forEach { device ->
-            val runYamlRequest = RunYamlRequest(
-              testName = "Yaml",
+            val runYamlRequest = requestFactory.create(
+              device = device,
               yaml = localYamlContent,
-              trailblazeLlmModel = currentTrailblazeLlmModel,
-              useRecordedSteps = true,
-              targetAppName = serverState.appConfig.selectedTargetAppId,
-              config = TrailblazeConfig(
-                setOfMarkEnabled = setOfMarkEnabledConfig,
-                aiFallback = serverState.appConfig.aiFallbackEnabled,
-                overrideSessionId = null,
-              ),
-              trailFilePath = null,
-              trailblazeDeviceId = device.trailblazeDeviceId,
-              referrer = TrailblazeReferrer.YAML_TAB
+              testName = "Yaml",
+              referrer = TrailblazeReferrer.YAML_TAB,
             )
 
             coroutineScope.launch {

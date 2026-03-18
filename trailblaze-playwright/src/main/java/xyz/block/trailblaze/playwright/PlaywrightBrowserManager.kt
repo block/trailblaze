@@ -101,6 +101,8 @@ class PlaywrightBrowserManager(
   private val viewportHeight: Int = DEFAULT_VIEWPORT_HEIGHT,
   override val idlingConfig: PlaywrightNativeIdlingConfig = PlaywrightNativeIdlingConfig(),
   val analyticsUrlPatterns: List<String> = emptyList(),
+  /** Called during first-time Chromium install with (percentComplete 0–100, statusMessage). */
+  private val onBrowserInstallProgress: ((Int, String) -> Unit)? = null,
 ) : PlaywrightPageManager {
 
   companion object {
@@ -312,6 +314,8 @@ class PlaywrightBrowserManager(
       // Ensure the Playwright driver is available (downloads on first use if driver-bundle
       // is not on the classpath, e.g., when running from the uber JAR).
       PlaywrightDriverManager.ensureDriverAvailable()
+      // Ensure the Chromium browser binary is installed. This is a no-op after first install.
+      PlaywrightDriverManager.ensureBrowserInstalled(onProgress = onBrowserInstallProgress)
       runBlocking(playwrightDispatcher) {
         playwright = Playwright.create()
         val browserType =

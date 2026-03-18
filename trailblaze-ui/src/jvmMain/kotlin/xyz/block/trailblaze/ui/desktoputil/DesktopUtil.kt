@@ -2,7 +2,7 @@ package xyz.block.trailblaze.ui.desktoputil
 
 import java.awt.Desktop
 import java.io.File
-import xyz.block.trailblaze.ui.DesktopOsType
+import xyz.block.trailblaze.util.DesktopOsType
 import xyz.block.trailblaze.util.Console
 
 /**

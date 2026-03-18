@@ -29,6 +29,7 @@ include(
   ":trailblaze-android-ondevice-mcp",
   ":trailblaze-capture",
   ":trailblaze-common",
+  ":trailblaze-compose-target",
   ":trailblaze-desktop",
   ":trailblaze-host",
   ":trailblaze-models",

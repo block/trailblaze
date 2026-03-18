@@ -1,0 +1,60 @@
+- config:
+    id: sample-app/catalog/conditional-item
+    app: xyz.block.trailblaze.examples.sampleapp
+    platform: android
+    driver: ANDROID_ONDEVICE_ACCESSIBILITY
+- tools:
+  - launchApp:
+      appId: xyz.block.trailblaze.examples.sampleapp
+- prompts:
+  - step: Navigate to the "Catalog" tab
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: Navigate to the Catalog tab by tapping the Catalog navigation item.
+          selector:
+            containsChild:
+              textRegex: Catalog
+          nodeSelector:
+            androidAccessibility:
+              textRegex: Catalog
+  - verify: '"Pumpkin Spice" is not visible on the screen'
+  - step: Tap "Show seasonal" to reveal seasonal items
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: Tap the "Show seasonal" filter chip to reveal seasonal items.
+          selector:
+            containsChild:
+              textRegex: Show seasonal
+          nodeSelector:
+            androidAccessibility:
+              textRegex: Show seasonal
+  - step: Verify "Pumpkin Spice" is now visible and tap it
+    recording:
+      tools:
+      - assertVisibleBySelector:
+          reason: Verify that "Pumpkin Spice" is now visible after enabling the seasonal filter.
+          selector:
+            textRegex: Pumpkin Spice
+          nodeSelector:
+            androidAccessibility:
+              textRegex: Pumpkin Spice
+      - tapOnElementBySelector:
+          reason: Tap on the "Pumpkin Spice" item row to open its detail dialog.
+          selector:
+            containsChild:
+              textRegex: Pumpkin Spice
+          nodeSelector:
+            androidAccessibility:
+              textRegex: Pumpkin Spice
+  - verify: A dialog showing "Pumpkin Spice" is visible
+    recording:
+      tools:
+      - assertVisibleBySelector:
+          reason: Verify the item detail dialog is showing "Pumpkin Spice".
+          selector:
+            textRegex: Pumpkin Spice
+          nodeSelector:
+            androidAccessibility:
+              textRegex: Pumpkin Spice

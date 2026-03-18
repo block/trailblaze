@@ -1,0 +1,41 @@
+- config:
+    id: sample-app/catalog/overlay-tap
+    app: xyz.block.trailblaze.examples.sampleapp
+    platform: android
+    driver: ANDROID_ONDEVICE_INSTRUMENTATION
+- tools:
+  - launchApp:
+      appId: xyz.block.trailblaze.examples.sampleapp
+      launchMode: REINSTALL
+- prompts:
+  - step: Navigate to the "Catalog" tab
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: Navigate to the Catalog tab by tapping the Catalog navigation item.
+          selector:
+            containsChild:
+              textRegex: Catalog
+  - step: Tap "Coffee Latte" in the list
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: Tap on the "Coffee Latte" item row to open its detail dialog.
+          selector:
+            containsChild:
+              textRegex: Coffee Latte
+  - verify: A dialog showing "Coffee Latte" is visible
+    recording:
+      tools:
+      - assertVisibleBySelector:
+          reason: Verify the item detail dialog is showing "Coffee Latte".
+          selector:
+            textRegex: Coffee Latte
+  - step: Tap "Add to Cart" in the dialog
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: Tap the "Add to Cart" button in the dialog overlay.
+          selector:
+            containsChild:
+              textRegex: Add to Cart

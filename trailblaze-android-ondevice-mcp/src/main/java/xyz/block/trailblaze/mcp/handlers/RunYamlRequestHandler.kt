@@ -25,7 +25,6 @@ import xyz.block.trailblaze.yaml.createTrailblazeYaml
  *
  * Routes requests based on [RunYamlRequest.agentImplementation]:
  * - [AgentImplementation.TRAILBLAZE_RUNNER]: Legacy YAML-based TrailblazeRunner
- * - [AgentImplementation.TWO_TIER_AGENT]: Modern two-tier agent architecture
  * - [AgentImplementation.MULTI_AGENT_V3]: Mobile-Agent-v3 inspired implementation
  *
  * Manages session lifecycle and executes tests in the background.
@@ -46,17 +45,15 @@ class RunYamlRequestHandler(
   private val sessionManager: TrailblazeSessionManager,
   /** Callback to run via TrailblazeRunner (legacy YAML processing) */
   private val runTrailblazeYaml: suspend (RunYamlRequest, TrailblazeSession) -> TrailblazeSession,
-  /** Callback to run via two-tier agent architecture */
-  private val runTwoTierAgent: suspend (RunYamlRequest, TrailblazeSession) -> TrailblazeSession,
   /** Provider for device info including classifiers - used in session start logs.
    *  Accepts the device ID from the request so callers can initialize state before
    *  building the info (e.g., setting lateinit properties). */
   private val trailblazeDeviceInfoProvider: (TrailblazeDeviceId) -> TrailblazeDeviceInfo,
   /** Optional progress manager for emitting progress events to MCP clients */
   private val progressManager: ProgressSessionManager? = null,
-  /** Callback to run via MultiAgentV3 (optional) - if not provided, falls back to TWO_TIER_AGENT */
-  private val runMultiAgentV3Callback: (suspend (RunYamlRequest, TrailblazeSession) -> TrailblazeSession)? =
-    null,
+  /** Callback to run via MultiAgentV3. When null (default for on-device), MULTI_AGENT_V3
+   *  requests fall back to TRAILBLAZE_RUNNER. V3 is intended to run on the host, not on-device. */
+  private val runMultiAgentV3Callback: (suspend (RunYamlRequest, TrailblazeSession) -> TrailblazeSession)? = null,
 ) : RpcHandler<RunYamlRequest, RunYamlResponse> {
 
   /** Tracks the session associated with the currently running job, so we can end the correct
@@ -175,20 +172,17 @@ class RunYamlRequestHandler(
               runTrailblazeYaml(requestWithStartLogSuppressed, session)
             }
 
-            AgentImplementation.TWO_TIER_AGENT -> {
-              Console.log("[RunYamlRequestHandler] Using TWO_TIER_AGENT")
-              runTwoTierAgent(request, session)
-            }
-
             AgentImplementation.MULTI_AGENT_V3 -> {
-              if (runMultiAgentV3Callback != null) {
+              val callback = runMultiAgentV3Callback
+              if (callback != null) {
                 Console.log("[RunYamlRequestHandler] Using MULTI_AGENT_V3")
-                runMultiAgentV3Callback.invoke(request, session)
+                callback.invoke(request, session)
               } else {
-                Console.log(
-                  "[RunYamlRequestHandler] Using MULTI_AGENT_V3 (fallback to TWO_TIER_AGENT)"
+                Console.log("[RunYamlRequestHandler] MULTI_AGENT_V3 is not supported on-device; falling back to TRAILBLAZE_RUNNER")
+                val requestWithStartLogSuppressed = request.copy(
+                  config = request.config.copy(sendSessionStartLog = false),
                 )
-                runTwoTierAgent(request, session)
+                runTrailblazeYaml(requestWithStartLogSuppressed, session)
               }
             }
           }

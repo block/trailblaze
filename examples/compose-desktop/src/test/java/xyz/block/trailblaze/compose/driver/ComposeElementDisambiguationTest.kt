@@ -23,6 +23,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
 import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.compose.driver.tools.ComposeClickTool
+import xyz.block.trailblaze.compose.target.ComposeUiTestTarget
 import xyz.block.trailblaze.compose.driver.tools.ComposeExecutableTool
 import xyz.block.trailblaze.compose.driver.tools.ComposeTypeTool
 import xyz.block.trailblaze.compose.driver.tools.ComposeVerifyElementVisibleTool
@@ -76,7 +77,7 @@ class ComposeElementDisambiguationTest {
     setContent { SampleTodoApp(includeAmbiguousSection = true) }
     waitForIdle()
 
-    val screenState = ComposeScreenState(this, 1280, 800)
+    val screenState = ComposeScreenState(ComposeUiTestTarget(this), 1280, 800)
 
     // Find the element ID for the settings save button
     val settingsSaveEntry =
@@ -88,7 +89,7 @@ class ComposeElementDisambiguationTest {
     val ctx = stubContext(screenState)
     val result = runBlocking {
       ComposeClickTool(elementId = settingsSaveEntry!!.key)
-        .executeWithCompose(this@runComposeUiTest, ctx)
+        .executeWithCompose(ComposeUiTestTarget(this@runComposeUiTest), ctx)
     }
     assertThat(result).isInstanceOf(TrailblazeToolResult.Success::class)
 
@@ -107,7 +108,7 @@ class ComposeElementDisambiguationTest {
     setContent { SampleTodoApp(includeAmbiguousSection = true) }
     waitForIdle()
 
-    val screenState = ComposeScreenState(this, 1280, 800)
+    val screenState = ComposeScreenState(ComposeUiTestTarget(this), 1280, 800)
 
     // Find element IDs for "Learn more" buttons (clickable text, no testTag)
     val learnMoreEntries =
@@ -123,7 +124,7 @@ class ComposeElementDisambiguationTest {
     val ctx = stubContext(screenState)
     val result = runBlocking {
       ComposeClickTool(elementId = secondLearnMore!!.key)
-        .executeWithCompose(this@runComposeUiTest, ctx)
+        .executeWithCompose(ComposeUiTestTarget(this@runComposeUiTest), ctx)
     }
     assertThat(result).isInstanceOf(TrailblazeToolResult.Success::class)
 
@@ -138,7 +139,7 @@ class ComposeElementDisambiguationTest {
     setContent { SampleTodoApp(includeAmbiguousSection = true) }
     waitForIdle()
 
-    val screenState = ComposeScreenState(this, 1280, 800)
+    val screenState = ComposeScreenState(ComposeUiTestTarget(this), 1280, 800)
 
     // Find the element ID for the settings field
     val settingsFieldEntry =
@@ -148,7 +149,7 @@ class ComposeElementDisambiguationTest {
     val ctx = stubContext(screenState)
     val result = runBlocking {
       ComposeTypeTool(text = "dark-mode=true", elementId = settingsFieldEntry!!.key)
-        .executeWithCompose(this@runComposeUiTest, ctx)
+        .executeWithCompose(ComposeUiTestTarget(this@runComposeUiTest), ctx)
     }
     assertThat(result).isInstanceOf(TrailblazeToolResult.Success::class)
   }
@@ -158,7 +159,7 @@ class ComposeElementDisambiguationTest {
     setContent { SampleTodoApp(includeAmbiguousSection = true) }
     waitForIdle()
 
-    val screenState = ComposeScreenState(this, 1280, 800)
+    val screenState = ComposeScreenState(ComposeUiTestTarget(this), 1280, 800)
 
     // Resolve a few IDs and verify they return valid refs
     val mapping = screenState.elementIdMapping
@@ -245,13 +246,13 @@ class ComposeElementDisambiguationTest {
     setContent { SampleTodoApp(includeAmbiguousSection = true) }
     waitForIdle()
 
-    val screenState = ComposeScreenState(this, 1280, 800)
+    val screenState = ComposeScreenState(ComposeUiTestTarget(this), 1280, 800)
     val ctx = stubContext(screenState)
 
     // Use a non-existent element ID but provide a valid testTag fallback
     val result = runBlocking {
       ComposeClickTool(elementId = "e999", testTag = "profile_save_button")
-        .executeWithCompose(this@runComposeUiTest, ctx)
+        .executeWithCompose(ComposeUiTestTarget(this@runComposeUiTest), ctx)
     }
     assertThat(result).isInstanceOf(TrailblazeToolResult.Success::class)
 
@@ -266,13 +267,13 @@ class ComposeElementDisambiguationTest {
     setContent { SampleTodoApp(includeAmbiguousSection = true) }
     waitForIdle()
 
-    val screenState = ComposeScreenState(this, 1280, 800)
+    val screenState = ComposeScreenState(ComposeUiTestTarget(this), 1280, 800)
     val ctx = stubContext(screenState)
 
     // Non-existent element ID and no testTag/text fallback
     val result = runBlocking {
       ComposeClickTool(elementId = "e999")
-        .executeWithCompose(this@runComposeUiTest, ctx)
+        .executeWithCompose(ComposeUiTestTarget(this@runComposeUiTest), ctx)
     }
     assertThat(result).isInstanceOf(TrailblazeToolResult.Error::class)
   }
@@ -282,7 +283,7 @@ class ComposeElementDisambiguationTest {
     setContent { SampleTodoApp(includeAmbiguousSection = true) }
     waitForIdle()
 
-    val screenState = ComposeScreenState(this, 1280, 800)
+    val screenState = ComposeScreenState(ComposeUiTestTarget(this), 1280, 800)
 
     // Find the element ID for the add button
     val addButtonEntry =
@@ -292,7 +293,7 @@ class ComposeElementDisambiguationTest {
     val ctx = stubContext(screenState)
     val result = runBlocking {
       ComposeVerifyElementVisibleTool(elementId = addButtonEntry!!.key)
-        .executeWithCompose(this@runComposeUiTest, ctx)
+        .executeWithCompose(ComposeUiTestTarget(this@runComposeUiTest), ctx)
     }
     assertThat(result).isInstanceOf(TrailblazeToolResult.Success::class)
   }
@@ -304,7 +305,7 @@ class ComposeElementDisambiguationTest {
     setContent { SampleTodoApp(includeAmbiguousSection = true) }
     waitForIdle()
 
-    val screenState = ComposeScreenState(this, 1280, 800)
+    val screenState = ComposeScreenState(ComposeUiTestTarget(this), 1280, 800)
     val addButtonEntry =
       screenState.elementIdMapping.entries.find { it.value.testTag == "add_button" }
     assertThat(addButtonEntry).isNotNull()
@@ -363,7 +364,7 @@ class ComposeElementDisambiguationTest {
     setContent { SampleTodoApp(includeAmbiguousSection = true) }
     waitForIdle()
 
-    val screenState = ComposeScreenState(this, 1280, 800)
+    val screenState = ComposeScreenState(ComposeUiTestTarget(this), 1280, 800)
     // Find a "Save" button element ID (resolves through buildMatcherFromDescriptor internally)
     val saveEntry =
       screenState.elementIdMapping.entries.find {

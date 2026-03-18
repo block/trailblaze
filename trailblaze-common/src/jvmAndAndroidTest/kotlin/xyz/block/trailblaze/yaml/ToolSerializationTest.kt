@@ -355,6 +355,30 @@ class ToolSerializationTest {
   }
 
   @Test
+  fun deserializePressKeyLowercaseKeyCode() {
+    // The LLM sometimes emits lowercase enum values; the custom serializer normalizes them.
+    val yaml = """
+- tools:
+    - pressKey:
+        keyCode: enter
+    """.trimIndent()
+
+    val trailItems = trailblazeYaml.decodeTrail(yaml)
+    with(trailItems) {
+      assertThat(size).isEqualTo(1)
+      with(get(0) as TrailYamlItem.ToolTrailItem) {
+        assertThat(tools.size).isEqualTo(1)
+        assertThat(tools[0]).isEqualTo(
+          TrailblazeToolYamlWrapper(
+            name = "pressKey",
+            trailblazeTool = PressKeyTrailblazeTool(keyCode = PressKeyCode.ENTER),
+          ),
+        )
+      }
+    }
+  }
+
+  @Test
   fun deserializeSwipeUpTool() {
     val yaml = """
 - tools:

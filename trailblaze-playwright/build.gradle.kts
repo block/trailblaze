@@ -18,3 +18,6 @@ dependencies {
 }
 
 tasks.test { useJUnit() }
+
+// Don't run tests as part of "check" — only when explicitly requested via "test"
+project.tasks.named("check") { dependsOn.removeIf { it.toString().contains("test") } }

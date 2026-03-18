@@ -8,6 +8,7 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.llm.LlmSessionUsageAndCost
 import xyz.block.trailblaze.llm.LlmUsageAndCostExt.computeUsageSummary
 import xyz.block.trailblaze.logs.client.TrailblazeLog
+import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.yaml.TrailConfig
 
 @Serializable
@@ -26,10 +27,21 @@ data class SessionInfo(
   val trailConfig: TrailConfig? = null,
   val llmUsageSummary: LlmSessionUsageAndCost? = null,
 ) {
-  // Use config title if available, otherwise fall back to method name, class name, or session ID
+  // Title resolution priority:
+  //  1. trailConfig.title  — explicit human-readable title in YAML
+  //  2. trailConfig.id     — explicit stable ID in YAML (e.g. "sample-app/taps/simple-tap")
+  //  3. trailFilePath      — derived from asset path when running from a YAML file
+  //                          e.g. "trails/EvaluationLongTest/tenKey.trail.yaml"
+  //                               → "EvaluationLongTest/tenKey"
+  //  4. ClassName/method   — fully-qualified stable name for tool-based tests
+  //  5. sessionId          — last resort (includes timestamp+random, not stable across runs)
   @Transient
   val displayName: String = trailConfig?.title
-    ?: testName?.takeIf { it.isNotBlank() }
+    ?: trailConfig?.id
+    ?: trailFilePath?.removePrefix("trails/")?.removeSuffix(TrailRecordings.DOT_TRAIL_DOT_YAML_FILE_SUFFIX)
+    ?: testName?.takeIf { it.isNotBlank() }?.let { name ->
+      testClass?.substringAfterLast(".")?.let { cls -> "$cls/$name" } ?: name
+    }
     ?: testClass?.substringAfterLast(".")
     ?: sessionId.value
 }

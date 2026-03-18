@@ -5,6 +5,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import maestro.DeviceInfo
 import maestro.Platform
+import xyz.block.trailblaze.AdbCommandUtil
 import xyz.block.trailblaze.InstrumentationUtil.withUiAutomation
 import xyz.block.trailblaze.InstrumentationUtil.withUiDevice
 import xyz.block.trailblaze.android.MaestroUiAutomatorXmlParser
@@ -47,6 +48,7 @@ class AndroidOnDeviceUiAutomatorScreenState(
   override var deviceHeight: Int = -1
   override var viewHierarchyOriginal: ViewHierarchyTreeNode
   private val foregroundAppId: String?
+  private val currentActivity: String?
 
   // Store only the clean screenshot bytes (compressed)
   private var _screenshotBytes: ByteArray = ByteArray(0)
@@ -58,6 +60,7 @@ class AndroidOnDeviceUiAutomatorScreenState(
     deviceWidth = displayWidth
     deviceHeight = displayHeight
     foregroundAppId = currentPackage
+    currentActivity = AdbCommandUtil.getForegroundActivity()
 
     var matched = false
     var attempts = 0
@@ -113,6 +116,7 @@ class AndroidOnDeviceUiAutomatorScreenState(
       screenWidth = deviceWidth,
       screenHeight = deviceHeight,
       foregroundAppId = foregroundAppId,
+      currentActivity = currentActivity,
       deviceClassifiers = deviceClassifiers,
       includeOffscreen = includeOffscreen,
       fullHierarchy = fullHierarchy,

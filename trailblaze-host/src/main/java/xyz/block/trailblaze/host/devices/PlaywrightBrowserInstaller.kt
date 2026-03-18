@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import xyz.block.trailblaze.playwright.PlaywrightDriverManager
 import xyz.block.trailblaze.util.Console
 import java.io.File
 import java.util.concurrent.TimeUnit
@@ -170,26 +171,30 @@ class PlaywrightBrowserInstaller {
   }
 
   private fun getPlaywrightCacheDir(): String {
-    val osName = System.getProperty("os.name").lowercase()
-    return when {
-      osName.contains("mac") -> {
-        val home = System.getProperty("user.home")
-        "$home/Library/Caches/ms-playwright/"
-      }
-      osName.contains("linux") -> {
-        val home = System.getProperty("user.home")
-        "$home/.cache/ms-playwright/"
-      }
-      osName.contains("windows") -> {
-        val localAppData = System.getenv("LOCALAPPDATA")
-          ?: (System.getProperty("user.home") + "\\AppData\\Local")
-        "$localAppData\\ms-playwright\\"
-      }
-      else -> {
-        val home = System.getProperty("user.home")
-        "$home/.cache/ms-playwright/"
-      }
-    }
+    return PlaywrightDriverManager.getPlaywrightBrowsersCacheDir().absolutePath + File.separator
+  }
+
+  /**
+   * Pushes an in-progress install state from an external installer (e.g. when
+   * [PlaywrightDriverManager.ensureBrowserInstalled] triggers download during
+   * [PlaywrightBrowserManager] init rather than via [installBrowsers]).
+   * Updates the [installState] flow so the UI progress bar reflects the download.
+   */
+  fun reportInstallProgress(progressPercent: Int, statusMessage: String) {
+    _installState.value = PlaywrightInstallState.Installing(
+      progressPercent = progressPercent,
+      statusMessage = statusMessage,
+    )
+  }
+
+  /** Marks the install as complete from an external installer. */
+  fun reportInstallComplete() {
+    _installState.value = PlaywrightInstallState.Installed
+  }
+
+  /** Reports an install failure from an external installer so the UI doesn't appear stuck. */
+  fun reportInstallError(message: String) {
+    _installState.value = PlaywrightInstallState.Error(message)
   }
 
   fun close() {
@@ -203,7 +208,8 @@ class PlaywrightBrowserInstaller {
     }
 
     return cachePath.listFiles()?.any { file ->
-      file.isDirectory && file.name.startsWith("chromium-")
+      file.isDirectory &&
+        (file.name.startsWith("chromium-") || file.name.startsWith("chromium_headless_shell-"))
     } ?: false
   }
 

@@ -17,6 +17,17 @@ import kotlin.reflect.full.memberProperties
 import kotlin.reflect.full.primaryConstructor
 import kotlin.reflect.jvm.isAccessible
 
+// Converts a failed recording result into a plain-text action history list for V3's TrailStepPlanner.
+// Each entry describes what the recording tried (and what failed), so the LLM can orient itself
+// without re-doing work that already succeeded.
+fun PromptRecordingResult.Failure.toActionHistory(): List<String> {
+  val history = mutableListOf<String>()
+  successfulTools.forEach { tool -> history.add("${tool.name}: succeeded") }
+  val errorMessage = (failureResult as? TrailblazeToolResult.Error)?.errorMessage ?: "unknown error"
+  history.add("${failedTool.name}: FAILED - $errorMessage")
+  return history
+}
+
 // This function takes a failed PromptRecordingResult and reconstructs the tool call message history
 // to send to the LLM for the prompt. This will allow the LLM to take over at the point the test
 // failed in order to attempt a recovery.

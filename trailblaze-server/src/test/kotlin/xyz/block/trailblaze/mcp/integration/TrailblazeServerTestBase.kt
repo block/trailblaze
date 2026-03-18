@@ -100,6 +100,9 @@ abstract class TrailblazeServerTestBase {
   protected lateinit var client: McpTestClient
   protected var deviceId: String? = null
 
+  /** Returns true if [client] has been initialized. Subclasses must use this instead of `::client.isInitialized`. */
+  protected fun isClientInitialized(): Boolean = ::client.isInitialized
+
   @Before
   fun baseSetUp() {
     runBlocking {

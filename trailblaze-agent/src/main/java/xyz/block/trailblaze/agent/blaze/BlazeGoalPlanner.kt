@@ -598,8 +598,9 @@ class BlazeGoalPlanner(
 
     // Also trim recent analyses to match
     if (steps > 0 && recentAnalyses.size >= steps) {
-      repeat(minOf(steps, recentAnalyses.size)) {
-        recentAnalyses.removeLastOrNull()
+      val toRemove = minOf(steps, recentAnalyses.size)
+      repeat(toRemove) {
+        if (recentAnalyses.isNotEmpty()) recentAnalyses.removeLastOrNull()
       }
     }
 

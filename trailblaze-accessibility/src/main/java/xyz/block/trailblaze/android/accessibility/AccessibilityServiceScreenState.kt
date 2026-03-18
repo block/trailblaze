@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import maestro.DeviceInfo
 import maestro.Platform
+import xyz.block.trailblaze.AdbCommandUtil
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
@@ -34,6 +35,12 @@ class AccessibilityServiceScreenState(
   private val includeScreenshot: Boolean = true,
   deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
   private val includeOffscreen: Boolean = false,
+  /**
+   * When true (default), prunes nodes where [DriverNodeDetail.AndroidAccessibility.isImportantForAccessibility]
+   * is false from [trailblazeNodeTree], promoting their children to preserve meaningful descendants.
+   * Set to false to expose all structural/decorative nodes (e.g. for debugging).
+   */
+  private val filterImportantForAccessibility: Boolean = true,
 ) : ScreenState {
 
   override var deviceWidth: Int = -1
@@ -42,22 +49,30 @@ class AccessibilityServiceScreenState(
   override var trailblazeNodeTree: TrailblazeNode? = null
 
   private var _screenshotBytes: ByteArray = ByteArray(0)
+  private var foregroundAppId: String? = null
+  private var currentActivity: String? = null
 
   init {
     val (displayWidth, displayHeight) = TrailblazeAccessibilityService.getScreenDimensions()
     deviceWidth = displayWidth
     deviceHeight = displayHeight
 
+    currentActivity = AdbCommandUtil.getForegroundActivity()
+
     // Single-pass capture: the UI is already settled (caller guarantees via waitForSettled),
     // so we capture the tree and screenshot once without a consistency retry loop.
     val rootNodeInfo = TrailblazeAccessibilityService.getRootNodeInfo()
     try {
+      // packageName must be read before recycle() invalidates the node
+      foregroundAppId = rootNodeInfo?.packageName?.toString()
+
       viewHierarchyOriginal =
         (rootNodeInfo?.toTreeNode()?.toViewHierarchyTreeNode()
             ?: ViewHierarchyTreeNode())
           .relabelWithFreshIds()
 
       trailblazeNodeTree = rootNodeInfo?.toAccessibilityNode()?.toTrailblazeNode()
+        ?.let { if (filterImportantForAccessibility) it.filterImportantForAccessibility() else it }
     } finally {
       rootNodeInfo?.recycle()
     }
@@ -81,6 +96,8 @@ class AccessibilityServiceScreenState(
       platform = trailblazeDevicePlatform,
       screenWidth = deviceWidth,
       screenHeight = deviceHeight,
+      foregroundAppId = foregroundAppId,
+      currentActivity = currentActivity,
       deviceClassifiers = deviceClassifiers,
       includeOffscreen = includeOffscreen,
     )

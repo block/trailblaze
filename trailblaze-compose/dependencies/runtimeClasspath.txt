@@ -1,5 +1,6 @@
 :trailblaze-agent
 :trailblaze-common
+:trailblaze-compose-target
 :trailblaze-models
 :trailblaze-tracing
 ai.koog:agents-core-jvm:0.6.4

@@ -1,8 +1,8 @@
 package xyz.block.trailblaze.compose.driver.tools
 
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
-import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
@@ -10,16 +10,16 @@ import xyz.block.trailblaze.compose.driver.ComposeScreenState
 import xyz.block.trailblaze.compose.driver.ComposeSemanticTreeMapper
 import xyz.block.trailblaze.compose.driver.ComposeSemanticTreeMapper.ComposeRole
 import xyz.block.trailblaze.compose.driver.rpc.ComposeRpcScreenState
+import xyz.block.trailblaze.compose.target.ComposeTestTarget
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 
 /**
- * Interface for tools that execute directly against a Compose [ComposeUiTest].
+ * Interface for tools that execute directly against a [ComposeTestTarget].
  *
- * This is the Compose equivalent of PlaywrightExecutableTool. Tools implementing
- * this interface are executed by [ComposeTrailblazeAgent] which provides the
- * current ComposeUiTest instance.
+ * This is the Compose equivalent of PlaywrightExecutableTool. Tools implementing this interface are
+ * executed by [ComposeTrailblazeAgent] which provides the current ComposeTestTarget instance.
  *
  * The default [execute] implementation throws an error directing callers to use
  * [ComposeTrailblazeAgent], which calls [executeWithCompose] directly.
@@ -27,14 +27,14 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 interface ComposeExecutableTool : ExecutableTrailblazeTool {
 
   /**
-   * Executes this tool against the given Compose UI test instance.
+   * Executes this tool against the given Compose test target.
    *
-   * @param composeUiTest The ComposeUiTest instance to execute actions against.
+   * @param target The ComposeTestTarget instance to execute actions against.
    * @param context The tool execution context with session, logging, and memory.
    * @return The result of tool execution.
    */
   suspend fun executeWithCompose(
-    composeUiTest: ComposeUiTest,
+    target: ComposeTestTarget,
     context: TrailblazeToolExecutionContext,
   ): TrailblazeToolResult
 
@@ -145,7 +145,7 @@ interface ComposeExecutableTool : ExecutableTrailblazeTool {
         else -> null
       }
 
-    /** Returns the nth-index from the ref, for use with `onAllNodes(matcher)[nthIndex]`. */
+    /** Returns the nth-index from the ref, for use with node disambiguation. */
     fun getNthIndex(
       elementId: String?,
       context: TrailblazeToolExecutionContext,
@@ -154,6 +154,36 @@ interface ComposeExecutableTool : ExecutableTrailblazeTool {
       val ref = resolveElementRef(elementId, context) ?: return 0
       return ref.nthIndex
     }
+
+    /**
+     * Finds a single node matching the given [matcher] in the [target]'s semantics tree.
+     *
+     * @param nthIndex If > 0, returns the nth matching node for disambiguation.
+     * @throws IllegalStateException if no matching nodes are found.
+     */
+    fun findNode(
+      target: ComposeTestTarget,
+      matcher: SemanticsMatcher,
+      nthIndex: Int = 0,
+    ): SemanticsNode {
+      val matchingNodes = target.allSemanticsNodes().filter { matcher.matches(it) }
+      if (matchingNodes.isEmpty()) {
+        error("No nodes found matching: ${matcher.description}")
+      }
+      return if (nthIndex > 0 && nthIndex < matchingNodes.size) {
+        matchingNodes[nthIndex]
+      } else {
+        matchingNodes.first()
+      }
+    }
+
+    /**
+     * Finds all nodes matching the given [matcher] in the [target]'s semantics tree.
+     */
+    fun findNodes(
+      target: ComposeTestTarget,
+      matcher: SemanticsMatcher,
+    ): List<SemanticsNode> = target.allSemanticsNodes().filter { matcher.matches(it) }
   }
 }
 

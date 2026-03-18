@@ -44,6 +44,7 @@ object SettingsTabComposables {
     driversForPlatform: List<TrailblazeDriverType>,
     enabledDriverTypesMap: Map<TrailblazeDevicePlatform, TrailblazeDriverType>,
     trailblazeSettingsRepo: TrailblazeSettingsRepo,
+    showWebBrowser: Boolean = true,
     playwrightInstallState: PlaywrightInstallState? = null,
     onInstallPlaywright: (() -> Unit)? = null,
   ) {
@@ -112,6 +113,30 @@ object SettingsTabComposables {
               }
             )
           }
+        }
+      }
+
+      // Show web browser options for WEB platform when a driver is selected
+      if (platform == TrailblazeDevicePlatform.WEB && enabledDriverTypesMap[platform] != null) {
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.SpaceBetween,
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          Column {
+            Text("Show browser window", style = MaterialTheme.typography.bodyMedium)
+            Text(
+              "Open a visible Chrome window during web sessions",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
+          Switch(
+            checked = showWebBrowser,
+            onCheckedChange = { checked ->
+              trailblazeSettingsRepo.updateAppConfig { it.copy(showWebBrowser = checked) }
+            },
+          )
         }
       }
 
@@ -502,7 +527,6 @@ object SettingsTabComposables {
         var showAgentImplMenu by remember { mutableStateOf(false) }
         val agentImplOptions = listOf(
           AgentImplementation.TRAILBLAZE_RUNNER to "TrailblazeRunner (Legacy)",
-          AgentImplementation.TWO_TIER_AGENT to "Two-Tier Agent",
           AgentImplementation.MULTI_AGENT_V3 to "Multi-Agent V3"
         )
         val currentAgentImplLabel =
@@ -728,6 +752,7 @@ object SettingsTabComposables {
               driversForPlatform = driversForPlatform,
               enabledDriverTypesMap = enabledDriverTypesMap,
               trailblazeSettingsRepo = trailblazeSettingsRepo,
+              showWebBrowser = serverState.appConfig.showWebBrowser,
               playwrightInstallState = currentPlaywrightState,
               onInstallPlaywright = onInstallPlaywright,
             )

@@ -61,6 +61,8 @@ class LocalLlmSamplingSource(
   private val sessionIdProvider: (() -> SessionId?)? = null,
   /** Timeout for each LLM call in milliseconds. Default: 120 seconds. */
   private val llmCallTimeoutMs: Long = DEFAULT_LLM_CALL_TIMEOUT_MS,
+  /** Which agent architecture this sampling source is part of — recorded in LLM request logs. */
+  private val agentImplementation: AgentImplementation = AgentImplementation.MULTI_AGENT_V3,
 ) : SamplingSource {
 
   override fun isAvailable(): Boolean = llmClient != null && llmModel != null
@@ -566,7 +568,7 @@ class LocalLlmSamplingSource(
         deviceWidth = screenContext.deviceWidth,
         deviceHeight = screenContext.deviceHeight,
         requestContext = TrailblazeLog.LlmRequestContext(
-          agentImplementation = AgentImplementation.TWO_TIER_AGENT,
+          agentImplementation = agentImplementation,
           llmCallStrategy = LlmCallStrategy.DIRECT,
           agentTier = AgentTier.INNER,
         ),

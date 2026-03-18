@@ -1,16 +1,14 @@
 package xyz.block.trailblaze.compose.driver.tools
 
 import ai.koog.agents.core.tools.annotations.LLMDescription
-import androidx.compose.ui.test.ComposeUiTest
-import androidx.compose.ui.test.ExperimentalTestApi
 import kotlinx.coroutines.delay
 import kotlinx.serialization.Serializable
+import xyz.block.trailblaze.compose.target.ComposeTestTarget
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.util.Console
 
-@OptIn(ExperimentalTestApi::class)
 @Serializable
 @TrailblazeToolClass("compose_wait")
 @LLMDescription(
@@ -25,14 +23,14 @@ class ComposeWaitTool(
 ) : ComposeExecutableTool {
 
   override suspend fun executeWithCompose(
-    composeUiTest: ComposeUiTest,
+    target: ComposeTestTarget,
     context: TrailblazeToolExecutionContext,
   ): TrailblazeToolResult {
     val cappedSeconds = seconds.coerceIn(1, 30)
     Console.log("### Waiting for $cappedSeconds seconds")
-    composeUiTest.waitForIdle()
+    target.waitForIdle()
     delay(cappedSeconds * 1000L)
-    composeUiTest.waitForIdle()
+    target.waitForIdle()
     return TrailblazeToolResult.Success(message = "Waited $cappedSeconds seconds.")
   }
 }

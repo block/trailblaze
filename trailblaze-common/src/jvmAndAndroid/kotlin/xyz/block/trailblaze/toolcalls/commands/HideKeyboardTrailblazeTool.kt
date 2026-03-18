@@ -50,9 +50,15 @@ class HideKeyboardTrailblazeTool : ExecutableTrailblazeTool {
     }
     
     /**
-     * Dismisses the keyboard on iOS landscape with a fast downward swipe above the keyboard.
-     * Maestro's native hideKeyboard swipes at 50%,50% which lands on the keyboard
-     * in iPad landscape, so we swipe at 50%,30% (above center-y) instead.
+     * Dismisses the keyboard on iOS with a short, gentle downward swipe above the keyboard.
+     *
+     * In landscape, Maestro's native hideKeyboard swipes at 50%,50%, which lands on the keyboard
+     * on iPad, so we instead swipe from 50%,30% to 50%,33% to stay above the keyboard while still
+     * triggering dismissal.
+     *
+     * In portrait, we use a similarly short downward swipe from 50%,60% to 50%,63%, starting just
+     * above where the keyboard typically appears and moving slightly downward to gently nudge the
+     * scrollable content without aggressively scrolling the screen.
      */
     fun hideIosKeyboardWithGentleScrollCommands(orientation: TrailblazeDeviceOrientation): List<Command> {
       return when (orientation) {
@@ -64,7 +70,13 @@ class HideKeyboardTrailblazeTool : ExecutableTrailblazeTool {
           )
         )
 
-        TrailblazeDeviceOrientation.PORTRAIT -> listOf(HideKeyboardCommand())
+        TrailblazeDeviceOrientation.PORTRAIT -> listOf(
+          SwipeCommand(
+            startRelative = "50%,60%",
+            endRelative = "50%,63%",
+            duration = 50,
+          )
+        )
       }
     }
   }

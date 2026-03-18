@@ -149,7 +149,7 @@ class InnerLoopScreenAnalyzer(
         type = Boolean::class.starProjectedType.asToolType(),
       ),
       ToolParameterDescriptor(
-        name = ToolCallAnalysisResponse::suggestedToolHint.name,
+        name = ToolCallAnalysisResponse::suggestedHint.name,
         description = "request different tools: NAVIGATION, VERIFICATION, STANDARD, or specific tool name",
         type = String::class.starProjectedType.asToolType(),
       ),
@@ -351,10 +351,22 @@ Before acting, check if the screen shows a non-normal state. If so, set `screenS
   /**
    * Builds a text description of the view hierarchy for the LLM.
    *
-   * Filters to interactable elements and formats them with nodeIds
-   * for easy reference in tool calls.
+   * For Compose drivers, uses the compact element list with `[eN]` IDs from
+   * [ScreenState.viewHierarchyTextRepresentation]. These IDs match what `compose_click`,
+   * `compose_type`, etc. expect in their `elementId` parameter.
+   *
+   * For all other drivers (Maestro, on-device), filters and formats the
+   * [ViewHierarchyTreeNode] tree with `[nodeId:X]` for standard tool compatibility.
    */
   private fun buildViewHierarchyDescription(screenState: ScreenState): String {
+    // For Compose drivers, use the compact element list with [eN] IDs.
+    // The "compose" device classifier signals that Compose-specific tools are active,
+    // and the [eN] IDs in viewHierarchyTextRepresentation match compose_click's elementId.
+    val isCompose = screenState.deviceClassifiers.any { it.classifier == "compose" }
+    if (isCompose) {
+      screenState.viewHierarchyTextRepresentation?.let { return it }
+    }
+
     val vhFilter = ViewHierarchyFilter.create(
       screenWidth = screenState.deviceWidth,
       screenHeight = screenState.deviceHeight,

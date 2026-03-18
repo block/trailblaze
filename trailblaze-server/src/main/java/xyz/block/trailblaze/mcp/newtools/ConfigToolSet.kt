@@ -51,7 +51,7 @@ class ConfigToolSet(
     Settings include device drivers, LLM model, agent implementation, and more.
     """
   )
-  @Tool
+  @Tool(McpToolProfile.TOOL_CONFIG)
   suspend fun config(
     @LLMDescription("Action: GET, SET, or LIST")
     action: ConfigAction,
@@ -327,11 +327,11 @@ class ConfigToolSet(
       ),
       ConfigKeyDef(
         key = KEY_LLM_PROVIDER,
-        description = "LLM provider (e.g., openai, anthropic, google, ollama)",
+        description = "LLM provider. Read trailblaze://llm/providers for all supported providers and their models",
       ),
       ConfigKeyDef(
         key = KEY_LLM_MODEL,
-        description = "LLM model ID (e.g., gpt-4.1, claude-sonnet-4-20250514)",
+        description = "LLM model ID. Read trailblaze://llm/providers for all supported models per provider",
       ),
       ConfigKeyDef(
         key = KEY_AGENT_IMPLEMENTATION,

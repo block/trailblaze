@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material.icons.filled.SwipeLeft
 import androidx.compose.material.icons.filled.TextFields
 import androidx.compose.material.icons.filled.TouchApp
@@ -22,6 +23,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import xyz.block.trailblaze.examples.sampleapp.ui.screens.catalog.CatalogScreen
 import xyz.block.trailblaze.examples.sampleapp.ui.screens.forms.FormsScreen
 import xyz.block.trailblaze.examples.sampleapp.ui.screens.lists.ListDetailScreen
 import xyz.block.trailblaze.examples.sampleapp.ui.screens.lists.ListsScreen
@@ -34,6 +36,7 @@ enum class Tab(val route: String, val label: String, val icon: ImageVector) {
   FORMS("forms", "Forms", Icons.Default.TextFields),
   LISTS("lists", "Lists", Icons.AutoMirrored.Filled.List),
   SWIPE("swipe", "Swipe", Icons.Default.SwipeLeft),
+  CATALOG("catalog", "Catalog", Icons.Default.ShoppingCart),
   SETTINGS("settings", "Settings", Icons.Default.Settings),
 }
 
@@ -77,6 +80,7 @@ fun SampleAppNavigation() {
         ListDetailScreen(index = index, onBack = { navController.popBackStack() })
       }
       composable(Tab.SWIPE.route) { SwipeScreen() }
+      composable(Tab.CATALOG.route) { CatalogScreen() }
       composable(Tab.SETTINGS.route) { SettingsScreen() }
     }
   }

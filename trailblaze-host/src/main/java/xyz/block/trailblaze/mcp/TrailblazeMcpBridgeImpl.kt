@@ -37,6 +37,16 @@ import xyz.block.trailblaze.toolcalls.commands.TapOnElementByNodeIdTrailblazeToo
 import xyz.block.trailblaze.toolcalls.commands.TapOnPointTrailblazeTool
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.util.AccessibilityServiceSetupUtils
+import xyz.block.trailblaze.compose.driver.rpc.ExecuteToolsRequest as ComposeExecuteToolsRequest
+import xyz.block.trailblaze.compose.driver.rpc.GetScreenStateRequest as ComposeGetScreenStateRequest
+import xyz.block.trailblaze.compose.driver.rpc.GetScreenStateResponse as ComposeGetScreenStateResponse
+import xyz.block.trailblaze.compose.driver.tools.ComposeToolSet
+import xyz.block.trailblaze.devices.TrailblazeDevicePort
+import xyz.block.trailblaze.host.rules.BasePlaywrightNativeTest
+import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
+import xyz.block.trailblaze.mcp.utils.HttpRequestUtils
+import xyz.block.trailblaze.playwright.PlaywrightBrowserManager
+import xyz.block.trailblaze.playwright.tools.PlaywrightNativeToolSet
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.HostAndroidDeviceConnectUtils
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
@@ -44,6 +54,7 @@ import xyz.block.trailblaze.yaml.models.TrailblazeYamlBuilder
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import kotlin.reflect.KClass
 import kotlin.time.Duration
 
 private const val DEFAULT_DEVICE_WIDTH = 1080
@@ -64,6 +75,27 @@ class TrailblazeMcpBridgeImpl(
    */
   private val logsRepo: LogsRepo? = null,
 ) : TrailblazeMcpBridge {
+
+  /**
+   * Tracks async Playwright browser initialization for WEB devices.
+   *
+   * [startTimeMs] — used to report elapsed time on repeated device(action=WEB) calls.
+   * [progressMessage] — last status line from the installer (e.g. "67% chromium-...").
+   *   Updated by the onBrowserInstallProgress callback during Chromium download.
+   * [error] — set on failure so the client sees the reason instead of a generic message.
+   *
+   * Entry is removed from [webInitJobs] as soon as initialization completes (success or
+   * failure) so that [getActivePlaywrightNativeTest] is the canonical "ready" signal.
+   */
+  private class WebInitState {
+    val startTimeMs: Long = System.currentTimeMillis()
+    @Volatile var progressMessage: String = "Checking Playwright drivers..."
+  }
+
+  private val webInitJobs = ConcurrentHashMap<String, WebInitState>()
+
+  /** Persists failure messages after the init thread exits, so the MCP client sees them on the next poll. */
+  private val webInitErrors = ConcurrentHashMap<String, String>()
 
   /**
    * Returns the effective device ID for the current execution context.
@@ -146,12 +178,80 @@ class TrailblazeMcpBridgeImpl(
   override suspend fun selectDevice(trailblazeDeviceId: TrailblazeDeviceId): TrailblazeConnectedDeviceSummary {
     assertDeviceIsSelected(trailblazeDeviceId)
 
+    // For WEB devices, kick off async Playwright browser initialization so that blaze()
+    // can capture screen state once it completes — without blocking this device() call.
+    //
+    // Three states:
+    //  1. Already ready   — getActivePlaywrightNativeTest() non-null → nothing to do
+    //  2. Init in progress — webInitJobs contains the key → return immediately, let
+    //                        getDriverConnectionStatus() report elapsed time to the client
+    //  3. Not started     — launch a background thread and return immediately
+    //
+    // If a WebBrowserManager browser is already running (desktop "Launch Browser") the
+    // background thread wraps it instead of launching a new one, so no download occurs.
+    // Otherwise Playwright drivers/Chromium are downloaded once (~150 MB) and cached.
+    val actualDriverType = trailblazeDeviceManager.getDeviceState(trailblazeDeviceId)?.device?.trailblazeDriverType
+    if (trailblazeDeviceId.trailblazeDevicePlatform == TrailblazeDevicePlatform.WEB &&
+      actualDriverType != TrailblazeDriverType.COMPOSE) {
+      val webKey = trailblazeDeviceId.instanceId
+      if (trailblazeDeviceManager.getActivePlaywrightNativeTest(trailblazeDeviceId) == null &&
+        !webInitJobs.containsKey(webKey)) {
+        // Clear any previous failure so a retry starts clean.
+        webInitErrors.remove(webKey)
+        val job = WebInitState()
+        webInitJobs[webKey] = job
+        val initThread = Thread {
+          try {
+            // Reuse an already-running browser (desktop app "Launch Browser") when
+            // available — no download needed. Otherwise create a headless browser,
+            // passing a progress callback so the MCP client sees download status.
+            val existingBrowser = trailblazeDeviceManager.webBrowserManager.getPageManager()
+            val browserManager = existingBrowser ?: PlaywrightBrowserManager(
+              headless = true,
+              onBrowserInstallProgress = { percent, message ->
+                job.progressMessage = if (percent > 0) "[$percent%] $message" else message
+              },
+            )
+            // If we just created a new headless browser, adopt it into WebBrowserManager
+            // so it persists across MCP session boundaries. When cancelSessionForDevice
+            // is called at session close, BasePlaywrightNativeTest.close() won't kill the
+            // browser (ownsTheBrowser=false), and the next device(WEB) call will reuse it
+            // via webBrowserManager.getPageManager() rather than spawning a new instance.
+            if (existingBrowser == null) {
+              trailblazeDeviceManager.webBrowserManager.adoptManagedBrowser(browserManager as PlaywrightBrowserManager)
+            }
+            // Update progress to indicate we've moved past driver/browser download.
+            job.progressMessage = "Launching browser..."
+            val test = BasePlaywrightNativeTest(
+              trailblazeDeviceId = trailblazeDeviceId,
+              existingBrowserManager = browserManager,
+            )
+            trailblazeDeviceManager.setActivePlaywrightNativeTest(trailblazeDeviceId, test)
+            Console.log("[MCP Bridge] WEB browser ready for ${trailblazeDeviceId.instanceId}")
+          } catch (e: Exception) {
+            val msg = e.message ?: "Unknown error initializing Playwright browser"
+            webInitErrors[webKey] = msg
+            Console.log("[MCP Bridge] WEB browser init failed: $msg")
+          } finally {
+            webInitJobs.remove(webKey)
+          }
+        }
+        initThread.isDaemon = true
+        initThread.name = "web-browser-init-$webKey"
+        initThread.start()
+        Console.log("[MCP Bridge] WEB browser initialization started for ${trailblazeDeviceId.instanceId}")
+      }
+    }
+
     // Only create a persistent Maestro HOST driver for host-side driver types.
     // On-device drivers (ACCESSIBILITY, INSTRUMENTATION) have their own on-device agent
     // that provides screen state via RPC — creating a Maestro HOST driver would kill
     // the running on-device service and break screen state capture.
+    // WEB (PLAYWRIGHT_NATIVE) also skips this — it has its own Playwright-based connection
+    // managed by BasePlaywrightNativeTest, not a Maestro driver.
     val configuredDriverType = getConfiguredDriverType(trailblazeDeviceId.trailblazeDevicePlatform)
-    val needsPersistentDriver = configuredDriverType?.isHost != false
+    val needsPersistentDriver = configuredDriverType?.isHost != false &&
+      trailblazeDeviceId.trailblazeDevicePlatform != TrailblazeDevicePlatform.WEB
 
     val key = trailblazeDeviceId.instanceId
 
@@ -249,10 +349,12 @@ class TrailblazeMcpBridgeImpl(
           }
         }
       }
-    } else if (!needsPersistentDriver && !onDeviceAgentReady.contains(key)) {
+    } else if (!needsPersistentDriver && !onDeviceAgentReady.contains(key) &&
+      trailblazeDeviceId.trailblazeDevicePlatform == TrailblazeDevicePlatform.ANDROID) {
       // On-device driver (ACCESSIBILITY, INSTRUMENTATION) — ensure the on-device agent is running.
       // This installs the test APK, starts instrumentation, and enables the accessibility service.
       // Analogous to creating a persistent Maestro driver for HOST mode above.
+      // WEB devices are excluded: they don't use on-device agents.
       ensureOnDeviceAgentRunning(trailblazeDeviceId, configuredDriverType)
     }
 
@@ -570,6 +672,15 @@ class TrailblazeMcpBridgeImpl(
       }
     }
 
+    // WEB: COMPOSE uses its own RPC server; Playwright uses the cached test.
+    if (deviceId.trailblazeDevicePlatform == TrailblazeDevicePlatform.WEB) {
+      val driverType = trailblazeDeviceManager.getDeviceState(deviceId)?.device?.trailblazeDriverType
+      if (driverType == TrailblazeDriverType.COMPOSE) {
+        return getComposeScreenStateProvider()
+      }
+      return getPlaywrightScreenStateProvider(deviceId)
+    }
+
     // Fallback: use active driver from device manager (only available during YAML execution)
     val driver = trailblazeDeviceManager.getActiveDriverForDevice(deviceId) ?: return null
 
@@ -579,6 +690,25 @@ class TrailblazeMcpBridgeImpl(
         setOfMarkEnabled = false,
         screenshotScalingConfig = scalingConfig,
       )
+    }
+  }
+
+  /**
+   * Returns a screen state provider backed by the cached [BasePlaywrightNativeTest] for the
+   * given WEB device, or null if no test is cached yet (e.g. before the first blaze call).
+   *
+   * Playwright API calls require thread affinity — all calls must happen on the dedicated
+   * `playwright-browser` dispatcher thread. [runBlocking] with that dispatcher schedules
+   * the capture on the correct thread and blocks the calling thread until it completes.
+   */
+  private fun getPlaywrightScreenStateProvider(
+    deviceId: TrailblazeDeviceId,
+  ): ((ScreenshotScalingConfig) -> ScreenState)? {
+    val test = trailblazeDeviceManager.getActivePlaywrightNativeTest(deviceId) ?: return null
+    return { _ ->
+      runBlocking(test.browserManager.playwrightDispatcher) {
+        test.browserManager.getScreenState()
+      }
     }
   }
 
@@ -601,6 +731,29 @@ class TrailblazeMcpBridgeImpl(
     val id = deviceId ?: getEffectiveDeviceId() ?: return null
     val key = id.instanceId
 
+    // WEB: check Playwright browser initialization state separately from Maestro drivers.
+    if (id.trailblazeDevicePlatform == TrailblazeDevicePlatform.WEB) {
+      // Ready — test is cached, nothing more to report.
+      if (trailblazeDeviceManager.getActivePlaywrightNativeTest(id) != null) return null
+      // Initialization is in progress or failed.
+      // Failure from a previous attempt — report it until the user retries.
+      webInitErrors[key]?.let {
+        return "Playwright browser installation failed: $it. Call device(action=WEB) to retry."
+      }
+      val job = webInitJobs[key]
+      if (job != null) {
+        val elapsedSeconds = (System.currentTimeMillis() - job.startTimeMs) / 1000
+        return buildString {
+          append("Playwright browser installing (${elapsedSeconds}s elapsed")
+          // Downloads are sequential: Playwright driver (~7MB) then Chromium (~150MB).
+          // Chromium install subprocess times out at 15 minutes.
+          if (elapsedSeconds < 900) append(", timeout in ${900 - elapsedSeconds}s")
+          append("): ${job.progressMessage}. Call device(action=WEB) to check status.")
+        }
+      }
+      return null
+    }
+
     // Driver is ready — no status to report (HOST persistent driver or on-device agent)
     if (persistentDevices.containsKey(key) || onDeviceAgentReady.contains(key)) return null
 
@@ -619,18 +772,78 @@ class TrailblazeMcpBridgeImpl(
 
   /**
    * Gets the driver type for the currently selected device.
-   * Uses the configured driver type from settings (source of truth), not the device state
-   * which may have the wrong driver type due to map key collisions.
+   * Prefers the actual device state driver type (handles COMPOSE vs PLAYWRIGHT_NATIVE
+   * distinction) over the configured driver type from settings.
    */
   override fun getDriverType(): TrailblazeDriverType? {
     val deviceId = getEffectiveDeviceId() ?: return null
-    return getConfiguredDriverType(deviceId.trailblazeDevicePlatform)
+    return trailblazeDeviceManager.getDeviceState(deviceId)?.device?.trailblazeDriverType
+      ?: getConfiguredDriverType(deviceId.trailblazeDevicePlatform)
+  }
+
+  /**
+   * Returns a screen state provider that fetches from the Compose RPC server.
+   * This is used when the selected device is a COMPOSE driver.
+   */
+  private fun getComposeScreenStateProvider(): ((ScreenshotScalingConfig) -> ScreenState)? {
+    return { _ ->
+      ComposeRpcScreenStateAdapter(fetchComposeScreenState())
+    }
+  }
+
+  /**
+   * Fetches the current screen state from the Compose RPC server synchronously.
+   */
+  private fun fetchComposeScreenState(): ComposeGetScreenStateResponse {
+    val httpUtils = HttpRequestUtils("http://localhost:${TrailblazeDevicePort.COMPOSE_DEFAULT_RPC_PORT}")
+    return try {
+      val json = runBlocking { httpUtils.postRequest("/rpc/GetScreenStateRequest", "{}") }
+      TrailblazeJsonInstance.decodeFromString(json)
+    } finally {
+      httpUtils.close()
+    }
+  }
+
+  /** Executes a COMPOSE tool by forwarding it to the Compose RPC server. */
+  private suspend fun executeComposeToolViaRpc(tool: TrailblazeTool): String {
+    val httpUtils = HttpRequestUtils("http://localhost:${TrailblazeDevicePort.COMPOSE_DEFAULT_RPC_PORT}")
+    return try {
+      val request = ComposeExecuteToolsRequest(tools = listOf(tool))
+      val json = TrailblazeJsonInstance.encodeToString(request)
+      httpUtils.postRequest("/rpc/ExecuteToolsRequest", json)
+    } finally {
+      httpUtils.close()
+    }
+  }
+
+  /**
+   * Returns Compose-specific tool classes when the Compose driver is active, null otherwise.
+   *
+   * The Compose driver uses a different tool set than native Android/iOS drivers. Tools like
+   * [RequestViewHierarchyDetailsTrailblazeTool] don't work with Compose — the inner agent
+   * must use Compose-specific tools (click, type, scroll) instead.
+   */
+  override fun getInnerAgentToolClasses(): Set<KClass<out TrailblazeTool>>? {
+    val deviceId = getEffectiveDeviceId() ?: return null
+    val driverType = trailblazeDeviceManager.getDeviceState(deviceId)?.device?.trailblazeDriverType
+    return when (driverType) {
+      TrailblazeDriverType.COMPOSE -> ComposeToolSet.LlmToolSet.toolClasses
+      else -> null
+    }
+  }
+
+  override fun getInnerAgentBuiltInToolClasses(): Set<kotlin.reflect.KClass<out xyz.block.trailblaze.toolcalls.TrailblazeTool>> {
+    return if (getDriverType() == TrailblazeDriverType.PLAYWRIGHT_NATIVE) {
+      PlaywrightNativeToolSet.LlmToolSet.toolClasses
+    } else {
+      emptySet()
+    }
   }
 
   /**
    * Gets screen state via RPC for on-device instrumentation mode.
    * This calls the GetScreenStateRequest endpoint on the on-device agent.
-   * 
+   *
    * @param includeScreenshot Whether to include screenshot bytes
    * @param filterViewHierarchy Whether to filter to interactable elements
    * @param screenshotScalingConfig Configuration for scaling/compressing screenshots on-device
@@ -701,6 +914,13 @@ class TrailblazeMcpBridgeImpl(
     )
 
     Console.log("Generated YAML:\n$yaml")
+
+    // For Compose driver, send the tool directly to the Compose RPC server.
+    if (trailblazeDeviceManager.getDeviceState(trailblazeDeviceId)?.device?.trailblazeDriverType == TrailblazeDriverType.COMPOSE) {
+      val result = executeComposeToolViaRpc(tool)
+      cachedScreenStates.remove(trailblazeDeviceId.instanceId)
+      return result
+    }
 
     // For on-device drivers, send the YAML directly via RPC and wait for completion.
     // The standard runYaml() path is fire-and-forget (launches a coroutine and returns
@@ -860,7 +1080,7 @@ class TrailblazeMcpBridgeImpl(
     return trailblazeDeviceManager.getCurrentSessionIdForDevice(deviceId)
   }
 
-  override suspend fun ensureSessionAndGetId(): SessionId? {
+  override suspend fun ensureSessionAndGetId(testName: String?): SessionId? {
     val deviceId = getEffectiveDeviceId() ?: return null
     // Use "yaml" prefix to match runYaml() - ensures we monitor the same session
     val sessionResolution = trailblazeDeviceManager.getOrCreateSessionResolution(
@@ -875,6 +1095,7 @@ class TrailblazeMcpBridgeImpl(
       emitSessionStartedLog(
         sessionId = sessionResolution.sessionId,
         deviceId = deviceId,
+        testName = testName,
       )
     }
 
@@ -888,6 +1109,7 @@ class TrailblazeMcpBridgeImpl(
   private fun emitSessionStartedLog(
     sessionId: SessionId,
     deviceId: TrailblazeDeviceId,
+    testName: String? = null,
   ) {
     val repo = logsRepo ?: return
 
@@ -941,7 +1163,7 @@ class TrailblazeMcpBridgeImpl(
       trailConfig = null, // MCP sessions don't have a trail config
       trailFilePath = null,
       hasRecordedSteps = false,
-      testMethodName = "mcp_session", // Synthetic test name for MCP sessions
+      testMethodName = testName ?: "mcp_session",
       testClassName = "MCP",
       trailblazeDeviceInfo = deviceInfo,
       trailblazeDeviceId = deviceId,
@@ -1032,6 +1254,12 @@ class TrailblazeMcpBridgeImpl(
   }
 
   override fun getConfiguredDriverType(platform: TrailblazeDevicePlatform): TrailblazeDriverType? {
+    // WEB always maps to PLAYWRIGHT_NATIVE for MCP purposes. Even when WEB is stored in
+    // selectedTrailblazeDriverTypes (e.g. via applyTestingEnvironment), returning it from
+    // settings would make needsPersistentDriver=true (because isHost=true), which would
+    // incorrectly trigger Maestro driver creation. Returning PLAYWRIGHT_NATIVE directly here
+    // is a signal to skip persistent-device setup — WEB uses its own Playwright connection.
+    if (platform == TrailblazeDevicePlatform.WEB) return TrailblazeDriverType.PLAYWRIGHT_NATIVE
     return trailblazeDeviceManager.settingsRepo.serverStateFlow.value
       .appConfig.selectedTrailblazeDriverTypes[platform]
   }

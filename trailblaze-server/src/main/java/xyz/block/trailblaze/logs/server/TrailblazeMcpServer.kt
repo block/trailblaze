@@ -76,7 +76,7 @@ import xyz.block.trailblaze.mcp.newtools.ConfigToolSet
 import xyz.block.trailblaze.mcp.newtools.StepToolSet
 import xyz.block.trailblaze.mcp.resources.registerResources
 import xyz.block.trailblaze.mcp.newtools.DeviceManagerToolSet
-import xyz.block.trailblaze.mcp.newtools.TrailTool
+import xyz.block.trailblaze.mcp.newtools.TrailMcpTool
 import xyz.block.trailblaze.mcp.agent.BridgeUiActionExecutor
 import xyz.block.trailblaze.mcp.utils.ScreenStateCaptureUtil
 import xyz.block.trailblaze.agent.InnerLoopScreenAnalyzer
@@ -98,6 +98,7 @@ import java.io.OutputStream
 import java.util.concurrent.ConcurrentHashMap
 import ai.koog.prompt.executor.clients.LLMClient
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
+import xyz.block.trailblaze.llm.TrailblazeLlmModelList
 import xyz.block.trailblaze.logs.client.LogEmitter
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionId
@@ -156,14 +157,26 @@ class TrailblazeMcpServer(
    * Required alongside [llmClientProvider] for local LLM sampling.
    */
   val llmModelProvider: (() -> TrailblazeLlmModel?)? = null,
+  /** Provider for all supported LLM model lists (for the llm/providers resource). */
+  val llmModelListsProvider: () -> Set<TrailblazeLlmModelList>,
 ) {
   /**
    * Default tool profile for new MCP sessions.
    *
-   * Set to [McpToolProfile.MINIMAL] to only expose high-level tools (device, blaze, verify, ask, trail)
+   * Set to [McpToolProfile.MINIMAL] to only expose high-level tools (device, blaze, ask, trail)
    * to external MCP clients. Set via `--tool-profile MINIMAL` CLI flag.
    */
   var defaultToolProfile: McpToolProfile = McpToolProfile.FULL
+
+  /**
+   * Default operating mode for new MCP sessions.
+   *
+   * - [TrailblazeMcpMode.TRAILBLAZE_AS_AGENT]: Trailblaze handles LLM reasoning internally.
+   *   Default for Block internal usage where an LLM is already configured.
+   * - [TrailblazeMcpMode.MCP_CLIENT_AS_AGENT]: MCP client handles all LLM reasoning.
+   *   Recommended for OSS usage — no Trailblaze-side LLM required.
+   */
+  var defaultMode: TrailblazeMcpMode = TrailblazeMcpMode.TRAILBLAZE_AS_AGENT
 
   /** Tracks exclusive device claims across MCP sessions. */
   val deviceClaimRegistry = DeviceClaimRegistry(
@@ -610,6 +623,7 @@ class TrailblazeMcpServer(
           mcpServerSession = serverSessionHolder,
           mcpSessionId = mcpSessionId,
           toolProfile = toolProfileOverride ?: defaultToolProfile,
+          mode = defaultMode,
         )
 
         // Populate client name from the SDK's initialize handshake.
@@ -972,7 +986,7 @@ class TrailblazeMcpServer(
       }
       val activeSessionIdProvider = { mcpBridge.getActiveSessionId() }
       tools(
-        TrailTool(
+        TrailMcpTool(
           sessionContext = sessionContext,
           mcpBridge = mcpBridge,
           logEmitter = trailLogEmitter,
@@ -1008,14 +1022,21 @@ class TrailblazeMcpServer(
         val uiActionExecutor = BridgeUiActionExecutor(mcpBridge)
 
         // Primary automation tools - step, verify, ask (with recording support)
-        // Note: Inner agent ALWAYS needs tools, even when includePrimitiveTools=false
-        // We use ToolSetCategoryMapping directly to get core tools for the inner agent.
-        val builtInTools = ToolSetCategoryMapping.getToolClasses(ToolSetCategory.STANDARD)
-        // Provider that dynamically includes custom tools from the current app target.
-        // This is a lambda so it picks up target app/driver changes during the session.
+        // Note: Inner agent ALWAYS needs tools, even when includePrimitiveTools=false.
+        // For WEB/Playwright devices, the bridge returns Playwright-native tool classes
+        // (navigate, click, type, etc.) instead of the Maestro-based toolset. This lambda
+        // is evaluated per blaze() call so it picks up device changes mid-session.
         val innerAgentToolsProvider = {
+          val driverType = mcpBridge.getDriverType()
+          // Ask the bridge for device-appropriate built-in tools.
+          // For WEB/Playwright: returns Playwright-native toolset (complete replacement for Maestro).
+          // For Android/iOS: returns empty → falls back to ALL Maestro tools so that
+          // availableToolsProvider() delivers the complete toolset to StepToolSet.
+          val bridgeToolClasses = mcpBridge.getInnerAgentBuiltInToolClasses()
+          val builtInToolClasses = bridgeToolClasses.ifEmpty {
+            ToolSetCategoryMapping.getToolClasses(ToolSetCategory.ALL)
+          }
           val customToolClasses = try {
-            val driverType = mcpBridge.getDriverType()
             val appTargetId = mcpBridge.getCurrentAppTargetId()
             val appTarget = if (appTargetId != null) {
               mcpBridge.getAvailableAppTargets().firstOrNull { it.id == appTargetId }
@@ -1029,12 +1050,12 @@ class TrailblazeMcpServer(
             Console.log("[TrailblazeMcpServer] Custom tool loading failed: ${e.message}")
             emptySet()
           }
-          val allTools = (builtInTools + customToolClasses)
+          val allTools = (builtInToolClasses + customToolClasses)
             .mapNotNull { it.toKoogToolDescriptor()?.toTrailblazeToolDescriptor() }
-          Console.log("[TrailblazeMcpServer] Inner agent total tools: ${allTools.size} (custom: ${customToolClasses.size})")
+          Console.log("[TrailblazeMcpServer] Inner agent total tools: ${allTools.size} (driver=$driverType, custom: ${customToolClasses.size})")
           allTools
         }
-        Console.log("[TrailblazeMcpServer] Inner agent tools provider registered (built-in: ${builtInTools.size})")
+        Console.log("[TrailblazeMcpServer] Inner agent tools provider registered")
 
         tools(
           StepToolSet(
@@ -1062,6 +1083,7 @@ class TrailblazeMcpServer(
             logEmitter = trailLogEmitter,
             sessionIdProvider = activeSessionIdProvider,
             driverStatusProvider = { mcpBridge.getDriverConnectionStatus() },
+            toolClassesOverrideProvider = { mcpBridge.getInnerAgentToolClasses() },
           ).asTools(TrailblazeJsonInstance),
         )
         Console.log("[TrailblazeMcpServer] blaze(), verify(), ask() tools registered")
@@ -1102,7 +1124,7 @@ class TrailblazeMcpServer(
     }
 
     // Register MCP resources
-    registerResources(mcpServer, sessionContext, mcpBridge, trailsDirProvider)
+    registerResources(mcpServer, sessionContext, mcpBridge, trailsDirProvider, llmModelListsProvider)
 
     mcpServer.onClose { }
   }
@@ -1276,6 +1298,7 @@ class TrailblazeMcpServer(
       mcpServerSession = null,
       mcpSessionId = mcpSessionId,
       toolProfile = toolProfile,
+      mode = defaultMode,
     )
     sessionContexts[mcpSessionId.sessionId] = sessionContext
     sessionCreationTimes[mcpSessionId.sessionId] = System.currentTimeMillis()
@@ -1371,7 +1394,7 @@ class TrailblazeMcpServer(
   ): SessionId {
     val action = (args["action"] as? JsonPrimitive)?.content?.uppercase()
     val shouldEnsureSession = toolName == "device" &&
-      (action == "CONNECT" || action == "ANDROID" || action == "IOS")
+      (action == "CONNECT" || action == "ANDROID" || action == "IOS" || action == "WEB")
 
     val sessionId = if (shouldEnsureSession) {
       // This must run BEFORE the request log so the session start log is first.
@@ -1411,6 +1434,7 @@ class TrailblazeMcpServer(
       }
       "ANDROID" -> devices.find { it.platform == TrailblazeDevicePlatform.ANDROID }
       "IOS" -> devices.find { it.platform == TrailblazeDevicePlatform.IOS }
+      "WEB" -> devices.find { it.platform == TrailblazeDevicePlatform.WEB }
       else -> null
     }
 

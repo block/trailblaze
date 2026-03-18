@@ -22,13 +22,34 @@ trailblaze [OPTIONS] [COMMAND]
 
 | Command | Description |
 |---------|-------------|
+| `desktop` | Launch the Trailblaze desktop application |
 | `run` | Run a .trail.yaml file or directory of trail files on a connected device |
 | `mcp` | Start the MCP server |
-| `list-devices` | List all connected devices |
+| `devices` | List all connected devices |
 | `config` | View and modify Trailblaze configuration |
 | `status` | Check if the Trailblaze daemon is running |
 | `stop` | Stop the Trailblaze daemon |
 | `help` | When no COMMAND is given, the usage help for the main command is displayed. |
+
+---
+
+### `trailblaze desktop`
+
+Launch the Trailblaze desktop application
+
+**Synopsis:**
+
+```
+trailblaze desktop [OPTIONS]
+```
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--headless` | Start in headless mode (MCP server only, no GUI) | - |
+| `-h`, `--help` | Show this help message and exit. | - |
+| `-V`, `--version` | Print version information and exit. | - |
 
 ---
 
@@ -54,7 +75,7 @@ trailblaze run [OPTIONS] <<trailFile>>
 |--------|-------------|---------|
 | `--headless` | Run without GUI (MCP server mode) | - |
 | `-d`, `--device` | Device ID to run on (e.g., 'emulator-5554'). If not specified, uses first available device. | - |
-| `-a`, `--agent` | Agent: TRAILBLAZE_RUNNER, TWO_TIER_AGENT, MULTI_AGENT_V3. Default: TRAILBLAZE_RUNNER | - |
+| `-a`, `--agent` | Agent: TRAILBLAZE_RUNNER, MULTI_AGENT_V3. Default: TRAILBLAZE_RUNNER | - |
 | `--use-recorded-steps` | Use recorded tool sequences instead of LLM inference | - |
 | `--set-of-mark` | Enable Set of Mark mode (default: true) | - |
 | `-v`, `--verbose` | Enable verbose output | - |
@@ -121,20 +142,19 @@ trailblaze mcp install [OPTIONS] [<<target>>]
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--port` | MCP endpoint port (default: 52525) | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
 
 ---
 
-### `trailblaze list-devices`
+### `trailblaze devices`
 
 List all connected devices
 
 **Synopsis:**
 
 ```
-trailblaze list-devices [OPTIONS]
+trailblaze devices [OPTIONS]
 ```
 
 **Options:**
@@ -180,7 +200,7 @@ trailblaze config drivers
 | `llm` | LLM provider and model (shorthand: provider/model) | provider/model (e.g., openai/gpt-4-1, anthropic/claude-sonnet-4-20250514) |
 | `llm-provider` | LLM provider | openai, anthropic, google, ollama, openrouter, etc. |
 | `llm-model` | LLM model ID | e.g., gpt-4-1, claude-sonnet-4-20250514, gemini-3-flash |
-| `agent` | Agent implementation | TRAILBLAZE_RUNNER, TWO_TIER_AGENT, MULTI_AGENT_V3 |
+| `agent` | Agent implementation | TRAILBLAZE_RUNNER, MULTI_AGENT_V3 |
 | `android-driver` | Android driver type | HOST, ONDEVICE, ACCESSIBILITY |
 | `ios-driver` | iOS driver type | HOST |
 | `set-of-mark` | Enable/disable Set of Mark mode | true, false |
@@ -194,7 +214,7 @@ trailblaze config llm                                # Show current LLM provider
 trailblaze config llm anthropic/claude-sonnet-4-6    # Set both provider + model
 trailblaze config llm-provider openai                # Set provider only
 trailblaze config llm-model gpt-4-1                  # Set model only
-trailblaze config agent TWO_TIER_AGENT               # Set agent implementation
+trailblaze config agent MULTI_AGENT_V3               # Set agent implementation
 trailblaze config set-of-mark false                  # Disable Set of Mark
 trailblaze config models                             # List available LLM models
 trailblaze config agents                             # List agent implementations

@@ -311,7 +311,7 @@ class TrailblazeNodeSelectorGeneratorTest {
     assertNotNull(selector.childOf, "Expected childOf selector")
   }
 
-  // -- Strategy 18: collectionItemInfo --
+  // -- Strategy 19: collectionItemInfo --
 
   @Test
   fun `collectionItemInfo for list item`() {

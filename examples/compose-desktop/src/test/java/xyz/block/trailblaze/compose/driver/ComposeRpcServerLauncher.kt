@@ -6,6 +6,7 @@ import kotlin.test.Ignore
 import kotlin.test.Test
 import xyz.block.trailblaze.compose.driver.rpc.ComposeRpcServer
 import xyz.block.trailblaze.compose.driver.tools.ComposeToolSet
+import xyz.block.trailblaze.compose.target.ComposeUiTestTarget
 import xyz.block.trailblaze.logs.client.TrailblazeJson
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
@@ -38,7 +39,7 @@ class ComposeRpcServerLauncher {
     setContent { SampleTodoApp() }
     waitForIdle()
 
-    val server = ComposeRpcServer(this, port = ComposeRpcServer.COMPOSE_DEFAULT_PORT)
+    val server = ComposeRpcServer(ComposeUiTestTarget(this), port = ComposeRpcServer.COMPOSE_DEFAULT_PORT)
     server.start(wait = false)
 
     Console.log("ComposeRpcServer started on port ${ComposeRpcServer.COMPOSE_DEFAULT_PORT}")
@@ -55,7 +56,7 @@ class ComposeRpcServerLauncher {
     setContent { SampleWidgetShowcase() }
     waitForIdle()
 
-    val server = ComposeRpcServer(this, port = ComposeRpcServer.COMPOSE_DEFAULT_PORT)
+    val server = ComposeRpcServer(ComposeUiTestTarget(this), port = ComposeRpcServer.COMPOSE_DEFAULT_PORT)
     server.start(wait = false)
 
     Console.log("ComposeRpcServer (WidgetShowcase) started on port ${ComposeRpcServer.COMPOSE_DEFAULT_PORT}")

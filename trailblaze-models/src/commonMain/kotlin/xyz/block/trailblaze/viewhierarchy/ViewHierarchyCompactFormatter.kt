@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.viewhierarchy
 
+import xyz.block.trailblaze.api.DeviceInfoPrefix
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
@@ -23,6 +24,8 @@ object ViewHierarchyCompactFormatter {
    * @param screenWidth The screen width in pixels.
    * @param screenHeight The screen height in pixels.
    * @param foregroundAppId The foreground app package name, if known.
+   * @param currentActivity The short name of the current foreground Activity, if known
+   *   (e.g. "HomeActivity"). Only meaningful on Android.
    * @param deviceClassifiers Device classifiers (e.g. "phone", "tablet", "ipad").
    * @param includeOffscreen When true, offscreen elements are included with an `(offscreen)`
    *   annotation. When false (default), offscreen elements are filtered out and a summary
@@ -35,18 +38,22 @@ object ViewHierarchyCompactFormatter {
     screenWidth: Int,
     screenHeight: Int,
     foregroundAppId: String? = null,
+    currentActivity: String? = null,
     deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
     includeOffscreen: Boolean = false,
     @Suppress("UNUSED_PARAMETER") fullHierarchy: Boolean = false,
   ): String = buildString {
     // Context header
-    appendLine("Platform: ${platform.displayName}")
-    appendLine("Screen: ${screenWidth}x${screenHeight}")
+    appendLine(DeviceInfoPrefix.PLATFORM.line(platform.displayName))
+    appendLine(DeviceInfoPrefix.SCREEN.line("${screenWidth}x${screenHeight}"))
     if (foregroundAppId != null) {
       appendLine("App: $foregroundAppId")
     }
+    if (currentActivity != null) {
+      appendLine("Activity: $currentActivity")
+    }
     if (deviceClassifiers.isNotEmpty()) {
-      appendLine("Device: ${deviceClassifiers.joinToString(", ")}")
+      appendLine(DeviceInfoPrefix.DEVICE.line(deviceClassifiers.joinToString(", ")))
     }
     appendLine()
 

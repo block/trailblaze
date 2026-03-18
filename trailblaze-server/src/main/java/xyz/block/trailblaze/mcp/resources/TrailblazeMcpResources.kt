@@ -6,6 +6,7 @@ import io.modelcontextprotocol.kotlin.sdk.types.TextResourceContents
 import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
+import xyz.block.trailblaze.llm.TrailblazeLlmModelList
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
 import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
 import xyz.block.trailblaze.mcp.newtools.ConfigToolSet
@@ -48,11 +49,35 @@ data class ConnectedDeviceResource(
   val currentAppTarget: String? = null,
 )
 
+@Serializable
+data class LlmModelResource(
+  val modelId: String,
+  val inputCostPerMillionTokens: Double,
+  val outputCostPerMillionTokens: Double,
+  val cachedInputCostPerMillionTokens: Double,
+  val contextLength: Long,
+  val maxOutputTokens: Long,
+  val capabilities: List<String>,
+)
+
+@Serializable
+data class LlmProviderResource(
+  val providerId: String,
+  val displayName: String,
+  val models: List<LlmModelResource>,
+)
+
+@Serializable
+data class LlmProvidersResource(
+  val providers: List<LlmProviderResource>,
+)
+
 object TrailblazeMcpResourceUris {
   const val ABOUT = "trailblaze://about"
   const val CONFIG = "trailblaze://config"
   const val DEVICES = "trailblaze://devices"
   const val DEVICES_CONNECTED = "trailblaze://devices/connected"
+  const val LLM_PROVIDERS = "trailblaze://llm/providers"
   const val TRAILS = "trailblaze://trails"
   const val TOOLS_CATEGORIES = "trailblaze://tools/categories"
 }
@@ -62,6 +87,7 @@ fun registerResources(
   sessionContext: TrailblazeMcpSessionContext?,
   mcpBridge: TrailblazeMcpBridge,
   trailsDirProvider: () -> File,
+  llmModelListsProvider: () -> Set<TrailblazeLlmModelList>,
 ) {
   // Static: What Trailblaze is and how to use it
   mcpServer.addResource(
@@ -215,6 +241,44 @@ fun registerResources(
     )
   }
 
+  // Static: LLM providers and their models
+  mcpServer.addResource(
+    uri = TrailblazeMcpResourceUris.LLM_PROVIDERS,
+    name = "LLM Providers",
+    description = "All supported LLM providers and their models with pricing, capabilities, and context lengths",
+    mimeType = "application/json",
+  ) {
+    val modelLists = llmModelListsProvider()
+    val resource = LlmProvidersResource(
+      providers = modelLists.map { modelList ->
+        LlmProviderResource(
+          providerId = modelList.provider.id,
+          displayName = modelList.provider.display,
+          models = modelList.entries.map { model ->
+            LlmModelResource(
+              modelId = model.modelId,
+              inputCostPerMillionTokens = model.inputCostPerOneMillionTokens,
+              outputCostPerMillionTokens = model.outputCostPerOneMillionTokens,
+              cachedInputCostPerMillionTokens = model.cachedInputCostPerOneMillionTokens,
+              contextLength = model.contextLength,
+              maxOutputTokens = model.maxOutputTokens,
+              capabilities = model.capabilityIds,
+            )
+          },
+        )
+      }.sortedBy { it.providerId },
+    )
+    ReadResourceResult(
+      contents = listOf(
+        TextResourceContents(
+          text = TrailblazeJsonInstance.encodeToString(resource),
+          uri = TrailblazeMcpResourceUris.LLM_PROVIDERS,
+          mimeType = "application/json",
+        ),
+      ),
+    )
+  }
+
   // Static: Tool category descriptions
   mcpServer.addResource(
     uri = TrailblazeMcpResourceUris.TOOLS_CATEGORIES,
@@ -257,6 +321,7 @@ and iOS devices and automates UI interactions using natural language.
 - trailblaze://config — Current settings and available options
 - trailblaze://devices — Available devices to connect to
 - trailblaze://devices/connected — Connected device info and installed apps
+- trailblaze://llm/providers — Supported LLM providers and models with pricing/capabilities
 - trailblaze://trails — Saved test trail files
 - trailblaze://tools/categories — Tool categories for fine-grained control
 

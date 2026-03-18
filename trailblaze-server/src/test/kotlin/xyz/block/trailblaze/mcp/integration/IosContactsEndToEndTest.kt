@@ -15,7 +15,7 @@ import xyz.block.trailblaze.util.Console
 /**
  * **iOS CONTACTS END-TO-END TEST**
  *
- * This test validates the complete MCP → DirectMcpAgent → Device flow on iOS by:
+ * This test validates the complete MCP → MULTI_AGENT_V3 → Device flow on iOS by:
  * 1. Automatically launching Trailblaze server (if not running)
  * 2. Opening the Contacts app
  * 3. Creating a new contact with test data
@@ -71,10 +71,10 @@ class IosContactsEndToEndTest : TrailblazeServerTestBase() {
         assertTrue(connectResult.isSuccess, "Should connect to device: ${connectResult.content}")
         Console.log("Connected: ${connectResult.content}")
 
-        // 2. Configure for DirectMcpAgent
+        // 2. Configure for MULTI_AGENT_V3
         Console.log("\n--- Step 2: Configure Agent ---")
         client.setMode(TrailblazeMcpMode.TRAILBLAZE_AS_AGENT)
-        client.setAgentImplementation(AgentImplementation.TWO_TIER_AGENT)
+        client.setAgentImplementation(AgentImplementation.MULTI_AGENT_V3)
 
         // 3. Run the contact creation automation (iOS-specific steps)
         Console.log("\n--- Step 3: Create Contact via Agent ---")
@@ -127,7 +127,7 @@ class IosContactsEndToEndTest : TrailblazeServerTestBase() {
 
       // Configure
       client.setMode(TrailblazeMcpMode.TRAILBLAZE_AS_AGENT)
-      client.setAgentImplementation(AgentImplementation.TWO_TIER_AGENT)
+      client.setAgentImplementation(AgentImplementation.MULTI_AGENT_V3)
       client.setMaxIterations(10) // Strict limit for tests
 
       // Run simple automation to open Contacts

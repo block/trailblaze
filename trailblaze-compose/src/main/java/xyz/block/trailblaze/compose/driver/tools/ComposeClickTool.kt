@@ -1,16 +1,13 @@
 package xyz.block.trailblaze.compose.driver.tools
 
 import ai.koog.agents.core.tools.annotations.LLMDescription
-import androidx.compose.ui.test.ComposeUiTest
-import androidx.compose.ui.test.ExperimentalTestApi
-import androidx.compose.ui.test.performClick
 import kotlinx.serialization.Serializable
+import xyz.block.trailblaze.compose.target.ComposeTestTarget
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.util.Console
 
-@OptIn(ExperimentalTestApi::class)
 @Serializable
 @TrailblazeToolClass("compose_click")
 @LLMDescription(
@@ -32,7 +29,7 @@ class ComposeClickTool(
 ) : ComposeExecutableTool {
 
   override suspend fun executeWithCompose(
-    composeUiTest: ComposeUiTest,
+    target: ComposeTestTarget,
     context: TrailblazeToolExecutionContext,
   ): TrailblazeToolResult {
     val description = element.ifBlank { elementId ?: testTag ?: text ?: "unknown" }
@@ -44,12 +41,9 @@ class ComposeClickTool(
             "Must provide elementId, testTag, or text to identify the element."
           )
       val nthIndex = ComposeExecutableTool.getNthIndex(elementId, context)
-      if (nthIndex > 0) {
-        composeUiTest.onAllNodes(matcher).get(nthIndex).performClick()
-      } else {
-        composeUiTest.onNode(matcher).performClick()
-      }
-      composeUiTest.waitForIdle()
+      val node = ComposeExecutableTool.findNode(target, matcher, nthIndex)
+      target.click(node)
+      target.waitForIdle()
       TrailblazeToolResult.Success(message = "Clicked on '$description'.")
     } catch (e: Exception) {
       TrailblazeToolResult.Error.ExceptionThrown("Click failed on '$description': ${e.message}")

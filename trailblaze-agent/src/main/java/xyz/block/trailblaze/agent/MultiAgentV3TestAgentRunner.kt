@@ -5,6 +5,7 @@ import kotlinx.datetime.Clock
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.agent.model.AgentTaskStatusData
 import xyz.block.trailblaze.agent.model.PromptRecordingResult
+import xyz.block.trailblaze.agent.util.toActionHistory
 import xyz.block.trailblaze.agent.model.PromptStepStatus
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TestAgentRunner
@@ -59,6 +60,7 @@ class MultiAgentV3TestAgentRunner(
       steps = listOf(promptStep),
       config = TrailConfig.AI_ONLY,
       sessionId = sessionIdProvider(),
+      initialActionHistory = recordingResult.toActionHistory(),
     )
     result.toAgentTaskStatus(promptStep, startTime)
   }

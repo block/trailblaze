@@ -262,12 +262,12 @@ data class ScreenAnalysis(
    * - "VERIFICATION" - needs assert tools
    * - "app_login" - needs app-specific login tools
    * - etc.
-   * 
-   * The outer agent can retry with `step(goal="...", toolHint=suggestedToolHint)`.
+   *
+   * The outer agent can retry with `blaze(goal="...", hint=suggestedHint)`.
    * This keeps the inner agent dumb (it just says what it needs) while the outer
    * agent makes decisions about tool selection.
    */
-  val suggestedToolHint: String? = null,
+  val suggestedHint: String? = null,
 
   // Exception handling (Mobile-Agent-v3 inspired)
   /**
@@ -368,7 +368,7 @@ data class ToolCallAnalysisResponse(
   val alternativeApproaches: List<String> = emptyList(),
   val objectiveAppearsAchieved: Boolean = false,
   val objectiveAppearsImpossible: Boolean = false,
-  val suggestedToolHint: String? = null,
+  val suggestedHint: String? = null,
   val screenState: String? = null,
   val recoveryAction: JsonElement? = null,
   val detectionConfidence: Float = 1.0f,
@@ -450,7 +450,7 @@ data class ToolCallAnalysisResponse(
       alternativeApproaches = alternativeApproaches,
       objectiveAppearsAchieved = objectiveAppearsAchieved,
       objectiveAppearsImpossible = objectiveAppearsImpossible,
-      suggestedToolHint = suggestedToolHint,
+      suggestedHint = suggestedHint,
       screenState = screenState?.let { state ->
         ExceptionalScreenState.entries.find { it.name.equals(state, ignoreCase = true) }
       } ?: ExceptionalScreenState.NORMAL,

@@ -9,11 +9,11 @@ import xyz.block.trailblaze.model.CustomTrailblazeTools
 import xyz.block.trailblaze.model.TrailblazeConfig
 
 class ExamplesAndroidTrailblazeRule(
-  trailblazeLlmModel: TrailblazeLlmModel = InstrumentationArgUtil.getInstrumentationArg("OPENROUTER_API_KEY")?.let {
-    OpenRouterTrailblazeLlmModelList.GPT_OSS_120B_FREE
-  } ?: InstrumentationArgUtil.getInstrumentationArg("OPENAI_API_KEY")?.let {
-    OpenAITrailblazeLlmModelList.OPENAI_GPT_4_1
-  } ?: error("Could not configure TrailblazeLlmModel"),
+  trailblazeLlmModel: TrailblazeLlmModel =
+    InstrumentationArgUtil.resolveTrailblazeLlmModel(
+      "OPENROUTER_API_KEY" to OpenRouterTrailblazeLlmModelList.GPT_OSS_120B_FREE,
+      "OPENAI_API_KEY" to OpenAITrailblazeLlmModelList.OPENAI_GPT_4_1,
+    ),
   config: TrailblazeConfig = TrailblazeConfig.DEFAULT,
   customToolClasses: CustomTrailblazeTools = CustomTrailblazeTools(
     registeredAppSpecificLlmTools = setOf(),

@@ -141,6 +141,9 @@ class TrailblazeDeviceManager(
   private val _activeDeviceSessionsFlow = MutableStateFlow<Map<TrailblazeDeviceId, SessionId>>(emptyMap())
   val activeDeviceSessionsFlow: StateFlow<Map<TrailblazeDeviceId, SessionId>> = _activeDeviceSessionsFlow.asStateFlow()
 
+  /** Guards [getOrCreateSessionResolution] against concurrent session creation for the same device. */
+  private val sessionCreationLock = Any()
+
   /**
    * Tracks installed app IDs per device.
    * Populated when loadDevices() is called.
@@ -214,6 +217,7 @@ class TrailblazeDeviceManager(
         sendSessionStartLog = sendSessionStartLog,
         sendSessionEndLog = sendSessionEndLog,
         setOfMarkEnabled = settingsState.appConfig.setOfMarkEnabled,
+        browserHeadless = !settingsState.appConfig.showWebBrowser,
       ),
       trailblazeDeviceId = trailblazeDeviceId,
       referrer = referrer,
@@ -255,7 +259,7 @@ class TrailblazeDeviceManager(
     forceNewSession: Boolean = false,
     sessionIdPrefix: String = "session",
     deviceSummary: TrailblazeConnectedDeviceSummary? = null
-  ): DeviceSessionResolution {
+  ): DeviceSessionResolution = synchronized(sessionCreationLock) {
     val existingSessionId = if (forceNewSession) null else getCurrentSessionIdForDevice(trailblazeDeviceId)
     val isNewSession = existingSessionId == null
     val sessionId = existingSessionId ?: TrailblazeSessionManager.generateSessionId(sessionIdPrefix)
@@ -265,7 +269,7 @@ class TrailblazeDeviceManager(
       trackActiveSession(trailblazeDeviceId, sessionId, deviceSummary)
     }
 
-    return DeviceSessionResolution(sessionId, isNewSession)
+    DeviceSessionResolution(sessionId, isNewSession)
   }
 
   /**

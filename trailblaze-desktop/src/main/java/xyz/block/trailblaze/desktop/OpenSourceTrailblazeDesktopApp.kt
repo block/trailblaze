@@ -1,14 +1,19 @@
 package xyz.block.trailblaze.desktop
 
+import xyz.block.trailblaze.compose.driver.tools.ComposeToolSet
 import xyz.block.trailblaze.host.rules.TrailblazeHostDynamicLlmClientProvider
 import xyz.block.trailblaze.host.rules.TrailblazeHostDynamicLlmTokenProvider
 import xyz.block.trailblaze.host.yaml.DesktopYamlRunner
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
+import xyz.block.trailblaze.logs.client.TrailblazeJson
+import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.server.TrailblazeMcpServer
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridgeImpl
 import xyz.block.trailblaze.mcp.utils.JvmLLMProvidersUtil
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
+import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
+import xyz.block.trailblaze.toolcalls.toolName
 import xyz.block.trailblaze.ui.MainTrailblazeApp
 import xyz.block.trailblaze.ui.TrailblazeAnalytics
 import xyz.block.trailblaze.ui.TrailblazeDesktopApp
@@ -21,9 +26,15 @@ import xyz.block.trailblaze.util.Console
 class OpenSourceTrailblazeDesktopApp : TrailblazeDesktopApp(
   desktopAppConfig = OpenSourceTrailblazeDesktopAppConfig()
 ) {
-  /** Public access to config for CLI commands */
-  val config: OpenSourceTrailblazeDesktopAppConfig
-    get() = desktopAppConfig as OpenSourceTrailblazeDesktopAppConfig
+
+  init {
+    TrailblazeJsonInstance = TrailblazeJson.createTrailblazeJsonInstance(
+      allToolClasses = TrailblazeToolSet.AllBuiltInTrailblazeToolsForSerializationByToolName
+        + ComposeToolSet.toolClassesByToolName
+        + desktopAppConfig.availableAppTargets.flatMap { it.getAllCustomToolClassesForSerialization() }
+        .associateBy { it.toolName() },
+    )
+  }
 
   fun createDynamicClient(trailblazeLlmModel: TrailblazeLlmModel): TrailblazeHostDynamicLlmClientProvider {
     return TrailblazeHostDynamicLlmClientProvider(
@@ -104,6 +115,7 @@ class OpenSourceTrailblazeDesktopApp : TrailblazeDesktopApp(
         }
       },
       llmModelProvider = { desktopAppConfig.getCurrentLlmModel() },
+      llmModelListsProvider = { desktopAppConfig.getAllSupportedLlmModelLists() },
     )
   }
 

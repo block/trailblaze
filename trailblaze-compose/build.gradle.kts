@@ -17,6 +17,7 @@ kotlin {
 dependencies {
   api(project(":trailblaze-common"))
   api(project(":trailblaze-agent"))
+  api(project(":trailblaze-compose-target"))
 
   api(compose.desktop.currentOs)
   api(libs.compose.ui.test.junit4)

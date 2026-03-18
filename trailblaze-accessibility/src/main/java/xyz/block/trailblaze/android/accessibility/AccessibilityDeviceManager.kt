@@ -26,6 +26,7 @@ class AccessibilityDeviceManager(
   private val filterViewHierarchy: Boolean = false,
   private val setOfMarkEnabled: Boolean = true,
   private val deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
+  private val filterImportantForAccessibility: Boolean = true,
 ) {
 
   companion object {
@@ -47,6 +48,7 @@ class AccessibilityDeviceManager(
       filterViewHierarchy = filterViewHierarchy,
       setOfMarkEnabled = setOfMarkEnabled,
       deviceClassifiers = deviceClassifiers,
+      filterImportantForAccessibility = filterImportantForAccessibility,
     )
   }
 
@@ -59,6 +61,7 @@ class AccessibilityDeviceManager(
       filterViewHierarchy = filterViewHierarchy,
       setOfMarkEnabled = setOfMarkEnabled,
       deviceClassifiers = deviceClassifiers,
+      filterImportantForAccessibility = filterImportantForAccessibility,
     )
   }
 

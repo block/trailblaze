@@ -2,9 +2,11 @@ package xyz.block.trailblaze.cli
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 import picocli.CommandLine.Command
 import picocli.CommandLine.Option
@@ -36,24 +38,17 @@ class McpInstallCommand : Callable<Int> {
   )
   var target: String? = null
 
-  @Option(
-    names = ["--port"],
-    description = ["MCP endpoint port (default: 52525)"],
-  )
-  var port: Int = 52525
-
   private val json = Json { prettyPrint = true }
 
   override fun call(): Int {
-    val endpoint = "http://localhost:$port/mcp"
     val targets = if (target != null) listOf(target!!) else listOf("claude", "cursor", "goose")
 
     var hasError = false
     for (t in targets) {
       when (t.lowercase()) {
-        "claude" -> if (!installClaude(endpoint)) hasError = true
-        "cursor" -> if (!installCursor(endpoint)) hasError = true
-        "goose" -> printGooseInstructions(endpoint)
+        "claude" -> if (!installClaude()) hasError = true
+        "cursor" -> if (!installCursor()) hasError = true
+        "goose" -> printGooseInstructions()
         else -> {
           Console.log("Unknown target: $t (supported: claude, cursor, goose)")
           hasError = true
@@ -64,15 +59,45 @@ class McpInstallCommand : Callable<Int> {
     return if (hasError) 1 else 0
   }
 
-  private fun installClaude(endpoint: String): Boolean {
-    val configDir = File(System.getProperty("user.home"), "Library/Application Support/Claude")
-    val configFile = File(configDir, "claude_desktop_config.json")
+  private fun claudeDesktopConfigDir(): File {
+    val home = System.getProperty("user.home")
+    val os = System.getProperty("os.name").lowercase()
+    return when {
+      os.contains("mac") -> File(home, "Library/Application Support/Claude")
+      os.contains("win") -> File(System.getenv("APPDATA") ?: File(home, "AppData/Roaming").path, "Claude")
+      else -> File(home, ".config/Claude") // Linux and other Unix-like systems
+    }
+  }
 
-    if (!configDir.exists()) {
-      Console.log("Skipping Claude Desktop: config directory not found at $configDir")
-      return false
+  private fun installClaude(): Boolean {
+    var installed = false
+
+    // Claude Desktop
+    val desktopConfigDir = claudeDesktopConfigDir()
+    if (desktopConfigDir.exists()) {
+      val configFile = File(desktopConfigDir, "claude_desktop_config.json")
+      writeMcpConfig(configFile, includeType = false)
+      Console.log("Configured Claude Desktop: $configFile")
+      installed = true
+    } else {
+      Console.log("Skipping Claude Desktop: config directory not found at $desktopConfigDir")
     }
 
+    // Claude Code CLI (~/.claude/settings.json on all platforms)
+    val cliConfigDir = File(System.getProperty("user.home"), ".claude")
+    if (cliConfigDir.exists()) {
+      val settingsFile = File(cliConfigDir, "settings.json")
+      writeMcpConfig(settingsFile, includeType = true)
+      Console.log("Configured Claude Code CLI: $settingsFile")
+      installed = true
+    } else {
+      Console.log("Skipping Claude Code CLI: config directory not found at $cliConfigDir")
+    }
+
+    return installed
+  }
+
+  private fun writeMcpConfig(configFile: File, includeType: Boolean) {
     val config = if (configFile.exists()) {
       json.parseToJsonElement(configFile.readText()).jsonObject
     } else {
@@ -82,27 +107,25 @@ class McpInstallCommand : Callable<Int> {
     val mcpServers = config["mcpServers"]?.jsonObject ?: JsonObject(emptyMap())
 
     val updated = buildJsonObject {
-      // Preserve existing top-level keys
       for ((key, value) in config) {
         if (key != "mcpServers") put(key, value)
       }
       putJsonObject("mcpServers") {
-        // Preserve existing servers
         for ((key, value) in mcpServers) {
           if (key != "trailblaze") put(key, value)
         }
         putJsonObject("trailblaze") {
-          put("url", endpoint)
+          if (includeType) put("type", "stdio")
+          put("command", "trailblaze")
+          putJsonArray("args") { add(JsonPrimitive("mcp")) }
         }
       }
     }
 
     configFile.writeText(json.encodeToString(JsonObject.serializer(), updated))
-    Console.log("Configured Claude Desktop: $configFile")
-    return true
   }
 
-  private fun installCursor(endpoint: String): Boolean {
+  private fun installCursor(): Boolean {
     val configDir = File(System.getProperty("user.home"), ".cursor")
     val configFile = File(configDir, "mcp.json")
 
@@ -111,40 +134,21 @@ class McpInstallCommand : Callable<Int> {
       return false
     }
 
-    val config = if (configFile.exists()) {
-      json.parseToJsonElement(configFile.readText()).jsonObject
-    } else {
-      JsonObject(emptyMap())
-    }
-
-    val mcpServers = config["mcpServers"]?.jsonObject ?: JsonObject(emptyMap())
-
-    val updated = buildJsonObject {
-      for ((key, value) in config) {
-        if (key != "mcpServers") put(key, value)
-      }
-      putJsonObject("mcpServers") {
-        for ((key, value) in mcpServers) {
-          if (key != "trailblaze") put(key, value)
-        }
-        putJsonObject("trailblaze") {
-          put("url", endpoint)
-        }
-      }
-    }
-
-    configFile.writeText(json.encodeToString(JsonObject.serializer(), updated))
+    writeMcpConfig(configFile, includeType = false)
     Console.log("Configured Cursor: $configFile")
     return true
   }
 
-  private fun printGooseInstructions(endpoint: String) {
+  private fun printGooseInstructions() {
     val configPath = "~/.config/goose/config.yaml"
     Console.log("Goose requires manual configuration (YAML format).")
-    Console.log("Add the following to $configPath under the 'mcpServers' section:")
+    Console.log("Add the following to $configPath under the 'extensions' section:")
     Console.log("")
     Console.log("  trailblaze:")
-    Console.log("    type: streamable_http")
-    Console.log("    url: $endpoint")
+    Console.log("    type: stdio")
+    Console.log("    cmd: trailblaze")
+    Console.log("    args:")
+    Console.log("      - mcp")
+    Console.log("    enabled: true")
   }
 }

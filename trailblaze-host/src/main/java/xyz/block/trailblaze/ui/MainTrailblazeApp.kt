@@ -65,6 +65,8 @@ import xyz.block.trailblaze.ui.models.TrailblazeServerState
 import xyz.block.trailblaze.ui.tabs.devdebug.DevDebugWindow
 import xyz.block.trailblaze.ui.theme.TrailblazeTheme
 import xyz.block.trailblaze.cli.DaemonClient
+import xyz.block.trailblaze.compose.driver.rpc.ComposeRpcServer
+import xyz.block.trailblaze.compose.target.LiveWindowComposeTarget
 import xyz.block.trailblaze.util.Console
 import java.awt.Desktop
 import java.awt.GraphicsEnvironment
@@ -233,6 +235,21 @@ class MainTrailblazeApp(
           // Bring to front when window becomes visible
           window.toFront()
           window.requestFocus()
+        }
+
+        // Self-test server: expose the live window as a Compose RPC test target
+        if (currentServerState.appConfig.enableSelfTestServer) {
+          LaunchedEffect(Unit) {
+            val composeWindow = window
+            val target = LiveWindowComposeTarget(composeWindow)
+            val server = ComposeRpcServer(target, port = ComposeRpcServer.COMPOSE_DEFAULT_PORT)
+            server.start(wait = false)
+            try {
+              kotlinx.coroutines.awaitCancellation()
+            } finally {
+              server.stop()
+            }
+          }
         }
         
         // Create NavController for type-safe navigation

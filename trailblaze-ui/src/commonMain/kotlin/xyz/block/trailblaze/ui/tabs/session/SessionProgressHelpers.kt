@@ -124,14 +124,15 @@ internal fun buildProgressItems(logs: List<TrailblazeLog>): List<ProgressItem> {
   }
 
   objectives.forEachIndexed { index, objective ->
-    items.add(ProgressItem.ObjectiveItem(objective = objective, stepNumber = stepNumber))
-    stepNumber++
-
-    // Collect tool logs between this objective and the next
+    // Collect tool logs between this objective and the next.
+    // In MCP mode these "late" tool logs are timestamped after ObjectiveCompleteLog because
+    // runYaml() is fire-and-forget: the tool executes asynchronously after the objective
+    // finishes. Semantically they belong to THIS objective, so we fold their count into it
+    // and render them visually nested underneath it (see SessionProgressComposable).
     val thisEnd = objective.completedAt
     val nextStart = objectives.getOrNull(index + 1)?.startedAt
-    if (thisEnd != null) {
-      val toolsBetween = logs.filterIsInstance<TrailblazeLog.TrailblazeToolLog>()
+    val toolsBetween = if (thisEnd != null) {
+      logs.filterIsInstance<TrailblazeLog.TrailblazeToolLog>()
         .filter { it.isRecordable }
         .filter { log ->
           val logMs = log.timestamp.toEpochMilliseconds()
@@ -140,15 +141,24 @@ internal fun buildProgressItems(logs: List<TrailblazeLog>): List<ProgressItem> {
             logMs < nextStart.toEpochMilliseconds()
           afterThis && beforeNext
         }
-      if (toolsBetween.isNotEmpty()) {
-        items.add(
-          ProgressItem.ToolBlockItem(
-            toolLogs = toolsBetween,
-            startedAt = toolsBetween.first().timestamp,
-            completedAt = toolsBetween.last().timestamp,
-          ),
-        )
-      }
+    } else emptyList()
+
+    // Include late-arriving tools in this objective's tool count so the subtitle is accurate.
+    val updatedObjective = if (toolsBetween.isNotEmpty()) {
+      objective.copy(toolCallCount = objective.toolCallCount + toolsBetween.size)
+    } else objective
+
+    items.add(ProgressItem.ObjectiveItem(objective = updatedObjective, stepNumber = stepNumber))
+    stepNumber++
+
+    if (toolsBetween.isNotEmpty()) {
+      items.add(
+        ProgressItem.ToolBlockItem(
+          toolLogs = toolsBetween,
+          startedAt = toolsBetween.first().timestamp,
+          completedAt = toolsBetween.last().timestamp,
+        ),
+      )
     }
   }
 

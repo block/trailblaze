@@ -1,0 +1,56 @@
+- config:
+    id: sample-app/catalog/multiple-items
+    app: xyz.block.trailblaze.examples.sampleapp
+    platform: android
+    driver: ANDROID_ONDEVICE_INSTRUMENTATION
+- tools:
+  - launchApp:
+      appId: xyz.block.trailblaze.examples.sampleapp
+      launchMode: REINSTALL
+- prompts:
+  - step: Navigate to the "Catalog" tab
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: Navigate to the Catalog tab by tapping the Catalog navigation item.
+          selector:
+            containsChild:
+              textRegex: Catalog
+  - verify: '"Coffee", "Coffee Latte", and "Coffee Americano" are all visible in the list'
+    recording:
+      tools:
+      - assertVisibleBySelector:
+          reason: Verify "Coffee" is visible in the catalog list.
+          selector:
+            textRegex: Coffee
+      - assertVisibleBySelector:
+          reason: Verify "Coffee Latte" is visible in the catalog list.
+          selector:
+            textRegex: Coffee Latte
+      - assertVisibleBySelector:
+          reason: Verify "Coffee Americano" is visible in the catalog list.
+          selector:
+            textRegex: Coffee Americano
+  - step: Tap on "Coffee Americano" specifically
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: Tap precisely on the "Coffee Americano" item to avoid ambiguity with other Coffee items.
+          selector:
+            containsChild:
+              textRegex: Coffee Americano
+  - verify: A dialog showing "Coffee Americano" is visible
+    recording:
+      tools:
+      - assertVisibleBySelector:
+          reason: Verify the item detail dialog is showing "Coffee Americano".
+          selector:
+            textRegex: Coffee Americano
+  - step: Tap "Dismiss" to close the dialog
+    recording:
+      tools:
+      - tapOnElementBySelector:
+          reason: Tap "Dismiss" to close the detail dialog.
+          selector:
+            containsChild:
+              textRegex: Dismiss

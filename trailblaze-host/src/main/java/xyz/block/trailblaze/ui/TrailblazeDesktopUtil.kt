@@ -2,7 +2,7 @@ package xyz.block.trailblaze.ui
 
 import org.yaml.snakeyaml.DumperOptions
 import org.yaml.snakeyaml.Yaml
-import xyz.block.trailblaze.ui.DesktopOsType
+import xyz.block.trailblaze.util.DesktopOsType
 import xyz.block.trailblaze.ui.goose.GooseRecipe
 import xyz.block.trailblaze.ui.goose.createGooseRecipe
 import xyz.block.trailblaze.ui.goose.defaultOpenSourceActivities

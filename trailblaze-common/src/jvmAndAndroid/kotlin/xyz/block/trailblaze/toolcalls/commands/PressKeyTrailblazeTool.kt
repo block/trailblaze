@@ -8,6 +8,7 @@ import maestro.orchestra.PressKeyCommand
 import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.toolcalls.MapsToMaestroCommands
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
+import xyz.block.trailblaze.yaml.serializers.CaseInsensitiveEnumSerializer
 
 @Serializable
 @TrailblazeToolClass("pressKey")
@@ -25,10 +26,13 @@ data class PressKeyTrailblazeTool(
   val keyCode: PressKeyCode,
 ) : MapsToMaestroCommands() {
 
+  @Serializable(with = PressKeyCode.Serializer::class)
   enum class PressKeyCode {
     BACK,
     ENTER,
-    HOME,
+    HOME;
+
+    object Serializer : CaseInsensitiveEnumSerializer<PressKeyCode>(PressKeyCode::class)
   }
 
   override fun toMaestroCommands(memory: AgentMemory): List<Command> = listOf(

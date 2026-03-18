@@ -3,6 +3,7 @@ package xyz.block.trailblaze.playwright
 import com.microsoft.playwright.Locator
 import com.microsoft.playwright.Page
 import com.microsoft.playwright.options.ScreenshotAnimations
+import xyz.block.trailblaze.api.DeviceInfoPrefix
 import xyz.block.trailblaze.api.DriverNodeDetail
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ScreenshotScalingConfig
@@ -168,7 +169,7 @@ class PlaywrightScreenState(
    */
   private fun buildPageContextHeader(): String = buildString {
     // Browser engine and viewport size class
-    appendLine("Browser: ${browserEngine.displayName} ($viewportSizeClass)")
+    appendLine(DeviceInfoPrefix.BROWSER.line("${browserEngine.displayName} ($viewportSizeClass)"))
 
     // Current URL
     try {
@@ -198,7 +199,7 @@ class PlaywrightScreenState(
     }
 
     // Viewport size — alongside scroll info for easy LLM reference
-    appendLine("Viewport: ${viewportWidth}x${viewportHeight}")
+    appendLine(DeviceInfoPrefix.VIEWPORT.line("${viewportWidth}x${viewportHeight}"))
 
     // Scroll position and total page height
     try {

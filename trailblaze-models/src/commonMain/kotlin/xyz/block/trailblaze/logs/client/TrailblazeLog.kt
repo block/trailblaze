@@ -63,11 +63,11 @@ sealed interface TrailblazeLog {
    */
   @Serializable
   data class LlmRequestContext(
-    /** Which agent architecture was used (TRAILBLAZE_RUNNER or TWO_TIER_AGENT) */
+    /** Which agent architecture was used (TRAILBLAZE_RUNNER or MULTI_AGENT_V3) */
     val agentImplementation: AgentImplementation,
     /** How the LLM was called (DIRECT or MCP_SAMPLING) */
     val llmCallStrategy: LlmCallStrategy,
-    /** Which tier of the two-tier agent made this request (INNER for screen analysis, OUTER for planning) */
+    /** Which tier of the agent made this request (INNER for screen analysis, OUTER for planning) */
     val agentTier: AgentTier? = null,
   )
 
@@ -448,7 +448,7 @@ sealed interface TrailblazeLog {
   // 2. (Inner loop activity)  - LLM calls, screen analysis, etc.
   // 3. McpToolCallResponseLog - What we sent back to the outer agent
   //
-  // This separation is critical for debugging TWO_TIER_AGENT mode where
+  // This separation is critical for debugging MULTI_AGENT_V3 mode where
   // the inner loop's decisions directly influence the response.
 
   /**

@@ -6,11 +6,11 @@ import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
-import xyz.block.trailblaze.llm.DirectAgentConfig
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateResponse
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
+import kotlin.reflect.KClass
 import kotlin.time.Duration
 
 /**
@@ -28,24 +28,6 @@ sealed interface RunYamlBlockingResult {
 
   /** Method not implemented by this bridge. */
   data object NotImplemented : RunYamlBlockingResult
-}
-
-/**
- * Result of [TrailblazeMcpBridge.runDirectAgentBlocking].
- */
-sealed interface RunDirectAgentBlockingResult {
-  /** All objectives completed successfully. */
-  data class Success(
-    val completedObjectives: Int,
-    val totalIterations: Int,
-    val totalActions: Int,
-  ) : RunDirectAgentBlockingResult
-
-  /** Agent execution failed. */
-  data class Failed(val message: String) : RunDirectAgentBlockingResult
-
-  /** Method not implemented by this bridge. */
-  data object NotImplemented : RunDirectAgentBlockingResult
 }
 
 /**
@@ -117,6 +99,18 @@ interface TrailblazeMcpBridge {
   fun getDriverType(): TrailblazeDriverType? = null
 
   /**
+   * Returns the tool classes the inner agent should use for the currently connected driver.
+   *
+   * When non-null, [StepToolSet] uses these classes instead of the default
+   * [ToolSetCategoryMapping.getToolClasses] call. This allows driver-specific tool sets
+   * (e.g., Compose tools instead of native Android tools) to be injected without the
+   * server module needing a direct dependency on driver-specific modules.
+   *
+   * @return Driver-specific tool classes, or null to fall back to the default tool set
+   */
+  fun getInnerAgentToolClasses(): Set<KClass<out TrailblazeTool>>? = null
+
+  /**
    * Returns the status of the device driver connection for the given device.
    *
    * @return null if no connection is in progress or the device is ready,
@@ -155,9 +149,10 @@ interface TrailblazeMcpBridge {
    * If no session exists, creates one. This is used to get a session ID for
    * progress notification monitoring BEFORE running YAML.
    *
+   * @param testName Optional display name for the session (shown in the Trailblaze report)
    * @return The session ID (existing or newly created), or null if no device is selected
    */
-  suspend fun ensureSessionAndGetId(): SessionId? = null
+  suspend fun ensureSessionAndGetId(testName: String? = null): SessionId? = null
 
   /**
    * Runs YAML and blocks until all objectives complete.
@@ -187,24 +182,6 @@ interface TrailblazeMcpBridge {
    * @param deviceId The device to cancel automation on
    */
   fun cancelAutomation(deviceId: TrailblazeDeviceId) {}
-
-  /**
-   * Runs DirectMcpAgent and blocks until all objectives complete.
-   * This executes the Koog-based agent (either on host or on-device depending on driver type).
-   *
-   * For on-device drivers: Sends RunDirectAgentRequest via RPC
-   * For host drivers: Runs DirectMcpAgent locally
-   *
-   * @param objectives List of natural language objectives to achieve
-   * @param onProgress Callback for progress messages during execution
-   * @param directAgentConfig Configuration for the DirectMcpAgent (iterations, screenshots, etc.)
-   * @return Result describing success/failure
-   */
-  suspend fun runDirectAgentBlocking(
-    objectives: List<String>,
-    onProgress: (String) -> Unit = {},
-    directAgentConfig: DirectAgentConfig = DirectAgentConfig(),
-  ): RunDirectAgentBlockingResult = RunDirectAgentBlockingResult.NotImplemented
 
   /**
    * Switches the current target app to the one matching the given app target ID.
@@ -285,4 +262,13 @@ interface TrailblazeMcpBridge {
    * @return null on success, or an error message
    */
   fun setAgentImplementation(implementation: AgentImplementation): String? = "Not implemented"
+
+  /**
+   * Returns the built-in tool classes for the inner agent based on the currently connected device.
+   *
+   * Returns an empty set by default — [TrailblazeMcpServer] falls back to the standard Maestro
+   * tool set when this is empty. Overridden by [TrailblazeMcpBridgeImpl] to return
+   * [PlaywrightNativeToolSet.LlmToolSet.toolClasses] when a WEB device is connected.
+   */
+  fun getInnerAgentBuiltInToolClasses(): Set<KClass<out TrailblazeTool>> = emptySet()
 }

@@ -33,6 +33,7 @@ import java.util.concurrent.CountDownLatch
 abstract class TrailblazeDesktopApp(
   protected val desktopAppConfig: TrailblazeDesktopAppConfig,
 ) {
+
   abstract val desktopYamlRunner: DesktopYamlRunner
 
   abstract val trailblazeMcpServer: TrailblazeMcpServer

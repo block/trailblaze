@@ -4,6 +4,28 @@ import xyz.block.trailblaze.api.DriverNodeDetail
 import xyz.block.trailblaze.api.TrailblazeNode
 
 /**
+ * Filters the [TrailblazeNode] tree to only include nodes marked as important for accessibility.
+ *
+ * Nodes where [DriverNodeDetail.AndroidAccessibility.isImportantForAccessibility] is false are
+ * removed and their children are promoted up to take their place, preserving any important
+ * descendants. Non-Android nodes are always kept.
+ *
+ * The root node is always kept regardless of its importance flag.
+ */
+internal fun TrailblazeNode.filterImportantForAccessibility(): TrailblazeNode {
+  fun processChildren(children: List<TrailblazeNode>): List<TrailblazeNode> =
+    children.flatMap { child ->
+      val processedChild = child.copy(children = processChildren(child.children))
+      val isImportant = when (val detail = child.driverDetail) {
+        is DriverNodeDetail.AndroidAccessibility -> detail.isImportantForAccessibility
+        else -> true
+      }
+      if (isImportant) listOf(processedChild) else processedChild.children
+    }
+  return copy(children = processChildren(children))
+}
+
+/**
  * Maps [AccessibilityNode] trees to [TrailblazeNode] trees with
  * [DriverNodeDetail.AndroidAccessibility] detail.
  *

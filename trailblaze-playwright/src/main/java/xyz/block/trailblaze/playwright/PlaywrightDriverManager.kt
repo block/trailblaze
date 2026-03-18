@@ -1,12 +1,16 @@
 package xyz.block.trailblaze.playwright
 
+import java.io.File
 import java.net.HttpURLConnection
 import java.net.URI
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.util.Properties
+import java.util.concurrent.TimeUnit
 import java.util.zip.ZipFile
+import xyz.block.trailblaze.util.DesktopOsType
+import xyz.block.trailblaze.util.isArm
 
 /**
  * Ensures the Playwright driver is available before [Playwright.create()][com.microsoft.playwright.Playwright.create]
@@ -167,16 +171,149 @@ object PlaywrightDriverManager {
     }
   }
 
+  /**
+   * Ensures the Chromium browser binary is installed in the Playwright browsers cache.
+   *
+   * Playwright separates the "driver" (Node.js runtime, ~7 MB) from the "browser" (Chromium
+   * binary, ~150 MB). [ensureDriverAvailable] handles the driver; this method handles the
+   * browser. It checks for any `chromium-*` or `chromium_headless_shell-*` directory in the
+   * ms-playwright cache (or in [PLAYWRIGHT_BROWSERS_PATH] if set), and runs
+   * `playwright install chromium` if none is found.
+   *
+   * Must be called after [ensureDriverAvailable] so that `playwright.cli.dir` is already set.
+   * Blocks the calling thread until the download completes (one-time, ~150 MB).
+   *
+   * @param onProgress invoked on each progress update with (percentComplete 0–100, statusMessage).
+   *   Called from a background reader thread. Implementations must be thread-safe. May be null.
+   */
+  fun ensureBrowserInstalled(onProgress: ((Int, String) -> Unit)? = null) {
+    if (isChromiumInstalled()) return
+
+    println("[Playwright] Chromium not found — installing (one-time, ~150 MB)...")
+    onProgress?.invoke(0, "Downloading Chromium...")
+    runPlaywrightInstallChromium(onProgress)
+    println("[Playwright] Chromium installed successfully.")
+  }
+
+  /** Prefix for the standard Chromium browser directory in the Playwright cache. */
+  private const val CHROMIUM_DIR_PREFIX = "chromium-"
+
+  /** Prefix for the headless-shell Chromium directory in the Playwright cache. */
+  private const val CHROMIUM_HEADLESS_SHELL_DIR_PREFIX = "chromium_headless_shell-"
+
+  /**
+   * Returns the Playwright browser cache directory for the current platform.
+   *
+   * Honors `PLAYWRIGHT_BROWSERS_PATH` when set (and not the sentinel `"0"`),
+   * otherwise falls back to the platform-specific default `ms-playwright` cache location.
+   */
+  fun getPlaywrightBrowsersCacheDir(): File {
+    val browsersPathEnv = System.getenv("PLAYWRIGHT_BROWSERS_PATH")
+    if (!browsersPathEnv.isNullOrBlank() && browsersPathEnv != "0") {
+      return File(browsersPathEnv)
+    }
+    return when (DesktopOsType.current()) {
+      DesktopOsType.MAC_OS ->
+        File(System.getProperty("user.home"), "Library/Caches/ms-playwright")
+      DesktopOsType.LINUX ->
+        File(System.getProperty("user.home"), ".cache/ms-playwright")
+      DesktopOsType.WINDOWS -> {
+        val localAppData = System.getenv("LOCALAPPDATA")
+          ?: (System.getProperty("user.home") + "/AppData/Local")
+        File(localAppData, "ms-playwright")
+      }
+    }
+  }
+
+  private fun isChromiumInstalled(): Boolean {
+    val cacheDir = getPlaywrightBrowsersCacheDir()
+    if (!cacheDir.exists() || !cacheDir.isDirectory) return false
+    return cacheDir.listFiles()?.any { file ->
+      file.isDirectory &&
+        (file.name.startsWith(CHROMIUM_DIR_PREFIX) || file.name.startsWith(CHROMIUM_HEADLESS_SHELL_DIR_PREFIX))
+    } ?: false
+  }
+
+  private val progressRegex = Regex("""(\d{1,3})\s*%""")
+
+  private fun parseProgressPercent(line: String): Int? {
+    val value = progressRegex.find(line)?.groupValues?.get(1)?.toIntOrNull() ?: return null
+    return if (value in 0..100) value else null
+  }
+
+  /**
+   * Spawns a subprocess to run `playwright install chromium`.
+   *
+   * Must run as a subprocess (not via [com.microsoft.playwright.CLI.main]) because the CLI
+   * calls [System.exit] on completion, which would terminate the host JVM.
+   */
+  private fun runPlaywrightInstallChromium(onProgress: ((Int, String) -> Unit)? = null) {
+    val javaHome = System.getProperty("java.home")
+    val javaBin = File(javaHome, "bin/java").absolutePath
+    val classPath = System.getProperty("java.class.path")
+    val cliDir = System.getProperty("playwright.cli.dir")
+    val driverTmpdir = System.getProperty("playwright.driver.tmpdir")
+
+    val process = ProcessBuilder(
+      buildList {
+        add(javaBin)
+        add("-cp")
+        add(classPath)
+        if (cliDir != null) {
+          add("-Dplaywright.cli.dir=$cliDir")
+        } else if (driverTmpdir != null) {
+          add("-Dplaywright.driver.tmpdir=$driverTmpdir")
+        }
+        add("com.microsoft.playwright.CLI")
+        add("install")
+        add("chromium")
+      }
+    ).redirectErrorStream(true).start()
+
+    // Read stdout on a background thread so the timeout on the main thread can actually
+    // fire. If we block on useLines{} here, waitFor() is never reached until the process
+    // closes stdout — which never happens if it hangs.
+    val readerThread = Thread {
+      try {
+        process.inputStream.bufferedReader().useLines { lines ->
+          lines.forEach { line ->
+            println("[Playwright] $line")
+            if (onProgress != null && line.isNotBlank()) {
+              onProgress(parseProgressPercent(line) ?: 0, line.trim())
+            }
+          }
+        }
+      } catch (_: Exception) {
+        // Stream closed — process ended or was destroyed; nothing to do.
+      }
+    }
+    readerThread.isDaemon = true
+    readerThread.start()
+
+    val finished = process.waitFor(15, TimeUnit.MINUTES)
+    if (!finished) {
+      process.destroyForcibly()
+      readerThread.join(5_000)
+      error(
+        "playwright install chromium timed out after 15 minutes. " +
+          "Run `playwright install chromium` manually to install the browser."
+      )
+    }
+    readerThread.join(5_000)
+    val exitCode = process.exitValue()
+    if (exitCode != 0) {
+      error(
+        "playwright install chromium failed (exit code $exitCode). " +
+          "Run `playwright install chromium` manually to install the browser."
+      )
+    }
+  }
+
   private fun detectPlatform(): String {
-    val os = System.getProperty("os.name").lowercase()
-    val arch = System.getProperty("os.arch").lowercase()
-    return when {
-      os.contains("mac") && (arch.contains("aarch64") || arch.contains("arm64")) -> "mac-arm64"
-      os.contains("mac") -> "mac"
-      os.contains("linux") && (arch.contains("aarch64") || arch.contains("arm64")) -> "linux-arm64"
-      os.contains("linux") -> "linux"
-      os.contains("win") -> "win32_x64"
-      else -> error("Unsupported platform for Playwright driver: $os ($arch)")
+    return when (DesktopOsType.current()) {
+      DesktopOsType.MAC_OS -> if (isArm()) "mac-arm64" else "mac"
+      DesktopOsType.LINUX -> if (isArm()) "linux-arm64" else "linux"
+      DesktopOsType.WINDOWS -> "win32_x64"
     }
   }
 }

@@ -11,9 +11,53 @@ import androidx.compose.material.icons.filled.Smartphone
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.compositionLocalOf
-import xyz.block.trailblaze.ui.icons.McpLogo
 import androidx.navigation.NavHostController
 import kotlinx.serialization.Serializable
+import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
+import xyz.block.trailblaze.llm.RunYamlRequest
+import xyz.block.trailblaze.llm.TrailblazeLlmModel
+import xyz.block.trailblaze.llm.TrailblazeReferrer
+import xyz.block.trailblaze.mcp.AgentImplementation
+import xyz.block.trailblaze.model.TrailblazeConfig
+import xyz.block.trailblaze.ui.icons.McpLogo
+import xyz.block.trailblaze.ui.models.TrailblazeServerState.SavedTrailblazeAppConfig
+
+/**
+ * Factory for building [RunYamlRequest] pre-populated with desktop app config defaults.
+ *
+ * Obtain via [LocalRunYamlRequestFactory]. Call sites only need to supply the
+ * per-run fields — device, yaml, testName, and referrer.
+ */
+class RunYamlRequestFactory(
+  private val appConfig: SavedTrailblazeAppConfig,
+  private val llmModel: TrailblazeLlmModel,
+) {
+  fun create(
+    device: TrailblazeConnectedDeviceSummary,
+    yaml: String,
+    testName: String,
+    referrer: TrailblazeReferrer,
+    trailFilePath: String? = null,
+    useRecordedSteps: Boolean = true,
+    agentImplementation: AgentImplementation = appConfig.agentImplementation,
+  ): RunYamlRequest = RunYamlRequest(
+    testName = testName,
+    yaml = yaml,
+    trailblazeLlmModel = llmModel,
+    useRecordedSteps = useRecordedSteps,
+    targetAppName = appConfig.selectedTargetAppId,
+    config = TrailblazeConfig(
+      setOfMarkEnabled = appConfig.setOfMarkEnabled,
+      aiFallback = appConfig.aiFallbackEnabled,
+      overrideSessionId = null,
+    ),
+    trailFilePath = trailFilePath,
+    trailblazeDeviceId = device.trailblazeDeviceId,
+    driverType = device.trailblazeDriverType,
+    referrer = referrer,
+    agentImplementation = agentImplementation,
+  )
+}
 
 /**
  * CompositionLocal for accessing the NavController anywhere in the Compose tree.
@@ -21,6 +65,15 @@ import kotlinx.serialization.Serializable
  */
 val LocalNavController = compositionLocalOf<NavHostController> {
   error("No NavController provided. Make sure LocalNavController is provided at the top level.")
+}
+
+/**
+ * CompositionLocal for accessing [RunYamlRequestFactory] anywhere in the Compose tree.
+ * Provided by each tab that runs YAML tests, pre-configured with the current app defaults
+ * (LLM model, target app, set-of-mark, etc.) so call sites only specify per-run fields.
+ */
+val LocalRunYamlRequestFactory = compositionLocalOf<RunYamlRequestFactory> {
+  error("No RunYamlRequestFactory provided.")
 }
 
 /**

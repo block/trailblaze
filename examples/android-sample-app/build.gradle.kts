@@ -40,5 +40,4 @@ dependencies {
   implementation("androidx.fragment:fragment-ktx:1.8.5")
 
   debugImplementation("androidx.compose.ui:ui-tooling")
-
 }

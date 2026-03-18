@@ -253,4 +253,26 @@ object AdbCommandUtil {
   fun longPress(x: Int, y: Int) {
     execShellCommand("input swipe $x $y $x $y 3000")
   }
+
+  /**
+   * Returns the short class name of the current foreground Activity (e.g. "HomeActivity"),
+   * or null if it cannot be determined.
+   *
+   * Parses the output of `dumpsys window | grep mCurrentFocus`, which looks like:
+   * `  mCurrentFocus=Window{abc u0 com.example.app/com.example.app.HomeActivity}`
+   *
+   * The command is fast — the window manager state is in-memory — so the overhead is
+   * negligible relative to a view hierarchy dump.
+   */
+  fun getForegroundActivity(): String? = try {
+    val output = execShellCommand("dumpsys window | grep mCurrentFocus")
+    val line = output.lines().firstOrNull { it.contains("mCurrentFocus=") } ?: return null
+    val braceContent = line.substringAfter("{", "").substringBefore("}", "")
+    val component = braceContent.trim().split(" ").lastOrNull()?.takeIf { it.contains("/") }
+      ?: return null
+    val activityClass = component.substringAfter("/").trimStart('.')
+    activityClass.substringAfterLast('.').takeIf { it.isNotBlank() && it != "null" }
+  } catch (_: Exception) {
+    null
+  }
 }

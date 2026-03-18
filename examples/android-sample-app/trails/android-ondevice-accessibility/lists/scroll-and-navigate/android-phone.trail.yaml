@@ -11,21 +11,22 @@
     recording:
       tools:
       - tapOnElementBySelector:
-          reason: The 'Lists' tab is clearly labeled and is the target of the current objective. Tapping it will navigate to the 'Lists' section as required.
+          reason: The 'Lists' tab is identified by the TextView labeled 'Lists' and the clickable parent View node 45. Tapping this View should navigate to the 'Lists' tab.
           selector:
             containsChild:
               textRegex: Lists
           nodeSelector:
             androidAccessibility:
               classNameRegex: \Qandroid.view.View\E
-            index: 26
+              collectionItemRowIndex: 0
+              collectionItemColumnIndex: 2
   - step: Scroll down to "Item 25" and tap it
     recording:
       tools:
       - scrollUntilTextIsVisible:
           text: Item 25
       - tapOnElementBySelector:
-          reason: The objective requires tapping on 'Item 25', which is now visible and corresponds to nodeId 12.
+          reason: The current objective is to tap on 'Item 25'. 'Item 25' is visible and clickable, corresponding to nodeId 17.
           selector:
             textRegex: Item 25
           nodeSelector:
@@ -35,14 +36,14 @@
     recording:
       tools:
       - assertVisibleBySelector:
-          reason: To verify that the detail screen for Item 25 is displayed as required by the objective.
+          reason: To verify that the 'Detail for Item 25' view is currently visible, satisfying the first step of the objective.
           selector:
             textRegex: Detail for Item 25
           nodeSelector:
             androidAccessibility:
               textRegex: Detail for Item 25
       - tapOnElementBySelector:
-          reason: The detail for Item 25 has been verified as visible. Now, to return to the list, tap the back arrow icon which is conventionally used for navigating back.
+          reason: The 'Detail for Item 25' view is confirmed to be visible. The next step is to go back to the list, which is typically done by tapping the back arrow, represented by nodeId 13.
           selector:
             containsChild:
               textRegex: Back
@@ -55,7 +56,7 @@
       - scrollUntilTextIsVisible:
           text: Item 50
       - assertVisibleBySelector:
-          reason: Verifying that 'Item 50' is visible after scrolling as per the objective.
+          reason: Item 50 is requested to be verified as visible. The corresponding node for 'Item 50' is present in the view hierarchy and shown near the bottom, indicating visibility.
           selector:
             textRegex: Item 50
           nodeSelector:

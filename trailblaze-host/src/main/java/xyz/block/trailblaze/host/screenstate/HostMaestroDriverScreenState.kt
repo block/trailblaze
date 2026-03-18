@@ -3,6 +3,7 @@ package xyz.block.trailblaze.host.screenstate
 import maestro.DeviceInfo
 import maestro.Driver
 import maestro.Platform
+import maestro.TreeNode
 import maestro.filterOutOfBounds
 import okio.Buffer
 import xyz.block.trailblaze.api.ScreenState
@@ -52,6 +53,18 @@ class HostMaestroDriverScreenState(
   private var stableTrailblazeNodeTree: TrailblazeNode? = null
   private var stableBufferedImage: BufferedImage? = null
 
+  /**
+   * Bundle identifier of the foreground iOS app, captured from the XCTest accessibility tree.
+   *
+   * The Maestro iOS driver maps `element.identifier` → `attributes["resource-id"]` for every
+   * node. For the root `XCUIApplication` element, `.identifier` IS the bundle ID (e.g.
+   * "com.example.myapp"). The iOS tree has a 0x0 container as its root with the application
+   * node as its first child, so we check the root itself first and then `root[0]`.
+   *
+   * Null for Android devices (which surface the foreground package via other means).
+   */
+  private var foregroundAppId: String? = null
+
   init {
     while (!matched && attempts < maxAttempts) {
       // Grab the first raw hierarchy (do NOT relabel)
@@ -69,6 +82,12 @@ class HostMaestroDriverScreenState(
       // Build TrailblazeNode tree for iOS Maestro path
       if (deviceInfo.platform == Platform.IOS) {
         stableTrailblazeNodeTree = rawTree1.toTrailblazeNodeIosMaestro()
+        // Extract the bundle ID on the first successful capture.
+        // The root's resource-id is checked first (in case Maestro returns XCUIApplication
+        // as the direct root), then root[0] (the app window when the root is a 0x0 container).
+        if (foregroundAppId == null) {
+          foregroundAppId = extractIosBundleId(rawTree1)
+        }
       }
 
       // Take the screenshot (raw, without set of mark)
@@ -137,6 +156,7 @@ class HostMaestroDriverScreenState(
       platform = trailblazeDevicePlatform,
       screenWidth = deviceWidth,
       screenHeight = deviceHeight,
+      foregroundAppId = foregroundAppId,
       deviceClassifiers = deviceClassifiers,
       includeOffscreen = includeOffscreen,
       fullHierarchy = fullHierarchy,
@@ -293,6 +313,24 @@ class HostMaestroDriverScreenState(
         if (result != null) return result
       }
       return null
+    }
+
+    /**
+     * Extracts the iOS app bundle identifier from the raw Maestro tree.
+     *
+     * The Maestro iOS driver maps `XCUIElement.identifier` → `attributes["resource-id"]`.
+     * For `XCUIApplication`, the identifier IS the bundle ID (e.g. "com.example.myapp").
+     * The tree root may be a 0x0 container with the app node as `root[0]`, so both are
+     * checked. A bundle ID is distinguished from a plain accessibility identifier by the
+     * presence of at least one dot and the absence of a colon (which would indicate an
+     * Android-style `package:id/resource` format instead).
+     */
+    internal fun extractIosBundleId(root: TreeNode): String? {
+      val candidates = listOf(root.attributes["resource-id"]) +
+        root.children.map { it.attributes["resource-id"] }
+      return candidates.firstOrNull { id ->
+        !id.isNullOrBlank() && id.contains('.') && !id.contains(':')
+      }
     }
 
     internal sealed class StatusBarPosition {

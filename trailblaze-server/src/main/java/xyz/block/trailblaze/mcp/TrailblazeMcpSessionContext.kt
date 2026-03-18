@@ -41,9 +41,17 @@ enum class McpToolProfile {
   MINIMAL;
 
   companion object {
+    // Tool name constants — referenced by @Tool annotations in their respective ToolSets.
+    const val TOOL_DEVICE = "device"
+    const val TOOL_BLAZE = "blaze"
+    const val TOOL_ASK = "ask"
+    const val TOOL_TRAIL = "trail"
+    const val TOOL_TRAIL_EDIT = "trailEdit"
+    const val TOOL_CONFIG = "config"
+
     /** Tool names exposed in MINIMAL mode. */
     val MINIMAL_TOOL_NAMES =
-      setOf("device", "blaze", "verify", "ask", "trail", "trailEdit", "config")
+      setOf(TOOL_DEVICE, TOOL_BLAZE, TOOL_ASK, TOOL_TRAIL, TOOL_TRAIL_EDIT, TOOL_CONFIG)
   }
 }
 
@@ -156,10 +164,10 @@ class TrailblazeMcpSessionContext(
    * Agent implementation to use in TRAILBLAZE_AS_AGENT mode.
    *
    * - TRAILBLAZE_RUNNER: Stable YAML-based TrailblazeRunner.kt
-   * - TWO_TIER_AGENT: Koog-based DirectMcpAgent with inner/outer agents
+   * - MULTI_AGENT_V3: Koog-based multi-agent runner with inner/outer agents
    *
-   * Defaults to [AgentImplementation.DEFAULT]. Use setAgentImplementation(TWO_TIER_AGENT)
-   * to opt into the two-tier architecture.
+   * Defaults to [AgentImplementation.DEFAULT]. Use setAgentImplementation(MULTI_AGENT_V3)
+   * to opt into the modern architecture.
    */
   @Volatile var agentImplementation: AgentImplementation = AgentImplementation.DEFAULT,
 

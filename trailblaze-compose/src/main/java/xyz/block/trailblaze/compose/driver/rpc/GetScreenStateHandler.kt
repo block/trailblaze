@@ -1,15 +1,14 @@
 package xyz.block.trailblaze.compose.driver.rpc
 
-import androidx.compose.ui.test.ComposeUiTest
-import androidx.compose.ui.test.ExperimentalTestApi
 import kotlin.coroutines.cancellation.CancellationException
+import kotlin.io.encoding.Base64
+import kotlin.io.encoding.ExperimentalEncodingApi
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import xyz.block.trailblaze.compose.driver.ComposeScreenState
+import xyz.block.trailblaze.compose.target.ComposeTestTarget
 import xyz.block.trailblaze.mcp.RpcHandler
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
-import kotlin.io.encoding.Base64
-import kotlin.io.encoding.ExperimentalEncodingApi
 
 /**
  * RPC handler that captures the current Compose screen state.
@@ -17,9 +16,8 @@ import kotlin.io.encoding.ExperimentalEncodingApi
  * Returns a screenshot (Base64-encoded PNG), the view hierarchy as serialized JSON, and the
  * semantics tree text snapshot.
  */
-@OptIn(ExperimentalTestApi::class)
 class GetScreenStateHandler(
-  private val composeUiTest: ComposeUiTest,
+  private val target: ComposeTestTarget,
   private val mutex: Mutex,
   private val viewportWidth: Int,
   private val viewportHeight: Int,
@@ -33,7 +31,7 @@ class GetScreenStateHandler(
       try {
         val screenState =
           ComposeScreenState(
-            composeUiTest = composeUiTest,
+            target = target,
             viewportWidth = viewportWidth,
             viewportHeight = viewportHeight,
             requestedDetails = request.requestedDetails,

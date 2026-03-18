@@ -1,0 +1,13 @@
+- config:
+    id: "sample-app/catalog/overlay-tap"
+    app: "xyz.block.trailblaze.examples.sampleapp"
+    platform: android
+    driver: ANDROID_ONDEVICE_ACCESSIBILITY
+- tools:
+    - launchApp:
+        appId: "xyz.block.trailblaze.examples.sampleapp"
+- prompts:
+    - step: Navigate to the "Catalog" tab
+    - step: Tap "Coffee Latte" in the list
+    - verify: A dialog showing "Coffee Latte" is visible
+    - step: Tap "Add to Cart" in the dialog

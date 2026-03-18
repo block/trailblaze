@@ -1,10 +1,7 @@
-package xyz.block.trailblaze.host.agent
+package xyz.block.trailblaze.agent
 
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import xyz.block.trailblaze.agent.ExecutionResult
-import xyz.block.trailblaze.agent.TrailblazeElementComparator
-import xyz.block.trailblaze.agent.UiActionExecutor
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeAgent
 import xyz.block.trailblaze.logs.model.TraceId
@@ -15,13 +12,13 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.util.Console
 
 /**
- * Implementation of [UiActionExecutor] that uses a host [TrailblazeAgent] to execute UI actions.
+ * Implementation of [UiActionExecutor] that uses a [TrailblazeAgent] to execute UI actions.
  *
- * This executor bridges between the two-tier agent architecture (used by MultiAgentV3Runner)
- * and the existing host Maestro infrastructure. It converts tool name + JSON args into
+ * This executor bridges between the inner/outer agent architecture (used by [MultiAgentV3Runner])
+ * and the Maestro infrastructure. It converts tool name + JSON args into
  * [TrailblazeTool] instances and executes them via the agent's `runTrailblazeTools()`.
  *
- * @param agent The host Maestro TrailblazeAgent for device communication
+ * @param agent The TrailblazeAgent for device communication
  * @param screenStateProvider Provider for capturing current screen state
  * @param toolRepo Tool repository for deserialization
  * @param elementComparator Element comparator for tool execution
@@ -29,7 +26,7 @@ import xyz.block.trailblaze.util.Console
  * @see UiActionExecutor
  * @see ExecutionResult
  */
-class HostUiActionExecutor(
+class AgentUiActionExecutor(
   private val agent: TrailblazeAgent,
   private val screenStateProvider: () -> ScreenState,
   private val toolRepo: TrailblazeToolRepo,
@@ -56,7 +53,7 @@ class HostUiActionExecutor(
       // available tool set. These operate on the TrailblazeToolRepo, not the device.
       if (tool is ConfigTrailblazeTool) {
         val configResult = tool.execute(toolRepo)
-        Console.log("[HostUiActionExecutor] ConfigTool $toolName: $configResult")
+        Console.log("[AgentUiActionExecutor] ConfigTool $toolName: $configResult")
         val durationMs = System.currentTimeMillis() - startTime
         return when (configResult) {
           is TrailblazeToolResult.Success -> ExecutionResult.Success(
@@ -133,7 +130,7 @@ class HostUiActionExecutor(
       val normalizedArgs = normalizeArgs(toolName, args)
       Pair(toolRepo.toolCallToTrailblazeTool(toolName, normalizedArgs.toString()), null)
     } catch (e: Exception) {
-      Console.log("[HostUiActionExecutor] Failed to deserialize tool '$toolName' via toolRepo: ${e.message}")
+      Console.log("[AgentUiActionExecutor] Failed to deserialize tool '$toolName' via toolRepo: ${e.message}")
       Pair(null, "Tool '$toolName' deserialization failed: ${e.message}")
     }
   }

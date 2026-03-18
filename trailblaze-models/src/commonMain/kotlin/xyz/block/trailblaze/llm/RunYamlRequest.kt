@@ -18,7 +18,7 @@ import xyz.block.trailblaze.model.TrailblazeConfig
  *
  * The [agentImplementation] controls which architecture processes the request:
  * - [AgentImplementation.TRAILBLAZE_RUNNER]: Legacy YAML-based TrailblazeRunner
- * - [AgentImplementation.TWO_TIER_AGENT]: Modern two-tier architecture (inner/outer agents)
+ * - [AgentImplementation.MULTI_AGENT_V3]: Mobile-Agent-v3 inspired implementation
  */
 @Serializable
 data class RunYamlRequest(
@@ -54,14 +54,7 @@ data class RunYamlRequest(
    * Which agent architecture to use for processing prompts.
    *
    * - [AgentImplementation.TRAILBLAZE_RUNNER]: Legacy YAML-based TrailblazeRunner
-   * - [AgentImplementation.TWO_TIER_AGENT]: Modern two-tier with separate inner/outer agents
    * - [AgentImplementation.MULTI_AGENT_V3]: Mobile-Agent-v3 inspired implementation
    */
   val agentImplementation: AgentImplementation = AgentImplementation.DEFAULT,
-
-  /**
-   * Runtime configuration for [AgentImplementation.TWO_TIER_AGENT].
-   * Ignored when using [AgentImplementation.TRAILBLAZE_RUNNER].
-   */
-  val directAgentConfig: DirectAgentConfig = DirectAgentConfig(),
 ) : RpcRequest<RunYamlResponse>

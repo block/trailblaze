@@ -11,7 +11,14 @@ import kotlinx.serialization.Serializable
  */
 @Serializable
 enum class NativeViewHierarchyDetail {
-  /** Include all nodes (even structural), bounds, dimensions, and enabled state. */
+  /**
+   * Include all nodes (even structural/decorative), bounds, dimensions, and enabled state.
+   *
+   * On the UiAutomator driver, this surfaces all structural containers alongside interactable
+   * elements. On the accessibility driver, forwarding this detail to disable the
+   * `importantForAccessibility` filter is not yet wired up — use it today for bounds and
+   * dimensions on the UiAutomator path.
+   */
   FULL_HIERARCHY,
 
   /**

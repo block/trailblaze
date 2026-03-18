@@ -1,16 +1,14 @@
 package xyz.block.trailblaze.compose.driver.tools
 
 import ai.koog.agents.core.tools.annotations.LLMDescription
-import androidx.compose.ui.test.ComposeUiTest
-import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.hasText
 import kotlinx.serialization.Serializable
+import xyz.block.trailblaze.compose.target.ComposeTestTarget
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.util.Console
 
-@OptIn(ExperimentalTestApi::class)
 @Serializable
 @TrailblazeToolClass("compose_verify_text_visible")
 @LLMDescription(
@@ -25,14 +23,14 @@ class ComposeVerifyTextVisibleTool(
 ) : ComposeExecutableTool {
 
   override suspend fun executeWithCompose(
-    composeUiTest: ComposeUiTest,
+    target: ComposeTestTarget,
     context: TrailblazeToolExecutionContext,
   ): TrailblazeToolResult {
     val interpolatedText = context.memory.interpolateVariables(text)
     Console.log("### Verifying text visible: $interpolatedText")
     return try {
-      val nodes =
-        composeUiTest.onAllNodes(hasText(interpolatedText, substring = false)).fetchSemanticsNodes()
+      val matcher = hasText(interpolatedText, substring = false)
+      val nodes = ComposeExecutableTool.findNodes(target, matcher)
       if (nodes.isEmpty()) {
         TrailblazeToolResult.Error.ExceptionThrown(
           "Assertion failed: text '$interpolatedText' is not visible in the Compose UI."

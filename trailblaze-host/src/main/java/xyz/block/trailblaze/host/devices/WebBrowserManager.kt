@@ -109,9 +109,18 @@ class WebBrowserManager {
         _browserState.value = WebBrowserState.Launching
 
         try {
-          // Launch browser - always visible for desktop app usage
-          val newBrowserManager = PlaywrightBrowserManager(headless = false)
+          // Launch browser - always visible for desktop app usage.
+          // Pass a progress callback so that if Chromium auto-installs during init
+          // (first launch with no prior install), the Settings/Devices UI progress
+          // bar stays in sync via playwrightInstaller's state flow.
+          val newBrowserManager = PlaywrightBrowserManager(
+            headless = false,
+            onBrowserInstallProgress = { percent, message ->
+              playwrightInstaller.reportInstallProgress(percent, message)
+            },
+          )
           browserManager = newBrowserManager
+          playwrightInstaller.reportInstallComplete()
 
           // Update state to running
           _browserState.value = WebBrowserState.Running
@@ -123,7 +132,13 @@ class WebBrowserManager {
           onComplete?.invoke()
         } catch (e: Exception) {
           Console.log("WebBrowserManager: Failed to launch browser: ${e.message}")
-          _browserState.value = WebBrowserState.Error(e.message ?: "Unknown error launching browser")
+          // If install was in progress when init failed, transition installer to Error so
+          // the UI doesn't remain stuck in the "Installing..." state.
+          val errorMessage = e.message ?: "Unknown error launching browser"
+          if (playwrightInstaller.installState.value is PlaywrightInstallState.Installing) {
+            playwrightInstaller.reportInstallError(errorMessage)
+          }
+          _browserState.value = WebBrowserState.Error(errorMessage)
         }
       }
     }
@@ -173,6 +188,25 @@ class WebBrowserManager {
    * Used by interactive recording to create a [DeviceScreenStream].
    */
   fun getPageManager(): PlaywrightBrowserManager? = browserManager
+
+  /**
+   * Stores an externally-created [PlaywrightBrowserManager] for reuse across MCP sessions.
+   *
+   * Unlike [launchBrowser], this does NOT update [browserStateFlow] or start the browser
+   * monitor — it simply makes the browser accessible via [getPageManager] so that future
+   * MCP [device(action=WEB)] calls can reuse the same Chromium instance instead of spawning
+   * a new one every session.
+   *
+   * Called by the MCP bridge after a headless browser is created for the first time.
+   * The browser's lifecycle is managed by its creator; [close] on [BasePlaywrightNativeTest]
+   * will NOT shut it down.
+   */
+  fun adoptManagedBrowser(manager: PlaywrightBrowserManager) {
+    if (browserManager == null) {
+      browserManager = manager
+      Console.log("WebBrowserManager: Adopted MCP-managed headless browser for session reuse")
+    }
+  }
 
   /**
    * Monitors the browser for disconnection/crash.
