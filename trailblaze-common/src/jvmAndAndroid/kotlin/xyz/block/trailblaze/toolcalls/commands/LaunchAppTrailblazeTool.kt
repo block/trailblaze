@@ -1,13 +1,11 @@
 package xyz.block.trailblaze.toolcalls.commands
 
 import ai.koog.agents.core.tools.annotations.LLMDescription
-import kotlinx.coroutines.delay
 import kotlinx.serialization.Serializable
 import maestro.orchestra.Command
 import maestro.orchestra.LaunchAppCommand
 import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
-import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.toolcalls.MapsToMaestroCommands
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
@@ -46,13 +44,12 @@ Available App Launch Modes:
       super.execute(toolExecutionContext)
     }
 
-    // On Android on-device drivers (instrumentation + accessibility), allow the app time to
-    // fully render after launch so the next view hierarchy snapshot is stable. Without this,
-    // slower emulators (especially in CI) often produce unstable hierarchies due to launch
-    // animations and initial layout. Host/Playwright/Compose drivers handle settle internally.
-    val driverType = toolExecutionContext.trailblazeDeviceInfo.trailblazeDriverType
-    if (driverType in TrailblazeDriverType.ANDROID_ON_DEVICE_DRIVER_TYPES) {
-      delay(2000)
+    // Wait for the app to reach the foreground before returning, so the next view hierarchy
+    // snapshot is stable. This replaces a blind 2s delay — polling returns as soon as the app
+    // is ready (typically <1s) while still handling slow CI cold starts (up to 30s).
+    if (toolExecutionContext.trailblazeDeviceInfo.platform == TrailblazeDevicePlatform.ANDROID) {
+      toolExecutionContext.androidDeviceCommandExecutor
+        ?.waitUntilAppInForeground(appId)
     }
     return result
   }

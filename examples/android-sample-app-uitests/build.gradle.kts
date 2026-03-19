@@ -33,7 +33,7 @@ android {
     sourceCompatibility = JavaVersion.VERSION_17
     targetCompatibility = JavaVersion.VERSION_17
   }
-  kotlin { jvmToolchain(17) }
+  kotlin { compilerOptions { jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17 } }
   lint { abortOnError = false }
   testOptions { animationsDisabled = true }
 }

@@ -33,15 +33,15 @@
       - assertVisibleBySelector:
           reason: Verifying that the network status shows 'Online' or 'Offline' is visible.
           selector:
-            textRegex: Online
+            textRegex: (Online|Offline)
       - assertVisibleBySelector:
           reason: Verifying that the network status 'Online' is visible.
           selector:
-            textRegex: Online
+            textRegex: (Online|Offline)
       - assertVisibleBySelector:
           reason: Checking that the network status shows 'Online' is visible.
           selector:
-            textRegex: Online
+            textRegex: (Online|Offline)
   - step: Check the "Accept Terms" checkbox and verify it is checked
     recording:
       tools:

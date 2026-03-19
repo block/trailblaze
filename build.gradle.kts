@@ -19,28 +19,15 @@ plugins {
 subprojects {
   apply(plugin = "org.jetbrains.dokka")
 
-  // Configure Java toolchain to use JDK 17
+  // Target Java 17 bytecode but use whatever JDK is installed
   plugins.withId("org.jetbrains.kotlin.jvm") {
-    configure<JavaPluginExtension> {
-      toolchain {
-        languageVersion = JavaLanguageVersion.of(17)
-      }
-    }
-    // Only apply release option for non-Android projects
     tasks.withType<JavaCompile>().configureEach {
       options.release = 17
     }
   }
-
-  plugins.withId("org.jetbrains.kotlin.multiplatform") {
-    configure<org.jetbrains.kotlin.gradle.dsl.KotlinMultiplatformExtension> {
-      jvmToolchain(17)
-    }
-  }
-
-  plugins.withId("org.jetbrains.kotlin.android") {
-    configure<org.jetbrains.kotlin.gradle.dsl.KotlinAndroidProjectExtension> {
-      jvmToolchain(17)
+  tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinJvmCompile>().configureEach {
+    compilerOptions {
+      jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
     }
   }
 

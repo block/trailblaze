@@ -34,7 +34,7 @@
       - assertVisibleBySelector:
           reason: To verify the network status shows 'Online' as required by the objective.
           selector:
-            textRegex: Online
+            textRegex: (Online|Offline)
       - assertVisibleBySelector:
           reason: To verify that the app version starting with 'Version' is visible, as required by the objective.
           selector:

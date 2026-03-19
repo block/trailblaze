@@ -22,25 +22,26 @@ trailblaze [OPTIONS] [COMMAND]
 
 | Command | Description |
 |---------|-------------|
-| `desktop` | Launch the Trailblaze desktop application |
+| `start` | Launch the Trailblaze desktop application |
 | `run` | Run a .trail.yaml file or directory of trail files on a connected device |
 | `mcp` | Start the MCP server |
 | `devices` | List all connected devices |
 | `config` | View and modify Trailblaze configuration |
+| `report` | Generate an HTML report for sessions in the logs directory |
 | `status` | Check if the Trailblaze daemon is running |
 | `stop` | Stop the Trailblaze daemon |
 | `help` | When no COMMAND is given, the usage help for the main command is displayed. |
 
 ---
 
-### `trailblaze desktop`
+### `trailblaze start`
 
 Launch the Trailblaze desktop application
 
 **Synopsis:**
 
 ```
-trailblaze desktop [OPTIONS]
+trailblaze start [OPTIONS]
 ```
 
 **Options:**
@@ -107,6 +108,7 @@ Start the MCP server
 
 ```
 trailblaze mcp [OPTIONS]
+trailblaze mcp start
 trailblaze mcp install
 ```
 
@@ -117,6 +119,25 @@ trailblaze mcp install
 | `--http` | Use Streamable HTTP transport instead of STDIO. Starts a standalone HTTP MCP server. | - |
 | `--direct`, `--no-daemon` | Run as an in-process MCP server over STDIO instead of the default proxy mode. Bypasses the Trailblaze daemon and runs everything in a single process. Use this for environments where the HTTP daemon cannot run. | - |
 | `--tool-profile` | Tool profile: FULL or MINIMAL (only device/blaze/verify/ask/trail). Defaults to MINIMAL for STDIO, FULL for HTTP. | - |
+| `-h`, `--help` | Show this help message and exit. | - |
+| `-V`, `--version` | Print version information and exit. | - |
+
+---
+
+### `trailblaze mcp start`
+
+Start the MCP server (default: STDIO transport)
+
+**Synopsis:**
+
+```
+trailblaze mcp start [OPTIONS]
+```
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
 
@@ -174,6 +195,7 @@ View and modify Trailblaze configuration
 
 ```
 trailblaze config [OPTIONS] [<<key>>] [<<value>>]
+trailblaze config show
 trailblaze config models
 trailblaze config agents
 trailblaze config drivers
@@ -220,6 +242,25 @@ trailblaze config models                             # List available LLM models
 trailblaze config agents                             # List agent implementations
 trailblaze config drivers                            # List driver types
 ```
+
+---
+
+### `trailblaze config show`
+
+Show all settings and authentication status
+
+**Synopsis:**
+
+```
+trailblaze config show [OPTIONS]
+```
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `-h`, `--help` | Show this help message and exit. | - |
+| `-V`, `--version` | Print version information and exit. | - |
 
 ---
 
@@ -275,6 +316,26 @@ trailblaze config drivers [OPTIONS]
 
 | Option | Description | Default |
 |--------|-------------|---------|
+| `-h`, `--help` | Show this help message and exit. | - |
+| `-V`, `--version` | Print version information and exit. | - |
+
+---
+
+### `trailblaze report`
+
+Generate an HTML report for sessions in the logs directory
+
+**Synopsis:**
+
+```
+trailblaze report [OPTIONS]
+```
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--open` | Open the report in the default browser after generation | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
 

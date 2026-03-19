@@ -710,6 +710,8 @@ class TrailblazeMcpServer(
     val server = embeddedServer(
       factory = Netty,
       configure = {
+        // Increase from 8KB default to handle large proxy headers (e.g. X-Forwarded-Client-Cert)
+        maxHeaderSize = 65536
         configureForSelfSignedSsl(
           requestedHttpPort = port,
           requestedHttpsPort = httpsPort,

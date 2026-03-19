@@ -131,6 +131,10 @@ compose.desktop {
 // ---------------------------------------------------------------------------
 val useProguard = project.findProperty("trailblaze.proguard") == "true"
 
+apply(from = file("../gradle/proguard-utils.gradle.kts"))
+val proguardInjarsResourceFilter: String by extra
+val restoreArchiveEntries: (File, File) -> Unit by extra
+
 val kotlinVersion = libs.versions.kotlin.asProvider().get()
 val proguardClasspath: Configuration by configurations.creating {
   isTransitive = true
@@ -164,10 +168,17 @@ val shrinkUberJar by tasks.registering(JavaExec::class) {
 
     args(
       "-include", project.file("proguard-rules.pro").absolutePath,
-      "-injars", actualJar.absolutePath,
+      "-injars", "${actualJar.absolutePath}($proguardInjarsResourceFilter)",
       "-outjars", outputJar.get().asFile.absolutePath,
       *jmodsArgs.toTypedArray(),
     )
+  }
+
+  doLast {
+    val jarsDir = layout.buildDirectory.dir("compose/jars").get().asFile
+    val originalJar = jarsDir.listFiles()?.firstOrNull { it.extension == "jar" }
+      ?: return@doLast
+    restoreArchiveEntries(originalJar, outputJar.get().asFile)
   }
 }
 

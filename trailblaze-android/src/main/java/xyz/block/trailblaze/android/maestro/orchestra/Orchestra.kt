@@ -549,6 +549,7 @@ class Orchestra(
 
   private fun hideKeyboardCommand(): Boolean {
     maestro.hideKeyboard()
+    maestro.waitForAppToSettle()
 
     // Throw error in case keyboard is still visible
     if (maestro.isKeyboardVisible()) {

@@ -56,7 +56,12 @@ class NetworkImageLoader(
         // Check current URL to determine appropriate base URL
         // Jvm Impl returns 'null'
 
-        val localhostStaticUrl = "$serverBaseUrl/static/$sessionId/$filename"
+        // filename may already include sessionId/ prefix (from replaceScreenshotPathsWithImageKeys)
+        val localhostStaticUrl = if (filename.startsWith("$sessionId/")) {
+            "$serverBaseUrl/static/$filename"
+        } else {
+            "$serverBaseUrl/static/$sessionId/$filename"
+        }
         return when (getPlatform()) {
           Platform.WASM -> {
             val currentUrl: String? = getCurrentUrl()

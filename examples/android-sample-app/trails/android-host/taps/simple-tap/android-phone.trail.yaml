@@ -6,7 +6,7 @@
 - tools:
   - launchApp:
       appId: xyz.block.trailblaze.examples.sampleapp
-      launchMode: REINSTALL
+      launchMode: FORCE_RESTART
 - prompts:
   - step: Tap the "Tap Me" button once
     recording:

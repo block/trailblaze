@@ -198,7 +198,9 @@ private fun generateSnapshotViewerIntegrated(logsRepo: LogsRepo) {
 }
 
 fun main(args: Array<String>) {
-  GenerateReportCliCommand().main(args)
+  // Filter out flags specific to GenerateTestResultsCliCommand
+  val reportArgs = args.filter { it != "--dedup" }.toTypedArray()
+  GenerateReportCliCommand().main(reportArgs)
   // Filter out flags that are specific to GenerateReportCliCommand
   val filteredArgs = args.filter { it != "--use-relative-image-urls" }.toTypedArray()
   GenerateTestResultsCliCommand().main(argv = filteredArgs)

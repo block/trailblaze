@@ -189,13 +189,22 @@ class LogsRepo(
   /**
    * Reads log files from disk for the given session.
    *
+   * Log filenames use two conventions:
+   * - Numbered: `001_TrailblazeSessionStatusChangeLog.json` (from on-device logging)
+   * - Hex-hashed: `a1b2c3d4_TrailblazeSessionStatusChangeLog.json`
+   *
+   * We filter to JSON files whose name starts with a hex character to match both conventions
+   * while excluding non-log files like `recording.trail.yaml`.
+   *
    * WARNING: This performs disk I/O on every call. Prefer using [getCachedLogsForSession]
    * or [getSessionLogsFlow] for cached/reactive access to avoid repeated disk reads.
    */
   private fun readLogFilesFromDisk(sessionId: SessionId): List<File> = File(logsDir, sessionId.value)
     .listFiles()
-    ?.filter { it.extension == "json" && it.name[0].isDigit() }
+    ?.filter { it.extension == "json" && it.name.first().isHexDigit() }
     ?: emptyList()
+
+  private fun Char.isHexDigit(): Boolean = this in '0'..'9' || this in 'a'..'f'
 
   /**
    * Returns a list of logs for the given session ID with caching via the reactive flow.

@@ -8,10 +8,12 @@ import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils
 import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils.runProcess
 import java.io.File
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.isMacOs
 
 object IosHostUtils {
 
   fun killAppOnSimulator(deviceId: String, appId: String) {
+    if (!isMacOs()) return
     TrailblazeProcessBuilderUtils.createProcessBuilder(
       listOf(
         "xcrun",
@@ -24,6 +26,7 @@ object IosHostUtils {
   }
 
   fun getInstalledAppIds(deviceId: String): Set<String> {
+    if (!isMacOs()) return emptySet()
     val output: CommandProcessResult = TrailblazeProcessBuilderUtils.createProcessBuilder(
       listOf(
         "xcrun",
@@ -86,6 +89,7 @@ object IosHostUtils {
     appId: String,
     additionalPlistKeys: List<String> = emptyList(),
   ): AppVersionInfo? {
+    if (!isMacOs()) return null
     val deviceId = trailblazeDeviceId.instanceId
     return try {
       // Get the app path from listapps output
@@ -135,6 +139,7 @@ object IosHostUtils {
    * @return The path to the app bundle, or null if not found
    */
   fun getAppBundlePath(deviceId: String, appId: String): String? {
+    if (!isMacOs()) return null
     return try {
       val listAppsOutput = TrailblazeProcessBuilderUtils.createProcessBuilder(
         listOf("xcrun", "simctl", "listapps", deviceId),

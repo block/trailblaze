@@ -6,32 +6,54 @@ import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsChannel
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpMethod
+import io.ktor.http.HttpStatusCode
 import io.ktor.http.content.ByteArrayContent
 import io.ktor.http.contentType
 import io.ktor.server.request.httpMethod
 import io.ktor.server.request.receiveChannel
 import io.ktor.server.response.respond
+import io.ktor.server.response.respondText
 import io.ktor.server.routing.Routing
 import io.ktor.server.routing.route
 import io.ktor.utils.io.toByteArray
-import xyz.block.trailblaze.http.TrailblazeHttpClientFactory
 import xyz.block.trailblaze.http.ReverseProxyHeaders
+import xyz.block.trailblaze.http.TrailblazeHttpClientFactory
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
 import xyz.block.trailblaze.mcp.utils.JvmLLMProvidersUtil.getEnvironmentVariableValueForLlmProvider
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.util.Console
 
 /**
- * Registers an endpoint to display LLM conversation as an html chat view.
+ * Reverse proxy endpoint for LLM API calls from connected Android devices.
+ *
+ * Android devices reach this server via adb port forwarding, so all legitimate
+ * requests originate from localhost. Requests from non-loopback addresses are
+ * rejected to prevent SSRF when the server is exposed externally (e.g., via Blox proxy).
  */
 object ReverseProxyEndpoint {
 
   val client = TrailblazeHttpClientFactory.createDefaultHttpClient(timeoutInSeconds = 120)
 
+  private val LOOPBACK_ADDRESSES = setOf("127.0.0.1", "::1", "0:0:0:0:0:0:0:1")
+
+  private fun isLoopback(address: String): Boolean =
+    address in LOOPBACK_ADDRESSES || address.startsWith("127.")
+
   fun register(routing: Routing, logsRepo: LogsRepo) = with(routing) {
     route("/reverse-proxy") {
       handle {
         try {
+          // Only allow requests from localhost (Android devices connect via adb forward)
+          val remoteAddress = call.request.local.remoteAddress
+          if (!isLoopback(remoteAddress)) {
+            Console.log("ReverseProxy: BLOCKED non-localhost request from $remoteAddress")
+            call.respondText(
+              "Reverse proxy is only available from localhost",
+              status = HttpStatusCode.Forbidden,
+            )
+            return@handle
+          }
+
           val httpMethod = call.request.httpMethod
           val callHeaders = call.request.headers
           val targetUrl = callHeaders[ReverseProxyHeaders.ORIGINAL_URI]
@@ -78,9 +100,9 @@ object ReverseProxyEndpoint {
           // Copy status, headers, and body to the response
           // Filter out headers that Ktor will set automatically to avoid duplicates in HTTP/2
           proxiedResponse.headers.forEach { key, values ->
-            val shouldSkip = HttpHeaders.isUnsafe(key) || 
-                            key.equals(HttpHeaders.ContentLength, ignoreCase = true) ||
-                            key.equals(HttpHeaders.TransferEncoding, ignoreCase = true)
+            val shouldSkip = HttpHeaders.isUnsafe(key) ||
+                key.equals(HttpHeaders.ContentLength, ignoreCase = true) ||
+                key.equals(HttpHeaders.TransferEncoding, ignoreCase = true)
             if (!shouldSkip) {
               values.forEach { call.response.headers.append(key, it) }
             }
@@ -98,7 +120,7 @@ object ReverseProxyEndpoint {
           Console.error("ReverseProxy ERROR: ${e.message}")
           e.printStackTrace()
           call.respond(
-            io.ktor.http.HttpStatusCode.InternalServerError,
+            HttpStatusCode.InternalServerError,
             "Reverse proxy error: ${e.message}"
           )
         }

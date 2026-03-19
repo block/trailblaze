@@ -52,3 +52,9 @@ fun isArm(): Boolean {
   val arch = System.getProperty("os.arch").lowercase()
   return arch.contains("aarch64") || arch.contains("arm64")
 }
+
+/**
+ * Returns true if the desktop GUI (Compose Desktop) can run on this platform.
+ * Currently requires macOS with a display available.
+ */
+fun canRunDesktopGui(): Boolean = isMacOs() && !java.awt.GraphicsEnvironment.isHeadless()

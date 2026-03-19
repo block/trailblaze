@@ -87,4 +87,16 @@ expect class AndroidDeviceCommandExecutor(
    * @param devicePath Absolute destination path on the device
    */
   fun copyTestResourceToDevice(resourcePath: String, devicePath: String)
+
+  /**
+   * Waits until the specified app is in the foreground.
+   * Polls at [checkIntervalMs] intervals up to [maxWaitMs].
+   *
+   * @return true if the app reached the foreground within the timeout, false otherwise
+   */
+  fun waitUntilAppInForeground(
+    appId: String,
+    maxWaitMs: Long = 30_000,
+    checkIntervalMs: Long = 200,
+  ): Boolean
 }

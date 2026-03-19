@@ -54,7 +54,7 @@ class PlaywrightElectronEvalTests {
         electronAppConfig =
           ElectronAppConfig(
             command = electronBinary,
-            args = listOf(electronAppDir),
+            args = listOf("--disable-gpu-shader-disk-cache", electronAppDir),
             cdpPort = cdpPort,
             headless = headless,
           ),

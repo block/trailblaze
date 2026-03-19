@@ -473,9 +473,29 @@ object WasmReport {
   }
 
   private fun getDefaultTransformImageUrlFunction(): String = """
-    // Default image URL transformation (returns unchanged)
-    // This can be overridden by scripts loaded later in the HTML
+    // Snapshot whether images were originally embedded at script-load time.
+    // The images map gets entries deleted after decompression (to free memory), so
+    // checking its length at call time is unreliable.
+    window._trailblaze_images_embedded = (function() {
+      var c = window.trailblaze_report_compressed;
+      return c && c.images && Object.keys(c.images).length > 0;
+    })();
+    // Default image URL transformation
+    // When served with no embedded images (on-demand /report endpoint), converts image
+    // keys to /static/ URLs so the browser can fetch them from the server. This works
+    // for both localhost and remote hosts (e.g., via Blox proxy).
+    // For embedded reports, images are in the compressed data and decompressed directly.
+    // This can be overridden by scripts loaded later in the HTML (e.g., Buildkite transformer).
     window.transformImageUrl = window.transformImageUrl || function(screenshotRef) {
+      if (screenshotRef.startsWith('http://') || screenshotRef.startsWith('https://') || screenshotRef.startsWith('data:')) {
+        return screenshotRef;
+      }
+      // Only redirect to /static/ when images were NOT originally embedded
+      // AND the report is served over HTTP (not opened as a local file://).
+      if (!window._trailblaze_images_embedded &&
+          (window.location.protocol === 'http:' || window.location.protocol === 'https:')) {
+        return window.location.origin + '/static/' + screenshotRef;
+      }
       return screenshotRef;
     };
   """.trimIndent()

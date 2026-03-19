@@ -6,17 +6,8 @@
 - tools:
   - launchApp:
       appId: xyz.block.trailblaze.examples.sampleapp
-      launchMode: REINSTALL
 - prompts:
   - step: Navigate to the "Forms" tab
-    recording:
-      tools:
-      - tapOnElementBySelector:
-          reason: The objective is to navigate to the 'Forms' tab, which is represented
-            by the node with 'Forms' text.
-          selector:
-            containsChild:
-              textRegex: Forms
   - step: Tap the "Name" field and type "Jane Doe"
     recording:
       tools:

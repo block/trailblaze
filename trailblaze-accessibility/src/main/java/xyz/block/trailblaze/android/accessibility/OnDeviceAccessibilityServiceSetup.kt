@@ -6,6 +6,7 @@ import androidx.test.uiautomator.Configurator
 import xyz.block.trailblaze.AdbCommandUtil
 import xyz.block.trailblaze.android.AndroidSdkVersion
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.PollingUtils
 
 /**
  * Enables the [TrailblazeAccessibilityService] from within an on-device instrumentation test.
@@ -116,7 +117,7 @@ object OnDeviceAccessibilityServiceSetup {
 
   private fun waitForServiceRunning(serviceComponent: String, timeoutMs: Long) {
     Console.log("Waiting for accessibility service to start (timeout: ${timeoutMs}ms)...")
-    AdbCommandUtil.tryUntilSuccessOrThrowException(
+    PollingUtils.tryUntilSuccessOrThrowException(
       maxWaitMs = timeoutMs,
       intervalMs = 500,
       conditionDescription = "TrailblazeAccessibilityService should be running",

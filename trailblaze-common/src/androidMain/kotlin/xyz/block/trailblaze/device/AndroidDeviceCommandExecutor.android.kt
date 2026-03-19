@@ -148,6 +148,16 @@ actual class AndroidDeviceCommandExecutor actual constructor(
     }
   }
 
+  actual fun waitUntilAppInForeground(
+    appId: String,
+    maxWaitMs: Long,
+    checkIntervalMs: Long,
+  ): Boolean = AdbCommandUtil.waitUntilAppInForeground(
+    appId = appId,
+    maxWaitMs = maxWaitMs,
+    checkIntervalMs = checkIntervalMs,
+  )
+
   actual fun copyTestResourceToDevice(resourcePath: String, devicePath: String) {
     val instrumentation = InstrumentationRegistry.getInstrumentation()
     val destFile = File(devicePath)

@@ -84,6 +84,10 @@ class McpProxy(
   // The last 'device' tool call -- replayed on reconnect to restore device binding
   private val lastDeviceToolCall = AtomicReference<String?>(null)
 
+  // The client's requested protocol version -- used to bridge version mismatches between
+  // the client and the MCP SDK (e.g., client wants 2025-11-25 but SDK only supports 2025-06-18)
+  private val clientProtocolVersion = AtomicReference<String?>(null)
+
   // Queue for SSE notifications from daemon -> client
   private val notificationQueue = LinkedBlockingQueue<String>(10_000)
 
@@ -286,7 +290,7 @@ class McpProxy(
           }
         }
 
-        return if (isNotification) null else result
+        return if (isNotification) null else translateProtocolVersion(result)
       } catch (e: ConnectException) {
         if (daemonSessionId.getAndSet(null) != null) {
           log("Daemon unreachable -- attempting restart...")
@@ -367,6 +371,9 @@ class McpProxy(
     // Track the 'initialize' request (not 'notifications/initialized')
     if (method == "initialize" && hasId) {
       lastInitializeRequest.set(jsonRpc)
+      root["params"]?.jsonObject?.get("protocolVersion")?.jsonPrimitive?.content?.let {
+        clientProtocolVersion.set(it)
+      }
     }
 
     // Track device connect calls (ANDROID, IOS, WEB, CONNECT actions)
@@ -517,6 +524,37 @@ class McpProxy(
       stdout.write(line.toByteArray())
       stdout.write('\n'.code)
       stdout.flush()
+    }
+  }
+
+  /**
+   * Translate the protocolVersion in an initialize response to match the client's
+   * requested version. This bridges the gap when the MCP SDK doesn't yet support
+   * the protocol version the client requires (e.g., client wants 2025-11-25 but
+   * SDK only supports up to 2025-06-18). The core tool-calling protocol is the same
+   * across these versions, so this is safe for Trailblaze's use case.
+   */
+  private fun translateProtocolVersion(response: String): String {
+    val clientVersion = clientProtocolVersion.get() ?: return response
+    return try {
+      val root = Json.parseToJsonElement(response).jsonObject
+      val result = root["result"]?.jsonObject ?: return response
+      val serverVersion = result["protocolVersion"]?.jsonPrimitive?.content ?: return response
+      if (serverVersion == clientVersion) return response
+
+      val newResult = buildMap {
+        result.forEach { (key, value) ->
+          put(key, if (key == "protocolVersion") JsonPrimitive(clientVersion) else value)
+        }
+      }
+      val newRoot = buildMap {
+        root.forEach { (key, value) ->
+          put(key, if (key == "result") JsonObject(newResult) else value)
+        }
+      }
+      Json.encodeToString(JsonObject.serializer(), JsonObject(newRoot))
+    } catch (_: Exception) {
+      response
     }
   }
 

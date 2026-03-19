@@ -19,6 +19,7 @@ object SslConfig {
     keyStore.saveToFile(keyStoreFile, "123456")
 
     connector {
+      host = "::"
       port = requestedHttpPort
     }
     // We use SSL so Android devices don't need to allowlist the server as a trusted host.

@@ -1,14 +1,11 @@
 package xyz.block.trailblaze
 
 import android.content.pm.PackageManager
-import kotlinx.datetime.Clock
 import maestro.Point
 import xyz.block.trailblaze.InstrumentationUtil.withInstrumentation
 import xyz.block.trailblaze.InstrumentationUtil.withUiDevice
-import xyz.block.trailblaze.device.AndroidDeviceCommandExecutor
-import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
-import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.PollingUtils
 
 /**
  * Utility for executing ADB shell commands via UiAutomation.
@@ -73,7 +70,7 @@ object AdbCommandUtil {
   ) {
     if (isAppRunning(appId)) {
       execShellCommand("am force-stop $appId")
-      tryUntilSuccessOrThrowException(
+      PollingUtils.tryUntilSuccessOrThrowException(
         maxWaitMs = 30_000,
         intervalMs = 200,
         "App $appId should be force stopped",
@@ -83,57 +80,6 @@ object AdbCommandUtil {
     } else {
       Console.log("App $appId does not have an active process, no need to force stop")
     }
-  }
-
-  /**
-   * @return true if the condition was met within the timeout, false otherwise
-   */
-  fun tryUntilSuccessOrThrowException(
-    maxWaitMs: Long,
-    intervalMs: Long,
-    conditionDescription: String,
-    condition: () -> Boolean,
-  ) {
-    val successful = tryUntilSuccessOrTimeout(
-      maxWaitMs = maxWaitMs,
-      intervalMs = intervalMs,
-      conditionDescription = conditionDescription,
-      condition = condition,
-    )
-    if (successful == false) {
-      error("Timed out (${maxWaitMs}ms limit) met [$conditionDescription]")
-    }
-  }
-
-  /**
-   * @return true if the condition was met within the timeout, false otherwise
-   */
-  fun tryUntilSuccessOrTimeout(
-    maxWaitMs: Long,
-    intervalMs: Long,
-    conditionDescription: String,
-    condition: () -> Boolean,
-  ): Boolean {
-    val startTime = Clock.System.now()
-    var elapsedTime = 0L
-    while (elapsedTime < maxWaitMs) {
-      val conditionResult: Boolean = try {
-        condition()
-      } catch (e: Exception) {
-        Console.log("Ignored Exception while computing Condition [$conditionDescription], Exception [${e.message}]")
-        false
-      }
-      if (conditionResult) {
-        Console.log("Condition [$conditionDescription] met after ${elapsedTime}ms")
-        return true
-      } else {
-        Console.log("Condition [$conditionDescription] not yet met after ${elapsedTime}ms with timeout of ${maxWaitMs}ms")
-        Thread.sleep(intervalMs)
-        elapsedTime = Clock.System.now().toEpochMilliseconds() - startTime.toEpochMilliseconds()
-      }
-    }
-    Console.log("Timed out (${maxWaitMs}ms limit) met [$conditionDescription] after ${elapsedTime}ms")
-    return false
   }
 
   fun grantAppOpsPermission(
@@ -151,7 +97,7 @@ object AdbCommandUtil {
     appId: String,
     maxWaitMs: Long = 30_000,
     checkIntervalMs: Long = 200,
-  ): Boolean = tryUntilSuccessOrTimeout(
+  ): Boolean = PollingUtils.tryUntilSuccessOrTimeout(
     maxWaitMs = maxWaitMs,
     intervalMs = checkIntervalMs,
     conditionDescription = "App $appId should be in foreground",
@@ -230,7 +176,7 @@ object AdbCommandUtil {
     appId: String,
     maxWaitMs: Long = 30_000,
     checkIntervalMs: Long = 200,
-  ) = tryUntilSuccessOrThrowException(
+  ) = PollingUtils.tryUntilSuccessOrThrowException(
     maxWaitMs = maxWaitMs,
     intervalMs = checkIntervalMs,
     "App $appId should not be in foreground",

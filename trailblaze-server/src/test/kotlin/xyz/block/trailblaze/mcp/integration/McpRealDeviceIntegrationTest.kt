@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.mcp.integration
 
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assume.assumeTrue
@@ -107,7 +108,14 @@ class McpRealDeviceIntegrationTest : TrailblazeServerTestBase() {
     setDriverType(driverType.name)
 
     // 2. Connect to device
-    val connectResult = client.callTool("device", mapOf("action" to "ANDROID", "testName" to tag))
+    val connectResult = client.callTool(
+      name = "device",
+      arguments = mapOf(
+        "action" to "ANDROID",
+        "testName" to tag,
+        "force" to "true"
+      )
+    )
     assumeTrue("No Android device available", connectResult.isSuccess)
 
     // 3. Set agent implementation
@@ -118,8 +126,8 @@ class McpRealDeviceIntegrationTest : TrailblazeServerTestBase() {
     Console.log("[$tag] Agent set: ${agentResult.content.take(200)}")
     assertTrue(agentResult.isSuccess, "[$tag] Setting agent should succeed: ${agentResult.content}")
 
-    // 4. Run a simple blaze goal
-    val blazeResult = client.callTool("blaze", mapOf("goal" to "Press the home button"))
+    // 4. Run a simple blaze goal (retry while driver is still initializing)
+    val blazeResult = callToolWithDriverRetry(tag, "blaze", mapOf("goal" to "Press the home button"))
     Console.log("[$tag] Blaze result: ${blazeResult.content.take(500)}")
     assertFalse(blazeResult.isError, "[$tag] Blaze should not error: ${blazeResult.content.take(500)}")
 
@@ -140,6 +148,30 @@ class McpRealDeviceIntegrationTest : TrailblazeServerTestBase() {
   // ═══════════════════════════════════════════════════════════════════════════
   // Helpers
   // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Calls a tool with retries when the driver is still initializing.
+   * The HOST driver initializes in a background thread and the device() call returns
+   * before it's ready (5s timeout). Retry for up to 30s so the driver can finish.
+   */
+  private suspend fun callToolWithDriverRetry(
+    tag: String,
+    toolName: String,
+    arguments: Map<String, String>,
+    maxRetries: Int = 6,
+    retryDelayMs: Long = 5_000L,
+  ): McpTestClient.ToolResult {
+    repeat(maxRetries) { attempt ->
+      val result = client.callTool(toolName, arguments)
+      if (!result.isError || "still initializing" !in result.content) {
+        return result
+      }
+      Console.log("[$tag] Driver still initializing (attempt ${attempt + 1}/$maxRetries), retrying in ${retryDelayMs}ms...")
+      delay(retryDelayMs)
+    }
+    // Final attempt — return whatever we get
+    return client.callTool(toolName, arguments)
+  }
 
   private suspend fun setDriverType(driverType: String) {
     val result = client.callTool(

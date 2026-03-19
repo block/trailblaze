@@ -64,4 +64,14 @@ data class SessionResult(
 
   /** Milliseconds since epoch when test completed */
   val completed_at_epoch_ms: Long? = null,
+
+  // === Retry Info ===
+  /** Which attempt this result represents (1-based). 1 = first try, 2 = first retry, etc. */
+  val attempt: Int = 1,
+
+  /** Total number of attempts for this test (including retries) */
+  val total_attempts: Int = 1,
+
+  /** Session IDs of previous attempts that were replaced by this result */
+  val replaced_session_ids: List<SessionId> = emptyList(),
 )

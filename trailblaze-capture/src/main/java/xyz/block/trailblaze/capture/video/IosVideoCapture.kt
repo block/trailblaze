@@ -8,6 +8,7 @@ import xyz.block.trailblaze.capture.CaptureStream
 import xyz.block.trailblaze.capture.model.CaptureArtifact
 import xyz.block.trailblaze.capture.model.CaptureType
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.isMacOs
 
 /**
  * Captures iOS Simulator screen video using `xcrun simctl io recordVideo`.
@@ -24,6 +25,7 @@ class IosVideoCapture : CaptureStream {
   private var isLandscape: Boolean = false
 
   override fun start(sessionDir: File, deviceId: String, appId: String?) {
+    if (!isMacOs()) return
     val output = File(sessionDir, "video.mp4")
     this.videoFile = output
     this.startTimestampMs = System.currentTimeMillis()

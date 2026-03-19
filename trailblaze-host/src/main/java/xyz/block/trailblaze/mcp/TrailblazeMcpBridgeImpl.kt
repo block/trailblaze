@@ -194,52 +194,54 @@ class TrailblazeMcpBridgeImpl(
     if (trailblazeDeviceId.trailblazeDevicePlatform == TrailblazeDevicePlatform.WEB &&
       actualDriverType != TrailblazeDriverType.COMPOSE) {
       val webKey = trailblazeDeviceId.instanceId
-      if (trailblazeDeviceManager.getActivePlaywrightNativeTest(trailblazeDeviceId) == null &&
-        !webInitJobs.containsKey(webKey)) {
-        // Clear any previous failure so a retry starts clean.
-        webInitErrors.remove(webKey)
+      if (trailblazeDeviceManager.getActivePlaywrightNativeTest(trailblazeDeviceId) == null) {
         val job = WebInitState()
-        webInitJobs[webKey] = job
-        val initThread = Thread {
-          try {
-            // Reuse an already-running browser (desktop app "Launch Browser") when
-            // available — no download needed. Otherwise create a headless browser,
-            // passing a progress callback so the MCP client sees download status.
-            val existingBrowser = trailblazeDeviceManager.webBrowserManager.getPageManager()
-            val browserManager = existingBrowser ?: PlaywrightBrowserManager(
-              headless = true,
-              onBrowserInstallProgress = { percent, message ->
-                job.progressMessage = if (percent > 0) "[$percent%] $message" else message
-              },
-            )
-            // If we just created a new headless browser, adopt it into WebBrowserManager
-            // so it persists across MCP session boundaries. When cancelSessionForDevice
-            // is called at session close, BasePlaywrightNativeTest.close() won't kill the
-            // browser (ownsTheBrowser=false), and the next device(WEB) call will reuse it
-            // via webBrowserManager.getPageManager() rather than spawning a new instance.
-            if (existingBrowser == null) {
-              trailblazeDeviceManager.webBrowserManager.adoptManagedBrowser(browserManager as PlaywrightBrowserManager)
+        if (webInitJobs.putIfAbsent(webKey, job) != null) {
+          // Another thread already started init — skip.
+        } else {
+          // Clear any previous failure so a retry starts clean.
+          webInitErrors.remove(webKey)
+          val initThread = Thread {
+            try {
+              // Reuse an already-running browser (desktop app "Launch Browser") when
+              // available — no download needed. Otherwise create a headless browser,
+              // passing a progress callback so the MCP client sees download status.
+              val existingBrowser = trailblazeDeviceManager.webBrowserManager.getPageManager()
+              val browserManager = existingBrowser ?: PlaywrightBrowserManager(
+                headless = true,
+                onBrowserInstallProgress = { percent, message ->
+                  job.progressMessage = if (percent > 0) "[$percent%] $message" else message
+                },
+              )
+              // If we just created a new headless browser, adopt it into WebBrowserManager
+              // so it persists across MCP session boundaries. When cancelSessionForDevice
+              // is called at session close, BasePlaywrightNativeTest.close() won't kill the
+              // browser (ownsTheBrowser=false), and the next device(WEB) call will reuse it
+              // via webBrowserManager.getPageManager() rather than spawning a new instance.
+              if (existingBrowser == null) {
+                trailblazeDeviceManager.webBrowserManager.adoptManagedBrowser(browserManager as PlaywrightBrowserManager)
+              }
+              // Update progress to indicate we've moved past driver/browser download.
+              job.progressMessage = "Launching browser..."
+              val test = BasePlaywrightNativeTest(
+                trailblazeDeviceId = trailblazeDeviceId,
+                existingBrowserManager = browserManager,
+              )
+              trailblazeDeviceManager.setActivePlaywrightNativeTest(trailblazeDeviceId, test)
+              Console.log("[MCP Bridge] WEB browser ready for ${trailblazeDeviceId.instanceId}")
+            } catch (e: Exception) {
+              val msg = e.message ?: "Unknown error initializing Playwright browser"
+              webInitErrors[webKey] = msg
+              Console.log("[MCP Bridge] WEB browser init failed: $msg")
+            } finally {
+              webInitJobs.remove(webKey)
             }
-            // Update progress to indicate we've moved past driver/browser download.
-            job.progressMessage = "Launching browser..."
-            val test = BasePlaywrightNativeTest(
-              trailblazeDeviceId = trailblazeDeviceId,
-              existingBrowserManager = browserManager,
-            )
-            trailblazeDeviceManager.setActivePlaywrightNativeTest(trailblazeDeviceId, test)
-            Console.log("[MCP Bridge] WEB browser ready for ${trailblazeDeviceId.instanceId}")
-          } catch (e: Exception) {
-            val msg = e.message ?: "Unknown error initializing Playwright browser"
-            webInitErrors[webKey] = msg
-            Console.log("[MCP Bridge] WEB browser init failed: $msg")
-          } finally {
-            webInitJobs.remove(webKey)
           }
+          initThread.isDaemon = true
+          initThread.name = "web-browser-init-$webKey"
+          initThread.start()
+          Console.log("[MCP Bridge] WEB browser initialization started for ${trailblazeDeviceId.instanceId}")
         }
-        initThread.isDaemon = true
-        initThread.name = "web-browser-init-$webKey"
-        initThread.start()
-        Console.log("[MCP Bridge] WEB browser initialization started for ${trailblazeDeviceId.instanceId}")
       }
     }
 

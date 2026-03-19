@@ -6,6 +6,7 @@ import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils.runProcess
 object IosHostSimctlUtils {
 
   fun clearAppDataContainer(deviceId: String, appId: String) {
+    if (!isMacOs()) return
     val output = TrailblazeProcessBuilderUtils.createProcessBuilder(
       listOf("xcrun", "simctl", "get_app_container", deviceId, appId, "data"),
     ).runProcess {}

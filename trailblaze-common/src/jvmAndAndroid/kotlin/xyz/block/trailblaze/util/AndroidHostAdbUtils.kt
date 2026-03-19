@@ -1,12 +1,9 @@
 package xyz.block.trailblaze.util
 
-import kotlinx.datetime.Clock
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.model.AppVersionInfo
-import xyz.block.trailblaze.model.TrailblazeOnDeviceInstrumentationTarget
 import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils.runProcess
 import java.io.File
-import xyz.block.trailblaze.util.Console
 
 object AndroidHostAdbUtils {
 
@@ -162,57 +159,6 @@ object AndroidHostAdbUtils {
     return isRunning
   }
 
-  /**
-   * @return true if the condition was met within the timeout, false otherwise
-   */
-  fun tryUntilSuccessOrTimeout(
-    maxWaitMs: Long,
-    intervalMs: Long,
-    conditionDescription: String,
-    condition: () -> Boolean,
-  ): Boolean {
-    val startTime = Clock.System.now()
-    var elapsedTime = 0L
-    while (elapsedTime < maxWaitMs) {
-      val conditionResult: Boolean = try {
-        condition()
-      } catch (e: Exception) {
-        Console.log("Ignored Exception while computing Condition [$conditionDescription], Exception [${e.message}]")
-        false
-      }
-      if (conditionResult) {
-        Console.log("Condition [$conditionDescription] met after ${elapsedTime}ms")
-        return true
-      } else {
-        Console.log("Condition [$conditionDescription] not yet met after ${elapsedTime}ms with timeout of ${maxWaitMs}ms")
-        Thread.sleep(intervalMs)
-        elapsedTime = Clock.System.now().toEpochMilliseconds() - startTime.toEpochMilliseconds()
-      }
-    }
-    Console.log("Timed out (${maxWaitMs}ms limit) met [$conditionDescription] after ${elapsedTime}ms")
-    return false
-  }
-
-  /**
-   * @return true if the condition was met within the timeout, false otherwise
-   */
-  fun tryUntilSuccessOrThrowException(
-    maxWaitMs: Long,
-    intervalMs: Long,
-    conditionDescription: String,
-    condition: () -> Boolean,
-  ) {
-    val successful = tryUntilSuccessOrTimeout(
-      maxWaitMs = maxWaitMs,
-      intervalMs = intervalMs,
-      conditionDescription = conditionDescription,
-      condition = condition,
-    )
-    if (!successful) {
-      error("Timed out (${maxWaitMs}ms limit) met [$conditionDescription]")
-    }
-  }
-
   fun launchAppWithAdbMonkey(
     deviceId: TrailblazeDeviceId,
     appId: String,
@@ -239,7 +185,7 @@ object AndroidHostAdbUtils {
         deviceId = deviceId,
         args = listOf("am", "force-stop", appId),
       )
-      tryUntilSuccessOrThrowException(
+      PollingUtils.tryUntilSuccessOrThrowException(
         maxWaitMs = 30_000,
         intervalMs = 200,
         conditionDescription = "App $appId should be force stopped",

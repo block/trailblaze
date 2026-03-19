@@ -10,6 +10,7 @@ import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.model.getSessionInfo
 import xyz.block.trailblaze.logs.model.getSessionStatus
+import xyz.block.trailblaze.report.ReportTemplateResolver
 import xyz.block.trailblaze.report.WasmReport
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.util.Console
@@ -123,37 +124,18 @@ open class CliReportGenerator {
   open fun generateReport(logsRepo: LogsRepo, sessionIds: List<SessionId>): File? {
     if (sessionIds.isEmpty()) return null
 
-    val gitRoot = GitUtils.getGitRootViaCommand()?.let { File(it) }
-
-    // Detect WASM artifacts in priority order
-    val reportTemplateFile = gitRoot?.let { File(it, "trailblaze_report_template.html") }
+    val gitRoot = ReportTemplateResolver.getGitRoot()
     val trailblazeUiDir = findTrailblazeUiDir(gitRoot)
     val wasmBuildDir =
       trailblazeUiDir?.let {
         File(it, "build/kotlin-webpack/wasmJs/productionExecutable")
       }
-
-    val hasTemplate = reportTemplateFile?.exists() == true
     val hasWasmBuild = wasmBuildDir?.exists() == true
 
-    // Fallback: try loading the template from the classpath (bundled in uber JAR)
-    val classpathTemplateFile =
-      if (!hasTemplate && !hasWasmBuild) {
-        val bundledTemplate =
-          javaClass.getResourceAsStream("/trailblaze_report_template.html")
-        if (bundledTemplate != null) {
-          val tempTemplate = File.createTempFile("trailblaze_report_template", ".html")
-          tempTemplate.deleteOnExit()
-          tempTemplate.outputStream().use { bundledTemplate.copyTo(it) }
-          tempTemplate
-        } else {
-          null
-        }
-      } else {
-        null
-      }
+    // Resolve template: local file at git root → classpath (bundled in JAR)
+    val effectiveTemplateFile = ReportTemplateResolver.resolveTemplate()
 
-    if (!hasTemplate && !hasWasmBuild && classpathTemplateFile == null) {
+    if (effectiveTemplateFile == null && !hasWasmBuild) {
       // Check if we are in local dev mode (source tree present)
       if (trailblazeUiDir?.exists() == true) {
         Console.log("")
@@ -164,10 +146,6 @@ open class CliReportGenerator {
       // If not in local dev mode, silently skip
       return null
     }
-
-    // Use the best available template source
-    val effectiveTemplateFile =
-      reportTemplateFile?.takeIf { it.exists() } ?: classpathTemplateFile ?: File("nonexistent")
 
     // Create a temporary directory containing symlinks to only this run's sessions
     val tempDir = Files.createTempDirectory("trailblaze-report-").toFile()
@@ -196,7 +174,7 @@ open class CliReportGenerator {
         logsRepo = tempLogsRepo,
         trailblazeUiProjectDir = trailblazeUiDir ?: tempDir,
         outputFile = outputFile,
-        reportTemplateFile = effectiveTemplateFile,
+        reportTemplateFile = effectiveTemplateFile ?: File("nonexistent"),
       )
 
       tempLogsRepo.close()

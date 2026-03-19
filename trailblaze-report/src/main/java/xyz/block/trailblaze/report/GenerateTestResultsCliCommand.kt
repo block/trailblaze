@@ -88,6 +88,12 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
   ).enum<OutputFormat>()
     .default(OutputFormat.JSON)
 
+  private val shouldDeduplicateRetries by option(
+    "--dedup",
+    help = "Collapse retried tests into a single result, keeping the best outcome. " +
+      "Use in CI when retries are configured. Omit for local/live reports to see all runs.",
+  ).flag(default = false)
+
   private val logsDir: File get() = logsDirArg.toFile()
 
   private enum class OutputFormat(val extension: String) {
@@ -191,18 +197,26 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
       }
     }
 
+    // Only deduplicate when explicitly requested (e.g. CI final reports).
+    // Local and live HTML reports keep all runs visible.
+    val finalResults = if (shouldDeduplicateRetries) {
+      deduplicateRetries(sessionResults)
+    } else {
+      sessionResults
+    }
+
     // Print summary to console
-    printSummary(sessionResults, errors)
+    printSummary(finalResults, errors)
 
     // Print detailed results if requested
     if (verbose) {
-      printDetailedResults(sessionResults)
-      printFailedTests(sessionResults)
+      printDetailedResults(finalResults)
+      printFailedTests(finalResults)
     }
 
     val summaryReport = CiSummaryReport(
       metadata = metadata,
-      results = sessionResults,
+      results = finalResults,
     )
 
     val output = outputArg ?: File(logsDir, "trailblaze_test_report.${outputFormat.extension}")
@@ -322,6 +336,37 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
       "Max LLM calls limit reached (${status.maxCalls}) for: ${status.objectivePrompt}"
 
     else -> null
+  }
+
+  /**
+   * Deduplicates retried tests by keeping one result per unique title.
+   *
+   * When a test is retried, multiple sessions share the same title. This groups
+   * them by title, picks the best result (preferring PASSED, then latest attempt),
+   * and annotates the kept result with retry metadata (attempt number, total attempts,
+   * replaced session IDs).
+   */
+  private fun deduplicateRetries(results: List<SessionResult>): List<SessionResult> {
+    return results
+      .groupBy { it.title }
+      .values
+      .map { attempts ->
+        if (attempts.size == 1) return@map attempts.single()
+
+        // Sort by start time so attempt numbering is chronological
+        val sorted = attempts.sortedBy { it.started_at_epoch_ms ?: 0L }
+
+        // Prefer the latest PASSED result; if none passed, take the last attempt
+        val best = sorted.lastOrNull { it.outcome == Outcome.PASSED } ?: sorted.last()
+        val bestIndex = sorted.indexOf(best)
+        val replaced = sorted.filter { it.session_id != best.session_id }
+
+        best.copy(
+          attempt = bestIndex + 1,
+          total_attempts = sorted.size,
+          replaced_session_ids = replaced.map { it.session_id },
+        )
+      }
   }
 
   /**

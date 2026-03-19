@@ -65,6 +65,7 @@ import kotlin.time.Duration.Companion.seconds
 import xyz.block.trailblaze.host.rules.BasePlaywrightElectronTest
 import xyz.block.trailblaze.host.rules.BasePlaywrightNativeTest
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.isMacOs
 
 /**
  * Manages device discovery, selection, and state across the application.
@@ -993,6 +994,7 @@ class TrailblazeDeviceManager(
      * Returns list of (udid, description) pairs.
      */
     internal fun listBootedIosSimulators(): List<Pair<String, String>> {
+      if (!isMacOs()) return emptyList()
       return try {
         val process = ProcessBuilder("xcrun", "simctl", "list", "devices", "booted")
           .redirectErrorStream(true)

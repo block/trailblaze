@@ -113,7 +113,7 @@ class HostMaestroDriverScreenState(
       }
       stableBufferedImage = finalImage
 
-      if (vh1 == vh2) {
+      if (vh1 != null && vh1 == vh2) {
         matched = true
       } else {
         attempts++

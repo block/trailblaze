@@ -76,7 +76,10 @@ actual fun resolveImageModel(sessionId: String, screenshotFile: String?, imageLo
             // - For Buildkite artifacts: construct full URL
             try {
                 val dataUrl = resolveScreenshot(screenshotFile)
-                resolvedImage = dataUrl
+                // Keep the original ref if decompression returns null (e.g., on-demand report
+                // with useRelativeImageUrls=true where images aren't embedded — the ref will
+                // be resolved to a /static/ URL by NetworkImageLoader.getImageModel instead)
+                resolvedImage = dataUrl ?: resolvedImage
             } catch (e: Exception) {
                 Console.log("❌ Failed to resolve screenshot: $screenshotFile - ${e.message}")
                 // If resolution fails, keep the original path as fallback

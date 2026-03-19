@@ -28,6 +28,7 @@ import xyz.block.trailblaze.logs.server.endpoints.HomeEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.LogScreenshotPostEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.LogTracePostEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.PingEndpoint
+import xyz.block.trailblaze.logs.server.endpoints.GenerateReportEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.ReverseProxyEndpoint
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.util.Console
@@ -80,6 +81,7 @@ object ServerEndpoints {
       LogScreenshotPostEndpoint.register(this, logsRepo)
       LogTracePostEndpoint.register(this, logsRepo)
       ReverseProxyEndpoint.register(this, logsRepo)
+      GenerateReportEndpoint.register(this, logsRepo)
       staticFiles("/static", logsRepo.logsDir)
 
       // CLI endpoints (only registered if callbacks provided)

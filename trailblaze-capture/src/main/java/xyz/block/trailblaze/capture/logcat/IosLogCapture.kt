@@ -6,6 +6,7 @@ import xyz.block.trailblaze.capture.CaptureStream
 import xyz.block.trailblaze.capture.model.CaptureArtifact
 import xyz.block.trailblaze.capture.model.CaptureType
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.isMacOs
 
 /**
  * Captures iOS Simulator system log using `xcrun simctl spawn log stream`.
@@ -27,6 +28,7 @@ class IosLogCapture : CaptureStream {
   private var startTimestampMs: Long = 0
 
   override fun start(sessionDir: File, deviceId: String, appId: String?) {
+    if (!isMacOs()) return
     startTimestampMs = System.currentTimeMillis()
     outputFile = File(sessionDir, "logcat.txt")
 

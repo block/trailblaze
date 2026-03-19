@@ -19,7 +19,7 @@
             androidAccessibility:
               classNameRegex: \Qandroid.view.View\E
               collectionItemRowIndex: 0
-              collectionItemColumnIndex: 4
+              collectionItemColumnIndex: 5
   - step: Enable the "Enable Notifications" switch and verify it is checked
     recording:
       tools:
@@ -38,38 +38,38 @@
       - assertVisibleBySelector:
           reason: This node displays the network status as 'Online'. Either 'Online' or 'Offline' needs to be visible.
           selector:
-            textRegex: Online
+            textRegex: (Online|Offline)
           nodeSelector:
             androidAccessibility:
-              textRegex: Online
+              textRegex: (Online|Offline)
       - assertVisibleBySelector:
           reason: This node displays the network status as either 'Online' or 'Offline'.
           selector:
-            textRegex: Online
+            textRegex: (Online|Offline)
           nodeSelector:
             androidAccessibility:
-              textRegex: Online
+              textRegex: (Online|Offline)
       - assertVisibleBySelector:
           reason: This node displays 'Online' which is an acceptable network status for the requirement.
           selector:
-            textRegex: Online
+            textRegex: (Online|Offline)
           nodeSelector:
             androidAccessibility:
-              textRegex: Online
+              textRegex: (Online|Offline)
       - assertVisibleBySelector:
           reason: This node displays the network status as 'Online'. Either 'Online' or 'Offline' must be visible.
           selector:
-            textRegex: Online
+            textRegex: (Online|Offline)
           nodeSelector:
             androidAccessibility:
-              textRegex: Online
+              textRegex: (Online|Offline)
       - assertVisibleBySelector:
           reason: This node displays the network status as 'Online'. 'Online' or 'Offline' must be visible.
           selector:
-            textRegex: Online
+            textRegex: (Online|Offline)
           nodeSelector:
             androidAccessibility:
-              textRegex: Online
+              textRegex: (Online|Offline)
   - step: Check the "Accept Terms" checkbox and verify it is checked
     recording:
       tools:

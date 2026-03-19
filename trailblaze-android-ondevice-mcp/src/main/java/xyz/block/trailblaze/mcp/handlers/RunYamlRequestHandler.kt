@@ -94,7 +94,12 @@ class RunYamlRequestHandler(
     val shouldEmitStartLogHere = request.config.sendSessionStartLog
 
     if (shouldEmitStartLogHere) {
-      val deviceInfo = trailblazeDeviceInfoProvider(request.trailblazeDeviceId)
+      val deviceInfo = trailblazeDeviceInfoProvider(request.trailblazeDeviceId).let { info ->
+        // Use the driver type from the request (set by CLI --driver flag or trail config)
+        // rather than the provider's default, which is always ANDROID_ONDEVICE_INSTRUMENTATION.
+        val requestDriverType = request.driverType
+        if (requestDriverType != null) info.copy(trailblazeDriverType = requestDriverType) else info
+      }
       val hasRecordedSteps = try {
         trailblazeYaml.hasRecordedSteps(
           trailblazeYaml.decodeTrail(request.yaml)

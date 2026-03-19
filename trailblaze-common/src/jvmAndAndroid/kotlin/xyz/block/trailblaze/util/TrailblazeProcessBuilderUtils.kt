@@ -47,8 +47,7 @@ object TrailblazeProcessBuilderUtils {
    */
   fun isCommandAvailable(command: String): Boolean {
     return try {
-      val whichCommand =
-        if (System.getProperty("os.name")?.lowercase()?.contains("win") == true) "where" else "which"
+      val whichCommand = if (isWindows()) "where" else "which"
       val result = createProcessBuilder(listOf(whichCommand, command)).runProcess {}
       val found = result.exitCode == 0
       if (found) {

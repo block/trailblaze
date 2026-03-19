@@ -4,6 +4,7 @@ import java.io.File
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.util.AndroidHostAdbUtils
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.PollingUtils
 import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils.runProcess
 
 /**
@@ -215,6 +216,23 @@ actual class AndroidDeviceCommandExecutor actual constructor(
       "-a", "clipper.set",
       "--es", "text", text,
     )
+  }
+
+  actual fun waitUntilAppInForeground(
+    appId: String,
+    maxWaitMs: Long,
+    checkIntervalMs: Long,
+  ): Boolean = PollingUtils.tryUntilSuccessOrTimeout(
+    maxWaitMs = maxWaitMs,
+    intervalMs = checkIntervalMs,
+    conditionDescription = "App $appId should be in foreground",
+  ) {
+    val output = AndroidHostAdbUtils.execAdbShellCommand(
+      deviceId = deviceId,
+      args = listOf("dumpsys", "window", "windows"),
+    )
+    output.lineSequence()
+      .any { it.contains("mCurrentFocus") && it.contains(appId) }
   }
 
   actual fun copyTestResourceToDevice(resourcePath: String, devicePath: String) {

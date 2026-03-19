@@ -211,5 +211,8 @@ class AccessibilityTrailblazeAgent(
   }
 
   /** Provides the screen state using the accessibility service (no Maestro driver). */
-  fun getScreenState() = deviceManager.getScreenState()
+  fun getScreenState(
+    fullHierarchy: Boolean = false,
+    includeOffscreen: Boolean = false,
+  ) = deviceManager.getScreenState(fullHierarchy = fullHierarchy, includeOffscreen = includeOffscreen)
 }

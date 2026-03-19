@@ -8,7 +8,6 @@ import picocli.CommandLine.Option
 import picocli.CommandLine.Parameters
 import xyz.block.trailblaze.TrailblazeVersion
 import xyz.block.trailblaze.capture.CaptureOptions
-import xyz.block.trailblaze.capture.CaptureSession
 import xyz.block.trailblaze.compose.driver.rpc.ComposeRpcServer
 import xyz.block.trailblaze.compose.driver.tools.ComposeToolSet
 import xyz.block.trailblaze.desktop.LlmTokenStatus
@@ -40,10 +39,11 @@ import xyz.block.trailblaze.ui.TrailblazeDesktopApp
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.ui.TrailblazePortManager
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.DesktopOsType
 import xyz.block.trailblaze.util.GitUtils
 import xyz.block.trailblaze.util.TrailYamlTemplateResolver
+import xyz.block.trailblaze.util.canRunDesktopGui
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
-import java.awt.GraphicsEnvironment
 import java.io.File
 import java.util.concurrent.Callable
 import java.util.concurrent.CountDownLatch
@@ -57,13 +57,16 @@ import kotlin.time.Duration.Companion.seconds
  * specific [TrailblazeDesktopApp] implementation.
  * 
  * Usage:
- *   trailblaze                     - Launch GUI (default)
- *   trailblaze desktop             - Launch GUI (explicit subcommand)
- *   trailblaze desktop --headless  - Start headless MCP server
+ *   trailblaze                     - Launch GUI (default, ./trailblaze only)
+ *   trailblaze start               - Launch GUI (explicit subcommand, works via sq)
+ *   trailblaze start --headless    - Start headless MCP server
  *   trailblaze --headless          - Start headless MCP server (legacy, on root command)
  *   trailblaze run <file>          - Run a .trail.yaml file
  *   trailblaze mcp                 - Start MCP server (STDIO transport + tray icon)
+ *   trailblaze mcp start           - Start MCP server (works via sq)
  *   trailblaze mcp --http          - Start MCP server (Streamable HTTP)
+ *   trailblaze report              - Generate HTML report for all sessions
+ *   trailblaze report --open       - Generate and open in browser
  *   trailblaze devices             - List connected devices
  *   trailblaze -p 52526            - Launch on a custom port (allows multiple instances)
  *   trailblaze --help              - Show all commands and options
@@ -171,6 +174,7 @@ class TrailblazeVersionProvider : IVersionProvider {
     McpCommand::class,
     DevicesCommand::class,
     ConfigCommand::class,
+    ReportCommand::class,
     StatusCommand::class,
     StopCommand::class,
     CommandLine.HelpCommand::class,
@@ -235,6 +239,15 @@ class TrailblazeCliCommand(
    * Core desktop launch logic shared by the root command (no-args) and [DesktopCommand].
    */
   internal fun launchDesktop(headless: Boolean): Int {
+    // The desktop GUI requires macOS with a display — auto-fallback to headless on other platforms
+    @Suppress("NAME_SHADOWING")
+    val headless = if (!headless && !canRunDesktopGui()) {
+      Console.log("Desktop GUI not available on this platform — starting in headless mode.")
+      true
+    } else {
+      headless
+    }
+
     // Check if Trailblaze is already running
     val daemon = DaemonClient(port = getEffectivePort())
     if (daemon.isRunning()) {
@@ -279,10 +292,11 @@ class TrailblazeCliCommand(
  * Launch the Trailblaze desktop application.
  *
  * This is the explicit subcommand equivalent of running `trailblaze` with no arguments.
- * Use this when integrating with a distribution system that requires an explicit subcommand.
+ * Use this when integrating with a distribution system (e.g., `sq`) that requires an
+ * explicit subcommand since bare `trailblaze` is intercepted as a help screen.
  */
 @Command(
-  name = "desktop",
+  name = "start",
   mixinStandardHelpOptions = true,
   description = ["Launch the Trailblaze desktop application"]
 )
@@ -1380,6 +1394,71 @@ class RunCommand : Callable<Int> {
 }
 
 /**
+ * Generate an HTML report for sessions in the logs directory.
+ *
+ * Examples:
+ *   trailblaze report              - Generate report for all sessions
+ *   trailblaze report --open       - Generate and open in browser
+ */
+@Command(
+  name = "report",
+  mixinStandardHelpOptions = true,
+  description = ["Generate an HTML report for sessions in the logs directory"]
+)
+class ReportCommand : Callable<Int> {
+
+  @CommandLine.ParentCommand
+  private lateinit var parent: TrailblazeCliCommand
+
+  @Option(
+    names = ["--open"],
+    description = ["Open the report in the default browser after generation"]
+  )
+  var open: Boolean = false
+
+  override fun call(): Int {
+    val app = parent.appProvider()
+    val logsRepo = app.deviceManager.logsRepo
+
+    val sessionIds = logsRepo.getSessionIds()
+    if (sessionIds.isEmpty()) {
+      Console.log("No sessions found in logs directory.")
+      return CommandLine.ExitCode.OK
+    }
+
+    Console.log("Generating report for ${sessionIds.size} session(s)...")
+
+    val reportGenerator = app.createCliReportGenerator()
+    val reportFile = reportGenerator.generateReport(logsRepo, sessionIds)
+    if (reportFile == null) {
+      Console.error("Failed to generate report. No report template found.")
+      Console.error("Ensure trailblaze_report_template.html is bundled or at the git root.")
+      return CommandLine.ExitCode.SOFTWARE
+    }
+
+    Console.info("\nReport: file://${reportFile.absolutePath}")
+
+    if (open) {
+      try {
+        val processBuilder = when (DesktopOsType.current()) {
+          DesktopOsType.MAC_OS ->
+            ProcessBuilder("open", reportFile.absolutePath)
+          DesktopOsType.LINUX ->
+            ProcessBuilder("xdg-open", reportFile.absolutePath)
+          DesktopOsType.WINDOWS ->
+            ProcessBuilder("cmd.exe", "/c", "start", "", reportFile.absolutePath)
+        }
+        processBuilder.start()
+      } catch (e: Exception) {
+        Console.error("Could not open report: ${e.message}")
+      }
+    }
+
+    exitProcess(CommandLine.ExitCode.OK)
+  }
+}
+
+/**
  * Start the MCP server with a specified transport.
  *
  * By default, starts an STDIO server for MCP client integrations
@@ -1396,7 +1475,7 @@ class RunCommand : Callable<Int> {
   name = "mcp",
   mixinStandardHelpOptions = true,
   description = ["Start the MCP server"],
-  subcommands = [McpInstallCommand::class]
+  subcommands = [McpStartCommand::class, McpInstallCommand::class]
 )
 class McpCommand : Callable<Int> {
 
@@ -1494,7 +1573,7 @@ class McpCommand : Callable<Int> {
       // false if another process already had it running.
       val ownsDaemon = app.ensureServerRunning()
 
-      if (ownsDaemon && !GraphicsEnvironment.isHeadless()) {
+      if (ownsDaemon && canRunDesktopGui()) {
         // This process owns the daemon — show tray icon with window hidden.
         // The Compose Desktop event loop must run on the main thread (macOS AppKit
         // requirement), so we launch the STDIO server on a background thread.
@@ -1551,6 +1630,29 @@ class McpCommand : Callable<Int> {
 
     return CommandLine.ExitCode.OK
   }
+}
+
+/**
+ * Start the MCP server (explicit subcommand for `sq` CLI integration).
+ *
+ * `sq` treats commands with subcommands as groups and won't forward bare
+ * `trailblaze mcp` to the JVM. This subcommand allows `trailblaze mcp start`
+ * to work through `sq`, while `./trailblaze mcp` continues to work directly.
+ *
+ * Flags like `--http`, `--direct`, and `--tool-profile` go on the parent
+ * `mcp` command: `trailblaze mcp --http start`.
+ */
+@Command(
+  name = "start",
+  mixinStandardHelpOptions = true,
+  description = ["Start the MCP server (default: STDIO transport)"]
+)
+class McpStartCommand : Callable<Int> {
+
+  @CommandLine.ParentCommand
+  private lateinit var parent: McpCommand
+
+  override fun call(): Int = parent.call()
 }
 
 /**
@@ -1617,6 +1719,7 @@ class DevicesCommand : Callable<Int> {
   mixinStandardHelpOptions = true,
   description = ["View and modify Trailblaze configuration"],
   subcommands = [
+    ConfigShowCommand::class,
     ConfigModelsCommand::class,
     ConfigAgentsCommand::class,
     ConfigDriversCommand::class,
@@ -1635,7 +1738,13 @@ class ConfigCommand : Callable<Int> {
 
   fun getConfigProvider(): TrailblazeDesktopAppConfig = parent.configProvider()
 
-  override fun call(): Int {
+  override fun call(): Int = executeConfig(key, value)
+
+  /**
+   * Shared config get/set logic used by both [ConfigCommand] (bare `trailblaze config`)
+   * and [ConfigShowCommand] (`trailblaze config show` via sq).
+   */
+  internal fun executeConfig(key: String?, value: String?): Int {
     if (key == null) {
       // No args: show all config + auth status (requires configProvider)
       return showAllConfig()
@@ -1657,7 +1766,7 @@ class ConfigCommand : Callable<Int> {
 
     // Key + value: set and save
     val currentConfig = CliConfigHelper.getOrCreateConfig()
-    val updatedConfig = configKey.set(currentConfig, value!!)
+    val updatedConfig = configKey.set(currentConfig, value)
     if (updatedConfig == null) {
       Console.error("Invalid value for $key: $value")
       Console.error("Valid values: ${configKey.validValues}")
@@ -1721,6 +1830,26 @@ class ConfigCommand : Callable<Int> {
     exitProcess(CommandLine.ExitCode.OK)
   }
 }
+
+/**
+ * Show all settings and authentication status.
+ *
+ * Explicit subcommand for `sq` CLI integration — equivalent to bare `trailblaze config`.
+ */
+@Command(
+  name = "show",
+  mixinStandardHelpOptions = true,
+  description = ["Show all settings and authentication status"],
+)
+class ConfigShowCommand : Callable<Int> {
+
+  @CommandLine.ParentCommand
+  private lateinit var parent: ConfigCommand
+
+  override fun call(): Int = parent.executeConfig(key = null, value = null)
+}
+
+
 
 /**
  * List available LLM models grouped by provider.

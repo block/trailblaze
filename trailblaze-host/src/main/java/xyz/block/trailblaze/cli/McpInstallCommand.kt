@@ -9,7 +9,6 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 import picocli.CommandLine.Command
-import picocli.CommandLine.Option
 import picocli.CommandLine.Parameters
 import xyz.block.trailblaze.util.Console
 import java.io.File
@@ -83,16 +82,11 @@ class McpInstallCommand : Callable<Int> {
       Console.log("Skipping Claude Desktop: config directory not found at $desktopConfigDir")
     }
 
-    // Claude Code CLI (~/.claude/settings.json on all platforms)
-    val cliConfigDir = File(System.getProperty("user.home"), ".claude")
-    if (cliConfigDir.exists()) {
-      val settingsFile = File(cliConfigDir, "settings.json")
-      writeMcpConfig(settingsFile, includeType = true)
-      Console.log("Configured Claude Code CLI: $settingsFile")
-      installed = true
-    } else {
-      Console.log("Skipping Claude Code CLI: config directory not found at $cliConfigDir")
-    }
+    // Claude Code project-level config (.mcp.json in current directory)
+    val mcpJsonFile = File(System.getProperty("user.dir"), ".mcp.json")
+    writeMcpConfig(mcpJsonFile, includeType = false)
+    Console.log("Configured Claude Code (project): $mcpJsonFile")
+    installed = true
 
     return installed
   }

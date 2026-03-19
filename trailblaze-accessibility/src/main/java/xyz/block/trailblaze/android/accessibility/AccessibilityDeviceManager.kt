@@ -42,13 +42,17 @@ class AccessibilityDeviceManager(
    * Follows the same pattern as `PlaywrightBrowserManager.getScreenState()` — calls
    * [waitForReady] before capturing to ensure the snapshot reflects a stable UI.
    */
-  fun getScreenState(): ScreenState {
+  fun getScreenState(
+    fullHierarchy: Boolean = false,
+    includeOffscreen: Boolean = false,
+  ): ScreenState {
     waitForReady()
     return AccessibilityServiceScreenState(
       filterViewHierarchy = filterViewHierarchy,
       setOfMarkEnabled = setOfMarkEnabled,
       deviceClassifiers = deviceClassifiers,
-      filterImportantForAccessibility = filterImportantForAccessibility,
+      filterImportantForAccessibility = if (fullHierarchy) false else filterImportantForAccessibility,
+      includeOffscreen = includeOffscreen,
     )
   }
 
@@ -56,12 +60,16 @@ class AccessibilityDeviceManager(
    * Captures screen state for logging without waiting for settle. Useful for recording the
    * immediate state after an action without the settle overhead.
    */
-  fun captureScreenStateForLogging(): ScreenState {
+  fun captureScreenStateForLogging(
+    fullHierarchy: Boolean = false,
+    includeOffscreen: Boolean = false,
+  ): ScreenState {
     return AccessibilityServiceScreenState(
       filterViewHierarchy = filterViewHierarchy,
       setOfMarkEnabled = setOfMarkEnabled,
       deviceClassifiers = deviceClassifiers,
-      filterImportantForAccessibility = filterImportantForAccessibility,
+      filterImportantForAccessibility = if (fullHierarchy) false else filterImportantForAccessibility,
+      includeOffscreen = includeOffscreen,
     )
   }
 

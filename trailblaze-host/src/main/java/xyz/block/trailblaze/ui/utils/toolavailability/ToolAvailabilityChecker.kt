@@ -3,6 +3,7 @@ package xyz.block.trailblaze.ui.utils.toolavailability
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import xyz.block.trailblaze.util.isWindows
 
 object ToolAvailabilityChecker {
 
@@ -47,7 +48,7 @@ object ToolAvailabilityChecker {
 
   /** ADB executable filenames to probe inside SDK directories. */
   private val ADB_FILENAMES: List<String> by lazy {
-    if (IS_WINDOWS) listOf("adb.exe", "adb") else listOf("adb")
+    if (isWindows()) listOf("adb.exe", "adb") else listOf("adb")
   }
 
   /** Tiered detection for ADB. */
@@ -100,18 +101,13 @@ object ToolAvailabilityChecker {
   // Helpers
   // ---------------------------------------------------------------------------
 
-  /** True when running on a Windows host. */
-  private val IS_WINDOWS: Boolean by lazy {
-    System.getProperty("os.name")?.lowercase()?.contains("win") == true
-  }
-
   /**
    * Extensions to append when probing for an executable on Windows. Derived from the `PATHEXT`
    * environment variable (falling back to a sensible default). On non-Windows systems this list
    * contains only an empty string so the bare [command] name is checked as-is.
    */
   private val EXECUTABLE_EXTENSIONS: List<String> by lazy {
-    if (IS_WINDOWS) {
+    if (isWindows()) {
       val pathExt = System.getenv("PATHEXT") ?: ".COM;.EXE;.BAT;.CMD"
       // Check the bare name first, then each PATHEXT extension (case-insensitive).
       listOf("") + pathExt.split(";").filter { it.isNotEmpty() }.map { it.lowercase() }

@@ -68,6 +68,7 @@ import xyz.block.trailblaze.cli.DaemonClient
 import xyz.block.trailblaze.compose.driver.rpc.ComposeRpcServer
 import xyz.block.trailblaze.compose.target.LiveWindowComposeTarget
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.canRunDesktopGui
 import java.awt.Desktop
 import java.awt.GraphicsEnvironment
 import java.awt.Window
@@ -107,8 +108,8 @@ class MainTrailblazeApp(
     // Get the MCP server instance (we'll set the callback after Compose state is ready)
     val trailblazeMcpServer = trailblazeMcpServerProvider()
 
-    if (headless && GraphicsEnvironment.isHeadless()) {
-      // True headless mode (no display available, e.g. CI): start only the MCP server
+    if (headless || !canRunDesktopGui()) {
+      // Headless mode (no display or non-macOS): start only the MCP server
       // without any Compose Desktop UI. This avoids requiring AWT/display.
       Console.log("Starting Trailblaze in headless mode (server only, no GUI)...")
       val portManager = trailblazeSavedSettingsRepo.portManager
