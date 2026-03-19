@@ -93,12 +93,13 @@ fun DeviceConfigurationContent(
     mutableStateOf(
       availableDevices.filter { device ->
         val isWebPlatform = device.platform == TrailblazeDevicePlatform.WEB
+        val hasLoadedApps = installedAppIdsByDevice.containsKey(device.trailblazeDeviceId)
         val appIdIfInstalled = selectedTargetApp?.getAppIdIfInstalled(
           platform = device.platform,
           installedAppIds = installedAppIdsByDevice[device.trailblazeDeviceId] ?: emptySet()
         )
         device.instanceId in lastSelectedDeviceInstanceIds &&
-            (isWebPlatform || selectedTargetApp == null || appIdIfInstalled != null)
+            (isWebPlatform || selectedTargetApp == null || appIdIfInstalled != null || !hasLoadedApps)
       }.toSet()
     )
   }
@@ -106,6 +107,14 @@ fun DeviceConfigurationContent(
   // Auto-refresh devices when requested
   if (autoRefreshOnLoad) {
     LaunchedEffect(Unit) {
+      deviceManager.loadDevices()
+    }
+  }
+
+  // Re-refresh when the selected target app changes (e.g., user adds a custom package)
+  // to ensure installed app data is up-to-date for the new target.
+  LaunchedEffect(selectedTargetApp) {
+    if (selectedTargetApp != null) {
       deviceManager.loadDevices()
     }
   }
@@ -174,13 +183,17 @@ fun DeviceConfigurationContent(
       ) {
         availableDevices.forEach { device ->
           val isWebPlatform = device.platform == TrailblazeDevicePlatform.WEB
+          // Check whether we have loaded installed app data for this device yet.
+          // installedAppIdsByDevice only has entries after loadDevices() completes for a device.
+          val hasLoadedInstalledApps = installedAppIdsByDevice.containsKey(device.trailblazeDeviceId)
           val appIdIfInstalled = selectedTargetApp?.getAppIdIfInstalled(
             platform = device.platform,
             installedAppIds = installedAppIdsByDevice[device.trailblazeDeviceId] ?: emptySet()
           )
           val isAppInstalled = appIdIfInstalled != null
-          // Web browsers are always enabled (no app to install); other devices need app check
-          val isDeviceEnabled = isWebPlatform || selectedTargetApp == null || isAppInstalled
+          // Web browsers are always enabled; other devices need app check.
+          // While installed app data is loading, allow device selection (don't block on stale data).
+          val isDeviceEnabled = isWebPlatform || selectedTargetApp == null || isAppInstalled || !hasLoadedInstalledApps
           val activeSessionId = activeDeviceSessions[device.trailblazeDeviceId]
           val hasActiveSession = activeSessionId != null
           // Get version info for the installed app
@@ -194,6 +207,7 @@ fun DeviceConfigurationContent(
             installedAppId = appIdIfInstalled,
             appTarget = selectedTargetApp,
             appVersionInfo = versionInfo,
+            hasLoadedInstalledApps = hasLoadedInstalledApps,
             activeSessionId = activeSessionId?.value,
             onSessionClick = onSessionClick,
             onToggle = {
@@ -436,6 +450,7 @@ fun SingleDeviceListItem(
   appTarget: TrailblazeHostAppTarget?,
   installedAppId: String?,
   appVersionInfo: AppVersionInfo? = null,
+  hasLoadedInstalledApps: Boolean = true,
   activeSessionId: String? = null,
   onSessionClick: ((String) -> Unit)? = null,
   onToggle: () -> Unit,
@@ -444,8 +459,9 @@ fun SingleDeviceListItem(
   // Web browsers don't have apps to install - they're always ready to use
   val isWebPlatform = device.platform == TrailblazeDevicePlatform.WEB
   val isAppInstalled = installedAppId != null
-  // Web devices are always enabled; other devices need app installation check
-  val isEnabled = isWebPlatform || appTarget == null || isAppInstalled
+  // Web devices are always enabled; other devices need app check.
+  // While installed app data hasn't loaded yet, allow selection (don't show false negatives).
+  val isEnabled = isWebPlatform || appTarget == null || isAppInstalled || !hasLoadedInstalledApps
   // A device has an active session if there's a session ID
   val hasActiveSession = activeSessionId != null
 
@@ -595,6 +611,18 @@ fun SingleDeviceListItem(
                   text = versionText,
                   style = MaterialTheme.typography.bodySmall,
                   color = MaterialTheme.colorScheme.primary,
+                  fontWeight = FontWeight.Medium
+                )
+              } else if (!hasLoadedInstalledApps) {
+                // Data hasn't loaded yet — show a neutral "checking" state instead of a false negative
+                CircularProgressIndicator(
+                  modifier = Modifier.size(16.dp),
+                  strokeWidth = 2.dp,
+                )
+                Text(
+                  text = "Checking if ${appTarget.displayName} is installed...",
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
                   fontWeight = FontWeight.Medium
                 )
               } else {

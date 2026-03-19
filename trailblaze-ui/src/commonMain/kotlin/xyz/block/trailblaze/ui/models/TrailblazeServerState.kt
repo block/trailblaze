@@ -80,6 +80,9 @@ data class TrailblazeServerState(
     val lastRoute: String? = null, // Qualified class name of the last visited route
     // Self-test server: expose the live desktop window as a Compose RPC test target
     val enableSelfTestServer: Boolean = true,
+    // User-added custom application package names (e.g., "com.example.myapp").
+    // These appear as selectable target apps in the device selection dropdown.
+    val customAppPackageNames: List<String> = emptyList(),
   ) {
 
     companion object {
