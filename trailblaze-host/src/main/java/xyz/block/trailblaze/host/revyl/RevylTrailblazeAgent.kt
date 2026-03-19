@@ -29,31 +29,24 @@ import xyz.block.trailblaze.utils.ElementComparator
 import xyz.block.trailblaze.util.Console
 
 /**
- * A standalone [TrailblazeAgent] implementation that routes device actions
- * directly to the Revyl cloud device worker HTTP API.
+ * [TrailblazeAgent] implementation that routes all device actions through
+ * the Revyl CLI binary via [RevylCliClient].
  *
- * Unlike [xyz.block.trailblaze.MaestroTrailblazeAgent], this agent does NOT
- * depend on the Maestro driver stack at all. Each [TrailblazeTool] is
- * pattern-matched by type and translated into the corresponding Revyl HTTP
- * call in a single hop — no intermediate Maestro Command objects.
+ * Each [TrailblazeTool] is mapped to the corresponding `revyl device`
+ * subcommand. The CLI handles auth, backend proxying, and AI-powered
+ * target grounding transparently.
  *
- * This makes it a clean, minimal integration layer between Trailblaze's
- * LLM agent loop and Revyl's cloud device infrastructure.
- *
- * @property revylClient HTTP client for the Revyl device worker.
+ * @property cliClient CLI-based client for Revyl device interactions.
  * @property platform "ios" or "android" — used for ScreenState construction.
  */
 class RevylTrailblazeAgent(
-  private val revylClient: RevylWorkerClient,
+  private val cliClient: RevylCliClient,
   private val platform: String,
 ) : TrailblazeAgent {
 
   /**
-   * Dispatches a list of [TrailblazeTool]s by mapping each tool's type
-   * directly to Revyl worker HTTP calls.
-   *
-   * Memory tools (assert/remember) are handled in-process via the
-   * [ElementComparator] — they don't require device interaction.
+   * Dispatches a list of [TrailblazeTool]s by mapping each tool to
+   * a `revyl device` CLI command via [RevylCliClient].
    *
    * @param tools Ordered list of tools to execute sequentially.
    * @param traceId Optional trace ID for log correlation.
@@ -73,8 +66,8 @@ class RevylTrailblazeAgent(
 
     for (tool in tools) {
       executed.add(tool)
-      val result = executeTool(tool, elementComparator, screenStateProvider)
-      if (result != TrailblazeToolResult.Success) {
+      val result = executeTool(tool, screenStateProvider)
+      if (result !is TrailblazeToolResult.Success) {
         return RunTrailblazeToolsResult(
           inputTools = tools,
           executedTools = executed,
@@ -86,17 +79,12 @@ class RevylTrailblazeAgent(
     return RunTrailblazeToolsResult(
       inputTools = tools,
       executedTools = executed,
-      result = TrailblazeToolResult.Success,
+      result = TrailblazeToolResult.Success(),
     )
   }
 
-  // ---------------------------------------------------------------------------
-  // Tool dispatch — maps each TrailblazeTool to the equivalent Revyl call.
-  // ---------------------------------------------------------------------------
-
   private fun executeTool(
     tool: TrailblazeTool,
-    elementComparator: ElementComparator,
     screenStateProvider: (() -> ScreenState)?,
   ): TrailblazeToolResult {
     val toolName = tool.getToolNameFromAnnotation()
@@ -104,142 +92,90 @@ class RevylTrailblazeAgent(
 
     return try {
       when (tool) {
-        is TapOnPointTrailblazeTool -> handleTapOnPoint(tool)
-        is InputTextTrailblazeTool -> handleInputText(tool)
-        is SwipeTrailblazeTool -> handleSwipe(tool)
-        is LaunchAppTrailblazeTool -> handleLaunchApp(tool)
-        is EraseTextTrailblazeTool -> handleEraseText()
-        is HideKeyboardTrailblazeTool -> handleHideKeyboard()
-        is PressBackTrailblazeTool -> handlePressBack()
-        is PressKeyTrailblazeTool -> handlePressKey(tool)
-        is OpenUrlTrailblazeTool -> handleOpenUrl(tool)
-        is TakeSnapshotTool -> handleTakeSnapshot(tool, screenStateProvider)
-        is WaitForIdleSyncTrailblazeTool -> handleWaitForIdle(tool)
-        is ScrollUntilTextIsVisibleTrailblazeTool -> handleScroll(tool)
-        is NetworkConnectionTrailblazeTool -> handleNetworkConnection(tool)
-        is TapOnElementByNodeIdTrailblazeTool -> handleTapByNodeId(tool)
-        is LongPressOnElementWithTextTrailblazeTool -> handleLongPressText(tool)
-        is ObjectiveStatusTrailblazeTool -> TrailblazeToolResult.Success
-        is MemoryTrailblazeTool -> {
-          // Memory tools don't need device interaction
-          TrailblazeToolResult.Success
+        is TapOnPointTrailblazeTool -> {
+          if (tool.longPress) {
+            cliClient.longPress("element at (${tool.x}, ${tool.y})")
+          } else {
+            cliClient.tap(tool.x, tool.y)
+          }
+          TrailblazeToolResult.Success()
         }
+        is InputTextTrailblazeTool -> {
+          cliClient.typeText(tool.text)
+          TrailblazeToolResult.Success()
+        }
+        is SwipeTrailblazeTool -> {
+          val direction = when (tool.direction) {
+            SwipeDirection.UP -> "up"
+            SwipeDirection.DOWN -> "down"
+            SwipeDirection.LEFT -> "left"
+            SwipeDirection.RIGHT -> "right"
+            else -> "down"
+          }
+          cliClient.swipe(direction)
+          TrailblazeToolResult.Success()
+        }
+        is LaunchAppTrailblazeTool -> {
+          cliClient.launchApp(tool.appId)
+          TrailblazeToolResult.Success()
+        }
+        is EraseTextTrailblazeTool -> {
+          cliClient.clearText()
+          TrailblazeToolResult.Success()
+        }
+        is HideKeyboardTrailblazeTool -> {
+          TrailblazeToolResult.Success()
+        }
+        is PressBackTrailblazeTool -> {
+          cliClient.back()
+          TrailblazeToolResult.Success()
+        }
+        is PressKeyTrailblazeTool -> {
+          cliClient.pressKey(tool.keyCode.name)
+          TrailblazeToolResult.Success()
+        }
+        is OpenUrlTrailblazeTool -> {
+          cliClient.navigate(tool.url)
+          TrailblazeToolResult.Success()
+        }
+        is TakeSnapshotTool -> {
+          cliClient.screenshot()
+          TrailblazeToolResult.Success()
+        }
+        is WaitForIdleSyncTrailblazeTool -> {
+          Thread.sleep(1000)
+          TrailblazeToolResult.Success()
+        }
+        is ScrollUntilTextIsVisibleTrailblazeTool -> {
+          cliClient.swipe("down")
+          TrailblazeToolResult.Success()
+        }
+        is NetworkConnectionTrailblazeTool -> {
+          Console.log("RevylAgent: network toggle not supported on cloud devices")
+          TrailblazeToolResult.Success()
+        }
+        is TapOnElementByNodeIdTrailblazeTool -> {
+          cliClient.tapTarget("element with node id ${tool.nodeId}")
+          TrailblazeToolResult.Success()
+        }
+        is LongPressOnElementWithTextTrailblazeTool -> {
+          cliClient.longPress(tool.text)
+          TrailblazeToolResult.Success()
+        }
+        is ObjectiveStatusTrailblazeTool -> TrailblazeToolResult.Success()
+        is MemoryTrailblazeTool -> TrailblazeToolResult.Success()
         else -> {
-          Console.log("RevylAgent: unsupported tool type ${tool::class.simpleName} — skipping")
-          TrailblazeToolResult.Success
+          Console.log("RevylAgent: unsupported tool ${tool::class.simpleName}")
+          TrailblazeToolResult.Success()
         }
       }
     } catch (e: Exception) {
       Console.error("RevylAgent: tool '$toolName' failed: ${e.message}")
       TrailblazeToolResult.Error.ExceptionThrown(
-        errorMessage = "Revyl execution failed for '$toolName': ${e.message}",
+        errorMessage = "CLI execution failed for '$toolName': ${e.message}",
         command = tool,
         stackTrace = e.stackTraceToString(),
       )
     }
-  }
-
-  // ---------------------------------------------------------------------------
-  // Individual tool handlers
-  // ---------------------------------------------------------------------------
-
-  private fun handleTapOnPoint(tool: TapOnPointTrailblazeTool): TrailblazeToolResult {
-    if (tool.longPress) {
-      Console.log("RevylAgent: long-press at (${tool.x}, ${tool.y})")
-      revylClient.longPress(tool.x, tool.y)
-    } else {
-      Console.log("RevylAgent: tap at (${tool.x}, ${tool.y})")
-      revylClient.tap(tool.x, tool.y)
-    }
-    return TrailblazeToolResult.Success
-  }
-
-  private fun handleInputText(tool: InputTextTrailblazeTool): TrailblazeToolResult {
-    Console.log("RevylAgent: type text '${tool.text}'")
-    revylClient.typeText(tool.text)
-    return TrailblazeToolResult.Success
-  }
-
-  private fun handleSwipe(tool: SwipeTrailblazeTool): TrailblazeToolResult {
-    val direction = when (tool.direction) {
-      SwipeDirection.UP -> "up"
-      SwipeDirection.DOWN -> "down"
-      SwipeDirection.LEFT -> "left"
-      SwipeDirection.RIGHT -> "right"
-      else -> "down"
-    }
-    Console.log("RevylAgent: swipe $direction")
-    revylClient.swipe(direction)
-    return TrailblazeToolResult.Success
-  }
-
-  private fun handleLaunchApp(tool: LaunchAppTrailblazeTool): TrailblazeToolResult {
-    Console.log("RevylAgent: launch app '${tool.appId}'")
-    revylClient.launchApp(tool.appId)
-    return TrailblazeToolResult.Success
-  }
-
-  private fun handleEraseText(): TrailblazeToolResult {
-    Console.log("RevylAgent: erase text (clear_first + space via /input)")
-    revylClient.typeText(text = " ", clearFirst = true)
-    return TrailblazeToolResult.Success
-  }
-
-  private fun handleHideKeyboard(): TrailblazeToolResult {
-    Console.log("RevylAgent: hide keyboard (no-op for cloud device)")
-    return TrailblazeToolResult.Success
-  }
-
-  private fun handlePressBack(): TrailblazeToolResult {
-    Console.log("RevylAgent: press back (not directly supported — skipping)")
-    return TrailblazeToolResult.Success
-  }
-
-  private fun handlePressKey(tool: PressKeyTrailblazeTool): TrailblazeToolResult {
-    Console.log("RevylAgent: press key '${tool.keyCode}' (not directly supported — skipping)")
-    return TrailblazeToolResult.Success
-  }
-
-  private fun handleOpenUrl(tool: OpenUrlTrailblazeTool): TrailblazeToolResult {
-    Console.log("RevylAgent: open URL '${tool.url}' (not directly supported — skipping)")
-    return TrailblazeToolResult.Success
-  }
-
-  private fun handleTakeSnapshot(
-    tool: TakeSnapshotTool,
-    screenStateProvider: (() -> ScreenState)?,
-  ): TrailblazeToolResult {
-    Console.log("RevylAgent: take snapshot '${tool.screenName}'")
-    // Capture screenshot from Revyl for the snapshot
-    revylClient.screenshot()
-    return TrailblazeToolResult.Success
-  }
-
-  private fun handleWaitForIdle(tool: WaitForIdleSyncTrailblazeTool): TrailblazeToolResult {
-    Console.log("RevylAgent: wait for idle — sleeping briefly")
-    Thread.sleep(1000)
-    return TrailblazeToolResult.Success
-  }
-
-  private fun handleScroll(tool: ScrollUntilTextIsVisibleTrailblazeTool): TrailblazeToolResult {
-    Console.log("RevylAgent: scroll until text visible — performing swipe down")
-    revylClient.swipe("down")
-    return TrailblazeToolResult.Success
-  }
-
-  private fun handleNetworkConnection(tool: NetworkConnectionTrailblazeTool): TrailblazeToolResult {
-    Console.log("RevylAgent: network connection toggle (not supported — skipping)")
-    return TrailblazeToolResult.Success
-  }
-
-  private fun handleTapByNodeId(tool: TapOnElementByNodeIdTrailblazeTool): TrailblazeToolResult {
-    Console.log("RevylAgent: tap by nodeId ${tool.nodeId} (not directly supported — skipping)")
-    return TrailblazeToolResult.Success
-  }
-
-  private fun handleLongPressText(tool: LongPressOnElementWithTextTrailblazeTool): TrailblazeToolResult {
-    Console.log("RevylAgent: long press on element with text '${tool.text}'")
-    revylClient.tapTarget(tool.text)
-    return TrailblazeToolResult.Success
   }
 }

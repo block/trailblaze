@@ -3,9 +3,11 @@ package xyz.block.trailblaze.host.revyl
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
+import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
+import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.getToolNameFromAnnotation
 import xyz.block.trailblaze.toolcalls.commands.BooleanAssertionTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.StringEvaluationTrailblazeTool
@@ -13,19 +15,17 @@ import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.utils.ElementComparator
 
 /**
- * [TrailblazeMcpBridge] implementation backed by the Revyl cloud device infrastructure.
+ * [TrailblazeMcpBridge] backed by the Revyl CLI for cloud device interactions.
  *
  * Routes MCP tool calls through [RevylTrailblazeAgent] and provides device
- * listing / selection via [RevylDeviceService]. This bridge is plugged into
- * [xyz.block.trailblaze.logs.server.TrailblazeMcpServer] as a drop-in
- * replacement for the local-device [xyz.block.trailblaze.mcp.TrailblazeMcpBridgeImpl].
+ * listing/selection via [RevylDeviceService].
  *
- * @property revylClient The HTTP client for Revyl worker communication.
+ * @property cliClient CLI-based client for Revyl device interactions.
  * @property revylDeviceService Handles session provisioning and listing.
- * @property agent The standalone Trailblaze agent that dispatches tools to Revyl.
+ * @property agent The Trailblaze agent that dispatches tools via CLI.
  */
 class RevylMcpBridge(
-  private val revylClient: RevylWorkerClient,
+  private val cliClient: RevylCliClient,
   private val revylDeviceService: RevylDeviceService,
   private val agent: RevylTrailblazeAgent,
 ) : TrailblazeMcpBridge {
@@ -41,7 +41,6 @@ class RevylMcpBridge(
   }
 
   override suspend fun getInstalledAppIds(): Set<String> {
-    // Revyl doesn't expose an installed-apps endpoint — return empty for PoC
     return emptySet()
   }
 
@@ -49,8 +48,8 @@ class RevylMcpBridge(
     return setOf(TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget)
   }
 
-  override suspend fun runYaml(yaml: String, startNewSession: Boolean): String {
-    Console.log("RevylMcpBridge: runYaml not supported for Revyl cloud devices (use tool calls instead)")
+  override suspend fun runYaml(yaml: String, startNewSession: Boolean, agentImplementation: AgentImplementation): String {
+    Console.log("RevylMcpBridge: runYaml not supported for CLI-based Revyl (use tool calls instead)")
     return "unsupported"
   }
 
@@ -59,8 +58,8 @@ class RevylMcpBridge(
   }
 
   override suspend fun getCurrentScreenState(): ScreenState? {
-    val session = revylClient.getSession() ?: return null
-    return RevylScreenState(revylClient, session.platform)
+    val session = cliClient.getSession() ?: return null
+    return RevylScreenState(cliClient, session.platform)
   }
 
   /**
@@ -79,16 +78,16 @@ class RevylMcpBridge(
     )
 
     return when (result.result) {
-      is xyz.block.trailblaze.toolcalls.TrailblazeToolResult.Success ->
+      is TrailblazeToolResult.Success ->
         "Successfully executed $toolName on Revyl cloud device."
-      is xyz.block.trailblaze.toolcalls.TrailblazeToolResult.Error ->
-        "Error executing $toolName: ${(result.result as xyz.block.trailblaze.toolcalls.TrailblazeToolResult.Error).errorMessage}"
+      is TrailblazeToolResult.Error ->
+        "Error executing $toolName: ${(result.result as TrailblazeToolResult.Error).errorMessage}"
     }
   }
 
   override suspend fun endSession(): Boolean {
     return try {
-      revylClient.stopSession()
+      cliClient.stopSession()
       true
     } catch (_: Exception) {
       false
@@ -104,9 +103,6 @@ class RevylMcpBridge(
   }
 }
 
-/**
- * No-op [ElementComparator] used when memory-based assertions are not needed.
- */
 private object NoOpElementComparator : ElementComparator {
   override fun getElementValue(prompt: String): String? = null
   override fun evaluateBoolean(statement: String): BooleanAssertionTrailblazeTool =

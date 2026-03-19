@@ -4,88 +4,124 @@ title: Revyl Cloud Device Integration
 
 # Revyl Cloud Device Integration
 
-Trailblaze can use [Revyl](https://revyl.ai) cloud devices instead of local ADB or Maestro. This lets you run the same AI-powered tests against managed Android (and iOS) devices without a local device or emulator.
+Trailblaze can use [Revyl](https://revyl.ai) cloud devices instead of local ADB or Maestro. This lets you run the same AI-powered tests against managed Android and iOS devices without a local device or emulator.
 
 ## Overview
 
 The Revyl integration provides:
 
-- **RevylTrailblazeAgent** – A standalone `TrailblazeAgent` that maps Trailblaze tools to Revyl HTTP APIs (no Maestro).
-- **RevylDeviceService** – Provisions and lists cloud devices via the Revyl backend.
-- **RevylMcpServerFactory** – Builds an MCP server that uses Revyl for device communication.
+- **RevylCliClient** – Shells out to the `revyl` CLI binary for all device interactions. Auto-downloads the CLI if not already installed.
+- **RevylTrailblazeAgent** – Maps every Trailblaze tool to a `revyl device` CLI command.
+- **RevylMcpServerFactory** – Builds an MCP server that provisions a Revyl cloud device and routes tool calls through the CLI.
 
 All integration code lives under `trailblaze-host/src/main/java/xyz/block/trailblaze/host/revyl/`.
 
 ## Prerequisites
 
-- A Revyl account and API key.
-- [Revyl CLI](https://github.com/revyl/revyl-cli) (optional but recommended for session management and debugging).
-
-Set environment variables:
+Set one environment variable:
 
 - `REVYL_API_KEY` – Your Revyl API key (required).
-- `REVYL_BACKEND_URL` – Backend base URL (optional; defaults to production).
+
+That's it. The `revyl` CLI binary is **auto-downloaded** from [GitHub Releases](https://github.com/RevylAI/revyl-cli/releases) on first use if not already on PATH. No manual install needed.
+
+**Optional overrides:**
+
+- `REVYL_BINARY` – Path to a specific `revyl` binary (skips auto-download and PATH lookup).
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    subgraph client["Client"]
-        LLM["LLM"]
+    subgraph trailblaze["Trailblaze"]
+        LLM["LLM Agent"]
         AGENT["RevylTrailblazeAgent"]
+        CLI["RevylCliClient"]
     end
-    subgraph revyl["Revyl"]
-        API["Revyl Backend API"]
-        WORKER["Worker HTTP"]
+    subgraph cli["revyl CLI"]
+        BIN["revyl device *"]
+    end
+    subgraph revyl["Revyl Cloud"]
+        PROXY["Backend Proxy"]
+        WORKER["Worker"]
     end
     DEVICE["Cloud Device"]
     LLM --> AGENT
-    AGENT --> API
-    AGENT --> WORKER
+    AGENT --> CLI
+    CLI -->|"ProcessBuilder"| BIN
+    BIN --> PROXY
+    PROXY --> WORKER
     WORKER --> DEVICE
 ```
 
 1. The LLM calls Trailblaze tools (tap, inputText, swipe, etc.).
-2. **RevylTrailblazeAgent** maps each tool to Revyl operations.
-3. **RevylWorkerClient** sends HTTP requests to the Revyl backend (session, device) and to the worker (screenshot, tap, type, swipe, etc.).
-4. The worker drives the cloud device (Android/iOS).
+2. **RevylTrailblazeAgent** dispatches each tool to **RevylCliClient**.
+3. **RevylCliClient** runs the corresponding `revyl device` command via `ProcessBuilder` and parses the JSON output.
+4. The `revyl` CLI handles auth, backend proxy routing, and AI-powered target grounding transparently.
+5. The cloud device executes the action and returns results.
+
+## Quick start
+
+```kotlin
+// Only prerequisite: set REVYL_API_KEY in your environment
+val client = RevylCliClient()  // auto-downloads revyl if not on PATH
+
+// Start a cloud device with an app installed
+val session = client.startSession(
+    platform = "android",
+    appUrl = "https://example.com/my-app.apk",
+)
+println("Viewer: ${session.viewerUrl}")
+
+// Interact using natural language targets
+client.tapTarget("Sign In button")
+client.typeText("user@example.com", target = "email field")
+client.tapTarget("Log In")
+
+// Screenshot
+client.screenshot("after-login.png")
+
+// Clean up
+client.stopSession()
+```
 
 ## MCP server usage
 
-Use **RevylMcpServerFactory** to create an MCP server that provisions a Revyl device and runs the agent:
+Use **RevylMcpServerFactory** to create an MCP server backed by Revyl:
 
 ```kotlin
-val server = RevylMcpServerFactory.create(
-    backendBaseUrl = System.getenv("REVYL_BACKEND_URL") ?: "https://backend.revyl.ai",
-    apiKey = System.getenv("REVYL_API_KEY") ?: error("REVYL_API_KEY required"),
-)
-// Use server with your MCP client
+val server = RevylMcpServerFactory.create(platform = "android")
+server.startStreamableHttpMcpServer(port = 8080, wait = true)
 ```
 
-The factory starts a device session, builds a **RevylMcpBridge** with **RevylTrailblazeAgent**, and returns a **TrailblazeMcpServer** that speaks MCP.
+The factory auto-downloads the CLI, provisions a cloud device, and returns a **TrailblazeMcpServer** that speaks MCP.
 
 ## Supported operations
 
-| Trailblaze tool   | Revyl implementation                          |
-|-------------------|-----------------------------------------------|
-| tap               | POST /input (tap at coordinates)             |
-| inputText         | POST /input (typeText; optional clear_first)  |
-| swipe             | POST /input (swipe)                           |
-| longPress         | POST /input (longPress)                       |
-| launchApp         | POST /session/launch_app                      |
-| installApp        | POST /session/install_app                     |
-| eraseText         | typeText with clear_first + space             |
-| getScreenState    | GET screenshot + minimal hierarchy            |
+All 12 Trailblaze tools are fully implemented:
 
-Screenshots and view hierarchy are provided by the Revyl worker; hierarchy may be minimal compared to a full Maestro tree.
+| Trailblaze tool | CLI command |
+|-----------------|-------------|
+| tap (coordinates) | `revyl device tap --x N --y N` |
+| tap (grounded) | `revyl device tap --target "..."` |
+| inputText | `revyl device type --text "..." [--target "..."]` |
+| swipe | `revyl device swipe --direction <dir>` |
+| longPress | `revyl device long-press --target "..."` |
+| launchApp | `revyl device launch --bundle-id <id>` |
+| installApp | `revyl device install --app-url <url>` |
+| eraseText | `revyl device clear-text` |
+| pressBack | `revyl device back` |
+| pressKey | `revyl device key --key ENTER` |
+| openUrl | `revyl device navigate --url "..."` |
+| screenshot | `revyl device screenshot --out <path>` |
 
 ## Limitations
 
-- No local ADB or Maestro; all device interaction goes through Revyl.
-- View hierarchy from Revyl may be reduced (e.g. dimensions only, empty tree).
-- Requires network access to Revyl backend and worker.
+- No local ADB or Maestro; all device interaction goes through Revyl cloud devices.
+- View hierarchy from Revyl is minimal (screenshot-based AI grounding is used instead).
+- Requires network access to Revyl backend and GitHub (for auto-download on first use).
 
 ## See also
 
 - [Architecture](architecture.md) – Revyl as an alternative to HostMaestroTrailblazeAgent.
-- [Revyl CLI](https://github.com/revyl/revyl-cli) – Command-line tool for devices and tests.
+- [Revyl CLI](https://github.com/RevylAI/revyl-cli) – Command-line tool for devices and tests.
+- [Revyl docs](https://docs.revyl.ai) – Full CLI and SDK documentation.

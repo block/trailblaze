@@ -6,31 +6,30 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 
 /**
- * Provisions and manages Revyl cloud device sessions as an alternative
- * to [xyz.block.trailblaze.host.devices.TrailblazeDeviceService] which
- * discovers local ADB/iOS devices.
+ * Provisions and manages Revyl cloud device sessions via the CLI,
+ * serving as the device-listing layer for [RevylMcpBridge].
  *
- * @property revylClient The HTTP client used for Revyl API and worker communication.
+ * @property cliClient CLI-based client for Revyl device interactions.
  */
 class RevylDeviceService(
-  private val revylClient: RevylWorkerClient,
+  private val cliClient: RevylCliClient,
 ) {
 
   /**
-   * Provisions a new cloud device via the Revyl backend.
+   * Provisions a new cloud device via the Revyl CLI.
    *
    * @param platform "ios" or "android".
-   * @param appUrl Optional direct download URL for an .apk/.ipa.
+   * @param appUrl Optional public download URL for an .apk/.ipa.
    * @param appLink Optional deep-link to open after launch.
-   * @return A summary of the connected device for use with [DeviceManagerToolSet].
-   * @throws RevylApiException If provisioning fails.
+   * @return A summary of the connected device.
+   * @throws RevylCliException If provisioning fails.
    */
   fun startDevice(
     platform: String,
     appUrl: String? = null,
     appLink: String? = null,
   ): TrailblazeConnectedDeviceSummary {
-    val session = revylClient.startSession(
+    val session = cliClient.startSession(
       platform = platform,
       appUrl = appUrl,
       appLink = appLink,
@@ -49,17 +48,17 @@ class RevylDeviceService(
   }
 
   /**
-   * Stops all active Revyl device sessions managed by this service.
+   * Stops the active Revyl device session.
    */
   fun stopDevice() {
-    revylClient.stopSession()
+    cliClient.stopSession()
   }
 
   /**
-   * Returns the [TrailblazeDeviceId] for the currently active session, or null if none.
+   * Returns the [TrailblazeDeviceId] for the currently active session, or null.
    */
   fun getCurrentDeviceId(): TrailblazeDeviceId? {
-    val session = revylClient.getSession() ?: return null
+    val session = cliClient.getSession() ?: return null
     val platform = when (session.platform) {
       "ios" -> TrailblazeDevicePlatform.IOS
       else -> TrailblazeDevicePlatform.ANDROID
@@ -71,10 +70,10 @@ class RevylDeviceService(
   }
 
   /**
-   * Returns the set of connected device summaries (at most one for Revyl sessions).
+   * Returns the set of connected device summaries (at most one for CLI sessions).
    */
   fun listDevices(): Set<TrailblazeConnectedDeviceSummary> {
-    val session = revylClient.getSession() ?: return emptySet()
+    val session = cliClient.getSession() ?: return emptySet()
     val driverType = when (session.platform) {
       "ios" -> TrailblazeDriverType.IOS_HOST
       else -> TrailblazeDriverType.ANDROID_HOST

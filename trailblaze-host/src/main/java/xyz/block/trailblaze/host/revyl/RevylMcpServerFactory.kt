@@ -7,65 +7,56 @@ import xyz.block.trailblaze.util.Console
 import java.io.File
 
 /**
- * Factory for constructing a fully wired [TrailblazeMcpServer] backed by
- * the Revyl cloud device infrastructure.
+ * Factory for constructing a [TrailblazeMcpServer] backed by
+ * the Revyl CLI for cloud device interactions.
  *
  * Usage:
  * ```
- * val server = RevylMcpServerFactory.create(
- *   apiKey = System.getenv("REVYL_API_KEY"),
- *   platform = "android",
- * )
+ * val server = RevylMcpServerFactory.create(platform = "android")
  * server.startStreamableHttpMcpServer(port = 8080, wait = true)
  * ```
+ *
+ * The CLI binary must be on PATH (or set via REVYL_BINARY env var)
+ * and authenticated via REVYL_API_KEY or `revyl auth login`.
  */
 object RevylMcpServerFactory {
 
   /**
    * Creates a [TrailblazeMcpServer] that provisions a Revyl cloud device
-   * and routes all MCP tool calls through [RevylTrailblazeAgent].
+   * via the CLI and routes all MCP tool calls through [RevylTrailblazeAgent].
    *
-   * @param apiKey Revyl API key (typically from REVYL_API_KEY env var).
    * @param platform "ios" or "android".
-   * @param backendUrl Override for the Revyl backend URL.
-   * @param appUrl Optional direct URL to an .apk/.ipa to install on the device.
+   * @param appUrl Optional public URL to an .apk/.ipa to install on the device.
    * @param appLink Optional deep-link to open after launch.
    * @param trailsDir Directory containing .trail YAML files.
    * @return A configured [TrailblazeMcpServer] ready to start.
-   * @throws RevylApiException If device provisioning fails.
+   * @throws RevylCliException If device provisioning fails.
    */
   fun create(
-    apiKey: String,
     platform: String = "android",
-    backendUrl: String = RevylWorkerClient.DEFAULT_BACKEND_URL,
     appUrl: String? = null,
     appLink: String? = null,
     trailsDir: File = File(System.getProperty("user.dir"), "trails"),
   ): TrailblazeMcpServer {
-    Console.log("RevylMcpServerFactory: creating Revyl-backed MCP server")
+    Console.log("RevylMcpServerFactory: creating CLI-backed MCP server")
     Console.log("  Platform: $platform")
-    Console.log("  Backend:  $backendUrl")
 
-    val revylClient = RevylWorkerClient(
-      apiKey = apiKey,
-      backendBaseUrl = backendUrl,
-    )
+    val cliClient = RevylCliClient()
 
-    Console.log("RevylMcpServerFactory: provisioning cloud device...")
-    revylClient.startSession(
+    Console.log("RevylMcpServerFactory: provisioning cloud device via CLI...")
+    cliClient.startSession(
       platform = platform,
       appUrl = appUrl,
       appLink = appLink,
     )
 
-    val session = revylClient.getSession()!!
+    val session = cliClient.getSession()!!
     Console.log("RevylMcpServerFactory: device ready")
-    Console.log("  Worker URL: ${session.workerBaseUrl}")
-    Console.log("  Viewer URL: ${session.viewerUrl}")
+    Console.log("  Viewer: ${session.viewerUrl}")
 
-    val revylDeviceService = RevylDeviceService(revylClient)
-    val agent = RevylTrailblazeAgent(revylClient, platform)
-    val bridge = RevylMcpBridge(revylClient, revylDeviceService, agent)
+    val revylDeviceService = RevylDeviceService(cliClient)
+    val agent = RevylTrailblazeAgent(cliClient, platform)
+    val bridge = RevylMcpBridge(cliClient, revylDeviceService, agent)
 
     val logsDir = File(System.getProperty("user.dir"), ".trailblaze/logs")
     logsDir.mkdirs()
@@ -76,6 +67,7 @@ object RevylMcpServerFactory {
       mcpBridge = bridge,
       trailsDirProvider = { trailsDir },
       targetTestAppProvider = { TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget },
+      llmModelListsProvider = { emptySet() },
     )
   }
 }

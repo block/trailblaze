@@ -8,22 +8,22 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 /**
- * [ScreenState] implementation backed by Revyl cloud device screenshots.
+ * [ScreenState] backed by Revyl CLI screenshots.
  *
  * Since Revyl uses AI-powered visual grounding (not accessibility trees),
- * the view hierarchy is returned as a minimal empty root node. The LLM agent
- * relies on screenshot-based reasoning instead of element trees.
+ * the view hierarchy is a minimal root node. The LLM agent relies on
+ * screenshot-based reasoning instead of element trees.
  *
- * @property revylClient Client used to capture screenshots from the Revyl worker.
+ * @property cliClient CLI client used to capture screenshots.
  * @property platform The device platform ("ios" or "android").
  */
 class RevylScreenState(
-  private val revylClient: RevylWorkerClient,
+  private val cliClient: RevylCliClient,
   private val platform: String,
 ) : ScreenState {
 
   private val capturedScreenshot: ByteArray? = try {
-    revylClient.screenshot()
+    cliClient.screenshot()
   } catch (_: Exception) {
     null
   }
@@ -37,10 +37,6 @@ class RevylScreenState(
 
   override val deviceHeight: Int = dimensions.second
 
-  /**
-   * Returns a minimal root node — Revyl does not provide a view hierarchy tree.
-   * The AI agent should rely on screenshot-based visual grounding instead.
-   */
   override val viewHierarchyOriginal: ViewHierarchyTreeNode = ViewHierarchyTreeNode(
     nodeId = 1,
     text = "RevylRootNode",
@@ -74,7 +70,6 @@ class RevylScreenState(
      * @return (width, height) pair, or null if the data is not valid PNG.
      */
     private fun extractPngDimensions(data: ByteArray): Pair<Int, Int>? {
-      // PNG: 8-byte signature + 4-byte IHDR length + 4-byte "IHDR" + 4-byte width + 4-byte height = 24 bytes minimum
       if (data.size < 24) return null
       val pngSignature = byteArrayOf(
         0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A
