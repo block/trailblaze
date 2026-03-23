@@ -107,20 +107,21 @@ class RevylMcpBridge(
   }
 
   /**
-   * Placeholder for AI-driven blaze exploration using BlazeGoalPlanner.
+   * Stub for AI-driven blaze exploration via [RevylBlazeSupport].
    *
-   * Blaze mode requires an LLM-backed ScreenAnalyzer and TrailblazeToolRepo,
-   * which must be configured by the host application (e.g. via
-   * TrailblazeHostYamlRunner). The device layer (RevylTrailblazeAgent +
-   * RevylScreenState) is ready; the caller must supply the agent wiring.
+   * Blaze mode requires an LLM-backed ScreenAnalyzer and TrailblazeToolRepo
+   * that the host application must provide. Use [RevylBlazeSupport.createBlazeRunner]
+   * to construct a fully configured [BlazeGoalPlanner] backed by Revyl cloud
+   * devices — it takes your existing LLM dependencies and returns a ready-to-run
+   * planner.
    *
    * @param yaml YAML containing blaze objectives.
-   * @return Status message indicating blaze mode requires host-level setup.
+   * @return Status message directing callers to [RevylBlazeSupport].
+   * @see RevylBlazeSupport.createBlazeRunner
    */
   private suspend fun blazeExecute(yaml: String): String {
-    Console.log("RevylMcpBridge: blaze (V3) mode requested")
-    Console.log("RevylMcpBridge: device layer is ready — wire BlazeGoalPlanner with AgentUiActionExecutor(RevylTrailblazeAgent) at the host level")
-    return "blaze:requires-host-wiring"
+    Console.log("RevylMcpBridge: blaze (V3) mode requested — use RevylBlazeSupport.createBlazeRunner() for host-level wiring")
+    return "blaze:use-RevylBlazeSupport.createBlazeRunner"
   }
 
   override fun getCurrentlySelectedDeviceId(): TrailblazeDeviceId? {
