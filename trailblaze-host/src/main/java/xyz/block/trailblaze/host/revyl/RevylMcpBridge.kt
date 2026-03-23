@@ -1,5 +1,10 @@
 package xyz.block.trailblaze.host.revyl
 
+import xyz.block.trailblaze.agent.AgentUiActionExecutor
+import xyz.block.trailblaze.agent.BlazeConfig
+import xyz.block.trailblaze.agent.blaze.BlazeGoalPlanner
+import xyz.block.trailblaze.agent.blaze.BlazeState
+import xyz.block.trailblaze.agent.blaze.ScreenAnalyzer
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
@@ -13,24 +18,32 @@ import xyz.block.trailblaze.toolcalls.commands.BooleanAssertionTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.StringEvaluationTrailblazeTool
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.utils.ElementComparator
+import xyz.block.trailblaze.yaml.TrailYamlItem
+import xyz.block.trailblaze.yaml.TrailblazeYaml
 
 /**
  * [TrailblazeMcpBridge] backed by the Revyl CLI for cloud device interactions.
  *
  * Routes MCP tool calls through [RevylTrailblazeAgent] and provides device
- * listing/selection via [RevylDeviceService].
+ * listing/selection via [RevylDeviceService]. Supports both trail replay
+ * (YAML tool execution) and blaze exploration (AI-driven via [BlazeGoalPlanner]).
  *
  * @property cliClient CLI-based client for Revyl device interactions.
  * @property revylDeviceService Handles session provisioning and listing.
  * @property agent The Trailblaze agent that dispatches tools via CLI.
+ * @property platform Device platform ("ios" or "android").
  */
 class RevylMcpBridge(
   private val cliClient: RevylCliClient,
   private val revylDeviceService: RevylDeviceService,
   private val agent: RevylTrailblazeAgent,
+  private val platform: String = "android",
 ) : TrailblazeMcpBridge {
 
   override suspend fun selectDevice(trailblazeDeviceId: TrailblazeDeviceId): TrailblazeConnectedDeviceSummary {
+    val session = cliClient.getSession(trailblazeDeviceId.instanceId)
+      ?: error("No Revyl session found for device ${trailblazeDeviceId.instanceId}")
+    cliClient.useSession(session.index)
     val devices = revylDeviceService.listDevices()
     return devices.firstOrNull { it.trailblazeDeviceId == trailblazeDeviceId }
       ?: error("Device ${trailblazeDeviceId.instanceId} not found in Revyl sessions.")
@@ -48,9 +61,98 @@ class RevylMcpBridge(
     return setOf(TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget)
   }
 
+  /**
+   * Executes a YAML trail on the Revyl cloud device.
+   *
+   * For trail/tool-based YAML: parses the YAML into [TrailblazeTool] instances
+   * and replays them sequentially via [executeTrailblazeTool].
+   *
+   * For blaze mode ([AgentImplementation.MULTI_AGENT_V3]): constructs a
+   * [BlazeGoalPlanner] with [AgentUiActionExecutor] and runs AI-driven
+   * exploration against the cloud device.
+   *
+   * @param yaml Raw YAML content to execute.
+   * @param startNewSession Whether to start a fresh session (ignored for Revyl).
+   * @param agentImplementation Which agent implementation to use for execution.
+   * @return A summary string with the number of tools executed or blaze result.
+   */
   override suspend fun runYaml(yaml: String, startNewSession: Boolean, agentImplementation: AgentImplementation): String {
-    Console.log("RevylMcpBridge: runYaml not supported for CLI-based Revyl (use tool calls instead)")
-    return "unsupported"
+    Console.log("RevylMcpBridge: runYaml invoked (implementation=$agentImplementation)")
+
+    if (agentImplementation == AgentImplementation.MULTI_AGENT_V3) {
+      return blazeExecute(yaml)
+    }
+
+    val trailblazeYaml = TrailblazeYaml.Default
+    val items = trailblazeYaml.decodeTrail(yaml)
+
+    var executedCount = 0
+
+    val toolItems = items.filterIsInstance<TrailYamlItem.ToolTrailItem>()
+    for (toolItem in toolItems) {
+      for (wrapper in toolItem.tools) {
+        executeTrailblazeTool(wrapper.trailblazeTool)
+        executedCount++
+      }
+    }
+
+    val promptItems = items.filterIsInstance<TrailYamlItem.PromptsTrailItem>()
+    for (promptItem in promptItems) {
+      for (step in promptItem.promptSteps) {
+        val tools = step.recording?.tools ?: continue
+        for (wrapper in tools) {
+          executeTrailblazeTool(wrapper.trailblazeTool)
+          executedCount++
+        }
+      }
+    }
+
+    Console.log("RevylMcpBridge: runYaml completed ($executedCount tools executed)")
+    return "completed:$executedCount"
+  }
+
+  /**
+   * Runs AI-driven blaze exploration using [BlazeGoalPlanner].
+   *
+   * Constructs an [AgentUiActionExecutor] backed by [RevylTrailblazeAgent]
+   * and [RevylScreenState], then delegates to [BlazeGoalPlanner] for
+   * autonomous goal-directed device exploration.
+   *
+   * @param yaml YAML containing blaze objectives.
+   * @return Human-readable result of the exploration.
+   */
+  private suspend fun blazeExecute(yaml: String): String {
+    Console.log("RevylMcpBridge: starting blaze execution on Revyl cloud device")
+
+    val activePlatform = cliClient.getActiveSession()?.platform ?: platform
+    val screenStateProvider = { RevylScreenState(cliClient, activePlatform) }
+
+    val executor = AgentUiActionExecutor(
+      agent = agent,
+      screenStateProvider = screenStateProvider,
+      toolRepo = null,
+      elementComparator = NoOpElementComparator,
+    )
+
+    val screenAnalyzer = ScreenAnalyzer()
+    val planner = BlazeGoalPlanner(
+      config = BlazeConfig.DEFAULT,
+      screenAnalyzer = screenAnalyzer,
+      executor = executor,
+    )
+
+    val initialState = BlazeState(
+      objective = yaml,
+      screenState = screenStateProvider(),
+    )
+
+    return try {
+      planner.execute(initialState)
+      "blaze:completed"
+    } catch (e: Exception) {
+      Console.error("RevylMcpBridge: blaze execution failed: ${e.message}")
+      "blaze:failed:${e.message}"
+    }
   }
 
   override fun getCurrentlySelectedDeviceId(): TrailblazeDeviceId? {
@@ -58,7 +160,7 @@ class RevylMcpBridge(
   }
 
   override suspend fun getCurrentScreenState(): ScreenState? {
-    val session = cliClient.getSession() ?: return null
+    val session = cliClient.getActiveSession() ?: return null
     return RevylScreenState(cliClient, session.platform)
   }
 

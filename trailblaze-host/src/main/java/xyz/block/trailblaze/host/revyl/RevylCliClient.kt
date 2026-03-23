@@ -31,7 +31,8 @@ class RevylCliClient(
 ) {
 
   private val json = Json { ignoreUnknownKeys = true }
-  private var currentSession: RevylSession? = null
+  private val sessions = mutableMapOf<Int, RevylSession>()
+  private var activeSessionIndex: Int = 0
 
   private var resolvedBinary: String = revylBinaryOverride ?: "revyl"
 
@@ -42,7 +43,40 @@ class RevylCliClient(
   /**
    * Returns the currently active session, or null if none has been started.
    */
-  fun getSession(): RevylSession? = currentSession
+  fun getActiveSession(): RevylSession? = sessions[activeSessionIndex]
+
+  /**
+   * Returns the session at the given index, or null if not found.
+   *
+   * @param index Session index to retrieve.
+   */
+  fun getSession(index: Int): RevylSession? = sessions[index]
+
+  /**
+   * Finds a session by its workflow run ID.
+   *
+   * @param workflowRunId The Hatchet workflow run identifier.
+   * @return The matching session, or null if not found.
+   */
+  fun getSession(workflowRunId: String): RevylSession? =
+    sessions.values.firstOrNull { it.workflowRunId == workflowRunId }
+
+  /**
+   * Returns all active sessions.
+   */
+  fun getAllSessions(): Map<Int, RevylSession> = sessions.toMap()
+
+  /**
+   * Switches the active session to the given index.
+   *
+   * @param index Session index to make active.
+   * @throws IllegalArgumentException If no session exists at the given index.
+   */
+  fun useSession(index: Int) {
+    require(sessions.containsKey(index)) { "No session at index $index. Active sessions: ${sessions.keys}" }
+    activeSessionIndex = index
+    Console.log("RevylCli: switched to session $index (${sessions[index]!!.platform})")
+  }
 
   // ---------------------------------------------------------------------------
   // Auto-install
@@ -170,28 +204,56 @@ class RevylCliClient(
       viewerUrl = obj["viewer_url"]?.jsonPrimitive?.content ?: "",
       platform = platform.lowercase(),
     )
-    currentSession = session
+    sessions[session.index] = session
+    activeSessionIndex = session.index
     Console.log("RevylCli: device ready (session ${session.index}, ${session.platform})")
     Console.log("  Viewer: ${session.viewerUrl}")
     return session
   }
 
   /**
-   * Stops the active device session.
+   * Stops a device session and removes it from the local session map.
    *
    * @param index Session index to stop. Defaults to -1 (active session).
    * @throws RevylCliException If the CLI exits with a non-zero code.
    */
   fun stopSession(index: Int = -1) {
+    val targetIndex = if (index >= 0) index else activeSessionIndex
     val args = mutableListOf("device", "stop")
-    if (index >= 0) args += listOf("-s", index.toString())
+    if (targetIndex >= 0) args += listOf("-s", targetIndex.toString())
     runCli(args)
-    currentSession = null
+    sessions.remove(targetIndex)
+    if (activeSessionIndex == targetIndex && sessions.isNotEmpty()) {
+      activeSessionIndex = sessions.keys.first()
+    }
+  }
+
+  /**
+   * Stops all active device sessions.
+   *
+   * @throws RevylCliException If the CLI exits with a non-zero code.
+   */
+  fun stopAllSessions() {
+    runCli(listOf("device", "stop", "--all"))
+    sessions.clear()
   }
 
   // ---------------------------------------------------------------------------
   // Device actions
   // ---------------------------------------------------------------------------
+
+  /**
+   * Builds session-scoped CLI args by prepending `-s <activeSessionIndex>`
+   * to device commands so each action targets the correct session.
+   */
+  private fun deviceArgs(vararg args: String): List<String> {
+    val base = mutableListOf("device")
+    if (sessions.size > 1) {
+      base += listOf("-s", activeSessionIndex.toString())
+    }
+    base += args.toList()
+    return base
+  }
 
   /**
    * Captures a PNG screenshot and returns the raw bytes.
@@ -201,7 +263,7 @@ class RevylCliClient(
    * @throws RevylCliException If the CLI exits with a non-zero code.
    */
   fun screenshot(outPath: String = createTempScreenshotPath()): ByteArray {
-    runCli(listOf("device", "screenshot", "--out", outPath))
+    runCli(deviceArgs("screenshot", "--out", outPath))
     val file = File(outPath)
     if (!file.exists()) {
       throw RevylCliException("Screenshot file not found at $outPath")
@@ -217,19 +279,17 @@ class RevylCliClient(
    * @throws RevylCliException If the CLI exits with a non-zero code.
    */
   fun tap(x: Int, y: Int) {
-    runCli(listOf("device", "tap", "--x", x.toString(), "--y", y.toString()))
+    runCli(deviceArgs("tap", "--x", x.toString(), "--y", y.toString()))
   }
 
   /**
    * Taps a UI element identified by natural language description.
-   * The CLI handles AI-powered grounding to resolve the target to
-   * exact coordinates transparently.
    *
    * @param target Natural language description (e.g. "Sign In button").
    * @throws RevylCliException If the CLI exits with a non-zero code.
    */
   fun tapTarget(target: String) {
-    runCli(listOf("device", "tap", "--target", target))
+    runCli(deviceArgs("tap", "--target", target))
   }
 
   /**
@@ -241,7 +301,7 @@ class RevylCliClient(
    * @throws RevylCliException If the CLI exits with a non-zero code.
    */
   fun typeText(text: String, target: String? = null, clearFirst: Boolean = false) {
-    val args = mutableListOf("device", "type", "--text", text)
+    val args = deviceArgs("type", "--text", text).toMutableList()
     if (!target.isNullOrBlank()) args += listOf("--target", target)
     if (clearFirst) args += "--clear-first"
     runCli(args)
@@ -255,7 +315,7 @@ class RevylCliClient(
    * @throws RevylCliException If the CLI exits with a non-zero code.
    */
   fun swipe(direction: String, target: String? = null) {
-    val args = mutableListOf("device", "swipe", "--direction", direction)
+    val args = deviceArgs("swipe", "--direction", direction).toMutableList()
     if (!target.isNullOrBlank()) args += listOf("--target", target)
     runCli(args)
   }
@@ -267,7 +327,7 @@ class RevylCliClient(
    * @throws RevylCliException If the CLI exits with a non-zero code.
    */
   fun longPress(target: String) {
-    runCli(listOf("device", "long-press", "--target", target))
+    runCli(deviceArgs("long-press", "--target", target))
   }
 
   /**
@@ -276,7 +336,7 @@ class RevylCliClient(
    * @throws RevylCliException If the CLI exits with a non-zero code.
    */
   fun back() {
-    runCli(listOf("device", "back"))
+    runCli(deviceArgs("back"))
   }
 
   /**
@@ -286,7 +346,7 @@ class RevylCliClient(
    * @throws RevylCliException If the CLI exits with a non-zero code.
    */
   fun pressKey(key: String) {
-    runCli(listOf("device", "key", "--key", key.uppercase()))
+    runCli(deviceArgs("key", "--key", key.uppercase()))
   }
 
   /**
@@ -296,7 +356,7 @@ class RevylCliClient(
    * @throws RevylCliException If the CLI exits with a non-zero code.
    */
   fun navigate(url: String) {
-    runCli(listOf("device", "navigate", "--url", url))
+    runCli(deviceArgs("navigate", "--url", url))
   }
 
   /**
@@ -306,7 +366,7 @@ class RevylCliClient(
    * @throws RevylCliException If the CLI exits with a non-zero code.
    */
   fun clearText(target: String? = null) {
-    val args = mutableListOf("device", "clear-text")
+    val args = deviceArgs("clear-text").toMutableList()
     if (!target.isNullOrBlank()) args += listOf("--target", target)
     runCli(args)
   }
@@ -318,7 +378,7 @@ class RevylCliClient(
    * @throws RevylCliException If the CLI exits with a non-zero code.
    */
   fun installApp(appUrl: String) {
-    runCli(listOf("device", "install", "--app-url", appUrl))
+    runCli(deviceArgs("install", "--app-url", appUrl))
   }
 
   /**
@@ -328,7 +388,7 @@ class RevylCliClient(
    * @throws RevylCliException If the CLI exits with a non-zero code.
    */
   fun launchApp(bundleId: String) {
-    runCli(listOf("device", "launch", "--bundle-id", bundleId))
+    runCli(deviceArgs("launch", "--bundle-id", bundleId))
   }
 
   /**
@@ -337,7 +397,18 @@ class RevylCliClient(
    * @throws RevylCliException If the CLI exits with a non-zero code.
    */
   fun home() {
-    runCli(listOf("device", "home"))
+    runCli(deviceArgs("home"))
+  }
+
+  /**
+   * Toggles device network connectivity (airplane mode).
+   *
+   * @param connected true to enable network (disable airplane mode),
+   *     false to disable network (enable airplane mode).
+   * @throws RevylCliException If the CLI exits with a non-zero code.
+   */
+  fun setNetworkConnected(connected: Boolean) {
+    runCli(deviceArgs("network", if (connected) "--connected" else "--disconnected"))
   }
 
   // ---------------------------------------------------------------------------

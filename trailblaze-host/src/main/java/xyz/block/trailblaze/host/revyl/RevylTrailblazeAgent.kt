@@ -151,7 +151,7 @@ class RevylTrailblazeAgent(
           TrailblazeToolResult.Success()
         }
         is NetworkConnectionTrailblazeTool -> {
-          Console.log("RevylAgent: network toggle not supported on cloud devices")
+          cliClient.setNetworkConnected(tool.connected)
           TrailblazeToolResult.Success()
         }
         is TapOnElementByNodeIdTrailblazeTool -> {
