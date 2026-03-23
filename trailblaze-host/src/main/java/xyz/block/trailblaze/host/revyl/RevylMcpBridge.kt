@@ -1,10 +1,5 @@
 package xyz.block.trailblaze.host.revyl
 
-import xyz.block.trailblaze.agent.AgentUiActionExecutor
-import xyz.block.trailblaze.agent.BlazeConfig
-import xyz.block.trailblaze.agent.blaze.BlazeGoalPlanner
-import xyz.block.trailblaze.agent.blaze.BlazeState
-import xyz.block.trailblaze.agent.blaze.ScreenAnalyzer
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
@@ -112,47 +107,20 @@ class RevylMcpBridge(
   }
 
   /**
-   * Runs AI-driven blaze exploration using [BlazeGoalPlanner].
+   * Placeholder for AI-driven blaze exploration using BlazeGoalPlanner.
    *
-   * Constructs an [AgentUiActionExecutor] backed by [RevylTrailblazeAgent]
-   * and [RevylScreenState], then delegates to [BlazeGoalPlanner] for
-   * autonomous goal-directed device exploration.
+   * Blaze mode requires an LLM-backed ScreenAnalyzer and TrailblazeToolRepo,
+   * which must be configured by the host application (e.g. via
+   * TrailblazeHostYamlRunner). The device layer (RevylTrailblazeAgent +
+   * RevylScreenState) is ready; the caller must supply the agent wiring.
    *
    * @param yaml YAML containing blaze objectives.
-   * @return Human-readable result of the exploration.
+   * @return Status message indicating blaze mode requires host-level setup.
    */
   private suspend fun blazeExecute(yaml: String): String {
-    Console.log("RevylMcpBridge: starting blaze execution on Revyl cloud device")
-
-    val activePlatform = cliClient.getActiveSession()?.platform ?: platform
-    val screenStateProvider = { RevylScreenState(cliClient, activePlatform) }
-
-    val executor = AgentUiActionExecutor(
-      agent = agent,
-      screenStateProvider = screenStateProvider,
-      toolRepo = null,
-      elementComparator = NoOpElementComparator,
-    )
-
-    val screenAnalyzer = ScreenAnalyzer()
-    val planner = BlazeGoalPlanner(
-      config = BlazeConfig.DEFAULT,
-      screenAnalyzer = screenAnalyzer,
-      executor = executor,
-    )
-
-    val initialState = BlazeState(
-      objective = yaml,
-      screenState = screenStateProvider(),
-    )
-
-    return try {
-      planner.execute(initialState)
-      "blaze:completed"
-    } catch (e: Exception) {
-      Console.error("RevylMcpBridge: blaze execution failed: ${e.message}")
-      "blaze:failed:${e.message}"
-    }
+    Console.log("RevylMcpBridge: blaze (V3) mode requested")
+    Console.log("RevylMcpBridge: device layer is ready — wire BlazeGoalPlanner with AgentUiActionExecutor(RevylTrailblazeAgent) at the host level")
+    return "blaze:requires-host-wiring"
   }
 
   override fun getCurrentlySelectedDeviceId(): TrailblazeDeviceId? {
