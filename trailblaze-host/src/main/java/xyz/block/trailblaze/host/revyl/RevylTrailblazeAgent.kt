@@ -94,15 +94,16 @@ class RevylTrailblazeAgent(
       when (tool) {
         is TapOnPointTrailblazeTool -> {
           if (tool.longPress) {
-            cliClient.longPress("element at (${tool.x}, ${tool.y})")
+            val r = cliClient.longPress("element at (${tool.x}, ${tool.y})")
+            TrailblazeToolResult.Success(message = "Long-pressed at (${r.x}, ${r.y})")
           } else {
-            cliClient.tap(tool.x, tool.y)
+            val r = cliClient.tap(tool.x, tool.y)
+            TrailblazeToolResult.Success(message = "Tapped at (${r.x}, ${r.y})")
           }
-          TrailblazeToolResult.Success()
         }
         is InputTextTrailblazeTool -> {
-          cliClient.typeText(tool.text)
-          TrailblazeToolResult.Success()
+          val r = cliClient.typeText(tool.text)
+          TrailblazeToolResult.Success(message = "Typed '${tool.text}' at (${r.x}, ${r.y})")
         }
         is SwipeTrailblazeTool -> {
           val direction = when (tool.direction) {
@@ -112,55 +113,55 @@ class RevylTrailblazeAgent(
             SwipeDirection.RIGHT -> "right"
             else -> "down"
           }
-          cliClient.swipe(direction)
-          TrailblazeToolResult.Success()
+          val r = cliClient.swipe(direction)
+          TrailblazeToolResult.Success(message = "Swiped $direction from (${r.x}, ${r.y})")
         }
         is LaunchAppTrailblazeTool -> {
           cliClient.launchApp(tool.appId)
-          TrailblazeToolResult.Success()
+          TrailblazeToolResult.Success(message = "Launched ${tool.appId}")
         }
         is EraseTextTrailblazeTool -> {
-          cliClient.clearText()
-          TrailblazeToolResult.Success()
+          val r = cliClient.clearText()
+          TrailblazeToolResult.Success(message = "Cleared text at (${r.x}, ${r.y})")
         }
         is HideKeyboardTrailblazeTool -> {
           TrailblazeToolResult.Success()
         }
         is PressBackTrailblazeTool -> {
-          cliClient.back()
-          TrailblazeToolResult.Success()
+          val r = cliClient.back()
+          TrailblazeToolResult.Success(message = "Pressed back at (${r.x}, ${r.y})")
         }
         is PressKeyTrailblazeTool -> {
-          cliClient.pressKey(tool.keyCode.name)
-          TrailblazeToolResult.Success()
+          val r = cliClient.pressKey(tool.keyCode.name)
+          TrailblazeToolResult.Success(message = "Pressed ${tool.keyCode.name} at (${r.x}, ${r.y})")
         }
         is OpenUrlTrailblazeTool -> {
           cliClient.navigate(tool.url)
-          TrailblazeToolResult.Success()
+          TrailblazeToolResult.Success(message = "Navigated to ${tool.url}")
         }
         is TakeSnapshotTool -> {
           cliClient.screenshot()
-          TrailblazeToolResult.Success()
+          TrailblazeToolResult.Success(message = "Screenshot captured")
         }
         is WaitForIdleSyncTrailblazeTool -> {
           Thread.sleep(1000)
           TrailblazeToolResult.Success()
         }
         is ScrollUntilTextIsVisibleTrailblazeTool -> {
-          cliClient.swipe("down")
-          TrailblazeToolResult.Success()
+          val r = cliClient.swipe("down")
+          TrailblazeToolResult.Success(message = "Scrolled down from (${r.x}, ${r.y})")
         }
         is NetworkConnectionTrailblazeTool -> {
           Console.log("RevylAgent: network toggle not yet implemented for cloud devices")
           TrailblazeToolResult.Success()
         }
         is TapOnElementByNodeIdTrailblazeTool -> {
-          cliClient.tapTarget("element with node id ${tool.nodeId}")
-          TrailblazeToolResult.Success()
+          val r = cliClient.tapTarget("element with node id ${tool.nodeId}")
+          TrailblazeToolResult.Success(message = "Tapped element at (${r.x}, ${r.y})")
         }
         is LongPressOnElementWithTextTrailblazeTool -> {
-          cliClient.longPress(tool.text)
-          TrailblazeToolResult.Success()
+          val r = cliClient.longPress(tool.text)
+          TrailblazeToolResult.Success(message = "Long-pressed '${tool.text}' at (${r.x}, ${r.y})")
         }
         is ObjectiveStatusTrailblazeTool -> TrailblazeToolResult.Success()
         is MemoryTrailblazeTool -> TrailblazeToolResult.Success()

@@ -35,6 +35,7 @@ include(
   ":trailblaze-models",
   ":trailblaze-compose",
   ":trailblaze-playwright",
+  ":trailblaze-revyl",
   ":trailblaze-ui",
   ":trailblaze-report",
   ":trailblaze-server",

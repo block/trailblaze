@@ -130,7 +130,12 @@ class RevylMcpBridge(
 
   override suspend fun getCurrentScreenState(): ScreenState? {
     val session = cliClient.getActiveSession() ?: return null
-    return RevylScreenState(cliClient, session.platform)
+    return RevylScreenState(
+      cliClient,
+      session.platform,
+      sessionScreenWidth = session.screenWidth,
+      sessionScreenHeight = session.screenHeight,
+    )
   }
 
   /**
@@ -148,11 +153,11 @@ class RevylMcpBridge(
       elementComparator = NoOpElementComparator,
     )
 
-    return when (result.result) {
+    return when (val outcome = result.result) {
       is TrailblazeToolResult.Success ->
-        "Successfully executed $toolName on Revyl cloud device."
+        outcome.message ?: "Successfully executed $toolName on Revyl cloud device."
       is TrailblazeToolResult.Error ->
-        "Error executing $toolName: ${(result.result as TrailblazeToolResult.Error).errorMessage}"
+        "Error executing $toolName: ${outcome.errorMessage}"
     }
   }
 

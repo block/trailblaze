@@ -2,11 +2,11 @@ package xyz.block.trailblaze.host.revyl
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.int
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import xyz.block.trailblaze.util.Console
 import java.io.File
-import java.net.URL
 
 /**
  * Device interaction client that delegates to the `revyl` CLI binary.
@@ -16,12 +16,12 @@ import java.net.URL
  * auth, backend proxy routing, and AI-powered target grounding.
  *
  * If the `revyl` binary is not found on PATH, it is automatically
- * downloaded from GitHub Releases to `~/.revyl/bin/revyl`. The only
- * prerequisite is setting the `REVYL_API_KEY` environment variable.
+ * installed via the official installer script from GitHub.
+ * The only prerequisite is setting the `REVYL_API_KEY` environment variable.
  *
  * @property revylBinaryOverride Explicit path to the revyl binary.
  *     Defaults to `REVYL_BINARY` env var, then PATH lookup, then
- *     auto-download.
+ *     auto-install via install.sh.
  * @property workingDirectory Optional working directory for CLI
  *     invocations. Defaults to the JVM's current directory.
  */
@@ -82,38 +82,54 @@ class RevylCliClient(
   // Auto-install
   // ---------------------------------------------------------------------------
 
+  private val installDir = File(System.getProperty("user.home"), ".revyl/bin")
+  private val installerUrl =
+    "https://raw.githubusercontent.com/RevylAI/revyl-cli/main/scripts/install.sh"
+
   /**
    * Ensures the revyl CLI binary is available. If not found on PATH,
-   * downloads the correct platform binary from GitHub Releases to
-   * `~/.revyl/bin/revyl` and uses that path for all subsequent calls.
+   * runs the official installer script to download and install it.
    *
-   * @throws RevylCliException If the platform is unsupported or download fails.
+   * @throws RevylCliException If installation fails.
    */
   private fun ensureRevylInstalled() {
     if (isRevylAvailable()) return
 
-    Console.log("RevylCli: 'revyl' not found on PATH — downloading automatically...")
-    val (os, arch) = detectPlatform()
-    val assetName = "revyl-$os-$arch" + if (os == "windows") ".exe" else ""
-    val downloadUrl =
-      "https://github.com/RevylAI/revyl-cli/releases/latest/download/$assetName"
-
-    val installDir = File(System.getProperty("user.home"), ".revyl/bin")
-    installDir.mkdirs()
-    val binaryName = if (os == "windows") "revyl.exe" else "revyl"
-    val binaryFile = File(installDir, binaryName)
+    Console.log("RevylCli: 'revyl' not found — installing via official installer...")
 
     try {
-      Console.log("RevylCli: downloading $downloadUrl")
-      URL(downloadUrl).openStream().use { input ->
-        binaryFile.outputStream().use { output -> input.copyTo(output) }
+      val process = ProcessBuilder("sh", "-c", "curl -fsSL '$installerUrl' | sh")
+        .redirectErrorStream(true)
+        .also { pb ->
+          pb.environment()["REVYL_INSTALL_DIR"] = installDir.absolutePath
+          pb.environment()["REVYL_NO_MODIFY_PATH"] = "1"
+        }
+        .start()
+      val output = process.inputStream.bufferedReader().readText()
+      val exitCode = process.waitFor()
+
+      if (exitCode != 0) {
+        throw RevylCliException(
+          "Installer failed (exit $exitCode): ${output.take(500)}\n" +
+            "Install manually: brew install RevylAI/tap/revyl"
+        )
       }
-      binaryFile.setExecutable(true)
-      resolvedBinary = binaryFile.absolutePath
-      Console.log("RevylCli: installed to ${binaryFile.absolutePath}")
+
+      val binaryPath = File(installDir, "revyl")
+      if (binaryPath.exists() && binaryPath.canExecute()) {
+        resolvedBinary = binaryPath.absolutePath
+        Console.log("RevylCli: installed to ${binaryPath.absolutePath}")
+      } else {
+        throw RevylCliException(
+          "Installer completed but binary not found at ${binaryPath.absolutePath}. " +
+            "Install manually: brew install RevylAI/tap/revyl"
+        )
+      }
+    } catch (e: RevylCliException) {
+      throw e
     } catch (e: Exception) {
       throw RevylCliException(
-        "Auto-download failed: ${e.message}. " +
+        "Auto-install failed: ${e.message}. " +
           "Install manually: brew install RevylAI/tap/revyl " +
           "or download from https://github.com/RevylAI/revyl-cli/releases"
       )
@@ -121,7 +137,7 @@ class RevylCliClient(
 
     if (!isRevylAvailable()) {
       throw RevylCliException(
-        "Downloaded binary at ${binaryFile.absolutePath} is not executable. " +
+        "Installed binary is not executable. " +
           "Install manually: brew install RevylAI/tap/revyl"
       )
     }
@@ -144,29 +160,6 @@ class RevylCliClient(
     }
   }
 
-  /**
-   * Detects the current OS and CPU architecture for binary selection.
-   *
-   * @return Pair of (os, arch) matching GitHub Release asset names.
-   * @throws RevylCliException If the platform is not supported.
-   */
-  private fun detectPlatform(): Pair<String, String> {
-    val osName = System.getProperty("os.name").lowercase()
-    val os = when {
-      "mac" in osName || "darwin" in osName -> "darwin"
-      "linux" in osName -> "linux"
-      "windows" in osName -> "windows"
-      else -> throw RevylCliException("Unsupported OS: $osName")
-    }
-    val archName = System.getProperty("os.arch").lowercase()
-    val arch = when (archName) {
-      "aarch64", "arm64" -> "arm64"
-      "amd64", "x86_64" -> "amd64"
-      else -> throw RevylCliException("Unsupported architecture: $archName")
-    }
-    return Pair(os, arch)
-  }
-
   // ---------------------------------------------------------------------------
   // Session lifecycle
   // ---------------------------------------------------------------------------
@@ -177,6 +170,10 @@ class RevylCliClient(
    * @param platform "ios" or "android".
    * @param appUrl Optional public URL to an .apk/.ipa to install on start.
    * @param appLink Optional deep-link to open after launch.
+   * @param deviceName Optional device preset name (e.g. "revyl-android-phone").
+   *     When set, the CLI resolves the preset to a specific model and OS version.
+   * @param deviceModel Optional explicit device model (e.g. "Pixel 7").
+   * @param osVersion Optional explicit OS version (e.g. "Android 14").
    * @return The newly created [RevylSession] parsed from CLI JSON output.
    * @throws RevylCliException If the CLI exits with a non-zero code.
    */
@@ -184,6 +181,9 @@ class RevylCliClient(
     platform: String,
     appUrl: String? = null,
     appLink: String? = null,
+    deviceName: String? = null,
+    deviceModel: String? = null,
+    osVersion: String? = null,
   ): RevylSession {
     val args = mutableListOf("device", "start", "--platform", platform.lowercase())
     if (!appUrl.isNullOrBlank()) {
@@ -191,6 +191,15 @@ class RevylCliClient(
     }
     if (!appLink.isNullOrBlank()) {
       args += listOf("--app-link", appLink)
+    }
+    if (!deviceName.isNullOrBlank()) {
+      args += listOf("--device-name", deviceName)
+    }
+    if (!deviceModel.isNullOrBlank()) {
+      args += listOf("--device-model", deviceModel)
+    }
+    if (!osVersion.isNullOrBlank()) {
+      args += listOf("--os-version", osVersion)
     }
 
     val result = runCli(args)
@@ -203,11 +212,16 @@ class RevylCliClient(
       workerBaseUrl = obj["worker_base_url"]?.jsonPrimitive?.content ?: "",
       viewerUrl = obj["viewer_url"]?.jsonPrimitive?.content ?: "",
       platform = platform.lowercase(),
+      screenWidth = obj["screen_width"]?.jsonPrimitive?.intOrNull ?: 0,
+      screenHeight = obj["screen_height"]?.jsonPrimitive?.intOrNull ?: 0,
     )
     sessions[session.index] = session
     activeSessionIndex = session.index
     Console.log("RevylCli: device ready (session ${session.index}, ${session.platform})")
     Console.log("  Viewer: ${session.viewerUrl}")
+    if (session.screenWidth > 0) {
+      Console.log("  Screen: ${session.screenWidth}x${session.screenHeight}")
+    }
     return session
   }
 
@@ -239,13 +253,9 @@ class RevylCliClient(
   }
 
   // ---------------------------------------------------------------------------
-  // Device actions
+  // Device actions — all return RevylActionResult with coordinates
   // ---------------------------------------------------------------------------
 
-  /**
-   * Builds session-scoped CLI args by prepending `-s <activeSessionIndex>`
-   * to device commands so each action targets the correct session.
-   */
   private fun deviceArgs(vararg args: String): List<String> {
     val base = mutableListOf("device")
     if (sessions.size > 1) {
@@ -276,20 +286,24 @@ class RevylCliClient(
    *
    * @param x Horizontal pixel coordinate.
    * @param y Vertical pixel coordinate.
+   * @return Action result with the tapped coordinates.
    * @throws RevylCliException If the CLI exits with a non-zero code.
    */
-  fun tap(x: Int, y: Int) {
-    runCli(deviceArgs("tap", "--x", x.toString(), "--y", y.toString()))
+  fun tap(x: Int, y: Int): RevylActionResult {
+    val stdout = runCli(deviceArgs("tap", "--x", x.toString(), "--y", y.toString()))
+    return RevylActionResult.fromJson(stdout)
   }
 
   /**
    * Taps a UI element identified by natural language description.
    *
    * @param target Natural language description (e.g. "Sign In button").
+   * @return Action result with the resolved coordinates.
    * @throws RevylCliException If the CLI exits with a non-zero code.
    */
-  fun tapTarget(target: String) {
-    runCli(deviceArgs("tap", "--target", target))
+  fun tapTarget(target: String): RevylActionResult {
+    val stdout = runCli(deviceArgs("tap", "--target", target))
+    return RevylActionResult.fromJson(stdout)
   }
 
   /**
@@ -298,13 +312,15 @@ class RevylCliClient(
    * @param text The text to type.
    * @param target Optional natural language element description to tap first.
    * @param clearFirst If true, clears the field before typing.
+   * @return Action result with the field coordinates.
    * @throws RevylCliException If the CLI exits with a non-zero code.
    */
-  fun typeText(text: String, target: String? = null, clearFirst: Boolean = false) {
+  fun typeText(text: String, target: String? = null, clearFirst: Boolean = false): RevylActionResult {
     val args = deviceArgs("type", "--text", text).toMutableList()
     if (!target.isNullOrBlank()) args += listOf("--target", target)
     if (clearFirst) args += "--clear-first"
-    runCli(args)
+    val stdout = runCli(args)
+    return RevylActionResult.fromJson(stdout)
   }
 
   /**
@@ -312,41 +328,49 @@ class RevylCliClient(
    *
    * @param direction One of "up", "down", "left", "right".
    * @param target Optional natural language element description for swipe origin.
+   * @return Action result with the swipe origin coordinates.
    * @throws RevylCliException If the CLI exits with a non-zero code.
    */
-  fun swipe(direction: String, target: String? = null) {
+  fun swipe(direction: String, target: String? = null): RevylActionResult {
     val args = deviceArgs("swipe", "--direction", direction).toMutableList()
     if (!target.isNullOrBlank()) args += listOf("--target", target)
-    runCli(args)
+    val stdout = runCli(args)
+    return RevylActionResult.fromJson(stdout)
   }
 
   /**
    * Long-presses a UI element identified by natural language description.
    *
    * @param target Natural language description of the element.
+   * @return Action result with the pressed coordinates.
    * @throws RevylCliException If the CLI exits with a non-zero code.
    */
-  fun longPress(target: String) {
-    runCli(deviceArgs("long-press", "--target", target))
+  fun longPress(target: String): RevylActionResult {
+    val stdout = runCli(deviceArgs("long-press", "--target", target))
+    return RevylActionResult.fromJson(stdout)
   }
 
   /**
    * Presses the Android back button.
    *
+   * @return Action result (coordinates are 0,0 for back).
    * @throws RevylCliException If the CLI exits with a non-zero code.
    */
-  fun back() {
-    runCli(deviceArgs("back"))
+  fun back(): RevylActionResult {
+    val stdout = runCli(deviceArgs("back"))
+    return RevylActionResult.fromJson(stdout)
   }
 
   /**
    * Sends a key press event (ENTER or BACKSPACE).
    *
    * @param key Key name: "ENTER" or "BACKSPACE".
+   * @return Action result (coordinates are 0,0 for key presses).
    * @throws RevylCliException If the CLI exits with a non-zero code.
    */
-  fun pressKey(key: String) {
-    runCli(deviceArgs("key", "--key", key.uppercase()))
+  fun pressKey(key: String): RevylActionResult {
+    val stdout = runCli(deviceArgs("key", "--key", key.uppercase()))
+    return RevylActionResult.fromJson(stdout)
   }
 
   /**
@@ -363,12 +387,14 @@ class RevylCliClient(
    * Clears text from the currently focused input field.
    *
    * @param target Optional natural language element description.
+   * @return Action result with the field coordinates.
    * @throws RevylCliException If the CLI exits with a non-zero code.
    */
-  fun clearText(target: String? = null) {
+  fun clearText(target: String? = null): RevylActionResult {
     val args = deviceArgs("clear-text").toMutableList()
     if (!target.isNullOrBlank()) args += listOf("--target", target)
-    runCli(args)
+    val stdout = runCli(args)
+    return RevylActionResult.fromJson(stdout)
   }
 
   /**
@@ -464,3 +490,23 @@ class RevylCliClient(
  * @property message Human-readable description including the exit code and stderr.
  */
 class RevylCliException(message: String) : RuntimeException(message)
+
+/**
+ * Named device presets for provisioning Revyl cloud devices.
+ *
+ * Maps to CLI presets defined in `revyl-cli/internal/devicetargets/targets.go`.
+ * The CLI resolves each preset to the current default model and OS version from
+ * the backend device catalog, so consumers don't hardcode device strings.
+ *
+ * @property presetId CLI-level preset identifier passed via `--device-name`.
+ * @property platform Target platform ("ios" or "android").
+ * @property displayName Human-readable label for UI display.
+ */
+enum class RevylDevicePreset(
+  val presetId: String,
+  val platform: String,
+  val displayName: String,
+) {
+  ANDROID_PHONE("revyl-android-phone", "android", "Revyl Android Phone"),
+  IOS_IPHONE("revyl-ios-iphone", "ios", "Revyl iOS iPhone"),
+}

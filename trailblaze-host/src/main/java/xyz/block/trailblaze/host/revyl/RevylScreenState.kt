@@ -14,12 +14,21 @@ import java.nio.ByteOrder
  * the view hierarchy is a minimal root node. The LLM agent relies on
  * screenshot-based reasoning instead of element trees.
  *
- * @property cliClient CLI client used to capture screenshots.
- * @property platform The device platform ("ios" or "android").
+ * Screen dimensions are resolved in priority order:
+ * 1. Session-reported dimensions from the worker health endpoint.
+ * 2. PNG IHDR header extraction from the captured screenshot.
+ * 3. Default fallback (1080x2340).
+ *
+ * @param cliClient CLI client used to capture screenshots.
+ * @param platform The device platform ("ios" or "android").
+ * @param sessionScreenWidth Session-reported width in pixels (0 = unknown).
+ * @param sessionScreenHeight Session-reported height in pixels (0 = unknown).
  */
 class RevylScreenState(
   private val cliClient: RevylCliClient,
   private val platform: String,
+  sessionScreenWidth: Int = 0,
+  sessionScreenHeight: Int = 0,
 ) : ScreenState {
 
   private val capturedScreenshot: ByteArray? = try {
@@ -28,8 +37,13 @@ class RevylScreenState(
     null
   }
 
-  private val dimensions: Pair<Int, Int> = capturedScreenshot?.let { extractPngDimensions(it) }
-    ?: Pair(DEFAULT_WIDTH, DEFAULT_HEIGHT)
+  private val dimensions: Pair<Int, Int> = when {
+    sessionScreenWidth > 0 && sessionScreenHeight > 0 ->
+      Pair(sessionScreenWidth, sessionScreenHeight)
+    else ->
+      capturedScreenshot?.let { extractPngDimensions(it) }
+        ?: Pair(DEFAULT_WIDTH, DEFAULT_HEIGHT)
+  }
 
   override val screenshotBytes: ByteArray? = capturedScreenshot
 
