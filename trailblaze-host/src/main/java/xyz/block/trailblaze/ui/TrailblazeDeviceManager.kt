@@ -127,6 +127,8 @@ class TrailblazeDeviceManager(
         connectedDeviceSummary.trailblazeDriverType == TrailblazeDriverType.PLAYWRIGHT_NATIVE ||
           connectedDeviceSummary.trailblazeDriverType == TrailblazeDriverType.PLAYWRIGHT_ELECTRON ||
           connectedDeviceSummary.trailblazeDriverType == TrailblazeDriverType.COMPOSE ||
+          connectedDeviceSummary.trailblazeDriverType == TrailblazeDriverType.REVYL_ANDROID ||
+          connectedDeviceSummary.trailblazeDriverType == TrailblazeDriverType.REVYL_IOS ||
           settingsRepo.getEnabledDriverTypes().contains(connectedDeviceSummary.trailblazeDriverType)
       }
     }
@@ -377,6 +379,14 @@ class TrailblazeDeviceManager(
         Console.log("⚠️ Screen state capture not supported for ${driverType.name} driver")
         null
       }
+      TrailblazeDriverType.REVYL_ANDROID,
+      TrailblazeDriverType.REVYL_IOS -> {
+        val platform = if (driverType == TrailblazeDriverType.REVYL_ANDROID) "android" else "ios"
+        xyz.block.trailblaze.host.revyl.RevylScreenState(
+          xyz.block.trailblaze.host.revyl.RevylCliClient(),
+          platform,
+        )
+      }
     }
   }
   
@@ -578,6 +588,24 @@ class TrailblazeDeviceManager(
               trailblazeDriverType = TrailblazeDriverType.COMPOSE,
               instanceId = "compose",
               description = "Compose (RPC)",
+            )
+          )
+        }
+
+        // Revyl cloud devices — available when REVYL_API_KEY is set.
+        if (System.getenv("REVYL_API_KEY") != null) {
+          add(
+            TrailblazeConnectedDeviceSummary(
+              trailblazeDriverType = TrailblazeDriverType.REVYL_ANDROID,
+              instanceId = "revyl-android-phone",
+              description = "Revyl Cloud Android Phone",
+            )
+          )
+          add(
+            TrailblazeConnectedDeviceSummary(
+              trailblazeDriverType = TrailblazeDriverType.REVYL_IOS,
+              instanceId = "revyl-ios-iphone",
+              description = "Revyl Cloud iOS iPhone",
             )
           )
         }

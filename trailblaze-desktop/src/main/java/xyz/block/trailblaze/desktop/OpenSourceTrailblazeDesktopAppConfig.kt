@@ -35,6 +35,8 @@ class OpenSourceTrailblazeDesktopAppConfig : TrailblazeDesktopAppConfig(
     TrailblazeDriverType.IOS_HOST,
     TrailblazeDriverType.PLAYWRIGHT_NATIVE,
     TrailblazeDriverType.PLAYWRIGHT_ELECTRON,
+    TrailblazeDriverType.REVYL_ANDROID,
+    TrailblazeDriverType.REVYL_IOS,
   )
 
   // Start with no platforms enabled by default - user must explicitly enable them

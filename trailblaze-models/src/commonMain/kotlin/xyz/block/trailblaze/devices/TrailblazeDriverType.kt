@@ -28,6 +28,14 @@ enum class TrailblazeDriverType(
     platform = TrailblazeDevicePlatform.WEB,
     isHost = true,
   ),
+  REVYL_ANDROID(
+    platform = TrailblazeDevicePlatform.ANDROID,
+    isHost = true,
+  ),
+  REVYL_IOS(
+    platform = TrailblazeDevicePlatform.IOS,
+    isHost = true,
+  ),
   // COMPOSE intentionally uses WEB platform: Compose Desktop testing reuses the web
   // platform's view hierarchy filtering and device infrastructure. Adding a separate
   // DESKTOP platform would require updating all exhaustive `when` expressions on
