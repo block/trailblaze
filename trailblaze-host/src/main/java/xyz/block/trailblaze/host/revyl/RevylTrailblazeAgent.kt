@@ -119,7 +119,7 @@ class RevylTrailblazeAgent(
           }
         }
         is InputTextTrailblazeTool -> {
-          val r = cliClient.typeText(tool.text)
+          val r = cliClient.typeText(tool.text, target = "focused input field")
           TrailblazeToolResult.Success(message = "Typed '${tool.text}' at (${r.x}, ${r.y})")
         }
         is SwipeTrailblazeTool -> {
@@ -138,7 +138,7 @@ class RevylTrailblazeAgent(
           TrailblazeToolResult.Success(message = "Launched ${tool.appId}")
         }
         is EraseTextTrailblazeTool -> {
-          val r = cliClient.clearText()
+          val r = cliClient.clearText(target = "focused input field")
           TrailblazeToolResult.Success(message = "Cleared text at (${r.x}, ${r.y})")
         }
         is HideKeyboardTrailblazeTool -> {
