@@ -1,13 +1,24 @@
 package xyz.block.trailblaze.revyl
 
+import kotlinx.datetime.Clock
+import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeAgent
 import xyz.block.trailblaze.api.TrailblazeAgent.RunTrailblazeToolsResult
+import xyz.block.trailblaze.devices.TrailblazeDeviceId
+import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.host.revyl.RevylCliClient
 import xyz.block.trailblaze.host.revyl.RevylScreenState
+import xyz.block.trailblaze.logs.client.TrailblazeLogger
+import xyz.block.trailblaze.logs.client.TrailblazeSession
+import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
+import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.revyl.tools.RevylExecutableTool
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
+import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.memory.MemoryTrailblazeTool
@@ -94,16 +105,22 @@ class RevylToolAgent(
   private fun buildMinimalContext(
     screenStateProvider: () -> ScreenState,
   ): TrailblazeToolExecutionContext {
+    val devicePlatform = if (platform == "ios") TrailblazeDevicePlatform.IOS else TrailblazeDevicePlatform.ANDROID
     return TrailblazeToolExecutionContext(
       screenState = null,
       traceId = null,
-      trailblazeDeviceInfo = xyz.block.trailblaze.devices.TrailblazeDeviceInfo.EMPTY,
-      sessionProvider = object : xyz.block.trailblaze.logs.client.TrailblazeSessionProvider {
-        override fun getSessionId(): String = ""
+      trailblazeDeviceInfo = TrailblazeDeviceInfo(
+        trailblazeDeviceId = TrailblazeDeviceId(instanceId = "revyl", trailblazeDevicePlatform = devicePlatform),
+        trailblazeDriverType = if (platform == "ios") TrailblazeDriverType.IOS_HOST else TrailblazeDriverType.ANDROID_HOST,
+        widthPixels = 0,
+        heightPixels = 0,
+      ),
+      sessionProvider = TrailblazeSessionProvider {
+        TrailblazeSession(sessionId = SessionId("revyl-tool-agent"), startTime = Clock.System.now())
       },
       screenStateProvider = screenStateProvider,
-      trailblazeLogger = xyz.block.trailblaze.logs.client.TrailblazeLogger.NOOP,
-      memory = xyz.block.trailblaze.AgentMemory(),
+      trailblazeLogger = TrailblazeLogger.createNoOp(),
+      memory = AgentMemory(),
     )
   }
 }

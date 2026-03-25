@@ -5,6 +5,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.jsonPrimitive
+import xyz.block.trailblaze.util.Console
 
 /**
  * Structured result from a Revyl CLI device action (tap, type, swipe, etc.).
@@ -52,7 +53,8 @@ data class RevylActionResult(
     fun fromJson(jsonString: String): RevylActionResult {
       return try {
         lenientJson.decodeFromString<RevylActionResult>(jsonString.trim())
-      } catch (_: Exception) {
+      } catch (e: Exception) {
+        Console.log("RevylActionResult: JSON parse failed, using default: ${e.message}")
         RevylActionResult(success = true)
       }
     }

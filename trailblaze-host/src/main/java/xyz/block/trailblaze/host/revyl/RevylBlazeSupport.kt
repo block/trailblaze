@@ -5,6 +5,13 @@ import xyz.block.trailblaze.agent.BlazeConfig
 import xyz.block.trailblaze.agent.ScreenAnalyzer
 import xyz.block.trailblaze.agent.TrailblazeElementComparator
 import xyz.block.trailblaze.agent.blaze.BlazeGoalPlanner
+import xyz.block.trailblaze.devices.TrailblazeDeviceId
+import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.logs.client.TrailblazeLogger
+import xyz.block.trailblaze.logs.client.TrailblazeSession
+import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 
 /**
@@ -56,7 +63,22 @@ object RevylBlazeSupport {
     elementComparator: TrailblazeElementComparator,
     config: BlazeConfig = BlazeConfig.DEFAULT,
   ): BlazeGoalPlanner {
-    val agent = RevylTrailblazeAgent(cliClient, platform)
+    val devicePlatform = if (platform == "ios") TrailblazeDevicePlatform.IOS else TrailblazeDevicePlatform.ANDROID
+    val deviceInfo = TrailblazeDeviceInfo(
+      trailblazeDeviceId = TrailblazeDeviceId(instanceId = "revyl-blaze", trailblazeDevicePlatform = devicePlatform),
+      trailblazeDriverType = if (platform == "ios") TrailblazeDriverType.REVYL_IOS else TrailblazeDriverType.REVYL_ANDROID,
+      widthPixels = 0,
+      heightPixels = 0,
+    )
+    val agent = RevylTrailblazeAgent(
+      cliClient = cliClient,
+      platform = platform,
+      trailblazeLogger = TrailblazeLogger.createNoOp(),
+      trailblazeDeviceInfoProvider = { deviceInfo },
+      sessionProvider = {
+        TrailblazeSession(sessionId = SessionId("revyl-blaze"), startTime = kotlinx.datetime.Clock.System.now())
+      },
+    )
     val screenStateProvider = { RevylScreenState(cliClient, platform) }
     val executor = AgentUiActionExecutor(
       agent = agent,

@@ -592,22 +592,40 @@ class TrailblazeDeviceManager(
           )
         }
 
-        // Revyl cloud devices — available when REVYL_API_KEY is set.
-        if (System.getenv("REVYL_API_KEY") != null) {
-          add(
-            TrailblazeConnectedDeviceSummary(
-              trailblazeDriverType = TrailblazeDriverType.REVYL_ANDROID,
-              instanceId = "revyl-android-phone",
-              description = "Revyl Cloud Android Phone",
-            )
+        // Revyl cloud devices — default presets always included as fallbacks.
+        add(
+          TrailblazeConnectedDeviceSummary(
+            trailblazeDriverType = TrailblazeDriverType.REVYL_ANDROID,
+            instanceId = "revyl-android-phone",
+            description = "Revyl Android (Default)",
           )
-          add(
-            TrailblazeConnectedDeviceSummary(
-              trailblazeDriverType = TrailblazeDriverType.REVYL_IOS,
-              instanceId = "revyl-ios-iphone",
-              description = "Revyl Cloud iOS iPhone",
-            )
+        )
+        add(
+          TrailblazeConnectedDeviceSummary(
+            trailblazeDriverType = TrailblazeDriverType.REVYL_IOS,
+            instanceId = "revyl-ios-iphone",
+            description = "Revyl iOS (Default)",
           )
+        )
+
+        // Dynamically register each model from the Revyl device catalog.
+        // Uses `revyl device targets --json` so the list stays in sync
+        // with the backend without code changes.
+        try {
+          val targets = xyz.block.trailblaze.host.revyl.RevylCliClient().getDeviceTargets()
+          for (target in targets) {
+            val driverType = if (target.platform == "android")
+              TrailblazeDriverType.REVYL_ANDROID else TrailblazeDriverType.REVYL_IOS
+            add(
+              TrailblazeConnectedDeviceSummary(
+                trailblazeDriverType = driverType,
+                instanceId = "revyl-model:${target.model}::${target.osVersion}",
+                description = "Revyl ${target.model} (${target.osVersion})",
+              )
+            )
+          }
+        } catch (e: Exception) {
+          Console.log("Revyl device catalog unavailable: ${e.message}")
         }
       }
 

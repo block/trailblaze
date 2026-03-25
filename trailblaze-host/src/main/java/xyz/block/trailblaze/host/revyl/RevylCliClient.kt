@@ -3,6 +3,7 @@ package xyz.block.trailblaze.host.revyl
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import xyz.block.trailblaze.util.Console
@@ -170,30 +171,29 @@ class RevylCliClient(
    * @param platform "ios" or "android".
    * @param appUrl Optional public URL to an .apk/.ipa to install on start.
    * @param appLink Optional deep-link to open after launch.
-   * @param deviceName Optional device preset name (e.g. "revyl-android-phone").
-   *     When set, the CLI resolves the preset to a specific model and OS version.
    * @param deviceModel Optional explicit device model (e.g. "Pixel 7").
    * @param osVersion Optional explicit OS version (e.g. "Android 14").
    * @return The newly created [RevylSession] parsed from CLI JSON output.
    * @throws RevylCliException If the CLI exits with a non-zero code.
+   * @throws IllegalArgumentException If only one of deviceModel/osVersion is provided.
    */
   fun startSession(
     platform: String,
     appUrl: String? = null,
     appLink: String? = null,
-    deviceName: String? = null,
     deviceModel: String? = null,
     osVersion: String? = null,
   ): RevylSession {
+    require(deviceModel.isNullOrBlank() == osVersion.isNullOrBlank()) {
+      "deviceModel and osVersion must both be provided or both be null/blank " +
+        "(got deviceModel=$deviceModel, osVersion=$osVersion)"
+    }
     val args = mutableListOf("device", "start", "--platform", platform.lowercase())
     if (!appUrl.isNullOrBlank()) {
       args += listOf("--app-url", appUrl)
     }
     if (!appLink.isNullOrBlank()) {
       args += listOf("--app-link", appLink)
-    }
-    if (!deviceName.isNullOrBlank()) {
-      args += listOf("--device-name", deviceName)
     }
     if (!deviceModel.isNullOrBlank()) {
       args += listOf("--device-model", deviceModel)
@@ -438,6 +438,74 @@ class RevylCliClient(
   }
 
   // ---------------------------------------------------------------------------
+  // Device catalog
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Queries the available device models from the Revyl backend catalog.
+   *
+   * Calls `revyl device targets --json` and parses the response into a
+   * deduplicated list of [RevylDeviceTarget] entries (one per unique model).
+   *
+   * @return Available device models grouped by platform.
+   * @throws RevylCliException If the CLI command fails.
+   */
+  fun getDeviceTargets(): List<RevylDeviceTarget> {
+    val stdout = runCli(listOf("device", "targets"))
+    val root = json.parseToJsonElement(stdout).jsonObject
+    val results = mutableListOf<RevylDeviceTarget>()
+    val seenModels = mutableSetOf<String>()
+
+    for (platform in listOf("android", "ios")) {
+      val entries = root[platform]?.jsonArray ?: continue
+      for (entry in entries) {
+        val model = entry.jsonObject["Model"]?.jsonPrimitive?.content ?: continue
+        val runtime = entry.jsonObject["Runtime"]?.jsonPrimitive?.content ?: continue
+        if (seenModels.add("$platform:$model")) {
+          results.add(RevylDeviceTarget(platform = platform, model = model, osVersion = runtime))
+        }
+      }
+    }
+    return results
+  }
+
+  // ---------------------------------------------------------------------------
+  // High-level steps (instruction / validation)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Executes a natural-language instruction step on the active device via
+   * `revyl device instruction "<description>" --json`.
+   *
+   * Revyl's worker agent handles planning, grounding, and execution
+   * in a single round-trip.
+   *
+   * @param description Natural-language instruction (e.g. "Tap the Search tab").
+   * @return Parsed [RevylLiveStepResult] with success flag and step output.
+   * @throws RevylCliException If the CLI process exits with a non-zero code.
+   */
+  fun instruction(description: String): RevylLiveStepResult {
+    val stdout = runCli(deviceArgs("instruction", description))
+    return RevylLiveStepResult.fromJson(stdout)
+  }
+
+  /**
+   * Executes a natural-language validation step on the active device via
+   * `revyl device validation "<description>" --json`.
+   *
+   * Revyl's worker agent performs a visual assertion against the current
+   * screen state and returns a pass/fail result.
+   *
+   * @param description Natural-language assertion (e.g. "The search results are visible").
+   * @return Parsed [RevylLiveStepResult] with success flag and step output.
+   * @throws RevylCliException If the CLI process exits with a non-zero code.
+   */
+  fun validation(description: String): RevylLiveStepResult {
+    val stdout = runCli(deviceArgs("validation", description))
+    return RevylLiveStepResult.fromJson(stdout)
+  }
+
+  // ---------------------------------------------------------------------------
   // CLI execution
   // ---------------------------------------------------------------------------
 
@@ -490,6 +558,15 @@ class RevylCliClient(
  * @property message Human-readable description including the exit code and stderr.
  */
 class RevylCliException(message: String) : RuntimeException(message)
+
+/**
+ * A device model available in the Revyl cloud catalog.
+ *
+ * @property platform "ios" or "android".
+ * @property model Human-readable model name (e.g. "iPhone 16", "Pixel 7").
+ * @property osVersion Runtime / OS version string (e.g. "Android 14", "iOS 18.2").
+ */
+data class RevylDeviceTarget(val platform: String, val model: String, val osVersion: String)
 
 /**
  * Named device presets for provisioning Revyl cloud devices.

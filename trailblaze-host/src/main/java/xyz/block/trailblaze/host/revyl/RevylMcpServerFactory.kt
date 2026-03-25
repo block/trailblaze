@@ -1,5 +1,12 @@
 package xyz.block.trailblaze.host.revyl
 
+import xyz.block.trailblaze.devices.TrailblazeDeviceId
+import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.logs.client.TrailblazeLogger
+import xyz.block.trailblaze.logs.client.TrailblazeSession
+import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.server.TrailblazeMcpServer
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
@@ -88,8 +95,23 @@ object RevylMcpServerFactory {
     }
 
     val primaryPlatform = platforms.first()
+    val devicePlatform = if (primaryPlatform == "ios") TrailblazeDevicePlatform.IOS else TrailblazeDevicePlatform.ANDROID
+    val deviceInfo = TrailblazeDeviceInfo(
+      trailblazeDeviceId = TrailblazeDeviceId(instanceId = "revyl-mcp", trailblazeDevicePlatform = devicePlatform),
+      trailblazeDriverType = if (primaryPlatform == "ios") TrailblazeDriverType.REVYL_IOS else TrailblazeDriverType.REVYL_ANDROID,
+      widthPixels = 0,
+      heightPixels = 0,
+    )
     val revylDeviceService = RevylDeviceService(cliClient)
-    val agent = RevylTrailblazeAgent(cliClient, primaryPlatform)
+    val agent = RevylTrailblazeAgent(
+      cliClient = cliClient,
+      platform = primaryPlatform,
+      trailblazeLogger = TrailblazeLogger.createNoOp(),
+      trailblazeDeviceInfoProvider = { deviceInfo },
+      sessionProvider = {
+        TrailblazeSession(sessionId = SessionId("revyl-mcp"), startTime = kotlinx.datetime.Clock.System.now())
+      },
+    )
     val bridge = RevylMcpBridge(cliClient, revylDeviceService, agent, primaryPlatform)
 
     val logsDir = File(System.getProperty("user.dir"), ".trailblaze/logs")

@@ -65,28 +65,19 @@ class TrailblazeSettingsRepo(
   fun applyTestingEnvironment(environment: TrailblazeServerState.TestingEnvironment) {
     updateAppConfig { config ->
       val existingDriverTypes = config.selectedTrailblazeDriverTypes
-      val driverTypes = when (environment) {
-        TrailblazeServerState.TestingEnvironment.MOBILE -> {
-          val defaultDriverTypes = mapOf(
-            TrailblazeDevicePlatform.ANDROID to TrailblazeDriverType.DEFAULT_ANDROID_ON_DEVICE,
-            TrailblazeDevicePlatform.IOS to TrailblazeDriverType.IOS_HOST,
-          )
-          defaultDriverTypes.mapValues { (platform, defaultDriverType) ->
-            existingDriverTypes[platform] ?: defaultDriverType
-          }
-        }
-        TrailblazeServerState.TestingEnvironment.WEB -> {
-          val defaultDriverTypes = mapOf(
-            TrailblazeDevicePlatform.WEB to TrailblazeDriverType.PLAYWRIGHT_NATIVE,
-          )
-          defaultDriverTypes.mapValues { (platform, defaultDriverType) ->
-            existingDriverTypes[platform] ?: defaultDriverType
-          }
-        }
+      val defaults = when (environment) {
+        TrailblazeServerState.TestingEnvironment.MOBILE -> mapOf(
+          TrailblazeDevicePlatform.ANDROID to TrailblazeDriverType.DEFAULT_ANDROID_ON_DEVICE,
+          TrailblazeDevicePlatform.IOS to TrailblazeDriverType.IOS_HOST,
+        )
+        TrailblazeServerState.TestingEnvironment.WEB -> mapOf(
+          TrailblazeDevicePlatform.WEB to TrailblazeDriverType.PLAYWRIGHT_NATIVE,
+        )
       }
+      val merged = existingDriverTypes + defaults.filterKeys { it !in existingDriverTypes }
       config.copy(
         testingEnvironment = environment,
-        selectedTrailblazeDriverTypes = driverTypes,
+        selectedTrailblazeDriverTypes = merged,
         showDevicesTab = environment == TrailblazeServerState.TestingEnvironment.WEB,
       )
     }

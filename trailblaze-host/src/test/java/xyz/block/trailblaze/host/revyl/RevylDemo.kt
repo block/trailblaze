@@ -32,7 +32,6 @@ fun main() {
   val session = client.startSession(
     platform = "android",
     appUrl = BUG_BAZAAR_APK,
-    deviceName = RevylDevicePreset.ANDROID_PHONE.presetId,
   )
   println("  Viewer: ${session.viewerUrl}")
   println("  Screen: ${session.screenWidth}x${session.screenHeight}")

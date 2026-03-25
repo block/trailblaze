@@ -1,9 +1,14 @@
 package xyz.block.trailblaze.host.revyl
 
 import maestro.SwipeDirection
+import xyz.block.trailblaze.AgentMemory
+import xyz.block.trailblaze.TrailblazeAgentContext
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeAgent
 import xyz.block.trailblaze.api.TrailblazeAgent.RunTrailblazeToolsResult
+import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
+import xyz.block.trailblaze.logs.client.TrailblazeLogger
+import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
@@ -38,11 +43,19 @@ import xyz.block.trailblaze.util.Console
  *
  * @property cliClient CLI-based client for Revyl device interactions.
  * @property platform "ios" or "android" — used for ScreenState construction.
+ * @property trailblazeLogger Logger for tool execution and snapshot events.
+ * @property trailblazeDeviceInfoProvider Provides device info for logging context.
+ * @property sessionProvider Provides current session for logging operations.
  */
 class RevylTrailblazeAgent(
   private val cliClient: RevylCliClient,
   private val platform: String,
-) : TrailblazeAgent {
+  override val trailblazeLogger: TrailblazeLogger,
+  override val trailblazeDeviceInfoProvider: () -> TrailblazeDeviceInfo,
+  override val sessionProvider: TrailblazeSessionProvider,
+) : TrailblazeAgent, TrailblazeAgentContext {
+
+  override val memory = AgentMemory()
 
   /**
    * Dispatches a list of [TrailblazeTool]s by mapping each tool to
@@ -93,12 +106,14 @@ class RevylTrailblazeAgent(
     return try {
       when (tool) {
         is TapOnPointTrailblazeTool -> {
+          val target = tool.reasoning?.takeIf { it.isNotBlank() }
           if (tool.longPress) {
-            val r = cliClient.longPress("element at (${tool.x}, ${tool.y})")
-            TrailblazeToolResult.Success(message = "Long-pressed at (${r.x}, ${r.y})")
+            val desc = target ?: "element at (${tool.x}, ${tool.y})"
+            val r = cliClient.longPress(desc)
+            TrailblazeToolResult.Success(message = "Long-pressed '$desc' at (${r.x}, ${r.y})")
           } else {
-            val r = cliClient.tap(tool.x, tool.y)
-            TrailblazeToolResult.Success(message = "Tapped at (${r.x}, ${r.y})")
+            val r = if (target != null) cliClient.tapTarget(target) else cliClient.tap(tool.x, tool.y)
+            TrailblazeToolResult.Success(message = "Tapped '${target ?: "${tool.x},${tool.y}"}' at (${r.x}, ${r.y})")
           }
         }
         is InputTextTrailblazeTool -> {
@@ -113,8 +128,9 @@ class RevylTrailblazeAgent(
             SwipeDirection.RIGHT -> "right"
             else -> "down"
           }
-          val r = cliClient.swipe(direction)
-          TrailblazeToolResult.Success(message = "Swiped $direction from (${r.x}, ${r.y})")
+          val target = tool.swipeOnElementText ?: "center of screen"
+          val r = cliClient.swipe(direction, target = target)
+          TrailblazeToolResult.Success(message = "Swiped $direction on '$target' from (${r.x}, ${r.y})")
         }
         is LaunchAppTrailblazeTool -> {
           cliClient.launchApp(tool.appId)
@@ -148,16 +164,26 @@ class RevylTrailblazeAgent(
           TrailblazeToolResult.Success()
         }
         is ScrollUntilTextIsVisibleTrailblazeTool -> {
-          val r = cliClient.swipe("down")
-          TrailblazeToolResult.Success(message = "Scrolled down from (${r.x}, ${r.y})")
+          val direction = when (tool.direction) {
+            maestro.ScrollDirection.UP -> "up"
+            maestro.ScrollDirection.DOWN -> "down"
+            maestro.ScrollDirection.LEFT -> "left"
+            maestro.ScrollDirection.RIGHT -> "right"
+            else -> "down"
+          }
+          val target = tool.text.ifBlank { "center of screen" }
+          val r = cliClient.swipe(direction, target = target)
+          TrailblazeToolResult.Success(message = "Scrolled $direction on '$target' from (${r.x}, ${r.y})")
         }
         is NetworkConnectionTrailblazeTool -> {
           Console.log("RevylAgent: network toggle not yet implemented for cloud devices")
           TrailblazeToolResult.Success()
         }
         is TapOnElementByNodeIdTrailblazeTool -> {
-          val r = cliClient.tapTarget("element with node id ${tool.nodeId}")
-          TrailblazeToolResult.Success(message = "Tapped element at (${r.x}, ${r.y})")
+          val target = tool.reasoning?.takeIf { it.isNotBlank() } ?: "element with node id ${tool.nodeId}"
+          val r = if (tool.longPress) cliClient.longPress(target) else cliClient.tapTarget(target)
+          val action = if (tool.longPress) "Long-pressed" else "Tapped"
+          TrailblazeToolResult.Success(message = "$action '$target' at (${r.x}, ${r.y})")
         }
         is LongPressOnElementWithTextTrailblazeTool -> {
           val r = cliClient.longPress(tool.text)
