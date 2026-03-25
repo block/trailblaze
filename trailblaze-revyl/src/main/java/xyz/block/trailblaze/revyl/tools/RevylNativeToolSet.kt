@@ -1,6 +1,5 @@
 package xyz.block.trailblaze.revyl.tools
 
-import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet.DynamicTrailblazeToolSet
 import xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool
 
@@ -13,7 +12,7 @@ import xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool
 object RevylNativeToolSet {
 
   /** Core tools for mobile interaction -- tap, type, swipe, navigate, etc. */
-  val CoreToolSet =
+  val RevylCoreToolSet =
     DynamicTrailblazeToolSet(
       name = "Revyl Native Core",
       toolClasses =
@@ -21,8 +20,6 @@ object RevylNativeToolSet {
           RevylNativeTapTool::class,
           RevylNativeTypeTool::class,
           RevylNativeSwipeTool::class,
-          RevylNativeLongPressTool::class,
-          RevylNativeScreenshotTool::class,
           RevylNativeNavigateTool::class,
           RevylNativeBackTool::class,
           RevylNativePressKeyTool::class,
@@ -31,7 +28,7 @@ object RevylNativeToolSet {
     )
 
   /** Revyl assertion tools for visual verification. */
-  val AssertionToolSet =
+  val RevylAssertionToolSet =
     DynamicTrailblazeToolSet(
       name = "Revyl Native Assertions",
       toolClasses =
@@ -41,12 +38,12 @@ object RevylNativeToolSet {
     )
 
   /** Full LLM tool set -- core tools plus assertions and memory tools. */
-  val LlmToolSet =
+  val RevylLlmToolSet =
     DynamicTrailblazeToolSet(
       name = "Revyl Native LLM",
       toolClasses =
-        CoreToolSet.toolClasses +
-          AssertionToolSet.toolClasses +
-          TrailblazeToolSet.RememberTrailblazeToolSet.toolClasses,
+        RevylCoreToolSet.toolClasses +
+          RevylAssertionToolSet.toolClasses +
+          xyz.block.trailblaze.toolcalls.TrailblazeToolSet.RememberTrailblazeToolSet.toolClasses,
     )
 }

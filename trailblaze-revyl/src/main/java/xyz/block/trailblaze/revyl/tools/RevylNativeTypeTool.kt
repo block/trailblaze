@@ -3,7 +3,6 @@ package xyz.block.trailblaze.revyl.tools
 import ai.koog.agents.core.tools.annotations.LLMDescription
 import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.host.revyl.RevylCliClient
-import xyz.block.trailblaze.toolcalls.ReasoningTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
@@ -29,15 +28,15 @@ class RevylNativeTypeTool(
   @param:LLMDescription("If true, clear the field before typing.")
   val clearFirst: Boolean = false,
   override val reasoning: String? = null,
-) : RevylExecutableTool, ReasoningTrailblazeTool {
+) : RevylExecutableTool() {
 
   override suspend fun executeWithRevyl(
-    client: RevylCliClient,
+    revylClient: RevylCliClient,
     context: TrailblazeToolExecutionContext,
   ): TrailblazeToolResult {
     val desc = if (target.isNotBlank()) "into '$target'" else "into focused field"
     Console.log("### Typing '$text' $desc")
-    val result = client.typeText(text, target.ifBlank { null }, clearFirst)
+    val result = revylClient.typeText(text, target.ifBlank { null }, clearFirst)
     val feedback = "Typed '$text' $desc at (${result.x}, ${result.y})"
     Console.log("### $feedback")
     return TrailblazeToolResult.Success(message = feedback)

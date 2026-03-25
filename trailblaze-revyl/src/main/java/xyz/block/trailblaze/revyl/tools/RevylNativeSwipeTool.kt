@@ -3,7 +3,6 @@ package xyz.block.trailblaze.revyl.tools
 import ai.koog.agents.core.tools.annotations.LLMDescription
 import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.host.revyl.RevylCliClient
-import xyz.block.trailblaze.toolcalls.ReasoningTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
@@ -26,16 +25,23 @@ class RevylNativeSwipeTool(
   @param:LLMDescription("Optional element to start the swipe from.")
   val target: String = "",
   override val reasoning: String? = null,
-) : RevylExecutableTool, ReasoningTrailblazeTool {
+) : RevylExecutableTool() {
 
   override suspend fun executeWithRevyl(
-    client: RevylCliClient,
+    revylClient: RevylCliClient,
     context: TrailblazeToolExecutionContext,
   ): TrailblazeToolResult {
+    require(direction in VALID_DIRECTIONS) {
+      "Invalid swipe direction '$direction'. Must be one of: $VALID_DIRECTIONS"
+    }
     Console.log("### Swiping $direction")
-    val result = client.swipe(direction, target.ifBlank { null })
+    val result = revylClient.swipe(direction, target.ifBlank { null })
     val feedback = "Swiped $direction from (${result.x}, ${result.y})"
     Console.log("### $feedback")
     return TrailblazeToolResult.Success(message = feedback)
+  }
+
+  companion object {
+    private val VALID_DIRECTIONS = setOf("up", "down", "left", "right")
   }
 }

@@ -2,10 +2,10 @@ package xyz.block.trailblaze.host.revyl
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
+import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.util.Console
 
 /**
@@ -37,8 +37,6 @@ data class RevylLiveStepResult(
     get() = stepOutput?.get("status_reason")?.jsonPrimitive?.contentOrNull
 
   companion object {
-    private val lenientJson = Json { ignoreUnknownKeys = true }
-
     /**
      * Parses CLI JSON stdout into a [RevylLiveStepResult].
      *
@@ -50,7 +48,7 @@ data class RevylLiveStepResult(
      */
     fun fromJson(jsonString: String): RevylLiveStepResult {
       return try {
-        lenientJson.decodeFromString<RevylLiveStepResult>(jsonString.trim())
+        TrailblazeJsonInstance.decodeFromString<RevylLiveStepResult>(jsonString.trim())
       } catch (e: Exception) {
         Console.log("RevylLiveStepResult: JSON parse failed: ${e.message}")
         RevylLiveStepResult(success = false)

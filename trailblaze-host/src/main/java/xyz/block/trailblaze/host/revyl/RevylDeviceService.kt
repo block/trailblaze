@@ -46,9 +46,9 @@ class RevylDeviceService(
   /**
    * Stops a device session by index.
    *
-   * @param index Session index to stop. Defaults to -1 (active session).
+   * @param index Session index to stop. Defaults to [RevylCliClient.ACTIVE_SESSION].
    */
-  fun stopDevice(index: Int = -1) {
+  fun stopDevice(index: Int = RevylCliClient.ACTIVE_SESSION) {
     cliClient.stopSession(index)
   }
 
@@ -63,7 +63,7 @@ class RevylDeviceService(
    * Returns the [TrailblazeDeviceId] for the currently active session, or null.
    */
   fun getCurrentDeviceId(): TrailblazeDeviceId? {
-    val session = cliClient.getActiveSession() ?: return null
+    val session = cliClient.getActiveRevylSession() ?: return null
     return sessionToDeviceId(session)
   }
 
@@ -75,25 +75,27 @@ class RevylDeviceService(
   }
 
   private fun sessionToSummary(session: RevylSession): TrailblazeConnectedDeviceSummary {
-    val driverType = when (session.platform) {
-      "ios" -> TrailblazeDriverType.IOS_HOST
-      else -> TrailblazeDriverType.ANDROID_HOST
-    }
     return TrailblazeConnectedDeviceSummary(
-      trailblazeDriverType = driverType,
+      trailblazeDriverType = session.toDriverType(),
       instanceId = session.workflowRunId,
       description = "Revyl cloud ${session.platform} device (session ${session.index})",
     )
   }
 
   private fun sessionToDeviceId(session: RevylSession): TrailblazeDeviceId {
-    val platform = when (session.platform) {
-      "ios" -> TrailblazeDevicePlatform.IOS
-      else -> TrailblazeDevicePlatform.ANDROID
-    }
     return TrailblazeDeviceId(
       instanceId = session.workflowRunId,
-      trailblazeDevicePlatform = platform,
+      trailblazeDevicePlatform = session.toDevicePlatform(),
     )
   }
+}
+
+private fun RevylSession.toDriverType(): TrailblazeDriverType = when (platform) {
+  "ios" -> TrailblazeDriverType.REVYL_IOS
+  else -> TrailblazeDriverType.REVYL_ANDROID
+}
+
+private fun RevylSession.toDevicePlatform(): TrailblazeDevicePlatform = when (platform) {
+  "ios" -> TrailblazeDevicePlatform.IOS
+  else -> TrailblazeDevicePlatform.ANDROID
 }

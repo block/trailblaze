@@ -66,12 +66,6 @@ Trailblaze's unique "**blaze once, trail forever**" workflow:
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### Cloud Device Support (Revyl)
-
-You can run Trailblaze against [Revyl](https://revyl.ai) cloud devices instead of local ADB or Maestro. Use
-`RevylMcpServerFactory` to create an MCP server that provisions a device and maps Trailblaze tools to Revyl HTTP APIs.
-See the [Revyl integration guide](docs/revyl-integration.md) for prerequisites, architecture, and usage.
-
 ## Documentation at <a href="https://block.github.io/trailblaze">block.github.io/trailblaze</a>
 
 See [Mobile-Agent-v3 Features Guide](docs/mobile-agent-v3-features.md) for detailed usage examples.

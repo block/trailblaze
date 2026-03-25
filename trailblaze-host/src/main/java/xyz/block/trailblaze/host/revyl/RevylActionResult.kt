@@ -2,9 +2,9 @@ package xyz.block.trailblaze.host.revyl
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.jsonPrimitive
+import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.util.Console
 
 /**
@@ -39,8 +39,6 @@ data class RevylActionResult(
   val direction: String? = null,
 ) {
   companion object {
-    private val lenientJson = Json { ignoreUnknownKeys = true }
-
     /**
      * Parses a CLI JSON stdout line into a [RevylActionResult].
      *
@@ -52,7 +50,7 @@ data class RevylActionResult(
      */
     fun fromJson(jsonString: String): RevylActionResult {
       return try {
-        lenientJson.decodeFromString<RevylActionResult>(jsonString.trim())
+        TrailblazeJsonInstance.decodeFromString<RevylActionResult>(jsonString.trim())
       } catch (e: Exception) {
         Console.log("RevylActionResult: JSON parse failed, using default: ${e.message}")
         RevylActionResult(success = true)

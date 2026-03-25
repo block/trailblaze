@@ -52,11 +52,12 @@ class RevylToolAgentTest {
   private class StubRevylTool(
     @Transient private val result: TrailblazeToolResult = TrailblazeToolResult.Success(),
     @Transient private val onExecute: ((TrailblazeToolExecutionContext) -> Unit)? = null,
-  ) : RevylExecutableTool {
+  ) : RevylExecutableTool() {
     @Transient var executed = false
+    override val reasoning: String? = null
 
     override suspend fun executeWithRevyl(
-      client: RevylCliClient,
+      revylClient: RevylCliClient,
       context: TrailblazeToolExecutionContext,
     ): TrailblazeToolResult {
       executed = true
@@ -68,9 +69,11 @@ class RevylToolAgentTest {
   @TrailblazeToolClass("stub_throwing_tool")
   private class ThrowingRevylTool(
     private val exception: Exception = RuntimeException("boom"),
-  ) : RevylExecutableTool {
+  ) : RevylExecutableTool() {
+    override val reasoning: String? = null
+
     override suspend fun executeWithRevyl(
-      client: RevylCliClient,
+      revylClient: RevylCliClient,
       context: TrailblazeToolExecutionContext,
     ): TrailblazeToolResult {
       throw exception

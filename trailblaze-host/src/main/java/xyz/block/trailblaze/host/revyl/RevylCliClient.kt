@@ -1,11 +1,11 @@
 package xyz.block.trailblaze.host.revyl
 
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.util.Console
 import java.io.File
 
@@ -16,13 +16,12 @@ import java.io.File
  * executes it, and parses the structured JSON output. The CLI handles
  * auth, backend proxy routing, and AI-powered target grounding.
  *
- * If the `revyl` binary is not found on PATH, it is automatically
- * installed via the official installer script from GitHub.
- * The only prerequisite is setting the `REVYL_API_KEY` environment variable.
+ * The `revyl` binary must be pre-installed on PATH (or pointed to via
+ * `REVYL_BINARY` env var). If not found, [startSession] throws a
+ * [RevylCliException] with install instructions.
  *
  * @property revylBinaryOverride Explicit path to the revyl binary.
- *     Defaults to `REVYL_BINARY` env var, then PATH lookup, then
- *     auto-install via install.sh.
+ *     Defaults to `REVYL_BINARY` env var, then PATH lookup.
  * @property workingDirectory Optional working directory for CLI
  *     invocations. Defaults to the JVM's current directory.
  */
@@ -31,23 +30,17 @@ class RevylCliClient(
   private val workingDirectory: File? = null,
 ) {
 
-  private val json = Json { ignoreUnknownKeys = true }
+  private val json = TrailblazeJsonInstance
   private val sessions = mutableMapOf<Int, RevylSession>()
   private var activeSessionIndex: Int = 0
 
-  private var resolvedBinary: String = revylBinaryOverride ?: "revyl"
-  private val installDir = File(System.getProperty("user.home"), ".revyl/bin")
-  private val installerUrl =
-    "https://raw.githubusercontent.com/RevylAI/revyl-cli/main/scripts/install.sh"
-
-  init {
-    ensureRevylInstalled()
-  }
+  private val resolvedBinary: String = revylBinaryOverride ?: "revyl"
+  private var cliVerified = false
 
   /**
-   * Returns the currently active session, or null if none has been started.
+   * Returns the currently active Revyl session, or null if none has been started.
    */
-  fun getActiveSession(): RevylSession? = sessions[activeSessionIndex]
+  fun getActiveRevylSession(): RevylSession? = sessions[activeSessionIndex]
 
   /**
    * Returns the session at the given index, or null if not found.
@@ -82,66 +75,60 @@ class RevylCliClient(
     Console.log("RevylCli: switched to session $index (${sessions[index]!!.platform})")
   }
 
-  // ---------------------------------------------------------------------------
-  // Auto-install and auto-update
-  // ---------------------------------------------------------------------------
+  companion object {
+    /** Sentinel value for "use the currently active session". */
+    const val ACTIVE_SESSION = -1
 
-  /**
-   * Ensures the revyl CLI binary is available and up to date.
-   *
-   * If the binary is missing, runs the official installer. If installed
-   * but outdated compared to the latest GitHub release, re-runs the
-   * installer to upgrade. Network failures are logged and the existing
-   * binary is used as-is.
-   *
-   * @throws RevylCliException If installation fails and no binary is available.
-   */
-  private fun ensureRevylInstalled() {
-    val installed = getInstalledVersion()
-    if (installed == null) {
-      Console.log("RevylCli: 'revyl' not found — installing...")
-      runInstaller()
-      return
-    }
-
-    val latest = getLatestVersion()
-    if (latest != null && latest != installed) {
-      Console.log("RevylCli: upgrading $installed -> $latest")
-      try {
-        runInstaller()
-      } catch (e: Exception) {
-        Console.log("RevylCli: upgrade failed (${e.message}), continuing with $installed")
-      }
-    } else {
-      Console.log("RevylCli: $installed (up to date)")
-    }
+    /** Environment variable name for the Revyl API key. */
+    const val REVYL_API_KEY_ENV = "REVYL_API_KEY"
   }
 
+  // ---------------------------------------------------------------------------
+  // CLI verification
+  // ---------------------------------------------------------------------------
+
   /**
-   * Returns the installed CLI version string (e.g. "v0.1.14"), or null
-   * if the binary is not found or not executable.
+   * Verifies the revyl CLI binary is available on PATH. Called lazily on first
+   * device provisioning so construction never throws.
+   *
+   * @throws RevylCliException If the binary is not found, with install instructions.
    */
-  private fun getInstalledVersion(): String? {
-    return try {
+  private fun verifyCliAvailable() {
+    if (cliVerified) return
+    try {
       val process = ProcessBuilder(resolvedBinary, "--version")
         .redirectErrorStream(true)
         .start()
       val output = process.inputStream.bufferedReader().readText().trim()
       if (process.waitFor() == 0) {
-        output.substringAfterLast(" ", "").takeIf { it.startsWith("v") }
-      } else null
-    } catch (_: Exception) {
-      null
-    }
+        Console.log("RevylCli: $output")
+        cliVerified = true
+        val installedVersion = output.substringAfterLast(" ", "").takeIf { it.startsWith("v") }
+        if (installedVersion != null) checkForUpgrade(installedVersion)
+        return
+      }
+    } catch (_: Exception) { /* binary not found */ }
+
+    throw RevylCliException(
+      "revyl CLI not found on PATH.\n\n" +
+        "Install:\n" +
+        "  curl -fsSL https://raw.githubusercontent.com/RevylAI/revyl-cli/main/scripts/install.sh | sh\n\n" +
+        "Or with Homebrew:\n" +
+        "  brew install RevylAI/tap/revyl\n\n" +
+        "Or download from:\n" +
+        "  https://github.com/RevylAI/revyl-cli/releases\n\n" +
+        "Then set REVYL_API_KEY and try again."
+    )
   }
 
   /**
-   * Resolves the latest release version from GitHub (e.g. "v0.1.15")
-   * by following the /releases/latest redirect. Returns null on any
-   * network failure, timeout, or parse error.
+   * Checks whether a newer CLI version is available on GitHub and logs
+   * a warning if so. Never throws -- network failures are silently ignored.
+   *
+   * @param installedVersion The currently installed version tag (e.g. "v0.1.14").
    */
-  private fun getLatestVersion(): String? {
-    return try {
+  private fun checkForUpgrade(installedVersion: String) {
+    try {
       val url = java.net.URL("https://github.com/RevylAI/revyl-cli/releases/latest")
       val conn = url.openConnection() as java.net.HttpURLConnection
       conn.instanceFollowRedirects = false
@@ -149,56 +136,32 @@ class RevylCliClient(
       conn.readTimeout = 3000
       val location = conn.getHeaderField("Location")
       conn.disconnect()
-      location?.substringAfterLast("/")?.takeIf { it.startsWith("v") }
-    } catch (_: Exception) {
-      null
-    }
+      val latest = location?.substringAfterLast("/")?.takeIf { it.startsWith("v") } ?: return
+      if (latest != installedVersion) {
+        Console.log(
+          "RevylCli: update available $installedVersion -> $latest.\n" +
+            "  Upgrade: curl -fsSL https://raw.githubusercontent.com/RevylAI/revyl-cli/main/scripts/install.sh | sh\n" +
+            "  Or:      brew upgrade revyl"
+        )
+      }
+    } catch (_: Exception) { /* network unavailable -- skip silently */ }
   }
 
   /**
-   * Runs the official Revyl CLI installer script via curl.
-   *
-   * @throws RevylCliException If the installer exits with a non-zero code
-   *     or the binary is not found after installation.
+   * Returns true if the revyl CLI binary is available on PATH.
+   * Does not throw -- suitable for feature-gating Revyl device types.
    */
-  private fun runInstaller() {
-    try {
-      val process = ProcessBuilder("sh", "-c", "curl -fsSL '$installerUrl' | sh")
+  fun isCliAvailable(): Boolean {
+    if (cliVerified) return true
+    return try {
+      val process = ProcessBuilder(resolvedBinary, "--version")
         .redirectErrorStream(true)
-        .also { pb ->
-          pb.environment()["REVYL_INSTALL_DIR"] = installDir.absolutePath
-          pb.environment()["REVYL_NO_MODIFY_PATH"] = "1"
-        }
         .start()
-      val output = process.inputStream.bufferedReader().readText()
-      val exitCode = process.waitFor()
-
-      if (exitCode != 0) {
-        throw RevylCliException(
-          "Installer failed (exit $exitCode): ${output.take(500)}\n" +
-            "Install manually: brew install RevylAI/tap/revyl"
-        )
-      }
-
-      val binaryPath = File(installDir, "revyl")
-      if (binaryPath.exists() && binaryPath.canExecute()) {
-        resolvedBinary = binaryPath.absolutePath
-        val newVersion = getInstalledVersion() ?: "unknown"
-        Console.log("RevylCli: installed $newVersion to ${binaryPath.absolutePath}")
-      } else {
-        throw RevylCliException(
-          "Installer completed but binary not found at ${binaryPath.absolutePath}. " +
-            "Install manually: brew install RevylAI/tap/revyl"
-        )
-      }
-    } catch (e: RevylCliException) {
-      throw e
-    } catch (e: Exception) {
-      throw RevylCliException(
-        "Auto-install failed: ${e.message}. " +
-          "Install manually: brew install RevylAI/tap/revyl " +
-          "or download from https://github.com/RevylAI/revyl-cli/releases"
-      )
+      val available = process.waitFor() == 0
+      if (available) cliVerified = true
+      available
+    } catch (_: Exception) {
+      false
     }
   }
 
@@ -225,6 +188,7 @@ class RevylCliClient(
     deviceModel: String? = null,
     osVersion: String? = null,
   ): RevylSession {
+    verifyCliAvailable()
     require(deviceModel.isNullOrBlank() == osVersion.isNullOrBlank()) {
       "deviceModel and osVersion must both be provided or both be null/blank " +
         "(got deviceModel=$deviceModel, osVersion=$osVersion)"
@@ -269,10 +233,10 @@ class RevylCliClient(
   /**
    * Stops a device session and removes it from the local session map.
    *
-   * @param index Session index to stop. Defaults to -1 (active session).
+   * @param index Session index to stop. Defaults to [ACTIVE_SESSION].
    * @throws RevylCliException If the CLI exits with a non-zero code.
    */
-  fun stopSession(index: Int = -1) {
+  fun stopSession(index: Int = ACTIVE_SESSION) {
     val targetIndex = if (index >= 0) index else activeSessionIndex
     val args = mutableListOf("device", "stop")
     if (targetIndex >= 0) args += listOf("-s", targetIndex.toString())
@@ -588,8 +552,7 @@ class RevylCliClient(
   }
 
   private fun createTempScreenshotPath(): String {
-    val tmpDir = System.getProperty("java.io.tmpdir")
-    return "$tmpDir/revyl-screenshot-${System.currentTimeMillis()}.png"
+    return File.createTempFile("revyl-screenshot-", ".png").absolutePath
   }
 }
 

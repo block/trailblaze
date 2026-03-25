@@ -1,3 +1,5 @@
+@file:Suppress("DEPRECATION")
+
 package xyz.block.trailblaze.host.revyl
 
 import maestro.SwipeDirection
@@ -126,7 +128,6 @@ class RevylTrailblazeAgent(
             SwipeDirection.DOWN -> "down"
             SwipeDirection.LEFT -> "left"
             SwipeDirection.RIGHT -> "right"
-            else -> "down"
           }
           val target = tool.swipeOnElementText ?: "center of screen"
           val r = cliClient.swipe(direction, target = target)
@@ -169,7 +170,6 @@ class RevylTrailblazeAgent(
             maestro.ScrollDirection.DOWN -> "down"
             maestro.ScrollDirection.LEFT -> "left"
             maestro.ScrollDirection.RIGHT -> "right"
-            else -> "down"
           }
           val target = tool.text.ifBlank { "center of screen" }
           val r = cliClient.swipe(direction, target = target)

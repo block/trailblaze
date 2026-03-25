@@ -700,8 +700,8 @@ object TrailblazeHostYamlRunner {
     val deviceLabel = if (instanceId.startsWith("revyl-model:"))
       instanceId.removePrefix("revyl-model:") else "$platform (default)"
 
-    if (System.getenv("REVYL_API_KEY").isNullOrBlank()) {
-      onProgressMessage("Error: REVYL_API_KEY is not set. Configure it in Settings → Environment Variables.")
+    if (System.getenv(RevylCliClient.REVYL_API_KEY_ENV).isNullOrBlank()) {
+      onProgressMessage("Error: ${RevylCliClient.REVYL_API_KEY_ENV} is not set. Configure it in Settings → Environment Variables.")
       return null
     }
 

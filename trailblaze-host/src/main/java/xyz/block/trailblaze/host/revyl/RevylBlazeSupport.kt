@@ -48,7 +48,7 @@ object RevylBlazeSupport {
    * wires them into a [BlazeGoalPlanner] ready for AI-driven exploration.
    *
    * @param cliClient Authenticated CLI client with an active session.
-   * @param platform Device platform ("ios" or "android").
+   * @param platform Device platform enum.
    * @param screenAnalyzer LLM-powered screen analyzer (provided by host).
    * @param toolRepo Tool repository for deserializing tool calls (provided by host).
    * @param elementComparator Element comparator for assertions (provided by host).
@@ -57,29 +57,40 @@ object RevylBlazeSupport {
    */
   fun createBlazeRunner(
     cliClient: RevylCliClient,
-    platform: String,
+    platform: TrailblazeDevicePlatform,
     screenAnalyzer: ScreenAnalyzer,
     toolRepo: TrailblazeToolRepo,
     elementComparator: TrailblazeElementComparator,
     config: BlazeConfig = BlazeConfig.DEFAULT,
   ): BlazeGoalPlanner {
-    val devicePlatform = if (platform == "ios") TrailblazeDevicePlatform.IOS else TrailblazeDevicePlatform.ANDROID
+    val driverType = when (platform) {
+      TrailblazeDevicePlatform.IOS -> TrailblazeDriverType.REVYL_IOS
+      else -> TrailblazeDriverType.REVYL_ANDROID
+    }
+    val defaultDimensions = when (platform) {
+      TrailblazeDevicePlatform.IOS -> Pair(1170, 2532)
+      else -> Pair(1080, 2400)
+    }
     val deviceInfo = TrailblazeDeviceInfo(
-      trailblazeDeviceId = TrailblazeDeviceId(instanceId = "revyl-blaze", trailblazeDevicePlatform = devicePlatform),
-      trailblazeDriverType = if (platform == "ios") TrailblazeDriverType.REVYL_IOS else TrailblazeDriverType.REVYL_ANDROID,
-      widthPixels = 0,
-      heightPixels = 0,
+      trailblazeDeviceId = TrailblazeDeviceId(instanceId = "revyl-blaze", trailblazeDevicePlatform = platform),
+      trailblazeDriverType = driverType,
+      widthPixels = defaultDimensions.first,
+      heightPixels = defaultDimensions.second,
     )
+    val platformStr = when (platform) {
+      TrailblazeDevicePlatform.IOS -> "ios"
+      else -> "android"
+    }
     val agent = RevylTrailblazeAgent(
       cliClient = cliClient,
-      platform = platform,
+      platform = platformStr,
       trailblazeLogger = TrailblazeLogger.createNoOp(),
       trailblazeDeviceInfoProvider = { deviceInfo },
       sessionProvider = {
         TrailblazeSession(sessionId = SessionId("revyl-blaze"), startTime = kotlinx.datetime.Clock.System.now())
       },
     )
-    val screenStateProvider = { RevylScreenState(cliClient, platform) }
+    val screenStateProvider = { RevylScreenState(cliClient, platformStr) }
     val executor = AgentUiActionExecutor(
       agent = agent,
       screenStateProvider = screenStateProvider,

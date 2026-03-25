@@ -129,7 +129,7 @@ class RevylMcpBridge(
   }
 
   override suspend fun getCurrentScreenState(): ScreenState? {
-    val session = cliClient.getActiveSession() ?: return null
+    val session = cliClient.getActiveRevylSession() ?: return null
     return RevylScreenState(
       cliClient,
       session.platform,

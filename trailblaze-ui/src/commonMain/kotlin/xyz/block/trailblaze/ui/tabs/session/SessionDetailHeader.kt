@@ -148,21 +148,29 @@ internal fun SessionDetailHeader(
               color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
             )
           }
-          // Revyl viewer link when running on a Revyl cloud device
-          val revylViewerUrl = sessionDetail.session.trailblazeDeviceInfo
-            ?.metadata?.get("revyl_viewer_url")
-            ?.takeIf { it.isNotBlank() }
-          if (revylViewerUrl != null) {
+          // Render external links from device metadata (convention: *_url keys become clickable links)
+          val metadata = sessionDetail.session.trailblazeDeviceInfo?.metadata.orEmpty()
+          val externalLinks = metadata.entries
+            .filter { it.key.endsWith("_url") && it.value.isNotBlank() }
+            .map { (key, url) ->
+              val prefix = key.removeSuffix("_url")
+              val label = metadata["${prefix}_label"]
+                ?: "Open ${prefix.replace('_', ' ').replaceFirstChar { c -> c.uppercase() }}"
+              label to url
+            }
+          if (externalLinks.isNotEmpty()) {
             val uriHandler = LocalUriHandler.current
-            TextButton(
-              onClick = { uriHandler.openUri(revylViewerUrl) },
-              contentPadding = ButtonDefaults.TextButtonContentPadding,
-            ) {
-              Text(
-                text = "Open Revyl Viewer",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.primary,
-              )
+            for ((label, url) in externalLinks) {
+              TextButton(
+                onClick = { uriHandler.openUri(url) },
+                contentPadding = ButtonDefaults.TextButtonContentPadding,
+              ) {
+                Text(
+                  text = label,
+                  style = MaterialTheme.typography.labelSmall,
+                  color = MaterialTheme.colorScheme.primary,
+                )
+              }
             }
           }
         }
