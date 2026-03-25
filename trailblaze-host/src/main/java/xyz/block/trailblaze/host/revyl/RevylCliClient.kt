@@ -299,7 +299,7 @@ class RevylCliClient(
 
   private fun deviceArgs(vararg args: String): List<String> {
     val base = mutableListOf("device")
-    if (sessions.size > 1) {
+    if (activeSessionIndex >= 0) {
       base += listOf("-s", activeSessionIndex.toString())
     }
     base += args.toList()
