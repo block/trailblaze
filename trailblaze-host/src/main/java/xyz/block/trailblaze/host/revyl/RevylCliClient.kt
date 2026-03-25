@@ -36,6 +36,9 @@ class RevylCliClient(
   private var activeSessionIndex: Int = 0
 
   private var resolvedBinary: String = revylBinaryOverride ?: "revyl"
+  private val installDir = File(System.getProperty("user.home"), ".revyl/bin")
+  private val installerUrl =
+    "https://raw.githubusercontent.com/RevylAI/revyl-cli/main/scripts/install.sh"
 
   init {
     ensureRevylInstalled()
@@ -80,24 +83,85 @@ class RevylCliClient(
   }
 
   // ---------------------------------------------------------------------------
-  // Auto-install
+  // Auto-install and auto-update
   // ---------------------------------------------------------------------------
 
-  private val installDir = File(System.getProperty("user.home"), ".revyl/bin")
-  private val installerUrl =
-    "https://raw.githubusercontent.com/RevylAI/revyl-cli/main/scripts/install.sh"
-
   /**
-   * Ensures the revyl CLI binary is available. If not found on PATH,
-   * runs the official installer script to download and install it.
+   * Ensures the revyl CLI binary is available and up to date.
    *
-   * @throws RevylCliException If installation fails.
+   * If the binary is missing, runs the official installer. If installed
+   * but outdated compared to the latest GitHub release, re-runs the
+   * installer to upgrade. Network failures are logged and the existing
+   * binary is used as-is.
+   *
+   * @throws RevylCliException If installation fails and no binary is available.
    */
   private fun ensureRevylInstalled() {
-    if (isRevylAvailable()) return
+    val installed = getInstalledVersion()
+    if (installed == null) {
+      Console.log("RevylCli: 'revyl' not found — installing...")
+      runInstaller()
+      return
+    }
 
-    Console.log("RevylCli: 'revyl' not found — installing via official installer...")
+    val latest = getLatestVersion()
+    if (latest != null && latest != installed) {
+      Console.log("RevylCli: upgrading $installed -> $latest")
+      try {
+        runInstaller()
+      } catch (e: Exception) {
+        Console.log("RevylCli: upgrade failed (${e.message}), continuing with $installed")
+      }
+    } else {
+      Console.log("RevylCli: $installed (up to date)")
+    }
+  }
 
+  /**
+   * Returns the installed CLI version string (e.g. "v0.1.14"), or null
+   * if the binary is not found or not executable.
+   */
+  private fun getInstalledVersion(): String? {
+    return try {
+      val process = ProcessBuilder(resolvedBinary, "--version")
+        .redirectErrorStream(true)
+        .start()
+      val output = process.inputStream.bufferedReader().readText().trim()
+      if (process.waitFor() == 0) {
+        output.substringAfterLast(" ", "").takeIf { it.startsWith("v") }
+      } else null
+    } catch (_: Exception) {
+      null
+    }
+  }
+
+  /**
+   * Resolves the latest release version from GitHub (e.g. "v0.1.15")
+   * by following the /releases/latest redirect. Returns null on any
+   * network failure, timeout, or parse error.
+   */
+  private fun getLatestVersion(): String? {
+    return try {
+      val url = java.net.URL("https://github.com/RevylAI/revyl-cli/releases/latest")
+      val conn = url.openConnection() as java.net.HttpURLConnection
+      conn.instanceFollowRedirects = false
+      conn.connectTimeout = 3000
+      conn.readTimeout = 3000
+      val location = conn.getHeaderField("Location")
+      conn.disconnect()
+      location?.substringAfterLast("/")?.takeIf { it.startsWith("v") }
+    } catch (_: Exception) {
+      null
+    }
+  }
+
+  /**
+   * Runs the official Revyl CLI installer script via curl.
+   *
+   * @throws RevylCliException If the installer exits with a non-zero code
+   *     or the binary is not found after installation.
+   */
+  private fun runInstaller() {
     try {
       val process = ProcessBuilder("sh", "-c", "curl -fsSL '$installerUrl' | sh")
         .redirectErrorStream(true)
@@ -119,7 +183,8 @@ class RevylCliClient(
       val binaryPath = File(installDir, "revyl")
       if (binaryPath.exists() && binaryPath.canExecute()) {
         resolvedBinary = binaryPath.absolutePath
-        Console.log("RevylCli: installed to ${binaryPath.absolutePath}")
+        val newVersion = getInstalledVersion() ?: "unknown"
+        Console.log("RevylCli: installed $newVersion to ${binaryPath.absolutePath}")
       } else {
         throw RevylCliException(
           "Installer completed but binary not found at ${binaryPath.absolutePath}. " +
@@ -134,30 +199,6 @@ class RevylCliClient(
           "Install manually: brew install RevylAI/tap/revyl " +
           "or download from https://github.com/RevylAI/revyl-cli/releases"
       )
-    }
-
-    if (!isRevylAvailable()) {
-      throw RevylCliException(
-        "Installed binary is not executable. " +
-          "Install manually: brew install RevylAI/tap/revyl"
-      )
-    }
-  }
-
-  /**
-   * Checks whether the resolved revyl binary is callable.
-   *
-   * @return true if `revyl --version` exits successfully.
-   */
-  private fun isRevylAvailable(): Boolean {
-    return try {
-      val process = ProcessBuilder(resolvedBinary, "--version")
-        .redirectErrorStream(true)
-        .start()
-      process.inputStream.bufferedReader().readText()
-      process.waitFor() == 0
-    } catch (_: Exception) {
-      false
     }
   }
 
@@ -567,23 +608,3 @@ class RevylCliException(message: String) : RuntimeException(message)
  * @property osVersion Runtime / OS version string (e.g. "Android 14", "iOS 18.2").
  */
 data class RevylDeviceTarget(val platform: String, val model: String, val osVersion: String)
-
-/**
- * Named device presets for provisioning Revyl cloud devices.
- *
- * Maps to CLI presets defined in `revyl-cli/internal/devicetargets/targets.go`.
- * The CLI resolves each preset to the current default model and OS version from
- * the backend device catalog, so consumers don't hardcode device strings.
- *
- * @property presetId CLI-level preset identifier passed via `--device-name`.
- * @property platform Target platform ("ios" or "android").
- * @property displayName Human-readable label for UI display.
- */
-enum class RevylDevicePreset(
-  val presetId: String,
-  val platform: String,
-  val displayName: String,
-) {
-  ANDROID_PHONE("revyl-android-phone", "android", "Revyl Android Phone"),
-  IOS_IPHONE("revyl-ios-iphone", "ios", "Revyl iOS iPhone"),
-}
