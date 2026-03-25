@@ -78,7 +78,7 @@ class OpenSourceTrailblazeDesktopAppConfig : TrailblazeDesktopAppConfig(
     ALL_MODEL_LISTS.mapNotNull { trailblazeLlmModelList ->
       val trailblazeLlmProvider = trailblazeLlmModelList.provider
       JvmLLMProvidersUtil.getEnvironmentVariableKeyForLlmProvider(trailblazeLlmProvider)
-    }
+    } + "REVYL_API_KEY"
 
   override fun getCurrentlyAvailableLlmModelLists(): Set<TrailblazeLlmModelList> {
     val modelLists = JvmLLMProvidersUtil.getAvailableTrailblazeLlmProviderModelLists(ALL_MODEL_LISTS)

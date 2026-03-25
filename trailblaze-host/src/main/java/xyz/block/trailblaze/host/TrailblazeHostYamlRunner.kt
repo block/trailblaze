@@ -39,6 +39,7 @@ import xyz.block.trailblaze.exception.TrailblazeSessionCancelledException
 import xyz.block.trailblaze.host.ios.MobileDeviceUtils
 import xyz.block.trailblaze.host.revyl.RevylCliClient
 import xyz.block.trailblaze.host.revyl.RevylScreenState
+import xyz.block.trailblaze.host.revyl.RevylSession
 import xyz.block.trailblaze.host.revyl.RevylTrailblazeAgent
 import xyz.block.trailblaze.host.rules.BaseComposeTest
 import xyz.block.trailblaze.host.rules.BaseHostTrailblazeTest
@@ -698,22 +699,36 @@ object TrailblazeHostYamlRunner {
     val instanceId = trailblazeDeviceId.instanceId
     val deviceLabel = if (instanceId.startsWith("revyl-model:"))
       instanceId.removePrefix("revyl-model:") else "$platform (default)"
+
+    if (System.getenv("REVYL_API_KEY").isNullOrBlank()) {
+      onProgressMessage("Error: REVYL_API_KEY is not set. Configure it in Settings → Environment Variables.")
+      return null
+    }
+
     onProgressMessage("Provisioning Revyl cloud $deviceLabel...")
 
-    val cliClient = RevylCliClient()
-    val session = if (instanceId.startsWith("revyl-model:")) {
-      val payload = instanceId.removePrefix("revyl-model:")
-      val parts = payload.split("::", limit = 2)
-      val modelName = parts[0]
-      val osVer = parts.getOrNull(1)?.takeIf { it.isNotBlank() }
-      if (osVer != null) {
-        cliClient.startSession(platform = platform, deviceModel = modelName, osVersion = osVer)
+    val cliClient: RevylCliClient
+    val session: RevylSession
+    try {
+      cliClient = RevylCliClient()
+      session = if (instanceId.startsWith("revyl-model:")) {
+        val payload = instanceId.removePrefix("revyl-model:")
+        val parts = payload.split("::", limit = 2)
+        val modelName = parts[0]
+        val osVer = parts.getOrNull(1)?.takeIf { it.isNotBlank() }
+        if (osVer != null) {
+          cliClient.startSession(platform = platform, deviceModel = modelName, osVersion = osVer)
+        } else {
+          Console.log("RevylYaml: device '$modelName' missing OS version — using platform default")
+          cliClient.startSession(platform = platform)
+        }
       } else {
-        Console.log("RevylYaml: device '$modelName' missing OS version — using platform default")
         cliClient.startSession(platform = platform)
       }
-    } else {
-      cliClient.startSession(platform = platform)
+    } catch (e: Exception) {
+      Console.log("Revyl session provisioning failed: ${e::class.simpleName}: ${e.message}")
+      onProgressMessage("Error: ${e.message}")
+      return null
     }
     onProgressMessage("Revyl $deviceLabel ready — viewer: ${session.viewerUrl}")
 
