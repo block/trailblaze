@@ -6,7 +6,6 @@ plugins {
 dependencies {
   api(project(":trailblaze-common"))
   api(project(":trailblaze-agent"))
-  implementation(project(":trailblaze-host"))
   implementation(project(":trailblaze-tracing"))
 
   implementation(libs.kotlinx.serialization.json)

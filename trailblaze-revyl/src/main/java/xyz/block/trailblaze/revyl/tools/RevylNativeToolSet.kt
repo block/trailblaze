@@ -18,6 +18,7 @@ object RevylNativeToolSet {
       toolClasses =
         setOf(
           RevylNativeTapTool::class,
+          RevylNativeDoubleTapTool::class,
           RevylNativeTypeTool::class,
           RevylNativeSwipeTool::class,
           RevylNativeNavigateTool::class,

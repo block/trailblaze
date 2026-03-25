@@ -42,6 +42,7 @@ dependencies {
   implementation(project(":trailblaze-common"))
   implementation(project(":trailblaze-compose"))
   implementation(project(":trailblaze-host"))
+  implementation(project(":trailblaze-revyl"))
   implementation(project(":trailblaze-models"))
   implementation(project(":trailblaze-report"))
   implementation(project(":trailblaze-server"))

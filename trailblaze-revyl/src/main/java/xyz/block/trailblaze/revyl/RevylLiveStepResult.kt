@@ -1,4 +1,4 @@
-package xyz.block.trailblaze.host.revyl
+package xyz.block.trailblaze.revyl
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable

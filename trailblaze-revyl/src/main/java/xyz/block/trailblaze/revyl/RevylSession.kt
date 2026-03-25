@@ -1,4 +1,7 @@
-package xyz.block.trailblaze.host.revyl
+package xyz.block.trailblaze.revyl
+
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.devices.TrailblazeDriverType
 
 /**
  * Represents an active Revyl cloud device session.
@@ -21,4 +24,21 @@ data class RevylSession(
   val platform: String,
   val screenWidth: Int = 0,
   val screenHeight: Int = 0,
-)
+) {
+
+  /**
+   * Maps this session's platform string to the corresponding [TrailblazeDriverType].
+   */
+  fun toDriverType(): TrailblazeDriverType = when (platform) {
+    RevylCliClient.PLATFORM_IOS -> TrailblazeDriverType.REVYL_IOS
+    else -> TrailblazeDriverType.REVYL_ANDROID
+  }
+
+  /**
+   * Maps this session's platform string to the corresponding [TrailblazeDevicePlatform].
+   */
+  fun toDevicePlatform(): TrailblazeDevicePlatform = when (platform) {
+    RevylCliClient.PLATFORM_IOS -> TrailblazeDevicePlatform.IOS
+    else -> TrailblazeDevicePlatform.ANDROID
+  }
+}

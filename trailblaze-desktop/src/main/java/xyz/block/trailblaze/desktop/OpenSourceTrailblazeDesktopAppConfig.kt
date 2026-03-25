@@ -13,6 +13,7 @@ import xyz.block.trailblaze.llm.providers.OpenRouterTrailblazeLlmModelList
 import xyz.block.trailblaze.mcp.utils.JvmLLMProvidersUtil
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
+import xyz.block.trailblaze.revyl.RevylCliClient
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.ui.TrailblazeSettingsRepo
 import xyz.block.trailblaze.ui.models.AppIconProvider
@@ -78,7 +79,7 @@ class OpenSourceTrailblazeDesktopAppConfig : TrailblazeDesktopAppConfig(
     ALL_MODEL_LISTS.mapNotNull { trailblazeLlmModelList ->
       val trailblazeLlmProvider = trailblazeLlmModelList.provider
       JvmLLMProvidersUtil.getEnvironmentVariableKeyForLlmProvider(trailblazeLlmProvider)
-    } + xyz.block.trailblaze.host.revyl.RevylCliClient.REVYL_API_KEY_ENV
+    } + RevylCliClient.REVYL_API_KEY_ENV
 
   override fun getCurrentlyAvailableLlmModelLists(): Set<TrailblazeLlmModelList> {
     val modelLists = JvmLLMProvidersUtil.getAvailableTrailblazeLlmProviderModelLists(ALL_MODEL_LISTS)

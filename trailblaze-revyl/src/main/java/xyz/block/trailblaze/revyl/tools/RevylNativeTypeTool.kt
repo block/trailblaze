@@ -2,7 +2,7 @@ package xyz.block.trailblaze.revyl.tools
 
 import ai.koog.agents.core.tools.annotations.LLMDescription
 import kotlinx.serialization.Serializable
-import xyz.block.trailblaze.host.revyl.RevylCliClient
+import xyz.block.trailblaze.revyl.RevylCliClient
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult

@@ -90,6 +90,7 @@ dependencies {
   api(libs.slf4j.api)
 
   implementation(project(":trailblaze-common"))
+  implementation(project(":trailblaze-revyl"))
   implementation(project(":trailblaze-compose"))
   implementation(libs.compose.ui.test.junit4)
   implementation(project(":trailblaze-playwright"))

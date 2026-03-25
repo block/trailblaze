@@ -30,10 +30,15 @@ import xyz.block.trailblaze.toolcalls.commands.TapOnPointTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.WaitForIdleSyncTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.NetworkConnectionTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.LongPressOnElementWithTextTrailblazeTool
+import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.commands.memory.MemoryTrailblazeTool
 import xyz.block.trailblaze.toolcalls.getToolNameFromAnnotation
 import xyz.block.trailblaze.utils.ElementComparator
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.revyl.RevylCliClient
+import xyz.block.trailblaze.revyl.RevylDefaults
+import xyz.block.trailblaze.revyl.RevylScreenState
+import xyz.block.trailblaze.revyl.tools.RevylExecutableTool
 
 /**
  * [TrailblazeAgent] implementation that routes all device actions through
@@ -119,7 +124,7 @@ class RevylTrailblazeAgent(
           }
         }
         is InputTextTrailblazeTool -> {
-          val r = cliClient.typeText(tool.text, target = "focused input field")
+          val r = cliClient.typeText(tool.text, target = "text input field")
           TrailblazeToolResult.Success(message = "Typed '${tool.text}' at (${r.x}, ${r.y})")
         }
         is SwipeTrailblazeTool -> {
@@ -189,6 +194,11 @@ class RevylTrailblazeAgent(
           val r = cliClient.longPress(tool.text)
           TrailblazeToolResult.Success(message = "Long-pressed '${tool.text}' at (${r.x}, ${r.y})")
         }
+        is RevylExecutableTool -> {
+          kotlinx.coroutines.runBlocking {
+            tool.executeWithRevyl(cliClient, buildRevylToolContext(screenStateProvider))
+          }
+        }
         is ObjectiveStatusTrailblazeTool -> TrailblazeToolResult.Success()
         is MemoryTrailblazeTool -> TrailblazeToolResult.Success()
         else -> {
@@ -204,5 +214,29 @@ class RevylTrailblazeAgent(
         stackTrace = e.stackTraceToString(),
       )
     }
+  }
+
+  /**
+   * Builds a [TrailblazeToolExecutionContext] for executing [RevylExecutableTool]
+   * instances, using this agent's logger, session provider, and device info.
+   *
+   * @param screenStateProvider Optional lazy provider for fresh screenshots.
+   * @return A context suitable for Revyl native tool execution.
+   */
+  private fun buildRevylToolContext(
+    screenStateProvider: (() -> ScreenState)?,
+  ): TrailblazeToolExecutionContext {
+    val deviceInfo = trailblazeDeviceInfoProvider()
+    val effectiveScreenStateProvider = screenStateProvider
+      ?: { RevylScreenState(cliClient, platform) }
+    return TrailblazeToolExecutionContext(
+      screenState = null,
+      traceId = null,
+      trailblazeDeviceInfo = deviceInfo,
+      sessionProvider = sessionProvider,
+      screenStateProvider = effectiveScreenStateProvider,
+      trailblazeLogger = trailblazeLogger,
+      memory = memory,
+    )
   }
 }

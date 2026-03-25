@@ -1,6 +1,6 @@
 package xyz.block.trailblaze.revyl.tools
 
-import xyz.block.trailblaze.host.revyl.RevylCliClient
+import xyz.block.trailblaze.revyl.RevylCliClient
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ReasoningTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext

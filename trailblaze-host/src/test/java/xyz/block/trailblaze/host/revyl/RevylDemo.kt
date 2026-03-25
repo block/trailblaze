@@ -1,5 +1,7 @@
 package xyz.block.trailblaze.host.revyl
 
+import xyz.block.trailblaze.revyl.RevylCliClient
+
 /**
  * Standalone demo that drives a Revyl cloud device through a Bug Bazaar
  * e-commerce flow using [RevylCliClient] — the same integration layer

@@ -9,8 +9,6 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
-import xyz.block.trailblaze.host.revyl.RevylCliClient
-import xyz.block.trailblaze.host.revyl.RevylScreenState
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
@@ -105,15 +103,16 @@ class RevylToolAgent(
   private fun buildMinimalContext(
     screenStateProvider: () -> ScreenState,
   ): TrailblazeToolExecutionContext {
-    val devicePlatform = if (platform == "ios") TrailblazeDevicePlatform.IOS else TrailblazeDevicePlatform.ANDROID
+    val devicePlatform = if (platform == RevylCliClient.PLATFORM_IOS) TrailblazeDevicePlatform.IOS else TrailblazeDevicePlatform.ANDROID
+    val defaultDimensions = RevylDefaults.dimensionsForPlatform(platform)
     return TrailblazeToolExecutionContext(
       screenState = null,
       traceId = null,
       trailblazeDeviceInfo = TrailblazeDeviceInfo(
         trailblazeDeviceId = TrailblazeDeviceId(instanceId = "revyl", trailblazeDevicePlatform = devicePlatform),
-        trailblazeDriverType = if (platform == "ios") TrailblazeDriverType.IOS_HOST else TrailblazeDriverType.ANDROID_HOST,
-        widthPixels = 0,
-        heightPixels = 0,
+        trailblazeDriverType = if (platform == RevylCliClient.PLATFORM_IOS) TrailblazeDriverType.REVYL_IOS else TrailblazeDriverType.REVYL_ANDROID,
+        widthPixels = defaultDimensions.first,
+        heightPixels = defaultDimensions.second,
       ),
       sessionProvider = TrailblazeSessionProvider {
         TrailblazeSession(sessionId = SessionId("revyl-tool-agent"), startTime = Clock.System.now())

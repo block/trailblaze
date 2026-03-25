@@ -66,6 +66,8 @@ import xyz.block.trailblaze.host.rules.BasePlaywrightElectronTest
 import xyz.block.trailblaze.host.rules.BasePlaywrightNativeTest
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.isMacOs
+import xyz.block.trailblaze.revyl.RevylCliClient
+import xyz.block.trailblaze.revyl.RevylScreenState
 
 /**
  * Manages device discovery, selection, and state across the application.
@@ -382,8 +384,8 @@ class TrailblazeDeviceManager(
       TrailblazeDriverType.REVYL_ANDROID,
       TrailblazeDriverType.REVYL_IOS -> {
         val platform = if (driverType == TrailblazeDriverType.REVYL_ANDROID) "android" else "ios"
-        xyz.block.trailblaze.host.revyl.RevylScreenState(
-          xyz.block.trailblaze.host.revyl.RevylCliClient(),
+        RevylScreenState(
+          revylCliClient,
           platform,
         )
       }
@@ -612,7 +614,7 @@ class TrailblazeDeviceManager(
         // Uses `revyl device targets --json` so the list stays in sync
         // with the backend without code changes.
         try {
-          val targets = xyz.block.trailblaze.host.revyl.RevylCliClient().getDeviceTargets()
+          val targets = revylCliClient.getDeviceTargets()
           for (target in targets) {
             val driverType = if (target.platform == "android")
               TrailblazeDriverType.REVYL_ANDROID else TrailblazeDriverType.REVYL_IOS
@@ -740,6 +742,8 @@ class TrailblazeDeviceManager(
   fun getAllSupportedDriverTypes() = settingsRepo.getAllSupportedDriverTypes()
 
   fun getCurrentSelectedTargetApp(): TrailblazeHostAppTarget? = settingsRepo.getCurrentSelectedTargetApp()
+
+  private val revylCliClient: RevylCliClient by lazy { RevylCliClient() }
 
   // Store running test instances per device - allows forceful driver shutdown
   private val maestroDriverByDeviceMap: MutableMap<TrailblazeDeviceId, Driver> =

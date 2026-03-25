@@ -10,23 +10,27 @@ Trailblaze can use [Revyl](https://revyl.ai) cloud devices instead of local ADB 
 
 The Revyl integration provides:
 
-- **RevylCliClient** – Shells out to the `revyl` CLI binary for all device interactions. Auto-downloads the CLI if not already installed.
-- **RevylTrailblazeAgent** – Maps every Trailblaze tool to a `revyl device` CLI command.
-- **RevylMcpServerFactory** – Builds an MCP server that provisions a Revyl cloud device and routes tool calls through the CLI.
+- **RevylCliClient** (`trailblaze-revyl`) – Shells out to the `revyl` CLI binary for all device interactions.
+- **RevylTrailblazeAgent** (`trailblaze-host`) – Maps every Trailblaze tool to a `revyl device` CLI command.
+- **RevylNativeToolSet** (`trailblaze-revyl`) – Revyl-specific LLM tools (tap, type, swipe, assert) using natural language targeting and AI-powered visual grounding.
 
-All integration code lives under `trailblaze-host/src/main/java/xyz/block/trailblaze/host/revyl/`.
+Core data classes and the CLI client live in the `trailblaze-revyl` module. Host-level wiring (agent, blaze support) lives in `trailblaze-host/.../host/revyl/`.
 
 ## Prerequisites
 
-Set one environment variable:
+1. Install the `revyl` CLI binary on your PATH:
 
-- `REVYL_API_KEY` – Your Revyl API key (required).
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/RevylAI/revyl-cli/main/scripts/install.sh | sh
+   # Or with Homebrew:
+   brew install RevylAI/tap/revyl
+   ```
 
-That's it. The `revyl` CLI binary is **auto-downloaded** from [GitHub Releases](https://github.com/RevylAI/revyl-cli/releases) on first use if not already on PATH. No manual install needed.
+2. Set the `REVYL_API_KEY` environment variable (or configure it in Settings > Environment Variables in the desktop app).
 
 **Optional overrides:**
 
-- `REVYL_BINARY` – Path to a specific `revyl` binary (skips auto-download and PATH lookup).
+- `REVYL_BINARY` – Path to a specific `revyl` binary (skips PATH lookup).
 
 ## Architecture
 
@@ -62,8 +66,8 @@ flowchart LR
 ## Quick start
 
 ```kotlin
-// Only prerequisite: set REVYL_API_KEY in your environment
-val client = RevylCliClient()  // auto-downloads revyl if not on PATH
+// Prerequisites: revyl CLI on PATH + REVYL_API_KEY set
+val client = RevylCliClient()
 
 // Start a cloud device with an app installed
 val session = client.startSession(
@@ -83,17 +87,6 @@ client.screenshot("after-login.png")
 // Clean up
 client.stopSession()
 ```
-
-## MCP server usage
-
-Use **RevylMcpServerFactory** to create an MCP server backed by Revyl:
-
-```kotlin
-val server = RevylMcpServerFactory.create(platform = "android")
-server.startStreamableHttpMcpServer(port = 8080, wait = true)
-```
-
-The factory auto-downloads the CLI, provisions a cloud device, and returns a **TrailblazeMcpServer** that speaks MCP.
 
 ## Supported operations
 
@@ -156,7 +149,7 @@ When `useRevylNativeSteps` is `false`:
 
 - No local ADB or Maestro; all device interaction goes through Revyl cloud devices.
 - View hierarchy from Revyl is minimal (screenshot-based AI grounding is used instead).
-- Requires network access to Revyl backend and GitHub (for auto-download on first use).
+- Requires network access to the Revyl backend.
 
 ## See also
 

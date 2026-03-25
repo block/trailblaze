@@ -37,10 +37,10 @@ import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.exception.TrailblazeSessionCancelledException
 import xyz.block.trailblaze.host.ios.MobileDeviceUtils
-import xyz.block.trailblaze.host.revyl.RevylCliClient
-import xyz.block.trailblaze.host.revyl.RevylScreenState
-import xyz.block.trailblaze.host.revyl.RevylSession
 import xyz.block.trailblaze.host.revyl.RevylTrailblazeAgent
+import xyz.block.trailblaze.revyl.RevylCliClient
+import xyz.block.trailblaze.revyl.RevylScreenState
+import xyz.block.trailblaze.revyl.RevylSession
 import xyz.block.trailblaze.host.rules.BaseComposeTest
 import xyz.block.trailblaze.host.rules.BaseHostTrailblazeTest
 import xyz.block.trailblaze.host.rules.BasePlaywrightElectronTest
@@ -738,8 +738,10 @@ object TrailblazeHostYamlRunner {
       val trailblazeDeviceInfo = TrailblazeDeviceInfo(
         trailblazeDeviceId = trailblazeDeviceId,
         trailblazeDriverType = runOnHostParams.trailblazeDriverType,
-        widthPixels = session.screenWidth.takeIf { it > 0 } ?: 1080,
-        heightPixels = session.screenHeight.takeIf { it > 0 } ?: 2340,
+        widthPixels = session.screenWidth.takeIf { it > 0 }
+          ?: xyz.block.trailblaze.revyl.RevylDefaults.dimensionsForPlatform(platform).first,
+        heightPixels = session.screenHeight.takeIf { it > 0 }
+          ?: xyz.block.trailblaze.revyl.RevylDefaults.dimensionsForPlatform(platform).second,
         metadata = mapOf("revyl_viewer_url" to session.viewerUrl),
         classifiers = listOf(
           TrailblazeDeviceClassifier(platform),
@@ -750,6 +752,11 @@ object TrailblazeHostYamlRunner {
       val screenStateProvider: () -> ScreenState = {
         RevylScreenState(cliClient, platform, session.screenWidth, session.screenHeight)
       }
+
+      TrailblazeJsonInstance = TrailblazeJson.createTrailblazeJsonInstance(
+        allToolClasses = TrailblazeToolSet.AllBuiltInTrailblazeToolsForSerializationByToolName +
+          xyz.block.trailblaze.revyl.tools.RevylNativeToolSet.RevylLlmToolSet.toolClasses.associateBy { it.toolName() },
+      )
 
       val loggingRule = HostTrailblazeLoggingRule(
         trailblazeDeviceInfoProvider = { trailblazeDeviceInfo },
@@ -766,7 +773,7 @@ object TrailblazeHostYamlRunner {
       )
 
       val toolRepo = TrailblazeToolRepo(
-        TrailblazeToolSet.getLlmToolSet(setOfMarkEnabled = false),
+        xyz.block.trailblaze.revyl.tools.RevylNativeToolSet.RevylLlmToolSet,
       )
 
       val trailblazeRunner = TrailblazeRunner(
@@ -788,7 +795,9 @@ object TrailblazeHostYamlRunner {
         toolRepo = toolRepo,
       )
 
-      val trailblazeYaml = createTrailblazeYaml()
+      val trailblazeYaml = createTrailblazeYaml(
+        customTrailblazeToolClasses = xyz.block.trailblaze.revyl.tools.RevylNativeToolSet.RevylLlmToolSet.toolClasses,
+      )
 
       val trailblazeRunnerUtil = TrailblazeRunnerUtil(
         trailblazeRunner = trailblazeRunner,
@@ -899,7 +908,10 @@ object TrailblazeHostYamlRunner {
           sessionManager.endSession(trailblazeSession, isSuccess = true)
         }
 
-        generateAndSaveRecording(sessionId = trailblazeSession.sessionId, customToolClasses = emptySet())
+        generateAndSaveRecording(
+          sessionId = trailblazeSession.sessionId,
+          customToolClasses = xyz.block.trailblaze.revyl.tools.RevylNativeToolSet.RevylLlmToolSet.toolClasses,
+        )
 
         trailblazeSession.sessionId
       } catch (e: TrailblazeSessionCancelledException) {

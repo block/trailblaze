@@ -10,7 +10,6 @@ import kotlinx.serialization.Transient
 import org.junit.Test
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
-import xyz.block.trailblaze.host.revyl.RevylCliClient
 import xyz.block.trailblaze.revyl.tools.RevylExecutableTool
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
@@ -177,7 +176,7 @@ class RevylToolAgentTest {
     runTools(agent, tool)
 
     val info = capturedContext!!.trailblazeDeviceInfo
-    assertThat(info.trailblazeDriverType).isEqualTo(TrailblazeDriverType.IOS_HOST)
+    assertThat(info.trailblazeDriverType).isEqualTo(TrailblazeDriverType.REVYL_IOS)
     assertThat(info.trailblazeDeviceId.trailblazeDevicePlatform)
       .isEqualTo(TrailblazeDevicePlatform.IOS)
   }
@@ -191,7 +190,7 @@ class RevylToolAgentTest {
     runTools(agent, tool)
 
     val info = capturedContext!!.trailblazeDeviceInfo
-    assertThat(info.trailblazeDriverType).isEqualTo(TrailblazeDriverType.ANDROID_HOST)
+    assertThat(info.trailblazeDriverType).isEqualTo(TrailblazeDriverType.REVYL_ANDROID)
     assertThat(info.trailblazeDeviceId.trailblazeDevicePlatform)
       .isEqualTo(TrailblazeDevicePlatform.ANDROID)
   }

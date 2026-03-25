@@ -1,4 +1,4 @@
-package xyz.block.trailblaze.host.revyl
+package xyz.block.trailblaze.revyl
 
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
@@ -17,7 +17,7 @@ import java.nio.ByteOrder
  * Screen dimensions are resolved in priority order:
  * 1. Session-reported dimensions from the worker health endpoint.
  * 2. PNG IHDR header extraction from the captured screenshot.
- * 3. Default fallback (1080x2340).
+ * 3. Default fallback constants from [RevylDefaults].
  *
  * @param cliClient CLI client used to capture screenshots.
  * @param platform The device platform ("ios" or "android").
@@ -37,12 +37,14 @@ class RevylScreenState(
     null
   }
 
+  private val defaultDimensions = RevylDefaults.dimensionsForPlatform(platform)
+
   private val dimensions: Pair<Int, Int> = when {
     sessionScreenWidth > 0 && sessionScreenHeight > 0 ->
       Pair(sessionScreenWidth, sessionScreenHeight)
     else ->
       capturedScreenshot?.let { extractPngDimensions(it) }
-        ?: Pair(DEFAULT_WIDTH, DEFAULT_HEIGHT)
+        ?: defaultDimensions
   }
 
   override val screenshotBytes: ByteArray? = capturedScreenshot
@@ -64,7 +66,7 @@ class RevylScreenState(
   override val viewHierarchy: ViewHierarchyTreeNode = viewHierarchyOriginal
 
   override val trailblazeDevicePlatform: TrailblazeDevicePlatform = when (platform.lowercase()) {
-    "ios" -> TrailblazeDevicePlatform.IOS
+    RevylCliClient.PLATFORM_IOS -> TrailblazeDevicePlatform.IOS
     else -> TrailblazeDevicePlatform.ANDROID
   }
 
@@ -74,9 +76,6 @@ class RevylScreenState(
   )
 
   companion object {
-    private const val DEFAULT_WIDTH = 1080
-    private const val DEFAULT_HEIGHT = 2340
-
     /**
      * Extracts width and height from a PNG file's IHDR chunk header.
      *

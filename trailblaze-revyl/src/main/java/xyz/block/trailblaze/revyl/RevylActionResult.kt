@@ -1,9 +1,8 @@
-package xyz.block.trailblaze.host.revyl
+package xyz.block.trailblaze.revyl
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.jsonPrimitive
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.util.Console
 

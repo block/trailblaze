@@ -2,7 +2,7 @@ package xyz.block.trailblaze.revyl.tools
 
 import ai.koog.agents.core.tools.annotations.LLMDescription
 import kotlinx.serialization.Serializable
-import xyz.block.trailblaze.host.revyl.RevylCliClient
+import xyz.block.trailblaze.revyl.RevylCliClient
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
@@ -32,13 +32,13 @@ class RevylNativeAssertTool(
     context: TrailblazeToolExecutionContext,
   ): TrailblazeToolResult {
     Console.log("### Asserting: $assertion")
-    val screenshot = revylClient.screenshot()
-    val passed = screenshot.isNotEmpty()
-    return if (passed) {
-      TrailblazeToolResult.Success(message = "Assertion check: '$assertion' — screenshot captured for verification.")
+    val result = revylClient.validation(assertion)
+    return if (result.success) {
+      TrailblazeToolResult.Success(message = "Assertion passed: '$assertion'")
     } else {
       TrailblazeToolResult.Error.ExceptionThrown(
-        errorMessage = "Assertion failed: could not capture screen for '$assertion'",
+        errorMessage = "Assertion failed: '$assertion'" +
+          (result.statusReason?.let { " -- $it" } ?: ""),
       )
     }
   }

@@ -148,25 +148,16 @@ internal fun SessionDetailHeader(
               color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
             )
           }
-          // Render external links from device metadata (convention: *_url keys become clickable links)
-          val metadata = sessionDetail.session.trailblazeDeviceInfo?.metadata.orEmpty()
-          val externalLinks = metadata.entries
-            .filter { it.key.endsWith("_url") && it.value.isNotBlank() }
-            .map { (key, url) ->
-              val prefix = key.removeSuffix("_url")
-              val label = metadata["${prefix}_label"]
-                ?: "Open ${prefix.replace('_', ' ').replaceFirstChar { c -> c.uppercase() }}"
-              label to url
-            }
+          val externalLinks = extractExternalLinks(sessionDetail.session.trailblazeDeviceInfo)
           if (externalLinks.isNotEmpty()) {
             val uriHandler = LocalUriHandler.current
-            for ((label, url) in externalLinks) {
+            for (link in externalLinks) {
               TextButton(
-                onClick = { uriHandler.openUri(url) },
+                onClick = { uriHandler.openUri(link.url) },
                 contentPadding = ButtonDefaults.TextButtonContentPadding,
               ) {
                 Text(
-                  text = label,
+                  text = link.label,
                   style = MaterialTheme.typography.labelSmall,
                   color = MaterialTheme.colorScheme.primary,
                 )

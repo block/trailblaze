@@ -13,6 +13,9 @@ import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
+import xyz.block.trailblaze.revyl.RevylCliClient
+import xyz.block.trailblaze.revyl.RevylDefaults
+import xyz.block.trailblaze.revyl.RevylScreenState
 
 /**
  * Factory for wiring [BlazeGoalPlanner] to run on Revyl cloud devices.
@@ -68,8 +71,8 @@ object RevylBlazeSupport {
       else -> TrailblazeDriverType.REVYL_ANDROID
     }
     val defaultDimensions = when (platform) {
-      TrailblazeDevicePlatform.IOS -> Pair(1170, 2532)
-      else -> Pair(1080, 2400)
+      TrailblazeDevicePlatform.IOS -> Pair(RevylDefaults.IOS_DEFAULT_WIDTH, RevylDefaults.IOS_DEFAULT_HEIGHT)
+      else -> Pair(RevylDefaults.ANDROID_DEFAULT_WIDTH, RevylDefaults.ANDROID_DEFAULT_HEIGHT)
     }
     val deviceInfo = TrailblazeDeviceInfo(
       trailblazeDeviceId = TrailblazeDeviceId(instanceId = "revyl-blaze", trailblazeDevicePlatform = platform),
@@ -78,8 +81,8 @@ object RevylBlazeSupport {
       heightPixels = defaultDimensions.second,
     )
     val platformStr = when (platform) {
-      TrailblazeDevicePlatform.IOS -> "ios"
-      else -> "android"
+      TrailblazeDevicePlatform.IOS -> RevylCliClient.PLATFORM_IOS
+      else -> RevylCliClient.PLATFORM_ANDROID
     }
     val agent = RevylTrailblazeAgent(
       cliClient = cliClient,

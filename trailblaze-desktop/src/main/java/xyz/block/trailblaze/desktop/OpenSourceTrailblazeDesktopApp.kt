@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.desktop
 
 import xyz.block.trailblaze.compose.driver.tools.ComposeToolSet
+import xyz.block.trailblaze.revyl.tools.RevylNativeToolSet
 import xyz.block.trailblaze.host.rules.TrailblazeHostDynamicLlmClientProvider
 import xyz.block.trailblaze.host.rules.TrailblazeHostDynamicLlmTokenProvider
 import xyz.block.trailblaze.host.yaml.DesktopYamlRunner
@@ -31,6 +32,7 @@ class OpenSourceTrailblazeDesktopApp : TrailblazeDesktopApp(
     TrailblazeJsonInstance = TrailblazeJson.createTrailblazeJsonInstance(
       allToolClasses = TrailblazeToolSet.AllBuiltInTrailblazeToolsForSerializationByToolName
         + ComposeToolSet.toolClassesByToolName
+        + RevylNativeToolSet.RevylLlmToolSet.toolClasses.associateBy { it.toolName() }
         + desktopAppConfig.availableAppTargets.flatMap { it.getAllCustomToolClassesForSerialization() }
         .associateBy { it.toolName() },
     )

@@ -1271,6 +1271,9 @@ class RunCommand : Callable<Int> {
               BasePlaywrightElectronTest.ELECTRON_BUILT_IN_TOOL_CLASSES
         TrailblazeDriverType.COMPOSE ->
           ComposeToolSet.LlmToolSet.toolClasses
+        TrailblazeDriverType.REVYL_ANDROID,
+        TrailblazeDriverType.REVYL_IOS ->
+          xyz.block.trailblaze.revyl.tools.RevylNativeToolSet.RevylLlmToolSet.toolClasses
         else -> emptySet()
       }
 

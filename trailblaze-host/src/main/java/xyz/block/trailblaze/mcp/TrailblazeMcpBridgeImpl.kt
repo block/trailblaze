@@ -835,10 +835,11 @@ class TrailblazeMcpBridgeImpl(
   }
 
   override fun getInnerAgentBuiltInToolClasses(): Set<kotlin.reflect.KClass<out xyz.block.trailblaze.toolcalls.TrailblazeTool>> {
-    return if (getDriverType() == TrailblazeDriverType.PLAYWRIGHT_NATIVE) {
-      PlaywrightNativeToolSet.LlmToolSet.toolClasses
-    } else {
-      emptySet()
+    return when (getDriverType()) {
+      TrailblazeDriverType.PLAYWRIGHT_NATIVE -> PlaywrightNativeToolSet.LlmToolSet.toolClasses
+      TrailblazeDriverType.REVYL_ANDROID,
+      TrailblazeDriverType.REVYL_IOS -> xyz.block.trailblaze.revyl.tools.RevylNativeToolSet.RevylLlmToolSet.toolClasses
+      else -> emptySet()
     }
   }
 

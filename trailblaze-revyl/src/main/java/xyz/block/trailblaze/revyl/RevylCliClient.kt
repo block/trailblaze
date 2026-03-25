@@ -1,4 +1,4 @@
-package xyz.block.trailblaze.host.revyl
+package xyz.block.trailblaze.revyl
 
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.intOrNull
@@ -32,7 +32,7 @@ class RevylCliClient(
 
   private val json = TrailblazeJsonInstance
   private val sessions = mutableMapOf<Int, RevylSession>()
-  private var activeSessionIndex: Int = 0
+  private var activeSessionIndex: Int = ACTIVE_SESSION
 
   private val resolvedBinary: String = revylBinaryOverride ?: "revyl"
   private var cliVerified = false
@@ -81,6 +81,12 @@ class RevylCliClient(
 
     /** Environment variable name for the Revyl API key. */
     const val REVYL_API_KEY_ENV = "REVYL_API_KEY"
+
+    /** Platform identifier for iOS devices. */
+    const val PLATFORM_IOS = "ios"
+
+    /** Platform identifier for Android devices. */
+    const val PLATFORM_ANDROID = "android"
   }
 
   // ---------------------------------------------------------------------------
@@ -177,9 +183,12 @@ class RevylCliClient(
    * @param appLink Optional deep-link to open after launch.
    * @param deviceModel Optional explicit device model (e.g. "Pixel 7").
    * @param osVersion Optional explicit OS version (e.g. "Android 14").
+   * @param appId Optional Revyl `apps` table UUID. The backend resolves the
+   *     latest build artifact and package name from this id.
+   * @param buildVersionId Optional `builds` table UUID. When provided the
+   *     backend uses this exact build instead of resolving the latest.
    * @return The newly created [RevylSession] parsed from CLI JSON output.
    * @throws RevylCliException If the CLI exits with a non-zero code.
-   * @throws IllegalArgumentException If only one of deviceModel/osVersion is provided.
    */
   fun startSession(
     platform: String,
@@ -187,12 +196,10 @@ class RevylCliClient(
     appLink: String? = null,
     deviceModel: String? = null,
     osVersion: String? = null,
+    appId: String? = null,
+    buildVersionId: String? = null,
   ): RevylSession {
     verifyCliAvailable()
-    require(deviceModel.isNullOrBlank() == osVersion.isNullOrBlank()) {
-      "deviceModel and osVersion must both be provided or both be null/blank " +
-        "(got deviceModel=$deviceModel, osVersion=$osVersion)"
-    }
     val args = mutableListOf("device", "start", "--platform", platform.lowercase())
     if (!appUrl.isNullOrBlank()) {
       args += listOf("--app-url", appUrl)
@@ -205,6 +212,12 @@ class RevylCliClient(
     }
     if (!osVersion.isNullOrBlank()) {
       args += listOf("--os-version", osVersion)
+    }
+    if (!appId.isNullOrBlank()) {
+      args += listOf("--app-id", appId)
+    }
+    if (!buildVersionId.isNullOrBlank()) {
+      args += listOf("--build-version-id", buildVersionId)
     }
 
     val result = runCli(args)
@@ -242,8 +255,8 @@ class RevylCliClient(
     if (targetIndex >= 0) args += listOf("-s", targetIndex.toString())
     runCli(args)
     sessions.remove(targetIndex)
-    if (activeSessionIndex == targetIndex && sessions.isNotEmpty()) {
-      activeSessionIndex = sessions.keys.first()
+    if (activeSessionIndex == targetIndex) {
+      activeSessionIndex = if (sessions.isNotEmpty()) sessions.keys.first() else ACTIVE_SESSION
     }
   }
 
@@ -283,7 +296,13 @@ class RevylCliClient(
     if (!file.exists()) {
       throw RevylCliException("Screenshot file not found at $outPath")
     }
-    return file.readBytes()
+    return try {
+      file.readBytes()
+    } finally {
+      if (file.absolutePath.contains("revyl-screenshot-")) {
+        file.delete()
+      }
+    }
   }
 
   /**
@@ -312,6 +331,18 @@ class RevylCliClient(
   }
 
   /**
+   * Double-taps a UI element identified by natural language description.
+   *
+   * @param target Natural language description of the element to double-tap.
+   * @return Action result with the resolved coordinates.
+   * @throws RevylCliException If the CLI exits with a non-zero code.
+   */
+  fun doubleTap(target: String): RevylActionResult {
+    val stdout = runCli(deviceArgs("double-tap", "--target", target))
+    return RevylActionResult.fromJson(stdout)
+  }
+
+  /**
    * Types text into an input field, optionally targeting a specific element.
    *
    * @param text The text to type.
@@ -323,7 +354,7 @@ class RevylCliClient(
   fun typeText(text: String, target: String? = null, clearFirst: Boolean = false): RevylActionResult {
     val args = deviceArgs("type", "--text", text).toMutableList()
     if (!target.isNullOrBlank()) args += listOf("--target", target)
-    if (clearFirst) args += "--clear-first"
+    args += "--clear-first=$clearFirst"
     val stdout = runCli(args)
     return RevylActionResult.fromJson(stdout)
   }
@@ -461,7 +492,7 @@ class RevylCliClient(
     val results = mutableListOf<RevylDeviceTarget>()
     val seenModels = mutableSetOf<String>()
 
-    for (platform in listOf("android", "ios")) {
+    for (platform in listOf(PLATFORM_ANDROID, PLATFORM_IOS)) {
       val entries = root[platform]?.jsonArray ?: continue
       for (entry in entries) {
         val model = entry.jsonObject["Model"]?.jsonPrimitive?.content ?: continue
@@ -552,7 +583,9 @@ class RevylCliClient(
   }
 
   private fun createTempScreenshotPath(): String {
-    return File.createTempFile("revyl-screenshot-", ".png").absolutePath
+    val tempFile = File.createTempFile("revyl-screenshot-", ".png")
+    tempFile.deleteOnExit()
+    return tempFile.absolutePath
   }
 }
 
