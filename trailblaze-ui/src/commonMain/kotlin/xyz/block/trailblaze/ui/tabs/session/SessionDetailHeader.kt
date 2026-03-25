@@ -38,6 +38,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -146,6 +147,23 @@ internal fun SessionDetailHeader(
               style = MaterialTheme.typography.labelSmall,
               color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
             )
+          }
+          // Revyl viewer link when running on a Revyl cloud device
+          val revylViewerUrl = sessionDetail.session.trailblazeDeviceInfo
+            ?.metadata?.get("revyl_viewer_url")
+            ?.takeIf { it.isNotBlank() }
+          if (revylViewerUrl != null) {
+            val uriHandler = LocalUriHandler.current
+            TextButton(
+              onClick = { uriHandler.openUri(revylViewerUrl) },
+              contentPadding = ButtonDefaults.TextButtonContentPadding,
+            ) {
+              Text(
+                text = "Open Revyl Viewer",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
+              )
+            }
           }
         }
       }

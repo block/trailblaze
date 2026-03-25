@@ -740,6 +740,7 @@ object TrailblazeHostYamlRunner {
         trailblazeDriverType = runOnHostParams.trailblazeDriverType,
         widthPixels = session.screenWidth.takeIf { it > 0 } ?: 1080,
         heightPixels = session.screenHeight.takeIf { it > 0 } ?: 2340,
+        metadata = mapOf("revyl_viewer_url" to session.viewerUrl),
         classifiers = listOf(
           TrailblazeDeviceClassifier(platform),
           TrailblazeDeviceClassifier("revyl-cloud"),
