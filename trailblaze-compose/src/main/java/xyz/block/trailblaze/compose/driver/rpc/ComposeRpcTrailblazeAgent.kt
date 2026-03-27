@@ -1,8 +1,5 @@
 package xyz.block.trailblaze.compose.driver.rpc
 
-import java.io.Closeable
-import java.util.concurrent.atomic.AtomicReference
-import kotlin.system.measureTimeMillis
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
 import xyz.block.trailblaze.AgentMemory
@@ -26,7 +23,9 @@ import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.logs.model.TraceId.Companion.TraceOrigin
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
+import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
+import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.commands.memory.MemoryTrailblazeTool
 import xyz.block.trailblaze.toolcalls.getIsRecordableFromAnnotation
@@ -34,6 +33,9 @@ import xyz.block.trailblaze.toolcalls.getToolNameFromAnnotation
 import xyz.block.trailblaze.toolcalls.isSuccess
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.utils.ElementComparator
+import java.io.Closeable
+import java.util.concurrent.atomic.AtomicReference
+import kotlin.system.measureTimeMillis
 
 /**
  * [TrailblazeAgent] that delegates tool execution to a remote Compose app via RPC.
@@ -117,7 +119,10 @@ class ComposeRpcTrailblazeAgent(
               logToolExecution(tool, toolStartTime, resolvedTraceId, result)
               if (!result.isSuccess()) {
                 logScreenStateAfterExecution(
-                  tools, overallStartTime, executionTimeMs, resolvedTraceId
+                  tools = tools,
+                  startTime = overallStartTime,
+                  executionTimeMs = executionTimeMs,
+                  traceId = resolvedTraceId
                 )
                 return TrailblazeAgent.RunTrailblazeToolsResult(
                   inputTools = tools,
@@ -131,7 +136,7 @@ class ComposeRpcTrailblazeAgent(
             is RpcResult.Failure -> {
               val errorMessage =
                 "RPC call failed: ${rpcResult.message} (${rpcResult.errorType})" +
-                  (rpcResult.details?.let { " — $it" } ?: "")
+                    (rpcResult.details?.let { " — $it" } ?: "")
               return TrailblazeAgent.RunTrailblazeToolsResult(
                 inputTools = tools,
                 executedTools = toolsExecuted,
@@ -139,6 +144,43 @@ class ComposeRpcTrailblazeAgent(
               )
             }
           }
+        }
+
+        is ExecutableTrailblazeTool -> {
+          val toolStartTime = Clock.System.now()
+          toolsExecuted.add(tool)
+          val context =
+            TrailblazeToolExecutionContext(
+              screenState = null,
+              traceId = resolvedTraceId,
+              trailblazeDeviceInfo = trailblazeDeviceInfoProvider(),
+              sessionProvider = sessionProvider,
+              screenStateProvider = screenStateProvider,
+              trailblazeLogger = trailblazeLogger,
+              memory = memory,
+            )
+          val result = runBlocking { tool.execute(context) }
+          logToolExecution(
+            tool = tool,
+            timeBeforeExecution = toolStartTime,
+            traceId = resolvedTraceId,
+            result = result
+          )
+          if (!result.isSuccess()) {
+            logScreenStateAfterExecution(
+              tools = tools,
+              startTime = overallStartTime,
+              executionTimeMs = kotlin.time.Clock.System.now()
+                .toEpochMilliseconds() - overallStartTime.toEpochMilliseconds(),
+              traceId = resolvedTraceId,
+            )
+            return TrailblazeAgent.RunTrailblazeToolsResult(
+              inputTools = tools,
+              executedTools = toolsExecuted,
+              result = result,
+            )
+          }
+          lastSuccessResult = result
         }
 
         else -> {
@@ -196,7 +238,7 @@ class ComposeRpcTrailblazeAgent(
 
         val log =
           TrailblazeLog.AgentDriverLog(
-            viewHierarchy = screenState.viewHierarchyOriginal,
+            viewHierarchy = screenState.viewHierarchy,
             trailblazeNodeTree = screenState.trailblazeNodeTree,
             screenshotFile = screenshotFilename,
             action = action,
@@ -234,6 +276,7 @@ class ComposeRpcTrailblazeAgent(
           isVisible = true,
           textToDisplay = firstTool.text,
         )
+
       is ComposeVerifyElementVisibleTool ->
         AgentDriverAction.AssertCondition(
           conditionDescription = "Verify element visible: ${firstTool.testTag}",
@@ -241,6 +284,7 @@ class ComposeRpcTrailblazeAgent(
           y = 0,
           isVisible = true,
         )
+
       else -> AgentDriverAction.OtherAction(AgentActionType.TAP_POINT)
     }
   }

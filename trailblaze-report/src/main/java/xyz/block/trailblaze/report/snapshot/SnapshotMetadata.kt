@@ -21,6 +21,8 @@ data class SnapshotMetadata(
   val testMethodName: String?,
   val customName: String?,
   val epochMillis: Long,
+  /** 3-panel golden diff image (golden | diff | actual), present only when comparison failed. */
+  val diffFile: File? = null,
 ) {
   companion object {
     /**
@@ -76,13 +78,17 @@ data class SnapshotMetadata(
         .toLocalDateTime(TimeZone.currentSystemDefault())
         .toJavaLocalDateTime()
       
+      // Diff file is named after the screenshot file (guaranteed unique per snapshot occurrence).
+      val diffFile = File(screenshotFile.parentFile, "${screenshotFile.nameWithoutExtension}.diff.png").takeIf { it.exists() }
+
       return SnapshotMetadata(
         file = screenshotFile,
         timestamp = localDateTime,
         testClassName = testClassName,
         testMethodName = testMethodName,
         customName = snapshotLog.displayName,
-        epochMillis = snapshotLog.timestamp.toEpochMilliseconds()
+        epochMillis = snapshotLog.timestamp.toEpochMilliseconds(),
+        diffFile = diffFile,
       )
     }
   }

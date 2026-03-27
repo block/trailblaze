@@ -15,6 +15,7 @@ import androidx.compose.ui.unit.dp
 import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.ui.composables.InteractivePieChart
+import xyz.block.trailblaze.ui.composables.SelectableText
 import xyz.block.trailblaze.ui.composables.PieChartCenterContent
 import xyz.block.trailblaze.ui.composables.PieChartSegment
 
@@ -134,7 +135,7 @@ fun TestResultsComposable(
             centerContent = { content ->
               when (content) {
                 is PieChartCenterContent.Default -> {
-                  Text(
+                  SelectableText(
                     text = content.totalValue,
                     style = MaterialTheme.typography.displayLarge,
                     fontWeight = FontWeight.Bold
@@ -146,19 +147,19 @@ fun TestResultsComposable(
                   )
                 }
                 is PieChartCenterContent.Hovered -> {
-                  Text(
+                  SelectableText(
                     text = content.label,
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Medium,
                     color = content.color
                   )
                   Spacer(modifier = Modifier.height(8.dp))
-                  Text(
+                  SelectableText(
                     text = content.value,
                     style = MaterialTheme.typography.displayLarge,
                     fontWeight = FontWeight.Bold
                   )
-                  Text(
+                  SelectableText(
                     text = "${content.percentage} of tests",
                     style = MaterialTheme.typography.titleMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,

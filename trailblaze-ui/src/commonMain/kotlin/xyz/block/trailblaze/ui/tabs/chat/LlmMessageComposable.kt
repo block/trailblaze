@@ -89,7 +89,7 @@ fun LlmMessageComposable(message: TrailblazeLlmMessage) {
 
   // Clean up message content
   val cleanedMessage = message.message
-      ?.replace("data:image/(png|jpeg);base64,[A-Za-z0-9+/=]+".toRegex(), "[🖼️ Screenshot attached]")
+      ?.replace("data:image/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+".toRegex(), "[🖼️ Screenshot attached]")
     ?: ""
 
   // For tool messages, try to pretty-print JSON content

@@ -30,11 +30,38 @@ import xyz.block.trailblaze.viewhierarchy.ViewHierarchyFilter
 data class ViewHierarchyTreeNode(
   val nodeId: Long = 1,
   val accessibilityText: String? = null,
+  /**
+   * Integer bounding rectangle — source of truth for element position.
+   *
+   * All creation sites should set these four fields directly from the original
+   * pixel-accurate bounds. The [bounds] property returns these as a [ViewHierarchyFilter.Bounds].
+   *
+   * When all four are 0 (the default), [bounds] falls back to parsing [centerPoint] +
+   * [dimensions] for backward compatibility with existing JSON data.
+   */
+  val x1: Int = 0,
+  val y1: Int = 0,
+  val x2: Int = 0,
+  val y2: Int = 0,
+  /**
+   * Center point as "x,y". Kept as a serializable field for backward-compatible
+   * deserialization of legacy JSON (iOS driver, test fixtures).
+   *
+   * New code should prefer [x1]/[y1]/[x2]/[y2] as the source of truth. However,
+   * call sites that produce nodes consumed by [CenterPointMatcher], tap tools, or
+   * selector strategies (e.g., `Ext.toViewHierarchyTreeNode()`) must still populate
+   * this field until those consumers are migrated to use [bounds] directly.
+   */
   val centerPoint: String? = null,
   val checked: Boolean = false,
   val children: List<ViewHierarchyTreeNode> = emptyList(),
   val className: String? = null,
   val clickable: Boolean = false,
+  /**
+   * Dimensions as "WxH". Present in legacy JSON data (iOS driver, test fixtures).
+   * New code should NOT set this — set [x1]/[y1]/[x2]/[y2] instead.
+   * Kept as a serializable field for backward-compatible deserialization.
+   */
   val dimensions: String? = null,
   val enabled: Boolean = true,
   val focusable: Boolean = false,
@@ -57,32 +84,44 @@ data class ViewHierarchyTreeNode(
 
   @Transient
   val bounds: ViewHierarchyFilter.Bounds? = run {
+    // Prefer integer bounds (exact, no string parsing) when they form a valid rectangle.
+    val hasIntBounds = x1 != 0 || y1 != 0 || x2 != 0 || y2 != 0
+    if (hasIntBounds && x2 >= x1 && y2 >= y1) {
+      return@run ViewHierarchyFilter.Bounds(x1 = x1, y1 = y1, x2 = x2, y2 = y2)
+    }
+
+    // Fallback: derive from centerPoint + dimensions (legacy JSON data).
+    // Uses toIntOrNull() to gracefully handle malformed legacy data.
     val dimensionsPair: Pair<Int, Int>? = dimensions?.split("x")?.let { tokens ->
       if (tokens.size == 2) {
-        Pair(tokens[0].toInt(), tokens[1].toInt())
+        val w = tokens[0].toIntOrNull() ?: return@let null
+        val h = tokens[1].toIntOrNull() ?: return@let null
+        Pair(w, h)
       } else {
         null
       }
     }
+    if (dimensionsPair == null) return@run null
+    val width = dimensionsPair.first
+    val height = dimensionsPair.second
 
     val centerPair: Pair<Int, Int>? = centerPoint?.split(",")?.let { tokens ->
       if (tokens.size == 2) {
-        Pair(tokens[0].toInt(), tokens[1].toInt())
+        val cx = tokens[0].toIntOrNull() ?: return@let null
+        val cy = tokens[1].toIntOrNull() ?: return@let null
+        Pair(cx, cy)
       } else {
         null
       }
     }
-
-    if (dimensionsPair != null && centerPair != null) {
-      val width = dimensionsPair.first
-      val height = dimensionsPair.second
-      val centerX = centerPair.first
-      val centerY = centerPair.second
+    if (centerPair != null) {
+      val left = centerPair.first - (width / 2)
+      val top = centerPair.second - (height / 2)
       ViewHierarchyFilter.Bounds(
-        x1 = centerX - (width / 2),
-        y1 = centerY - (height / 2),
-        x2 = centerX + (width / 2),
-        y2 = centerY + (height / 2),
+        x1 = left,
+        y1 = top,
+        x2 = left + width,
+        y2 = top + height,
       )
     } else {
       null
@@ -141,12 +180,19 @@ data class ViewHierarchyTreeNode(
       return true
     }
 
-    // If exact equality fails, try lenient dimension comparison
-    // Compare structure without dimensions
-    val thisWithoutDims = this.copy(dimensions = null)
-    val otherWithoutDims = otherNode.copy(dimensions = null)
+    // If exact equality fails, try lenient dimension comparison.
+    // Null out all bounds-related fields (both string and integer representations)
+    // since we compare bounds with tolerance below. This avoids false negatives when
+    // one node was created with integer bounds and the other with string centerPoint/dimensions
+    // (e.g., after a Maestro TreeNode round-trip which reconstructs the node).
+    val thisWithoutDims = this.copy(
+      centerPoint = null, dimensions = null, x1 = 0, y1 = 0, x2 = 0, y2 = 0,
+    )
+    val otherWithoutDims = otherNode.copy(
+      centerPoint = null, dimensions = null, x1 = 0, y1 = 0, x2 = 0, y2 = 0,
+    )
 
-    // Compare everything except dimensions and children (we'll check children recursively)
+    // Compare everything except bounds/dimensions and children (we'll check those separately)
     if (thisWithoutDims.copy(children = emptyList()) != otherWithoutDims.copy(children = emptyList())) {
       return false
     }
@@ -193,11 +239,21 @@ data class ViewHierarchyTreeNode(
   }
 
   /**
-   * Returns a deep copy of this ViewHierarchyTreeNode without dimensions property.
+   * Returns a deep copy of this ViewHierarchyTreeNode with all bounds-related fields cleared
+   * (integer bounds, centerPoint, and dimensions).
    * This is applied recursively to all children as well.
-   * Useful for comparisons where dimensions might have rounding errors.
+   * Useful for comparisons where bounds representations differ (integer vs string)
+   * or have rounding errors.
    */
-  fun deepCopyWithoutDimensions(): ViewHierarchyTreeNode = deepTransform { node -> node.copy(dimensions = null) }
+  fun deepCopyWithoutBounds(): ViewHierarchyTreeNode = deepTransform { node ->
+    node.copy(centerPoint = null, dimensions = null, x1 = 0, y1 = 0, x2 = 0, y2 = 0)
+  }
+
+  @Deprecated(
+    message = "Use deepCopyWithoutBounds() which more accurately describes the behavior.",
+    replaceWith = ReplaceWith("deepCopyWithoutBounds()"),
+  )
+  fun deepCopyWithoutDimensions(): ViewHierarchyTreeNode = deepCopyWithoutBounds()
 
   /**
    * Relabels the tree with new nodeIds using a shared atomic incrementer.

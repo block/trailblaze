@@ -118,7 +118,12 @@ class AndroidViewHierarchyFilter(
       candidates = remaining
     }
 
-    return candidates
+    // Geometric occlusion pass: filter elements ≥95% covered by a higher-z-order
+    // non-ancestor element. Catches overlays missed by the pattern-based checks above
+    // (e.g. ConstraintLayout-based bottom sheets, full-screen dialog fragments).
+    val result = filterOccludedElements(candidates)
+    occlusionSummaries = result.occlusionSummaries
+    return result.elements
   }
 
   /**

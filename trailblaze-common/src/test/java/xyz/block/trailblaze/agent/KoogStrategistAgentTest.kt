@@ -344,7 +344,7 @@ class KoogStrategistAgentTest {
     override val annotatedScreenshotBytes: ByteArray? = null
     override val deviceWidth: Int = 1080
     override val deviceHeight: Int = 1920
-    override val viewHierarchyOriginal: ViewHierarchyTreeNode = ViewHierarchyTreeNode(
+    override val viewHierarchy: ViewHierarchyTreeNode = ViewHierarchyTreeNode(
       nodeId = 0,
       className = "root",
       text = null,
@@ -352,7 +352,6 @@ class KoogStrategistAgentTest {
       resourceId = null,
       children = emptyList(),
     )
-    override val viewHierarchy: ViewHierarchyTreeNode = viewHierarchyOriginal
     override val trailblazeDevicePlatform: TrailblazeDevicePlatform =
       TrailblazeDevicePlatform.ANDROID
     override val deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList()

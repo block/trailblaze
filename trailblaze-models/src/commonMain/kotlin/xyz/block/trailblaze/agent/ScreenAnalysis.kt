@@ -252,6 +252,9 @@ data class ScreenAnalysis(
   /** True if the screen state indicates the objective cannot be achieved */
   val objectiveAppearsImpossible: Boolean = false,
 
+  /** Direct answer to a question-based objective, if applicable */
+  val answer: String? = null,
+
   // Tool management
   /**
    * Suggested tool hint if the analyzer couldn't find an appropriate tool.
@@ -368,6 +371,7 @@ data class ToolCallAnalysisResponse(
   val alternativeApproaches: List<String> = emptyList(),
   val objectiveAppearsAchieved: Boolean = false,
   val objectiveAppearsImpossible: Boolean = false,
+  val answer: String? = null,
   val suggestedHint: String? = null,
   val screenState: String? = null,
   val recoveryAction: JsonElement? = null,
@@ -450,6 +454,7 @@ data class ToolCallAnalysisResponse(
       alternativeApproaches = alternativeApproaches,
       objectiveAppearsAchieved = objectiveAppearsAchieved,
       objectiveAppearsImpossible = objectiveAppearsImpossible,
+      answer = answer,
       suggestedHint = suggestedHint,
       screenState = screenState?.let { state ->
         ExceptionalScreenState.entries.find { it.name.equals(state, ignoreCase = true) }

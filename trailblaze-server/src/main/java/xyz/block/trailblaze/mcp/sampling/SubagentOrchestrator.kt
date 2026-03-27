@@ -231,7 +231,7 @@ RULES:
       screenHeight = screenState.deviceHeight,
       platform = screenState.trailblazeDevicePlatform,
     )
-    val filtered = vhFilter.filterInteractableViewHierarchyTreeNodes(screenState.viewHierarchyOriginal)
+    val filtered = vhFilter.filterInteractableViewHierarchyTreeNodes(screenState.viewHierarchy)
 
     return ScreenStateForSampling(
       viewHierarchy = buildViewHierarchyText(filtered),

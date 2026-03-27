@@ -155,8 +155,9 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
           ?: sessionInfo.trailConfig?.id
           ?: sessionInfo.trailFilePath?.removePrefix("trails/")?.removeSuffix(TrailRecordings.DOT_TRAIL_DOT_YAML_FILE_SUFFIX)
           ?: sessionInfo.testName?.takeIf { it.isNotBlank() }?.let { name ->
-            sessionInfo.testClass?.substringAfterLast(".")?.let { cls -> "$cls/$name" } ?: name
+            sessionInfo.testClass?.let { cls -> "$cls:$name" } ?: name
           }
+          ?: sessionInfo.testClass
           ?: sessionId.value
         val sessionRecordingInfo = SessionRecordingInfo.fromLogs(logs)
         // Get timestamps
@@ -365,6 +366,7 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
           attempt = bestIndex + 1,
           total_attempts = sorted.size,
           replaced_session_ids = replaced.map { it.session_id },
+          replaced_failure_reasons = replaced.mapNotNull { it.failure_reason },
         )
       }
   }

@@ -19,10 +19,24 @@ data class PromptStepStatus(
   val llmStatusChecks: Boolean = true,
   private val koogLlmResponseHistory: MutableList<Message> = mutableListOf(),
   private val screenStateProvider: () -> ScreenState,
+  private val maxHistorySize: Int = DEFAULT_MAX_HISTORY_SIZE,
+  // Constructor param so data class copy() preserves the count across the session.
+  // Defaults to the initial history size; callers should not set this directly.
+  private var totalMessageCount: Int = koogLlmResponseHistory.size,
 ) {
   val taskId = TaskId.generate()
 
   private var latestObjectiveStatus: String? = null
+
+  init {
+    require(maxHistorySize > 0) { "maxHistorySize must be positive, but was $maxHistorySize" }
+    // If constructed with a pre-populated history (e.g. recovery path), trim it
+    if (koogLlmResponseHistory.size > maxHistorySize) {
+      val trimmed = koogLlmResponseHistory.takeLast(maxHistorySize)
+      koogLlmResponseHistory.clear()
+      koogLlmResponseHistory.addAll(trimmed)
+    }
+  }
 
   fun addObjectiveStatusUpdate(status: String) {
     latestObjectiveStatus = status
@@ -31,10 +45,10 @@ data class PromptStepStatus(
   fun getLatestObjectiveStatus(): String? = latestObjectiveStatus
 
   fun getLimitedHistory(): List<Message> {
-    return koogLlmResponseHistory.takeLast(5)
+    return koogLlmResponseHistory.takeLast(maxHistorySize)
   }
 
-  private fun getHistorySize() = koogLlmResponseHistory.size
+  private fun getHistorySize() = totalMessageCount
 
   var currentStep: Int = 0
     private set
@@ -133,7 +147,7 @@ data class PromptStepStatus(
       toolName = toolName,
       toolArgs = toolArgs,
     )
-    koogLlmResponseHistory.add(
+    addToHistory(
       Message.User(
         content = contentString,
         metaInfo = RequestMetaInfo.create(kotlin.time.Clock.System),
@@ -153,7 +167,7 @@ data class PromptStepStatus(
       toolNames = toolNames,
       toolArgs = toolArgs,
     )
-    koogLlmResponseHistory.add(
+    addToHistory(
       Message.User(
         content = contentString,
         metaInfo = RequestMetaInfo.create(kotlin.time.Clock.System),
@@ -171,7 +185,7 @@ data class PromptStepStatus(
     val contentString = commandResult.toContentString(
       toolsWithArgs = toolsWithArgs,
     )
-    koogLlmResponseHistory.add(
+    addToHistory(
       Message.User(
         content = contentString,
         metaInfo = RequestMetaInfo.create(kotlin.time.Clock.System),
@@ -180,12 +194,30 @@ data class PromptStepStatus(
   }
 
   private fun addAssistantMessageToChatHistory(llmContent: String) {
-    koogLlmResponseHistory.add(
+    addToHistory(
       Message.Assistant(
         content = llmContent,
         metaInfo = ResponseMetaInfo.create(kotlin.time.Clock.System),
       ),
     )
+  }
+
+  private fun addToHistory(message: Message) {
+    koogLlmResponseHistory.add(message)
+    totalMessageCount++
+    // Keep only what getLimitedHistory() needs — avoid unbounded memory growth on-device
+    while (koogLlmResponseHistory.size > maxHistorySize) {
+      koogLlmResponseHistory.removeAt(0)
+    }
+  }
+
+  companion object {
+    /**
+     * Default number of recent LLM messages to retain. Only the last N messages are sent
+     * to the LLM for context, and older messages are evicted to bound memory usage —
+     * critical for on-device Android execution where the ART heap is ~192 MB.
+     */
+    const val DEFAULT_MAX_HISTORY_SIZE = 5
   }
 
   fun handleEmptyToolCall(llmResponseContent: String?) {

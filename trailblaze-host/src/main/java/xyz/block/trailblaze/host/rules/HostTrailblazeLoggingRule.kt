@@ -18,10 +18,13 @@ class HostTrailblazeLoggingRule(
   logsBaseUrl: String = "https://localhost:${TrailblazePortManager.resolveEffectiveHttpsPort()}",
   additionalLogEmitter: LogEmitter? = null,
   logsDir: File? = null,
-  val logsRepo: LogsRepo = LogsRepo(resolveLogsDir(logsDir)),
+  /** When true, the LogsRepo rejects all writes — fixture sessions remain readable. */
+  noLogging: Boolean = false,
+  val logsRepo: LogsRepo = LogsRepo(resolveLogsDir(logsDir), readOnly = noLogging),
 ) : TrailblazeLoggingRule(
   logsBaseUrl = logsBaseUrl,
   additionalLogEmitter = additionalLogEmitter,
+  noLogging = noLogging,
   writeLogToDisk = { _: SessionId, log: TrailblazeLog ->
     logsRepo.saveLogToDisk(log)
   },

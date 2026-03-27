@@ -29,6 +29,7 @@ import xyz.block.trailblaze.ui.composables.SelectableText
 import xyz.block.trailblaze.ui.models.TrailblazeServerState
 import java.io.File
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
 import xyz.block.trailblaze.host.devices.PlaywrightInstallState
 import javax.swing.JFileChooser
 
@@ -268,6 +269,7 @@ object SettingsTabComposables {
     isProviderLocked: Boolean = false,
     playwrightInstallState: StateFlow<PlaywrightInstallState>? = null,
     onInstallPlaywright: (() -> Unit)? = null,
+    onTestLlmConnection: (suspend (TrailblazeLlmModel) -> Result<String>)? = null,
   ) {
 
     val serverState: TrailblazeServerState by trailblazeSettingsRepo.serverStateFlow.collectAsState()
@@ -724,6 +726,57 @@ object SettingsTabComposables {
                   }
                 )
               }
+            }
+          }
+        }
+
+        // Test LLM Connection button
+        if (onTestLlmConnection != null) {
+          val testScope = rememberCoroutineScope()
+          var isTesting by remember { mutableStateOf(false) }
+          var testResult by remember { mutableStateOf<String?>(null) }
+          var testIsSuccess by remember { mutableStateOf(false) }
+
+          Spacer(modifier = Modifier.height(8.dp))
+          Button(
+            onClick = {
+              isTesting = true
+              testResult = null
+              testScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                val result = onTestLlmConnection(currentModel)
+                testIsSuccess = result.isSuccess
+                testResult = result.getOrElse { it.message ?: "Unknown error" }
+                isTesting = false
+              }
+            },
+            enabled = !isTesting
+          ) {
+            if (isTesting) {
+              Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+              ) {
+                CircularProgressIndicator(
+                  modifier = Modifier.size(16.dp),
+                  strokeWidth = 2.dp
+                )
+                SelectableText("Testing...")
+              }
+            } else {
+              SelectableText("Test Connection")
+            }
+          }
+          if (testResult != null) {
+            OutlinedCard(
+              modifier = Modifier.fillMaxWidth(),
+            ) {
+              SelectableText(
+                text = testResult!!,
+                modifier = Modifier.padding(12.dp),
+                style = MaterialTheme.typography.bodySmall,
+                color = if (testIsSuccess) MaterialTheme.colorScheme.onSurface
+                  else MaterialTheme.colorScheme.error,
+              )
             }
           }
         }

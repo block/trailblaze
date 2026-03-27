@@ -39,7 +39,7 @@ class OpenSourceTrailblazeDesktopAppConfig : TrailblazeDesktopAppConfig(
 
   // Start with no platforms enabled by default - user must explicitly enable them
   private val initialDriverTypesMap: Map<TrailblazeDevicePlatform, TrailblazeDriverType> = mapOf(
-    TrailblazeDevicePlatform.ANDROID to TrailblazeDriverType.ANDROID_HOST,
+    TrailblazeDevicePlatform.ANDROID to TrailblazeDriverType.DEFAULT_ANDROID_ON_DEVICE,
     TrailblazeDevicePlatform.IOS to TrailblazeDriverType.IOS_HOST,
   )
 

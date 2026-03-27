@@ -5,6 +5,13 @@ plugins {
   alias(libs.plugins.vanniktech.maven.publish)
 }
 
+configurations.all {
+  exclude(group = "ai.koog", module = "prompt-executor-bedrock-client")
+  exclude(group = "ai.koog", module = "prompt-executor-dashscope-client")
+  exclude(group = "ai.koog", module = "prompt-executor-deepseek-client")
+  exclude(group = "ai.koog", module = "prompt-executor-mistralai-client")
+}
+
 dependencies {
   api(libs.ktor.server.core)
   api(libs.ktor.server.netty) {
@@ -33,7 +40,7 @@ dependencies {
   implementation(libs.koog.agents.tools)
   implementation(libs.koog.agents.mcp)
   implementation(libs.koog.prompt.executor.clients)
-  implementation(libs.koog.prompt.executor.llms)
+  implementation(libs.koog.prompt.executor.llms.all)
   implementation(libs.kotlinx.datetime)
   implementation(libs.ktor.http)
   implementation(libs.ktor.serialization)

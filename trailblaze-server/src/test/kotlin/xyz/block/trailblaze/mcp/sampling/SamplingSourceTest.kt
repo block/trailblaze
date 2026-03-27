@@ -320,7 +320,7 @@ class SamplingSourceTest {
 private class MockLlmClient(
   private val responseText: String = "Mock response",
   private val throwException: Exception? = null,
-) : LLMClient {
+) : LLMClient() {
   override suspend fun execute(
     prompt: Prompt,
     model: LLModel,

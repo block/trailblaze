@@ -5,11 +5,11 @@ import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.MaestroTrailblazeAgent
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.device.AndroidDeviceCommandExecutor
-import xyz.block.trailblaze.devices.AdbDeviceDriver
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.logs.model.TraceId
+import xyz.block.trailblaze.model.NodeSelectorMode
 
 /**
  * Context for handling Trailblaze tools.
@@ -46,12 +46,8 @@ class TrailblazeToolExecutionContext(
    * `../../../examples/sample-app/index.html` resolve correctly regardless of the JVM's CWD.
    */
   val workingDirectory: File? = null,
-  /**
-   * Optional ADB device driver for direct ADB command execution.
-   * Used by benchmark tools (AndroidWorld) that need low-level ADB access
-   * (tap, swipe, input text, etc.) without going through Maestro.
-   */
-  val adbDeviceDriver: AdbDeviceDriver? = null,
+  /** Controls whether playback/recording uses nodeSelector or legacy Maestro path. */
+  val nodeSelectorMode: NodeSelectorMode = NodeSelectorMode.FORCE_LEGACY,
 ) {
   @Deprecated("Use maestroTrailblazeAgent, trailblazeLogger, or memory directly")
   val trailblazeAgent: MaestroTrailblazeAgent

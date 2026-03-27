@@ -91,8 +91,47 @@ class LiveWindowComposeTarget(
   }
 
   override fun waitForIdle() {
-    // Drain the EDT event queue to let Compose process pending recompositions
+    // Drain the EDT event queue to let Compose process pending recompositions.
     SwingUtilities.invokeAndWait {}
+
+    // Poll until Compose rendering stabilizes (no more animation frames being drawn).
+    // Actions like clicks can trigger animated state changes (e.g., a dialog appearing with
+    // an enter animation). We sample a few pixels from the Skia layer; once they stop
+    // changing across STABLE_FRAME_COUNT consecutive frames, rendering has settled.
+    var prevHash = onEdt { frameHash() }
+    var stableFrames = 0
+    repeat(SETTLE_MAX_FRAMES) {
+      Thread.sleep(FRAME_INTERVAL_MS)
+      val currentHash = onEdt { frameHash() }
+      if (currentHash == prevHash) {
+        if (++stableFrames >= STABLE_FRAME_COUNT) return
+      } else {
+        stableFrames = 0
+        prevHash = currentHash
+      }
+    }
+  }
+
+  /**
+   * Samples pixel colors at 3 points in the Skia layer to detect frame changes.
+   * Returns 0 if the layer or bitmap is unavailable (treated as stable).
+   * Must be called on the EDT.
+   */
+  private fun frameHash(): Int {
+    val layer = findSkiaLayer(window) ?: return 0
+    val bitmap = try { layer.screenshot() } catch (_: Exception) { return 0 } ?: return 0
+    val w = bitmap.width
+    val h = bitmap.height
+    if (w <= 0 || h <= 0) return 0
+    return (bitmap.getColor(w / 2, h / 2) * 31 +
+      bitmap.getColor(w / 4, h / 4)) * 31 +
+      bitmap.getColor(3 * w / 4, 3 * h / 4)
+  }
+
+  companion object {
+    private const val FRAME_INTERVAL_MS = 16L // ~1 frame at 60fps
+    private const val STABLE_FRAME_COUNT = 3  // consecutive identical frames = settled
+    private const val SETTLE_MAX_FRAMES = 50  // max ~800ms total wait
   }
 
   /**

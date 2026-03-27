@@ -28,4 +28,6 @@ class DesktopAppRunYamlParams(
   val onComplete: ((TrailExecutionResult) -> Unit)? = null,
   /** RPC port for Compose driver connections. */
   val composeRpcPort: Int = TrailblazeDevicePort.COMPOSE_DEFAULT_RPC_PORT,
+  /** When true, uses a no-op logger so no session files are written to disk. */
+  val noLogging: Boolean = false,
 )

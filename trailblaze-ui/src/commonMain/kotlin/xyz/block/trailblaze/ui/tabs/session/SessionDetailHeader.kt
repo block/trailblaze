@@ -42,6 +42,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import xyz.block.trailblaze.ui.Platform
+import xyz.block.trailblaze.logs.model.SessionStatus
+import xyz.block.trailblaze.ui.composables.FallbackChip
 import xyz.block.trailblaze.ui.composables.SelectableText
 import xyz.block.trailblaze.ui.composables.StatusBadge
 import xyz.block.trailblaze.ui.composables.getIcon
@@ -86,11 +88,6 @@ internal fun SessionDetailHeader(
         )
       }
       Spacer(modifier = Modifier.width(8.dp))
-      // Status badge
-      overallStatus?.let {
-        StatusBadge(status = it)
-        Spacer(modifier = Modifier.width(8.dp))
-      }
       // Device platform icon
       sessionDetail?.session?.trailblazeDeviceInfo?.let { deviceInfo ->
         Icon(
@@ -101,19 +98,32 @@ internal fun SessionDetailHeader(
         Spacer(modifier = Modifier.width(8.dp))
       }
       Column {
-        // Title: use test name if available, otherwise "Trailblaze Logs"
+        // Title row: test name + status badge inline
         val title = sessionDetail?.let {
           it.session.trailConfig?.title
             ?: listOfNotNull(it.session.testClass, it.session.testName).joinToString(":")
               .ifEmpty { null }
         } ?: "Trailblaze Logs"
-        Text(
-          text = title,
-          style = MaterialTheme.typography.titleMedium,
-          fontWeight = FontWeight.Bold,
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
-        )
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+          Text(
+            text = title,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false),
+          )
+          overallStatus?.let {
+            if (it is SessionStatus.Ended.SucceededWithFallback ||
+                it is SessionStatus.Ended.FailedWithFallback) {
+              FallbackChip()
+            }
+            StatusBadge(status = it)
+          }
+        }
         // Subtitle: device info, driver, agent, classifiers, duration
         if (sessionDetail != null) {
           val subtitleParts = mutableListOf<String>()

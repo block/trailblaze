@@ -26,26 +26,10 @@ fun ViewHierarchyTreeNode.asTreeNode(): TreeNode {
   if (focusable) attributes["focusable"] = "true"
   if (password) attributes["password"] = "true"
 
-  // Reconstruct bounds from dimensions and centerPoint
-  if (dimensions != null && centerPoint != null) {
-    val dimensionsParts = dimensions!!.split("x")
-    val centerParts = centerPoint!!.split(",")
-
-    if (dimensionsParts.size == 2 && centerParts.size == 2) {
-      val width = dimensionsParts[0].toIntOrNull()
-      val height = dimensionsParts[1].toIntOrNull()
-      val centerX = centerParts[0].toIntOrNull()
-      val centerY = centerParts[1].toIntOrNull()
-
-      if (width != null && height != null && centerX != null && centerY != null) {
-        val left = centerX - (width / 2)
-        val top = centerY - (height / 2)
-        val right = centerX + (width / 2)
-        val bottom = centerY + (height / 2)
-
-        attributes["bounds"] = "[$left,$top][$right,$bottom]"
-      }
-    }
+  // Use integer bounds (preferred) or fall back to centerPoint + dimensions for legacy data.
+  val b = bounds
+  if (b != null) {
+    attributes["bounds"] = "[${b.x1},${b.y1}][${b.x2},${b.y2}]"
   }
 
   return TreeNode(

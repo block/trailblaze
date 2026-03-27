@@ -6,7 +6,6 @@ import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionInfo
-import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.ui.InspectTrailblazeNodeSelectorHelper
@@ -26,7 +25,6 @@ fun LiveSessionDetailComposableWithSelectorSupport(
   sessionDataProvider: LiveSessionDataProvider,
   session: SessionInfo,
   toMaestroYaml: (JsonObject) -> String,
-  toTrailblazeYaml: (toolName: String, trailblazeTool: TrailblazeTool) -> String,
   generateRecordingYaml: () -> String,
   onBackClick: () -> Unit,
   imageLoader: ImageLoader,
@@ -117,7 +115,6 @@ fun LiveSessionDetailComposableWithSelectorSupport(
     sessionDataProvider = sessionDataProvider,
     session = session,
     toMaestroYaml = toMaestroYaml,
-    toTrailblazeYaml = toTrailblazeYaml,
     generateRecordingYaml = generateRecordingYaml,
     onBackClick = onBackClick,
     imageLoader = imageLoader,

@@ -294,7 +294,6 @@ fun SessionsTabComposableJvm(
       sessionDataProvider = liveSessionDataProvider,
       imageLoader = createLogsFileSystemImageLoader(),
       toMaestroYaml = { jsonObject: JsonObject -> TemplateHelpers.asMaestroYaml(jsonObject) },
-      toTrailblazeYaml = TemplateHelpers::asTrailblazeYaml,
       generateRecordingYaml = {
         runBlocking {
           val logs = liveSessionDataProvider.getLogsForSession(selectedSession.sessionId)

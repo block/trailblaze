@@ -9,6 +9,8 @@ import maestro.orchestra.ElementSelector
 import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.api.DriverNodeMatch
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.model.NodeSelectorMode
 import xyz.block.trailblaze.toolcalls.MapsToMaestroCommands
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
@@ -60,17 +62,38 @@ data class AssertNotVisibleWithTextTrailblazeTool(
   override suspend fun execute(
     toolExecutionContext: TrailblazeToolExecutionContext,
   ): TrailblazeToolResult {
+    val mode = toolExecutionContext.nodeSelectorMode
+    if (mode == NodeSelectorMode.FORCE_LEGACY) {
+      return super.execute(toolExecutionContext)
+    }
+
     val agent = toolExecutionContext.maestroTrailblazeAgent
     if (agent != null) {
       val interpolatedText = toolExecutionContext.memory.interpolateVariables(text)
-      val nodeSelector = TrailblazeNodeSelector.withMatch(
-        DriverNodeMatch.AndroidAccessibility(
+      val convertedIndex = if (index == 0) null else index
+      val platform = toolExecutionContext.trailblazeDeviceInfo.platform
+      val driverMatch: DriverNodeMatch = when (platform) {
+        TrailblazeDevicePlatform.IOS -> DriverNodeMatch.IosMaestro(
+          textRegex = interpolatedText,
+          resourceIdRegex = id,
+          selected = selected,
+        )
+        TrailblazeDevicePlatform.ANDROID -> DriverNodeMatch.AndroidAccessibility(
           textRegex = interpolatedText,
           resourceIdRegex = id,
           isEnabled = enabled,
           isSelected = selected,
-        ),
-        index = if (index == 0) null else index,
+        )
+        TrailblazeDevicePlatform.WEB -> DriverNodeMatch.AndroidAccessibility(
+          textRegex = interpolatedText,
+          resourceIdRegex = id,
+          isEnabled = enabled,
+          isSelected = selected,
+        )
+      }
+      val nodeSelector = TrailblazeNodeSelector.withMatch(
+        driverMatch,
+        index = convertedIndex,
       )
       val result = agent.executeNodeSelectorAssertNotVisible(
         nodeSelector = nodeSelector,

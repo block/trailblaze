@@ -16,8 +16,31 @@ abstract class ViewHierarchyFilter(
   protected val screenHeight: Int,
 ) {
 
+  /** Summary of elements removed by geometric occlusion filtering. */
+  data class OcclusionSummary(
+    val occluderNodeId: Long,
+    val occluderClassName: String?,
+    val occludedCount: Int,
+  )
+
+  /** Result of [filterOccludedElements] containing the surviving elements and occlusion metadata. */
+  data class OcclusionResult(
+    val elements: List<ViewHierarchyTreeNode>,
+    val occlusionSummaries: List<OcclusionSummary>,
+  )
+
+  /** Occlusion summaries from the most recent call to [filterInteractableViewHierarchyTreeNodes]. */
+  var occlusionSummaries: List<OcclusionSummary> = emptyList()
+    protected set
+
   /** Maximum number of offscreen elements to include in the filtered output. */
   private val MAX_OFFSCREEN_ELEMENTS = 20
+
+  /** Elements with ≥ this fraction of their area covered by a higher-z element are filtered. */
+  protected val OCCLUSION_THRESHOLD = 0.95
+
+  /** Minimum occluder size as a fraction of screen area — avoids treating small elements as occluders. */
+  private val MIN_OCCLUDER_SCREEN_FRACTION = 0.25
 
   /**
    * Bounds represents the rectangular bounds of a UI element.
@@ -44,6 +67,19 @@ abstract class ViewHierarchyFilter(
         x2 >= other.x2 &&
         y2 >= other.y2
       )
+
+    /**
+     * Compute the fraction of this element's area that is covered by [occluder].
+     * Returns 0.0 when there is no overlap or this element has zero area; 1.0 when
+     * fully covered.
+     */
+    fun occludedBy(occluder: Bounds): Double {
+      val overlapX = maxOf(0, minOf(x2, occluder.x2) - maxOf(x1, occluder.x1))
+      val overlapY = maxOf(0, minOf(y2, occluder.y2) - maxOf(y1, occluder.y1))
+      val overlapArea = overlapX.toLong() * overlapY
+      val myArea = width.toLong() * height
+      return if (myArea > 0) overlapArea.toDouble() / myArea else 0.0
+    }
   }
 
   /**
@@ -96,8 +132,10 @@ abstract class ViewHierarchyFilter(
 
     return ViewHierarchyTreeNode(
       children = deduplicated + offscreenInteractable,
-      centerPoint = "${screenWidth / 2},${screenHeight / 2}",
-      dimensions = "${screenWidth}x$screenHeight",
+      x1 = 0,
+      y1 = 0,
+      x2 = screenWidth,
+      y2 = screenHeight,
     )
   }
 
@@ -134,6 +172,82 @@ abstract class ViewHierarchyFilter(
 
   private fun ViewHierarchyTreeNode.hasDescendant(target: ViewHierarchyTreeNode): Boolean =
     children.any { it === target || it.hasDescendant(target) }
+
+  /**
+   * Filter out elements that are ≥[occlusionThreshold] covered by a higher-z-order element
+   * that is not an ancestor or descendant. Uses position in the flat [elements] list as a
+   * proxy for z-order (later = drawn on top), which matches pre-order DFS / Android draw order.
+   *
+   * Only elements covering ≥[MIN_OCCLUDER_SCREEN_FRACTION] of the screen area are considered
+   * as potential occluders, keeping the check O(N × M) where M is small.
+   */
+  protected fun filterOccludedElements(
+    elements: List<ViewHierarchyTreeNode>,
+    occlusionThreshold: Double = OCCLUSION_THRESHOLD,
+  ): OcclusionResult {
+    if (elements.size <= 1) return OcclusionResult(elements, emptyList())
+
+    val minOccluderArea =
+      (screenWidth.toLong() * screenHeight * MIN_OCCLUDER_SCREEN_FRACTION).toLong()
+
+    // Identify large elements that could act as occluders.
+    data class Occluder(val index: Int, val node: ViewHierarchyTreeNode, val bounds: Bounds)
+    val occluders = elements.mapIndexedNotNull { index, elem ->
+      val b = elem.bounds ?: return@mapIndexedNotNull null
+      if (b.width.toLong() * b.height >= minOccluderArea) Occluder(index, elem, b)
+      else null
+    }
+
+    if (occluders.isEmpty()) return OcclusionResult(elements, emptyList())
+
+    val occludedIndices = mutableSetOf<Int>()
+    // Track which occluder was responsible for filtering each element.
+    val occluderHits = mutableMapOf<Long, Int>() // occluder nodeId → count
+
+    for (i in elements.indices) {
+      val element = elements[i]
+      val bounds = element.bounds ?: continue
+      if (bounds.width <= 0 || bounds.height <= 0) continue
+
+      for (occluder in occluders) {
+        // Occluder must be drawn on top (later in traversal order).
+        if (occluder.index <= i) continue
+
+        // Never filter ancestor/descendant pairs — children overlap their parents by design.
+        if (occluder.node.hasDescendantRef(element) || element.hasDescendantRef(occluder.node)) {
+          continue
+        }
+
+        if (bounds.occludedBy(occluder.bounds) >= occlusionThreshold) {
+          occludedIndices.add(i)
+          occluderHits[occluder.node.nodeId] =
+            (occluderHits[occluder.node.nodeId] ?: 0) + 1
+          break
+        }
+      }
+    }
+
+    val occluderByNodeId = occluders.associateBy { it.node.nodeId }
+    val summaries = occluderHits.mapNotNull { (nodeId, count) ->
+      val occluder = occluderByNodeId[nodeId] ?: return@mapNotNull null
+      occluder.index to OcclusionSummary(
+        occluderNodeId = nodeId,
+        occluderClassName = occluder.node.className,
+        occludedCount = count,
+      )
+    }
+      .sortedBy { (index, _) -> index }
+      .map { (_, summary) -> summary }
+
+    return OcclusionResult(
+      elements = elements.filterIndexed { index, _ -> index !in occludedIndices },
+      occlusionSummaries = summaries,
+    )
+  }
+
+  /** Reference-equality descendant check for use with flattened aggregate() lists. */
+  private fun ViewHierarchyTreeNode.hasDescendantRef(target: ViewHierarchyTreeNode): Boolean =
+    children.any { it === target || it.hasDescendantRef(target) }
 
   /**
    * Check if two bounds rectangles overlap.

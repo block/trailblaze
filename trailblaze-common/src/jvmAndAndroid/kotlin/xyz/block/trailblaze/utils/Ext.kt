@@ -89,13 +89,20 @@ object Ext {
     } else {
       return ViewHierarchyTreeNode(
         accessibilityText = getAttributeIfNotBlank("accessibilityText"),
+        x1 = bounds?.x ?: 0,
+        y1 = bounds?.y ?: 0,
+        x2 = bounds?.let { it.x + it.width } ?: 0,
+        y2 = bounds?.let { it.y + it.height } ?: 0,
+        // centerPoint is derived from integer bounds (no rounding drift).
+        // Intentionally set here despite ViewHierarchyTreeNode KDoc preferring x1/y1/x2/y2:
+        // CenterPointMatcher, tap tools, and selector strategies read this field directly.
+        // Do not remove until those consumers are migrated to use bounds.
         centerPoint = bounds?.let { "${it.centerX},${it.centerY}" },
         checked = checked ?: false,
         children = children.mapNotNull {
           it.toViewHierarchyTreeNode()
         },
         className = getAttributeIfNotBlank("class"),
-        dimensions = bounds?.let { "${it.width}x${it.height}" },
         clickable = clickable ?: false,
         enabled = enabled ?: true,
         focusable = getAttributeIfNotBlank("focusable") == "true",

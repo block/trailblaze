@@ -67,15 +67,11 @@ class ComposeScreenState(
   override val deviceHeight: Int by lazy { capturedImage?.height ?: viewportHeight }
 
   override val trailblazeNodeTree: TrailblazeNode? by lazy {
-    ComposeSemanticTreeMapper.mapToTrailblazeNode(rootSemanticsNode)
-  }
-
-  override val viewHierarchyOriginal: ViewHierarchyTreeNode by lazy {
-    ComposeSemanticTreeMapper.map(rootSemanticsNode)
+    ComposeSemanticTreeMapper.mapToTrailblazeNode(allRootNodes)
   }
 
   override val viewHierarchy: ViewHierarchyTreeNode by lazy {
-    viewHierarchyOriginal
+    ComposeSemanticTreeMapper.map(allRootNodes)
   }
 
   override val viewHierarchyTextRepresentation: String by lazy {

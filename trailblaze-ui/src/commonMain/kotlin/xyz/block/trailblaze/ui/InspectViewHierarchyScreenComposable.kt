@@ -66,6 +66,7 @@ import coil3.compose.AsyncImage
 import kotlinx.serialization.json.Json
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
+import androidx.compose.foundation.text.selection.SelectionContainer
 import xyz.block.trailblaze.ui.composables.SelectableText
 import xyz.block.trailblaze.ui.images.ImageLoader
 import xyz.block.trailblaze.ui.models.TrailblazeServerState
@@ -366,7 +367,7 @@ fun InspectViewHierarchyScreenComposable(
                 )
               }
             } else {
-              Text(
+              SelectableText(
                 text = "No screenshot available",
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -662,7 +663,7 @@ private fun ViewHierarchyInspector(
         }
       }
     } else {
-      Text(
+      SelectableText(
         text = "Failed to load screenshot",
         style = MaterialTheme.typography.bodyLarge,
         color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -828,7 +829,7 @@ private fun ViewHierarchyTreeItem(
       verticalAlignment = Alignment.CenterVertically
     ) {
       // Node ID
-      Text(
+      SelectableText(
         text = "${node.nodeId}",
         style = MaterialTheme.typography.labelMedium.copy(
           fontSize = MaterialTheme.typography.labelMedium.fontSize * fontScale,
@@ -1084,7 +1085,7 @@ private fun NodeDetailsPanel(
 
           when {
             isComputingSelectors -> {
-              Text(
+              SelectableText(
                 text = "Computing selectors...",
                 style = MaterialTheme.typography.bodySmall.copy(
                   fontSize = MaterialTheme.typography.bodySmall.fontSize * fontScale
@@ -1094,7 +1095,7 @@ private fun NodeDetailsPanel(
             }
 
             selectorError != null -> {
-              Text(
+              SelectableText(
                 text = "⚠️ $selectorError",
                 style = MaterialTheme.typography.bodySmall.copy(
                   fontSize = MaterialTheme.typography.bodySmall.fontSize * fontScale
@@ -1124,7 +1125,7 @@ private fun NodeDetailsPanel(
       }
 
     } else {
-      Text(
+      SelectableText(
         text = "Hover or click on an element in the screenshot to see its details.",
         style = MaterialTheme.typography.bodyMedium.copy(
           fontSize = MaterialTheme.typography.bodyMedium.fontSize * fontScale
@@ -1150,63 +1151,65 @@ private fun SelectorOptionCard(
       }
     )
   ) {
-    Column(
-      modifier = Modifier.padding(12.dp)
-    ) {
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
+    SelectionContainer {
+      Column(
+        modifier = Modifier.padding(12.dp)
       ) {
-        Text(
-          text = option.strategy,
-          style = MaterialTheme.typography.labelMedium.copy(
-            fontSize = MaterialTheme.typography.labelMedium.fontSize * fontScale
-          ),
-          fontWeight = FontWeight.Medium,
-          color = MaterialTheme.colorScheme.primary
-        )
-
-        // Show badge for the production default selector
-        if (option.isBest) {
-          Card(
-            colors = CardDefaults.cardColors(
-              containerColor = MaterialTheme.colorScheme.primary
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.SpaceBetween,
+          verticalAlignment = Alignment.CenterVertically
+        ) {
+          Text(
+            text = option.strategy,
+            style = MaterialTheme.typography.labelMedium.copy(
+              fontSize = MaterialTheme.typography.labelMedium.fontSize * fontScale
             ),
-            modifier = Modifier.padding(start = 8.dp)
-          ) {
-            Text(
-              text = "DEFAULT",
-              style = MaterialTheme.typography.labelSmall.copy(
-                fontSize = MaterialTheme.typography.labelSmall.fontSize * fontScale
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.primary
+          )
+
+          // Show badge for the production default selector
+          if (option.isBest) {
+            Card(
+              colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.primary
               ),
-              fontWeight = FontWeight.Bold,
-              color = MaterialTheme.colorScheme.onPrimary,
-              modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-            )
+              modifier = Modifier.padding(start = 8.dp)
+            ) {
+              Text(
+                text = "DEFAULT",
+                style = MaterialTheme.typography.labelSmall.copy(
+                  fontSize = MaterialTheme.typography.labelSmall.fontSize * fontScale
+                ),
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onPrimary,
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+              )
+            }
           }
         }
-      }
-      Spacer(modifier = Modifier.height(4.dp))
+        Spacer(modifier = Modifier.height(4.dp))
 
-      // Code block for YAML selector
-      Box(
-        modifier = Modifier
-          .fillMaxWidth()
-          .background(
-            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-            shape = androidx.compose.foundation.shape.RoundedCornerShape(4.dp)
+        // Code block for YAML selector
+        Box(
+          modifier = Modifier
+            .fillMaxWidth()
+            .background(
+              MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+              shape = androidx.compose.foundation.shape.RoundedCornerShape(4.dp)
+            )
+            .padding(8.dp)
+        ) {
+          Text(
+            text = option.yamlSelector,
+            style = MaterialTheme.typography.bodySmall.copy(
+              fontSize = MaterialTheme.typography.bodySmall.fontSize * fontScale,
+              fontFamily = FontFamily.Monospace
+            ),
+            color = MaterialTheme.colorScheme.onSurfaceVariant
           )
-          .padding(8.dp)
-      ) {
-        SelectableText(
-          text = option.yamlSelector,
-          style = MaterialTheme.typography.bodySmall.copy(
-            fontSize = MaterialTheme.typography.bodySmall.fontSize * fontScale,
-            fontFamily = FontFamily.Monospace
-          ),
-          color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
+        }
       }
     }
   }
@@ -1391,14 +1394,14 @@ private fun PropertyUniquenessCard(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
                   ) {
-                    Text(
+                    SelectableText(
                       text = "#${node.nodeId}",
+                      modifier = Modifier.width(60.dp),
                       style = MaterialTheme.typography.labelSmall.copy(
                         fontSize = MaterialTheme.typography.labelSmall.fontSize * fontScale,
                         fontFamily = FontFamily.Monospace
                       ),
                       color = MaterialTheme.colorScheme.primary,
-                      modifier = Modifier.width(60.dp)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
@@ -1425,7 +1428,7 @@ private fun PropertyUniquenessCard(
                         )
                         .padding(6.dp)
                     ) {
-                      Text(
+                      SelectableText(
                         text = selector,
                         style = MaterialTheme.typography.bodySmall.copy(
                           fontSize = (MaterialTheme.typography.bodySmall.fontSize * fontScale * 0.9f),
@@ -1441,7 +1444,7 @@ private fun PropertyUniquenessCard(
           }
         }
       } else {
-        Text(
+        SelectableText(
           text = "Text: (none)",
           style = MaterialTheme.typography.bodySmall.copy(
             fontSize = MaterialTheme.typography.bodySmall.fontSize * fontScale
@@ -1542,14 +1545,14 @@ private fun PropertyUniquenessCard(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
                   ) {
-                    Text(
+                    SelectableText(
                       text = "#${node.nodeId}",
+                      modifier = Modifier.width(60.dp),
                       style = MaterialTheme.typography.labelSmall.copy(
                         fontSize = MaterialTheme.typography.labelSmall.fontSize * fontScale,
                         fontFamily = FontFamily.Monospace
                       ),
                       color = MaterialTheme.colorScheme.primary,
-                      modifier = Modifier.width(60.dp)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
@@ -1576,7 +1579,7 @@ private fun PropertyUniquenessCard(
                         )
                         .padding(6.dp)
                     ) {
-                      Text(
+                      SelectableText(
                         text = selector,
                         style = MaterialTheme.typography.bodySmall.copy(
                           fontSize = (MaterialTheme.typography.bodySmall.fontSize * fontScale * 0.9f),
@@ -1592,7 +1595,7 @@ private fun PropertyUniquenessCard(
           }
         }
       } else {
-        Text(
+        SelectableText(
           text = "ID: (none)",
           style = MaterialTheme.typography.bodySmall.copy(
             fontSize = MaterialTheme.typography.bodySmall.fontSize * fontScale
@@ -1669,7 +1672,7 @@ private fun PropertiesGrid(
       }
     }
   } else {
-    Text(
+    SelectableText(
       text = "No active properties",
       style = MaterialTheme.typography.bodySmall.copy(
         fontSize = MaterialTheme.typography.bodySmall.fontSize * fontScale
@@ -1694,50 +1697,52 @@ private fun ChildNodeItem(
       containerColor = MaterialTheme.colorScheme.surfaceVariant
     )
   ) {
-    Column(
-      modifier = Modifier.padding(12.dp)
-    ) {
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
+    SelectionContainer {
+      Column(
+        modifier = Modifier.padding(12.dp)
       ) {
-        Text(
-          text = "ID: ${child.nodeId}",
-          style = MaterialTheme.typography.labelMedium.copy(
-            fontSize = MaterialTheme.typography.labelMedium.fontSize * fontScale
-          ),
-          fontWeight = FontWeight.Medium
-        )
-        if (child.children.isNotEmpty()) {
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.SpaceBetween,
+          verticalAlignment = Alignment.CenterVertically
+        ) {
           Text(
-            text = "${child.children.size} children",
-            style = MaterialTheme.typography.labelSmall.copy(
-              fontSize = MaterialTheme.typography.labelSmall.fontSize * fontScale
+            text = "ID: ${child.nodeId}",
+            style = MaterialTheme.typography.labelMedium.copy(
+              fontSize = MaterialTheme.typography.labelMedium.fontSize * fontScale
             ),
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            fontWeight = FontWeight.Medium
+          )
+          if (child.children.isNotEmpty()) {
+            Text(
+              text = "${child.children.size} children",
+              style = MaterialTheme.typography.labelSmall.copy(
+                fontSize = MaterialTheme.typography.labelSmall.fontSize * fontScale
+              ),
+              color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+          }
+        }
+
+        if (!child.text.isNullOrBlank()) {
+          Text(
+            text = child.text!!,
+            style = MaterialTheme.typography.bodySmall.copy(
+              fontSize = MaterialTheme.typography.bodySmall.fontSize * fontScale
+            ),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1
+          )
+        } else if (!child.className.isNullOrEmpty()) {
+          Text(
+            text = child.className!!,
+            style = MaterialTheme.typography.bodySmall.copy(
+              fontSize = MaterialTheme.typography.bodySmall.fontSize * fontScale
+            ),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1
           )
         }
-      }
-
-      if (!child.text.isNullOrBlank()) {
-        Text(
-          text = child.text!!,
-          style = MaterialTheme.typography.bodySmall.copy(
-            fontSize = MaterialTheme.typography.bodySmall.fontSize * fontScale
-          ),
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-          maxLines = 1
-        )
-      } else if (!child.className.isNullOrEmpty()) {
-        Text(
-          text = child.className!!,
-          style = MaterialTheme.typography.bodySmall.copy(
-            fontSize = MaterialTheme.typography.bodySmall.fontSize * fontScale
-          ),
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
-          maxLines = 1
-        )
       }
     }
   }

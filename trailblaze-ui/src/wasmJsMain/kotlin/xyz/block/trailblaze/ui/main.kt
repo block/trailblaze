@@ -37,6 +37,7 @@ import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.yaml.TrailblazeYaml
 import xyz.block.trailblaze.yaml.generateRecordedYaml
 import xyz.block.trailblaze.ui.composables.FullScreenModalOverlay
+import xyz.block.trailblaze.ui.composables.SelectableText
 import xyz.block.trailblaze.ui.composables.ScreenshotImageModal
 import xyz.block.trailblaze.ui.navigation.WasmRoute
 import xyz.block.trailblaze.ui.tabs.session.SessionDetailComposable
@@ -62,7 +63,7 @@ fun main() {
 fun TrailblazeApp() {
   val navController = rememberNavController()
 
-  val toMaestroYaml: (JsonObject) -> String = { it.toString() }
+  val toMaestroYaml: (JsonObject) -> String = { TrailblazeYaml.jsonToYaml(it) }
 
   Console.log("Using data provider: $dataProvider")
 
@@ -243,7 +244,7 @@ fun SessionListViewLoader(
           text = "Error loading sessions",
           style = MaterialTheme.typography.headlineSmall
         )
-        Text(
+        SelectableText(
           text = errorMessage!!,
           style = MaterialTheme.typography.bodyMedium,
           color = MaterialTheme.colorScheme.error,
@@ -361,11 +362,41 @@ fun WasmSessionDetailView(
     Console.log("🎨 [${renderStartTime.toInt()}ms] Starting to render SessionDetailComposable with ${logs.size} logs")
 
     Box(modifier = Modifier.fillMaxSize()) {
-      SessionDetailComposable(
-        sessionDetail = SessionDetail(
-          session = sessionInfo!!,
+      // Derive session metadata from logs, matching the JVM LiveSessionDetailComposable behavior
+      val sessionDetail = remember(logs, sessionInfo) {
+        val info = sessionInfo!!
+        val overallStatus = info.latestStatus
+
+        val firstLogWithDeviceInfo = logs.firstOrNull { log ->
+          log is TrailblazeLog.TrailblazeLlmRequestLog || log is TrailblazeLog.AgentDriverLog
+        }
+
+        val (deviceName, deviceType) = when (firstLogWithDeviceInfo) {
+          is TrailblazeLog.TrailblazeLlmRequestLog -> "Device ${firstLogWithDeviceInfo.deviceWidth}x${firstLogWithDeviceInfo.deviceHeight}" to "Mobile"
+          is TrailblazeLog.AgentDriverLog -> "Device ${firstLogWithDeviceInfo.deviceWidth}x${firstLogWithDeviceInfo.deviceHeight}" to "Mobile"
+          else -> null to null
+        }
+
+        val totalDurationMs = if (logs.isNotEmpty()) {
+          val firstLog = logs.minByOrNull { log -> log.timestamp }
+          val lastLog = logs.maxByOrNull { log -> log.timestamp }
+          if (firstLog != null && lastLog != null) {
+            lastLog.timestamp.toEpochMilliseconds() - firstLog.timestamp.toEpochMilliseconds()
+          } else null
+        } else null
+
+        SessionDetail(
+          session = info,
           logs = logs,
-        ),
+          overallStatus = overallStatus,
+          deviceName = deviceName,
+          deviceType = deviceType,
+          totalDurationMs = totalDurationMs,
+        )
+      }
+
+      SessionDetailComposable(
+        sessionDetail = sessionDetail,
         toMaestroYaml = toMaestroYaml,
         onBackClick = onBackClick,
         generateRecordingYaml = {
@@ -554,7 +585,7 @@ fun WasmSessionDetailView(
                   computeTrailblazeNodeSelectorOptions = computeTrailblazeNodeSelectors,
                 )
               } else {
-                Text(
+                SelectableText(
                   text = "No view hierarchy data available for this log",
                   modifier = Modifier.padding(16.dp),
                   style = MaterialTheme.typography.bodyLarge,
@@ -657,7 +688,7 @@ fun WasmSessionDetailView(
           style = MaterialTheme.typography.headlineSmall
         )
         if (errorMessage != null) {
-          Text(
+          SelectableText(
             text = errorMessage!!,
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.error,

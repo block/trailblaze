@@ -239,6 +239,7 @@ abstract class TrailblazeDesktopAppConfig(
     webBrowserManager: WebBrowserManager? = null,
     mcpServerDebugStateFlow: StateFlow<McpServerDebugState>? = null,
     recommendTrailblazeAsAgent: Boolean = false,
+    onTestLlmConnection: (suspend (TrailblazeLlmModel) -> Result<String>)? = null,
   ): List<TrailblazeAppTab> {
     return buildList {
       add(
@@ -303,10 +304,11 @@ abstract class TrailblazeDesktopAppConfig(
           globalSettingsContent = globalSettingsContent,
           availableModelLists = getCurrentlyAvailableLlmModelLists(),
           customEnvVarNames = customEnvVarNames,
-          openGoose = openGoose ?: { TrailblazeDesktopUtil.openGoose() },
+          openGoose = openGoose ?: { TrailblazeDesktopUtil.openGoose(port = trailblazeSettingsRepo.portManager.httpPort) },
           isProviderLocked = isProviderLocked,
           playwrightInstallState = webBrowserManager?.playwrightInstaller?.installState,
           onInstallPlaywright = webBrowserManager?.let { { it.playwrightInstaller.installBrowsers() } },
+          onTestLlmConnection = onTestLlmConnection,
         )
       )
     }

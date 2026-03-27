@@ -54,12 +54,8 @@ class ComposeRpcScreenState(
   override val trailblazeNodeTree: TrailblazeNode?
     get() = response.trailblazeNodeTree
 
-  override val viewHierarchyOriginal: ViewHierarchyTreeNode
+  override val viewHierarchy: ViewHierarchyTreeNode
     get() = response.viewHierarchy
-
-  override val viewHierarchy: ViewHierarchyTreeNode by lazy {
-    viewHierarchyOriginal
-  }
 
   override val viewHierarchyTextRepresentation: String
     get() = response.semanticsTreeText

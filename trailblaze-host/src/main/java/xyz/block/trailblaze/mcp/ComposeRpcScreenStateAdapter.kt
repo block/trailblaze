@@ -33,9 +33,6 @@ class ComposeRpcScreenStateAdapter(
   override val viewHierarchy: ViewHierarchyTreeNode
     get() = response.viewHierarchy
 
-  override val viewHierarchyOriginal: ViewHierarchyTreeNode
-    get() = response.viewHierarchy
-
   /**
    * Returns the compact element list with `[eN]` IDs from the Compose RPC server.
    *

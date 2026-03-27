@@ -258,7 +258,7 @@
 
                 // Decompress the image (GZIP → raw bytes → base64)
                 decompressBinaryToBase64(compressedImage).then(base64Data => {
-                    const format = imageKey.endsWith('.png') ? 'png' : 'jpeg';
+                    const format = imageKey.endsWith('.png') ? 'png' : imageKey.endsWith('.webp') ? 'webp' : 'jpeg';
                     const dataUrl = `data:image/${format};base64,${base64Data}`;
 
                     // Free memory: delete compressed source after decompression.

@@ -67,9 +67,25 @@ class StepToolSet(
     """
     Take a step toward your goal, or verify an assertion.
 
-    blaze(goal="Tap the login button")
-    blaze(goal="Enter email test@example.com")
-    blaze(goal="The login button is visible", hint="VERIFY")
+    Each blaze() call should be a COMPLETE USER-FACING ACTION with all relevant
+    parameters — not individual UI taps, but not multi-screen journeys either.
+    The inner agent has specialized tools that handle multi-step flows (login,
+    setup, onboarding, etc.) and needs full context to select the right one.
+
+    GOOD scope — one action with all its details:
+      blaze(goal="Login with test@example.com")
+      blaze(goal="Search flights from Paris to London on October 4")
+      blaze(goal="Enter shipping address: 123 Main St, Springfield, IL 62701")
+
+    BAD scope — too granular, strips context the inner agent needs:
+      blaze(goal="Launch the app")  ← inner agent can't tell this is part of a login
+      blaze(goal="Tap the email field")
+      blaze(goal="Type test@example.com")
+
+    Trailblaze can handle larger objectives autonomously — it will break them down
+    internally and use specialized tools. Larger goals mean less back-and-forth but
+    slower feedback. Smaller goals give faster feedback but risk losing context.
+    When in doubt, go bigger — include all details the inner agent might need.
 
     Returns what happened plus a screenSummary showing visible text and actionable
     elements (e.g. "[button] Login | [input] Email"). This summary is compact and
@@ -81,7 +97,7 @@ class StepToolSet(
   )
   @Tool(McpToolProfile.TOOL_BLAZE)
   suspend fun blaze(
-    @LLMDescription("What you want to accomplish (e.g., 'Tap the login button') or assert (e.g., 'The login button is visible')")
+    @LLMDescription("A complete user-facing action with all relevant details (e.g., 'Login with test@example.com', 'Search flights Paris to London Oct 4'). Include credentials, search terms, and parameters — the inner agent needs this context to select specialized tools.")
     goal: String,
     @LLMDescription("Context from previous steps (optional)")
     context: String? = null,
@@ -96,7 +112,7 @@ class StepToolSet(
         executed = false,
         error = driverStatusProvider?.invoke()
           ?: "No device connected. Use device(action=ANDROID), device(action=IOS), or device(action=WEB) first.",
-      ).toJson()
+      ).toMarkdown()
 
     val promptStep = if (isVerify) VerificationStep(verify = goal) else DirectionStep(step = goal)
     val stepStartTime = Clock.System.now()
@@ -127,7 +143,7 @@ class StepToolSet(
       return StepResult(
         executed = false,
         error = "Failed to analyze screen: ${e.message}",
-      ).toJson()
+      ).toMarkdown()
     }
 
     Console.log("")
@@ -151,7 +167,7 @@ class StepToolSet(
         passed = if (isVerify) true else null,
         result = if (isVerify) "Assertion passed" else "Goal already achieved",
         screenSummary = analysis.screenSummary,
-      ).toJson()
+      ).toMarkdown()
     }
 
     // Impossible / assertion failed?
@@ -164,7 +180,7 @@ class StepToolSet(
         error = failureReason,
         screenSummary = analysis.screenSummary,
         suggestedHint = if (!isVerify) analysis.suggestedHint else null,
-      ).toJson()
+      ).toMarkdown()
     }
 
     // HIGH or MEDIUM confidence → execute
@@ -178,7 +194,7 @@ class StepToolSet(
           passed = if (isVerify) false else null,
           error = "Action failed: ${e.message}",
           screenSummary = analysis.screenSummary,
-        ).toJson()
+        ).toMarkdown()
       }
 
       val (result, success) = when (executionResult) {
@@ -225,7 +241,7 @@ class StepToolSet(
           success = success,
         ),
       )
-      return result.toJson()
+      return result.toMarkdown()
     }
 
     // LOW confidence → return options (inner agent may also suggest different tools)
@@ -238,7 +254,7 @@ class StepToolSet(
       screenSummary = analysis.screenSummary,
       suggestion = analysis.recommendedTool,
       suggestedHint = analysis.suggestedHint,
-    ).toJson()
+    ).toMarkdown()
   }
 
   @LLMDescription(
@@ -268,12 +284,12 @@ class StepToolSet(
       return AskResult(
         answer = null,
         error = driverStatus,
-      ).toJson()
+      ).toMarkdown()
     }
     val recommendationContext = RecommendationContext(
       objective = "Answer this question: $question",
       progressSummary = null,
-      hint = "Describe what you see that answers this question. Don't take any action.",
+      hint = "Put a direct, concise answer to the question in the `answer` field. If the question is about what's on the screen, the answer should just be the screen summary. Don't take any action.",
       attemptNumber = 1,
     )
 
@@ -290,7 +306,7 @@ class StepToolSet(
       return AskResult(
         answer = null,
         error = "Failed to analyze screen: ${e.message}",
-      ).toJson()
+      ).toMarkdown()
     }
 
     Console.log("")
@@ -300,7 +316,7 @@ class StepToolSet(
     Console.log("└──────────────────────────────────────────────────────────────────────────────")
 
     val result = AskResult(
-      answer = analysis.reasoning,
+      answer = analysis.answer ?: analysis.reasoning,
       screenSummary = analysis.screenSummary,
     )
 
@@ -308,7 +324,7 @@ class StepToolSet(
     // Only blaze() calls (including hint="VERIFY") are tracked as trail steps.
     emitAskLog(question, result.answer, result.screenSummary, null, traceId, startTime)
 
-    return result.toJson()
+    return result.toMarkdown()
   }
 
   /**
@@ -416,6 +432,38 @@ data class StepResult(
   val passed: Boolean? = null,
 ) {
   fun toJson(): String = TrailblazeJsonInstance.encodeToString(serializer(), this)
+
+  /** Human-readable markdown format for MCP tool responses. */
+  fun toMarkdown(): String = buildString {
+    // Status + main message on the first line (always visible even when truncated)
+    when {
+      passed == true -> append("**✅ PASSED**")
+      passed == false -> append("**❌ FAILED**")
+      error != null -> append("**❌ Error**")
+      done -> append("**✅ Done**")
+      needsInput -> append("**⚠️ Needs input**")
+      executed -> append("**✓ Executed**")
+      else -> append("**→ Analyzed**")
+    }
+
+    // Result or error detail
+    val message = error ?: result
+    if (message != null) {
+      append(" — $message")
+    }
+
+    // Suggestion for low-confidence / error recovery
+    if (suggestion != null || suggestedHint != null) {
+      appendLine()
+      if (suggestion != null) append("\n**Suggestion:** $suggestion")
+      if (suggestedHint != null) append("\n**Hint:** retry with hint=`$suggestedHint`")
+    }
+
+    // Screen summary last (longest, least critical for human observer)
+    if (screenSummary != null) {
+      append("\n\n**Screen:** $screenSummary")
+    }
+  }
 }
 
 @Serializable
@@ -425,6 +473,19 @@ data class AskResult(
   val screenSummary: String? = null,
 ) {
   fun toJson(): String = TrailblazeJsonInstance.encodeToString(serializer(), this)
+
+  /** Human-readable markdown format for MCP tool responses. */
+  fun toMarkdown(): String = buildString {
+    if (error != null) {
+      append("**❌ Error** — $error")
+    } else if (answer != null) {
+      append("**Answer:** $answer")
+    }
+
+    if (screenSummary != null) {
+      append("\n\n**Screen:** $screenSummary")
+    }
+  }
 }
 
 /** Recognized values for the [StepToolSet.blaze] `hint` parameter. */

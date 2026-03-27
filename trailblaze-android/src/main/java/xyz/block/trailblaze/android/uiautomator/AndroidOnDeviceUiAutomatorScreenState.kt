@@ -8,6 +8,7 @@ import maestro.Platform
 import xyz.block.trailblaze.AdbCommandUtil
 import xyz.block.trailblaze.InstrumentationUtil.withUiAutomation
 import xyz.block.trailblaze.InstrumentationUtil.withUiDevice
+import xyz.block.trailblaze.android.MemoryDiagnostics
 import xyz.block.trailblaze.android.MaestroUiAutomatorXmlParser
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ScreenshotScalingConfig
@@ -15,38 +16,32 @@ import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode.Companion.relabelWithFreshIds
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
-import xyz.block.trailblaze.setofmark.android.AndroidBitmapUtils.scale
+import xyz.block.trailblaze.setofmark.android.AndroidBitmapUtils
+import xyz.block.trailblaze.setofmark.android.AndroidBitmapUtils.scaleAndEncode
 import xyz.block.trailblaze.setofmark.android.AndroidBitmapUtils.toByteArray
 import xyz.block.trailblaze.setofmark.android.AndroidCanvasSetOfMark
-import xyz.block.trailblaze.tracing.TrailblazeTracer.traceRecorder
-import xyz.block.trailblaze.viewhierarchy.ViewHierarchyCompactFormatter
-import xyz.block.trailblaze.viewhierarchy.ViewHierarchyFilter
 import xyz.block.trailblaze.viewhierarchy.ViewHierarchyTreeNodeUtils
+import xyz.block.trailblaze.tracing.TrailblazeTracer.traceRecorder
 import java.io.ByteArrayOutputStream
 
 /**
  * Snapshot in time of what the screen has in it.
- * 
+ *
  * Memory Optimization:
  * - Only stores the clean (non-annotated) screenshot in memory
- * - Only stores the original (unfiltered) view hierarchy in memory
  * - Set-of-mark annotations are generated on-demand
- * - Filtered view hierarchy is generated on-demand
  */
 class AndroidOnDeviceUiAutomatorScreenState(
-  private val filterViewHierarchy: Boolean = false,
-  private val screenshotScalingConfig: ScreenshotScalingConfig = ScreenshotScalingConfig.DEFAULT,
+  private val screenshotScalingConfig: ScreenshotScalingConfig = ScreenshotScalingConfig.ON_DEVICE,
   private val setOfMarkEnabled: Boolean = true,
   maxAttempts: Int = 1,
   includeScreenshot: Boolean = true,
   deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
-  private val fullHierarchy: Boolean = false,
-  private val includeOffscreen: Boolean = false,
 ) : ScreenState {
 
   override var deviceWidth: Int = -1
   override var deviceHeight: Int = -1
-  override var viewHierarchyOriginal: ViewHierarchyTreeNode
+  override var viewHierarchy: ViewHierarchyTreeNode
   private val foregroundAppId: String?
   private val currentActivity: String?
 
@@ -67,80 +62,60 @@ class AndroidOnDeviceUiAutomatorScreenState(
     var lastViewHierarchyOriginal: ViewHierarchyTreeNode? = null
     var lastScreenshotBytes: ByteArray? = null
 
-    while (!matched && attempts < maxAttempts) {
-      val vh1Original = MaestroUiAutomatorXmlParser.getUiAutomatorViewHierarchyAsSerializableTreeNodes(
-        xmlHierarchy = dumpViewHierarchy(),
-        excludeKeyboardElements = false,
-      ).relabelWithFreshIds()
+    try {
+      while (!matched && attempts < maxAttempts) {
+        val vh1Original = MaestroUiAutomatorXmlParser.getUiAutomatorViewHierarchyAsSerializableTreeNodes(
+          xmlHierarchy = dumpViewHierarchy(),
+          excludeKeyboardElements = false,
+        ).relabelWithFreshIds()
 
-      val bytes = if (includeScreenshot) {
-        // Use original hierarchy for screenshot capture (filtering happens lazily later)
-        getScreenshot(vh1Original, screenshotScalingConfig)
-      } else {
-        null
-      }
+        val bytes = if (includeScreenshot) {
+          // Use original hierarchy for screenshot capture (filtering happens lazily later)
+          getScreenshot(vh1Original, screenshotScalingConfig)
+        } else {
+          null
+        }
 
-      val vh2Original = MaestroUiAutomatorXmlParser.getUiAutomatorViewHierarchyAsSerializableTreeNodes(
-        xmlHierarchy = dumpViewHierarchy(),
-        excludeKeyboardElements = false,
-      )
+        val vh2Original = MaestroUiAutomatorXmlParser.getUiAutomatorViewHierarchyAsSerializableTreeNodes(
+          xmlHierarchy = dumpViewHierarchy(),
+          excludeKeyboardElements = false,
+        )
 
-      lastViewHierarchyOriginal = vh1Original
-      lastScreenshotBytes = bytes
+        lastViewHierarchyOriginal = vh1Original
+        lastScreenshotBytes = bytes
 
-      // Create a copy of the view hierarchies with the node ids all set to 0 and then compare
-      val vh1Zeroed = vh1Original.copy(nodeId = 0)
-      val vh2Zeroed = vh2Original.copy(nodeId = 0)
+        // Create a copy of the view hierarchies with the node ids all set to 0 and then compare
+        val vh1Zeroed = vh1Original.copy(nodeId = 0)
+        val vh2Zeroed = vh2Original.copy(nodeId = 0)
 
-      if (vh1Zeroed == vh2Zeroed) {
-        matched = true
-      } else {
-        attempts++
-        if (attempts < maxAttempts) {
-          Thread.sleep((attempts * 100).toLong())
+        if (vh1Zeroed == vh2Zeroed) {
+          matched = true
+        } else {
+          attempts++
+          if (attempts < maxAttempts) {
+            Thread.sleep((attempts * 100).toLong())
+          }
         }
       }
+    } catch (e: OutOfMemoryError) {
+      MemoryDiagnostics.dumpOnOom(e, "AndroidOnDeviceUiAutomatorScreenState.init")
+      throw e
     }
 
     // Ensure these are set after the loop
-    viewHierarchyOriginal = lastViewHierarchyOriginal ?: throw IllegalStateException("Failed to get view hierarchy")
+    viewHierarchy = lastViewHierarchyOriginal ?: throw IllegalStateException("Failed to get view hierarchy")
     _screenshotBytes = lastScreenshotBytes ?: ByteArray(0)
   }
 
   override val trailblazeDevicePlatform: TrailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID
 
-  override val viewHierarchyTextRepresentation: String
-    get() = ViewHierarchyCompactFormatter.format(
-      root = viewHierarchy,
-      platform = trailblazeDevicePlatform,
-      screenWidth = deviceWidth,
-      screenHeight = deviceHeight,
-      foregroundAppId = foregroundAppId,
-      currentActivity = currentActivity,
-      deviceClassifiers = deviceClassifiers,
-      includeOffscreen = includeOffscreen,
-      fullHierarchy = fullHierarchy,
-    )
+  override val pageContextSummary: String?
+    get() = buildList {
+      foregroundAppId?.let { add("App: $it") }
+      currentActivity?.let { add("Activity: $it") }
+    }.takeIf { it.isNotEmpty() }?.joinToString("\n")
 
   override val deviceClassifiers: List<TrailblazeDeviceClassifier> = deviceClassifiers
-
-  /**
-   * Returns the filtered view hierarchy.
-   * Generates filtered hierarchy on-demand without caching - used for LLM requests.
-   */
-  override val viewHierarchy: ViewHierarchyTreeNode
-    get() {
-      if (!filterViewHierarchy) {
-        return viewHierarchyOriginal
-      }
-
-      val viewHierarchyFilter = ViewHierarchyFilter.create(
-        screenHeight = deviceHeight,
-        screenWidth = deviceWidth,
-        platform = TrailblazeDevicePlatform.ANDROID,
-      )
-      return viewHierarchyFilter.filterInteractableViewHierarchyTreeNodes(viewHierarchyOriginal)
-    }
 
   /**
    * Returns the clean screenshot without any annotations.
@@ -152,64 +127,21 @@ class AndroidOnDeviceUiAutomatorScreenState(
   /**
    * Returns screenshot bytes with set-of-mark annotations applied.
    * Generates annotations on-demand without caching - used only for LLM requests.
-   * 
+   *
    * Decodes the stored screenshot bytes back to a bitmap, applies annotations, then re-encodes.
    * This avoids storing the uncompressed bitmap in memory.
    */
   override val annotatedScreenshotBytes: ByteArray
     get() {
-      // If set-of-mark is disabled, return the clean screenshot
-      if (!setOfMarkEnabled) {
-        return _screenshotBytes
-      }
-
-      // If no screenshot bytes, return empty
-      if (_screenshotBytes.isEmpty()) {
-        return _screenshotBytes
-      }
-
-      // Decode the compressed bytes back to a bitmap
-      val bitmap = android.graphics.BitmapFactory.decodeByteArray(_screenshotBytes, 0, _screenshotBytes.size)
-        ?: return _screenshotBytes
-      
-      // Create a mutable copy for annotation. Recycle original immediately.
-      val annotatedBitmap = bitmap.copy(Bitmap.Config.ARGB_8888, true)
-      bitmap.recycle()
-
-      // bitmap.copy() can return null under memory pressure
-      if (annotatedBitmap == null) {
-        return _screenshotBytes
-      }
-
-      try {
-        // Apply set-of-mark annotations
-        // Pass device dimensions so coordinates can be scaled to match bitmap size
-        AndroidCanvasSetOfMark.drawSetOfMarkOnBitmap(
-          originalScreenshotBitmap = annotatedBitmap,
-          elements = ViewHierarchyTreeNodeUtils.from(
-            viewHierarchy,
-            DeviceInfo(
-              platform = Platform.ANDROID,
-              widthPixels = deviceWidth,
-              heightPixels = deviceHeight,
-              widthGrid = deviceWidth,
-              heightGrid = deviceHeight,
-            ),
-          ),
-          includeLabel = true,
-          deviceWidth = deviceWidth,
-          deviceHeight = deviceHeight,
-        )
-
-        // Convert to bytes and clean up
-        val bytes = annotatedBitmap.toByteArray()
-        annotatedBitmap.recycle()
-
-        return bytes
-      } catch (e: Exception) {
-        annotatedBitmap.recycle()
-        throw e
-      }
+      if (!setOfMarkEnabled) return _screenshotBytes
+      return AndroidBitmapUtils.annotateScreenshotBytes(
+        screenshotBytes = _screenshotBytes,
+        config = screenshotScalingConfig,
+        viewHierarchy = viewHierarchy,
+        deviceWidth = deviceWidth,
+        deviceHeight = deviceHeight,
+        oomContext = "AndroidOnDeviceUiAutomatorScreenState.annotatedScreenshotBytes",
+      )
     }
 
   companion object {
@@ -307,26 +239,13 @@ class AndroidOnDeviceUiAutomatorScreenState(
       viewHierarchy = viewHierarchy,
       setOfMarkEnabled = false,
     ) ?: return null
-    
-    // Scale if needed
-    val bitmap = if (screenshotScalingConfig != null) {
-      val scaled = cleanBitmap.scale(
-        maxDim1 = screenshotScalingConfig.maxDimension1,
-        maxDim2 = screenshotScalingConfig.maxDimension2,
-      )
-      // Recycle original if scaling created a new bitmap
-      if (scaled != cleanBitmap) {
-        cleanBitmap.recycle()
-      }
-      scaled
+
+    return if (screenshotScalingConfig != null) {
+      cleanBitmap.scaleAndEncode(screenshotScalingConfig)
     } else {
-      cleanBitmap
+      val bytes = cleanBitmap.toByteArray()
+      cleanBitmap.recycle()
+      bytes
     }
-    
-    // Convert to bytes and recycle bitmap immediately
-    val bytes = bitmap.toByteArray()
-    bitmap.recycle()
-    
-    return bytes
   }
 }

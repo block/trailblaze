@@ -54,17 +54,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.encodeToJsonElement
-import kotlinx.serialization.json.jsonObject
 import xyz.block.trailblaze.api.AgentDriverAction
-import xyz.block.trailblaze.logs.client.TrailblazeJson
-import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.llm.LlmSessionUsageAndCost
 import xyz.block.trailblaze.llm.LlmUsageAndCostExt.computeUsageSummary
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.model.isInProgress
-import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.ui.composables.CodeBlock
 import xyz.block.trailblaze.ui.composables.SelectableText
 import xyz.block.trailblaze.ui.images.ImageLoader
@@ -81,7 +76,6 @@ import xyz.block.trailblaze.util.Console
 fun SessionDetailComposable(
   sessionDetail: SessionDetail,
   toMaestroYaml: (JsonObject) -> String = { it.toString() },
-  toTrailblazeYaml: (toolName: String, trailblazeTool: TrailblazeTool) -> String = ::formatTrailblazeToolForDisplay,
   generateRecordingYaml: () -> String,
   onBackClick: () -> Unit = {},
   imageLoader: ImageLoader = NetworkImageLoader(),
@@ -301,7 +295,6 @@ fun SessionDetailComposable(
                         sessionId = sessionDetail.session.sessionId.value,
                         sessionStartTime = sessionDetail.session.timestamp,
                         toMaestroYaml = toMaestroYaml,
-                        toTrailblazeYaml = toTrailblazeYaml,
                         imageLoader = imageLoader,
                         cardSize = cardSize,
                         showDetails = { onShowDetails(log) },
@@ -627,26 +620,5 @@ fun SessionDetailComposable(
         }
       }
     }
-  }
-}
-private fun formatTrailblazeToolForDisplay(
-  toolName: String,
-  trailblazeTool: TrailblazeTool,
-): String {
-  val toolArgs = when (trailblazeTool) {
-    is OtherTrailblazeTool -> trailblazeTool.raw
-    else -> runCatching {
-      TrailblazeJson.defaultWithoutToolsInstance.encodeToJsonElement(trailblazeTool).jsonObject
-    }.getOrNull()
-  }?.filterKeys { key ->
-    key != "class" && key != "@class" && key != "type" && key != "toolName"
-  }?.let(::JsonObject) ?: JsonObject(emptyMap())
-  val prettyArgs = TrailblazeJson.defaultWithoutToolsInstance.encodeToString(
-    JsonObject.serializer(),
-    toolArgs,
-  )
-  return buildString {
-    appendLine(toolName)
-    append(prettyArgs)
   }
 }

@@ -309,7 +309,7 @@ class DeviceTestBridge(
     return devices.first { it.instanceId == trailblazeDeviceId.instanceId }
   }
 
-  override suspend fun executeTrailblazeTool(tool: TrailblazeTool): String = "[OK]"
+  override suspend fun executeTrailblazeTool(tool: TrailblazeTool, blocking: Boolean): String = "[OK]"
   override suspend fun getInstalledAppIds(): Set<String> = installedApps
   override fun getAvailableAppTargets(): Set<TrailblazeHostAppTarget> = emptySet()
   override suspend fun runYaml(yaml: String, startNewSession: Boolean, agentImplementation: AgentImplementation) = ""
@@ -321,7 +321,6 @@ class DeviceTestBridge(
   override fun getDriverType(): TrailblazeDriverType? = if (lastSelectedDeviceId != null) driverType else null
   override suspend fun getScreenStateViaRpc(
     includeScreenshot: Boolean,
-    filterViewHierarchy: Boolean,
     screenshotScalingConfig: ScreenshotScalingConfig,
   ): GetScreenStateResponse? = null
   override fun getActiveSessionId(): SessionId? = null

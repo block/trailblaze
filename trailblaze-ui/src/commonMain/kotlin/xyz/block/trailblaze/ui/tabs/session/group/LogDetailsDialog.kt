@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Block
@@ -44,6 +45,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import xyz.block.trailblaze.agent.AgentTier
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
+import xyz.block.trailblaze.ui.composables.SelectableText
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.mcp.AgentImplementation
@@ -189,7 +191,7 @@ fun LogDetailsDialog(
 
       is TrailblazeLog.AccessibilityActionLog -> {
         item {
-          Text(
+          SelectableText(
             text = "Action: ${log.actionDescription}\n${log.actionJsonObj}",
             style = MaterialTheme.typography.bodySmall,
           )
@@ -299,99 +301,103 @@ fun ChatHistoryDialog(
             fontWeight = FontWeight.Bold
           )
           Spacer(modifier = Modifier.height(12.dp))
-          
-          // Model info
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween
-          ) {
-            Text("Model:", fontWeight = FontWeight.Medium)
-            Text(log.trailblazeLlmModel.modelId)
-          }
-          Spacer(modifier = Modifier.height(4.dp))
-          
-          // Request Context (agent architecture, tier, strategy)
-          log.requestContext?.let { ctx ->
-            // Agent Implementation
-            Row(
-              modifier = Modifier.fillMaxWidth(),
-              horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-              Text("Agent Architecture:", fontWeight = FontWeight.Medium)
-              Text(
-                text = ctx.agentImplementation.name,
-                color = when (ctx.agentImplementation) {
-                  AgentImplementation.TRAILBLAZE_RUNNER -> Color(0xFF1976D2)
-                  AgentImplementation.MULTI_AGENT_V3 -> Color(0xFF7B1FA2)
+
+          SelectionContainer {
+            Column {
+              // Model info
+              Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+              ) {
+                Text("Model:", fontWeight = FontWeight.Medium)
+                Text(text = log.trailblazeLlmModel.modelId)
+              }
+              Spacer(modifier = Modifier.height(4.dp))
+
+              // Request Context (agent architecture, tier, strategy)
+              log.requestContext?.let { ctx ->
+                // Agent Implementation
+                Row(
+                  modifier = Modifier.fillMaxWidth(),
+                  horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                  Text("Agent Architecture:", fontWeight = FontWeight.Medium)
+                  Text(
+                    text = ctx.agentImplementation.name,
+                    color = when (ctx.agentImplementation) {
+                      AgentImplementation.TRAILBLAZE_RUNNER -> Color(0xFF1976D2)
+                      AgentImplementation.MULTI_AGENT_V3 -> Color(0xFF7B1FA2)
+                    }
+                  )
                 }
-              )
-            }
-            Spacer(modifier = Modifier.height(4.dp))
-            
-            // Agent Tier (for two-tier architecture)
-            Row(
-              modifier = Modifier.fillMaxWidth(),
-              horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-              Text("Agent Tier:", fontWeight = FontWeight.Medium)
-              Text(
-                text = when (ctx.agentTier) {
-                  AgentTier.INNER -> "INNER (Screen Analysis)"
-                  AgentTier.OUTER -> "OUTER (Planning/Reasoning)"
-                  null -> "N/A"
-                },
-                color = when (ctx.agentTier) {
-                  AgentTier.INNER -> Color(0xFF9C27B0) // Purple for inner
-                  AgentTier.OUTER -> Color(0xFF2196F3) // Blue for outer
-                  null -> MaterialTheme.colorScheme.onSurfaceVariant
+                Spacer(modifier = Modifier.height(4.dp))
+
+                // Agent Tier (for two-tier architecture)
+                Row(
+                  modifier = Modifier.fillMaxWidth(),
+                  horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                  Text("Agent Tier:", fontWeight = FontWeight.Medium)
+                  Text(
+                    text = when (ctx.agentTier) {
+                      AgentTier.INNER -> "INNER (Screen Analysis)"
+                      AgentTier.OUTER -> "OUTER (Planning/Reasoning)"
+                      null -> "N/A"
+                    },
+                    color = when (ctx.agentTier) {
+                      AgentTier.INNER -> Color(0xFF9C27B0) // Purple for inner
+                      AgentTier.OUTER -> Color(0xFF2196F3) // Blue for outer
+                      null -> MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+                  )
                 }
-              )
-            }
-            Spacer(modifier = Modifier.height(4.dp))
-            
-            // LLM Call Strategy
-            Row(
-              modifier = Modifier.fillMaxWidth(),
-              horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-              Text("LLM Call Strategy:", fontWeight = FontWeight.Medium)
-              Text(
-                text = ctx.llmCallStrategy.name,
-                color = when (ctx.llmCallStrategy) {
-                  LlmCallStrategy.DIRECT -> Color(0xFF2E7D32)
-                  LlmCallStrategy.MCP_SAMPLING -> Color(0xFFFF9800)
+                Spacer(modifier = Modifier.height(4.dp))
+
+                // LLM Call Strategy
+                Row(
+                  modifier = Modifier.fillMaxWidth(),
+                  horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                  Text("LLM Call Strategy:", fontWeight = FontWeight.Medium)
+                  Text(
+                    text = ctx.llmCallStrategy.name,
+                    color = when (ctx.llmCallStrategy) {
+                      LlmCallStrategy.DIRECT -> Color(0xFF2E7D32)
+                      LlmCallStrategy.MCP_SAMPLING -> Color(0xFFFF9800)
+                    }
+                  )
                 }
-              )
-            }
-            Spacer(modifier = Modifier.height(4.dp))
-          }
-          
-          // Duration
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween
-          ) {
-            Text("Duration:", fontWeight = FontWeight.Medium)
-            Text("${log.durationMs}ms")
-          }
-          
-          // Token usage if available
-          log.llmRequestUsageAndCost?.inputTokenBreakdown?.let { breakdown ->
-            Spacer(modifier = Modifier.height(8.dp))
-            HorizontalDivider()
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-              text = "Token Usage",
-              style = MaterialTheme.typography.labelMedium,
-              fontWeight = FontWeight.Bold
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Row(
-              modifier = Modifier.fillMaxWidth(),
-              horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-              Text("Input Tokens:", fontWeight = FontWeight.Medium)
-              Text(formatCommaNumber(breakdown.totalEstimatedTokens))
+                Spacer(modifier = Modifier.height(4.dp))
+              }
+
+              // Duration
+              Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+              ) {
+                Text("Duration:", fontWeight = FontWeight.Medium)
+                Text(text = "${log.durationMs}ms")
+              }
+
+              // Token usage if available
+              log.llmRequestUsageAndCost?.inputTokenBreakdown?.let { breakdown ->
+                Spacer(modifier = Modifier.height(8.dp))
+                HorizontalDivider()
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                  text = "Token Usage",
+                  style = MaterialTheme.typography.labelMedium,
+                  fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(
+                  modifier = Modifier.fillMaxWidth(),
+                  horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                  Text("Input Tokens:", fontWeight = FontWeight.Medium)
+                  Text(text = formatCommaNumber(breakdown.totalEstimatedTokens))
+                }
+              }
             }
           }
         }
@@ -446,9 +452,9 @@ fun ChatHistoryDialog(
                   
                   // Token usage if available
                   log.llmRequestUsageAndCost?.inputTokenBreakdown?.let { breakdown ->
-                    Text(
+                    SelectableText(
                       text = "${breakdown.toolDescriptors.count} tools using ${formatCommaNumber(breakdown.toolDescriptors.tokens)} Tokens (${
-                        if (breakdown.totalEstimatedTokens > 0) 
+                        if (breakdown.totalEstimatedTokens > 0)
                           "${((breakdown.toolDescriptors.tokens.toDouble() / breakdown.totalEstimatedTokens) * 100).toInt()}% of context"
                         else "0%"
                       })",
@@ -517,123 +523,127 @@ fun ChatHistoryDialog(
                 modifier = Modifier.fillMaxWidth()
               ) {
                 // Collapsible header
-                Row(
-                  modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { isExpanded = !isExpanded }
-                    .padding(vertical = 8.dp),
-                  horizontalArrangement = Arrangement.SpaceBetween,
-                  verticalAlignment = Alignment.CenterVertically
-                ) {
+                SelectionContainer {
                   Row(
-                    modifier = Modifier.weight(1f),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier
+                      .fillMaxWidth()
+                      .clickable { isExpanded = !isExpanded }
+                      .padding(vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                   ) {
-                    Icon(
-                      imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                      contentDescription = if (isExpanded) "Collapse" else "Expand",
-                      modifier = Modifier.size(20.dp),
-                      tint = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Row(
+                      modifier = Modifier.weight(1f),
+                      horizontalArrangement = Arrangement.spacedBy(8.dp),
+                      verticalAlignment = Alignment.CenterVertically
+                    ) {
+                      Icon(
+                        imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                        contentDescription = if (isExpanded) "Collapse" else "Expand",
+                        modifier = Modifier.size(20.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                      )
+                      Text(
+                        text = tool.name,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.primary
+                      )
+                    }
+
                     Text(
-                      text = tool.name,
-                      style = MaterialTheme.typography.bodyMedium,
-                      fontWeight = FontWeight.Medium,
-                      color = MaterialTheme.colorScheme.primary
+                      text = "~${formatCommaNumber(estimatedTokens)} Tokens (${percentageOfTools.toInt()}% of tools, ${percentageOfTotal.toInt()}% of total context)",
+                      style = MaterialTheme.typography.labelSmall,
+                      color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                   }
-                  
-                  Text(
-                    text = "~${formatCommaNumber(estimatedTokens)} Tokens (${percentageOfTools.toInt()}% of tools, ${percentageOfTotal.toInt()}% of total context)",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                  )
                 }
                 
                 // Expanded content
                 if (isExpanded) {
-                  Column(
-                    modifier = Modifier
-                      .fillMaxWidth()
-                      .padding(start = 28.dp, top = 4.dp, bottom = 8.dp)
-                  ) {
-                    tool.description?.let { desc ->
-                      Text(
-                        text = desc,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurface
-                      )
-                      Spacer(modifier = Modifier.height(8.dp))
-                    }
-                    
-                    // Required parameters
-                    if (tool.requiredParameters.isNotEmpty()) {
-                      Text(
-                        text = "Required Parameters:",
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.error
-                      )
-                      Spacer(modifier = Modifier.height(4.dp))
-                      tool.requiredParameters.forEach { param ->
-                        Row(
-                          modifier = Modifier.padding(start = 8.dp, top = 2.dp),
-                          horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                          Text(
-                            text = "•",
-                            style = MaterialTheme.typography.bodySmall
-                          )
-                          Column {
+                  SelectionContainer {
+                    Column(
+                      modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 28.dp, top = 4.dp, bottom = 8.dp)
+                    ) {
+                      tool.description?.let { desc ->
+                        Text(
+                          text = desc,
+                          style = MaterialTheme.typography.bodySmall,
+                          color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                      }
+
+                      // Required parameters
+                      if (tool.requiredParameters.isNotEmpty()) {
+                        Text(
+                          text = "Required Parameters:",
+                          style = MaterialTheme.typography.labelSmall,
+                          fontWeight = FontWeight.Medium,
+                          color = MaterialTheme.colorScheme.error
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        tool.requiredParameters.forEach { param ->
+                          Row(
+                            modifier = Modifier.padding(start = 8.dp, top = 2.dp),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                          ) {
                             Text(
-                              text = "${param.name}: ${param.type}",
-                              style = MaterialTheme.typography.bodySmall,
-                              fontWeight = FontWeight.Medium
+                              text = "•",
+                              style = MaterialTheme.typography.bodySmall
                             )
-                            param.description?.let {
+                            Column {
                               Text(
-                                text = it,
+                                text = "${param.name}: ${param.type}",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                fontWeight = FontWeight.Medium
                               )
+                              param.description?.let {
+                                Text(
+                                  text = it,
+                                  style = MaterialTheme.typography.bodySmall,
+                                  color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                              }
                             }
                           }
                         }
+                        Spacer(modifier = Modifier.height(8.dp))
                       }
-                      Spacer(modifier = Modifier.height(8.dp))
-                    }
-                    
-                    // Optional parameters
-                    if (tool.optionalParameters.isNotEmpty()) {
-                      Text(
-                        text = "Optional Parameters:",
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                      )
-                      Spacer(modifier = Modifier.height(4.dp))
-                      tool.optionalParameters.forEach { param ->
-                        Row(
-                          modifier = Modifier.padding(start = 8.dp, top = 2.dp),
-                          horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                          Text(
-                            text = "•",
-                            style = MaterialTheme.typography.bodySmall
-                          )
-                          Column {
+
+                      // Optional parameters
+                      if (tool.optionalParameters.isNotEmpty()) {
+                        Text(
+                          text = "Optional Parameters:",
+                          style = MaterialTheme.typography.labelSmall,
+                          fontWeight = FontWeight.Medium,
+                          color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        tool.optionalParameters.forEach { param ->
+                          Row(
+                            modifier = Modifier.padding(start = 8.dp, top = 2.dp),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                          ) {
                             Text(
-                              text = "${param.name}: ${param.type}",
-                              style = MaterialTheme.typography.bodySmall,
-                              fontWeight = FontWeight.Medium
+                              text = "•",
+                              style = MaterialTheme.typography.bodySmall
                             )
-                            param.description?.let {
+                            Column {
                               Text(
-                                text = it,
+                                text = "${param.name}: ${param.type}",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                fontWeight = FontWeight.Medium
                               )
+                              param.description?.let {
+                                Text(
+                                  text = it,
+                                  style = MaterialTheme.typography.bodySmall,
+                                  color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                              }
                             }
                           }
                         }

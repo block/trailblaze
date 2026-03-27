@@ -2,6 +2,7 @@ package xyz.block.trailblaze.model
 
 import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.model.NodeSelectorMode.FORCE_LEGACY
 
 /**
  * Default value for whether AI fallback is enabled.
@@ -11,6 +12,23 @@ import xyz.block.trailblaze.logs.model.SessionId
  * recordings are validated unless explicitly opted-in.
  */
 const val AI_FALLBACK_DEFAULT: Boolean = false
+
+/**
+ * Controls whether playback and recording use the new [TrailblazeNodeSelector]-based path
+ * or the legacy Maestro [TrailblazeElementSelector] path.
+ *
+ * Applies to Maestro-based drivers (iOS Maestro, Android Maestro).
+ * Android Accessibility has its own execution path and is unaffected.
+ */
+@Serializable
+enum class NodeSelectorMode {
+  /** Try nodeSelector first; fall back to legacy Maestro if it returns null. */
+  PREFER_NODE_SELECTOR,
+  /** Always use the legacy Maestro command path. Ignores nodeSelector even if present. */
+  FORCE_LEGACY,
+  /** Always try nodeSelector first (converting legacy selectors if needed); fall back to legacy if the driver cannot handle it. */
+  FORCE_NODE_SELECTOR,
+}
 
 /**
  * Configuration class for Trailblaze test execution parameters.
@@ -37,6 +55,7 @@ data class TrailblazeConfig(
   val overrideSessionId: SessionId? = null,
   val aiFallback: Boolean = AI_FALLBACK_DEFAULT,
   val browserHeadless: Boolean = true,
+  val nodeSelectorMode: NodeSelectorMode = FORCE_LEGACY,
 ) {
   companion object {
     /**

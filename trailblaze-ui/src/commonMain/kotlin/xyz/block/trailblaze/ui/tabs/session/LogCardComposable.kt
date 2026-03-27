@@ -45,7 +45,7 @@ import xyz.block.trailblaze.api.HasClickCoordinates
 import xyz.block.trailblaze.api.AgentDriverAction
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionStatus
-import xyz.block.trailblaze.toolcalls.TrailblazeTool
+import xyz.block.trailblaze.yaml.TrailblazeYaml
 import xyz.block.trailblaze.ui.composables.CodeBlock
 import xyz.block.trailblaze.ui.composables.ScreenshotImage
 import xyz.block.trailblaze.ui.composables.SelectableText
@@ -61,7 +61,6 @@ fun LogCard(
   sessionId: String,
   sessionStartTime: Instant,
   toMaestroYaml: (JsonObject) -> String,
-  toTrailblazeYaml: (toolName: String, trailblazeTool: TrailblazeTool) -> String,
   imageLoader: ImageLoader = NetworkImageLoader(),
   showDetails: (() -> Unit)? = null,
   showInspectUI: (() -> Unit)? = null,
@@ -78,7 +77,7 @@ fun LogCard(
       title = "Tool: ${log.toolName}",
       duration = log.durationMs,
       elapsedTime = elapsedTimeMs,
-      preformattedText = toTrailblazeYaml(log.toolName, log.trailblazeTool)
+      preformattedText = TrailblazeYaml.toolToYaml(log.toolName, log.trailblazeTool)
     )
 
     is TrailblazeLog.MaestroCommandLog -> LogCardData(
@@ -119,7 +118,7 @@ fun LogCard(
       duration = null,
       elapsedTime = elapsedTimeMs,
       preformattedText = buildString {
-        appendLine(toTrailblazeYaml(log.toolName, log.trailblazeTool))
+        appendLine(TrailblazeYaml.toolToYaml(log.toolName, log.trailblazeTool))
       }
     )
 

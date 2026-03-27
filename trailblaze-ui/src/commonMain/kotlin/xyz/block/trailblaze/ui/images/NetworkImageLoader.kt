@@ -25,7 +25,7 @@ class NetworkImageLoader(
         return screenshotFile?.let { filename ->
             // Check if we have base64-encoded image data embedded in the HTML (WASM only)
             if (filename.startsWith("data:")) {
-                // Handle both PNG and JPEG data URLs
+                // Handle PNG, JPEG, and WebP data URLs
                 val base64Data = when {
                     filename.contains("png;base64,") -> filename.split("png;base64,", limit = 2).last()
                     filename.contains("jpeg;base64,") -> filename.split("jpeg;base64,", limit = 2).last()

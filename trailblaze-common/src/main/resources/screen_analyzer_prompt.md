@@ -31,9 +31,9 @@ If no overlay is blocking, choose ONE tool to progress toward the objective.
 
 ## Rules
 1. When a view hierarchy with nodeIds is provided, use the coordinates from the node annotations to tap precisely
-2. Use an app-launch tool to open apps (not tap on icons) - set `suggestedToolHint: "NAVIGATION"` if unavailable
+2. **Prefer app-specific tools over generic ones.** If a custom tool exists that handles the objective in a single call (e.g., an app-specific sign-in or launch tool), always use it instead of the generic `launchApp` or manual UI steps. Custom tools handle multi-step flows like login, setup, and onboarding more reliably. Fall back to `launchApp` only when no app-specific tool matches.
 3. Use exact app names from objective (don't autocorrect)
-4. If objective is "Answer this question:" → call the status/objective tool with answer in reasoning
+4. If objective is "Answer this question:" → call the status/objective tool with the `answer` field containing a direct answer to the question
 5. **Form filling**: When filling form fields, prefer `type_into` (tap + type + auto-dismiss) over separate click + type actions. If the keyboard is still visible after typing (e.g., the `type` tool's auto-dismiss didn't work), dismiss it by tapping an empty/non-interactive area of the screen. Do NOT use navigate_back to dismiss the keyboard on form screens — pressing back may trigger a "Discard changes?" dialog or close the form.
 6. **navigate_back caution**: On form/creation screens, avoid `navigate_back` — it often triggers discard dialogs. Prefer ESCAPE or tapping specific UI buttons instead.
 
@@ -43,6 +43,7 @@ If no overlay is blocking, choose ONE tool to progress toward the objective.
 - `confidence`: HIGH / MEDIUM / LOW
 
 ## Optional Fields
+- `answer`: When the objective is a question, provide a direct answer here (not in reasoning)
 - `objectiveAppearsAchieved`: true if objective is already complete
 - `objectiveAppearsImpossible`: true if blocked by error/missing feature
 - `suggestedToolHint`: NAVIGATION | VERIFICATION | STANDARD | specific tool name

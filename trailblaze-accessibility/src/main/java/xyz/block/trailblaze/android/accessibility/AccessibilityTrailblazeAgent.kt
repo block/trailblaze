@@ -44,7 +44,6 @@ class AccessibilityTrailblazeAgent(
 
   private val deviceManager =
     AccessibilityDeviceManager(
-      filterViewHierarchy = true,
       setOfMarkEnabled = setOfMarkEnabled,
       deviceClassifiers = deviceClassifiers,
     )
@@ -211,8 +210,5 @@ class AccessibilityTrailblazeAgent(
   }
 
   /** Provides the screen state using the accessibility service (no Maestro driver). */
-  fun getScreenState(
-    fullHierarchy: Boolean = false,
-    includeOffscreen: Boolean = false,
-  ) = deviceManager.getScreenState(fullHierarchy = fullHierarchy, includeOffscreen = includeOffscreen)
+  fun getScreenState() = deviceManager.getScreenState()
 }

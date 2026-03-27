@@ -29,7 +29,7 @@ fun CommandLine.describeCommands(): String =
       name = commandSpec.name(),
       summary = commandSpec.usageMessage().description().joinToString(" "),
       commands = subcommands.values
-        .filterNot { it.commandSpec.name() == "help" }
+        .filterNot { it.commandSpec.usageMessage().hidden() }
         .distinctBy { it.commandSpec.name() }
         .map { it.toCommandDescription() },
     )
@@ -41,7 +41,7 @@ private fun CommandLine.toCommandDescription(): CommandDescription {
     name = spec.name(),
     summary = spec.usageMessage().description().joinToString(" "),
     commands = spec.subcommands().values
-      .filterNot { it.commandSpec.name() == "help" }
+      .filterNot { it.commandSpec.usageMessage().hidden() }
       .distinctBy { it.commandSpec.name() }
       .map { it.toCommandDescription() },
   )

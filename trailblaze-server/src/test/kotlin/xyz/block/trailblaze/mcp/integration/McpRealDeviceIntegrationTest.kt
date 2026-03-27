@@ -33,7 +33,7 @@ import kotlin.test.assertTrue
  *
  * ## Running locally
  * ```bash
- * ./trailblaze --headless &
+ * ./trailblaze app --headless &
  * ./gradlew :trailblaze-server:integrationTest --tests "*McpRealDeviceIntegrationTest"
  * ```
  */
@@ -86,6 +86,10 @@ class McpRealDeviceIntegrationTest : TrailblazeServerTestBase() {
     if (isClientInitialized()) {
       try {
         client.callTool("endSession", emptyMap())
+        // Give the server time to release the device claim before the next test's
+        // baseSetUp creates a new session. Without this, the new session's auto-connect
+        // races with the old session's cleanup, causing DeviceAlreadyClaimedException.
+        delay(1_000)
       } catch (_: Exception) {
         // Non-fatal — base teardown will still close the client
       }
@@ -103,6 +107,9 @@ class McpRealDeviceIntegrationTest : TrailblazeServerTestBase() {
   private fun blazeTest(driverType: TrailblazeDriverType, agentImpl: AgentImplementation) = runBlocking {
     val tag = "${driverType.name} x ${agentImpl.name}"
     Console.log("[$tag] Starting")
+
+    // 0. End any stale session so the device call creates a fresh one with our testName
+    try { client.callTool("endSession", emptyMap()) } catch (_: Exception) {}
 
     // 1. Set driver type
     setDriverType(driverType.name)

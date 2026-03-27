@@ -82,7 +82,7 @@ open class GenerateReportCliCommand :
 
     // Move the files into session directories.  This is needed after an adb pull
     moveJsonFilesToSessionDirs(logsDir)
-    movePngsToSessionDirs(logsDir)
+    moveScreenshotsToSessionDirs(logsDir)
 
     val standaloneFileReport = true
     val logsSummaryEvents = renderSummary(logsRepo, standaloneFileReport)
@@ -253,27 +253,29 @@ fun moveJsonFilesToSessionDirs(logsDir: File) {
   }
 }
 
-fun movePngsToSessionDirs(logsDir: File) {
-  val pngFilesInLogsDir = logsDir.listFiles()?.filter { it.extension == "png" } ?: emptyList()
-  pngFilesInLogsDir.forEach { pngFile ->
+private val IMAGE_EXTENSIONS = setOf("png", "jpg", "jpeg", "webp")
+
+fun moveScreenshotsToSessionDirs(logsDir: File) {
+  val imageFiles = logsDir.listFiles()?.filter { it.extension in IMAGE_EXTENSIONS } ?: emptyList()
+  imageFiles.forEach { imageFile ->
     try {
-      // Filename format is: {sessionId}_{timestamp}.png
+      // Filename format is: {sessionId}_{timestamp}.{ext}
       // We need to extract everything before the last underscore (which is the timestamp)
-      val sessionId = pngFile.nameWithoutExtension.substringBeforeLast("_")
+      val sessionId = imageFile.nameWithoutExtension.substringBeforeLast("_")
 
       if (sessionId.isNotEmpty()) {
         val sessionDir = File(logsDir, sessionId)
         sessionDir.mkdirs()
 
-        val destFile = File(sessionDir, pngFile.name)
-        pngFile.copyTo(destFile, overwrite = true)
-        pngFile.delete()
-        Console.log("Moved ${pngFile.name} to session directory: $sessionId")
+        val destFile = File(sessionDir, imageFile.name)
+        imageFile.copyTo(destFile, overwrite = true)
+        imageFile.delete()
+        Console.log("Moved ${imageFile.name} to session directory: $sessionId")
       } else {
-        Console.log("Could not determine session ID for PNG file: ${pngFile.name}, skipping")
+        Console.log("Could not determine session ID for image file: ${imageFile.name}, skipping")
       }
     } catch (e: Exception) {
-      Console.log("Error processing PNG file ${pngFile.absolutePath}: ${e.message}")
+      Console.log("Error processing image file ${imageFile.absolutePath}: ${e.message}")
     }
   }
 }

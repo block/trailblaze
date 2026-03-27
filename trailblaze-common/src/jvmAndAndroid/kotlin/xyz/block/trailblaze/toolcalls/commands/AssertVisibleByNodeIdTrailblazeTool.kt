@@ -6,7 +6,9 @@ import kotlinx.serialization.encodeToString
 import xyz.block.trailblaze.api.TrailblazeElementSelector
 import xyz.block.trailblaze.api.TrailblazeNodeSelectorGenerator
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.exception.TrailblazeToolExecutionException
+import xyz.block.trailblaze.model.NodeSelectorMode
 import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
@@ -51,13 +53,13 @@ data class AssertVisibleByNodeIdTrailblazeTool(
 ) : DelegatingTrailblazeTool {
   override fun toExecutableTrailblazeTools(executionContext: TrailblazeToolExecutionContext): List<ExecutableTrailblazeTool> {
     val screenState = executionContext.screenState
-    if (screenState?.viewHierarchyOriginal == null) {
+    if (screenState?.viewHierarchy == null) {
       throw TrailblazeToolExecutionException(
         message = "No View Hierarchy available when processing $this",
         tool = this,
       )
     }
-    val matchingNode = ViewHierarchyTreeNode.dfs(screenState.viewHierarchyOriginal) {
+    val matchingNode = ViewHierarchyTreeNode.dfs(screenState.viewHierarchy) {
       it.nodeId == nodeId
     }
     if (matchingNode == null) {
@@ -66,16 +68,6 @@ data class AssertVisibleByNodeIdTrailblazeTool(
         tool = this,
       )
     }
-
-    val trailblazeElementSelector: TrailblazeElementSelector = findBestTrailblazeElementSelectorForTargetNode(
-      root = screenState.viewHierarchyOriginal,
-      target = matchingNode,
-      trailblazeDevicePlatform = screenState.trailblazeDevicePlatform,
-      widthPixels = screenState.deviceWidth,
-      heightPixels = screenState.deviceHeight,
-      spatialHints = relativelyPositionedViews.toOrderedSpatialHints(),
-    )
-    Console.log("Best Element Selector:\n${TrailblazeYaml.defaultYamlInstance.encodeToString(trailblazeElementSelector)}")
 
     // Generate a rich TrailblazeNodeSelector if the screen state has a native tree.
     // Node IDs don't align between ViewHierarchyTreeNode (pre-order DFS) and
@@ -104,11 +96,56 @@ data class AssertVisibleByNodeIdTrailblazeTool(
       }
     }
 
-    val bestTapTrailblazeToolForNode: ExecutableTrailblazeTool = AssertVisibleBySelectorTrailblazeTool(
-      reason = reason,
-      selector = trailblazeElementSelector,
-      nodeSelector = nodeSelector,
+    val mode = executionContext.nodeSelectorMode
+
+    when (mode) {
+      NodeSelectorMode.FORCE_LEGACY -> { /* fall through to TapSelectorV2 below */ }
+      NodeSelectorMode.FORCE_NODE_SELECTOR -> {
+        if (nodeSelector != null) {
+          val legacySelector = nodeSelector.toTrailblazeElementSelector()
+          Console.log("Best Element Selector (derived from nodeSelector):\n${TrailblazeYaml.defaultYamlInstance.encodeToString(legacySelector)}")
+          return listOf(
+            AssertVisibleBySelectorTrailblazeTool(
+              reason = reason,
+              selector = legacySelector,
+              nodeSelector = nodeSelector,
+            ),
+          )
+        }
+        // nodeSelector generation failed; fall through to legacy path
+      }
+      NodeSelectorMode.PREFER_NODE_SELECTOR -> {
+        if (screenState.trailblazeDevicePlatform == TrailblazeDevicePlatform.IOS && nodeSelector != null) {
+          val legacySelector = nodeSelector.toTrailblazeElementSelector()
+          Console.log("Best Element Selector (derived from nodeSelector):\n${TrailblazeYaml.defaultYamlInstance.encodeToString(legacySelector)}")
+          return listOf(
+            AssertVisibleBySelectorTrailblazeTool(
+              reason = reason,
+              selector = legacySelector,
+              nodeSelector = nodeSelector,
+            ),
+          )
+        }
+      }
+    }
+
+    // Legacy path: generate selector via TapSelectorV2.
+    val trailblazeElementSelector: TrailblazeElementSelector = findBestTrailblazeElementSelectorForTargetNode(
+      root = screenState.viewHierarchy,
+      target = matchingNode,
+      trailblazeDevicePlatform = screenState.trailblazeDevicePlatform,
+      widthPixels = screenState.deviceWidth,
+      heightPixels = screenState.deviceHeight,
+      spatialHints = relativelyPositionedViews.toOrderedSpatialHints(),
     )
-    return listOf(bestTapTrailblazeToolForNode)
+    Console.log("Best Element Selector:\n${TrailblazeYaml.defaultYamlInstance.encodeToString(trailblazeElementSelector)}")
+
+    return listOf(
+      AssertVisibleBySelectorTrailblazeTool(
+        reason = reason,
+        selector = trailblazeElementSelector,
+        nodeSelector = if (mode == NodeSelectorMode.FORCE_LEGACY) null else nodeSelector,
+      ),
+    )
   }
 }

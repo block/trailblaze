@@ -393,4 +393,5 @@ class TrailblazeNodeSelectorGeneratorAndroidAccessibilityTest : TrailblazeNodeSe
     val selector = assertUniqueMatch(root, root)
     assertNotNull(selector)
   }
+
 }

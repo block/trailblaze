@@ -207,33 +207,33 @@ fun InteractivePieChart(
           if (hoveredSegment != null) {
             val percentage = ((hoveredSegment.value.toFloat() / total) * 100).toInt()
             
-            Text(
+            SelectableText(
               text = hoveredSegment.label,
               style = MaterialTheme.typography.labelMedium,
               fontWeight = FontWeight.Medium,
               color = hoveredSegment.color
             )
             Spacer(modifier = Modifier.height(4.dp))
-            Text(
+            SelectableText(
               text = formatValue(hoveredSegment.value),
               style = MaterialTheme.typography.titleLarge,
               fontWeight = FontWeight.Bold
             )
-            Text(
+            SelectableText(
               text = "$percentage%",
               style = MaterialTheme.typography.bodySmall,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
               fontWeight = FontWeight.Medium
             )
             hoveredSegment.description?.let { desc ->
-              Text(
+              SelectableText(
                 text = desc,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
               )
             }
           } else {
-            Text(
+            SelectableText(
               text = formatValue(total.toLong()),
               style = MaterialTheme.typography.titleLarge,
               fontWeight = FontWeight.Bold
@@ -291,13 +291,13 @@ private fun PieChartLegendItem(
         style = MaterialTheme.typography.bodyMedium,
         fontWeight = FontWeight.Medium
       )
-      Text(
+      SelectableText(
         text = value,
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant
       )
     }
-    Text(
+    SelectableText(
       text = "$percentage%",
       style = MaterialTheme.typography.titleSmall,
       fontWeight = FontWeight.Bold,

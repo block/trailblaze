@@ -85,5 +85,18 @@ Unknown custom command, ensure there is a mapping between the custom command and
       override val errorMessage: String,
       val command: TrailblazeTool,
     ) : Error
+
+    /**
+     * A fatal, non-recoverable error that should immediately abort the test.
+     * Unlike other errors (which are sent back to the LLM for potential retry),
+     * this error terminates execution right away.
+     *
+     * Use for precondition failures like missing hardware, disconnected devices, etc.
+     */
+    @Serializable
+    data class FatalError(
+      override val errorMessage: String,
+      val stackTraceString: String? = null,
+    ) : Error
   }
 }

@@ -140,6 +140,69 @@ data class TrailblazeNodeSelector(
     }
     index?.let { append(", index=$it") }
   }.trimStart(',', ' ')
+
+  /**
+   * Converts this [TrailblazeNodeSelector] to a legacy [TrailblazeElementSelector] for
+   * backward compatibility. Maps driver-specific properties to the closest
+   * [TrailblazeElementSelector] equivalents.
+   *
+   * Maestro's `textRegex` matches against `resolveText()` (text ?? hintText ?? accessibilityText),
+   * so any text-like field maps to `textRegex`. Properties without a legacy equivalent
+   * (className, hintText as a distinct field) are folded into the closest match.
+   */
+  fun toTrailblazeElementSelector(): TrailblazeElementSelector {
+    var textRegex: String? = null
+    var idRegex: String? = null
+    var focused: Boolean? = null
+    var selected: Boolean? = null
+    var enabled: Boolean? = null
+    var checked: Boolean? = null
+
+    when (val match = driverMatch) {
+      is DriverNodeMatch.IosMaestro -> {
+        textRegex = match.textRegex ?: match.hintTextRegex ?: match.accessibilityTextRegex
+        idRegex = match.resourceIdRegex
+        focused = match.focused
+        selected = match.selected
+      }
+      is DriverNodeMatch.AndroidMaestro -> {
+        textRegex = match.textRegex ?: match.hintTextRegex ?: match.accessibilityTextRegex
+        idRegex = match.resourceIdRegex
+        focused = match.focused
+        selected = match.selected
+        enabled = match.enabled
+        checked = match.checked
+      }
+      is DriverNodeMatch.AndroidAccessibility -> {
+        textRegex = match.textRegex ?: match.contentDescriptionRegex ?: match.hintTextRegex
+        idRegex = match.resourceIdRegex
+      }
+      is DriverNodeMatch.Compose -> {
+        textRegex = match.textRegex
+      }
+      is DriverNodeMatch.Web -> {
+        textRegex = match.ariaNameRegex ?: match.ariaDescriptorRegex
+      }
+      null -> {}
+    }
+
+    return TrailblazeElementSelector(
+      textRegex = textRegex,
+      idRegex = idRegex,
+      focused = focused,
+      selected = selected,
+      enabled = enabled,
+      checked = checked,
+      index = this.index?.toString(),
+      below = this.below?.toTrailblazeElementSelector(),
+      above = this.above?.toTrailblazeElementSelector(),
+      leftOf = this.leftOf?.toTrailblazeElementSelector(),
+      rightOf = this.rightOf?.toTrailblazeElementSelector(),
+      childOf = this.childOf?.toTrailblazeElementSelector(),
+      containsChild = this.containsChild?.toTrailblazeElementSelector(),
+      containsDescendants = this.containsDescendants?.map { it.toTrailblazeElementSelector() },
+    )
+  }
 }
 
 /**

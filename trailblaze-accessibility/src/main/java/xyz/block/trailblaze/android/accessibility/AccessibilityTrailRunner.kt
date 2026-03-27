@@ -53,10 +53,9 @@ object AccessibilityTrailRunner {
   /**
    * Runs a list of accessibility actions with standardized error handling and logging.
    *
-   * Actions are executed sequentially on the calling thread. After each action completes
-   * and the UI settles, the settled screen state (view hierarchy + screenshot) is captured
-   * and logged asynchronously on a background thread so that the next action can start
-   * immediately.
+   * For each action, the pre-action screen state is captured first (so tap coordinates
+   * overlay on the correct screenshot), then the action executes. Logging runs
+   * asynchronously on a background thread so the next action can start immediately.
    */
   fun runActions(
     actions: List<AccessibilityAction>,
@@ -66,6 +65,15 @@ object AccessibilityTrailRunner {
     deviceManager: AccessibilityDeviceManager = AccessibilityDeviceManager(),
   ): TrailblazeToolResult {
     for (action in actions) {
+      // Ensure the UI is settled before capturing. In the RPC flow, actions arrive from the
+      // agent without a local settle guarantee — waitForReady() is event-based and returns
+      // immediately if already stable, so this is free when the previous action already settled.
+      deviceManager.waitForReady()
+
+      // Capture the pre-action screen state so the screenshot shows the UI at the moment
+      // the action was decided — tap coordinates overlay correctly on the target element.
+      val preScreenState = deviceManager.captureScreenStateForLogging()
+
       val startTime = Clock.System.now()
 
       // Execute action (gesture dispatch + event-based settle)
@@ -84,15 +92,10 @@ object AccessibilityTrailRunner {
       val durationMs =
         Clock.System.now().toEpochMilliseconds() - startTime.toEpochMilliseconds()
 
-      // Capture the settled screen state (single-pass: one tree capture + UiAutomation
-      // screenshot with no rate limit). This is the post-action state after the UI has
-      // settled, so it reflects what the user would see.
-      val screenState = deviceManager.captureScreenStateForLogging()
-
       // Map action to driver log format and log asynchronously
       val driverAction = mapToAgentDriverAction(action, executionResult, result)
       val session = sessionProvider.invoke()
-      logAsync(trailblazeLogger, session, screenState, driverAction, durationMs, startTime, traceId)
+      logAsync(trailblazeLogger, session, preScreenState, driverAction, durationMs, startTime, traceId)
 
       if (result is TrailblazeToolResult.Error) {
         flushLogs()

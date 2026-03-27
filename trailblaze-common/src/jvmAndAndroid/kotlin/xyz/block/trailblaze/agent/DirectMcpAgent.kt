@@ -2,7 +2,7 @@ package xyz.block.trailblaze.agent
 
 import ai.koog.agents.core.tools.ToolDescriptor
 import ai.koog.agents.core.tools.ToolParameterDescriptor
-import ai.koog.agents.core.tools.reflect.asToolType
+import xyz.block.trailblaze.toolcalls.asToolType
 import ai.koog.prompt.message.Message
 import ai.koog.prompt.message.RequestMetaInfo
 import kotlin.reflect.full.starProjectedType
@@ -161,7 +161,7 @@ GUIDELINES:
         screenHeight = screenState.deviceHeight,
         platform = screenState.trailblazeDevicePlatform,
       )
-      val filtered = vhFilter.filterInteractableViewHierarchyTreeNodes(screenState.viewHierarchyOriginal)
+      val filtered = vhFilter.filterInteractableViewHierarchyTreeNodes(screenState.viewHierarchy)
       val viewHierarchyDescription = buildViewHierarchyDescription(filtered)
 
       // 3. Build user message with screen state and action history

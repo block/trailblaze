@@ -48,10 +48,21 @@ enum class McpToolProfile {
     const val TOOL_TRAIL = "trail"
     const val TOOL_TRAIL_EDIT = "trailEdit"
     const val TOOL_CONFIG = "config"
+    const val TOOL_SNAPSHOT = "snapshot"
+    const val TOOL_SESSION = "session"
 
     /** Tool names exposed in MINIMAL mode. */
     val MINIMAL_TOOL_NAMES =
-      setOf(TOOL_DEVICE, TOOL_BLAZE, TOOL_ASK, TOOL_TRAIL, TOOL_TRAIL_EDIT, TOOL_CONFIG)
+      setOf(
+        TOOL_DEVICE,
+        TOOL_BLAZE,
+        TOOL_ASK,
+        TOOL_TRAIL,
+        TOOL_TRAIL_EDIT,
+        TOOL_CONFIG,
+        TOOL_SNAPSHOT,
+        TOOL_SESSION,
+      )
   }
 }
 
@@ -206,6 +217,26 @@ class TrailblazeMcpSessionContext(
 ) {
 
   // ─────────────────────────────────────────────────────────────────────────────
+  // Session Capture State
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Callback to stop the active capture session (video + device logs).
+   * Returns list of artifact descriptions (name, type, sizeBytes).
+   * Set by session(action=START), cleared by session(action=STOP) or close().
+   */
+  var stopCaptureCallback: (() -> List<CaptureArtifactInfo>)? = null
+
+  /** Simple artifact info returned by capture stop, avoiding dependency on trailblaze-capture. */
+  data class CaptureArtifactInfo(val name: String, val type: String, val sizeBytes: Long)
+
+  /**
+   * Human-readable title for the current session.
+   * Set by session(action=START, title="..."), used as default trail name when saving.
+   */
+  var sessionTitle: String? = null
+
+  // ─────────────────────────────────────────────────────────────────────────────
   // Trail Recording State
   //
   // All recording state is guarded by [recordingLock] since multiple MCP tool
@@ -301,6 +332,12 @@ class TrailblazeMcpSessionContext(
    * Call when the session is being destroyed to prevent coroutine leaks.
    */
   fun close() {
+    try {
+      stopCaptureCallback?.invoke()
+    } catch (e: Exception) {
+      Console.error("[SessionContext] Failed to stop capture on close: ${e.message}")
+    }
+    stopCaptureCallback = null
     sendProgressNotificationsScope.cancel()
   }
 

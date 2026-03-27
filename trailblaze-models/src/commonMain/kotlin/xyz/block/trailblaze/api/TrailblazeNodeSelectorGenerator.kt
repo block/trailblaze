@@ -29,6 +29,15 @@ package xyz.block.trailblaze.api
  * **Spatial (10):** Positional relationships to uniquely identifiable neighbors.
  * **Fallback (11):** Index-based positioning as a last resort.
  *
+ * ## iOS Maestro strategy cascade (simplest to most complex)
+ *
+ * **Identity (1):** resourceId (accessibility identifier — most stable on iOS).
+ * **Text (2-6):** accessibilityText, hintText, text, text+className, resourceId+text.
+ * **Type + state (7-8):** className alone, className + focused/selected.
+ * **Hierarchy (9-10):** childOf parent, containsChild.
+ * **Spatial (11):** Positional relationships to uniquely identifiable neighbors.
+ * **Fallback (12):** Index-based positioning as a last resort.
+ *
  * ## Recording flow
  * The caller provides the full tree and the target node. The generator returns the
  * simplest [TrailblazeNodeSelector] that resolves to exactly one match (the target).

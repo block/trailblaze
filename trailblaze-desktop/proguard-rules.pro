@@ -66,8 +66,14 @@
 # ===========================================================================
 # Kotlin
 # ===========================================================================
--keep class kotlin.Metadata { *; }
--keep class kotlin.reflect.jvm.internal.** { *; }
+# ProGuard corrupts Kotlin metadata when processing stdlib classes, causing
+# KotlinReflectionInternalError at runtime (e.g., EmptySet.serialVersionUID).
+# Keep all Kotlin/KotlinX classes to prevent metadata corruption.
+-keep class kotlin.** { *; }
+-keep class kotlinx.** { *; }
+-keepclassmembers class * {
+    static final long serialVersionUID;
+}
 -dontnote kotlin.**
 -dontnote kotlinx.**
 
@@ -120,7 +126,27 @@
 # ===========================================================================
 # Maestro (device automation — may use reflection internally)
 # ===========================================================================
--keep class dev.mobile.maestro.** { *; }
+# The Maven group is "dev.mobile" but the Java packages are top-level:
+# maestro.*, device.*, ios.*, xcuitest.*, util.*, hierarchy.*, dadb.*, etc.
+# (spread across maestro-client, maestro-ios-driver, maestro-orchestra JARs).
+-keep class maestro.** { *; }
+-keep class maestro_android.** { *; }
+-keep class device.** { *; }
+-keep class ios.** { *; }
+-keep class xcuitest.** { *; }
+-keep class util.** { *; }
+-keep class hierarchy.** { *; }
+-keep class dadb.** { *; }
+-keep class difflib.** { *; }
+-keep class pxb.** { *; }
+-keep class CdpClient { *; }
+-keep class CdpClient$* { *; }
+-keep class CdpTarget { *; }
+-keep class CdpTarget$* { *; }
+# Maestro's XCTest installer resolves iOS driver bundles via resource directory
+# lookups (getResource("driver-iPhoneSimulator")). ProGuard strips empty
+# directory entries by default, which breaks the lookup.
+-keepdirectories
 
 # ===========================================================================
 # Playwright (driver process spawning, internal impl classes)

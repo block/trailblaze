@@ -40,6 +40,8 @@ class DeviceManagerToolSet(
   private val deviceClaimRegistry: DeviceClaimRegistry? = null,
   private val toolSetCatalog: List<ToolSetCatalogEntry> = TrailblazeToolSetCatalog.defaultEntries(true),
   private val onActiveToolSetsChanged: (activeToolSetIds: List<String>, catalog: List<ToolSetCatalogEntry>) -> Unit = { _, _ -> },
+  /** Callback to terminate a displaced MCP session when force-claiming a device. */
+  private val onTerminateSession: ((sessionId: String) -> String?)? = null,
 ) : ToolSet {
 
   /**
@@ -247,9 +249,15 @@ class DeviceManagerToolSet(
   ): String {
     // Check exclusive device claim before connecting
     val mcpSessionId = sessionContext?.mcpSessionId?.sessionId
+    var displacedSessionInfo: String? = null
     if (deviceClaimRegistry != null && mcpSessionId != null) {
       try {
-        deviceClaimRegistry.claim(trailblazeDeviceId, mcpSessionId, force)
+        val previousClaim = deviceClaimRegistry.claim(trailblazeDeviceId, mcpSessionId, force)
+        // If we force-claimed from another session, terminate it cleanly
+        if (previousClaim != null && previousClaim.mcpSessionId != mcpSessionId) {
+          val clientName = onTerminateSession?.invoke(previousClaim.mcpSessionId)
+          displacedSessionInfo = clientName ?: previousClaim.mcpSessionId
+        }
       } catch (e: DeviceAlreadyClaimedException) {
         return "Error: ${e.message}"
       }
@@ -274,8 +282,8 @@ class DeviceManagerToolSet(
     }
 
     sessionContext?.setAssociatedDevice(trailblazeDeviceId)
-    // Ensure a session exists and emit the session start log on connect
-    mcpBridge.ensureSessionAndGetId(testName)
+    // Session creation is deferred to the first blaze/ask call so it can be named
+    // after the first objective. Start implicit recording now (it just sets a flag).
     // Start implicit recording - user can save later with trail(action=SAVE, name="...")
     sessionContext?.startImplicitRecording()
 
@@ -284,7 +292,12 @@ class DeviceManagerToolSet(
     val driverStatus = mcpBridge.getDriverConnectionStatus(trailblazeDeviceId)
     if (driverStatus != null) return driverStatus
 
-    return "Connected to ${trailblazeDeviceId.instanceId} (${trailblazeDeviceId.trailblazeDevicePlatform.displayName}). Session recording - save anytime with trail(action=SAVE, name='...')"
+    val displacedMsg = if (displacedSessionInfo != null) {
+      " (ended previous session: $displacedSessionInfo)"
+    } else {
+      ""
+    }
+    return "Connected to ${trailblazeDeviceId.instanceId} (${trailblazeDeviceId.trailblazeDevicePlatform.displayName})$displacedMsg. Session recording - save anytime with trail(action=SAVE, name='...')"
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -307,7 +320,7 @@ class DeviceManagerToolSet(
   suspend fun connectToDevice(trailblazeDeviceId: TrailblazeDeviceId): String {
     val result = mcpBridge.selectDevice(trailblazeDeviceId)
     sessionContext?.setAssociatedDevice(trailblazeDeviceId)
-    mcpBridge.ensureSessionAndGetId()
+    // Session creation deferred to first blaze/ask call for meaningful naming.
     sessionContext?.startImplicitRecording()
     return TrailblazeJsonInstance.encodeToString(result)
   }
@@ -510,12 +523,12 @@ class ObservationToolSet(
       screenHeight = screenState.deviceHeight,
       platform = screenState.trailblazeDevicePlatform,
     )
-    val filtered = vhFilter.filterInteractableViewHierarchyTreeNodes(screenState.viewHierarchyOriginal)
+    val filtered = vhFilter.filterInteractableViewHierarchyTreeNodes(screenState.viewHierarchy)
 
     val viewHierarchyText = when (effectiveVerbosity) {
       ViewHierarchyVerbosity.MINIMAL -> buildMinimalViewHierarchy(filtered)
       ViewHierarchyVerbosity.STANDARD -> buildViewHierarchyDescription(filtered)
-      ViewHierarchyVerbosity.FULL -> buildFullViewHierarchy(screenState.viewHierarchyOriginal)
+      ViewHierarchyVerbosity.FULL -> buildFullViewHierarchy(screenState.viewHierarchy)
     }
 
     return if (includeScreenshot) {
@@ -559,12 +572,12 @@ class ObservationToolSet(
       screenHeight = screenState.deviceHeight,
       platform = screenState.trailblazeDevicePlatform,
     )
-    val filtered = vhFilter.filterInteractableViewHierarchyTreeNodes(screenState.viewHierarchyOriginal)
+    val filtered = vhFilter.filterInteractableViewHierarchyTreeNodes(screenState.viewHierarchy)
 
     return when (effectiveVerbosity) {
       ViewHierarchyVerbosity.MINIMAL -> buildMinimalViewHierarchy(filtered)
       ViewHierarchyVerbosity.STANDARD -> buildViewHierarchyDescription(filtered)
-      ViewHierarchyVerbosity.FULL -> buildFullViewHierarchy(screenState.viewHierarchyOriginal)
+      ViewHierarchyVerbosity.FULL -> buildFullViewHierarchy(screenState.viewHierarchy)
     }
   }
 

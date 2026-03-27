@@ -48,7 +48,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.datetime.Instant
 import xyz.block.trailblaze.logs.client.TrailblazeLog
-import xyz.block.trailblaze.toolcalls.TrailblazeTool
+import xyz.block.trailblaze.yaml.TrailblazeYaml
 import xyz.block.trailblaze.ui.composables.ScreenshotImage
 import xyz.block.trailblaze.ui.images.ImageLoader
 
@@ -61,7 +61,6 @@ internal fun ScreenshotGallery(
   sessionId: String,
   imageLoader: ImageLoader,
   onFullScreenClick: (Any?, Int, Int, Int?, Int?) -> Unit,
-  toTrailblazeYaml: (toolName: String, trailblazeTool: TrailblazeTool) -> String = { name, _ -> name },
   onShowDetails: ((TrailblazeLog) -> Unit)? = null,
   onShowInspectUI: ((TrailblazeLog) -> Unit)? = null,
   onShowChatHistory: ((TrailblazeLog.TrailblazeLlmRequestLog) -> Unit)? = null,
@@ -339,7 +338,7 @@ internal fun ScreenshotGallery(
             // Tool call rendered as YAML
             if (selected.toolCallName != null && selected.trailblazeTool != null) {
               val yamlText =
-                toTrailblazeYaml(selected.toolCallName, selected.trailblazeTool)
+                TrailblazeYaml.toolToYaml(selected.toolCallName, selected.trailblazeTool)
               if (yamlText.isNotBlank()) {
                 val yamlShape = if (hasScreenshot) {
                   RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp)

@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.mcp.sampling
 
+import xyz.block.trailblaze.api.ImageFormatDetector
 import io.modelcontextprotocol.kotlin.sdk.server.ServerSession
 import io.modelcontextprotocol.kotlin.sdk.types.CreateMessageRequest
 import io.modelcontextprotocol.kotlin.sdk.types.CreateMessageRequestParams
@@ -204,7 +205,7 @@ class McpSamplingClient(
           role = Role.User,
           content = ImageContent(
             data = screenshotBase64,
-            mimeType = "image/png",
+            mimeType = ImageFormatDetector.detectMimeTypeFromBase64(screenshotBase64),
           ),
         ),
       )

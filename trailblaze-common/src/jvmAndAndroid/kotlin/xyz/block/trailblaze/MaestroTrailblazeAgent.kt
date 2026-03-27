@@ -14,16 +14,15 @@ import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.logs.model.TraceId.Companion.TraceOrigin
+import xyz.block.trailblaze.model.NodeSelectorMode
 import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.isSuccess
-import xyz.block.trailblaze.toolcalls.commands.RequestViewHierarchyDetailsTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.memory.MemoryTrailblazeTool
 import xyz.block.trailblaze.utils.ElementComparator
-import xyz.block.trailblaze.viewhierarchy.NativeViewHierarchyDetail
 
 /**
  * Abstract class for Trailblaze agents that handle Maestro commands.
@@ -36,6 +35,8 @@ abstract class MaestroTrailblazeAgent(
   override val trailblazeLogger: TrailblazeLogger,
   override val trailblazeDeviceInfoProvider: () -> TrailblazeDeviceInfo,
   override val sessionProvider: TrailblazeSessionProvider,
+  /** Controls nodeSelector vs legacy Maestro path for playback and recording. */
+  val nodeSelectorMode: NodeSelectorMode = NodeSelectorMode.FORCE_LEGACY,
 ) : TrailblazeAgent, TrailblazeAgentContext {
 
   /**
@@ -50,13 +51,6 @@ abstract class MaestroTrailblazeAgent(
   ): TrailblazeToolResult
 
   override val memory = AgentMemory()
-
-  /**
-   * Pending view hierarchy detail requests from [RequestViewHierarchyDetailsTrailblazeTool].
-   * Consumed (cleared) by the screen state provider on the next turn.
-   */
-  @Volatile
-  var pendingViewHierarchyDetails: Set<NativeViewHierarchyDetail> = emptySet()
 
   /**
    * Executes a tap using the rich [TrailblazeNodeSelector], bypassing the Maestro command layer.
@@ -156,6 +150,7 @@ abstract class MaestroTrailblazeAgent(
       trailblazeLogger = trailblazeLogger,
       memory = memory,
       maestroTrailblazeAgent = this,
+      nodeSelectorMode = nodeSelectorMode,
     )
 
     val toolsExecuted = mutableListOf<TrailblazeTool>()
@@ -168,9 +163,6 @@ abstract class MaestroTrailblazeAgent(
           if (!result.isSuccess()) {
             // Exit early if any tool execution fails
             return TrailblazeAgent.RunTrailblazeToolsResult(inputTools = toolsExecuted, executedTools = toolsExecuted, result = result)
-          }
-          if (trailblazeTool is RequestViewHierarchyDetailsTrailblazeTool) {
-            pendingViewHierarchyDetails = trailblazeTool.include.toSet()
           }
           lastSuccessResult = result
         }

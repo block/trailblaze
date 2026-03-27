@@ -108,9 +108,11 @@ class MainTrailblazeApp(
     // Get the MCP server instance (we'll set the callback after Compose state is ready)
     val trailblazeMcpServer = trailblazeMcpServerProvider()
 
-    if (headless || !canRunDesktopGui()) {
-      // Headless mode (no display or non-macOS): start only the MCP server
-      // without any Compose Desktop UI. This avoids requiring AWT/display.
+    if (!canRunDesktopGui()) {
+      // No display available (non-macOS or headless environment): start only the
+      // MCP server without any Compose Desktop UI.
+      // On macOS, we always start Compose Desktop so the system tray icon is
+      // available — the `headless` flag just controls initial window visibility.
       Console.log("Starting Trailblaze in headless mode (server only, no GUI)...")
       val portManager = trailblazeSavedSettingsRepo.portManager
       trailblazeMcpServer.startStreamableHttpMcpServer(
@@ -137,7 +139,7 @@ class MainTrailblazeApp(
       // Auto Launch Goose if enabled
       val appConfig = trailblazeSavedSettingsRepo.serverStateFlow.value.appConfig
       if (appConfig.autoLaunchGoose) {
-        TrailblazeDesktopUtil.openGoose()
+        TrailblazeDesktopUtil.openGoose(port = portManager.httpPort)
       }
     }
 

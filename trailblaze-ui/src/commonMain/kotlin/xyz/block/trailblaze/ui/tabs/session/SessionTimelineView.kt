@@ -60,6 +60,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.model.isInProgress
 import xyz.block.trailblaze.ui.composables.ScreenshotImage
+import xyz.block.trailblaze.ui.composables.SelectableText
 import xyz.block.trailblaze.ui.composables.createVideoFrameCache
 import xyz.block.trailblaze.ui.composables.extractVideoFrame
 import xyz.block.trailblaze.ui.images.ImageLoader
@@ -123,9 +124,11 @@ internal fun SessionTimelineView(
     timelineState.sessionEndMs = effectiveEndMs
     timelineState.hasObjectives = objectives.isNotEmpty()
     timelineState.isInProgress = overallStatus?.isInProgress == true
-    // Auto-scrub to session start if no position set
+    // Completed sessions start at the end so the user sees the final step/screenshot;
+    // live sessions start at the beginning.
     if (timelineState.scrubTimestampMs == null) {
-      timelineState.scrubTimestampMs = effectiveStartMs
+      val isLiveSession = overallStatus?.isInProgress == true
+      timelineState.scrubTimestampMs = if (isLiveSession) effectiveStartMs else effectiveEndMs
     }
   }
 
@@ -465,7 +468,7 @@ internal fun SessionTimelineView(
           if (closestScreenshot != null) {
             val screenshotElapsed =
               (closestScreenshot.timestamp.toEpochMilliseconds() - sessionStartMs).coerceAtLeast(0L)
-            Text(
+            SelectableText(
               text = "${closestScreenshot.label} @ ${formatDuration(screenshotElapsed)}",
               style = MaterialTheme.typography.labelMedium,
               fontWeight = FontWeight.Medium,
@@ -498,7 +501,7 @@ internal fun SessionTimelineView(
 
             closestScreenshot.toolCallName?.let { toolName ->
               Spacer(modifier = Modifier.height(4.dp))
-              Text(
+              SelectableText(
                 text = toolName,
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.primary,
@@ -525,7 +528,7 @@ internal fun SessionTimelineView(
       ) {
         // Current position indicator
         val elapsed = (currentTimestamp - sessionStartMs).coerceAtLeast(0L)
-        Text(
+        SelectableText(
           text = "Position: ${formatDuration(elapsed)}",
           style = MaterialTheme.typography.titleSmall,
           fontWeight = FontWeight.Bold,
@@ -537,11 +540,11 @@ internal fun SessionTimelineView(
             title = "Step",
             color = objectiveStatusColor(activeObjective.status),
           ) {
-            Text(
+            SelectableText(
               text = activeObjective.prompt,
               style = MaterialTheme.typography.bodyMedium,
             )
-            Text(
+            SelectableText(
               text = activeObjective.status.label,
               style = MaterialTheme.typography.labelSmall,
               color = objectiveStatusColor(activeObjective.status),
@@ -556,14 +559,14 @@ internal fun SessionTimelineView(
             title = "Tool: ${activeToolLog.toolName}",
             color = if (activeToolLog.successful) SessionProgressColors.succeeded else MaterialTheme.colorScheme.error,
           ) {
-            Text(
+            SelectableText(
               text = if (activeToolLog.successful) "Succeeded" else "Failed",
               style = MaterialTheme.typography.labelSmall,
               fontWeight = FontWeight.Bold,
               color = if (activeToolLog.successful) SessionProgressColors.succeeded else MaterialTheme.colorScheme.error,
             )
             activeToolLog.durationMs?.let { dur ->
-              Text(
+              SelectableText(
                 text = "Duration: ${dur}ms",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,

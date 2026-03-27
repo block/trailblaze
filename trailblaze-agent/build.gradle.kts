@@ -9,7 +9,7 @@ plugins {
 dependencies {
   api(project(":trailblaze-common"))
   api(libs.koog.agents.tools)
-  api(libs.koog.agents.planner) // Goal-oriented planner for trail execution
+  api(libs.koog.agents.ext)
   api(libs.koog.prompt.llm)
   api(libs.koog.prompt.model)
 

@@ -210,27 +210,24 @@ class McpProxy(
   }
 
   /**
-   * Start the daemon via the `./trailblaze` launcher script.
-   * The script handles Gradle build and launches in headless mode.
+   * Start the daemon in headless mode.
    */
   private fun startDaemon(log: (String) -> Unit) {
     val launcher = findLauncher()
     if (launcher == null) {
-      log("Cannot auto-start daemon: ./trailblaze launcher not found. Start manually.")
+      log("Cannot auto-start daemon: trailblaze launcher not found. Start it manually with: trailblaze app")
       return
     }
 
-    val command = mutableListOf(launcher.absolutePath, "--headless")
+    val command = mutableListOf(launcher.absolutePath, "app", "--headless")
 
-    // Port overrides
-    if (port != TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTP_PORT) {
-      command.addAll(1, listOf("--port", port.toString()))
-    }
-
-    log("Starting daemon: ${launcher.name} --headless")
+    log("Starting daemon: ${launcher.name} app --headless")
 
     try {
       val pb = ProcessBuilder(command)
+      if (port != TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTP_PORT) {
+        pb.environment()["TRAILBLAZE_PORT"] = port.toString()
+      }
       pb.redirectOutput(ProcessBuilder.Redirect.DISCARD)
       pb.redirectError(ProcessBuilder.Redirect.DISCARD)
       pb.start()
@@ -240,22 +237,7 @@ class McpProxy(
     }
   }
 
-  /**
-   * Find the trailblaze launcher script next to the running JAR,
-   * falling back to well-known relative paths for local development.
-   */
-  private fun findLauncher(): File? {
-    // Launcher next to the JAR (install.sh / release builds).
-    val jarDir = McpProxy::class.java.protectionDomain?.codeSource?.location?.toURI()?.let { File(it).parentFile }
-    if (jarDir != null) {
-      val launcher = File(jarDir, "trailblaze")
-      if (launcher.exists() && launcher.canExecute()) return launcher
-    }
-
-    // Fallback: relative to CWD (local development from repo root).
-    return listOf(File("trailblaze"), File("opensource/trailblaze"))
-      .firstOrNull { it.exists() && it.canExecute() }
-  }
+  private fun findLauncher(): File? = findTrailblazeLauncher()
 
   /**
    * Forward a JSON-RPC request to the daemon, retrying if it's down.
@@ -597,4 +579,46 @@ class McpProxy(
     /** Device actions that represent a connection/binding (should be replayed on reconnect). */
     private val DEVICE_CONNECT_ACTIONS = setOf("ANDROID", "IOS", "WEB", "CONNECT")
   }
+}
+
+/**
+ * Find an executable on the system PATH.
+ * Returns the [File] if found and executable, null otherwise.
+ */
+internal fun findOnPath(name: String): File? {
+  return try {
+    val process = ProcessBuilder("which", name)
+      .redirectError(ProcessBuilder.Redirect.DISCARD)
+      .start()
+    val path = process.inputStream.bufferedReader().readLine()?.trim()
+    process.waitFor()
+    if (process.exitValue() == 0 && !path.isNullOrBlank()) {
+      val file = File(path)
+      if (file.exists() && file.canExecute()) file else null
+    } else {
+      null
+    }
+  } catch (_: Exception) {
+    null
+  }
+}
+
+/**
+ * Find the trailblaze launcher executable.
+ * Checks next to the running JAR first (release builds), then the system PATH,
+ * then well-known relative paths for local development.
+ */
+internal fun findTrailblazeLauncher(): File? {
+  val jarDir = McpProxy::class.java.protectionDomain?.codeSource?.location?.toURI()
+    ?.let { File(it).parentFile }
+  if (jarDir != null) {
+    val launcher = File(jarDir, "trailblaze")
+    if (launcher.exists() && launcher.canExecute()) return launcher
+  }
+
+  val pathLauncher = findOnPath("trailblaze")
+  if (pathLauncher != null) return pathLauncher
+
+  return listOf(File("trailblaze"), File("opensource/trailblaze"))
+    .firstOrNull { it.exists() && it.canExecute() }
 }

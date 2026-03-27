@@ -214,7 +214,7 @@ class ComposeEvalSuiteTest {
   }
 
   @Test
-  fun `dimensions and centerPoint are populated`() = runComposeUiTest {
+  fun `bounds are populated`() = runComposeUiTest {
     setContent { SampleWidgetShowcase() }
     waitForIdle()
 
@@ -223,14 +223,12 @@ class ComposeEvalSuiteTest {
 
     val counterButton = allNodes.find { it.resourceId == "counter_button" }
     assertThat(counterButton).isNotNull()
-    assertThat(counterButton!!.dimensions).isNotNull()
-    assertThat(counterButton.dimensions!!).isNotEmpty()
-    assertThat(counterButton.centerPoint).isNotNull()
-    assertThat(counterButton.centerPoint!!).isNotEmpty()
-    // Dimensions should be in "WxH" format
-    assertThat(counterButton.dimensions!!).contains("x")
-    // CenterPoint should be in "X,Y" format
-    assertThat(counterButton.centerPoint!!).contains(",")
+    val bounds = counterButton!!.bounds
+    assertThat(bounds).isNotNull()
+    assertThat(bounds!!.width).isGreaterThan(0)
+    assertThat(bounds.height).isGreaterThan(0)
+    assertThat(bounds.centerX).isGreaterThan(0)
+    assertThat(bounds.centerY).isGreaterThan(0)
   }
 
   @Test

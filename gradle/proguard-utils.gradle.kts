@@ -29,17 +29,31 @@ val archiveExtensions = listOf(".apk", ".zip")
 // Use as: "-injars", "${jarPath}($proguardInjarsResourceFilter)"
 extra["proguardInjarsResourceFilter"] = archiveExtensions.joinToString(",") { "!**$it" }
 
-// Restores binary resource entries that were excluded from ProGuard processing.
+// Restores binary resource entries that were excluded from ProGuard processing,
+// plus directory entries that ProGuard strips (needed by classLoader.getResource()
+// for directory lookups, e.g. Maestro's IOSBuildProductsExtractor).
 // Call as: restoreArchiveEntries(originalUberJar, shrunkOutputJar)
 extra["restoreArchiveEntries"] = fun(originalJar: File, shrunkJar: File) {
   val entries = mutableMapOf<String, ByteArray>()
+  val directoryEntries = mutableSetOf<String>()
   ZipFile(originalJar).use { zip ->
-    zip.entries().asSequence()
-      .filter { entry -> archiveExtensions.any { entry.name.endsWith(it) } }
-      .forEach { entry -> entries[entry.name] = zip.getInputStream(entry).readBytes() }
+    zip.entries().asSequence().forEach { entry ->
+      if (archiveExtensions.any { entry.name.endsWith(it) }) {
+        entries[entry.name] = zip.getInputStream(entry).readBytes()
+      } else if (entry.isDirectory) {
+        directoryEntries.add(entry.name)
+      }
+    }
   }
 
-  if (entries.isEmpty()) return
+  if (entries.isEmpty() && directoryEntries.isEmpty()) return
+
+  // Collect directory entries already in the shrunk JAR so we don't duplicate
+  val existingEntryNames = mutableSetOf<String>()
+  ZipFile(shrunkJar).use { zip ->
+    zip.entries().asSequence().forEach { existingEntryNames.add(it.name) }
+  }
+  val missingDirs = directoryEntries - existingEntryNames
 
   val tempFile = File(shrunkJar.parentFile, "${shrunkJar.name}.tmp")
   ZipFile(shrunkJar).use { existingZip ->
@@ -52,6 +66,16 @@ extra["restoreArchiveEntries"] = fun(originalJar: File, shrunkJar: File) {
           existingZip.getInputStream(entry).use { it.copyTo(zos) }
           zos.closeEntry()
         }
+      // Restore directory entries that ProGuard stripped
+      missingDirs.sorted().forEach { dirName ->
+        zos.putNextEntry(ZipEntry(dirName).apply {
+          method = ZipEntry.STORED
+          size = 0
+          compressedSize = 0
+          crc = 0
+        })
+        zos.closeEntry()
+      }
       // Add the archive entries verbatim from the original JAR (STORED for byte-for-byte integrity)
       entries.forEach { (name, bytes) ->
         zos.putNextEntry(
@@ -68,5 +92,5 @@ extra["restoreArchiveEntries"] = fun(originalJar: File, shrunkJar: File) {
     }
   }
   tempFile.renameTo(shrunkJar)
-  println("Restored ${entries.size} binary resource entries into shrunk JAR: ${entries.keys}")
+  println("Restored ${entries.size} binary resource entries and ${missingDirs.size} directory entries into shrunk JAR")
 }

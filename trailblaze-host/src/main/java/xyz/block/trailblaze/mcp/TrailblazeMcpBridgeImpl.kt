@@ -1,5 +1,7 @@
 package xyz.block.trailblaze.mcp
 
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -12,6 +14,7 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.host.devices.HostIosDriverFactory
 import xyz.block.trailblaze.host.devices.TrailblazeConnectedDevice
 import xyz.block.trailblaze.host.devices.TrailblazeDeviceService
 import xyz.block.trailblaze.host.devices.TrailblazeHostDeviceClassifier
@@ -19,6 +22,7 @@ import xyz.block.trailblaze.host.screenstate.HostMaestroDriverScreenState
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.llm.RunYamlResponse
 import xyz.block.trailblaze.llm.TrailblazeReferrer
+import xyz.block.trailblaze.model.TrailExecutionResult
 import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.model.findById
 import xyz.block.trailblaze.logs.client.TrailblazeLog
@@ -56,11 +60,10 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.reflect.KClass
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
 
 private const val DEFAULT_DEVICE_WIDTH = 1080
 private const val DEFAULT_DEVICE_HEIGHT = 2400
-/** Time to wait after sending a single tool via RPC for the on-device agent to execute it. */
-private const val ON_DEVICE_TOOL_SETTLE_MS = 500L
 
 class TrailblazeMcpBridgeImpl(
   private val trailblazeDeviceManager: TrailblazeDeviceManager,
@@ -510,11 +513,13 @@ class TrailblazeMcpBridgeImpl(
         Console.log("[MCP Bridge] Starting on-device agent for $key (driver=${driverType?.name})")
 
         // Install APK and start instrumentation (reuses existing agent if already running)
+        // Pass LLM tokens so the on-device runner can create LLM clients (e.g., SSO token).
         runBlocking {
           HostAndroidDeviceConnectUtils.connectToInstrumentationAndInstallAppIfNotAvailable(
             sendProgressMessage = { Console.log("[MCP Bridge] [$key] $it") },
             deviceId = trailblazeDeviceId,
             trailblazeOnDeviceInstrumentationTarget = target,
+            additionalInstrumentationArgs = trailblazeDeviceManager.onDeviceInstrumentationArgsProvider(),
           )
         }
 
@@ -574,6 +579,17 @@ class TrailblazeMcpBridgeImpl(
     yaml: String,
     startNewSession: Boolean,
     agentImplementation: AgentImplementation,
+  ): String = runYamlInternal(yaml, startNewSession, agentImplementation)
+
+  /**
+   * Internal runYaml that supports an optional [onComplete] callback.
+   * The public [runYaml] override delegates here (without onComplete).
+   */
+  private suspend fun runYamlInternal(
+    yaml: String,
+    startNewSession: Boolean,
+    agentImplementation: AgentImplementation = AgentImplementation.DEFAULT,
+    onComplete: ((TrailExecutionResult) -> Unit)? = null,
   ): String {
     val deviceId = assertDeviceIsSelected()
 
@@ -592,6 +608,7 @@ class TrailblazeMcpBridgeImpl(
       existingSessionId = sessionResolution.sessionId,
       referrer = TrailblazeReferrer.MCP,
       agentImplementation = agentImplementation,
+      onComplete = onComplete,
     )
 
     // Return the session ID used for this run so callers can monitor progress
@@ -821,9 +838,8 @@ class TrailblazeMcpBridgeImpl(
   /**
    * Returns Compose-specific tool classes when the Compose driver is active, null otherwise.
    *
-   * The Compose driver uses a different tool set than native Android/iOS drivers. Tools like
-   * [RequestViewHierarchyDetailsTrailblazeTool] don't work with Compose — the inner agent
-   * must use Compose-specific tools (click, type, scroll) instead.
+   * The Compose driver uses a different tool set than native Android/iOS drivers — the inner
+   * agent must use Compose-specific tools (click, type, scroll) instead.
    */
   override fun getInnerAgentToolClasses(): Set<KClass<out TrailblazeTool>>? {
     val deviceId = getEffectiveDeviceId() ?: return null
@@ -847,13 +863,11 @@ class TrailblazeMcpBridgeImpl(
    * This calls the GetScreenStateRequest endpoint on the on-device agent.
    *
    * @param includeScreenshot Whether to include screenshot bytes
-   * @param filterViewHierarchy Whether to filter to interactable elements
    * @param screenshotScalingConfig Configuration for scaling/compressing screenshots on-device
    * @return GetScreenStateResponse on success, null on failure
    */
   override suspend fun getScreenStateViaRpc(
     includeScreenshot: Boolean,
-    filterViewHierarchy: Boolean,
     screenshotScalingConfig: ScreenshotScalingConfig,
   ): GetScreenStateResponse? {
     val deviceId = getEffectiveDeviceId() ?: return null
@@ -870,7 +884,6 @@ class TrailblazeMcpBridgeImpl(
     return try {
       val request = GetScreenStateRequest(
         includeScreenshot = includeScreenshot,
-        filterViewHierarchy = filterViewHierarchy,
         setOfMarkEnabled = false,
         screenshotMaxDimension1 = screenshotScalingConfig.maxDimension1,
         screenshotMaxDimension2 = screenshotScalingConfig.maxDimension2,
@@ -888,7 +901,7 @@ class TrailblazeMcpBridgeImpl(
   }
 
   override suspend fun getAvailableDevices(): Set<TrailblazeConnectedDeviceSummary> {
-    val availableDevices = trailblazeDeviceManager.loadDevicesSuspend(applyDriverFilter = false).toSet()
+    val availableDevices = trailblazeDeviceManager.loadDevicesSuspend(applyDriverFilter = true).toSet()
     return availableDevices
   }
 
@@ -897,7 +910,7 @@ class TrailblazeMcpBridgeImpl(
     return trailblazeDeviceManager.getInstalledAppIdsFlow(trailblazeDeviceId).value
   }
 
-  override suspend fun executeTrailblazeTool(tool: TrailblazeTool): String {
+  override suspend fun executeTrailblazeTool(tool: TrailblazeTool, blocking: Boolean): String {
     val trailblazeDeviceId = assertDeviceIsSelected()
 
     // Use custom executor if provided, otherwise convert to YAML and run
@@ -929,15 +942,35 @@ class TrailblazeMcpBridgeImpl(
     // as soon as the session is created), so tool actions like taps return "executed"
     // before the on-device agent actually performs them.
     if (isOnDeviceInstrumentation()) {
-      val result = executeToolViaRpc(tool, trailblazeDeviceId, yaml)
+      val result = executeToolViaRpc(tool, trailblazeDeviceId, yaml, blocking)
       cachedScreenStates.remove(trailblazeDeviceId.instanceId)
       return result
     }
 
     // HOST driver path: clear cache since screen will change
     cachedScreenStates.remove(trailblazeDeviceId.instanceId)
-    val sessionId = runYaml(yaml, startNewSession = false)
 
+    if (blocking) {
+      // Blocking mode: suspend until the Maestro YAML execution finishes.
+      // Uses CompletableDeferred bridged to the DesktopYamlRunner's onComplete callback.
+      val completion = CompletableDeferred<TrailExecutionResult>()
+      runYamlInternal(
+        yaml = yaml,
+        startNewSession = false,
+        onComplete = { completion.complete(it) },
+      )
+      val executionResult = withTimeout(300.seconds) { completion.await() }
+      return when (executionResult) {
+        is TrailExecutionResult.Success ->
+          "Executed ${tool::class.simpleName} on device ${trailblazeDeviceId.instanceId}"
+        is TrailExecutionResult.Failed ->
+          error("Tool execution failed: ${executionResult.errorMessage}")
+        is TrailExecutionResult.Cancelled ->
+          error("Tool execution cancelled")
+      }
+    }
+
+    val sessionId = runYaml(yaml, startNewSession = false)
     return "Executed ${tool::class.simpleName} on device ${trailblazeDeviceId.instanceId} (session: $sessionId)"
   }
 
@@ -954,6 +987,7 @@ class TrailblazeMcpBridgeImpl(
     tool: TrailblazeTool,
     trailblazeDeviceId: TrailblazeDeviceId,
     yaml: String,
+    blocking: Boolean = false,
   ): String {
     // For tapOnElementByNodeId, resolve coordinates from the HOST screen state
     // so we can use coordinate-based tap on-device (avoids node ID mismatch).
@@ -984,7 +1018,7 @@ class TrailblazeMcpBridgeImpl(
         yaml = resolvedYaml,
         testName = "tool_${resolvedTool::class.simpleName}",
         trailFilePath = null,
-        targetAppName = null,
+        targetAppName = getCurrentAppTargetId(),
         useRecordedSteps = false,
         trailblazeLlmModel = trailblazeDeviceManager.currentTrailblazeLlmModelProvider(),
         trailblazeDeviceId = trailblazeDeviceId,
@@ -993,6 +1027,8 @@ class TrailblazeMcpBridgeImpl(
         config = TrailblazeConfig(
           setOfMarkEnabled = false,
           overrideSessionId = sessionResolution.sessionId,
+          // Emit start only when this call created the session. This preserves host-managed
+          // MCP sessions (no duplicate start logs) while still initializing direct tool-first sessions.
           sendSessionStartLog = sessionResolution.isNewSession,
           sendSessionEndLog = false,
         ),
@@ -1002,8 +1038,24 @@ class TrailblazeMcpBridgeImpl(
       when (val result: RpcResult<RunYamlResponse> = rpcClient.rpcCall(request)) {
         is RpcResult.Success -> {
           Console.log("[executeToolViaRpc] On-device execution started: ${result.data.sessionId}")
-          // Brief settle time for single-tool execution
-          kotlinx.coroutines.delay(ON_DEVICE_TOOL_SETTLE_MS)
+          if (blocking) {
+            // Wait for the on-device agent to finish executing the tool.
+            // The agent emits a TrailblazeToolLog when each tool completes.
+            // Custom tools (e.g., myapp_launchAppSignedIn) can take 60+ seconds
+            // (clear data, launch, sign in, wait for loading), so use a generous timeout.
+            if (logsRepo != null) {
+              val toolLog = logsRepo.awaitLog<TrailblazeLog.TrailblazeToolLog>(
+                sessionId = sessionResolution.sessionId,
+                timeout = 120.seconds,
+                skipExisting = true,
+              )
+              if (toolLog == null) {
+                Console.log("[executeToolViaRpc] Warning: timed out waiting for ${resolvedTool::class.simpleName} to complete on-device")
+              }
+            } else {
+              Console.log("[executeToolViaRpc] Warning: blocking=true but logsRepo is null, cannot wait for tool completion")
+            }
+          }
           "Executed ${resolvedTool::class.simpleName} on device ${trailblazeDeviceId.instanceId} (session: ${result.data.sessionId})"
         }
         is RpcResult.Failure -> {
@@ -1028,7 +1080,7 @@ class TrailblazeMcpBridgeImpl(
 
     // Capture view hierarchy via RPC to resolve element coordinates.
     val rpcResponse = try {
-      getScreenStateViaRpc(includeScreenshot = false, filterViewHierarchy = false)
+      getScreenStateViaRpc(includeScreenshot = false)
     } catch (e: Exception) {
       Console.log("[resolveToolForOnDevice] Screen state capture failed: ${e.message}")
       null
@@ -1241,10 +1293,17 @@ class TrailblazeMcpBridgeImpl(
     // driver wrapper (e.g., SquareTrailblazeIosDriver with custom contentDescriptor).
     if (previousTarget?.id != appTargetId) {
       val iosDriverChanged = previousTarget?.hasCustomIosDriver == true || matchingTarget.hasCustomIosDriver
-      val deviceId = getEffectiveDeviceId()
-      if (iosDriverChanged && deviceId != null && deviceId.trailblazeDevicePlatform == TrailblazeDevicePlatform.IOS) {
-        Console.log("[MCP Bridge] App target changed from ${previousTarget?.id} to $appTargetId (custom iOS driver involved) — releasing iOS persistent device for ${deviceId.instanceId}")
-        releasePersistentDeviceConnection(deviceId)
+      if (iosDriverChanged) {
+        // Always clear the HostIosDriverFactory singleton cache when iOS drivers change,
+        // regardless of current device selection. A stale cached driver could be reused
+        // later if an iOS device is selected after the app target switch.
+        HostIosDriverFactory.clearCachedDriver()
+
+        val deviceId = getEffectiveDeviceId()
+        if (deviceId != null && deviceId.trailblazeDevicePlatform == TrailblazeDevicePlatform.IOS) {
+          Console.log("[MCP Bridge] App target changed from ${previousTarget?.id} to $appTargetId (custom iOS driver involved) — releasing iOS persistent device for ${deviceId.instanceId}")
+          releasePersistentDeviceConnection(deviceId)
+        }
       }
     }
 

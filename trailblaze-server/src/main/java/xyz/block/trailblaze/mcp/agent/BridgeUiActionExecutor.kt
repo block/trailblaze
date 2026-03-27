@@ -111,9 +111,8 @@ class BridgeUiActionExecutor(
         }
       }
 
-      // Execute via MCP bridge - returns String result
-      // Throws exception on failure
-      val bridgeResult = mcpBridge.executeTrailblazeTool(tool)
+      // Execute via MCP bridge - blocking so we can capture screen state after completion
+      val bridgeResult = mcpBridge.executeTrailblazeTool(tool, blocking = true)
       Console.log("[BridgeUiActionExecutor] Executed $toolName: $bridgeResult")
 
       val durationMs = System.currentTimeMillis() - startTime
@@ -250,21 +249,43 @@ class BridgeUiActionExecutor(
     val actionableItems = if (trailblazeTree != null) {
       describeFromTrailblazeNode(trailblazeTree)
     } else {
-      describeFromViewHierarchy(screenState.viewHierarchyOriginal)
+      describeFromViewHierarchy(screenState.viewHierarchy)
     }
 
-    val elementsSummary = if (actionableItems.isEmpty()) {
-      "No actionable elements visible"
+    // Extract non-actionable labels (headings, titles, static text) for screen context.
+    val contextLabels = if (trailblazeTree != null) {
+      extractContextLabels(trailblazeTree)
     } else {
-      buildString {
-        for (item in actionableItems) {
-          if (length + item.length + 4 > MAX_SUMMARY_LENGTH) {
+      extractContextLabelsFromVh(screenState.viewHierarchy)
+    }
+
+    val elementsSummary = buildString {
+      // Context labels first — helps orient the agent without needing ask()
+      if (contextLabels.isNotEmpty()) {
+        for (label in contextLabels) {
+          if (length + label.length + 4 > MAX_CONTEXT_LABELS_LENGTH) {
             append("...")
             break
           }
           if (isNotEmpty()) append(" | ")
+          append(label)
+        }
+      }
+
+      // Then actionable elements
+      if (actionableItems.isNotEmpty()) {
+        if (isNotEmpty()) append("\n")
+        val startLen = length
+        for (item in actionableItems) {
+          if (length - startLen + item.length + 4 > MAX_SUMMARY_LENGTH) {
+            append("...")
+            break
+          }
+          if (length > startLen) append(" | ")
           append(item)
         }
+      } else if (contextLabels.isEmpty()) {
+        append("No actionable elements visible")
       }
     }
 
@@ -422,6 +443,44 @@ class BridgeUiActionExecutor(
     }.distinct()
   }
 
+  /**
+   * Extracts non-actionable text labels from the [TrailblazeNode] tree.
+   * These are headings, titles, and static text that help orient the agent.
+   * Only includes labels that are important for accessibility and have meaningful text,
+   * excluding labels that are already captured as actionable elements.
+   */
+  private fun extractContextLabels(root: TrailblazeNode): List<String> {
+    return root.aggregate().mapNotNull { node ->
+      when (val detail = node.driverDetail) {
+        is DriverNodeDetail.AndroidAccessibility -> {
+          if (!detail.isImportantForAccessibility) return@mapNotNull null
+          if (detail.packageName?.startsWith("com.android.systemui") == true) return@mapNotNull null
+          // Skip actionable elements — they're already in the main list
+          val actionable = detail.isClickable || detail.isEditable || detail.isScrollable || detail.isCheckable
+          if (actionable) return@mapNotNull null
+          detail.text?.takeIf { it.isNotBlank() }
+            ?: detail.contentDescription?.takeIf { it.isNotBlank() }
+        }
+        // Only Android accessibility for now — other drivers can be added as needed
+        else -> null
+      }
+    }.map { it.truncate(MAX_LABEL_LENGTH) }.distinct()
+  }
+
+  /**
+   * Extracts non-actionable text labels from the legacy [ViewHierarchyTreeNode] tree.
+   */
+  private fun extractContextLabelsFromVh(root: ViewHierarchyTreeNode): List<String> {
+    return stripSystemUiSubtrees(root).aggregate().mapNotNull { node ->
+      // Match the TrailblazeNode version: skip clickable, editable (hintText proxy),
+      // scrollable, and checkable (checked proxy) elements.
+      val actionable = node.clickable || node.scrollable || node.checked || !node.hintText.isNullOrBlank()
+      if (actionable) return@mapNotNull null
+      node.text?.takeIf { it.isNotBlank() }
+        ?: node.accessibilityText?.takeIf { it.isNotBlank() }
+    }.map { it.truncate(MAX_LABEL_LENGTH) }.distinct()
+  }
+
   /** Infers element type from legacy [ViewHierarchyTreeNode] properties. */
   internal fun inferElementTypeFromVh(node: ViewHierarchyTreeNode): String? {
     if (!node.hintText.isNullOrBlank()) return ELEMENT_TYPE_INPUT
@@ -457,7 +516,9 @@ class BridgeUiActionExecutor(
   }
 
   companion object {
-    private const val MAX_SUMMARY_LENGTH = 500
+    private const val MAX_SUMMARY_LENGTH = 1500
+    /** Max chars for context labels (headings, titles, static text). */
+    private const val MAX_CONTEXT_LABELS_LENGTH = 300
     /** Max chars per element label — longer text is truncated with ellipsis. */
     private const val MAX_LABEL_LENGTH = 40
 

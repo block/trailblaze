@@ -40,9 +40,9 @@ data class SessionInfo(
     ?: trailConfig?.id
     ?: trailFilePath?.removePrefix("trails/")?.removeSuffix(TrailRecordings.DOT_TRAIL_DOT_YAML_FILE_SUFFIX)
     ?: testName?.takeIf { it.isNotBlank() }?.let { name ->
-      testClass?.substringAfterLast(".")?.let { cls -> "$cls/$name" } ?: name
+      testClass?.let { cls -> "$cls:$name" } ?: name
     }
-    ?: testClass?.substringAfterLast(".")
+    ?: testClass
     ?: sessionId.value
 }
 

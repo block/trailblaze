@@ -12,6 +12,7 @@ dependencies {
   implementation(libs.kotlinx.serialization.json)
   implementation(libs.kotlinx.datetime)
   implementation(libs.koog.agents.tools)
+  implementation(libs.skiko)
 
   testImplementation(libs.kotlin.test.junit4)
   testImplementation(libs.assertk)

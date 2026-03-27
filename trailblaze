@@ -21,6 +21,10 @@ tb_run_background() {
   fi
 }
 
+tb_run_quiet() {
+  ./gradlew -q --console=plain ${TRAILBLAZE_MODULE}:run --args="$1"
+}
+
 tb_run_exec_quiet() {
   exec ./gradlew -q --console=plain ${TRAILBLAZE_MODULE}:run --args="$1"
 }

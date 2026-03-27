@@ -37,6 +37,7 @@ import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.exception.TrailblazeSessionCancelledException
 import xyz.block.trailblaze.host.ios.MobileDeviceUtils
+import xyz.block.trailblaze.host.golden.SnapshotGoldenComparison
 import xyz.block.trailblaze.host.rules.BaseComposeTest
 import xyz.block.trailblaze.host.rules.BaseHostTrailblazeTest
 import xyz.block.trailblaze.host.rules.BasePlaywrightElectronTest
@@ -106,7 +107,9 @@ object TrailblazeHostYamlRunner {
   private suspend fun exportAndSaveTrace(
     sessionId: SessionId,
     loggingRule: TrailblazeLoggingRule,
+    noLogging: Boolean = false,
   ) {
+    if (noLogging) return
     withContext(kotlinx.coroutines.NonCancellable) {
       TrailblazeTraceExporter.exportAndSave(
         sessionId = sessionId,
@@ -267,7 +270,9 @@ object TrailblazeHostYamlRunner {
       Console.log("❌ Exception caught in runPlaywrightNativeYaml for device: ${trailblazeDeviceId.instanceId} - ${e::class.simpleName}: ${e.message}")
       onProgressMessage("Test execution failed: ${e.message}")
       captureFailureScreenshot(session, playwrightTest.loggingRule, playwrightTest.browserManager::getScreenState)
-      sessionManager.endSession(session, isSuccess = false, exception = e)
+      if (runYamlRequest.config.sendSessionEndLog) {
+        sessionManager.endSession(session, isSuccess = false, exception = e)
+      }
       null
     } finally {
       Console.log("🧹 Finally block executing for Playwright-native device: ${trailblazeDeviceId.instanceId}")
@@ -402,7 +407,9 @@ object TrailblazeHostYamlRunner {
       Console.log("❌ Exception caught in runPlaywrightElectronYaml for device: ${trailblazeDeviceId.instanceId} - ${e::class.simpleName}: ${e.message}")
       onProgressMessage("Test execution failed: ${e.message}")
       captureFailureScreenshot(session, electronTest.loggingRule, electronTest.browserManager::getScreenState)
-      sessionManager.endSession(session, isSuccess = false, exception = e)
+      if (runYamlRequest.config.sendSessionEndLog) {
+        sessionManager.endSession(session, isSuccess = false, exception = e)
+      }
       null
     } finally {
       Console.log("🧹 Finally block executing for Playwright-electron device: ${trailblazeDeviceId.instanceId}")
@@ -512,6 +519,7 @@ object TrailblazeHostYamlRunner {
 
       loggingRule = HostTrailblazeLoggingRule(
         trailblazeDeviceInfoProvider = { trailblazeDeviceInfo },
+        noLogging = runOnHostParams.noLogging,
       )
 
       agent = ComposeRpcTrailblazeAgent(
@@ -635,15 +643,27 @@ object TrailblazeHostYamlRunner {
       Console.log("✅ Compose RPC execution completed for device: ${trailblazeDeviceId.instanceId}")
       onProgressMessage("Test execution completed successfully")
 
-      if (runYamlRequest.config.sendSessionEndLog) {
-        sessionManager.endSession(session, isSuccess = true)
-      }
-
       // Generate and save recording YAML from session logs
       generateAndSaveRecording(
         sessionId = session.sessionId,
         customToolClasses = ComposeToolSet.LlmToolSet.toolClasses,
       )
+
+      // Run golden comparison before ending the session so failures are reflected in session status.
+      val goldenResult = compareSnapshotsAgainstGoldens(session.sessionId)
+      val goldenPassed = goldenResult?.passed != false
+
+      if (runYamlRequest.config.sendSessionEndLog) {
+        sessionManager.endSession(session, isSuccess = goldenPassed)
+      }
+
+      if (!goldenPassed) {
+        val failures = goldenResult!!.results.filter { it.goldenFound && !it.passed }
+        val msg = failures.joinToString("; ") {
+          "'${it.snapshotName}' (${"%.2f".format(it.diffPercent)}% diff, threshold ${it.thresholdPercent}%)"
+        }
+        throw TrailblazeException("Golden snapshot comparison failed: $msg")
+      }
 
       session.sessionId
     } catch (e: TrailblazeSessionCancelledException) {
@@ -658,11 +678,13 @@ object TrailblazeHostYamlRunner {
       Console.log("❌ Exception caught in runComposeYaml for device: ${trailblazeDeviceId.instanceId} - ${e::class.simpleName}: ${e.message}")
       onProgressMessage("Test execution failed: ${e.message}")
       captureFailureScreenshot(session, loggingRule, screenStateProvider)
-      sessionManager.endSession(session, isSuccess = false, exception = e)
+      if (runYamlRequest.config.sendSessionEndLog) {
+        sessionManager.endSession(session, isSuccess = false, exception = e)
+      }
       null
     } finally {
       Console.log("🧹 Finally block executing for Compose RPC device: ${trailblazeDeviceId.instanceId}")
-      exportAndSaveTrace(session.sessionId, loggingRule)
+      exportAndSaveTrace(session.sessionId, loggingRule, noLogging = runOnHostParams.noLogging)
       loggingRule.setSession(null)
       agent.close()
       deviceManager.cancelSessionForDevice(trailblazeDeviceId)
@@ -804,7 +826,9 @@ object TrailblazeHostYamlRunner {
       Console.log("❌ Exception caught in runHostYaml for device: ${trailblazeDeviceId.instanceId} - ${e::class.simpleName}: ${e.message}")
       onProgressMessage("Test execution failed: ${e.message}")
       captureFailureScreenshot(session, hostTbRunner.loggingRule, hostTbRunner.hostRunner.screenStateProvider)
-      sessionManager.endSession(session, isSuccess = false, exception = e)
+      if (runYamlRequest.config.sendSessionEndLog) {
+        sessionManager.endSession(session, isSuccess = false, exception = e)
+      }
       null
     } finally {
       // IMPORTANT: This ALWAYS executes, even when cancelled!
@@ -1046,7 +1070,9 @@ object TrailblazeHostYamlRunner {
       captureFailureScreenshot(session, loggingRule) {
         runBlocking { executor.captureScreenState() } ?: error("No screen state available")
       }
-      sessionManager.endSession(session, isSuccess = false, exception = e)
+      if (runYamlRequest.config.sendSessionEndLog) {
+        sessionManager.endSession(session, isSuccess = false, exception = e)
+      }
       null
     } finally {
       exportAndSaveTrace(session.sessionId, loggingRule)
@@ -1071,6 +1097,53 @@ object TrailblazeHostYamlRunner {
    *
    * @return [RecordingResult] if the recording was saved, or null on failure.
    */
+  /**
+   * Compares each snapshot taken during [sessionId] against its checked-in golden file.
+   * Goldens are resolved from the trail file's directory using the pattern:
+   * `{device-classifier}.{snapshot-name}.golden.png`
+   *
+   * Missing goldens are silently skipped (not a failure) — this allows new trails to run
+   * without goldens until they are deliberately captured and committed.
+   */
+  private fun compareSnapshotsAgainstGoldens(sessionId: SessionId): SnapshotGoldenComparison.GoldenComparisonResult? {
+    return try {
+      val gitRoot = GitUtils.getGitRootViaCommand() ?: return null
+      val sessionDir = File(File(gitRoot, "logs"), sessionId.value)
+      if (!sessionDir.exists()) return null
+
+      val logs = sessionDir.listFiles()
+        ?.filter { it.extension == "json" }
+        ?.mapNotNull { file ->
+          try { TrailblazeJsonInstance.decodeFromString<TrailblazeLog>(file.readText()) }
+          catch (_: Exception) { null }
+        }
+        ?.sortedBy { it.timestamp }
+        ?: return null
+
+      val comparison = SnapshotGoldenComparison.compare(
+        sessionId = sessionId,
+        sessionDir = sessionDir,
+        logs = logs,
+      )
+
+      Console.log("[Golden] ${comparison.summary}")
+      comparison.results.forEach { r ->
+        if (r.goldenFound && !r.passed) {
+          Console.log(
+            "[Golden] ❌ '${r.snapshotName}': ${"%.2f".format(r.diffPercent)}% diff" +
+              " (${r.pixelDifferences}/${r.totalPixels} pixels," +
+              " threshold ${r.thresholdPercent}%)"
+          )
+        }
+      }
+
+      comparison
+    } catch (e: Exception) {
+      Console.log("[Golden] Comparison error (non-fatal): ${e.message}")
+      null
+    }
+  }
+
   private fun generateAndSaveRecording(
     sessionId: SessionId,
     customToolClasses: Set<kotlin.reflect.KClass<out xyz.block.trailblaze.toolcalls.TrailblazeTool>> = emptySet(),

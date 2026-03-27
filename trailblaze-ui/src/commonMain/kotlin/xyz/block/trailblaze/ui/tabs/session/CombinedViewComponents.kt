@@ -38,7 +38,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionStatus
-import xyz.block.trailblaze.ui.utils.FormattingUtils
+import xyz.block.trailblaze.ui.composables.SelectableText
 import xyz.block.trailblaze.ui.utils.FormattingUtils.formatDuration
 
 // -- Step-grouped hierarchy components --
@@ -134,7 +134,7 @@ internal fun CombinedObjectiveHeader(
         parts.add(objective.status.label)
         if (toolCount > 0) parts.add("$toolCount tool${if (toolCount != 1) "s" else ""}")
         if (duration != null) parts.add(formatDuration(duration))
-        Text(
+        SelectableText(
           text = parts.joinToString(" \u2022 "),
           style = MaterialTheme.typography.labelSmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -201,7 +201,7 @@ internal fun CombinedToolBlockHeader(
         add("$toolCount tool${if (toolCount != 1) "s" else ""}")
         if (durationMs != null) add(formatDuration(durationMs))
       }.joinToString(" \u2022 ")
-      Text(
+      SelectableText(
         text = subtitle,
         style = MaterialTheme.typography.labelSmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -332,53 +332,12 @@ internal fun CombinedChildEventRow(
     }
   }
 
-  // YAML code block — shown when selected
+  // YAML code block — shown when selected (tool calls and LLM response actions)
   if (isActive && event.toolYaml != null) {
-    ExpandedDetailPanel(typeColor = typeColor, indentDp = indentDp, minHeight = 48.dp) {
+    ExpandedDetailPanel(indentDp = indentDp, minHeight = 48.dp) {
       SelectionContainer {
         Text(
           text = event.toolYaml,
-          style = MaterialTheme.typography.labelSmall,
-          fontFamily = FontFamily.Monospace,
-          color = MaterialTheme.colorScheme.onSurface,
-        )
-      }
-    }
-  }
-
-  // LLM usage details — shown when selected
-  if (isActive && event.sourceLog is TrailblazeLog.TrailblazeLlmRequestLog) {
-    val llmLog = event.sourceLog
-    val usage = llmLog.llmRequestUsageAndCost
-    val model = llmLog.trailblazeLlmModel
-
-    ExpandedDetailPanel(typeColor = typeColor, indentDp = indentDp, minHeight = 56.dp) {
-      Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(
-          text = "${model.trailblazeLlmProvider.display} / ${model.modelId}",
-          style = MaterialTheme.typography.labelSmall,
-          fontWeight = FontWeight.SemiBold,
-          color = typeColor,
-        )
-        if (usage != null) {
-          Text(
-            text = "Tokens: ${FormattingUtils.formatCommaNumber(usage.inputTokens)} in \u2192 ${FormattingUtils.formatCommaNumber(usage.outputTokens)} out",
-            style = MaterialTheme.typography.labelSmall,
-            fontFamily = FontFamily.Monospace,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
-        }
-        val toolCount = llmLog.toolOptions.size
-        if (toolCount > 0) {
-          Text(
-            text = "Tools: $toolCount available",
-            style = MaterialTheme.typography.labelSmall,
-            fontFamily = FontFamily.Monospace,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
-        }
-        Text(
-          text = "Duration: ${FormattingUtils.formatCommaNumber(llmLog.durationMs)}ms",
           style = MaterialTheme.typography.labelSmall,
           fontFamily = FontFamily.Monospace,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -388,10 +347,9 @@ internal fun CombinedChildEventRow(
   }
 }
 
-/** Indented detail panel with a colored accent bar, used for YAML and LLM details. */
+/** Indented detail panel with a neutral accent bar, used for YAML and LLM details. */
 @Composable
 private fun ExpandedDetailPanel(
-  typeColor: Color,
   indentDp: androidx.compose.ui.unit.Dp,
   minHeight: androidx.compose.ui.unit.Dp,
   content: @Composable () -> Unit,
@@ -401,17 +359,18 @@ private fun ExpandedDetailPanel(
       Modifier.fillMaxWidth()
         .padding(start = 54.dp + indentDp, end = 10.dp, top = 2.dp, bottom = 4.dp),
   ) {
+    val neutral = MaterialTheme.colorScheme.onSurfaceVariant
     Box(
       modifier =
         Modifier.width(2.dp)
           .height(minHeight)
-          .background(typeColor.copy(alpha = 0.5f), RoundedCornerShape(1.dp)),
+          .background(neutral.copy(alpha = 0.2f), RoundedCornerShape(1.dp)),
     )
     Box(
       modifier =
         Modifier.weight(1f)
           .background(
-            typeColor.copy(alpha = 0.06f),
+            neutral.copy(alpha = 0.04f),
             RoundedCornerShape(topEnd = 4.dp, bottomEnd = 4.dp),
           )
           .padding(horizontal = 8.dp, vertical = 4.dp),
@@ -447,7 +406,7 @@ internal fun ObjectiveResultBanner(
             )
             .padding(10.dp),
       ) {
-        Text(
+        SelectableText(
           text = suggestion,
           style = MaterialTheme.typography.bodySmall,
           color = MaterialTheme.colorScheme.onErrorContainer,
@@ -523,13 +482,13 @@ internal fun CombinedCompletedSummary(objectives: List<ObjectiveProgress>) {
     val summary =
       if (failedCount > 0) "$failedCount of $totalCount failed"
       else "$completedCount step${if (completedCount != 1) "s" else ""} passed"
-    Text(
+    SelectableText(
       text = summary,
       style = MaterialTheme.typography.bodySmall,
       fontWeight = FontWeight.Medium,
     )
     if (elapsedMs != null) {
-      Text(
+      SelectableText(
         text = formatDuration(elapsedMs),
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -572,7 +531,7 @@ internal fun SessionFailureBanner(
           color = accentColor,
         )
       }
-      Text(
+      SelectableText(
         text = failureMessage,
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurface,

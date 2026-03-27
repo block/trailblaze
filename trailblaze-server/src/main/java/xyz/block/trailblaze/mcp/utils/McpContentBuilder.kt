@@ -2,6 +2,7 @@ package xyz.block.trailblaze.mcp.utils
 
 import io.ktor.util.encodeBase64
 import io.modelcontextprotocol.kotlin.sdk.types.TextContent
+import xyz.block.trailblaze.api.ImageFormatDetector
 import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
 import xyz.block.trailblaze.mcp.ScreenshotFormat
 
@@ -40,13 +41,13 @@ class McpContentBuilder(
   /**
    * Adds a screenshot to the result based on the session's screenshot format setting.
    *
-   * @param screenshotBytes The raw PNG screenshot bytes
-   * @param mimeType The image MIME type (default: "image/png")
+   * @param screenshotBytes The raw screenshot bytes (format auto-detected from magic bytes)
+   * @param mimeType The image MIME type. Defaults to auto-detection via [ImageFormatDetector].
    * @return This builder for chaining
    */
   fun addScreenshot(
     screenshotBytes: ByteArray?,
-    mimeType: String = "image/png",
+    mimeType: String = ImageFormatDetector.detectFormat(screenshotBytes ?: ByteArray(0)).mimeType,
   ): McpContentBuilder {
     if (screenshotBytes == null) return this
 
@@ -83,7 +84,7 @@ class McpContentBuilder(
    */
   fun addScreenshotIfAutoEnabled(
     screenshotBytes: ByteArray?,
-    mimeType: String = "image/png",
+    mimeType: String = ImageFormatDetector.detectFormat(screenshotBytes ?: ByteArray(0)).mimeType,
   ): McpContentBuilder {
     if (sessionContext?.autoIncludeScreenshotAfterAction == true) {
       addScreenshot(screenshotBytes, mimeType)
