@@ -169,6 +169,18 @@ fun LogDetailsDialog(
         }
       }
 
+      is TrailblazeLog.PrerequisiteStartLog -> {
+        item {
+          PrerequisiteStartDetailsFlat(log)
+        }
+      }
+
+      is TrailblazeLog.PrerequisiteCompleteLog -> {
+        item {
+          PrerequisiteCompleteDetailsFlat(log)
+        }
+      }
+
       is TrailblazeLog.AttemptAiFallbackLog -> {
         item {
           AttemptAiFallbackFlat(

@@ -15,6 +15,8 @@ object DisplayUtils {
       is TrailblazeLog.TrailblazeSessionStatusChangeLog -> "Session Status"
       is TrailblazeLog.ObjectiveStartLog -> "Objective Start"
       is TrailblazeLog.ObjectiveCompleteLog -> "Objective Complete"
+      is TrailblazeLog.PrerequisiteStartLog -> "Prerequisite Start"
+      is TrailblazeLog.PrerequisiteCompleteLog -> "Prerequisite Complete"
       is TrailblazeLog.AttemptAiFallbackLog -> "Attempt AI Fallback"
       is TrailblazeLog.TrailblazeSnapshotLog -> "Snapshot"
       is TrailblazeLog.AccessibilityActionLog -> "Accessibility Action"

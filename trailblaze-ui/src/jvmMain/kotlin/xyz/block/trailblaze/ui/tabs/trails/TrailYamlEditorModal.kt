@@ -83,6 +83,7 @@ fun TrailYamlEditorModal(
   progressMessages: List<String> = emptyList(),
   connectionStatus: DeviceConnectionStatus? = null,
   relativePath: String? = null,
+  availableTrailIds: List<String> = emptyList(),
 ) {
   var localContent by remember(initialContent) { mutableStateOf(initialContent) }
   var validationError by remember { mutableStateOf<String?>(null) }
@@ -198,6 +199,7 @@ fun TrailYamlEditorModal(
             onYamlContentChange = { localContent = it },
             visualEditorView = visualEditorView,
             onVisualEditorViewChange = { visualEditorView = it },
+            availableTrailIds = availableTrailIds,
             modifier = Modifier.weight(1f)
           )
         }

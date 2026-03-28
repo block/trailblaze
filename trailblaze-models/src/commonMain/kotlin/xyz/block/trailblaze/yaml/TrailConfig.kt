@@ -33,6 +33,14 @@ data class TrailConfig(
   val driver: String? = null,
   /** Optional Electron app configuration for [TrailblazeDriverType.PLAYWRIGHT_ELECTRON] trails. */
   val electron: ElectronAppConfig? = null,
+  /**
+   * Optional list of prerequisite trail IDs that must run before this trail.
+   * Each entry is the ID of another trail that will be auto-executed prior to this trail.
+   * Nested prerequisites (prerequisites of prerequisites) are resolved recursively
+   * across all execution paths (Desktop UI, host tests, MCP). A visited set prevents
+   * circular dependencies.
+   */
+  val prerequisites: List<String>? = null,
 )
 
 @Serializable

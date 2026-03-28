@@ -82,6 +82,7 @@ import xyz.block.trailblaze.ui.tabs.trails.TrailDetailsView
 import xyz.block.trailblaze.ui.tabs.trails.TrailVariant
 import xyz.block.trailblaze.ui.tabs.trails.TrailYamlEditorModal
 import xyz.block.trailblaze.ui.tabs.trails.TrailsDirectoryScanner
+import xyz.block.trailblaze.mcp.newtools.TrailFileManager
 import xyz.block.trailblaze.yaml.TrailSourceType
 import java.io.File
 import java.nio.file.Paths
@@ -120,6 +121,7 @@ fun TrailsBrowserTabComposable(
   onChangeDirectory: ((String) -> Unit)? = null,
 ) {
   val trailsDirectory = remember(trailsDirectoryPath) { File(trailsDirectoryPath) }
+  val trailFileManager = remember(trailsDirectoryPath) { TrailFileManager(trailsDirectoryPath) }
   val serverState by trailblazeSettingsRepo.serverStateFlow.collectAsState()
   val coroutineScope = rememberCoroutineScope()
 
@@ -127,6 +129,7 @@ fun TrailsBrowserTabComposable(
   var showDeviceSelectionDialog by remember { mutableStateOf(false) }
   var trailNameToRun by remember { mutableStateOf<String?>(null) }
   var yamlContentToRun by remember { mutableStateOf<String?>(null) }
+  var variantFilePathToRun by remember { mutableStateOf<String?>(null) }
 
   // Progress state for trail execution
   var progressMessages by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -945,13 +948,15 @@ fun TrailsBrowserTabComposable(
         // Show device selection dialog to run the trail
         trailNameToRun = yamlViewerVariant?.displayLabel ?: "Trail"
         yamlContentToRun = yamlViewerContent
+        variantFilePathToRun = yamlViewerVariant?.absolutePath
         showDeviceSelectionDialog = true
       },
       progressMessages = progressMessages,
       connectionStatus = connectionStatus,
       relativePath = runCatching {
         Paths.get(trailsDirectory.absolutePath).relativize(Paths.get(yamlViewerVariant!!.absolutePath)).toString()
-      }.getOrElse { yamlViewerVariant!!.fileName }
+      }.getOrElse { yamlViewerVariant!!.fileName },
+      availableTrailIds = remember(trails) { trails.map { it.id } }
     )
   }
 
@@ -973,6 +978,7 @@ fun TrailsBrowserTabComposable(
         showDeviceSelectionDialog = false
         trailNameToRun = null
         yamlContentToRun = null
+        variantFilePathToRun = null
       },
       onSessionClick = { sessionId ->
         showDeviceSelectionDialog = false
@@ -983,43 +989,58 @@ fun TrailsBrowserTabComposable(
         connectionStatus = null
 
         val targetTestApp = deviceManager.getCurrentSelectedTargetApp()
+        val yamlContent = yamlContentToRun!!
+        val variantFilePath = variantFilePathToRun
+        val trailName = trailNameToRun
 
-        // Run on each selected device
-        selectedDevices.forEach { device ->
-          val runYamlRequest = requestFactory.create(
-            device = device,
-            yaml = yamlContentToRun!!,
-            testName = trailNameToRun ?: "Trail from Browser",
-            referrer = TrailblazeReferrer(id = "trails_tab", display = "Trails Tab"),
-          )
+        trailNameToRun = null
+        yamlContentToRun = null
+        variantFilePathToRun = null
 
-          coroutineScope.launch(Dispatchers.IO) {
-            try {
-              yamlRunner(
-                DesktopAppRunYamlParams(
-                  forceStopTargetApp = forceStopApp,
-                  runYamlRequest = runYamlRequest,
-                  onProgressMessage = { message ->
-                    progressMessages = progressMessages + message
-                  },
-                  onConnectionStatus = { status ->
-                    connectionStatus = status
-                  },
-                  targetTestApp = targetTestApp,
-                  additionalInstrumentationArgs = additionalInstrumentationArgs(),
-                  onComplete = { result ->
-                    // Stay in the current session view - don't navigate away
-                    // The session detail view will show the completed state
-                  }
+        coroutineScope.launch {
+          // Flatten prerequisites into YAML so Desktop UI runs them like MCP does
+          val flattenedYaml = withContext(Dispatchers.IO) {
+            trailFileManager.flattenPrerequisites(
+              yamlContent = yamlContent,
+              variantFilePath = variantFilePath,
+            )
+          }
+
+          // Run on each selected device
+          selectedDevices.forEach { device ->
+            val runYamlRequest = requestFactory.create(
+              device = device,
+              yaml = flattenedYaml,
+              testName = trailName ?: "Trail from Browser",
+              referrer = TrailblazeReferrer(id = "trails_tab", display = "Trails Tab"),
+            )
+
+            launch(Dispatchers.IO) {
+              try {
+                yamlRunner(
+                  DesktopAppRunYamlParams(
+                    forceStopTargetApp = forceStopApp,
+                    runYamlRequest = runYamlRequest,
+                    onProgressMessage = { message ->
+                      progressMessages = progressMessages + message
+                    },
+                    onConnectionStatus = { status ->
+                      connectionStatus = status
+                    },
+                    targetTestApp = targetTestApp,
+                    additionalInstrumentationArgs = additionalInstrumentationArgs(),
+                    onComplete = { result ->
+                      // Stay in the current session view - don't navigate away
+                      // The session detail view will show the completed state
+                    }
+                  )
                 )
-              )
-            } catch (e: Exception) {
-              progressMessages = progressMessages + "Error: ${e.message}"
+              } catch (e: Exception) {
+                progressMessages = progressMessages + "Error: ${e.message}"
+              }
             }
           }
         }
-        trailNameToRun = null
-        yamlContentToRun = null
       }
     )
   }

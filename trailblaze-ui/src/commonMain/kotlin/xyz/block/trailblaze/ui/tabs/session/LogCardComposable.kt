@@ -138,6 +138,26 @@ fun LogCard(
       }
     )
 
+    is TrailblazeLog.PrerequisiteStartLog -> LogCardData(
+      title = "Prerequisite Start: ${log.prerequisiteTitle ?: log.prerequisiteTrailId}",
+      duration = null,
+      elapsedTime = elapsedTimeMs,
+      preformattedText = "Running prerequisite '${log.prerequisiteTrailId}' for trail '${log.parentTrailId}'"
+    )
+
+    is TrailblazeLog.PrerequisiteCompleteLog -> LogCardData(
+      title = if (log.passed) "Prerequisite Passed: ${log.prerequisiteTitle ?: log.prerequisiteTrailId}"
+              else "Prerequisite Failed: ${log.prerequisiteTitle ?: log.prerequisiteTrailId}",
+      duration = log.durationMs,
+      elapsedTime = elapsedTimeMs,
+      preformattedText = buildString {
+        appendLine("Trail: ${log.prerequisiteTrailId}")
+        appendLine("Status: ${if (log.passed) "PASSED" else "FAILED"}")
+        appendLine("Steps Executed: ${log.stepsExecuted}")
+        log.failureReason?.let { appendLine("Failure: $it") }
+      }
+    )
+
     is TrailblazeLog.TrailblazeSessionStatusChangeLog -> LogCardData(
       title = "Session Status",
       duration = null,

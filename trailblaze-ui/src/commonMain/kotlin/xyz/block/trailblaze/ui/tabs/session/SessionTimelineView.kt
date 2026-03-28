@@ -696,6 +696,8 @@ private fun logSummary(log: TrailblazeLog): Pair<String, String?> =
     is TrailblazeLog.TrailblazeLlmRequestLog -> "LLM Request" to "${log.durationMs}ms"
     is TrailblazeLog.ObjectiveStartLog -> "Step started" to log.promptStep.prompt
     is TrailblazeLog.ObjectiveCompleteLog -> "Step completed" to log.promptStep.prompt
+    is TrailblazeLog.PrerequisiteStartLog -> "Prerequisite started" to (log.prerequisiteTitle ?: log.prerequisiteTrailId)
+    is TrailblazeLog.PrerequisiteCompleteLog -> (if (log.passed) "Prerequisite passed" else "Prerequisite failed") to "${log.prerequisiteTitle ?: log.prerequisiteTrailId} (${log.durationMs}ms)"
     is TrailblazeLog.TrailblazeSessionStatusChangeLog -> "Session" to log.sessionStatus.toString()
     else -> log::class.simpleName.orEmpty() to null
   }

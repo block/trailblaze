@@ -78,6 +78,12 @@ data class Trail(
     get() = defaultVariant?.config?.source ?: variants.firstNotNullOfOrNull { it.config?.source }
 
   /**
+   * Returns the prerequisites from the default variant's config, or from any variant if default has none.
+   */
+  val prerequisites: List<String>?
+    get() = defaultVariant?.config?.prerequisites ?: variants.firstNotNullOfOrNull { it.config?.prerequisites }
+
+  /**
    * Returns merged metadata from all variants (default variant takes precedence).
    */
   val metadata: Map<String, String>

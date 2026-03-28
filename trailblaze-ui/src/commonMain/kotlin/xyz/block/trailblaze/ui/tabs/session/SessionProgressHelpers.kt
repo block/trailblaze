@@ -468,6 +468,11 @@ internal fun latestActivityLabel(log: TrailblazeLog): String {
     is TrailblazeLog.McpToolCallResponseLog -> "MCP tool response: ${log.toolName}"
     is TrailblazeLog.McpAskLog -> "MCP ask"
     is TrailblazeLog.TrailblazeProgressLog -> log.description
+    is TrailblazeLog.PrerequisiteStartLog ->
+      "Running prerequisite: ${log.prerequisiteTitle ?: log.prerequisiteTrailId}"
+    is TrailblazeLog.PrerequisiteCompleteLog ->
+      if (log.passed) "Prerequisite passed: ${log.prerequisiteTitle ?: log.prerequisiteTrailId}"
+      else "Prerequisite failed: ${log.prerequisiteTitle ?: log.prerequisiteTrailId}"
   }
 }
 

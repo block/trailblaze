@@ -312,6 +312,60 @@ fun ObjectiveCompleteDetailsFlat(log: TrailblazeLog.ObjectiveCompleteLog) {
 }
 
 @Composable
+fun PrerequisiteStartDetailsFlat(log: TrailblazeLog.PrerequisiteStartLog) {
+  Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+    DetailSection("Prerequisite Trail") {
+      CodeBlock(log.prerequisiteTitle?.let { "$it (${log.prerequisiteTrailId})" } ?: log.prerequisiteTrailId)
+    }
+    DetailSection("Parent Trail") {
+      CodeBlock(log.parentTrailId)
+    }
+  }
+}
+
+@Composable
+fun PrerequisiteCompleteDetailsFlat(log: TrailblazeLog.PrerequisiteCompleteLog) {
+  val statusText = if (log.passed) "Passed" else "Failed"
+  val statusColor = if (log.passed) Color(0xFF28A745) else Color(0xFFDC3545)
+
+  Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+    // Status indicator at the top
+    Row(
+      verticalAlignment = Alignment.CenterVertically,
+      modifier = Modifier.padding(bottom = 8.dp)
+    ) {
+      Icon(
+        imageVector = if (log.passed) Icons.Filled.CheckCircle else Icons.Filled.Close,
+        contentDescription = statusText,
+        tint = statusColor,
+        modifier = Modifier.size(24.dp)
+      )
+      Spacer(modifier = Modifier.width(8.dp))
+      Text(
+        text = "Prerequisite $statusText",
+        style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.Bold,
+        color = statusColor
+      )
+    }
+
+    DetailSection("Prerequisite Trail") {
+      CodeBlock(log.prerequisiteTitle?.let { "$it (${log.prerequisiteTrailId})" } ?: log.prerequisiteTrailId)
+    }
+    DetailSection("Parent Trail") {
+      CodeBlock(log.parentTrailId)
+    }
+    DetailSection("Execution Summary") {
+      CodeBlock(buildString {
+        appendLine("Steps Executed: ${log.stepsExecuted}")
+        appendLine("Duration: ${log.durationMs}ms")
+        log.failureReason?.let { appendLine("Failure Reason: $it") }
+      })
+    }
+  }
+}
+
+@Composable
 fun AttemptAiFallbackFlat(
   log: TrailblazeLog.AttemptAiFallbackLog,
 ) {
