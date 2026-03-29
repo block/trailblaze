@@ -57,11 +57,11 @@ dependencies {
 // ---------------------------------------------------------------------------
 // generateSampleAppTests
 // Scans ../android-sample-app/trails/android-ondevice-instrumentation/**/*.trail.yaml
-// and writes a JUnit test class so the sample-app trails can run on Test Farm.
+// and writes a JUnit test class so the sample-app trails can run on a remote device farm.
 // Usage: ./gradlew :examples:android-sample-app-uitests:generateSampleAppTests
 // ---------------------------------------------------------------------------
 tasks.register("generateSampleAppTests") {
-  description = "Generate JUnit instrumentation tests from trail YAML files for Test Farm"
+  description = "Generate JUnit instrumentation tests from trail YAML files for remote device farm"
   group = "trailblaze"
 
   val trailsDir = file("../android-sample-app/trails/android-ondevice-instrumentation")

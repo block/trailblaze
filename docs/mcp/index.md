@@ -300,7 +300,7 @@ This enables:
 - **Custom replanning logic** - Your client decides when to retry or try alternatives
 - **Cost optimization** - Trailblaze uses a cheap vision model for screen analysis
 
-See the migration guide under `docs/decisions/009_migration_guide.md` for details.
+See the [Kotlin language decision](../devlog/2026-01-28-kotlin-language.md) for details on migration.
 
 ## Troubleshooting
 

@@ -31,7 +31,7 @@ data class ScreenshotScalingConfig(
     val DEFAULT = ScreenshotScalingConfig()
 
     /**
-     * Alias for [DEFAULT]. On-device in-process execution (e.g. Android Test Farm) uses the
+     * Alias for [DEFAULT]. On-device in-process execution (e.g. remote device farm) uses the
      * same config as host — WebP at 1536x768. Kept as a named constant for clarity at call
      * sites where the on-device context matters.
      */

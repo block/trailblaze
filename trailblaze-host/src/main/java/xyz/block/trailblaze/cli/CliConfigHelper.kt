@@ -5,6 +5,7 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.client.TrailblazeJson
 import xyz.block.trailblaze.mcp.AgentImplementation
+import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.ui.TrailblazePortManager
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.ui.models.TrailblazeServerState.SavedTrailblazeAppConfig
@@ -52,6 +53,16 @@ val CONFIG_KEYS: Map<String, ConfigKey> = listOf(
     validValues = "e.g., gpt-4-1, claude-sonnet-4-20250514, gemini-3-flash",
     get = { config -> config.llmModel },
     set = { config, value -> config.copy(llmModel = value) },
+  ),
+  ConfigKey(
+    name = "app",
+    description = "Target app for device connections and custom tools",
+    validValues = "App target ID (e.g., square, cash, none)",
+    get = { config -> config.selectedTargetAppId ?: "not set" },
+    set = { config, value ->
+      val targetId = if (value.equals(TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget.id, ignoreCase = true)) null else value.lowercase()
+      config.copy(selectedTargetAppId = targetId)
+    },
   ),
   ConfigKey(
     name = "agent",

@@ -94,6 +94,9 @@ class McpProxy(
   // Whether the proxy is shutting down
   private val shutdownRequested = AtomicBoolean(false)
 
+  // The daemon process we launched (if any) -- prevents double-launching
+  private val daemonProcess = AtomicReference<Process?>(null)
+
   fun run(): Int {
     System.setProperty("java.awt.headless", "true")
 
@@ -211,8 +214,15 @@ class McpProxy(
 
   /**
    * Start the daemon in headless mode.
+   * Skips if a previously launched daemon process is still alive.
    */
   private fun startDaemon(log: (String) -> Unit) {
+    val existing = daemonProcess.get()
+    if (existing != null && existing.isAlive) {
+      log("Daemon process still starting -- skipping duplicate launch.")
+      return
+    }
+
     val launcher = findLauncher()
     if (launcher == null) {
       log("Cannot auto-start daemon: trailblaze launcher not found. Start it manually with: trailblaze app")
@@ -230,7 +240,8 @@ class McpProxy(
       }
       pb.redirectOutput(ProcessBuilder.Redirect.DISCARD)
       pb.redirectError(ProcessBuilder.Redirect.DISCARD)
-      pb.start()
+      val process = pb.start()
+      daemonProcess.set(process)
       log("Daemon process launched.")
     } catch (e: Exception) {
       log("Failed to start daemon: ${e.message}")
