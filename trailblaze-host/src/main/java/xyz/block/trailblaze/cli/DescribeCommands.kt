@@ -15,13 +15,11 @@ data class CommandDescription(
 )
 
 /**
- * Returns JSON describing the CLI's command tree for `sq` CLI integration.
+ * Returns JSON describing the CLI's command tree for CLI integration.
  *
- * The `sq` CLI calls `trailblaze --describe-commands` to discover subcommands
- * and display them in `sq trailblaze` help output. This walks picocli's
+ * The CLI calls `trailblaze --describe-commands` to discover subcommands
+ * and display them in help output. This walks picocli's
  * [CommandLine] model so the output stays in sync with the actual commands.
- *
- * @see <a href="https://dev-guides.sqprod.co/docs/tools/sq-cli/guides/integration#subcommands">sq CLI integration guide</a>
  */
 fun CommandLine.describeCommands(): String =
   json.encodeToString(

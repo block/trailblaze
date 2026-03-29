@@ -483,7 +483,7 @@ object WasmReport {
     // Default image URL transformation
     // When served with no embedded images (on-demand /report endpoint), converts image
     // keys to /static/ URLs so the browser can fetch them from the server. This works
-    // for both localhost and remote hosts (e.g., via Blox proxy).
+    // for both localhost and remote hosts.
     // For embedded reports, images are in the compressed data and decompressed directly.
     // This can be overridden by scripts loaded later in the HTML (e.g., Buildkite transformer).
     window.transformImageUrl = window.transformImageUrl || function(screenshotRef) {
