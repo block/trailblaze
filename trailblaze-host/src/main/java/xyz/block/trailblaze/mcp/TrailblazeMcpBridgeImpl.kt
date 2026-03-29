@@ -901,8 +901,22 @@ class TrailblazeMcpBridgeImpl(
   }
 
   override suspend fun getAvailableDevices(): Set<TrailblazeConnectedDeviceSummary> {
-    val availableDevices = trailblazeDeviceManager.loadDevicesSuspend(applyDriverFilter = true).toSet()
-    return availableDevices
+    // Load all devices (unfiltered) — the UI-level targetDeviceFilter may not work correctly
+    // in headless/MCP mode (e.g., testingEnvironment=null skips Playwright, but MCP always
+    // needs to offer web). Instead, deduplicate here using the configured driver type per platform.
+    val allDevices = trailblazeDeviceManager.loadDevicesSuspend(applyDriverFilter = false)
+    return allDevices
+      .groupBy { it.instanceId to it.platform }
+      .map { (_, variants) ->
+        val platform = variants.first().platform
+        val configuredType = getConfiguredDriverType(platform)
+        if (configuredType != null) {
+          variants.find { it.trailblazeDriverType == configuredType } ?: variants.first()
+        } else {
+          variants.first()
+        }
+      }
+      .toSet()
   }
 
   override suspend fun getInstalledAppIds(): Set<String> {

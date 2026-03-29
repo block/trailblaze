@@ -59,7 +59,6 @@ object HostAndroidDeviceConnectUtils {
     sendProgressMessage("Installing pre-compiled test APK...")
 
     val installSuccess = PrecompiledApkInstaller.extractAndInstallPrecompiledApk(
-      resourcePath = PrecompiledApkInstaller.PRECOMPILED_APK_RESOURCE_PATH,
       trailblazeDeviceId = trailblazeDeviceId,
       sendProgressMessage = sendProgressMessage,
     )
@@ -172,15 +171,24 @@ object HostAndroidDeviceConnectUtils {
     )
 
     if (alreadyRunning) {
-      sendProgressMessage("On-device server already running — reusing existing connection.")
-      Console.log("On-device server already running for ${trailblazeOnDeviceInstrumentationTarget.testAppId}, skipping force-stop/reinstall.")
-      return DeviceConnectionStatus.WithTargetDevice.TrailblazeInstrumentationRunning(
-        trailblazeDeviceId = trailblazeDeviceId,
-      )
+      // Even if running, verify the installed APK matches the bundled version.
+      // This handles brew upgrades and local source rebuilds transparently.
+      if (PrecompiledApkInstaller.isInstalledApkUpToDate(trailblazeDeviceId)) {
+        sendProgressMessage("On-device server already running — reusing existing connection.")
+        Console.log("On-device server already running for ${trailblazeOnDeviceInstrumentationTarget.testAppId}, skipping force-stop/reinstall.")
+        return DeviceConnectionStatus.WithTargetDevice.TrailblazeInstrumentationRunning(
+          trailblazeDeviceId = trailblazeDeviceId,
+        )
+      } else {
+        sendProgressMessage("On-device APK is outdated — reinstalling...")
+        Console.log("APK SHA mismatch for ${trailblazeOnDeviceInstrumentationTarget.testAppId}, forcing reinstall.")
+      }
     }
 
-    // Server not running (or force restart requested) — clean slate setup
-    sendProgressMessage("On-device server not running — starting fresh...")
+    // Server not running, force restart requested, or APK outdated — clean slate setup
+    if (!alreadyRunning) {
+      sendProgressMessage("On-device server not running — starting fresh...")
+    }
     forceStopAllAndroidInstrumentationProcesses(
       trailblazeOnDeviceInstrumentationTargetTestApps = setOf(trailblazeOnDeviceInstrumentationTarget),
       deviceId = trailblazeDeviceId,

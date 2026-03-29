@@ -176,9 +176,12 @@ object PlaywrightDriverManager {
    *
    * Playwright separates the "driver" (Node.js runtime, ~7 MB) from the "browser" (Chromium
    * binary, ~150 MB). [ensureDriverAvailable] handles the driver; this method handles the
-   * browser. It checks for any `chromium-*` or `chromium_headless_shell-*` directory in the
-   * ms-playwright cache (or in [PLAYWRIGHT_BROWSERS_PATH] if set), and runs
-   * `playwright install chromium` if none is found.
+   * browser. It checks that both `chromium-*` and `chromium_headless_shell-*` directories exist
+   * in the ms-playwright cache (or in [PLAYWRIGHT_BROWSERS_PATH] if set) with a completed
+   * installation marker, and runs `playwright install chromium` if either is missing.
+   *
+   * Both variants are required because headless mode (the default) uses the headless shell,
+   * while headed mode uses the full Chromium browser.
    *
    * Must be called after [ensureDriverAvailable] so that `playwright.cli.dir` is already set.
    * Blocks the calling thread until the download completes (one-time, ~150 MB).
@@ -200,6 +203,9 @@ object PlaywrightDriverManager {
 
   /** Prefix for the headless-shell Chromium directory in the Playwright cache. */
   private const val CHROMIUM_HEADLESS_SHELL_DIR_PREFIX = "chromium_headless_shell-"
+
+  /** Marker file Playwright writes after a successful browser download. */
+  private const val INSTALLATION_COMPLETE_MARKER = "INSTALLATION_COMPLETE"
 
   /**
    * Returns the Playwright browser cache directory for the current platform.
@@ -228,10 +234,23 @@ object PlaywrightDriverManager {
   private fun isChromiumInstalled(): Boolean {
     val cacheDir = getPlaywrightBrowsersCacheDir()
     if (!cacheDir.exists() || !cacheDir.isDirectory) return false
-    return cacheDir.listFiles()?.any { file ->
+    // Playwright writes an INSTALLATION_COMPLETE marker file after downloading a browser.
+    // Checking only the directory name is insufficient — the directory can exist without
+    // the actual binary (e.g., partial download, interrupted install, or cleanup).
+    // We need *both* chromium and chromium_headless_shell because headless mode (the default)
+    // uses the headless shell variant, while headed mode needs the full browser.
+    val dirs = cacheDir.listFiles() ?: return false
+    val hasChromium = dirs.any { file ->
       file.isDirectory &&
-        (file.name.startsWith(CHROMIUM_DIR_PREFIX) || file.name.startsWith(CHROMIUM_HEADLESS_SHELL_DIR_PREFIX))
-    } ?: false
+        file.name.startsWith(CHROMIUM_DIR_PREFIX) &&
+        File(file, INSTALLATION_COMPLETE_MARKER).exists()
+    }
+    val hasHeadlessShell = dirs.any { file ->
+      file.isDirectory &&
+        file.name.startsWith(CHROMIUM_HEADLESS_SHELL_DIR_PREFIX) &&
+        File(file, INSTALLATION_COMPLETE_MARKER).exists()
+    }
+    return hasChromium && hasHeadlessShell
   }
 
   private val progressRegex = Regex("""(\d{1,3})\s*%""")

@@ -89,6 +89,8 @@ import xyz.block.trailblaze.mcp.sampling.LocalLlmSamplingSource
 import xyz.block.trailblaze.mcp.toolsets.ToolSetCategory
 import xyz.block.trailblaze.mcp.toolsets.ToolSetCategoryMapping
 import xyz.block.trailblaze.mcp.utils.KoogToMcpExt.toMcpJsonSchemaObject
+import xyz.block.trailblaze.mcp.utils.filterNonNullableRequired
+import xyz.block.trailblaze.mcp.utils.simplifyNullableAnyOf
 import xyz.block.trailblaze.toolcalls.toKoogToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeToolDescriptor
 import xyz.block.trailblaze.mcp.utils.TrailblazeToolToMcpBridge
@@ -357,14 +359,16 @@ class TrailblazeMcpServer(
     Console.log("[MCP] Registering ${newToolRegistry.tools.size} tools from Koog registry")
     newToolRegistry.tools.forEach { tool: Tool<*, *> ->
       try {
-      // Build properties JsonObject directly (following Koog pattern)
+      // Build properties JsonObject directly (following Koog pattern).
+      // Post-process each property to simplify nullable anyOf patterns for broad
+      // MCP client compatibility (see simplifyNullableAnyOf).
       val properties = buildJsonObject {
         (tool.descriptor.requiredParameters + tool.descriptor.optionalParameters).forEach { param ->
-          put(param.name, param.toMcpJsonSchemaObject())
+          put(param.name, param.toMcpJsonSchemaObject().simplifyNullableAnyOf())
         }
       }
 
-      val required = tool.descriptor.requiredParameters.map { it.name }
+      val required = tool.descriptor.requiredParameters.filterNonNullableRequired()
 
       // Always provide properties (even if empty) - Goose client expects properties to be present
       // Previously we used ToolSchema() for empty tools, but this omits the "properties" field

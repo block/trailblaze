@@ -131,6 +131,9 @@ class PlaywrightElectronBrowserManager(
 
   init {
     try {
+      // Ensure the Playwright driver is available (downloads on first use if driver-bundle
+      // is not on the classpath, e.g., when running from the uber JAR).
+      PlaywrightDriverManager.ensureDriverAvailable()
       runBlocking(playwrightDispatcher) {
         playwright = Playwright.create()
         browser = playwright.chromium().connectOverCDP(cdpUrl)

@@ -60,6 +60,13 @@ actual class AndroidDeviceCommandExecutor actual constructor(
     return AdbCommandUtil.isAppRunning(appId)
   }
 
+  actual fun grantAppOpsPermission(appId: String, permission: String) {
+    AdbCommandUtil.grantAppOpsPermission(
+      targetAppPackageName = appId,
+      permission = permission,
+    )
+  }
+
   actual fun writeFileToDownloads(fileName: String, content: ByteArray) {
     val context = InstrumentationRegistry.getInstrumentation().context
     FileReadWriteUtil.writeToDownloadsFile(
@@ -188,4 +195,5 @@ actual class AndroidDeviceCommandExecutor actual constructor(
       tempFile.delete()
     }
   }
+
 }
