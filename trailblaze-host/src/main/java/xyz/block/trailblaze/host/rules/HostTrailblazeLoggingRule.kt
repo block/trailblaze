@@ -7,6 +7,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeScreenStateLog
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.rules.TrailblazeLoggingRule
+import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.ui.TrailblazePortManager
 
 import xyz.block.trailblaze.util.GitUtils
@@ -46,7 +47,10 @@ class HostTrailblazeLoggingRule(
       explicitLogsDir?.let { return it }
 
       val gitRoot = GitUtils.getGitRootViaCommand()
-      return File(gitRoot, "logs")
+      if (gitRoot != null) return File(gitRoot, "logs")
+
+      // Release/binary builds: use ~/.trailblaze/logs as the default logs directory
+      return File(TrailblazeDesktopUtil.getDefaultAppDataDirectory(), "logs")
     }
   }
 }

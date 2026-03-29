@@ -18,6 +18,11 @@ object GitUtils {
     null
   }
 
+  /**
+   * Returns the git repository root directory, or null if not in a git repo.
+   * Callers must handle null gracefully — release/binary builds may not be in a git repo
+   * and should fall back to configured or default paths (e.g., ~/.trailblaze/logs).
+   */
   fun getGitRootViaCommand(): String? = runGitCommand("rev-parse", "--show-toplevel")
 
   // Helper to get git root directory

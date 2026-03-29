@@ -68,6 +68,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.toolcalls.toolName
 import xyz.block.trailblaze.tracing.TrailblazeTraceExporter
+import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.GitUtils
@@ -116,7 +117,9 @@ object TrailblazeHostYamlRunner {
         client = loggingRule.trailblazeLogServerClient,
         isServerAvailable = true, // Host runner always has a server running
         writeToDisk = { traceJson ->
-          val logsDir = File(GitUtils.getGitRootViaCommand(), "logs")
+          val gitRoot = GitUtils.getGitRootViaCommand()
+          val logsDir = if (gitRoot != null) File(gitRoot, "logs")
+            else File(TrailblazeDesktopUtil.getDefaultAppDataDirectory(), "logs")
           val sessionDir = File(logsDir, sessionId.value)
           sessionDir.mkdirs()
           File(sessionDir, "trace.json").writeText(traceJson)

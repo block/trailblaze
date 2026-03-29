@@ -43,7 +43,7 @@ data class SnapshotMetadata(
       // Extract filename from screenshotFile (could be a filename or a full URL)
       val screenshotPath = snapshotLog.screenshotFile
       val screenshotFileName = if (screenshotPath.startsWith("http://") || screenshotPath.startsWith("https://")) {
-        // Extract filename from URL (e.g., from S3 URL after ATF upload)
+        // Extract filename from URL (e.g., from S3 URL after device farm upload)
         // URL format: https://...?key=...%2Ffilename.png
         val keyParam = screenshotPath.substringAfter("key=", "")
         if (keyParam.isNotEmpty()) {

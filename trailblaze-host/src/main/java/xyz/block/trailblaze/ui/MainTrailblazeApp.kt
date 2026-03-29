@@ -74,6 +74,15 @@ import java.awt.GraphicsEnvironment
 import java.awt.Window
 
 
+/**
+ * When true, always show the main window on macOS instead of starting minimized to tray.
+ * This improves discoverability of the app vs being hidden in the menu bar.
+ *
+ * Note: When --headless is passed (e.g. via `trailblaze mcp`), the window is always hidden
+ * regardless of this flag — headless mode only starts the daemon/server with a tray icon.
+ */
+private const val ALWAYS_SHOW_WINDOW = true
+
 private data class WindowStateSnapshot(
   val width: Int,
   val height: Int,
@@ -146,9 +155,9 @@ class MainTrailblazeApp(
     application {
       val currentServerState by trailblazeSavedSettingsRepo.serverStateFlow.collectAsState()
       
-      // Window visibility state - starts hidden in headless mode, visible otherwise
-      // Closing the window hides it instead of quitting (can reopen from tray)
-      var windowVisible by remember { mutableStateOf(!headless) }
+      // Window visibility state - starts hidden in headless mode, visible otherwise.
+      // ALWAYS_SHOW_WINDOW overrides headless to improve app discoverability on macOS.
+      var windowVisible by remember { mutableStateOf(if (headless) false else ALWAYS_SHOW_WINDOW) }
       
       // Track the AWT window for bringing to front
       var awtWindow by remember { mutableStateOf<Window?>(null) }
