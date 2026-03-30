@@ -434,6 +434,7 @@ trailblaze config drivers
 | `llm` | LLM provider and model (shorthand: provider/model) | provider/model (e.g., openai/gpt-4-1, anthropic/claude-sonnet-4-20250514) |
 | `llm-provider` | LLM provider | openai, anthropic, google, ollama, openrouter, etc. |
 | `llm-model` | LLM model ID | e.g., gpt-4-1, claude-sonnet-4-20250514, gemini-3-flash |
+| `app` | Target app for device connections and custom tools | App target ID (e.g., square, cash, none) |
 | `agent` | Agent implementation | TRAILBLAZE_RUNNER, MULTI_AGENT_V3 |
 | `android-driver` | Android driver type | HOST, ONDEVICE, ACCESSIBILITY |
 | `ios-driver` | iOS driver type | HOST |
