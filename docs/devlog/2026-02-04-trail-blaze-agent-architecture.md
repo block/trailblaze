@@ -112,8 +112,8 @@ When `blaze()` runs via MCP, progress callbacks report iteration status, action 
 ## Related Documents
 
 - [021: AI Fallback](./2026-01-29-ai-fallback.md) - Integrated into `trail<>` execution
-- [002: Trail Recording Format](../../devlog/2025-10-01-trail-recording-format.md) - Trail file format used by both modes
-- [011: Agent Loop Implementation](../../devlog/2026-01-28-agent-loop-implementation.md) - Custom loops being replaced
-- [012: Koog LLM Client](../../devlog/2026-01-28-koog-llm-client.md) - Koog integration foundation
+- [002: Trail Recording Format](2025-10-01-trail-recording-format.md) - Trail file format used by both modes
+- [011: Agent Loop Implementation](2026-01-28-agent-loop-implementation.md) - Custom loops being replaced
+- [012: Koog LLM Client](2026-01-28-koog-llm-client.md) - Koog integration foundation
 - [Mobile-Agent-v3 Paper](https://arxiv.org/abs/2508.15144) - Multi-agent GUI automation research
 - [Koog Complex Workflow Agents](https://docs.koog.ai/complex-workflow-agents/) - Strategy graph documentation

@@ -33,7 +33,7 @@ A key principle: **author once, run deterministically**. While the subagent appr
 
 **Custom tools** are a key benefit of Trailblaze. By specifying a target app, teams get access to app-specific tools that expose functionality beyond standard UI interactions. For example, an app target can provide a tool for quickly logging into staging or test accounts, providing the same access as debug menus without navigating through the UI.
 
-The [Model Context Protocol (MCP)](https://modelcontextprotocol.io) provides a standardized interface for exposing Trailblaze capabilities to external AI systems. Trailblaze uses the **Streamable HTTP** transport, which allows MCP clients to connect via HTTP POST requests to a session-based endpoint. See the [MCP setup guide](../../mcp/index.md) for connection details.
+The [Model Context Protocol (MCP)](https://modelcontextprotocol.io) provides a standardized interface for exposing Trailblaze capabilities to external AI systems. Trailblaze uses the **Streamable HTTP** transport, which allows MCP clients to connect via HTTP POST requests to a session-based endpoint. See the [MCP setup guide](../mcp/index.md) for connection details.
 
 ## Decision
 

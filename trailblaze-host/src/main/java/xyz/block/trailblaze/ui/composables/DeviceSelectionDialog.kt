@@ -88,7 +88,7 @@ fun DeviceConfigurationContent(
     availableDevices,
     lastSelectedDeviceInstanceIds,
     selectedTargetApp,
-    installedAppIdsByDevice
+    installedAppIdsByDevice,
   ) {
     mutableStateOf(
       availableDevices.filter { device ->
@@ -101,6 +101,17 @@ fun DeviceConfigurationContent(
             (isWebPlatform || selectedTargetApp == null || appIdIfInstalled != null)
       }.toSet()
     )
+  }
+
+  LaunchedEffect(activeDeviceSessions, allowSelectionOfActiveDevices) {
+    if (allowSelectionOfActiveDevices) return@LaunchedEffect
+    val filteredSelection = selectedDevices.filterTo(mutableSetOf()) { device ->
+      !activeDeviceSessions.containsKey(device.trailblazeDeviceId)
+    }
+    if (filteredSelection != selectedDevices) {
+      selectedDevices = filteredSelection
+      onSelectionChanged(selectedDevices.map { it.instanceId })
+    }
   }
 
   // Auto-refresh devices when requested
@@ -197,7 +208,6 @@ fun DeviceConfigurationContent(
             activeSessionId = activeSessionId?.value,
             onSessionClick = onSessionClick,
             onToggle = {
-              // Only allow toggle if device is enabled and (allowSelectionOfActiveDevices is true OR device has no active session)
               if (isDeviceEnabled && (allowSelectionOfActiveDevices || !hasActiveSession)) {
                 selectedDevices = if (allowMultipleSelection) {
                   if (selectedDevices.contains(device)) {

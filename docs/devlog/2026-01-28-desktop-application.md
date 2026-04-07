@@ -40,7 +40,7 @@ Trailblaze usage has shifted toward patterns that don't require IDE integration:
 
 ### Application Architecture
 
-The Trailblaze desktop application is a Compose Multiplatform app built with Kotlin (see [Decision 009](../../devlog/2026-01-28-kotlin-language.md)). It runs as a native application on macOS, with Linux support planned.
+The Trailblaze desktop application is a Compose Multiplatform app built with Kotlin (see [Decision 009](2026-01-28-kotlin-language.md)). It runs as a native application on macOS, with Linux support planned.
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -116,7 +116,7 @@ Developers keep their IDE for code editing; Trailblaze handles UI test automatio
 
 ### Distribution
 
-Trailblaze is distributed as a **CLI tool that bundles the desktop application** (see [Decision 013](2026-01-28-distribution-model.md)):
+Trailblaze is distributed as a **CLI tool that bundles the desktop application** (see Decision 013: Distribution Model):
 
 | Audience | Channel | Command |
 | :--- | :--- | :--- |

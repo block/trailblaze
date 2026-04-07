@@ -21,7 +21,15 @@ class HostTrailblazeLoggingRule(
   logsDir: File? = null,
   /** When true, the LogsRepo rejects all writes — fixture sessions remain readable. */
   noLogging: Boolean = false,
-  val logsRepo: LogsRepo = LogsRepo(resolveLogsDir(logsDir), readOnly = noLogging),
+  /**
+   * When false (default), the LogsRepo does not start FileWatchService threads for
+   * reactive session monitoring. Per-run LogsRepo instances only need to write logs —
+   * the server's primary LogsRepo (or the desktop app) already watches the directory.
+   * Set to true only when this is the sole LogsRepo for the logs directory (e.g., in
+   * standalone test harnesses that need reactive session updates).
+   */
+  watchFileSystem: Boolean = false,
+  val logsRepo: LogsRepo = LogsRepo(resolveLogsDir(logsDir), readOnly = noLogging, watchFileSystem = watchFileSystem),
 ) : TrailblazeLoggingRule(
   logsBaseUrl = logsBaseUrl,
   additionalLogEmitter = additionalLogEmitter,

@@ -8,7 +8,7 @@ date: 2026-01-29
 
 ## Context
 
-A core value proposition of Trailblaze is that **natural language is always the source of truth** for test definitions. As described in [Decision 002](../../devlog/2025-10-01-trail-recording-format.md), trail recordings (`.trail.yaml` files) are an *optimization*—they capture successful executions as deterministic tool sequences that can replay without LLM involvement, reducing costs and ensuring consistency.
+A core value proposition of Trailblaze is that **natural language is always the source of truth** for test definitions. As described in [Decision 002](2025-10-01-trail-recording-format.md), trail recordings (`.trail.yaml` files) are an *optimization*—they capture successful executions as deterministic tool sequences that can replay without LLM involvement, reducing costs and ensuring consistency.
 
 However, recordings are inherently tied to the application state at the time they were captured. When the application changes—a new onboarding popup appears, button text is updated, a feature flag changes the UI flow—recorded tool calls may fail. Rather than treating this as an immediate test failure, Trailblaze can leverage the natural language source of truth to attempt recovery.
 
@@ -95,7 +95,7 @@ The `PASSED_WITH_AI_FALLBACK` status is critical for several reasons:
 
 ### Interaction with Step-Level Recordability
 
-As noted in [Decision 002](../../devlog/2025-10-01-trail-recording-format.md), individual steps can be marked `recordable: false` to always use AI interpretation:
+As noted in [Decision 002](2025-10-01-trail-recording-format.md), individual steps can be marked `recordable: false` to always use AI interpretation:
 
 ```yaml
 - step: Verify the total matches the expected value

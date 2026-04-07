@@ -29,7 +29,7 @@ Trailblaze's Maestro dependency exists at three layers:
 - **Execution**: Tools extending `MapsToMaestroCommands` produce Maestro `Command` objects.
 - **Type conversion**: `TreeNodeExt.kt` and `TrailblazeElementSelectorExt.kt` exist solely to bridge the matching dependency.
 
-Per [Decision 006](../../devlog/2026-01-01-maestro-integration.md), Maestro was explicitly "not a permanent coupling."
+Per [Decision 006](2026-01-01-maestro-integration.md), Maestro was explicitly "not a permanent coupling."
 
 ### ViewHierarchyTreeNode Loses Fidelity
 
@@ -109,7 +109,7 @@ Phases 1 and 4 can proceed in parallel.
 
 ## Related Documents
 
-- [006: Maestro Integration](../../devlog/2026-01-01-maestro-integration.md) - This makes 006's "not a permanent coupling" concrete
+- [006: Maestro Integration](2026-01-01-maestro-integration.md) - This makes 006's "not a permanent coupling" concrete
 - [032: Trail/Blaze Agent](2026-02-04-trail-blaze-agent-architecture.md) - Phase 2's adaptive tool switching applies to both trail and blaze
 - [032b: Mobile-Agent-v3](2026-02-04-mobile-agent-v3-integration.md) - Decoupled; V3 benefits from but doesn't depend on this work
-- [002: Trail Recording Format](../../devlog/2025-10-01-trail-recording-format.md) - Phases 3 and 6 improve recording quality
+- [002: Trail Recording Format](2025-10-01-trail-recording-format.md) - Phases 3 and 6 improve recording quality

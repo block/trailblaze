@@ -120,7 +120,7 @@ The coding agent uses `sessionDir` to read raw data when needed:
 
 ### Trailhead: Setup as a Checkpoint
 
-> See [Decision 026: Trail YAML v2 Syntax](../../devlog/2026-03-06-trail-yaml-v2-syntax.md) for the full trailhead specification.
+> See [Decision 026: Trail YAML v2 Syntax](2026-03-06-trail-yaml-v2-syntax.md) for the full trailhead specification.
 
 The trailhead is the setup portion of a test — launch the app, sign in, navigate to the target screen. In the dev loop:
 
@@ -132,7 +132,7 @@ If the app's UI changes (new onboarding flow, redesigned nav), the trail breaks.
 
 ### Recording Optimization
 
-> See [Decision 034: Recording Optimization Pipeline](../../devlog/2026-03-09-recording-optimization-pipeline.md) for the full specification.
+> See [Decision 034: Recording Optimization Pipeline](2026-03-09-recording-optimization-pipeline.md) for the full specification.
 
 In the dev loop, recordings are a **cache**, not a commitment:
 
@@ -254,13 +254,13 @@ External developers create app targets by package name.
 
 ### Phase 4: YAML v2 Syntax with Trailhead (High)
 
-> See [Decision 026](../../devlog/2026-03-06-trail-yaml-v2-syntax.md)
+> See [Decision 026](2026-03-06-trail-yaml-v2-syntax.md)
 
 Implement the v2 YAML parser with `config`, `trailhead`, and `trail` sections. Mapping-based format, flat `recording` syntax, compact tool syntax.
 
 ### Phase 5: Recording Optimization Pipeline (Medium)
 
-> See [Decision 034](../../devlog/2026-03-09-recording-optimization-pipeline.md)
+> See [Decision 034](2026-03-09-recording-optimization-pipeline.md)
 
 Raw capture during blazing, post-processing for selectors/slots/generalization, validation loop for test authoring, best-effort caching for dev loop.
 
@@ -318,5 +318,5 @@ Phases 1 + 2 + 6 are the MVP. Once those ship, a developer can add Trailblaze as
 
 ## Related Decisions
 
-- [Decision 026: Trail YAML v2 Syntax](../../devlog/2026-03-06-trail-yaml-v2-syntax.md) — trailhead, trail, config sections
-- [Decision 034: Recording Optimization Pipeline](../../devlog/2026-03-09-recording-optimization-pipeline.md) — post-processing, selectors, memory slots
+- [Decision 026: Trail YAML v2 Syntax](2026-03-06-trail-yaml-v2-syntax.md) — trailhead, trail, config sections
+- [Decision 034: Recording Optimization Pipeline](2026-03-09-recording-optimization-pipeline.md) — post-processing, selectors, memory slots
