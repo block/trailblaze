@@ -2,7 +2,6 @@ package xyz.block.trailblaze.model
 
 import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.logs.model.SessionId
-import xyz.block.trailblaze.model.NodeSelectorMode.FORCE_LEGACY
 
 /**
  * Default value for whether AI fallback is enabled.
@@ -13,22 +12,6 @@ import xyz.block.trailblaze.model.NodeSelectorMode.FORCE_LEGACY
  */
 const val AI_FALLBACK_DEFAULT: Boolean = false
 
-/**
- * Controls whether playback and recording use the new [TrailblazeNodeSelector]-based path
- * or the legacy Maestro [TrailblazeElementSelector] path.
- *
- * Applies to Maestro-based drivers (iOS Maestro, Android Maestro).
- * Android Accessibility has its own execution path and is unaffected.
- */
-@Serializable
-enum class NodeSelectorMode {
-  /** Try nodeSelector first; fall back to legacy Maestro if it returns null. */
-  PREFER_NODE_SELECTOR,
-  /** Always use the legacy Maestro command path. Ignores nodeSelector even if present. */
-  FORCE_LEGACY,
-  /** Always try nodeSelector first (converting legacy selectors if needed); fall back to legacy if the driver cannot handle it. */
-  FORCE_NODE_SELECTOR,
-}
 
 /**
  * Configuration class for Trailblaze test execution parameters.
@@ -45,11 +28,6 @@ enum class NodeSelectorMode {
  *                      if false, disables AI fallback (useful for debugging recorded steps).
  * @property browserHeadless If true, the Playwright browser runs headless (no visible window);
  *                           if false, the browser window is shown on screen.
- * @property useRevylNativeSteps If true, Revyl device prompt steps use
- *                               `revyl device instruction` / `validation` instead of the
- *                               LLM agent pipeline. Defaults to false (LLM pipeline) until
- *                               native step reporting with screenshots is implemented.
- *                               Only affects REVYL_ANDROID/REVYL_IOS drivers.
  */
 @Serializable
 data class TrailblazeConfig(
@@ -60,8 +38,7 @@ data class TrailblazeConfig(
   val overrideSessionId: SessionId? = null,
   val aiFallback: Boolean = AI_FALLBACK_DEFAULT,
   val browserHeadless: Boolean = true,
-  val useRevylNativeSteps: Boolean = false,
-  val nodeSelectorMode: NodeSelectorMode = FORCE_LEGACY,
+  val nodeSelectorMode: NodeSelectorMode = NodeSelectorMode.DEFAULT,
 ) {
   companion object {
     /**

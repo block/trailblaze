@@ -359,26 +359,24 @@ Platform drivers translate tool calls into device-specific actions.
 
 ### Current Implementation
 
-For mobile platforms, Trailblaze uses [Maestro](https://maestro.mobile.dev) internally as the device interaction layer.
-However:
+Trailblaze operates at a high level abstraction, but actions are carried out through these various drivers for each platform:
 
-- **This is an implementation detail** - users interact with Trailblaze tools, not Maestro directly
-- **Not all Maestro features are exposed** - only the subset needed for Trailblaze tools
-- **The driver is replaceable** - the architecture supports alternative implementations
+Primary platform drivers:
 
-**Revyl integration:** A standalone agent, `RevylTrailblazeAgent`, implements `TrailblazeAgent` directly (no Maestro)
-and talks to Revyl cloud devices via HTTP. See [Revyl integration](revyl-integration.md) for details.
+| Platform | Driver | Status | Notes |
+| --- | --- | --- | --- |
+| iOS | Maestro | Current | Primary iOS driver |
+| Android | Accessibility | Current | Preferred Android driver |
+| Android | Maestro | Deprecated | Legacy Android driver |
+| Web | Playwright | Current | Primary web driver |
+| Electron Desktop | Custom + Playwright | Current | Custom implementation built on Playwright |
+| Compose Desktop | Custom Compose RPC | Current | Uses a custom Compose RPC implementation |
 
-### Driver Interface
+Remote device support:
 
-Drivers must implement command execution:
-
-```kotlin
-abstract suspend fun executeMaestroCommands(
-    commands: List<Command>,
-    traceId: TraceId?
-): TrailblazeToolResult
-```
+| Provider | Platforms | Integration |
+| --- | --- | --- |
+| Revyl | iOS, Android | Uses the Revyl CLI with the Trailblaze Agent. See [Revyl integration](revyl-integration.md). |
 
 ## Logging & Reporting
 

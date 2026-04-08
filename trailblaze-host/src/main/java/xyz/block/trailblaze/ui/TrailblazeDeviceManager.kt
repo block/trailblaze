@@ -393,10 +393,13 @@ class TrailblazeDeviceManager(
       TrailblazeDriverType.REVYL_ANDROID,
       TrailblazeDriverType.REVYL_IOS -> {
         val platform = if (driverType == TrailblazeDriverType.REVYL_ANDROID) "android" else "ios"
-        RevylScreenState(
-          revylCliClient,
-          platform,
-        )
+        val activeClient = getActiveRevylCliClient(trailblazeDeviceId)
+        if (activeClient != null) {
+          RevylScreenState(activeClient, platform)
+        } else {
+          Console.log("No active Revyl session for ${trailblazeDeviceId.instanceId}, screen state unavailable")
+          null
+        }
       }
     }
   }
@@ -619,21 +622,19 @@ class TrailblazeDeviceManager(
         // Dynamically register each model from the Revyl device catalog.
         // Uses `revyl device targets --json` so the list stays in sync
         // with the backend without code changes.
-        try {
-          val targets = revylCliClient.getDeviceTargets()
-          for (target in targets) {
-            val driverType = if (target.platform == "android")
-              TrailblazeDriverType.REVYL_ANDROID else TrailblazeDriverType.REVYL_IOS
-            add(
-              TrailblazeConnectedDeviceSummary(
-                trailblazeDriverType = driverType,
-                instanceId = "revyl-model:${target.model}::${target.osVersion}",
-                description = "Revyl ${target.model} (${target.osVersion})",
-              )
+        val targets = runWithTimeout(10, "revyl-catalog", "device targets") {
+          revylCliClient.getDeviceTargets()
+        } ?: emptyList()
+        for (target in targets) {
+          val driverType = if (target.platform == "android")
+            TrailblazeDriverType.REVYL_ANDROID else TrailblazeDriverType.REVYL_IOS
+          add(
+            TrailblazeConnectedDeviceSummary(
+              trailblazeDriverType = driverType,
+              instanceId = "revyl-model:${target.model}::${target.osVersion}",
+              description = "Revyl ${target.model} (${target.osVersion})",
             )
-          }
-        } catch (e: Exception) {
-          Console.log("Revyl device catalog unavailable: ${e.message}")
+          )
         }
       }
 
@@ -757,6 +758,10 @@ class TrailblazeDeviceManager(
 
   // Store running test instances per device - allows forceful driver shutdown
   private val maestroDriverByDeviceMap: MutableMap<TrailblazeDeviceId, Driver> =
+    java.util.concurrent.ConcurrentHashMap()
+
+  // Store active Revyl CLI clients per device for session reuse across MCP calls
+  private val revylCliClientByDeviceMap: MutableMap<TrailblazeDeviceId, RevylCliClient> =
     java.util.concurrent.ConcurrentHashMap()
 
   // Store running Playwright-native test instances per device for browser reuse across MCP calls
@@ -929,6 +934,23 @@ class TrailblazeDeviceManager(
     trailblazeDeviceId: TrailblazeDeviceId,
   ): BasePlaywrightElectronTest? {
     return playwrightElectronTestByDeviceMap[trailblazeDeviceId]
+  }
+
+  fun setActiveRevylCliClient(
+    trailblazeDeviceId: TrailblazeDeviceId,
+    client: RevylCliClient,
+  ) {
+    revylCliClientByDeviceMap[trailblazeDeviceId] = client
+  }
+
+  fun getActiveRevylCliClient(
+    trailblazeDeviceId: TrailblazeDeviceId,
+  ): RevylCliClient? {
+    return revylCliClientByDeviceMap[trailblazeDeviceId]
+  }
+
+  fun removeActiveRevylCliClient(trailblazeDeviceId: TrailblazeDeviceId) {
+    revylCliClientByDeviceMap.remove(trailblazeDeviceId)
   }
 
   private fun closeAndRemovePlaywrightElectronTestForDevice(trailblazeDeviceId: TrailblazeDeviceId) {

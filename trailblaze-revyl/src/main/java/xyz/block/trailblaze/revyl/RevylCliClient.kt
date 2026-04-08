@@ -79,6 +79,9 @@ class RevylCliClient(
     /** Sentinel value for "use the currently active session". */
     const val ACTIVE_SESSION = -1
 
+    /** Default timeout in seconds for CLI commands. */
+    const val CLI_TIMEOUT_SECONDS = 120L
+
     /** Environment variable name for the Revyl API key. */
     const val REVYL_API_KEY_ENV = "REVYL_API_KEY"
 
@@ -109,9 +112,7 @@ class RevylCliClient(
       if (process.waitFor() == 0) {
         Console.log("RevylCli: $output")
         cliVerified = true
-        val installedVersion = output.substringAfterLast(" ", "").takeIf { it.startsWith("v") }
-        if (installedVersion != null) checkForUpgrade(installedVersion)
-        return
+          return
       }
     } catch (_: Exception) { /* binary not found */ }
 
@@ -125,32 +126,6 @@ class RevylCliClient(
         "  https://github.com/RevylAI/revyl-cli/releases\n\n" +
         "Then set REVYL_API_KEY and try again."
     )
-  }
-
-  /**
-   * Checks whether a newer CLI version is available on GitHub and logs
-   * a warning if so. Never throws -- network failures are silently ignored.
-   *
-   * @param installedVersion The currently installed version tag (e.g. "v0.1.14").
-   */
-  private fun checkForUpgrade(installedVersion: String) {
-    try {
-      val url = java.net.URL("https://github.com/RevylAI/revyl-cli/releases/latest")
-      val conn = url.openConnection() as java.net.HttpURLConnection
-      conn.instanceFollowRedirects = false
-      conn.connectTimeout = 3000
-      conn.readTimeout = 3000
-      val location = conn.getHeaderField("Location")
-      conn.disconnect()
-      val latest = location?.substringAfterLast("/")?.takeIf { it.startsWith("v") } ?: return
-      if (latest != installedVersion) {
-        Console.log(
-          "RevylCli: update available $installedVersion -> $latest.\n" +
-            "  Upgrade: curl -fsSL https://raw.githubusercontent.com/RevylAI/revyl-cli/main/scripts/install.sh | sh\n" +
-            "  Or:      brew upgrade revyl"
-        )
-      }
-    } catch (_: Exception) { /* network unavailable -- skip silently */ }
   }
 
   /**
@@ -290,16 +265,18 @@ class RevylCliClient(
    * @return Raw PNG bytes read from the output file.
    * @throws RevylCliException If the CLI exits with a non-zero code.
    */
-  fun screenshot(outPath: String = createTempScreenshotPath()): ByteArray {
-    runCli(deviceArgs("screenshot", "--out", outPath))
-    val file = File(outPath)
+  fun screenshot(outPath: String? = null): ByteArray {
+    val resolvedOutPath = outPath ?: createTempScreenshotPath()
+    val shouldDeleteFile = outPath == null
+    runCli(deviceArgs("screenshot", "--out", resolvedOutPath))
+    val file = File(resolvedOutPath)
     if (!file.exists()) {
-      throw RevylCliException("Screenshot file not found at $outPath")
+      throw RevylCliException("Screenshot file not found at $resolvedOutPath")
     }
     return try {
       file.readBytes()
     } finally {
-      if (file.absolutePath.contains("revyl-screenshot-")) {
+      if (shouldDeleteFile) {
         file.delete()
       }
     }
@@ -487,6 +464,7 @@ class RevylCliClient(
    * @throws RevylCliException If the CLI command fails.
    */
   fun getDeviceTargets(): List<RevylDeviceTarget> {
+    verifyCliAvailable()
     val stdout = runCli(listOf("device", "targets"))
     val root = json.parseToJsonElement(stdout).jsonObject
     val results = mutableListOf<RevylDeviceTarget>()
@@ -506,24 +484,8 @@ class RevylCliClient(
   }
 
   // ---------------------------------------------------------------------------
-  // High-level steps (instruction / validation)
+  // High-level steps (validation)
   // ---------------------------------------------------------------------------
-
-  /**
-   * Executes a natural-language instruction step on the active device via
-   * `revyl device instruction "<description>" --json`.
-   *
-   * Revyl's worker agent handles planning, grounding, and execution
-   * in a single round-trip.
-   *
-   * @param description Natural-language instruction (e.g. "Tap the Search tab").
-   * @return Parsed [RevylLiveStepResult] with success flag and step output.
-   * @throws RevylCliException If the CLI process exits with a non-zero code.
-   */
-  fun instruction(description: String): RevylLiveStepResult {
-    val stdout = runCli(deviceArgs("instruction", description))
-    return RevylLiveStepResult.fromJson(stdout)
-  }
 
   /**
    * Executes a natural-language validation step on the active device via
@@ -557,7 +519,7 @@ class RevylCliClient(
    */
   private fun runCli(args: List<String>): String {
     val command = listOf(resolvedBinary) + args + "--json"
-    Console.log("RevylCli: ${command.joinToString(" ")}")
+    Console.log("RevylCli: ${redactCommand(command)}")
 
     val processBuilder = ProcessBuilder(command)
       .redirectErrorStream(false)
@@ -567,9 +529,25 @@ class RevylCliClient(
     }
 
     val process = processBuilder.start()
+
+    // Read stdout and stderr concurrently to avoid deadlocks when the process
+    // writes enough data to fill one stream's buffer while we block-read the other.
+    var stderr = ""
+    val stderrThread = Thread {
+      stderr = process.errorStream.bufferedReader().readText()
+    }.also { it.start() }
     val stdout = process.inputStream.bufferedReader().readText()
-    val stderr = process.errorStream.bufferedReader().readText()
-    val exitCode = process.waitFor()
+    stderrThread.join()
+
+    val exited = process.waitFor(CLI_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)
+    if (!exited) {
+      process.destroyForcibly()
+      throw RevylCliException(
+        "revyl ${args.firstOrNull() ?: ""} ${args.getOrNull(1) ?: ""} " +
+          "timed out after $CLI_TIMEOUT_SECONDS seconds"
+      )
+    }
+    val exitCode = process.exitValue()
 
     if (exitCode != 0) {
       val errorDetail = stderr.ifBlank { stdout }
@@ -580,6 +558,25 @@ class RevylCliClient(
     }
 
     return stdout.trim()
+  }
+
+  /** Redacts sensitive flag values (e.g. --text) from CLI commands for logging. */
+  private fun redactCommand(command: List<String>): String {
+    val sensitiveFlags = setOf("--text")
+    val result = mutableListOf<String>()
+    var redactNext = false
+    for (token in command) {
+      if (redactNext) {
+        result.add("***")
+        redactNext = false
+      } else if (token in sensitiveFlags) {
+        result.add(token)
+        redactNext = true
+      } else {
+        result.add(token)
+      }
+    }
+    return result.joinToString(" ")
   }
 
   private fun createTempScreenshotPath(): String {

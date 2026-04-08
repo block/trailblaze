@@ -77,10 +77,8 @@ import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.GitUtils
 import xyz.block.trailblaze.util.HostAndroidDeviceConnectUtils
-import xyz.block.trailblaze.yaml.DirectionStep
 import xyz.block.trailblaze.yaml.ElectronAppConfig
 import xyz.block.trailblaze.yaml.TrailYamlItem
-import xyz.block.trailblaze.yaml.VerificationStep
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 
 object TrailblazeHostYamlRunner {
@@ -757,6 +755,12 @@ object TrailblazeHostYamlRunner {
     }
     onProgressMessage("Revyl $deviceLabel ready — viewer: ${session.viewerUrl}")
 
+    // Store the client for MCP screen state capture
+    val isMcpRequest = !runYamlRequest.config.sendSessionEndLog
+    if (isMcpRequest) {
+      deviceManager.setActiveRevylCliClient(trailblazeDeviceId, cliClient)
+    }
+
     // Outer try-finally guarantees the cloud device is stopped even if setup
     // (e.g. LLM client creation) fails before the inner execution try block.
     try {
@@ -778,9 +782,14 @@ object TrailblazeHostYamlRunner {
         RevylScreenState(cliClient, platform, session.screenWidth, session.screenHeight)
       }
 
+      val allSerializationToolClasses = deviceManager.availableAppTargets
+        .flatMap { it.getAllCustomToolClassesForSerialization() }
+        .toSet()
+
       TrailblazeJsonInstance = TrailblazeJson.createTrailblazeJsonInstance(
         allToolClasses = TrailblazeToolSet.AllBuiltInTrailblazeToolsForSerializationByToolName +
-          xyz.block.trailblaze.revyl.tools.RevylNativeToolSet.RevylLlmToolSet.toolClasses.associateBy { it.toolName() },
+          xyz.block.trailblaze.revyl.tools.RevylNativeToolSet.RevylLlmToolSet.toolClasses.associateBy { it.toolName() } +
+          allSerializationToolClasses.associateBy { it.toolName() },
       )
 
       val loggingRule = HostTrailblazeLoggingRule(
@@ -882,39 +891,10 @@ object TrailblazeHostYamlRunner {
           )
         }
 
-        val useRevylNativeSteps = runYamlRequest.config.useRevylNativeSteps
         for (item in trailItems) {
           val itemResult = when (item) {
             is TrailYamlItem.PromptsTrailItem -> {
-              if (useRevylNativeSteps) {
-                for (prompt in item.promptSteps) {
-                  when (prompt) {
-                    is VerificationStep -> {
-                      Console.log("RevylYaml: validation — '${prompt.verify}'")
-                      val result = cliClient.validation(prompt.verify)
-                      if (!result.success) {
-                        throw TrailblazeException(
-                          "Validation failed: ${prompt.verify}" +
-                            (result.statusReason?.let { " — $it" } ?: ""),
-                        )
-                      }
-                    }
-                    is DirectionStep -> {
-                      Console.log("RevylYaml: instruction — '${prompt.step}'")
-                      val result = cliClient.instruction(prompt.step)
-                      if (!result.success) {
-                        throw TrailblazeException(
-                          "Instruction failed: ${prompt.step}" +
-                            (result.statusReason?.let { " — $it" } ?: ""),
-                        )
-                      }
-                    }
-                  }
-                }
-                TrailblazeToolResult.Success()
-              } else {
-                trailblazeRunnerUtil.runPromptSuspend(item.promptSteps, runYamlRequest.useRecordedSteps)
-              }
+              trailblazeRunnerUtil.runPromptSuspend(item.promptSteps, runYamlRequest.useRecordedSteps)
             }
             is TrailYamlItem.ToolTrailItem ->
               trailblazeRunnerUtil.runTrailblazeTool(item.tools.map { it.trailblazeTool })
@@ -967,7 +947,10 @@ object TrailblazeHostYamlRunner {
       onProgressMessage("Error: ${e.message}")
       return null
     } finally {
-      try { cliClient.stopSession() } catch (_: Exception) { }
+      if (runYamlRequest.config.sendSessionEndLog) {
+        deviceManager.removeActiveRevylCliClient(trailblazeDeviceId)
+        try { cliClient.stopSession() } catch (_: Exception) { }
+      }
     }
   }
 

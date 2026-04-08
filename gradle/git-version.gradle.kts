@@ -55,7 +55,10 @@ rootProject.extra["gitTagVersion"] = gitTagVersion
 // When HEAD is on a release tag, override project.version for all projects so that
 // Maven coordinates (publish) and any other version-dependent tasks use the semver
 // from the tag instead of the default from gradle.properties.
-if (gitTagVersion.isNotEmpty()) {
+// Skip the override when -Pversion is explicitly passed on the command line (e.g. from
+// release.sh) — the explicit property must win, especially when multiple v* tags exist
+// on the same commit where git-describe is ambiguous.
+if (gitTagVersion.isNotEmpty() && !gradle.startParameter.projectProperties.containsKey("version")) {
   rootProject.allprojects {
     version = gitTagVersion
   }

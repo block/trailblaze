@@ -17,7 +17,7 @@ class AndroidMaestroTrailblazeAgent(
   trailblazeLogger: TrailblazeLogger,
   trailblazeDeviceInfoProvider: () -> TrailblazeDeviceInfo,
   sessionProvider: TrailblazeSessionProvider,
-  nodeSelectorMode: NodeSelectorMode = NodeSelectorMode.FORCE_LEGACY,
+  nodeSelectorMode: NodeSelectorMode = NodeSelectorMode.DEFAULT,
 ) : MaestroTrailblazeAgent(
   trailblazeLogger = trailblazeLogger,
   trailblazeDeviceInfoProvider = trailblazeDeviceInfoProvider,

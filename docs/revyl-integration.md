@@ -107,44 +107,6 @@ All 12 Trailblaze tools are fully implemented:
 | openUrl | `revyl device navigate --url "..."` |
 | screenshot | `revyl device screenshot --out <path>` |
 
-## Native instruction and validation steps
-
-Revyl devices can optionally use Revyl's own agent pipeline for natural-language
-prompt steps instead of routing through Trailblaze's LLM agent. This is
-controlled by the `useRevylNativeSteps` flag on `TrailblazeConfig` (default
-`false` -- LLM pipeline is used until native step reporting with screenshots
-is implemented).
-
-| YAML key | PromptStep type | CLI command | What happens |
-|----------|-----------------|-------------|--------------|
-| `- step:` | `DirectionStep` | `revyl device instruction "..."` | Revyl's worker agent plans and executes the action |
-| `- verify:` | `VerificationStep` | `revyl device validation "..."` | Revyl's worker agent asserts against the current screen |
-
-When `useRevylNativeSteps` is `true`:
-
-- Each `- step:` prompt is sent directly to `revyl device instruction` in a
-  single round-trip. Revyl's agent handles grounding and execution natively.
-- Each `- verify:` prompt is sent to `revyl device validation`, which performs
-  a visual assertion without needing a view hierarchy.
-- Explicit tool steps (e.g. `- tapOn:`, `- inputText:`) are **not** affected
-  and still route through `RevylTrailblazeAgent` -> individual CLI commands.
-
-When `useRevylNativeSteps` is `false`:
-
-- All prompt steps go through Trailblaze's LLM agent pipeline, which decides
-  which tools to call (tap, type, swipe, etc.) and dispatches them via
-  `RevylTrailblazeAgent`. This is the original pre-flag behavior.
-
-```yaml
-# Example trail using both step types
-- prompts:
-    - step: Open the Search tab
-    - step: Type "beetle" in the search field
-    - verify: Search results are visible
-    - step: Tap the first result
-    - verify: Product detail page is shown
-```
-
 ## Limitations
 
 - No local ADB or Maestro; all device interaction goes through Revyl cloud devices.

@@ -1,8 +1,6 @@
-@file:Suppress("DEPRECATION")
-
 package xyz.block.trailblaze.host.revyl
 
-import maestro.SwipeDirection
+import kotlinx.coroutines.runBlocking
 import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.TrailblazeAgentContext
 import xyz.block.trailblaze.api.ScreenState
@@ -12,33 +10,18 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.logs.model.TraceId
-import xyz.block.trailblaze.toolcalls.TrailblazeTool
-import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
-import xyz.block.trailblaze.toolcalls.commands.EraseTextTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.HideKeyboardTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.LaunchAppTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.OpenUrlTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.PressBackTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.PressKeyTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.ScrollUntilTextIsVisibleTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.SwipeTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.TakeSnapshotTool
-import xyz.block.trailblaze.toolcalls.commands.TapOnElementByNodeIdTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.TapOnPointTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.WaitForIdleSyncTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.NetworkConnectionTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.LongPressOnElementWithTextTrailblazeTool
-import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
-import xyz.block.trailblaze.toolcalls.commands.memory.MemoryTrailblazeTool
-import xyz.block.trailblaze.toolcalls.getToolNameFromAnnotation
-import xyz.block.trailblaze.utils.ElementComparator
-import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.revyl.RevylCliClient
 import xyz.block.trailblaze.revyl.RevylDefaults
 import xyz.block.trailblaze.revyl.RevylScreenState
 import xyz.block.trailblaze.revyl.tools.RevylExecutableTool
+import xyz.block.trailblaze.toolcalls.TrailblazeTool
+import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
+import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.memory.MemoryTrailblazeTool
+import xyz.block.trailblaze.toolcalls.getToolNameFromAnnotation
+import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.utils.ElementComparator
 
 /**
  * [TrailblazeAgent] implementation that routes all device actions through
@@ -112,98 +95,21 @@ class RevylTrailblazeAgent(
 
     return try {
       when (tool) {
-        is TapOnPointTrailblazeTool -> {
-          val target = tool.reasoning?.takeIf { it.isNotBlank() }
-          if (tool.longPress) {
-            val desc = target ?: "element at (${tool.x}, ${tool.y})"
-            val r = cliClient.longPress(desc)
-            TrailblazeToolResult.Success(message = "Long-pressed '$desc' at (${r.x}, ${r.y})")
-          } else {
-            val r = if (target != null) cliClient.tapTarget(target) else cliClient.tap(tool.x, tool.y)
-            TrailblazeToolResult.Success(message = "Tapped '${target ?: "${tool.x},${tool.y}"}' at (${r.x}, ${r.y})")
-          }
-        }
-        is InputTextTrailblazeTool -> {
-          val r = cliClient.typeText(tool.text, target = "text input field")
-          TrailblazeToolResult.Success(message = "Typed '${tool.text}' at (${r.x}, ${r.y})")
-        }
-        is SwipeTrailblazeTool -> {
-          val direction = when (tool.direction) {
-            SwipeDirection.UP -> "up"
-            SwipeDirection.DOWN -> "down"
-            SwipeDirection.LEFT -> "left"
-            SwipeDirection.RIGHT -> "right"
-          }
-          val target = tool.swipeOnElementText ?: "center of screen"
-          val r = cliClient.swipe(direction, target = target)
-          TrailblazeToolResult.Success(message = "Swiped $direction on '$target' from (${r.x}, ${r.y})")
-        }
-        is LaunchAppTrailblazeTool -> {
-          cliClient.launchApp(tool.appId)
-          TrailblazeToolResult.Success(message = "Launched ${tool.appId}")
-        }
-        is EraseTextTrailblazeTool -> {
-          val r = cliClient.clearText(target = "focused input field")
-          TrailblazeToolResult.Success(message = "Cleared text at (${r.x}, ${r.y})")
-        }
-        is HideKeyboardTrailblazeTool -> {
-          TrailblazeToolResult.Success()
-        }
-        is PressBackTrailblazeTool -> {
-          val r = cliClient.back()
-          TrailblazeToolResult.Success(message = "Pressed back at (${r.x}, ${r.y})")
-        }
-        is PressKeyTrailblazeTool -> {
-          val r = cliClient.pressKey(tool.keyCode.name)
-          TrailblazeToolResult.Success(message = "Pressed ${tool.keyCode.name} at (${r.x}, ${r.y})")
-        }
-        is OpenUrlTrailblazeTool -> {
-          cliClient.navigate(tool.url)
-          TrailblazeToolResult.Success(message = "Navigated to ${tool.url}")
-        }
-        is TakeSnapshotTool -> {
-          cliClient.screenshot()
-          TrailblazeToolResult.Success(message = "Screenshot captured")
-        }
-        is WaitForIdleSyncTrailblazeTool -> {
-          Thread.sleep(1000)
-          TrailblazeToolResult.Success()
-        }
-        is ScrollUntilTextIsVisibleTrailblazeTool -> {
-          val direction = when (tool.direction) {
-            maestro.ScrollDirection.UP -> "up"
-            maestro.ScrollDirection.DOWN -> "down"
-            maestro.ScrollDirection.LEFT -> "left"
-            maestro.ScrollDirection.RIGHT -> "right"
-          }
-          val target = tool.text.ifBlank { "center of screen" }
-          val r = cliClient.swipe(direction, target = target)
-          TrailblazeToolResult.Success(message = "Scrolled $direction on '$target' from (${r.x}, ${r.y})")
-        }
-        is NetworkConnectionTrailblazeTool -> {
-          Console.log("RevylAgent: network toggle not yet implemented for cloud devices")
-          TrailblazeToolResult.Success()
-        }
-        is TapOnElementByNodeIdTrailblazeTool -> {
-          val target = tool.reasoning?.takeIf { it.isNotBlank() } ?: "element with node id ${tool.nodeId}"
-          val r = if (tool.longPress) cliClient.longPress(target) else cliClient.tapTarget(target)
-          val action = if (tool.longPress) "Long-pressed" else "Tapped"
-          TrailblazeToolResult.Success(message = "$action '$target' at (${r.x}, ${r.y})")
-        }
-        is LongPressOnElementWithTextTrailblazeTool -> {
-          val r = cliClient.longPress(tool.text)
-          TrailblazeToolResult.Success(message = "Long-pressed '${tool.text}' at (${r.x}, ${r.y})")
-        }
         is RevylExecutableTool -> {
-          kotlinx.coroutines.runBlocking {
+          runBlocking {
             tool.executeWithRevyl(cliClient, buildRevylToolContext(screenStateProvider))
           }
         }
         is ObjectiveStatusTrailblazeTool -> TrailblazeToolResult.Success()
         is MemoryTrailblazeTool -> TrailblazeToolResult.Success()
         else -> {
-          Console.log("RevylAgent: unsupported tool ${tool::class.simpleName}")
-          TrailblazeToolResult.Success()
+          val unsupportedToolName = tool::class.simpleName ?: toolName
+          Console.log("RevylAgent: unsupported tool $unsupportedToolName")
+          TrailblazeToolResult.Error.ExceptionThrown(
+            errorMessage = "Unsupported tool '$unsupportedToolName' for RevylTrailblazeAgent",
+            command = tool,
+            stackTrace = "",
+          )
         }
       }
     } catch (e: Exception) {

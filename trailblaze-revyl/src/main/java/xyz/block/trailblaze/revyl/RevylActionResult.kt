@@ -41,8 +41,8 @@ data class RevylActionResult(
     /**
      * Parses a CLI JSON stdout line into a [RevylActionResult].
      *
-     * Falls back to a default (success=true, coords=0,0) if parsing fails,
-     * since the CLI already succeeded if we got stdout.
+     * Falls back to a default (success=false, coords=0,0) if parsing fails,
+     * so unexpected or partial CLI output is treated as a failure.
      *
      * @param jsonString Raw JSON from `revyl device <action> --json`.
      * @return Parsed result with coordinates and metadata.
@@ -51,8 +51,8 @@ data class RevylActionResult(
       return try {
         TrailblazeJsonInstance.decodeFromString<RevylActionResult>(jsonString.trim())
       } catch (e: Exception) {
-        Console.log("RevylActionResult: JSON parse failed, using default: ${e.message}")
-        RevylActionResult(success = true)
+        Console.log("RevylActionResult: JSON parse failed, treating as failure: ${e.message}")
+        RevylActionResult(success = false)
       }
     }
   }

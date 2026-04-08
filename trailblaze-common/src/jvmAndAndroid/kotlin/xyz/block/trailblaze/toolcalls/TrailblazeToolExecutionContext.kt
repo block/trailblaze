@@ -1,6 +1,5 @@
 package xyz.block.trailblaze.toolcalls
 
-import java.io.File
 import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.MaestroTrailblazeAgent
 import xyz.block.trailblaze.api.ScreenState
@@ -10,6 +9,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.model.NodeSelectorMode
+import java.io.File
 
 /**
  * Context for handling Trailblaze tools.
@@ -47,7 +47,7 @@ class TrailblazeToolExecutionContext(
    */
   val workingDirectory: File? = null,
   /** Controls whether playback/recording uses nodeSelector or legacy Maestro path. */
-  val nodeSelectorMode: NodeSelectorMode = NodeSelectorMode.FORCE_LEGACY,
+  val nodeSelectorMode: NodeSelectorMode = NodeSelectorMode.DEFAULT,
 ) {
   @Deprecated("Use maestroTrailblazeAgent, trailblazeLogger, or memory directly")
   val trailblazeAgent: MaestroTrailblazeAgent

@@ -20,8 +20,8 @@ import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
-import xyz.block.trailblaze.toolcalls.isSuccess
 import xyz.block.trailblaze.toolcalls.commands.memory.MemoryTrailblazeTool
+import xyz.block.trailblaze.toolcalls.isSuccess
 import xyz.block.trailblaze.utils.ElementComparator
 
 /**
@@ -36,7 +36,7 @@ abstract class MaestroTrailblazeAgent(
   override val trailblazeDeviceInfoProvider: () -> TrailblazeDeviceInfo,
   override val sessionProvider: TrailblazeSessionProvider,
   /** Controls nodeSelector vs legacy Maestro path for playback and recording. */
-  val nodeSelectorMode: NodeSelectorMode = NodeSelectorMode.FORCE_LEGACY,
+  val nodeSelectorMode: NodeSelectorMode = NodeSelectorMode.DEFAULT,
 ) : TrailblazeAgent, TrailblazeAgentContext {
 
   /**

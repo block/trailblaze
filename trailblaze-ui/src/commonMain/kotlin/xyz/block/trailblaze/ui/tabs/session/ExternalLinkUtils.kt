@@ -25,10 +25,14 @@ fun extractExternalLinks(deviceInfo: TrailblazeDeviceInfo?): List<ExternalLink> 
   val metadata = deviceInfo?.metadata.orEmpty()
   return metadata.entries
     .filter { it.key.endsWith("_url") && it.value.isNotBlank() }
+    .filter { (_, url) ->
+      val scheme = url.substringBefore("://", "").lowercase()
+      scheme == "http" || scheme == "https"
+    }
     .map { (key, url) ->
       val prefix = key.removeSuffix("_url")
-      val label = metadata["${prefix}_label"]
-        ?: "Open ${prefix.replace('_', ' ').replaceFirstChar { c -> c.uppercase() }}"
+      val autoLabel = "Open ${prefix.replace('_', ' ').replaceFirstChar { c -> c.uppercase() }}"
+      val label = metadata["${prefix}_label"]?.takeIf { it.isNotBlank() } ?: autoLabel
       ExternalLink(label, url)
     }
 }

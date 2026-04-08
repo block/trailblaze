@@ -15,7 +15,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
  * can render click overlays.
  *
  * Subclasses implement [executeWithRevyl]; the default [execute] throws to
- * direct callers through [RevylToolAgent] which calls [executeWithRevyl] directly.
+ * ensure callers route through [RevylTrailblazeAgent] which calls [executeWithRevyl] directly.
  */
 abstract class RevylExecutableTool : ExecutableTrailblazeTool, ReasoningTrailblazeTool {
 
@@ -34,6 +34,6 @@ abstract class RevylExecutableTool : ExecutableTrailblazeTool, ReasoningTrailbla
   override suspend fun execute(
     toolExecutionContext: TrailblazeToolExecutionContext,
   ): TrailblazeToolResult {
-    error("RevylExecutableTool must be executed via RevylToolAgent")
+    error("RevylExecutableTool must be executed via RevylTrailblazeAgent")
   }
 }

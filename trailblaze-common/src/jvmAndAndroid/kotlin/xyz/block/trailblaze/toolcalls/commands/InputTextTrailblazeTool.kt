@@ -24,7 +24,9 @@ data class InputTextTrailblazeTool(
 ) : ExecutableTrailblazeTool {
 
   override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult {
-    val maestroCommands = listOf(InputTextCommand(text)) +
+    val maestroCommands = listOf(
+      InputTextCommand(toolExecutionContext.memory.interpolateVariables(text)),
+    ) +
       HideKeyboardTrailblazeTool.hideKeyboardCommands(
         platform = toolExecutionContext.screenState?.trailblazeDevicePlatform,
         orientation = toolExecutionContext.trailblazeDeviceInfo.orientation,

@@ -35,9 +35,9 @@ class RevylNativeTypeTool(
     context: TrailblazeToolExecutionContext,
   ): TrailblazeToolResult {
     val desc = if (target.isNotBlank()) "into '$target'" else "into focused field"
-    Console.log("### Typing '$text' $desc")
+    Console.log("### Typing ${text.length} chars $desc")
     val result = revylClient.typeText(text, target.ifBlank { null }, clearFirst)
-    val feedback = "Typed '$text' $desc at (${result.x}, ${result.y})"
+    val feedback = "Typed ${text.length} characters $desc at (${result.x}, ${result.y})"
     Console.log("### $feedback")
     return TrailblazeToolResult.Success(message = feedback)
   }
