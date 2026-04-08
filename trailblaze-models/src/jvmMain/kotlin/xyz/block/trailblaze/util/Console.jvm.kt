@@ -59,4 +59,9 @@ actual object Console {
     // (Ktor, HTTP clients) depend on System.out being functional. SLF4J/Logback
     // noise should be suppressed via logback.xml configuration instead.
   }
+
+  actual fun enableJsonMode() {
+    // Redirect info() to stderr so stdout is reserved for JSON output.
+    userOut = System.err
+  }
 }

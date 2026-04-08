@@ -233,11 +233,13 @@ class RunYamlRequestHandler(
             )
           )
 
-          sessionManager.endSession(
-            session = session,
-            isSuccess = false,
-            exception = e,
-          )
+          if (request.config.sendSessionEndLog) {
+            sessionManager.endSession(
+              session = session,
+              isSuccess = false,
+              exception = e,
+            )
+          }
         }
       }
 

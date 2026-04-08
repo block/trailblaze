@@ -21,7 +21,6 @@ import xyz.block.trailblaze.host.util.BufferedImageUtils.rotateCounterClockwise9
 import xyz.block.trailblaze.host.util.BufferedImageUtils.scale
 import xyz.block.trailblaze.host.util.BufferedImageUtils.toByteArray
 import xyz.block.trailblaze.utils.Ext.toViewHierarchyTreeNode
-import xyz.block.trailblaze.viewhierarchy.ViewHierarchyCompactFormatter
 import xyz.block.trailblaze.viewhierarchy.ViewHierarchyFilter
 import xyz.block.trailblaze.viewhierarchy.ViewHierarchyTreeNodeUtils
 import xyz.block.trailblaze.viewmatcher.matching.toTrailblazeNodeIosMaestro
@@ -35,12 +34,9 @@ import javax.imageio.ImageIO
 class HostMaestroDriverScreenState(
   maestroDriver: Driver,
   private val setOfMarkEnabled: Boolean,
-  private val filterViewHierarchy: Boolean = true,
   private val screenshotScalingConfig: ScreenshotScalingConfig? = ScreenshotScalingConfig.DEFAULT,
   maxAttempts: Int = 10,
   override val deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
-  private val fullHierarchy: Boolean = false,
-  private val includeOffscreen: Boolean = false,
 ) : ScreenState {
 
   private val deviceInfo: DeviceInfo = maestroDriver.deviceInfo()
@@ -124,43 +120,16 @@ class HostMaestroDriverScreenState(
     }
   }
 
-  override val viewHierarchyOriginal: ViewHierarchyTreeNode = stableRelabeledViewHierarchy
+  override val viewHierarchy: ViewHierarchyTreeNode = stableRelabeledViewHierarchy
     ?: throw IllegalStateException("Failed to get stable view hierarchy from Maestro driver after $maxAttempts attempts.")
 
   override val trailblazeNodeTree: TrailblazeNode?
     get() = stableTrailblazeNodeTree
 
-  /**
-   * Returns the filtered view hierarchy.
-   * Generates filtered hierarchy on-demand without caching - used for LLM requests.
-   */
-  override val viewHierarchy: ViewHierarchyTreeNode
-    get() {
-      if (!filterViewHierarchy) {
-        return viewHierarchyOriginal
-      }
-
-      val viewHierarchyFilter = ViewHierarchyFilter.create(
-        screenWidth = deviceWidth,
-        screenHeight = deviceHeight,
-        platform = deviceInfo.platform.toTrailblazeDevicePlatform(),
-      )
-      return viewHierarchyFilter.filterInteractableViewHierarchyTreeNodes(viewHierarchyOriginal)
-    }
-
   override val trailblazeDevicePlatform: TrailblazeDevicePlatform = deviceInfo.platform.toTrailblazeDevicePlatform()
 
-  override val viewHierarchyTextRepresentation: String
-    get() = ViewHierarchyCompactFormatter.format(
-      root = viewHierarchy,
-      platform = trailblazeDevicePlatform,
-      screenWidth = deviceWidth,
-      screenHeight = deviceHeight,
-      foregroundAppId = foregroundAppId,
-      deviceClassifiers = deviceClassifiers,
-      includeOffscreen = includeOffscreen,
-      fullHierarchy = fullHierarchy,
-    )
+  override val pageContextSummary: String?
+    get() = foregroundAppId?.let { "App: $it" }
 
   /**
    * Returns the clean screenshot bytes without any annotations.
@@ -196,8 +165,13 @@ class HostMaestroDriverScreenState(
       graphics.dispose()
 
       // Apply set of mark annotations on full-res image (before scaling for max quality)
+      val filtered = ViewHierarchyFilter.create(
+        screenWidth = deviceWidth,
+        screenHeight = deviceHeight,
+        platform = deviceInfo.platform.toTrailblazeDevicePlatform(),
+      ).filterInteractableViewHierarchyTreeNodes(viewHierarchy)
       val elementList = ViewHierarchyTreeNodeUtils.from(
-        viewHierarchy, // Use filtered hierarchy for set of mark
+        filtered,
         deviceInfo,
       )
 

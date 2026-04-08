@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Build
@@ -72,8 +73,8 @@ import xyz.block.trailblaze.api.AgentDriverAction
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.model.isInProgress
-import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.ui.composables.ScreenshotImage
+import xyz.block.trailblaze.ui.composables.SelectableText
 import xyz.block.trailblaze.ui.images.ImageLoader
 import xyz.block.trailblaze.ui.images.NetworkImageLoader
 import xyz.block.trailblaze.ui.utils.FormattingUtils.formatDuration
@@ -85,7 +86,6 @@ fun SessionProgressComposable(
   overallStatus: SessionStatus?,
   sessionId: String,
   imageLoader: ImageLoader = NetworkImageLoader(),
-  toTrailblazeYaml: (toolName: String, trailblazeTool: TrailblazeTool) -> String = { name, _ -> name },
   timelineState: SessionTimelineState? = null,
   scrollState: ScrollState? = null,
   autoFollow: Boolean = false,
@@ -182,19 +182,14 @@ fun SessionProgressComposable(
       timelineState.scrollState = scrollState
       timelineState.isInProgress = isInProgress
     }
-    // Initial state depends on session status (only once)
+    // Initial state: scrub to the end and expand the last item (only once).
+    // For live sessions this shows the latest activity; for completed sessions
+    // it shows the final step so the user sees the result immediately.
     if (timelineState.scrubTimestampMs == null && progressItems.isNotEmpty()) {
-      if (isInProgress) {
-        timelineState.scrubTimestampMs = timelineEndMs
-        val lastIdx = progressItems.lastIndex
-        selectedObjectiveIndex = lastIdx
-        expandedObjectives[lastIdx] = true
-      } else {
-        timelineState.scrubTimestampMs = sessionStartTime.toEpochMilliseconds()
-        val lastIdx = progressItems.lastIndex
-        selectedObjectiveIndex = lastIdx
-        expandedObjectives[lastIdx] = true
-      }
+      timelineState.scrubTimestampMs = timelineEndMs
+      val lastIdx = progressItems.lastIndex
+      selectedObjectiveIndex = lastIdx
+      expandedObjectives[lastIdx] = true
     }
   }
 
@@ -452,7 +447,6 @@ fun SessionProgressComposable(
                       objective = progressItem.objective,
                       sessionStartTime = sessionStartTime,
                       isExpanded = isExpanded,
-                      toTrailblazeYaml = toTrailblazeYaml,
                       onToggleExpanded = {
                         onAutoFollowDisabled?.invoke()
                         expandedObjectives[index] = !isExpanded
@@ -485,7 +479,6 @@ fun SessionProgressComposable(
                       toolBlock = progressItem,
                       sessionStartTime = sessionStartTime,
                       isExpanded = isExpanded,
-                      toTrailblazeYaml = toTrailblazeYaml,
                       onToggleExpanded = {
                         onAutoFollowDisabled?.invoke()
                         expandedObjectives[index] = !isExpanded
@@ -598,7 +591,7 @@ private fun SummaryCard(
           )
 
           if (elapsedMs != null) {
-            Text(
+            SelectableText(
               text = "·  ${formatDuration(elapsedMs)}",
               style = MaterialTheme.typography.bodySmall,
               color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -655,31 +648,33 @@ private fun CompletedSummaryRow(
   val statusColor =
     if (failedCount > 0) MaterialTheme.colorScheme.error else SessionProgressColors.succeeded
 
-  Row(
-    modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
-    verticalAlignment = Alignment.CenterVertically,
-    horizontalArrangement = Arrangement.spacedBy(8.dp),
-  ) {
-    Box(modifier = Modifier.size(8.dp).background(statusColor, CircleShape))
+  SelectionContainer {
+    Row(
+      modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+      Box(modifier = Modifier.size(8.dp).background(statusColor, CircleShape))
 
-    val summary =
-      if (failedCount > 0) {
-        "$failedCount of $totalCount failed"
-      } else {
-        "$completedCount step${if (completedCount != 1) "s" else ""} passed"
-      }
-    Text(
-      text = summary,
-      style = MaterialTheme.typography.bodySmall,
-      fontWeight = FontWeight.Medium,
-    )
-
-    if (elapsedMs != null) {
+      val summary =
+        if (failedCount > 0) {
+          "$failedCount of $totalCount failed"
+        } else {
+          "$completedCount step${if (completedCount != 1) "s" else ""} passed"
+        }
       Text(
-        text = formatDuration(elapsedMs),
+        text = summary,
         style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        fontWeight = FontWeight.Medium,
       )
+
+      if (elapsedMs != null) {
+        Text(
+          text = formatDuration(elapsedMs),
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+      }
     }
   }
 }
@@ -735,7 +730,6 @@ private fun ObjectiveStepRow(
   objective: ObjectiveProgress,
   sessionStartTime: Instant,
   isExpanded: Boolean,
-  toTrailblazeYaml: (toolName: String, trailblazeTool: TrailblazeTool) -> String,
   onToggleExpanded: () -> Unit,
   objectiveScreenshots: List<ScreenshotTimelineItem>,
   selectedScreenshotIndex: Int,
@@ -838,7 +832,7 @@ private fun ObjectiveStepRow(
         )
         if (!isPending) {
           val subtitle = buildStepSubtitle(objective, sessionStartTime)
-          Text(
+          SelectableText(
             text = subtitle,
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -866,7 +860,7 @@ private fun ObjectiveStepRow(
       } else {
         val duration = objectiveDurationMs(objective)
         if (duration != null) {
-          Text(
+          SelectableText(
             text = formatDuration(duration),
             style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.Medium,
@@ -916,25 +910,29 @@ private fun ObjectiveStepRow(
               .padding(start = 52.dp, end = 16.dp, top = 0.dp, bottom = 16.dp),
           verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-          // Full prompt
-          Text(
-            text = objective.prompt.trim(),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-          )
+          // Full prompt + tool call count / duration
+          SelectionContainer {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+              Text(
+                text = objective.prompt.trim(),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
 
-          // Tool call count + duration line
-          val toolCount = objective.toolCallCount
-          val duration = objectiveDurationMs(objective)
-          if (toolCount > 0 || duration != null) {
-            val parts = mutableListOf<String>()
-            if (toolCount > 0) parts.add("$toolCount tool call${if (toolCount != 1) "s" else ""}")
-            if (duration != null) parts.add(formatDuration(duration))
-            Text(
-              text = parts.joinToString(" \u2022 "),
-              style = MaterialTheme.typography.labelSmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+              // Tool call count + duration line
+              val toolCount = objective.toolCallCount
+              val duration = objectiveDurationMs(objective)
+              if (toolCount > 0 || duration != null) {
+                val parts = mutableListOf<String>()
+                if (toolCount > 0) parts.add("$toolCount tool call${if (toolCount != 1) "s" else ""}")
+                if (duration != null) parts.add(formatDuration(duration))
+                Text(
+                  text = parts.joinToString(" \u2022 "),
+                  style = MaterialTheme.typography.labelSmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+              }
+            }
           }
 
           // Failure suggestion
@@ -950,7 +948,7 @@ private fun ObjectiveStepRow(
                     )
                     .padding(12.dp),
               ) {
-                Text(
+                SelectableText(
                   text = suggestion,
                   style = MaterialTheme.typography.bodySmall,
                   color = MaterialTheme.colorScheme.onErrorContainer,
@@ -971,7 +969,6 @@ private fun ObjectiveStepRow(
                 sessionId = sessionId,
                 imageLoader = imageLoader,
                 onFullScreenClick = onScreenshotClick,
-                toTrailblazeYaml = toTrailblazeYaml,
                 onShowDetails = onShowDetails,
                 onShowInspectUI = onShowInspectUI,
                 onShowChatHistory = onShowChatHistory,
@@ -1015,7 +1012,7 @@ private fun ObjectiveStepRow(
                     color = accentColor,
                   )
                 }
-                Text(
+                SelectableText(
                   text = objective.llmExplanation,
                   style = MaterialTheme.typography.bodySmall,
                   color = MaterialTheme.colorScheme.onSurface,
@@ -1035,7 +1032,6 @@ private fun ObjectiveStepRow(
               toolBlock = childToolBlock,
               sessionStartTime = sessionStartTime,
               isExpanded = childToolBlockExpanded,
-              toTrailblazeYaml = toTrailblazeYaml,
               onToggleExpanded = { childToolBlockExpanded = !childToolBlockExpanded },
               toolBlockScreenshots = childToolBlockScreenshots,
               selectedScreenshotIndex = 0,
@@ -1059,7 +1055,6 @@ private fun ToolBlockRow(
   toolBlock: ProgressItem.ToolBlockItem,
   sessionStartTime: Instant,
   isExpanded: Boolean,
-  toTrailblazeYaml: (toolName: String, trailblazeTool: TrailblazeTool) -> String,
   onToggleExpanded: () -> Unit,
   toolBlockScreenshots: List<ScreenshotTimelineItem>,
   selectedScreenshotIndex: Int,
@@ -1126,7 +1121,7 @@ private fun ToolBlockRow(
           add("$toolCount tool${if (toolCount != 1) "s" else ""}")
           if (durationMs != null) add(formatDuration(durationMs))
         }.joinToString(" \u2022 ")
-        Text(
+        SelectableText(
           text = subtitle,
           style = MaterialTheme.typography.labelSmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1140,7 +1135,7 @@ private fun ToolBlockRow(
         if (start != null && end != null) end - start else null
       }
       if (durationMs != null) {
-        Text(
+        SelectableText(
           text = formatDuration(durationMs),
           style = MaterialTheme.typography.labelSmall,
           fontWeight = FontWeight.Medium,
@@ -1181,7 +1176,6 @@ private fun ToolBlockRow(
               sessionId = sessionId,
               imageLoader = imageLoader,
               onFullScreenClick = onScreenshotClick,
-              toTrailblazeYaml = toTrailblazeYaml,
               onShowDetails = onShowDetails,
               onColumnsPerRowChanged = onColumnsPerRowChanged,
             )

@@ -51,8 +51,10 @@ class TrailblazeNodeCompatTest {
     assertEquals(false, vh.password)
     assertEquals(false, vh.focusable)
     assertEquals(true, vh.ignoreBoundsFiltering)
-    assertEquals("200x100", vh.dimensions)
-    assertEquals("100,50", vh.centerPoint)
+    assertEquals(0, vh.x1)
+    assertEquals(0, vh.y1)
+    assertEquals(200, vh.x2)
+    assertEquals(100, vh.y2)
   }
 
   // ======================================================================
@@ -146,7 +148,10 @@ class TrailblazeNodeCompatTest {
     val vh = node.toViewHierarchyTreeNode()
     assertEquals("button", vh.className) // ariaRole -> className
     assertEquals("Submit", vh.text) // ariaName -> text
-    assertEquals("100x30", vh.dimensions)
+    assertEquals(0, vh.x1)
+    assertEquals(0, vh.y1)
+    assertEquals(100, vh.x2)
+    assertEquals(30, vh.y2)
   }
 
   // ======================================================================

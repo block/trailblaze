@@ -43,10 +43,10 @@ import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.logs.model.SessionStatus
-import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.ui.InspectTrailblazeNodeSelectorHelper
 import xyz.block.trailblaze.ui.InspectViewHierarchyScreenComposable
 import xyz.block.trailblaze.ui.composables.FullScreenModalOverlay
+import xyz.block.trailblaze.ui.composables.SelectableText
 import xyz.block.trailblaze.ui.composables.ScreenshotImageModal
 import xyz.block.trailblaze.ui.images.ImageLoader
 import xyz.block.trailblaze.ui.images.NetworkImageLoader
@@ -61,7 +61,6 @@ fun LiveSessionDetailComposable(
   sessionDataProvider: LiveSessionDataProvider,
   session: SessionInfo,
   toMaestroYaml: (JsonObject) -> String,
-  toTrailblazeYaml: (toolName: String, trailblazeTool: TrailblazeTool) -> String,
   generateRecordingYaml: () -> String,
   onBackClick: () -> Unit,
   imageLoader: ImageLoader = NetworkImageLoader(),
@@ -282,7 +281,6 @@ fun LiveSessionDetailComposable(
     SessionDetailComposable(
       sessionDetail = sessionDetail,
       toMaestroYaml = toMaestroYaml,
-      toTrailblazeYaml = toTrailblazeYaml,
       generateRecordingYaml = generateRecordingYaml,
       onBackClick = onBackClick,
       imageLoader = imageLoader,
@@ -545,7 +543,7 @@ fun LiveSessionDetailComposable(
             }
 
             if (cancellationError != null) {
-              Text(
+              SelectableText(
                 text = "⚠️ $cancellationError",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error

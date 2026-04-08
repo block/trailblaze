@@ -7,16 +7,21 @@ import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.viewhierarchy.ViewHierarchyFilter.Companion.collectAllClickableAndEnabledElements
 import xyz.block.trailblaze.viewhierarchy.ViewHierarchyFilter.Companion.collectIOSElements
 import xyz.block.trailblaze.viewhierarchy.ViewHierarchyFilter.Companion.filterOutOfBounds
+import xyz.block.trailblaze.viewhierarchy.ViewHierarchyFilter.Companion.hasMaestroProperties
 
 object ViewHierarchyTreeNodeUtils {
   /**
-   * Create a list of view hierarchy nodes that are clickable and enabled,
+   * Create a list of view hierarchy nodes suitable for set-of-mark annotation.
+   *
+   * Only includes elements that will also appear in the LLM text hierarchy
+   * (i.e. have a non-blank [TrailblazeElementSelector]). This ensures marks on
+   * the annotated screenshot match exactly the `[nodeId:X]` entries the LLM
+   * receives, preventing phantom marks that the LLM cannot reference.
    */
   fun from(
     viewHierarchyRoot: ViewHierarchyTreeNode,
     deviceInfo: DeviceInfo,
   ): List<ViewHierarchyTreeNode> {
-    val deviceInfo = deviceInfo
     val treeNodesInBounds: ViewHierarchyTreeNode = viewHierarchyRoot.filterOutOfBounds(
       width = deviceInfo.widthPixels,
       height = deviceInfo.heightPixels,
@@ -29,6 +34,8 @@ object ViewHierarchyTreeNodeUtils {
       treeNodesInBounds.collectAllClickableAndEnabledElements()
     }
 
-    return clickableNodes
+    // Only mark elements that have a non-blank selector (text, resourceId, etc.)
+    // so the annotated screenshot and the LLM text hierarchy stay in sync.
+    return clickableNodes.filter { it.hasMaestroProperties() }
   }
 }

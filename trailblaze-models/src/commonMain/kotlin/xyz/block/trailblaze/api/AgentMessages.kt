@@ -29,6 +29,7 @@ object AgentMessages {
       requiredArgs,
     )
     is TrailblazeToolResult.Error.InvalidToolCall -> invalidToolCallContentString(this)
+    is TrailblazeToolResult.Error.FatalError -> fatalErrorContentString(this)
   }
 
   /**
@@ -57,6 +58,7 @@ object AgentMessages {
       requiredArgs,
     )
     is TrailblazeToolResult.Error.InvalidToolCall -> invalidToolCallContentString(this)
+    is TrailblazeToolResult.Error.FatalError -> fatalErrorContentString(this)
   }
 
   /**
@@ -83,6 +85,18 @@ object AgentMessages {
       requiredArgs,
     )
     is TrailblazeToolResult.Error.InvalidToolCall -> invalidToolCallContentString(this)
+    is TrailblazeToolResult.Error.FatalError -> fatalErrorContentString(this)
+  }
+
+  private fun fatalErrorContentString(fatalError: TrailblazeToolResult.Error.FatalError) = buildString {
+    appendLine("# FATAL ERROR — test cannot proceed")
+    appendLine("Error: ${fatalError.errorMessage}")
+    fatalError.stackTraceString?.takeIf { it.isNotBlank() }?.let { stackTrace ->
+      appendLine("Stack Trace:")
+      appendLine("```")
+      appendLine(stackTrace.trimEnd())
+      appendLine("```")
+    }
   }
 
   private fun errorExceptionContentString(errorException: TrailblazeToolResult.Error.ExceptionThrown) = buildString {

@@ -218,6 +218,7 @@ abstract class TrailblazeDesktopApp(
       runYamlRequest = runYamlRequest,
       targetTestApp = trailConfig?.app?.let { desktopAppConfig.availableAppTargets.findById(it) }
         ?: deviceManager.getCurrentSelectedTargetApp(),
+      noLogging = request.noLogging,
       onProgressMessage = { message -> Console.info(message) },
       onConnectionStatus = { status ->
         if (status is DeviceConnectionStatus.DeviceConnectionError.ConnectionFailure) {
@@ -238,6 +239,15 @@ abstract class TrailblazeDesktopApp(
 
     desktopYamlRunner.runYaml(params)
     completionLatch.await()
+
+    // When --no-logging is active, no session files are written so there is nothing to poll.
+    // Return the success/failure result from the latch directly.
+    if (request.noLogging) {
+      return@withContext CliRunResponse(
+        success = success && errorMessage == null,
+        error = errorMessage,
+      )
+    }
 
     // Wait for session logs to appear and reach a terminal state.
     // For on-device instrumentation, the RPC returns before the trail finishes executing

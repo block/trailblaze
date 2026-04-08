@@ -5,6 +5,7 @@ import kotlinx.coroutines.withContext
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.model.TrailblazeOnDeviceInstrumentationTarget
 import java.nio.file.Files
+import java.security.MessageDigest
 
 object PrecompiledApkInstaller {
 
@@ -14,18 +15,51 @@ object PrecompiledApkInstaller {
    */
   const val PRECOMPILED_APK_RESOURCE_PATH = "/apks/trailblaze-ondevice-runner.apk"
 
+  /** Device-side path where the APK SHA marker is stored after installation. */
+  private const val DEVICE_SHA_MARKER_PATH = "/data/local/tmp/trailblaze-runner-sha.txt"
+
+  /** Cached SHA256 of the bundled APK resource, computed once per process. */
+  private val bundledApkSha: String? by lazy { computeBundledApkSha() }
+
+  /**
+   * Checks whether the on-device APK matches the bundled APK by comparing SHA256 hashes.
+   * Returns true if the installed version is up-to-date, false if a reinstall is needed.
+   */
+  fun isInstalledApkUpToDate(trailblazeDeviceId: TrailblazeDeviceId): Boolean {
+    // If we can't compute the bundled SHA (e.g., resource missing in dev packaging),
+    // assume up-to-date to avoid tearing down a working on-device server.
+    val expectedSha = bundledApkSha ?: return true
+    return try {
+      val deviceSha = AndroidHostAdbUtils.execAdbShellCommand(
+        deviceId = trailblazeDeviceId,
+        args = listOf("cat", DEVICE_SHA_MARKER_PATH),
+      ).trim()
+      val match = deviceSha == expectedSha
+      if (!match) {
+        Console.log(
+          "APK version mismatch: device=$deviceSha, bundled=$expectedSha — will reinstall."
+        )
+      }
+      match
+    } catch (e: Exception) {
+      Console.log("Could not read APK SHA marker from device: ${e.message}")
+      false
+    }
+  }
+
   /**
    * Extracts a pre-compiled APK from resources and installs it on the device.
    * The APK is bundled during the desktop app build process, eliminating the need
    * for runtime Gradle compilation and significantly improving user experience.
    *
-   * @param resourcePath The path to the APK resource
+   * After successful installation a SHA256 marker is written to the device so that
+   * subsequent connections can skip reinstallation when the APK hasn't changed.
+   *
    * @param deviceId The device ID to install the APK on
    * @param sendProgressMessage Callback to send progress messages
    * @return true if installation was successful, false otherwise
    */
   suspend fun extractAndInstallPrecompiledApk(
-    resourcePath: String,
     trailblazeDeviceId: TrailblazeDeviceId,
     sendProgressMessage: (String) -> Unit,
   ): Boolean {
@@ -34,7 +68,7 @@ object PrecompiledApkInstaller {
 
       val tempApkFile = withContext(Dispatchers.IO) {
         // Get the APK from resources
-        val apkInputStream = PrecompiledApkInstaller::class.java.getResourceAsStream(resourcePath)
+        val apkInputStream = PrecompiledApkInstaller::class.java.getResourceAsStream(PRECOMPILED_APK_RESOURCE_PATH)
           ?: return@withContext null
 
         // Create a temporary file to store the APK
@@ -50,7 +84,7 @@ object PrecompiledApkInstaller {
 
         tempFile
       } ?: return run {
-        sendProgressMessage("Error: Could not find APK at resource path: $resourcePath")
+        sendProgressMessage("Error: Could not find APK at resource path: $PRECOMPILED_APK_RESOURCE_PATH")
         false
       }
 
@@ -64,6 +98,8 @@ object PrecompiledApkInstaller {
 
       if (installResult) {
         sendProgressMessage("Test APK installed successfully")
+        // Write the SHA marker so future connections can skip reinstallation
+        writeShaMarkerToDevice(trailblazeDeviceId)
       } else {
         sendProgressMessage("Failed to install test APK")
       }
@@ -81,5 +117,33 @@ object PrecompiledApkInstaller {
    */
   fun hasPrecompiledApk(target: TrailblazeOnDeviceInstrumentationTarget): Boolean {
     return PrecompiledApkInstaller::class.java.getResource(PRECOMPILED_APK_RESOURCE_PATH) != null
+  }
+
+  private fun computeBundledApkSha(): String? = try {
+    PrecompiledApkInstaller::class.java.getResourceAsStream(PRECOMPILED_APK_RESOURCE_PATH)
+      ?.use { input ->
+        val digest = MessageDigest.getInstance("SHA-256")
+        val buffer = ByteArray(8192)
+        var bytesRead: Int
+        while (input.read(buffer).also { bytesRead = it } != -1) {
+          digest.update(buffer, 0, bytesRead)
+        }
+        digest.digest().joinToString("") { "%02x".format(it) }
+      }
+  } catch (e: Exception) {
+    Console.log("Failed to compute bundled APK SHA: ${e.message}")
+    null
+  }
+
+  private fun writeShaMarkerToDevice(trailblazeDeviceId: TrailblazeDeviceId) {
+    val sha = bundledApkSha ?: return
+    try {
+      AndroidHostAdbUtils.execAdbShellCommand(
+        deviceId = trailblazeDeviceId,
+        args = listOf("sh", "-c", "echo '$sha' > $DEVICE_SHA_MARKER_PATH"),
+      )
+    } catch (e: Exception) {
+      Console.log("Failed to write APK SHA marker to device: ${e.message}")
+    }
   }
 }

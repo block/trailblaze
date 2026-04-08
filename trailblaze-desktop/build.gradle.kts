@@ -156,11 +156,18 @@ val shrinkUberJar by tasks.registering(JavaExec::class) {
   outputs.file(outputJar)
 
   val javaHome = System.getProperty("java.home")
+  // Resolved in doFirst, reused in doLast so both operate on the same JAR.
+  var resolvedInputJar: File? = null
+
   doFirst {
     outputJar.get().asFile.parentFile.mkdirs()
+    // Find the newest uber JAR (old builds may leave stale JARs in this directory).
     val jarsDir = layout.buildDirectory.dir("compose/jars").get().asFile
-    val actualJar = jarsDir.listFiles()?.firstOrNull { it.extension == "jar" }
+    val actualJar = jarsDir.listFiles()
+      ?.filter { it.extension == "jar" }
+      ?.maxByOrNull { it.lastModified() }
       ?: error("No uber JAR found in ${jarsDir.absolutePath}")
+    resolvedInputJar = actualJar
 
     val jmodsArgs = File("$javaHome/jmods").listFiles { f -> f.extension == "jmod" }
       ?.sorted()
@@ -176,9 +183,7 @@ val shrinkUberJar by tasks.registering(JavaExec::class) {
   }
 
   doLast {
-    val jarsDir = layout.buildDirectory.dir("compose/jars").get().asFile
-    val originalJar = jarsDir.listFiles()?.firstOrNull { it.extension == "jar" }
-      ?: return@doLast
+    val originalJar = resolvedInputJar ?: return@doLast
     restoreArchiveEntries(originalJar, outputJar.get().asFile)
   }
 }

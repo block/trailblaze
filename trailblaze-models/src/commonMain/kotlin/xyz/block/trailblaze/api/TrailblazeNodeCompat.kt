@@ -8,13 +8,15 @@ package xyz.block.trailblaze.api
  * pipelines to work unchanged during migration to [TrailblazeNode].
  */
 fun TrailblazeNode.toViewHierarchyTreeNode(): ViewHierarchyTreeNode {
-  val bounds = this.bounds
-  val dimensions = if (bounds != null) "${bounds.width}x${bounds.height}" else null
-  val centerPoint = if (bounds != null) "${bounds.centerX},${bounds.centerY}" else null
+  val b = this.bounds
 
   return when (val detail = driverDetail) {
     is DriverNodeDetail.IosMaestro -> ViewHierarchyTreeNode(
       nodeId = nodeId,
+      x1 = b?.left ?: 0,
+      y1 = b?.top ?: 0,
+      x2 = b?.right ?: 0,
+      y2 = b?.bottom ?: 0,
       className = detail.className,
       resourceId = detail.resourceId,
       text = detail.text,
@@ -29,12 +31,14 @@ fun TrailblazeNode.toViewHierarchyTreeNode(): ViewHierarchyTreeNode {
       password = detail.password,
       focusable = detail.focusable,
       ignoreBoundsFiltering = detail.ignoreBoundsFiltering,
-      dimensions = dimensions,
-      centerPoint = centerPoint,
       children = children.map { it.toViewHierarchyTreeNode() },
     )
     is DriverNodeDetail.AndroidAccessibility -> ViewHierarchyTreeNode(
       nodeId = nodeId,
+      x1 = b?.left ?: 0,
+      y1 = b?.top ?: 0,
+      x2 = b?.right ?: 0,
+      y2 = b?.bottom ?: 0,
       className = detail.className,
       resourceId = detail.resourceId,
       text = detail.text,
@@ -48,12 +52,14 @@ fun TrailblazeNode.toViewHierarchyTreeNode(): ViewHierarchyTreeNode {
       scrollable = detail.isScrollable,
       password = detail.isPassword,
       focusable = detail.isFocusable,
-      dimensions = dimensions,
-      centerPoint = centerPoint,
       children = children.map { it.toViewHierarchyTreeNode() },
     )
     is DriverNodeDetail.AndroidMaestro -> ViewHierarchyTreeNode(
       nodeId = nodeId,
+      x1 = b?.left ?: 0,
+      y1 = b?.top ?: 0,
+      x2 = b?.right ?: 0,
+      y2 = b?.bottom ?: 0,
       className = detail.className,
       resourceId = detail.resourceId,
       text = detail.text,
@@ -67,20 +73,24 @@ fun TrailblazeNode.toViewHierarchyTreeNode(): ViewHierarchyTreeNode {
       scrollable = detail.scrollable,
       password = detail.password,
       focusable = detail.focusable,
-      dimensions = dimensions,
-      centerPoint = centerPoint,
       children = children.map { it.toViewHierarchyTreeNode() },
     )
     is DriverNodeDetail.Web -> ViewHierarchyTreeNode(
       nodeId = nodeId,
+      x1 = b?.left ?: 0,
+      y1 = b?.top ?: 0,
+      x2 = b?.right ?: 0,
+      y2 = b?.bottom ?: 0,
       className = detail.ariaRole,
       text = detail.ariaName,
-      dimensions = dimensions,
-      centerPoint = centerPoint,
       children = children.map { it.toViewHierarchyTreeNode() },
     )
     is DriverNodeDetail.Compose -> ViewHierarchyTreeNode(
       nodeId = nodeId,
+      x1 = b?.left ?: 0,
+      y1 = b?.top ?: 0,
+      x2 = b?.right ?: 0,
+      y2 = b?.bottom ?: 0,
       className = detail.role,
       resourceId = detail.testTag,
       text = detail.text ?: detail.editableText,
@@ -89,8 +99,6 @@ fun TrailblazeNode.toViewHierarchyTreeNode(): ViewHierarchyTreeNode {
       focused = detail.isFocused,
       selected = detail.isSelected,
       password = detail.isPassword,
-      dimensions = dimensions,
-      centerPoint = centerPoint,
       children = children.map { it.toViewHierarchyTreeNode() },
     )
   }

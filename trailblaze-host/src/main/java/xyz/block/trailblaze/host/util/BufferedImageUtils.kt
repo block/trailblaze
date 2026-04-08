@@ -1,5 +1,8 @@
 package xyz.block.trailblaze.host.util
 
+import org.jetbrains.skia.ColorAlphaType
+import org.jetbrains.skia.EncodedImageFormat
+import org.jetbrains.skia.ImageInfo
 import xyz.block.trailblaze.api.TrailblazeImageFormat
 import java.awt.Image
 import java.awt.image.BufferedImage
@@ -7,6 +10,7 @@ import java.io.ByteArrayOutputStream
 import javax.imageio.IIOImage
 import javax.imageio.ImageIO
 import javax.imageio.ImageWriteParam
+import org.jetbrains.skia.Image as SkiaImage
 
 object BufferedImageUtils {
 
@@ -21,6 +25,11 @@ object BufferedImageUtils {
       when (format) {
         TrailblazeImageFormat.PNG -> {
           ImageIO.write(this, format.formatName, outputStream)
+        }
+
+        TrailblazeImageFormat.WEBP -> {
+          // Use Skia (bundled with Compose Desktop) for native WebP encoding.
+          return this.encodeWithSkia(EncodedImageFormat.WEBP, compressionQuality)
         }
 
         TrailblazeImageFormat.JPEG -> {
@@ -161,5 +170,52 @@ object BufferedImageUtils {
     g.drawImage(this, 0, 0, null)
     g.dispose()
     return rotated
+  }
+
+  /**
+   * Encodes a BufferedImage using Skia (bundled with Compose Desktop via Skiko).
+   * Used for formats not supported by JVM ImageIO (e.g. WebP).
+   */
+  private fun BufferedImage.encodeWithSkia(
+    format: EncodedImageFormat,
+    quality: Float,
+  ): ByteArray {
+    // Convert BufferedImage to ARGB pixel array
+    val rgbImage = if (this.type == BufferedImage.TYPE_INT_ARGB) {
+      this
+    } else {
+      val converted = BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB)
+      val g = converted.createGraphics()
+      g.drawImage(this, 0, 0, null)
+      g.dispose()
+      converted
+    }
+
+    // BufferedImage TYPE_INT_ARGB stores pixels as 0xAARRGGBB
+    // Skia with BGRA_8888 expects bytes as [B, G, R, A] per pixel
+    val argbPixels = rgbImage.getRGB(0, 0, width, height, null, 0, width)
+    val bytes = ByteArray(width * height * 4)
+    for (i in argbPixels.indices) {
+      val pixel = argbPixels[i]
+      val offset = i * 4
+      bytes[offset] = (pixel and 0xFF).toByte()         // B
+      bytes[offset + 1] = (pixel shr 8 and 0xFF).toByte()  // G
+      bytes[offset + 2] = (pixel shr 16 and 0xFF).toByte() // R
+      bytes[offset + 3] = (pixel shr 24 and 0xFF).toByte() // A
+    }
+
+    val imageInfo = ImageInfo.makeN32(width, height, ColorAlphaType.UNPREMUL)
+    val skiaImage = SkiaImage.makeRaster(imageInfo, bytes, width * 4)
+    try {
+      val encoded = skiaImage.encodeToData(format, (quality * 100).toInt())
+        ?: error("Skia failed to encode image as ${format.name}")
+      try {
+        return encoded.bytes
+      } finally {
+        encoded.close()
+      }
+    } finally {
+      skiaImage.close()
+    }
   }
 }

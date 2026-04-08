@@ -253,7 +253,7 @@ class ConfigurableMockBridge : TrailblazeMcpBridge {
   var executeToolException: Exception? = null
   var lastExecutedTool: TrailblazeTool? = null
 
-  override suspend fun executeTrailblazeTool(tool: TrailblazeTool): String {
+  override suspend fun executeTrailblazeTool(tool: TrailblazeTool, blocking: Boolean): String {
     lastExecutedTool = tool
     executeToolException?.let { throw it }
     return executeToolResult
@@ -295,7 +295,6 @@ class ConfigurableMockBridge : TrailblazeMcpBridge {
 
   override suspend fun getScreenStateViaRpc(
     includeScreenshot: Boolean,
-    filterViewHierarchy: Boolean,
     screenshotScalingConfig: ScreenshotScalingConfig,
   ): GetScreenStateResponse? =
     throw NotImplementedError("Not needed for executor tests")

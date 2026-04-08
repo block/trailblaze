@@ -217,10 +217,11 @@ object TrailblazeBuiltInTabs {
     globalSettingsContent: @Composable ColumnScope.(TrailblazeServerState) -> Unit,
     availableModelLists: Set<TrailblazeLlmModelList>,
     customEnvVarNames: List<String>,
-    openGoose: () -> Unit = { TrailblazeDesktopUtil.openGoose() },
+    openGoose: () -> Unit = { TrailblazeDesktopUtil.openGoose(port = trailblazeSettingsRepo.portManager.httpPort) },
     isProviderLocked: Boolean = false,
     playwrightInstallState: StateFlow<PlaywrightInstallState>? = null,
     onInstallPlaywright: (() -> Unit)? = null,
+    onTestLlmConnection: (suspend (TrailblazeLlmModel) -> Result<String>)? = null,
   ): TrailblazeAppTab {
     val shellProfile = DesktopUtil.getShellProfileFile()
     return TrailblazeAppTab(
@@ -242,6 +243,7 @@ object TrailblazeBuiltInTabs {
           isProviderLocked = isProviderLocked,
           playwrightInstallState = playwrightInstallState,
           onInstallPlaywright = onInstallPlaywright,
+          onTestLlmConnection = onTestLlmConnection,
         )
       }
     )

@@ -29,6 +29,9 @@ class GetScreenStateHandler(
   ): RpcResult<GetScreenStateResponse> {
     return mutex.withLock {
       try {
+        // Settle animations/recompositions before capturing so the semantics tree and
+        // screenshot reflect the same UI state (dialogs, popups, animated overlays).
+        target.waitForIdle()
         val screenState =
           ComposeScreenState(
             target = target,

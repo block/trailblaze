@@ -104,48 +104,12 @@ class TrailblazeSettingsRepo(
     return serverStateFlow.value.appConfig.selectedTrailblazeDriverTypes.values.toSet()
   }
 
-  /** Adds a custom app package name to the persisted list. */
-  fun addCustomAppPackageName(packageName: String) {
-    updateAppConfig { config ->
-      val trimmed = packageName.trim()
-      if (trimmed.isNotEmpty() && trimmed !in config.customAppPackageNames) {
-        config.copy(customAppPackageNames = config.customAppPackageNames + trimmed)
-      } else {
-        config
-      }
-    }
-  }
-
-  /** Removes a custom app package name from the persisted list. */
-  fun removeCustomAppPackageName(packageName: String) {
-    updateAppConfig { config ->
-      config.copy(
-        customAppPackageNames = config.customAppPackageNames - packageName,
-        // Clear selection if the removed package was selected
-        selectedTargetAppId = if (config.selectedTargetAppId == packageName) {
-          null
-        } else {
-          config.selectedTargetAppId
-        },
-      )
-    }
-  }
-
   fun getCurrentSelectedTargetApp(): TrailblazeHostAppTarget? {
-    val selectedId = serverStateFlow.value.appConfig.selectedTargetAppId ?: return null
-
-    // Check registered app targets first
-    val registeredTarget = allTargetApps()
+    return allTargetApps()
       .filter { it != defaultHostAppTarget }
-      .firstOrNull { appTarget -> appTarget.id == selectedId }
-    if (registeredTarget != null) return registeredTarget
-
-    // Fall back to custom package names added by the user
-    if (selectedId in serverStateFlow.value.appConfig.customAppPackageNames) {
-      return TrailblazeHostAppTarget.CustomPackageHostAppTarget(selectedId)
-    }
-
-    return null
+      .firstOrNull { appTarget ->
+        appTarget.id == serverStateFlow.value.appConfig.selectedTargetAppId
+      }
   }
 
   /** Manages HTTP/HTTPS port resolution (runtime CLI overrides + persisted fallback). */
@@ -162,7 +126,6 @@ class TrailblazeSettingsRepo(
       serverStateFlow
         .distinctUntilChangedBy { newState -> newState }
         .collect { newState ->
-          Console.log("Trailblaze Server State Updated: $newState")
           saveConfig(newState.appConfig)
         }
     }

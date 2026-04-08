@@ -74,6 +74,15 @@ import java.awt.GraphicsEnvironment
 import java.awt.Window
 
 
+/**
+ * When true, always show the main window on macOS instead of starting minimized to tray.
+ * This improves discoverability of the app vs being hidden in the menu bar.
+ *
+ * Note: When --headless is passed (e.g. via `trailblaze mcp`), the window is always hidden
+ * regardless of this flag — headless mode only starts the daemon/server with a tray icon.
+ */
+private const val ALWAYS_SHOW_WINDOW = true
+
 private data class WindowStateSnapshot(
   val width: Int,
   val height: Int,
@@ -108,9 +117,11 @@ class MainTrailblazeApp(
     // Get the MCP server instance (we'll set the callback after Compose state is ready)
     val trailblazeMcpServer = trailblazeMcpServerProvider()
 
-    if (headless || !canRunDesktopGui()) {
-      // Headless mode (no display or non-macOS): start only the MCP server
-      // without any Compose Desktop UI. This avoids requiring AWT/display.
+    if (!canRunDesktopGui()) {
+      // No display available (non-macOS or headless environment): start only the
+      // MCP server without any Compose Desktop UI.
+      // On macOS, we always start Compose Desktop so the system tray icon is
+      // available — the `headless` flag just controls initial window visibility.
       Console.log("Starting Trailblaze in headless mode (server only, no GUI)...")
       val portManager = trailblazeSavedSettingsRepo.portManager
       trailblazeMcpServer.startStreamableHttpMcpServer(
@@ -137,16 +148,16 @@ class MainTrailblazeApp(
       // Auto Launch Goose if enabled
       val appConfig = trailblazeSavedSettingsRepo.serverStateFlow.value.appConfig
       if (appConfig.autoLaunchGoose) {
-        TrailblazeDesktopUtil.openGoose()
+        TrailblazeDesktopUtil.openGoose(port = portManager.httpPort)
       }
     }
 
     application {
       val currentServerState by trailblazeSavedSettingsRepo.serverStateFlow.collectAsState()
       
-      // Window visibility state - starts hidden in headless mode, visible otherwise
-      // Closing the window hides it instead of quitting (can reopen from tray)
-      var windowVisible by remember { mutableStateOf(!headless) }
+      // Window visibility state - starts hidden in headless mode, visible otherwise.
+      // ALWAYS_SHOW_WINDOW overrides headless to improve app discoverability on macOS.
+      var windowVisible by remember { mutableStateOf(if (headless) false else ALWAYS_SHOW_WINDOW) }
       
       // Track the AWT window for bringing to front
       var awtWindow by remember { mutableStateOf<Window?>(null) }

@@ -39,7 +39,6 @@ import xyz.block.trailblaze.yaml.TrailConfig
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.util.Console
-import xyz.block.trailblaze.viewhierarchy.NativeViewHierarchyDetail
 
 /**
  * On-Device Android Trailblaze Rule Implementation.
@@ -72,6 +71,7 @@ open class AndroidTrailblazeRule(
     trailblazeLogger = trailblazeLoggingRule.logger,
     trailblazeDeviceInfoProvider = trailblazeLoggingRule.trailblazeDeviceInfoProvider,
     sessionProvider = { trailblazeLoggingRule.session ?: error("Session not available - ensure test is running") },
+    nodeSelectorMode = config.nodeSelectorMode,
   )
 
   private val trailblazeToolRepo = TrailblazeToolRepo.withDynamicToolSets(
@@ -80,16 +80,10 @@ open class AndroidTrailblazeRule(
   )
 
   private val screenStateProvider: () -> ScreenState = screenStateProviderOverride ?: {
-    // Consume pending view hierarchy details from the agent (one-shot, auto-reverts)
-    val pendingDetails = trailblazeAgent.pendingViewHierarchyDetails
-    trailblazeAgent.pendingViewHierarchyDetails = emptySet()
     AndroidOnDeviceUiAutomatorScreenState(
       includeScreenshot = true,
-      filterViewHierarchy = true,
       setOfMarkEnabled = config.setOfMarkEnabled,
       deviceClassifiers = trailblazeLoggingRule.trailblazeDeviceInfoProvider().classifiers,
-      fullHierarchy = NativeViewHierarchyDetail.FULL_HIERARCHY in pendingDetails,
-      includeOffscreen = NativeViewHierarchyDetail.OFFSCREEN_ELEMENTS in pendingDetails,
     )
   }
 

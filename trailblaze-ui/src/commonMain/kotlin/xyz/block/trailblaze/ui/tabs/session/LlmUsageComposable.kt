@@ -37,6 +37,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import xyz.block.trailblaze.llm.LlmSessionUsageAndCost
 import xyz.block.trailblaze.ui.composables.InteractivePieChart
+import androidx.compose.foundation.text.selection.SelectionContainer
 import xyz.block.trailblaze.ui.composables.PieChartCenterContent
 import xyz.block.trailblaze.ui.composables.PieChartSegment
 import xyz.block.trailblaze.ui.utils.FormattingUtils.formatCommaNumber
@@ -91,35 +92,37 @@ fun LlmUsageComposable(
             Spacer(modifier = Modifier.height(16.dp))
 
             // Model Information
-            Row(
-              modifier = Modifier.fillMaxWidth(),
-              horizontalArrangement = Arrangement.SpaceBetween,
-              verticalAlignment = Alignment.Bottom
-            ) {
-              Column {
-                Text(
-                  text = "Model",
-                  style = MaterialTheme.typography.labelMedium,
-                  color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                  text = llmSessionUsageAndCost.llmModel.modelId,
-                  style = MaterialTheme.typography.titleMedium,
-                  fontWeight = FontWeight.SemiBold
-                )
-              }
+            SelectionContainer {
+              Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Bottom
+              ) {
+                Column {
+                  Text(
+                    text = "Model",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                  )
+                  Text(
+                    text = llmSessionUsageAndCost.llmModel.modelId,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                  )
+                }
 
-              Column(horizontalAlignment = Alignment.End) {
-                Text(
-                  text = "Provider",
-                  style = MaterialTheme.typography.labelMedium,
-                  color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                  text = llmSessionUsageAndCost.llmModel.trailblazeLlmProvider.display,
-                  style = MaterialTheme.typography.titleMedium,
-                  fontWeight = FontWeight.SemiBold
-                )
+                Column(horizontalAlignment = Alignment.End) {
+                  Text(
+                    text = "Provider",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                  )
+                  Text(
+                    text = llmSessionUsageAndCost.llmModel.trailblazeLlmProvider.display,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                  )
+                }
               }
             }
           }
@@ -326,83 +329,85 @@ fun LlmUsageComposable(
             Spacer(modifier = Modifier.height(16.dp))
 
             // Cost Breakdown
-            Row(
-              modifier = Modifier.fillMaxWidth(),
-              horizontalArrangement = Arrangement.SpaceBetween,
-              verticalAlignment = Alignment.CenterVertically
-            ) {
-              Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
-                Column {
-                  Text(
-                    text = "Input Cost",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                  )
-                  Text(
-                    text = "$${
-                      formatDouble(
-                        llmSessionUsageAndCost.requestBreakdowns.sumOf { it.promptCost },
-                        2
-                      )
-                    }",
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Medium
-                  )
-                }
-
-                Column {
-                  Text(
-                    text = "Output Cost",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                  )
-                  Text(
-                    text = "$${
-                      formatDouble(
-                        (llmSessionUsageAndCost.totalOutputTokens * llmSessionUsageAndCost.llmModel.outputCostPerOneMillionTokens) / 1_000_000,
-                        2
-                      )
-                    }",
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Medium
-                  )
-                }
-
-                if (llmSessionUsageAndCost.totalCacheSavings > 0.0) {
+            SelectionContainer {
+              Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+              ) {
+                Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
                   Column {
                     Text(
-                      text = "Cache Savings",
+                      text = "Input Cost",
                       style = MaterialTheme.typography.labelSmall,
-                      color = MaterialTheme.colorScheme.tertiary
+                      color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Text(
-                      text = "-$${formatDouble(llmSessionUsageAndCost.totalCacheSavings, 2)}",
+                      text = "$${
+                        formatDouble(
+                          llmSessionUsageAndCost.requestBreakdowns.sumOf { it.promptCost },
+                          2
+                        )
+                      }",
                       style = MaterialTheme.typography.bodyMedium,
-                      fontWeight = FontWeight.Medium,
-                      color = MaterialTheme.colorScheme.tertiary
+                      fontWeight = FontWeight.Medium
                     )
                   }
-                }
-              }
 
-              Column(horizontalAlignment = Alignment.End) {
-                Text(
-                  text = "Total Cost",
-                  style = MaterialTheme.typography.labelMedium,
-                  color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                  text = "$${formatDouble(llmSessionUsageAndCost.totalCostInUsDollars, 2)}",
-                  style = MaterialTheme.typography.titleMedium,
-                  fontWeight = FontWeight.Bold,
-                  color = MaterialTheme.colorScheme.error
-                )
-                if (llmSessionUsageAndCost.totalCacheSavings > 0.0) {
+                  Column {
+                    Text(
+                      text = "Output Cost",
+                      style = MaterialTheme.typography.labelSmall,
+                      color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                      text = "$${
+                        formatDouble(
+                          (llmSessionUsageAndCost.totalOutputTokens * llmSessionUsageAndCost.llmModel.outputCostPerOneMillionTokens) / 1_000_000,
+                          2
+                        )
+                      }",
+                      style = MaterialTheme.typography.bodyMedium,
+                      fontWeight = FontWeight.Medium
+                    )
+                  }
+
+                  if (llmSessionUsageAndCost.totalCacheSavings > 0.0) {
+                    Column {
+                      Text(
+                        text = "Cache Savings",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.tertiary
+                      )
+                      Text(
+                        text = "-$${formatDouble(llmSessionUsageAndCost.totalCacheSavings, 2)}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.tertiary
+                      )
+                    }
+                  }
+                }
+
+                Column(horizontalAlignment = Alignment.End) {
                   Text(
-                    text = "without cache: $${formatDouble(llmSessionUsageAndCost.totalCostWithoutCacheDiscount, 2)}",
-                    style = MaterialTheme.typography.bodySmall,
+                    text = "Total Cost",
+                    style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                   )
+                  Text(
+                    text = "$${formatDouble(llmSessionUsageAndCost.totalCostInUsDollars, 2)}",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.error
+                  )
+                  if (llmSessionUsageAndCost.totalCacheSavings > 0.0) {
+                    Text(
+                      text = "without cache: $${formatDouble(llmSessionUsageAndCost.totalCostWithoutCacheDiscount, 2)}",
+                      style = MaterialTheme.typography.bodySmall,
+                      color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                  }
                 }
               }
             }
@@ -495,42 +500,50 @@ fun LlmUsageComposable(
                 centerContent = { content ->
                   when (content) {
                     is PieChartCenterContent.Default -> {
-                      Text(
-                        text = content.totalValue,
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold
-                      )
-                      Text(
-                        text = "Total Tokens",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                      )
+                      SelectionContainer {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                          Text(
+                            text = content.totalValue,
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold
+                          )
+                          Text(
+                            text = "Total Tokens",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                          )
+                        }
+                      }
                     }
                     is PieChartCenterContent.Hovered -> {
-                      Text(
-                        text = content.label,
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Medium,
-                        color = content.color
-                      )
-                      Spacer(modifier = Modifier.height(4.dp))
-                      Text(
-                        text = content.value,
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold
-                      )
-                      Text(
-                        text = "${content.percentage} of context",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontWeight = FontWeight.Medium
-                      )
-                      content.description?.let { desc ->
-                        Text(
-                          text = desc,
-                          style = MaterialTheme.typography.bodySmall,
-                          color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                      SelectionContainer {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                          Text(
+                            text = content.label,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Medium,
+                            color = content.color
+                          )
+                          Spacer(modifier = Modifier.height(4.dp))
+                          Text(
+                            text = content.value,
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold
+                          )
+                          Text(
+                            text = "${content.percentage} of context",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontWeight = FontWeight.Medium
+                          )
+                          content.description?.let { desc ->
+                            Text(
+                              text = desc,
+                              style = MaterialTheme.typography.bodySmall,
+                              color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                          }
+                        }
                       }
                     }
                   }
@@ -646,124 +659,126 @@ fun LlmUsageComposable(
               
               llmSessionUsageAndCost.requestBreakdowns.forEachIndexed { index, request ->
                 // Column-aligned row with Input/Output groupings
-                Row(
-                  modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 4.dp),
-                  horizontalArrangement = Arrangement.SpaceBetween,
-                  verticalAlignment = Alignment.CenterVertically
-                ) {
-                  // Left: Request number and breakdown columns
+                SelectionContainer {
                   Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier
+                      .fillMaxWidth()
+                      .padding(vertical = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                   ) {
-                    Text(
-                      text = "Request ${index + 1}",
-                      style = MaterialTheme.typography.bodyMedium,
-                      fontWeight = FontWeight.Medium,
-                      modifier = Modifier.width(75.dp)
-                    )
-                    
-                    // Breakdown columns
-                    request.inputTokenBreakdown?.let { breakdown ->
+                    // Left: Request number and breakdown columns
+                    Row(
+                      horizontalArrangement = Arrangement.spacedBy(8.dp),
+                      verticalAlignment = Alignment.CenterVertically,
+                      modifier = Modifier.weight(1f)
+                    ) {
                       Text(
-                        text = formatCommaNumber(breakdown.systemPrompt.tokens),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.width(65.dp)
+                        text = "Request ${index + 1}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.width(75.dp)
                       )
-                      Text(
-                        text = formatCommaNumber(breakdown.userPrompt.tokens),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.width(65.dp)
-                      )
-                      Text(
-                        text = formatCommaNumber(breakdown.toolDescriptors.tokens),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.width(65.dp)
-                      )
-                      Text(
-                        text = if (breakdown.images.count > 0) formatCommaNumber(breakdown.images.tokens) else "-",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.width(65.dp)
-                      )
-                    } ?: run {
-                      // No breakdown available - show dashes
-                      repeat(4) {
+
+                      // Breakdown columns
+                      request.inputTokenBreakdown?.let { breakdown ->
                         Text(
-                          text = "-",
+                          text = formatCommaNumber(breakdown.systemPrompt.tokens),
                           style = MaterialTheme.typography.bodySmall,
                           color = MaterialTheme.colorScheme.onSurfaceVariant,
                           modifier = Modifier.width(65.dp)
                         )
-                      }
-                    }
-                  }
-                  
-                  // Right: Input Total, Output Tokens, View button, and Cost (aligned columns)
-                  Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                  ) {
-                    // Input Tokens - Reported vs Estimated
-                    Column(modifier = Modifier.width(100.dp)) {
-                      // LLM-Reported tokens
-                      Text(
-                        text = formatCommaNumber(request.inputTokens),
-                        style = MaterialTheme.typography.bodySmall,
-                        fontWeight = FontWeight.SemiBold
-                      )
-
-                      if (request.cacheReadInputTokens > 0) {
-                        // Show cached token count
                         Text(
-                          text = "${formatCommaNumber(request.cacheReadInputTokens)} cached",
-                          style = MaterialTheme.typography.bodySmall,
-                          color = MaterialTheme.colorScheme.tertiary,
-                          fontSize = MaterialTheme.typography.bodySmall.fontSize * 0.9
-                        )
-                      } else {
-                        // Estimated tokens (fallback when no cache data)
-                        val estimatedTokens = request.inputTokenBreakdown?.totalEstimatedTokens
-                        Text(
-                          text = estimatedTokens?.let { formatCommaNumber(it) } ?: "-",
+                          text = formatCommaNumber(breakdown.userPrompt.tokens),
                           style = MaterialTheme.typography.bodySmall,
                           color = MaterialTheme.colorScheme.onSurfaceVariant,
-                          fontSize = MaterialTheme.typography.bodySmall.fontSize * 0.9
+                          modifier = Modifier.width(65.dp)
                         )
+                        Text(
+                          text = formatCommaNumber(breakdown.toolDescriptors.tokens),
+                          style = MaterialTheme.typography.bodySmall,
+                          color = MaterialTheme.colorScheme.onSurfaceVariant,
+                          modifier = Modifier.width(65.dp)
+                        )
+                        Text(
+                          text = if (breakdown.images.count > 0) formatCommaNumber(breakdown.images.tokens) else "-",
+                          style = MaterialTheme.typography.bodySmall,
+                          color = MaterialTheme.colorScheme.onSurfaceVariant,
+                          modifier = Modifier.width(65.dp)
+                        )
+                      } ?: run {
+                        // No breakdown available - show dashes
+                        repeat(4) {
+                          Text(
+                            text = "-",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.width(65.dp)
+                          )
+                        }
                       }
                     }
-                    
-                    // Output Tokens
-                    Text(
-                      text = "${formatCommaNumber(request.outputTokens)}",
-                      style = MaterialTheme.typography.bodySmall,
-                      color = MaterialTheme.colorScheme.onSurfaceVariant,
-                      modifier = Modifier.width(70.dp)
-                    )
-                    TextButton(
-                      onClick = { onShowRequestDetails(index) },
-                      contentPadding = ButtonDefaults.TextButtonContentPadding
+
+                    // Right: Input Total, Output Tokens, View button, and Cost (aligned columns)
+                    Row(
+                      horizontalArrangement = Arrangement.spacedBy(8.dp),
+                      verticalAlignment = Alignment.CenterVertically
                     ) {
-                      Icon(
-                        imageVector = Icons.Default.Chat,
-                        contentDescription = "View chat history",
-                        modifier = Modifier.size(16.dp).padding(end = 4.dp)
+                      // Input Tokens - Reported vs Estimated
+                      Column(modifier = Modifier.width(100.dp)) {
+                        // LLM-Reported tokens
+                        Text(
+                          text = formatCommaNumber(request.inputTokens),
+                          style = MaterialTheme.typography.bodySmall,
+                          fontWeight = FontWeight.SemiBold
+                        )
+
+                        if (request.cacheReadInputTokens > 0) {
+                          // Show cached token count
+                          Text(
+                            text = "${formatCommaNumber(request.cacheReadInputTokens)} cached",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.tertiary,
+                            fontSize = MaterialTheme.typography.bodySmall.fontSize * 0.9
+                          )
+                        } else {
+                          // Estimated tokens (fallback when no cache data)
+                          val estimatedTokens = request.inputTokenBreakdown?.totalEstimatedTokens
+                          Text(
+                            text = estimatedTokens?.let { formatCommaNumber(it) } ?: "-",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = MaterialTheme.typography.bodySmall.fontSize * 0.9
+                          )
+                        }
+                      }
+
+                      // Output Tokens
+                      Text(
+                        text = "${formatCommaNumber(request.outputTokens)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.width(70.dp)
                       )
-                      Text("View", style = MaterialTheme.typography.labelSmall)
+                      TextButton(
+                        onClick = { onShowRequestDetails(index) },
+                        contentPadding = ButtonDefaults.TextButtonContentPadding
+                      ) {
+                        Icon(
+                          imageVector = Icons.Default.Chat,
+                          contentDescription = "View chat history",
+                          modifier = Modifier.size(16.dp).padding(end = 4.dp)
+                        )
+                        Text("View", style = MaterialTheme.typography.labelSmall)
+                      }
+                      Text(
+                        text = "$${formatDouble(request.totalCost, 4)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.width(80.dp)
+                      )
                     }
-                    Text(
-                      text = "$${formatDouble(request.totalCost, 4)}",
-                      style = MaterialTheme.typography.bodySmall,
-                      fontWeight = FontWeight.Bold,
-                      color = MaterialTheme.colorScheme.error,
-                      modifier = Modifier.width(80.dp)
-                    )
                   }
                 }
                 

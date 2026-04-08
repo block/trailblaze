@@ -799,13 +799,9 @@ class PlaywrightScreenState(
     get() = viewportHeight
 
   /** Full tree for logging/backward compatibility — not sent to the LLM. */
-  override val viewHierarchyOriginal: ViewHierarchyTreeNode by lazy {
+  override val viewHierarchy: ViewHierarchyTreeNode by lazy {
     val tree = PlaywrightAriaSnapshot.ariaSnapshotToViewHierarchy(ariaSnapshotYaml)
     enrichViewHierarchyWithBounds(tree)
-  }
-
-  override val viewHierarchy: ViewHierarchyTreeNode by lazy {
-    viewHierarchyOriginal
   }
 
   /**
@@ -895,8 +891,10 @@ class PlaywrightScreenState(
     descriptorOccurrences[descriptor] = nthIndex + 1
 
     // Resolve bounds via Playwright's accessibility-tree-aware locator API
-    var centerPoint: String? = null
-    var dimensions: String? = null
+    var bLeft: Int? = null
+    var bTop: Int? = null
+    var bRight: Int? = null
+    var bBottom: Int? = null
     try {
       val elementRef = PlaywrightAriaSnapshot.ElementRef(descriptor, nthIndex)
       val locator = PlaywrightAriaSnapshot.resolveElementRef(page, elementRef)
@@ -905,10 +903,10 @@ class PlaywrightScreenState(
           Locator.BoundingBoxOptions().setTimeout(captureTimeoutMs),
         )
         if (box != null && box.width > 0 && box.height > 0) {
-          val cx = (box.x + box.width / 2).toInt()
-          val cy = (box.y + box.height / 2).toInt()
-          centerPoint = "$cx,$cy"
-          dimensions = "${box.width.toInt()}x${box.height.toInt()}"
+          bLeft = box.x.toInt()
+          bTop = box.y.toInt()
+          bRight = (box.x + box.width).toInt()
+          bBottom = (box.y + box.height).toInt()
         }
       }
     } catch (_: Exception) {
@@ -920,11 +918,13 @@ class PlaywrightScreenState(
       enrichNodeWithLocatorBounds(child, descriptorOccurrences)
     }
 
-    return if (centerPoint != null) {
+    return if (bLeft != null && bTop != null && bRight != null && bBottom != null) {
       node.copy(
         children = enrichedChildren,
-        centerPoint = centerPoint,
-        dimensions = dimensions,
+        x1 = bLeft,
+        y1 = bTop,
+        x2 = bRight,
+        y2 = bBottom,
       )
     } else {
       node.copy(children = enrichedChildren)
@@ -1050,6 +1050,10 @@ class PlaywrightScreenState(
             ImageIO.write(this, format.formatName, outputStream)
           }
 
+          TrailblazeImageFormat.WEBP -> {
+            return this.encodeWebPWithSkia(quality)
+          }
+
           TrailblazeImageFormat.JPEG -> {
             // JPEG doesn't support transparency — convert ARGB to RGB if needed
             val imageToWrite = if (type == BufferedImage.TYPE_INT_ARGB ||
@@ -1085,6 +1089,49 @@ class PlaywrightScreenState(
           }
         }
         return outputStream.toByteArray()
+      }
+    }
+
+    /** Encodes a BufferedImage to WebP using Skia (via Skiko). */
+    private fun BufferedImage.encodeWebPWithSkia(quality: Float): ByteArray {
+      val rgbImage = if (this.type == BufferedImage.TYPE_INT_ARGB) {
+        this
+      } else {
+        val converted = BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB)
+        val g = converted.createGraphics()
+        g.drawImage(this, 0, 0, null)
+        g.dispose()
+        converted
+      }
+
+      val argbPixels = rgbImage.getRGB(0, 0, width, height, null, 0, width)
+      val bytes = ByteArray(width * height * 4)
+      for (i in argbPixels.indices) {
+        val pixel = argbPixels[i]
+        val offset = i * 4
+        bytes[offset] = (pixel and 0xFF).toByte()             // B
+        bytes[offset + 1] = (pixel shr 8 and 0xFF).toByte()   // G
+        bytes[offset + 2] = (pixel shr 16 and 0xFF).toByte()  // R
+        bytes[offset + 3] = (pixel shr 24 and 0xFF).toByte()  // A
+      }
+
+      val imageInfo = org.jetbrains.skia.ImageInfo.makeN32(
+        width, height, org.jetbrains.skia.ColorAlphaType.UNPREMUL,
+      )
+      // Note: duplicates BufferedImageUtils.encodeWithSkia() — kept separate because
+      // trailblaze-playwright does not depend on trailblaze-host.
+      val skiaImage = org.jetbrains.skia.Image.makeRaster(imageInfo, bytes, width * 4)
+      try {
+        val encoded = skiaImage.encodeToData(
+          org.jetbrains.skia.EncodedImageFormat.WEBP, (quality * 100).toInt(),
+        ) ?: error("Skia failed to encode image as WEBP")
+        try {
+          return encoded.bytes
+        } finally {
+          encoded.close()
+        }
+      } finally {
+        skiaImage.close()
       }
     }
   }

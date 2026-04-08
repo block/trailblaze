@@ -40,6 +40,8 @@ data class CliRunRequest(
   val setOfMark: Boolean = true,
   /** Show the browser window (for web trails). */
   val showBrowser: Boolean = false,
+  /** When true, uses a no-op logger so no session files are written to disk. */
+  val noLogging: Boolean = false,
 ) {
   /**
    * Validates that at least one execution mode is specified:

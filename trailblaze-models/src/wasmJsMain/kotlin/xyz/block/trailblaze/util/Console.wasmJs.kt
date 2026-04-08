@@ -30,4 +30,8 @@ actual object Console {
   actual fun enableQuietMode() {
     // No-op in browser — console.log is always the output.
   }
+
+  actual fun enableJsonMode() {
+    // No-op in browser — console.log is always the output.
+  }
 }

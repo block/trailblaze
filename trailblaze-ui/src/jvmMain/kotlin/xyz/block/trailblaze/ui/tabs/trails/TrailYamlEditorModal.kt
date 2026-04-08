@@ -50,6 +50,8 @@ import kotlinx.coroutines.delay
 import xyz.block.trailblaze.model.DeviceConnectionStatus
 import xyz.block.trailblaze.ui.composables.ConnectionStatusPanel
 import xyz.block.trailblaze.ui.composables.FullScreenModalOverlay
+import androidx.compose.foundation.text.selection.SelectionContainer
+import xyz.block.trailblaze.ui.composables.SelectableText
 import xyz.block.trailblaze.ui.composables.ProgressMessagesPanel
 import xyz.block.trailblaze.ui.desktoputil.DesktopUtil
 import xyz.block.trailblaze.ui.editors.yaml.YamlEditorMode
@@ -300,7 +302,7 @@ private fun TrailEditorHeader(
           )
         }
         saveError?.let { error ->
-          Text(
+          SelectableText(
             text = "✗ $error",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.error,
@@ -311,37 +313,39 @@ private fun TrailEditorHeader(
       
       Spacer(modifier = Modifier.height(4.dp))
       
-      Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-      ) {
-        Text(
-          text = variant.displayLabel,
-          style = MaterialTheme.typography.titleMedium,
-          color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Text(
-          text = "•",
-          color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Text(
-          text = relativePath ?: variant.fileName,
-          style = MaterialTheme.typography.bodyMedium.copy(
-            fontFamily = FontFamily.Monospace
-          ),
-          color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        
-        IconButton(
-          onClick = onOpenFolder,
-          modifier = Modifier.size(24.dp)
+      SelectionContainer {
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-          Icon(
-            imageVector = Icons.Filled.FolderOpen,
-            contentDescription = "Open folder",
-            modifier = Modifier.size(16.dp),
-            tint = MaterialTheme.colorScheme.onSurfaceVariant
+          Text(
+            text = variant.displayLabel,
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
           )
+          Text(
+            text = "•",
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+          )
+          Text(
+            text = relativePath ?: variant.fileName,
+            style = MaterialTheme.typography.bodyMedium.copy(
+              fontFamily = FontFamily.Monospace
+            ),
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+          )
+
+          IconButton(
+            onClick = onOpenFolder,
+            modifier = Modifier.size(24.dp)
+          ) {
+            Icon(
+              imageVector = Icons.Filled.FolderOpen,
+              contentDescription = "Open folder",
+              modifier = Modifier.size(16.dp),
+              tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+          }
         }
       }
     }

@@ -28,7 +28,7 @@ import xyz.block.trailblaze.util.Console
  *
  * Android devices reach this server via adb port forwarding, so all legitimate
  * requests originate from localhost. Requests from non-loopback addresses are
- * rejected to prevent SSRF when the server is exposed externally (e.g., via Blox proxy).
+ * rejected to prevent SSRF when the server is exposed externally.
  */
 object ReverseProxyEndpoint {
 

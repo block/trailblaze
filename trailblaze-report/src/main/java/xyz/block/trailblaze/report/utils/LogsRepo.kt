@@ -27,10 +27,16 @@ class LogsRepo(
   val logsDir: File,
   /**
    * Whether we should monitor the filesystem for changes, or just do a single read.
-   * 
+   *
    * Single read is good for analyzing files on disk that won't change.
    */
   private val watchFileSystem: Boolean = true,
+  /**
+   * When true, all write operations are no-ops. Reads and reactive flows still work normally,
+   * so existing sessions (e.g. fixture sessions) remain visible. Use this with [--no-logging]
+   * to prevent test runs from polluting the session list.
+   */
+  val readOnly: Boolean = false,
 ) : TrailblazeLogsDataProvider {
 
   // Create a dedicated coroutine scope for background file operations
@@ -268,14 +274,13 @@ class LogsRepo(
 
   /**
    * Returns the directory for the given session, creating it if it does not exist.
+   * When [readOnly] is true the directory is returned but NOT created.
    */
   fun getSessionDir(session: SessionId): File {
-    if (!logsDir.exists()) {
-      logsDir.mkdirs()
-    }
     val sessionDir = File(logsDir, session.value)
-    if (!sessionDir.exists()) {
-      sessionDir.mkdirs()
+    if (!readOnly) {
+      if (!logsDir.exists()) logsDir.mkdirs()
+      if (!sessionDir.exists()) sessionDir.mkdirs()
     }
     return sessionDir
   }
@@ -368,7 +373,6 @@ class LogsRepo(
     }
     
     if (sessionListWatcher == null) {
-      Console.log("[LogsRepo] Starting session list watcher")
       val watcher = FileWatchService(
         dirToWatch = logsDir,
         debounceDelayMs = 100L, // Faster for session list updates (especially status changes)
@@ -609,6 +613,7 @@ class LogsRepo(
    * @return the file where the log was written
    */
   fun saveLogToDisk(logEvent: TrailblazeLog): File {
+    if (readOnly) return File(logsDir, "noop")
     val logCount = getNextLogCountForSession(logEvent.session)
     // Only add timestamp if we restarted mid-session (to avoid filename collisions)
     val filename = if (logEvent.session in sessionsNeedingTimestamp) {
@@ -631,6 +636,7 @@ class LogsRepo(
   }
 
   fun saveScreenshotToDisk(screenshot: TrailblazeScreenStateLog) {
+    if (readOnly) return
     screenshot.screenState.screenshotBytes?.let { bytes ->
       val sessionDir = getSessionDir(screenshot.sessionId)
       val screenshotFile = File(sessionDir, screenshot.fileName)
@@ -643,8 +649,8 @@ class LogsRepo(
    * Saves raw screenshot bytes to disk and returns the filename.
    *
    * @param sessionId The session ID to save the screenshot under
-   * @param bytes The screenshot bytes (PNG or JPEG)
-   * @param fileExtension The file extension (default "png")
+   * @param bytes The screenshot bytes (PNG, JPEG, or WebP)
+   * @param fileExtension The file extension (e.g. "png", "jpg", "webp")
    * @return The filename of the saved screenshot
    */
   fun saveScreenshotBytes(
@@ -652,6 +658,7 @@ class LogsRepo(
     bytes: ByteArray,
     fileExtension: String = "png",
   ): String {
+    if (readOnly) return "noop"
     val sessionDir = getSessionDir(sessionId)
     val timestamp = Clock.System.now().toEpochMilliseconds()
     val filename = "${sessionId.value}_${timestamp}.$fileExtension"
@@ -662,13 +669,13 @@ class LogsRepo(
   }
 
   /**
-   * Returns a list of image files (PNG and JPEG) for the given session.
+   * Returns a list of image files for the given session.
    */
   fun getImagesForSession(sessionId: SessionId): List<File> {
     val sessionDir = File(logsDir, sessionId.value)
     if (!sessionDir.exists()) return emptyList()
     return sessionDir.listFiles()?.filter {
-      it.extension == "png" || it.extension == "jpg" || it.extension == "jpeg"
+      it.extension in setOf("png", "jpg", "jpeg", "webp")
     }?.sortedBy { it.name }
       ?: emptyList()
   }

@@ -8,6 +8,7 @@ import maestro.orchestra.Condition
 import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.api.TrailblazeElementSelector
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
+import xyz.block.trailblaze.model.NodeSelectorMode
 import xyz.block.trailblaze.toolcalls.MapsToMaestroCommands
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
@@ -49,18 +50,35 @@ data class AssertVisibleBySelectorTrailblazeTool(
   override suspend fun execute(
     toolExecutionContext: TrailblazeToolExecutionContext,
   ): TrailblazeToolResult {
-    // If we have a nodeSelector, try the native driver path first (bypasses Maestro commands)
-    if (nodeSelector != null) {
-      val agent = toolExecutionContext.maestroTrailblazeAgent
-      if (agent != null) {
-        val result = agent.executeNodeSelectorAssertVisible(
-          nodeSelector = nodeSelector,
-          traceId = toolExecutionContext.traceId,
-        )
-        if (result != null) return result
+    val mode = toolExecutionContext.nodeSelectorMode
+    val agent = toolExecutionContext.maestroTrailblazeAgent
+
+    when (mode) {
+      NodeSelectorMode.FORCE_LEGACY -> {
+        return super.execute(toolExecutionContext)
+      }
+      NodeSelectorMode.FORCE_NODE_SELECTOR -> {
+        if (agent != null) {
+          val effectiveNodeSelector = nodeSelector
+            ?: selector.toTrailblazeNodeSelector(toolExecutionContext.trailblazeDeviceInfo.platform)
+          val result = agent.executeNodeSelectorAssertVisible(
+            nodeSelector = effectiveNodeSelector,
+            traceId = toolExecutionContext.traceId,
+          )
+          if (result != null) return result
+        }
+        return super.execute(toolExecutionContext)
+      }
+      NodeSelectorMode.PREFER_NODE_SELECTOR -> {
+        if (nodeSelector != null && agent != null) {
+          val result = agent.executeNodeSelectorAssertVisible(
+            nodeSelector = nodeSelector,
+            traceId = toolExecutionContext.traceId,
+          )
+          if (result != null) return result
+        }
+        return super.execute(toolExecutionContext)
       }
     }
-    // Fall back to Maestro command path
-    return super.execute(toolExecutionContext)
   }
 }

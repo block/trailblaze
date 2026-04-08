@@ -98,23 +98,48 @@ class SnapshotViewerGenerator {
   private fun StringBuilder.appendSnapshotCard(snapshot: SnapshotMetadata) {
     val base64Image = encodeImageToBase64(snapshot.file)
     val imageId = "img-${snapshot.epochMillis}"
-    
-    appendLine("          <div class=\"snapshot-card\">")
+    val hasDiff = snapshot.diffFile != null
+    val escapedName = snapshot.displayName().escapeHtml()
+
+    appendLine("          <div class=\"snapshot-card${if (hasDiff) " snapshot-card--failed" else ""}\">")
     appendLine("            <div class=\"snapshot-header\">")
-    appendLine("              <h3>${snapshot.displayName()}</h3>")
+    appendLine("              <h3>$escapedName</h3>")
     appendLine("              <span class=\"timestamp\">${snapshot.formattedTimestamp()}</span>")
+    if (hasDiff) appendLine("              <span class=\"golden-badge golden-badge--fail\">Golden mismatch</span>")
     appendLine("            </div>")
     appendLine("            <div class=\"snapshot-image-container\">")
     appendLine("              <img ")
     appendLine("                id=\"$imageId\"")
     appendLine("                src=\"data:image/${snapshot.file.extension};base64,$base64Image\" ")
-    appendLine("                alt=\"${snapshot.displayName()}\"")
+    appendLine("                alt=\"$escapedName\"")
     appendLine("                onclick=\"openModal('$imageId')\"")
     appendLine("                loading=\"lazy\"")
     appendLine("              />")
     appendLine("            </div>")
+    if (hasDiff) {
+      val base64Diff = encodeImageToBase64(snapshot.diffFile!!)
+      val diffId = "diff-${snapshot.epochMillis}"
+      appendLine("            <div class=\"diff-image-container\">")
+      appendLine("              <p class=\"diff-label\">Golden diff (Golden | Diff | Actual)</p>")
+      appendLine("              <img ")
+      appendLine("                id=\"$diffId\"")
+      appendLine("                src=\"data:image/png;base64,$base64Diff\" ")
+      appendLine("                alt=\"Golden diff for $escapedName\"")
+      appendLine("                onclick=\"openDiffModal('$diffId')\"")
+      appendLine("                title=\"Click to view full-size\"")
+      appendLine("                loading=\"lazy\"")
+      appendLine("              />")
+      appendLine("            </div>")
+    }
     appendLine("          </div>")
   }
+
+  private fun String.escapeHtml(): String = this
+    .replace("&", "&amp;")
+    .replace("<", "&lt;")
+    .replace(">", "&gt;")
+    .replace("\"", "&quot;")
+    .replace("'", "&#x27;")
   
   private fun encodeImageToBase64(file: File): String {
     return Base64.getEncoder().encodeToString(file.readBytes())
@@ -240,6 +265,43 @@ class SnapshotViewerGenerator {
     .snapshot-card:hover {
       transform: translateY(-2px);
       box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+    }
+
+    .snapshot-card--failed {
+      border-color: #e74c3c;
+    }
+
+    .golden-badge {
+      display: inline-block;
+      font-size: 0.75em;
+      padding: 2px 8px;
+      border-radius: 10px;
+      margin-top: 4px;
+    }
+
+    .golden-badge--fail {
+      background: #e74c3c;
+      color: white;
+    }
+
+    .diff-image-container {
+      border-top: 2px solid #e74c3c;
+      padding: 10px;
+      background: #fdf2f2;
+    }
+
+    .diff-label {
+      font-size: 0.8em;
+      color: #c0392b;
+      font-weight: bold;
+      margin-bottom: 6px;
+    }
+
+    .diff-image-container img {
+      width: 100%;
+      height: auto;
+      display: block;
+      cursor: pointer;
     }
     
     .snapshot-header {
@@ -371,6 +433,38 @@ class SnapshotViewerGenerator {
       color: #bbb;
       cursor: pointer;
     }
+
+    /* Pan/zoom modal for wide diff images */
+    .diff-modal {
+      display: none;
+      position: fixed;
+      z-index: 1000;
+      left: 0;
+      top: 0;
+      width: 100%;
+      height: 100%;
+      background-color: rgba(0,0,0,0.92);
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+
+    .diff-modal img {
+      position: absolute;
+      max-width: none;
+      user-select: none;
+    }
+
+    .diff-modal-hint {
+      position: absolute;
+      bottom: 16px;
+      left: 50%;
+      transform: translateX(-50%);
+      color: rgba(255,255,255,0.5);
+      font-size: 0.8em;
+      pointer-events: none;
+      z-index: 10;
+    }
     
     @media (max-width: 768px) {
       .container {
@@ -408,6 +502,88 @@ class SnapshotViewerGenerator {
       icon.classList.toggle('collapsed');
     }
     
+    // Pan/zoom state for diff modal
+    let diffScale = 1, diffOriginX = 0, diffOriginY = 0;
+    let diffDragging = false, diffDragStartX = 0, diffDragStartY = 0, diffDragOriginX = 0, diffDragOriginY = 0;
+
+    function applyDiffTransform() {
+      const img = document.getElementById('diffModalImage');
+      if (img) img.style.transform = 'translate(' + diffOriginX + 'px, ' + diffOriginY + 'px) scale(' + diffScale + ')';
+    }
+
+    function openDiffModal(imageId) {
+      const modal = document.getElementById('diffModal') || createDiffModal();
+      const modalImg = document.getElementById('diffModalImage');
+      const img = document.getElementById(imageId);
+      modalImg.src = img.src;
+      // Reset to fit-to-screen on open
+      modalImg.onload = function() {
+        const scaleX = (window.innerWidth * 0.95) / modalImg.naturalWidth;
+        const scaleY = (window.innerHeight * 0.9) / modalImg.naturalHeight;
+        diffScale = Math.min(scaleX, scaleY, 1);
+        diffOriginX = 0;
+        diffOriginY = 0;
+        applyDiffTransform();
+      };
+      modal.style.display = 'flex';
+    }
+
+    function createDiffModal() {
+      const modal = document.createElement('div');
+      modal.id = 'diffModal';
+      modal.className = 'diff-modal';
+      modal.onclick = function(e) { if (e.target === modal) modal.style.display = 'none'; };
+
+      const close = document.createElement('span');
+      close.className = 'modal-close';
+      close.innerHTML = '&times;';
+      close.onclick = function(e) { e.stopPropagation(); modal.style.display = 'none'; };
+
+      const hint = document.createElement('div');
+      hint.className = 'diff-modal-hint';
+      hint.textContent = 'Scroll to zoom · Drag to pan · Click outside to close';
+
+      const img = document.createElement('img');
+      img.id = 'diffModalImage';
+      img.style.transformOrigin = 'center center';
+      img.style.cursor = 'grab';
+      img.onclick = function(e) { e.stopPropagation(); };
+
+      // Zoom with scroll wheel
+      modal.addEventListener('wheel', function(e) {
+        e.preventDefault();
+        const factor = e.deltaY < 0 ? 1.1 : 0.9;
+        diffScale = Math.max(0.1, Math.min(diffScale * factor, 10));
+        applyDiffTransform();
+      }, { passive: false });
+
+      // Drag to pan
+      img.addEventListener('mousedown', function(e) {
+        diffDragging = true;
+        diffDragStartX = e.clientX;
+        diffDragStartY = e.clientY;
+        diffDragOriginX = diffOriginX;
+        diffDragOriginY = diffOriginY;
+        img.style.cursor = 'grabbing';
+        e.preventDefault();
+      });
+      document.addEventListener('mousemove', function(e) {
+        if (!diffDragging) return;
+        diffOriginX = diffDragOriginX + (e.clientX - diffDragStartX);
+        diffOriginY = diffDragOriginY + (e.clientY - diffDragStartY);
+        applyDiffTransform();
+      });
+      document.addEventListener('mouseup', function() {
+        if (diffDragging) { diffDragging = false; img.style.cursor = 'grab'; }
+      });
+
+      modal.appendChild(close);
+      modal.appendChild(hint);
+      modal.appendChild(img);
+      document.body.appendChild(modal);
+      return modal;
+    }
+
     function openModal(imageId) {
       const modal = document.getElementById('imageModal') || createModal();
       const modalImg = document.getElementById('modalImage');
@@ -438,11 +614,13 @@ class SnapshotViewerGenerator {
       return modal;
     }
     
-    // Close modal with Escape key
+    // Close modals with Escape key
     document.addEventListener('keydown', function(event) {
       if (event.key === 'Escape') {
         const modal = document.getElementById('imageModal');
         if (modal) modal.style.display = 'none';
+        const diffModal = document.getElementById('diffModal');
+        if (diffModal) diffModal.style.display = 'none';
       }
     });
   """

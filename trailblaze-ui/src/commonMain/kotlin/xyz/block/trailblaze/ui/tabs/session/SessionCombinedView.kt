@@ -67,6 +67,7 @@ import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.model.isInProgress
 import xyz.block.trailblaze.ui.composables.ScreenshotAnnotation
 import xyz.block.trailblaze.ui.composables.ScreenshotImage
+import xyz.block.trailblaze.ui.composables.SelectableText
 import xyz.block.trailblaze.ui.composables.createVideoFrameCache
 import xyz.block.trailblaze.ui.composables.extractVideoFrame
 import xyz.block.trailblaze.ui.images.ImageLoader
@@ -146,7 +147,10 @@ internal fun SessionCombinedView(
     timelineState.hasObjectives = objectives.isNotEmpty()
     timelineState.isInProgress = overallStatus?.isInProgress == true
     if (timelineState.scrubTimestampMs == null) {
-      timelineState.scrubTimestampMs = effectiveStartMs
+      // Completed sessions start at the end so the user sees the final step;
+      // live sessions start at the beginning and auto-follow takes over.
+      val isLiveSession = overallStatus?.isInProgress == true
+      timelineState.scrubTimestampMs = if (isLiveSession) effectiveStartMs else effectiveEndMs
     }
   }
 
@@ -270,6 +274,16 @@ internal fun SessionCombinedView(
     // Wait for expand/collapse animation to settle
     delay(TimelineConstants.ANIMATION_SETTLE_DELAY_MS)
     listScrollState.animateScrollTo(listScrollState.maxValue)
+  }
+
+  // Completed sessions: scroll to the bottom once so the user sees the final step
+  var didInitialScroll by remember { mutableStateOf(false) }
+  LaunchedEffect(isLive, logs.size) {
+    if (!isLive && logs.isNotEmpty() && !didInitialScroll && !userHasInteracted) {
+      delay(TimelineConstants.ANIMATION_SETTLE_DELAY_MS)
+      listScrollState.scrollTo(listScrollState.maxValue)
+      didInitialScroll = true
+    }
   }
 
   Row(
@@ -408,8 +422,13 @@ internal fun SessionCombinedView(
       }
       // Overall summary row when session is complete
       if (overallStatus?.isInProgress != true && objectives.isNotEmpty()) {
+        // Use objectives from patched progressItems so in-progress objectives that were
+        // terminated by session end are correctly counted as failed
+        val patchedObjectives = progressItems
+          .filterIsInstance<ProgressItem.ObjectiveItem>()
+          .map { it.objective }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-        CombinedCompletedSummary(objectives = objectives)
+        CombinedCompletedSummary(objectives = patchedObjectives)
       }
       // Session-level failure banner
       if (overallStatus != null) {
@@ -657,7 +676,9 @@ internal fun buildChildEvents(
         val usage = log.llmRequestUsageAndCost
         val detailParts = mutableListOf(log.trailblazeLlmModel.modelId)
         if (usage != null) {
-          detailParts.add("${usage.inputTokens}in/${usage.outputTokens}out")
+          val inTok = FormattingUtils.formatCommaNumber(usage.inputTokens)
+          val outTok = FormattingUtils.formatCommaNumber(usage.outputTokens)
+          detailParts.add("${inTok}in / ${outTok}out")
         }
         val toolCount = log.toolOptions.size
         if (toolCount > 0) detailParts.add("$toolCount tool${if (toolCount != 1) "s" else ""}")
@@ -670,6 +691,7 @@ internal fun buildChildEvents(
             title = "LLM Request",
             detail = detailParts.joinToString(" \u2022 "),
             depth = 0,
+            toolYaml = formatLlmActionsYaml(log.actions),
             sourceLog = log,
           ),
         )
@@ -900,7 +922,7 @@ private fun ColumnScope.ScreenshotKeyframePanel(
   }
 
   Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-    Text(
+    SelectableText(
       text = "${screenshotLogs.size} keyframe${if (screenshotLogs.size != 1) "s" else ""}",
       style = MaterialTheme.typography.labelSmall,
       color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1035,6 +1057,35 @@ private fun formatToolYaml(toolName: String, log: TrailblazeLog.TrailblazeToolLo
     }
   } catch (e: Exception) {
     "- $toolName: # (serialization error)"
+  }
+}
+
+/** Format LLM response actions as YAML, matching the tool YAML style. */
+private fun formatLlmActionsYaml(
+  actions: List<TrailblazeLog.TrailblazeLlmRequestLog.Action>,
+): String? {
+  if (actions.isEmpty()) return null
+  return try {
+    buildString {
+      actions.forEachIndexed { index, action ->
+        if (index > 0) append('\n')
+        val argsYaml = TrailblazeYaml.jsonToYaml(action.args).trimEnd()
+        if (argsYaml.isBlank() || argsYaml == "{}") {
+          append("- ${action.name}:")
+        } else {
+          append("- ${action.name}:\n")
+          argsYaml.lines().forEach { line ->
+            if (line.isNotBlank()) {
+              append("    ")
+              append(line)
+              append('\n')
+            }
+          }
+        }
+      }
+    }.trimEnd()
+  } catch (_: Exception) {
+    actions.joinToString("\n") { "- ${it.name}: # (serialization error)" }
   }
 }
 

@@ -60,4 +60,8 @@ actual object Console {
   actual fun enableQuietMode() {
     // No-op on Android — Logcat is always the output.
   }
+
+  actual fun enableJsonMode() {
+    // No-op on Android — Logcat is always the output.
+  }
 }

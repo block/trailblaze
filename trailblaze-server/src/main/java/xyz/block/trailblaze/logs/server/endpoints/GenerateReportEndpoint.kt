@@ -14,7 +14,7 @@ import java.io.File
 
 /**
  * Endpoint that generates a WASM report on-demand for all current sessions
- * and serves it as HTML. Useful for viewing results remotely (e.g., via Blox proxy).
+ * and serves it as HTML. Useful for viewing results remotely.
  *
  * Uses relative image URLs so screenshots load from the server's /static endpoint
  * rather than being embedded in the HTML (keeps generation fast and report size small).

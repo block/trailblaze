@@ -24,9 +24,7 @@ the specific view to long press on.
 )
 @Deprecated("Use [TapOnElementByNodeIdTrailblazeTool] or [TapOnByElementSelector].")
 data class LongPressOnElementWithTextTrailblazeTool(
-  @LLMDescription(
-    description = REQUIRED_TEXT_DESCRIPTION,
-  )
+  @LLMDescription(REQUIRED_TEXT_DESCRIPTION)
   val text: String,
   val id: String? = null,
   val index: String? = null,

@@ -94,8 +94,12 @@ class DesktopYamlRunner(
       // Track the execution result to report in finally block
       var executionResult: TrailExecutionResult = TrailExecutionResult.Success
 
+      // Try filtered first (correct driver selection for Android which has 3 driver variants
+      // sharing the same device ID). Fall back to unfiltered for Compose/Playwright which are
+      // only visible when testingEnvironment=WEB but should always be reachable via CLI.
       val connectedTrailblazeDevice = trailblazeDeviceManager.getDeviceState(trailblazeDeviceId)?.device
-        ?: trailblazeDeviceManager.loadDevicesSuspend().firstOrNull { it.trailblazeDeviceId == trailblazeDeviceId }
+        ?: trailblazeDeviceManager.loadDevicesSuspend(applyDriverFilter = true).firstOrNull { it.trailblazeDeviceId == trailblazeDeviceId }
+        ?: trailblazeDeviceManager.loadDevicesSuspend(applyDriverFilter = false).firstOrNull { it.trailblazeDeviceId == trailblazeDeviceId }
 
       if (connectedTrailblazeDevice == null) {
         onProgressMessage("Device with ID $trailblazeDeviceId not found")
@@ -119,13 +123,16 @@ class DesktopYamlRunner(
         MobileDeviceUtils.ensureAppsAreForceStopped(possibleAppIds, trailblazeDeviceId)
       }
 
-      // Prefer the driver type from the request (set by CLI --driver flag) over
-      // the device's driver type, because TrailblazeDeviceId doesn't include the
-      // driver type — all three Android variants share the same device ID.
-      val trailblazeDriverType = runYamlRequest.driverType ?: connectedTrailblazeDevice.trailblazeDriverType
-
       // Start capture streams if enabled in desktop settings
       val appConfig = trailblazeDeviceManager.settingsRepo.serverStateFlow.value.appConfig
+
+      // Resolve driver type: request (CLI --driver / trail config) > app setting > connected device default.
+      val appSettingDriverType = appConfig.selectedTrailblazeDriverTypes[
+        trailblazeDeviceId.trailblazeDevicePlatform
+      ]
+      val trailblazeDriverType = runYamlRequest.driverType
+        ?: appSettingDriverType
+        ?: connectedTrailblazeDevice.trailblazeDriverType
       val captureOptions = CaptureOptions(
         captureVideo = true,
         captureLogcat = appConfig.captureLogcat,
@@ -228,6 +235,7 @@ class DesktopYamlRunner(
                 },
                 composeRpcPort = desktopAppRunYamlParams.composeRpcPort,
                 referrer = desktopAppRunYamlParams.runYamlRequest.referrer,
+                noLogging = desktopAppRunYamlParams.noLogging,
               ),
               deviceManager = trailblazeDeviceManager,
             )

@@ -207,13 +207,24 @@ class PlaywrightBrowserInstaller {
       return false
     }
 
-    return cachePath.listFiles()?.any { file ->
+    val dirs = cachePath.listFiles() ?: return false
+    // Check for INSTALLATION_COMPLETE marker — Playwright writes this after a successful download.
+    // Checking only directory names is insufficient (partial downloads leave empty directories).
+    val hasChromium = dirs.any { file ->
       file.isDirectory &&
-        (file.name.startsWith("chromium-") || file.name.startsWith("chromium_headless_shell-"))
-    } ?: false
+        file.name.startsWith("chromium-") &&
+        File(file, INSTALLATION_COMPLETE_MARKER).exists()
+    }
+    val hasHeadlessShell = dirs.any { file ->
+      file.isDirectory &&
+        file.name.startsWith("chromium_headless_shell-") &&
+        File(file, INSTALLATION_COMPLETE_MARKER).exists()
+    }
+    return hasChromium && hasHeadlessShell
   }
 
   companion object {
     private val PROGRESS_REGEX = Regex("""(\d{1,3})\s*%""")
+    private const val INSTALLATION_COMPLETE_MARKER = "INSTALLATION_COMPLETE"
   }
 }

@@ -85,4 +85,15 @@ expect object Console {
    * No-op on Android and wasmJs.
    */
   fun enableQuietMode()
+
+  /**
+   * Redirect [info] output to stderr, keeping stdout clean for JSON.
+   *
+   * Call this from CLI commands that use `--json` so that progress messages
+   * from [info] don't pollute the machine-readable JSON output on stdout.
+   * After this call, only explicit [println] writes to stdout.
+   *
+   * No-op on Android and wasmJs.
+   */
+  fun enableJsonMode()
 }

@@ -56,8 +56,12 @@ interface ScreenState {
 
   val deviceHeight: Int
 
-  val viewHierarchyOriginal: ViewHierarchyTreeNode
-
+  /**
+   * The complete, unfiltered view hierarchy tree.
+   *
+   * Always contains the full tree — filtering is a presentation concern handled by consumers
+   * at the point of use (e.g., LLM prompt building, set-of-mark annotations).
+   */
   val viewHierarchy: ViewHierarchyTreeNode
 
   /**

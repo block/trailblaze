@@ -24,7 +24,6 @@ import xyz.block.trailblaze.toolcalls.commands.OpenUrlTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.PressBackTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.PressKeyTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.PasteClipboardTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.RequestViewHierarchyDetailsTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.ScrollUntilTextIsVisibleTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.SwipeTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.SwipeWithRelativeCoordinatesTool
@@ -78,7 +77,6 @@ abstract class TrailblazeToolSet(
         PasteClipboardTrailblazeTool::class,
         PressBackTrailblazeTool::class,
         PressKeyTrailblazeTool::class,
-        RequestViewHierarchyDetailsTrailblazeTool::class,
         TakeSnapshotTool::class,
         ScrollUntilTextIsVisibleTrailblazeTool::class,
         SetClipboardTrailblazeTool::class,

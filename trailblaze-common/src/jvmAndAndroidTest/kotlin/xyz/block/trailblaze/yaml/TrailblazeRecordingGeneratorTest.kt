@@ -188,7 +188,7 @@ class TrailblazeRecordingGeneratorTest {
     val step = DirectionStep(step = "Tap login")
     val logs = listOf(
       objectiveStart(step),
-      toolLog(InputTextTrailblazeTool(text = "user"), "requestViewHierarchyDetails", isRecordable = false),
+      toolLog(InputTextTrailblazeTool(text = "user"), "takeSnapshot", isRecordable = false),
       toolLog(
         TapOnByElementSelector(
           reason = "Tap the login button",
@@ -201,7 +201,7 @@ class TrailblazeRecordingGeneratorTest {
 
     val yaml = logs.generateRecordedYaml(trailblazeYaml)
 
-    // Only tapOnElementBySelector should appear, not requestViewHierarchyDetails
+    // Only tapOnElementBySelector should appear, not takeSnapshot (non-recordable)
     assertThat(yaml).contains("tapOnElementBySelector")
     val decoded = trailblazeYaml.decodeTrail(yaml)
     assertThat(decoded.size).isEqualTo(1)
@@ -696,7 +696,7 @@ class TrailblazeRecordingGeneratorTest {
   @Test
   fun onlyNonRecordableLogsProducesEmptyOutput() {
     val logs = listOf(
-      toolLog(InputTextTrailblazeTool(text = "hello"), "requestViewHierarchyDetails", isRecordable = false),
+      toolLog(InputTextTrailblazeTool(text = "hello"), "takeSnapshot", isRecordable = false),
       toolLog(InputTextTrailblazeTool(text = "world"), "tapOnElementByNodeId", isRecordable = false),
     )
 
@@ -708,7 +708,7 @@ class TrailblazeRecordingGeneratorTest {
   fun nonRecordableToolsOutsideWindowAreExcluded() {
     val logs = listOf(
       toolLog(InputTextTrailblazeTool(text = "hello"), "inputText"),
-      toolLog(InputTextTrailblazeTool(text = "ignored"), "requestViewHierarchyDetails", isRecordable = false),
+      toolLog(InputTextTrailblazeTool(text = "ignored"), "takeSnapshot", isRecordable = false),
       toolLog(PressBackTrailblazeTool, "pressBack"),
     )
 
@@ -765,8 +765,8 @@ class TrailblazeRecordingGeneratorTest {
     )
     val logs = listOf(
       objectiveStart(step),
-      // LLM first requests view hierarchy (non-recordable)
-      toolLog(InputTextTrailblazeTool(text = ""), "requestViewHierarchyDetails", isRecordable = false),
+      // Non-recordable tool (should be excluded from recording)
+      toolLog(InputTextTrailblazeTool(text = ""), "takeSnapshot", isRecordable = false),
       // LLM calls tapOnElementByNodeId (delegating, non-recordable)
       delegatingToolLog(
         tool = selectorTool,

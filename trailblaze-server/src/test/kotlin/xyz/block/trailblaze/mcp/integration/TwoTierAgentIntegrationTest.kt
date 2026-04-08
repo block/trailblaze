@@ -414,7 +414,6 @@ class TwoTierAgentIntegrationTest {
           override val screenshotBytes: ByteArray? = byteArrayOf(1, 2, 3)
           override val deviceWidth: Int = 1080
           override val deviceHeight: Int = 1920
-          override val viewHierarchyOriginal: ViewHierarchyTreeNode = emptyVh
           override val viewHierarchy: ViewHierarchyTreeNode = emptyVh
           override val trailblazeDevicePlatform: TrailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID
           override val deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList()

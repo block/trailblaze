@@ -8,7 +8,7 @@ import java.io.OutputStream
 import java.io.PrintStream
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
-import xyz.block.trailblaze.util.Console
+
 
 /**
  * Tees System.out and System.err to a log file in `~/.trailblaze/desktop-logs/`.
@@ -55,8 +55,6 @@ object DesktopLogFileWriter {
 
     System.setOut(PrintStream(TeeOutputStream(System.out, fileOut), /* autoFlush = */ true))
     System.setErr(PrintStream(TeeOutputStream(System.err, fileOut), /* autoFlush = */ true))
-
-    Console.log("[DesktopLogFileWriter] Logging to ${logFile.absolutePath}")
   }
 
   private fun rotateIfNeeded(logFile: File) {

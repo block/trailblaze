@@ -142,12 +142,17 @@ class TrailblazeSessionManager(
     trailblazeDeviceId: TrailblazeDeviceId? = null,
     rawYaml: String? = null,
   ) {
+    // Fall back to session metadata when explicit params are blank (e.g. when the
+    // caller doesn't have test context but TrailblazeLoggingRule stored it on the session).
+    val resolvedTestMethod = testMethodName.ifBlank { session.metadata.testMethodName.orEmpty() }
+    val resolvedTestClass = testClassName.ifBlank { session.metadata.testClassName.orEmpty() }
+
     val sessionStartedStatus = SessionStatus.Started(
       trailConfig = trailConfig,
-      trailFilePath = trailFilePath,
+      trailFilePath = trailFilePath ?: session.metadata.trailFilePath,
       hasRecordedSteps = hasRecordedSteps,
-      testMethodName = testMethodName,
-      testClassName = testClassName,
+      testMethodName = resolvedTestMethod,
+      testClassName = resolvedTestClass,
       trailblazeDeviceInfo = trailblazeDeviceInfo,
       trailblazeDeviceId = trailblazeDeviceId,
       rawYaml = rawYaml,

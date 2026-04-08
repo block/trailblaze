@@ -48,6 +48,7 @@ import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRpcClient
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
 import xyz.block.trailblaze.model.AppVersionInfo
 import xyz.block.trailblaze.model.DesktopAppRunYamlParams
+import xyz.block.trailblaze.model.TrailExecutionResult
 import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
@@ -56,6 +57,7 @@ import xyz.block.trailblaze.ui.composables.DeviceClassifierIconProvider
 import xyz.block.trailblaze.ui.devices.DeviceManagerState
 import xyz.block.trailblaze.ui.devices.DeviceState
 import xyz.block.trailblaze.ui.models.AppIconProvider
+import xyz.block.trailblaze.ui.models.TrailblazeServerState
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.yaml.models.TrailblazeYamlBuilder
 import java.util.Base64
@@ -124,14 +126,19 @@ class TrailblazeDeviceManager(
 
   private val targetDeviceFilter: (List<TrailblazeConnectedDeviceSummary>) -> List<TrailblazeConnectedDeviceSummary> =
     { connectedDeviceSummaries ->
+      val isWebMode =
+        settingsRepo.serverStateFlow.value.appConfig.testingEnvironment ==
+          TrailblazeServerState.TestingEnvironment.WEB
       connectedDeviceSummaries.filter { connectedDeviceSummary ->
-        // Virtual devices (no hardware) — always available if they made it into the list.
-        connectedDeviceSummary.trailblazeDriverType == TrailblazeDriverType.PLAYWRIGHT_NATIVE ||
-          connectedDeviceSummary.trailblazeDriverType == TrailblazeDriverType.PLAYWRIGHT_ELECTRON ||
-          connectedDeviceSummary.trailblazeDriverType == TrailblazeDriverType.COMPOSE ||
-          connectedDeviceSummary.trailblazeDriverType == TrailblazeDriverType.REVYL_ANDROID ||
-          connectedDeviceSummary.trailblazeDriverType == TrailblazeDriverType.REVYL_IOS ||
-          settingsRepo.getEnabledDriverTypes().contains(connectedDeviceSummary.trailblazeDriverType)
+        when (connectedDeviceSummary.trailblazeDriverType) {
+          // Virtual devices (Playwright, Compose) — only shown when web mode is enabled.
+          TrailblazeDriverType.PLAYWRIGHT_NATIVE,
+          TrailblazeDriverType.PLAYWRIGHT_ELECTRON,
+          TrailblazeDriverType.COMPOSE -> isWebMode
+          TrailblazeDriverType.REVYL_ANDROID,
+          TrailblazeDriverType.REVYL_IOS -> true
+          else -> settingsRepo.getEnabledDriverTypes().contains(connectedDeviceSummary.trailblazeDriverType)
+        }
       }
     }
 
@@ -206,6 +213,7 @@ class TrailblazeDeviceManager(
     forceStopTargetApp: Boolean = false,
     referrer: TrailblazeReferrer,
     agentImplementation: AgentImplementation = AgentImplementation.DEFAULT,
+    onComplete: ((TrailExecutionResult) -> Unit)? = null,
   ) {
     val settingsState = settingsRepo.serverStateFlow.value
     val runYamlRequest = RunYamlRequest(
@@ -234,7 +242,8 @@ class TrailblazeDeviceManager(
       targetTestApp = this.getCurrentSelectedTargetApp(),
       onProgressMessage = {},
       onConnectionStatus = {},
-      additionalInstrumentationArgs = onDeviceInstrumentationArgsProvider()
+      additionalInstrumentationArgs = onDeviceInstrumentationArgsProvider(),
+      onComplete = onComplete,
     )
 
     runYamlLambda(params)
@@ -404,7 +413,6 @@ class TrailblazeDeviceManager(
       
       val request = GetScreenStateRequest(
         includeScreenshot = true,
-        filterViewHierarchy = false,
         setOfMarkEnabled = false,
       )
       
@@ -419,7 +427,6 @@ class TrailblazeDeviceManager(
             override val screenshotBytes: ByteArray? = screenshotBytes
             override val deviceWidth: Int = response.deviceWidth
             override val deviceHeight: Int = response.deviceHeight
-            override val viewHierarchyOriginal: ViewHierarchyTreeNode = response.viewHierarchy
             override val viewHierarchy: ViewHierarchyTreeNode = response.viewHierarchy
             override val trailblazeDevicePlatform: TrailblazeDevicePlatform = 
               trailblazeDeviceId.trailblazeDevicePlatform
@@ -448,7 +455,6 @@ class TrailblazeDeviceManager(
       HostMaestroDriverScreenState(
         maestroDriver = driver,
         setOfMarkEnabled = false,
-        filterViewHierarchy = false,
       )
     } catch (e: Exception) {
       Console.log("❌ Exception getting screen state via driver: ${e.message}")
@@ -631,10 +637,14 @@ class TrailblazeDeviceManager(
         }
       }
 
-      val filteredDevices = if (applyDriverFilter) targetDeviceFilter(allDevices) else allDevices
+      // Always filter for device state — all three Android driver variants share the same
+      // TrailblazeDeviceId key (instanceId + platform), so unfiltered results would let
+      // ANDROID_HOST (added last) overwrite the configured driver type.
+      val devicesForState = targetDeviceFilter(allDevices)
+      val devicesToReturn = if (applyDriverFilter) devicesForState else allDevices
 
       // Query installed app IDs for each device (with per-device timeout to avoid hanging)
-      val installedAppIdsByDevice: Map<TrailblazeDeviceId, Set<String>> = filteredDevices.associate { device ->
+      val installedAppIdsByDevice: Map<TrailblazeDeviceId, Set<String>> = devicesForState.associate { device ->
         val appIds = runWithTimeout(10, device.instanceId, "installed apps") {
           installedAppIdsProviderBlocking(device.trailblazeDeviceId)
         } ?: emptySet()
@@ -650,7 +660,7 @@ class TrailblazeDeviceManager(
       }.toSet()
 
       val appVersionInfoByDevice = mutableMapOf<DeviceAppKey, AppVersionInfo>()
-      filteredDevices.forEach { device ->
+      devicesForState.forEach { device ->
         val installedAppIds = installedAppIdsByDevice[device.trailblazeDeviceId] ?: emptySet()
         val appsToQuery = installedAppIds.intersect(relevantAppIds)
         appsToQuery.forEach { appId ->
@@ -666,7 +676,7 @@ class TrailblazeDeviceManager(
 
       withContext(Dispatchers.Default) {
         updateDeviceState { currState ->
-          val newDeviceStates: Map<TrailblazeDeviceId, DeviceState> = filteredDevices.associate { device ->
+          val newDeviceStates: Map<TrailblazeDeviceId, DeviceState> = devicesForState.associate { device ->
             device.trailblazeDeviceId to DeviceState(device = device)
           }
 
@@ -678,7 +688,7 @@ class TrailblazeDeviceManager(
         }
       }
 
-      return filteredDevices
+      return devicesToReturn
     } catch (e: Exception) {
       updateDeviceState { deviceState ->
         deviceState.copy(

@@ -3,6 +3,7 @@ package xyz.block.trailblaze.ui
 import org.yaml.snakeyaml.DumperOptions
 import org.yaml.snakeyaml.Yaml
 import xyz.block.trailblaze.util.DesktopOsType
+import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.ui.goose.GooseRecipe
 import xyz.block.trailblaze.ui.goose.createGooseRecipe
 import xyz.block.trailblaze.ui.goose.defaultOpenSourceActivities
@@ -270,11 +271,16 @@ object TrailblazeDesktopUtil {
   /**
    * Opens Goose with the Trailblaze recipe.
    * Ensures the Trailblaze extension is installed before opening.
+   * @param port The HTTP port the Trailblaze server is running on, used to construct the default
+   *   recipe. Ignored when a custom [recipe] is provided.
    * @param recipe The Goose recipe to launch with. Defaults to the base Trailblaze recipe with
-   *   [defaultOpenSourceActivities].
+   *   [defaultOpenSourceActivities] configured for [port].
    */
   @OptIn(ExperimentalEncodingApi::class)
-  fun openGoose(recipe: GooseRecipe = createGooseRecipe(defaultOpenSourceActivities)) {
+  fun openGoose(
+    port: Int = TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTP_PORT,
+    recipe: GooseRecipe = createGooseRecipe(defaultOpenSourceActivities, port),
+  ) {
     // Ensure the extension is installed before opening Goose
     ensureTrailblazeExtensionInstalledInGoose()
 

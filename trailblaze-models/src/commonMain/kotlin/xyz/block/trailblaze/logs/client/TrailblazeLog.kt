@@ -262,6 +262,8 @@ sealed interface TrailblazeLog {
 
     val viewHierarchy: ViewHierarchyTreeNode,
     val trailblazeNodeTree: TrailblazeNode? = null,
+    /** Human-readable compact text representation of the view hierarchy (same format used in LLM prompts). */
+    val viewHierarchyText: String? = null,
     override val deviceWidth: Int,
     override val deviceHeight: Int,
     override val session: SessionId,

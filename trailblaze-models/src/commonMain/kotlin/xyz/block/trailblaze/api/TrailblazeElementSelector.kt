@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.api
 
 import kotlinx.serialization.Serializable
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 
 /**
  * Element selector for UI automation, supporting property matching, spatial relationships, and hierarchy constraints.
@@ -125,6 +126,63 @@ data class TrailblazeElementSelector(
     }
 
     return descriptions.joinToString(", ")
+  }
+
+  /**
+   * Converts this legacy selector to a [TrailblazeNodeSelector] for the given [platform]'s
+   * Maestro driver. This is the inverse of [TrailblazeNodeSelector.toTrailblazeElementSelector].
+   *
+   * The conversion is lossy: properties without a driver-native equivalent (size, traits, css)
+   * are dropped, and `textRegex` maps to a single text field (the driver's primary text property).
+   *
+   * Spatial and hierarchy relationships are recursively converted.
+   */
+  fun toTrailblazeNodeSelector(platform: TrailblazeDevicePlatform): TrailblazeNodeSelector {
+    val convertedIndex = index?.toDoubleOrNull()?.toInt()
+    val driverMatch: DriverNodeMatch? = when (platform) {
+      TrailblazeDevicePlatform.IOS -> {
+        if (textRegex != null || idRegex != null || focused != null || selected != null) {
+          DriverNodeMatch.IosMaestro(
+            textRegex = textRegex,
+            resourceIdRegex = idRegex,
+            focused = focused,
+            selected = selected,
+          )
+        } else {
+          null
+        }
+      }
+      TrailblazeDevicePlatform.ANDROID -> {
+        if (textRegex != null || idRegex != null || enabled != null || focused != null ||
+          selected != null || checked != null
+        ) {
+          DriverNodeMatch.AndroidMaestro(
+            textRegex = textRegex,
+            resourceIdRegex = idRegex,
+            enabled = enabled,
+            focused = focused,
+            selected = selected,
+            checked = checked,
+          )
+        } else {
+          null
+        }
+      }
+      TrailblazeDevicePlatform.WEB -> null
+    }
+
+    return TrailblazeNodeSelector(
+      iosMaestro = (driverMatch as? DriverNodeMatch.IosMaestro),
+      androidMaestro = (driverMatch as? DriverNodeMatch.AndroidMaestro),
+      index = convertedIndex,
+      below = below?.toTrailblazeNodeSelector(platform),
+      above = above?.toTrailblazeNodeSelector(platform),
+      leftOf = leftOf?.toTrailblazeNodeSelector(platform),
+      rightOf = rightOf?.toTrailblazeNodeSelector(platform),
+      childOf = childOf?.toTrailblazeNodeSelector(platform),
+      containsChild = containsChild?.toTrailblazeNodeSelector(platform),
+      containsDescendants = containsDescendants?.map { it.toTrailblazeNodeSelector(platform) },
+    )
   }
 
   companion object {

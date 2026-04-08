@@ -123,6 +123,7 @@ dependencies {
   // We're not actually leveraging playwright now, so let's keep it out of the app
   implementation(libs.playwright)
 
+  implementation(libs.differ.jvm)
   implementation(project(":trailblaze-tracing"))
   testImplementation(libs.kotlin.test.junit4)
   testImplementation(libs.assertk)

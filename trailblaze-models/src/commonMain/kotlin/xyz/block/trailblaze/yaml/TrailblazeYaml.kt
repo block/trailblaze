@@ -8,6 +8,11 @@ import com.charleskorn.kaml.YamlNamingStrategy
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.modules.SerializersModule
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.yaml.serializers.TrailYamlItemSerializer
@@ -47,6 +52,92 @@ class TrailblazeYaml(
 
     fun toolToYaml(toolName: String, trailblazeTool: TrailblazeTool): String =
       Default.encodeToolToYaml(toolName, trailblazeTool)
+
+    /**
+     * Encode a [JsonElement] as YAML.
+     *
+     * [JsonElement.serializer] only works with the JSON format (it verifies the encoder is a
+     * [kotlinx.serialization.json.JsonEncoder]), so we convert manually instead of going
+     * through kaml.
+     */
+    fun jsonToYaml(jsonElement: JsonElement): String =
+      buildString { appendJsonElementAsYaml(jsonElement, indent = 0) }.trimEnd()
+
+    private fun StringBuilder.appendJsonElementAsYaml(
+      element: JsonElement,
+      indent: Int,
+      inlineFirst: Boolean = false,
+    ) {
+      when (element) {
+        is JsonNull -> append("null")
+        is JsonPrimitive -> appendYamlScalar(element)
+        is JsonObject -> {
+          if (element.isEmpty()) {
+            append("{}")
+            return
+          }
+          val pad = "  ".repeat(indent)
+          element.entries.forEachIndexed { i, (key, value) ->
+            if (i > 0 || !inlineFirst) append(pad)
+            append(key)
+            append(":")
+            if ((value is JsonObject || value is JsonArray) && !isEmptyContainer(value)) {
+              append("\n")
+              appendJsonElementAsYaml(value, indent + 1)
+            } else {
+              append(" ")
+              appendJsonElementAsYaml(value, indent + 1)
+            }
+            if (i < element.entries.size - 1) append("\n")
+          }
+        }
+        is JsonArray -> {
+          if (element.isEmpty()) {
+            append("[]")
+            return
+          }
+          val pad = "  ".repeat(indent)
+          element.forEachIndexed { i, item ->
+            append(pad)
+            append("- ")
+            appendJsonElementAsYaml(item, indent + 1, inlineFirst = true)
+            if (i < element.size - 1) append("\n")
+          }
+        }
+      }
+    }
+
+    private fun isEmptyContainer(element: JsonElement): Boolean = when (element) {
+      is JsonObject -> element.isEmpty()
+      is JsonArray -> element.isEmpty()
+      else -> false
+    }
+
+    private fun StringBuilder.appendYamlScalar(primitive: JsonPrimitive) {
+      if (!primitive.isString) {
+        append(primitive.content)
+        return
+      }
+      val s = primitive.content
+      if (needsYamlQuoting(s)) {
+        append('"')
+        append(s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n"))
+        append('"')
+      } else {
+        append(s)
+      }
+    }
+
+    private fun needsYamlQuoting(s: String): Boolean =
+      s.isEmpty() ||
+        s.contains(':') || s.contains('#') || s.contains('\n') ||
+        s.startsWith('{') || s.startsWith('[') || s.startsWith('"') ||
+        s.startsWith('\'') || s.startsWith('*') || s.startsWith('&') ||
+        s.startsWith('!') || s.startsWith('|') || s.startsWith('>') ||
+        s.startsWith('%') || s.startsWith('@') ||
+        s == "true" || s == "false" || s == "null" || s == "~" ||
+        s == "yes" || s == "no" || s == "on" || s == "off" ||
+        s.toLongOrNull() != null || s.toDoubleOrNull() != null
   }
 
   private val trailblazeToolYamlWrapperSerializer: TrailblazeToolYamlWrapperSerializer

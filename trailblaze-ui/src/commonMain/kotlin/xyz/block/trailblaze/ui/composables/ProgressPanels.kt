@@ -84,7 +84,7 @@ fun ConnectionStatusPanel(status: DeviceConnectionStatus) {
 
       Spacer(modifier = Modifier.height(8.dp))
 
-      Text(text = statusText, color = statusColor)
+      SelectableText(text = statusText, color = statusColor)
     }
   }
 }

@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.ui.tabs.session.group
 
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -32,6 +33,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeJson
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.ui.composables.CodeBlock
+import xyz.block.trailblaze.ui.composables.SelectableText
 import xyz.block.trailblaze.ui.tabs.session.DetailSection
 import xyz.block.trailblaze.ui.utils.FormattingUtils.formatDuration
 import xyz.block.trailblaze.yaml.toDetailedString
@@ -54,7 +56,7 @@ fun LlmRequestDetailsFlat(
     }
 
     DetailSection("Request Duration") {
-      Text(formatDuration(log.durationMs))
+      SelectableText(text = formatDuration(log.durationMs))
     }
 
     DetailSection("Available Tools") {
@@ -118,7 +120,7 @@ fun MaestroCommandDetailsFlat(log: TrailblazeLog.MaestroCommandLog) {
 fun AgentTaskStatusDetailsFlat(log: TrailblazeLog.TrailblazeAgentTaskStatusChangeLog) {
   Column(modifier = Modifier.padding(horizontal = 16.dp)) {
     DetailSection("Agent Task Status") {
-      Text("Status Type: ${log.agentTaskStatus::class.simpleName}")
+      SelectableText(text = "Status Type: ${log.agentTaskStatus::class.simpleName}")
       Spacer(modifier = Modifier.height(8.dp))
       Text("Prompt:", fontWeight = FontWeight.Bold)
       CodeBlock(log.agentTaskStatus.statusData.prompt)
@@ -167,7 +169,7 @@ fun SessionStatusDetailsFlat(log: TrailblazeLog.TrailblazeSessionStatusChangeLog
         modifier = Modifier.size(24.dp)
       )
       Spacer(modifier = Modifier.width(8.dp))
-      Text(
+      SelectableText(
         text = label,
         style = MaterialTheme.typography.titleMedium,
         fontWeight = FontWeight.Bold,
@@ -280,7 +282,7 @@ fun ObjectiveCompleteDetailsFlat(log: TrailblazeLog.ObjectiveCompleteLog) {
         modifier = Modifier.size(24.dp)
       )
       Spacer(modifier = Modifier.width(8.dp))
-      Text(
+      SelectableText(
         text = "Objective $statusText",
         style = MaterialTheme.typography.titleMedium,
         fontWeight = FontWeight.Bold,
@@ -378,7 +380,7 @@ fun DeviceSnapshotFlat(
       // Add helpful hint for UI Inspector
       if (showInspectUI != null) {
         Spacer(modifier = Modifier.height(4.dp))
-        xyz.block.trailblaze.ui.composables.SelectableText(
+        SelectableText(
           text = "💡 Click screenshot to inspect UI elements",
           style = MaterialTheme.typography.labelSmall,
           color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
@@ -415,7 +417,7 @@ fun McpAgentRunDetailsFlat(log: TrailblazeLog.McpAgentRunLog) {
         modifier = Modifier.size(24.dp)
       )
       Spacer(modifier = Modifier.width(8.dp))
-      Text(
+      SelectableText(
         text = if (log.successful) "Agent Run Succeeded" else "Agent Run Failed",
         style = MaterialTheme.typography.titleMedium,
         fontWeight = FontWeight.Bold,
@@ -487,7 +489,7 @@ fun McpAgentIterationDetailsFlat(log: TrailblazeLog.McpAgentIterationLog) {
 
     log.toolSucceeded?.let { succeeded ->
       DetailSection("Tool Result") {
-        Text(
+        SelectableText(
           text = if (succeeded) "✓ Success" else "✗ Failed",
           color = if (succeeded) Color(0xFF2E7D32) else Color(0xFFC62828)
         )
@@ -517,7 +519,7 @@ fun McpSamplingDetailsFlat(log: TrailblazeLog.McpSamplingLog) {
         modifier = Modifier.size(24.dp)
       )
       Spacer(modifier = Modifier.width(8.dp))
-      Text(
+      SelectableText(
         text = if (log.successful) "Sampling Succeeded" else "Sampling Failed",
         style = MaterialTheme.typography.titleMedium,
         fontWeight = FontWeight.Bold,
@@ -577,7 +579,7 @@ fun McpAgentToolDetailsFlat(log: TrailblazeLog.McpAgentToolLog) {
         modifier = Modifier.size(24.dp)
       )
       Spacer(modifier = Modifier.width(8.dp))
-      Text(
+      SelectableText(
         text = "Tool: ${log.toolName}",
         style = MaterialTheme.typography.titleMedium,
         fontWeight = FontWeight.Bold,
@@ -612,7 +614,7 @@ fun McpToolCallRequestDetailsFlat(log: TrailblazeLog.McpToolCallRequestLog) {
       verticalAlignment = Alignment.CenterVertically,
       modifier = Modifier.padding(bottom = 8.dp)
     ) {
-      Text(
+      SelectableText(
         text = "📥 MCP Tool Request: ${log.toolName}",
         style = MaterialTheme.typography.titleMedium,
         fontWeight = FontWeight.Bold,
@@ -651,7 +653,7 @@ fun McpToolCallResponseDetailsFlat(log: TrailblazeLog.McpToolCallResponseLog) {
         modifier = Modifier.size(24.dp)
       )
       Spacer(modifier = Modifier.width(8.dp))
-      Text(
+      SelectableText(
         text = "MCP Tool Response: ${log.toolName}",
         style = MaterialTheme.typography.titleMedium,
         fontWeight = FontWeight.Bold,
@@ -689,7 +691,7 @@ fun TrailblazeProgressDetailsFlat(log: TrailblazeLog.TrailblazeProgressLog) {
       style = MaterialTheme.typography.labelMedium,
       color = MaterialTheme.colorScheme.onSurfaceVariant
     )
-    Text(
+    SelectableText(
       text = log.eventType,
       style = MaterialTheme.typography.bodyMedium,
       modifier = Modifier.padding(bottom = 12.dp)
@@ -700,26 +702,30 @@ fun TrailblazeProgressDetailsFlat(log: TrailblazeLog.TrailblazeProgressLog) {
       style = MaterialTheme.typography.labelMedium,
       color = MaterialTheme.colorScheme.onSurfaceVariant
     )
-    Text(
-      text = log.description,
-      style = MaterialTheme.typography.bodyMedium,
-      modifier = Modifier.padding(bottom = 12.dp)
-    )
+    SelectionContainer {
+      Column {
+        Text(
+          text = log.description,
+          style = MaterialTheme.typography.bodyMedium,
+          modifier = Modifier.padding(bottom = 12.dp)
+        )
 
-    log.stepIndex?.let { step ->
-      Text(
-        text = "Step ${step + 1}${log.totalSteps?.let { " of $it" } ?: ""}",
-        style = MaterialTheme.typography.bodyMedium,
-        modifier = Modifier.padding(bottom = 8.dp)
-      )
-    }
+        log.stepIndex?.let { step ->
+          Text(
+            text = "Step ${step + 1}${log.totalSteps?.let { " of $it" } ?: ""}",
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.padding(bottom = 8.dp)
+          )
+        }
 
-    log.progressPercent?.let { percent ->
-      Text(
-        text = "Progress: $percent%",
-        style = MaterialTheme.typography.bodyMedium,
-        modifier = Modifier.padding(bottom = 8.dp)
-      )
+        log.progressPercent?.let { percent ->
+          Text(
+            text = "Progress: $percent%",
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.padding(bottom = 8.dp)
+          )
+        }
+      }
     }
 
     log.eventData?.takeIf { it.isNotEmpty() }?.let { data ->

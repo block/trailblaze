@@ -1,6 +1,9 @@
 package xyz.block.trailblaze.cli
 
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import picocli.CommandLine
 import picocli.CommandLine.Command
 import picocli.CommandLine.IVersionProvider
@@ -57,18 +60,19 @@ import kotlin.time.Duration.Companion.seconds
  * specific [TrailblazeDesktopApp] implementation.
  * 
  * Usage:
- *   trailblaze                     - Launch GUI (default, ./trailblaze only)
- *   trailblaze start               - Launch GUI (explicit subcommand, works via sq)
- *   trailblaze start --headless    - Start headless MCP server
- *   trailblaze --headless          - Start headless MCP server (legacy, on root command)
+ *   trailblaze                     - Launch desktop GUI
+ *   trailblaze app --headless      - Start headless daemon
+ *   trailblaze app                 - Launch desktop GUI (same as bare `trailblaze`)
+ *   trailblaze app --stop          - Stop the daemon
+ *   trailblaze app --status        - Check daemon status
+ *   trailblaze blaze "goal"        - Take a single UI action on a connected device
+ *   trailblaze ask "question"      - Ask about what's visible on screen
  *   trailblaze run <file>          - Run a .trail.yaml file
+ *   trailblaze session end         - End the CLI session
  *   trailblaze mcp                 - Start MCP server (STDIO transport + tray icon)
- *   trailblaze mcp start           - Start MCP server (works via sq)
- *   trailblaze mcp --http          - Start MCP server (Streamable HTTP)
  *   trailblaze report              - Generate HTML report for all sessions
- *   trailblaze report --open       - Generate and open in browser
  *   trailblaze devices             - List connected devices
- *   trailblaze -p 52526            - Launch on a custom port (allows multiple instances)
+ *   TRAILBLAZE_PORT=52526 trailblaze - Launch on a custom port (allows multiple instances)
  *   trailblaze --help              - Show all commands and options
  */
 object TrailblazeCli {
@@ -139,17 +143,13 @@ object TrailblazeCli {
   }
 
   /**
-   * Lightweight pre-scan of CLI args to resolve the HTTP port before picocli runs.
+   * Lightweight pre-scan to resolve the HTTP port before picocli runs.
    *
-   * Precedence: `-p`/`--port` flag → `TRAILBLAZE_PORT` env var → default.
+   * Precedence: `TRAILBLAZE_PORT` env var → default.
    */
-  private fun resolvePortFromArgs(args: Array<String>): Int {
-    val portIndex = args.indexOfFirst { it == "-p" || it == "--port" }
-    if (portIndex != -1 && portIndex + 1 < args.size) {
-      args[portIndex + 1].toIntOrNull()?.let { return it }
-    }
-    System.getenv(TrailblazePortManager.HTTP_PORT_ENV_VAR)?.toIntOrNull()?.let { return it }
-    return TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTP_PORT
+  private fun resolvePortFromArgs(@Suppress("UNUSED_PARAMETER") args: Array<String>): Int {
+    return System.getenv(TrailblazePortManager.HTTP_PORT_ENV_VAR)?.toIntOrNull()
+      ?: TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTP_PORT
   }
 
 }
@@ -169,15 +169,17 @@ class TrailblazeVersionProvider : IVersionProvider {
   versionProvider = TrailblazeVersionProvider::class,
   description = ["Trailblaze - AI-powered UI automation"],
   subcommands = [
-    DesktopCommand::class,
+    AppCommand::class,
     RunCommand::class,
+    BlazeCommand::class,
+    AskCommand::class,
+    SnapshotCommand::class,
+    SessionCommand::class,
     McpCommand::class,
     DevicesCommand::class,
     ConfigCommand::class,
     ReportCommand::class,
-    StatusCommand::class,
     StopCommand::class,
-    CommandLine.HelpCommand::class,
   ]
 )
 class TrailblazeCliCommand(
@@ -187,56 +189,39 @@ class TrailblazeCliCommand(
 
   @Option(
     names = ["--headless"],
-    description = ["Start in headless mode (MCP server only, no GUI)"]
+    description = ["Start in headless mode (daemon only, no GUI)"]
   )
   var headless: Boolean = false
-
-  @Option(
-    names = ["-p", "--port"],
-    description = ["HTTP port for the Trailblaze server (default: ${TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTP_PORT})"]
-  )
-  var port: Int? = null
-
-  @Option(
-    names = ["--https-port"],
-    description = ["HTTPS port for the Trailblaze server (default: ${TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTPS_PORT})"]
-  )
-  var httpsPort: Int? = null
 
   /**
    * Returns the effective HTTP port.
    *
-   * Precedence: CLI flag → saved settings (per-install) → TRAILBLAZE_PORT env var → default (52525)
+   * Precedence: saved settings (per-install) → TRAILBLAZE_PORT env var → default (52525)
    */
-  fun getEffectivePort(): Int {
-    // 1. CLI flag (highest priority — one-off override)
-    port?.let { return it }
-    return CliConfigHelper.resolveEffectiveHttpPort()
-  }
+  fun getEffectivePort(): Int = CliConfigHelper.resolveEffectiveHttpPort()
 
   /**
    * Returns the effective HTTPS port.
    *
-   * Precedence: CLI flag → saved settings (per-install) → TRAILBLAZE_HTTPS_PORT env var → default (8443)
+   * Precedence: saved settings (per-install) → TRAILBLAZE_HTTPS_PORT env var → default (8443)
    */
-  fun getEffectiveHttpsPort(): Int {
-    // 1. CLI flag (highest priority — one-off override)
-    httpsPort?.let { return it }
-    return CliConfigHelper.resolveEffectiveHttpsPort()
-  }
+  fun getEffectiveHttpsPort(): Int = CliConfigHelper.resolveEffectiveHttpsPort()
 
   /**
-   * Whether any port override is active (from CLI flag, env var, or saved settings).
+   * Whether any port override is active (from env var or saved settings).
    */
   fun hasPortOverride(): Boolean {
     return getEffectivePort() != TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTP_PORT ||
         getEffectiveHttpsPort() != TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTPS_PORT
   }
 
-  override fun call(): Int = launchDesktop(headless)
+  override fun call(): Int {
+    // No subcommand → launch the desktop app (or headless daemon with --headless).
+    return launchDesktop(headless)
+  }
 
   /**
-   * Core desktop launch logic shared by the root command (no-args) and [DesktopCommand].
+   * Core desktop launch logic used by [AppCommand].
    */
   internal fun launchDesktop(headless: Boolean): Int {
     // The desktop GUI requires macOS with a display — auto-fallback to headless on other platforms
@@ -289,29 +274,112 @@ class TrailblazeCliCommand(
 }
 
 /**
- * Launch the Trailblaze desktop application.
+ * Launch, stop, or check the status of the Trailblaze application.
  *
- * This is the explicit subcommand equivalent of running `trailblaze` with no arguments.
- * Use this when integrating with a distribution system (e.g., `sq`) that requires an
- * explicit subcommand since bare `trailblaze` is intercepted as a help screen.
+ * Examples:
+ *   trailblaze app                 - Launch desktop GUI
+ *   trailblaze app --headless      - Start headless daemon (no GUI)
+ *   trailblaze app --stop          - Stop the daemon
+ *   trailblaze app --status        - Check if daemon is running
  */
 @Command(
-  name = "start",
+  name = "app",
   mixinStandardHelpOptions = true,
-  description = ["Launch the Trailblaze desktop application"]
+  description = ["Launch, stop, or check the status of the Trailblaze application"]
 )
-class DesktopCommand : Callable<Int> {
+open class AppCommand : Callable<Int> {
 
   @CommandLine.ParentCommand
   private lateinit var parent: TrailblazeCliCommand
 
   @Option(
     names = ["--headless"],
-    description = ["Start in headless mode (MCP server only, no GUI)"]
+    description = ["Start in headless mode (daemon only, no GUI)"]
   )
   var headless: Boolean = false
 
-  override fun call(): Int = parent.launchDesktop(headless || parent.headless)
+  @Option(
+    names = ["--stop"],
+    description = ["Stop the running daemon"]
+  )
+  var stop: Boolean = false
+
+  @Option(
+    names = ["--status"],
+    description = ["Check if the daemon is running"]
+  )
+  var status: Boolean = false
+
+  override fun call(): Int {
+    return when {
+      stop -> doStop()
+      status -> doStatus()
+      else -> parent.launchDesktop(headless)
+    }
+  }
+
+  private fun doStop(): Int {
+    val port = parent.getEffectivePort()
+    val daemon = DaemonClient(port = port)
+
+    if (!daemon.isRunning()) {
+      Console.log("Trailblaze daemon is not running.")
+      return CommandLine.ExitCode.OK
+    }
+
+    Console.log("Stopping Trailblaze daemon...")
+    val response = daemon.shutdown()
+    if (response.success) {
+      Console.appendLog("Waiting for daemon to stop")
+      var attempts = 0
+      while (daemon.isRunning() && attempts < 20) {
+        Console.appendLog(".")
+        Thread.sleep(500)
+        attempts++
+      }
+      Console.log("")
+
+      if (daemon.isRunning()) {
+        Console.error("Daemon did not stop gracefully.")
+        return CommandLine.ExitCode.SOFTWARE
+      }
+
+      Console.log("Trailblaze daemon stopped.")
+    } else {
+      Console.error("Failed to stop daemon: ${response.message}")
+      return CommandLine.ExitCode.SOFTWARE
+    }
+
+    // Clear the CLI session file
+    CliMcpClient.clearSession(port)
+
+    return CommandLine.ExitCode.OK
+  }
+
+  private fun doStatus(): Int {
+    val daemon = DaemonClient(port = parent.getEffectivePort())
+
+    if (!daemon.isRunning()) {
+      Console.log("Trailblaze daemon is not running.")
+      Console.log("")
+      Console.log("Start the daemon with: trailblaze app")
+      return CommandLine.ExitCode.OK
+    }
+
+    val status = daemon.getStatus()
+    Console.log("Trailblaze daemon is running.")
+    Console.log("")
+    if (status != null) {
+      Console.log("  Port:              ${status.port}")
+      Console.log("  Connected devices: ${status.connectedDevices}")
+      Console.log("  Uptime:            ${status.uptimeSeconds.seconds}")
+      if (status.activeSessionId != null) {
+        Console.log("  Active session:    ${status.activeSessionId}")
+      }
+    }
+
+    return CommandLine.ExitCode.OK
+  }
 }
 
 /**
@@ -320,9 +388,9 @@ class DesktopCommand : Callable<Int> {
 @Command(
   name = "run",
   mixinStandardHelpOptions = true,
-  description = ["Run a .trail.yaml file or directory of trail files on a connected device"]
+  description = ["Run trail.yaml files on a connected device"]
 )
-class RunCommand : Callable<Int> {
+open class RunCommand : Callable<Int> {
 
   @CommandLine.ParentCommand
   private lateinit var parent: TrailblazeCliCommand
@@ -335,12 +403,6 @@ class RunCommand : Callable<Int> {
     description = ["Path to a .trail.yaml file or directory containing trail files"]
   )
   lateinit var trailFile: File
-
-  @Option(
-    names = ["--headless"],
-    description = ["Run without GUI (MCP server mode)"]
-  )
-  var headless: Boolean = false
 
   @Option(
     names = ["-d", "--device"],
@@ -417,6 +479,12 @@ class RunCommand : Callable<Int> {
   var noRecord: Boolean = false
 
   @Option(
+    names = ["--no-logging"],
+    description = ["Disable session logging — no files written to logs/, session does not appear in Sessions tab"]
+  )
+  var noLogging: Boolean = false
+
+  @Option(
     names = ["--markdown"],
     description = ["Generate a markdown report after execution"]
   )
@@ -428,18 +496,6 @@ class RunCommand : Callable<Int> {
         "The server shuts down when the run completes."]
   )
   var noDaemon: Boolean = false
-
-  @Option(
-    names = ["-p", "--port"],
-    description = ["HTTP port for the Trailblaze server (overrides parent --port if set)"]
-  )
-  var port: Int? = null
-
-  @Option(
-    names = ["--https-port"],
-    description = ["HTTPS port for the Trailblaze server (overrides parent --https-port if set)"]
-  )
-  var httpsPort: Int? = null
 
   @Option(
     names = ["--compose-port"],
@@ -504,7 +560,7 @@ class RunCommand : Callable<Int> {
     // Check if a daemon is already running — delegate to it to avoid starting a second
     // Gradle JVM. This is critical for CI where multiple trails run sequentially.
     // --no-daemon skips this check and always runs in-process.
-    val daemonPort = port ?: parent.getEffectivePort()
+    val daemonPort = parent.getEffectivePort()
     val daemon = DaemonClient(port = daemonPort)
     if (!noDaemon) {
       if (daemon.isRunning()) {
@@ -538,12 +594,9 @@ class RunCommand : Callable<Int> {
       // Initialize the app once for all files
       val app = parent.appProvider()
 
-      // Apply port overrides: RunCommand flags take priority, then fall back to parent
-      val effectivePort = port ?: parent.getEffectivePort()
-      val effectiveHttpsPort = httpsPort ?: parent.getEffectiveHttpsPort()
-      if (effectivePort != TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTP_PORT ||
-        effectiveHttpsPort != TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTPS_PORT) {
-        app.applyPortOverrides(httpPort = effectivePort, httpsPort = effectiveHttpsPort)
+      // Apply port overrides from env vars / saved settings
+      if (parent.hasPortOverride()) {
+        app.applyPortOverrides(httpPort = parent.getEffectivePort(), httpsPort = parent.getEffectiveHttpsPort())
       }
       app.ensureServerRunning()
 
@@ -604,12 +657,9 @@ class RunCommand : Callable<Int> {
 
     val app = parent.appProvider()
 
-    // Apply port overrides: RunCommand flags take priority, then fall back to parent
-    val effectivePort = port ?: parent.getEffectivePort()
-    val effectiveHttpsPort = httpsPort ?: parent.getEffectiveHttpsPort()
-    if (effectivePort != TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTP_PORT ||
-      effectiveHttpsPort != TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTPS_PORT) {
-      app.applyPortOverrides(httpPort = effectivePort, httpsPort = effectiveHttpsPort)
+    // Apply port overrides from env vars / saved settings
+    if (parent.hasPortOverride()) {
+      app.applyPortOverrides(httpPort = parent.getEffectivePort(), httpsPort = parent.getEffectiveHttpsPort())
     }
     app.ensureServerRunning()
 
@@ -698,6 +748,7 @@ class RunCommand : Callable<Int> {
       useRecordedSteps = useRecordedSteps,
       setOfMark = setOfMark,
       showBrowser = showBrowser,
+      noLogging = noLogging,
     )
 
     // Register Ctrl+C handler to cancel the in-flight daemon run
@@ -809,6 +860,7 @@ class RunCommand : Callable<Int> {
         useRecordedSteps = useRecordedSteps,
         setOfMark = setOfMark,
         showBrowser = showBrowser,
+        noLogging = noLogging,
       )
 
       val response = daemon.run(request) { progress ->
@@ -861,8 +913,14 @@ class RunCommand : Callable<Int> {
       null
     }
 
-    // Resolve driver type: CLI --driver flag overrides trail config driver field.
-    val driverString = driverType ?: trailConfig?.driver
+    // Resolve driver type: CLI --driver flag > trail config driver field > app setting.
+    val appSettingDriverType = trailConfig?.platform
+      ?.let { TrailblazeDevicePlatform.fromString(it) }
+      ?.let { platform ->
+        app.deviceManager.settingsRepo.serverStateFlow.value
+          .appConfig.selectedTrailblazeDriverTypes[platform]
+      }
+    val driverString = driverType ?: trailConfig?.driver ?: appSettingDriverType?.name
     val trailDriverType = driverString?.let { ds ->
       TrailblazeDriverType.fromString(ds)
         ?: run {
@@ -1406,7 +1464,7 @@ class RunCommand : Callable<Int> {
 @Command(
   name = "report",
   mixinStandardHelpOptions = true,
-  description = ["Generate an HTML report for sessions in the logs directory"]
+  description = ["Generate a report (html, json) for Trailblaze sessions"]
 )
 class ReportCommand : Callable<Int> {
 
@@ -1462,6 +1520,1028 @@ class ReportCommand : Callable<Int> {
 }
 
 /**
+ * Take a single UI action or verify an assertion on a connected device.
+ *
+ * Connects to the running Trailblaze daemon via MCP and calls the `blaze` tool.
+ * The daemon must be running (`trailblaze app --headless` or the desktop app).
+ *
+ * Examples:
+ *   trailblaze blaze "Tap the login button"
+ *   trailblaze blaze --verify "The email field is visible"
+ *   trailblaze blaze -d ANDROID "Open settings"
+ *   trailblaze blaze --json "Tap login"
+ */
+
+/**
+ * Shared setup for CLI commands that need a daemon connection and device.
+ *
+ * Handles quiet mode, daemon check, MCP client connection, and device selection,
+ * then delegates to [action] for the command-specific logic.
+ *
+ * If the daemon is not running, attempts to auto-start it in headless mode
+ * and waits for it to become available before connecting.
+ */
+fun withDevice(
+  verbose: Boolean,
+  parent: TrailblazeCliCommand,
+  device: String?,
+  jsonMode: Boolean = false,
+  action: suspend (CliMcpClient) -> Int,
+): Int {
+  if (!verbose) Console.enableQuietMode()
+  if (jsonMode) Console.enableJsonMode()
+
+  val port = parent.getEffectivePort()
+
+  return runBlocking {
+    val mcpClient = try {
+      CliMcpClient.connectToDaemon(port)
+    } catch (_: Exception) {
+      // Daemon not running — try to auto-start it
+      if (!tryStartDaemon(port)) {
+        Console.error("Error: Trailblaze daemon is not running. Start it with: trailblaze app")
+        return@runBlocking CommandLine.ExitCode.SOFTWARE
+      }
+      try {
+        CliMcpClient.connectToDaemon(port)
+      } catch (_: Exception) {
+        Console.error("Error: Failed to connect to Trailblaze daemon after starting it. Try running: trailblaze app")
+        return@runBlocking CommandLine.ExitCode.SOFTWARE
+      }
+    }
+
+    mcpClient.use { client ->
+      val deviceError = client.ensureDevice(device)
+      if (deviceError != null) {
+        Console.error(deviceError)
+        return@runBlocking CommandLine.ExitCode.SOFTWARE
+      }
+      action(client)
+    }
+  }
+}
+
+/**
+ * Attempt to auto-start the Trailblaze daemon in headless mode.
+ * Returns true if the daemon was successfully started and is responding.
+ */
+private fun tryStartDaemon(port: Int): Boolean {
+  val launcher = findTrailblazeLauncher() ?: run {
+    Console.error("Cannot auto-start daemon: trailblaze launcher not found.")
+    return false
+  }
+
+  Console.log("Starting Trailblaze daemon...")
+
+  val command = mutableListOf(launcher.absolutePath, "app", "--headless")
+
+  try {
+    val pb = ProcessBuilder(command)
+    if (port != TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTP_PORT) {
+      pb.environment()["TRAILBLAZE_PORT"] = port.toString()
+    }
+    pb.redirectOutput(ProcessBuilder.Redirect.DISCARD)
+    pb.redirectError(ProcessBuilder.Redirect.DISCARD)
+    pb.start()
+  } catch (e: Exception) {
+    Console.error("Failed to start daemon: ${e.message}")
+    return false
+  }
+
+  val started = DaemonClient(port = port).use { it.waitForDaemon() }
+  if (started) {
+    Console.log("Trailblaze daemon started.")
+  }
+  return started
+}
+
+@Command(
+  name = "blaze",
+  mixinStandardHelpOptions = true,
+  description = ["Take a UI action or verify an assertion on a connected device"]
+)
+class BlazeCommand : Callable<Int> {
+
+  @CommandLine.ParentCommand
+  private lateinit var parent: TrailblazeCliCommand
+
+  @Parameters(
+    description = ["Goal or assertion (e.g., 'Tap login', 'The email field is visible')"],
+    arity = "1..*",
+  )
+  lateinit var goalWords: List<String>
+
+  @Option(
+    names = ["--verify"],
+    description = ["Verify an assertion instead of taking an action (exit code 1 if assertion fails)"]
+  )
+  var verify: Boolean = false
+
+  @Option(
+    names = ["-d", "--device"],
+    description = ["Device platform to connect: ANDROID, IOS, or WEB"]
+  )
+  var device: String? = null
+
+  @Option(
+    names = ["--json"],
+    description = ["Output machine-readable JSON instead of human-readable text"]
+  )
+  var jsonOutput: Boolean = false
+
+  @Option(
+    names = ["--context"],
+    description = ["Context from previous steps for situational awareness"]
+  )
+  var context: String? = null
+
+  @Option(
+    names = ["-v", "--verbose"],
+    description = ["Enable verbose output (show daemon logs, MCP calls)"]
+  )
+  var verbose: Boolean = false
+
+  override fun call(): Int = withDevice(verbose, parent, device, jsonMode = jsonOutput) { client ->
+    val goal = goalWords.joinToString(" ")
+    val arguments = mutableMapOf<String, Any?>("goal" to goal)
+    if (verify) arguments["hint"] = "VERIFY"
+    if (context != null) arguments["context"] = context
+
+    val result = client.callTool("blaze", arguments)
+
+    if (jsonOutput) {
+      println(result.content)
+    } else {
+      formatBlazeResult(result)
+    }
+
+    if (result.isError) {
+      return@withDevice CommandLine.ExitCode.SOFTWARE
+    }
+
+    // Parse JSON once for error/verify checks
+    val parsedJson = try {
+      Json.parseToJsonElement(result.content).jsonObject
+    } catch (_: Exception) {
+      return@withDevice CommandLine.ExitCode.OK
+    }
+
+    // Check JSON payload for errors — MCP isError can be false even when
+    // the tool response contains an error field (e.g., no device connected).
+    val error = parsedJson["error"]?.jsonPrimitive?.content
+    if (!error.isNullOrBlank()) {
+      return@withDevice CommandLine.ExitCode.SOFTWARE
+    }
+
+    if (verify) {
+      // Default passed to false — if the server omits it (e.g., needsInput),
+      // that's not a confirmed pass.
+      val passed = parsedJson["passed"]?.jsonPrimitive?.content?.toBoolean() ?: false
+      if (passed) CommandLine.ExitCode.OK else CommandLine.ExitCode.SOFTWARE
+    } else {
+      CommandLine.ExitCode.OK
+    }
+  }
+
+  private fun formatBlazeResult(result: CliMcpClient.ToolResult) {
+    if (result.isError) {
+      Console.error("Error: ${result.content}")
+      return
+    }
+    try {
+      val json = Json.parseToJsonElement(result.content).jsonObject
+      val error = json["error"]?.jsonPrimitive?.content
+      if (error != null) {
+        Console.error("Error: $error")
+        return
+      }
+      val screenSummary = json["screenSummary"]?.jsonPrimitive?.content
+      if (verify) {
+        val passed = json["passed"]?.jsonPrimitive?.content?.toBoolean()
+        val resultText = json["result"]?.jsonPrimitive?.content ?: ""
+        if (passed == true) {
+          Console.info("Verified: $resultText")
+        } else {
+          Console.error("Verification failed: $resultText")
+        }
+      } else {
+        val done = json["done"]?.jsonPrimitive?.content?.toBoolean() ?: false
+        val resultText = json["result"]?.jsonPrimitive?.content
+        val executed = json["executed"]?.jsonPrimitive?.content?.toBoolean() ?: false
+        when {
+          done -> Console.info("Done: ${resultText ?: "objective already achieved"}")
+          executed -> Console.info("Result: ${resultText ?: "Action executed"}")
+          else -> Console.info("Result: ${resultText ?: result.content}")
+        }
+      }
+      if (screenSummary != null) {
+        Console.info("Screen summary: $screenSummary")
+      }
+    } catch (_: Exception) {
+      Console.info(result.content)
+    }
+  }
+}
+
+/**
+ * Ask a question about what's currently visible on a connected device's screen.
+ *
+ * Connects to the running Trailblaze daemon via MCP and calls the `ask` tool.
+ * The daemon must be running (`trailblaze app --headless` or the desktop app).
+ *
+ * Examples:
+ *   trailblaze ask "What's the current balance?"
+ *   trailblaze ask "What buttons are visible?"
+ *   trailblaze ask -d ANDROID "What screen is this?"
+ *   trailblaze ask --json "What's visible?"
+ */
+@Command(
+  name = "ask",
+  mixinStandardHelpOptions = true,
+  description = ["Ask a question about what's currently visible on screen"]
+)
+class AskCommand : Callable<Int> {
+
+  @CommandLine.ParentCommand
+  private lateinit var parent: TrailblazeCliCommand
+
+  @Parameters(
+    description = ["Question about the screen (e.g., 'What's the current balance?')"],
+    arity = "1..*",
+  )
+  lateinit var questionWords: List<String>
+
+  @Option(
+    names = ["-d", "--device"],
+    description = ["Device platform to connect: ANDROID, IOS, or WEB"]
+  )
+  var device: String? = null
+
+  @Option(
+    names = ["--json"],
+    description = ["Output machine-readable JSON instead of human-readable text"]
+  )
+  var jsonOutput: Boolean = false
+
+  @Option(
+    names = ["-v", "--verbose"],
+    description = ["Enable verbose output (show daemon logs, MCP calls)"]
+  )
+  var verbose: Boolean = false
+
+  override fun call(): Int = withDevice(verbose, parent, device, jsonMode = jsonOutput) { client ->
+    val question = questionWords.joinToString(" ")
+    val result = client.callTool("ask", mapOf("question" to question))
+
+    if (jsonOutput) {
+      println(result.content)
+    } else {
+      formatAskResult(result)
+    }
+
+    val hasError = result.isError || try {
+      val json = Json.parseToJsonElement(result.content).jsonObject
+      !json["error"]?.jsonPrimitive?.content.isNullOrBlank()
+    } catch (_: Exception) {
+      false
+    }
+    if (hasError) CommandLine.ExitCode.SOFTWARE else CommandLine.ExitCode.OK
+  }
+
+  private fun formatAskResult(result: CliMcpClient.ToolResult) {
+    if (result.isError) {
+      Console.error("Error: ${result.content}")
+      return
+    }
+    try {
+      val json = Json.parseToJsonElement(result.content).jsonObject
+      val error = json["error"]?.jsonPrimitive?.content
+      if (error != null) {
+        Console.error("Error: $error")
+        return
+      }
+      val answer = json["answer"]?.jsonPrimitive?.content
+      val screenSummary = json["screenSummary"]?.jsonPrimitive?.content
+      if (answer != null || screenSummary != null) {
+        if (answer != null) Console.info("Answer: $answer")
+        if (screenSummary != null) Console.info("Screen summary: $screenSummary")
+      } else {
+        Console.info(result.content)
+      }
+    } catch (_: Exception) {
+      Console.info(result.content)
+    }
+  }
+}
+
+/**
+ * Get a raw screenshot and/or view hierarchy from a connected device.
+ *
+ * Unlike `ask`, which uses an LLM to interpret the screen, `snapshot` returns
+ * raw data directly. Does not require an LLM to be configured.
+ *
+ * Examples:
+ *   trailblaze snapshot                          - Screenshot + hierarchy
+ *   trailblaze snapshot --hierarchy              - Hierarchy only
+ *   trailblaze snapshot --screenshot             - Screenshot only (base64)
+ *   trailblaze snapshot --verbosity FULL         - Unfiltered hierarchy
+ *   trailblaze snapshot --json                   - Full JSON output
+ *   trailblaze snapshot --output screen.png      - Save screenshot to file
+ */
+@Command(
+  name = "snapshot",
+  mixinStandardHelpOptions = true,
+  description = ["Get raw screenshot and/or view hierarchy from connected device"],
+)
+class SnapshotCommand : Callable<Int> {
+
+  @CommandLine.ParentCommand
+  private lateinit var parent: TrailblazeCliCommand
+
+  @Option(
+    names = ["--screenshot"],
+    description = ["Include only the screenshot (no hierarchy)"],
+  )
+  var screenshotOnly: Boolean = false
+
+  @Option(
+    names = ["--hierarchy"],
+    description = ["Include only the view hierarchy (no screenshot)"],
+  )
+  var hierarchyOnly: Boolean = false
+
+  @Option(
+    names = ["--verbosity"],
+    description = ["Hierarchy verbosity: MINIMAL, STANDARD, or FULL"],
+  )
+  var verbosity: String? = null
+
+  @Option(
+    names = ["-d", "--device"],
+    description = ["Device platform to connect: ANDROID, IOS, or WEB"],
+  )
+  var device: String? = null
+
+  @Option(
+    names = ["--json"],
+    description = ["Output machine-readable JSON instead of human-readable text"],
+  )
+  var jsonOutput: Boolean = false
+
+  @Option(
+    names = ["--output", "-o"],
+    description = ["Save screenshot to a file (WebP format)"],
+  )
+  var outputFile: String? = null
+
+  @Option(
+    names = ["-v", "--verbose"],
+    description = ["Enable verbose output (show daemon logs, MCP calls)"],
+  )
+  var verbose: Boolean = false
+
+  override fun call(): Int = withDevice(verbose, parent, device, jsonMode = jsonOutput) { client ->
+    if (screenshotOnly && hierarchyOnly) {
+      Console.error("Error: --screenshot and --hierarchy are mutually exclusive.")
+      return@withDevice CommandLine.ExitCode.USAGE
+    }
+    val arguments = mutableMapOf<String, Any?>()
+    if (screenshotOnly) arguments["detail"] = "SCREENSHOT"
+    else if (hierarchyOnly) arguments["detail"] = "HIERARCHY"
+    if (verbosity != null) {
+      val normalizedVerbosity = verbosity!!.uppercase()
+      val allowedVerbosityValues = setOf("MINIMAL", "STANDARD", "FULL")
+      if (normalizedVerbosity !in allowedVerbosityValues) {
+        Console.error(
+          "Invalid verbosity '$verbosity'. Allowed values: minimal, standard, full."
+        )
+        return@withDevice CommandLine.ExitCode.USAGE
+      }
+      arguments["verbosity"] = normalizedVerbosity
+    }
+
+    val result = client.callTool("snapshot", arguments)
+
+    if (result.isError) {
+      Console.error("Error: ${result.content}")
+      return@withDevice CommandLine.ExitCode.SOFTWARE
+    }
+
+    if (jsonOutput) {
+      println(result.content)
+      return@withDevice CommandLine.ExitCode.OK
+    }
+
+    try {
+      val json = Json.parseToJsonElement(result.content).jsonObject
+      val error = json["error"]?.jsonPrimitive?.content
+      if (!error.isNullOrBlank()) {
+        Console.error("Error: $error")
+        return@withDevice CommandLine.ExitCode.SOFTWARE
+      }
+
+      // Print view hierarchy if present
+      val hierarchy = json["viewHierarchy"]?.jsonPrimitive?.content
+      val contextSummary = json["pageContextSummary"]?.jsonPrimitive?.content
+      val platform = json["platform"]?.jsonPrimitive?.content
+      val width = json["deviceWidth"]?.jsonPrimitive?.content
+      val height = json["deviceHeight"]?.jsonPrimitive?.content
+
+      if (platform != null || width != null) {
+        Console.info("Device: ${platform ?: "unknown"} ${width ?: "?"}x${height ?: "?"}")
+      }
+      if (contextSummary != null) {
+        Console.info("Context: $contextSummary")
+      }
+      if (hierarchy != null) {
+        Console.info("View hierarchy:")
+        println(hierarchy)
+      }
+
+      // Screenshot path (saved server-side to session directory)
+      val screenshotPath = json["screenshotPath"]?.jsonPrimitive?.content
+      if (screenshotPath != null) {
+        Console.info("Screenshot: file://$screenshotPath")
+      }
+
+      // Save to explicit output file if requested
+      val screenshot = json["screenshot"]?.jsonPrimitive?.content
+      if (outputFile != null && screenshot != null) {
+        val bytes = java.util.Base64.getDecoder().decode(screenshot)
+        java.io.File(outputFile!!).also { it.parentFile?.mkdirs() }.writeBytes(bytes)
+        Console.info("Screenshot saved to: $outputFile")
+      }
+    } catch (_: Exception) {
+      Console.info(result.content)
+    }
+    CommandLine.ExitCode.OK
+  }
+}
+
+/**
+ * Manage the CLI session — save recordings, end the session.
+ *
+ * Examples:
+ *   trailblaze session info                    - Show session status
+ *   trailblaze session save --name login_flow  - Save recording as a trail
+ *   trailblaze session end                     - End session, release device
+ *   trailblaze session end --name login_flow   - Save and end in one step
+ */
+@Command(
+  name = "session",
+  mixinStandardHelpOptions = true,
+  description = ["Start, stop, save, and inspect sessions"],
+  subcommands = [
+    SessionStartCommand::class,
+    SessionStopCommand::class,
+    SessionSaveCommand::class,
+    SessionInfoCommand::class,
+    SessionListCommand::class,
+    SessionArtifactsCommand::class,
+    SessionEndCommand::class,
+  ],
+)
+class SessionCommand : Callable<Int> {
+  override fun call(): Int {
+    CommandLine(this).usage(System.out)
+    return CommandLine.ExitCode.OK
+  }
+}
+
+@Command(
+  name = "start",
+  mixinStandardHelpOptions = true,
+  description = ["Start a new session with automatic video and log capture"],
+)
+class SessionStartCommand : Callable<Int> {
+
+  @CommandLine.ParentCommand
+  private lateinit var parent: SessionCommand
+
+  @Option(
+    names = ["--title", "-t"],
+    description = ["Title for the session (used as trail name when saving)"],
+  )
+  var title: String? = null
+
+  @Option(
+    names = ["--no-video"],
+    description = ["Disable video capture"],
+  )
+  var noVideo: Boolean = false
+
+  @Option(
+    names = ["--no-logs"],
+    description = ["Disable device log capture"],
+  )
+  var noLogs: Boolean = false
+
+  @Option(
+    names = ["-d", "--device"],
+    description = ["Device platform to connect: ANDROID, IOS, or WEB"],
+  )
+  var device: String? = null
+
+  @Option(
+    names = ["-v", "--verbose"],
+    description = ["Enable verbose output"],
+  )
+  var verbose: Boolean = false
+
+  override fun call(): Int {
+    if (!verbose) Console.enableQuietMode()
+    val port = CliConfigHelper.resolveEffectiveHttpPort()
+
+    return runBlocking {
+      val client = try {
+        CliMcpClient.connectToDaemon(port)
+      } catch (_: Exception) {
+        Console.error("Error: Trailblaze daemon is not running. Start it with: trailblaze --headless")
+        return@runBlocking CommandLine.ExitCode.SOFTWARE
+      }
+
+      client.use {
+        // Connect device if specified
+        if (device != null) {
+          val deviceError = it.ensureDevice(device)
+          if (deviceError != null) {
+            Console.error(deviceError)
+            return@runBlocking CommandLine.ExitCode.SOFTWARE
+          }
+        }
+
+        val arguments = mutableMapOf<String, Any?>("action" to "START")
+        if (title != null) arguments["title"] = title
+        if (noVideo) arguments["noVideo"] = true
+        if (noLogs) arguments["noLogs"] = true
+
+        val result = it.callTool("session", arguments)
+        if (result.isError) {
+          Console.error("Error: ${result.content}")
+          CommandLine.ExitCode.SOFTWARE
+        } else {
+          try {
+            val json = Json.parseToJsonElement(result.content).jsonObject
+            val error = json["error"]?.jsonPrimitive?.content
+            if (!error.isNullOrBlank()) {
+              Console.error("Error: $error")
+              return@use CommandLine.ExitCode.SOFTWARE
+            }
+            val msg = json["message"]?.jsonPrimitive?.content
+            val sessionId = json["sessionId"]?.jsonPrimitive?.content
+            if (sessionId != null) Console.info("Session ID: $sessionId")
+            if (msg != null) Console.info(msg)
+          } catch (_: Exception) {
+            Console.info(result.content)
+          }
+          CommandLine.ExitCode.OK
+        }
+      }
+    }
+  }
+}
+
+@Command(
+  name = "stop",
+  mixinStandardHelpOptions = true,
+  description = ["Stop the current session and finalize captures"],
+)
+class SessionStopCommand : Callable<Int> {
+
+  @CommandLine.ParentCommand
+  private lateinit var parent: SessionCommand
+
+  @Option(
+    names = ["--save"],
+    description = ["Save session as a trail before stopping"],
+  )
+  var save: Boolean = false
+
+  @Option(
+    names = ["--title", "-t"],
+    description = ["Trail title when saving (overrides session title)"],
+  )
+  var title: String? = null
+
+  override fun call(): Int {
+    val port = CliConfigHelper.resolveEffectiveHttpPort()
+    val daemon = DaemonClient(port = port)
+    if (!daemon.isRunning()) {
+      Console.log("No active session (daemon not running).")
+      CliMcpClient.clearSession(port)
+      return CommandLine.ExitCode.OK
+    }
+
+    return runBlocking {
+      val client = try {
+        CliMcpClient.connectToDaemon(port)
+      } catch (_: Exception) {
+        Console.log("No active session.")
+        CliMcpClient.clearSession(port)
+        return@runBlocking CommandLine.ExitCode.OK
+      }
+
+      var exitCode = CommandLine.ExitCode.OK
+      client.use {
+        val arguments = mutableMapOf<String, Any?>("action" to "STOP")
+        if (save) arguments["save"] = true
+        if (title != null) arguments["title"] = title
+
+        val result = it.callTool("session", arguments)
+        if (result.isError) {
+          Console.error("Error: ${result.content}")
+          exitCode = CommandLine.ExitCode.SOFTWARE
+        } else {
+          try {
+            val json = Json.parseToJsonElement(result.content).jsonObject
+            val msg = json["message"]?.jsonPrimitive?.content
+            if (msg != null) Console.info(msg)
+          } catch (_: Exception) {
+            Console.info(result.content)
+          }
+        }
+      }
+
+      CliMcpClient.clearSession(port)
+      exitCode
+    }
+  }
+}
+
+@Command(
+  name = "list",
+  mixinStandardHelpOptions = true,
+  description = ["List recent sessions"],
+)
+class SessionListCommand : Callable<Int> {
+
+  @CommandLine.ParentCommand
+  private lateinit var parent: SessionCommand
+
+  @Option(
+    names = ["--limit", "-n"],
+    description = ["Maximum number of sessions to show (default: 20)"],
+  )
+  var limit: Int = 20
+
+  @Option(
+    names = ["--json"],
+    description = ["Output machine-readable JSON"],
+  )
+  var jsonOutput: Boolean = false
+
+  override fun call(): Int {
+    if (jsonOutput) Console.enableJsonMode()
+    val port = CliConfigHelper.resolveEffectiveHttpPort()
+
+    return runBlocking {
+      val client = try {
+        CliMcpClient.connectToDaemon(port)
+      } catch (_: Exception) {
+        Console.error("Error: Trailblaze daemon is not running.")
+        return@runBlocking CommandLine.ExitCode.SOFTWARE
+      }
+
+      client.use {
+        val result = it.callTool("session", mapOf("action" to "LIST", "limit" to limit))
+        if (result.isError) {
+          Console.error("Error: ${result.content}")
+          return@use CommandLine.ExitCode.SOFTWARE
+        }
+        if (jsonOutput) {
+          println(result.content)
+        } else {
+          try {
+            val json = Json.parseToJsonElement(result.content).jsonObject
+            val sessions = json["sessions"]?.let { s ->
+              Json.parseToJsonElement(s.toString()).let { arr ->
+                if (arr is kotlinx.serialization.json.JsonArray) arr else null
+              }
+            }
+            if (sessions != null && sessions.isNotEmpty()) {
+              Console.info("%-20s  %-12s  %s".format("ID", "STATUS", "STARTED"))
+              Console.info("-".repeat(60))
+              for (entry in sessions) {
+                val obj = entry.jsonObject
+                val id = obj["id"]?.jsonPrimitive?.content ?: "?"
+                val status = obj["status"]?.jsonPrimitive?.content ?: "?"
+                val startedAt = obj["startedAt"]?.jsonPrimitive?.content ?: ""
+                val displayId = if (id.length > 20) id.take(20) + "..." else id
+                Console.info("%-20s  %-12s  %s".format(displayId, status, startedAt))
+              }
+            } else {
+              Console.info("No sessions found.")
+            }
+          } catch (_: Exception) {
+            Console.info(result.content)
+          }
+        }
+        CommandLine.ExitCode.OK
+      }
+    }
+  }
+}
+
+@Command(
+  name = "artifacts",
+  mixinStandardHelpOptions = true,
+  description = ["List artifacts in a session"],
+)
+class SessionArtifactsCommand : Callable<Int> {
+
+  @CommandLine.ParentCommand
+  private lateinit var parent: SessionCommand
+
+  @Option(
+    names = ["--id"],
+    description = ["Session ID (defaults to current session)"],
+  )
+  var id: String? = null
+
+  @Option(
+    names = ["--json"],
+    description = ["Output machine-readable JSON"],
+  )
+  var jsonOutput: Boolean = false
+
+  override fun call(): Int {
+    if (jsonOutput) Console.enableJsonMode()
+    val port = CliConfigHelper.resolveEffectiveHttpPort()
+
+    return runBlocking {
+      val client = try {
+        CliMcpClient.connectToDaemon(port)
+      } catch (_: Exception) {
+        Console.error("Error: Trailblaze daemon is not running.")
+        return@runBlocking CommandLine.ExitCode.SOFTWARE
+      }
+
+      client.use {
+        val arguments = mutableMapOf<String, Any?>("action" to "ARTIFACTS")
+        if (id != null) arguments["id"] = id
+        val result = it.callTool("session", arguments)
+        if (result.isError) {
+          Console.error("Error: ${result.content}")
+          return@use CommandLine.ExitCode.SOFTWARE
+        }
+        if (jsonOutput) {
+          println(result.content)
+        } else {
+          try {
+            val json = Json.parseToJsonElement(result.content).jsonObject
+            val error = json["error"]?.jsonPrimitive?.content
+            if (!error.isNullOrBlank()) {
+              Console.error("Error: $error")
+              return@use CommandLine.ExitCode.SOFTWARE
+            }
+            val path = json["path"]?.jsonPrimitive?.content
+            val artifacts = json["artifacts"]?.let { a ->
+              Json.parseToJsonElement(a.toString()).let { arr ->
+                if (arr is kotlinx.serialization.json.JsonArray) arr else null
+              }
+            }
+            if (path != null) Console.info("Session directory: $path")
+            if (artifacts != null && artifacts.isNotEmpty()) {
+              Console.info("")
+              Console.info("%-30s  %-12s  %s".format("NAME", "TYPE", "SIZE"))
+              Console.info("-".repeat(60))
+              for (entry in artifacts) {
+                val obj = entry.jsonObject
+                val name = obj["name"]?.jsonPrimitive?.content ?: "?"
+                val type = obj["type"]?.jsonPrimitive?.content ?: "?"
+                val size = obj["sizeBytes"]?.jsonPrimitive?.content?.toLongOrNull()
+                val sizeStr = if (size != null) "${size / 1024}KB" else "?"
+                Console.info("%-30s  %-12s  %s".format(name, type, sizeStr))
+              }
+            } else {
+              Console.info("No artifacts found.")
+            }
+          } catch (_: Exception) {
+            Console.info(result.content)
+          }
+        }
+        CommandLine.ExitCode.OK
+      }
+    }
+  }
+}
+
+@Command(
+  name = "end",
+  mixinStandardHelpOptions = true,
+  description = ["End the CLI session and release the device (deprecated: use 'stop' instead)"],
+)
+class SessionEndCommand : Callable<Int> {
+
+  @CommandLine.ParentCommand
+  private lateinit var parent: SessionCommand
+
+  @Option(
+    names = ["--name", "-n"],
+    description = ["Save the recording as a trail before ending"]
+  )
+  var name: String? = null
+
+  override fun call(): Int {
+    // Find the root command to get the port
+    val port = CliConfigHelper.resolveEffectiveHttpPort()
+
+    val daemon = DaemonClient(port = port)
+    if (!daemon.isRunning()) {
+      Console.log("No active session (daemon not running).")
+      CliMcpClient.clearSession(port)
+      return CommandLine.ExitCode.OK
+    }
+
+    return runBlocking {
+      val client = try {
+        CliMcpClient.connectToDaemon(port)
+      } catch (e: Exception) {
+        Console.log("No active session.")
+        CliMcpClient.clearSession(port)
+        return@runBlocking CommandLine.ExitCode.OK
+      }
+
+      client.use {
+        // Save if name provided
+        if (name != null) {
+          val saveResult = it.callTool("trail", mapOf("action" to "SAVE", "name" to name!!))
+          if (saveResult.isError) {
+            Console.error("Error saving trail: ${saveResult.content}")
+          } else {
+            Console.info("Trail saved: $name")
+          }
+        }
+
+        // End the session recording (deprecated trail tool uses END action)
+        it.callTool("trail", mapOf("action" to "END"))
+      }
+
+      // Clear the session file
+      CliMcpClient.clearSession(port)
+      Console.log("Session ended.")
+      CommandLine.ExitCode.OK
+    }
+  }
+}
+
+@Command(
+  name = "save",
+  mixinStandardHelpOptions = true,
+  description = ["Save the current recording as a trail without ending the session"],
+)
+class SessionSaveCommand : Callable<Int> {
+
+  @CommandLine.ParentCommand
+  private lateinit var parent: SessionCommand
+
+  @Option(
+    names = ["--title", "-t"],
+    description = ["Title for the saved trail (uses session title if not specified)"],
+  )
+  var title: String? = null
+
+  @Option(
+    names = ["--name", "-n"],
+    hidden = true,
+    description = ["Deprecated: use --title instead"],
+  )
+  var name: String? = null
+
+  override fun call(): Int {
+    val effectiveTitle = title ?: name
+    val port = CliConfigHelper.resolveEffectiveHttpPort()
+
+    val daemon = DaemonClient(port = port)
+    if (!daemon.isRunning()) {
+      Console.error("Error: Trailblaze daemon is not running.")
+      return CommandLine.ExitCode.SOFTWARE
+    }
+
+    return runBlocking {
+      val client = try {
+        CliMcpClient.connectToDaemon(port)
+      } catch (e: Exception) {
+        Console.error("Error: No active session. ${e.message}")
+        return@runBlocking CommandLine.ExitCode.SOFTWARE
+      }
+
+      client.use {
+        val arguments = mutableMapOf<String, Any?>("action" to "SAVE")
+        if (effectiveTitle != null) arguments["title"] = effectiveTitle
+        val result = it.callTool("session", arguments)
+        if (result.isError) {
+          Console.error("Error saving trail: ${result.content}")
+          CommandLine.ExitCode.SOFTWARE
+        } else {
+          try {
+            val json = Json.parseToJsonElement(result.content).jsonObject
+            val error = json["error"]?.jsonPrimitive?.content
+            if (!error.isNullOrBlank()) {
+              Console.error("Error: $error")
+              return@use CommandLine.ExitCode.SOFTWARE
+            }
+            val msg = json["message"]?.jsonPrimitive?.content
+            if (msg != null) Console.info(msg)
+          } catch (_: Exception) {
+            Console.info(result.content)
+          }
+          CommandLine.ExitCode.OK
+        }
+      }
+    }
+  }
+}
+
+@Command(
+  name = "info",
+  mixinStandardHelpOptions = true,
+  description = ["Show information about a session"],
+)
+class SessionInfoCommand : Callable<Int> {
+
+  @CommandLine.ParentCommand
+  private lateinit var parent: SessionCommand
+
+  @Option(
+    names = ["--id"],
+    description = ["Session ID (defaults to current session)"],
+  )
+  var id: String? = null
+
+  @Option(
+    names = ["--json"],
+    description = ["Output machine-readable JSON"],
+  )
+  var jsonOutput: Boolean = false
+
+  override fun call(): Int {
+    if (jsonOutput) Console.enableJsonMode()
+    val port = CliConfigHelper.resolveEffectiveHttpPort()
+
+    val daemon = DaemonClient(port = port)
+    if (!daemon.isRunning()) {
+      Console.log("No active session (daemon not running).")
+      return CommandLine.ExitCode.OK
+    }
+
+    return runBlocking {
+      val client = try {
+        CliMcpClient.connectToDaemon(port)
+      } catch (_: Exception) {
+        Console.log("No active session.")
+        return@runBlocking CommandLine.ExitCode.OK
+      }
+
+      client.use {
+        val arguments = mutableMapOf<String, Any?>("action" to "INFO")
+        if (id != null) arguments["id"] = id
+
+        val result = it.callTool("session", arguments)
+
+        // Check for "no active session" — not an error, just informational
+        val infoError = try {
+          Json.parseToJsonElement(result.content).jsonObject["error"]?.jsonPrimitive?.content
+        } catch (_: Exception) { null }
+        if (infoError != null) {
+          if (jsonOutput) println(result.content) else Console.info(infoError)
+          return@use CommandLine.ExitCode.OK
+        }
+
+        if (result.isError) {
+          Console.error("Error: ${result.content}")
+          return@use CommandLine.ExitCode.SOFTWARE
+        }
+        if (jsonOutput) {
+          println(result.content)
+        } else {
+          try {
+            val json = Json.parseToJsonElement(result.content).jsonObject
+            val sessionId = json["sessionId"]?.jsonPrimitive?.content
+            val sessionTitle = json["title"]?.jsonPrimitive?.content
+            val status = json["status"]?.jsonPrimitive?.content
+            val device = json["device"]?.jsonPrimitive?.content
+            val platform = json["platform"]?.jsonPrimitive?.content
+            val path = json["path"]?.jsonPrimitive?.content
+
+            Console.info("Session:")
+            if (sessionId != null) Console.info("  ID:       $sessionId")
+            if (sessionTitle != null) Console.info("  Title:    $sessionTitle")
+            if (status != null) Console.info("  Status:   $status")
+            if (device != null) Console.info("  Device:   $device")
+            if (platform != null) Console.info("  Platform: $platform")
+            if (path != null) Console.info("  Path:     file://$path")
+          } catch (_: Exception) {
+            Console.info(result.content)
+          }
+        }
+        CommandLine.ExitCode.OK
+      }
+    }
+  }
+}
+
+/**
  * Start the MCP server with a specified transport.
  *
  * By default, starts an STDIO server for MCP client integrations
@@ -1478,7 +2558,6 @@ class ReportCommand : Callable<Int> {
   name = "mcp",
   mixinStandardHelpOptions = true,
   description = ["Start the MCP server"],
-  subcommands = [McpStartCommand::class, McpInstallCommand::class]
 )
 class McpCommand : Callable<Int> {
 
@@ -1635,28 +2714,6 @@ class McpCommand : Callable<Int> {
   }
 }
 
-/**
- * Start the MCP server (explicit subcommand for `sq` CLI integration).
- *
- * `sq` treats commands with subcommands as groups and won't forward bare
- * `trailblaze mcp` to the JVM. This subcommand allows `trailblaze mcp start`
- * to work through `sq`, while `./trailblaze mcp` continues to work directly.
- *
- * Flags like `--http`, `--direct`, and `--tool-profile` go on the parent
- * `mcp` command: `trailblaze mcp --http start`.
- */
-@Command(
-  name = "start",
-  mixinStandardHelpOptions = true,
-  description = ["Start the MCP server (default: STDIO transport)"]
-)
-class McpStartCommand : Callable<Int> {
-
-  @CommandLine.ParentCommand
-  private lateinit var parent: McpCommand
-
-  override fun call(): Int = parent.call()
-}
 
 /**
  * List all connected devices.
@@ -1955,64 +3012,17 @@ class ConfigDriversCommand : Callable<Int> {
   }
 }
 
-/**
- * Check if the Trailblaze daemon is running.
- */
-@Command(
-  name = "status",
-  mixinStandardHelpOptions = true,
-  description = ["Check if the Trailblaze daemon is running"]
-)
-class StatusCommand : Callable<Int> {
-
-  @CommandLine.ParentCommand
-  private lateinit var parent: TrailblazeCliCommand
-
-  override fun call(): Int {
-    val daemon = DaemonClient(port = parent.getEffectivePort())
-
-    if (!daemon.isRunning()) {
-      Console.log("Trailblaze daemon is not running.")
-      Console.log("")
-      Console.log("Start the daemon with: trailblaze")
-      return CommandLine.ExitCode.OK
-    }
-
-    val status = daemon.getStatus()
-
-    Console.log("Trailblaze daemon is running.")
-    Console.log("")
-    if (status != null) {
-      Console.log("  Port:              ${status.port}")
-      Console.log("  Connected devices: ${status.connectedDevices}")
-      Console.log("  Uptime:            ${status.uptimeSeconds.seconds}")
-      if (status.activeSessionId != null) {
-        Console.log("  Active session:    ${status.activeSessionId}")
-      }
-    }
-
-    return CommandLine.ExitCode.OK
-  }
-}
-
-/**
- * Stop the Trailblaze daemon.
- */
+/** Hidden alias: `trailblaze stop` still works. Use `trailblaze app --stop` instead. */
 @Command(
   name = "stop",
+  hidden = true,
   mixinStandardHelpOptions = true,
-  description = ["Stop the Trailblaze daemon"]
+  description = ["Stop the Trailblaze daemon (alias for 'app --stop')"]
 )
 class StopCommand : Callable<Int> {
 
   @CommandLine.ParentCommand
   private lateinit var parent: TrailblazeCliCommand
-
-  @Option(
-    names = ["-f", "--force"],
-    description = ["Force stop (kill process) if graceful shutdown fails"]
-  )
-  var force: Boolean = false
 
   override fun call(): Int {
     val daemon = DaemonClient(port = parent.getEffectivePort())
@@ -2038,13 +3048,8 @@ class StopCommand : Callable<Int> {
       Console.log("")
 
       if (daemon.isRunning()) {
-        if (force) {
-          Console.error("Daemon did not stop gracefully. Force option not yet implemented.")
-          return CommandLine.ExitCode.SOFTWARE
-        } else {
-          Console.error("Daemon did not stop gracefully. Use --force to kill.")
-          return CommandLine.ExitCode.SOFTWARE
-        }
+        Console.error("Daemon did not stop gracefully.")
+        return CommandLine.ExitCode.SOFTWARE
       }
 
       Console.log("Trailblaze daemon stopped.")
@@ -2057,7 +3062,7 @@ class StopCommand : Callable<Int> {
   }
 }
 
-// Extension property to access appProvider from RunCommand/DevicesCommand/DesktopCommand
+// Extension property to access appProvider from RunCommand/DevicesCommand/AppCommand
 private val TrailblazeCliCommand.appProvider: () -> TrailblazeDesktopApp
   get() = this.let {
     val field = TrailblazeCliCommand::class.java.getDeclaredField("appProvider")

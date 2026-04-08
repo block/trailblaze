@@ -53,7 +53,7 @@ class RevylScreenState(
 
   override val deviceHeight: Int = dimensions.second
 
-  override val viewHierarchyOriginal: ViewHierarchyTreeNode = ViewHierarchyTreeNode(
+  private val rootViewHierarchy: ViewHierarchyTreeNode = ViewHierarchyTreeNode(
     nodeId = 1,
     text = "RevylRootNode",
     className = "RevylCloudDevice",
@@ -63,7 +63,7 @@ class RevylScreenState(
     enabled = true,
   )
 
-  override val viewHierarchy: ViewHierarchyTreeNode = viewHierarchyOriginal
+  override val viewHierarchy: ViewHierarchyTreeNode = rootViewHierarchy
 
   override val trailblazeDevicePlatform: TrailblazeDevicePlatform = when (platform.lowercase()) {
     RevylCliClient.PLATFORM_IOS -> TrailblazeDevicePlatform.IOS

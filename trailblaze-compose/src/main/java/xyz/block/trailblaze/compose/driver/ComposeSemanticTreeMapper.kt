@@ -134,10 +134,39 @@ object ComposeSemanticTreeMapper {
     return mapNode(rootNode) { nextNodeId++ }
   }
 
+  /**
+   * Maps multiple root nodes (e.g. main window + dialog) into a single tree.
+   * When there is more than one root (a popup or dialog is open) the roots are
+   * wrapped in a transparent synthetic container so nothing is lost.
+   */
+  fun map(rootNodes: List<SemanticsNode>): ViewHierarchyTreeNode =
+    when {
+      rootNodes.isEmpty() -> ViewHierarchyTreeNode()
+      rootNodes.size == 1 -> map(rootNodes.first())
+      else -> ViewHierarchyTreeNode(nodeId = 0L, children = rootNodes.map { map(it) })
+    }
+
   fun mapToTrailblazeNode(rootNode: SemanticsNode): TrailblazeNode {
     var nextNodeId = 1L
     return mapNodeToTrailblazeNode(rootNode) { nextNodeId++ }
   }
+
+  /**
+   * Multi-root variant of [mapToTrailblazeNode] — see [map] for rationale.
+   * When a dialog is open, its root is appended as a sibling inside the primary root so all
+   * nodes are visible in the tree without losing hierarchy context.
+   */
+  fun mapToTrailblazeNode(rootNodes: List<SemanticsNode>): TrailblazeNode? =
+    when {
+      rootNodes.isEmpty() -> null
+      rootNodes.size == 1 -> mapToTrailblazeNode(rootNodes.first())
+      else -> {
+        val trees = rootNodes.mapNotNull { mapToTrailblazeNode(it) }
+        trees.firstOrNull()?.let { primary ->
+          primary.copy(children = primary.children + trees.drop(1))
+        }
+      }
+    }
 
   private fun mapNodeToTrailblazeNode(
     node: SemanticsNode,
@@ -195,8 +224,10 @@ object ComposeSemanticTreeMapper {
       checked = s.isChecked,
       selected = s.isSelected ?: false,
       password = s.isPassword,
-      dimensions = "${s.width}x${s.height}",
-      centerPoint = "${s.centerX},${s.centerY}",
+      x1 = s.bounds.left.toInt(),
+      y1 = s.bounds.top.toInt(),
+      x2 = s.bounds.right.toInt(),
+      y2 = s.bounds.bottom.toInt(),
       children = children,
     )
   }

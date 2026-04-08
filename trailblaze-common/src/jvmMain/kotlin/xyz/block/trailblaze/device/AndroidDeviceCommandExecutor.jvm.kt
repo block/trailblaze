@@ -56,6 +56,10 @@ actual class AndroidDeviceCommandExecutor actual constructor(
     )
   }
 
+  actual fun grantAppOpsPermission(appId: String, permission: String) {
+    shellCommand("appops", "set", appId, permission, "allow")
+  }
+
   /**
    * Writes a file to Downloads via the MediaStore content provider.
    *

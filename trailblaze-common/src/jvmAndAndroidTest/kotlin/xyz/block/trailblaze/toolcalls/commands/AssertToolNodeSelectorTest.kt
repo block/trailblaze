@@ -22,6 +22,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TraceId
+import xyz.block.trailblaze.model.NodeSelectorMode
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 
@@ -184,6 +185,7 @@ class AssertToolNodeSelectorTest {
       trailblazeLogger = agent.trailblazeLogger,
       memory = agent.memory,
       maestroTrailblazeAgent = agent,
+      nodeSelectorMode = NodeSelectorMode.PREFER_NODE_SELECTOR,
     )
   }
 

@@ -38,6 +38,18 @@ internal object HostIosDriverFactory {
   @Volatile
   private var hasPerformedInitialCleanup = false
 
+  /**
+   * Clears the cached driver so the next [createIOS] call creates a fresh one.
+   * Call this when the persistent driver is closed externally (e.g., force-reconnect).
+   */
+  @Synchronized
+  fun clearCachedDriver() {
+    cachedMaestro = null
+    cachedDeviceId = null
+    cachedDriverHostPort = null
+  }
+
+  @Synchronized
   fun createIOS(
     deviceId: String,
     openDriver: Boolean,

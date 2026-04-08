@@ -59,7 +59,14 @@ class TrailblazeAccessibilityService : AccessibilityService() {
     // Track the timestamp of meaningful UI events for settle detection.
     // Only event types that indicate actual UI mutations — not noise like announcements.
     when (event.eventType) {
-      AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
+      AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
+        lastUiEventTimestampMs = Clock.System.now().toEpochMilliseconds()
+        // Track the foreground activity class from window state changes.
+        // The className on these events is the Activity or Dialog class name.
+        event.className?.toString()?.let { cls ->
+          if (cls.contains('.')) currentActivityClass = cls
+        }
+      }
       AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED,
       AccessibilityEvent.TYPE_VIEW_SCROLLED,
       AccessibilityEvent.TYPE_WINDOWS_CHANGED -> {
@@ -102,6 +109,13 @@ class TrailblazeAccessibilityService : AccessibilityService() {
      * threads (settle detection).
      */
     @Volatile internal var lastUiEventTimestampMs: Long = 0L
+
+    /** The class name of the current foreground activity, tracked from accessibility events. */
+    @Volatile internal var currentActivityClass: String? = null
+
+    /** Returns the short name of the current foreground activity (e.g., "HomeActivity"). */
+    fun getCurrentActivity(): String? =
+      currentActivityClass?.substringAfterLast('.')?.takeIf { it.isNotBlank() }
 
     @Volatile private var accessibilityServiceInstance: TrailblazeAccessibilityService? = null
 

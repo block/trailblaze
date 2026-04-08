@@ -35,7 +35,6 @@ private val MOCK_SCREEN_STATE = object : ScreenState {
   override val screenshotBytes: ByteArray? = null
   override val deviceWidth: Int = 1080
   override val deviceHeight: Int = 1920
-  override val viewHierarchyOriginal: ViewHierarchyTreeNode = ViewHierarchyTreeNode()
   override val viewHierarchy: ViewHierarchyTreeNode = ViewHierarchyTreeNode()
   override val trailblazeDevicePlatform: TrailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID
   override val deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList()

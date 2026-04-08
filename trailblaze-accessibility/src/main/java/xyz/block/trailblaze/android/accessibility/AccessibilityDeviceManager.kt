@@ -23,10 +23,8 @@ import xyz.block.trailblaze.util.Console
  * - **AI agent tools**: direct device control with built-in settle guarantees
  */
 class AccessibilityDeviceManager(
-  private val filterViewHierarchy: Boolean = false,
   private val setOfMarkEnabled: Boolean = true,
   private val deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
-  private val filterImportantForAccessibility: Boolean = true,
 ) {
 
   companion object {
@@ -42,17 +40,11 @@ class AccessibilityDeviceManager(
    * Follows the same pattern as `PlaywrightBrowserManager.getScreenState()` — calls
    * [waitForReady] before capturing to ensure the snapshot reflects a stable UI.
    */
-  fun getScreenState(
-    fullHierarchy: Boolean = false,
-    includeOffscreen: Boolean = false,
-  ): ScreenState {
+  fun getScreenState(): ScreenState {
     waitForReady()
     return AccessibilityServiceScreenState(
-      filterViewHierarchy = filterViewHierarchy,
       setOfMarkEnabled = setOfMarkEnabled,
       deviceClassifiers = deviceClassifiers,
-      filterImportantForAccessibility = if (fullHierarchy) false else filterImportantForAccessibility,
-      includeOffscreen = includeOffscreen,
     )
   }
 
@@ -60,16 +52,10 @@ class AccessibilityDeviceManager(
    * Captures screen state for logging without waiting for settle. Useful for recording the
    * immediate state after an action without the settle overhead.
    */
-  fun captureScreenStateForLogging(
-    fullHierarchy: Boolean = false,
-    includeOffscreen: Boolean = false,
-  ): ScreenState {
+  fun captureScreenStateForLogging(): ScreenState {
     return AccessibilityServiceScreenState(
-      filterViewHierarchy = filterViewHierarchy,
       setOfMarkEnabled = setOfMarkEnabled,
       deviceClassifiers = deviceClassifiers,
-      filterImportantForAccessibility = if (fullHierarchy) false else filterImportantForAccessibility,
-      includeOffscreen = includeOffscreen,
     )
   }
 

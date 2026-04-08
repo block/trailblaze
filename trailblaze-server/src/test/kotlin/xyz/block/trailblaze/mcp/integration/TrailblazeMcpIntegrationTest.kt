@@ -430,7 +430,7 @@ private class TestTrailblazeMcpBridge : TrailblazeMcpBridge {
 
   override fun getDirectScreenStateProvider(): ((ScreenshotScalingConfig) -> ScreenState)? = null
 
-  override suspend fun executeTrailblazeTool(tool: TrailblazeTool): String =
+  override suspend fun executeTrailblazeTool(tool: TrailblazeTool, blocking: Boolean): String =
     "[OK] Tool executed (test mode)"
 
   override suspend fun endSession(): Boolean = true

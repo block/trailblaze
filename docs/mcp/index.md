@@ -83,16 +83,20 @@ device(action=LIST)
 device(action=CONNECT, deviceId="emulator-5554")
 ```
 
-### step
+### blaze
 
 Execute an action using natural language. Trailblaze's inner agent analyzes the screen and performs the necessary UI interactions.
 
+Each call should be a **complete user-facing action** with all relevant details — not individual UI taps, but not multi-screen journeys either. The inner agent has specialized tools (login, setup, onboarding) that need full context to select the right one.
+
 ```
-step("Tap the Login button")
-step("Enter 'hello@example.com' in the email field")
-step("Scroll down until the Submit button is visible")
-step("Swipe left to dismiss the notification")
+blaze(goal="Login with test@example.com")
+blaze(goal="Search flights from Paris to London on October 4")
+blaze(goal="Tap the Login button")
+blaze(goal="Scroll down until the Submit button is visible")
 ```
+
+Trailblaze can handle larger objectives autonomously — it breaks them down internally. Larger goals mean less back-and-forth but slower feedback. Smaller goals give faster feedback but risk losing context for specialized tools. When in doubt, go bigger.
 
 Returns: Success/failure status with screen summary.
 
@@ -296,7 +300,7 @@ This enables:
 - **Custom replanning logic** - Your client decides when to retry or try alternatives
 - **Cost optimization** - Trailblaze uses a cheap vision model for screen analysis
 
-See the migration guide under `docs/decisions/009_migration_guide.md` for details.
+See the [Kotlin language decision](../devlog/2026-01-28-kotlin-language.md) for details on migration.
 
 ## Troubleshooting
 

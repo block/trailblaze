@@ -57,6 +57,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.text.selection.SelectionContainer
+import xyz.block.trailblaze.ui.composables.SelectableText
 import xyz.block.trailblaze.yaml.DirectionStep
 import xyz.block.trailblaze.yaml.TrailConfig
 import xyz.block.trailblaze.yaml.TrailSource
@@ -249,25 +251,27 @@ fun YamlVisualEditor(
         OutlinedCard(
           modifier = Modifier.fillMaxWidth()
         ) {
-          Column(
-            modifier = Modifier.padding(12.dp)
-          ) {
-            Text(
-              text = "✗ YAML Parse Error",
-              style = MaterialTheme.typography.titleMedium,
-              color = MaterialTheme.colorScheme.error,
-              fontWeight = FontWeight.Medium
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-              text = parseResult.message,
-              style = MaterialTheme.typography.bodyMedium,
-              color = MaterialTheme.colorScheme.error
-            )
+          SelectionContainer {
+            Column(
+              modifier = Modifier.padding(12.dp)
+            ) {
+              Text(
+                text = "✗ YAML Parse Error",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.error,
+                fontWeight = FontWeight.Medium
+              )
+              Spacer(modifier = Modifier.height(4.dp))
+              Text(
+                text = parseResult.message,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.error
+              )
+            }
           }
         }
 
-        Text(
+        SelectableText(
           text = "Please fix the YAML syntax in the text editor and return here.",
           style = MaterialTheme.typography.bodyMedium,
           modifier = Modifier.padding(top = 8.dp)
@@ -611,7 +615,7 @@ private fun PromptsItemContent(
     verticalAlignment = Alignment.CenterVertically,
     horizontalArrangement = Arrangement.SpaceBetween
   ) {
-    Text(
+    SelectableText(
       text = "${item.promptSteps.size} Steps",
       style = MaterialTheme.typography.titleMedium,
       fontWeight = FontWeight.Bold
@@ -842,7 +846,7 @@ private fun PromptsItemContent(
                     tint = Color(0xFFE53935), // Red recording icon
                     modifier = Modifier.size(10.dp)
                   )
-                  Text(
+                  SelectableText(
                     text = tool.name,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSecondaryContainer,
@@ -929,7 +933,7 @@ private fun ToolItemContent(
       horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
       ItemTypeBadge(text = "TOOLS", color = Color(0xFFFF5722))
-      Text(
+      SelectableText(
         text = "${item.tools.size} Tools",
         style = MaterialTheme.typography.titleMedium,
         fontWeight = FontWeight.Bold
@@ -958,7 +962,7 @@ private fun ToolItemContent(
         modifier = Modifier.padding(12.dp),
         verticalAlignment = Alignment.CenterVertically
       ) {
-        Text(
+        SelectableText(
           text = tool.name,
           style = MaterialTheme.typography.bodyMedium,
           fontWeight = FontWeight.Medium

@@ -9,6 +9,13 @@ plugins {
   alias(libs.plugins.vanniktech.maven.publish)
 }
 
+configurations.all {
+  exclude(group = "ai.koog", module = "prompt-executor-bedrock-client")
+  exclude(group = "ai.koog", module = "prompt-executor-dashscope-client")
+  exclude(group = "ai.koog", module = "prompt-executor-deepseek-client")
+  exclude(group = "ai.koog", module = "prompt-executor-mistralai-client")
+}
+
 android {
   namespace = "xyz.block.trailblaze.models"
   compileSdk = 35
@@ -56,7 +63,7 @@ kotlin {
       implementation(libs.koog.prompt.executor.anthropic)
       implementation(libs.koog.prompt.executor.clients)
       implementation(libs.koog.prompt.executor.google)
-      implementation(libs.koog.prompt.executor.llms)
+      implementation(libs.koog.prompt.executor.llms.all)
       implementation(libs.koog.prompt.executor.openai)
       implementation(libs.koog.prompt.executor.openrouter)
       implementation(libs.kotlinx.datetime)

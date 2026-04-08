@@ -37,6 +37,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.Image
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.vector.rememberVectorPainter
+import androidx.compose.foundation.text.selection.SelectionContainer
+import xyz.block.trailblaze.ui.composables.SelectableText
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.ui.composables.LocalDeviceClassifierIcons
@@ -94,35 +96,39 @@ fun TrailDetailsView(
       Spacer(modifier = Modifier.height(12.dp))
       
       // Title (from config)
-      trail.title?.let {
-        DetailRow(label = "Title", value = it)
+      SelectionContainer {
+        Column {
+          trail.title?.let {
+            DetailRow(label = "Title", value = it)
+          }
+
+          // Trail ID
+          DetailRow(label = "ID", value = trail.id, isMonospace = true)
+
+          // Display name (only if different from title and ID)
+          if (trail.displayName != trail.id && trail.displayName != trail.title) {
+            DetailRow(label = "Name", value = trail.displayName)
+          }
+
+          // Parent path
+          trail.parentPath?.let {
+            DetailRow(label = "Path", value = it, isMonospace = true)
+          }
+
+          // Priority (from config)
+          trail.priority?.let {
+            DetailRow(label = "Priority", value = it)
+          }
+
+          // Platforms
+          if (trail.platforms.isNotEmpty()) {
+            DetailRow(label = "Platforms", value = trail.platforms.joinToString(", ") { it.displayName })
+          }
+
+          // Variant count
+          DetailRow(label = "Variants", value = "${trail.variants.size}")
+        }
       }
-      
-      // Trail ID
-      DetailRow(label = "ID", value = trail.id, isMonospace = true)
-      
-      // Display name (only if different from title and ID)
-      if (trail.displayName != trail.id && trail.displayName != trail.title) {
-        DetailRow(label = "Name", value = trail.displayName)
-      }
-      
-      // Parent path
-      trail.parentPath?.let {
-        DetailRow(label = "Path", value = it, isMonospace = true)
-      }
-      
-      // Priority (from config)
-      trail.priority?.let {
-        DetailRow(label = "Priority", value = it)
-      }
-      
-      // Platforms
-      if (trail.platforms.isNotEmpty()) {
-        DetailRow(label = "Platforms", value = trail.platforms.joinToString(", ") { it.displayName })
-      }
-      
-      // Variant count
-      DetailRow(label = "Variants", value = "${trail.variants.size}")
       
       // Description (from config)
       trail.description?.let { desc ->
@@ -132,7 +138,7 @@ fun TrailDetailsView(
           style = MaterialTheme.typography.bodyMedium,
           fontWeight = FontWeight.Medium
         )
-        Text(
+        SelectableText(
           text = desc,
           style = MaterialTheme.typography.bodySmall,
           color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -149,8 +155,12 @@ fun TrailDetailsView(
           fontWeight = FontWeight.SemiBold
         )
         Spacer(modifier = Modifier.height(4.dp))
-        trail.metadata.forEach { (key, value) ->
-          DetailRow(label = key, value = value, isMonospace = true)
+        SelectionContainer {
+          Column {
+            trail.metadata.forEach { (key, value) ->
+              DetailRow(label = key, value = value, isMonospace = true)
+            }
+          }
         }
       }
       
@@ -282,34 +292,36 @@ private fun VariantRow(
       
       Spacer(modifier = Modifier.width(12.dp))
       
-      Column(modifier = Modifier.weight(1f)) {
-        Row(
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-          Text(
-            text = variant.displayLabel,
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.Medium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-          )
-          // Source type icon per file
-          sourceTypeIcon?.let { srcIcon ->
-            Icon(
-              imageVector = srcIcon,
-              contentDescription = variant.config?.source?.type?.name,
-              modifier = Modifier.size(16.dp),
-              tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+      SelectionContainer(modifier = Modifier.weight(1f)) {
+        Column {
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+          ) {
+            Text(
+              text = variant.displayLabel,
+              style = MaterialTheme.typography.bodyMedium,
+              fontWeight = FontWeight.Medium,
+              color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            // Source type icon per file
+            sourceTypeIcon?.let { srcIcon ->
+              Icon(
+                imageVector = srcIcon,
+                contentDescription = variant.config?.source?.type?.name,
+                modifier = Modifier.size(16.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+              )
+            }
           }
+          Text(
+            text = variant.fileName,
+            style = MaterialTheme.typography.bodySmall.copy(
+              fontFamily = FontFamily.Monospace
+            ),
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+          )
         }
-        Text(
-          text = variant.fileName,
-          style = MaterialTheme.typography.bodySmall.copy(
-            fontFamily = FontFamily.Monospace
-          ),
-          color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-        )
       }
       
       Icon(

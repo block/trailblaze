@@ -74,4 +74,7 @@ data class SessionResult(
 
   /** Session IDs of previous attempts that were replaced by this result */
   val replaced_session_ids: List<SessionId> = emptyList(),
+
+  /** Failure reasons from replaced attempts (populated during dedup when this result superseded earlier failures) */
+  val replaced_failure_reasons: List<String> = emptyList(),
 )

@@ -122,11 +122,6 @@ abstract class BaseHostTrailblazeTest(
       sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
       appTarget = appTarget,
       deviceClassifiers = trailblazeDeviceClassifiers,
-      pendingViewHierarchyDetailsProvider = {
-        val details = trailblazeAgent.pendingViewHierarchyDetails
-        trailblazeAgent.pendingViewHierarchyDetails = emptySet()
-        details
-      },
     )
   }
 
@@ -200,6 +195,7 @@ abstract class BaseHostTrailblazeTest(
       trailblazeLogger = loggingRule.logger,
       trailblazeDeviceInfoProvider = loggingRule.trailblazeDeviceInfoProvider,
       sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
+      nodeSelectorMode = config.nodeSelectorMode,
     )
   }
 

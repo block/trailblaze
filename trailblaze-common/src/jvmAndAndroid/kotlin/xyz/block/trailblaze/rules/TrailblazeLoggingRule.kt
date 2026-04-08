@@ -11,6 +11,7 @@ import xyz.block.trailblaze.logs.client.LogEmitter
 import xyz.block.trailblaze.logs.client.ScreenStateLogger
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogServerClient
+import xyz.block.trailblaze.logs.client.SessionMetadata
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeScreenStateLog
 import xyz.block.trailblaze.logs.client.TrailblazeSession
@@ -37,6 +38,11 @@ abstract class TrailblazeLoggingRule(
   private val writeTraceToDisk: ((sessionId: SessionId, json: String) -> Unit) = { _, _ -> },
   /** This can be used for additional log monitoring or verifications if needed, but is not needed for normal usage */
   private val additionalLogEmitter: LogEmitter? = null,
+  /**
+   * When true, all log emission is suppressed — neither HTTP nor disk writes occur.
+   * Use with [--no-logging] so test runs don't pollute the session list.
+   */
+  private val noLogging: Boolean = false,
 ) : SimpleTestRule() {
 
   abstract val trailblazeDeviceInfoProvider: () -> TrailblazeDeviceInfo
@@ -70,6 +76,8 @@ abstract class TrailblazeLoggingRule(
    */
   private val logEmitter: LogEmitter by lazy {
     LogEmitter { log: TrailblazeLog ->
+      if (noLogging) return@LogEmitter
+
       // Notify additional log emitter (for test inspection, etc.)
       additionalLogEmitter?.emit(log)
 
@@ -130,6 +138,7 @@ abstract class TrailblazeLoggingRule(
   }
 
   private val isServerAvailable by lazy {
+    if (noLogging) return@lazy false
     val startTime = Clock.System.now()
     val isRunning = runBlocking { trailblazeLogServerClient.isServerRunning() }
     Console.log("isServerAvailable [$isRunning] took ${Clock.System.now() - startTime}ms")
@@ -146,11 +155,18 @@ abstract class TrailblazeLoggingRule(
 
   override fun ruleCreation(description: Description) {
     this.description = description
-    
+
     val testName = "${description.testClass.canonicalName}_${description.methodName}"
-    
-    // Start new session
-    session = sessionManager.startSession(testName)
+
+    // Start new session with metadata so title resolution uses class/method
+    // instead of falling back to the session ID (which contains a timestamp prefix)
+    session = sessionManager.startSession(
+      sessionName = testName,
+      metadata = SessionMetadata(
+        testClassName = description.testClass.canonicalName,
+        testMethodName = description.methodName,
+      ),
+    )
   }
 
   override fun beforeTestExecution(description: Description) {

@@ -4,6 +4,7 @@ import io.ktor.util.decodeBase64Bytes
 import kotlinx.coroutines.withTimeoutOrNull
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ScreenshotScalingConfig
+import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
@@ -33,14 +34,17 @@ class RpcScreenStateAdapter(
   override val viewHierarchy: ViewHierarchyTreeNode
     get() = response.viewHierarchy
 
-  override val viewHierarchyOriginal: ViewHierarchyTreeNode
-    get() = response.viewHierarchy
-
   override val deviceWidth: Int
     get() = response.deviceWidth
 
   override val deviceHeight: Int
     get() = response.deviceHeight
+
+  override val trailblazeNodeTree: TrailblazeNode?
+    get() = response.trailblazeNodeTree
+
+  override val pageContextSummary: String?
+    get() = response.pageContextSummary
 
   override val trailblazeDevicePlatform: TrailblazeDevicePlatform
     get() = TrailblazeDevicePlatform.ANDROID
@@ -84,7 +88,6 @@ object ScreenStateCaptureUtil {
       if (mcpBridge.isOnDeviceInstrumentation()) {
         mcpBridge.getScreenStateViaRpc(
           includeScreenshot = true,
-          filterViewHierarchy = false,
           screenshotScalingConfig = screenshotScalingConfig,
         )?.let { rpcResponse ->
           return@withTimeoutOrNull RpcScreenStateAdapter(rpcResponse)

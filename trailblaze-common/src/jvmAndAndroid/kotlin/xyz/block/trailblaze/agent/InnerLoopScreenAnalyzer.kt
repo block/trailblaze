@@ -2,7 +2,7 @@ package xyz.block.trailblaze.agent
 
 import ai.koog.agents.core.tools.ToolDescriptor
 import ai.koog.agents.core.tools.ToolParameterDescriptor
-import ai.koog.agents.core.tools.reflect.asToolType
+import xyz.block.trailblaze.toolcalls.asToolType
 import kotlin.reflect.full.starProjectedType
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -149,6 +149,11 @@ class InnerLoopScreenAnalyzer(
         type = Boolean::class.starProjectedType.asToolType(),
       ),
       ToolParameterDescriptor(
+        name = ToolCallAnalysisResponse::answer.name,
+        description = "Direct answer when objective is a question",
+        type = String::class.starProjectedType.asToolType(),
+      ),
+      ToolParameterDescriptor(
         name = ToolCallAnalysisResponse::suggestedHint.name,
         description = "request different tools: NAVIGATION, VERIFICATION, STANDARD, or specific tool name",
         type = String::class.starProjectedType.asToolType(),
@@ -244,7 +249,7 @@ Analyze the screen and call ONE tool to progress toward the objective.
 2. When a view hierarchy with nodeIds is provided, use the coordinates from the node annotations to tap precisely
 3. Use an app-launch tool to open apps (not tap on icons) - set `suggestedToolHint: "NAVIGATION"` if unavailable
 4. Use exact app names from objective (don't autocorrect)
-5. If objective is "Answer this question:" → call the status/objective tool with answer in reasoning
+5. If objective is "Answer this question:" → call the status/objective tool with the `answer` field containing a direct answer to the question
 
 ## Required Fields (add to every tool call)
 - `reasoning`: Why this action achieves the objective
@@ -252,6 +257,7 @@ Analyze the screen and call ONE tool to progress toward the objective.
 - `confidence`: HIGH / MEDIUM / LOW
 
 ## Optional Fields
+- `answer`: When the objective is a question, provide a direct answer here (not in reasoning)
 - `objectiveAppearsAchieved`: true if objective is already complete
 - `objectiveAppearsImpossible`: true if blocked by error/missing feature
 - `suggestedToolHint`: NAVIGATION | VERIFICATION | STANDARD | specific tool name
@@ -297,9 +303,9 @@ Before acting, check if the screen shows a non-normal state. If so, set `screenS
       screenHeight = screenState.deviceHeight,
       platform = screenState.trailblazeDevicePlatform,
     )
-    val filteredHierarchy = vhFilter.filterInteractableViewHierarchyTreeNodes(screenState.viewHierarchyOriginal)
+    val filteredHierarchy = vhFilter.filterInteractableViewHierarchyTreeNodes(screenState.viewHierarchy)
     val screenContext = ScreenContext(
-      viewHierarchy = screenState.viewHierarchyOriginal,
+      viewHierarchy = screenState.viewHierarchy,
       viewHierarchyFiltered = filteredHierarchy,
       deviceWidth = screenState.deviceWidth,
       deviceHeight = screenState.deviceHeight,
@@ -367,13 +373,16 @@ Before acting, check if the screen shows a non-normal state. If so, set `screenS
       screenState.viewHierarchyTextRepresentation?.let { return it }
     }
 
+    // Filter to interactable elements for LLM consumption (token budget).
+    // ScreenState.viewHierarchy always contains the full unfiltered tree;
+    // filtering is a presentation concern applied here at the point of use.
     val vhFilter = ViewHierarchyFilter.create(
       screenWidth = screenState.deviceWidth,
       screenHeight = screenState.deviceHeight,
       platform = screenState.trailblazeDevicePlatform,
     )
-    val filtered = vhFilter.filterInteractableViewHierarchyTreeNodes(screenState.viewHierarchyOriginal)
-    val description = buildNodeDescription(filtered, depth = 0)
+    val root = vhFilter.filterInteractableViewHierarchyTreeNodes(screenState.viewHierarchy)
+    val description = buildNodeDescription(root, depth = 0)
 
     // Note: focused text input fields are already annotated with ", focused" in the
     // node description. The `type` and `type_into` tools auto-dismiss the keyboard via

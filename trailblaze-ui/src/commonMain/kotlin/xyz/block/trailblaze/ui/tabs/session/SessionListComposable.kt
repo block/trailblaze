@@ -23,6 +23,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Assessment
@@ -87,6 +88,9 @@ import xyz.block.trailblaze.llm.LlmSessionUsageAndCost
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.logs.model.SessionStatus
+import xyz.block.trailblaze.logs.model.computeGroupedStats
+import xyz.block.trailblaze.logs.model.groupByTest
+import xyz.block.trailblaze.ui.composables.FallbackChip
 import xyz.block.trailblaze.ui.composables.FullScreenModalOverlay
 import xyz.block.trailblaze.ui.composables.PriorityChip
 import xyz.block.trailblaze.ui.composables.SelectableText
@@ -144,11 +148,14 @@ private fun formatRelativeDate(date: LocalDate, today: LocalDate): String {
   }
 }
 
-/** Aggregated stats computed from a list of sessions. */
+/** Aggregated stats computed from a list of sessions (deduplicated by test name). */
 private data class SessionStats(
   val total: Int,
+  val uniqueTests: Int,
   val passed: Int,
   val failed: Int,
+  val fallback: Int,
+  val retried: Int,
   val inProgress: Int,
   val timeout: Int,
   val maxCalls: Int,
@@ -157,35 +164,25 @@ private data class SessionStats(
   val totalLlmCostUsd: Double,
   val totalLlmRequests: Int,
 ) {
-  val completed get() = passed + failed + timeout + maxCalls + cancelled
+  val completed get() = passed + failed + timeout + maxCalls
   val passRate: Float
     get() = if (completed > 0) passed.toFloat() / completed else 0f
 }
 
 private fun computeStats(sessions: List<SessionInfo>): SessionStats {
-  var passed = 0
-  var failed = 0
-  var inProgress = 0
-  var timeout = 0
-  var maxCalls = 0
+  val groups = sessions.groupByTest()
+  val groupedStats = groups.computeGroupedStats()
+
   var cancelled = 0
   var totalDuration = 0L
   var durationCount = 0
   var totalLlmCost = 0.0
   var totalLlmReqs = 0
 
-  for (session in sessions) {
-    when (session.latestStatus) {
-      is SessionStatus.Started -> inProgress++
-      is SessionStatus.Ended.Succeeded,
-      is SessionStatus.Ended.SucceededWithFallback -> passed++
-      is SessionStatus.Ended.Failed,
-      is SessionStatus.Ended.FailedWithFallback -> failed++
-      is SessionStatus.Ended.TimeoutReached -> timeout++
-      is SessionStatus.Ended.MaxCallsLimitReached -> maxCalls++
-      is SessionStatus.Ended.Cancelled -> cancelled++
-      is SessionStatus.Unknown -> {}
-    }
+  // Compute cost/duration from the best result per group
+  for (group in groups) {
+    val session = group.best
+    if (session.latestStatus is SessionStatus.Ended.Cancelled) cancelled++
     if (session.durationMs > 0) {
       totalDuration += session.durationMs
       durationCount++
@@ -198,11 +195,14 @@ private fun computeStats(sessions: List<SessionInfo>): SessionStats {
 
   return SessionStats(
     total = sessions.size,
-    passed = passed,
-    failed = failed,
-    inProgress = inProgress,
-    timeout = timeout,
-    maxCalls = maxCalls,
+    uniqueTests = groupedStats.uniqueTests,
+    passed = groupedStats.passed,
+    failed = groupedStats.failed,
+    fallback = groupedStats.fallback,
+    retried = groupedStats.retried,
+    inProgress = groupedStats.inProgress,
+    timeout = groupedStats.timeout,
+    maxCalls = groupedStats.maxCalls,
     cancelled = cancelled,
     avgDurationMs = if (durationCount > 0) totalDuration / durationCount else 0L,
     totalLlmCostUsd = totalLlmCost,
@@ -568,7 +568,7 @@ fun SessionListComposable(
                   style = MaterialTheme.typography.titleMedium,
                   color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Text(
+                SelectableText(
                   text = "${sessions.size} sessions hidden by current filters",
                   style = MaterialTheme.typography.bodySmall,
                   color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
@@ -599,36 +599,39 @@ fun SessionListComposable(
             .forEach { (date, sessionsForDay) ->
               item {
                 Spacer(modifier = Modifier.height(8.dp))
-                Row(
-                  modifier = Modifier.fillMaxWidth(),
-                  verticalAlignment = Alignment.CenterVertically,
-                  horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                  Text(
-                    text = formatRelativeDate(date, today),
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                  )
-                  // Mini pass/fail for the day
-                  val dayStats = computeStats(sessionsForDay)
-                  if (dayStats.completed > 0) {
+                SelectionContainer {
+                  Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                  ) {
                     Text(
-                      text = "${dayStats.passed}/${dayStats.completed}",
-                      style = MaterialTheme.typography.labelSmall,
-                      color = if (dayStats.passRate >= 0.5f) Color(0xFF4CAF50) else Color(0xFFE53935),
+                      text = formatRelativeDate(date, today),
+                      style = MaterialTheme.typography.titleSmall,
+                      fontWeight = FontWeight.SemiBold,
+                      color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                  } else {
-                    Text(
-                      text = "${sessionsForDay.size}",
-                      style = MaterialTheme.typography.labelSmall,
-                      color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                    // Mini pass/fail for the day
+                    val dayStats = computeStats(sessionsForDay)
+                    if (dayStats.completed > 0) {
+                      Text(
+                        text = "${dayStats.passed}/${dayStats.completed}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color =
+                          if (dayStats.passRate >= 0.5f) Color(0xFF4CAF50) else Color(0xFFE53935),
+                      )
+                    } else {
+                      Text(
+                        text = "${sessionsForDay.size}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                      )
+                    }
+                    HorizontalDivider(
+                      modifier = Modifier.weight(1f),
+                      color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
                     )
                   }
-                  HorizontalDivider(
-                    modifier = Modifier.weight(1f),
-                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
-                  )
                 }
                 Spacer(modifier = Modifier.height(4.dp))
               }
@@ -725,8 +728,8 @@ private fun StatsDashboard(
             .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
         )
         HeroMetric(
-          label = "Sessions",
-          value = "${stats.total}",
+          label = if (stats.total != stats.uniqueTests) "Tests (${stats.total} sessions)" else "Sessions",
+          value = "${stats.uniqueTests}",
           color = MaterialTheme.colorScheme.onSurface,
           modifier = Modifier.weight(1f),
         )
@@ -810,6 +813,58 @@ private fun StatsDashboard(
             modifier = Modifier.weight(1f),
           )
         }
+        if (stats.fallback > 0 || SessionStatusFilter.SUCCEEDED_FALLBACK in selectedStatuses) {
+          StatusPill(
+            icon = Icons.Filled.SmartToy,
+            count = stats.fallback,
+            label = "Fallback",
+            color = Color(0xFF26A69A),
+            selected = SessionStatusFilter.SUCCEEDED_FALLBACK in selectedStatuses ||
+                SessionStatusFilter.FAILED_FALLBACK in selectedStatuses,
+            onClick = { onStatusToggle(SessionStatusFilter.SUCCEEDED_FALLBACK) },
+            modifier = Modifier.weight(1f),
+          )
+        }
+        if (stats.retried > 0) {
+          // Informational indicator (not a filter toggle)
+          Surface(
+            modifier = Modifier.weight(1f),
+            shape = RoundedCornerShape(10.dp),
+            color = Color.Transparent,
+            border = androidx.compose.foundation.BorderStroke(
+              1.dp,
+              MaterialTheme.colorScheme.outlineVariant,
+            ),
+          ) {
+            Column(
+              modifier = Modifier.padding(vertical = 6.dp, horizontal = 8.dp),
+              horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+              ) {
+                Icon(
+                  Icons.Filled.Schedule,
+                  contentDescription = null,
+                  modifier = Modifier.size(14.dp),
+                  tint = Color(0xFF7C4DFF),
+                )
+                Text(
+                  "${stats.retried}",
+                  style = MaterialTheme.typography.titleSmall,
+                  fontWeight = FontWeight.Bold,
+                  color = Color(0xFF7C4DFF),
+                )
+              }
+              Text(
+                "Retried",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+              )
+            }
+          }
+        }
       }
     }
   }
@@ -826,7 +881,7 @@ private fun HeroMetric(
     modifier = modifier,
     horizontalAlignment = Alignment.CenterHorizontally,
   ) {
-    Text(
+    SelectableText(
       text = value,
       style = MaterialTheme.typography.headlineMedium,
       fontWeight = FontWeight.Bold,
@@ -878,7 +933,7 @@ private fun StatusPill(
           modifier = Modifier.size(14.dp),
           tint = color,
         )
-        Text(
+        SelectableText(
           text = "$count",
           style = MaterialTheme.typography.titleSmall,
           fontWeight = FontWeight.Bold,
@@ -1120,24 +1175,26 @@ private fun SessionCard(
           horizontalArrangement = Arrangement.SpaceBetween,
           verticalAlignment = Alignment.Top,
         ) {
-          Column(modifier = Modifier.weight(1f)) {
-            SelectableText(
-              text = session.displayName,
-              style = MaterialTheme.typography.titleSmall,
-              fontWeight = FontWeight.SemiBold,
-            )
-
-            val testIdentifier = buildString {
-              session.testClass?.substringAfterLast(".")?.let { append(it) }
-              session.testName?.let { append("::$it") }
-            }
-            if (testIdentifier.isNotEmpty() && session.trailConfig?.title != null) {
-              SelectableText(
-                text = testIdentifier,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                modifier = Modifier.padding(top = 2.dp),
+          SelectionContainer {
+            Column(modifier = Modifier.weight(1f)) {
+              Text(
+                text = session.displayName,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
               )
+
+              val testIdentifier = buildString {
+                session.testClass?.substringAfterLast(".")?.let { append(it) }
+                session.testName?.let { append("::$it") }
+              }
+              if (testIdentifier.isNotEmpty() && session.trailConfig?.title != null) {
+                Text(
+                  text = testIdentifier,
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                  modifier = Modifier.padding(top = 2.dp),
+                )
+              }
             }
           }
 
@@ -1145,6 +1202,10 @@ private fun SessionCard(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(4.dp),
           ) {
+            if (session.latestStatus is SessionStatus.Ended.SucceededWithFallback ||
+                session.latestStatus is SessionStatus.Ended.FailedWithFallback) {
+              FallbackChip()
+            }
             StatusBadge(status = session.latestStatus)
 
             if (deleteSession != null || openLogsFolder != null || onExportSession != null) {
@@ -1217,45 +1278,47 @@ private fun SessionCard(
         }
 
         // --- Time, duration, trail ID row ---
-        Row(
-          modifier = Modifier.padding(top = 6.dp),
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
+        SelectionContainer {
           Row(
+            modifier = Modifier.padding(top = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
           ) {
-            Icon(
-              imageVector = Icons.Default.Schedule,
-              contentDescription = null,
-              modifier = Modifier.size(14.dp),
-              tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-            )
-            Text(
-              text = timeString,
-              style = MaterialTheme.typography.labelMedium,
-              fontFamily = FontFamily.Monospace,
-              color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-            )
-          }
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+              Icon(
+                imageVector = Icons.Default.Schedule,
+                contentDescription = null,
+                modifier = Modifier.size(14.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+              )
+              Text(
+                text = timeString,
+                style =
+                  MaterialTheme.typography.labelMedium.copy(fontFamily = FontFamily.Monospace),
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+              )
+            }
 
-          if (session.latestStatus !is SessionStatus.Started && session.durationMs > 0) {
-            Text(
-              text = formatDuration(session.durationMs),
-              style = MaterialTheme.typography.labelMedium,
-              fontFamily = FontFamily.Monospace,
-              color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-            )
-          }
+            if (session.latestStatus !is SessionStatus.Started && session.durationMs > 0) {
+              Text(
+                text = formatDuration(session.durationMs),
+                style =
+                  MaterialTheme.typography.labelMedium.copy(fontFamily = FontFamily.Monospace),
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+              )
+            }
 
-          session.trailConfig?.id?.let { id ->
-            Text(
-              text = id,
-              style = MaterialTheme.typography.labelSmall,
-              fontFamily = FontFamily.Monospace,
-              color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-            )
+            session.trailConfig?.id?.let { id ->
+              Text(
+                text = id,
+                style =
+                  MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+              )
+            }
           }
         }
 
@@ -1381,59 +1444,61 @@ private fun LlmUsageSummaryRow(llm: LlmSessionUsageAndCost) {
     shape = RoundedCornerShape(8.dp),
     color = LlmAccentColor.copy(alpha = 0.06f),
   ) {
-    Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
-      // Row 1: Model name + provider
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-      ) {
+    SelectionContainer {
+      Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
+        // Row 1: Model name + provider
         Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.SpaceBetween,
           verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-          Icon(
-            imageVector = Icons.Default.SmartToy,
-            contentDescription = null,
-            modifier = Modifier.size(14.dp),
-            tint = LlmAccentColor,
-          )
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+          ) {
+            Icon(
+              imageVector = Icons.Default.SmartToy,
+              contentDescription = null,
+              modifier = Modifier.size(14.dp),
+              tint = LlmAccentColor,
+            )
+            Text(
+              text =
+                llm.llmModel.modelId.substringAfterLast("/").substringBefore("-202"),
+              style = MaterialTheme.typography.labelMedium,
+              fontWeight = FontWeight.SemiBold,
+              color = LlmAccentColor,
+              maxLines = 1,
+            )
+          }
           Text(
-            text = llm.llmModel.modelId
-              .substringAfterLast("/")
-              .substringBefore("-202"),
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.SemiBold,
-            color = LlmAccentColor,
-            maxLines = 1,
+            text = llm.llmModel.trailblazeLlmProvider.display,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
           )
         }
-        Text(
-          text = llm.llmModel.trailblazeLlmProvider.display,
-          style = MaterialTheme.typography.labelSmall,
-          color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-        )
-      }
 
-      Spacer(modifier = Modifier.height(4.dp))
+        Spacer(modifier = Modifier.height(4.dp))
 
-      // Row 2: Key metrics
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-      ) {
-        LlmMetricLabel(label = "Calls", value = "${llm.totalRequestCount}")
-        LlmMetricLabel(label = "Cost", value = formatCost(llm.totalCostInUsDollars))
-        LlmMetricLabel(
-          label = "Tokens",
-          value = "${formatTokenCount(llm.totalInputTokens)} in / ${formatTokenCount(llm.totalOutputTokens)} out"
-        )
-        if (llm.averageDurationMillis > 0) {
+        // Row 2: Key metrics
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.spacedBy(12.dp),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          LlmMetricLabel(label = "Calls", value = "${llm.totalRequestCount}")
+          LlmMetricLabel(label = "Cost", value = formatCost(llm.totalCostInUsDollars))
           LlmMetricLabel(
-            label = "Avg",
-            value = "${roundTo1(llm.averageDurationMillis / 1000.0)}s"
+            label = "Tokens",
+            value =
+              "${formatTokenCount(llm.totalInputTokens)} in / ${formatTokenCount(llm.totalOutputTokens)} out",
           )
+          if (llm.averageDurationMillis > 0) {
+            LlmMetricLabel(
+              label = "Avg",
+              value = "${roundTo1(llm.averageDurationMillis / 1000.0)}s",
+            )
+          }
         }
       }
     }
@@ -1453,8 +1518,7 @@ private fun LlmMetricLabel(label: String, value: String) {
     )
     Text(
       text = value,
-      style = MaterialTheme.typography.labelSmall,
-      fontFamily = FontFamily.Monospace,
+      style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
       fontWeight = FontWeight.Medium,
       color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f),
     )

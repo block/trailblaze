@@ -35,7 +35,7 @@ class DebuggingToolSet(
         screenHeight = screenState.deviceHeight,
         platform = screenState.trailblazeDevicePlatform
       )
-      val filtered = vhFilter.filterInteractableViewHierarchyTreeNodes(screenState.viewHierarchyOriginal)
+      val filtered = vhFilter.filterInteractableViewHierarchyTreeNodes(screenState.viewHierarchy)
       buildViewHierarchyDescription(filtered)
     } ?: "No screen state available."
   }

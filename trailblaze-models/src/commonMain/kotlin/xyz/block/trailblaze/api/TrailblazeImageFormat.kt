@@ -22,5 +22,10 @@ enum class TrailblazeImageFormat(
     formatName = "JPEG",
     fileExtension = "jpg",
     mimeSubtype = "jpeg"
-  )
+  ),
+  WEBP(
+    formatName = "WEBP",
+    fileExtension = "webp",
+    mimeSubtype = "webp"
+  ),
 }

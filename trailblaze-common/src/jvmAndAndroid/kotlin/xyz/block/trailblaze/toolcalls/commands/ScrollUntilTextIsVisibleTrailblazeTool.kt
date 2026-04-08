@@ -58,18 +58,7 @@ class ScrollUntilTextIsVisibleTrailblazeTool(
   override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult {
     val memory = toolExecutionContext.trailblazeAgent.memory
     val trailblazeDriverType = toolExecutionContext.trailblazeDeviceInfo.trailblazeDriverType
-    val scrollDuration = when (trailblazeDriverType) {
-        /**
-         * This matches Maestro's Swipe Implementation with the 400ms duration and is working well on-device Android.
-         * https://github.com/mobile-dev-inc/Maestro/blob/0a38a9468cb769ecbc1edc76974fd2f8a8b0b64e/maestro-client/src/main/java/maestro/drivers/AndroidDriver.kt#L404
-         *
-         * The default (40ms) causes a "fling" that overshoots elements. The accessibility driver
-         * also uses the manual scroll loop, so it needs the same 400ms duration.
-         */
-        TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
-        TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY -> "400"
-        else -> ScrollUntilVisibleCommand.DEFAULT_SCROLL_DURATION
-      }
+    val scrollDuration = scrollDurationFor(trailblazeDriverType)
 
     val trailblazeElementSelector = TrailblazeElementSelector(
       textRegex = ".*${Regex.escape(memory.interpolateVariables(text))}.*",
@@ -134,7 +123,7 @@ class ScrollUntilTextIsVisibleTrailblazeTool(
         heightGrid = screenState.deviceHeight
         val tbElementMatches: ElementMatches =
           ElementMatcherUsingMaestro.getMatchingElementsFromSelector(
-            rootTreeNode = screenState.viewHierarchyOriginal,
+            rootTreeNode = screenState.viewHierarchy,
             trailblazeDevicePlatform = toolExecutionContext.trailblazeDeviceInfo.platform,
             trailblazeElementSelector = trailblazeElementSelector,
             widthPixels = widthGrid,
@@ -246,12 +235,26 @@ class ScrollUntilTextIsVisibleTrailblazeTool(
     }
     throw MaestroException.ElementNotFound(
       message = "No visible element found: ${maestroCommand.selector.description()}",
-      hierarchyRoot = screenState.viewHierarchyOriginal.asTreeNode(),
+      hierarchyRoot = screenState.viewHierarchy.asTreeNode(),
       debugMessage = debugMessage,
     )
   }
 
   companion object {
+    fun scrollDurationFor(trailblazeDriverType: TrailblazeDriverType): String =
+      when (trailblazeDriverType) {
+        /**
+         * This matches Maestro's Swipe Implementation with the 400ms duration and is working well on-device Android.
+         * https://github.com/mobile-dev-inc/Maestro/blob/0a38a9468cb769ecbc1edc76974fd2f8a8b0b64e/maestro-client/src/main/java/maestro/drivers/AndroidDriver.kt#L404
+         *
+         * The default (40ms) causes a "fling" that overshoots elements. The accessibility driver
+         * also uses the manual scroll loop, so it needs the same 400ms duration.
+         */
+        TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+        TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY -> "400"
+        else -> ScrollUntilVisibleCommand.DEFAULT_SCROLL_DURATION
+      }
+
     private fun relativeScrollStartPoints(
       scrollStartPosition: TrailblazeScrollStartPosition,
       direction: SwipeDirection,

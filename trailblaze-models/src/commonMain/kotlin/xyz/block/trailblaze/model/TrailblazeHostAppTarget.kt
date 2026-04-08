@@ -107,32 +107,6 @@ abstract class TrailblazeHostAppTarget(
       setOf()
   }
 
-  /**
-   * A target app created from a user-entered package name (e.g., "com.example.myapp").
-   * Returns the package name as the app ID for all mobile platforms.
-   */
-  class CustomPackageHostAppTarget(
-    val packageName: String,
-  ) : TrailblazeHostAppTarget(
-    id = packageName.replace(".", "").lowercase(),
-    displayName = packageName,
-  ) {
-    override fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): Set<String>? {
-      return when (platform) {
-        TrailblazeDevicePlatform.ANDROID, TrailblazeDevicePlatform.IOS -> setOf(packageName)
-        else -> null
-      }
-    }
-
-    override fun internalGetCustomToolsForDriver(driverType: TrailblazeDriverType): Set<KClass<out TrailblazeTool>> =
-      emptySet()
-
-    override fun equals(other: Any?): Boolean =
-      other is CustomPackageHostAppTarget && other.packageName == packageName
-
-    override fun hashCode(): Int = packageName.hashCode()
-  }
-
   fun getAppIdIfInstalled(
     platform: TrailblazeDevicePlatform,
     installedAppIds: Set<String>

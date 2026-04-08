@@ -22,6 +22,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.text.selection.SelectionContainer
 
 /**
  * Panel displaying details about a selected trail file.
@@ -54,23 +55,27 @@ fun TrailDetailsPanel(
       )
       
       Spacer(modifier = Modifier.height(12.dp))
-      
-      // File name
-      DetailRow(label = "File", value = trail.fileName)
-      
-      // Platform
-      trail.platform?.let {
-        DetailRow(label = "Platform", value = it.toString())
+
+      SelectionContainer {
+        Column {
+          // File name
+          DetailRow(label = "File", value = trail.fileName)
+
+          // Platform
+          trail.platform?.let {
+            DetailRow(label = "Platform", value = it.toString())
+          }
+
+          // Classifiers
+          if (trail.classifiers.isNotEmpty()) {
+            DetailRow(label = "Classifiers", value = trail.classifiers.joinToString(", "))
+          }
+
+          // Path
+          DetailRow(label = "Path", value = trail.relativePath)
+        }
       }
-      
-      // Classifiers
-      if (trail.classifiers.isNotEmpty()) {
-        DetailRow(label = "Classifiers", value = trail.classifiers.joinToString(", "))
-      }
-      
-      // Path
-      DetailRow(label = "Path", value = trail.relativePath)
-      
+
       Spacer(modifier = Modifier.height(16.dp))
       
       Row(

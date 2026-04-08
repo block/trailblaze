@@ -30,7 +30,6 @@ object ViewHierarchyCompactFormatter {
    * @param includeOffscreen When true, offscreen elements are included with an `(offscreen)`
    *   annotation. When false (default), offscreen elements are filtered out and a summary
    *   line is appended showing how many were hidden.
-   * @param fullHierarchy Retained for API compatibility; all properties are now always included.
    */
   fun format(
     root: ViewHierarchyTreeNode,
@@ -41,7 +40,7 @@ object ViewHierarchyCompactFormatter {
     currentActivity: String? = null,
     deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
     includeOffscreen: Boolean = false,
-    @Suppress("UNUSED_PARAMETER") fullHierarchy: Boolean = false,
+    occlusionSummaries: List<ViewHierarchyFilter.OcclusionSummary> = emptyList(),
   ): String = buildString {
     // Context header
     appendLine(DeviceInfoPrefix.PLATFORM.line(platform.displayName))
@@ -72,6 +71,14 @@ object ViewHierarchyCompactFormatter {
       appendLine(
         "(${offscreenCount[0]} offscreen elements hidden" +
           " — request OFFSCREEN_ELEMENTS for full list)",
+      )
+    }
+
+    for (summary in occlusionSummaries) {
+      val className = shortClassName(summary.occluderClassName)
+      appendLine(
+        "(${summary.occludedCount} elements hidden behind $className" +
+          " [${summary.occluderNodeId}] — dismiss overlay to access)",
       )
     }
   }.trimEnd()

@@ -108,7 +108,9 @@ fun McpTabComposable(
     HorizontalDivider()
 
     // Client Setup
-    ClientSetupSection()
+    ClientSetupSection(
+      openGoose = { TrailblazeDesktopUtil.openGoose(port = trailblazeSettingsRepo.portManager.httpPort) },
+    )
 
     // How It Works
     HowItWorksSection(recommendTrailblazeAsAgent = recommendTrailblazeAsAgent)
@@ -304,7 +306,7 @@ private fun SessionTag(text: String, color: Color) {
 // ---------------------------------------------------------------------------
 
 @Composable
-private fun ClientSetupSection() {
+private fun ClientSetupSection(openGoose: () -> Unit) {
   Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
     Text(
       text = "Connect an MCP Client",
@@ -327,6 +329,7 @@ private fun ClientSetupSection() {
       )
       GooseSetupCard(
         modifier = Modifier.weight(1f),
+        openGoose = openGoose,
       )
     }
   }
@@ -394,7 +397,7 @@ private fun ClaudeCodeSetupCard(modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun GooseSetupCard(modifier: Modifier = Modifier) {
+private fun GooseSetupCard(modifier: Modifier = Modifier, openGoose: () -> Unit) {
   OutlinedCard(modifier = modifier) {
     Column(
       modifier = Modifier.padding(20.dp),
@@ -434,7 +437,7 @@ private fun GooseSetupCard(modifier: Modifier = Modifier) {
       )
 
       Button(
-        onClick = { TrailblazeDesktopUtil.openGoose() },
+        onClick = openGoose,
         modifier = Modifier.fillMaxWidth(),
       ) {
         Text("Open Goose with Trailblaze")

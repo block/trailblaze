@@ -22,6 +22,8 @@ class RunOnHostParams(
    * Used for analytics and to determine behavior (e.g., MCP keeps drivers alive between calls).
    */
   val referrer: TrailblazeReferrer,
+  /** When true, uses a no-op logger so no session files are written to disk. */
+  val noLogging: Boolean = false,
 ) {
 
   val trailblazeDevicePlatform: TrailblazeDevicePlatform = device.platform

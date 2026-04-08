@@ -32,10 +32,13 @@ class FileWatchService(
   )
 
   // Path to the directory to watch
-  val path: Path = Paths.get(dirToWatch.canonicalPath)
+  private val path: Path = Paths.get(dirToWatch.canonicalPath)
 
-  // Create a WatchService
-  val watchService: WatchService = FileSystems.getDefault().newWatchService()
+  // WatchService is created lazily in startWatching() to avoid allocating an OS-level
+  // poll thread at construction time. Previously this was an eager `val` which meant
+  // every FileWatchService instance — even short-lived ones that were never started —
+  // leaked a NIO poll thread until stopWatching() was called.
+  private var watchService: WatchService? = null
 
   // Thread for running the watch loop
   private var watchThread: Thread? = null
@@ -74,7 +77,8 @@ class FileWatchService(
 
   fun stopWatching() {
     // Close the WatchService to stop watching - this will cause the thread to exit
-    watchService.close()
+    watchService?.close()
+    watchService = null
     watchThread?.interrupt()
     watchThread = null
     debounceScope.cancel()
@@ -83,11 +87,29 @@ class FileWatchService(
   }
 
   fun startWatching() {
-    // Register the directory with the WatchService for create, delete, and modify events
-    path.register(
-      watchService,
-      eventTypes.map { it.watchEventKind }.toTypedArray(),
-    )
+    // No-op if already started — prevents leaking a previous WatchService
+    // if startWatching() is called multiple times on the same instance.
+    if (watchService != null) return
+
+    // Create the WatchService on demand — this allocates an OS poll thread,
+    // so we defer it until watching is actually requested.
+    val ws = FileSystems.getDefault().newWatchService()
+    watchService = ws
+
+    // Register the directory with the WatchService for create, delete, and modify events.
+    // If registration fails (e.g., directory deleted, permission issue), close the
+    // WatchService immediately to avoid leaking its OS poll thread.
+    try {
+      path.register(
+        ws,
+        eventTypes.map { it.watchEventKind }.toTypedArray(),
+      )
+    } catch (e: Exception) {
+      Console.log("[FileWatchService] Failed to register watcher for $path: ${e.message}")
+      ws.close()
+      watchService = null
+      return
+    }
 
     Console.log("[FileWatchService] Started watching: $path (debounce: ${debounceDelayMs}ms)")
 
@@ -97,7 +119,7 @@ class FileWatchService(
         // Infinite loop to watch for events
         while (!Thread.currentThread().isInterrupted) {
           // Retrieve and remove the next watch key, waiting if none are present
-          val key = watchService.take()
+          val key = ws.take()
 
           // Process the events for the watch key
           for (event in key.pollEvents()) {

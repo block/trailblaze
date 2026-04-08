@@ -2,7 +2,7 @@ package xyz.block.trailblaze.android.agent
 
 import ai.koog.agents.core.tools.ToolDescriptor
 import ai.koog.agents.core.tools.ToolParameterDescriptor
-import ai.koog.agents.core.tools.reflect.asToolType
+import xyz.block.trailblaze.toolcalls.asToolType
 import ai.koog.prompt.dsl.Prompt
 import ai.koog.prompt.executor.clients.LLMClient
 import ai.koog.prompt.message.AttachmentContent

@@ -55,6 +55,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import xyz.block.trailblaze.api.DriverNodeDetail
 import xyz.block.trailblaze.api.TrailblazeNode
+import androidx.compose.foundation.text.selection.SelectionContainer
 import xyz.block.trailblaze.ui.composables.SelectableText
 import xyz.block.trailblaze.ui.images.ImageLoader
 
@@ -146,7 +147,7 @@ internal fun TrailblazeNodeInspector(
         }
       }
     } else {
-      Text(
+      SelectableText(
         text = "Failed to load screenshot",
         style = MaterialTheme.typography.bodyLarge,
         color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -283,7 +284,7 @@ private fun TrailblazeNodeTreeItem(
       verticalAlignment = Alignment.CenterVertically
     ) {
       // Node ID
-      Text(
+      SelectableText(
         text = "${node.nodeId}",
         style = MaterialTheme.typography.labelMedium.copy(
           fontSize = MaterialTheme.typography.labelMedium.fontSize * fontScale,
@@ -317,7 +318,7 @@ private fun TrailblazeNodeTreeItem(
         is DriverNodeDetail.Web -> "web"
         is DriverNodeDetail.Compose -> "compose"
       }
-      Text(
+      SelectableText(
         text = driverBadge,
         style = MaterialTheme.typography.labelSmall.copy(
           fontSize = MaterialTheme.typography.labelSmall.fontSize * fontScale * 0.85f,
@@ -528,7 +529,7 @@ internal fun TrailblazeNodeDetailsPanel(
         }
       }
     } else {
-      Text(
+      SelectableText(
         text = "Hover or click on an element in the screenshot to see its details.",
         style = MaterialTheme.typography.bodyMedium.copy(
           fontSize = MaterialTheme.typography.bodyMedium.fontSize * fontScale
@@ -560,7 +561,7 @@ private fun TrailblazeNodeSelectorSection(
 
   when {
     isComputing -> {
-      Text(
+      SelectableText(
         text = "Computing selectors...",
         style = MaterialTheme.typography.bodySmall.copy(
           fontSize = MaterialTheme.typography.bodySmall.fontSize * fontScale,
@@ -570,7 +571,7 @@ private fun TrailblazeNodeSelectorSection(
       )
     }
     selectorAnalysis == null || selectorAnalysis.selectorOptions.isEmpty() -> {
-      Text(
+      SelectableText(
         text = "No selectors available",
         style = MaterialTheme.typography.bodySmall.copy(
           fontSize = MaterialTheme.typography.bodySmall.fontSize * fontScale
@@ -643,87 +644,89 @@ private fun TrailblazeNodeSelectorCard(
       }
     )
   ) {
-    Column(modifier = Modifier.padding(12.dp)) {
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-      ) {
-        Text(
-          text = option.strategy.removePrefix("Structural: "),
-          style = MaterialTheme.typography.labelMedium.copy(
-            fontSize = MaterialTheme.typography.labelMedium.fontSize * fontScale
-          ),
-          fontWeight = FontWeight.Medium,
-          color = if (option.isBest) accentColor else MaterialTheme.colorScheme.onSurfaceVariant
-        )
+    SelectionContainer {
+      Column(modifier = Modifier.padding(12.dp)) {
         Row(
-          horizontalArrangement = Arrangement.spacedBy(6.dp),
-          verticalAlignment = Alignment.CenterVertically,
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.SpaceBetween,
+          verticalAlignment = Alignment.CenterVertically
         ) {
-          // Match count badge
           Text(
-            text = when {
-              option.matchCount == 0 -> "NO MATCH"
-              isUnique -> "UNIQUE"
-              else -> "${option.matchCount} MATCHES"
-            },
-            style = MaterialTheme.typography.labelSmall.copy(
-              fontSize = MaterialTheme.typography.labelSmall.fontSize * fontScale
+            text = option.strategy.removePrefix("Structural: "),
+            style = MaterialTheme.typography.labelMedium.copy(
+              fontSize = MaterialTheme.typography.labelMedium.fontSize * fontScale
             ),
-            fontWeight = FontWeight.Bold,
-            color = when {
-              option.matchCount == 0 -> MaterialTheme.colorScheme.error
-              isUnique -> uniqueColor
-              else -> ambiguousColor
-            },
+            fontWeight = FontWeight.Medium,
+            color = if (option.isBest) accentColor else MaterialTheme.colorScheme.onSurfaceVariant
           )
-          if (option.isBest) {
+          Row(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            // Match count badge
             Text(
-              text = "BEST",
+              text = when {
+                option.matchCount == 0 -> "NO MATCH"
+                isUnique -> "UNIQUE"
+                else -> "${option.matchCount} MATCHES"
+              },
               style = MaterialTheme.typography.labelSmall.copy(
                 fontSize = MaterialTheme.typography.labelSmall.fontSize * fontScale
               ),
               fontWeight = FontWeight.Bold,
-              color = accentColor,
+              color = when {
+                option.matchCount == 0 -> MaterialTheme.colorScheme.error
+                isUnique -> uniqueColor
+                else -> ambiguousColor
+              },
             )
+            if (option.isBest) {
+              Text(
+                text = "BEST",
+                style = MaterialTheme.typography.labelSmall.copy(
+                  fontSize = MaterialTheme.typography.labelSmall.fontSize * fontScale
+                ),
+                fontWeight = FontWeight.Bold,
+                color = accentColor,
+              )
+            }
           }
         }
-      }
-      // Coordinate verification: hit-tests the resolved center to confirm
-      // no child element would intercept the tap
-      Spacer(modifier = Modifier.height(2.dp))
-      if (option.resolvedCenter != null) {
-        val (cx, cy) = option.resolvedCenter
+        // Coordinate verification: hit-tests the resolved center to confirm
+        // no child element would intercept the tap
+        Spacer(modifier = Modifier.height(2.dp))
+        if (option.resolvedCenter != null) {
+          val (cx, cy) = option.resolvedCenter
+          Text(
+            text = if (option.hitsTarget) {
+              "Tap ($cx, $cy) hits target"
+            } else {
+              "Tap ($cx, $cy) would hit a different element"
+            },
+            style = MaterialTheme.typography.labelSmall.copy(
+              fontSize = MaterialTheme.typography.labelSmall.fontSize * fontScale
+            ),
+            color = if (option.hitsTarget) uniqueColor else MaterialTheme.colorScheme.error,
+          )
+        } else if (option.matchCount > 0) {
+          Text(
+            text = "No bounds — tap verification unavailable",
+            style = MaterialTheme.typography.labelSmall.copy(
+              fontSize = MaterialTheme.typography.labelSmall.fontSize * fontScale
+            ),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
+        Spacer(modifier = Modifier.height(4.dp))
         Text(
-          text = if (option.hitsTarget) {
-            "Tap ($cx, $cy) hits target"
-          } else {
-            "Tap ($cx, $cy) would hit a different element"
-          },
-          style = MaterialTheme.typography.labelSmall.copy(
-            fontSize = MaterialTheme.typography.labelSmall.fontSize * fontScale
+          text = option.yamlSelector.trim(),
+          style = MaterialTheme.typography.bodySmall.copy(
+            fontSize = MaterialTheme.typography.bodySmall.fontSize * fontScale,
+            fontFamily = FontFamily.Monospace
           ),
-          color = if (option.hitsTarget) uniqueColor else MaterialTheme.colorScheme.error,
-        )
-      } else if (option.matchCount > 0) {
-        Text(
-          text = "No bounds — tap verification unavailable",
-          style = MaterialTheme.typography.labelSmall.copy(
-            fontSize = MaterialTheme.typography.labelSmall.fontSize * fontScale
-          ),
-          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          color = MaterialTheme.colorScheme.onSurface
         )
       }
-      Spacer(modifier = Modifier.height(4.dp))
-      SelectableText(
-        text = option.yamlSelector.trim(),
-        style = MaterialTheme.typography.bodySmall.copy(
-          fontSize = MaterialTheme.typography.bodySmall.fontSize * fontScale,
-          fontFamily = FontFamily.Monospace
-        ),
-        color = MaterialTheme.colorScheme.onSurface
-      )
     }
   }
 }
@@ -1052,7 +1055,7 @@ private fun TrailblazePropertiesGrid(
       }
     }
   } else {
-    Text(
+    SelectableText(
       text = "No active properties",
       style = MaterialTheme.typography.bodySmall.copy(
         fontSize = MaterialTheme.typography.bodySmall.fontSize * fontScale
@@ -1075,40 +1078,42 @@ private fun TrailblazeNodeChildItem(
       containerColor = MaterialTheme.colorScheme.surfaceVariant
     )
   ) {
-    Column(
-      modifier = Modifier.padding(12.dp)
-    ) {
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
+    SelectionContainer {
+      Column(
+        modifier = Modifier.padding(12.dp)
       ) {
-        Text(
-          text = "ID: ${child.nodeId}",
-          style = MaterialTheme.typography.labelMedium.copy(
-            fontSize = MaterialTheme.typography.labelMedium.fontSize * fontScale
-          ),
-          fontWeight = FontWeight.Medium
-        )
-        if (child.children.isNotEmpty()) {
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.SpaceBetween,
+          verticalAlignment = Alignment.CenterVertically
+        ) {
           Text(
-            text = "${child.children.size} children",
-            style = MaterialTheme.typography.labelSmall.copy(
-              fontSize = MaterialTheme.typography.labelSmall.fontSize * fontScale
+            text = "ID: ${child.nodeId}",
+            style = MaterialTheme.typography.labelMedium.copy(
+              fontSize = MaterialTheme.typography.labelMedium.fontSize * fontScale
             ),
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            fontWeight = FontWeight.Medium
           )
+          if (child.children.isNotEmpty()) {
+            Text(
+              text = "${child.children.size} children",
+              style = MaterialTheme.typography.labelSmall.copy(
+                fontSize = MaterialTheme.typography.labelSmall.fontSize * fontScale
+              ),
+              color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+          }
         }
-      }
 
-      Text(
-        text = resolveDisplayText(child),
-        style = MaterialTheme.typography.bodySmall.copy(
-          fontSize = MaterialTheme.typography.bodySmall.fontSize * fontScale
-        ),
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        maxLines = 1
-      )
+        Text(
+          text = resolveDisplayText(child),
+          style = MaterialTheme.typography.bodySmall.copy(
+            fontSize = MaterialTheme.typography.bodySmall.fontSize * fontScale
+          ),
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          maxLines = 1
+        )
+      }
     }
   }
 }

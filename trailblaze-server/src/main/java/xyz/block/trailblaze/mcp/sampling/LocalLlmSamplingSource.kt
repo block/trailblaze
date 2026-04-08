@@ -2,7 +2,7 @@ package xyz.block.trailblaze.mcp.sampling
 
 import ai.koog.agents.core.tools.ToolDescriptor
 import ai.koog.agents.core.tools.ToolParameterDescriptor
-import ai.koog.agents.core.tools.reflect.asToolType
+import xyz.block.trailblaze.toolcalls.asToolType
 import ai.koog.prompt.dsl.Prompt
 import ai.koog.prompt.executor.clients.LLMClient
 import ai.koog.prompt.message.AttachmentContent
@@ -13,6 +13,7 @@ import ai.koog.prompt.params.LLMParams
 import kotlinx.coroutines.withTimeout
 import kotlinx.datetime.Clock
 import kotlinx.datetime.Instant
+import xyz.block.trailblaze.api.ImageFormatDetector
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.agent.AgentTier
@@ -446,7 +447,7 @@ class LocalLlmSamplingSource(
             add(
               ContentPart.Image(
                 content = AttachmentContent.Binary.Bytes(screenshotBytes),
-                format = "png",
+                format = ImageFormatDetector.detectFormat(screenshotBytes).mimeSubtype,
               ),
             )
           }
@@ -512,7 +513,11 @@ class LocalLlmSamplingSource(
     // Save screenshot to disk if available
     val screenshotFile = if (screenshotBytes != null && screenshotBytes.isNotEmpty()) {
       try {
-        repo.saveScreenshotBytes(sessionId, screenshotBytes, "png")
+        repo.saveScreenshotBytes(
+          sessionId,
+          screenshotBytes,
+          ImageFormatDetector.detectFormat(screenshotBytes).fileExtension,
+        )
       } catch (e: Exception) {
         Console.log("[LocalLlmSamplingSource] Failed to save screenshot: ${e.message}")
         null

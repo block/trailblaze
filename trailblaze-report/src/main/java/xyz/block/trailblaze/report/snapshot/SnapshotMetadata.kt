@@ -21,6 +21,8 @@ data class SnapshotMetadata(
   val testMethodName: String?,
   val customName: String?,
   val epochMillis: Long,
+  /** 3-panel golden diff image (golden | diff | actual), present only when comparison failed. */
+  val diffFile: File? = null,
 ) {
   companion object {
     /**
@@ -41,7 +43,7 @@ data class SnapshotMetadata(
       // Extract filename from screenshotFile (could be a filename or a full URL)
       val screenshotPath = snapshotLog.screenshotFile
       val screenshotFileName = if (screenshotPath.startsWith("http://") || screenshotPath.startsWith("https://")) {
-        // Extract filename from URL (e.g., from S3 URL after ATF upload)
+        // Extract filename from URL (e.g., from S3 URL after device farm upload)
         // URL format: https://...?key=...%2Ffilename.png
         val keyParam = screenshotPath.substringAfter("key=", "")
         if (keyParam.isNotEmpty()) {
@@ -76,13 +78,17 @@ data class SnapshotMetadata(
         .toLocalDateTime(TimeZone.currentSystemDefault())
         .toJavaLocalDateTime()
       
+      // Diff file is named after the screenshot file (guaranteed unique per snapshot occurrence).
+      val diffFile = File(screenshotFile.parentFile, "${screenshotFile.nameWithoutExtension}.diff.png").takeIf { it.exists() }
+
       return SnapshotMetadata(
         file = screenshotFile,
         timestamp = localDateTime,
         testClassName = testClassName,
         testMethodName = testMethodName,
         customName = snapshotLog.displayName,
-        epochMillis = snapshotLog.timestamp.toEpochMilliseconds()
+        epochMillis = snapshotLog.timestamp.toEpochMilliseconds(),
+        diffFile = diffFile,
       )
     }
   }

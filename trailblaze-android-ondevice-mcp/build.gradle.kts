@@ -43,6 +43,7 @@ dependencies {
   implementation(project(":trailblaze-common"))
   implementation(project(":trailblaze-models"))
   implementation(project(":trailblaze-android"))
+  implementation(project(":trailblaze-accessibility"))
   implementation(project(":trailblaze-agent"))
 
   implementation(libs.ktor.server.core.jvm)

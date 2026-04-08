@@ -33,6 +33,7 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import xyz.block.trailblaze.logs.client.TrailblazeLog
+import xyz.block.trailblaze.ui.composables.SelectableText
 import xyz.block.trailblaze.ui.utils.FormattingUtils.formatDuration
 
 /** Pinned vertical timeline — replaces the scrollbar on the right in Timeline mode. */
@@ -279,7 +280,7 @@ internal fun SessionTimeline(
         }
       }
 
-      Text(
+      SelectableText(
         text = if (isInProgress) "Live" else formatDuration(totalElapsedMs),
         style = MaterialTheme.typography.labelSmall,
         fontWeight = if (isInProgress) FontWeight.SemiBold else FontWeight.Normal,

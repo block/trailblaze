@@ -66,6 +66,41 @@ Trailblaze's unique "**blaze once, trail forever**" workflow:
 └─────────────────────────────────────────────────────────────┘
 ```
 
+## Installation
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/block/trailblaze/main/install.sh | bash
+```
+
+## Getting Started
+
+### Launch the Desktop App
+
+```bash
+trailblaze app
+```
+
+### MCP Server for Claude
+
+Add Trailblaze as an MCP server so Claude can interact with connected devices:
+
+```bash
+trailblaze mcp install claude
+```
+
+Or manually add to your Claude config (`claude_desktop_config.json` or `.mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "trailblaze": {
+      "command": "trailblaze",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
 ## Documentation at <a href="https://block.github.io/trailblaze">block.github.io/trailblaze</a>
 
 See [Mobile-Agent-v3 Features Guide](docs/mobile-agent-v3-features.md) for detailed usage examples.

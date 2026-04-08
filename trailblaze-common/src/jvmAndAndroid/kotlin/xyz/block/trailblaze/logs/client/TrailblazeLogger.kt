@@ -151,6 +151,7 @@ class TrailblazeLogger(
         screenshotFile = screenshotFileName,
         viewHierarchy = screenState.viewHierarchy,
         trailblazeNodeTree = screenState.trailblazeNodeTree,
+        viewHierarchyText = screenState.viewHierarchyTextRepresentation,
         deviceWidth = screenState.deviceWidth,
         deviceHeight = screenState.deviceHeight,
         session = session.sessionId,
@@ -294,8 +295,7 @@ class TrailblazeLogger(
       session,
       TrailblazeLog.TrailblazeLlmRequestLog(
         agentTaskStatus = stepStatus.currentStatus.value,
-        viewHierarchy = stepStatus.currentScreenState.viewHierarchyOriginal,
-        viewHierarchyFiltered = stepStatus.currentScreenState.viewHierarchy,
+        viewHierarchy = stepStatus.currentScreenState.viewHierarchy,
         trailblazeNodeTree = stepStatus.currentScreenState.trailblazeNodeTree,
         instructions = stepStatus.promptStep.prompt,
         trailblazeLlmModel = trailblazeLlmModel,

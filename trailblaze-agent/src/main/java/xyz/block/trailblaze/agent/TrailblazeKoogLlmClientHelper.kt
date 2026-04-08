@@ -4,8 +4,10 @@ package xyz.block.trailblaze.agent
 
 import ai.koog.agents.core.tools.Tool
 import ai.koog.agents.core.tools.ToolRegistry
-import xyz.block.trailblaze.util.Console
 import ai.koog.agents.core.tools.ToolResult
+import ai.koog.serialization.kotlinx.KotlinxSerializer
+import ai.koog.serialization.kotlinx.toKoogJSONObject
+import xyz.block.trailblaze.util.Console
 import ai.koog.prompt.dsl.Prompt
 import ai.koog.prompt.executor.clients.LLMClient
 import ai.koog.prompt.llm.LLMCapability
@@ -26,6 +28,7 @@ import xyz.block.trailblaze.api.ImageFormatDetector
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeAgent
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
+import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.exception.TrailblazeToolExecutionException
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
@@ -162,10 +165,11 @@ class TrailblazeKoogLlmClientHelper(
     @Suppress("UNCHECKED_CAST")
     val koogTool: Tool<TrailblazeTool, ToolResult> =
       toolRegistry.getTool(toolName) as Tool<TrailblazeTool, ToolResult>
-    val trailblazeTool: TrailblazeTool = TrailblazeJsonInstance.decodeFromJsonElement(
-      deserializer = koogTool.argsSerializer,
-      element = toolArgs,
-    )
+    @Suppress("UNCHECKED_CAST")
+    val trailblazeTool: TrailblazeTool = koogTool.decodeArgs(
+      toolArgs.toKoogJSONObject(),
+      KotlinxSerializer(TrailblazeJsonInstance),
+    ) as TrailblazeTool
     return trailblazeTool
   }
 
@@ -225,6 +229,20 @@ class TrailblazeKoogLlmClientHelper(
         ),
         executedTools = emptyList(),
       )
+    }
+
+    // Fatal errors abort the test immediately — no retry, no LLM feedback loop
+    val fatalError = toolExecutionResult.result as? TrailblazeToolResult.Error.FatalError
+    if (fatalError != null) {
+      val fatalToolMessage =
+        buildString {
+          append("Fatal tool error: ${fatalError.errorMessage}")
+          fatalError.stackTraceString?.takeIf { it.isNotBlank() }?.let { stackTrace ->
+            append("\nStack trace:\n")
+            append(stackTrace.trimEnd())
+          }
+        }
+      throw TrailblazeException(fatalToolMessage)
     }
 
     // Serialize each executed tool to get its actual arguments

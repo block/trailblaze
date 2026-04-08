@@ -14,7 +14,6 @@ import xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.OpenUrlTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.PasteClipboardTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.PressKeyTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.RequestViewHierarchyDetailsTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.ScrollUntilTextIsVisibleTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.SwipeTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TakeSnapshotTool
@@ -135,9 +134,8 @@ object TrailblazeToolSetCatalog {
 
   val ADVANCED = ToolSetCatalogEntry(
     id = "advanced",
-    description = "Advanced device control: request full view hierarchy details, take screenshots, wait for idle, toggle network.",
+    description = "Advanced device control: take screenshots, wait for idle, toggle network.",
     toolClasses = setOf(
-      RequestViewHierarchyDetailsTrailblazeTool::class,
       TakeSnapshotTool::class,
       WaitForIdleSyncTrailblazeTool::class,
       NetworkConnectionTrailblazeTool::class,

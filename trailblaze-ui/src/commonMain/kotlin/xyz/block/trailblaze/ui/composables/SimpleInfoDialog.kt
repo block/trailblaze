@@ -13,6 +13,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import xyz.block.trailblaze.ui.composables.FullScreenModalOverlay
+import xyz.block.trailblaze.ui.composables.SelectableText
 
 /**
  * Simple dialog component to show informational messages
@@ -45,7 +46,7 @@ fun SimpleInfoDialog(
           fontWeight = FontWeight.Bold
         )
 
-        Text(
+        SelectableText(
           text = message,
           style = MaterialTheme.typography.bodyMedium
         )

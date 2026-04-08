@@ -18,6 +18,8 @@ import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
 import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
 import xyz.block.trailblaze.mcp.models.McpSessionId
 import xyz.block.trailblaze.mcp.utils.KoogToMcpExt.toMcpJsonSchemaObject
+import xyz.block.trailblaze.mcp.utils.filterNonNullableRequired
+import xyz.block.trailblaze.mcp.utils.simplifyNullableAnyOf
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.toolcalls.toKoogToolDescriptor
@@ -108,14 +110,21 @@ class TrailblazeToolToMcpBridge(
         return@forEach
       }
 
-      // Build properties JsonObject for the tool parameters
+      // Build properties JsonObject for the tool parameters.
+      // Koog wraps nullable Kotlin types as anyOf: [{type:"null"}, {type:"string"}], which is
+      // valid JSON Schema but rejected by clients expecting a top-level "type" field.
+      // e.g. Codex: "Failed to convert MCP tool: Error("missing field 'type'")"
+      // See: https://github.com/openai/codex/issues/1973
+      //      https://github.com/JetBrains/koog/issues/642
       val properties = buildJsonObject {
         (descriptor.requiredParameters + descriptor.optionalParameters).forEach { param ->
-          put(param.name, param.toMcpJsonSchemaObject())
+          put(param.name, param.toMcpJsonSchemaObject().simplifyNullableAnyOf())
         }
       }
 
-      val required = descriptor.requiredParameters.map { it.name }
+      // Once we strip null from the anyOf union above, nullable params must also be removed
+      // from required — otherwise clients reject requests that omit them.
+      val required = descriptor.requiredParameters.filterNonNullableRequired()
 
       Console.log("Registering MCP tool: ${descriptor.name}")
       Console.log("  Description: ${descriptor.description}")

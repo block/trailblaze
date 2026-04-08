@@ -6,6 +6,13 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceId
  * Expected class for executing device commands on Android devices.
  * Implementations may use ADB (from host JVM) or direct Android APIs (from on-device Android).
  */
+/**
+ * AppOps operation name for the MANAGE_EXTERNAL_STORAGE permission (API 30+).
+ * Equivalent to [android.app.AppOpsManager.OPSTR_MANAGE_EXTERNAL_STORAGE], which is not
+ * available on JVM.
+ */
+const val APPOPS_MANAGE_EXTERNAL_STORAGE = "MANAGE_EXTERNAL_STORAGE"
+
 expect class AndroidDeviceCommandExecutor(
   deviceId: TrailblazeDeviceId,
 ) {
@@ -35,6 +42,28 @@ expect class AndroidDeviceCommandExecutor(
    * Checks if the specified app is running.
    */
   fun isAppRunning(appId: String): Boolean
+
+  /**
+   * Grants an AppOps permission to the specified app via `appops set <appId> <permission> allow`.
+   *
+   * Requires ADB shell access or an instrumentation test context (which runs as the `shell` user
+   * via [UiDevice.executeShellCommand]). Does **not** require root. Will fail with a permission
+   * denial if called from a regular (non-privileged) app process.
+   *
+   * This only works for AppOps operations, **not** standard runtime permissions (which require
+   * `pm grant`). Common supported operations include:
+   * - `MANAGE_EXTERNAL_STORAGE` — broad file access (API 30+)
+   * - `REQUEST_INSTALL_PACKAGES` — install unknown apps
+   * - `SYSTEM_ALERT_WINDOW` — draw overlays
+   * - `WRITE_SETTINGS` — modify system settings
+   * - `ACCESS_NOTIFICATIONS` — read notifications
+   * - `PICTURE_IN_PICTURE` — picture-in-picture mode
+   *
+   * @param appId the application package name
+   * @param permission the AppOps operation name (e.g. [APPOPS_MANAGE_EXTERNAL_STORAGE])
+   * @see <a href="https://developer.android.com/reference/android/app/AppOpsManager">AppOpsManager</a>
+   */
+  fun grantAppOpsPermission(appId: String, permission: String)
 
   /**
    * Writes a file to the device's public Downloads directory.

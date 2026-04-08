@@ -71,9 +71,13 @@ interface TrailblazeMcpBridge {
    * This enables MCP clients to act as the agent, calling low-level device control tools.
    *
    * @param tool The TrailblazeTool to execute (e.g., TapOnPointTrailblazeTool, SwipeTrailblazeTool)
+   * @param blocking When true, suspends until the tool execution completes on the device.
+   *   When false (default), the HOST/Maestro path is fire-and-forget and may return before
+   *   the action finishes. Use blocking=true when you need to capture screen state after
+   *   the action (e.g., agent-driven CLI flows).
    * @return Result string describing the execution outcome
    */
-  suspend fun executeTrailblazeTool(tool: TrailblazeTool): String
+  suspend fun executeTrailblazeTool(tool: TrailblazeTool, blocking: Boolean = false): String
 
   /**
    * Ends the current session on the selected device.
@@ -125,14 +129,12 @@ interface TrailblazeMcpBridge {
    * Only applicable when isOnDeviceInstrumentation() returns true.
    *
    * @param includeScreenshot Whether to include screenshot bytes
-   * @param filterViewHierarchy Whether to filter to interactable elements
    * @param screenshotScalingConfig Configuration for scaling/compressing screenshots on-device
    *                                before transfer. Scaling on-device saves bandwidth and tokens.
    * @return GetScreenStateResponse on success, null on failure or if not using on-device mode
    */
   suspend fun getScreenStateViaRpc(
     includeScreenshot: Boolean = true,
-    filterViewHierarchy: Boolean = true,
     screenshotScalingConfig: ScreenshotScalingConfig = ScreenshotScalingConfig.DEFAULT,
   ): GetScreenStateResponse? = null
 

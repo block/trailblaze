@@ -104,10 +104,16 @@ class TrailMcpTool(
   ): String {
     return when (action) {
       TrailAction.START -> handleStart(name, platform, device)
-      TrailAction.SAVE -> handleSave(name)
+      TrailAction.SAVE -> {
+        Console.log("[trail] Deprecation: trail(action=SAVE) is deprecated. Use session(action=SAVE, title='...') instead.")
+        handleSave(name)
+      }
       TrailAction.RUN -> handleRun(name, file, platform, device)
       TrailAction.LIST -> handleList(filter, page ?: 1)
-      TrailAction.END -> handleEnd()
+      TrailAction.END -> {
+        Console.log("[trail] Deprecation: trail(action=END) is deprecated. Use session(action=STOP) instead.")
+        handleEnd()
+      }
     }
   }
 
@@ -236,7 +242,7 @@ class TrailMcpTool(
       ).toJson()
     }
 
-    if (yamlContent.isBlank()) {
+    if (yamlContent.isBlank() || !yamlContent.contains("- prompts:")) {
       return TrailSaveResult(
         saved = false,
         error = "No recordable steps found in session logs. Use blaze(), verify(), or ask() first.",

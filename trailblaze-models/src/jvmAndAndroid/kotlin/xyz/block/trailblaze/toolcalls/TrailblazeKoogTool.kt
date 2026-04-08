@@ -3,6 +3,7 @@ package xyz.block.trailblaze.toolcalls
 import ai.koog.agents.core.tools.Tool
 import ai.koog.agents.core.tools.ToolDescriptor
 import ai.koog.agents.core.tools.ToolParameterDescriptor
+import ai.koog.serialization.JSONSerializer
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.serializer
@@ -28,7 +29,7 @@ open class TrailblazeKoogTool<T : TrailblazeTool>(
 ) {
 
   override suspend fun execute(args: T): String = executeTool(args)
-  override fun encodeResultToString(result: String): String = result
+  override fun encodeResultToString(result: String, serializer: JSONSerializer): String = result
 
   companion object {
     fun ToolParameterDescriptor.toTrailblazeToolParameterDescriptor(): TrailblazeToolParameterDescriptor =

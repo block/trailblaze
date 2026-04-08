@@ -6,7 +6,9 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonNames
 import xyz.block.trailblaze.api.TrailblazeNodeSelectorGenerator
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.exception.TrailblazeToolExecutionException
+import xyz.block.trailblaze.model.NodeSelectorMode
 import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ReasoningTrailblazeTool
@@ -58,14 +60,14 @@ data class TapOnElementByNodeIdTrailblazeTool(
     val screenState = executionContext.screenState
 
     // Make sure we have a view hierarchy to work with
-    if (screenState?.viewHierarchyOriginal == null) {
+    if (screenState?.viewHierarchy == null) {
       throw TrailblazeToolExecutionException(
         message = "No View Hierarchy available when processing $trailblazeTool",
         tool = this,
       )
     }
     // Make sure the nodeId is in the view hierarchy
-    val matchingNode = ViewHierarchyTreeNode.dfs(screenState.viewHierarchyOriginal) {
+    val matchingNode = ViewHierarchyTreeNode.dfs(screenState.viewHierarchy) {
       it.nodeId == trailblazeTool.nodeId
     }
     if (matchingNode == null) {
@@ -73,37 +75,6 @@ data class TapOnElementByNodeIdTrailblazeTool(
         message = "TapOnElementByNodeId: No node found with nodeId=${trailblazeTool.nodeId}.  $trailblazeTool",
         tool = this,
       )
-    }
-
-    val selectorWithStrategy = findBestTrailblazeElementSelectorForTargetNodeWithStrategy(
-      root = screenState.viewHierarchyOriginal,
-      target = matchingNode,
-      trailblazeDevicePlatform = screenState.trailblazeDevicePlatform,
-      widthPixels = screenState.deviceWidth,
-      heightPixels = screenState.deviceHeight,
-      spatialHints = relativelyPositionedViews.toOrderedSpatialHints(),
-    )
-
-    // If IndexStrategy was used with a high index (> 10), the selector is fragile.
-    // High indices depend on exact element ordering in the hierarchy which can change.
-    // Low indices (≤ 10) are usually stable enough to be useful.
-    // Fall back to tapping by coordinates for high indices.
-    if (selectorWithStrategy.strategyName == IndexStrategy.name) {
-      val index = selectorWithStrategy.selector.index?.toIntOrNull()
-      if (index != null && index > 10) {
-        val centerPoint = matchingNode.centerPoint
-        if (centerPoint != null) {
-          val (x, y) = centerPoint.split(",").map { it.toInt() }
-          return listOf(
-            TapOnPointTrailblazeTool(
-              x = x,
-              y = y,
-              longPress = longPress,
-              reasoning = reasoning,
-            ),
-          )
-        }
-      }
     }
 
     // Generate a rich TrailblazeNodeSelector if the screen state has a native tree.
@@ -139,13 +110,79 @@ data class TapOnElementByNodeIdTrailblazeTool(
       }
     }
 
-    val bestTapTrailblazeToolForNode: ExecutableTrailblazeTool = TapOnByElementSelector(
-      reason = reasoning,
-      selector = selectorWithStrategy.selector,
-      longPress = longPress,
-      nodeSelector = nodeSelector,
+    val mode = executionContext.nodeSelectorMode
+
+    // FORCE_LEGACY: skip nodeSelector entirely, always use TapSelectorV2
+    // FORCE_NODE_SELECTOR: derive legacy from nodeSelector; fall through to legacy if generation fails
+    // PREFER_NODE_SELECTOR: iOS derives from nodeSelector when available; non-iOS uses TapSelectorV2
+    when (mode) {
+      NodeSelectorMode.FORCE_LEGACY -> { /* fall through to TapSelectorV2 below */ }
+      NodeSelectorMode.FORCE_NODE_SELECTOR -> {
+        if (nodeSelector != null) {
+          return listOf(
+            TapOnByElementSelector(
+              reason = reasoning,
+              selector = nodeSelector.toTrailblazeElementSelector(),
+              longPress = longPress,
+              nodeSelector = nodeSelector,
+            ),
+          )
+        }
+        // nodeSelector generation failed; fall through to legacy path
+      }
+      NodeSelectorMode.PREFER_NODE_SELECTOR -> {
+        if (screenState.trailblazeDevicePlatform == TrailblazeDevicePlatform.IOS && nodeSelector != null) {
+          return listOf(
+            TapOnByElementSelector(
+              reason = reasoning,
+              selector = nodeSelector.toTrailblazeElementSelector(),
+              longPress = longPress,
+              nodeSelector = nodeSelector,
+            ),
+          )
+        }
+      }
+    }
+
+    // Legacy path: generate selector via TapSelectorV2.
+    val selectorWithStrategy = findBestTrailblazeElementSelectorForTargetNodeWithStrategy(
+      root = screenState.viewHierarchy,
+      target = matchingNode,
+      trailblazeDevicePlatform = screenState.trailblazeDevicePlatform,
+      widthPixels = screenState.deviceWidth,
+      heightPixels = screenState.deviceHeight,
+      spatialHints = relativelyPositionedViews.toOrderedSpatialHints(),
     )
 
-    return listOf(bestTapTrailblazeToolForNode)
+    // If IndexStrategy was used with a high index (> 10), the selector is fragile.
+    // High indices depend on exact element ordering in the hierarchy which can change.
+    // Low indices (≤ 10) are usually stable enough to be useful.
+    // Fall back to tapping by coordinates for high indices.
+    if (selectorWithStrategy.strategyName == IndexStrategy.name) {
+      val index = selectorWithStrategy.selector.index?.toIntOrNull()
+      if (index != null && index > 10) {
+        val centerPoint = matchingNode.centerPoint
+        if (centerPoint != null) {
+          val (x, y) = centerPoint.split(",").map { it.toInt() }
+          return listOf(
+            TapOnPointTrailblazeTool(
+              x = x,
+              y = y,
+              longPress = longPress,
+              reasoning = reasoning,
+            ),
+          )
+        }
+      }
+    }
+
+    return listOf(
+      TapOnByElementSelector(
+        reason = reasoning,
+        selector = selectorWithStrategy.selector,
+        longPress = longPress,
+        nodeSelector = if (mode == NodeSelectorMode.FORCE_LEGACY) null else nodeSelector,
+      ),
+    )
   }
 }

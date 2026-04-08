@@ -3,14 +3,14 @@
 # Trailblaze launcher
 #
 # Usage:
-#   ./trailblaze              - Start in background
-#   ./trailblaze --dev        - Start in foreground (for development)
-#   ./trailblaze stop         - Stop the running daemon
-#   ./trailblaze status       - Check if daemon is running
-#   ./trailblaze mcp          - Start MCP server (STDIO proxy to daemon, default)
-#   ./trailblaze mcp --http   - Start Streamable HTTP MCP server
-#   ./trailblaze mcp --direct - Start in-process STDIO MCP server (no daemon proxy)
-#   ./trailblaze <command>    - Run other CLI commands (run, config, etc.)
+#   ./trailblaze                     - Launch desktop GUI
+#   ./trailblaze --headless          - Start headless daemon
+#   ./trailblaze app --stop          - Stop the daemon
+#   ./trailblaze blaze "goal"        - Take a UI action (auto-starts daemon)
+#   ./trailblaze ask "question"      - Ask about the screen (auto-starts daemon)
+#   ./trailblaze run <file>          - Run a trail file (auto-starts daemon)
+#   ./trailblaze mcp                 - Start MCP server (STDIO proxy to daemon)
+#   ./trailblaze <command>           - Run other CLI commands (config, report, etc.)
 #
 # Environment variables:
 #   TRAILBLAZE_PORT           - HTTP port (default: 52525). Override to run multiple instances.
@@ -63,6 +63,11 @@ if ! declare -f tb_run > /dev/null 2>&1; then
     fi
   }
 
+  tb_run_quiet() {
+    # JAR mode has no build noise, so this is the same as tb_run.
+    tb_run "$1"
+  }
+
   tb_run_exec_quiet() {
     exec java $TRAILBLAZE_JVM_ARGS -jar "$TRAILBLAZE_JAR" $1
   }
@@ -80,6 +85,10 @@ TRAILBLAZE_DEFAULT_PORT=52525
 TRAILBLAZE_DEFAULT_HTTPS_PORT=8443
 TRAILBLAZE_PORT="${TRAILBLAZE_PORT:-$TRAILBLAZE_DEFAULT_PORT}"
 TRAILBLAZE_HTTPS_PORT="${TRAILBLAZE_HTTPS_PORT:-$TRAILBLAZE_DEFAULT_HTTPS_PORT}"
+
+# Export so the JVM process can read them via System.getenv()
+export TRAILBLAZE_PORT
+export TRAILBLAZE_HTTPS_PORT
 
 # ---------------------------------------------------------------------------
 # Daemon management
@@ -150,28 +159,13 @@ to_absolute_path() {
 # Argument parsing
 # ---------------------------------------------------------------------------
 
-# Build port flags to pass to the CLI when ports are overridden via env vars
-PORT_ARGS=""
-if [ "$TRAILBLAZE_PORT" != "$TRAILBLAZE_DEFAULT_PORT" ]; then
-    PORT_ARGS="--port $TRAILBLAZE_PORT"
-fi
-if [ "$TRAILBLAZE_HTTPS_PORT" != "$TRAILBLAZE_DEFAULT_HTTPS_PORT" ]; then
-    PORT_ARGS="$PORT_ARGS --https-port $TRAILBLAZE_HTTPS_PORT"
-fi
-
-# Process arguments: strip --dev flag, resolve file paths to absolute,
-# and detect STDIO mode for MCP transport.
-DEV_MODE=false
+# Process arguments: resolve file paths to absolute and detect STDIO mode.
 STDIO_MODE=false
 HAS_MCP=false
 HAS_HTTP=false
 HAS_DIRECT=false
 ARGS=""
 for arg in "$@"; do
-    if [ "$arg" = "--dev" ]; then
-        DEV_MODE=true
-        continue
-    fi
     if [ "$arg" = "mcp" ]; then
         HAS_MCP=true
     fi
@@ -195,24 +189,11 @@ if [ "$HAS_MCP" = true ] && [ "$HAS_HTTP" = false ]; then
     STDIO_MODE=true
 fi
 
-# Prepend port args (top-level flags go before subcommands)
-if [ -n "$PORT_ARGS" ]; then
-    if [ -z "$ARGS" ]; then
-        ARGS="$PORT_ARGS"
-    else
-        ARGS="$PORT_ARGS $ARGS"
-    fi
-fi
-
 # ---------------------------------------------------------------------------
 # Main logic
 # ---------------------------------------------------------------------------
 
-if [ "$DEV_MODE" = true ]; then
-    # Development mode: foreground with logs visible in terminal
-    echo "Starting Trailblaze in dev mode (foreground)..."
-    tb_run "$ARGS"
-elif [ "$1" = "stop" ]; then
+if [ "$1" = "stop" ]; then
     stop_daemon
 elif [ "$1" = "status" ]; then
     get_status
@@ -222,15 +203,8 @@ elif [ "$STDIO_MODE" = true ]; then
     # Auto-start daemon if not running (proxy needs it)
     if ! is_daemon_running; then
         echo "[mcp] Starting Trailblaze daemon..." >&2
-        DAEMON_ARGS="--headless"
-        if [ "$TRAILBLAZE_PORT" != "$TRAILBLAZE_DEFAULT_PORT" ]; then
-            DAEMON_ARGS="--port $TRAILBLAZE_PORT $DAEMON_ARGS"
-        fi
-        if [ "$TRAILBLAZE_HTTPS_PORT" != "$TRAILBLAZE_DEFAULT_HTTPS_PORT" ]; then
-            DAEMON_ARGS="--https-port $TRAILBLAZE_HTTPS_PORT $DAEMON_ARGS"
-        fi
-
-        tb_run_background_quiet "$DAEMON_ARGS"
+        # Ports are passed via exported TRAILBLAZE_PORT/TRAILBLAZE_HTTPS_PORT env vars
+        tb_run_background_quiet "app --headless"
         echo "[mcp] Daemon starting (PID $!)..." >&2
 
         attempts=0
@@ -249,42 +223,51 @@ elif [ "$STDIO_MODE" = true ]; then
     fi
 
     tb_run_exec_quiet "$ARGS"
-elif [ "$1" = "run" ] && ! is_daemon_running; then
-    # Auto-start daemon on first 'run' command so subsequent runs reuse it.
-    echo "Starting Trailblaze daemon..."
-    DAEMON_ARGS="--headless"
-    if [ -n "$PORT_ARGS" ]; then
-        DAEMON_ARGS="$PORT_ARGS $DAEMON_ARGS"
-    fi
-    tb_run_background "$DAEMON_ARGS"
+elif ([ "$1" = "trail" ] || [ "$1" = "run" ] || [ "$1" = "blaze" ] || [ "$1" = "ask" ] || ([ "$1" = "session" ] && [ "$2" != "info" ] && [ "$2" != "list" ] && [ "$2" != "artifacts" ]) || [ "$1" = "snapshot" ]) && ! is_daemon_running; then
+    # Auto-start daemon for commands that need it so subsequent calls reuse it.
+    # Use stderr so --json output on stdout stays clean.
+    echo "Starting Trailblaze daemon..." >&2
+    # Ports are passed via exported TRAILBLAZE_PORT/TRAILBLAZE_HTTPS_PORT env vars
+    tb_run_background "app --headless"
+    STARTED_DAEMON=true
 
-    # Wait for daemon to be ready
-    echo -n "Waiting for daemon"
+    # Wait for daemon to be ready (all output to stderr for --json safety)
+    echo -n "Waiting for Trailblaze daemon" >&2
     max_attempts=60
     attempts=0
     while [ $attempts -lt $max_attempts ]; do
         if is_daemon_running; then
-            echo ""
-            echo "Daemon ready."
+            echo "" >&2
+            echo "Trailblaze daemon ready." >&2
             break
         fi
-        echo -n "."
+        echo -n "." >&2
         sleep 1
         attempts=$((attempts + 1))
     done
 
     if ! is_daemon_running; then
-        echo ""
-        echo "Warning: Daemon did not start in time. Falling back to direct execution."
+        echo "" >&2
+        echo "Warning: Daemon did not start in time. Falling back to direct execution." >&2
     fi
 
-    # Now run the CLI command — RunCommand will detect the daemon and delegate
-    tb_run "$ARGS"
+    # Now run the CLI command — RunCommand will detect the daemon and delegate.
+    # Use quiet mode to suppress Gradle build noise from user-facing output.
+    tb_run_quiet "$ARGS"
+    RUN_EXIT=$?
+
+    # Stop the daemon we started so it doesn't linger as a zombie process.
+    # Keep it alive for session commands (start/save/info) since the user
+    # will need it for subsequent blaze/ask/snapshot calls.
+    if [ "$STARTED_DAEMON" = true ] && is_daemon_running && [ "$1" != "session" ] && [ "$1" != "snapshot" ]; then
+        stop_daemon > /dev/null 2>&1
+    fi
+    exit $RUN_EXIT
 elif [ -n "$ARGS" ]; then
     # CLI command mode (config, auth, etc.)
-    tb_run "$ARGS"
+    tb_run_quiet "$ARGS"
 else
-    # Default mode: check if already running, otherwise start in background
+    # Default mode (no subcommand): launch the app
     if is_daemon_running; then
         echo "Trailblaze is already running."
         show_window
@@ -292,7 +275,8 @@ else
     else
         echo "Starting Trailblaze..."
 
-        tb_run_background "$PORT_ARGS"
+        # Ports are passed via exported TRAILBLAZE_PORT/TRAILBLAZE_HTTPS_PORT env vars
+        tb_run_background "app"
 
         # Poll for daemon to become available
         echo -n "Waiting for Trailblaze to start"
@@ -311,6 +295,6 @@ else
 
         echo ""
         echo "Trailblaze is starting in the background (taking longer than expected)."
-        echo "Check the menu bar icon or run './trailblaze --dev' for verbose output."
+        echo "Check the menu bar icon or run with '--verbose' for verbose output."
     fi
 fi
