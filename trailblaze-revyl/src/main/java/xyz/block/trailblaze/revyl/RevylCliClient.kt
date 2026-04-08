@@ -16,12 +16,12 @@ import java.io.File
  * executes it, and parses the structured JSON output. The CLI handles
  * auth, backend proxy routing, and AI-powered target grounding.
  *
- * The `revyl` binary must be pre-installed on PATH (or pointed to via
- * `REVYL_BINARY` env var). If not found, [startSession] throws a
+ * The `revyl` binary is resolved from PATH by default, or can be pointed to via
+ * `REVYL_BINARY` for local/dev overrides. If not found, [startSession] throws a
  * [RevylCliException] with install instructions.
  *
- * @property revylBinaryOverride Explicit path to the revyl binary.
- *     Defaults to `REVYL_BINARY` env var, then PATH lookup.
+ * @property revylBinaryOverride Optional explicit path to the revyl binary.
+ *     Defaults to `REVYL_BINARY`; if null, PATH lookup uses `revyl`.
  * @property workingDirectory Optional working directory for CLI
  *     invocations. Defaults to the JVM's current directory.
  */
@@ -599,7 +599,7 @@ class RevylCliException(message: String) : RuntimeException(message)
 /**
  * A device model available in the Revyl cloud catalog.
  *
- * @property platform "ios" or "android".
+ * @property platform One of [RevylCliClient.PLATFORM_IOS] or [RevylCliClient.PLATFORM_ANDROID].
  * @property model Human-readable model name (e.g. "iPhone 16", "Pixel 7").
  * @property osVersion Runtime / OS version string (e.g. "Android 14", "iOS 18.2").
  */

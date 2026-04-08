@@ -19,10 +19,14 @@ import xyz.block.trailblaze.util.Console
 @LLMDescription(
   "Assert a visual condition on the device screen. Describe what should be true. " +
     "Examples: 'the cart total shows \$42.99', 'a success message is visible', " +
-    "'the Sign In button is disabled', 'there are at least 3 search results'.",
+    "'the Sign In button is disabled', 'there are at least 3 search results', " +
+    "'the settings screen is open', 'the order confirmation page is shown'.",
 )
 class RevylNativeAssertTool(
-  @param:LLMDescription("The condition to verify, described in natural language.")
+  @param:LLMDescription(
+    "The condition to verify, described in natural language. " +
+      "Examples: 'the cart badge shows 2 items', 'the profile tab is selected'.",
+  )
   val assertion: String,
   override val reasoning: String? = null,
 ) : RevylExecutableTool() {
