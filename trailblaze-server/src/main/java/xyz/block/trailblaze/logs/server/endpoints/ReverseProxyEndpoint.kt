@@ -18,8 +18,7 @@ import io.ktor.server.routing.route
 import io.ktor.utils.io.toByteArray
 import xyz.block.trailblaze.http.ReverseProxyHeaders
 import xyz.block.trailblaze.http.TrailblazeHttpClientFactory
-import xyz.block.trailblaze.llm.TrailblazeLlmProvider
-import xyz.block.trailblaze.mcp.utils.JvmLLMProvidersUtil.getEnvironmentVariableValueForLlmProvider
+import xyz.block.trailblaze.llm.config.ResolvedProviderAuth
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.util.Console
 
@@ -39,7 +38,11 @@ object ReverseProxyEndpoint {
   private fun isLoopback(address: String): Boolean =
     address in LOOPBACK_ADDRESSES || address.startsWith("127.")
 
-  fun register(routing: Routing, logsRepo: LogsRepo) = with(routing) {
+  fun register(
+    routing: Routing,
+    logsRepo: LogsRepo,
+    resolvedAuths: Map<String, ResolvedProviderAuth> = emptyMap(),
+  ) = with(routing) {
     route("/reverse-proxy") {
       handle {
         try {
@@ -77,19 +80,24 @@ object ReverseProxyEndpoint {
             this.headers.remove(HttpHeaders.Host)
             this.headers.remove(HttpHeaders.ContentLength)
             this.headers.remove(ReverseProxyHeaders.ORIGINAL_URI)
-            if (targetUrl.contains("https://openrouter.ai/api/v1/chat/completions")) {
-              // https://openrouter.ai/docs/api/reference/overview#headers
-              // Optional. Site URL for rankings on openrouter.ai.
-              this.headers.append("HTTP-Referer", "https://block.github.io/trailblaze")
-              // Optional. Site title for rankings on openrouter.ai.
-              this.headers.append("X-Title", "Trailblaze")
-              getEnvironmentVariableValueForLlmProvider(TrailblazeLlmProvider.OPEN_ROUTER)?.let { apiKey ->
-                // Remove any existing Authorization header before setting the new one
-                this.headers.remove(HttpHeaders.Authorization)
-                // Override the Authorization Token
-                this.bearerAuth(apiKey)
-              }
+            // Config-driven auth injection: match request URL to a provider's base_url
+            val matchingAuth = resolvedAuths.values.firstOrNull { auth ->
+              val url = auth.baseUrl
+              url != null && targetUrl.startsWith(url)
             }
+            if (matchingAuth != null) {
+              // Inject provider-specific headers from config
+              matchingAuth.headers.forEach { (key, value) ->
+                this.headers.append(key, value)
+              }
+              // Inject auth token as Bearer
+              matchingAuth.token?.let { token ->
+                this.headers.remove(HttpHeaders.Authorization)
+                this.bearerAuth(token)
+              }
+              Console.log("ReverseProxy: Injected auth for provider '${matchingAuth.providerId}'")
+            }
+
             if (httpMethod != HttpMethod.Get && httpMethod != HttpMethod.Head) {
               setBody(callBytes)
             }

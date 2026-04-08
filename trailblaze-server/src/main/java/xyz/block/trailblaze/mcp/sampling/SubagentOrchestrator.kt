@@ -7,6 +7,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import xyz.block.trailblaze.api.ScreenState
+import xyz.block.trailblaze.api.ScreenshotScalingConfig
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
@@ -42,6 +43,7 @@ import kotlin.reflect.KClass
 class SubagentOrchestrator(
   private val sessionContext: TrailblazeMcpSessionContext,
   private val mcpBridge: TrailblazeMcpBridge,
+  private val screenshotScalingConfig: ScreenshotScalingConfig = ScreenshotScalingConfig.DEFAULT,
 ) {
   private val samplingClient = McpSamplingClient(sessionContext)
 
@@ -220,7 +222,10 @@ RULES:
    * Captures the current screen state using the shared utility.
    */
   private suspend fun captureScreenState(): ScreenState? =
-    ScreenStateCaptureUtil.captureScreenState(mcpBridge)
+    ScreenStateCaptureUtil.captureScreenState(
+      mcpBridge = mcpBridge,
+      screenshotScalingConfig = screenshotScalingConfig
+    )
 
   private fun buildScreenStateForSampling(
     screenState: ScreenState,

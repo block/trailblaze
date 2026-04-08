@@ -122,6 +122,7 @@ abstract class BaseHostTrailblazeTest(
       sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
       appTarget = appTarget,
       deviceClassifiers = trailblazeDeviceClassifiers,
+      screenshotScalingConfig = trailblazeLlmModel.screenshotScalingConfig,
     )
   }
 

@@ -11,6 +11,7 @@ import maestro.orchestra.util.Env.withInjectedShellEnvVars
 import maestro.orchestra.yaml.YamlCommandReader
 import xyz.block.trailblaze.android.maestro.LoggingDriver
 import xyz.block.trailblaze.api.ScreenState
+import xyz.block.trailblaze.api.ScreenshotScalingConfig
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
@@ -43,6 +44,7 @@ class MaestroHostRunnerImpl(
    */
   appTarget: TrailblazeHostAppTarget? = null,
   private val deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
+  private val screenshotScalingConfig: ScreenshotScalingConfig = ScreenshotScalingConfig.DEFAULT,
 ) : MaestroHostRunner {
   val connectedDevice: TrailblazeConnectedDevice by lazy {
     val hostDriverType = when (trailblazeDeviceId.trailblazeDevicePlatform) {
@@ -73,6 +75,7 @@ class MaestroHostRunnerImpl(
     HostMaestroDriverScreenState(
       maestroDriver = loggingDriver,
       setOfMarkEnabled = setOfMarkEnabled,
+      screenshotScalingConfig = screenshotScalingConfig,
       deviceClassifiers = deviceClassifiers,
     )
   }

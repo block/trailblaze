@@ -1,0 +1,55 @@
+# Ollama built-in model definitions (local models, zero cost)
+provider_id: ollama
+name: Ollama
+auth:
+  required: false
+models:
+  # GPT-OSS models (no vision)
+  - id: "gpt-oss:20b"
+    vision: false
+    context_length: 131072
+    max_output_tokens: 65536
+  - id: "gpt-oss:120b"
+    vision: false
+    context_length: 131072
+    max_output_tokens: 65536
+
+  # Qwen3 VL models (vision-capable)
+  - id: "qwen3-vl:2b"
+    context_length: 131072
+    max_output_tokens: 8192
+  - id: "qwen3-vl:4b"
+    context_length: 131072
+    max_output_tokens: 8192
+  - id: "qwen3-vl:8b"
+    context_length: 131072
+    max_output_tokens: 8192
+  - id: "qwen3-vl:30b"
+    context_length: 131072
+    max_output_tokens: 8192
+
+  # Qwen3.5 models (vision-capable)
+  - id: "qwen3.5:0.8b"
+    context_length: 131072
+    max_output_tokens: 8192
+  - id: "qwen3.5:2b"
+    context_length: 131072
+    max_output_tokens: 8192
+  - id: "qwen3.5:4b"
+    context_length: 131072
+    max_output_tokens: 8192
+  - id: "qwen3.5:9b"
+    context_length: 131072
+    max_output_tokens: 8192
+  - id: "qwen3.5:27b"
+    context_length: 131072
+    max_output_tokens: 8192
+  - id: "qwen3.5:35b"
+    context_length: 131072
+    max_output_tokens: 8192
+  - id: "qwen3.5:122b"
+    context_length: 131072
+    max_output_tokens: 8192
+  - id: "qwen3.5:latest"
+    context_length: 131072
+    max_output_tokens: 8192

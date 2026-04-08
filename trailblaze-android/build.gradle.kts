@@ -53,6 +53,8 @@ dependencies {
   implementation(libs.slf4j.api)
   implementation(libs.koog.prompt.executor.clients)
   implementation(libs.koog.prompt.executor.openai)
+  implementation(libs.koog.prompt.executor.openrouter)
+  implementation(libs.koog.prompt.executor.ollama)
   implementation(libs.kotlinx.datetime)
 
   implementation(libs.ktor.http)

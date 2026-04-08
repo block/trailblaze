@@ -3,6 +3,7 @@ package xyz.block.trailblaze.llm
 import ai.koog.prompt.llm.LLMCapability
 import ai.koog.prompt.llm.LLModel
 import kotlinx.serialization.Serializable
+import xyz.block.trailblaze.api.ScreenshotScalingConfig
 
 interface TrailblazeLlmModelList {
   val entries: List<TrailblazeLlmModel>
@@ -24,9 +25,13 @@ data class TrailblazeLlmModel(
   val outputCostPerOneMillionTokens: Double,
   /** Cost per million tokens for cached input reads. Defaults to full input price when unknown. */
   val cachedInputCostPerOneMillionTokens: Double = inputCostPerOneMillionTokens,
+  /** Formula for estimating image token counts in the input breakdown visualization. */
+  val imageTokenFormula: ImageTokenFormula = ImageTokenFormula.DEFAULT,
   val contextLength: Long,
   val maxOutputTokens: Long,
   val capabilityIds: List<String>,
+  val defaultTemperature: Double? = null,
+  val screenshotScalingConfig: ScreenshotScalingConfig = ScreenshotScalingConfig.DEFAULT,
 ) {
   val capabilities: List<LLMCapability> = LlmCapabilitiesUtil.capabilitiesFromIds(capabilityIds)
 
@@ -39,11 +44,47 @@ data class TrailblazeLlmModel(
   )
 
   companion object {
+    /**
+     * Standard capabilities matching Koog's model definitions.
+     * Used as fallback when built-in YAML resources are not accessible.
+     */
+    private val DEFAULT_CAPABILITY_IDS: List<String> = listOf(
+      LLMCapability.Completion,
+      LLMCapability.Document,
+      LLMCapability.MultipleChoices,
+      LLMCapability.Schema.JSON.Basic,
+      LLMCapability.Schema.JSON.Standard,
+      LLMCapability.Speculation,
+      LLMCapability.Temperature,
+      LLMCapability.Tools,
+      LLMCapability.ToolChoice,
+      LLMCapability.Vision.Image,
+      LLMCapability.OpenAIEndpoint.Completions,
+      LLMCapability.OpenAIEndpoint.Responses,
+    ).map { it.id }
+
+    /**
+     * Creates a minimal fallback model when the built-in YAML can't be loaded from
+     * the classpath (e.g., in certain Android CI environments). Uses reasonable
+     * defaults for context length and capabilities.
+     */
+    fun fallback(provider: TrailblazeLlmProvider, modelId: String): TrailblazeLlmModel =
+      TrailblazeLlmModel(
+        trailblazeLlmProvider = provider,
+        modelId = modelId,
+        inputCostPerOneMillionTokens = 0.0,
+        outputCostPerOneMillionTokens = 0.0,
+        contextLength = 131_072L,
+        maxOutputTokens = 8_192L,
+        capabilityIds = DEFAULT_CAPABILITY_IDS,
+      )
+
     fun LLModel.toTrailblazeLlmModel(
       inputCostPerOneMillionTokens: Double,
       outputCostPerOneMillionTokens: Double,
       cachedInputDiscountMultiplier: Double = 1.0,
       maxOutputTokens: Long? = null,
+      imageTokenFormula: ImageTokenFormula = ImageTokenFormula.DEFAULT,
     ): TrailblazeLlmModel {
       return TrailblazeLlmModel(
         trailblazeLlmProvider = TrailblazeLlmProvider.fromKoogLlmProvider(this.provider),
@@ -51,6 +92,7 @@ data class TrailblazeLlmModel(
         inputCostPerOneMillionTokens = inputCostPerOneMillionTokens,
         outputCostPerOneMillionTokens = outputCostPerOneMillionTokens,
         cachedInputCostPerOneMillionTokens = inputCostPerOneMillionTokens * cachedInputDiscountMultiplier,
+        imageTokenFormula = imageTokenFormula,
         contextLength = this.contextLength
           ?: error("contextLength must be set for ${this.id}"),
         maxOutputTokens = maxOutputTokens ?: this.maxOutputTokens

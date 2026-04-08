@@ -27,6 +27,8 @@ import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.ui.TrailblazeSettingsRepo
 import xyz.block.trailblaze.ui.composables.SelectableText
 import xyz.block.trailblaze.ui.models.TrailblazeServerState
+import com.mikepenz.markdown.m3.Markdown
+import com.mikepenz.markdown.m3.markdownTypography
 import java.io.File
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -687,6 +689,15 @@ object SettingsTabComposables {
               }
             }
           }
+        }
+        if (currentProvider.description != null) {
+          Markdown(
+            content = currentProvider.description.orEmpty(),
+            typography = markdownTypography(
+              text = MaterialTheme.typography.bodySmall,
+              paragraph = MaterialTheme.typography.bodySmall,
+            ),
+          )
         }
 
         // LLM Model Section

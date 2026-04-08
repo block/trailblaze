@@ -15,6 +15,11 @@ fun main() {
     generatedFunctionsDocsDir = generatedFunctionsDocsDir
   ).generate()
 
+  // Generate LLM Models documentation
+  LlmConfigDocsGenerator(
+    generatedDir = generatedDir,
+  ).generate()
+
   // Generate CLI documentation (goes in main docs folder, not generated/)
   CliDocsGenerator(
     docsDir = docsDir

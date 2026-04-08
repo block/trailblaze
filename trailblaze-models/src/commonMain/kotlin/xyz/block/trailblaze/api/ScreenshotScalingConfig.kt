@@ -1,5 +1,7 @@
 package xyz.block.trailblaze.api
 
+import kotlinx.serialization.Serializable
+
 /**
  * Configuration for screenshot scaling.
  *
@@ -13,12 +15,42 @@ package xyz.block.trailblaze.api
  * @property imageFormat Format for the screenshot output (PNG, JPEG, or WEBP)
  * @property compressionQuality Compression quality (0.0 to 1.0). Only applicable for lossy formats (JPEG, WEBP).
  */
+@Serializable
 data class ScreenshotScalingConfig(
   val maxDimension1: Int = 1536,
   val maxDimension2: Int = 768,
   val imageFormat: TrailblazeImageFormat = TrailblazeImageFormat.WEBP,
   val compressionQuality: Float = 0.80f,
 ) {
+
+  /**
+   * Computes the scaled image dimensions that would result from applying this config
+   * to an image with the given original dimensions.
+   *
+   * This is a pure computation mirroring the scaling logic in BufferedImageUtils.scale()
+   * and AndroidBitmapUtils.scale(). Images are only scaled down, never up.
+   *
+   * @return Pair of (scaledWidth, scaledHeight)
+   */
+  fun computeScaledDimensions(originalWidth: Int, originalHeight: Int): Pair<Int, Int> {
+    val targetLong = maxOf(maxDimension1, maxDimension2)
+    val targetShort = minOf(maxDimension1, maxDimension2)
+    val imageLong = maxOf(originalWidth, originalHeight)
+    val imageShort = minOf(originalWidth, originalHeight)
+
+    if (imageLong <= targetLong && imageShort <= targetShort) {
+      return Pair(originalWidth, originalHeight)
+    }
+
+    val scaleLong = targetLong.toFloat() / imageLong
+    val scaleShort = targetShort.toFloat() / imageShort
+    val scaleAmount = minOf(scaleLong, scaleShort)
+
+    return Pair(
+      (originalWidth * scaleAmount).toInt(),
+      (originalHeight * scaleAmount).toInt(),
+    )
+  }
 
   companion object {
     /**

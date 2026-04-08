@@ -9,6 +9,7 @@ import xyz.block.trailblaze.agent.ExecutionResult
 import xyz.block.trailblaze.agent.UiActionExecutor
 import xyz.block.trailblaze.api.DriverNodeDetail
 import xyz.block.trailblaze.api.ScreenState
+import xyz.block.trailblaze.api.ScreenshotScalingConfig
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
@@ -49,6 +50,7 @@ import xyz.block.trailblaze.util.Console
 class BridgeUiActionExecutor(
   private val mcpBridge: TrailblazeMcpBridge,
   private val trailblazeToolRepo: TrailblazeToolRepo? = null,
+  private val screenshotScalingConfig: ScreenshotScalingConfig = ScreenshotScalingConfig.DEFAULT,
 ) : UiActionExecutor {
 
   /**
@@ -146,7 +148,10 @@ class BridgeUiActionExecutor(
    */
   override suspend fun captureScreenState(): ScreenState? {
     return try {
-      ScreenStateCaptureUtil.captureScreenState(mcpBridge)
+      ScreenStateCaptureUtil.captureScreenState(
+        mcpBridge = mcpBridge,
+        screenshotScalingConfig = screenshotScalingConfig
+      )
     } catch (e: Exception) {
       Console.log("[BridgeUiActionExecutor] Failed to capture screen state: ${e.message}")
       null

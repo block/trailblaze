@@ -20,15 +20,6 @@ fun isHttpsServerRunning(port: Int): Boolean {
   }
 }
 
-// Helper function to mask sensitive values
-fun maskValue(value: String): String {
-  return if (value.length > 4) {
-    "*".repeat(value.length - 4) + value.takeLast(4)
-  } else {
-    "****"
-  }
-}
-
 // Check if we're running a test task to avoid validation errors during assemble/check
 val isRunningTests = gradle.startParameter.taskNames.any { taskName ->
   taskName.contains("test", ignoreCase = true) || taskName.contains("connected", ignoreCase = true)
@@ -36,8 +27,6 @@ val isRunningTests = gradle.startParameter.taskNames.any { taskName ->
 
 val trailblazeDefaultHttpsPort = 8443
 val trailblazeHttpsPort = System.getenv("TRAILBLAZE_HTTPS_PORT")?.toIntOrNull() ?: trailblazeDefaultHttpsPort
-val openAiEnvVarName = "OPENAI_API_KEY"
-val openRouterEnvVarName = "OPENROUTER_API_KEY"
 
 android {
   namespace = "xyz.block.trailblaze.examples"
@@ -46,34 +35,21 @@ android {
     minSdk = 28
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-    // Trailblaze Reverse Proxy to support Physical Devices and Ollama
-    val isGitHubActions = (System.getenv("GITHUB_ACTIONS") == "true")
-    val isTrailblazeServerRunning = isHttpsServerRunning(trailblazeHttpsPort)
-    val isOpenRouterApiKeyEnvVarSet = (System.getenv(openRouterEnvVarName) != null)
-
-    if (isGitHubActions && isRunningTests) {
-      if (!isTrailblazeServerRunning) {
-        throw GradleException("Trailblaze Reverse Proxy is required when running in GitHub Actions. Please ensure the server is running on port $trailblazeHttpsPort.")
-      }
-      if (isOpenRouterApiKeyEnvVarSet) {
-        // Setting a dummy value so this LLM client is used, but it doesn't get in the logs as it's replaced by the reverse proxy
-        val dummyValue = "OPENROUTER_API_KEY_GOES_HERE"
-        testInstrumentationRunnerArguments[openRouterEnvVarName] = dummyValue
-      } else {
-        // This key will be replaced by the reverse proxy, but is required as a system environmenet variable
-        throw GradleException("$openRouterEnvVarName is not set. Please set it as a secret in GitHub Actions.")
-      }
-    } else {
-      // Local Development
-      System.getenv(openRouterEnvVarName)?.let { apiKey ->
-        testInstrumentationRunnerArguments[openRouterEnvVarName] = apiKey
-      }
-
-      System.getenv(openAiEnvVarName)?.let { apiKey ->
-        testInstrumentationRunnerArguments[openAiEnvVarName] = apiKey
+    // Pass API keys from environment variables to authenticate with LLM providers
+    val providerEnvVars = mapOf(
+      "openai" to "OPENAI_API_KEY",
+      "openrouter" to "OPENROUTER_API_KEY",
+      "anthropic" to "ANTHROPIC_API_KEY",
+      "google" to "GOOGLE_API_KEY",
+    )
+    for ((providerId, envVar) in providerEnvVars) {
+      System.getenv(envVar)?.let { apiKey ->
+        testInstrumentationRunnerArguments["trailblaze.llm.auth.token.$providerId"] = apiKey
       }
     }
 
+    // Trailblaze Reverse Proxy to support Physical Devices and Ollama
+    val isTrailblazeServerRunning = isHttpsServerRunning(trailblazeHttpsPort)
     if (isTrailblazeServerRunning) {
       if (isRunningTests) println("Server is running on port $trailblazeHttpsPort, enabling Trailblaze Reverse Proxy")
       testInstrumentationRunnerArguments["trailblaze.reverseProxy"] = "true"

@@ -1,0 +1,48 @@
+# OpenAI built-in model definitions
+# Pricing: https://platform.openai.com/docs/pricing
+provider_id: openai
+name: OpenAI
+auth:
+  env_var: OPENAI_API_KEY
+default_model: gpt-4.1
+models:
+  - id: gpt-4.1
+    context_length: 1047576
+    max_output_tokens: 32768
+    cost:
+      input_per_million: 2.00
+      output_per_million: 8.00
+      cached_input_per_million: 0.50
+
+  - id: gpt-4.1-mini
+    context_length: 1047576
+    max_output_tokens: 32768
+    cost:
+      input_per_million: 0.40
+      output_per_million: 1.60
+      cached_input_per_million: 0.10
+
+  - id: gpt-5.2
+    context_length: 400000
+    max_output_tokens: 128000
+    cost:
+      input_per_million: 1.75
+      output_per_million: 14.00
+      cached_input_per_million: 0.175
+
+  - id: gpt-5
+    context_length: 400000
+    max_output_tokens: 128000
+    cost:
+      input_per_million: 1.25
+      output_per_million: 10.00
+      cached_input_per_million: 0.125
+
+  - id: gpt-5-mini
+    context_length: 400000
+    max_output_tokens: 128000
+    cost:
+      input_per_million: 0.25
+      output_per_million: 2.00
+      cached_input_per_million: 0.025
+

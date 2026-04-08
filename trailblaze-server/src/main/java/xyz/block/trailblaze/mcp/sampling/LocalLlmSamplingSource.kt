@@ -14,6 +14,7 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.datetime.Clock
 import kotlinx.datetime.Instant
 import xyz.block.trailblaze.api.ImageFormatDetector
+
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.agent.AgentTier
@@ -491,11 +492,17 @@ class LocalLlmSamplingSource(
     val outputTokens = tokenUsage?.outputTokens ?: 0L
 
     // Use the standard LlmTokenBreakdownEstimator if we have Koog messages
+    val scaledDims = screenContext?.let {
+      model.screenshotScalingConfig.computeScaledDimensions(it.deviceWidth, it.deviceHeight)
+    }
     val inputTokenBreakdown = if (inputTokens > 0 && koogMessages.isNotEmpty()) {
       LlmTokenBreakdownEstimator.estimateBreakdown(
         messages = koogMessages,
         toolDescriptors = koogToolDescriptors,
         totalInputTokens = inputTokens,
+        imageTokenFormula = model.imageTokenFormula,
+        imageWidth = scaledDims?.first,
+        imageHeight = scaledDims?.second,
       )
     } else {
       null

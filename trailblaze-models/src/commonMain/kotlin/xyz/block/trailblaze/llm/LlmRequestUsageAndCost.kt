@@ -60,6 +60,22 @@ data class LlmRequestUsageAndCost(
     return breakdown.totalEstimatedTokens - inputTokens
   }
 
+  /**
+   * Returns a copy with costs recalculated using the given model's pricing.
+   * Used by the host-side LogsRepo to enrich logs from on-device execution
+   * where the device may not have had the latest pricing config.
+   */
+  fun withRecalculatedCosts(model: TrailblazeLlmModel): LlmRequestUsageAndCost {
+    val newPromptCost = calculatePromptCost(inputTokens, cacheReadInputTokens, model)
+    val newCompletionCost = outputTokens * model.outputCostPerOneMillionTokens / 1_000_000.0
+    return copy(
+      trailblazeLlmModel = model,
+      promptCost = newPromptCost,
+      completionCost = newCompletionCost,
+      totalCost = newPromptCost + newCompletionCost,
+    )
+  }
+
   companion object {
     /**
      * Calculates the prompt cost accounting for cached token discounts.

@@ -1,0 +1,10 @@
+# Trailblaze open source workspace defaults.
+# These are the recommended LLM settings for open source contributors.
+# Override with ~/.trailblaze/trailblaze.yaml for personal preferences.
+#
+# Provider connection details and model definitions live in:
+#   trailblaze-models/src/commonMain/resources/trailblaze-config/providers/
+
+llm:
+  defaults:
+    model: openai/gpt-4.1

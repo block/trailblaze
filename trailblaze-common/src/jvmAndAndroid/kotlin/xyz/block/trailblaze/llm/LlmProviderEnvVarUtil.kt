@@ -1,17 +1,23 @@
 package xyz.block.trailblaze.llm
 
+import xyz.block.trailblaze.llm.config.BuiltInLlmModelRegistry
+import xyz.block.trailblaze.llm.config.LlmProviderConfig
+
 object LlmProviderEnvVarUtil {
 
   fun getEnvironmentVariableKeyForProvider(provider: TrailblazeLlmProvider): String? {
-    return when (provider) {
-      TrailblazeLlmProvider.OPENAI -> "OPENAI_API_KEY"
-      TrailblazeLlmProvider.DATABRICKS -> "DATABRICKS_TOKEN"
-      TrailblazeLlmProvider.GOOGLE -> "GOOGLE_API_KEY"
-      TrailblazeLlmProvider.ANTHROPIC -> "ANTHROPIC_API_KEY"
-      TrailblazeLlmProvider.OPEN_ROUTER -> "OPENROUTER_API_KEY"
-      TrailblazeLlmProvider.OLLAMA -> null
-      else -> null
-    }
+    return BuiltInLlmModelRegistry.authForProvider(provider)?.envVar
+  }
+
+  /**
+   * Gets the environment variable key for a provider, consulting the YAML config first.
+   * Falls back to the built-in mapping if the config doesn't specify an env var.
+   */
+  fun getEnvironmentVariableKeyForProviderConfig(
+    config: LlmProviderConfig?,
+    provider: TrailblazeLlmProvider,
+  ): String? {
+    return config?.auth?.envVar ?: getEnvironmentVariableKeyForProvider(provider)
   }
 
   fun getEnvironmentVariableValueForProvider(provider: TrailblazeLlmProvider): String? {
@@ -20,12 +26,24 @@ object LlmProviderEnvVarUtil {
   }
 
   /**
-   * Gets the environment variable value, but will throw an [IllegalStateException] if it is not available.
+   * Gets the environment variable value for a provider, consulting the YAML config first.
+   */
+  fun getEnvironmentVariableValueForProviderConfig(
+    config: LlmProviderConfig?,
+    provider: TrailblazeLlmProvider,
+  ): String? {
+    val key = getEnvironmentVariableKeyForProviderConfig(config, provider)
+    return key?.let { System.getenv(it) }
+  }
+
+  /**
+   * Gets the environment variable value, but will throw an [IllegalStateException] if it is not
+   * available.
    */
   fun requireEnvironmentVariableValueForProvider(provider: TrailblazeLlmProvider): String {
     val envVarName = getEnvironmentVariableKeyForProvider(provider)
-    return envVarName?.let { System.getenv(envVarName) }
+      ?: throw IllegalStateException("No environment variable configured for provider ${provider.id}")
+    return System.getenv(envVarName)
       ?: throw IllegalStateException("[$envVarName] environment variable is not set for ${provider.id}")
-
   }
 }

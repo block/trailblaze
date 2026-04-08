@@ -6,33 +6,41 @@ import ai.koog.prompt.message.Message
 
 /**
  * Estimates token usage breakdown by category.
- * 
+ *
  * Since LLM APIs typically only return total input token counts, we estimate the breakdown
  * based on the relative character counts of different message types. This uses a rough
  * approximation of 4 characters per token for English text.
+ *
+ * When an [ImageTokenFormula] and image dimensions are supplied, uses the formula for
+ * more accurate per-image token estimation instead of a flat constant.
  */
 object LlmTokenBreakdownEstimator {
   private const val CHARS_PER_TOKEN = 4.0
-  private const val IMAGE_TOKENS_ESTIMATE = 765 // Average tokens for a high-res image
 
   /**
    * Estimates token breakdown from the request data and total input tokens.
-   * 
+   *
    * @param messages The messages sent to the LLM
    * @param toolDescriptors The tool descriptors sent to the LLM
    * @param totalInputTokens The actual total input tokens from the LLM response
+   * @param imageTokenFormula The formula to use for image token estimation (from model config)
+   * @param imageWidth Width of scaled images sent to the LLM (pixels)
+   * @param imageHeight Height of scaled images sent to the LLM (pixels)
    * @return Estimated breakdown of input tokens by category
    */
   fun estimateBreakdown(
     messages: List<Message>,
     toolDescriptors: List<ToolDescriptor>,
     totalInputTokens: Long,
+    imageTokenFormula: ImageTokenFormula = ImageTokenFormula.DEFAULT,
+    imageWidth: Int? = null,
+    imageHeight: Int? = null,
   ): LlmInputTokenBreakdown {
     // Collect character counts and image counts by category
     var systemPromptChars = 0L
     var userPromptChars = 0L
     var totalImageCount = 0
-    
+
     // Message counts by category
     var systemMessageCount = 0
     var userMessageCount = 0
@@ -92,7 +100,12 @@ object LlmTokenBreakdownEstimator {
     // Calculate total character count
     val totalChars = systemPromptChars + userPromptChars + toolDescriptorChars
     val estimatedTextTokens = (totalChars / CHARS_PER_TOKEN).toLong()
-    val estimatedImageTokens = totalImageCount * IMAGE_TOKENS_ESTIMATE
+    val perImageTokens = if (imageWidth != null && imageHeight != null) {
+      imageTokenFormula.estimateTokens(imageWidth, imageHeight)
+    } else {
+      ImageTokenFormula.DEFAULT_ESTIMATE
+    }
+    val estimatedImageTokens = totalImageCount * perImageTokens
 
     // If we have actual token count from LLM, distribute proportionally
     val totalEstimated = estimatedTextTokens + estimatedImageTokens

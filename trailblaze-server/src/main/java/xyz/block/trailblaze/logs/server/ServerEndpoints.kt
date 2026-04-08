@@ -30,6 +30,9 @@ import xyz.block.trailblaze.logs.server.endpoints.LogTracePostEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.PingEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.GenerateReportEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.ReverseProxyEndpoint
+import xyz.block.trailblaze.llm.config.LlmAuthResolver
+import xyz.block.trailblaze.llm.config.LlmConfigLoader
+import xyz.block.trailblaze.llm.config.ResolvedProviderAuth
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.util.Console
 import io.ktor.server.application.ApplicationStopped
@@ -60,7 +63,9 @@ object ServerEndpoints {
     homeCallbackHandler: ((parameters: Map<String, List<String>>) -> Result<String>)? = null,
     installContentNegotiation: Boolean = true,
     cliCallbacks: CliEndpointCallbacks? = null,
+    resolvedAuths: Map<String, ResolvedProviderAuth>? = null,
   ) {
+    val auths = resolvedAuths ?: LlmAuthResolver.resolveAll(LlmConfigLoader.load())
     if (installContentNegotiation) {
       install(ContentNegotiation) {
         json(TrailblazeJsonInstance)
@@ -80,7 +85,7 @@ object ServerEndpoints {
       DeleteLogsEndpoint.register(this, logsRepo)
       LogScreenshotPostEndpoint.register(this, logsRepo)
       LogTracePostEndpoint.register(this, logsRepo)
-      ReverseProxyEndpoint.register(this, logsRepo)
+      ReverseProxyEndpoint.register(this, logsRepo, auths)
       GenerateReportEndpoint.register(this, logsRepo)
       staticFiles("/static", logsRepo.logsDir)
 

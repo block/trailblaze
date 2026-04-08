@@ -50,9 +50,25 @@ object TrailYamlValidator {
     directory.walkTopDown()
       .onEnter { dir -> dir.name != "build" }
       .filter { it.isFile && TrailRecordings.isTrailFile(it.name) }
+      .filter { !isProjectConfigFile(it) }
       .forEach { trailFiles.add(it) }
 
     return trailFiles
+  }
+
+  /**
+   * Returns true if this trailblaze.yaml file is a project config file (contains llm: or
+   * target: keys) rather than a trail NL definition file. Project config files use the
+   * same filename but a different schema and should not be validated as trail YAML.
+   */
+  private fun isProjectConfigFile(file: File): Boolean {
+    if (file.name != TrailRecordings.TRAILBLAZE_DOT_YAML) return false
+    return try {
+      val content = file.readText()
+      content.contains("llm:") || content.contains("target:")
+    } catch (_: Exception) {
+      false
+    }
   }
 
   /**

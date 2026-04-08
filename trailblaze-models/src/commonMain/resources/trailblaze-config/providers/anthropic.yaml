@@ -1,0 +1,32 @@
+# Anthropic built-in model definitions
+# Pricing: https://docs.anthropic.com/en/docs/about-claude/pricing
+# Models: https://docs.anthropic.com/en/docs/about-claude/models/all-models
+provider_id: anthropic
+name: Anthropic
+auth:
+  env_var: ANTHROPIC_API_KEY
+default_model: claude-sonnet-4-6
+models:
+  - id: claude-opus-4-6
+    context_length: 1000000
+    max_output_tokens: 128000
+    cost:
+      input_per_million: 5.00
+      output_per_million: 25.00
+      cached_input_per_million: 0.50
+
+  - id: claude-sonnet-4-6
+    context_length: 1000000
+    max_output_tokens: 64000
+    cost:
+      input_per_million: 3.00
+      output_per_million: 15.00
+      cached_input_per_million: 0.30
+
+  - id: claude-haiku-4-5
+    context_length: 200000
+    max_output_tokens: 64000
+    cost:
+      input_per_million: 1.00
+      output_per_million: 5.00
+      cached_input_per_million: 0.10

@@ -164,7 +164,7 @@ class TrailblazeMcpServer(
    * Required alongside [llmClientProvider] for local LLM sampling.
    */
   val llmModelProvider: (() -> TrailblazeLlmModel?)? = null,
-  /** Provider for all supported LLM model lists (for the llm/providers resource). */
+  /** Provider for all supported LLM model lists (for the trailblaze://llm/providers resource). */
   val llmModelListsProvider: () -> Set<TrailblazeLlmModelList>,
 ) {
   /**

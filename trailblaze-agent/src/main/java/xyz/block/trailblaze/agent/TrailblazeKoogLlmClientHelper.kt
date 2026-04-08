@@ -298,7 +298,7 @@ class TrailblazeKoogLlmClientHelper(
             messages = llmRequestData.messages,
             id = promptId,
             params = LLMParams(
-              temperature = null,
+              temperature = trailblazeLlmModel.defaultTemperature,
               speculation = null,
               schema = null,
               toolChoice = llmRequestData.toolChoice,

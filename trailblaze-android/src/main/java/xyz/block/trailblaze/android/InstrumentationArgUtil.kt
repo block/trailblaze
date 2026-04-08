@@ -39,8 +39,8 @@ object InstrumentationArgUtil {
    * Example:
    * ```
    * InstrumentationArgUtil.resolveTrailblazeLlmModel(
-   *     "OPENROUTER_API_KEY" to OpenRouterTrailblazeLlmModelList.GPT_OSS_120B_FREE,
-   *     "OPENAI_API_KEY" to OpenAITrailblazeLlmModelList.OPENAI_GPT_4_1,
+   *     LlmAuthResolver.resolve(TrailblazeLlmProvider.OPEN_ROUTER) to OpenRouterTrailblazeLlmModelList.GPT_OSS_120B_FREE,
+   *     LlmAuthResolver.resolve(TrailblazeLlmProvider.OPENAI) to OpenAITrailblazeLlmModelList.OPENAI_GPT_4_1,
    * )
    * ```
    */

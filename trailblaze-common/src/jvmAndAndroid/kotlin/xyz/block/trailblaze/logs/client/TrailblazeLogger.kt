@@ -268,11 +268,18 @@ class TrailblazeLogger(
         "totalCost=${promptCost + completionCost}"
     )
 
+    val (scaledWidth, scaledHeight) = trailblazeLlmModel.screenshotScalingConfig.computeScaledDimensions(
+      originalWidth = stepStatus.currentScreenState.deviceWidth,
+      originalHeight = stepStatus.currentScreenState.deviceHeight,
+    )
     val tokenBreakdown = if (inputTokens > 0) {
       LlmTokenBreakdownEstimator.estimateBreakdown(
         messages = koogLlmRequestMessages,
         toolDescriptors = toolDescriptors,
         totalInputTokens = inputTokens,
+        imageTokenFormula = trailblazeLlmModel.imageTokenFormula,
+        imageWidth = scaledWidth,
+        imageHeight = scaledHeight,
       )
     } else {
       null

@@ -53,8 +53,8 @@ import xyz.block.trailblaze.util.Console
  * - For accessibility mode, callers inject accessibility-specific implementations
  */
 open class AndroidTrailblazeRule(
-  val llmClient: LLMClient,
-  val trailblazeLlmModel: TrailblazeLlmModel,
+  val trailblazeLlmModel: TrailblazeLlmModel = AndroidLlmClientResolver.resolveModel(),
+  val llmClient: LLMClient = AndroidLlmClientResolver.createClient(trailblazeLlmModel),
   val config: TrailblazeConfig = TrailblazeConfig.DEFAULT,
   private val trailblazeDeviceId: TrailblazeDeviceId = DEFAULT_JUNIT_TEST_ANDROID_ON_DEVICE_TRAILBLAZE_DEVICE_ID,
   val trailblazeLoggingRule: TrailblazeAndroidLoggingRule = TrailblazeAndroidLoggingRule(

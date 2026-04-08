@@ -103,11 +103,11 @@ tasks.register("generateSampleAppTests") {
         appendLine()
         appendLine("import org.junit.Rule")
         appendLine("import org.junit.Test")
-        appendLine("import xyz.block.trailblaze.examples.sampleapp.SampleAppTrailblazeRule")
+        appendLine("import xyz.block.trailblaze.android.AndroidTrailblazeRule")
         appendLine()
         appendLine("class GeneratedSampleAppTests {")
         appendLine()
-        appendLine("  @get:Rule val rule = SampleAppTrailblazeRule()")
+        appendLine("  @get:Rule val rule = AndroidTrailblazeRule()")
         appendLine()
         testMethods.forEach { (method, path) ->
           appendLine("  @Test fun $method() = rule.runFromAsset(\"$path\")")

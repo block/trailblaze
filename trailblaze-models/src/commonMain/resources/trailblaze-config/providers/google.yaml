@@ -1,0 +1,47 @@
+# Google built-in model definitions
+# Pricing: https://ai.google.dev/gemini-api/docs/pricing
+provider_id: google
+name: Google
+auth:
+  env_var: GOOGLE_API_KEY
+default_model: gemini-3-flash-preview
+models:
+  - id: gemini-2.5-pro
+    context_length: 1048576
+    max_output_tokens: 65536
+    cost:
+      input_per_million: 1.25
+      output_per_million: 10.00
+      cached_input_per_million: 0.125
+
+  - id: gemini-3-flash-preview
+    context_length: 1048576
+    max_output_tokens: 65536
+    cost:
+      input_per_million: 0.50
+      output_per_million: 3.00
+      cached_input_per_million: 0.05
+
+  - id: gemini-3.1-pro-preview
+    context_length: 1048576
+    max_output_tokens: 65536
+    cost:
+      input_per_million: 2.00
+      output_per_million: 12.00
+      cached_input_per_million: 0.20
+
+  - id: gemini-3.1-pro-preview-customtools
+    context_length: 1048576
+    max_output_tokens: 65536
+    cost:
+      input_per_million: 2.00
+      output_per_million: 12.00
+      cached_input_per_million: 0.20
+
+  - id: gemini-3.1-flash-lite-preview
+    context_length: 1048576
+    max_output_tokens: 65536
+    cost:
+      input_per_million: 0.25
+      output_per_million: 1.50
+      cached_input_per_million: 0.025

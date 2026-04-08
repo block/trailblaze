@@ -421,7 +421,7 @@ Teams configure their MCP servers in their test repository:
 
 ```yaml
 # trailblaze.yaml - in repo root
-appTarget: acme_driver
+target: acme_driver
 
 mcpServers:
   # stdio (managed) - Trailblaze starts and stops this
@@ -450,7 +450,7 @@ $ trailblaze run
 
 ```yaml
 # trailblaze.yaml
-appTarget: string              # Which app target (acme_driver, myapp, etc.)
+target: string              # Which app target (acme_driver, myapp, etc.)
 platform: string               # Optional: android, ios, web
 
 mcpServers:

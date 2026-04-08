@@ -37,6 +37,14 @@ class LogsRepo(
    * to prevent test runs from polluting the session list.
    */
   val readOnly: Boolean = false,
+  /**
+   * Cost enrichment function called on every log write and read. Recalculates LLM request
+   * costs using the host's pricing config, ensuring on-device logs get accurate pricing
+   * regardless of what pricing data was available on the device.
+   *
+   * Defaults to identity (no enrichment) for backward compatibility.
+   */
+  private val costEnricher: (TrailblazeLog) -> TrailblazeLog = { it },
 ) : TrailblazeLogsDataProvider {
 
   // Create a dedicated coroutine scope for background file operations
@@ -207,7 +215,7 @@ class LogsRepo(
    */
   private fun readLogFilesFromDisk(sessionId: SessionId): List<File> = File(logsDir, sessionId.value)
     .listFiles()
-    ?.filter { it.extension == "json" && it.name.first().isHexDigit() }
+    ?.filter { it.extension == "json" && it.name.first().isHexDigit() && it.name != "capture_metadata.json" }
     ?: emptyList()
 
   private fun Char.isHexDigit(): Boolean = this in '0'..'9' || this in 'a'..'f'
@@ -243,9 +251,11 @@ class LogsRepo(
   }
 
   private fun parseTrailblazeLogFromFile(logFile: File): TrailblazeLog? = try {
-    TrailblazeJsonInstance.decodeFromString<TrailblazeLog>(
+    val log = TrailblazeJsonInstance.decodeFromString<TrailblazeLog>(
       logFile.readText(),
     )
+    // Always recalculate costs from the host's pricing config on read
+    costEnricher(log)
   } catch (e: Exception) {
     if (!logFile.name.endsWith("trace.json")) {
       Console.log("Could Not Parse Log: ${logFile.absolutePath}.  ${e.stackTraceToString()}")
@@ -614,6 +624,8 @@ class LogsRepo(
    */
   fun saveLogToDisk(logEvent: TrailblazeLog): File {
     if (readOnly) return File(logsDir, "noop")
+    @Suppress("NAME_SHADOWING")
+    val logEvent = costEnricher(logEvent)
     val logCount = getNextLogCountForSession(logEvent.session)
     // Only add timestamp if we restarted mid-session (to avoid filename collisions)
     val filename = if (logEvent.session in sessionsNeedingTimestamp) {

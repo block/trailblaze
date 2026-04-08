@@ -18,7 +18,9 @@ import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import xyz.block.trailblaze.llm.LlmLogCostEnricher
 import xyz.block.trailblaze.llm.LlmUsageAndCostExt.computeUsageSummary
+import xyz.block.trailblaze.llm.config.BuiltInLlmModelRegistry
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.recordings.TrailRecordings
@@ -122,9 +124,11 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
     private set
 
   override fun run() {
+    val costEnricher = LlmLogCostEnricher { modelId -> BuiltInLlmModelRegistry.find(modelId) }
     val logsRepo = LogsRepo(
       logsDir = logsDir,
-      watchFileSystem = false
+      watchFileSystem = false,
+      costEnricher = costEnricher::enrich,
     )
     val sessionIds = logsRepo.getSessionIds()
 

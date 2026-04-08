@@ -1,0 +1,3 @@
+llm:
+  defaults:
+    model: openai/gpt-4.1

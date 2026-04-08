@@ -7,6 +7,7 @@ import kotlinx.serialization.Serializable
 data class TrailblazeLlmProvider(
   val id: String,
   val display: String,
+  val description: String? = null,
 ) {
   fun toKoogLlmProvider(): LLMProvider = when (id) {
     LLMProvider.OpenAI.id -> LLMProvider.OpenAI
@@ -16,7 +17,7 @@ data class TrailblazeLlmProvider(
     LLMProvider.Google.id -> LLMProvider.Google
     DATABRICKS_KOOG_LLM_PROVIDER.id -> DATABRICKS_KOOG_LLM_PROVIDER
     MCP_SAMPLING_KOOG_LLM_PROVIDER.id -> MCP_SAMPLING_KOOG_LLM_PROVIDER
-    else -> error("Unknown LLM provider: $id")
+    else -> object : LLMProvider(id = id, display = display) {}
   }
 
   companion object {

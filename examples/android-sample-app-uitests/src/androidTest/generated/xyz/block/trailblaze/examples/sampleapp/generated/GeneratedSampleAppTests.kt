@@ -5,11 +5,11 @@ package xyz.block.trailblaze.examples.sampleapp.generated
 
 import org.junit.Rule
 import org.junit.Test
-import xyz.block.trailblaze.examples.sampleapp.SampleAppTrailblazeRule
+import xyz.block.trailblaze.android.AndroidTrailblazeRule
 
 class GeneratedSampleAppTests {
 
-  @get:Rule val rule = SampleAppTrailblazeRule()
+  @get:Rule val rule = AndroidTrailblazeRule()
 
   @Test
   fun conditionalItem() =

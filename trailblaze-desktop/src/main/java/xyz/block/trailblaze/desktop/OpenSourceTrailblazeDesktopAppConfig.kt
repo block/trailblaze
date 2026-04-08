@@ -5,6 +5,12 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.host.ios.MobileDeviceUtils
 import xyz.block.trailblaze.llm.TrailblazeLlmModelList
+import xyz.block.trailblaze.llm.LlmLogCostEnricher
+import xyz.block.trailblaze.llm.config.BuiltInLlmModelRegistry
+import xyz.block.trailblaze.llm.config.LlmAuthResolver
+import xyz.block.trailblaze.llm.config.LlmConfig
+import xyz.block.trailblaze.llm.config.LlmConfigLoader
+import xyz.block.trailblaze.llm.config.LlmConfigResolver
 import xyz.block.trailblaze.llm.providers.AnthropicTrailblazeLlmModelList
 import xyz.block.trailblaze.llm.providers.GoogleTrailblazeLlmModelList
 import xyz.block.trailblaze.llm.providers.OllamaTrailblazeLlmModelList
@@ -19,6 +25,7 @@ import xyz.block.trailblaze.ui.TrailblazeSettingsRepo
 import xyz.block.trailblaze.ui.models.AppIconProvider
 import xyz.block.trailblaze.ui.models.TrailblazeServerState
 import xyz.block.trailblaze.ui.recordings.RecordedTrailsRepoJvm
+import xyz.block.trailblaze.util.Console
 import java.io.File
 
 /**
@@ -64,7 +71,13 @@ class OpenSourceTrailblazeDesktopAppConfig : TrailblazeDesktopAppConfig(
     ),
   ).apply { mkdirs() }
 
-  override val logsRepo = LogsRepo(logsDir)
+  private val costEnricher = LlmLogCostEnricher { modelId ->
+    // Check YAML-configured models first (covers custom providers), then built-in registry
+    resolvedModelLists.flatMap { it.entries }.firstOrNull { it.modelId == modelId }
+      ?: BuiltInLlmModelRegistry.find(modelId)
+  }
+
+  override val logsRepo = LogsRepo(logsDir, costEnricher = costEnricher::enrich)
 
   val trailsDir = File(
     TrailblazeDesktopUtil.getEffectiveTrailsDirectory(
@@ -75,20 +88,36 @@ class OpenSourceTrailblazeDesktopAppConfig : TrailblazeDesktopAppConfig(
   override val recordedTrailsRepo = RecordedTrailsRepoJvm(
     trailsDirectory = trailsDir
   )
-  override val customEnvVarNames: List<String> =
-    ALL_MODEL_LISTS.mapNotNull { trailblazeLlmModelList ->
-      val trailblazeLlmProvider = trailblazeLlmModelList.provider
-      JvmLLMProvidersUtil.getEnvironmentVariableKeyForLlmProvider(trailblazeLlmProvider)
-    } + RevylCliClient.REVYL_API_KEY_ENV
+  override val customEnvVarNames: List<String> = buildList {
+    BUILT_IN_MODEL_LISTS.mapNotNullTo(this) { trailblazeLlmModelList ->
+      JvmLLMProvidersUtil.getEnvironmentVariableKeyForLlmProvider(trailblazeLlmModelList.provider)
+    }
+    loadedConfig.providers.values.mapNotNullTo(this) { it.auth.envVar }
+    add(RevylCliClient.REVYL_API_KEY_ENV)
+  }.distinct()
 
   override fun getCurrentlyAvailableLlmModelLists(): Set<TrailblazeLlmModelList> {
-    val modelLists = JvmLLMProvidersUtil.getAvailableTrailblazeLlmProviderModelLists(ALL_MODEL_LISTS)
-    return modelLists
+    return JvmLLMProvidersUtil.getAvailableTrailblazeLlmProviderModelLists(
+      getAllSupportedLlmModelLists(),
+      loadedConfig,
+    )
   }
 
   override fun getAllSupportedLlmModelLists(): Set<TrailblazeLlmModelList> {
-    // Return ALL supported providers, not filtered by availability
-    return ALL_MODEL_LISTS
+    return resolvedModelLists
+  }
+
+  override suspend fun additionalInstrumentationArgs(): Map<String, String> {
+    val config = LlmConfigLoader.load()
+    val auths = LlmAuthResolver.resolveAll(config)
+    val appConfig = trailblazeSettingsRepo.serverStateFlow.value.appConfig
+    val selectedProvider = appConfig.llmProvider
+    val selectedModel = appConfig.llmModel
+    return LlmAuthResolver.toInstrumentationArgs(
+      auths = auths,
+      selectedProviderId = selectedProvider,
+      defaultModel = "$selectedProvider/$selectedModel",
+    )
   }
 
   override val appIconProvider: AppIconProvider = AppIconProvider.DefaultAppIconProvider
@@ -97,14 +126,42 @@ class OpenSourceTrailblazeDesktopAppConfig : TrailblazeDesktopAppConfig(
   }
 
   companion object {
-    /** All supported LLM model lists for open source host mode. */
-    private val ALL_MODEL_LISTS = setOf(
+    /** Built-in hardcoded model lists (fallback when no YAML config exists). */
+    private val BUILT_IN_MODEL_LISTS: Set<TrailblazeLlmModelList> = setOf(
       AnthropicTrailblazeLlmModelList,
       GoogleTrailblazeLlmModelList,
       OllamaTrailblazeLlmModelList,
       OpenAITrailblazeLlmModelList,
       OpenRouterTrailblazeLlmModelList,
     )
+
+    /** Loaded YAML config, falling back to empty config on failure. */
+    val loadedConfig: LlmConfig by lazy {
+      try {
+        LlmConfigLoader.load()
+      } catch (e: Exception) {
+        Console.log("Warning: Failed to load LLM config: ${e.message}")
+        LlmConfig()
+      }
+    }
+
+    /**
+     * Resolved model lists from YAML config, falling back to built-in defaults.
+     * Loaded lazily on first access.
+     */
+    val resolvedModelLists: Set<TrailblazeLlmModelList> by lazy {
+      try {
+        if (loadedConfig.providers.isEmpty()) {
+          BUILT_IN_MODEL_LISTS
+        } else {
+          val resolved = LlmConfigResolver.resolve(loadedConfig, BuiltInLlmModelRegistry)
+          resolved.modelLists.toSet()
+        }
+      } catch (e: Exception) {
+        Console.log("Warning: Failed to resolve LLM config, using built-in defaults: ${e.message}")
+        BUILT_IN_MODEL_LISTS
+      }
+    }
   }
 
 }

@@ -11,6 +11,8 @@ import xyz.block.trailblaze.android.InstrumentationArgUtil
 import xyz.block.trailblaze.android.devices.TrailblazeAndroidOnDeviceClassifier
 import xyz.block.trailblaze.android.runner.rpc.OnDeviceRpcServer
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
+import xyz.block.trailblaze.llm.TrailblazeLlmProvider
+import xyz.block.trailblaze.llm.config.LlmAuthResolver
 import xyz.block.trailblaze.http.DefaultDynamicLlmClient
 import xyz.block.trailblaze.http.DynamicLlmClient
 import xyz.block.trailblaze.http.TrailblazeHttpClientFactory
@@ -57,12 +59,17 @@ class AndroidStandaloneServerTest : BaseAndroidStandaloneServerTest() {
 
   override fun getDynamicLlmClient(trailblazeLlmModel: TrailblazeLlmModel): DynamicLlmClient {
     // Reuse the cached HTTP client to prevent "unknown client" errors
+    val ollamaBaseUrl =
+      InstrumentationArgUtil.getInstrumentationArg(LlmAuthResolver.BASE_URL_ARG)
     return DefaultDynamicLlmClient(
       trailblazeLlmModel = trailblazeLlmModel,
       llmClients = mutableMapOf<LLMProvider, LLMClient>(
-        LLMProvider.Ollama to OllamaClient(baseClient = cachedHttpClient),
+        LLMProvider.Ollama to OllamaClient(
+          baseUrl = ollamaBaseUrl ?: "http://localhost:11434",
+          baseClient = cachedHttpClient,
+        ),
       ).apply {
-        InstrumentationArgUtil.getInstrumentationArg("OPENAI_API_KEY")?.let { openAiApiKey ->
+        InstrumentationArgUtil.getInstrumentationArg(LlmAuthResolver.resolve(TrailblazeLlmProvider.OPENAI))?.let { openAiApiKey ->
           put(
             LLMProvider.OpenAI,
             OpenAILLMClient(

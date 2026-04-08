@@ -9,6 +9,7 @@ import ai.koog.prompt.executor.ollama.client.OllamaClient
 import io.ktor.client.HttpClient
 import xyz.block.trailblaze.llm.LlmProviderEnvVarUtil
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
+import xyz.block.trailblaze.llm.config.LlmConfigLoader
 import xyz.block.trailblaze.llm.providers.TrailblazeDynamicLlmTokenProvider
 import xyz.block.trailblaze.mcp.utils.JvmLLMProvidersUtil
 
@@ -16,6 +17,11 @@ import xyz.block.trailblaze.mcp.utils.JvmLLMProvidersUtil
  * Retrieves LLM API tokens from environment variables
  */
 object TrailblazeHostDynamicLlmTokenProvider : TrailblazeDynamicLlmTokenProvider {
+
+  val ollamaBaseUrl: String? by lazy {
+    LlmConfigLoader.load().providers["ollama"]?.baseUrl
+  }
+
   override fun supportedProviders(): Set<TrailblazeLlmProvider> = setOf(
     TrailblazeLlmProvider.OLLAMA,
     TrailblazeLlmProvider.OPENAI,
@@ -33,7 +39,7 @@ object TrailblazeHostDynamicLlmTokenProvider : TrailblazeDynamicLlmTokenProvider
   ): LLMClient? {
     if (trailblazeLlmProvider == TrailblazeLlmProvider.OLLAMA) {
       return if (JvmLLMProvidersUtil.isOllamaInstalled) {
-        OllamaClient()
+        OllamaClient(baseUrl = ollamaBaseUrl ?: "http://localhost:11434")
       } else {
         null
       }

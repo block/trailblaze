@@ -1,6 +1,8 @@
 package xyz.block.trailblaze.report
 
 import com.github.ajalt.clikt.core.main
+import xyz.block.trailblaze.llm.LlmLogCostEnricher
+import xyz.block.trailblaze.llm.config.BuiltInLlmModelRegistry
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.HasScreenshot
@@ -78,7 +80,8 @@ open class GenerateReportCliCommand :
     Console.log("logsDir: ${logsDir.canonicalPath}")
     Console.log("useRelativeImageUrls: $useRelativeImageUrls")
 
-    val logsRepo = LogsRepo(logsDir, watchFileSystem = false)
+    val costEnricher = LlmLogCostEnricher { modelId -> BuiltInLlmModelRegistry.find(modelId) }
+    val logsRepo = LogsRepo(logsDir, watchFileSystem = false, costEnricher = costEnricher::enrich)
 
     // Move the files into session directories.  This is needed after an adb pull
     moveJsonFilesToSessionDirs(logsDir)

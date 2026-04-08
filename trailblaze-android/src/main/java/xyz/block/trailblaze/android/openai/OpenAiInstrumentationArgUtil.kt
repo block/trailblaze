@@ -1,6 +1,8 @@
 package xyz.block.trailblaze.android.openai
 
 import xyz.block.trailblaze.android.InstrumentationArgUtil
+import xyz.block.trailblaze.llm.TrailblazeLlmProvider
+import xyz.block.trailblaze.llm.config.LlmAuthResolver
 
 /**
  * OpenAI-specific instrumentation argument utilities.
@@ -10,13 +12,13 @@ object OpenAiInstrumentationArgUtil {
 
   /**
    * Gets the OpenAI API key from instrumentation arguments.
-   * Supports both OPENAI_API_KEY and openAiApiKey argument variants.
+   * Checks the dynamic convention first, then legacy arg names.
    */
   fun getApiKeyFromInstrumentationArg(): String = if (InstrumentationArgUtil.isAiEnabled()) {
-    val openAiApiKey = InstrumentationArgUtil.getInstrumentationArg("OPENAI_API_KEY")
-      ?: InstrumentationArgUtil.getInstrumentationArg("openAiApiKey")
+    val openAiApiKey =
+      InstrumentationArgUtil.getInstrumentationArg(LlmAuthResolver.resolve(TrailblazeLlmProvider.OPENAI))
     if (openAiApiKey.isNullOrBlank()) {
-      throw IllegalStateException("OPENAI_API_KEY environment variable is not set")
+      throw IllegalStateException("OpenAI API key not set (expected trailblaze.llm.auth.token.openai)")
     }
     openAiApiKey
   } else {
@@ -25,12 +27,12 @@ object OpenAiInstrumentationArgUtil {
 
   /**
    * Gets the OpenAI base URL from instrumentation arguments.
-   * Supports both OPENAI_BASE_URL and openAiBaseUrl argument variants.
+   * Checks the dynamic convention first, then legacy arg names.
    * Defaults to the standard OpenAI API endpoint if not provided.
    */
   fun getBaseUrlFromInstrumentationArg(): String {
-    val baseUrl = InstrumentationArgUtil.getInstrumentationArg("OPENAI_BASE_URL")
-      ?: InstrumentationArgUtil.getInstrumentationArg("openAiBaseUrl")
+    val baseUrl =
+      InstrumentationArgUtil.getInstrumentationArg(LlmAuthResolver.BASE_URL_ARG)
 
     return if (baseUrl.isNullOrBlank()) {
       "https://api.openai.com"

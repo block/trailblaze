@@ -1,5 +1,7 @@
 package xyz.block.trailblaze.api
 
+import kotlinx.serialization.Serializable
+
 /**
  * Represents the format of an image file.
  *
@@ -7,6 +9,7 @@ package xyz.block.trailblaze.api
  * @property fileExtension The file extension for this format (e.g., "png", "jpg")
  * @property mimeSubtype The mime subtype for this format (e.g., "png", "jpeg")
  */
+@Serializable
 enum class TrailblazeImageFormat(
   val formatName: String,
   val fileExtension: String,

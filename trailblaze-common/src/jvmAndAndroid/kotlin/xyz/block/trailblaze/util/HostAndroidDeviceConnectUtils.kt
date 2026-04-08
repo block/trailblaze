@@ -15,7 +15,6 @@ import xyz.block.trailblaze.util.AndroidHostAdbUtils.adbPortForward
 import xyz.block.trailblaze.util.AndroidHostAdbUtils.adbPortReverse
 import xyz.block.trailblaze.util.AndroidHostAdbUtils.createAdbCommandProcessBuilder
 import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils.runProcess
-import xyz.block.trailblaze.util.Console
 
 object HostAndroidDeviceConnectUtils {
 
@@ -30,8 +29,8 @@ object HostAndroidDeviceConnectUtils {
   ) {
     val testAppIds: List<String> =
       trailblazeOnDeviceInstrumentationTargetTestApps.map { it.testAppId } + listOf(
-        HostAndroidDeviceConnectUtils.MAESTRO_APP_ID,
-        HostAndroidDeviceConnectUtils.MAESTRO_TEST_APP_ID,
+        MAESTRO_APP_ID,
+        MAESTRO_TEST_APP_ID,
       ).distinct()
     Console.log("Force stopping all Android instrumentation processes. IDs: $testAppIds")
     testAppIds.forEach { appId ->
@@ -121,15 +120,8 @@ object HostAndroidDeviceConnectUtils {
           ),
         )
 
-        listOf(
-          "OPENAI_API_KEY",
-          "DATABRICKS_TOKEN",
-        ).forEach { envVar ->
-          System.getenv(envVar)?.let {
-            addAll(listOf("-e", envVar, it))
-          }
-        }
-
+        // All tokens and provider config are passed via additionalInstrumentationArgs,
+        // resolved from YAML config by LlmAuthResolver on the host side.
         additionalInstrumentationArgs.forEach { (key, value) ->
           addAll(listOf("-e", key, value))
         }
