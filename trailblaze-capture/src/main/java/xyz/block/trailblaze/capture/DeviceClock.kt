@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.capture
 
+import xyz.block.trailblaze.util.AdbPathResolver
 import xyz.block.trailblaze.util.Console
 
 /**
@@ -17,7 +18,7 @@ object DeviceClock {
   fun nowMs(deviceId: String): Long {
     return try {
       val p =
-        ProcessBuilder("adb", "-s", deviceId, "shell", "date", "+%s%3N")
+        ProcessBuilder(AdbPathResolver.adbCommand, "-s", deviceId, "shell", "date", "+%s%3N")
           .redirectErrorStream(true)
           .start()
       val output = p.inputStream.bufferedReader().readText().trim()

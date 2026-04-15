@@ -126,6 +126,10 @@ object TrailblazeCli {
       DesktopLogFileWriter.install(httpPort = httpPort)
     }
 
+    // Resolve adb path early so that CLI, MCP, and all subcommands can find it
+    // even when adb is not on PATH but ANDROID_HOME or ANDROID_SDK_ROOT is set.
+    xyz.block.trailblaze.util.AdbPathResolver.resolve()
+
     val cli = TrailblazeCliCommand(appProvider, configProvider)
     val commandLine = CommandLine(cli)
       .setCaseInsensitiveEnumValuesAllowed(true)

@@ -51,7 +51,7 @@ object AndroidHostAdbUtils {
     deviceId: TrailblazeDeviceId?,
   ): ProcessBuilder {
     val args = mutableListOf<String>().apply {
-      add("adb")
+      add(AdbPathResolver.adbCommand)
       if (deviceId != null) {
         add("-s")
         add(deviceId.instanceId)

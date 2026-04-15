@@ -2,6 +2,7 @@ package xyz.block.trailblaze.host.devices
 
 import java.net.ServerSocket
 import java.util.concurrent.TimeUnit
+import xyz.block.trailblaze.util.AdbPathResolver
 import xyz.block.trailblaze.util.Console
 
 /**
@@ -84,7 +85,7 @@ internal object HostDriverPortUtils {
     try {
       val process =
         ProcessBuilder(
-            listOf("adb", "-s", deviceInstanceId, "forward", "--remove", "tcp:$port"),
+            listOf(AdbPathResolver.adbCommand, "-s", deviceInstanceId, "forward", "--remove", "tcp:$port"),
           )
           .redirectErrorStream(true)
           .start()

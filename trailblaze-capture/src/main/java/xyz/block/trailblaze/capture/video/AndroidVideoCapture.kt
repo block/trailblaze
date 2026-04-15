@@ -7,6 +7,7 @@ import xyz.block.trailblaze.capture.CaptureStream
 import xyz.block.trailblaze.capture.DeviceClock
 import xyz.block.trailblaze.capture.model.CaptureArtifact
 import xyz.block.trailblaze.capture.model.CaptureType
+import xyz.block.trailblaze.util.AdbPathResolver
 import xyz.block.trailblaze.util.Console
 
 /**
@@ -93,7 +94,7 @@ class AndroidVideoCapture : CaptureStream {
 
     // Stop screenrecord on device
     try {
-      ProcessBuilder("adb", "-s", dev, "shell", "pkill", "-INT", "screenrecord")
+      ProcessBuilder(AdbPathResolver.adbCommand, "-s", dev, "shell", "pkill", "-INT", "screenrecord")
         .redirectErrorStream(true)
         .start()
         .waitFor()
@@ -118,7 +119,7 @@ class AndroidVideoCapture : CaptureStream {
       val localFile = File(dir, File(segment).name)
       try {
         val pullProcess =
-          ProcessBuilder("adb", "-s", dev, "pull", segment, localFile.absolutePath)
+          ProcessBuilder(AdbPathResolver.adbCommand, "-s", dev, "pull", segment, localFile.absolutePath)
             .redirectErrorStream(true)
             .start()
         val pullOutput = pullProcess.inputStream.bufferedReader().readText()
@@ -137,7 +138,7 @@ class AndroidVideoCapture : CaptureStream {
     // Clean up device files
     for (segment in segmentsSnapshot) {
       try {
-        ProcessBuilder("adb", "-s", dev, "shell", "rm", "-f", segment)
+        ProcessBuilder(AdbPathResolver.adbCommand, "-s", dev, "shell", "rm", "-f", segment)
           .redirectErrorStream(true)
           .start()
           .waitFor()
@@ -203,7 +204,7 @@ class AndroidVideoCapture : CaptureStream {
   private fun getDeviceDisplaySize(deviceId: String): Pair<Int, Int>? {
     try {
       val proc =
-        ProcessBuilder("adb", "-s", deviceId, "shell", "wm", "size")
+        ProcessBuilder(AdbPathResolver.adbCommand, "-s", deviceId, "shell", "wm", "size")
           .redirectErrorStream(true)
           .start()
       val output = proc.inputStream.bufferedReader().readText().trim()
@@ -229,7 +230,7 @@ class AndroidVideoCapture : CaptureStream {
     // Gracefully stop any previous recording so the MP4 container is finalized.
     // destroyForcibly() would corrupt the segment — mirror the SIGINT approach from stop().
     try {
-      ProcessBuilder("adb", "-s", dev, "shell", "pkill", "-INT", "screenrecord")
+      ProcessBuilder(AdbPathResolver.adbCommand, "-s", dev, "shell", "pkill", "-INT", "screenrecord")
         .redirectErrorStream(true)
         .start()
         .waitFor()
@@ -241,7 +242,7 @@ class AndroidVideoCapture : CaptureStream {
     try {
       process =
         ProcessBuilder(
-            "adb",
+            AdbPathResolver.adbCommand,
             "-s",
             dev,
             "shell",

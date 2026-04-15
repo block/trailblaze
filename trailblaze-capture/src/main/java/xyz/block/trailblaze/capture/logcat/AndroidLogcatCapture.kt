@@ -6,6 +6,7 @@ import xyz.block.trailblaze.capture.CaptureStream
 import xyz.block.trailblaze.capture.DeviceClock
 import xyz.block.trailblaze.capture.model.CaptureArtifact
 import xyz.block.trailblaze.capture.model.CaptureType
+import xyz.block.trailblaze.util.AdbPathResolver
 import xyz.block.trailblaze.util.Console
 
 /**
@@ -35,7 +36,7 @@ class AndroidLogcatCapture : CaptureStream {
 
     // Clear logcat buffer before starting
     try {
-      ProcessBuilder("adb", "-s", deviceId, "logcat", "-c")
+      ProcessBuilder(AdbPathResolver.adbCommand, "-s", deviceId, "logcat", "-c")
         .redirectErrorStream(true)
         .start()
         .waitFor()
@@ -44,7 +45,7 @@ class AndroidLogcatCapture : CaptureStream {
     }
 
     // Start logcat capture with epoch timestamps, streaming to file
-    val command = mutableListOf("adb", "-s", deviceId, "logcat", "-v", "epoch", "-v", "printable")
+    val command = mutableListOf(AdbPathResolver.adbCommand, "-s", deviceId, "logcat", "-v", "epoch", "-v", "printable")
 
     // Filter to app PID if appId is known and app is running
     if (appId != null) {
@@ -81,7 +82,7 @@ class AndroidLogcatCapture : CaptureStream {
   private fun getAppPid(deviceId: String, appId: String): String? =
     try {
       val result =
-        ProcessBuilder("adb", "-s", deviceId, "shell", "pidof", appId)
+        ProcessBuilder(AdbPathResolver.adbCommand, "-s", deviceId, "shell", "pidof", appId)
           .redirectErrorStream(true)
           .start()
       val output = result.inputStream.bufferedReader().readText().trim()

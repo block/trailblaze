@@ -66,6 +66,7 @@ import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 import xyz.block.trailblaze.host.rules.BasePlaywrightElectronTest
 import xyz.block.trailblaze.host.rules.BasePlaywrightNativeTest
+import xyz.block.trailblaze.util.AdbPathResolver
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.isMacOs
 import xyz.block.trailblaze.revyl.RevylCliClient
@@ -1045,7 +1046,7 @@ class TrailblazeDeviceManager(
      */
     internal fun listConnectedAdbDevices(): List<Pair<String, String>> {
       return try {
-        val process = ProcessBuilder("adb", "devices")
+        val process = ProcessBuilder(AdbPathResolver.adbCommand, "devices")
           .redirectErrorStream(true)
           .start()
         val finished = process.waitFor(DEVICE_DISCOVERY_TIMEOUT_SECONDS, TimeUnit.SECONDS)
