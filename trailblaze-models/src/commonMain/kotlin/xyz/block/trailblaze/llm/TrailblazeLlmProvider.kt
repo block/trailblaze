@@ -17,10 +17,19 @@ data class TrailblazeLlmProvider(
     LLMProvider.Google.id -> LLMProvider.Google
     DATABRICKS_KOOG_LLM_PROVIDER.id -> DATABRICKS_KOOG_LLM_PROVIDER
     MCP_SAMPLING_KOOG_LLM_PROVIDER.id -> MCP_SAMPLING_KOOG_LLM_PROVIDER
-    else -> object : LLMProvider(id = id, display = display) {}
+    else -> customKoogProviderCache.getOrPut(id) {
+      object : LLMProvider(id = id, display = display) {}
+    }
   }
 
   companion object {
+    /**
+     * Cache of Koog [LLMProvider] instances for custom providers. Since [LLMProvider] uses
+     * reference equality (no equals/hashCode override), we must return the same instance for a
+     * given provider ID so that map lookups in [MultiLLMPromptExecutor] work correctly.
+     */
+    private val customKoogProviderCache = mutableMapOf<String, LLMProvider>()
+
     val DATABRICKS_KOOG_LLM_PROVIDER = object : LLMProvider(
       id = "databricks",
       display = "Databricks",

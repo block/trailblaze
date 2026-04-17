@@ -228,7 +228,7 @@ class PlaywrightToolRefResolutionTest {
     assertNull(locator)
     assertNotNull(error)
     assertIs<TrailblazeToolResult.Error.ExceptionThrown>(error)
-    assertContains(error.errorMessage, "playwright_snapshot")
+    assertContains(error.errorMessage, "web_snapshot")
   }
 
   @Test

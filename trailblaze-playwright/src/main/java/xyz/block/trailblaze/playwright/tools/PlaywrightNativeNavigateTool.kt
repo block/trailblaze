@@ -11,7 +11,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.util.Console
 
 @Serializable
-@TrailblazeToolClass("playwright_navigate")
+@TrailblazeToolClass("web_navigate")
 @LLMDescription(
   """
 Navigate the browser to a URL, or go back/forward in browser history.

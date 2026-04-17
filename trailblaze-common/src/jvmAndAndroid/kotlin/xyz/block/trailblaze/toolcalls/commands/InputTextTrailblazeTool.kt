@@ -4,10 +4,12 @@ import ai.koog.agents.core.tools.annotations.LLMDescription
 import kotlinx.serialization.Serializable
 import maestro.orchestra.InputTextCommand
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
+import xyz.block.trailblaze.toolcalls.ReasoningTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.TrailblazeTools.REQUIRED_TEXT_DESCRIPTION
+import xyz.block.trailblaze.toolcalls.isSuccess
 
 @Serializable
 @TrailblazeToolClass("inputText")
@@ -21,19 +23,21 @@ This will type characters into the currently focused text field. This is useful 
 )
 data class InputTextTrailblazeTool(
   @param:LLMDescription(REQUIRED_TEXT_DESCRIPTION) val text: String,
-) : ExecutableTrailblazeTool {
+  override val reasoning: String? = null,
+) : ExecutableTrailblazeTool, ReasoningTrailblazeTool {
 
   override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult {
-    val maestroCommands = listOf(
-      InputTextCommand(toolExecutionContext.memory.interpolateVariables(text)),
-    ) +
+    val interpolated = toolExecutionContext.memory.interpolateVariables(text)
+    val maestroCommands = listOf(InputTextCommand(interpolated)) +
       HideKeyboardTrailblazeTool.hideKeyboardCommands(
         platform = toolExecutionContext.screenState?.trailblazeDevicePlatform,
         orientation = toolExecutionContext.trailblazeDeviceInfo.orientation,
       )
-    return toolExecutionContext.trailblazeAgent.runMaestroCommands(
+    val result = toolExecutionContext.trailblazeAgent.runMaestroCommands(
       maestroCommands = maestroCommands,
       traceId = toolExecutionContext.traceId,
     )
+    if (result.isSuccess()) return TrailblazeToolResult.Success(message = "Typed '$interpolated'")
+    return result
   }
 }

@@ -357,4 +357,315 @@ class PlaywrightScreenStateBoundsTest {
       "Offscreen button should have both bounds and offscreen annotation: $offscreenButtonLine",
     )
   }
+
+  // -- Batch JS viewport check correctness tests --
+
+  /**
+   * Complex page with diverse element types that exercises the batch JS viewport check.
+   * Tests role matching (implicit + explicit) and accessible name computation for:
+   * links, buttons, headings, inputs, selects, images, checkboxes, radio buttons,
+   * aria-label, aria-labelledby, and nested text content.
+   *
+   * Elements above the spacer are in viewport; below are offscreen.
+   */
+  private val complexPageHtml = """
+    <!DOCTYPE html>
+    <html>
+    <body style="margin:0; padding:0;">
+      <nav aria-label="Primary">
+        <a href="#home">Home</a>
+        <a href="#about">About Us</a>
+        <a href="#contact">Contact</a>
+      </nav>
+      <main>
+        <h1>Dashboard</h1>
+        <h2>User Settings</h2>
+        <form>
+          <label for="search-input">Search</label>
+          <input id="search-input" type="search" aria-label="Search users" />
+          <label for="name-input">Name</label>
+          <input id="name-input" type="text" placeholder="Enter your name" />
+          <select aria-label="Country">
+            <option>United States</option>
+            <option>Canada</option>
+          </select>
+          <label for="agree"><input id="agree" type="checkbox" /> I agree</label>
+          <button type="submit">Save Changes</button>
+        </form>
+        <img src="logo.png" alt="Company Logo" width="100" height="50" />
+        <p id="desc">Welcome back!</p>
+        <span id="status-label">Status:</span>
+        <div role="status" aria-labelledby="status-label">Active</div>
+        <button aria-label="Close dialog">X</button>
+        <a href="#more"><span>Learn</span> <span>More</span></a>
+
+        <!-- Push below elements offscreen (past 800px viewport) -->
+        <div style="height: 2000px;"></div>
+
+        <h2>Offscreen Section</h2>
+        <a href="#hidden">Hidden Link</a>
+        <button>Hidden Button</button>
+        <input type="text" aria-label="Offscreen Input" />
+        <img src="offscreen.png" alt="Offscreen Image" width="100" height="50" />
+        <input type="checkbox" aria-label="Offscreen Checkbox" />
+      </main>
+    </body>
+    </html>
+  """.trimIndent()
+
+  @Test
+  fun `batch JS correctly identifies diverse element types as in-viewport`() {
+    page.setContent(complexPageHtml)
+
+    val screenState = PlaywrightScreenState(
+      page = page,
+      viewportWidth = 1280,
+      viewportHeight = 800,
+    )
+
+    val text = screenState.viewHierarchyTextRepresentation!!
+    // All these elements should be present (visible, not filtered out)
+    val expectedVisible = listOf(
+      "\"Home\"", "\"About Us\"", "\"Contact\"",
+      "\"Dashboard\"", "\"User Settings\"",
+      "\"Search users\"", "\"Save Changes\"",
+      "\"Company Logo\"", "\"Close dialog\"",
+      "\"Learn More\"",
+    )
+    for (expected in expectedVisible) {
+      assertTrue(
+        text.contains(expected),
+        "Expected visible element with $expected in output, but got:\n$text",
+      )
+    }
+  }
+
+  @Test
+  fun `batch JS correctly identifies diverse element types as offscreen`() {
+    page.setContent(complexPageHtml)
+
+    val screenState = PlaywrightScreenState(
+      page = page,
+      viewportWidth = 1280,
+      viewportHeight = 800,
+    )
+
+    val text = screenState.viewHierarchyTextRepresentation!!
+    // All these elements should be filtered out (offscreen)
+    val expectedOffscreen = listOf(
+      "\"Offscreen Section\"",
+      "\"Hidden Link\"",
+      "\"Hidden Button\"",
+      "\"Offscreen Input\"",
+      "\"Offscreen Image\"",
+      "\"Offscreen Checkbox\"",
+    )
+    for (expected in expectedOffscreen) {
+      assertFalse(
+        text.contains(expected),
+        "Expected offscreen element with $expected to be filtered out, but found in:\n$text",
+      )
+    }
+    assertTrue(
+      text.contains("offscreen elements hidden"),
+      "Should have offscreen summary line, but got:\n$text",
+    )
+  }
+
+  @Test
+  fun `batch JS matches Playwright ARIA snapshot for every element`() {
+    page.setContent(complexPageHtml)
+
+    // Capture ARIA snapshot and build compact list (this is what Playwright sees)
+    val screenState = PlaywrightScreenState(
+      page = page,
+      viewportWidth = 1280,
+      viewportHeight = 800,
+      requestedDetails = setOf(ViewHierarchyDetail.OFFSCREEN_ELEMENTS),
+    )
+
+    val text = screenState.viewHierarchyTextRepresentation!!
+
+    // Cross-reference: for every element in the compact list, verify the batch JS
+    // classification matches Playwright's own locator-based bounding box check.
+    for ((id, elementRef) in screenState.elementIdMapping) {
+      val locator = PlaywrightAriaSnapshot.resolveElementRef(page, elementRef)
+      if (locator.count() == 0) continue
+
+      val box = locator.boundingBox() ?: continue
+      val playwrightSaysInViewport = box.y + box.height > 0 && box.y < 800 &&
+        box.x + box.width > 0 && box.x < 1280 &&
+        box.width > 0 && box.height > 0
+
+      // Find this element's line in the output
+      val elementLine = text.lines().find { it.contains("[$id]") } ?: continue
+      val batchSaysOffscreen = elementLine.contains("(offscreen)")
+
+      if (playwrightSaysInViewport) {
+        assertFalse(
+          batchSaysOffscreen,
+          "Element $id (${elementRef.descriptor}) is in viewport per Playwright " +
+            "but batch JS marked it offscreen: $elementLine",
+        )
+      } else {
+        assertTrue(
+          batchSaysOffscreen,
+          "Element $id (${elementRef.descriptor}) is offscreen per Playwright " +
+            "but batch JS did NOT mark it offscreen: $elementLine",
+        )
+      }
+    }
+  }
+
+  @Test
+  fun `batch JS handles page with many duplicate elements`() {
+    // Page with 50 links that share the same text — exercises nth-index disambiguation
+    val manyLinksHtml = buildString {
+      append("<!DOCTYPE html><html><body style='margin:0;padding:0;'><main>")
+      append("<h1>Link List</h1>")
+      for (i in 1..50) {
+        append("""<a href="#item$i">Item</a> """)
+      }
+      // Push more links offscreen
+      append("<div style='height:2000px;'></div>")
+      for (i in 51..100) {
+        append("""<a href="#item$i">Item</a> """)
+      }
+      append("</main></body></html>")
+    }
+
+    page.setContent(manyLinksHtml)
+
+    val screenState = PlaywrightScreenState(
+      page = page,
+      viewportWidth = 1280,
+      viewportHeight = 800,
+    )
+
+    val text = screenState.viewHierarchyTextRepresentation!!
+    // Should have some visible elements
+    assertTrue(text.contains("[e"), "Should have element IDs in output:\n$text")
+    // Should have offscreen summary (the 50 links below the spacer)
+    assertTrue(
+      text.contains("offscreen elements hidden"),
+      "Should have offscreen summary for duplicate-heavy page, but got:\n$text",
+    )
+    // Heading should be visible
+    assertTrue(text.contains("\"Link List\""), "Heading should be visible:\n$text")
+  }
+
+  @Test
+  fun `batch JS skips aria-hidden elements to keep nth-indices aligned`() {
+    // This page has 3 DOM links named "Edit", but the middle one is aria-hidden.
+    // Playwright's ARIA snapshot only sees 2: nth=0 (visible-top) and nth=1 (offscreen).
+    // If the JS DOM walk doesn't skip the aria-hidden link, nth=1 would resolve to
+    // the aria-hidden element instead of the offscreen one — a correctness bug.
+    val ariaHiddenHtml = """
+      <!DOCTYPE html>
+      <html>
+      <body style="margin:0; padding:0;">
+        <main>
+          <a href="#top">Edit</a>
+          <div aria-hidden="true"><a href="#hidden">Edit</a></div>
+          <div style="height: 2000px;"></div>
+          <a href="#bottom">Edit</a>
+        </main>
+      </body>
+      </html>
+    """.trimIndent()
+
+    page.setContent(ariaHiddenHtml)
+
+    val screenState = PlaywrightScreenState(
+      page = page,
+      viewportWidth = 1280,
+      viewportHeight = 800,
+      requestedDetails = setOf(ViewHierarchyDetail.OFFSCREEN_ELEMENTS),
+    )
+
+    val text = screenState.viewHierarchyTextRepresentation!!
+
+    // Should have exactly 2 "Edit" links (the aria-hidden one is excluded by Playwright)
+    val editLines = text.lines().filter { it.contains("link \"Edit\"") }
+    assertTrue(
+      editLines.size == 2,
+      "Expected 2 'Edit' links (ARIA-hidden excluded), but found ${editLines.size} in:\n$text",
+    )
+
+    // Cross-reference each element against Playwright's own locator resolution
+    for ((id, elementRef) in screenState.elementIdMapping) {
+      val locator = PlaywrightAriaSnapshot.resolveElementRef(page, elementRef)
+      if (locator.count() == 0) continue
+      val box = locator.boundingBox() ?: continue
+      val playwrightInViewport = box.y + box.height > 0 && box.y < 800 &&
+        box.x + box.width > 0 && box.x < 1280
+      val elementLine = text.lines().find { it.contains("[$id]") } ?: continue
+      val batchSaysOffscreen = elementLine.contains("(offscreen)")
+      if (playwrightInViewport) {
+        assertFalse(
+          batchSaysOffscreen,
+          "Element $id (${elementRef.descriptor} nth=${elementRef.nthIndex}) " +
+            "is in viewport per Playwright but batch JS says offscreen: $elementLine",
+        )
+      } else {
+        assertTrue(
+          batchSaysOffscreen,
+          "Element $id (${elementRef.descriptor} nth=${elementRef.nthIndex}) " +
+            "is offscreen per Playwright but batch JS missed it: $elementLine",
+        )
+      }
+    }
+  }
+
+  @Test
+  fun `batch JS skips display-none elements to keep nth-indices aligned`() {
+    val displayNoneHtml = """
+      <!DOCTYPE html>
+      <html>
+      <body style="margin:0; padding:0;">
+        <main>
+          <button>Submit</button>
+          <div style="display:none;"><button>Submit</button></div>
+          <div style="height: 2000px;"></div>
+          <button>Submit</button>
+        </main>
+      </body>
+      </html>
+    """.trimIndent()
+
+    page.setContent(displayNoneHtml)
+
+    val screenState = PlaywrightScreenState(
+      page = page,
+      viewportWidth = 1280,
+      viewportHeight = 800,
+      requestedDetails = setOf(ViewHierarchyDetail.OFFSCREEN_ELEMENTS),
+    )
+
+    val text = screenState.viewHierarchyTextRepresentation!!
+
+    // Cross-reference every element against Playwright's locator resolution
+    for ((id, elementRef) in screenState.elementIdMapping) {
+      val locator = PlaywrightAriaSnapshot.resolveElementRef(page, elementRef)
+      if (locator.count() == 0) continue
+      val box = locator.boundingBox() ?: continue
+      val playwrightInViewport = box.y + box.height > 0 && box.y < 800 &&
+        box.x + box.width > 0 && box.x < 1280
+      val elementLine = text.lines().find { it.contains("[$id]") } ?: continue
+      val batchSaysOffscreen = elementLine.contains("(offscreen)")
+      if (playwrightInViewport) {
+        assertFalse(
+          batchSaysOffscreen,
+          "Element $id (${elementRef.descriptor} nth=${elementRef.nthIndex}) " +
+            "in viewport per Playwright but batch JS says offscreen: $elementLine",
+        )
+      } else {
+        assertTrue(
+          batchSaysOffscreen,
+          "Element $id (${elementRef.descriptor} nth=${elementRef.nthIndex}) " +
+            "offscreen per Playwright but batch JS missed it: $elementLine",
+        )
+      }
+    }
+  }
 }

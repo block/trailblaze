@@ -1,0 +1,2 @@
+id: web_verify_list_visible
+class: xyz.block.trailblaze.playwright.tools.PlaywrightNativeVerifyListVisibleTool

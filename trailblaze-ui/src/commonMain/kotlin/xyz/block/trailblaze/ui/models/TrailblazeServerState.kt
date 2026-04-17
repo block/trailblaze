@@ -30,7 +30,6 @@ data class TrailblazeServerState(
     val themeMode: ThemeMode = ThemeMode.System,
     val llmProvider: String = DEFAULT_DESKTOP_APP_MODEL_LLM_MODEL.trailblazeLlmProvider.id,
     val llmModel: String = DEFAULT_DESKTOP_APP_MODEL_LLM_MODEL.modelId, // Default to GPT-4.1 model
-    val setOfMarkEnabled: Boolean = true,
     val aiFallbackEnabled: Boolean = AI_FALLBACK_DEFAULT,
     /** Agent implementation to use. Defaults to [AgentImplementation.DEFAULT]. */
     val agentImplementation: AgentImplementation = AgentImplementation.DEFAULT,
@@ -80,6 +79,12 @@ data class TrailblazeServerState(
     val lastRoute: String? = null, // Qualified class name of the last visited route
     // Self-test server: expose the live desktop window as a Compose RPC test target
     val enableSelfTestServer: Boolean = true,
+    // CLI working mode: "trail" for authoring reproducible trails, "blaze" for exploration
+    val cliMode: String? = null,
+    // CLI device platform: "ANDROID", "IOS", or "WEB" — used as default when -d is not passed
+    val cliDevicePlatform: String? = null,
+    // Agent execution location: true = host controls via RPC, false = agent runs entirely on-device
+    val preferHostAgent: Boolean = true,
   ) {
 
     companion object {

@@ -57,9 +57,9 @@ object CoreTools {
   const val TAP_ON_ELEMENT = "tapOnElement"
 
   /**
-   * Tap on a UI element identified by node ID.
+   * Tap on a UI element by its stable ref ID from the snapshot.
    */
-  const val TAP_ON_ELEMENT_BY_NODE_ID = "tapOnElementByNodeId"
+  const val TAP = "tap"
 
   /**
    * Tap at specific screen coordinates.
@@ -199,9 +199,9 @@ object CoreTools {
 
   /** Well-known tool names that represent tap/click actions. */
   private val TAP_NAMES = setOf(
+    TAP,                       // "tap"                      — Trailblaze core (ref-based)
     TAP_ON_POINT,              // "tapOnPoint"              — Trailblaze core
     TAP_ON_ELEMENT,            // "tapOnElement"             — Trailblaze core
-    TAP_ON_ELEMENT_BY_NODE_ID, // "tapOnElementByNodeId"     — Trailblaze core
     "click",                   // AndroidWorld canonical
   )
 
@@ -474,7 +474,7 @@ class ToolCompatibilityRegistry {
 
       // Interaction - core touch interactions
       ToolCompatibility.builtinMobile(CoreTools.TAP_ON_ELEMENT, "Tap on UI element by selector"),
-      ToolCompatibility.builtinMobile(CoreTools.TAP_ON_ELEMENT_BY_NODE_ID, "Tap on UI element by node ID"),
+      ToolCompatibility.builtinMobile(CoreTools.TAP, "Tap on UI element by ref ID"),
       ToolCompatibility.builtinMobile(CoreTools.TAP_ON_POINT, "Tap at screen coordinates"),
       ToolCompatibility.builtinMobile(CoreTools.LONG_PRESS, "Long press on UI element"),
       ToolCompatibility.builtinMobile(CoreTools.SWIPE, "Swipe in a direction"),

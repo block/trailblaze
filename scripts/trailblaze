@@ -4,11 +4,11 @@
 #
 # Usage:
 #   ./trailblaze                     - Launch desktop GUI
-#   ./trailblaze --headless          - Start headless daemon
+#   ./trailblaze app --headless      - Start headless daemon
 #   ./trailblaze app --stop          - Stop the daemon
-#   ./trailblaze blaze "goal"        - Take a UI action (auto-starts daemon)
+#   ./trailblaze blaze "objective"   - Take a UI action (auto-starts daemon)
 #   ./trailblaze ask "question"      - Ask about the screen (auto-starts daemon)
-#   ./trailblaze run <file>          - Run a trail file (auto-starts daemon)
+#   ./trailblaze trail <file>          - Run a trail file (auto-starts daemon)
 #   ./trailblaze mcp                 - Start MCP server (STDIO proxy to daemon)
 #   ./trailblaze <command>           - Run other CLI commands (config, report, etc.)
 #
@@ -38,42 +38,36 @@ fi
 
 # JVM args required for Compose Desktop on macOS — Skiko's JNI native code needs
 # access to internal AWT classes. Without these, java -jar crashes with SIGSEGV.
-TRAILBLAZE_JVM_ARGS=""
+# Default max heap covers report generation with large session logs.
+TRAILBLAZE_JVM_ARGS="-Xmx4g"
 if [[ "$(uname)" == "Darwin" ]]; then
-  TRAILBLAZE_JVM_ARGS="--add-opens java.desktop/sun.awt=ALL-UNNAMED --add-opens java.desktop/sun.lwawt=ALL-UNNAMED --add-opens java.desktop/sun.lwawt.macosx=ALL-UNNAMED"
+  TRAILBLAZE_JVM_ARGS="$TRAILBLAZE_JVM_ARGS --add-opens java.desktop/sun.awt=ALL-UNNAMED --add-opens java.desktop/sun.lwawt=ALL-UNNAMED --add-opens java.desktop/sun.lwawt.macosx=ALL-UNNAMED"
 fi
 
 TRAILBLAZE_JAR="${TRAILBLAZE_JAR:-$SCRIPT_DIR/trailblaze.jar}"
 
 # Execution functions — overridable by defining them before sourcing this script.
+# All functions accept variadic args to preserve quoting (e.g., YAML with newlines).
 if ! declare -f tb_run > /dev/null 2>&1; then
   tb_run() {
-    if [ -n "$1" ]; then
-      java $TRAILBLAZE_JVM_ARGS -jar "$TRAILBLAZE_JAR" $1
-    else
-      java $TRAILBLAZE_JVM_ARGS -jar "$TRAILBLAZE_JAR"
-    fi
+    java $TRAILBLAZE_JVM_ARGS -jar "$TRAILBLAZE_JAR" "$@"
   }
 
   tb_run_background() {
-    if [ -n "$1" ]; then
-      nohup java $TRAILBLAZE_JVM_ARGS -jar "$TRAILBLAZE_JAR" $1 > /dev/null 2>&1 &
-    else
-      nohup java $TRAILBLAZE_JVM_ARGS -jar "$TRAILBLAZE_JAR" > /dev/null 2>&1 &
-    fi
+    nohup java $TRAILBLAZE_JVM_ARGS -jar "$TRAILBLAZE_JAR" "$@" > /dev/null 2>&1 &
   }
 
   tb_run_quiet() {
     # JAR mode has no build noise, so this is the same as tb_run.
-    tb_run "$1"
+    tb_run "$@"
   }
 
   tb_run_exec_quiet() {
-    exec java $TRAILBLAZE_JVM_ARGS -jar "$TRAILBLAZE_JAR" $1
+    exec java $TRAILBLAZE_JVM_ARGS -jar "$TRAILBLAZE_JAR" "$@"
   }
 
   tb_run_background_quiet() {
-    nohup java $TRAILBLAZE_JVM_ARGS -jar "$TRAILBLAZE_JAR" $1 > /dev/null 2>&1 &
+    nohup java $TRAILBLAZE_JVM_ARGS -jar "$TRAILBLAZE_JAR" "$@" > /dev/null 2>&1 &
   }
 fi
 
@@ -160,11 +154,12 @@ to_absolute_path() {
 # ---------------------------------------------------------------------------
 
 # Process arguments: resolve file paths to absolute and detect STDIO mode.
+# Uses an array to preserve quoting for arguments with spaces (e.g., --yaml YAML).
 STDIO_MODE=false
 HAS_MCP=false
 HAS_HTTP=false
 HAS_DIRECT=false
-ARGS=""
+ARGS_ARRAY=()
 for arg in "$@"; do
     if [ "$arg" = "mcp" ]; then
         HAS_MCP=true
@@ -176,13 +171,17 @@ for arg in "$@"; do
         HAS_DIRECT=true
     fi
 
-    resolved_arg=$(to_absolute_path "$arg")
-    if [ -z "$ARGS" ]; then
-        ARGS="$resolved_arg"
+    # Only resolve paths that look like file/dir references (contain / or .)
+    # Don't resolve bare words like "web", "android", "ios" — they're command arguments
+    if [[ "$arg" == */* ]] || [[ "$arg" == *.* ]]; then
+        resolved_arg=$(to_absolute_path "$arg")
     else
-        ARGS="$ARGS $resolved_arg"
+        resolved_arg="$arg"
     fi
+    ARGS_ARRAY+=("$resolved_arg")
 done
+# Flat string for functions that need it (backward compat)
+ARGS="${ARGS_ARRAY[*]}"
 
 # STDIO mode: `mcp` subcommand without `--http` flag (includes --bridge mode)
 if [ "$HAS_MCP" = true ] && [ "$HAS_HTTP" = false ]; then
@@ -204,7 +203,7 @@ elif [ "$STDIO_MODE" = true ]; then
     if ! is_daemon_running; then
         echo "[mcp] Starting Trailblaze daemon..." >&2
         # Ports are passed via exported TRAILBLAZE_PORT/TRAILBLAZE_HTTPS_PORT env vars
-        tb_run_background_quiet "app --headless"
+        tb_run_background_quiet app --foreground --headless
         echo "[mcp] Daemon starting (PID $!)..." >&2
 
         attempts=0
@@ -222,14 +221,13 @@ elif [ "$STDIO_MODE" = true ]; then
         fi
     fi
 
-    tb_run_exec_quiet "$ARGS"
-elif ([ "$1" = "trail" ] || [ "$1" = "run" ] || [ "$1" = "blaze" ] || [ "$1" = "ask" ] || ([ "$1" = "session" ] && [ "$2" != "info" ] && [ "$2" != "list" ] && [ "$2" != "artifacts" ]) || [ "$1" = "snapshot" ]) && ! is_daemon_running; then
+    tb_run_exec_quiet "${ARGS_ARRAY[@]}"
+elif ([ "$1" = "trail" ] || [ "$1" = "run" ] || [ "$1" = "blaze" ] || [ "$1" = "ask" ] || ([ "$1" = "session" ] && [ "$2" != "info" ]) || [ "$1" = "tools" ]) && ! is_daemon_running; then
     # Auto-start daemon for commands that need it so subsequent calls reuse it.
     # Use stderr so --json output on stdout stays clean.
     echo "Starting Trailblaze daemon..." >&2
     # Ports are passed via exported TRAILBLAZE_PORT/TRAILBLAZE_HTTPS_PORT env vars
-    tb_run_background "app --headless"
-    STARTED_DAEMON=true
+    tb_run_background app --foreground --headless
 
     # Wait for daemon to be ready (all output to stderr for --json safety)
     echo -n "Waiting for Trailblaze daemon" >&2
@@ -251,50 +249,18 @@ elif ([ "$1" = "trail" ] || [ "$1" = "run" ] || [ "$1" = "blaze" ] || [ "$1" = "
         echo "Warning: Daemon did not start in time. Falling back to direct execution." >&2
     fi
 
-    # Now run the CLI command — RunCommand will detect the daemon and delegate.
+    # Now run the CLI command — TrailCommand will detect the daemon and delegate.
     # Use quiet mode to suppress Gradle build noise from user-facing output.
-    tb_run_quiet "$ARGS"
+    tb_run_quiet "${ARGS_ARRAY[@]}"
     RUN_EXIT=$?
 
-    # Stop the daemon we started so it doesn't linger as a zombie process.
-    # Keep it alive for session commands (start/save/info) since the user
-    # will need it for subsequent blaze/ask/snapshot calls.
-    if [ "$STARTED_DAEMON" = true ] && is_daemon_running && [ "$1" != "session" ] && [ "$1" != "snapshot" ]; then
-        stop_daemon > /dev/null 2>&1
-    fi
+    # Keep daemon alive for all commands so subsequent runs reuse it.
+    # Use `./trailblaze app --stop` to shut it down explicitly.
     exit $RUN_EXIT
-elif [ -n "$ARGS" ]; then
+elif [ ${#ARGS_ARRAY[@]} -gt 0 ]; then
     # CLI command mode (config, auth, etc.)
-    tb_run_quiet "$ARGS"
+    tb_run_quiet "${ARGS_ARRAY[@]}"
 else
-    # Default mode (no subcommand): launch the app
-    if is_daemon_running; then
-        echo "Trailblaze is already running."
-        show_window
-        echo "Use the menu bar icon to show the window."
-    else
-        echo "Starting Trailblaze..."
-
-        # Ports are passed via exported TRAILBLAZE_PORT/TRAILBLAZE_HTTPS_PORT env vars
-        tb_run_background "app"
-
-        # Poll for daemon to become available
-        echo -n "Waiting for Trailblaze to start"
-        max_attempts=30
-        attempts=0
-        while [ $attempts -lt $max_attempts ]; do
-            if is_daemon_running; then
-                echo ""
-                echo "Trailblaze is ready! Check the menu bar icon."
-                exit 0
-            fi
-            echo -n "."
-            sleep 1
-            attempts=$((attempts + 1))
-        done
-
-        echo ""
-        echo "Trailblaze is starting in the background (taking longer than expected)."
-        echo "Check the menu bar icon or run with '--verbose' for verbose output."
-    fi
+    # No subcommand: show help
+    tb_run_quiet --help
 fi

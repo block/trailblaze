@@ -44,25 +44,18 @@ class GetScreenStateRequestHandler : RpcHandler<GetScreenStateRequest, GetScreen
         TrailblazeAccessibilityService.waitForSettled()
         AccessibilityServiceScreenState(
           screenshotScalingConfig = scalingConfig,
-          setOfMarkEnabled = request.setOfMarkEnabled,
           includeScreenshot = request.includeScreenshot,
         )
       } else {
         AndroidOnDeviceUiAutomatorScreenState(
           screenshotScalingConfig = scalingConfig,
-          setOfMarkEnabled = request.setOfMarkEnabled,
           includeScreenshot = request.includeScreenshot,
         )
       }
-      
-      // Get screenshot bytes and encode to base64 if requested
+
+      // Always use annotatedScreenshotBytes — set-of-mark is always on.
       val screenshotBase64 = if (request.includeScreenshot) {
-        val bytes = if (request.setOfMarkEnabled) {
-          screenState.annotatedScreenshotBytes
-        } else {
-          screenState.screenshotBytes
-        }
-        bytes?.encodeBase64()
+        screenState.annotatedScreenshotBytes?.encodeBase64()
       } else {
         null
       }

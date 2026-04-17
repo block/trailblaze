@@ -16,6 +16,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.TrailblazeTools.REQUIRED_TEXT_DESCRIPTION
+import xyz.block.trailblaze.toolcalls.isSuccess
 
 @Serializable
 @TrailblazeToolClass(
@@ -99,9 +100,18 @@ data class AssertNotVisibleWithTextTrailblazeTool(
         nodeSelector = nodeSelector,
         traceId = toolExecutionContext.traceId,
       )
-      if (result != null) return result
+      if (result != null) {
+        if (result.isSuccess()) {
+          return TrailblazeToolResult.Success(message = "Verified '$text' not visible")
+        }
+        return result
+      }
     }
     // Fall back to Maestro command path
-    return super.execute(toolExecutionContext)
+    val fallbackResult = super.execute(toolExecutionContext)
+    if (fallbackResult.isSuccess()) {
+      return TrailblazeToolResult.Success(message = "Verified '$text' not visible")
+    }
+    return fallbackResult
   }
 }

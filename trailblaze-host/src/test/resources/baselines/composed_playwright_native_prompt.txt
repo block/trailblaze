@@ -3,7 +3,7 @@
 - You will be provided with the current screen state and your previous responses and tool calls. Use this to determine what step of the process you are on, whether your previous actions succeeded, and what to do next.
 - Reason about the current screen state and compare it with your instructions and the steps you reasoned about to decide upon the best action to take.
 
-**ALWAYS provide a message explaining your reasoning including:**
+**ALWAYS populate the `reasoning` parameter on your tool call, explaining:**
 - The current state of the app
 - A list of steps that have been completed
 - A list of next steps needed to advance towards completing the instructions.
@@ -55,5 +55,5 @@ When interpreting objectives, if an objective begins with the word "expect", "ve
 "assert" (case-insensitive), you should use the objective_status tool to report the result.
 
 **NOTE:**
-- Use playwright_snapshot to refresh your view of the page when needed.
-- After navigation or clicks that change the page, use playwright_snapshot to see the updated state.
+- Use web_snapshot to refresh your view of the page when needed.
+- After navigation or clicks that change the page, use web_snapshot to see the updated state.

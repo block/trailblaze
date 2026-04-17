@@ -76,8 +76,8 @@ import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
 import xyz.block.trailblaze.mcp.models.McpSessionId
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.mcp.newtools.ConfigToolSet
+import xyz.block.trailblaze.mcp.newtools.ToolDiscoveryToolSet
 import xyz.block.trailblaze.mcp.newtools.SessionToolSet
-import xyz.block.trailblaze.mcp.newtools.SnapshotToolSet
 import xyz.block.trailblaze.mcp.newtools.StepToolSet
 import xyz.block.trailblaze.mcp.resources.registerResources
 import xyz.block.trailblaze.mcp.newtools.DeviceManagerToolSet
@@ -93,6 +93,8 @@ import xyz.block.trailblaze.mcp.utils.filterNonNullableRequired
 import xyz.block.trailblaze.mcp.utils.simplifyNullableAnyOf
 import xyz.block.trailblaze.toolcalls.toKoogToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeToolDescriptor
+import xyz.block.trailblaze.toolcalls.TrailblazeTool
+import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
 import xyz.block.trailblaze.mcp.utils.TrailblazeToolToMcpBridge
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
@@ -101,6 +103,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
 import xyz.block.trailblaze.toolcalls.toolName
 import xyz.block.trailblaze.util.Console
 import java.io.File
+import kotlin.reflect.KClass
 import java.io.OutputStream
 import java.util.concurrent.ConcurrentHashMap
 import ai.koog.prompt.executor.clients.LLMClient
@@ -138,6 +141,20 @@ data class McpServerDebugState(
   val sessions: List<McpSessionSnapshot> = emptyList(),
 )
 
+/** Read the build version from the classpath (same properties file TrailblazeVersion uses). */
+private fun readVersionFromClasspath(): String? {
+  return try {
+    val props = java.util.Properties()
+    TrailblazeMcpServer::class.java.getResourceAsStream("/version.properties")?.use { props.load(it) }
+    val version = props.getProperty("version") ?: return null
+    val variant = props.getProperty("variant")
+    val base = "v$version"
+    if (variant != null) "$base ($variant)" else base
+  } catch (_: Exception) {
+    null
+  }
+}
+
 class TrailblazeMcpServer(
   val logsRepo: LogsRepo,
   val mcpBridge: TrailblazeMcpBridge,
@@ -150,7 +167,7 @@ class TrailblazeMcpServer(
   /** Optional callback to shutdown the application (for CLI integration) */
   var onShutdownRequest: (() -> Unit)? = null,
   /** Optional callback to handle CLI run requests (for CLI integration) */
-  var onRunRequest: (suspend (CliRunRequest) -> CliRunResponse)? = null,
+  var onRunRequest: (suspend (CliRunRequest, onProgress: (String) -> Unit) -> CliRunResponse)? = null,
   /**
    * Optional provider for the LLM client to use for local sampling.
    * When provided, enables the Koog agent to use Trailblaze's configured LLM
@@ -804,8 +821,8 @@ class TrailblazeMcpServer(
         installContentNegotiation = false,
         // Always register CLI callbacks - onShowWindowRequest is checked dynamically
         cliCallbacks = CliEndpointCallbacks(
-          onRunRequest = { request ->
-            onRunRequest?.invoke(request)
+          onRunRequest = { request, onProgress ->
+            onRunRequest?.invoke(request, onProgress)
               ?: CliRunResponse(success = false, error = "Run handler not configured")
           },
           onShutdownRequest = {
@@ -832,6 +849,7 @@ class TrailblazeMcpServer(
               port = port,
               connectedDevices = deviceCount,
               uptimeSeconds = uptimeSeconds,
+              version = readVersionFromClasspath(),
             )
           },
         ),
@@ -993,7 +1011,7 @@ class TrailblazeMcpServer(
   ) {
     val isMinimalProfile = sessionContext.toolProfile == McpToolProfile.MINIMAL
     Console.log("[MCP] registerTools called. Profile: ${sessionContext.toolProfile}, isMinimal: $isMinimalProfile")
-    val toolSetCatalog = TrailblazeToolSetCatalog.defaultEntries(setOfMarkEnabled = true)
+    val toolSetCatalog = TrailblazeToolSetCatalog.defaultEntries()
 
     // Get or create the per-session set of registered TrailblazeTool names.
     // Using instance-scoped tracking ensures mode changes can clean up previously expanded toolsets.
@@ -1078,6 +1096,23 @@ class TrailblazeMcpServer(
         ).asTools(),
       )
 
+      // Tool discovery (available even without a device or LLM configured)
+      tools(
+        ToolDiscoveryToolSet(
+          sessionContext = sessionContext,
+          allTargetAppsProvider = { mcpBridge.getAvailableAppTargets() },
+          currentTargetProvider = {
+            val targetId = mcpBridge.getCurrentAppTargetId()
+            if (targetId != null) {
+              mcpBridge.getAvailableAppTargets().firstOrNull { it.id == targetId }
+            } else null
+          },
+          currentDriverTypeProvider = {
+            mcpBridge.getDriverType()
+          },
+        ).asTools(),
+      )
+
       // Session management tool (start/stop with capture, save, browse)
       tools(
         SessionToolSet(
@@ -1088,56 +1123,56 @@ class TrailblazeMcpServer(
         ).asTools(),
       )
 
-      // Snapshot tool — raw screenshot + view hierarchy, no LLM needed
-      val snapshotScreenStateProvider: () -> ScreenState? = {
-        val deviceId = McpDeviceContext.currentDeviceId.get()
-        try {
-          runBlocking(
-            deviceId?.let { McpDeviceContext.currentDeviceId.asContextElement(it) }
-              ?: EmptyCoroutineContext
-          ) {
-            ScreenStateCaptureUtil.captureScreenState(mcpBridge)
-          }
-        } catch (e: Throwable) {
-          Console.error("[MCP] snapshot screenStateProvider: FAILED — ${e::class.simpleName}: ${e.message}")
-          null
-        }
-      }
-      tools(
-        SnapshotToolSet(
-          screenStateProvider = snapshotScreenStateProvider,
-          sessionContext = sessionContext,
-          driverStatusProvider = { mcpBridge.getDriverConnectionStatus() },
-          logsRepo = logsRepo,
-          sessionIdProvider = activeSessionIdProvider,
-          mcpBridge = mcpBridge,
-        ).asTools(),
-      )
-
-      // Two-tier agent MCP tools (conditional on LLM being configured)
-      // These tools enable external agents to use Trailblaze's inner agent for screen analysis
+      // Two-tier agent MCP tools: blaze(), ask()
+      // blaze(tools=...) works without an LLM (direct tool execution mode).
+      // blaze() without tools and ask() require an LLM for screen analysis.
       val llmClient = llmClientProvider?.invoke()
       val llmModel = llmModelProvider?.invoke()
-      if (llmClient != null && llmModel != null) {
-        // Create inner agent components for the two-tier tools
+      val uiActionExecutor = BridgeUiActionExecutor(mcpBridge)
+
+      // Build inner agent components only when an LLM is available
+      val screenAnalyzer = if (llmClient != null && llmModel != null) {
         val innerSamplingSource = LocalLlmSamplingSource(
           llmClient = llmClient,
           llmModel = llmModel,
           logsRepo = logsRepo,
           sessionIdProvider = { mcpBridge.getActiveSessionId() },
         )
-        val screenAnalyzer = InnerLoopScreenAnalyzer(
+        InnerLoopScreenAnalyzer(
           samplingSource = innerSamplingSource,
           model = llmModel,
         )
-        val uiActionExecutor = BridgeUiActionExecutor(mcpBridge)
+      } else null
 
+      // Resolves custom (target-specific) tool classes for the current app target and driver.
+      // Evaluated per call so it picks up target/device changes mid-session.
+      // Hoisted outside the screenAnalyzer check so direct tool execution (no LLM)
+      // can also resolve custom tools for YAML parsing.
+      // Always aggregates tools from ALL available targets so that tools from any
+      // target can be used regardless of which target is currently selected.
+      val customToolClassesProvider: () -> Set<KClass<out TrailblazeTool>> = {
+        try {
+          val driverType = mcpBridge.getDriverType()
+          val tools = if (driverType != null) {
+            mcpBridge.getAvailableAppTargets().flatMap { target ->
+              target.getCustomToolsForDriver(driverType)
+            }.toSet()
+          } else emptySet()
+          Console.log("[TrailblazeMcpServer] Custom tools for $driverType: ${tools.map { it.simpleName }}")
+          tools
+        } catch (e: Exception) {
+          Console.log("[TrailblazeMcpServer] Custom tool loading failed: ${e.message}")
+          emptySet()
+        }
+      }
+
+      val innerAgentToolsProvider = if (screenAnalyzer != null) {
         // Primary automation tools - step, verify, ask (with recording support)
         // Note: Inner agent ALWAYS needs tools, even when includePrimitiveTools=false.
         // For WEB/Playwright devices, the bridge returns Playwright-native tool classes
         // (navigate, click, type, etc.) instead of the Maestro-based toolset. This lambda
         // is evaluated per blaze() call so it picks up device changes mid-session.
-        val innerAgentToolsProvider = {
+        {
           val driverType = mcpBridge.getDriverType()
           // Ask the bridge for device-appropriate built-in tools.
           // For WEB/Playwright: returns Playwright-native toolset (complete replacement for Maestro).
@@ -1147,20 +1182,7 @@ class TrailblazeMcpServer(
           val builtInToolClasses = bridgeToolClasses.ifEmpty {
             ToolSetCategoryMapping.getToolClasses(ToolSetCategory.ALL)
           }
-          val customToolClasses = try {
-            val appTargetId = mcpBridge.getCurrentAppTargetId()
-            val appTarget = if (appTargetId != null) {
-              mcpBridge.getAvailableAppTargets().firstOrNull { it.id == appTargetId }
-            } else null
-            val tools = if (appTarget != null && driverType != null) {
-              appTarget.getCustomToolsForDriver(driverType)
-            } else emptySet()
-            Console.log("[TrailblazeMcpServer] Custom tools for $appTargetId/$driverType: ${tools.map { it.simpleName }}")
-            tools
-          } catch (e: Exception) {
-            Console.log("[TrailblazeMcpServer] Custom tool loading failed: ${e.message}")
-            emptySet()
-          }
+          val customToolClasses = customToolClassesProvider()
           // Custom tools first so the LLM sees app-specific tools (e.g., sign-in)
           // before generic alternatives (e.g., launchApp), improving selection.
           val allTools = (customToolClasses + builtInToolClasses)
@@ -1168,41 +1190,55 @@ class TrailblazeMcpServer(
           Console.log("[TrailblazeMcpServer] Inner agent total tools: ${allTools.size} (driver=$driverType, custom: ${customToolClasses.size})")
           allTools
         }
-        Console.log("[TrailblazeMcpServer] Inner agent tools provider registered")
-
-        tools(
-          StepToolSet(
-            screenAnalyzer = screenAnalyzer,
-            executor = uiActionExecutor,
-            screenStateProvider = {
-              // Capture the device ID from the current thread's context before entering
-              // runBlocking, which creates a new coroutine scope that doesn't inherit
-              // the parent's ThreadLocal-based context element.
-              val deviceId = McpDeviceContext.currentDeviceId.get()
-              try {
-                runBlocking(
-                  deviceId?.let { McpDeviceContext.currentDeviceId.asContextElement(it) }
-                    ?: EmptyCoroutineContext
-                ) {
-                  ScreenStateCaptureUtil.captureScreenState(mcpBridge)
-                }
-              } catch (e: Throwable) {
-                Console.error("[MCP] screenStateProvider: FAILED — ${e::class.simpleName}: ${e.message}")
-                null
-              }
-            },
-            sessionContext = sessionContext,
-            availableToolsProvider = innerAgentToolsProvider,
-            logEmitter = trailLogEmitter,
-            sessionIdProvider = activeSessionIdProvider,
-            driverStatusProvider = { mcpBridge.getDriverConnectionStatus() },
-            toolClassesOverrideProvider = { mcpBridge.getInnerAgentToolClasses() },
-          ).asTools(),
-        )
-        Console.log("[TrailblazeMcpServer] blaze(), verify(), ask() tools registered")
       } else {
-        Console.log("[TrailblazeMcpServer] Two-tier agent tools NOT registered - LLM not configured")
+        { emptyList<TrailblazeToolDescriptor>() }
       }
+      if (screenAnalyzer != null) {
+        Console.log("[TrailblazeMcpServer] Inner agent tools provider registered")
+      }
+
+      tools(
+        StepToolSet(
+          screenAnalyzer = screenAnalyzer,
+          executor = uiActionExecutor,
+          screenStateProvider = { fast ->
+            // Capture the device ID from the current thread's context before entering
+            // runBlocking, which creates a new coroutine scope that doesn't inherit
+            // the parent's ThreadLocal-based context element.
+            val deviceId = McpDeviceContext.currentDeviceId.get()
+            try {
+              runBlocking(
+                deviceId?.let { McpDeviceContext.currentDeviceId.asContextElement(it) }
+                  ?: EmptyCoroutineContext
+              ) {
+                ScreenStateCaptureUtil.captureScreenState(mcpBridge, fast = fast)
+              }
+            } catch (e: Throwable) {
+              Console.error("[MCP] screenStateProvider: FAILED — ${e::class.simpleName}: ${e.message}")
+              null
+            }
+          },
+          sessionContext = sessionContext,
+          availableToolsProvider = innerAgentToolsProvider,
+          logEmitter = trailLogEmitter,
+          sessionIdProvider = activeSessionIdProvider,
+          driverStatusProvider = { mcpBridge.getDriverConnectionStatus() },
+          toolClassesOverrideProvider = { mcpBridge.getInnerAgentToolClasses() },
+          rawToolExecutor = { tool -> mcpBridge.executeTrailblazeTool(tool, blocking = true) },
+          screenSummaryProvider = { details -> uiActionExecutor.getScreenSummary(details) },
+          screenshotSaver = { bytes ->
+            val sessionId = activeSessionIdProvider()
+              ?: mcpBridge.ensureSessionAndGetId(null)
+            if (logsRepo != null && sessionId != null) {
+              val filename = logsRepo.saveScreenshotBytes(sessionId, bytes)
+              val sessionDir = logsRepo.getSessionDir(sessionId)
+              java.io.File(sessionDir, filename).absolutePath
+            } else null
+          },
+          customToolClassesProvider = customToolClassesProvider,
+        ).asTools(),
+      )
+      Console.log("[TrailblazeMcpServer] blaze(), ask() tools registered${if (screenAnalyzer == null) " (direct-tools-only mode, no LLM)" else ""}")
     } + if (isMinimalProfile) ToolRegistry {} else additionalToolsProvider(sessionContext, mcpServer)
 
     addToolsAsMcpToolsFromRegistry(
@@ -1537,7 +1573,7 @@ class TrailblazeMcpServer(
     val sessionId = if (shouldEnsureSession) {
       val testName = when (toolName) {
         McpToolProfile.TOOL_BLAZE ->
-          (args["goal"] as? JsonPrimitive)?.content?.trim()?.take(80)
+          (args["objective"] as? JsonPrimitive)?.content?.trim()?.take(80)
         McpToolProfile.TOOL_ASK ->
           (args["question"] as? JsonPrimitive)?.content?.trim()?.take(80)
         else -> null

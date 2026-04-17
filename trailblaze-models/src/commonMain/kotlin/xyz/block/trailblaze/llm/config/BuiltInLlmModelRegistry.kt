@@ -6,6 +6,7 @@ import com.charleskorn.kaml.YamlConfiguration
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.llm.TrailblazeLlmModelList
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
+import xyz.block.trailblaze.util.Console
 
 /**
  * Registry of all built-in (shipped) LLM models.
@@ -46,7 +47,7 @@ object BuiltInLlmModelRegistry {
     return try {
       parseProviderYaml(content)
     } catch (e: Exception) {
-      println("Warning: Failed to parse built-in provider YAML '$providerId': ${e.message}")
+      Console.log("Warning: Failed to parse built-in provider YAML '$providerId': ${e.message}")
       null
     }
   }
@@ -157,7 +158,7 @@ object BuiltInLlmModelRegistry {
         }
         loaded
       } catch (e: Exception) {
-        println("Warning: Failed to parse built-in provider YAML: ${e.message}")
+        Console.log("Warning: Failed to parse built-in provider YAML: ${e.message}")
         null
       }
     }
@@ -204,17 +205,8 @@ object BuiltInLlmModelRegistry {
     )
   }
 
-  /** Infers the provider type from the provider_id, for image token formula defaults. */
-  private fun inferProviderType(providerId: String): LlmProviderType? {
-    return when (providerId) {
-      TrailblazeLlmProvider.OPENAI.id -> LlmProviderType.OPENAI
-      TrailblazeLlmProvider.ANTHROPIC.id -> LlmProviderType.ANTHROPIC
-      TrailblazeLlmProvider.GOOGLE.id -> LlmProviderType.GOOGLE
-      TrailblazeLlmProvider.OLLAMA.id -> LlmProviderType.OLLAMA
-      TrailblazeLlmProvider.OPEN_ROUTER.id -> LlmProviderType.OPEN_ROUTER
-      else -> null
-    }
-  }
+  private fun inferProviderType(providerId: String): LlmProviderType? =
+    LlmProviderType.inferFromProviderId(providerId)
 
   /**
    * Default capabilities for built-in models, matching Koog's standard model definitions.

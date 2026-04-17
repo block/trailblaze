@@ -8,6 +8,7 @@ import org.junit.Test
 import xyz.block.trailblaze.android.AndroidTrailblazeRule
 import xyz.block.trailblaze.android.BaseAndroidStandaloneServerTest
 import xyz.block.trailblaze.android.InstrumentationArgUtil
+import xyz.block.trailblaze.android.accessibility.OnDeviceAccessibilityServiceSetup
 import xyz.block.trailblaze.android.devices.TrailblazeAndroidOnDeviceClassifier
 import xyz.block.trailblaze.android.runner.rpc.OnDeviceRpcServer
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
@@ -18,6 +19,7 @@ import xyz.block.trailblaze.http.DynamicLlmClient
 import xyz.block.trailblaze.http.TrailblazeHttpClientFactory
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
+import xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer
 
 /**
  * This would be the single test that runs the MCP server.  It blocks the instrumentation test
@@ -27,6 +29,9 @@ import xyz.block.trailblaze.llm.TrailblazeLlmModel
  */
 class AndroidStandaloneServerTest : BaseAndroidStandaloneServerTest() {
 
+  init {
+    TrailblazeSerializationInitializer.initialize()
+  }
 
   // Cache the HTTP client to prevent "unknown client" errors on subsequent calls
   private val cachedHttpClient by lazy {
@@ -88,6 +93,11 @@ class AndroidStandaloneServerTest : BaseAndroidStandaloneServerTest() {
 
   @Test
   fun startServer() {
+    // Configure UiAutomation to not suppress accessibility services before starting the
+    // RPC server. The host enables the accessibility service via ADB after instrumentation
+    // connects, so UiAutomation must already be configured by that point.
+    OnDeviceAccessibilityServiceSetup.ensureUiAutomationDoesNotSuppressAccessibility()
+
     val onDeviceRpcServer = OnDeviceRpcServer(
       sessionManager = trailblazeLoggingRule.sessionManager,
       runTrailblazeYaml = createRunTrailblazeYamlCallback(),

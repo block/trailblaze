@@ -26,7 +26,7 @@ NOTE:
 - You may need to scroll down the page or close the keyboard if it is not visible in the screenshot.
 """,
 )
-@Deprecated("Use [TapOnElementByNodeIdTrailblazeTool] or [TapOnByElementSelector].")
+@Deprecated("Use [TapTrailblazeTool] or [TapOnByElementSelector].")
 data class TapOnElementWithTextTrailblazeTool(
   @LLMDescription(REQUIRED_TEXT_DESCRIPTION)
   val text: String,

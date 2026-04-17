@@ -208,6 +208,18 @@ class TrailblazeYaml(
     return trailItemList
   }
 
+  /**
+   * Decodes a YAML list of tool wrappers directly (no TrailYamlItem wrapping).
+   * Input format: `- tapOnPoint:\n    x: 200\n    y: 400`
+   */
+  @OptIn(ExperimentalSerializationApi::class)
+  fun decodeTools(yaml: String): List<TrailblazeToolYamlWrapper> {
+    val contextual = yamlInstance.serializersModule
+      .getContextual(TrailblazeToolYamlWrapper::class)
+      ?: error("Missing contextual serializer for TrailblazeToolYamlWrapper")
+    return yamlInstance.decodeFromString(ListSerializer(contextual), yaml)
+  }
+
   @OptIn(ExperimentalSerializationApi::class)
   fun extractTrailConfig(yaml: String): TrailConfig? {
     val trailItems: List<TrailYamlItem> = decodeTrail(yaml)

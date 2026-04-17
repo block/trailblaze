@@ -38,12 +38,18 @@ actual suspend fun loadCaptureVideoMetadata(sessionId: String): VideoMetadata? {
         val json = loadCaptureMetadataJson(sessionId) ?: return null
         val metadata = Json { ignoreUnknownKeys = true }
             .decodeFromString<CaptureMetadataModel>(json)
-        val videoArtifact = metadata.artifacts.firstOrNull { it.type == "VIDEO" } ?: return null
+        // The WASM timeline has no way to decode a raw mp4 — it can only render
+        // frames when the report embeds a sprite sheet (VIDEO_FRAMES). If sprite
+        // generation was skipped (e.g., ffmpeg not installed on the CI runner),
+        // fall back to null so the timeline uses screenshot slideshow mode
+        // instead of sticking on "Loading frame...".
+        val spritesArtifact = metadata.artifacts.firstOrNull { it.type == "VIDEO_FRAMES" }
+            ?: return null
         VideoMetadata(
             url = "",
             filePath = sessionId, // Used as key prefix by WasmEmbeddedVideoFrameCache
-            startTimestampMs = videoArtifact.startTimestampMs,
-            endTimestampMs = videoArtifact.endTimestampMs,
+            startTimestampMs = spritesArtifact.startTimestampMs,
+            endTimestampMs = spritesArtifact.endTimestampMs,
         )
     } catch (e: Exception) {
         Console.log("Failed to load capture video metadata for $sessionId: ${e.message}")

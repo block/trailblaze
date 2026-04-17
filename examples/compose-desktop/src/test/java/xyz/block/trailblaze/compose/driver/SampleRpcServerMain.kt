@@ -18,23 +18,14 @@ import kotlinx.coroutines.runBlocking
 import kotlin.time.Duration.Companion.INFINITE
 import xyz.block.trailblaze.compose.driver.rpc.ComposeRpcClient
 import xyz.block.trailblaze.compose.driver.rpc.ComposeRpcServer
-import xyz.block.trailblaze.compose.driver.tools.ComposeToolSet
 import xyz.block.trailblaze.compose.target.ComposeUiTestTarget
-import xyz.block.trailblaze.logs.client.TrailblazeJson
-import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
+import xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
-import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
-import xyz.block.trailblaze.toolcalls.toolName
 import xyz.block.trailblaze.util.Console
 @OptIn(ExperimentalTestApi::class)
 fun main(args: Array<String>) {
   val sampleApp = args.firstOrNull()?.lowercase() ?: "todo"
-  TrailblazeJsonInstance =
-    TrailblazeJson.createTrailblazeJsonInstance(
-      allToolClasses =
-        TrailblazeToolSet.AllBuiltInTrailblazeToolsForSerializationByToolName +
-          ComposeToolSet.LlmToolSet.toolClasses.associateBy { it.toolName() },
-    )
+  TrailblazeSerializationInitializer.initialize()
   runComposeUiTest(testTimeout = INFINITE) {
     when (sampleApp) {
       "todo" -> setContent { SampleTodoApp() }

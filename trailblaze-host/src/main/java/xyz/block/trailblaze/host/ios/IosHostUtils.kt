@@ -68,6 +68,91 @@ object IosHostUtils {
       .toSet()
   }
 
+  /**
+   * Returns a map of bundle ID → display name for all installed apps on the given simulator.
+   *
+   * Parses the display name from the `CFBundleName` field in `xcrun simctl listapps` output.
+   * Apps without a `CFBundleName` entry are still included in the result with an empty display name.
+   *
+   * @param deviceId The simulator device ID
+   * @return Map of bundleId to CFBundleName (display name)
+   */
+  fun getInstalledAppsWithDisplayNames(deviceId: String): Map<String, String> {
+    if (!isMacOs()) return emptyMap()
+    val output: CommandProcessResult = TrailblazeProcessBuilderUtils.createProcessBuilder(
+      listOf(
+        "xcrun",
+        "simctl",
+        "listapps",
+        deviceId,
+      ),
+    ).runProcess {}
+
+    return parseInstalledAppsWithDisplayNames(output.outputLines)
+  }
+
+  /**
+   * Parses a map of bundle ID → display name from `xcrun simctl listapps` output lines.
+   *
+   * The output is a plist-style format where each app block looks like:
+   * ```
+   *     "com.apple.MobileAddressBook" =     {
+   *         ...
+   *         CFBundleName = Contacts;
+   *         ...
+   *     };
+   * ```
+   *
+   * Tracks the current bundle ID when a `"bundleId" = {` header line is found, then
+   * extracts the `CFBundleName` value within that block.
+   *
+   * @param outputLines The lines from `xcrun simctl listapps` output
+   * @return Map of bundle ID to display name (CFBundleName); display name is empty string if absent
+   */
+  internal fun parseInstalledAppsWithDisplayNames(outputLines: List<String>): Map<String, String> {
+    val bundleIdRegex = Regex("^\\s+\"([^\"]+)\"\\s*=\\s*\\{")
+    val bundleNameRegex = Regex("^\\s+CFBundleName\\s*=\\s*\"?([^;\"]+)\"?\\s*;")
+
+    val result = mutableMapOf<String, String>()
+    var currentBundleId: String? = null
+
+    for (line in outputLines) {
+      val bundleIdMatch = bundleIdRegex.matchEntire(line)
+      if (bundleIdMatch != null) {
+        val bundleId = bundleIdMatch.groupValues[1]
+        if (!bundleId.startsWith("group.") && bundleId.isNotBlank()) {
+          currentBundleId = bundleId
+          result[bundleId] = ""
+        }
+        continue
+      }
+
+      if (currentBundleId != null) {
+        val bundleNameMatch = bundleNameRegex.matchEntire(line)
+        if (bundleNameMatch != null) {
+          result[currentBundleId!!] = bundleNameMatch.groupValues[1].trim()
+        }
+      }
+    }
+
+    return result
+  }
+
+  /**
+   * Dismisses passkey-related system prompts on an iOS simulator. iOS may trigger passkey
+   * authentication during sign-in, showing system dialogs ("Bluetooth Off", "Scan QR Code") that
+   * are invisible to Maestro's accessibility tree. This terminates the AuthenticationServicesUI
+   * process via simctl, which cancels the passkey flow and lets the app fall back to its standard
+   * verification path. Safe to call even if no passkey dialog is present.
+   */
+  fun dismissPasskeyDialogIfPresent(deviceId: String) {
+    if (!isMacOs()) return
+    TrailblazeProcessBuilderUtils.createProcessBuilder(
+        listOf("xcrun", "simctl", "terminate", deviceId, "com.apple.AuthenticationServicesUI"),
+      )
+      .runProcess {}
+  }
+
   fun clearAppDataContainer(deviceId: String, appId: String) {
     IosHostSimctlUtils.clearAppDataContainer(deviceId = deviceId, appId = appId)
   }

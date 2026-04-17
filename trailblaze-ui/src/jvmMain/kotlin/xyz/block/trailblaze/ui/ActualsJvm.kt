@@ -61,32 +61,29 @@ actual suspend fun loadCaptureVideoMetadata(sessionId: String): VideoMetadata? {
       val json = Json { ignoreUnknownKeys = true }
       val metadata = json.decodeFromString<CaptureMetadataModel>(metadataFile.readText())
 
-      // Prefer sprite sheet (VIDEO_FRAMES) over raw video (VIDEO)
+      // Require a sprite sheet (VIDEO_FRAMES) for the video-frame timeline mode —
+      // without one the UI has no way to render frames and sticks on "Loading frame...".
+      // When only a raw VIDEO is present (e.g., ffmpeg missing on the CI runner so
+      // sprite extraction was skipped), return null so the timeline falls back to
+      // the screenshot slideshow.
       val spritesArtifact = metadata.artifacts.firstOrNull { it.type == "VIDEO_FRAMES" }
-      if (spritesArtifact != null) {
-        val spriteFile = File(logsDir, "$sessionId/${spritesArtifact.filename}")
-        if (spriteFile.exists()) {
-          val spriteInfo = parseSpriteMetadata(File(logsDir, "$sessionId/video_sprites.txt"))
-          return@withContext VideoMetadata(
-            url = spriteFile.toURI().toString(),
-            filePath = spriteFile.absolutePath,
-            startTimestampMs = spritesArtifact.startTimestampMs,
-            endTimestampMs = spritesArtifact.endTimestampMs,
-            spriteInfo = spriteInfo,
-          )
-        }
-      }
+        ?: return@withContext null
 
-      // Fallback to raw video
-      val videoArtifact =
-        metadata.artifacts.firstOrNull { it.type == "VIDEO" } ?: return@withContext null
-      val videoFile = File(logsDir, "$sessionId/${videoArtifact.filename}")
-      if (!videoFile.exists()) return@withContext null
+      fun resolveFile(artifact: CaptureMetadataModel.ArtifactEntry?): File? =
+        artifact?.let { File(logsDir, "$sessionId/${it.filename}") }?.takeIf { it.exists() }
+
+      val spritesFile = resolveFile(spritesArtifact) ?: return@withContext null
+      val spriteInfo = parseSpriteMetadata(File(logsDir, "$sessionId/video_sprites.txt"))
+      // The original video.mp4 still exists on disk after sprite generation but
+      // isn't listed as a separate artifact. Probe for it so "Watch Video" works.
+      val rawVideoFile = File(logsDir, "$sessionId/video.mp4").takeIf { it.exists() }
       VideoMetadata(
-        url = videoFile.toURI().toString(),
-        filePath = videoFile.absolutePath,
-        startTimestampMs = videoArtifact.startTimestampMs,
-        endTimestampMs = videoArtifact.endTimestampMs,
+        url = spritesFile.toURI().toString(),
+        filePath = spritesFile.absolutePath,
+        startTimestampMs = spritesArtifact.startTimestampMs,
+        endTimestampMs = spritesArtifact.endTimestampMs,
+        spriteInfo = spriteInfo,
+        videoFilePath = rawVideoFile?.absolutePath,
       )
     } catch (e: Exception) {
       null

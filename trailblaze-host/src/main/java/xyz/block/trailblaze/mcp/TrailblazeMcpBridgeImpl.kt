@@ -37,7 +37,6 @@ import xyz.block.trailblaze.model.TrailblazeOnDeviceInstrumentationTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.TapOnElementByNodeIdTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnPointTrailblazeTool
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.util.AccessibilityServiceSetupUtils
@@ -255,7 +254,7 @@ class TrailblazeMcpBridgeImpl(
     // WEB (PLAYWRIGHT_NATIVE) also skips this — it has its own Playwright-based connection
     // managed by BasePlaywrightNativeTest, not a Maestro driver.
     val configuredDriverType = getConfiguredDriverType(trailblazeDeviceId.trailblazeDevicePlatform)
-    val needsPersistentDriver = configuredDriverType?.isHost != false &&
+    val needsPersistentDriver = configuredDriverType?.requiresHost != false &&
       trailblazeDeviceId.trailblazeDevicePlatform != TrailblazeDevicePlatform.WEB
 
     val key = trailblazeDeviceId.instanceId
@@ -368,7 +367,12 @@ class TrailblazeMcpBridgeImpl(
       lastConnectedDriverType[trailblazeDeviceId] = configuredDriverType
     }
 
+    // First check the device state map (populated by loadDevices with UI-level filter).
+    // Fall back to unfiltered available devices — in headless/MCP mode, the UI-level
+    // targetDeviceFilter excludes virtual devices (Playwright, Compose) because
+    // testingEnvironment is null, but MCP always needs to offer them.
     return trailblazeDeviceManager.getDeviceState(trailblazeDeviceId)?.device
+      ?: getAvailableDevices().find { it.trailblazeDeviceId == trailblazeDeviceId }
       ?: error("Device $trailblazeDeviceId is not available.")
   }
 
@@ -523,16 +527,18 @@ class TrailblazeMcpBridgeImpl(
           )
         }
 
-        // For accessibility driver, enable the service after instrumentation starts
+        // Enable the service in ADB settings, then block on-device until it's connected.
+        // The on-device check uses the reliable in-process TrailblazeAccessibilityService
+        // singleton rather than host-side dumpsys parsing which is unreliable on API 35+.
         if (driverType == TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY) {
-          AccessibilityServiceSetupUtils.ensureAccessibilityServiceReady(
+          AccessibilityServiceSetupUtils.enableAccessibilityService(
             deviceId = trailblazeDeviceId,
             hostPackage = target.testAppId,
             sendProgressMessage = { Console.log("[MCP Bridge] [$key] $it") },
           )
         }
 
-        // Verify the RPC server is reachable
+        // Verify the RPC server is reachable, then ensure accessibility is ready on-device
         runBlocking {
           val rpcClient = OnDeviceRpcClient(
             trailblazeDeviceId = trailblazeDeviceId,
@@ -540,6 +546,9 @@ class TrailblazeMcpBridgeImpl(
           )
           try {
             rpcClient.verifyServerIsRunning()
+            if (driverType == TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY) {
+              rpcClient.ensureAccessibilityServiceReady()
+            }
           } finally {
             rpcClient.close()
           }
@@ -650,7 +659,7 @@ class TrailblazeMcpBridgeImpl(
     cachedScreenStates.remove(key)
   }
 
-  override fun getDirectScreenStateProvider(): ((ScreenshotScalingConfig) -> ScreenState)? {
+  override fun getDirectScreenStateProvider(skipScreenshot: Boolean): ((ScreenshotScalingConfig) -> ScreenState)? {
     val deviceId = getEffectiveDeviceId() ?: return null
     val key = deviceId.instanceId
 
@@ -660,8 +669,8 @@ class TrailblazeMcpBridgeImpl(
       return { scalingConfig ->
         HostMaestroDriverScreenState(
           maestroDriver = driver,
-          setOfMarkEnabled = false,
           screenshotScalingConfig = scalingConfig,
+          skipScreenshot = skipScreenshot,
         )
       }
     }
@@ -679,8 +688,8 @@ class TrailblazeMcpBridgeImpl(
           return { scalingConfig ->
             HostMaestroDriverScreenState(
               maestroDriver = driver,
-              setOfMarkEnabled = false,
               screenshotScalingConfig = scalingConfig,
+              skipScreenshot = skipScreenshot,
             )
           }
         }
@@ -706,7 +715,6 @@ class TrailblazeMcpBridgeImpl(
     return { scalingConfig ->
       HostMaestroDriverScreenState(
         maestroDriver = driver,
-        setOfMarkEnabled = false,
         screenshotScalingConfig = scalingConfig,
       )
     }
@@ -743,7 +751,7 @@ class TrailblazeMcpBridgeImpl(
     // is the source of truth for which driver mode is active.
     val driverType = getConfiguredDriverType(deviceId.trailblazeDevicePlatform)
       ?: return false
-    return driverType.platform == TrailblazeDevicePlatform.ANDROID && !driverType.isHost
+    return driverType.platform == TrailblazeDevicePlatform.ANDROID && !driverType.requiresHost
   }
 
   override fun getDriverConnectionStatus(deviceId: TrailblazeDeviceId?): String? {
@@ -885,7 +893,6 @@ class TrailblazeMcpBridgeImpl(
     return try {
       val request = GetScreenStateRequest(
         includeScreenshot = includeScreenshot,
-        setOfMarkEnabled = false,
         screenshotMaxDimension1 = screenshotScalingConfig.maxDimension1,
         screenshotMaxDimension2 = screenshotScalingConfig.maxDimension2,
         screenshotImageFormat = screenshotScalingConfig.imageFormat,
@@ -991,12 +998,6 @@ class TrailblazeMcpBridgeImpl(
 
   /**
    * Executes a tool on the on-device agent via direct RPC, waiting for completion.
-   *
-   * For node-ID-based tools (e.g., tapOnElementByNodeId), resolves the element's
-   * coordinates from the HOST-side screen state and converts to a coordinate-based
-   * tool. This is necessary because node IDs are assigned per-capture and differ
-   * between the HOST screen state (used by blaze for planning) and the on-device
-   * screen state (used for execution).
    */
   private suspend fun executeToolViaRpc(
     tool: TrailblazeTool,
@@ -1004,18 +1005,6 @@ class TrailblazeMcpBridgeImpl(
     yaml: String,
     blocking: Boolean = false,
   ): String {
-    // For tapOnElementByNodeId, resolve coordinates from the HOST screen state
-    // so we can use coordinate-based tap on-device (avoids node ID mismatch).
-    val resolvedTool = resolveToolForOnDevice(tool, trailblazeDeviceId)
-    val resolvedYaml = if (resolvedTool !== tool) {
-      Console.log("[executeToolViaRpc] Resolved ${tool::class.simpleName} -> ${resolvedTool::class.simpleName}")
-      createTrailblazeYaml().encodeToString(
-        TrailblazeYamlBuilder().tools(listOf(resolvedTool)).build()
-      )
-    } else {
-      yaml
-    }
-
     val rpcClient = OnDeviceRpcClient(
       trailblazeDeviceId = trailblazeDeviceId,
       sendProgressMessage = { Console.log("[executeToolViaRpc] $it") },
@@ -1030,8 +1019,8 @@ class TrailblazeMcpBridgeImpl(
 
       val driverType = getConfiguredDriverType(trailblazeDeviceId.trailblazeDevicePlatform)
       val request = RunYamlRequest(
-        yaml = resolvedYaml,
-        testName = "tool_${resolvedTool::class.simpleName}",
+        yaml = yaml,
+        testName = "tool_${tool::class.simpleName}",
         trailFilePath = null,
         targetAppName = getCurrentAppTargetId(),
         useRecordedSteps = false,
@@ -1040,7 +1029,6 @@ class TrailblazeMcpBridgeImpl(
         referrer = TrailblazeReferrer.MCP,
         driverType = driverType,
         config = TrailblazeConfig(
-          setOfMarkEnabled = false,
           overrideSessionId = sessionResolution.sessionId,
           // Emit start only when this call created the session. This preserves host-managed
           // MCP sessions (no duplicate start logs) while still initializing direct tool-first sessions.
@@ -1049,15 +1037,19 @@ class TrailblazeMcpBridgeImpl(
         ),
       )
 
-      Console.log("[executeToolViaRpc] Sending ${resolvedTool::class.simpleName} to on-device agent")
+      Console.log("[executeToolViaRpc] Sending ${tool::class.simpleName} to on-device agent")
       when (val result: RpcResult<RunYamlResponse> = rpcClient.rpcCall(request)) {
         is RpcResult.Success -> {
           Console.log("[executeToolViaRpc] On-device execution started: ${result.data.sessionId}")
           if (blocking) {
             // Wait for the on-device agent to finish executing the tool.
-            // The agent emits a TrailblazeToolLog when each tool completes.
-            // Custom tools (e.g., myapp_launchAppSignedIn) can take 60+ seconds
-            // (clear data, launch, sign in, wait for loading), so use a generous timeout.
+            // The on-device agent emits exactly ONE TrailblazeToolLog per tool, only
+            // after the tool's full execute() method returns — including all sub-steps
+            // from runTrailblazeSteps/runNamedTrailblazeSteps. Multi-step custom tools
+            // (e.g., myapp_launchAppSignedIn with 12+ sub-steps) still produce a
+            // single log at the end, so awaitLog correctly waits for full completion.
+            // Custom tools can take 60+ seconds (clear data, launch, sign in, wait for
+            // loading), so use a generous timeout.
             if (logsRepo != null) {
               val toolLog = logsRepo.awaitLog<TrailblazeLog.TrailblazeToolLog>(
                 sessionId = sessionResolution.sessionId,
@@ -1065,13 +1057,13 @@ class TrailblazeMcpBridgeImpl(
                 skipExisting = true,
               )
               if (toolLog == null) {
-                Console.log("[executeToolViaRpc] Warning: timed out waiting for ${resolvedTool::class.simpleName} to complete on-device")
+                Console.log("[executeToolViaRpc] Warning: timed out waiting for ${tool::class.simpleName} to complete on-device")
               }
             } else {
               Console.log("[executeToolViaRpc] Warning: blocking=true but logsRepo is null, cannot wait for tool completion")
             }
           }
-          "Executed ${resolvedTool::class.simpleName} on device ${trailblazeDeviceId.instanceId} (session: ${result.data.sessionId})"
+          "Executed ${tool::class.simpleName} on device ${trailblazeDeviceId.instanceId} (session: ${result.data.sessionId})"
         }
         is RpcResult.Failure -> {
           Console.log("[executeToolViaRpc] RPC failed: ${result.message}")
@@ -1081,57 +1073,6 @@ class TrailblazeMcpBridgeImpl(
     } finally {
       rpcClient.close()
     }
-  }
-
-  /**
-   * Resolves node-ID-based tools to coordinate-based equivalents using the HOST screen state.
-   * This bridges the node ID mismatch between HOST-captured and on-device screen states.
-   */
-  private suspend fun resolveToolForOnDevice(
-    tool: TrailblazeTool,
-    trailblazeDeviceId: TrailblazeDeviceId,
-  ): TrailblazeTool {
-    if (tool !is TapOnElementByNodeIdTrailblazeTool) return tool
-
-    // Capture view hierarchy via RPC to resolve element coordinates.
-    val rpcResponse = try {
-      getScreenStateViaRpc(includeScreenshot = false)
-    } catch (e: Exception) {
-      Console.log("[resolveToolForOnDevice] Screen state capture failed: ${e.message}")
-      null
-    } ?: run {
-      Console.log("[resolveToolForOnDevice] No screen state available, sending tool as-is")
-      return tool
-    }
-
-    val matchingNode = ViewHierarchyTreeNode.dfs(rpcResponse.viewHierarchy) {
-      it.nodeId == tool.nodeId
-    }
-
-    if (matchingNode == null) {
-      Console.log("[resolveToolForOnDevice] Node ${tool.nodeId} not found in HOST screen state")
-      return tool
-    }
-
-    val centerStr = matchingNode.centerPoint
-    if (centerStr == null) {
-      Console.log("[resolveToolForOnDevice] Node ${tool.nodeId} has no centerPoint")
-      return tool
-    }
-
-    val parts = centerStr.split(",").mapNotNull { it.trim().toIntOrNull() }
-    if (parts.size != 2) {
-      Console.log("[resolveToolForOnDevice] Could not parse centerPoint: $centerStr")
-      return tool
-    }
-
-    val (x, y) = parts
-    Console.log("[resolveToolForOnDevice] Resolved nodeId=${tool.nodeId} -> tapOnPoint($x, $y)")
-    return TapOnPointTrailblazeTool(
-      x = x,
-      y = y,
-      longPress = tool.longPress,
-    )
   }
 
   override suspend fun endSession(): Boolean {
@@ -1185,7 +1126,7 @@ class TrailblazeMcpBridgeImpl(
     // Get device info from the device state
     val deviceState = trailblazeDeviceManager.getDeviceState(deviceId)
     val device = deviceState?.device
-    val driverType = device?.trailblazeDriverType ?: TrailblazeDriverType.ANDROID_HOST
+    val driverType = device?.trailblazeDriverType ?: TrailblazeDriverType.DEFAULT_ANDROID_ON_DEVICE
 
     // Try to get real device dimensions from the Maestro driver
     // Prefer persistent device, then fall back to device manager's active driver
@@ -1332,7 +1273,7 @@ class TrailblazeMcpBridgeImpl(
   override fun getConfiguredDriverType(platform: TrailblazeDevicePlatform): TrailblazeDriverType? {
     // WEB always maps to PLAYWRIGHT_NATIVE for MCP purposes. Even when WEB is stored in
     // selectedTrailblazeDriverTypes (e.g. via applyTestingEnvironment), returning it from
-    // settings would make needsPersistentDriver=true (because isHost=true), which would
+    // settings would make needsPersistentDriver=true (because requiresHost=true), which would
     // incorrectly trigger Maestro driver creation. Returning PLAYWRIGHT_NATIVE directly here
     // is a signal to skip persistent-device setup — WEB uses its own Playwright connection.
     if (platform == TrailblazeDevicePlatform.WEB) return TrailblazeDriverType.PLAYWRIGHT_NATIVE
@@ -1366,10 +1307,21 @@ class TrailblazeMcpBridgeImpl(
   }
 
   override fun setLlmConfig(provider: String?, model: String?): String? {
+    val isProviderNone = provider.equals("none", ignoreCase = true)
+    val isModelNone = model.equals("none", ignoreCase = true)
     trailblazeDeviceManager.settingsRepo.updateAppConfig { config ->
       config.copy(
-        llmProvider = provider ?: config.llmProvider,
-        llmModel = model ?: config.llmModel,
+        llmProvider = when {
+          isProviderNone -> "none"
+          provider != null -> provider
+          else -> config.llmProvider
+        },
+        llmModel = when {
+          // Clearing provider also clears model
+          isProviderNone || isModelNone -> "none"
+          model != null -> model
+          else -> config.llmModel
+        },
       )
     }
     return null

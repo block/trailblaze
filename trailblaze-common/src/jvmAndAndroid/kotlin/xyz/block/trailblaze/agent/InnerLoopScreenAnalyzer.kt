@@ -339,11 +339,16 @@ Before acting, check if the screen shows a non-normal state. If so, set `screenS
     // - Which tool was selected (type-safe)
     // - Tool arguments (validated against schema)
     // - Analysis metadata (reasoning, confidence, etc.)
+    // In fast mode, skip sending screenshots to the LLM — text-only analysis
+    // using the compact element list. This saves vision tokens and latency.
+    val screenshotBytes = if (context.fast) null
+      else screenState.annotatedScreenshotBytes ?: screenState.screenshotBytes
+
     val samplingResult = samplingSource.sampleToolCallWithKoogTools(
       systemPrompt = systemPrompt,
       userMessage = userMessage,
       koogTools = wrappedTools,
-      screenshotBytes = screenState.annotatedScreenshotBytes ?: screenState.screenshotBytes,
+      screenshotBytes = screenshotBytes,
       maxTokens = MAX_TOKENS,
       traceId = traceId,
       screenContext = screenContext,
@@ -365,31 +370,23 @@ Before acting, check if the screen shows a non-normal state. If so, set `screenS
    * [ViewHierarchyTreeNode] tree with `[nodeId:X]` for standard tool compatibility.
    */
   private fun buildViewHierarchyDescription(screenState: ScreenState): String {
-    // For Compose drivers, use the compact element list with [eN] IDs.
-    // The "compose" device classifier signals that Compose-specific tools are active,
-    // and the [eN] IDs in viewHierarchyTextRepresentation match compose_click's elementId.
-    val isCompose = screenState.deviceClassifiers.any { it.classifier == "compose" }
-    if (isCompose) {
-      screenState.viewHierarchyTextRepresentation?.let { return it }
-    }
+    // Prefer the platform-native compact text representation when available.
+    // This provides hierarchical, indented output with element refs and state annotations:
+    // - Web/Playwright: ARIA roles with [eN] refs
+    // - Android: native class names with [nID] refs and state annotations
+    // - iOS: UIKit class names with [nID] refs and state annotations
+    // - Compose: semantics tree with [eN] refs
+    screenState.viewHierarchyTextRepresentation?.let { return it }
 
-    // Filter to interactable elements for LLM consumption (token budget).
-    // ScreenState.viewHierarchy always contains the full unfiltered tree;
-    // filtering is a presentation concern applied here at the point of use.
+    // Fallback for drivers that don't provide a text representation (e.g., legacy Maestro):
+    // filter to interactable elements and generate description from the tree.
     val vhFilter = ViewHierarchyFilter.create(
       screenWidth = screenState.deviceWidth,
       screenHeight = screenState.deviceHeight,
       platform = screenState.trailblazeDevicePlatform,
     )
     val root = vhFilter.filterInteractableViewHierarchyTreeNodes(screenState.viewHierarchy)
-    val description = buildNodeDescription(root, depth = 0)
-
-    // Note: focused text input fields are already annotated with ", focused" in the
-    // node description. The `type` and `type_into` tools auto-dismiss the keyboard via
-    // KEYCODE_ESCAPE, so a focused field does NOT necessarily mean the keyboard is visible.
-    // BlazeGoalPlanner.detectKeyboardAfterTypingHint() handles the actual keyboard detection
-    // based on action history, which is more reliable than the focused flag.
-    return description
+    return buildNodeDescription(root, depth = 0)
   }
 
   /**

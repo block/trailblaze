@@ -281,7 +281,7 @@ class ConfigurableMockBridge : TrailblazeMcpBridge {
   override suspend fun getCurrentScreenState(): ScreenState? =
     throw NotImplementedError("Not needed for executor tests")
 
-  override fun getDirectScreenStateProvider(): ((ScreenshotScalingConfig) -> ScreenState)? =
+  override fun getDirectScreenStateProvider(skipScreenshot: Boolean): ((ScreenshotScalingConfig) -> ScreenState)? =
     throw NotImplementedError("Not needed for executor tests")
 
   override suspend fun endSession(): Boolean =

@@ -1,0 +1,12 @@
+# Tools for remembering and comparing values across steps.
+id: memory
+description: "Store text, numbers, and use AI to extract and compare information."
+tools:
+  - assertEquals
+  - assertMath
+  - assertNotEquals
+  - assertWithAi
+  - dumpMemory
+  - rememberNumber
+  - rememberText
+  - rememberWithAi

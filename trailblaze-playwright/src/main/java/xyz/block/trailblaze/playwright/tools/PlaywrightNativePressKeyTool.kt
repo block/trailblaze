@@ -10,7 +10,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.util.Console
 
 @Serializable
-@TrailblazeToolClass("playwright_press_key")
+@TrailblazeToolClass("web_press_key")
 @LLMDescription(
   """
 Press a keyboard key or key combination.

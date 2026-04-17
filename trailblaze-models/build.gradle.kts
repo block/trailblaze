@@ -37,13 +37,15 @@ kotlin {
   // Apply the default hierarchy template explicitly
   applyDefaultHierarchyTemplate()
 
-  @OptIn(ExperimentalWasmDsl::class)
-  wasmJs {
-    browser()
-    compilerOptions {
-      // Enable qualified names in Kotlin/Wasm to support KClass.qualifiedName used in OtherTrailblazeToolSerializer
-      // Required since Kotlin 2.2.20 where qualifiedName usage in Wasm became a compile error by default
-      freeCompilerArgs.add("-Xwasm-kclass-fqn")
+  if (findProperty("trailblaze.wasm")?.toString()?.toBoolean() != false) {
+    @OptIn(ExperimentalWasmDsl::class)
+    wasmJs {
+      browser()
+      compilerOptions {
+        // Enable qualified names in Kotlin/Wasm to support KClass.qualifiedName used in OtherTrailblazeToolSerializer
+        // Required since Kotlin 2.2.20 where qualifiedName usage in Wasm became a compile error by default
+        freeCompilerArgs.add("-Xwasm-kclass-fqn")
+      }
     }
   }
 

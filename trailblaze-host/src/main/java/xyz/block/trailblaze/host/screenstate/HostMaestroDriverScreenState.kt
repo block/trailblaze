@@ -6,12 +6,15 @@ import maestro.Platform
 import maestro.TreeNode
 import maestro.filterOutOfBounds
 import okio.Buffer
+import xyz.block.trailblaze.api.AnnotationElement
+import xyz.block.trailblaze.api.CompactScreenElements
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ScreenshotScalingConfig
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode.Companion.relabelWithFreshIds
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
+import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.host.setofmark.HostCanvasSetOfMark
 import xyz.block.trailblaze.host.toTrailblazeDevicePlatform
@@ -23,6 +26,7 @@ import xyz.block.trailblaze.host.util.BufferedImageUtils.toByteArray
 import xyz.block.trailblaze.utils.Ext.toViewHierarchyTreeNode
 import xyz.block.trailblaze.viewhierarchy.ViewHierarchyFilter
 import xyz.block.trailblaze.viewhierarchy.ViewHierarchyTreeNodeUtils
+import xyz.block.trailblaze.viewmatcher.matching.toTrailblazeNodeAndroidMaestro
 import xyz.block.trailblaze.viewmatcher.matching.toTrailblazeNodeIosMaestro
 import java.awt.image.BufferedImage
 import java.io.ByteArrayInputStream
@@ -33,18 +37,16 @@ import javax.imageio.ImageIO
  */
 class HostMaestroDriverScreenState(
   maestroDriver: Driver,
-  private val setOfMarkEnabled: Boolean,
   private val screenshotScalingConfig: ScreenshotScalingConfig? = ScreenshotScalingConfig.DEFAULT,
-  maxAttempts: Int = 10,
   override val deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
+  /** When true, skip device screenshot capture for maximum speed. View hierarchy is still captured. */
+  private val skipScreenshot: Boolean = false,
 ) : ScreenState {
 
   private val deviceInfo: DeviceInfo = maestroDriver.deviceInfo()
   override val deviceWidth: Int = deviceInfo.widthGrid
   override val deviceHeight: Int = deviceInfo.heightGrid
 
-  private var matched = false
-  private var attempts = 0
   private var stableRelabeledViewHierarchy: ViewHierarchyTreeNode? = null
   private var stableTrailblazeNodeTree: TrailblazeNode? = null
   private var stableBufferedImage: BufferedImage? = null
@@ -62,31 +64,39 @@ class HostMaestroDriverScreenState(
   private var foregroundAppId: String? = null
 
   init {
-    while (!matched && attempts < maxAttempts) {
-      // Grab the first raw hierarchy (do NOT relabel)
-      val rawTree1 = maestroDriver.contentDescriptor(false)
-      // Keep unfiltered tree for iOS orientation detection (status bar has 0x0 bounds
-      // and gets stripped by filterOutOfBounds)
-      val unfilteredVh1 = rawTree1.toViewHierarchyTreeNode()
-      val vh1 = rawTree1
-        .filterOutOfBounds(width = deviceWidth, height = deviceHeight)
-        ?.toViewHierarchyTreeNode()
+    // Single-fetch: Maestro's XCTest accessibility snapshot is atomic — no settling needed.
+    // The XCTest runner returns a point-in-time snapshot of the accessibility tree; it won't
+    // be "half-updated." If the screen is mid-animation, the agent will re-capture after its
+    // next action anyway.
+    Console.log("[ScreenState] maestroDriver class: ${maestroDriver.javaClass.simpleName}")
+    val rawTree = maestroDriver.contentDescriptor(false)
+    Console.log("[ScreenState] rawTree children: ${rawTree.children.size}")
+    // Keep unfiltered tree for iOS orientation detection (status bar has 0x0 bounds
+    // and gets stripped by filterOutOfBounds)
+    val unfilteredVh = rawTree.toViewHierarchyTreeNode()
+    val vh = rawTree
+      .filterOutOfBounds(width = deviceWidth, height = deviceHeight)
+      ?.toViewHierarchyTreeNode()
 
-      // Relabel for drawing and returning
-      stableRelabeledViewHierarchy = vh1?.relabelWithFreshIds()
+    stableRelabeledViewHierarchy = vh?.relabelWithFreshIds()
 
-      // Build TrailblazeNode tree for iOS Maestro path
-      if (deviceInfo.platform == Platform.IOS) {
-        stableTrailblazeNodeTree = rawTree1.toTrailblazeNodeIosMaestro()
-        // Extract the bundle ID on the first successful capture.
-        // The root's resource-id is checked first (in case Maestro returns XCUIApplication
-        // as the direct root), then root[0] (the app window when the root is a 0x0 container).
-        if (foregroundAppId == null) {
-          foregroundAppId = extractIosBundleId(rawTree1)
-        }
+    // Build platform-specific TrailblazeNode tree for compact element list
+    when (deviceInfo.platform) {
+      Platform.IOS -> {
+        stableTrailblazeNodeTree = rawTree.toTrailblazeNodeIosMaestro()
+        foregroundAppId = extractIosBundleId(rawTree)
       }
+      Platform.ANDROID -> {
+        stableTrailblazeNodeTree = rawTree.toTrailblazeNodeAndroidMaestro()
+        foregroundAppId = extractAndroidPackageId(rawTree)
+      }
+      else -> {}
+    }
 
-      // Take the screenshot (raw, without set of mark)
+    // Take the screenshot (raw, without set of mark).
+    // In fast mode (skipScreenshot), skip device screenshot capture entirely —
+    // saves ~200-500ms per capture. View hierarchy is still captured for text-only analysis.
+    if (!skipScreenshot) {
       val sink = Buffer()
       maestroDriver.takeScreenshot(sink, compressed = false)
       val screenshotBytes = sink.readByteArray()
@@ -94,42 +104,44 @@ class HostMaestroDriverScreenState(
         ImageIO.read(bis)
       }
 
-      // Grab the second raw hierarchy (do NOT relabel)
-      val vh2 = maestroDriver.contentDescriptor(false)
-        .filterOutOfBounds(width = deviceWidth, height = deviceHeight)
-        ?.toViewHierarchyTreeNode()
-
       // On iOS, screenshots always arrive in the native portrait pixel orientation regardless
       // of the device orientation. Detect the actual orientation by checking the position of
       // status bar elements in the original (unfiltered) view hierarchy and rotate to match.
-      val finalImage = if (deviceInfo.platform == Platform.IOS && unfilteredVh1 != null) {
-        rotateIosScreenshotToMatchOrientation(bufferedImage, unfilteredVh1, deviceInfo)
+      stableBufferedImage = if (deviceInfo.platform == Platform.IOS && unfilteredVh != null) {
+        rotateIosScreenshotToMatchOrientation(bufferedImage, unfilteredVh, deviceInfo)
       } else {
         bufferedImage
-      }
-      stableBufferedImage = finalImage
-
-      if (vh1 != null && vh1 == vh2) {
-        matched = true
-      } else {
-        attempts++
-        if (attempts < maxAttempts) {
-          Thread.sleep((attempts * 100).toLong())
-        }
       }
     }
   }
 
   override val viewHierarchy: ViewHierarchyTreeNode = stableRelabeledViewHierarchy
-    ?: throw IllegalStateException("Failed to get stable view hierarchy from Maestro driver after $maxAttempts attempts.")
-
-  override val trailblazeNodeTree: TrailblazeNode?
-    get() = stableTrailblazeNodeTree
+    ?: throw IllegalStateException("Failed to get view hierarchy from Maestro driver.")
 
   override val trailblazeDevicePlatform: TrailblazeDevicePlatform = deviceInfo.platform.toTrailblazeDevicePlatform()
 
-  override val pageContextSummary: String?
-    get() = foregroundAppId?.let { "App: $it" }
+  /** Cached compact elements result — shared between text representation and annotation elements. */
+  private val compactElements: CompactScreenElements? by lazy {
+    val tree = stableTrailblazeNodeTree ?: return@lazy null
+    when (deviceInfo.platform) {
+      Platform.IOS -> CompactScreenElements.buildForIos(tree, screenHeight = deviceHeight, screenWidth = deviceWidth)
+      Platform.ANDROID -> CompactScreenElements.buildForAndroid(tree, screenHeight = deviceHeight)
+      else -> null
+    }
+  }
+
+  override val trailblazeNodeTree: TrailblazeNode? by lazy {
+    val tree = stableTrailblazeNodeTree ?: return@lazy null
+    compactElements?.applyRefsToTree(tree) ?: tree
+  }
+
+  override val viewHierarchyTextRepresentation: String? by lazy {
+    compactElements?.buildTextRepresentation(foregroundAppId)
+  }
+
+  override val annotationElements: List<AnnotationElement>? by lazy {
+    compactElements?.buildAnnotationElements()
+  }
 
   /**
    * Returns the clean screenshot bytes without any annotations.
@@ -142,17 +154,16 @@ class HostMaestroDriverScreenState(
   /**
    * Returns screenshot bytes with set-of-mark annotations applied if enabled.
    * Generates annotations on-demand without caching - used only for LLM requests.
-   * Uses the filtered view hierarchy for set-of-mark annotations.
+   *
+   * When [annotationElements] is available (from the compact element list), uses those
+   * to draw IDs that exactly match the `[nID]` refs in the text representation.
+   * Falls back to the ViewHierarchyTreeNode-based approach for legacy paths.
+   *
    * Applies the same scaling as [screenshotBytes] via [screenshotScalingConfig].
    */
   override val annotatedScreenshotBytes: ByteArray?
     get() {
       val bufferedImage = stableBufferedImage ?: return null
-
-      // If set-of-mark is disabled, return the clean (already-scaled) screenshot
-      if (!setOfMarkEnabled) {
-        return screenshotBytes
-      }
 
       // Create a copy of the buffered image for annotation (don't modify original)
       val imageForAnnotation = BufferedImage(
@@ -164,19 +175,28 @@ class HostMaestroDriverScreenState(
       graphics.drawImage(bufferedImage, 0, 0, null)
       graphics.dispose()
 
-      // Apply set of mark annotations on full-res image (before scaling for max quality)
-      val filtered = ViewHierarchyFilter.create(
-        screenWidth = deviceWidth,
-        screenHeight = deviceHeight,
-        platform = deviceInfo.platform.toTrailblazeDevicePlatform(),
-      ).filterInteractableViewHierarchyTreeNodes(viewHierarchy)
-      val elementList = ViewHierarchyTreeNodeUtils.from(
-        filtered,
-        deviceInfo,
-      )
-
       val canvas = HostCanvasSetOfMark(imageForAnnotation, deviceInfo)
-      canvas.draw(elementList)
+
+      // Prefer annotation elements from the compact element list — these use the same
+      // node IDs that appear in the text representation sent to the LLM.
+      val annotations = annotationElements
+      if (annotations != null && annotations.isNotEmpty()) {
+        canvas.drawAnnotations(annotations)
+      } else {
+        // Fallback: derive elements from the ViewHierarchyTreeNode tree (legacy path).
+        // These IDs come from relabelWithFreshIds() and match the fallback text path
+        // in InnerLoopScreenAnalyzer.buildNodeDescription().
+        val filtered = ViewHierarchyFilter.create(
+          screenWidth = deviceWidth,
+          screenHeight = deviceHeight,
+          platform = deviceInfo.platform.toTrailblazeDevicePlatform(),
+        ).filterInteractableViewHierarchyTreeNodes(viewHierarchy)
+        val elementList = ViewHierarchyTreeNodeUtils.from(
+          filtered,
+          deviceInfo,
+        )
+        canvas.draw(elementList)
+      }
 
       return scaleAndEncode(imageForAnnotation)
     }
@@ -305,6 +325,28 @@ class HostMaestroDriverScreenState(
       return candidates.firstOrNull { id ->
         !id.isNullOrBlank() && id.contains('.') && !id.contains(':')
       }
+    }
+
+    /**
+     * Extracts the Android foreground app package from the raw Maestro tree.
+     *
+     * UiAutomator resource IDs use the format `"com.example.app:id/view_name"`.
+     * We walk the tree looking for the first resource-id with a package prefix
+     * (contains both '.' and ':') and extract the package portion.
+     */
+    internal fun extractAndroidPackageId(root: TreeNode): String? {
+      fun findPackage(node: TreeNode): String? {
+        val resId = node.attributes["resource-id"]
+        if (!resId.isNullOrBlank() && ':' in resId && '.' in resId) {
+          return resId.substringBefore(':')
+        }
+        for (child in node.children) {
+          val result = findPackage(child)
+          if (result != null) return result
+        }
+        return null
+      }
+      return findPackage(root)
     }
 
     internal sealed class StatusBarPosition {

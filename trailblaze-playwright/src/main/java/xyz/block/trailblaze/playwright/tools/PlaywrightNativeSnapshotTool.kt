@@ -12,7 +12,7 @@ import xyz.block.trailblaze.toolcalls.isSuccess
 import xyz.block.trailblaze.util.Console
 
 @Serializable
-@TrailblazeToolClass("playwright_snapshot")
+@TrailblazeToolClass("web_snapshot")
 @LLMDescription(
   """
 Take a snapshot of the current page state and save it with the provided screen name.

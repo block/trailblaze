@@ -5,8 +5,10 @@ import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils
 import java.io.File
 
 /**
@@ -35,45 +37,7 @@ class RevylCliClient(
   private var activeSessionIndex: Int = ACTIVE_SESSION
 
   private val resolvedBinary: String = revylBinaryOverride ?: "revyl"
-  private var cliVerified = false
-
-  /**
-   * Returns the currently active Revyl session, or null if none has been started.
-   */
-  fun getActiveRevylSession(): RevylSession? = sessions[activeSessionIndex]
-
-  /**
-   * Returns the session at the given index, or null if not found.
-   *
-   * @param index Session index to retrieve.
-   */
-  fun getSession(index: Int): RevylSession? = sessions[index]
-
-  /**
-   * Finds a session by its workflow run ID.
-   *
-   * @param workflowRunId The Hatchet workflow run identifier.
-   * @return The matching session, or null if not found.
-   */
-  fun getSession(workflowRunId: String): RevylSession? =
-    sessions.values.firstOrNull { it.workflowRunId == workflowRunId }
-
-  /**
-   * Returns all active sessions.
-   */
-  fun getAllSessions(): Map<Int, RevylSession> = sessions.toMap()
-
-  /**
-   * Switches the active session to the given index.
-   *
-   * @param index Session index to make active.
-   * @throws IllegalArgumentException If no session exists at the given index.
-   */
-  fun useSession(index: Int) {
-    require(sessions.containsKey(index)) { "No session at index $index. Active sessions: ${sessions.keys}" }
-    activeSessionIndex = index
-    Console.log("RevylCli: switched to session $index (${sessions[index]!!.platform})")
-  }
+  val isCliAvailable: Boolean by lazy { TrailblazeProcessBuilderUtils.isCommandAvailable(resolvedBinary) }
 
   companion object {
     /** Sentinel value for "use the currently active session". */
@@ -103,46 +67,11 @@ class RevylCliClient(
    * @throws RevylCliException If the binary is not found, with install instructions.
    */
   private fun verifyCliAvailable() {
-    if (cliVerified) return
-    try {
-      val process = ProcessBuilder(resolvedBinary, "--version")
-        .redirectErrorStream(true)
-        .start()
-      val output = process.inputStream.bufferedReader().readText().trim()
-      if (process.waitFor() == 0) {
-        Console.log("RevylCli: $output")
-        cliVerified = true
-          return
-      }
-    } catch (_: Exception) { /* binary not found */ }
-
-    throw RevylCliException(
-      "revyl CLI not found on PATH.\n\n" +
-        "Install:\n" +
-        "  curl -fsSL https://raw.githubusercontent.com/RevylAI/revyl-cli/main/scripts/install.sh | sh\n\n" +
-        "Or with Homebrew:\n" +
-        "  brew install RevylAI/tap/revyl\n\n" +
-        "Or download from:\n" +
-        "  https://github.com/RevylAI/revyl-cli/releases\n\n" +
-        "Then set REVYL_API_KEY and try again."
-    )
-  }
-
-  /**
-   * Returns true if the revyl CLI binary is available on PATH.
-   * Does not throw -- suitable for feature-gating Revyl device types.
-   */
-  fun isCliAvailable(): Boolean {
-    if (cliVerified) return true
-    return try {
-      val process = ProcessBuilder(resolvedBinary, "--version")
-        .redirectErrorStream(true)
-        .start()
-      val available = process.waitFor() == 0
-      if (available) cliVerified = true
-      available
-    } catch (_: Exception) {
-      false
+    if (!isCliAvailable) {
+      throw RevylCliException(
+        "revyl CLI not found (resolved binary: '$resolvedBinary'). " +
+          "Ensure 'revyl' is on PATH (or set REVYL_BINARY) and set REVYL_API_KEY, then try again."
+      )
     }
   }
 
@@ -464,19 +393,21 @@ class RevylCliClient(
    * @throws RevylCliException If the CLI command fails.
    */
   fun getDeviceTargets(): List<RevylDeviceTarget> {
-    verifyCliAvailable()
     val stdout = runCli(listOf("device", "targets"))
     val root = json.parseToJsonElement(stdout).jsonObject
     val results = mutableListOf<RevylDeviceTarget>()
     val seenModels = mutableSetOf<String>()
 
-    for (platform in listOf(PLATFORM_ANDROID, PLATFORM_IOS)) {
-      val entries = root[platform]?.jsonArray ?: continue
+    for ((platformKey, devicePlatform) in listOf(
+      PLATFORM_ANDROID to TrailblazeDevicePlatform.ANDROID,
+      PLATFORM_IOS to TrailblazeDevicePlatform.IOS,
+    )) {
+      val entries = root[platformKey]?.jsonArray ?: continue
       for (entry in entries) {
         val model = entry.jsonObject["Model"]?.jsonPrimitive?.content ?: continue
         val runtime = entry.jsonObject["Runtime"]?.jsonPrimitive?.content ?: continue
-        if (seenModels.add("$platform:$model")) {
-          results.add(RevylDeviceTarget(platform = platform, model = model, osVersion = runtime))
+        if (seenModels.add("$platformKey:$model")) {
+          results.add(RevylDeviceTarget(platform = devicePlatform, model = model, osVersion = runtime))
         }
       }
     }
@@ -600,4 +531,4 @@ class RevylCliException(message: String) : RuntimeException(message)
  * @property model Human-readable model name (e.g. "iPhone 16", "Pixel 7").
  * @property osVersion Runtime / OS version string (e.g. "Android 14", "iOS 18.2").
  */
-data class RevylDeviceTarget(val platform: String, val model: String, val osVersion: String)
+data class RevylDeviceTarget(val platform: TrailblazeDevicePlatform, val model: String, val osVersion: String)

@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.android.accessibility
 
+import maestro.KeyCode
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 
 /**
@@ -83,6 +84,17 @@ sealed interface AccessibilityAction {
     override val description get() = "Press home"
   }
 
+  /**
+   * Sends a key event via ADB shell (`input keyevent`).
+   *
+   * Used for keys that have no native accessibility global-action equivalent (e.g. ENTER, TAB).
+   * BACK and HOME should still use [PressBack]/[PressHome] which use the more reliable
+   * `performGlobalAction` path.
+   */
+  data class PressKey(val code: KeyCode) : AccessibilityAction {
+    override val description get() = "Press key ${code.name}"
+  }
+
   data object HideKeyboard : AccessibilityAction {
     override val description get() = "Hide keyboard"
   }
@@ -134,21 +146,82 @@ sealed interface AccessibilityAction {
       get() = "Assert not visible: ${nodeSelector.description()}"
   }
 
+  // --- Clipboard ---
+
+  data class SetClipboard(val text: String) : AccessibilityAction {
+    override val description get() = "Set clipboard to \"$text\""
+  }
+
+  data object PasteText : AccessibilityAction {
+    override val description get() = "Paste text from clipboard"
+  }
+
+  data class CopyTextFrom(
+    val nodeSelector: TrailblazeNodeSelector,
+    val timeoutMs: Long = DEFAULT_ELEMENT_TIMEOUT_MS,
+  ) : AccessibilityAction {
+    override val description: String
+      get() = "Copy text from ${nodeSelector.description()}"
+  }
+
   // --- App lifecycle ---
 
   /**
    * Launches an app by package ID via the accessibility service's Context.
    *
-   * This action only handles the UI launch (via [Intent.FLAG_ACTIVITY_CLEAR_TASK]).
-   * `clearState` and `stopApp` are intentionally omitted because `pm clear` and
-   * `am force-stop` require shell-level permissions that an accessibility service doesn't
-   * have. Those operations are handled separately via ADB by
-   * [AccessibilityTrailblazeAgent.executeLaunchAppViaAdb].
+   * Uses [Intent.FLAG_ACTIVITY_CLEAR_TASK] for a fresh UI start. When used as part of
+   * [LaunchAppCommand] processing, stop/clear/permissions are handled separately via ADB
+   * by [AccessibilityTrailblazeAgent.executeLaunchAppViaAdb] before this action runs.
    */
   data class LaunchApp(
     val appId: String,
   ) : AccessibilityAction {
     override val description get() = "Launch app $appId"
+  }
+
+  data class StopApp(val appId: String) : AccessibilityAction {
+    override val description get() = "Stop app $appId"
+  }
+
+  data class KillApp(val appId: String) : AccessibilityAction {
+    override val description get() = "Kill app $appId"
+  }
+
+  data class ClearState(val appId: String) : AccessibilityAction {
+    override val description get() = "Clear state for $appId"
+  }
+
+  // --- Navigation ---
+
+  data class OpenLink(val link: String) : AccessibilityAction {
+    override val description get() = "Open link $link"
+  }
+
+  // --- Device settings ---
+
+  /** Sets the device orientation. [rotation] matches ADB values: 0=portrait, 1=landscape_left, 2=upside_down, 3=landscape_right. */
+  data class SetOrientation(val rotation: Int) : AccessibilityAction {
+    override val description get() = "Set orientation to rotation=$rotation"
+  }
+
+  data class SetAirplaneMode(val enabled: Boolean) : AccessibilityAction {
+    override val description get() = "${if (enabled) "Enable" else "Disable"} airplane mode"
+  }
+
+  data object ToggleAirplaneMode : AccessibilityAction {
+    override val description get() = "Toggle airplane mode"
+  }
+
+  // --- Scroll until visible ---
+
+  data class ScrollUntilVisible(
+    val nodeSelector: TrailblazeNodeSelector,
+    val direction: Direction,
+    val timeoutMs: Long,
+    val scrollDurationMs: Long = 400L,
+  ) : AccessibilityAction {
+    override val description: String
+      get() = "Scroll ${direction.name} until ${nodeSelector.description()} is visible"
   }
 
   // --- Waiting ---

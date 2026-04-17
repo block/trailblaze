@@ -62,7 +62,6 @@ import xyz.block.trailblaze.logs.model.isInProgress
 import xyz.block.trailblaze.ui.composables.ScreenshotImage
 import xyz.block.trailblaze.ui.composables.SelectableText
 import xyz.block.trailblaze.ui.composables.createVideoFrameCache
-import xyz.block.trailblaze.ui.composables.extractVideoFrame
 import xyz.block.trailblaze.ui.images.ImageLoader
 import xyz.block.trailblaze.ui.images.NetworkImageLoader
 import xyz.block.trailblaze.ui.openVideoInSystemPlayer
@@ -332,25 +331,28 @@ internal fun SessionTimelineView(
               durationMs = videoDurationMs,
             )
             Spacer(modifier = Modifier.weight(1f))
-            Text(
-              text = "Watch Video \u2197",
-              style = MaterialTheme.typography.labelSmall,
-              color = MaterialTheme.colorScheme.primary,
-              fontWeight = FontWeight.Medium,
-              modifier = Modifier
-                .padding(end = 4.dp)
-                .background(
-                  MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f),
-                  RoundedCornerShape(4.dp),
-                )
-                .padding(horizontal = 8.dp, vertical = 4.dp)
-                .clickable { openVideoInSystemPlayer(videoMetadata.filePath) },
-            )
+            val watchVideoPath = videoMetadata.videoFilePath
+            if (watchVideoPath != null) {
+              Text(
+                text = "Watch Video \u2197",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier
+                  .padding(end = 4.dp)
+                  .background(
+                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f),
+                    RoundedCornerShape(4.dp),
+                  )
+                  .padding(horizontal = 8.dp, vertical = 4.dp)
+                  .clickable { openVideoInSystemPlayer(watchVideoPath) },
+              )
+            }
           }
 
-          // Pre-extract all frames in the background for fast scrubbing/playback
+          // Create frame cache for sprite sheet cropping during scrubbing/playback
           val frameCache = remember(videoMetadata.filePath) {
-            createVideoFrameCache(videoMetadata.filePath, VIDEO_CACHE_FPS)
+            createVideoFrameCache(videoMetadata.filePath, VIDEO_CACHE_FPS, videoMetadata.spriteInfo)
           }
           DisposableEffect(frameCache) { onDispose { frameCache.dispose() } }
 
@@ -358,22 +360,10 @@ internal fun SessionTimelineView(
             (currentTimestamp - videoMetadata.startTimestampMs).coerceAtLeast(0L)
           var currentFrame by remember { mutableStateOf<ImageBitmap?>(null) }
 
-          // Fast low-res frame from cache (async on WASM to load embedded frames on demand)
+          // Load frame from sprite sheet cache (async on WASM to load embedded frames on demand)
           LaunchedEffect(videoPositionMs) {
             val frame = frameCache.getFrameAsync(videoPositionMs)
             if (frame != null) currentFrame = frame
-          }
-
-          // Upgrade to full-res native frame when paused and idle
-          LaunchedEffect(
-            videoPositionMs,
-            timelineState.isVideoPlaying,
-            timelineState.isScrubbing,
-          ) {
-            if (timelineState.isVideoPlaying || timelineState.isScrubbing) return@LaunchedEffect
-            delay(TimelineConstants.FRAME_DEBOUNCE_MS) // wait for scrubbing to settle
-            val hiRes = extractVideoFrame(videoMetadata.filePath, videoPositionMs)
-            if (hiRes != null) currentFrame = hiRes
           }
 
           // Auto-play: advance scrubber in real time at 20fps

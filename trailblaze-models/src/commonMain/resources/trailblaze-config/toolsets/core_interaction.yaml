@@ -1,0 +1,26 @@
+# Essential UI interaction tools for basic device control.
+# Available on host-driven and on-device drivers only — Revyl has its own tool implementations.
+id: core_interaction
+description: "Tap, swipe, type, and other basic device interactions."
+drivers:
+  - android-ondevice-instrumentation
+  - android-ondevice-accessibility
+  - ios-host
+tools:
+  - assertNotVisibleWithText
+  - assertVisibleWithNodeId
+  - eraseText
+  - hideKeyboard
+  - inputText
+  - launchApp
+  - networkConnection
+  - openUrl
+  - pasteClipboard
+  - pressKey
+  - scrollUntilTextIsVisible
+  - setClipboard
+  - swipe
+  - takeSnapshot
+  - tap
+  - tapOnPoint
+  - wait

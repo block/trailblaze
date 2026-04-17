@@ -24,4 +24,11 @@ fun main() {
   CliDocsGenerator(
     docsDir = docsDir
   ).generate()
+
+  // Generate CLI Scenarios documentation (from @Scenario test annotations)
+  CliScenariosGenerator(
+    generatedDir = generatedDir,
+    gitDir = gitDir,
+  ).generate()
+
 }

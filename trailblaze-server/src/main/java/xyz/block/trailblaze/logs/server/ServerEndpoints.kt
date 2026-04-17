@@ -42,8 +42,8 @@ import kotlin.io.encoding.ExperimentalEncodingApi
  * Callbacks for CLI endpoints. These are provided by the desktop app.
  */
 data class CliEndpointCallbacks(
-  /** Called when CLI requests a trail run */
-  val onRunRequest: suspend (CliRunRequest) -> CliRunResponse,
+  /** Called when CLI requests a trail run. The progress callback receives status messages. */
+  val onRunRequest: suspend (CliRunRequest, onProgress: (String) -> Unit) -> CliRunResponse,
   /** Called when CLI requests shutdown */
   val onShutdownRequest: () -> Unit,
   /** Called when CLI requests to show the window */

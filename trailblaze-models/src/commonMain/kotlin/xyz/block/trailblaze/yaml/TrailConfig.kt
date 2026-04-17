@@ -12,11 +12,11 @@ data class TrailConfig(
   val source: TrailSource? = null,
   val metadata: Map<String, String>? = null,
   /**
-   * Optional target application identifier. This can be an alias if custom tools provided by your
-   * organization use a short name for the app, or a package ID (e.g., "com.example.app") if
-   * desired. Not required.
+   * Optional target identifier. This can be an alias if custom tools provided by your organization
+   * use a short name for the target, a package ID (e.g., "com.example.app"), or a URL for web
+   * targets. Not required.
    */
-  val app: String? = null,
+  val target: String? = null,
   /**
    * Optional platform hint for device selection. When set, the CLI will auto-select a device
    * matching this platform. This is a freeform string used as a first classifier — it does not
@@ -28,7 +28,7 @@ data class TrailConfig(
    * Optional driver type for device selection. When set, the CLI will select a device with the
    * matching driver. This is more explicit than [platform] and takes precedence over it. Valid
    * values correspond to [xyz.block.trailblaze.devices.TrailblazeDriverType] names (e.g.,
-   * "PLAYWRIGHT_NATIVE", "ANDROID_HOST", "IOS_HOST").
+   * "PLAYWRIGHT_NATIVE", "ANDROID_ONDEVICE_INSTRUMENTATION", "IOS_HOST").
    */
   val driver: String? = null,
   /** Optional Electron app configuration for [TrailblazeDriverType.PLAYWRIGHT_ELECTRON] trails. */

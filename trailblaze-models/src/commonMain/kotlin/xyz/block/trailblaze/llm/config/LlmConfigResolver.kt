@@ -96,16 +96,8 @@ object LlmConfigResolver {
     }
   }
 
-  private fun inferProviderType(key: String): LlmProviderType? {
-    return when (key) {
-      TrailblazeLlmProvider.OPENAI.id -> LlmProviderType.OPENAI
-      TrailblazeLlmProvider.ANTHROPIC.id -> LlmProviderType.ANTHROPIC
-      TrailblazeLlmProvider.GOOGLE.id -> LlmProviderType.GOOGLE
-      TrailblazeLlmProvider.OLLAMA.id -> LlmProviderType.OLLAMA
-      TrailblazeLlmProvider.OPEN_ROUTER.id -> LlmProviderType.OPEN_ROUTER
-      else -> null
-    }
-  }
+  private fun inferProviderType(key: String): LlmProviderType? =
+    LlmProviderType.inferFromProviderId(key)
 
   private fun resolveModelEntry(
     entry: LlmModelConfigEntry,

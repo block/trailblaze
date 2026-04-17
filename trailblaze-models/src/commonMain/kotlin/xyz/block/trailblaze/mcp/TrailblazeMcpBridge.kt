@@ -61,10 +61,11 @@ interface TrailblazeMcpBridge {
    * This captures screen state directly from the Maestro driver without creating sessions.
    * More reliable than getCurrentScreenState() for MCP use cases.
    *
+   * @param skipScreenshot When true, skip screenshot capture and settling for maximum speed.
    * @return A lambda that captures fresh screen state with optional scaling config,
    *         or null if no device is connected
    */
-  fun getDirectScreenStateProvider(): ((ScreenshotScalingConfig) -> ScreenState)? = null
+  fun getDirectScreenStateProvider(skipScreenshot: Boolean = false): ((ScreenshotScalingConfig) -> ScreenState)? = null
 
   /**
    * Executes a TrailblazeTool directly on the connected device.

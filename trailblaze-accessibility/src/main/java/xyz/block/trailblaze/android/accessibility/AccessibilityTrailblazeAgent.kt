@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.android.accessibility
 
+import maestro.orchestra.ApplyConfigurationCommand
 import maestro.orchestra.Command
 import maestro.orchestra.LaunchAppCommand
 import xyz.block.trailblaze.AdbCommandUtil
@@ -37,14 +38,12 @@ class AccessibilityTrailblazeAgent(
   trailblazeDeviceInfoProvider: () -> TrailblazeDeviceInfo,
   sessionProvider: TrailblazeSessionProvider,
   deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
-  setOfMarkEnabled: Boolean = true,
 ) : MaestroTrailblazeAgent(trailblazeLogger, trailblazeDeviceInfoProvider, sessionProvider) {
 
   override val usesAccessibilityDriver: Boolean = true
 
   private val deviceManager =
     AccessibilityDeviceManager(
-      setOfMarkEnabled = setOfMarkEnabled,
       deviceClassifiers = deviceClassifiers,
     )
 
@@ -69,7 +68,7 @@ class AccessibilityTrailblazeAgent(
       executeLaunchAppViaAdb(launch)
     }
 
-    val uiCommands = commands.filter { it !is LaunchAppCommand }
+    val uiCommands = commands.filter { it !is LaunchAppCommand && it !is ApplyConfigurationCommand }
     if (uiCommands.isEmpty()) return TrailblazeToolResult.Success()
 
     Console.log(
@@ -113,24 +112,14 @@ class AccessibilityTrailblazeAgent(
       AdbCommandUtil.clearPackageData(appId)
     }
 
-    // Grant permissions — mirrors Maestro Orchestra's setPermissions() behavior.
-    command.permissions?.forEach { (permission, action) ->
-      if (action == "allow") {
-        if (permission == "all") {
-          // TODO: Implement granting all runtime permissions. AdbCommandUtil does not yet have a
-          //  grantAllRuntimePermissions() method. Maestro handles this by querying the package's
-          //  declared permissions and granting each runtime permission individually.
-          Console.log(
-            "WARNING: permission=\"all\" is not yet supported in the accessibility driver for $appId. " +
-              "Individual permissions must be specified explicitly."
-          )
-        } else {
-          try {
-            AdbCommandUtil.grantPermission(appId, permission)
-          } catch (e: Exception) {
-            Console.log("Failed to grant $permission to $appId: ${e.message}")
-          }
-        }
+    // Grant permissions — matches MaestroAndroidUiAutomatorDriver.setPermissions() behavior.
+    val permissionsToGrant =
+      command.permissions?.filterValues { it == "allow" }?.keys ?: emptySet()
+    for (permission in permissionsToGrant) {
+      try {
+        AdbCommandUtil.grantPermission(appId, permission)
+      } catch (e: Exception) {
+        Console.log("Failed to grant $permission to $appId: ${e.message}")
       }
     }
 

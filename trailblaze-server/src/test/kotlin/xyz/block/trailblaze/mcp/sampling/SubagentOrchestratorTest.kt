@@ -409,7 +409,7 @@ private class MockTrailblazeMcpBridge : TrailblazeMcpBridge {
   override suspend fun getCurrentScreenState(): ScreenState? =
     throw NotImplementedError("Not needed for parsing tests")
 
-  override fun getDirectScreenStateProvider(): ((ScreenshotScalingConfig) -> ScreenState)? =
+  override fun getDirectScreenStateProvider(skipScreenshot: Boolean): ((ScreenshotScalingConfig) -> ScreenState)? =
     throw NotImplementedError("Not needed for parsing tests")
 
   override suspend fun executeTrailblazeTool(tool: TrailblazeTool, blocking: Boolean): String =

@@ -3,8 +3,6 @@ package xyz.block.trailblaze.mcp.newtools
 import ai.koog.agents.core.tools.annotations.LLMDescription
 import ai.koog.agents.core.tools.annotations.Tool
 import ai.koog.agents.core.tools.reflect.ToolSet
-import io.ktor.util.encodeBase64
-import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
@@ -14,13 +12,10 @@ import xyz.block.trailblaze.mcp.DeviceClaimRegistry
 import xyz.block.trailblaze.mcp.McpToolProfile
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
 import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
-import xyz.block.trailblaze.mcp.ViewHierarchyVerbosity
-import xyz.block.trailblaze.mcp.utils.ScreenStateCaptureUtil
+import xyz.block.trailblaze.toolcalls.toKoogToolDescriptor
+import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeToolDescriptor
 import xyz.block.trailblaze.toolcalls.ToolSetCatalogEntry
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
-import xyz.block.trailblaze.viewhierarchy.ViewHierarchyFilter
-import xyz.block.trailblaze.viewhierarchy.ViewHierarchyFilter.Companion.asTrailblazeElementSelector
-import xyz.block.trailblaze.viewhierarchy.ViewHierarchyFilter.Companion.isInteractable
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.yaml.models.TrailblazeYamlBuilder
 
@@ -38,7 +33,7 @@ class DeviceManagerToolSet(
   private val sessionContext: TrailblazeMcpSessionContext?,
   private val mcpBridge: TrailblazeMcpBridge,
   private val deviceClaimRegistry: DeviceClaimRegistry? = null,
-  private val toolSetCatalog: List<ToolSetCatalogEntry> = TrailblazeToolSetCatalog.defaultEntries(true),
+  private val toolSetCatalog: List<ToolSetCatalogEntry> = TrailblazeToolSetCatalog.defaultEntries(),
   private val onActiveToolSetsChanged: (activeToolSetIds: List<String>, catalog: List<ToolSetCatalogEntry>) -> Unit = { _, _ -> },
   /** Callback to terminate a displaced MCP session when force-claiming a device. */
   private val onTerminateSession: ((sessionId: String) -> String?)? = null,
@@ -153,6 +148,11 @@ class DeviceManagerToolSet(
               appendLine("  Platform: ${currentDeviceId.trailblazeDevicePlatform.displayName}")
               if (driverType != null) {
                 appendLine("  Driver: $driverType")
+              }
+              val toolSummary = buildAvailableToolsSummary()
+              if (toolSummary != null) {
+                appendLine()
+                append(toolSummary)
               }
             }
           }
@@ -297,7 +297,14 @@ class DeviceManagerToolSet(
     } else {
       ""
     }
-    return "Connected to ${trailblazeDeviceId.instanceId} (${trailblazeDeviceId.trailblazeDevicePlatform.displayName})$displacedMsg. Session recording - save anytime with trail(action=SAVE, name='...')"
+    return buildString {
+      append("Connected to ${trailblazeDeviceId.instanceId} (${trailblazeDeviceId.trailblazeDevicePlatform.displayName})$displacedMsg. Session recording - save anytime with trail(action=SAVE, name='...')")
+      val toolSummary = buildAvailableToolsSummary()
+      if (toolSummary != null) {
+        append("\n\n")
+        append(toolSummary)
+      }
+    }
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -431,6 +438,37 @@ Call with an empty list to reset to only the core tools.""",
     }
   }
 
+  /**
+   * Builds a summary of custom tools available for the current target + driver.
+   * Returns null if no target is set, no driver is connected, or no custom tools exist.
+   */
+  private fun buildAvailableToolsSummary(): String? {
+    val driverType = mcpBridge.getDriverType() ?: return null
+    val targetId = mcpBridge.getCurrentAppTargetId() ?: return null
+    val target = mcpBridge.getAvailableAppTargets().firstOrNull { it.id == targetId } ?: return null
+    if (target.id == "none") return null
+
+    val groups = try {
+      target.getCustomToolGroupsForDriver(driverType)
+    } catch (_: Exception) {
+      return null
+    }
+    if (groups.isEmpty()) return null
+
+    return buildString {
+      appendLine("Available ${target.displayName} tools (${driverType.platform.displayName}):")
+      for (group in groups) {
+        val toolNames = group.toolClasses
+          .mapNotNull { it.toKoogToolDescriptor()?.toTrailblazeToolDescriptor()?.name }
+          .sorted()
+        if (toolNames.isNotEmpty()) {
+          appendLine("  ${group.id}: ${toolNames.joinToString(", ")}")
+        }
+      }
+      append("Use tools(target=\"${target.id}\") for details, or blaze(objective=\"...\") — the inner agent selects the right tool automatically.")
+    }
+  }
+
   companion object {
     // Tool names - referenced in @Tool annotations and LLM descriptions
     const val TOOL_GET_INSTALLED_APPS = "getInstalledApps"
@@ -445,204 +483,3 @@ Call with an empty list to reset to only the core tools.""",
   }
 }
 
-/**
- * Session/Trail management tools for test authoring.
- *
- * NOT registered by default - these are for test authoring workflows
- * where you're creating trails and need explicit session boundaries.
- *
- * For exploration/automation, you don't need these - just connect and use two-tier tools.
- */
-@Suppress("unused")
-class SessionManagementToolSet(
-  private val sessionContext: TrailblazeMcpSessionContext?,
-  private val mcpBridge: TrailblazeMcpBridge,
-) : ToolSet {
-
-  @LLMDescription(
-    """
-    End the current trail/session. Use this when test authoring is complete.
-
-    This marks the trail as done and finalizes any recording.
-    For exploration/automation, you typically don't need this.
-    """
-  )
-  @Tool
-  suspend fun endSession(): String {
-    val wasSessionEnded = mcpBridge.endSession()
-    sessionContext?.clearAssociatedDevice()
-    return if (wasSessionEnded) "Session ended. Trail finalized." else "No active session to end."
-  }
-}
-
-/**
- * Observation tools for screen state inspection.
- *
- * NOT registered by default - these tools return large payloads (screenshots, full hierarchy)
- * that should stay out of the primary context window.
- *
- * Enable via: enableToolCategories(["OBSERVATION"])
- *
- * The two-tier pattern tools (getNextActionRecommendation) handle screen state internally
- * without polluting the outer agent's context.
- */
-@Suppress("unused")
-class ObservationToolSet(
-  private val sessionContext: TrailblazeMcpSessionContext?,
-  private val mcpBridge: TrailblazeMcpBridge,
-) : ToolSet {
-
-  private suspend fun getScreenStateDirectly() = ScreenStateCaptureUtil.captureScreenState(mcpBridge)
-
-  @LLMDescription(
-    """
-    Get current screen state (view hierarchy and optional screenshot).
-
-    WARNING: Returns large payload. Prefer getNextActionRecommendation for UI automation
-    to keep screen data out of your context window.
-
-    Use this only when you need to manually inspect screen state.
-    """
-  )
-  @Tool
-  suspend fun getScreenState(
-    @LLMDescription("Include base64 screenshot (default: true)")
-    includeScreenshot: Boolean = true,
-    @LLMDescription("Verbosity: MINIMAL, STANDARD, or FULL")
-    verbosity: ViewHierarchyVerbosity? = null,
-  ): String {
-    val screenState = getScreenStateDirectly()
-      ?: return "Error: No screen state available. Is a device connected?"
-
-    val effectiveVerbosity = verbosity
-      ?: sessionContext?.viewHierarchyVerbosity
-      ?: ViewHierarchyVerbosity.MINIMAL
-
-    val vhFilter = ViewHierarchyFilter.create(
-      screenWidth = screenState.deviceWidth,
-      screenHeight = screenState.deviceHeight,
-      platform = screenState.trailblazeDevicePlatform,
-    )
-    val filtered = vhFilter.filterInteractableViewHierarchyTreeNodes(screenState.viewHierarchy)
-
-    val viewHierarchyText = when (effectiveVerbosity) {
-      ViewHierarchyVerbosity.MINIMAL -> buildMinimalViewHierarchy(filtered)
-      ViewHierarchyVerbosity.STANDARD -> buildViewHierarchyDescription(filtered)
-      ViewHierarchyVerbosity.FULL -> buildFullViewHierarchy(screenState.viewHierarchy)
-    }
-
-    return if (includeScreenshot) {
-      val screenshot = screenState.screenshotBytes?.encodeBase64() ?: "Screenshot unavailable"
-      """
-      |== View Hierarchy ==
-      |$viewHierarchyText
-      |
-      |== Screenshot (base64 PNG) ==
-      |$screenshot
-      """.trimMargin()
-    } else {
-      viewHierarchyText
-    }
-  }
-
-  @LLMDescription(
-    """
-    Get view hierarchy only (no screenshot).
-
-    Verbosity levels:
-    - MINIMAL: Interactable elements with coordinates
-    - STANDARD: Interactable elements with descriptions and hierarchy
-    - FULL: Complete view hierarchy including non-interactable elements
-    """
-  )
-  @Tool
-  suspend fun viewHierarchy(
-    @LLMDescription("Verbosity: MINIMAL, STANDARD, or FULL")
-    verbosity: ViewHierarchyVerbosity? = null,
-  ): String {
-    val screenState = getScreenStateDirectly()
-      ?: return "Error: No screen state available. Is a device connected?"
-
-    val effectiveVerbosity = verbosity
-      ?: sessionContext?.viewHierarchyVerbosity
-      ?: ViewHierarchyVerbosity.MINIMAL
-
-    val vhFilter = ViewHierarchyFilter.create(
-      screenWidth = screenState.deviceWidth,
-      screenHeight = screenState.deviceHeight,
-      platform = screenState.trailblazeDevicePlatform,
-    )
-    val filtered = vhFilter.filterInteractableViewHierarchyTreeNodes(screenState.viewHierarchy)
-
-    return when (effectiveVerbosity) {
-      ViewHierarchyVerbosity.MINIMAL -> buildMinimalViewHierarchy(filtered)
-      ViewHierarchyVerbosity.STANDARD -> buildViewHierarchyDescription(filtered)
-      ViewHierarchyVerbosity.FULL -> buildFullViewHierarchy(screenState.viewHierarchy)
-    }
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────────
-  // View hierarchy formatting helpers
-  // ─────────────────────────────────────────────────────────────────────────────
-
-  private fun buildMinimalViewHierarchy(node: ViewHierarchyTreeNode): String {
-    val elements = mutableListOf<String>()
-    collectInteractableElements(node, elements)
-    return if (elements.isEmpty()) {
-      "No interactable elements found on screen."
-    } else {
-      elements.joinToString("\n")
-    }
-  }
-
-  private fun collectInteractableElements(node: ViewHierarchyTreeNode, elements: MutableList<String>) {
-    if (node.isInteractable()) {
-      val selector = node.asTrailblazeElementSelector()
-      val description = selector?.description() ?: node.className
-      val position = node.centerPoint?.let { "@($it)" } ?: ""
-      elements.add("- $description $position")
-    }
-    node.children.forEach { child -> collectInteractableElements(child, elements) }
-  }
-
-  private fun buildFullViewHierarchy(node: ViewHierarchyTreeNode, depth: Int = 0): String {
-    val indent = "  ".repeat(depth)
-    val className = node.className ?: "Unknown"
-    val text = node.text?.let { " '$it'" } ?: ""
-    val resourceId = node.resourceId?.let { " [$it]" } ?: ""
-    val position = node.centerPoint?.let { " @($it)" } ?: ""
-    val interactable = if (node.isInteractable()) " *" else ""
-
-    val thisLine = "$indent$className$text$resourceId$position$interactable"
-
-    val childDescriptions = node.children
-      .map { child -> buildFullViewHierarchy(child, depth + 1) }
-      .filter { it.isNotBlank() }
-
-    return listOf(thisLine)
-      .plus(childDescriptions)
-      .joinToString("\n")
-  }
-
-  private fun buildViewHierarchyDescription(node: ViewHierarchyTreeNode, depth: Int = 0): String {
-    val indent = "  ".repeat(depth)
-    val selectorDescription = node.asTrailblazeElementSelector()?.description()
-    val centerPoint = node.centerPoint
-
-    val thisNodeLine = if (selectorDescription != null) {
-      val positionSuffix = centerPoint?.let { " @$it" } ?: ""
-      "$indent$selectorDescription$positionSuffix"
-    } else {
-      null
-    }
-
-    val childDepth = if (selectorDescription != null) depth + 1 else depth
-    val childDescriptions = node.children
-      .map { child -> buildViewHierarchyDescription(child, childDepth) }
-      .filter { it.isNotBlank() }
-
-    return listOfNotNull(thisNodeLine)
-      .plus(childDescriptions)
-      .joinToString("\n")
-  }
-}

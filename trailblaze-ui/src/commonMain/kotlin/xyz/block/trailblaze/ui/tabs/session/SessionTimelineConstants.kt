@@ -38,7 +38,6 @@ internal object TimelineConstants {
 
   // Playback
   const val PLAYBACK_FRAME_INTERVAL_MS = 50L
-  const val FRAME_DEBOUNCE_MS = 300L
   const val END_OF_VIDEO_THRESHOLD_MS = 500L
   const val NEARBY_LOGS_WINDOW_MS = 2000L
   const val SLIDESHOW_MIN_DELAY_MS = 200L

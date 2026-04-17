@@ -2,39 +2,52 @@ package xyz.block.trailblaze.devices
 
 enum class TrailblazeDriverType(
   val platform: TrailblazeDevicePlatform,
-  val isHost: Boolean,
+  /**
+   * Whether this driver requires a host machine to operate. Drivers with `requiresHost = false`
+   * (e.g., on-device Android drivers) can run autonomously on the device via RPC; drivers with
+   * `requiresHost = true` need a host-resident process (Maestro, Playwright, Revyl API, etc.).
+   */
+  val requiresHost: Boolean,
+  /**
+   * The YAML key used to reference this specific driver type in `trailblaze-config/` YAML files
+   * (targets, toolsets). Case-insensitive. Matches the keys in [DriverTypeKey].
+   */
+  val yamlKey: String,
 ) {
   ANDROID_ONDEVICE_ACCESSIBILITY(
     platform = TrailblazeDevicePlatform.ANDROID,
-    isHost = false,
+    requiresHost = false,
+    yamlKey = "android-ondevice-accessibility",
   ),
   ANDROID_ONDEVICE_INSTRUMENTATION(
     platform = TrailblazeDevicePlatform.ANDROID,
-    isHost = false,
-  ),
-  ANDROID_HOST(
-    platform = TrailblazeDevicePlatform.ANDROID,
-    isHost = true,
+    requiresHost = false,
+    yamlKey = "android-ondevice-instrumentation",
   ),
   IOS_HOST(
     platform = TrailblazeDevicePlatform.IOS,
-    isHost = true,
+    requiresHost = true,
+    yamlKey = "ios-host",
   ),
   PLAYWRIGHT_NATIVE(
     platform = TrailblazeDevicePlatform.WEB,
-    isHost = true,
+    requiresHost = true,
+    yamlKey = "playwright-native",
   ),
   PLAYWRIGHT_ELECTRON(
     platform = TrailblazeDevicePlatform.WEB,
-    isHost = true,
+    requiresHost = true,
+    yamlKey = "playwright-electron",
   ),
   REVYL_ANDROID(
     platform = TrailblazeDevicePlatform.ANDROID,
-    isHost = true,
+    requiresHost = true,
+    yamlKey = "revyl-android",
   ),
   REVYL_IOS(
     platform = TrailblazeDevicePlatform.IOS,
-    isHost = true,
+    requiresHost = true,
+    yamlKey = "revyl-ios",
   ),
   // COMPOSE intentionally uses WEB platform: Compose Desktop testing reuses the web
   // platform's view hierarchy filtering and device infrastructure. Adding a separate
@@ -42,7 +55,8 @@ enum class TrailblazeDriverType(
   // TrailblazeDevicePlatform across the codebase (e.g., ViewHierarchyFilter.create).
   COMPOSE(
     platform = TrailblazeDevicePlatform.WEB,
-    isHost = true,
+    requiresHost = true,
+    yamlKey = "compose",
   ),
   ;
 
@@ -54,7 +68,14 @@ enum class TrailblazeDriverType(
       ANDROID_ONDEVICE_ACCESSIBILITY,
     )
 
+    /** Legacy aliases for removed driver types. */
+    private val LEGACY_ALIASES = mapOf(
+      "ANDROID_HOST" to ANDROID_ONDEVICE_INSTRUMENTATION,
+      "HOST" to ANDROID_ONDEVICE_INSTRUMENTATION,
+    )
+
     fun fromString(value: String): TrailblazeDriverType? =
       entries.find { it.name.equals(value, ignoreCase = true) }
+        ?: LEGACY_ALIASES.entries.firstOrNull { it.key.equals(value, ignoreCase = true) }?.value
   }
 }

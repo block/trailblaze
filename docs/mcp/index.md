@@ -6,7 +6,7 @@ Trailblaze exposes a clean **5-tool MCP API** for UI automation and test authori
 
 ## Quick Start
 
-```
+```text
 # Connect to a device
 device(action=ANDROID)
 
@@ -37,7 +37,7 @@ trail(action=SAVE, name="login_test")
 
 For quick exploration and automation without creating reusable tests:
 
-```
+```text
 device(action=ANDROID)                    # Connect
 step("Open the Settings app")             # Interact
 step("Scroll down to About")
@@ -50,7 +50,7 @@ Your session is automatically recorded. Save it anytime with `trail(action=SAVE,
 
 For creating reusable test cases:
 
-```
+```text
 trail(action=START, name="checkout_flow", platform=ANDROID)   # Start named trail
 step("Add item to cart")
 step("Proceed to checkout")
@@ -60,7 +60,7 @@ trail(action=SAVE)                                            # Save the trail
 ```
 
 Run saved trails later:
-```
+```text
 trail(action=RUN, name="checkout_flow")   # Deterministic replay
 ```
 
@@ -77,7 +77,7 @@ Connect to a mobile device.
 | `LIST` | List available devices |
 | `CONNECT` | Connect by specific device ID |
 
-```
+```text
 device(action=ANDROID)
 device(action=LIST)
 device(action=CONNECT, deviceId="emulator-5554")
@@ -89,7 +89,7 @@ Execute an action using natural language. Trailblaze's inner agent analyzes the 
 
 Each call should be a **complete user-facing action** with all relevant details — not individual UI taps, but not multi-screen journeys either. The inner agent has specialized tools (login, setup, onboarding) that need full context to select the right one.
 
-```
+```text
 blaze(goal="Login with test@example.com")
 blaze(goal="Search flights from Paris to London on October 4")
 blaze(goal="Tap the Login button")
@@ -104,7 +104,7 @@ Returns: Success/failure status with screen summary.
 
 Check if a condition is true on the current screen.
 
-```
+```text
 verify("The welcome message is visible")
 verify("The cart shows 3 items")
 verify("No error messages are displayed")
@@ -116,7 +116,7 @@ Returns: `{ passed: true/false, reason: "..." }`
 
 Ask a question about the current screen state.
 
-```
+```text
 ask("What is the title of this screen?")
 ask("How many items are in the list?")
 ask("What error message is shown?")
@@ -136,7 +136,7 @@ Manage trails (reusable test recordings).
 | `LIST` | List available devices or trails |
 | `END` | End session without saving |
 
-```
+```text
 # Start a named trail
 trail(action=START, name="login_flow", platform=ANDROID)
 
@@ -263,7 +263,7 @@ Then click **Refresh All** in MCP settings.
 
 ## Architecture
 
-```
+```text
 MCP Client (Claude, Goose, Firebender)
               │
     ┌─────────┴─────────┐
@@ -306,7 +306,7 @@ See the [Kotlin language decision](../devlog/2026-01-28-kotlin-language.md) for 
 
 ### Device not found
 
-```
+```text
 device(action=LIST)   # See what's available
 ```
 
@@ -315,7 +315,7 @@ device(action=LIST)   # See what's available
 
 ### Trail not found
 
-```
+```text
 trail(action=LIST, filter="login")   # Search for trails
 ```
 

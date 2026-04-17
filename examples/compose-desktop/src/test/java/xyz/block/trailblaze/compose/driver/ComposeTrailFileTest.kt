@@ -15,13 +15,11 @@ import java.io.File
 import java.util.Base64
 import kotlin.test.Test
 import kotlinx.datetime.Clock
-import xyz.block.trailblaze.compose.driver.tools.ComposeToolSet
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
-import xyz.block.trailblaze.logs.client.TrailblazeJson
-import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
+import xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.model.SessionId
@@ -31,7 +29,7 @@ import xyz.block.trailblaze.toolcalls.isSuccess
 import xyz.block.trailblaze.toolcalls.toolName
 import xyz.block.trailblaze.utils.ElementComparator
 import xyz.block.trailblaze.yaml.TrailYamlItem
-import xyz.block.trailblaze.yaml.createTrailblazeYaml
+import xyz.block.trailblaze.yaml.TrailblazeYaml
 import xyz.block.trailblaze.compose.target.ComposeTestTarget
 import xyz.block.trailblaze.compose.target.ComposeUiTestTarget
 import xyz.block.trailblaze.util.Console
@@ -48,17 +46,10 @@ import xyz.block.trailblaze.util.Console
 class ComposeTrailFileTest {
 
   init {
-    TrailblazeJsonInstance =
-      TrailblazeJson.createTrailblazeJsonInstance(
-        allToolClasses =
-          TrailblazeToolSet.AllBuiltInTrailblazeToolsForSerializationByToolName +
-            ComposeToolSet.LlmToolSet.toolClasses.associateBy { it.toolName() },
-      )
+    TrailblazeSerializationInitializer.initialize()
   }
 
-  private val trailblazeYaml = createTrailblazeYaml(
-    customTrailblazeToolClasses = ComposeToolSet.LlmToolSet.toolClasses,
-  )
+  private val trailblazeYaml = TrailblazeYaml.Default
 
   /** Stub [ElementComparator] — only used for memory tools, which these tests don't exercise. */
   private val stubElementComparator = object : ElementComparator {

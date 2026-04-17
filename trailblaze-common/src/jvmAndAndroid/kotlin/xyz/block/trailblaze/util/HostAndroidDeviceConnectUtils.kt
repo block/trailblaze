@@ -32,6 +32,13 @@ object HostAndroidDeviceConnectUtils {
         MAESTRO_APP_ID,
         MAESTRO_TEST_APP_ID,
       ).distinct()
+
+    // Disable accessibility services before force-stopping. A registered accessibility service
+    // causes Android to restart the process immediately after force-stop, preventing clean shutdown.
+    testAppIds.forEach { appId ->
+      AccessibilityServiceSetupUtils.disableAccessibilityService(deviceId, appId)
+    }
+
     Console.log("Force stopping all Android instrumentation processes. IDs: $testAppIds")
     testAppIds.forEach { appId ->
       AndroidHostAdbUtils.forceStopApp(

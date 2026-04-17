@@ -38,12 +38,18 @@ jobs:
       - name: Verify Documentation is up-to-date
         run: ./scripts/generate-docs-and-diff.sh
 
-  # Run Android Instrumentation Tests
-  android-tests:
+  # Drives the trail through `connectedDebugAndroidTest` — the test logic runs on the
+  # emulator inside the JUnit instrumentation process and talks to the headless desktop
+  # server on :8443 for agent orchestration.
+  android-tests-on-device:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
-      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      # These CI checks replay recorded trails, so LLM inference is never invoked.
+      # A non-empty sentinel value is required to satisfy the provider/client wiring
+      # (e.g., `examples/build.gradle.kts` forwards this to `trailblaze.llm.auth.token.openai`
+      # and the on-device client map is built from whichever tokens are present).
+      OPENAI_API_KEY: no-key-set
 
     steps:
       - name: Enable KVM group perms
@@ -80,7 +86,7 @@ jobs:
           disk-size: 6000M
           heap-size: 600M
           profile: Nexus 6
-          script: ./.github/pr_run_android_tests.sh
+          script: ./.github/pr_run_android_tests_on_device.sh
 
       - name: Verify logs were pulled
         if: always()
@@ -96,12 +102,88 @@ jobs:
         continue-on-error: true
         run: ./.github/pr_create_artifacts.sh
 
+      - name: Upload artifacts
+        if: always()  # Ensures this runs even if the previous step failed
+        uses: actions/upload-artifact@v4
+        with:
+          name: trailblaze-artifacts-on-device
+          path: |
+            trailblaze-logs.zip
+            trailblaze_report.html
+            logcat.log
+
+      - name: Fail if tests failed
+        if: steps.run-tests-linux.outcome == 'failure'
+        run: |
+          echo "Tests failed - failing the workflow"
+          exit 1
+
+  # Drives the trail from the host via the Trailblaze CLI (`./trailblaze trail …`).
+  # Agent loop runs in-process on the host; tools dispatch over RPC to the bundled
+  # on-device APK that the CLI auto-installs over ADB.
+  android-tests-host-rpc:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      # Recordings-only — LLM is never invoked. See android-tests-on-device above.
+      OPENAI_API_KEY: no-key-set
+
+    steps:
+      - name: Enable KVM group perms
+        if: runner.os == 'Linux'
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls /dev/kvm
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: 17
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407
+
+      - name: Create and start emulator and run tests (Linux)
+        if: runner.os == 'Linux'
+        uses: reactivecircus/android-emulator-runner@b530d96654c385303d652368551fb075bc2f0b6b
+        id: run-tests-linux
+        continue-on-error: true
+        with:
+          api-level: 34
+          arch: x86_64
+          disable-animations: true
+          disk-size: 6000M
+          heap-size: 600M
+          profile: Nexus 6
+          script: ./.github/pr_run_android_tests_host_rpc.sh
+
+      - name: Verify logs were pulled
+        if: always()
+        run: ./.github/pr_verify_logs_were_pulled.sh
+
+      - name: Generate Trailblaze report
+        if: always()
+        continue-on-error: true
+        run: ./.github/pr_generate_trailblaze_report.sh
+
+      - name: Create artifacts
+        if: always()
+        continue-on-error: true
+        run: ./.github/pr_create_artifacts.sh
 
       - name: Upload artifacts
         if: always()  # Ensures this runs even if the previous step failed
         uses: actions/upload-artifact@v4
         with:
-          name: trailblaze-artifacts
+          name: trailblaze-artifacts-host-rpc
           path: |
             trailblaze-logs.zip
             trailblaze_report.html

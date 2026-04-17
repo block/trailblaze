@@ -6,13 +6,13 @@
   - step: Navigate to ../../../examples/playwright-native/sample-app/index.html
     recording:
       tools:
-      - playwright_navigate:
+      - web_navigate:
           url: ../../../examples/playwright-native/sample-app/index.html
           reasoning: The objective is to navigate to the specified URL. No interactive elements are present, so navigation must be done directly.
   - step: Click on the "Scroll" navigation link
     recording:
       tools:
-      - playwright_click:
+      - web_click:
           ref: e7
           element: link "Scroll"
           reasoning: The objective is to click the "Scroll" navigation link. The element with ID e7 is the correct target for this action.
@@ -22,35 +22,35 @@
   - step: Take a snapshot of the current page
     recording:
       tools:
-      - playwright_snapshot:
+      - web_snapshot:
           screenName: current_page_snapshot
           reasoning: The objective is to take a snapshot of the current page. This action will capture the current screen state and fulfill the task requirements.
-  - step: Use the playwright_verify_text_visible tool to verify "Category 1" is visible
+  - step: Use the web_verify_text_visible tool to verify "Category 1" is visible
     recording:
       tools:
-      - playwright_verify_text_visible:
+      - web_verify_text_visible:
           text: Category 1
           reasoning: The objective specifically asks to verify that the text 'Category 1' is visible. This text appears as a link in the Sidebar navigation. I expect the verification to succeed since it is clearly listed in the current view hierarchy and screenshot.
   - step: Scroll down within the sidebar navigation container
     recording:
       tools:
-      - playwright_scroll:
+      - web_scroll:
           ref: navigation "Sidebar navigation"
           reasoning: The sidebar contains more categories than currently visible, so scrolling down within 'Sidebar navigation' will reveal further items and accomplish the objective.
           nodeSelector:
             web:
               ariaRole: navigation
               ariaNameRegex: Sidebar navigation
-  - step: Use the playwright_verify_text_visible tool to verify "Category 15" is visible
+  - step: Use the web_verify_text_visible tool to verify "Category 15" is visible
     recording:
       tools:
-      - playwright_verify_text_visible:
+      - web_verify_text_visible:
           text: Category 15
           reasoning: The visible hierarchy shows 'Category 15' as a link in the sidebar navigation. Verifying that this text is visible fulfills the objective.
   - step: Scroll down within the content panel
     recording:
       tools:
-      - playwright_scroll:
+      - web_scroll:
           ref: e26
           element: Content panel region
           reasoning: The objective is to scroll down within the content panel. The content panel corresponds to region 'e26'. I will scroll down within this region to achieve the objective.
@@ -58,16 +58,16 @@
             web:
               ariaRole: region
               ariaNameRegex: Content panel
-  - step: Use the playwright_verify_text_visible tool to verify "Item 20" is visible
+  - step: Use the web_verify_text_visible tool to verify "Item 20" is visible
     recording:
       tools:
-      - playwright_verify_text_visible:
+      - web_verify_text_visible:
           text: Item 20
-          reasoning: The current objective requests verification that 'Item 20' is visible. According to the view hierarchy and screenshot, 'Item 20' is visible within the content panel. Using the playwright_verify_text_visible tool to confirm its presence as required by the objective.
+          reasoning: The current objective requests verification that 'Item 20' is visible. According to the view hierarchy and screenshot, 'Item 20' is visible within the content panel. Using the web_verify_text_visible tool to confirm its presence as required by the objective.
   - step: Scroll up within the content panel
     recording:
       tools:
-      - playwright_scroll:
+      - web_scroll:
           direction: UP
           ref: e26
           element: Content panel region

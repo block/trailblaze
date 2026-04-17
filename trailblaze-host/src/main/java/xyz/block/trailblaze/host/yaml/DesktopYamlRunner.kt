@@ -196,8 +196,36 @@ class DesktopYamlRunner(
             )
           }
 
-          trailblazeDriverType == TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION ||
-            trailblazeDriverType == TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY -> {
+          // Host agent with on-device driver (accessibility or instrumentation): run the
+          // agent loop on the host JVM, send individual tool calls to the device via RPC.
+          // The device executes each tool using whichever driver is selected.
+          trailblazeDriverType in TrailblazeDriverType.ANDROID_ON_DEVICE_DRIVER_TYPES &&
+            runYamlRequest.agentImplementation != AgentImplementation.MULTI_AGENT_V3 &&
+            runYamlRequest.config.preferHostAgent -> {
+            val trailblazeOnDeviceInstrumentationTarget = targetTestApp?.getTrailblazeOnDeviceInstrumentationTarget()
+              ?: trailblazeHostAppTarget.getTrailblazeOnDeviceInstrumentationTarget()
+
+            val onDeviceRpc = OnDeviceRpcClient(
+              trailblazeDeviceId = trailblazeDeviceId,
+              sendProgressMessage = prefixedProgressMessage,
+            )
+
+            runHostAgentWithOnDeviceRpc(
+              onDeviceRpc = onDeviceRpc,
+              dynamicLlmClient = dynamicLlmClientProvider(runYamlRequest.trailblazeLlmModel),
+              runYamlRequest = runYamlRequest.copy(driverType = trailblazeDriverType),
+              connectedTrailblazeDevice = connectedTrailblazeDevice,
+              trailblazeOnDeviceInstrumentationTarget = trailblazeOnDeviceInstrumentationTarget,
+              onProgressMessage = prefixedProgressMessage,
+              onConnectionStatus = onConnectionStatus,
+              additionalInstrumentationArgs = additionalInstrumentationArgs,
+              targetTestApp = targetTestApp,
+            )
+          }
+
+          // On-device agent: send entire YAML to device, agent loop runs on-device.
+          // Used when preferHostAgent=false or for instrumentation driver fallback.
+          trailblazeDriverType in TrailblazeDriverType.ANDROID_ON_DEVICE_DRIVER_TYPES -> {
             val trailblazeOnDeviceInstrumentationTarget = targetTestApp?.getTrailblazeOnDeviceInstrumentationTarget()
               ?: trailblazeHostAppTarget.getTrailblazeOnDeviceInstrumentationTarget()
 
@@ -329,7 +357,10 @@ class DesktopYamlRunner(
         additionalInstrumentationArgs = additionalInstrumentationArgs,
       )
 
-      AccessibilityServiceSetupUtils.ensureAccessibilityServiceReady(
+      // Enable the service in ADB settings, then block on-device until it's connected.
+      // The on-device check uses the reliable in-process TrailblazeAccessibilityService
+      // singleton rather than host-side dumpsys parsing which is unreliable on API 35+.
+      AccessibilityServiceSetupUtils.enableAccessibilityService(
         deviceId = connectedTrailblazeDevice.trailblazeDeviceId,
         hostPackage = trailblazeOnDeviceInstrumentationTarget.testAppId,
         sendProgressMessage = onProgressMessage,
@@ -338,8 +369,62 @@ class DesktopYamlRunner(
       withContext(Dispatchers.Default) {
         onConnectionStatus(status)
         onDeviceRpc.verifyServerIsRunning()
+        onDeviceRpc.ensureAccessibilityServiceReady()
 
         TrailblazeHostYamlRunner.runHostV3WithAccessibilityYaml(
+          dynamicLlmClient = dynamicLlmClient,
+          onDeviceRpc = onDeviceRpc,
+          runYamlRequest = runYamlRequest,
+          trailblazeDeviceId = connectedTrailblazeDevice.trailblazeDeviceId,
+          onProgressMessage = onProgressMessage,
+          targetTestApp = targetTestApp,
+        )
+      }
+    }
+  }
+
+  /**
+   * Runs the legacy TrailblazeRunner agent on the host with tool execution delegated to
+   * an on-device driver (accessibility or instrumentation) via RPC.
+   */
+  private suspend fun runHostAgentWithOnDeviceRpc(
+    onDeviceRpc: OnDeviceRpcClient,
+    dynamicLlmClient: DynamicLlmClient,
+    runYamlRequest: RunYamlRequest,
+    connectedTrailblazeDevice: TrailblazeConnectedDeviceSummary,
+    trailblazeOnDeviceInstrumentationTarget: TrailblazeOnDeviceInstrumentationTarget,
+    onProgressMessage: (String) -> Unit,
+    onConnectionStatus: (DeviceConnectionStatus) -> Unit,
+    additionalInstrumentationArgs: Map<String, String>,
+    targetTestApp: TrailblazeHostAppTarget?,
+  ): SessionId? {
+    return withContext(Dispatchers.IO) {
+      val status = HostAndroidDeviceConnectUtils.connectToInstrumentationAndInstallAppIfNotAvailable(
+        sendProgressMessage = onProgressMessage,
+        deviceId = connectedTrailblazeDevice.trailblazeDeviceId,
+        trailblazeOnDeviceInstrumentationTarget = trailblazeOnDeviceInstrumentationTarget,
+        additionalInstrumentationArgs = additionalInstrumentationArgs,
+      )
+
+      // Enable the service in ADB settings, then block on-device until it's connected.
+      // The on-device check uses the reliable in-process TrailblazeAccessibilityService
+      // singleton rather than host-side dumpsys parsing which is unreliable on API 35+.
+      if (runYamlRequest.driverType == TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY) {
+        AccessibilityServiceSetupUtils.enableAccessibilityService(
+          deviceId = connectedTrailblazeDevice.trailblazeDeviceId,
+          hostPackage = trailblazeOnDeviceInstrumentationTarget.testAppId,
+          sendProgressMessage = onProgressMessage,
+        )
+      }
+
+      withContext(Dispatchers.Default) {
+        onConnectionStatus(status)
+        onDeviceRpc.verifyServerIsRunning()
+        if (runYamlRequest.driverType == TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY) {
+          onDeviceRpc.ensureAccessibilityServiceReady()
+        }
+
+        TrailblazeHostYamlRunner.runHostTrailblazeRunnerWithOnDeviceRpc(
           dynamicLlmClient = dynamicLlmClient,
           onDeviceRpc = onDeviceRpc,
           runYamlRequest = runYamlRequest,
@@ -371,12 +456,11 @@ class DesktopYamlRunner(
         additionalInstrumentationArgs = additionalInstrumentationArgs,
       )
 
-      // For accessibility mode, enable the service AFTER the APK is installed and
-      // instrumentation has started. The service is declared in the test runner APK's
-      // manifest (via library merge), so it runs in the same process as the test.
-      // Enabling must happen after install so Android can find the package.
+      // Enable the service in ADB settings, then block on-device until it's connected.
+      // The on-device check uses the reliable in-process TrailblazeAccessibilityService
+      // singleton rather than host-side dumpsys parsing which is unreliable on API 35+.
       if (runYamlRequest.driverType == TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY) {
-        AccessibilityServiceSetupUtils.ensureAccessibilityServiceReady(
+        AccessibilityServiceSetupUtils.enableAccessibilityService(
           deviceId = trailblazeConnectedDevice.trailblazeDeviceId,
           hostPackage = trailblazeOnDeviceInstrumentationTarget.testAppId,
           sendProgressMessage = onProgressMessage,
@@ -386,6 +470,9 @@ class DesktopYamlRunner(
       withContext(Dispatchers.Default) {
         onConnectionStatus(status)
         onDeviceRpc.verifyServerIsRunning()
+        if (runYamlRequest.driverType == TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY) {
+          onDeviceRpc.ensureAccessibilityServiceReady()
+        }
         when (val result: RpcResult<RunYamlResponse> = onDeviceRpc.rpcCall(runYamlRequest)) {
           is RpcResult.Failure -> {
             onProgressMessage("Failed to start YAML execution: ${result.message}${result.details?.let { " | $it" } ?: ""}")

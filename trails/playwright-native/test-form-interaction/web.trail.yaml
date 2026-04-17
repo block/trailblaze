@@ -6,13 +6,13 @@
   - step: Navigate to ../../../examples/playwright-native/sample-app/index.html
     recording:
       tools:
-      - playwright_navigate:
+      - web_navigate:
           url: ../../../examples/playwright-native/sample-app/index.html
           reasoning: The objective is to navigate to the specific URL '../../../examples/playwright-native/sample-app/index.html', so I will perform a direct navigation to that URL.
   - step: Click on the "Form" navigation link
     recording:
       tools:
-      - playwright_click:
+      - web_click:
           ref: e4
           element: link "Form"
           reasoning: The objective is to click on the "Form" navigation link. The element with ID e4 corresponds to the "Form" link in the navigation, making it the correct target for this action.
@@ -22,7 +22,7 @@
   - step: Type "Trail Blaze" into the Name input field
     recording:
       tools:
-      - playwright_type:
+      - web_type:
           text: Trail Blaze
           ref: e9
           element: Name input field
@@ -33,7 +33,7 @@
   - step: Type "trail@example.com" into the Email input field
     recording:
       tools:
-      - playwright_type:
+      - web_type:
           text: trail@example.com
           ref: e10
           element: Email input field
@@ -44,7 +44,7 @@
   - step: Select "Feedback" from the Category dropdown
     recording:
       tools:
-      - playwright_select_option:
+      - web_select_option:
           ref: e11
           element: Category dropdown
           values:
@@ -56,7 +56,7 @@
   - step: Type "Trailblaze is great" into the Message textarea
     recording:
       tools:
-      - playwright_type:
+      - web_type:
           text: Trailblaze is great
           ref: e16
           element: textbox Message
@@ -67,7 +67,7 @@
   - step: Click the "Submit" button
     recording:
       tools:
-      - playwright_click:
+      - web_click:
           ref: e17
           element: button "Submit"
           reasoning: The current objective is to click the 'Submit' button. The view hierarchy lists 'e17' as the Submit button, so I will click it to complete the objective.
@@ -78,12 +78,12 @@
   - step: Verify the text "Form submitted!" is visible
     recording:
       tools:
-      - playwright_verify_text_visible:
+      - web_verify_text_visible:
           text: Form submitted!
           reasoning: The current objective requires verifying that the text 'Form submitted!' is visible on the screen. The view hierarchy confirms the presence of this text in a 'strong' element. This action will assert its visibility.
   - step: Verify the text "Trail Blaze" is visible in the form summary
     recording:
       tools:
-      - playwright_verify_text_visible:
+      - web_verify_text_visible:
           text: Trail Blaze
           reasoning: 'The objective requires verifying that ''Trail Blaze'' is visible in the form summary. The current screen contains a paragraph element that includes ''Name: Trail Blaze,'' which indicates the required text is present. Verifying this meets the objective.'

@@ -18,7 +18,6 @@ import kotlin.test.assertTrue
  * initialize → config → connect → blaze → verify.
  *
  * ## Driver Types Tested
- * - ANDROID_HOST
  * - ANDROID_ONDEVICE_INSTRUMENTATION
  * - ANDROID_ONDEVICE_ACCESSIBILITY
  *
@@ -44,14 +43,8 @@ class McpRealDeviceIntegrationTest : TrailblazeServerTestBase() {
   override val requestTimeoutMs = 300_000L // 5 minutes for agent operations
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // Android Driver × Agent Implementation (3 drivers × 3 agents = 9 tests)
+  // Android Driver × Agent Implementation (2 drivers × 2 agents = 4 tests)
   // ═══════════════════════════════════════════════════════════════════════════
-
-  @Test fun `blaze - ANDROID_HOST x TRAILBLAZE_RUNNER`() =
-    blazeTest(TrailblazeDriverType.ANDROID_HOST, AgentImplementation.TRAILBLAZE_RUNNER)
-
-  @Test fun `blaze - ANDROID_HOST x MULTI_AGENT_V3`() =
-    blazeTest(TrailblazeDriverType.ANDROID_HOST, AgentImplementation.MULTI_AGENT_V3)
 
   @Test fun `blaze - ANDROID_ONDEVICE_INSTRUMENTATION x TRAILBLAZE_RUNNER`() =
     blazeTest(TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION, AgentImplementation.TRAILBLAZE_RUNNER)
@@ -101,7 +94,7 @@ class McpRealDeviceIntegrationTest : TrailblazeServerTestBase() {
   // ═══════════════════════════════════════════════════════════════════════════
 
   /**
-   * Blaze test: set driver type + agent implementation, connect, run a simple goal, verify.
+   * Blaze test: set driver type + agent implementation, connect, run a simple objective, verify.
    * Requires LLM credentials to be configured.
    */
   private fun blazeTest(driverType: TrailblazeDriverType, agentImpl: AgentImplementation) = runBlocking {
@@ -133,15 +126,15 @@ class McpRealDeviceIntegrationTest : TrailblazeServerTestBase() {
     Console.log("[$tag] Agent set: ${agentResult.content.take(200)}")
     assertTrue(agentResult.isSuccess, "[$tag] Setting agent should succeed: ${agentResult.content}")
 
-    // 4. Run a simple blaze goal (retry while driver is still initializing)
-    val blazeResult = callToolWithDriverRetry(tag, "blaze", mapOf("goal" to "Press the home button"))
+    // 4. Run a simple blaze objective (retry while driver is still initializing)
+    val blazeResult = callToolWithDriverRetry(tag, "blaze", mapOf("objective" to "Press the home button"))
     Console.log("[$tag] Blaze result: ${blazeResult.content.take(500)}")
     assertFalse(blazeResult.isError, "[$tag] Blaze should not error: ${blazeResult.content.take(500)}")
 
     // 5. Verify the result
     val verifyResult = client.callTool(
       "blaze",
-      mapOf("goal" to "The home screen or launcher is visible", "hint" to "VERIFY"),
+      mapOf("objective" to "The home screen or launcher is visible", "hint" to "VERIFY"),
     )
     Console.log("[$tag] Verify result: ${verifyResult.content.take(500)}")
     assertFalse(
@@ -158,7 +151,7 @@ class McpRealDeviceIntegrationTest : TrailblazeServerTestBase() {
 
   /**
    * Calls a tool with retries when the driver is still initializing.
-   * The HOST driver initializes in a background thread and the device() call returns
+   * The driver initializes in a background thread and the device() call returns
    * before it's ready (5s timeout). Retry for up to 30s so the driver can finish.
    */
   private suspend fun callToolWithDriverRetry(

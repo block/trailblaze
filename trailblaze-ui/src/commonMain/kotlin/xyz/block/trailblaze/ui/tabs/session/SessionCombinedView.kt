@@ -69,7 +69,6 @@ import xyz.block.trailblaze.ui.composables.ScreenshotAnnotation
 import xyz.block.trailblaze.ui.composables.ScreenshotImage
 import xyz.block.trailblaze.ui.composables.SelectableText
 import xyz.block.trailblaze.ui.composables.createVideoFrameCache
-import xyz.block.trailblaze.ui.composables.extractVideoFrame
 import xyz.block.trailblaze.ui.images.ImageLoader
 import xyz.block.trailblaze.ui.images.NetworkImageLoader
 import xyz.block.trailblaze.ui.Platform
@@ -755,7 +754,8 @@ private fun ColumnScope.VideoFramePanel(
     null,
   onShowInspectUI: ((TrailblazeLog) -> Unit)? = null,
 ) {
-  if (getPlatform() != Platform.WASM) {
+  val watchVideoPath = videoMetadata.videoFilePath
+  if (watchVideoPath != null && getPlatform() != Platform.WASM) {
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
       Text(
         text = "Watch Video \u2197",
@@ -768,36 +768,24 @@ private fun ColumnScope.VideoFramePanel(
             RoundedCornerShape(4.dp),
           )
             .padding(horizontal = 8.dp, vertical = 4.dp)
-            .clickable { openVideoInSystemPlayer(videoMetadata.filePath) },
+            .clickable { openVideoInSystemPlayer(watchVideoPath) },
       )
     }
   }
 
   // Frame cache for fast scrubbing
   val frameCache = remember(videoMetadata.filePath) {
-    createVideoFrameCache(videoMetadata.filePath, VIDEO_CACHE_FPS)
+    createVideoFrameCache(videoMetadata.filePath, VIDEO_CACHE_FPS, videoMetadata.spriteInfo)
   }
   DisposableEffect(frameCache) { onDispose { frameCache.dispose() } }
 
   val videoPositionMs =
     (currentTimestamp - videoMetadata.startTimestampMs).coerceAtLeast(0L)
 
-  // Fast low-res frame from cache (async on WASM to load embedded frames on demand)
+  // Load frame from sprite sheet cache (async on WASM to load embedded frames on demand)
   LaunchedEffect(videoPositionMs) {
     val frame = frameCache.getFrameAsync(videoPositionMs)
     if (frame != null) onFrameUpdated(frame)
-  }
-
-  // Upgrade to full-res when paused and idle
-  LaunchedEffect(
-    videoPositionMs,
-    timelineState.isVideoPlaying,
-    timelineState.isScrubbing,
-  ) {
-    if (timelineState.isVideoPlaying || timelineState.isScrubbing) return@LaunchedEffect
-    delay(TimelineConstants.FRAME_DEBOUNCE_MS)
-    val hiRes = extractVideoFrame(videoMetadata.filePath, videoPositionMs)
-    if (hiRes != null) onFrameUpdated(hiRes)
   }
 
   // Auto-play: advance scrubber at playback speed

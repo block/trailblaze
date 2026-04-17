@@ -2,6 +2,8 @@ package xyz.block.trailblaze.android.accessibility
 
 import kotlin.concurrent.thread
 import xyz.block.trailblaze.AdbCommandUtil
+import xyz.block.trailblaze.api.AnnotationElement
+import xyz.block.trailblaze.api.CompactScreenElements
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ScreenshotScalingConfig
 import xyz.block.trailblaze.api.TrailblazeNode
@@ -26,7 +28,6 @@ import xyz.block.trailblaze.utils.Ext.toViewHierarchyTreeNode
  * rather than the accessibility service's native API (which enforces a 333ms minimum interval).
  */
 class AccessibilityServiceScreenState(
-  private val setOfMarkEnabled: Boolean = true,
   private val includeScreenshot: Boolean = true,
   deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
   private val screenshotScalingConfig: ScreenshotScalingConfig = ScreenshotScalingConfig.ON_DEVICE,
@@ -35,7 +36,26 @@ class AccessibilityServiceScreenState(
   override var deviceWidth: Int = -1
   override var deviceHeight: Int = -1
   override var viewHierarchy: ViewHierarchyTreeNode
-  override var trailblazeNodeTree: TrailblazeNode? = null
+  // Backing field for the tree. Refs are applied lazily via [ensureRefsApplied].
+  private var _trailblazeNodeTree: TrailblazeNode? = null
+  private var refsApplied = false
+
+  override var trailblazeNodeTree: TrailblazeNode?
+    get() {
+      ensureRefsApplied()
+      return _trailblazeNodeTree
+    }
+    set(value) {
+      _trailblazeNodeTree = value
+      refsApplied = false
+    }
+
+  private fun ensureRefsApplied() {
+    if (!refsApplied && _trailblazeNodeTree != null) {
+      compactElements
+      refsApplied = true
+    }
+  }
 
   private var _screenshotBytes: ByteArray = ByteArray(0)
   private var foregroundAppId: String? = null
@@ -89,11 +109,22 @@ class AccessibilityServiceScreenState(
 
   override val trailblazeDevicePlatform: TrailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID
 
-  override val pageContextSummary: String?
-    get() = buildList {
-      foregroundAppId?.let { add("App: $it") }
-      currentActivity?.let { add("Activity: $it") }
-    }.takeIf { it.isNotEmpty() }?.joinToString("\n")
+  /** Cached compact elements result — shared between text representation and annotation elements. */
+  private val compactElements: CompactScreenElements? by lazy {
+    val tree = _trailblazeNodeTree ?: return@lazy null
+    val result = CompactScreenElements.buildForAndroid(tree, screenHeight = deviceHeight)
+    // Annotate tree nodes with their stable hash refs for debugging and inspector
+    _trailblazeNodeTree = result.applyRefsToTree(tree)
+    result
+  }
+
+  override val viewHierarchyTextRepresentation: String? by lazy {
+    compactElements?.buildTextRepresentation(foregroundAppId, currentActivity)
+  }
+
+  override val annotationElements: List<AnnotationElement>? by lazy {
+    compactElements?.buildAnnotationElements()
+  }
 
   override val deviceClassifiers: List<TrailblazeDeviceClassifier> = deviceClassifiers
 
@@ -102,13 +133,13 @@ class AccessibilityServiceScreenState(
 
   override val annotatedScreenshotBytes: ByteArray
     get() {
-      if (!setOfMarkEnabled) return _screenshotBytes
       return AndroidBitmapUtils.annotateScreenshotBytes(
         screenshotBytes = _screenshotBytes,
         config = screenshotScalingConfig,
         viewHierarchy = viewHierarchy,
         deviceWidth = deviceWidth,
         deviceHeight = deviceHeight,
+        annotationElements = annotationElements,
         oomContext = "AccessibilityServiceScreenState.annotatedScreenshotBytes",
       )
     }

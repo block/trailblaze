@@ -57,6 +57,10 @@ class ComposeRpcTrailblazeAgent(
   TrailblazeAgentContext,
   Closeable {
 
+  fun clearMemory() {
+    memory.clear()
+  }
+
   private val pendingDetailRequests =
     AtomicReference<Set<ComposeViewHierarchyDetail>>(emptySet())
 
@@ -89,7 +93,15 @@ class ComposeRpcTrailblazeAgent(
       when (tool) {
         is MemoryTrailblazeTool -> {
           toolsExecuted.add(tool)
-          tool.execute(memory = memory, elementComparator = elementComparator)
+          val result = tool.execute(memory = memory, elementComparator = elementComparator)
+          if (!result.isSuccess()) {
+            return TrailblazeAgent.RunTrailblazeToolsResult(
+              inputTools = tools,
+              executedTools = toolsExecuted,
+              result = result,
+            )
+          }
+          lastSuccessResult = result
         }
 
         is ComposeRequestDetailsTool -> {

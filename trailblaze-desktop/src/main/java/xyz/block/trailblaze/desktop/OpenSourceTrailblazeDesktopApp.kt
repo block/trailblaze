@@ -1,20 +1,15 @@
 package xyz.block.trailblaze.desktop
 
-import xyz.block.trailblaze.compose.driver.tools.ComposeToolSet
-import xyz.block.trailblaze.revyl.tools.RevylNativeToolSet
 import xyz.block.trailblaze.host.rules.TrailblazeHostDynamicLlmClientProvider
 import xyz.block.trailblaze.host.rules.TrailblazeHostDynamicLlmTokenProvider
 import xyz.block.trailblaze.host.yaml.DesktopYamlRunner
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
-import xyz.block.trailblaze.logs.client.TrailblazeJson
-import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
+import xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer
 import xyz.block.trailblaze.logs.server.TrailblazeMcpServer
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridgeImpl
 import xyz.block.trailblaze.mcp.utils.JvmLLMProvidersUtil
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
-import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
-import xyz.block.trailblaze.toolcalls.toolName
 import xyz.block.trailblaze.ui.MainTrailblazeApp
 import xyz.block.trailblaze.ui.TrailblazeAnalytics
 import xyz.block.trailblaze.ui.TrailblazeDesktopApp
@@ -29,12 +24,9 @@ class OpenSourceTrailblazeDesktopApp : TrailblazeDesktopApp(
 ) {
 
   init {
-    TrailblazeJsonInstance = TrailblazeJson.createTrailblazeJsonInstance(
-      allToolClasses = TrailblazeToolSet.AllBuiltInTrailblazeToolsForSerializationByToolName
-        + ComposeToolSet.toolClassesByToolName
-        + RevylNativeToolSet.RevylLlmToolSet.toolClasses.associateBy { it.toolName() }
-        + desktopAppConfig.availableAppTargets.flatMap { it.getAllCustomToolClassesForSerialization() }
-        .associateBy { it.toolName() },
+    TrailblazeSerializationInitializer.initialize(
+      additionalToolClasses = desktopAppConfig.availableAppTargets
+        .flatMap { it.getAllCustomToolClassesForSerialization() }.toSet(),
     )
   }
 

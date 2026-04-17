@@ -11,7 +11,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.util.Console
 
 @Serializable
-@TrailblazeToolClass("playwright_type")
+@TrailblazeToolClass("web_type")
 @LLMDescription(
   """
 Type text into a web input element identified by its element ID, ARIA descriptor, or CSS selector.

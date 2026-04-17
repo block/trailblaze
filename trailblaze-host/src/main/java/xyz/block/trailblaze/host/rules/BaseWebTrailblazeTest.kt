@@ -17,7 +17,7 @@ abstract class BaseWebTrailblazeTest :
       trailblazeDevicePlatform = TrailblazeDevicePlatform.WEB,
     ),
     trailblazeDriverType = TrailblazeDriverType.PLAYWRIGHT_NATIVE,
-    config = TrailblazeConfig.DEVICE_CONTROL,
+    config = TrailblazeConfig.DEFAULT,
     systemPromptTemplate = WEB_SYSTEM_PROMPT,
     trailblazeToolSet = TrailblazeToolSet.DynamicTrailblazeToolSet(
       toolClasses = mutableSetOf<KClass<out TrailblazeTool>>().apply {

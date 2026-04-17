@@ -1,37 +1,115 @@
 #!/bin/bash
 
 # Trailblaze launcher (development)
-# Overrides execution to use Gradle, then sources the base launcher for all other logic.
+# Runs from uber JAR when source hasn't changed, or via Gradle otherwise.
+# Override TRAILBLAZE_MODULE to use a different module (e.g., :my-custom-host).
+#
+# Modes:
+#   ./trailblaze "command"        - Runs from uber JAR, rebuilding only when source changes (default)
+#   ./trailblaze --gradle "cmd"   - Always runs via Gradle (slower but guaranteed fresh)
+#   BLAZE_JAR=0 ./trailblaze      - Same as --gradle, via environment variable
 
 TRAILBLAZE_MODULE="${TRAILBLAZE_MODULE:-:trailblaze-desktop}"
 
-tb_run() {
-  if [ -n "$1" ]; then
-    ./gradlew ${TRAILBLAZE_MODULE}:run --args="$1"
-  else
-    ./gradlew ${TRAILBLAZE_MODULE}:run
-  fi
-}
-
-tb_run_background() {
-  if [ -n "$1" ]; then
-    nohup ./gradlew ${TRAILBLAZE_MODULE}:run --args="$1" > /dev/null 2>&1 &
-  else
-    nohup ./gradlew ${TRAILBLAZE_MODULE}:run > /dev/null 2>&1 &
-  fi
-}
-
-tb_run_quiet() {
-  ./gradlew -q --console=plain ${TRAILBLAZE_MODULE}:run --args="$1"
-}
-
-tb_run_exec_quiet() {
-  exec ./gradlew -q --console=plain ${TRAILBLAZE_MODULE}:run --args="$1"
-}
-
-tb_run_background_quiet() {
-  nohup ./gradlew -q --console=plain ${TRAILBLAZE_MODULE}:run --args="$1" > /dev/null 2>&1 &
-}
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export TRAILBLAZE_LAUNCHER="${TRAILBLAZE_LAUNCHER:-$SCRIPT_DIR/trailblaze}"
+source "$SCRIPT_DIR/scripts/dev-jar-cache.sh"
+
+# ---------------------------------------------------------------------------
+# JAR mode detection — strip --jar/--gradle flags from arguments
+# ---------------------------------------------------------------------------
+
+# In CI, default to Gradle mode — there's no cached uber JAR and building one
+# from scratch exceeds the server health-check timeout.
+if [[ "${CI:-}" == "true" ]] || [[ "${BUILDKITE:-}" == "true" ]]; then
+  BLAZE_JAR="${BLAZE_JAR:-0}"
+else
+  BLAZE_JAR="${BLAZE_JAR:-1}"
+fi
+FILTERED_ARGS=()
+for arg in "$@"; do
+  if [ "$arg" = "--gradle" ]; then
+    BLAZE_JAR=0
+  elif [ "$arg" = "--jar" ]; then
+    BLAZE_JAR=1
+  else
+    FILTERED_ARGS+=("$arg")
+  fi
+done
+set -- "${FILTERED_ARGS[@]}"
+
+# ---------------------------------------------------------------------------
+# JAR mode — resolve or build uber JAR, let production script handle execution
+# ---------------------------------------------------------------------------
+
+JAR_DIR=$(dev_jar_dir)
+
+if [ "$BLAZE_JAR" = "1" ]; then
+  if dev_ensure_jar "$JAR_DIR"; then
+    # JAR is ready — export TRAILBLAZE_JAR so the production script's tb_run*
+    # functions use it directly (no Gradle overhead).
+    export TRAILBLAZE_JAR="$DEV_JAR_PATH"
+  else
+    # Build failed — fall back to Gradle mode
+    BLAZE_JAR=0
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# Gradle mode — override tb_run* to use Gradle, pre-cache JAR after success
+# ---------------------------------------------------------------------------
+
+if [ "$BLAZE_JAR" != "1" ]; then
+  tb_run() {
+    if [ -n "$1" ]; then
+      ./gradlew ${TRAILBLAZE_MODULE}:run --args="$1"
+    else
+      ./gradlew ${TRAILBLAZE_MODULE}:run
+    fi
+  }
+
+  tb_run_background() {
+    if [ -n "$1" ]; then
+      nohup ./gradlew ${TRAILBLAZE_MODULE}:run --args="$1" > /dev/null 2>&1 &
+    else
+      nohup ./gradlew ${TRAILBLAZE_MODULE}:run > /dev/null 2>&1 &
+    fi
+  }
+
+  tb_run_quiet() {
+    local _exit
+    if [ ${#ARGS_ARRAY[@]} -gt 0 ]; then
+      # Quote args containing spaces so Gradle's --args preserves them
+      local quoted_args=""
+      for arg in "${ARGS_ARRAY[@]}"; do
+        if [[ "$arg" == *" "* ]] || [[ "$arg" == *":"* ]] || [[ "$arg" == *"{"* ]]; then
+          arg="\"$arg\""
+        fi
+        if [ -z "$quoted_args" ]; then
+          quoted_args="$arg"
+        else
+          quoted_args="$quoted_args $arg"
+        fi
+      done
+      ./gradlew -q --console=plain ${TRAILBLAZE_MODULE}:run --args="$quoted_args"
+    else
+      ./gradlew -q --console=plain ${TRAILBLAZE_MODULE}:run --args="$1"
+    fi
+    _exit=$?
+    # Rebuild the uber JAR so the next default run (JAR mode) starts instantly.
+    if [ $_exit -eq 0 ]; then
+      dev_update_jar_cache "$JAR_DIR"
+    fi
+    return $_exit
+  }
+
+  tb_run_exec_quiet() {
+    exec ./gradlew -q --console=plain ${TRAILBLAZE_MODULE}:run --args="$1"
+  }
+
+  tb_run_background_quiet() {
+    nohup ./gradlew -q --console=plain ${TRAILBLAZE_MODULE}:run --args="$1" > /dev/null 2>&1 &
+  }
+fi
+
 source "$SCRIPT_DIR/scripts/trailblaze"

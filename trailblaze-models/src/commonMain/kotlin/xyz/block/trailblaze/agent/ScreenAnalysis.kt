@@ -266,7 +266,7 @@ data class ScreenAnalysis(
    * - "app_login" - needs app-specific login tools
    * - etc.
    *
-   * The outer agent can retry with `blaze(goal="...", hint=suggestedHint)`.
+   * The outer agent can retry with `blaze(objective="...", hint=suggestedHint)`.
    * This keeps the inner agent dumb (it just says what it needs) while the outer
    * agent makes decisions about tool selection.
    */

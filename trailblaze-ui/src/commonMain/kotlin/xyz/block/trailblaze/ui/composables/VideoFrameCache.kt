@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.ui.composables
 
 import androidx.compose.ui.graphics.ImageBitmap
+import xyz.block.trailblaze.ui.tabs.session.SpriteSheetInfo
 
 /**
  * Pre-extracts video frames at a fixed fps for fast timeline scrubbing and playback.
@@ -28,7 +29,14 @@ interface VideoFrameCache {
 /**
  * Creates a platform-specific [VideoFrameCache].
  *
- * On JVM: runs a single background ffmpeg process to extract JPEG frames at [fps] into a temp dir.
- * On WASM: returns a no-op stub.
+ * On JVM: loads a sprite sheet image and crops individual frames on demand.
+ * On WASM: lazily loads pre-extracted frames from embedded report data.
+ *
+ * @param spriteInfo Pre-parsed sprite sheet metadata. On JVM this avoids re-reading the companion
+ *   metadata file from disk. Ignored on WASM.
  */
-expect fun createVideoFrameCache(videoPath: String, fps: Int): VideoFrameCache
+expect fun createVideoFrameCache(
+  videoPath: String,
+  fps: Int,
+  spriteInfo: SpriteSheetInfo? = null,
+): VideoFrameCache

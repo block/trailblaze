@@ -9,9 +9,11 @@ import maestro.orchestra.SwipeCommand
 import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.MapsToMaestroCommands
+import xyz.block.trailblaze.toolcalls.ReasoningTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.toolcalls.isSuccess
 import xyz.block.trailblaze.util.Console
 
 @Serializable
@@ -23,7 +25,12 @@ The start and end points are automatically calculated based on the direction and
     """,
 )
 class SwipeTrailblazeTool(
-  @param:LLMDescription("The direction to swipe. Default is 'DOWN'.")
+  @param:LLMDescription(
+    """The direction of the finger swipe gesture (not the scroll direction).
+To see more content BELOW (scroll down), use 'UP' (finger swipes upward).
+To see more content ABOVE (scroll up), use 'DOWN' (finger swipes downward).
+Default is 'DOWN'.""",
+  )
   val direction: SwipeDirection = SwipeDirection.DOWN,
   @param:LLMDescription(
     """
@@ -31,7 +38,8 @@ The text value to swipe on. If not provided, the swipe will be performed on the 
   """,
   )
   val swipeOnElementText: String? = null,
-) : ExecutableTrailblazeTool {
+  override val reasoning: String? = null,
+) : ExecutableTrailblazeTool, ReasoningTrailblazeTool {
 
   override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult {
     Console.log(
@@ -48,10 +56,15 @@ The text value to swipe on. If not provided, the swipe will be performed on the 
         direction = direction,
       ),
     )
-    return toolExecutionContext.trailblazeAgent.runMaestroCommands(
+    val result = toolExecutionContext.trailblazeAgent.runMaestroCommands(
       maestroCommands = maestroCommands,
       traceId = toolExecutionContext.traceId,
     )
+    if (result.isSuccess()) {
+      val target = swipeOnElementText?.let { " on '$it'" } ?: ""
+      return TrailblazeToolResult.Success(message = "Swiped $direction$target")
+    }
+    return result
   }
 }
 

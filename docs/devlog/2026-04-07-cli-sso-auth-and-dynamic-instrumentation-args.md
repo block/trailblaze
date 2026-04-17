@@ -13,7 +13,7 @@ date: 2026-04-07
 
 ## Summary
 
-Two related problems: (1) SSO/OAuth for LLM providers is hardcoded to Databricks, and (2) on-device Android LLM calls use hardcoded env var names that don't scale to arbitrary YAML-configured providers. Part 1 introduced a convention-based instrumentation arg scheme for on-device token passing. Part 2 proposes shell-out token commands for auth.
+Two related problems: (1) SSO/OAuth for LLM providers is hardcoded to a single provider, and (2) on-device Android LLM calls use hardcoded env var names that don't scale to arbitrary YAML-configured providers. Part 1 introduced a convention-based instrumentation arg scheme for on-device token passing. Part 2 proposes shell-out token commands for auth.
 
 ## Context
 
@@ -23,7 +23,7 @@ Organization-specific OAuth implementations (e.g., a custom OAuth client and JVM
 
 ### Problem 2: Hardcoded on-device instrumentation args (resolved by Part 1)
 
-Previously, the host side wrote API keys using hardcoded env var names (`DATABRICKS_TOKEN`, `OPENAI_API_KEY`) and the Android side had a hardcoded `when(provider)` block. This is now resolved — `LlmAuthResolver` reads `auth.env_var` from the YAML config and uses the dynamic `trailblaze.llm.auth.token.<provider_id>` convention. The Android side reads tokens generically via `AndroidLlmClientResolver`.
+Previously, the host side wrote API keys using hardcoded env var names (`MY_PROVIDER_TOKEN`, `OPENAI_API_KEY`) and the Android side had a hardcoded `when(provider)` block. This is now resolved — `LlmAuthResolver` reads `auth.env_var` from the YAML config and uses the dynamic `trailblaze.llm.auth.token.<provider_id>` convention. The Android side reads tokens generically via `AndroidLlmClientResolver`.
 
 ## Decision
 

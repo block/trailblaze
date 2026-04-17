@@ -67,9 +67,7 @@ object MaestroUiAutomatorRunner {
     val traceId = traceId ?: TraceId.generate(TraceId.Companion.TraceOrigin.MAESTRO)
 
     val screenStateProvider = {
-      AndroidOnDeviceUiAutomatorScreenState(
-        setOfMarkEnabled = false, // We don't need this unless it's an LLM Request that requires it
-      )
+      AndroidOnDeviceUiAutomatorScreenState()
     }
 
     val maestro = Maestro(

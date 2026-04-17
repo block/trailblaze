@@ -1,0 +1,2 @@
+id: compose_verify_element_visible
+class: xyz.block.trailblaze.compose.driver.tools.ComposeVerifyElementVisibleTool

@@ -3,6 +3,7 @@ package xyz.block.trailblaze.mcp.utils
 import xyz.block.trailblaze.llm.LlmProviderEnvVarUtil
 import xyz.block.trailblaze.llm.TrailblazeLlmModelList
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
+import xyz.block.trailblaze.llm.config.BuiltInLlmModelRegistry
 import xyz.block.trailblaze.llm.config.LlmAuthResolver
 import xyz.block.trailblaze.llm.config.LlmConfig
 import xyz.block.trailblaze.llm.config.LlmConfigLoader
@@ -41,7 +42,12 @@ object JvmLLMProvidersUtil {
   fun isProviderAvailableOnJvm(provider: TrailblazeLlmProvider): Boolean {
     return when (provider) {
       TrailblazeLlmProvider.OLLAMA -> isOllamaInstalled
-      else -> getEnvironmentVariableValueForLlmProvider(provider) != null
+      else -> {
+        // Check built-in provider YAML auth config (e.g. auth.required: false)
+        val builtInAuth = BuiltInLlmModelRegistry.authForProvider(provider)
+        if (builtInAuth?.required == false) return true
+        getEnvironmentVariableValueForLlmProvider(provider) != null
+      }
     }
   }
 

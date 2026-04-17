@@ -22,7 +22,7 @@ matches elsewhere on the screen. In this case the additional fields will be used
 the specific view to long press on.
       """,
 )
-@Deprecated("Use [TapOnElementByNodeIdTrailblazeTool] or [TapOnByElementSelector].")
+@Deprecated("Use [TapTrailblazeTool] or [TapOnByElementSelector].")
 data class LongPressOnElementWithTextTrailblazeTool(
   @LLMDescription(REQUIRED_TEXT_DESCRIPTION)
   val text: String,

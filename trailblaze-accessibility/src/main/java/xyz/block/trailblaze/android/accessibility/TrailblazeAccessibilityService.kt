@@ -316,6 +316,19 @@ class TrailblazeAccessibilityService : AccessibilityService() {
       requireService().performGlobalAction(GLOBAL_ACTION_RECENTS)
     }
 
+    fun setClipboard(text: String) {
+      val clipboardManager =
+        requireService().getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+      val clip = android.content.ClipData.newPlainText("Trailblaze", text)
+      clipboardManager.setPrimaryClip(clip)
+    }
+
+    fun getClipboardText(): String? {
+      val clipboardManager =
+        requireService().getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+      return clipboardManager.primaryClip?.getItemAt(0)?.text?.toString()
+    }
+
     /**
      * Scrolls in the given direction using a swipe gesture.
      *

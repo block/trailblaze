@@ -19,6 +19,7 @@ enum class AgentActionType(val displayLabel: String) {
   ASSERT_CONDITION("Assert"),
   WEB_ACTION("Web"),
   PRESS_HOME("Home"),
+  PRESS_KEY("Key"),
   HIDE_KEYBOARD("Keyboard"),
   ERASE_TEXT("Erase"),
   SCROLL("Scroll"),

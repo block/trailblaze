@@ -5,6 +5,8 @@ import androidx.compose.runtime.Composable
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.host.devices.WebBrowserManager
 import xyz.block.trailblaze.host.ios.MobileDeviceUtils
+import xyz.block.trailblaze.host.rules.TrailblazeHostDynamicLlmClientProvider
+import xyz.block.trailblaze.http.TrailblazeHttpClientFactory
 import xyz.block.trailblaze.llm.LlmProviderEnvVarUtil
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.llm.TrailblazeLlmModelList
@@ -98,7 +100,7 @@ abstract class TrailblazeDesktopAppConfig(
 
   /**
    * LLM token provider used by the recording tab to authenticate LLM calls.
-   * Override in subclasses to provide custom auth (e.g., Databricks SSO).
+   * Override in subclasses to provide custom auth (e.g., corporate SSO/OAuth).
    * Defaults to the open source provider which reads from environment variables.
    */
   open val llmTokenProvider: TrailblazeDynamicLlmTokenProvider
@@ -217,7 +219,79 @@ abstract class TrailblazeDesktopAppConfig(
       webBrowserManager = deviceManager.webBrowserManager,
       mcpServerDebugStateFlow = mcpServerDebugStateFlow,
       recommendTrailblazeAsAgent = recommendTrailblazeAsAgent,
+      onTestLlmConnection = { model -> testLlmConnection(model) },
     )
+  }
+
+  /**
+   * Tests the LLM connection by sending a simple prompt and reporting the result along with
+   * full HTTP diagnostics (request URL, headers, response status, headers, body) to help
+   * debug provider connectivity issues. Uses [llmTokenProvider] for auth, so subclasses that
+   * override it (e.g. for OAuth) get correct credentials automatically.
+   */
+  protected suspend fun testLlmConnection(model: TrailblazeLlmModel): Result<String> {
+    val report = StringBuilder()
+    report.appendLine("Provider: ${model.trailblazeLlmProvider.display}")
+    report.appendLine("Model: ${model.modelId}")
+
+    val diagnosticClient = TrailblazeHttpClientFactory.createDiagnosticHttpClient(timeoutInSeconds = 30)
+    val client =
+      TrailblazeHostDynamicLlmClientProvider(
+        trailblazeLlmModel = model,
+        trailblazeDynamicLlmTokenProvider = llmTokenProvider,
+        baseClient = diagnosticClient.httpClient,
+      )
+
+    return try {
+      val startTime = System.currentTimeMillis()
+      val responses =
+        client.createLlmClient().execute(
+          prompt =
+            ai.koog.prompt.dsl.Prompt(
+              messages =
+                listOf(
+                  ai.koog.prompt.message.Message.User(
+                    content = "Respond with OK",
+                    metaInfo =
+                      ai.koog.prompt.message.RequestMetaInfo.create(kotlin.time.Clock.System),
+                  ),
+                ),
+              id = "llm-connection-test",
+            ),
+          model = model.toKoogLlmModel(),
+          tools = emptyList(),
+        )
+      val elapsedMs = System.currentTimeMillis() - startTime
+      report.appendLine("Response time: ${elapsedMs}ms")
+      report.appendLine("Response: ${responses.firstOrNull()?.content ?: "(empty)"}")
+      report.appendLine()
+      report.appendLine("--- Request ---")
+      report.append(diagnosticClient.interceptor.requestLog)
+      report.appendLine()
+      report.appendLine("--- Response ---")
+      report.append(diagnosticClient.interceptor.responseLog)
+      Result.success(report.toString())
+    } catch (e: Exception) {
+      report.appendLine("Error: ${e.message}")
+      var cause = e.cause
+      while (cause != null) {
+        report.appendLine("Caused by: ${cause.javaClass.simpleName}: ${cause.message}")
+        cause = cause.cause
+      }
+      if (diagnosticClient.interceptor.requestLog.isNotEmpty()) {
+        report.appendLine()
+        report.appendLine("--- Request ---")
+        report.append(diagnosticClient.interceptor.requestLog)
+      }
+      if (diagnosticClient.interceptor.responseLog.isNotEmpty()) {
+        report.appendLine()
+        report.appendLine("--- Response ---")
+        report.append(diagnosticClient.interceptor.responseLog)
+      }
+      Result.failure(RuntimeException(report.toString(), e))
+    } finally {
+      diagnosticClient.httpClient.close()
+    }
   }
 
   /**

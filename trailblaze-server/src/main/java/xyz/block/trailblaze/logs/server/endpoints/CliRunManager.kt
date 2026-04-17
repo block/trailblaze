@@ -15,7 +15,7 @@ import kotlinx.coroutines.launch
  * blocking HTTP connection open for the entire trail execution.
  */
 class CliRunManager(
-  private val onRunRequest: suspend (CliRunRequest) -> CliRunResponse,
+  private val onRunRequest: suspend (CliRunRequest, onProgress: (String) -> Unit) -> CliRunResponse,
 ) : java.io.Closeable {
   private val runs = ConcurrentHashMap<String, MutableRunState>()
   private val scope = CoroutineScope(Dispatchers.IO + Job())
@@ -39,7 +39,9 @@ class CliRunManager(
     runState.job = scope.launch {
       synchronized(runState) { runState.state = RunState.RUNNING }
       try {
-        val response = onRunRequest(request)
+        val response = onRunRequest(request) { message ->
+          runState.progressMessage = message
+        }
         synchronized(runState) {
           runState.sessionId = response.sessionId
           runState.result = response
@@ -92,21 +94,6 @@ class CliRunManager(
       run.completedAt = System.currentTimeMillis()
     }
     return true
-  }
-
-  /**
-   * Update the progress message for a run. Called from the trail execution
-   * callback to provide real-time progress updates to polling clients.
-   */
-  fun updateProgress(runId: String, message: String) {
-    runs[runId]?.progressMessage = message
-  }
-
-  /**
-   * Update the session ID for a run once it becomes known.
-   */
-  fun updateSessionId(runId: String, sessionId: String) {
-    runs[runId]?.sessionId = sessionId
   }
 
   /** Remove entries that completed more than [ttlMs] ago. */

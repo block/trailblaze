@@ -136,3 +136,8 @@ extensions regardless of which encoding path produced the bytes.
   The host annotation path avoids this by annotating the full-res BufferedImage before scaling.
 - Uses deprecated `Bitmap.CompressFormat.WEBP` on Android API 28-29 (suppressed warning).
   Unavoidable until minSdk is raised to 30.
+
+## Also Fixed
+
+- `List.removeFirst()` → `removeAt(0)` in `PromptStepStatus.kt`. Java 21+ API not available
+  on Android runtime. Caused ~31 test failures across 3 CI steps.

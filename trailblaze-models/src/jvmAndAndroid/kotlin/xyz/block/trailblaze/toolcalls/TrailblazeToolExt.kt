@@ -14,3 +14,8 @@ fun KClass<out TrailblazeTool>.trailblazeToolClassAnnotation(): TrailblazeToolCl
  * Extracts tool name from a [TrailblazeTool] class.
  */
 fun KClass<out TrailblazeTool>.toolName(): ToolName = ToolName(this.trailblazeToolClassAnnotation().name)
+
+/**
+ * Whether this tool requires host-side execution (e.g., ADB, USB hardware).
+ */
+fun KClass<out TrailblazeTool>.requiresHost(): Boolean = this.trailblazeToolClassAnnotation().requiresHost

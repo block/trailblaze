@@ -46,4 +46,6 @@ data class RecommendationContext(
   val hint: String? = null,
   /** Which attempt this is (1 = first try, increments on retries after failures) */
   val attemptNumber: Int = 1,
+  /** Text-only mode: skip screenshots, use text-only screen analysis (no vision tokens), and skip disk logging. */
+  val fast: Boolean = false,
 )

@@ -17,6 +17,9 @@ NOTE:
 - The text can be a regular expression.
 - If more than one view matches the text, other optional properties are required to disambiguate.
 
+### Optional Parameters
+- `reasoning`: `String`
+
 
 
 <hr/>

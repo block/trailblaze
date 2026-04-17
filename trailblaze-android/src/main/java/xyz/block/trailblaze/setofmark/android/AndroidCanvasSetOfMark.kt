@@ -6,6 +6,7 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.Typeface
+import xyz.block.trailblaze.api.AnnotationElement
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.viewhierarchy.ViewHierarchyFilter
 
@@ -102,6 +103,71 @@ object AndroidCanvasSetOfMark {
         canvas.drawRect(textRect, textBackgroundPaint)
         canvas.drawText(text, textRect.left + padding, textRect.bottom.toFloat() - padding, textPaint)
       }
+    }
+    return originalScreenshotBitmap
+  }
+
+  /**
+   * Draws set-of-mark annotations from [AnnotationElement] list.
+   * Uses [AnnotationElement.refLabel] as the label text when available, falling back to nodeId.
+   */
+  fun drawAnnotationsOnBitmap(
+    originalScreenshotBitmap: Bitmap,
+    annotations: List<AnnotationElement>,
+    deviceWidth: Int? = null,
+    deviceHeight: Int? = null,
+  ): Bitmap {
+    val canvas = Canvas(originalScreenshotBitmap)
+
+    val drawScale = originalScreenshotBitmap.width.toFloat() / REFERENCE_WIDTH
+    val outlineThickness = BASE_BOX_OUTLINE_THICKNESS * drawScale
+    val textSize = BASE_TEXT_SIZE * drawScale
+    val padding = BASE_PADDING * drawScale
+
+    val scaleX = if (deviceWidth != null && deviceWidth != originalScreenshotBitmap.width) {
+      originalScreenshotBitmap.width.toFloat() / deviceWidth.toFloat()
+    } else {
+      1.0f
+    }
+    val scaleY = if (deviceHeight != null && deviceHeight != originalScreenshotBitmap.height) {
+      originalScreenshotBitmap.height.toFloat() / deviceHeight.toFloat()
+    } else {
+      1.0f
+    }
+
+    annotations.forEachIndexed { index, element ->
+      val scaledBounds = ViewHierarchyFilter.Bounds(
+        x1 = (element.bounds.left * scaleX).toInt(),
+        y1 = (element.bounds.top * scaleY).toInt(),
+        x2 = (element.bounds.right * scaleX).toInt(),
+        y2 = (element.bounds.bottom * scaleY).toInt(),
+      )
+
+      val text = element.refLabel ?: element.nodeId.toString()
+      val color = BORDER_AND_BACKGROUND_COLORS[index % BORDER_AND_BACKGROUND_COLORS.size]
+      drawRectOutline(canvas, scaledBounds, color, outlineThickness)
+
+      val textPaint = Paint().apply {
+        setColor(Color.WHITE)
+        this.textSize = textSize
+        style = Paint.Style.FILL
+        setTypeface(Typeface.create(Typeface.MONOSPACE, Typeface.BOLD))
+      }
+      val textWidth = textPaint.measureText(text)
+      val textHeight = textPaint.fontMetricsInt.run { bottom - top }
+
+      val textBackgroundPaint = Paint().apply {
+        setColor(color)
+        style = Paint.Style.FILL
+      }
+      val textRect = Rect(
+        scaledBounds.x2 - textWidth.toInt() - (padding * 2).toInt(),
+        scaledBounds.y2 - textHeight - (padding * 2).toInt(),
+        scaledBounds.x2,
+        scaledBounds.y2,
+      )
+      canvas.drawRect(textRect, textBackgroundPaint)
+      canvas.drawText(text, textRect.left + padding, textRect.bottom.toFloat() - padding, textPaint)
     }
     return originalScreenshotBitmap
   }

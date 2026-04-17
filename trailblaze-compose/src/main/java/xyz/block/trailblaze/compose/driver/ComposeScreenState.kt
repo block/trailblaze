@@ -6,6 +6,7 @@ import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.compose.target.ComposeTestTarget
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.setofmark.SetOfMarkAnnotator
 import xyz.block.trailblaze.util.Console
 
 /**
@@ -61,6 +62,16 @@ class ComposeScreenState(
   }
 
   override val screenshotBytes: ByteArray? by lazy { capturedImage?.let { imageBitmapToPngBytes(it) } }
+
+  override val annotatedScreenshotBytes: ByteArray? by lazy {
+    SetOfMarkAnnotator.annotate(
+      screenshotBytes = screenshotBytes,
+      viewHierarchy = viewHierarchy,
+      screenWidth = deviceWidth,
+      screenHeight = deviceHeight,
+      platform = trailblazeDevicePlatform,
+    )
+  }
 
   override val deviceWidth: Int by lazy { capturedImage?.width ?: viewportWidth }
 

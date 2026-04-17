@@ -12,6 +12,7 @@ Erases characters from the currently focused text field.
 ### Registered `EraseTextTrailblazeTool` in `ToolRegistry`
 ### Optional Parameters
 - `charactersToErase`: `Integer`
+- `reasoning`: `String`
 
 
 

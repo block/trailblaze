@@ -31,6 +31,20 @@ fun createTrailblazeYaml(
   )
 }
 
+/**
+ * Builds a [TrailblazeYaml] from an explicit set of all tool classes.
+ * Preferred over the [customTrailblazeToolClasses] overload when the caller already has
+ * a complete tool class set (e.g., from [TrailblazeSerializationInitializer]).
+ */
+@OptIn(InternalSerializationApi::class)
+fun createTrailblazeYamlFromAllTools(
+  allToolClasses: Set<KClass<out TrailblazeTool>>,
+): TrailblazeYaml {
+  return TrailblazeYaml(
+    toolSerializersByName = buildToolSerializerMap(allToolClasses),
+  )
+}
+
 @OptIn(InternalSerializationApi::class)
 fun buildToolSerializerMap(
   toolClasses: Set<KClass<out TrailblazeTool>>,

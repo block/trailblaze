@@ -2,6 +2,8 @@ package xyz.block.trailblaze.mcp.utils
 
 import io.ktor.util.decodeBase64Bytes
 import kotlinx.coroutines.withTimeoutOrNull
+import xyz.block.trailblaze.api.AndroidCompactElementList
+import xyz.block.trailblaze.api.AnnotationElement
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ScreenshotScalingConfig
 import xyz.block.trailblaze.api.TrailblazeNode
@@ -40,11 +42,32 @@ class RpcScreenStateAdapter(
   override val deviceHeight: Int
     get() = response.deviceHeight
 
-  override val trailblazeNodeTree: TrailblazeNode?
-    get() = response.trailblazeNodeTree
+  /** Cached compact elements result — shared between text representation and annotation elements. */
+  private val compactElements by lazy {
+    val tree = response.trailblazeNodeTree ?: return@lazy null
+    AndroidCompactElementList.build(tree, screenHeight = response.deviceHeight)
+  }
 
-  override val pageContextSummary: String?
-    get() = response.pageContextSummary
+  override val trailblazeNodeTree: TrailblazeNode? by lazy {
+    val tree = response.trailblazeNodeTree ?: return@lazy null
+    val elements = compactElements ?: return@lazy tree
+    val nodeIdToRef = elements.refMapping.entries.associate { (ref, nodeId) -> nodeId to ref }
+    tree.withRefs(nodeIdToRef)
+  }
+
+  override val viewHierarchyTextRepresentation: String? by lazy {
+    val elements = compactElements ?: return@lazy null
+    val header = response.pageContextSummary ?: ""
+    if (header.isNotEmpty()) "$header\n\n${elements.text}" else elements.text
+  }
+
+  override val annotationElements: List<AnnotationElement>? by lazy {
+    val elements = compactElements ?: return@lazy null
+    val nodeIdToRef = elements.refMapping.entries.associate { (ref, nodeId) -> nodeId to ref }
+    elements.elementNodeIds.zip(elements.elementBounds).map { (id, bounds) ->
+      AnnotationElement(nodeId = id, bounds = bounds, refLabel = nodeIdToRef[id])
+    }
+  }
 
   override val trailblazeDevicePlatform: TrailblazeDevicePlatform
     get() = TrailblazeDevicePlatform.ANDROID
@@ -82,12 +105,13 @@ object ScreenStateCaptureUtil {
     mcpBridge: TrailblazeMcpBridge,
     timeoutMs: Long = CAPTURE_TIMEOUT_MS,
     screenshotScalingConfig: ScreenshotScalingConfig = ScreenshotScalingConfig.DEFAULT,
+    fast: Boolean = false,
   ): ScreenState? {
     return withTimeoutOrNull(timeoutMs) {
       // Priority 1: RPC for on-device instrumentation (most reliable for Android)
       if (mcpBridge.isOnDeviceInstrumentation()) {
         mcpBridge.getScreenStateViaRpc(
-          includeScreenshot = true,
+          includeScreenshot = !fast,
           screenshotScalingConfig = screenshotScalingConfig,
         )?.let { rpcResponse ->
           return@withTimeoutOrNull RpcScreenStateAdapter(rpcResponse)
@@ -95,7 +119,7 @@ object ScreenStateCaptureUtil {
       }
 
       // Priority 2: Direct provider (most reliable for HOST mode)
-      val directProvider = mcpBridge.getDirectScreenStateProvider()
+      val directProvider = mcpBridge.getDirectScreenStateProvider(skipScreenshot = fast)
       directProvider?.let { provider ->
         try {
           return@withTimeoutOrNull provider(screenshotScalingConfig)

@@ -36,12 +36,12 @@ data class CliRunRequest(
   val llmModel: String? = null,
   /** Use recorded tool sequences instead of LLM inference. */
   val useRecordedSteps: Boolean = false,
-  /** Enable Set of Mark mode. */
-  val setOfMark: Boolean = true,
   /** Show the browser window (for web trails). */
   val showBrowser: Boolean = false,
   /** When true, uses a no-op logger so no session files are written to disk. */
   val noLogging: Boolean = false,
+  /** Agent implementation override (e.g., "MULTI_AGENT_V3"). */
+  val agentImplementation: String? = null,
 ) {
   /**
    * Validates that at least one execution mode is specified:

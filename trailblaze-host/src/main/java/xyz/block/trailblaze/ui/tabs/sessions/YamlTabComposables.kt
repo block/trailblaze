@@ -277,11 +277,6 @@ fun YamlTabComposable(
             progressMessages = progressMessages + message
           }
 
-          val setOfMarkEnabledConfig = serverState.appConfig.setOfMarkEnabled
-          onProgressMessage(
-            "Set of Mark: ${if (setOfMarkEnabledConfig) "ENABLED" else "DISABLED"}"
-          )
-
           val onConnectionStatus: (DeviceConnectionStatus) -> Unit = { status ->
             connectionStatus = status
           }

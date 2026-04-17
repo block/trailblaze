@@ -14,6 +14,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.commands.TrailblazeElementSelectorExt.toMaestroElementSelector
+import xyz.block.trailblaze.toolcalls.isSuccess
 
 @Serializable
 @TrailblazeToolClass(
@@ -53,32 +54,35 @@ data class AssertVisibleBySelectorTrailblazeTool(
     val mode = toolExecutionContext.nodeSelectorMode
     val agent = toolExecutionContext.maestroTrailblazeAgent
 
-    when (mode) {
-      NodeSelectorMode.FORCE_LEGACY -> {
-        return super.execute(toolExecutionContext)
-      }
+    val result = when (mode) {
+      NodeSelectorMode.FORCE_LEGACY -> super.execute(toolExecutionContext)
       NodeSelectorMode.FORCE_NODE_SELECTOR -> {
         if (agent != null) {
           val effectiveNodeSelector = nodeSelector
             ?: selector.toTrailblazeNodeSelector(toolExecutionContext.trailblazeDeviceInfo.platform)
-          val result = agent.executeNodeSelectorAssertVisible(
+          agent.executeNodeSelectorAssertVisible(
             nodeSelector = effectiveNodeSelector,
             traceId = toolExecutionContext.traceId,
-          )
-          if (result != null) return result
+          ) ?: super.execute(toolExecutionContext)
+        } else {
+          super.execute(toolExecutionContext)
         }
-        return super.execute(toolExecutionContext)
       }
       NodeSelectorMode.PREFER_NODE_SELECTOR -> {
         if (nodeSelector != null && agent != null) {
-          val result = agent.executeNodeSelectorAssertVisible(
+          agent.executeNodeSelectorAssertVisible(
             nodeSelector = nodeSelector,
             traceId = toolExecutionContext.traceId,
-          )
-          if (result != null) return result
+          ) ?: super.execute(toolExecutionContext)
+        } else {
+          super.execute(toolExecutionContext)
         }
-        return super.execute(toolExecutionContext)
       }
     }
+    if (result.isSuccess()) {
+      val desc = selector.textRegex ?: selector.idRegex ?: "element"
+      return TrailblazeToolResult.Success(message = "Verified '$desc' visible")
+    }
+    return result
   }
 }

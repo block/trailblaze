@@ -5,6 +5,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import xyz.block.trailblaze.agent.TrailblazeProgressEvent
+import xyz.block.trailblaze.android.accessibility.TrailblazeAccessibilityService
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.llm.RunYamlRequest
@@ -165,6 +166,16 @@ class RunYamlRequestHandler(
             )
           )
 
+          // When the host-side agent dispatches individual tools via RPC, each tool
+          // arrives as a separate RunYamlRequest. Wait for the UI to settle before
+          // execution so animations and accessibility events from the previous tool
+          // have completed. Without this, rapid sequential tool dispatches (e.g.,
+          // tap → inputText → tap → inputText) can overwhelm the accessibility
+          // service and crash the on-device server.
+          if (TrailblazeAccessibilityService.isServiceRunning()) {
+            TrailblazeAccessibilityService.waitForSettled()
+          }
+
           // Route to appropriate agent implementation
           // For TRAILBLAZE_RUNNER, suppress the Started log in the callback since
           // the handler already emitted it above via sessionManager.emitSessionStartLog().
@@ -190,6 +201,13 @@ class RunYamlRequestHandler(
                 runTrailblazeYaml(requestWithStartLogSuppressed, session)
               }
             }
+          }
+
+          // Wait for the UI to settle after execution before signaling completion.
+          // The host polls for COMPLETED status and immediately dispatches the next
+          // tool, so the UI must be stable before we transition.
+          if (TrailblazeAccessibilityService.isServiceRunning()) {
+            TrailblazeAccessibilityService.waitForSettled()
           }
 
           val endTimeMs = System.currentTimeMillis()

@@ -24,7 +24,7 @@ class TrailblazeYamlBuilder {
     priority: String? = null,
     source: TrailSource? = null,
     metadata: Map<String, String>? = null,
-    app: String? = null,
+    target: String? = null,
     driver: String? = null,
     platform: String? = null,
   ) = apply {
@@ -38,7 +38,7 @@ class TrailblazeYamlBuilder {
           description = description,
           priority = priority,
           metadata = metadata,
-          app = app,
+          target = target,
           driver = driver,
           platform = platform,
         ),

@@ -7,9 +7,12 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
 import xyz.block.trailblaze.agent.ExecutionResult
 import xyz.block.trailblaze.agent.UiActionExecutor
+import xyz.block.trailblaze.api.AndroidCompactElementList
 import xyz.block.trailblaze.api.DriverNodeDetail
+import xyz.block.trailblaze.api.IosCompactElementList
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ScreenshotScalingConfig
+import xyz.block.trailblaze.api.SnapshotDetail
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
@@ -119,14 +122,10 @@ class BridgeUiActionExecutor(
 
       val durationMs = System.currentTimeMillis() - startTime
 
-      // If no exception was thrown, execution was successful
-      // Capture screen state after action for summary
-      val screenSummary = try {
-        val screenState = captureScreenState()
-        screenState?.let { describeScreen(it) } ?: "Screen state not available"
-      } catch (e: Exception) {
-        "Screen capture failed: ${e.message}"
-      }
+      // Capture screen state after action. The blocking executeTrailblazeTool() call above
+      // already waits for the UI to settle (Maestro's Orchestra calls waitForAppToSettle(),
+      // the accessibility driver calls waitForSettled()), so no additional delay is needed.
+      val screenSummary = getScreenSummary() ?: "Screen state not available"
 
       ExecutionResult.Success(
         screenSummaryAfter = screenSummary,
@@ -202,21 +201,28 @@ class BridgeUiActionExecutor(
    * 1. App ID is provided
    * 2. App is installed on the device (for non-system apps)
    *
+   * If a display name is provided (e.g. "Contacts") instead of a bundle ID, attempts
+   * to resolve it via [IOS_SYSTEM_APP_DISPLAY_NAMES] before validation.
+   *
    * @return Error message if validation fails, null if valid
    */
   private suspend fun validateLaunchApp(args: JsonObject): String? {
     val appId = (args["appId"] as? JsonPrimitive)?.contentOrNull
       ?: return "launchApp requires an 'appId' argument"
 
+    // Resolve display name → bundle ID for well-known iOS system apps
+    // (e.g. "Contacts" → "com.apple.MobileAddressBook")
+    val resolvedAppId = IOS_SYSTEM_APP_DISPLAY_NAMES[appId.lowercase()] ?: appId
+
     // Skip validation for system apps (they're always "installed")
-    if (isIosSystemApp(appId)) {
+    if (isIosSystemApp(resolvedAppId)) {
       return null
     }
 
     // Check if app is installed
     return try {
       val installedApps = mcpBridge.getInstalledAppIds()
-      if (!installedApps.contains(appId)) {
+      if (!installedApps.contains(resolvedAppId)) {
         // Include full app list in error so LLM can retry with correct app
         val sortedApps = installedApps.sorted()
 
@@ -249,7 +255,47 @@ class BridgeUiActionExecutor(
    *
    * Falls back to [ViewHierarchyTreeNode] for Maestro-based drivers.
    */
-  private fun describeScreen(screenState: ScreenState): String {
+  /** Captures the current screen state and returns a text summary, or null on failure. */
+  internal suspend fun getScreenSummary(
+    details: Set<SnapshotDetail> = emptySet(),
+  ): String? {
+    return try {
+      val screenState = captureScreenState() ?: return null
+      describeScreen(screenState, details)
+    } catch (e: Exception) {
+      null
+    }
+  }
+
+  private fun describeScreen(
+    screenState: ScreenState,
+    details: Set<SnapshotDetail> = emptySet(),
+  ): String {
+    // When detail enrichment is requested, rebuild the compact list with details
+    if (details.isNotEmpty()) {
+      val tree = screenState.trailblazeNodeTree
+      if (tree != null) {
+        // Detect platform from tree — check root and first child (root may be a wrapper)
+        val platform = detectPlatform(tree)
+        val elements = when (platform) {
+          "android" -> AndroidCompactElementList.build(tree, details, screenState.deviceHeight).text
+          "ios" -> IosCompactElementList.build(tree, details, screenState.deviceHeight).text
+          else -> null
+        }
+        if (elements != null) {
+          val pageContext = screenState.pageContextSummary
+          return if (pageContext != null) "$pageContext\n\n$elements" else elements
+        }
+      }
+    }
+
+    // Default: use the pre-computed compact text representation
+    val textRepresentation = screenState.viewHierarchyTextRepresentation
+    if (textRepresentation != null) {
+      return textRepresentation
+    }
+
+    // Mobile/other: generate summary from TrailblazeNode tree or ViewHierarchy
     val trailblazeTree = screenState.trailblazeNodeTree
     val actionableItems = if (trailblazeTree != null) {
       describeFromTrailblazeNode(trailblazeTree)
@@ -466,7 +512,18 @@ class BridgeUiActionExecutor(
           detail.text?.takeIf { it.isNotBlank() }
             ?: detail.contentDescription?.takeIf { it.isNotBlank() }
         }
-        // Only Android accessibility for now — other drivers can be added as needed
+        is DriverNodeDetail.IosMaestro -> {
+          val actionable = detail.clickable || detail.scrollable || detail.checked || !detail.hintText.isNullOrBlank()
+          if (actionable) return@mapNotNull null
+          detail.text?.takeIf { it.isNotBlank() }
+            ?: detail.accessibilityText?.takeIf { it.isNotBlank() }
+        }
+        is DriverNodeDetail.AndroidMaestro -> {
+          val actionable = detail.clickable || detail.scrollable || detail.checked || !detail.hintText.isNullOrBlank()
+          if (actionable) return@mapNotNull null
+          detail.text?.takeIf { it.isNotBlank() }
+            ?: detail.accessibilityText?.takeIf { it.isNotBlank() }
+        }
         else -> null
       }
     }.map { it.truncate(MAX_LABEL_LENGTH) }.distinct()
@@ -527,6 +584,34 @@ class BridgeUiActionExecutor(
     /** Max chars per element label — longer text is truncated with ellipsis. */
     private const val MAX_LABEL_LENGTH = 40
 
+    /**
+     * Mapping of lowercase iOS system app display names to their bundle IDs.
+     *
+     * Used in [validateLaunchApp] so that natural-language app names like "Contacts"
+     * are resolved to the correct bundle ID (e.g. "com.apple.MobileAddressBook") before
+     * checking whether the app is installed. System apps often do not appear under their
+     * display name in the `getInstalledAppIds()` result, so without this mapping the
+     * validation would incorrectly report them as "not installed".
+     */
+    internal val IOS_SYSTEM_APP_DISPLAY_NAMES: Map<String, String> = mapOf(
+      "contacts" to "com.apple.MobileAddressBook",
+      "calendar" to "com.apple.mobilecal",
+      "safari" to "com.apple.mobilesafari",
+      "maps" to "com.apple.Maps",
+      "messages" to "com.apple.MobileSMS",
+      "photos" to "com.apple.mobileslideshow",
+      "settings" to "com.apple.Preferences",
+      "reminders" to "com.apple.reminders",
+      "health" to "com.apple.Health",
+      "wallet" to "com.apple.Passbook",
+      "news" to "com.apple.news",
+      "files" to "com.apple.DocumentsApp",
+      "shortcuts" to "com.apple.shortcuts",
+      "fitness" to "com.apple.Fitness",
+      "passwords" to "com.apple.Passwords",
+      "podcasts" to "243LU875E5.groups.com.apple.podcasts",
+    )
+
     // Element type constants returned by inferElementTypeFromVh / inferElementTypeFromDetail.
     internal const val ELEMENT_TYPE_BUTTON = "button"
     internal const val ELEMENT_TYPE_TOGGLE = "toggle"
@@ -565,3 +650,14 @@ class BridgeUiActionExecutor(
 
 private fun String.truncate(max: Int): String =
   if (length <= max) this else take(max - 1) + "…"
+
+/** Detects platform from the TrailblazeNode tree by checking root and first child. */
+private fun detectPlatform(tree: TrailblazeNode): String? {
+  if (tree.driverDetail is DriverNodeDetail.AndroidAccessibility) return "android"
+  if (tree.driverDetail is DriverNodeDetail.IosMaestro) return "ios"
+  // Check first child (root may be a wrapper with generic detail)
+  val firstChild = tree.children.firstOrNull() ?: return null
+  if (firstChild.driverDetail is DriverNodeDetail.AndroidAccessibility) return "android"
+  if (firstChild.driverDetail is DriverNodeDetail.IosMaestro) return "ios"
+  return null
+}

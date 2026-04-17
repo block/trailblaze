@@ -6,6 +6,7 @@ import android.os.Build
 import maestro.DeviceInfo
 import maestro.Platform
 import xyz.block.trailblaze.android.MemoryDiagnostics
+import xyz.block.trailblaze.api.AnnotationElement
 import xyz.block.trailblaze.api.ScreenshotScalingConfig
 import xyz.block.trailblaze.api.TrailblazeImageFormat
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
@@ -113,6 +114,10 @@ object AndroidBitmapUtils {
    * Shared by [AndroidOnDeviceUiAutomatorScreenState] and [AccessibilityServiceScreenState]
    * to avoid duplicating the decode → annotate → encode pipeline.
    *
+   * When [annotationElements] is provided, uses those to draw ref labels (e.g., "y778")
+   * that match the text representation sent to the LLM. Falls back to deriving elements
+   * from [viewHierarchy] with numeric nodeIds when annotation elements are unavailable.
+   *
    * @return Annotated bytes, or [screenshotBytes] unchanged if decoding/copy fails.
    */
   fun annotateScreenshotBytes(
@@ -121,6 +126,7 @@ object AndroidBitmapUtils {
     viewHierarchy: ViewHierarchyTreeNode,
     deviceWidth: Int,
     deviceHeight: Int,
+    annotationElements: List<AnnotationElement>? = null,
     oomContext: String = "annotateScreenshotBytes",
   ): ByteArray {
     if (screenshotBytes.isEmpty()) return screenshotBytes
@@ -138,27 +144,36 @@ object AndroidBitmapUtils {
       // bitmap.copy() can return null under memory pressure
       if (annotatedBitmap == null) return screenshotBytes
 
-      val filtered = ViewHierarchyFilter.create(
-        screenHeight = deviceHeight,
-        screenWidth = deviceWidth,
-        platform = TrailblazeDevicePlatform.ANDROID,
-      ).filterInteractableViewHierarchyTreeNodes(viewHierarchy)
-      AndroidCanvasSetOfMark.drawSetOfMarkOnBitmap(
-        originalScreenshotBitmap = annotatedBitmap,
-        elements = ViewHierarchyTreeNodeUtils.from(
-          filtered,
-          DeviceInfo(
-            platform = Platform.ANDROID,
-            widthPixels = deviceWidth,
-            heightPixels = deviceHeight,
-            widthGrid = deviceWidth,
-            heightGrid = deviceHeight,
+      if (annotationElements != null && annotationElements.isNotEmpty()) {
+        AndroidCanvasSetOfMark.drawAnnotationsOnBitmap(
+          originalScreenshotBitmap = annotatedBitmap,
+          annotations = annotationElements,
+          deviceWidth = deviceWidth,
+          deviceHeight = deviceHeight,
+        )
+      } else {
+        val filtered = ViewHierarchyFilter.create(
+          screenHeight = deviceHeight,
+          screenWidth = deviceWidth,
+          platform = TrailblazeDevicePlatform.ANDROID,
+        ).filterInteractableViewHierarchyTreeNodes(viewHierarchy)
+        AndroidCanvasSetOfMark.drawSetOfMarkOnBitmap(
+          originalScreenshotBitmap = annotatedBitmap,
+          elements = ViewHierarchyTreeNodeUtils.from(
+            filtered,
+            DeviceInfo(
+              platform = Platform.ANDROID,
+              widthPixels = deviceWidth,
+              heightPixels = deviceHeight,
+              widthGrid = deviceWidth,
+              heightGrid = deviceHeight,
+            ),
           ),
-        ),
-        includeLabel = true,
-        deviceWidth = deviceWidth,
-        deviceHeight = deviceHeight,
-      )
+          includeLabel = true,
+          deviceWidth = deviceWidth,
+          deviceHeight = deviceHeight,
+        )
+      }
 
       val bytes = annotatedBitmap.toByteArray(config.imageFormat, config.compressionQuality)
       annotatedBitmap.recycle()

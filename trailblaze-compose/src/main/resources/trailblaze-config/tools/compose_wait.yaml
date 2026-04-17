@@ -1,0 +1,2 @@
+id: compose_wait
+class: xyz.block.trailblaze.compose.driver.tools.ComposeWaitTool

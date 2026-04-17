@@ -36,7 +36,7 @@ object LlmConfigLoader {
    * (e.g. default model not found in any provider, empty provider definitions).
    */
   fun load(
-    userHomeDir: File = File(System.getProperty("user.home")),
+    userHomeDir: File = File(System.getProperty("user.home") ?: "."),
     projectDir: File? = File("."),
   ): LlmConfig {
     var config = LlmConfig()

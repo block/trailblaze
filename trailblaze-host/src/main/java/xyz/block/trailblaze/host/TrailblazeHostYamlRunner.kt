@@ -14,6 +14,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.datetime.Clock
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.agent.BlazeConfig
 import xyz.block.trailblaze.agent.DefaultProgressReporter
 import xyz.block.trailblaze.agent.InnerLoopScreenAnalyzer
@@ -51,12 +52,13 @@ import xyz.block.trailblaze.host.yaml.RunOnHostParams
 import xyz.block.trailblaze.http.DynamicLlmClient
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.llm.TrailblazeReferrer
-import xyz.block.trailblaze.logs.client.TrailblazeJson
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
+import xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer
 import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
+import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRpcClient
 import xyz.block.trailblaze.mcp.sampling.LocalLlmSamplingSource
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
@@ -67,6 +69,7 @@ import xyz.block.trailblaze.rules.TrailblazeLoggingRule
 import xyz.block.trailblaze.rules.TrailblazeRunnerUtil
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeToolDescriptor
+import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
@@ -129,6 +132,61 @@ object TrailblazeHostYamlRunner {
           File(sessionDir, "trace.json").writeText(traceJson)
         },
       )
+    }
+  }
+
+  /**
+   * Common session lifecycle wrapper for trail execution.
+   *
+   * Handles session creation, standardized exception handling (cancellation,
+   * failure screenshots, session end on error), trace export, and cleanup.
+   * Each driver-specific method handles its own setup and passes execution
+   * logic via [execute], eliminating duplicated try-catch-finally blocks.
+   */
+  private suspend fun executeTrailSession(
+    loggingRule: TrailblazeLoggingRule,
+    overrideSessionId: SessionId?,
+    testName: String,
+    deviceLabel: String,
+    sendSessionEndLog: Boolean,
+    onProgressMessage: (String) -> Unit,
+    screenshotProvider: (() -> ScreenState)? = null,
+    noLogging: Boolean = false,
+    cleanup: suspend () -> Unit = {},
+    execute: suspend (TrailblazeSession) -> SessionId?,
+  ): SessionId? {
+    val sessionManager = loggingRule.sessionManager
+    val session = if (overrideSessionId != null) {
+      sessionManager.createSessionWithId(overrideSessionId)
+    } else {
+      sessionManager.startSession(testName)
+    }
+    loggingRule.setSession(session)
+
+    return try {
+      execute(session)
+    } catch (e: TrailblazeSessionCancelledException) {
+      Console.log("🚫 Session cancelled for $deviceLabel")
+      onProgressMessage("Test session cancelled")
+      null
+    } catch (e: CancellationException) {
+      Console.log("🚫 Coroutine cancelled for $deviceLabel: ${e.message}")
+      onProgressMessage("Test execution cancelled")
+      throw e
+    } catch (e: Exception) {
+      Console.log("❌ ${e::class.simpleName} in $deviceLabel: ${e.message}")
+      onProgressMessage("Test execution failed: ${e.message}")
+      if (screenshotProvider != null) {
+        captureFailureScreenshot(session, loggingRule, screenshotProvider)
+      }
+      if (sendSessionEndLog) {
+        sessionManager.endSession(session, isSuccess = false, exception = e)
+      }
+      null
+    } finally {
+      exportAndSaveTrace(session.sessionId, loggingRule, noLogging = noLogging)
+      loggingRule.setSession(null)
+      cleanup()
     }
   }
 
@@ -227,19 +285,24 @@ object TrailblazeHostYamlRunner {
       deviceManager.setActivePlaywrightNativeTest(requestDeviceId, playwrightTest)
     }
 
-    val sessionManager = playwrightTest.loggingRule.sessionManager
-
-    val overrideSessionId = runYamlRequest.config.overrideSessionId
-    val session = if (overrideSessionId != null) {
-      sessionManager.createSessionWithId(overrideSessionId)
-    } else {
-      sessionManager.startSession(runYamlRequest.testName)
-    }
-    playwrightTest.loggingRule.setSession(session)
-
     onProgressMessage("Launching browser...")
 
-    return try {
+    return executeTrailSession(
+      loggingRule = playwrightTest.loggingRule,
+      overrideSessionId = runYamlRequest.config.overrideSessionId,
+      testName = runYamlRequest.testName,
+      deviceLabel = "playwright-native:${trailblazeDeviceId.instanceId}",
+      sendSessionEndLog = runYamlRequest.config.sendSessionEndLog,
+      onProgressMessage = onProgressMessage,
+      screenshotProvider = playwrightTest.browserManager::getScreenState,
+      noLogging = runOnHostParams.noLogging,
+      cleanup = {
+        if (!keepBrowserAlive) {
+          playwrightTest.close()
+          deviceManager.cancelSessionForDevice(trailblazeDeviceId)
+        }
+      },
+    ) { session ->
       onProgressMessage("Executing YAML test...")
       Console.log("▶️ Starting Playwright-native runTrailblazeYamlSuspend for device: ${trailblazeDeviceId.instanceId}")
       val sessionId = playwrightTest.runTrailblazeYamlSuspend(
@@ -256,10 +319,9 @@ object TrailblazeHostYamlRunner {
       onProgressMessage("Test execution completed successfully")
 
       if (runYamlRequest.config.sendSessionEndLog) {
-        sessionManager.endSession(session, isSuccess = true)
+        playwrightTest.loggingRule.sessionManager.endSession(session, isSuccess = true)
       }
 
-      // Generate and save recording YAML from session logs
       val customToolClasses = runOnHostParams.targetTestApp
         ?.getCustomToolsForDriver(runOnHostParams.trailblazeDriverType) ?: emptySet()
       generateAndSaveRecording(
@@ -268,31 +330,6 @@ object TrailblazeHostYamlRunner {
       )
 
       sessionId
-    } catch (e: TrailblazeSessionCancelledException) {
-      Console.log("🚫 TrailblazeSessionCancelledException caught for device: ${trailblazeDeviceId.instanceId}")
-      onProgressMessage("Test session cancelled")
-      null
-    } catch (e: CancellationException) {
-      Console.log("🚫 CancellationException caught for device: ${trailblazeDeviceId.instanceId} - ${e.message}")
-      onProgressMessage("Test execution cancelled")
-      throw e
-    } catch (e: Exception) {
-      Console.log("❌ Exception caught in runPlaywrightNativeYaml for device: ${trailblazeDeviceId.instanceId} - ${e::class.simpleName}: ${e.message}")
-      onProgressMessage("Test execution failed: ${e.message}")
-      captureFailureScreenshot(session, playwrightTest.loggingRule, playwrightTest.browserManager::getScreenState)
-      if (runYamlRequest.config.sendSessionEndLog) {
-        sessionManager.endSession(session, isSuccess = false, exception = e)
-      }
-      null
-    } finally {
-      Console.log("🧹 Finally block executing for Playwright-native device: ${trailblazeDeviceId.instanceId}")
-      exportAndSaveTrace(session.sessionId, playwrightTest.loggingRule)
-      playwrightTest.loggingRule.setSession(null)
-      if (!keepBrowserAlive) {
-        playwrightTest.close()
-        deviceManager.cancelSessionForDevice(trailblazeDeviceId)
-      }
-      Console.log("🏁 Finally block completed for Playwright-native device: ${trailblazeDeviceId.instanceId}")
     }
   }
 
@@ -364,19 +401,24 @@ object TrailblazeHostYamlRunner {
       deviceManager.setActivePlaywrightElectronTest(requestDeviceId, electronTest)
     }
 
-    val sessionManager = electronTest.loggingRule.sessionManager
-
-    val overrideSessionId = runYamlRequest.config.overrideSessionId
-    val session = if (overrideSessionId != null) {
-      sessionManager.createSessionWithId(overrideSessionId)
-    } else {
-      sessionManager.startSession(runYamlRequest.testName)
-    }
-    electronTest.loggingRule.setSession(session)
-
     onProgressMessage("Connecting to Electron app...")
 
-    return try {
+    return executeTrailSession(
+      loggingRule = electronTest.loggingRule,
+      overrideSessionId = runYamlRequest.config.overrideSessionId,
+      testName = runYamlRequest.testName,
+      deviceLabel = "playwright-electron:${trailblazeDeviceId.instanceId}",
+      sendSessionEndLog = runYamlRequest.config.sendSessionEndLog,
+      onProgressMessage = onProgressMessage,
+      screenshotProvider = electronTest.browserManager::getScreenState,
+      noLogging = runOnHostParams.noLogging,
+      cleanup = {
+        if (!keepAlive) {
+          electronTest.close()
+          deviceManager.cancelSessionForDevice(trailblazeDeviceId)
+        }
+      },
+    ) { session ->
       onProgressMessage("Executing YAML test...")
       Console.log("▶️ Starting Playwright-electron runTrailblazeYamlSuspend for device: ${trailblazeDeviceId.instanceId}")
       val sessionId = electronTest.runTrailblazeYamlSuspend(
@@ -393,7 +435,7 @@ object TrailblazeHostYamlRunner {
       onProgressMessage("Test execution completed successfully")
 
       if (runYamlRequest.config.sendSessionEndLog) {
-        sessionManager.endSession(session, isSuccess = true)
+        electronTest.loggingRule.sessionManager.endSession(session, isSuccess = true)
       }
 
       val customToolClasses = runOnHostParams.targetTestApp
@@ -405,31 +447,6 @@ object TrailblazeHostYamlRunner {
       )
 
       sessionId
-    } catch (e: TrailblazeSessionCancelledException) {
-      Console.log("🚫 TrailblazeSessionCancelledException caught for device: ${trailblazeDeviceId.instanceId}")
-      onProgressMessage("Test session cancelled")
-      null
-    } catch (e: CancellationException) {
-      Console.log("🚫 CancellationException caught for device: ${trailblazeDeviceId.instanceId} - ${e.message}")
-      onProgressMessage("Test execution cancelled")
-      throw e
-    } catch (e: Exception) {
-      Console.log("❌ Exception caught in runPlaywrightElectronYaml for device: ${trailblazeDeviceId.instanceId} - ${e::class.simpleName}: ${e.message}")
-      onProgressMessage("Test execution failed: ${e.message}")
-      captureFailureScreenshot(session, electronTest.loggingRule, electronTest.browserManager::getScreenState)
-      if (runYamlRequest.config.sendSessionEndLog) {
-        sessionManager.endSession(session, isSuccess = false, exception = e)
-      }
-      null
-    } finally {
-      Console.log("🧹 Finally block executing for Playwright-electron device: ${trailblazeDeviceId.instanceId}")
-      exportAndSaveTrace(session.sessionId, electronTest.loggingRule)
-      electronTest.loggingRule.setSession(null)
-      if (!keepAlive) {
-        electronTest.close()
-        deviceManager.cancelSessionForDevice(trailblazeDeviceId)
-      }
-      Console.log("🏁 Finally block completed for Playwright-electron device: ${trailblazeDeviceId.instanceId}")
     }
   }
 
@@ -522,10 +539,7 @@ object TrailblazeHostYamlRunner {
     val agent: ComposeRpcTrailblazeAgent
     val loggingRule: HostTrailblazeLoggingRule
     try {
-      TrailblazeJsonInstance = TrailblazeJson.createTrailblazeJsonInstance(
-        allToolClasses = TrailblazeToolSet.AllBuiltInTrailblazeToolsForSerializationByToolName +
-          ComposeToolSet.LlmToolSet.toolClasses.associateBy { it.toolName() },
-      )
+      TrailblazeSerializationInitializer.initialize()
 
       loggingRule = HostTrailblazeLoggingRule(
         trailblazeDeviceInfoProvider = { trailblazeDeviceInfo },
@@ -599,17 +613,20 @@ object TrailblazeHostYamlRunner {
       },
     )
 
-    val sessionManager = loggingRule.sessionManager
-
-    val overrideSessionId = runYamlRequest.config.overrideSessionId
-    val session = if (overrideSessionId != null) {
-      sessionManager.createSessionWithId(overrideSessionId)
-    } else {
-      sessionManager.startSession(runYamlRequest.testName)
-    }
-    loggingRule.setSession(session)
-
-    return try {
+    return executeTrailSession(
+      loggingRule = loggingRule,
+      overrideSessionId = runYamlRequest.config.overrideSessionId,
+      testName = runYamlRequest.testName,
+      deviceLabel = "compose-rpc:${trailblazeDeviceId.instanceId}",
+      sendSessionEndLog = runYamlRequest.config.sendSessionEndLog,
+      onProgressMessage = onProgressMessage,
+      screenshotProvider = screenStateProvider,
+      noLogging = runOnHostParams.noLogging,
+      cleanup = {
+        agent.close()
+        deviceManager.cancelSessionForDevice(trailblazeDeviceId)
+      },
+    ) { session ->
       onProgressMessage("Executing YAML test via Compose RPC...")
       Console.log("▶️ Starting Compose RPC execution for device: ${trailblazeDeviceId.instanceId}")
 
@@ -653,7 +670,6 @@ object TrailblazeHostYamlRunner {
       Console.log("✅ Compose RPC execution completed for device: ${trailblazeDeviceId.instanceId}")
       onProgressMessage("Test execution completed successfully")
 
-      // Generate and save recording YAML from session logs
       generateAndSaveRecording(
         sessionId = session.sessionId,
         customToolClasses = ComposeToolSet.LlmToolSet.toolClasses,
@@ -664,7 +680,7 @@ object TrailblazeHostYamlRunner {
       val goldenPassed = goldenResult?.passed != false
 
       if (runYamlRequest.config.sendSessionEndLog) {
-        sessionManager.endSession(session, isSuccess = goldenPassed)
+        loggingRule.sessionManager.endSession(session, isSuccess = goldenPassed)
       }
 
       if (!goldenPassed) {
@@ -676,29 +692,6 @@ object TrailblazeHostYamlRunner {
       }
 
       session.sessionId
-    } catch (e: TrailblazeSessionCancelledException) {
-      Console.log("🚫 TrailblazeSessionCancelledException caught for device: ${trailblazeDeviceId.instanceId}")
-      onProgressMessage("Test session cancelled")
-      null
-    } catch (e: CancellationException) {
-      Console.log("🚫 CancellationException caught for device: ${trailblazeDeviceId.instanceId} - ${e.message}")
-      onProgressMessage("Test execution cancelled")
-      throw e
-    } catch (e: Exception) {
-      Console.log("❌ Exception caught in runComposeYaml for device: ${trailblazeDeviceId.instanceId} - ${e::class.simpleName}: ${e.message}")
-      onProgressMessage("Test execution failed: ${e.message}")
-      captureFailureScreenshot(session, loggingRule, screenStateProvider)
-      if (runYamlRequest.config.sendSessionEndLog) {
-        sessionManager.endSession(session, isSuccess = false, exception = e)
-      }
-      null
-    } finally {
-      Console.log("🧹 Finally block executing for Compose RPC device: ${trailblazeDeviceId.instanceId}")
-      exportAndSaveTrace(session.sessionId, loggingRule, noLogging = runOnHostParams.noLogging)
-      loggingRule.setSession(null)
-      agent.close()
-      deviceManager.cancelSessionForDevice(trailblazeDeviceId)
-      Console.log("🏁 Finally block completed for Compose RPC device: ${trailblazeDeviceId.instanceId}")
     }
   }
 
@@ -786,10 +779,8 @@ object TrailblazeHostYamlRunner {
         .flatMap { it.getAllCustomToolClassesForSerialization() }
         .toSet()
 
-      TrailblazeJsonInstance = TrailblazeJson.createTrailblazeJsonInstance(
-        allToolClasses = TrailblazeToolSet.AllBuiltInTrailblazeToolsForSerializationByToolName +
-          xyz.block.trailblaze.revyl.tools.RevylNativeToolSet.RevylLlmToolSet.toolClasses.associateBy { it.toolName() } +
-          allSerializationToolClasses.associateBy { it.toolName() },
+      TrailblazeSerializationInitializer.initialize(
+        additionalToolClasses = allSerializationToolClasses,
       )
 
       val loggingRule = HostTrailblazeLoggingRule(
@@ -854,26 +845,28 @@ object TrailblazeHostYamlRunner {
         },
       )
 
-      val sessionManager = loggingRule.sessionManager
-
-      val overrideSessionId = runYamlRequest.config.overrideSessionId
-      val trailblazeSession = if (overrideSessionId != null) {
-        sessionManager.createSessionWithId(overrideSessionId)
-      } else {
-        sessionManager.startSession(runYamlRequest.testName)
-      }
-      loggingRule.setSession(trailblazeSession)
-
-      return try {
+      return executeTrailSession(
+        loggingRule = loggingRule,
+        overrideSessionId = runYamlRequest.config.overrideSessionId,
+        testName = runYamlRequest.testName,
+        deviceLabel = "revyl:${trailblazeDeviceId.instanceId}",
+        sendSessionEndLog = runYamlRequest.config.sendSessionEndLog,
+        onProgressMessage = onProgressMessage,
+        screenshotProvider = screenStateProvider,
+        noLogging = runOnHostParams.noLogging,
+        cleanup = {
+          deviceManager.cancelSessionForDevice(trailblazeDeviceId)
+        },
+      ) { session ->
         onProgressMessage("Executing YAML test via Revyl cloud device...")
-        Console.log("Starting Revyl execution for device: ${trailblazeDeviceId.instanceId}")
+        Console.log("▶️ Starting Revyl execution for device: ${trailblazeDeviceId.instanceId}")
 
         val trailItems: List<TrailYamlItem> = trailblazeYaml.decodeTrail(runYamlRequest.yaml)
         val trailConfig = trailblazeYaml.extractTrailConfig(trailItems)
 
         if (runYamlRequest.config.sendSessionStartLog) {
           loggingRule.logger.log(
-            trailblazeSession,
+            session,
             TrailblazeLog.TrailblazeSessionStatusChangeLog(
               sessionStatus = SessionStatus.Started(
                 trailConfig = trailConfig,
@@ -885,7 +878,7 @@ object TrailblazeHostYamlRunner {
                 hasRecordedSteps = trailblazeYaml.hasRecordedSteps(trailItems),
                 trailblazeDeviceId = trailblazeDeviceId,
               ),
-              session = trailblazeSession.sessionId,
+              session = session.sessionId,
               timestamp = Clock.System.now(),
             ),
           )
@@ -893,9 +886,8 @@ object TrailblazeHostYamlRunner {
 
         for (item in trailItems) {
           val itemResult = when (item) {
-            is TrailYamlItem.PromptsTrailItem -> {
+            is TrailYamlItem.PromptsTrailItem ->
               trailblazeRunnerUtil.runPromptSuspend(item.promptSteps, runYamlRequest.useRecordedSteps)
-            }
             is TrailYamlItem.ToolTrailItem ->
               trailblazeRunnerUtil.runTrailblazeTool(item.tools.map { it.trailblazeTool })
             is TrailYamlItem.ConfigTrailItem ->
@@ -906,39 +898,19 @@ object TrailblazeHostYamlRunner {
           }
         }
 
-        Console.log("Revyl execution completed for device: ${trailblazeDeviceId.instanceId}")
+        Console.log("✅ Revyl execution completed for device: ${trailblazeDeviceId.instanceId}")
         onProgressMessage("Test execution completed successfully")
 
         if (runYamlRequest.config.sendSessionEndLog) {
-          sessionManager.endSession(trailblazeSession, isSuccess = true)
+          loggingRule.sessionManager.endSession(session, isSuccess = true)
         }
 
         generateAndSaveRecording(
-          sessionId = trailblazeSession.sessionId,
+          sessionId = session.sessionId,
           customToolClasses = xyz.block.trailblaze.revyl.tools.RevylNativeToolSet.RevylLlmToolSet.toolClasses,
         )
 
-        trailblazeSession.sessionId
-      } catch (e: TrailblazeSessionCancelledException) {
-        Console.log("TrailblazeSessionCancelledException caught for device: ${trailblazeDeviceId.instanceId}")
-        onProgressMessage("Test session cancelled")
-        null
-      } catch (e: CancellationException) {
-        Console.log("CancellationException caught for device: ${trailblazeDeviceId.instanceId} - ${e.message}")
-        onProgressMessage("Test execution cancelled")
-        throw e
-      } catch (e: Exception) {
-        Console.log("Exception caught in runRevylYaml for device: ${trailblazeDeviceId.instanceId} - ${e::class.simpleName}: ${e.message}")
-        onProgressMessage("Test execution failed: ${e.message}")
-        captureFailureScreenshot(trailblazeSession, loggingRule, screenStateProvider)
-        sessionManager.endSession(trailblazeSession, isSuccess = false, exception = e)
-        null
-      } finally {
-        Console.log("Finally block executing for Revyl device: ${trailblazeDeviceId.instanceId}")
-        exportAndSaveTrace(trailblazeSession.sessionId, loggingRule)
-        loggingRule.setSession(null)
-        deviceManager.cancelSessionForDevice(trailblazeDeviceId)
-        Console.log("Finally block completed for Revyl device: ${trailblazeDeviceId.instanceId}")
+        session.sessionId
       }
     } catch (e: CancellationException) {
       throw e
@@ -1020,27 +992,28 @@ object TrailblazeHostYamlRunner {
     // Store the test instance for forceful shutdown on cancellation
     deviceManager.setActiveDriverForDevice(trailblazeDeviceId, hostTbRunner.hostRunner.loggingDriver)
 
-    // Get logger and session manager from the test's logging rule
-    val logger = hostTbRunner.loggingRule.logger
-    val sessionManager = hostTbRunner.loggingRule.sessionManager
-
-    // Extract override session ID to avoid smart cast issues
-    val overrideSessionId = runYamlRequest.config.overrideSessionId
-
-    // Initialize session using SessionManager
-    var session = if (overrideSessionId != null) {
-      sessionManager.createSessionWithId(overrideSessionId)
-    } else {
-      sessionManager.startSession(runYamlRequest.testName)
-    }
-
-    // Set the session on the logging rule so it's available to all components
-    // (hostRunner, trailblazeAgent, trailblazeRunner) that use sessionProvider
-    hostTbRunner.loggingRule.setSession(session)
-
     onProgressMessage("Connecting to $trailblazeDeviceId device...")
 
-    return try {
+    val keepDriverAlive = runOnHostParams.referrer == TrailblazeReferrer.MCP
+
+    return executeTrailSession(
+      loggingRule = hostTbRunner.loggingRule,
+      overrideSessionId = runYamlRequest.config.overrideSessionId,
+      testName = runYamlRequest.testName,
+      deviceLabel = "maestro:${trailblazeDeviceId.instanceId}",
+      sendSessionEndLog = runYamlRequest.config.sendSessionEndLog,
+      onProgressMessage = onProgressMessage,
+      screenshotProvider = hostTbRunner.hostRunner.screenStateProvider,
+      noLogging = runOnHostParams.noLogging,
+      cleanup = {
+        if (keepDriverAlive) {
+          Console.log("🔗 MCP referrer detected - keeping driver alive for device: ${trailblazeDeviceId.instanceId}")
+          deviceManager.clearCoroutineScopeForDevice(trailblazeDeviceId)
+        } else {
+          deviceManager.cancelSessionForDevice(trailblazeDeviceId)
+        }
+      },
+    ) { session ->
       onProgressMessage("Executing YAML test...")
       Console.log("▶️ Starting runTrailblazeYamlSuspend for device: ${trailblazeDeviceId.instanceId}")
       val sessionId = hostTbRunner.runTrailblazeYamlSuspend(
@@ -1048,72 +1021,22 @@ object TrailblazeHostYamlRunner {
         forceStopApp = runOnHostParams.forceStopTargetApp,
         trailFilePath = runYamlRequest.trailFilePath,
         trailblazeDeviceId = trailblazeDeviceId,
-        sendSessionStartLog = runYamlRequest.config.sendSessionStartLog
+        sendSessionStartLog = runYamlRequest.config.sendSessionStartLog,
       )
       Console.log("✅ runTrailblazeYamlSuspend completed successfully for device: ${trailblazeDeviceId.instanceId}")
       onProgressMessage("Test execution completed successfully")
 
       if (runYamlRequest.config.sendSessionEndLog) {
-        // End session using SessionManager
-        sessionManager.endSession(session, isSuccess = true)
-      } else {
-        // Keep the session open
+        hostTbRunner.loggingRule.sessionManager.endSession(session, isSuccess = true)
       }
 
-      // Generate and save recording YAML from session logs
       generateAndSaveRecording(
         sessionId = sessionId,
         customToolClasses = runOnHostParams.targetTestApp
           ?.getCustomToolsForDriver(runOnHostParams.trailblazeDriverType) ?: emptySet(),
       )
 
-       sessionId
-    } catch (e: TrailblazeSessionCancelledException) {
-      // Handle Trailblaze session cancellation - user cancelled via UI
-      Console.log("🚫 TrailblazeSessionCancelledException caught for device: ${trailblazeDeviceId.instanceId}")
-      onProgressMessage("Test session cancelled")
-      // DON'T write log here - cancellation log is written by the UI layer
-      // (JvmLiveSessionDataProvider.writeCancellationLog) to avoid duplicates
-      // Don't re-throw, just end gracefully
-      null
-    } catch (e: CancellationException) {
-      // Handle coroutine cancellation explicitly
-      Console.log("🚫 CancellationException caught for device: ${trailblazeDeviceId.instanceId} - ${e.message}")
-      onProgressMessage("Test execution cancelled")
-      // DON'T write log here - cancellation log is already written by the UI layer
-      // to avoid duplicate logs. Just do cleanup in finally block.
-      // Re-throw to propagate cancellation
-      throw e
-    } catch (e: Exception) {
-      Console.log("❌ Exception caught in runHostYaml for device: ${trailblazeDeviceId.instanceId} - ${e::class.simpleName}: ${e.message}")
-      onProgressMessage("Test execution failed: ${e.message}")
-      captureFailureScreenshot(session, hostTbRunner.loggingRule, hostTbRunner.hostRunner.screenStateProvider)
-      if (runYamlRequest.config.sendSessionEndLog) {
-        sessionManager.endSession(session, isSuccess = false, exception = e)
-      }
-      null
-    } finally {
-      // IMPORTANT: This ALWAYS executes, even when cancelled!
-      // Ensures device manager state is updated and job is cleaned up
-      Console.log("🧹 Finally block executing for device: ${trailblazeDeviceId.instanceId} - calling cancelSessionForDevice")
-      exportAndSaveTrace(session.sessionId, hostTbRunner.loggingRule)
-      // Clear the session from the logging rule to prevent stale sessions
-      hostTbRunner.loggingRule.setSession(null)
-
-      // For MCP requests, keep the driver alive so subsequent tool calls can reuse it.
-      // The driver will be closed when the MCP session explicitly ends.
-      // For all other sources (UI, CLI), close the driver after each run.
-      val keepDriverAlive = runOnHostParams.referrer == TrailblazeReferrer.MCP
-
-      if (keepDriverAlive) {
-        Console.log("🔗 MCP referrer detected - keeping driver alive for device: ${trailblazeDeviceId.instanceId}")
-        // Don't cancel the session/close driver for MCP - just clear the coroutine scope
-        deviceManager.clearCoroutineScopeForDevice(trailblazeDeviceId)
-      } else {
-        Console.log("🧹 Finally block executing for device: ${trailblazeDeviceId.instanceId} - calling cancelSessionForDevice")
-        deviceManager.cancelSessionForDevice(trailblazeDeviceId)
-      }
-      Console.log("🏁 Finally block completed for device: ${trailblazeDeviceId.instanceId}")
+      sessionId
     }
   }
 
@@ -1159,6 +1082,7 @@ object TrailblazeHostYamlRunner {
       return null
     }
     val trailConfig = trailblazeYaml.extractTrailConfig(trailItems)
+    val toolItems = trailItems.filterIsInstance<TrailYamlItem.ToolTrailItem>()
     val promptSteps = trailItems
       .filterIsInstance<TrailYamlItem.PromptsTrailItem>()
       .flatMap { it.promptSteps }
@@ -1184,37 +1108,6 @@ object TrailblazeHostYamlRunner {
       },
     )
 
-    val sessionManager = loggingRule.sessionManager
-    val overrideSessionId = runYamlRequest.config.overrideSessionId
-    val session = if (overrideSessionId != null) {
-      sessionManager.createSessionWithId(overrideSessionId)
-    } else {
-      sessionManager.startSession(runYamlRequest.testName)
-    }
-    loggingRule.setSession(session)
-
-    if (runYamlRequest.config.sendSessionStartLog) {
-      val deviceInfo = loggingRule.trailblazeDeviceInfoProvider()
-      loggingRule.logger.log(
-        session,
-        TrailblazeLog.TrailblazeSessionStatusChangeLog(
-          sessionStatus = SessionStatus.Started(
-            trailConfig = trailConfig,
-            trailFilePath = runYamlRequest.trailFilePath,
-            testClassName = "HostAccessibilityV3",
-            testMethodName = "run",
-            trailblazeDeviceInfo = deviceInfo,
-            rawYaml = runYamlRequest.yaml,
-            hasRecordedSteps = trailblazeYaml.hasRecordedSteps(trailItems),
-            trailblazeDeviceId = trailblazeDeviceId,
-          ),
-          session = session.sessionId,
-          timestamp = Clock.System.now(),
-        ),
-      )
-    }
-
-    // Build V3 runner components
     val llmClient = dynamicLlmClient.createLlmClient()
     val trailblazeLlmModel = runYamlRequest.trailblazeLlmModel
 
@@ -1231,7 +1124,6 @@ object TrailblazeHostYamlRunner {
     )
 
     val toolRepo = TrailblazeToolRepo.withDynamicToolSets(
-      setOfMarkEnabled = runYamlRequest.config.setOfMarkEnabled,
       customToolClasses = customToolClasses,
       excludedToolClasses = excludedToolClasses,
     )
@@ -1240,64 +1132,127 @@ object TrailblazeHostYamlRunner {
       rpcClient = onDeviceRpc,
       toolRepo = toolRepo,
       runYamlRequestTemplate = runYamlRequest,
-    )
-
-    val plannerLlmCall: PlannerLlmCall = { systemPrompt, userMessage, tools, _, screenshotBytes ->
-      val metaInfo = RequestMetaInfo.create(kotlin.time.Clock.System)
-      val userMsg = if (screenshotBytes != null && screenshotBytes.isNotEmpty()) {
-        Message.User(
-          parts = buildList {
-            add(ContentPart.Text(userMessage))
-            add(
-              ContentPart.Image(
-                content = AttachmentContent.Binary.Bytes(screenshotBytes),
-                format = ImageFormatDetector.detectFormat(screenshotBytes).mimeSubtype,
-              ),
-            )
-          },
-          metaInfo = metaInfo,
+      sessionProvider = { loggingRule.session ?: error("Session not available") },
+      toolExecutionContextProvider = {
+        TrailblazeToolExecutionContext(
+          screenState = null,
+          traceId = null,
+          trailblazeDeviceInfo = loggingRule.trailblazeDeviceInfoProvider(),
+          sessionProvider = { loggingRule.session ?: error("Session not available") },
+          trailblazeLogger = loggingRule.logger,
+          memory = AgentMemory(),
         )
-      } else {
-        Message.User(content = userMessage, metaInfo = metaInfo)
-      }
-      val koogPrompt = Prompt(
-        messages = listOf(
-          Message.System(content = systemPrompt, metaInfo = metaInfo),
-          userMsg,
-        ),
-        id = "host_accessibility_v3_planner",
-        params = LLMParams(toolChoice = LLMParams.ToolChoice.Required),
-      )
-      val responses = llmClient.execute(koogPrompt, trailblazeLlmModel.toKoogLlmModel(), tools)
-      val toolCall = responses.filterIsInstance<Message.Tool.Call>().firstOrNull()
-      val toolArgsJson = toolCall?.content ?: "{}"
-      val toolArgs = try {
-        Json.parseToJsonElement(toolArgsJson) as? JsonObject ?: JsonObject(emptyMap())
-      } catch (_: Exception) {
-        JsonObject(emptyMap())
-      }
-      PlannerToolCallResult.fromRaw(toolCall?.tool ?: tools.firstOrNull()?.name ?: "unknown", toolArgs)
-    }
-
-    val progressListener = loggingRule.logger.createProgressListener(session)
-    val progressReporter = DefaultProgressReporter(progressListener)
-    val availableToolsProvider = {
-      toolRepo.getCurrentToolDescriptors().map { it.toTrailblazeToolDescriptor() }
-    }
-
-    val v3Runner = MultiAgentV3Runner.create(
-      screenAnalyzer = screenAnalyzer,
-      executor = executor,
-      plannerLlmCall = plannerLlmCall,
-      config = BlazeConfig.DEFAULT,
-      progressReporter = progressReporter,
-      deviceId = trailblazeDeviceId,
-      availableToolsProvider = availableToolsProvider,
+      },
     )
 
-    onProgressMessage("Starting V3 runner on host with accessibility driver (${promptSteps.size} steps)...")
+    return executeTrailSession(
+      loggingRule = loggingRule,
+      overrideSessionId = runYamlRequest.config.overrideSessionId,
+      testName = runYamlRequest.testName,
+      deviceLabel = "v3-accessibility:${trailblazeDeviceId.instanceId}",
+      sendSessionEndLog = runYamlRequest.config.sendSessionEndLog,
+      onProgressMessage = onProgressMessage,
+      screenshotProvider = {
+        runBlocking { executor.captureScreenState() } ?: error("No screen state available")
+      },
+      cleanup = { executor.close() },
+    ) { session ->
+      if (runYamlRequest.config.sendSessionStartLog) {
+        val deviceInfo = loggingRule.trailblazeDeviceInfoProvider()
+        loggingRule.logger.log(
+          session,
+          TrailblazeLog.TrailblazeSessionStatusChangeLog(
+            sessionStatus = SessionStatus.Started(
+              trailConfig = trailConfig,
+              trailFilePath = runYamlRequest.trailFilePath,
+              testClassName = "HostAccessibilityV3",
+              testMethodName = "run",
+              trailblazeDeviceInfo = deviceInfo,
+              rawYaml = runYamlRequest.yaml,
+              hasRecordedSteps = trailblazeYaml.hasRecordedSteps(trailItems),
+              trailblazeDeviceId = trailblazeDeviceId,
+            ),
+            session = session.sessionId,
+            timestamp = Clock.System.now(),
+          ),
+        )
+      }
 
-    return try {
+      val plannerLlmCall: PlannerLlmCall = { systemPrompt, userMessage, tools, _, screenshotBytes ->
+        val metaInfo = RequestMetaInfo.create(kotlin.time.Clock.System)
+        val userMsg = if (screenshotBytes != null && screenshotBytes.isNotEmpty()) {
+          Message.User(
+            parts = buildList {
+              add(ContentPart.Text(userMessage))
+              add(
+                ContentPart.Image(
+                  content = AttachmentContent.Binary.Bytes(screenshotBytes),
+                  format = ImageFormatDetector.detectFormat(screenshotBytes).mimeSubtype,
+                ),
+              )
+            },
+            metaInfo = metaInfo,
+          )
+        } else {
+          Message.User(content = userMessage, metaInfo = metaInfo)
+        }
+        val koogPrompt = Prompt(
+          messages = listOf(
+            Message.System(content = systemPrompt, metaInfo = metaInfo),
+            userMsg,
+          ),
+          id = "host_accessibility_v3_planner",
+          params = LLMParams(toolChoice = LLMParams.ToolChoice.Required),
+        )
+        val responses = llmClient.execute(koogPrompt, trailblazeLlmModel.toKoogLlmModel(), tools)
+        val toolCall = responses.filterIsInstance<Message.Tool.Call>().firstOrNull()
+        val toolArgsJson = toolCall?.content ?: "{}"
+        val toolArgs = try {
+          Json.parseToJsonElement(toolArgsJson) as? JsonObject ?: JsonObject(emptyMap())
+        } catch (_: Exception) {
+          JsonObject(emptyMap())
+        }
+        PlannerToolCallResult.fromRaw(toolCall?.tool ?: tools.firstOrNull()?.name ?: "unknown", toolArgs)
+      }
+
+      val progressListener = loggingRule.logger.createProgressListener(session)
+      val progressReporter = DefaultProgressReporter(progressListener)
+      val availableToolsProvider = {
+        toolRepo.getCurrentToolDescriptors().map { it.toTrailblazeToolDescriptor() }
+      }
+
+      val v3Runner = MultiAgentV3Runner.create(
+        screenAnalyzer = screenAnalyzer,
+        executor = executor,
+        plannerLlmCall = plannerLlmCall,
+        config = BlazeConfig.DEFAULT,
+        progressReporter = progressReporter,
+        deviceId = trailblazeDeviceId,
+        availableToolsProvider = availableToolsProvider,
+      )
+
+      onProgressMessage("Starting V3 runner on host with accessibility driver (${promptSteps.size} steps)...")
+
+      // Execute pre-action tools (e.g. launchApp) before running V3 prompt steps
+      for (toolItem in toolItems) {
+        for (toolWrapper in toolItem.tools) {
+          val toolYaml = trailblazeYaml.encodeToString(
+            listOf(TrailYamlItem.ToolTrailItem(listOf(toolWrapper))),
+          )
+          val toolCallSessionId = SessionId.generate()
+          val singleToolRequest = runYamlRequest.copy(
+            yaml = toolYaml,
+            agentImplementation = AgentImplementation.TRAILBLAZE_RUNNER,
+            config = runYamlRequest.config.copy(
+              overrideSessionId = toolCallSessionId,
+              sendSessionStartLog = false,
+              sendSessionEndLog = false,
+            ),
+          )
+          executor.executePreAction(singleToolRequest, toolCallSessionId)
+        }
+      }
+
       val result = v3Runner.trail(
         steps = promptSteps,
         config = TrailConfig.AI_ONLY,
@@ -1309,7 +1264,16 @@ object TrailblazeHostYamlRunner {
       )
 
       if (runYamlRequest.config.sendSessionEndLog) {
-        sessionManager.endSession(session, isSuccess = result.success)
+        val sessionManager = loggingRule.sessionManager
+        if (result.success) {
+          sessionManager.endSession(session, isSuccess = true)
+        } else {
+          sessionManager.endSession(
+            session,
+            isSuccess = false,
+            exception = Exception(result.errorMessage ?: "Trail execution failed"),
+          )
+        }
       }
 
       generateAndSaveRecording(
@@ -1318,28 +1282,182 @@ object TrailblazeHostYamlRunner {
       )
 
       session.sessionId
-    } catch (e: TrailblazeSessionCancelledException) {
-      onProgressMessage("V3 accessibility session cancelled")
-      null
-    } catch (e: CancellationException) {
-      onProgressMessage("V3 accessibility execution cancelled")
-      throw e
+    }
+  }
+
+  /**
+   * Runs the legacy [TrailblazeRunner] on the host with tool execution delegated to an
+   * on-device driver (accessibility or instrumentation) via RPC.
+   *
+   * The agent loop (LLM calls, tool selection) runs on the host JVM. Each individual tool
+   * call is serialized as single-step trail YAML and sent to the device. The device
+   * executes the tool via whichever driver is specified in the request's `driverType`.
+   * Mirrors the [runHostV3WithAccessibilityYaml] pattern but using [TrailblazeRunner]
+   * instead of [MultiAgentV3Runner].
+   */
+  suspend fun runHostTrailblazeRunnerWithOnDeviceRpc(
+    dynamicLlmClient: DynamicLlmClient,
+    onDeviceRpc: OnDeviceRpcClient,
+    runYamlRequest: RunYamlRequest,
+    trailblazeDeviceId: TrailblazeDeviceId,
+    onProgressMessage: (String) -> Unit,
+    targetTestApp: TrailblazeHostAppTarget?,
+  ): SessionId? {
+    val driverType = runYamlRequest.driverType
+      ?: TrailblazeDriverType.DEFAULT_ANDROID_ON_DEVICE
+    val customToolClasses = targetTestApp
+      ?.getCustomToolsForDriver(driverType)
+      ?: emptySet()
+    val excludedToolClasses = targetTestApp?.getExcludedToolsForDriver(driverType) ?: emptySet()
+
+    val trailblazeYaml = createTrailblazeYaml(
+      customTrailblazeToolClasses = customToolClasses,
+    )
+
+    val trailItems = try {
+      trailblazeYaml.decodeTrail(runYamlRequest.yaml)
     } catch (e: Exception) {
-      Console.log(
-        "[TrailblazeHostYamlRunner] V3 accessibility exception: ${e::class.simpleName}: ${e.message}",
+      onProgressMessage("Failed to decode trail YAML: ${e.message}")
+      return null
+    }
+    val trailConfig = trailblazeYaml.extractTrailConfig(trailItems)
+
+    // Set up host-side logging
+    val driverClassifier = when (driverType) {
+      TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY -> "accessibility"
+      TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION -> "instrumentation"
+      else -> driverType.name.lowercase()
+    }
+    val loggingRule = HostTrailblazeLoggingRule(
+      trailblazeDeviceInfoProvider = {
+        TrailblazeDeviceInfo(
+          trailblazeDeviceId = trailblazeDeviceId,
+          trailblazeDriverType = driverType,
+          widthPixels = 0,
+          heightPixels = 0,
+          classifiers = listOf(
+            TrailblazeDeviceClassifier("android"),
+            TrailblazeDeviceClassifier(driverClassifier),
+          ),
+        )
+      },
+    )
+
+    val trailblazeLlmModel = runYamlRequest.trailblazeLlmModel
+    val llmClient = dynamicLlmClient.createLlmClient()
+
+    val toolRepo = TrailblazeToolRepo.withDynamicToolSets(
+      customToolClasses = customToolClasses,
+      excludedToolClasses = excludedToolClasses,
+    )
+
+    val agent = HostOnDeviceRpcTrailblazeAgent(
+      rpcClient = onDeviceRpc,
+      runYamlRequestTemplate = runYamlRequest,
+      trailblazeLogger = loggingRule.logger,
+      trailblazeDeviceInfoProvider = loggingRule.trailblazeDeviceInfoProvider,
+      sessionProvider = { loggingRule.session ?: error("Session not available") },
+      customToolClasses = customToolClasses,
+    )
+
+    val runner = TrailblazeRunner(
+      agent = agent,
+      screenStateProvider = agent.screenStateProvider,
+      llmClient = llmClient,
+      trailblazeLlmModel = trailblazeLlmModel,
+      trailblazeToolRepo = toolRepo,
+      trailblazeLogger = loggingRule.logger,
+      sessionProvider = { loggingRule.session ?: error("Session not available") },
+    )
+
+    val elementComparator = TrailblazeElementComparator(
+      screenStateProvider = agent.screenStateProvider,
+      llmClient = llmClient,
+      trailblazeLlmModel = trailblazeLlmModel,
+      toolRepo = toolRepo,
+    )
+
+    val runnerUtil = TrailblazeRunnerUtil(
+      trailblazeRunner = runner,
+      runTrailblazeTool = { tools ->
+        val result = agent.runTrailblazeTools(
+          tools = tools,
+          traceId = null,
+          screenState = agent.screenStateProvider(),
+          elementComparator = elementComparator,
+          screenStateProvider = agent.screenStateProvider,
+        )
+        when (val toolResult = result.result) {
+          is TrailblazeToolResult.Success -> toolResult
+          is TrailblazeToolResult.Error -> throw TrailblazeException(toolResult.errorMessage)
+        }
+      },
+      trailblazeLogger = loggingRule.logger,
+      sessionProvider = { loggingRule.session ?: error("Session not available") },
+    )
+
+    return executeTrailSession(
+      loggingRule = loggingRule,
+      overrideSessionId = runYamlRequest.config.overrideSessionId,
+      testName = runYamlRequest.testName,
+      deviceLabel = "rpc-runner:${trailblazeDeviceId.instanceId}",
+      sendSessionEndLog = runYamlRequest.config.sendSessionEndLog,
+      onProgressMessage = onProgressMessage,
+      screenshotProvider = {
+        runBlocking { agent.captureScreenState() } ?: error("No screen state available")
+      },
+    ) { session ->
+      if (runYamlRequest.config.sendSessionStartLog) {
+        val deviceInfo = loggingRule.trailblazeDeviceInfoProvider()
+        loggingRule.logger.log(
+          session,
+          TrailblazeLog.TrailblazeSessionStatusChangeLog(
+            sessionStatus = SessionStatus.Started(
+              trailConfig = trailConfig,
+              trailFilePath = runYamlRequest.trailFilePath,
+              testClassName = "HostOnDeviceRpcRunner",
+              testMethodName = "run",
+              trailblazeDeviceInfo = deviceInfo,
+              rawYaml = runYamlRequest.yaml,
+              hasRecordedSteps = trailblazeYaml.hasRecordedSteps(trailItems),
+              trailblazeDeviceId = trailblazeDeviceId,
+            ),
+            session = session.sessionId,
+            timestamp = Clock.System.now(),
+          ),
+        )
+      }
+
+      onProgressMessage(
+        "Starting TrailblazeRunner on host with $driverClassifier driver via RPC (${trailItems.size} trail items)...",
       )
-      onProgressMessage("V3 accessibility execution failed: ${e.message}")
-      captureFailureScreenshot(session, loggingRule) {
-        runBlocking { executor.captureScreenState() } ?: error("No screen state available")
+
+      for (item in trailItems) {
+        val itemResult = when (item) {
+          is TrailYamlItem.PromptsTrailItem ->
+            runnerUtil.runPromptSuspend(item.promptSteps, useRecordedSteps = true)
+          is TrailYamlItem.ToolTrailItem ->
+            runnerUtil.runTrailblazeTool(item.tools.map { it.trailblazeTool })
+          is TrailYamlItem.ConfigTrailItem ->
+            item.config.context?.let { runner.appendToSystemPrompt(it) }
+        }
+        if (itemResult is TrailblazeToolResult.Error) {
+          throw TrailblazeException(itemResult.errorMessage)
+        }
       }
+
+      onProgressMessage("TrailblazeRunner accessibility execution completed successfully")
+
       if (runYamlRequest.config.sendSessionEndLog) {
-        sessionManager.endSession(session, isSuccess = false, exception = e)
+        loggingRule.sessionManager.endSession(session, isSuccess = true)
       }
-      null
-    } finally {
-      exportAndSaveTrace(session.sessionId, loggingRule)
-      loggingRule.setSession(null)
-      executor.close()
+
+      generateAndSaveRecording(
+        sessionId = session.sessionId,
+        customToolClasses = customToolClasses,
+      )
+
+      session.sessionId
     }
   }
 
@@ -1353,12 +1471,6 @@ object TrailblazeHostYamlRunner {
     val driverType: String?,
   )
 
-  /**
-   * Generates a recording YAML from a completed session's logs and saves it
-   * in the session directory (as `recording.trail.yaml`).
-   *
-   * @return [RecordingResult] if the recording was saved, or null on failure.
-   */
   /**
    * Compares each snapshot taken during [sessionId] against its checked-in golden file.
    * Goldens are resolved from the trail file's directory using the pattern:
@@ -1454,7 +1566,7 @@ object TrailblazeHostYamlRunner {
           context = originalConfig?.context,
           source = originalConfig?.source,
           metadata = originalConfig?.metadata,
-          app = originalConfig?.app,
+          target = originalConfig?.target,
           driver = started.trailblazeDeviceInfo.trailblazeDriverType.name,
           platform = started.trailblazeDeviceInfo.platform.name.lowercase(),
         )

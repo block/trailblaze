@@ -42,7 +42,7 @@ class JvmLiveSessionDataProvider(
       // Check if this is an on-device session
       val driverType = deviceInfo.trailblazeDriverType
 
-      if (!driverType.isHost && driverType.platform == TrailblazeDevicePlatform.ANDROID) {
+      if (!driverType.requiresHost && driverType.platform == TrailblazeDevicePlatform.ANDROID) {
         // For on-device tests, send cancel request to the device's RPC server
         withContext(Dispatchers.IO) {
           sessionInfo.trailblazeDeviceId?.let { trailblazeDeviceId ->

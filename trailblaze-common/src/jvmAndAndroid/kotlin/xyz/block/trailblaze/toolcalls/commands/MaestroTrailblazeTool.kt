@@ -54,6 +54,16 @@ data class MaestroTrailblazeTool(
     val agent = toolExecutionContext.maestroTrailblazeAgent
       ?: error("MaestroTrailblazeTool requires MaestroTrailblazeAgent")
     val maestroCommands = commands.asMaestroCommands()
+    if (maestroCommands.size < commands.size) {
+      val dropped = commands.size - maestroCommands.size
+      val errorMessage = if (dropped == commands.size) {
+        "All ${commands.size} maestro command(s) failed to deserialize."
+      } else {
+        "Failed to deserialize $dropped of ${commands.size} maestro command(s). " +
+          "Check logs for 'Failed to deserialize MaestroCommand' details."
+      }
+      return TrailblazeToolResult.Error.ExceptionThrown(errorMessage = errorMessage)
+    }
     return agent.runMaestroCommands(
       maestroCommands = maestroCommands,
       traceId = toolExecutionContext.traceId,

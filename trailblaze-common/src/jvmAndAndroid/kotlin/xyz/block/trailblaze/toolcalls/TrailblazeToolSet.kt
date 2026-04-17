@@ -16,6 +16,7 @@ import xyz.block.trailblaze.toolcalls.commands.EraseTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.HideKeyboardTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.LaunchAppTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.TapTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.LongPressElementWithAccessibilityTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.LongPressOnElementWithTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.NetworkConnectionTrailblazeTool
@@ -29,7 +30,6 @@ import xyz.block.trailblaze.toolcalls.commands.SwipeTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.SwipeWithRelativeCoordinatesTool
 import xyz.block.trailblaze.toolcalls.commands.TakeSnapshotTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnByElementSelector
-import xyz.block.trailblaze.toolcalls.commands.TapOnElementByNodeIdTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnElementWithAccessiblityTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnElementWithTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnPointTrailblazeTool
@@ -78,6 +78,7 @@ abstract class TrailblazeToolSet(
         PressBackTrailblazeTool::class,
         PressKeyTrailblazeTool::class,
         TakeSnapshotTool::class,
+        TapTrailblazeTool::class,
         ScrollUntilTextIsVisibleTrailblazeTool::class,
         SetClipboardTrailblazeTool::class,
         SwipeTrailblazeTool::class,
@@ -87,7 +88,7 @@ abstract class TrailblazeToolSet(
 
     val DefaultSetOfMarkTrailblazeToolSet = DynamicTrailblazeToolSet(
       name = "Set of Mark Ui Interactions (For Recording) - Do Not Combine with Device Control",
-      toolClasses = DefaultUiTrailblazeToolSet.toolClasses + TapOnElementByNodeIdTrailblazeTool::class,
+      toolClasses = DefaultUiTrailblazeToolSet.toolClasses,
     )
 
     val DeviceControlTrailblazeToolSet = DynamicTrailblazeToolSet(
@@ -95,15 +96,11 @@ abstract class TrailblazeToolSet(
       toolClasses = DefaultUiTrailblazeToolSet.toolClasses + TapOnPointTrailblazeTool::class,
     )
 
-    fun getSetOfMarkToolSet(setOfMarkEnabled: Boolean): TrailblazeToolSet = if (setOfMarkEnabled) {
-      DefaultSetOfMarkTrailblazeToolSet
-    } else {
-      DeviceControlTrailblazeToolSet
-    }
+    fun getSetOfMarkToolSet(): TrailblazeToolSet = DefaultSetOfMarkTrailblazeToolSet
 
-    fun getLlmToolSet(setOfMarkEnabled: Boolean): TrailblazeToolSet = DynamicTrailblazeToolSet(
-      name = if (setOfMarkEnabled) "Set-of-Mark LLM Tools" else "Device Control LLM Tools",
-      toolClasses = getSetOfMarkToolSet(setOfMarkEnabled).toolClasses +
+    fun getLlmToolSet(): TrailblazeToolSet = DynamicTrailblazeToolSet(
+      name = "Set-of-Mark LLM Tools",
+      toolClasses = getSetOfMarkToolSet().toolClasses +
           RememberTrailblazeToolSet.toolClasses +
           VerifyToolSet.toolClasses +
           TrailblazeToolSetCatalog.META_TOOLS,
@@ -142,11 +139,19 @@ abstract class TrailblazeToolSet(
     val DefaultLlmTrailblazeTools: Set<KClass<out TrailblazeTool>> =
       AllDefaultTrailblazeToolSets.flatMap { it.asTools() }.toSet()
 
+    @Deprecated(
+      "Use TrailblazeSerializationInitializer.initialize() which discovers all tools from YAML. " +
+        "This set only contains built-in mobile/Maestro tools and misses driver-specific tools " +
+        "(Playwright, Compose, Revyl) that are now registered via trailblaze-config/tools/*.yaml.",
+    )
     val AllBuiltInTrailblazeToolsForSerialization: Set<KClass<out TrailblazeTool>> =
       DefaultLlmTrailblazeTools + NonLlmTrailblazeTools +
           AndroidWorldBenchmarksToolSet.toolClasses +
           TrailblazeToolSetCatalog.META_TOOLS
 
+    @Deprecated(
+      "Use TrailblazeSerializationInitializer.initialize() which discovers all tools from YAML.",
+    )
     val AllBuiltInTrailblazeToolsForSerializationByToolName = AllBuiltInTrailblazeToolsForSerialization
       .associateBy { it.toolName() }
   }

@@ -2,6 +2,7 @@ package xyz.block.trailblaze.toolcalls
 
 import kotlin.reflect.KClass
 import xyz.block.trailblaze.android.tools.SetClipboardTrailblazeTool
+import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.toolcalls.commands.AssertNotVisibleWithTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.SetActiveToolSetsTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleByNodeIdTrailblazeTool
@@ -17,8 +18,8 @@ import xyz.block.trailblaze.toolcalls.commands.PressKeyTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.ScrollUntilTextIsVisibleTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.SwipeTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TakeSnapshotTool
-import xyz.block.trailblaze.toolcalls.commands.TapOnElementByNodeIdTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnPointTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.TapTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.WaitForIdleSyncTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.memory.AssertEqualsTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.memory.AssertMathTrailblazeTool
@@ -72,7 +73,7 @@ object TrailblazeToolSetCatalog {
     id = "core",
     description = "Essential interaction and navigation tools. Always enabled.",
     toolClasses = META_TOOLS + CORE_NAVIGATION_TOOLS + setOf(
-      TapOnElementByNodeIdTrailblazeTool::class,
+      TapTrailblazeTool::class,
       InputTextTrailblazeTool::class,
     ),
     alwaysEnabled = true,
@@ -143,12 +144,17 @@ object TrailblazeToolSetCatalog {
   )
 
   /**
-   * Returns the default catalog entries for a given interaction mode.
-   * Additional app-specific entries can be appended by the host app target.
+   * Framework-level tool exclusions by driver type.
+   *
+   * These apply to ALL app targets regardless of their [TrailblazeHostAppTarget.getExcludedToolsForDriver]
+   * overrides. Consumers should merge these with target-specific exclusions.
    */
-  fun defaultEntries(setOfMarkEnabled: Boolean): List<ToolSetCatalogEntry> {
-    val core = if (setOfMarkEnabled) CORE_SET_OF_MARK else CORE_DEVICE_CONTROL
-    return listOf(core, NAVIGATION, TEXT_EDITING, VERIFICATION, MEMORY, ADVANCED)
+  fun getFrameworkExcludedTools(driverType: TrailblazeDriverType): Set<KClass<out TrailblazeTool>> =
+    emptySet()
+
+  /** Returns the default catalog entries. */
+  fun defaultEntries(): List<ToolSetCatalogEntry> {
+    return listOf(CORE_SET_OF_MARK, NAVIGATION, TEXT_EDITING, VERIFICATION, MEMORY, ADVANCED)
   }
 
   /**

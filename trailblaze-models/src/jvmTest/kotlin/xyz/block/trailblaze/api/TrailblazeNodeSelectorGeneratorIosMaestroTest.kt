@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.api
 
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
@@ -206,6 +207,40 @@ class TrailblazeNodeSelectorGeneratorIosMaestroTest : TrailblazeNodeSelectorGene
 
     val selector = assertUniqueMatch(root, node2)
     assertNotNull(selector.index, "Expected index-based selector for identical iOS nodes")
+  }
+
+  // -- iOS: propertyless container skipped in favor of identifiable sibling --
+
+  @Test
+  fun `iOS - selector prefers identifiable node over smaller propertyless container`() {
+    nextId = 1L
+    // Small className-only container at (20,10)-(80,40) — 60x30 = 1800 area
+    // Real iOS containers typically have className but no text/resourceId/accessibilityText
+    val propertyless = nodeOf(
+      detail = DriverNodeDetail.IosMaestro(className = "UIView"),
+      bounds = TrailblazeNode.Bounds(20, 10, 80, 40),
+    )
+    // Slightly larger node with properties at (10,5)-(90,45) — 80x40 = 3200 area
+    // Both contain center point (50, 25)
+    val identifiable = nodeOf(
+      detail = DriverNodeDetail.IosMaestro(resourceId = "Contacts", accessibilityText = "Contacts"),
+      bounds = TrailblazeNode.Bounds(10, 5, 90, 45),
+    )
+    val root = nodeOf(
+      detail = DriverNodeDetail.IosMaestro(),
+      bounds = TrailblazeNode.Bounds(0, 0, 100, 50),
+      children = listOf(propertyless, identifiable),
+    )
+
+    // hitTest at the overlapping center should pick the identifiable node
+    val hit = root.hitTest(50, 25)
+    assertNotNull(hit)
+    assertEquals(identifiable.nodeId, hit.nodeId)
+
+    // The selector should use resourceId, not a bare index fallback
+    val selector = assertUniqueMatch(root, identifiable)
+    val match = selector.driverMatch as DriverNodeMatch.IosMaestro
+    assertNotNull(match.resourceIdRegex)
   }
 
   // -- iOS: findAllValidSelectors returns multiple strategies --

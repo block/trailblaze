@@ -16,6 +16,7 @@
 - [setClipboard](functions/custom/setClipboard.md)
 - [swipe](functions/custom/swipe.md)
 - [takeSnapshot](functions/custom/takeSnapshot.md)
+- [tap](functions/custom/tap.md)
 - [tapOnPoint](functions/custom/tapOnPoint.md)
 - [wait](functions/custom/wait.md)
 
@@ -39,7 +40,7 @@
 - [setClipboard](functions/custom/setClipboard.md)
 - [swipe](functions/custom/swipe.md)
 - [takeSnapshot](functions/custom/takeSnapshot.md)
-- [tapOnElementByNodeId](functions/custom/tapOnElementByNodeId.md)
+- [tap](functions/custom/tap.md)
 - [wait](functions/custom/wait.md)
 
 <hr/>

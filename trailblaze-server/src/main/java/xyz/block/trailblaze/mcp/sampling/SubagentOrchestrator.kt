@@ -112,7 +112,7 @@ RULES:
   /**
    * Runs a multi-step automation task using the client's LLM for reasoning.
    *
-   * @param objective The high-level goal to accomplish (e.g., "Log in and check my balance")
+   * @param objective The high-level objective to accomplish (e.g., "Log in and check my balance")
    * @param includeScreenshots Whether to include screenshots in sampling requests
    * @return Result describing success/failure and actions taken
    */

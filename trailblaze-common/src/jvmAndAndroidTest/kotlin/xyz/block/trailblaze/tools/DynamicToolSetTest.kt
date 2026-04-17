@@ -10,7 +10,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleByNodeIdTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.SetActiveToolSetsTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.TapOnElementByNodeIdTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.TapTrailblazeTool
 import xyz.block.trailblaze.toolcalls.toKoogToolDescriptor
 import xyz.block.trailblaze.toolcalls.toolName
 
@@ -20,7 +20,7 @@ class DynamicToolSetTest {
 
   @Test
   fun `formatCatalogSummary includes all entries with IDs and tool names`() {
-    val catalog = TrailblazeToolSetCatalog.defaultEntries(setOfMarkEnabled = true)
+    val catalog = TrailblazeToolSetCatalog.defaultEntries()
     val summary = TrailblazeToolSetCatalog.formatCatalogSummary(catalog)
 
     assertTrue(summary.contains("core"), "Should list core toolset")
@@ -36,7 +36,7 @@ class DynamicToolSetTest {
 
   @Test
   fun `setActiveToolSets replaces tools with requested toolsets`() {
-    val catalog = TrailblazeToolSetCatalog.defaultEntries(setOfMarkEnabled = true)
+    val catalog = TrailblazeToolSetCatalog.defaultEntries()
     val coreTools = TrailblazeToolSetCatalog.resolve(emptyList(), catalog)
     val repo = TrailblazeToolRepo(
       trailblazeToolSet = TrailblazeToolSet.DynamicTrailblazeToolSet("core", coreTools),
@@ -45,7 +45,7 @@ class DynamicToolSetTest {
 
     // Initially core tools (including basic navigation: pressKey, swipe, scroll)
     val initialToolNames = repo.getRegisteredTrailblazeTools().map { it.toolName().toolName }.toSet()
-    assertTrue("tapOnElementByNodeId" in initialToolNames, "Core should include tap")
+    assertTrue("tap" in initialToolNames, "Core should include tap")
     assertTrue("inputText" in initialToolNames, "Core should include input text")
     assertTrue("pressKey" in initialToolNames, "Core should include pressKey")
     assertTrue("swipe" in initialToolNames, "Core should include swipe")
@@ -58,12 +58,12 @@ class DynamicToolSetTest {
 
     val updatedToolNames = repo.getRegisteredTrailblazeTools().map { it.toolName().toolName }.toSet()
     assertTrue("launchApp" in updatedToolNames, "Navigation tools should now be active")
-    assertTrue("tapOnElementByNodeId" in updatedToolNames, "Core tools should still be present")
+    assertTrue("tap" in updatedToolNames, "Core tools should still be present")
   }
 
   @Test
   fun `setActiveToolSets rejects unknown toolset IDs`() {
-    val catalog = TrailblazeToolSetCatalog.defaultEntries(setOfMarkEnabled = true)
+    val catalog = TrailblazeToolSetCatalog.defaultEntries()
     val coreTools = TrailblazeToolSetCatalog.resolve(emptyList(), catalog)
     val repo = TrailblazeToolRepo(
       trailblazeToolSet = TrailblazeToolSet.DynamicTrailblazeToolSet("core", coreTools),
@@ -76,7 +76,7 @@ class DynamicToolSetTest {
 
   @Test
   fun `setActiveToolSets with empty list resets to core only`() {
-    val catalog = TrailblazeToolSetCatalog.defaultEntries(setOfMarkEnabled = true)
+    val catalog = TrailblazeToolSetCatalog.defaultEntries()
     val coreTools = TrailblazeToolSetCatalog.resolve(emptyList(), catalog)
     val repo = TrailblazeToolRepo(
       trailblazeToolSet = TrailblazeToolSet.DynamicTrailblazeToolSet("core", coreTools),
@@ -90,12 +90,12 @@ class DynamicToolSetTest {
     val toolNames = repo.getRegisteredTrailblazeTools().map { it.toolName().toolName }.toSet()
     assertTrue("launchApp" !in toolNames, "Navigation-only tools should be removed after reset")
     assertTrue("pressKey" in toolNames, "Core navigation tools should remain")
-    assertTrue("tapOnElementByNodeId" in toolNames, "Core tools should remain")
+    assertTrue("tap" in toolNames, "Core tools should remain")
   }
 
   @Test
   fun `setActiveToolSets preserves extra tools not in catalog`() {
-    val catalog = TrailblazeToolSetCatalog.defaultEntries(setOfMarkEnabled = true)
+    val catalog = TrailblazeToolSetCatalog.defaultEntries()
     val coreTools = TrailblazeToolSetCatalog.resolve(emptyList(), catalog)
     // Simulate an app-specific custom tool added alongside catalog tools
     val customToolSet = TrailblazeToolSet.DynamicTrailblazeToolSet(
@@ -118,7 +118,7 @@ class DynamicToolSetTest {
     val repo = TrailblazeToolRepo(
       trailblazeToolSet = TrailblazeToolSet.DynamicTrailblazeToolSet(
         "minimal",
-        setOf(TapOnElementByNodeIdTrailblazeTool::class),
+        setOf(TapTrailblazeTool::class),
       ),
     )
 
@@ -137,7 +137,7 @@ class DynamicToolSetTest {
 
   @Test
   fun `getToolDescriptorsForStep returns verify tools for VerificationStep`() {
-    val repo = TrailblazeToolRepo.withDynamicToolSets(setOfMarkEnabled = true)
+    val repo = TrailblazeToolRepo.withDynamicToolSets()
     val verifyStep = xyz.block.trailblaze.yaml.VerificationStep(verify = "test")
     val verifyDescriptors = repo.getToolDescriptorsForStep(verifyStep).map { it.name }.toSet()
 
@@ -153,7 +153,7 @@ class DynamicToolSetTest {
 
   @Test
   fun `setActiveToolSets persists tools across calls`() {
-    val catalog = TrailblazeToolSetCatalog.defaultEntries(setOfMarkEnabled = true)
+    val catalog = TrailblazeToolSetCatalog.defaultEntries()
     val coreTools = TrailblazeToolSetCatalog.resolve(emptyList(), catalog)
     val repo = TrailblazeToolRepo(
       trailblazeToolSet = TrailblazeToolSet.DynamicTrailblazeToolSet("core", coreTools),

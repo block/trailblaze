@@ -1,0 +1,2 @@
+id: web_scroll
+class: xyz.block.trailblaze.playwright.tools.PlaywrightNativeScrollTool

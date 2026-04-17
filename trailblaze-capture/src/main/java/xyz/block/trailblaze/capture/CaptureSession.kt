@@ -80,7 +80,11 @@ class CaptureSession(private val streams: List<CaptureStream>, private val optio
       if (options.captureVideo) {
         when (platform) {
           "ANDROID" -> streams.add(xyz.block.trailblaze.capture.video.AndroidVideoCapture())
-          "IOS" -> streams.add(xyz.block.trailblaze.capture.video.IosVideoCapture())
+          // TODO: iOS video capture disabled — sprite sheet generation needs WebP migration
+          //  (ffmpeg 8.0 JPEG encoder rejects iOS simulator's limited-range YUV, and the
+          //  desktop UI's ImageIO.read() doesn't support WebP). See IosVideoCapture.kt for
+          //  the recording + stale-lock fixes that are ready once the format is sorted out.
+          // "IOS" -> streams.add(xyz.block.trailblaze.capture.video.IosVideoCapture())
         }
       }
       if (options.captureLogcat) {

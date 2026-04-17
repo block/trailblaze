@@ -36,6 +36,29 @@ abstract class TrailblazeHostAppTarget(
     internalGetCustomToolsForDriver(driverType)
 
   /**
+   * A named group of tools for discovery output. Allows targets to organize their
+   * custom tools into logical groups (e.g., "card-reader", "merchant-factory").
+   */
+  data class ToolGroup(
+    val id: String,
+    val description: String,
+    val toolClasses: Set<KClass<out TrailblazeTool>>,
+  )
+
+  /**
+   * Override this to expose custom tools organized into logical groups for discovery.
+   *
+   * Default implementation wraps all custom tools in a single group named after the target.
+   * Override in app-specific targets to provide meaningful grouping (e.g., separating
+   * card reader tools from merchant factory tools from app launch tools).
+   */
+  open fun getCustomToolGroupsForDriver(driverType: TrailblazeDriverType): List<ToolGroup> {
+    val tools = getCustomToolsForDriver(driverType)
+    if (tools.isEmpty()) return emptyList()
+    return listOf(ToolGroup(id = id, description = "$displayName tools", toolClasses = tools))
+  }
+
+  /**
    * Override this to exclude specific tools from the default tool set.
    * This is useful when you want to replace a default tool with a custom implementation.
    */

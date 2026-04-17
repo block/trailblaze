@@ -1,0 +1,10 @@
+# Tools for verifying UI state and asserting expectations.
+id: verification
+description: "Assert element visible, compare values, and AI-powered assertions."
+drivers:
+  - android-ondevice-instrumentation
+  - android-ondevice-accessibility
+  - ios-host
+tools:
+  - assertNotVisibleWithText
+  - assertVisibleWithNodeId

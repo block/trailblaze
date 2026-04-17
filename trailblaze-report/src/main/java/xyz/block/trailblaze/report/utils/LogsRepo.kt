@@ -150,8 +150,15 @@ class LogsRepo(
         }
       }
     } else {
-      // Single read mode: just initialize SessionInfo once without reactive updates
-      _sessionInfoFlow.value = _sessionsFlow.value.mapNotNull { getSessionInfoDirect(it) }
+      // Single read mode: read all session logs once and cache them.
+      // This avoids redundant disk I/O in the main loop and makes the report
+      // resilient to transient I/O failures after initialization.
+      _sessionInfoFlow.value = _sessionsFlow.value.mapNotNull { sessionId ->
+        val logs = getLogsForSession(sessionId)
+        // Cache the logs so getCachedLogsForSession/getSessionLogsFlow can reuse them
+        _sessionLogsFlows[sessionId] = MutableStateFlow(logs)
+        buildSessionInfo(logs)
+      }
       Console.log("[LogsRepo] Initialized in single-read mode with ${_sessionsFlow.value.size} sessions")
     }
   }
@@ -227,6 +234,9 @@ class LogsRepo(
    */
   fun getCachedLogsForSession(sessionId: SessionId?): List<TrailblazeLog> {
     if (sessionId == null) return emptyList()
+
+    // Return from cache if already populated (avoids disk check when volume may be unavailable)
+    _sessionLogsFlows[sessionId]?.let { return it.value }
 
     val sessionDir = File(logsDir, sessionId.value)
     if (!sessionDir.exists()) return emptyList()

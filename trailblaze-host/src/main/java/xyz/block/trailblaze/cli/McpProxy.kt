@@ -53,7 +53,7 @@ import xyz.block.trailblaze.mcp.McpToolProfile
  * Hot-reload workflow (development):
  *   1. Start proxy once -- MCP client connects here, stays connected
  *   2. Make code changes
- *   3. trailblaze stop                                (kill daemon)
+ *   3. trailblaze app --stop                           (kill daemon)
  *   4. ./gradlew :trailblaze-desktop:releaseArtifacts   (rebuild uber JAR)
  *   5. trailblaze                                     (restart daemon)
  *   6. Proxy auto-reconnects, replays session -- MCP client doesn't notice
@@ -616,10 +616,15 @@ internal fun findOnPath(name: String): File? {
 
 /**
  * Find the trailblaze launcher executable.
- * Checks next to the running JAR first (release builds), then the system PATH,
- * then well-known relative paths for local development.
+ * Dev launchers export TRAILBLAZE_LAUNCHER so the subprocess uses the same script.
+ * For release builds, checks next to the running JAR, then the system PATH.
  */
 internal fun findTrailblazeLauncher(): File? {
+  System.getenv("TRAILBLAZE_LAUNCHER")?.let { path ->
+    val file = File(path)
+    if (file.exists() && file.canExecute()) return file
+  }
+
   val jarDir = McpProxy::class.java.protectionDomain?.codeSource?.location?.toURI()
     ?.let { File(it).parentFile }
   if (jarDir != null) {
@@ -627,9 +632,5 @@ internal fun findTrailblazeLauncher(): File? {
     if (launcher.exists() && launcher.canExecute()) return launcher
   }
 
-  val pathLauncher = findOnPath("trailblaze")
-  if (pathLauncher != null) return pathLauncher
-
-  return listOf(File("trailblaze"), File("opensource/trailblaze"))
-    .firstOrNull { it.exists() && it.canExecute() }
+  return findOnPath("trailblaze")
 }

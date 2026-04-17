@@ -77,12 +77,7 @@ data class AssertVisibleByNodeIdTrailblazeTool(
       val centerPoint = matchingNode.centerPoint
       if (centerPoint != null) {
         val (cx, cy) = centerPoint.split(",").map { it.toInt() }
-        val targetTrailblazeNode = trailblazeTree
-          .findAll { node -> node.bounds?.containsPoint(cx, cy) == true }
-          .minByOrNull { node ->
-            val b = node.bounds ?: return@minByOrNull Long.MAX_VALUE
-            b.width.toLong() * b.height.toLong()
-          }
+        val targetTrailblazeNode = trailblazeTree.hitTest(cx, cy)
         targetTrailblazeNode?.let { target ->
           try {
             TrailblazeNodeSelectorGenerator.findBestSelector(trailblazeTree, target)

@@ -12,8 +12,7 @@ import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.host.rules.TrailblazeHostLlmConfig.DEFAULT_TRAILBLAZE_LLM_MODEL
 import xyz.block.trailblaze.http.DynamicLlmClient
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
-import xyz.block.trailblaze.logs.client.TrailblazeJson
-import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
+import xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
@@ -28,9 +27,8 @@ import xyz.block.trailblaze.rules.TrailblazeLoggingRule
 import xyz.block.trailblaze.rules.TrailblazeRunnerUtil
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
-import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
-import xyz.block.trailblaze.toolcalls.toolName
+import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.util.toPascalCaseIdentifier
@@ -67,10 +65,8 @@ class BasePlaywrightNativeTest(
 ) {
 
   init {
-    TrailblazeJsonInstance = TrailblazeJson.createTrailblazeJsonInstance(
-      allToolClasses = TrailblazeToolSet.AllBuiltInTrailblazeToolsForSerializationByToolName +
-          (PlaywrightNativeToolSet.LlmToolSet.toolClasses + allSerializationToolClasses)
-            .associateBy { it.toolName() },
+    TrailblazeSerializationInitializer.initialize(
+      additionalToolClasses = allSerializationToolClasses,
     )
   }
 
@@ -269,8 +265,8 @@ When interpreting objectives, if an objective begins with the word "expect", "ve
 "assert" (case-insensitive), you should use the objective_status tool to report the result.
 
 **NOTE:**
-- Use playwright_snapshot to refresh your view of the page when needed.
-- After navigation or clicks that change the page, use playwright_snapshot to see the updated state.
+- Use web_snapshot to refresh your view of the page when needed.
+- After navigation or clicks that change the page, use web_snapshot to see the updated state.
     """.trimIndent()
   }
 }

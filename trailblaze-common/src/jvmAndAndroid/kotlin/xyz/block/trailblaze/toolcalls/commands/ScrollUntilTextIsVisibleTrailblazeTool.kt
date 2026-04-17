@@ -16,9 +16,11 @@ import xyz.block.trailblaze.api.TrailblazeElementSelector
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.maestro.TrailblazeScrollStartPosition
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
+import xyz.block.trailblaze.toolcalls.ReasoningTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.toolcalls.isSuccess
 import xyz.block.trailblaze.toolcalls.commands.TrailblazeElementSelectorExt.toMaestroElementSelector
 import xyz.block.trailblaze.utils.Ext.toViewHierarchyTreeNode
 import xyz.block.trailblaze.viewmatcher.matching.ElementMatcherUsingMaestro
@@ -53,7 +55,8 @@ class ScrollUntilTextIsVisibleTrailblazeTool(
   val centerElement: Boolean = ScrollUntilVisibleCommand.DEFAULT_CENTER_ELEMENT,
   @param:LLMDescription("Which part of the screen to scroll from. Default is 'CENTER'.")
   val scrollStartPosition: TrailblazeScrollStartPosition = TrailblazeScrollStartPosition.CENTER,
-) : ExecutableTrailblazeTool {
+  override val reasoning: String? = null,
+) : ExecutableTrailblazeTool, ReasoningTrailblazeTool {
 
   override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult {
     val memory = toolExecutionContext.trailblazeAgent.memory
@@ -84,10 +87,17 @@ class ScrollUntilTextIsVisibleTrailblazeTool(
     return if (!useManualScrollLoop) {
       // For default scrolling with Maestro-compatible drivers, delegate to Maestro's
       // ScrollUntilVisibleCommand which handles the scroll-check loop internally.
-      toolExecutionContext.trailblazeAgent.runMaestroCommands(
+      val result = toolExecutionContext.trailblazeAgent.runMaestroCommands(
         maestroCommands = listOf(scrollCommand),
-        traceId = toolExecutionContext.traceId
+        traceId = toolExecutionContext.traceId,
       )
+      if (result.isSuccess()) {
+        TrailblazeToolResult.Success(
+          message = "Scrolled ${direction.name} until '$text' visible",
+        )
+      } else {
+        result
+      }
     } else {
       scrollUntilVisibleWithStartPosition(
         toolExecutionContext = toolExecutionContext,
@@ -160,11 +170,15 @@ class ScrollUntilTextIsVisibleTrailblazeTool(
 
           if (maestroCommand.centerElement && visibility > 0.1 && retryCenterCount <= maxRetryCenterCount) {
             if (maestroUiElement.isElementNearScreenCenter(direction, widthGrid, heightGrid)) {
-              return TrailblazeToolResult.Success()
+              return TrailblazeToolResult.Success(
+                message = "Scrolled ${direction.name} until '$text' visible",
+              )
             }
             retryCenterCount++
           } else if (visibility >= maestroCommand.visibilityPercentageNormalized) {
-            return TrailblazeToolResult.Success()
+            return TrailblazeToolResult.Success(
+              message = "Scrolled ${direction.name} until '$text' visible",
+            )
           }
         }
       } catch (ignored: MaestroException.ElementNotFound) {

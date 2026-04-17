@@ -223,6 +223,113 @@ class TrailblazeNodeHitTestAndTapResolutionTest {
   }
 
   // ======================================================================
+  // hitTest: propertyless node preference
+  // ======================================================================
+
+  @Test
+  fun `hitTest prefers identifiable node over smaller propertyless container`() {
+    nextId = 1L
+    // Smaller propertyless container — 60x30 = 1800 area
+    val empty = node(
+      detail = DriverNodeDetail.AndroidAccessibility(),
+      bounds = TrailblazeNode.Bounds(20, 10, 80, 40),
+    )
+    // Slightly larger node with properties — 80x40 = 3200 area
+    val labeled = node(
+      detail = DriverNodeDetail.AndroidAccessibility(
+        text = "Contacts",
+        resourceId = "com.example:id/contacts",
+      ),
+      bounds = TrailblazeNode.Bounds(10, 5, 90, 45),
+    )
+    val root = node(
+      bounds = TrailblazeNode.Bounds(0, 0, 100, 50),
+      children = listOf(empty, labeled),
+    )
+
+    // Both nodes contain (50, 25). The labeled node should win despite being larger.
+    val hit = root.hitTest(50, 25)
+    assertNotNull(hit)
+    assertEquals(labeled.nodeId, hit.nodeId)
+  }
+
+  @Test
+  fun `hitTest still picks smallest when all nodes have properties`() {
+    nextId = 1L
+    val small = node(
+      detail = DriverNodeDetail.AndroidAccessibility(text = "Small"),
+      bounds = TrailblazeNode.Bounds(20, 10, 80, 40),
+    )
+    val large = node(
+      detail = DriverNodeDetail.AndroidAccessibility(text = "Large"),
+      bounds = TrailblazeNode.Bounds(10, 5, 90, 45),
+    )
+    val root = node(
+      bounds = TrailblazeNode.Bounds(0, 0, 100, 50),
+      children = listOf(small, large),
+    )
+
+    // When both have properties, smallest area wins as before
+    val hit = root.hitTest(50, 25)
+    assertNotNull(hit)
+    assertEquals(small.nodeId, hit.nodeId)
+  }
+
+  @Test
+  fun `hitTest falls back to smallest when no nodes have properties`() {
+    nextId = 1L
+    val small = node(
+      detail = DriverNodeDetail.AndroidAccessibility(),
+      bounds = TrailblazeNode.Bounds(20, 10, 80, 40),
+    )
+    val large = node(
+      detail = DriverNodeDetail.AndroidAccessibility(),
+      bounds = TrailblazeNode.Bounds(10, 5, 90, 45),
+    )
+    val root = node(
+      bounds = TrailblazeNode.Bounds(0, 0, 100, 50),
+      children = listOf(small, large),
+    )
+
+    // When neither has properties, smallest area wins as fallback
+    val hit = root.hitTest(50, 25)
+    assertNotNull(hit)
+    assertEquals(small.nodeId, hit.nodeId)
+  }
+
+  @Test
+  fun `hitTest iOS propertyless container scenario`() {
+    nextId = 1L
+    // Simulates the iOS scenario: small className-only container nested inside an identifiable element
+    val emptyContainer = TrailblazeNode(
+      nodeId = nextId++,
+      bounds = TrailblazeNode.Bounds(25, 15, 75, 35),
+      driverDetail = DriverNodeDetail.IosMaestro(className = "UIView"), // className only, no text/resourceId
+      children = emptyList(),
+    )
+    val contactsButton = TrailblazeNode(
+      nodeId = nextId++,
+      bounds = TrailblazeNode.Bounds(10, 5, 90, 45),
+      driverDetail = DriverNodeDetail.IosMaestro(
+        resourceId = "Contacts",
+        accessibilityText = "Contacts",
+      ),
+      children = listOf(emptyContainer),
+    )
+    val root = TrailblazeNode(
+      nodeId = nextId++,
+      bounds = TrailblazeNode.Bounds(0, 0, 100, 50),
+      driverDetail = DriverNodeDetail.IosMaestro(),
+      children = listOf(contactsButton),
+    )
+
+    // Tap at center of the empty container — should still resolve to the Contacts button
+    val hit = root.hitTest(50, 25)
+    assertNotNull(hit)
+    assertEquals(contactsButton.nodeId, hit.nodeId)
+  }
+
+  // ======================================================================
   // resolveFromTap: basic cases
   // ======================================================================
 

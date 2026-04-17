@@ -12,7 +12,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.util.Console
 
 @Serializable
-@TrailblazeToolClass("playwright_verify_element_visible")
+@TrailblazeToolClass("web_verify_element_visible")
 @LLMDescription(
   """
 Verify that an element identified by its element ID, ARIA descriptor, or CSS selector is visible on the page.

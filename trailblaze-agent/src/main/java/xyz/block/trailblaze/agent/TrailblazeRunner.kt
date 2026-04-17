@@ -111,6 +111,11 @@ class TrailblazeRunner(
   ): AgentTaskStatus {
     logObjectiveStart(prompt)
     val stepToolStrategy = prompt.getToolStrategy()
+    // Sliding window of recent tool call fingerprints (tool:args) for loop detection.
+    // Capped at STUCK_IDENTICAL_ACTION_THRESHOLD entries to avoid unbounded growth.
+    // Each entry represents one tool call from an LLM response — a single response may
+    // contribute multiple entries when the LLM batches tool calls.
+    val recentToolFingerprints = ArrayDeque<String>(STUCK_IDENTICAL_ACTION_THRESHOLD)
     do {
       TrailblazeTracer.trace("prepareNextStep", "agent") {
         stepStatus.prepareNextStep()
@@ -198,14 +203,40 @@ class TrailblazeRunner(
         )
       }
 
+      // --- Stuck detection: bail out early if the agent is looping ---
+      // Track tool fingerprints (tool name + args) in a fixed-size sliding window.
+      // If every entry in the window is identical, the agent is stuck and further
+      // calls won't help. We only check fully identical actions (same tool AND same
+      // args) to avoid false positives on legitimate sequences like tapping different
+      // elements or entering repeated PIN digits.
+      val toolCalls = koogLlmResponseMessages.filterIsInstance<Message.Tool>()
+      for (toolCall in toolCalls) {
+        val fingerprint = "${toolCall.tool}:${toolCall.content}"
+        if (recentToolFingerprints.size >= STUCK_IDENTICAL_ACTION_THRESHOLD) {
+          recentToolFingerprints.removeFirst()
+        }
+        recentToolFingerprints.addLast(fingerprint)
+      }
+
+      if (recentToolFingerprints.size >= STUCK_IDENTICAL_ACTION_THRESHOLD &&
+        recentToolFingerprints.toSet().size == 1
+      ) {
+        val toolName = toolCalls.lastOrNull()?.tool ?: "unknown"
+        Console.info(
+          "  Agent stuck: $toolName repeated identically " +
+            "$STUCK_IDENTICAL_ACTION_THRESHOLD times consecutively",
+        )
+        throw MaxCallsLimitReachedException(
+          maxCalls = stepStatus.currentStep,
+          objectivePrompt = "${stepStatus.promptStep.prompt} [stuck: $toolName repeated identically]",
+        )
+      }
+
       if (stepStatus.currentStep >= maxSteps) {
-        // Create exception for logging and throwing
         val exception = MaxCallsLimitReachedException(
           maxCalls = maxSteps,
           objectivePrompt = stepStatus.promptStep.prompt,
         )
-        // Session end is now handled by SessionManager in the calling context
-        // Throw terminal exception to halt execution
         throw exception
       }
     } while (!stepStatus.isFinished())
@@ -297,6 +328,13 @@ class TrailblazeRunner(
   )
 
   companion object {
+    /**
+     * Number of consecutive identical actions (same tool + same args) before
+     * declaring the agent stuck. Set high enough to allow legitimate repetition
+     * (e.g., entering repeated PIN digits) but low enough to catch true loops.
+     */
+    private const val STUCK_IDENTICAL_ACTION_THRESHOLD = 10
+
     val baseSystemPrompt = TemplatingUtil.getResourceAsText(
       "trailblaze_base_system_prompt.md",
     )!!

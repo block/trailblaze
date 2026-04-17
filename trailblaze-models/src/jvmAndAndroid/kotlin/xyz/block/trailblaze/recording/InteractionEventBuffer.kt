@@ -151,7 +151,7 @@ class InteractionEventBuffer(
 
 /**
  * Factory interface for creating platform-specific tool instances from user input.
- * Playwright creates `playwright_click`, `playwright_type`, etc.
+ * Playwright creates `web_click`, `web_type`, etc.
  * Maestro creates `tapOnElementWithText`, `inputText`, etc.
  */
 interface InteractionToolFactory {

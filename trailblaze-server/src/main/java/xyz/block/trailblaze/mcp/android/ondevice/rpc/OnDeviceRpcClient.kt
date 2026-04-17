@@ -133,6 +133,21 @@ class OnDeviceRpcClient(
     }
   }
 
+  /**
+   * Blocks until the on-device accessibility service is connected.
+   * Uses the reliable in-process check on-device rather than host-side dumpsys parsing.
+   */
+  suspend fun ensureAccessibilityServiceReady() {
+    when (val result = rpcCall(EnsureAccessibilityReadyRequest())) {
+      is RpcResult.Success -> {
+        sendProgressMessage("Accessibility service verified as running on-device.")
+      }
+      is RpcResult.Failure -> {
+        throw IOException("On-device accessibility check failed: ${result.message}")
+      }
+    }
+  }
+
   @OptIn(ExperimentalTime::class)
   suspend fun verifyServerIsRunning(): Boolean {
     val startTimeSeconds = Clock.System.now().epochSeconds

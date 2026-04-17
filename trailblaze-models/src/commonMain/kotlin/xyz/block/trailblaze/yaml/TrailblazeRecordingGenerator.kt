@@ -34,7 +34,7 @@ fun List<TrailblazeLog>.generateRecordedYaml(
             description = sessionTrailConfig.description,
             priority = sessionTrailConfig.priority,
             metadata = sessionTrailConfig.metadata,
-            app = sessionTrailConfig.app,
+            target = sessionTrailConfig.target,
             driver = sessionTrailConfig.driver,
             platform = sessionTrailConfig.platform,
           ),

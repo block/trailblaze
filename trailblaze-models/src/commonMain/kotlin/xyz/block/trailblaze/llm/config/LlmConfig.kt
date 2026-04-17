@@ -2,6 +2,7 @@ package xyz.block.trailblaze.llm.config
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import xyz.block.trailblaze.llm.TrailblazeLlmProvider
 
 /**
  * Top-level LLM configuration matching the schema from Decision 030.
@@ -43,7 +44,19 @@ enum class LlmProviderType {
   @SerialName("google") GOOGLE,
   @SerialName("ollama") OLLAMA,
   @SerialName("openrouter") OPEN_ROUTER,
-  @SerialName("openai_compatible") OPENAI_COMPATIBLE,
+  @SerialName("openai_compatible") OPENAI_COMPATIBLE;
+
+  companion object {
+    /** Infers the provider type from a provider ID string, or null for unknown/custom providers. */
+    fun inferFromProviderId(providerId: String): LlmProviderType? = when (providerId) {
+      TrailblazeLlmProvider.OPENAI.id -> OPENAI
+      TrailblazeLlmProvider.ANTHROPIC.id -> ANTHROPIC
+      TrailblazeLlmProvider.GOOGLE.id -> GOOGLE
+      TrailblazeLlmProvider.OLLAMA.id -> OLLAMA
+      TrailblazeLlmProvider.OPEN_ROUTER.id -> OPEN_ROUTER
+      else -> null
+    }
+  }
 }
 
 @Serializable

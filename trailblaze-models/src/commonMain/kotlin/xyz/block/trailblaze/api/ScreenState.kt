@@ -22,6 +22,17 @@ enum class DeviceInfoPrefix(val prefix: String) {
   fun line(value: String): String = "$prefix $value"
 }
 
+/**
+ * An element to annotate on a screenshot with a set-of-mark label.
+ * Carries the ref label (matching the `[ref]` in the text representation) and bounds.
+ */
+data class AnnotationElement(
+  val nodeId: Long,
+  val bounds: TrailblazeNode.Bounds,
+  /** The hash ref label to draw on the screenshot (e.g., "y778"). Matches the text output. */
+  val refLabel: String? = null,
+)
+
 interface ScreenState {
   /**
    * Returns the clean screenshot bytes without any debugging annotations.
@@ -76,6 +87,20 @@ interface ScreenState {
    * - Implementations should return a human-readable text format suitable for LLM consumption.
    */
   val viewHierarchyTextRepresentation: String?
+    get() = null
+
+  /**
+   * Elements to annotate on screenshots with set-of-mark labels.
+   *
+   * Returns a list of (nodeId, bounds) pairs corresponding to the elements emitted
+   * in [viewHierarchyTextRepresentation] with `[nID]` refs. When non-null, the SoM
+   * annotator uses these instead of deriving elements from [viewHierarchy], ensuring
+   * that the numbers drawn on the screenshot exactly match the IDs in the text.
+   *
+   * Null by default — implementations should override when [viewHierarchyTextRepresentation]
+   * uses element IDs from [trailblazeNodeTree] (Android, iOS) rather than [viewHierarchy].
+   */
+  val annotationElements: List<AnnotationElement>?
     get() = null
 
   val trailblazeDevicePlatform: TrailblazeDevicePlatform

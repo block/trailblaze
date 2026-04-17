@@ -5,7 +5,7 @@
     - step: Open Yahoo.com
       recording:
         tools:
-          - playwright_navigate:
+          - web_navigate:
               url: https://yahoo.com
               reasoning: The objective is to navigate to the provided file URL. There are currently no interactive elements, so navigation is the required step to begin this task.
     - step: Input the search query of "Trailblaze Github Block" but don't click Search.

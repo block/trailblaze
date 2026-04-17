@@ -48,8 +48,8 @@ enum class McpToolProfile {
     const val TOOL_TRAIL = "trail"
     const val TOOL_TRAIL_EDIT = "trailEdit"
     const val TOOL_CONFIG = "config"
-    const val TOOL_SNAPSHOT = "snapshot"
     const val TOOL_SESSION = "session"
+    const val TOOL_TOOLS = "toolbox"
 
     /** Tool names exposed in MINIMAL mode. */
     val MINIMAL_TOOL_NAMES =
@@ -60,8 +60,8 @@ enum class McpToolProfile {
         TOOL_TRAIL,
         TOOL_TRAIL_EDIT,
         TOOL_CONFIG,
-        TOOL_SNAPSHOT,
         TOOL_SESSION,
+        TOOL_TOOLS,
       )
   }
 }
@@ -156,7 +156,7 @@ class TrailblazeMcpSessionContext(
    * - `ALL_TOOLS` (default): All tool categories enabled upfront. Maximum reliability —
    *   the LLM always has every tool available without needing to request more.
    * - `PROGRESSIVE`: Start with minimal tools (CORE_INTERACTION + OBSERVATION) and let
-   *   the LLM request additional categories via the `tools()` MCP tool. Saves tokens
+   *   the LLM request additional categories via the `toolbox()` MCP tool. Saves tokens
    *   but requires the LLM to correctly identify when it needs more tools.
    */
   @Volatile var toolLoadingStrategy: ToolLoadingStrategy = ToolLoadingStrategy.ALL_TOOLS,
@@ -291,11 +291,34 @@ class TrailblazeMcpSessionContext(
   /**
    * Records a step taken during the session.
    * Called by blaze(), verify(), ask() in StepTool.
+   *
+   * Consecutive tool calls with the same objective (input) are grouped into a single
+   * recorded step with accumulated tool calls. This enables external agents to use
+   * `blaze tool -o "Enter login credentials"` multiple times and have them produce
+   * a single trail objective with a multi-tool recording.
    */
   fun recordStep(step: RecordedStep) = synchronized(recordingLock) {
     if (isRecording) {
-      recordedSteps.add(step)
-      Console.log("[Recording] Step ${recordedSteps.size}: ${step.type} - ${step.input.take(50)}...")
+      val lastStep = recordedSteps.lastOrNull()
+      // Group consecutive STEP entries with the same objective input
+      if (lastStep != null &&
+        lastStep.type == RecordedStepType.STEP &&
+        step.type == RecordedStepType.STEP &&
+        lastStep.input == step.input &&
+        step.toolCalls.isNotEmpty()
+      ) {
+        // Merge tool calls into the existing step
+        val merged = lastStep.copy(
+          toolCalls = lastStep.toolCalls + step.toolCalls,
+          result = "Executed ${lastStep.toolCalls.size + step.toolCalls.size} tools",
+          success = lastStep.success && step.success,
+        )
+        recordedSteps[recordedSteps.lastIndex] = merged
+        Console.log("[Recording] Step ${recordedSteps.size} (grouped): ${step.type} - ${step.input.take(50)}... (${merged.toolCalls.size} tools)")
+      } else {
+        recordedSteps.add(step)
+        Console.log("[Recording] Step ${recordedSteps.size}: ${step.type} - ${step.input.take(50)}...")
+      }
     }
   }
 
@@ -587,7 +610,7 @@ data class RecordedStep(
   /** Type of step (STEP, VERIFY, ASK) */
   val type: RecordedStepType,
 
-  /** The natural language input (goal/assertion/question) */
+  /** The natural language input (objective/assertion/question) */
   val input: String,
 
   /** Tool calls made by the inner agent to achieve this step */

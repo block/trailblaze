@@ -35,21 +35,24 @@ class TrailblazeSettingsRepo(
 
   fun load(
     initialConfig: SavedTrailblazeAppConfig,
-  ): SavedTrailblazeAppConfig = try {
-    Console.log("Loading Settings from: ${settingsFile.absolutePath}")
-    trailblazeJson.decodeFromString(
-      SavedTrailblazeAppConfig.serializer(),
-      settingsFile.readText(),
-    ).copy(
-      // Clear session-specific state on app restart
-      currentSessionId = null,
-      currentSessionViewMode = SessionViewMode.DEFAULT.name,
-    )
-  } catch (e: Exception) {
-    Console.log("Error loading settings, using default: ${e.message}")
-    initialConfig.also {
-      saveConfig(initialConfig)
+  ): SavedTrailblazeAppConfig {
+    val config = try {
+      Console.log("Loading Settings from: ${settingsFile.absolutePath}")
+      trailblazeJson.decodeFromString(
+        SavedTrailblazeAppConfig.serializer(),
+        settingsFile.readText(),
+      ).copy(
+        // Clear session-specific state on app restart
+        currentSessionId = null,
+        currentSessionViewMode = SessionViewMode.DEFAULT.name,
+      )
+    } catch (e: Exception) {
+      Console.log("Error loading settings, using default: ${e.message}")
+      initialConfig.also {
+        saveConfig(initialConfig)
+      }
     }
+    return config
   }
 
   fun updateState(stateUpdater: (TrailblazeServerState) -> TrailblazeServerState) {
@@ -106,7 +109,7 @@ class TrailblazeSettingsRepo(
 
   fun getCurrentSelectedTargetApp(): TrailblazeHostAppTarget? {
     return allTargetApps()
-      .filter { it != defaultHostAppTarget }
+      .filter { it.id != defaultHostAppTarget.id }
       .firstOrNull { appTarget ->
         appTarget.id == serverStateFlow.value.appConfig.selectedTargetAppId
       }

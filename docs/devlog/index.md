@@ -11,12 +11,15 @@ Entries tagged as **Decision** record significant architectural or technical cho
 
 | Date | Title | Type |
 | :--- | :--- | :--- |
+| 2026-04-15 | [Ref-Based Tap Replaces Node ID Tap](2026-04-15-ref-based-tap-replaces-node-id.md) | Decision |
+| 2026-04-12 | [Platform-Native Hierarchical Snapshots with Stable Element Refs](2026-04-12-platform-native-hierarchical-snapshots.md) | Decision |
+| 2026-04-10 | [CLI and MCP Session Management: Device State and Multi-Terminal Behavior](2026-04-10-cli-mcp-session-and-device-state.md) | Devlog |
 | 2026-04-07 | [Unified Provider Auto-Detection Across Host and Android](2026-04-07-unified-provider-auto-detection.md) | Decision |
+| 2026-04-07 | [Workspace Config Resolution: .trailblaze/ and trailblaze-config/ Conventions](2026-04-07-trailblaze-yaml-config-resolution.md) | Decision |
 | 2026-04-07 | [Unified trailblaze-config/ Classpath Layout](2026-04-07-trailblaze-config-classpath-layout.md) | Decision |
-| 2026-04-07 | [Workspace Config Resolution: .trailblaze/ Directory Convention](2026-04-07-trailblaze-yaml-config-resolution.md) | Decision |
-| 2026-04-07 | [CLI SSO Auth and Dynamic Instrumentation Args](2026-04-07-cli-sso-auth-and-dynamic-instrumentation-args.md) | Decision |
+| 2026-04-07 | [Support reasoning_effort in LLM Config](2026-04-07-reasoning-effort-config-support.md) | Devlog |
+| 2026-04-07 | [CLI-Based SSO/Auth and Dynamic On-Device Instrumentation Args](2026-04-07-cli-sso-auth-and-dynamic-instrumentation-args.md) | Devlog |
 | 2026-03-20 | [Screenshot Format Optimization (WebP Everywhere)](2026-03-20-on-device-screenshot-optimization.md) | Decision |
-| 2026-03-20 | [Screenshot Format Optimization (WebP Everywhere)](2026-03-20-on-device-screenshot-memory-optimization.md) | Devlog |
 | 2026-03-17 | [MCP API Redesign: verify→blaze, Mode Defaults, iOS launchApp Fix](2026-03-17-mcp-api-redesign-and-ios-fixes.md) | Devlog |
 | 2026-03-17 | [iOS TrailblazeNode Support via IosMaestro](2026-03-17-ios-trailblaze-node-detail.md) | Devlog |
 | 2026-03-15 | [MCP STDIO-to-HTTP Proxy for Development](2026-03-15-mcp-stdio-http-proxy-architecture.md) | Devlog |

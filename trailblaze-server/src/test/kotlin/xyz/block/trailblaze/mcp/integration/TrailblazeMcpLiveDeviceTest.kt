@@ -31,8 +31,8 @@ import xyz.block.trailblaze.util.Console
  *
  * ## Driver Types Tested
  *
- * - **ANDROID_HOST** - Maestro-based Android automation (emulator/device)
- * - **ANDROID_ONDEVICE_INSTRUMENTATION** - On-device accessibility instrumentation
+ * - **ANDROID_ONDEVICE_INSTRUMENTATION** - On-device instrumentation
+ * - **ANDROID_ONDEVICE_ACCESSIBILITY** - On-device accessibility
  * - **IOS_HOST** - iOS simulator/device automation
  *
  * Tests are skipped if server is not running or no devices are connected.
@@ -159,26 +159,6 @@ class TrailblazeMcpLiveDeviceTest {
   // ==========================================================================
 
   @Test
-  fun `test ANDROID_HOST driver - view hierarchy`() {
-    runBlocking {
-      val devices = client.callTool("listConnectedDevices", emptyMap())
-
-      // Check if we have an Android HOST device
-      assumeTrue(
-        "No ANDROID_HOST device connected",
-        devices.content.contains("ANDROID_HOST"),
-      )
-
-      Console.log("\n=== Testing ANDROID_HOST Device ===")
-      val viewHierarchy = client.callTool("viewHierarchy", emptyMap())
-      assertTrue(viewHierarchy.isSuccess, "viewHierarchy failed: ${viewHierarchy.content}")
-
-      Console.log("View hierarchy captured successfully (${viewHierarchy.content.length} chars)")
-      Console.log("Sample: ${viewHierarchy.content.take(500)}...")
-    }
-  }
-
-  @Test
   fun `test ANDROID_ONDEVICE_INSTRUMENTATION driver - view hierarchy`() {
     runBlocking {
       val devices = client.callTool("listConnectedDevices", emptyMap())
@@ -255,7 +235,6 @@ class TrailblazeMcpLiveDeviceTest {
 
       // Test each available driver type
       val driverTypes = listOf(
-        "ANDROID_HOST" to "Android (Maestro)",
         "ANDROID_ONDEVICE_INSTRUMENTATION" to "Android (On-Device)",
         "ANDROID_ONDEVICE_ACCESSIBILITY" to "Android (Accessibility)",
         "IOS_HOST" to "iOS",

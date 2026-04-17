@@ -11,6 +11,9 @@ Opens the browser to the provided url.
 - `url`: `String`
   The URL to open that starts with https
 
+### Optional Parameters
+- `reasoning`: `String`
+
 
 
 <hr/>

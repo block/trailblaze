@@ -136,14 +136,10 @@ open class CliReportGenerator {
     val effectiveTemplateFile = ReportTemplateResolver.resolveTemplate()
 
     if (effectiveTemplateFile == null && !hasWasmBuild) {
-      // Check if we are in local dev mode (source tree present)
-      if (trailblazeUiDir?.exists() == true) {
-        Console.log("")
-        Console.log("To enable HTML reports, build the report viewer (one-time):")
-        Console.log("  ./gradlew :trailblaze-ui:wasmJsBrowserProductionWebpack")
-        Console.log("To get the latest report UI, re-run the above command.")
-      }
-      // If not in local dev mode, silently skip
+      Console.log("")
+      Console.log("No report template found. To enable HTML reports, build the WASM report viewer:")
+      Console.log("  ./gradlew :trailblaze-report:generateReportTemplate -Ptrailblaze.wasm=true")
+      Console.log("This is a one-time step. Re-run to pick up report UI changes.")
       return null
     }
 

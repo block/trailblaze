@@ -283,9 +283,9 @@ private fun TrailblazeNodeTreeItem(
         .padding(start = (level * 16).dp, top = 4.dp, bottom = 4.dp),
       verticalAlignment = Alignment.CenterVertically
     ) {
-      // Node ID
+      // Ref (or nodeId fallback)
       SelectableText(
-        text = "${node.nodeId}",
+        text = node.ref ?: "${node.nodeId}",
         style = MaterialTheme.typography.labelMedium.copy(
           fontSize = MaterialTheme.typography.labelMedium.fontSize * fontScale,
           fontFamily = FontFamily.Monospace
@@ -460,6 +460,10 @@ internal fun TrailblazeNodeDetailsPanel(
         Spacer(modifier = Modifier.height(8.dp))
 
         TrailblazeDetailRow(label = "Node ID", value = displayNode.nodeId.toString(), fontScale = fontScale)
+
+        displayNode.ref?.let { ref ->
+          TrailblazeDetailRow(label = "Ref", value = ref, fontScale = fontScale)
+        }
 
         displayNode.bounds?.let { bounds ->
           TrailblazeDetailRow(

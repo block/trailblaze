@@ -6,8 +6,6 @@ title: Introduction
 
 [Trailblaze](https://github.com/block/trailblaze) is an AI-powered UI testing framework that lets you author and execute tests using natural language.
 
-![trailblaze-with-goose-android.gif](images-opensource/trailblaze-with-goose-android.gif)
-
 ## Current Vision
 
 Trailblaze enables adoption of AI powered tests in regular Android on-device instrumentation tests.

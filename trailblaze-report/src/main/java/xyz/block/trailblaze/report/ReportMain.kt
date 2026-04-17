@@ -152,9 +152,11 @@ private fun generateSnapshotViewerIntegrated(logsRepo: LogsRepo) {
   try {
     val snapshotViewerFile = File(logsRepo.logsDir, "snapshot_viewer.html")
 
-    // Get all session IDs and their logs from LogsRepo (already parsed)
+    // Re-read session IDs from disk here (not from cache) because LogsRepo may have
+    // been created before moveJsonFilesToSessionDirs/moveScreenshotsToSessionDirs
+    // reorganized adb-pulled files into session directories.
     val sessionIds = logsRepo.getSessionIds()
-    Console.log("📂 Using ${sessionIds.size} session(s) from LogsRepo")
+    Console.log("📸 Collecting snapshots from ${sessionIds.size} session(s)...")
 
     // Build maps for the collector
     val logsBySession = sessionIds.associateWith { sessionId ->

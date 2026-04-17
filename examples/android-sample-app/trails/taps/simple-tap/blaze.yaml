@@ -1,6 +1,6 @@
 - config:
     id: "sample-app/taps/simple-tap"
-    app: "xyz.block.trailblaze.examples.sampleapp"
+    target: "xyz.block.trailblaze.examples.sampleapp"
 - tools:
     - launchApp:
         appId: "xyz.block.trailblaze.examples.sampleapp"

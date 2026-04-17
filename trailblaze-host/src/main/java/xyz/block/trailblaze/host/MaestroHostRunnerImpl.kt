@@ -36,7 +36,6 @@ import xyz.block.trailblaze.util.Console
  */
 class MaestroHostRunnerImpl(
   private val trailblazeDeviceId: TrailblazeDeviceId,
-  setOfMarkEnabled: Boolean = true,
   val trailblazeLogger: TrailblazeLogger,
   private val sessionProvider: TrailblazeSessionProvider,
   /**
@@ -48,7 +47,9 @@ class MaestroHostRunnerImpl(
 ) : MaestroHostRunner {
   val connectedDevice: TrailblazeConnectedDevice by lazy {
     val hostDriverType = when (trailblazeDeviceId.trailblazeDevicePlatform) {
-      TrailblazeDevicePlatform.ANDROID -> TrailblazeDriverType.ANDROID_HOST
+      TrailblazeDevicePlatform.ANDROID -> error(
+        "Android does not use MaestroHostRunnerImpl — use on-device drivers via RPC instead"
+      )
       TrailblazeDevicePlatform.IOS -> TrailblazeDriverType.IOS_HOST
       TrailblazeDevicePlatform.WEB -> error("Web tests do not use MaestroHostRunnerImpl")
     }
@@ -74,7 +75,6 @@ class MaestroHostRunnerImpl(
     Console.log("screenStateProvider call count: $callCount")
     HostMaestroDriverScreenState(
       maestroDriver = loggingDriver,
-      setOfMarkEnabled = setOfMarkEnabled,
       screenshotScalingConfig = screenshotScalingConfig,
       deviceClassifiers = deviceClassifiers,
     )

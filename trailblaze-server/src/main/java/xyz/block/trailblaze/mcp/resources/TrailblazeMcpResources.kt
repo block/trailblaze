@@ -305,7 +305,7 @@ and iOS devices and automates UI interactions using natural language.
 ## Core Workflow
 1. Connect to a device: `device(action=ANDROID)` or `device(action=IOS)`
 2. Automate UI with natural language:
-   - `blaze(goal="tap the login button")` — take actions on the device
+   - `blaze(objective="tap the login button")` — take actions on the device
    - `verify(assertion="the welcome screen is shown")` — check something is true
    - `ask(question="what is the account balance?")` — extract information
 3. Save as reusable test: `trail(action=SAVE, name="login_test")`
@@ -327,7 +327,7 @@ and iOS devices and automates UI interactions using natural language.
 
 ## Tips
 - Sessions are recorded automatically. Save anytime with trail(action=SAVE).
-- Use `blaze` for multi-step goals — it handles screen analysis internally.
+- Use `blaze` for multi-step objectives — it handles screen analysis internally.
 - Use `verify` for assertions and `ask` for data extraction.
 - Check trailblaze://devices before connecting to see what's available.
 """.trimIndent()

@@ -11,7 +11,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.util.Console
 
 @Serializable
-@TrailblazeToolClass("playwright_select_option")
+@TrailblazeToolClass("web_select_option")
 @LLMDescription(
   """
 Select one or more options from a <select> dropdown element identified by its element ID, ARIA descriptor, or CSS selector.

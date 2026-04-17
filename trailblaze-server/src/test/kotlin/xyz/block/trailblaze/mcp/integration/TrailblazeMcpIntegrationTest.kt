@@ -393,7 +393,7 @@ private class TestTrailblazeMcpBridge : TrailblazeMcpBridge {
     selectedDeviceId = trailblazeDeviceId
     hasConnectedDevice = true
     return TrailblazeConnectedDeviceSummary(
-      trailblazeDriverType = TrailblazeDriverType.ANDROID_HOST,
+      trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
       instanceId = trailblazeDeviceId.instanceId,
       description = "Test Device",
     )
@@ -403,7 +403,7 @@ private class TestTrailblazeMcpBridge : TrailblazeMcpBridge {
     return if (hasConnectedDevice && selectedDeviceId != null) {
       setOf(
         TrailblazeConnectedDeviceSummary(
-          trailblazeDriverType = TrailblazeDriverType.ANDROID_HOST,
+          trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
           instanceId = selectedDeviceId!!.instanceId,
           description = "Test Device",
         ),
@@ -428,7 +428,7 @@ private class TestTrailblazeMcpBridge : TrailblazeMcpBridge {
 
   override suspend fun getCurrentScreenState(): ScreenState? = null
 
-  override fun getDirectScreenStateProvider(): ((ScreenshotScalingConfig) -> ScreenState)? = null
+  override fun getDirectScreenStateProvider(skipScreenshot: Boolean): ((ScreenshotScalingConfig) -> ScreenState)? = null
 
   override suspend fun executeTrailblazeTool(tool: TrailblazeTool, blocking: Boolean): String =
     "[OK] Tool executed (test mode)"

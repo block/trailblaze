@@ -20,7 +20,7 @@ Walk-up resolution and stacking merge from multiple ancestor directories were pr
 The original `LlmConfigLoader` resolves project config from `./trailblaze.yaml` — literally `File(".")`, the process CWD. This creates problems:
 
 1. **Subdirectory breakage** — `cd trails && trailblaze run test.yaml` silently loses all project-level LLM config because `trails/trailblaze.yaml` doesn't exist.
-2. **Multi-workspace repos** — A repo with `trails-cash/` and `trails-square/` can't have different target apps or model defaults per directory.
+2. **Multi-workspace repos** — A repo with `trails-banking/` and `trails-storefront/` can't have different target apps or model defaults per directory.
 3. **Bare config file** — `trailblaze.yaml` at repo root clutters the root.
 
 ### How Other CLIs Handle This
@@ -105,13 +105,13 @@ If walk-up resolution is implemented:
 my-repo/
 ├── .trailblaze/
 │   └── trailblaze.yaml              # llm auth, org-wide defaults
-├── trails-cash/
+├── trails-banking/
 │   ├── .trailblaze/
-│   │   └── trailblaze.yaml          # target: cash_app
+│   │   └── trailblaze.yaml          # target: banking
 │   └── send-money.trail.yaml
-├── trails-square/
+├── trails-storefront/
 │   ├── .trailblaze/
-│   │   └── trailblaze.yaml          # target: square_pos, different model
+│   │   └── trailblaze.yaml          # target: storefront, different model
 │   └── checkout.trail.yaml
 ```
 

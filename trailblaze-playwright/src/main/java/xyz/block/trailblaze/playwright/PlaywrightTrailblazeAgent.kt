@@ -3,23 +3,19 @@ package xyz.block.trailblaze.playwright
 import com.microsoft.playwright.TimeoutError
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
-import xyz.block.trailblaze.AgentMemory
-import xyz.block.trailblaze.TrailblazeAgentContext
+import xyz.block.trailblaze.BaseTrailblazeAgent
 import xyz.block.trailblaze.api.AgentActionType
 import xyz.block.trailblaze.api.AgentDriverAction
 import xyz.block.trailblaze.api.DriverNodeDetail
 import xyz.block.trailblaze.api.ScreenState
-import xyz.block.trailblaze.api.TrailblazeAgent
 import xyz.block.trailblaze.api.TrailblazeNodeSelectorGenerator
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.exception.TrailblazeException
-import xyz.block.trailblaze.logDelegatingTool
 import xyz.block.trailblaze.logToolExecution
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.logs.model.TraceId
-import xyz.block.trailblaze.logs.model.TraceId.Companion.TraceOrigin
 import xyz.block.trailblaze.playwright.tools.PlaywrightExecutableTool
 import xyz.block.trailblaze.playwright.tools.PlaywrightNativeClickTool
 import xyz.block.trailblaze.playwright.tools.PlaywrightNativeHoverTool
@@ -40,11 +36,12 @@ import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.toolcalls.commands.LaunchAppTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.OpenUrlTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.memory.MemoryTrailblazeTool
 import xyz.block.trailblaze.toolcalls.isSuccess
 import xyz.block.trailblaze.tracing.TrailblazeTracer
-import xyz.block.trailblaze.toolcalls.commands.memory.MemoryTrailblazeTool
 import xyz.block.trailblaze.util.Console
-import xyz.block.trailblaze.utils.ElementComparator
 
 /**
  * Playwright-native implementation of [TrailblazeAgent].
@@ -63,9 +60,7 @@ class PlaywrightTrailblazeAgent(
   override val trailblazeLogger: TrailblazeLogger,
   override val trailblazeDeviceInfoProvider: () -> TrailblazeDeviceInfo,
   override val sessionProvider: TrailblazeSessionProvider,
-) : TrailblazeAgent, TrailblazeAgentContext {
-
-  override val memory = AgentMemory()
+) : BaseTrailblazeAgent() {
 
   /**
    * Working directory for resolving relative file paths in tools.
@@ -75,120 +70,72 @@ class PlaywrightTrailblazeAgent(
 
   val screenStateProvider: () -> ScreenState = { browserManager.getScreenState() }
 
-  fun clearMemory() {
-    memory.clear()
+  override fun buildExecutionContext(
+    traceId: TraceId,
+    screenState: ScreenState?,
+    screenStateProvider: (() -> ScreenState)?,
+  ): TrailblazeToolExecutionContext {
+    val trailblazeDeviceInfo = trailblazeDeviceInfoProvider()
+    return TrailblazeToolExecutionContext(
+      screenState = screenState,
+      traceId = traceId,
+      trailblazeDeviceInfo = trailblazeDeviceInfo,
+      sessionProvider = sessionProvider,
+      screenStateProvider = screenStateProvider ?: this.screenStateProvider,
+      trailblazeLogger = trailblazeLogger,
+      memory = memory,
+      maestroTrailblazeAgent = null,
+      workingDirectory = workingDirectory,
+    )
   }
 
-  override fun runTrailblazeTools(
-    tools: List<TrailblazeTool>,
-    traceId: TraceId?,
-    screenState: ScreenState?,
-    elementComparator: ElementComparator,
-    screenStateProvider: (() -> ScreenState)?,
-  ): TrailblazeAgent.RunTrailblazeToolsResult {
-    val resolvedTraceId = traceId ?: TraceId.generate(TraceOrigin.TOOL)
-    val trailblazeDeviceInfo = trailblazeDeviceInfoProvider()
-    val executionContext =
-      TrailblazeToolExecutionContext(
-        screenState = screenState,
-        traceId = resolvedTraceId,
-        trailblazeDeviceInfo = trailblazeDeviceInfo,
-        sessionProvider = sessionProvider,
-        screenStateProvider = screenStateProvider ?: this.screenStateProvider,
-        trailblazeLogger = trailblazeLogger,
-        memory = memory,
-        maestroTrailblazeAgent = null,
-        workingDirectory = workingDirectory,
-      )
-
-    val toolsExecuted = mutableListOf<TrailblazeTool>()
-    var lastSuccessResult: TrailblazeToolResult = TrailblazeToolResult.Success()
-    for (tool in tools) {
-      when (tool) {
-        is PlaywrightExecutableTool -> {
-          toolsExecuted.add(tool)
-          val result = executePlaywrightToolBlocking(tool, executionContext)
-          if (!result.isSuccess()) {
-            return TrailblazeAgent.RunTrailblazeToolsResult(
-              inputTools = tools,
-              executedTools = toolsExecuted,
-              result = result,
-            )
-          }
-          lastSuccessResult = result
-        }
-
-        is ExecutableTrailblazeTool -> {
-          toolsExecuted.add(tool)
-          val result = executeToolBlocking(tool, executionContext)
-          if (!result.isSuccess()) {
-            return TrailblazeAgent.RunTrailblazeToolsResult(
-              inputTools = tools,
-              executedTools = toolsExecuted,
-              result = result,
-            )
-          }
-          lastSuccessResult = result
-        }
-
-        is DelegatingTrailblazeTool -> {
-          val mappedTools = tool.toExecutableTrailblazeTools(executionContext)
-          logDelegatingTool(tool, resolvedTraceId, mappedTools)
-          val originalTools = listOf(tool)
-          for (mappedTool in mappedTools) {
-            toolsExecuted.add(mappedTool)
-            val result =
-              if (mappedTool is PlaywrightExecutableTool) {
-                executePlaywrightToolBlocking(mappedTool, executionContext)
-              } else {
-                executeToolBlocking(mappedTool, executionContext)
-              }
-            if (!result.isSuccess()) {
-              return TrailblazeAgent.RunTrailblazeToolsResult(
-                inputTools = originalTools,
-                executedTools = toolsExecuted,
-                result = result,
-              )
-            }
-            lastSuccessResult = result
-          }
-        }
-
-        is MemoryTrailblazeTool -> {
-          toolsExecuted.add(tool)
-          val result = tool.execute(
-            memory = memory,
-            elementComparator = elementComparator,
-          )
-          if (!result.isSuccess()) {
-            return TrailblazeAgent.RunTrailblazeToolsResult(
-              inputTools = tools,
-              executedTools = toolsExecuted,
-              result = result,
-            )
-          }
-          lastSuccessResult = result
-        }
-
-        else ->
-          throw TrailblazeException(
-            message =
-              buildString {
-                appendLine("Unhandled Trailblaze tool ${tool::class.java.simpleName} - $tool.")
-                appendLine("PlaywrightTrailblazeAgent supports:")
-                appendLine("- ${PlaywrightExecutableTool::class.java.simpleName}")
-                appendLine("- ${ExecutableTrailblazeTool::class.java.simpleName}")
-                appendLine("- ${DelegatingTrailblazeTool::class.java.simpleName}")
-                appendLine("- ${MemoryTrailblazeTool::class.java.simpleName}")
-              },
-          )
+  override fun executeTool(
+    tool: TrailblazeTool,
+    context: TrailblazeToolExecutionContext,
+    toolsExecuted: MutableList<TrailblazeTool>,
+  ): TrailblazeToolResult {
+    return when (tool) {
+      is PlaywrightExecutableTool -> {
+        toolsExecuted.add(tool)
+        executePlaywrightToolBlocking(tool, context)
       }
+      is ExecutableTrailblazeTool -> {
+        toolsExecuted.add(tool)
+        executeToolBlocking(tool, context)
+      }
+      is DelegatingTrailblazeTool -> {
+        executeDelegatingTool(tool, context, toolsExecuted) { mappedTool ->
+          if (mappedTool is PlaywrightExecutableTool) {
+            executePlaywrightToolBlocking(mappedTool, context)
+          } else {
+            executeToolBlocking(mappedTool, context)
+          }
+        }
+      }
+      // Map cross-platform Maestro tools to their Playwright equivalents
+      is OpenUrlTrailblazeTool -> {
+        toolsExecuted.add(tool)
+        val navigateTool = PlaywrightNativeNavigateTool(url = tool.url, reasoning = tool.reasoning)
+        executePlaywrightToolBlocking(navigateTool, context)
+      }
+      is LaunchAppTrailblazeTool -> {
+        // launchApp is a no-op on web — the browser is already open
+        toolsExecuted.add(tool)
+        TrailblazeToolResult.Success(message = "Browser already open (launchApp is a no-op on web)")
+      }
+      else ->
+        throw TrailblazeException(
+          message =
+            buildString {
+              appendLine("Unhandled Trailblaze tool ${tool::class.java.simpleName} - $tool.")
+              appendLine("PlaywrightTrailblazeAgent supports:")
+              appendLine("- ${PlaywrightExecutableTool::class.java.simpleName}")
+              appendLine("- ${ExecutableTrailblazeTool::class.java.simpleName}")
+              appendLine("- ${DelegatingTrailblazeTool::class.java.simpleName}")
+              appendLine("- ${MemoryTrailblazeTool::class.java.simpleName}")
+            },
+        )
     }
-    return TrailblazeAgent.RunTrailblazeToolsResult(
-      inputTools = tools,
-      executedTools = toolsExecuted,
-      result = lastSuccessResult,
-    )
   }
 
   /**

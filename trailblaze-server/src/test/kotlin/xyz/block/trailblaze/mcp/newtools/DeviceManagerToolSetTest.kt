@@ -40,7 +40,7 @@ class DeviceManagerToolSetTest {
   )
 
   private val androidDevice = TrailblazeConnectedDeviceSummary(
-    trailblazeDriverType = TrailblazeDriverType.ANDROID_HOST,
+    trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
     instanceId = "emulator-5554",
     description = "Pixel 6 API 34",
   )
@@ -140,7 +140,7 @@ class DeviceManagerToolSetTest {
   fun `device INFO returns summary of connected device`() = runTest {
     val bridge = DeviceTestBridge(
       devices = setOf(androidDevice),
-      driverType = TrailblazeDriverType.ANDROID_HOST,
+      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
     )
     val toolSet = DeviceManagerToolSet(
       sessionContext = createSessionContext(),
@@ -155,7 +155,7 @@ class DeviceManagerToolSetTest {
 
     assertContains(result, "emulator-5554")
     assertContains(result, "Android")
-    assertContains(result, "ANDROID_HOST")
+    assertContains(result, "ANDROID_ONDEVICE_INSTRUMENTATION")
   }
 
   @Test
@@ -199,7 +199,7 @@ class DeviceManagerToolSetTest {
   fun `device INFO FULL returns summary and apps`() = runTest {
     val bridge = DeviceTestBridge(
       devices = setOf(androidDevice),
-      driverType = TrailblazeDriverType.ANDROID_HOST,
+      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
       installedApps = setOf("com.example.app"),
     )
     val toolSet = DeviceManagerToolSet(
@@ -214,7 +214,7 @@ class DeviceManagerToolSetTest {
     )
 
     assertContains(result, "emulator-5554")
-    assertContains(result, "ANDROID_HOST")
+    assertContains(result, "ANDROID_ONDEVICE_INSTRUMENTATION")
     assertContains(result, "com.example.app")
   }
 
@@ -315,7 +315,7 @@ class DeviceTestBridge(
   override suspend fun runYaml(yaml: String, startNewSession: Boolean, agentImplementation: AgentImplementation) = ""
   override fun getCurrentlySelectedDeviceId(): TrailblazeDeviceId? = lastSelectedDeviceId
   override suspend fun getCurrentScreenState(): ScreenState? = null
-  override fun getDirectScreenStateProvider(): ((ScreenshotScalingConfig) -> ScreenState)? = null
+  override fun getDirectScreenStateProvider(skipScreenshot: Boolean): ((ScreenshotScalingConfig) -> ScreenState)? = null
   override suspend fun endSession(): Boolean = true
   override fun isOnDeviceInstrumentation(): Boolean = false
   override fun getDriverType(): TrailblazeDriverType? = if (lastSelectedDeviceId != null) driverType else null

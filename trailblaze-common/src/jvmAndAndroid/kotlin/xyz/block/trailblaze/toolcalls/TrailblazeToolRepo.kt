@@ -146,10 +146,9 @@ class TrailblazeToolRepo(
      * The LLM can enable additional toolsets at runtime via `setActiveToolSets`.
      */
     fun withDynamicToolSets(
-      setOfMarkEnabled: Boolean,
       customToolClasses: Set<KClass<out TrailblazeTool>> = emptySet(),
       excludedToolClasses: Set<KClass<out TrailblazeTool>> = emptySet(),
-      catalog: List<ToolSetCatalogEntry> = TrailblazeToolSetCatalog.defaultEntries(setOfMarkEnabled),
+      catalog: List<ToolSetCatalogEntry> = TrailblazeToolSetCatalog.defaultEntries(),
     ): TrailblazeToolRepo {
       val coreTools = TrailblazeToolSetCatalog.resolve(emptyList(), catalog)
       return TrailblazeToolRepo(

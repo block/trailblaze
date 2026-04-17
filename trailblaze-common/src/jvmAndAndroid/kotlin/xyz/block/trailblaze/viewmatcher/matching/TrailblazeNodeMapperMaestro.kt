@@ -13,14 +13,54 @@ import java.util.regex.Pattern
  * in trailblaze-accessibility, preserving all Maestro-captured properties in the
  * typed [DriverNodeDetail.IosMaestro] variant.
  */
-fun TreeNode.toTrailblazeNodeIosMaestro(): TrailblazeNode? {
+private class NodeIdCounter {
+  private var next = 0L
+  fun next(): Long = next++
+}
+
+fun TreeNode.toTrailblazeNodeAndroidMaestro(): TrailblazeNode? =
+  toTrailblazeNodeAndroidMaestro(NodeIdCounter())
+
+fun TreeNode.toTrailblazeNodeIosMaestro(): TrailblazeNode? =
+  toTrailblazeNodeIosMaestro(NodeIdCounter())
+
+private fun TreeNode.toTrailblazeNodeAndroidMaestro(counter: NodeIdCounter): TrailblazeNode? {
+  if (attributes.isEmpty() && children.isEmpty()) return null
+
+  val bounds = parseBounds(attributes["bounds"])
+  val resourceId = getAttributeIfNotBlank("resource-id")
+
+  return TrailblazeNode(
+    nodeId = counter.next(),
+    bounds = bounds,
+    children = children.mapNotNull { it.toTrailblazeNodeAndroidMaestro(counter) },
+    driverDetail = DriverNodeDetail.AndroidMaestro(
+      text = getAttributeIfNotBlank("text"),
+      resourceId = resourceId,
+      accessibilityText = getAttributeIfNotBlank("accessibilityText"),
+      className = getAttributeIfNotBlank("class"),
+      hintText = getAttributeIfNotBlank("hintText"),
+      clickable = clickable ?: false,
+      enabled = enabled ?: true,
+      focused = focused ?: false,
+      checked = checked ?: false,
+      selected = selected ?: false,
+      focusable = attributes["focusable"] == "true",
+      scrollable = attributes["scrollable"] == "true",
+      password = attributes["password"] == "true",
+    ),
+  )
+}
+
+private fun TreeNode.toTrailblazeNodeIosMaestro(counter: NodeIdCounter): TrailblazeNode? {
   if (attributes.isEmpty() && children.isEmpty()) return null
 
   val bounds = parseBounds(attributes["bounds"])
 
   return TrailblazeNode(
+    nodeId = counter.next(),
     bounds = bounds,
-    children = children.mapNotNull { it.toTrailblazeNodeIosMaestro() },
+    children = children.mapNotNull { it.toTrailblazeNodeIosMaestro(counter) },
     driverDetail = DriverNodeDetail.IosMaestro(
       text = getAttributeIfNotBlank("text"),
       resourceId = getAttributeIfNotBlank("resource-id"),

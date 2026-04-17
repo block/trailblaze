@@ -1,0 +1,8 @@
+# Compose Desktop assertion tools.
+id: compose_verification
+description: "Verify text and elements are visible in Compose Desktop UI."
+drivers:
+  - compose
+tools:
+  - compose_verify_text_visible
+  - compose_verify_element_visible

@@ -30,7 +30,7 @@ import xyz.block.trailblaze.util.Console
  * - Page has poor accessibility and elements can't be found by role → requests CSS_SELECTORS
  */
 @Serializable
-@TrailblazeToolClass("playwright_request_details", isRecordable = false)
+@TrailblazeToolClass("web_request_details", isRecordable = false)
 @LLMDescription(
   """
 Request additional detail in the next view hierarchy snapshot.

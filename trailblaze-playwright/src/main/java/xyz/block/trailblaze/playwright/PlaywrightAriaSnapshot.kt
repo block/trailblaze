@@ -105,16 +105,42 @@ object PlaywrightAriaSnapshot {
 
     // Unquoted role+name: textbox Email or phone number
     // Also handles single-quoted names from recording YAML: heading 'All orders'
+    // Only returns if the locator actually matches elements — otherwise falls through
+    // to try interactive roles and text matching (e.g., "Search Wikipedia" would
+    // incorrectly match role=SEARCH name="Wikipedia" which resolves to 0 elements).
     ROLE_UNQUOTED_NAME_PATTERN.matchEntire(sanitized)?.let { match ->
       val (role, rawName) = match.destructured
       val ariaRole = try { AriaRole.valueOf(role.uppercase()) } catch (_: IllegalArgumentException) { null }
       if (ariaRole != null) {
         val name = rawName.removeSurrounding("'")
-        return page.getByRole(ariaRole, Page.GetByRoleOptions().setName(name).setExact(true))
+        val locator = page.getByRole(ariaRole, Page.GetByRoleOptions().setName(name).setExact(true))
+        if (locator.count() > 0) return locator
       }
     }
 
-    // Last resort: use it as a text selector
+    // No role prefix matched — try common interactive ARIA roles with the text as
+    // the accessible name. This handles cases like "Search Wikipedia" resolving to
+    // a searchbox with aria-label="Search Wikipedia", without requiring the caller
+    // to know the exact ARIA role.
+    val interactiveRoles = listOf(
+      AriaRole.TEXTBOX, AriaRole.SEARCHBOX, AriaRole.COMBOBOX,
+      AriaRole.BUTTON, AriaRole.LINK, AriaRole.CHECKBOX, AriaRole.RADIO,
+      AriaRole.TAB, AriaRole.MENUITEM, AriaRole.OPTION,
+    )
+    for (role in interactiveRoles) {
+      try {
+        val roleLocator = page.getByRole(role, Page.GetByRoleOptions().setName(sanitized).setExact(true))
+        if (roleLocator.count() > 0) return roleLocator
+      } catch (_: Exception) { /* continue to next role */ }
+    }
+
+    // Try getByLabel (matches aria-label, <label> associations, placeholder text)
+    try {
+      val labelLocator = page.getByLabel(sanitized, Page.GetByLabelOptions().setExact(true))
+      if (labelLocator.count() > 0) return labelLocator
+    } catch (_: Exception) { /* fall through */ }
+
+    // Last resort: visible text content
     return page.getByText(sanitized)
   }
 
@@ -516,7 +542,7 @@ object PlaywrightAriaSnapshot {
    * roles (list, table) so the LLM can see and target these structural elements.
    * Without list/table here, their children (listitem, cell) appear to float under
    * the wrong parent in the compact view, causing tools like
-   * `playwright_verify_list_visible` to target headings instead of lists.
+   * `web_verify_list_visible` to target headings instead of lists.
    */
   private val LANDMARK_ROLES =
     setOf(

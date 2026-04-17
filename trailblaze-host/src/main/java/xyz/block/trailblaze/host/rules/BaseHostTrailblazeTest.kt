@@ -117,7 +117,6 @@ abstract class BaseHostTrailblazeTest(
   val hostRunner: MaestroHostRunnerImpl by lazy {
     MaestroHostRunnerImpl(
       trailblazeDeviceId = trailblazeDeviceId,
-      setOfMarkEnabled = config.setOfMarkEnabled,
       trailblazeLogger = loggingRule.logger,
       sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
       appTarget = appTarget,
@@ -219,7 +218,6 @@ abstract class BaseHostTrailblazeTest(
     )
   } else {
     TrailblazeToolRepo.withDynamicToolSets(
-      setOfMarkEnabled = config.setOfMarkEnabled,
       customToolClasses = customToolClasses,
       excludedToolClasses = excludedToolClasses,
     )

@@ -28,14 +28,26 @@ tasks.register<JavaExec>("generateTestResultsArtifacts") {
   mainClass.set("xyz.block.trailblaze.report.GenerateTestResultsCliCommandKt")
 }
 
+val wasmEnabled = findProperty("trailblaze.wasm")?.toString()?.toBoolean() != false
+
 val generateReportTemplate by tasks.registering(JavaExec::class) {
-  description = "Generates a blank report template HTML with embedded WASM UI"
+  description = "Generates a blank report template HTML with embedded WASM UI (requires -Ptrailblaze.wasm=true)"
   group = "report"
-  dependsOn(":trailblaze-ui:wasmJsBrowserProductionWebpack")
+  if (wasmEnabled) {
+    dependsOn(":trailblaze-ui:wasmJsBrowserProductionWebpack")
+  }
   classpath = sourceSets["main"].runtimeClasspath
   mainClass.set("xyz.block.trailblaze.report.ReportMainKt")
   val templateBuildDir = layout.buildDirectory.dir("report-template")
-  doFirst { templateBuildDir.get().asFile.mkdirs() }
+  doFirst {
+    if (!wasmEnabled) {
+      throw GradleException(
+        "generateReportTemplate requires WASM targets.\n" +
+          "Run with: ./gradlew :trailblaze-report:generateReportTemplate -Ptrailblaze.wasm=true"
+      )
+    }
+    templateBuildDir.get().asFile.mkdirs()
+  }
   args(templateBuildDir.get().asFile.absolutePath)
   jvmArgs("-Dtrailblaze.rootDir=${rootProject.projectDir.absolutePath}")
   outputs.file(templateBuildDir.map { it.file("trailblaze_report.html") })

@@ -9,8 +9,8 @@ import xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.PressBackTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.SwipeTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TakeSnapshotTool
-import xyz.block.trailblaze.toolcalls.commands.TapOnElementByNodeIdTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnPointTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.TapTrailblazeTool
 import kotlin.reflect.KClass
 
 /**
@@ -19,7 +19,7 @@ import kotlin.reflect.KClass
  * - [ALL_TOOLS]: Send all tools upfront. No progressive disclosure. This is the default
  *   to maximize reliability — the LLM always has every tool available.
  * - [PROGRESSIVE]: Start with minimal tools and let the LLM request more categories
- *   as needed via the `tools()` MCP tool. Saves tokens but may cause regressions
+ *   as needed via the `toolbox()` MCP tool. Saves tokens but may cause regressions
  *   if the LLM doesn't request the right categories.
  */
 enum class ToolLoadingStrategy {
@@ -271,7 +271,7 @@ object ToolSetCategoryMapping {
    * Minimal tool set for the inner agent, optimized for token efficiency.
    *
    * Only includes the most commonly used tools:
-   * - tapOnElementByNodeId / tapOnPoint: Click on elements
+   * - tap / tapOnPoint: Click on elements
    * - inputText: Type text
    * - swipe: Scroll/navigate
    * - pressBack: Back navigation
@@ -281,7 +281,7 @@ object ToolSetCategoryMapping {
    */
   fun getInnerAgentMinimalTools(): Set<KClass<out TrailblazeTool>> {
     return setOf(
-      TapOnElementByNodeIdTrailblazeTool::class,
+      TapTrailblazeTool::class,
       TapOnPointTrailblazeTool::class,
       InputTextTrailblazeTool::class,
       SwipeTrailblazeTool::class,

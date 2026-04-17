@@ -41,6 +41,7 @@ import java.util.concurrent.atomic.AtomicInteger
 class CliMcpClient(
   private val serverUrl: String = "http://localhost:${TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTP_PORT}/mcp",
   private val requestTimeoutMs: Long = DEFAULT_REQUEST_TIMEOUT_MS,
+  private val toolProfile: String = "MINIMAL",
 ) : AutoCloseable {
 
   private val httpClient = HttpClient(OkHttp) {
@@ -105,6 +106,32 @@ class CliMcpClient(
   }
 
   /**
+   * Lists all available MCP tools from the server.
+   *
+   * Calls the `tools/list` MCP method to retrieve tool names, descriptions,
+   * and input schemas. Useful for CLI discovery and agent tool enumeration.
+   *
+   * @return List of tool descriptors, or empty list on error
+   */
+  suspend fun listTools(): List<McpToolInfo> {
+    val response = sendRequest(
+      method = "tools/list",
+      params = buildJsonObject {},
+    )
+
+    val tools = response["result"]?.jsonObject?.get("tools")?.jsonArray
+      ?: return emptyList()
+
+    return tools.mapNotNull { tool ->
+      val obj = tool.jsonObject
+      val name = obj["name"]?.jsonPrimitive?.content ?: return@mapNotNull null
+      val description = obj["description"]?.jsonPrimitive?.content ?: ""
+      val inputSchema = obj["inputSchema"]?.jsonObject
+      McpToolInfo(name = name, description = description, inputSchema = inputSchema)
+    }
+  }
+
+  /**
    * Calls an MCP tool by name with the given arguments.
    *
    * @param name Tool name (e.g., "blaze", "ask", "device")
@@ -162,9 +189,9 @@ class CliMcpClient(
       headers {
         append("Accept", "application/json, text/event-stream")
         sessionId?.let { append("mcp-session-id", it) }
-        // Use minimal tool profile for CLI sessions to reduce overhead
+        // Set tool profile on initialization: trail mode → MINIMAL, blaze mode → FULL
         if (sessionId == null) {
-          append("X-Tool-Profile", "MINIMAL")
+          append("X-Tool-Profile", toolProfile)
         }
       }
       setBody(body.toString())
@@ -266,73 +293,150 @@ class CliMcpClient(
   }
 
   /**
-   * Ensures a device is connected for this session.
-   *
-   * If [devicePlatform] is specified, connects to that platform (ANDROID, IOS, WEB).
-   * Otherwise, lists available devices and auto-connects if exactly one mobile device
-   * is found. Returns an error message if no devices or multiple devices are available.
+   * Ensures a device is connected. Supports:
+   * - `null` → auto-detect (single device) or error (multiple)
+   * - `"android"` / `"ios"` / `"web"` → connect by platform
+   * - `"android/emulator-5556"` → connect to specific instance
    *
    * @return null on success, or an error message on failure
    */
-  suspend fun ensureDevice(devicePlatform: String? = null): String? {
-    // If reusing an existing session that already has a device, skip unless
-    // the user explicitly asked for a different platform.
-    if (hasExistingDevice && devicePlatform == null) return null
+  suspend fun ensureDevice(deviceSpec: String? = null): String? {
+    // When reusing a session that already has a device, skip the expensive driver reconnect.
+    // The daemon's Maestro driver persists across CLI invocations within the same MCP session,
+    // so force-reconnecting on every call just adds latency (~2-5s on iOS).
+    if (hasExistingDevice) {
+      if (deviceSpec == null) return null // same session, same device — ready to go
 
-    // CLI always force-claims — if another session holds the device, take it over
-    // and terminate that session cleanly.
-    if (devicePlatform != null) {
-      val platform = TrailblazeDevicePlatform.fromString(devicePlatform)
-        ?: return "Unknown platform: $devicePlatform. Use ${TrailblazeDevicePlatform.entries.joinToString { it.name }}"
-      return connectToDevice(platform)
+      // Explicit device spec — check if it matches what's already connected
+      val infoResult = callTool("device", mapOf("action" to "INFO"))
+      if (!infoResult.isError) {
+        val currentInstanceId = parseConnectedInstanceId(infoResult)
+        val currentPlatform = parseDevicePlatform(infoResult)
+        if (currentPlatform != null) {
+          val currentSpec = "${currentPlatform.name.lowercase()}${if (currentInstanceId != null) "/$currentInstanceId" else ""}"
+          val platformName = currentPlatform.name.lowercase()
+          val specMatchesFull = currentInstanceId != null && deviceSpec.equals(currentSpec, ignoreCase = true)
+          val specMatchesPlatformOnly = deviceSpec.equals(platformName, ignoreCase = true)
+          if (specMatchesFull || specMatchesPlatformOnly) return null // same device
+        }
+      }
+      Console.info("Switching device — starting new session.")
+    }
+
+    if (deviceSpec != null) {
+      // Support multiple formats:
+      //   "android/emulator-5554"  → platform + instance
+      //   "android"                → platform only
+      //   "emulator-5554"          → instance ID only (resolve platform from device list)
+      val parts = deviceSpec.split("/", limit = 2)
+      val platform = TrailblazeDevicePlatform.fromString(parts[0])
+
+      if (platform != null) {
+        // First part is a known platform
+        val instanceId = parts.getOrNull(1)
+        return connectToDevice(platform, instanceId)
+      }
+
+      // Not a known platform — treat the whole spec as an instance ID
+      return connectToDeviceByInstanceId(deviceSpec)
     }
 
     // No explicit device — check what's available and auto-select
     val listResult = callTool("device", mapOf("action" to "LIST"))
     if (listResult.isError) return "Error listing devices: ${listResult.content}"
 
-    // Parse the device list to find mobile devices (exclude web — always available)
-    val lines = listResult.content.lines().filter { it.trimStart().startsWith("- ") }
-    val mobileDevices = lines.filter { line ->
-      val lower = line.lowercase()
-      lower.contains("android") || lower.contains("ios")
-    }
+    val mobileDevices = parseDeviceList(listResult.content)
+      .filter { it.platform != TrailblazeDevicePlatform.WEB }
 
     return when {
-      mobileDevices.size == 1 -> {
-        // Auto-connect to the only mobile device
-        val platform =
-          if (mobileDevices[0].lowercase().contains("android")) TrailblazeDevicePlatform.ANDROID
-          else TrailblazeDevicePlatform.IOS
-        connectToDevice(platform)
-      }
+      mobileDevices.size == 1 -> connectToDevice(mobileDevices[0].platform)
       mobileDevices.isEmpty() -> {
         "No mobile devices found. Connect an Android device/emulator or start an iOS simulator.\n" +
-          "Or specify a platform: -d ANDROID, -d IOS, or -d WEB"
+          "Or specify a device: --device android, --device ios, --device android/emulator-5554"
       }
       else -> {
-        "Multiple devices found. Specify which to use with -d:\n${listResult.content}"
+        "Multiple devices found. Specify which to use with --device (-d):\n" +
+          mobileDevices.joinToString("\n") { "  --device ${it.spec}" }
       }
     }
   }
 
-  private suspend fun connectToDevice(platform: TrailblazeDevicePlatform): String? {
-    Console.info("Connecting to ${platform.displayName} device...")
-    if (platform == TrailblazeDevicePlatform.IOS) {
-      Console.info("First connection may take a moment while the driver is set up on the device.")
+  private suspend fun connectToDevice(
+    platform: TrailblazeDevicePlatform,
+    instanceId: String? = null,
+  ): String? {
+    val listResult = callTool("device", mapOf("action" to "LIST"))
+    if (!listResult.isError) {
+      val platformDevices = parseDeviceList(listResult.content)
+        .filter { it.platform == platform }
+
+      if (instanceId == null && platformDevices.size > 1) {
+        return "Multiple ${platform.displayName} devices found. Specify which one:\n" +
+          platformDevices.joinToString("\n") { "  --device ${it.spec}" }
+      }
+
+      // Validate the instance ID against available devices
+      if (instanceId != null && platform != TrailblazeDevicePlatform.WEB) {
+        val knownIds = platformDevices.map { it.instanceId }
+        if (knownIds.isNotEmpty() && instanceId !in knownIds) {
+          val available = knownIds.joinToString(", ") { "${platform.name.lowercase()}/$it" }
+          return "Device '${platform.name.lowercase()}/$instanceId' not found. Available: $available"
+        }
+      }
     }
-    val result = callTool("device", mapOf("action" to platform.name, "force" to true))
+
+    Console.info("Connecting to ${platform.displayName} device${if (instanceId != null) " ($instanceId)" else ""}...")
+    if (platform == TrailblazeDevicePlatform.IOS) {
+      Console.info("First connection may take 10–30s while the driver is set up on the device. The driver is cached and immediately available for subsequent connections.")
+    }
+    val args = mutableMapOf<String, Any?>("action" to platform.name, "force" to true)
+    if (instanceId != null) args["instanceId"] = instanceId
+    val result = callTool("device", args)
     if (result.isError) return "Error connecting to device: ${result.content}"
+    // Echo the full device spec so the agent knows what was connected
+    val connectedId = parseConnectedInstanceId(result) ?: instanceId
+    Console.info("Connected: ${platform.name.lowercase()}/${connectedId ?: "default"}")
     printDeviceSessionInfo(result)
     return null
   }
 
+  /**
+   * Resolves a bare instance ID (e.g., "emulator-5554") by looking it up in the device list.
+   */
+  private suspend fun connectToDeviceByInstanceId(instanceId: String): String? {
+    val listResult = callTool("device", mapOf("action" to "LIST"))
+    if (listResult.isError) return "Error listing devices: ${listResult.content}"
+
+    val entry = parseDeviceList(listResult.content)
+      .firstOrNull { it.instanceId == instanceId }
+      ?: return "Device '$instanceId' not found. Run 'trailblaze device list' to see available devices."
+
+    return connectToDevice(entry.platform, instanceId)
+  }
+
+  private fun parseConnectedInstanceId(result: ToolResult): String? =
+    parseConnectedInstanceId(result.content)
+
+  private fun parseDevicePlatform(result: ToolResult): TrailblazeDevicePlatform? =
+    parseDevicePlatform(result.content)
+
   private fun printDeviceSessionInfo(result: ToolResult) {
-    // If the server response mentions ending a previous session, surface it to the user
-    if (result.content.contains("ended previous session")) {
-      val match = Regex("\\(ended previous session: (.+?)\\)").find(result.content)
-      val sessionInfo = match?.groupValues?.get(1) ?: "unknown"
-      Console.info("Ended previous session ($sessionInfo) to claim device.")
+    val sessionInfo = parseEndedSessionInfo(result.content) ?: return
+    Console.info("Ended previous session ($sessionInfo) to claim device.")
+  }
+
+  /**
+   * Fetches the Trailblaze session ID from the server via the session(INFO) tool.
+   * Returns null if no active Trailblaze session exists yet.
+   */
+  suspend fun getTrailblazeSessionId(): String? {
+    return try {
+      val result = callTool("session", mapOf("action" to "INFO"))
+      if (result.isError) return null
+      val parsed = Json.parseToJsonElement(result.content).jsonObject
+      parsed["sessionId"]?.jsonPrimitive?.content
+    } catch (_: Exception) {
+      null
     }
   }
 
@@ -345,6 +449,20 @@ class CliMcpClient(
     val isError: Boolean = false,
   ) {
     val isSuccess: Boolean get() = !isError
+  }
+
+  data class McpToolInfo(
+    val name: String,
+    val description: String,
+    val inputSchema: JsonObject? = null,
+  )
+
+  /** A parsed entry from the MCP device LIST response. */
+  data class DeviceListEntry(
+    val instanceId: String,
+    val platform: TrailblazeDevicePlatform,
+  ) {
+    val spec: String get() = "${platform.name.lowercase()}/$instanceId"
   }
 
   class CliMcpException(message: String, cause: Throwable? = null) : Exception(message, cause)
@@ -365,45 +483,56 @@ class CliMcpClient(
      * Connects to the daemon, reusing the existing CLI session if available.
      *
      * One CLI session is shared across all terminals for a given daemon port.
-     * The session ID is persisted in `/tmp/trailblaze-cli-session-{port}`.
+     * The session file (`/tmp/trailblaze-cli-session-{port}`) stores both the
+     * session ID and the target app ID that the session was created for.
      *
      * Flow:
      * 1. If session file exists, try to reuse that session
      * 2. Validate with a lightweight call (device INFO)
-     * 3. If stale (daemon restarted), create a fresh session
-     * 4. If no session file, create a fresh session
+     * 3. If the target app changed (different custom driver/tools), create a fresh session
+     * 4. If stale (daemon restarted), create a fresh session
+     * 5. If no session file, create a fresh session
      *
      * @param port The daemon's HTTP port
+     * @param targetAppId The current target app ID from CLI config. When this differs from the
+     *   session's stored target, the session is invalidated because different targets may use
+     *   different drivers and different custom tool sets.
      * @return A connected client. Check [hasExistingDevice] to see if a device is already connected.
      * @throws CliMcpException if connection fails
      */
-    suspend fun connectToDaemon(port: Int = TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTP_PORT): CliMcpClient {
-      val client = CliMcpClient(serverUrl = "http://localhost:$port/mcp")
+    suspend fun connectToDaemon(
+      port: Int = TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTP_PORT,
+      toolProfile: String = "MINIMAL",
+      targetAppId: String? = null,
+    ): CliMcpClient {
+      val client = CliMcpClient(serverUrl = "http://localhost:$port/mcp", toolProfile = toolProfile)
       val file = sessionFile(port)
 
-      // Try to reuse existing session
-      val savedSessionId = try {
-        if (file.exists()) file.readText().trim().ifEmpty { null } else null
-      } catch (_: Exception) {
-        null
-      }
+      // Try to reuse existing session — file format: "sessionId\ntargetAppId"
+      val (savedSessionId, savedTargetAppId) = readSessionFile(file)
 
       if (savedSessionId != null) {
-        client.sessionId = savedSessionId
-        try {
-          val result = client.callTool("device", mapOf("action" to "INFO"))
-          if (!result.isError || result.content.contains("No device connected")) {
-            // Session is alive — reuse it
-            client.hasExistingDevice = !result.isError
-            return client
+        // Target app changed — different targets use different drivers and tool sets,
+        // so the entire session must be recreated (not just a driver reconnect).
+        if (targetAppId != null && savedTargetAppId != null && targetAppId != savedTargetAppId) {
+          Console.info("Target app changed ($savedTargetAppId → $targetAppId) — creating new session.")
+        } else {
+          client.sessionId = savedSessionId
+          try {
+            val result = client.callTool("device", mapOf("action" to "INFO"))
+            if (!result.isError || result.content.contains("No device connected")) {
+              // Session is alive — reuse it
+              client.hasExistingDevice = !result.isError
+              return client
+            }
+            // Daemon responded but doesn't recognize our session — it was restarted
+            Console.info("Creating new session.")
+          } catch (_: Exception) {
+            // Daemon unreachable — will be recreated below
+            Console.info("Creating new session.")
           }
-          // Daemon responded but doesn't recognize our session — it was restarted
-          Console.info("Creating new session.")
-        } catch (_: Exception) {
-          // Daemon unreachable — will be recreated below
-          Console.info("Creating new session.")
+          client.sessionId = null
         }
-        client.sessionId = null
       }
 
       // Create fresh session
@@ -418,14 +547,8 @@ class CliMcpClient(
         )
       }
 
-      // Save session ID for reuse
-      try {
-        file.writeText(client.sessionId ?: "")
-      } catch (_: Exception) {
-        // Non-fatal — session just won't persist
-      }
-
-      Console.info("New session: ${client.sessionId}")
+      // Save session ID + target app for reuse
+      writeSessionFile(file, client.sessionId, targetAppId)
 
       return client
     }
@@ -437,6 +560,92 @@ class CliMcpClient(
       } catch (_: Exception) {
         // Ignore
       }
+    }
+
+    /**
+     * Reads the session file. Format: line 1 = session ID, line 2 = target app ID (optional).
+     * Backwards-compatible: old files with only a session ID still work.
+     */
+    internal fun readSessionFile(file: File): Pair<String?, String?> {
+      return try {
+        if (!file.exists()) return null to null
+        val lines = file.readLines()
+        val sessionId = lines.getOrNull(0)?.trim()?.ifEmpty { null }
+        val targetAppId = lines.getOrNull(1)?.trim()?.ifEmpty { null }
+        sessionId to targetAppId
+      } catch (_: Exception) {
+        null to null
+      }
+    }
+
+    internal fun writeSessionFile(file: File, sessionId: String?, targetAppId: String?) {
+      try {
+        val content = buildString {
+          append(sessionId ?: "")
+          if (targetAppId != null) {
+            append("\n")
+            append(targetAppId)
+          }
+        }
+        file.writeText(content)
+      } catch (_: Exception) {
+        // Non-fatal — session just won't persist
+      }
+    }
+
+    // -- Parsing helpers (internal for testing) ----------------------------------
+
+    /**
+     * Parses device entries from the MCP device LIST tool response.
+     *
+     * Expected line format: `"  - emulator-5554 (Android) - Google Pixel 6"`
+     */
+    internal fun parseDeviceList(content: String): List<DeviceListEntry> {
+      return content.lines()
+        .map { it.trim().removePrefix("- ") }
+        .filter { it.isNotBlank() }
+        .mapNotNull { line ->
+          val platform = when {
+            line.contains("(Android)") -> TrailblazeDevicePlatform.ANDROID
+            line.contains("(iOS)") -> TrailblazeDevicePlatform.IOS
+            line.contains("(Web") -> TrailblazeDevicePlatform.WEB
+            else -> return@mapNotNull null
+          }
+          val instanceId = line.substringBefore(" (").trim()
+          if (instanceId.isEmpty()) return@mapNotNull null
+          DeviceListEntry(instanceId, platform)
+        }
+    }
+
+    /** Extracts the connected instance ID from device tool response text. */
+    internal fun parseConnectedInstanceId(text: String): String? {
+      // INFO format: "Instance ID: emulator-5554"
+      Regex("Instance ID: (.+)").find(text)?.let {
+        return it.groupValues[1].trim()
+      }
+      // Connect format: "Connected to emulator-5554 (Android)"
+      Regex("Connected to (.+?) \\(").find(text)?.let {
+        return it.groupValues[1].trim()
+      }
+      return null
+    }
+
+    /** Extracts the device platform from device tool response text. */
+    internal fun parseDevicePlatform(text: String): TrailblazeDevicePlatform? {
+      // INFO format: "Platform: Android"
+      val platformName = (
+        Regex("Platform: (.+)").find(text)
+          // Connect format: "Connected to emulator-5554 (Android)"
+          ?: Regex("\\(([^)]+)\\)").find(text)
+        )?.groupValues?.get(1)?.trim() ?: return null
+      return TrailblazeDevicePlatform.entries.find {
+        it.displayName.equals(platformName, ignoreCase = true)
+      }
+    }
+
+    /** Extracts the ended-session identifier from the device tool response, if present. */
+    internal fun parseEndedSessionInfo(text: String): String? {
+      return Regex("\\(ended previous session: (.+?)\\)").find(text)?.groupValues?.get(1)
     }
   }
 }

@@ -29,6 +29,7 @@ import xyz.block.trailblaze.mcp.handlers.ListActiveSessionsRequestHandler
 import xyz.block.trailblaze.mcp.handlers.RunYamlRequestHandler
 import xyz.block.trailblaze.mcp.handlers.SubscribeToProgressRequestHandler
 import xyz.block.trailblaze.mcp.progress.ProgressSessionManager
+import xyz.block.trailblaze.mcp.handlers.EnsureAccessibilityReadyRequestHandler
 import xyz.block.trailblaze.mcp.registerRpcHandler
 import xyz.block.trailblaze.mcp.respondRpcError
 
@@ -91,6 +92,9 @@ class OnDeviceRpcServer(
             progressManager = progressManager,
           )
         )
+
+        // Blocks until the accessibility service is connected on-device.
+        registerRpcHandler(EnsureAccessibilityReadyRequestHandler())
 
         // Register GetScreenState handler for MCP subagent screen state queries
         registerRpcHandler(GetScreenStateRequestHandler())

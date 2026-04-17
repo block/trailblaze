@@ -10,7 +10,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.util.Console
 
 @Serializable
-@TrailblazeToolClass("playwright_wait")
+@TrailblazeToolClass("web_wait")
 @LLMDescription(
   """
 Wait for a specified number of seconds before continuing.

@@ -11,7 +11,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.util.Console
 
 @Serializable
-@TrailblazeToolClass("playwright_verify_text_visible")
+@TrailblazeToolClass("web_verify_text_visible")
 @LLMDescription(
   """
 Verify that specific text is visible on the current page.

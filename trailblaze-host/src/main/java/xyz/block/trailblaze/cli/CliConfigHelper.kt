@@ -24,44 +24,71 @@ data class ConfigKey(
   val set: (SavedTrailblazeAppConfig, String) -> SavedTrailblazeAppConfig?,
 )
 
+/** Sentinel value indicating no LLM is configured. */
+const val LLM_NONE = "none"
+
+private fun String.isLlmNoneValue(): Boolean = equals(LLM_NONE, ignoreCase = true)
+
 /** Registry of all config keys supported by `trailblaze config <key> [<value>]`. */
 val CONFIG_KEYS: Map<String, ConfigKey> = listOf(
   ConfigKey(
     name = "llm",
     description = "LLM provider and model (shorthand: provider/model)",
-    validValues = "provider/model (e.g., openai/gpt-4-1, anthropic/claude-sonnet-4-20250514)",
-    get = { config -> "${config.llmProvider}/${config.llmModel}" },
+    validValues = "provider/model (e.g., openai/gpt-4-1, anthropic/claude-sonnet-4-20250514) or 'none' to disable",
+    get = { config ->
+      if (config.llmProvider == LLM_NONE) LLM_NONE
+      else "${config.llmProvider}/${config.llmModel}"
+    },
     set = { config, value ->
-      val parts = value.split("/", limit = 2)
-      if (parts.size != 2 || parts[0].isBlank() || parts[1].isBlank()) {
-        null
+      if (value.isLlmNoneValue()) {
+        config.copy(llmProvider = LLM_NONE, llmModel = LLM_NONE)
       } else {
-        config.copy(llmProvider = parts[0].lowercase(), llmModel = parts[1])
+        val parts = value.split("/", limit = 2)
+        if (parts.size != 2 || parts[0].isBlank() || parts[1].isBlank()) {
+          null
+        } else {
+          config.copy(llmProvider = parts[0].lowercase(), llmModel = parts[1])
+        }
       }
     },
   ),
   ConfigKey(
     name = "llm-provider",
     description = "LLM provider",
-    validValues = "openai, anthropic, google, ollama, openrouter, etc.",
+    validValues = "openai, anthropic, google, ollama, openrouter, etc. or 'none' to disable",
     get = { config -> config.llmProvider },
-    set = { config, value -> config.copy(llmProvider = value.lowercase()) },
+    set = { config, value ->
+      if (value.isLlmNoneValue()) {
+        config.copy(llmProvider = LLM_NONE, llmModel = LLM_NONE)
+      } else {
+        config.copy(llmProvider = value.lowercase())
+      }
+    },
   ),
   ConfigKey(
     name = "llm-model",
     description = "LLM model ID",
-    validValues = "e.g., gpt-4-1, claude-sonnet-4-20250514, gemini-3-flash",
+    validValues = "e.g., gpt-4-1, claude-sonnet-4-20250514, gemini-3-flash or 'none' to disable",
     get = { config -> config.llmModel },
-    set = { config, value -> config.copy(llmModel = value) },
+    set = { config, value ->
+      if (value.isLlmNoneValue()) {
+        config.copy(llmProvider = LLM_NONE, llmModel = LLM_NONE)
+      } else {
+        config.copy(llmModel = value)
+      }
+    },
   ),
   ConfigKey(
-    name = "app",
+    name = "target",
     description = "Target app for device connections and custom tools",
-    validValues = "App target ID (e.g., square, cash, none)",
-    get = { config -> config.selectedTargetAppId ?: "not set" },
+    validValues = "App target ID. Run 'trailblaze config target' to see all.",
+    get = { config -> config.selectedTargetAppId ?: "(not set)" },
     set = { config, value ->
-      val targetId = if (value.equals(TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget.id, ignoreCase = true)) null else value.lowercase()
-      config.copy(selectedTargetAppId = targetId)
+      if (!value.lowercase().matches(Regex("^[a-z0-9]+$"))) {
+        null
+      } else {
+        config.copy(selectedTargetAppId = value.lowercase())
+      }
     },
   ),
   ConfigKey(
@@ -106,21 +133,36 @@ val CONFIG_KEYS: Map<String, ConfigKey> = listOf(
     },
   ),
   ConfigKey(
-    name = "set-of-mark",
-    description = "Enable/disable Set of Mark mode",
-    validValues = "true, false",
-    get = { config -> config.setOfMarkEnabled.toString() },
-    set = { config, value ->
-      value.toBooleanStrictOrNull()?.let { config.copy(setOfMarkEnabled = it) }
-    },
-  ),
-  ConfigKey(
     name = "ai-fallback",
     description = "Enable/disable AI fallback when recorded steps fail",
     validValues = "true, false",
     get = { config -> config.aiFallbackEnabled.toString() },
     set = { config, value ->
       value.toBooleanStrictOrNull()?.let { config.copy(aiFallbackEnabled = it) }
+    },
+  ),
+  ConfigKey(
+    name = "mode",
+    description = "CLI working mode: trail (author reproducible trails) or blaze (explore device)",
+    validValues = "trail, blaze",
+    get = { config -> config.cliMode ?: "not set" },
+    set = { config, value ->
+      val mode = value.lowercase()
+      if (mode in setOf("trail", "blaze")) config.copy(cliMode = mode) else null
+    },
+  ),
+  ConfigKey(
+    name = "device",
+    description = "Default device platform for CLI commands",
+    validValues = "android, ios, web",
+    get = { config -> config.cliDevicePlatform?.lowercase() ?: "not set" },
+    set = { config, value ->
+      val platform = value.uppercase()
+      if (platform in setOf("ANDROID", "IOS", "WEB")) {
+        config.copy(cliDevicePlatform = platform)
+      } else {
+        null
+      }
     },
   ),
 ).associateBy { it.name }
@@ -136,7 +178,7 @@ object CliConfigHelper {
   /**
    * Gets the path to the settings file.
    */
-  fun getSettingsFile(): File = File("build/${TrailblazeDesktopUtil.SETTINGS_FILENAME}")
+  fun getSettingsFile(): File = TrailblazeDesktopUtil.getDefaultSettingsFile()
   
   /**
    * Reads the current config from disk, or returns null if not found.
@@ -185,7 +227,8 @@ object CliConfigHelper {
     selectedTrailblazeDriverTypes = mapOf(
       TrailblazeDevicePlatform.ANDROID to TrailblazeDriverType.DEFAULT_ANDROID_ON_DEVICE,
       TrailblazeDevicePlatform.IOS to TrailblazeDriverType.IOS_HOST,
-    )
+    ),
+    selectedTargetAppId = TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget.id,
   )
   
   /**
@@ -209,8 +252,7 @@ object CliConfigHelper {
    */
   fun parseAndroidDriver(driver: String): TrailblazeDriverType? {
     return when (driver.uppercase()) {
-      "HOST", "ANDROID_HOST" -> TrailblazeDriverType.ANDROID_HOST
-      "ONDEVICE", "INSTRUMENTATION", "ANDROID_ONDEVICE_INSTRUMENTATION" ->
+      "HOST", "ANDROID_HOST", "ONDEVICE", "INSTRUMENTATION", "ANDROID_ONDEVICE_INSTRUMENTATION" ->
         TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION
       "ACCESSIBILITY", "ANDROID_ONDEVICE_ACCESSIBILITY" ->
         TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY

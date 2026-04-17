@@ -51,7 +51,7 @@ class SessionToolSetTest {
 
   private val androidDevice =
     TrailblazeConnectedDeviceSummary(
-      trailblazeDriverType = TrailblazeDriverType.ANDROID_HOST,
+      trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
       instanceId = "emulator-5554",
       description = "Pixel 6 API 34",
     )
@@ -365,7 +365,7 @@ class SessionTestBridge(
 
   override suspend fun getCurrentScreenState(): ScreenState? = null
 
-  override fun getDirectScreenStateProvider(): ((ScreenshotScalingConfig) -> ScreenState)? = null
+  override fun getDirectScreenStateProvider(skipScreenshot: Boolean): ((ScreenshotScalingConfig) -> ScreenState)? = null
 
   override suspend fun endSession(): Boolean = true
 

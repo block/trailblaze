@@ -119,6 +119,31 @@ object SettingsTabComposables {
         }
       }
 
+      // Show host/on-device agent toggle for Android when a driver is selected
+      if (platform == TrailblazeDevicePlatform.ANDROID && enabledDriverTypesMap[platform] != null) {
+        val appConfig = trailblazeSettingsRepo.serverStateFlow.collectAsState().value.appConfig
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.SpaceBetween,
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          Column(modifier = Modifier.weight(1f)) {
+            Text("Run Android agent on host (RPC Calls)", style = MaterialTheme.typography.bodyMedium)
+            Text(
+              "Agent loop runs on the host with tool calls dispatched via RPC. When off, the entire agent runs on-device.",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+          }
+          Switch(
+            checked = appConfig.preferHostAgent,
+            onCheckedChange = { checked ->
+              trailblazeSettingsRepo.updateAppConfig { it.copy(preferHostAgent = checked) }
+            },
+          )
+        }
+      }
+
       // Show web browser options for WEB platform when a driver is selected
       if (platform == TrailblazeDevicePlatform.WEB && enabledDriverTypesMap[platform] != null) {
         Row(
@@ -514,19 +539,6 @@ object SettingsTabComposables {
 
     val languageModelSection: @Composable () -> Unit = {
       SettingsSection(title = "Language Model Settings") {
-        // Set of Mark Toggle
-        PreferenceToggle(
-          label = "Enable Set of Mark",
-          checked = serverState.appConfig.setOfMarkEnabled,
-          onCheckedChange = { checkedValue ->
-            trailblazeSettingsRepo.updateAppConfig {
-              it.copy(setOfMarkEnabled = checkedValue)
-            }
-          }
-        )
-
-        Spacer(modifier = Modifier.height(8.dp))
-
         // Agent Implementation Selection
         var showAgentImplMenu by remember { mutableStateOf(false) }
         val agentImplOptions = listOf(

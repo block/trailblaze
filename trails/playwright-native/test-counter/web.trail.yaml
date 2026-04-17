@@ -6,13 +6,13 @@
   - step: Navigate to ../../../examples/playwright-native/sample-app/index.html
     recording:
       tools:
-      - playwright_navigate:
+      - web_navigate:
           url: ../../../examples/playwright-native/sample-app/index.html
           reasoning: The current task is to navigate to the specified URL. There are no interactive elements present, so direct navigation is required.
   - step: Click on the "Counter" navigation link
     recording:
       tools:
-      - playwright_click:
+      - web_click:
           ref: e5
           element: link "Counter"
           reasoning: The objective requires clicking on the 'Counter' navigation link. The view hierarchy shows 'Counter' as [e5], so clicking this element should satisfy the requirement.
@@ -22,27 +22,27 @@
   - step: Verify the counter value shows "0"
     recording:
       tools:
-      - playwright_verify_text_visible:
+      - web_verify_text_visible:
           text: 'Current value: 0'
           reasoning: 'The current objective is to verify that the counter value shows ''0''. The text ''Current value: 0'' appears in the paragraph [e9], which satisfies the requirement. Verifying this text ensures the objective is met.'
   - step: Click the "Increment" button (the + button) three times
     recording:
       tools:
-      - playwright_click:
+      - web_click:
           ref: e11
           element: button "Increment"
           reasoning: To increment the counter as requested, I will click the 'Increment' (+) button three times. This is the first click.
           nodeSelector:
             web:
               cssSelector: "#increment-btn"
-      - playwright_click:
+      - web_click:
           ref: e11
           element: button "Increment"
           reasoning: The objective requires clicking the 'Increment' button three times. The button has been clicked once already, so I need to click it two more times to fulfill the objective.
           nodeSelector:
             web:
               cssSelector: "#increment-btn"
-      - playwright_click:
+      - web_click:
           ref: e11
           element: button "Increment"
           reasoning: The objective is to click the Increment (+) button three times. I have already clicked it twice. The current value displayed is 2, indicating that two increments have been performed. I will click the Increment button one more time to complete the objective.
@@ -52,13 +52,13 @@
   - step: Verify the counter value shows "3"
     recording:
       tools:
-      - playwright_verify_text_visible:
+      - web_verify_text_visible:
           text: 'Current value: 3'
           reasoning: 'The current objective is to verify that the counter value shows ''3''. The paragraph [e9] displays ''Current value: 3'', so I will verify this text is visible to confirm the objective is satisfied.'
   - step: Click the "Decrement" button (the - button) once
     recording:
       tools:
-      - playwright_click:
+      - web_click:
           ref: e10
           element: button "Decrement"
           reasoning: The objective requires clicking the 'Decrement' button (the - button). e10 corresponds exactly to that button. Clicking it will fulfill the given task.
@@ -68,13 +68,13 @@
   - step: Verify the counter value shows "2"
     recording:
       tools:
-      - playwright_verify_text_visible:
+      - web_verify_text_visible:
           text: 'Current value: 2'
           reasoning: 'The objective is to verify that the counter value shows ''2''. The paragraph element on the screen displays ''Current value: 2'', directly matching the requirement. Verifying this text ensures the objective is met.'
   - step: Click the "Reset" button
     recording:
       tools:
-      - playwright_click:
+      - web_click:
           ref: e12
           element: button "Reset"
           reasoning: The objective requires clicking the 'Reset' button. The button is clearly identified as [e12] in the view hierarchy, so I will click it to complete the task.
@@ -84,6 +84,6 @@
   - step: Verify the counter value shows "0"
     recording:
       tools:
-      - playwright_verify_text_visible:
+      - web_verify_text_visible:
           text: 'Current value: 0'
           reasoning: 'The objective requires verification that the counter value shows ''0''. The paragraph with text ''Current value: 0'' indicates this state. Verifying this text fulfills the objective.'

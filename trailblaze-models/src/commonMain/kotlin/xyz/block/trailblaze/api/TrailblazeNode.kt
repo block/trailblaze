@@ -36,6 +36,17 @@ data class TrailblazeNode(
   /** Auto-assigned ID within a single tree capture. Not stable across captures. */
   val nodeId: Long = 0,
 
+  /**
+   * Stable content-hashed ref for this element (e.g., "y778").
+   *
+   * Computed from the element's text, class name, and screen position. Same element
+   * on the same screen always produces the same ref. Set by the compact element list
+   * builder after tree construction — null until then.
+   *
+   * Format: 1 letter + 1-3 digits. Collisions get a letter suffix ("k42b").
+   */
+  val ref: String? = null,
+
   /** Child nodes in the tree. */
   val children: List<TrailblazeNode> = emptyList(),
 
@@ -84,6 +95,12 @@ data class TrailblazeNode(
       left < other.right && right > other.left && top < other.bottom && bottom > other.top
   }
 
+  /** Returns a copy of this tree with refs populated from a nodeId→ref mapping. */
+  fun withRefs(refMapping: Map<Long, String>): TrailblazeNode = copy(
+    ref = refMapping[nodeId] ?: ref,
+    children = children.map { it.withRefs(refMapping) },
+  )
+
   /** Flattens this node and all descendants into a single list (pre-order DFS). */
   fun aggregate(): List<TrailblazeNode> =
     listOf(this) + children.flatMap { it.aggregate() }
@@ -113,13 +130,45 @@ data class TrailblazeNode(
    * Hit-tests the tree at (x, y) and returns the frontmost (deepest/smallest) node
    * whose bounds contain the point, or null if no node contains it.
    *
-   * Uses the smallest-area heuristic: among all nodes containing the point, the one
-   * with the smallest bounding area is the most specific (deepest in the Z-order).
-   * This mirrors how touch dispatch works in Android's view system and accessibility
-   * framework — the most specific (smallest) node at a point receives the event.
+   * Prefers nodes with identifiable driver properties (text, resourceId, etc.) over
+   * propertyless containers, then uses the smallest-area heuristic. On iOS especially,
+   * the smallest node at a given point is often an empty decorative container with no
+   * properties — selecting it produces only fragile index-based selectors.
    */
   fun hitTest(x: Int, y: Int): TrailblazeNode? =
     aggregate()
       .filter { it.bounds?.containsPoint(x, y) == true }
-      .minByOrNull { it.bounds!!.width.toLong() * it.bounds.height.toLong() }
+      .minWithOrNull(
+        compareByDescending<TrailblazeNode> { it.driverDetail.hasIdentifiableProperties }
+          .thenBy {
+            val b = it.bounds!!
+            b.width.toLong() * b.height.toLong()
+          },
+      )
+}
+
+/**
+ * Concise human-readable description of this node, e.g. `'Money' (Button)`.
+ * Dispatches on [DriverNodeDetail] to use the best text and type for each platform.
+ */
+fun TrailblazeNode.describe(): String {
+  val detail = driverDetail
+  val (text, type) = when (detail) {
+    is DriverNodeDetail.AndroidAccessibility ->
+      detail.resolveText() to detail.className?.substringAfterLast('.')
+    is DriverNodeDetail.AndroidMaestro ->
+      detail.resolveText() to detail.className?.substringAfterLast('.')
+    is DriverNodeDetail.IosMaestro ->
+      detail.resolveText() to detail.className
+    is DriverNodeDetail.Compose ->
+      detail.resolveText() to detail.role
+    is DriverNodeDetail.Web ->
+      detail.ariaName to detail.ariaRole
+  }
+  return when {
+    text != null && type != null -> "'$text' ($type)"
+    text != null -> "'$text'"
+    type != null -> type
+    else -> "element"
+  }
 }

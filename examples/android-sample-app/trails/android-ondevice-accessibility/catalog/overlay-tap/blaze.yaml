@@ -1,6 +1,6 @@
 - config:
     id: "sample-app/catalog/overlay-tap"
-    app: "xyz.block.trailblaze.examples.sampleapp"
+    target: "xyz.block.trailblaze.examples.sampleapp"
     platform: android
     driver: ANDROID_ONDEVICE_ACCESSIBILITY
 - tools:

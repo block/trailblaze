@@ -20,9 +20,7 @@ data class CustomTrailblazeTools(
   val nonLlmAppSpecificTools: Set<KClass<out TrailblazeTool>> = setOf(),
   /** Initial set of tools given to the LLM via a [TrailblazeToolRepo]. */
   val initialToolRepoToolClasses: Set<KClass<out TrailblazeTool>> =
-    TrailblazeToolSet.getLlmToolSet(
-      config.setOfMarkEnabled,
-    ).toolClasses + registeredAppSpecificLlmTools,
+    TrailblazeToolSet.getLlmToolSet().toolClasses + registeredAppSpecificLlmTools,
   /** Optional custom toolset catalog for dynamic toolset switching. */
   val toolSetCatalog: List<ToolSetCatalogEntry>? = null,
 ) {

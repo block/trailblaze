@@ -58,8 +58,11 @@ object OnDeviceAccessibilityServiceSetup {
    * [UiAutomation] connection uses flags=0 which tells the system to disable all accessibility
    * services while automation is active. Setting [UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES]
    * allows our [TrailblazeAccessibilityService] to coexist with UiAutomation.
+   *
+   * Call this early (e.g., during server startup) so that when the host enables the
+   * accessibility service via ADB, the system can bind it immediately.
    */
-  private fun ensureUiAutomationDoesNotSuppressAccessibility() {
+  fun ensureUiAutomationDoesNotSuppressAccessibility() {
     if (AndroidSdkVersion.isAtLeast(24)) {
       // Set the flag on UiAutomator's Configurator so any future UiDevice.getInstance() calls
       // also use the non-suppressing flag.

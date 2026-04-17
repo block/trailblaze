@@ -130,7 +130,9 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
       watchFileSystem = false,
       costEnricher = costEnricher::enrich,
     )
-    val sessionIds = logsRepo.getSessionIds()
+    // Use cached session IDs from init (already populated during LogsRepo construction)
+    // instead of re-listing the directory, which may fail if the volume becomes unavailable.
+    val sessionIds = logsRepo.sessionsFlow.value
 
     if (sessionIds.isEmpty()) {
       logsRepo.close()
@@ -147,7 +149,7 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
     for (sessionId in sessionIds) {
       try {
         val sessionInfo = logsRepo.getSessionInfo(sessionId)
-        val logs = logsRepo.getLogsForSession(sessionId)
+        val logs = logsRepo.getCachedLogsForSession(sessionId)
         if (sessionInfo == null) {
           errors.add("$sessionId: Could not load session info")
           continue
@@ -344,16 +346,17 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
   }
 
   /**
-   * Deduplicates retried tests by keeping one result per unique title.
+   * Deduplicates retried tests by keeping one result per unique (title, device_classifier) pair.
    *
-   * When a test is retried, multiple sessions share the same title. This groups
-   * them by title, picks the best result (preferring PASSED, then latest attempt),
-   * and annotates the kept result with retry metadata (attempt number, total attempts,
-   * replaced session IDs).
+   * When a test is retried, multiple sessions share the same title and device_classifier.
+   * This groups them by both fields, picks the best result (preferring PASSED, then latest
+   * attempt), and annotates the kept result with retry metadata (attempt number, total attempts,
+   * replaced session IDs). Using device_classifier ensures that the same test run on different
+   * devices (e.g. phone vs tablet) is preserved as separate results.
    */
   private fun deduplicateRetries(results: List<SessionResult>): List<SessionResult> {
     return results
-      .groupBy { it.title }
+      .groupBy { listOf(it.title, it.device_classifier.orEmpty()) }
       .values
       .map { attempts ->
         if (attempts.size == 1) return@map attempts.single()

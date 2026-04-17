@@ -8,6 +8,9 @@ import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.toolcalls.MapsToMaestroCommands
 import xyz.block.trailblaze.toolcalls.ReasoningTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
+import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
+import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.toolcalls.isSuccess
 
 @Serializable
 @TrailblazeToolClass("tapOnPoint")
@@ -27,4 +30,15 @@ data class TapOnPointTrailblazeTool(
       longPress = longPress,
     ),
   )
+
+  override suspend fun execute(
+    toolExecutionContext: TrailblazeToolExecutionContext,
+  ): TrailblazeToolResult {
+    val result = super.execute(toolExecutionContext)
+    if (result.isSuccess()) {
+      val action = if (longPress) "Long pressed" else "Tapped"
+      return TrailblazeToolResult.Success(message = "$action at ($x, $y)")
+    }
+    return result
+  }
 }

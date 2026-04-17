@@ -76,40 +76,7 @@ object InstrumentationUtil {
    * Note: Use [inputTextByTyping] if you are doing normal typing and not pressing a specific key
    */
   fun pressKey(code: KeyCode) {
-    val intCode: Int = when (code) {
-      KeyCode.ENTER -> 66
-      KeyCode.BACKSPACE -> 67
-      KeyCode.BACK -> 4
-      KeyCode.VOLUME_UP -> 24
-      KeyCode.VOLUME_DOWN -> 25
-      KeyCode.HOME -> 3
-      KeyCode.LOCK -> 276
-      KeyCode.REMOTE_UP -> 19
-      KeyCode.REMOTE_DOWN -> 20
-      KeyCode.REMOTE_LEFT -> 21
-      KeyCode.REMOTE_RIGHT -> 22
-      KeyCode.REMOTE_CENTER -> 23
-      KeyCode.REMOTE_PLAY_PAUSE -> 85
-      KeyCode.REMOTE_STOP -> 86
-      KeyCode.REMOTE_NEXT -> 87
-      KeyCode.REMOTE_PREVIOUS -> 88
-      KeyCode.REMOTE_REWIND -> 89
-      KeyCode.REMOTE_FAST_FORWARD -> 90
-      KeyCode.POWER -> 26
-      KeyCode.ESCAPE -> 111
-      KeyCode.TAB -> 62
-      KeyCode.REMOTE_SYSTEM_NAVIGATION_UP -> 280
-      KeyCode.REMOTE_SYSTEM_NAVIGATION_DOWN -> 281
-      KeyCode.REMOTE_BUTTON_A -> 96
-      KeyCode.REMOTE_BUTTON_B -> 97
-      KeyCode.REMOTE_MENU -> 82
-      KeyCode.TV_INPUT -> 178
-      KeyCode.TV_INPUT_HDMI_1 -> 243
-      KeyCode.TV_INPUT_HDMI_2 -> 244
-      KeyCode.TV_INPUT_HDMI_3 -> 245
-    }
-
-    execShellCommand("input keyevent $intCode")
+    AdbCommandUtil.pressKey(code)
     Thread.sleep(300)
   }
 

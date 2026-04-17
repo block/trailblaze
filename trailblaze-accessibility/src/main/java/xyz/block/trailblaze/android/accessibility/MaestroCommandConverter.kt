@@ -1,19 +1,35 @@
 package xyz.block.trailblaze.android.accessibility
 
+import maestro.DeviceOrientation
 import maestro.KeyCode
+import maestro.ScrollDirection
 import maestro.SwipeDirection
+import maestro.orchestra.AirplaneValue
 import maestro.orchestra.AssertConditionCommand
 import maestro.orchestra.BackPressCommand
+import maestro.orchestra.ClearStateCommand
 import maestro.orchestra.Command
+import maestro.orchestra.CopyTextFromCommand
 import maestro.orchestra.EraseTextCommand
 import maestro.orchestra.HideKeyboardCommand
+import maestro.orchestra.InputRandomCommand
 import maestro.orchestra.InputTextCommand
+import maestro.orchestra.KillAppCommand
+import maestro.orchestra.OpenLinkCommand
+import maestro.orchestra.PasteTextCommand
 import maestro.orchestra.PressKeyCommand
 import maestro.orchestra.ScrollCommand
+import maestro.orchestra.ScrollUntilVisibleCommand
+import maestro.orchestra.SetAirplaneModeCommand
+import maestro.orchestra.SetClipboardCommand
+import maestro.orchestra.SetOrientationCommand
+import maestro.orchestra.StopAppCommand
 import maestro.orchestra.SwipeCommand
+import maestro.orchestra.TakeScreenshotCommand
 import maestro.orchestra.TapOnElementCommand
 import maestro.orchestra.TapOnPointCommand
 import maestro.orchestra.TapOnPointV2Command
+import maestro.orchestra.ToggleAirplaneModeCommand
 import maestro.orchestra.WaitForAnimationToEndCommand
 import xyz.block.trailblaze.api.DriverNodeMatch
 import xyz.block.trailblaze.api.TrailblazeElementSelector
@@ -62,6 +78,49 @@ object MaestroCommandConverter {
       is WaitForAnimationToEndCommand ->
         listOf(AccessibilityAction.WaitForSettle(timeoutMs = command.timeout ?: 5_000L))
       is AssertConditionCommand -> convertAssertCondition(command)
+      is SetClipboardCommand -> listOf(AccessibilityAction.SetClipboard(command.text))
+      is PasteTextCommand -> listOf(AccessibilityAction.PasteText)
+      is CopyTextFromCommand -> {
+        val elementSelector = convertElementSelector(command.selector)
+        val nodeSelector = convertElementSelectorToNodeSelector(elementSelector)
+        listOf(AccessibilityAction.CopyTextFrom(nodeSelector = nodeSelector))
+      }
+      is StopAppCommand -> listOf(AccessibilityAction.StopApp(command.appId))
+      is KillAppCommand -> listOf(AccessibilityAction.KillApp(command.appId))
+      is ClearStateCommand -> listOf(AccessibilityAction.ClearState(command.appId))
+      is OpenLinkCommand -> listOf(AccessibilityAction.OpenLink(command.link))
+      is SetOrientationCommand -> listOf(
+        AccessibilityAction.SetOrientation(
+          rotation = when (command.orientation) {
+            DeviceOrientation.PORTRAIT -> 0
+            DeviceOrientation.LANDSCAPE_LEFT -> 1
+            DeviceOrientation.UPSIDE_DOWN -> 2
+            DeviceOrientation.LANDSCAPE_RIGHT -> 3
+          },
+        ),
+      )
+      is SetAirplaneModeCommand -> listOf(
+        AccessibilityAction.SetAirplaneMode(enabled = command.value == AirplaneValue.Enable),
+      )
+      is ToggleAirplaneModeCommand -> listOf(AccessibilityAction.ToggleAirplaneMode)
+      is InputRandomCommand -> listOf(AccessibilityAction.InputText(command.genRandomString()))
+      is ScrollUntilVisibleCommand -> {
+        val elementSelector = convertElementSelector(command.selector)
+        val nodeSelector = convertElementSelectorToNodeSelector(elementSelector)
+        listOf(
+          AccessibilityAction.ScrollUntilVisible(
+            nodeSelector = nodeSelector,
+            direction = convertScrollDirection(command.direction),
+            timeoutMs = command.timeout.toLong(),
+            scrollDurationMs = command.scrollDuration.toLong(),
+          ),
+        )
+      }
+      is TakeScreenshotCommand -> {
+        // Screenshots are captured automatically by AccessibilityTrailRunner for every action.
+        Console.log("MaestroCommandConverter: TakeScreenshotCommand is a no-op (screenshots captured by logging)")
+        emptyList()
+      }
       else -> {
         Console.log(
           "MaestroCommandConverter: Skipping unsupported command: ${command::class.simpleName}"
@@ -205,6 +264,15 @@ object MaestroCommandConverter {
     }
   }
 
+  private fun convertScrollDirection(direction: ScrollDirection): AccessibilityAction.Direction {
+    return when (direction) {
+      ScrollDirection.UP -> AccessibilityAction.Direction.UP
+      ScrollDirection.DOWN -> AccessibilityAction.Direction.DOWN
+      ScrollDirection.LEFT -> AccessibilityAction.Direction.LEFT
+      ScrollDirection.RIGHT -> AccessibilityAction.Direction.RIGHT
+    }
+  }
+
   private fun convertAssertCondition(command: AssertConditionCommand): List<AccessibilityAction> {
     val condition = command.condition
     val timeoutMs = command.timeoutMs() ?: 5_000L
@@ -232,14 +300,11 @@ object MaestroCommandConverter {
 
   private fun convertPressKey(command: PressKeyCommand): List<AccessibilityAction> {
     return when (command.code) {
+      // BACK and HOME use native accessibility global actions for reliability.
       KeyCode.BACK -> listOf(AccessibilityAction.PressBack)
       KeyCode.HOME -> listOf(AccessibilityAction.PressHome)
-      else -> {
-        Console.log(
-          "MaestroCommandConverter: Key ${command.code} not supported via accessibility, skipping"
-        )
-        emptyList()
-      }
+      // All other keys (ENTER, TAB, etc.) go through ADB shell `input keyevent`.
+      else -> listOf(AccessibilityAction.PressKey(command.code))
     }
   }
 

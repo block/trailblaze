@@ -9,6 +9,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.model.getSessionStartedInfo
 import xyz.block.trailblaze.mcp.McpToolProfile
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
@@ -58,6 +59,10 @@ class SessionToolSet(
     LIST,
     /** List artifacts in a session */
     ARTIFACTS,
+    /** Delete a session's logs and artifacts */
+    DELETE,
+    /** Generate and return the recording YAML for a session */
+    RECORDING,
   }
 
   @LLMDescription(
@@ -73,17 +78,21 @@ class SessionToolSet(
     session(action=INFO, id="abc123") → specific session info
     session(action=LIST) → recent sessions
     session(action=ARTIFACTS, id="abc123") → list artifacts
+    session(action=DELETE, id="abc123") → delete a session
+    session(action=RECORDING) → return recording YAML for current session
+    session(action=RECORDING, id="abc123") → return recording YAML for a specific session
+    session(action=SAVE, id="abc123", title="Login") → save a specific session as trail
 
     Video and device logs are captured by default when a session starts.
     """
   )
   @Tool(McpToolProfile.TOOL_SESSION)
   suspend fun session(
-    @LLMDescription("Action: START, STOP, SAVE, INFO, LIST, or ARTIFACTS")
+    @LLMDescription("Action: START, STOP, SAVE, INFO, LIST, ARTIFACTS, RECORDING, or DELETE")
     action: SessionAction,
     @LLMDescription("Session title (for START or SAVE)")
     title: String? = null,
-    @LLMDescription("Session ID for INFO, ARTIFACTS (defaults to current session)")
+    @LLMDescription("Session ID for INFO, ARTIFACTS, SAVE, RECORDING (defaults to current session)")
     id: String? = null,
     @LLMDescription("Disable video capture (default: false)")
     noVideo: Boolean = false,
@@ -97,10 +106,12 @@ class SessionToolSet(
     return when (action) {
       SessionAction.START -> handleStart(title, noVideo, noLogs)
       SessionAction.STOP -> handleStop(save, title)
-      SessionAction.SAVE -> handleSave(title)
+      SessionAction.SAVE -> handleSave(title, id)
       SessionAction.INFO -> handleInfo(id)
       SessionAction.LIST -> handleList(limit ?: 20)
       SessionAction.ARTIFACTS -> handleArtifacts(id)
+      SessionAction.DELETE -> handleDelete(id)
+      SessionAction.RECORDING -> handleRecording(id)
     }
   }
 
@@ -247,7 +258,15 @@ class SessionToolSet(
   // SAVE
   // ─────────────────────────────────────────────────────────────────────────────
 
-  private suspend fun handleSave(title: String?): String {
+  private suspend fun handleSave(title: String?, id: String? = null): String {
+    // Resolve target session — explicit id, or current session
+    val targetSessionId = if (id != null) {
+      resolveSessionId(id)
+        ?: return SessionResult(error = "Session not found: $id").toJson()
+    } else {
+      sessionIdProvider?.invoke()
+    }
+
     val trailName = title
       ?: sessionContext?.sessionTitle
       ?: sessionContext?.getCurrentTrailName()
@@ -266,12 +285,11 @@ class SessionToolSet(
     }
 
     // Try log-based trail generation first (preferred)
-    val sessionId = sessionIdProvider?.invoke()
-    if (logsRepo != null && sessionId != null) {
-      return saveFromLogs(trailName, sessionId, platform)
+    if (logsRepo != null && targetSessionId != null) {
+      return saveFromLogs(trailName, targetSessionId, platform)
     }
 
-    // Fallback: in-memory RecordedStep path
+    // Fallback: in-memory RecordedStep path (only for current session)
     return saveFromRecordedSteps(trailName, platform)
   }
 
@@ -298,7 +316,7 @@ class SessionToolSet(
         context = originalConfig?.context,
         source = originalConfig?.source,
         metadata = originalConfig?.metadata,
-        app = originalConfig?.app,
+        target = originalConfig?.target,
         electron = originalConfig?.electron,
         driver = started.trailblazeDeviceInfo.trailblazeDriverType.name,
         platform = started.trailblazeDeviceInfo.platform.name.lowercase(),
@@ -347,6 +365,61 @@ class SessionToolSet(
     } else {
       SessionResult(error = saveResult.error ?: "Unknown error saving trail").toJson()
     }
+  }
+
+  private fun handleRecording(id: String?): String {
+    val repo = logsRepo
+      ?: return SessionResult(error = "Recording not available (no logs configured)").toJson()
+
+    val sessionId = if (id != null) {
+      resolveSessionId(id)
+        ?: return SessionResult(error = "Session not found: $id").toJson()
+    } else {
+      sessionIdProvider?.invoke()
+        ?: return SessionResult(error = "No active session. Specify id parameter.").toJson()
+    }
+
+    val logs = repo.getLogsForSession(sessionId)
+    if (logs.isEmpty()) {
+      return SessionResult(error = "No logs found for session ${sessionId.value}").toJson()
+    }
+
+    val startedStatus = logs.getSessionStartedInfo()
+    val sessionTrailConfig = startedStatus?.let { started ->
+      val originalConfig = started.trailConfig
+      TrailConfig(
+        id = originalConfig?.id,
+        title = originalConfig?.title ?: sessionContext?.sessionTitle,
+        description = originalConfig?.description,
+        priority = originalConfig?.priority,
+        context = originalConfig?.context,
+        source = originalConfig?.source,
+        metadata = originalConfig?.metadata,
+        target = originalConfig?.target,
+        electron = originalConfig?.electron,
+        driver = started.trailblazeDeviceInfo.trailblazeDriverType.name,
+        platform = started.trailblazeDeviceInfo.platform.name.lowercase(),
+      )
+    }
+
+    val yamlContent = try {
+      logs.generateRecordedYaml(sessionTrailConfig = sessionTrailConfig)
+    } catch (e: Exception) {
+      return SessionResult(error = "Failed to generate recording: ${e.message}").toJson()
+    }
+
+    if (yamlContent.isBlank()) {
+      return SessionResult(
+        error = "No recordable steps found in session ${sessionId.value}",
+      ).toJson()
+    }
+
+    return SessionResult(
+      sessionId = sessionId.value,
+      status = "recording_generated",
+      yaml = yamlContent,
+      message = "Recording generated for session ${sessionId.value}",
+    ).toJson()
   }
 
   private fun writeTrailFile(
@@ -399,8 +472,16 @@ class SessionToolSet(
 
     val info = logsRepo?.getSessionInfoDirect(sessionId)
     val sessionDir = logsRepo?.getSessionDir(sessionId)
-    val statusStr = info?.latestStatus?.toString() ?: "unknown"
+    val statusStr = info?.latestStatus?.let { formatStatus(it) } ?: "unknown"
     val displayTitle = info?.displayName ?: sessionContext?.sessionTitle
+
+    // Include recorded steps for the current session
+    val currentSessionId = sessionIdProvider?.invoke()
+    val stepEntries = if (sessionId == currentSessionId) {
+      sessionContext?.getRecordedSteps()?.mapIndexed { idx, step ->
+        SessionStepEntry(index = idx + 1, type = step.type.name, input = step.input)
+      }
+    } else null
 
     return SessionResult(
       sessionId = sessionId.value,
@@ -411,6 +492,7 @@ class SessionToolSet(
       platform = info?.trailblazeDeviceId?.trailblazeDevicePlatform?.name
         ?: sessionContext?.associatedDeviceId?.trailblazeDevicePlatform?.name,
       path = sessionDir?.absolutePath,
+      steps = stepEntries,
       message = buildString {
         append("Session: ${sessionId.value}")
         if (displayTitle != null) append(" ($displayTitle)")
@@ -423,23 +505,25 @@ class SessionToolSet(
     val repo = logsRepo
       ?: return SessionResult(error = "Session listing not available").toJson()
 
-    val sessionIds = repo.getSessionIds().take(limit)
-    if (sessionIds.isEmpty()) {
+    val sessions = repo.sessionInfoFlow.value
+    if (sessions.isEmpty()) {
       return SessionResult(message = "No sessions found.").toJson()
     }
 
-    val entries = sessionIds.map { sessionId ->
-      val info = repo.getSessionInfoDirect(sessionId)
-      SessionListEntry(
-        id = sessionId.value,
-        title = info?.displayName,
-        status = info?.latestStatus?.toString() ?: "unknown",
-        startedAt = info?.timestamp?.toString(),
-        durationMs = info?.durationMs,
-        device = info?.trailblazeDeviceId?.instanceId,
-        platform = info?.trailblazeDeviceId?.trailblazeDevicePlatform?.name,
-      )
-    }
+    val entries = sessions
+      .sortedByDescending { it.timestamp }
+      .take(limit)
+      .map { info ->
+        SessionListEntry(
+          id = info.sessionId.value,
+          title = info.displayName,
+          status = formatStatus(info.latestStatus),
+          startedAt = info.timestamp.toString(),
+          durationMs = info.durationMs,
+          device = info.trailblazeDeviceId?.instanceId,
+          platform = info.trailblazeDeviceId?.trailblazeDevicePlatform?.name,
+        )
+      }
 
     return SessionListResult(
       sessions = entries,
@@ -480,6 +564,25 @@ class SessionToolSet(
     ).toJson()
   }
 
+  private fun handleDelete(id: String?): String {
+    val repo = logsRepo
+      ?: return SessionResult(error = "Session deletion not available (no logs configured)").toJson()
+
+    if (id == null) {
+      return SessionResult(error = "Session ID required. Use session(action=DELETE, id=\"...\")").toJson()
+    }
+
+    val sessionId = resolveSessionId(id)
+      ?: return SessionResult(error = "Session not found: $id").toJson()
+
+    repo.deleteLogsForSession(sessionId)
+    return SessionResult(
+      sessionId = sessionId.value,
+      status = "deleted",
+      message = "Session deleted: ${sessionId.value}",
+    ).toJson()
+  }
+
   // ─────────────────────────────────────────────────────────────────────────────
   // Helpers
   // ─────────────────────────────────────────────────────────────────────────────
@@ -501,13 +604,32 @@ class SessionToolSet(
     }
   }
 
+  private fun formatStatus(status: SessionStatus): String {
+    val durationSuffix = if (status is SessionStatus.Ended) {
+      val seconds = status.durationMs / 1000.0
+      if (seconds < 60) " (%.1fs)".format(seconds)
+      else " (%dm %ds)".format((seconds / 60).toLong(), (seconds % 60).toLong())
+    } else ""
+    return when (status) {
+      is SessionStatus.Unknown -> "Unknown"
+      is SessionStatus.Started -> "In Progress"
+      is SessionStatus.Ended.Succeeded -> "Succeeded$durationSuffix"
+      is SessionStatus.Ended.Failed -> "Failed$durationSuffix"
+      is SessionStatus.Ended.Cancelled -> "Cancelled$durationSuffix"
+      is SessionStatus.Ended.TimeoutReached -> "Timeout$durationSuffix"
+      is SessionStatus.Ended.SucceededWithFallback -> "Succeeded (with fallback)$durationSuffix"
+      is SessionStatus.Ended.FailedWithFallback -> "Failed (with fallback)$durationSuffix"
+      is SessionStatus.Ended.MaxCallsLimitReached -> "Max calls reached$durationSuffix"
+    }
+  }
+
   private fun categorizeArtifact(fileName: String): String {
     return when {
       fileName.endsWith(".mp4") || fileName.endsWith(".webm") -> "video"
       fileName.contains("logcat") || fileName.contains("system_log") -> "device_log"
       fileName.endsWith(".trail.yaml") -> "trail"
       fileName.endsWith(".json") -> "metadata"
-      fileName.endsWith(".png") || fileName.endsWith(".jpg") -> "screenshot"
+      fileName.endsWith(".png") || fileName.endsWith(".jpg") || fileName.endsWith(".webp") -> "screenshot"
       else -> "other"
     }
   }
@@ -528,11 +650,20 @@ data class SessionResult(
   val file: String? = null,
   val message: String? = null,
   val error: String? = null,
+  val yaml: String? = null,
   val artifacts: List<ArtifactEntry>? = null,
   val saveResult: String? = null,
+  val steps: List<SessionStepEntry>? = null,
 ) {
   fun toJson(): String = TrailblazeJsonInstance.encodeToString(serializer(), this)
 }
+
+@Serializable
+data class SessionStepEntry(
+  val index: Int,
+  val type: String,
+  val input: String,
+)
 
 @Serializable
 data class ArtifactEntry(

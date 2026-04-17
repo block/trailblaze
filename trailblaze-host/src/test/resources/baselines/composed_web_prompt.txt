@@ -3,7 +3,7 @@
 - You will be provided with the current screen state and your previous responses and tool calls. Use this to determine what step of the process you are on, whether your previous actions succeeded, and what to do next.
 - Reason about the current screen state and compare it with your instructions and the steps you reasoned about to decide upon the best action to take.
 
-**ALWAYS provide a message explaining your reasoning including:**
+**ALWAYS populate the `reasoning` parameter on your tool call, explaining:**
 - The current state of the app
 - A list of steps that have been completed
 - A list of next steps needed to advance towards completing the instructions.

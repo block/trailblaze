@@ -127,6 +127,9 @@ dependencies {
   implementation(project(":trailblaze-tracing"))
   testImplementation(libs.kotlin.test.junit4)
   testImplementation(libs.assertk)
+  testImplementation(libs.ktor.server.cio)
+  testImplementation(libs.ktor.server.content.negotiation)
+  testImplementation(libs.ktor.serialization.kotlinx.json)
 }
 
 tasks.test {

@@ -13,12 +13,12 @@ if [ ! -d "$TRAILBLAZE_LOGS_DIR" ] || [ -z "$(ls -A "$TRAILBLAZE_LOGS_DIR" 2>/de
 fi
 
 echo "Building Compose Web/WASM UI..."
-./gradlew :trailblaze-ui:wasmJsBrowserProductionWebpack
+./gradlew :trailblaze-ui:wasmJsBrowserProductionWebpack -Ptrailblaze.wasm=true
 UI_EXIT_CODE=$?
 echo "UI build exit code: $UI_EXIT_CODE"
 
 echo "Generating Trailblaze report..."
-./gradlew :trailblaze-report:run --args="$TRAILBLAZE_LOGS_DIR"
+./gradlew :trailblaze-report:run --args="$TRAILBLAZE_LOGS_DIR" -Ptrailblaze.wasm=true
 REPORT_EXIT_CODE=$?
 echo "Report generation exit code: $REPORT_EXIT_CODE"
 

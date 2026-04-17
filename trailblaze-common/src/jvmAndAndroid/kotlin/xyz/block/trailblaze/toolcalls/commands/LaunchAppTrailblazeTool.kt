@@ -7,9 +7,11 @@ import maestro.orchestra.LaunchAppCommand
 import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.toolcalls.MapsToMaestroCommands
+import xyz.block.trailblaze.toolcalls.ReasoningTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.toolcalls.isSuccess
 
 @Serializable
 @TrailblazeToolClass("launchApp")
@@ -28,7 +30,8 @@ Available App Launch Modes:
     """,
   )
   val launchMode: LaunchMode = LaunchMode.REINSTALL,
-) : MapsToMaestroCommands() {
+  override val reasoning: String? = null,
+) : MapsToMaestroCommands(), ReasoningTrailblazeTool {
 
   override suspend fun execute(
     toolExecutionContext: TrailblazeToolExecutionContext,
@@ -38,8 +41,13 @@ Available App Launch Modes:
     // All Apple system apps use the com.apple.* prefix, which third-party apps cannot use.
     val isIosSystemApp = toolExecutionContext.trailblazeDeviceInfo.platform == TrailblazeDevicePlatform.IOS &&
       appId.startsWith("com.apple.")
-    val result = if (launchMode == LaunchMode.REINSTALL && isIosSystemApp) {
-      copy(launchMode = LaunchMode.FORCE_RESTART).execute(toolExecutionContext)
+    val effectiveLaunchMode = if (launchMode == LaunchMode.REINSTALL && isIosSystemApp) {
+      LaunchMode.FORCE_RESTART
+    } else {
+      launchMode
+    }
+    val result = if (effectiveLaunchMode != launchMode) {
+      copy(launchMode = effectiveLaunchMode).execute(toolExecutionContext)
     } else {
       super.execute(toolExecutionContext)
     }
@@ -50,6 +58,9 @@ Available App Launch Modes:
     if (toolExecutionContext.trailblazeDeviceInfo.platform == TrailblazeDevicePlatform.ANDROID) {
       toolExecutionContext.androidDeviceCommandExecutor
         ?.waitUntilAppInForeground(appId)
+    }
+    if (result.isSuccess()) {
+      return TrailblazeToolResult.Success(message = "Launched $appId ($effectiveLaunchMode)")
     }
     return result
   }

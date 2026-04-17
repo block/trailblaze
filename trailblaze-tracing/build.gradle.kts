@@ -21,9 +21,11 @@ android {
 }
 
 kotlin {
-  @OptIn(ExperimentalWasmDsl::class)
-  wasmJs {
-    browser()
+  if (findProperty("trailblaze.wasm")?.toString()?.toBoolean() != false) {
+    @OptIn(ExperimentalWasmDsl::class)
+    wasmJs {
+      browser()
+    }
   }
 
   androidTarget {

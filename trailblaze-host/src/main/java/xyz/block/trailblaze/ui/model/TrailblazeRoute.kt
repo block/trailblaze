@@ -47,9 +47,9 @@ class RunYamlRequestFactory(
     useRecordedSteps = useRecordedSteps,
     targetAppName = appConfig.selectedTargetAppId,
     config = TrailblazeConfig(
-      setOfMarkEnabled = appConfig.setOfMarkEnabled,
       aiFallback = appConfig.aiFallbackEnabled,
       overrideSessionId = null,
+      preferHostAgent = appConfig.preferHostAgent,
     ),
     trailFilePath = trailFilePath,
     trailblazeDeviceId = device.trailblazeDeviceId,

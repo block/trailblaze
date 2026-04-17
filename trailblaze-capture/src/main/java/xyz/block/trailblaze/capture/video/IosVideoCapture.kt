@@ -26,6 +26,11 @@ class IosVideoCapture : CaptureStream {
 
   override fun start(sessionDir: File, deviceId: String, appId: String?) {
     if (!isMacOs()) return
+
+    // Clean up any stale recording from a previous session that wasn't stopped cleanly.
+    // Without this, xcrun fails with "Host recording is already in progress".
+    stopStaleRecording(deviceId)
+
     val output = File(sessionDir, "video.mp4")
     this.videoFile = output
     this.startTimestampMs = System.currentTimeMillis()
@@ -51,10 +56,59 @@ class IosVideoCapture : CaptureStream {
           )
           .redirectErrorStream(true)
           .start()
-      Console.log("iOS video recording process started (pid=${process?.pid()})")
+
+      // Verify the recording actually started. xcrun exits immediately with an error
+      // if recording can't start (e.g., "Host recording is already in progress").
+      // simctl writes "Recording started" to stderr once the first frame is processed.
+      Thread.sleep(RECORDING_START_VERIFY_MS)
+      if (process?.isAlive != true) {
+        val errorOutput =
+          try {
+            process?.inputStream?.bufferedReader()?.readText()?.trim() ?: ""
+          } catch (_: Exception) {
+            ""
+          }
+        Console.log(
+          "iOS video recording failed to start: exitCode=${process?.exitValue()}, output=$errorOutput"
+        )
+        process = null
+      } else {
+        Console.log("iOS video recording process started (pid=${process?.pid()})")
+      }
     } catch (e: Exception) {
       Console.log("Failed to start iOS video recording: ${e.message}")
     }
+  }
+
+  /**
+   * Attempts to stop any stale recording on this simulator from a previous session. This can happen
+   * when a previous recording process was killed without clean SIGINT shutdown (e.g.,
+   * destroyForcibly on cancellation), leaving the simulator's internal recording lock held.
+   */
+  private fun stopStaleRecording(deviceId: String) {
+    try {
+      val pgrep =
+        ProcessBuilder("pgrep", "-f", "simctl io $deviceId recordVideo")
+          .redirectErrorStream(true)
+          .start()
+      val pids = pgrep.inputStream.bufferedReader().readText().trim()
+      pgrep.waitFor(5, TimeUnit.SECONDS)
+
+      if (pids.isNotBlank()) {
+        for (pid in pids.lines().filter { it.isNotBlank() }) {
+          try {
+            Console.log("Sending SIGINT to stale recording process $pid")
+            ProcessBuilder("kill", "-INT", pid.trim())
+              .redirectErrorStream(true)
+              .start()
+              .waitFor(5, TimeUnit.SECONDS)
+          } catch (_: Exception) {}
+        }
+        // Wait for the simulator to release the recording lock
+        Thread.sleep(STALE_CLEANUP_WAIT_MS)
+        Console.log("Cleaned up stale recording process(es)")
+      }
+    } catch (_: Exception) {}
   }
 
   /**
@@ -92,6 +146,15 @@ class IosVideoCapture : CaptureStream {
     return false
   }
 
+  companion object {
+    /** Time to wait after starting xcrun to verify the process is still alive. */
+    private const val RECORDING_START_VERIFY_MS = 1000L
+    /** Time to wait after killing stale processes for the simulator to release its lock. */
+    private const val STALE_CLEANUP_WAIT_MS = 1000L
+    /** Seconds to wait for xcrun to finalize the MP4 after SIGINT. */
+    private const val STOP_TIMEOUT_SECONDS = 10L
+  }
+
   override fun stop(options: CaptureOptions): CaptureArtifact? {
     val proc = process ?: run {
       Console.log("iOS video capture: process is null — recording never started")
@@ -105,11 +168,19 @@ class IosVideoCapture : CaptureStream {
       val isAlive = proc.isAlive
       Console.log("Stopping iOS video recording (pid=$pid, alive=$isAlive)...")
       ProcessBuilder("kill", "-INT", pid.toString()).redirectErrorStream(true).start().waitFor()
-      // Wait for the process to finalize the MP4
-      val finished = proc.waitFor(10, TimeUnit.SECONDS)
+      // Wait for the process to finalize the MP4.
+      // Avoid destroyForcibly() — force-killing leaves the simulator's internal
+      // recording lock held, causing all subsequent recordings to fail with
+      // "Host recording is already in progress". A second SIGINT is safe.
+      val finished = proc.waitFor(STOP_TIMEOUT_SECONDS, TimeUnit.SECONDS)
       if (!finished) {
-        Console.log("iOS recording process did not exit within 10s, force-killing")
-        proc.destroyForcibly()
+        Console.log("iOS recording process did not exit within ${STOP_TIMEOUT_SECONDS}s, sending second SIGINT")
+        ProcessBuilder("kill", "-INT", pid.toString()).redirectErrorStream(true).start().waitFor()
+        val finishedRetry = proc.waitFor(5, TimeUnit.SECONDS)
+        if (!finishedRetry) {
+          Console.log("iOS recording process still alive after second SIGINT, force-killing (may leave stale lock)")
+          proc.destroyForcibly()
+        }
       } else {
         // Drain process output for diagnostics (safe since process has exited)
         val output = try { proc.inputStream.bufferedReader().readText().trim() } catch (_: Exception) { "" }
@@ -117,7 +188,16 @@ class IosVideoCapture : CaptureStream {
       }
     } catch (e: Exception) {
       Console.log("Error stopping iOS video recording: ${e.message}")
-      proc.destroyForcibly()
+      // Send SIGINT rather than destroyForcibly to give the simulator a chance to
+      // release the recording lock cleanly.
+      try {
+        ProcessBuilder("kill", "-INT", proc.pid().toString())
+          .redirectErrorStream(true)
+          .start()
+          .waitFor(5, TimeUnit.SECONDS)
+      } catch (_: Exception) {
+        proc.destroyForcibly()
+      }
     }
 
     process = null

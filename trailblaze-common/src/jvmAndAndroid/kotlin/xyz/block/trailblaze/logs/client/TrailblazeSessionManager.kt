@@ -292,16 +292,19 @@ class TrailblazeSessionManager(
     /**
      * Generates a session ID with timestamp and random suffix.
      *
-     * Format: `YYYY_MM_DD_HH_MM_SS_<seed>_<random>`
+     * Format: `YYYY_MM_DD_HH_MM_SS_<seed>_<random>`, then sanitized via [truncateSessionId]
+     * so a host-generated ID passed to the on-device handler (which re-sanitizes any
+     * override ID) survives the round-trip unchanged — otherwise host and device end up
+     * writing to two different session directories that differ only by dot vs underscore.
      *
-     * Example: `2026_01_07_14_30_45_MyTest_1234`
+     * Example: `2026_01_07_14_30_45_mytest_1234`
      *
      * @param seed The name/identifier to include in the session ID
      * @return A new session ID
      */
     fun generateSessionId(seed: String): SessionId {
       val randomNumber = random.nextInt(0, 9999)
-      return SessionId("${dateTimeFormat.format(Date())}_${seed}_${randomNumber}")
+      return truncateSessionId("${dateTimeFormat.format(Date())}_${seed}_${randomNumber}")
     }
 
     /**

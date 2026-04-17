@@ -1,9 +1,1 @@
-- config:
-    id: "sample-app/taps/simple-tap"
-    app: "xyz.block.trailblaze.examples.sampleapp"
-- tools:
-    - launchApp:
-        appId: "xyz.block.trailblaze.examples.sampleapp"
-        launchMode: "REINSTALL"
-- prompts:
-    - step: Tap the "Tap Me" button once
+../../../taps/simple-tap/blaze.yaml

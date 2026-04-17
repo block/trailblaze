@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.agent.trail
 
 import kotlinx.serialization.json.JsonObject
+import xyz.block.trailblaze.agent.ToolCallAnalysisResponse
 import xyz.block.trailblaze.agent.ExecutionResult
 import xyz.block.trailblaze.agent.RecommendationContext
 import xyz.block.trailblaze.agent.ScreenAnalyzer
@@ -298,6 +299,21 @@ class TrailStepPlanner(
                 retryCount = 0,
               )
             }
+
+            // If verification recommends the same tool on the same target, the action
+            // was performed but the screen didn't visibly change. Treat as achieved to
+            // avoid infinite loops on tap/assert steps that don't alter the UI.
+            if (verifyAnalysis.recommendedTool == analysis.recommendedTool &&
+              stripAnalysisFields(verifyAnalysis.recommendedArgs) ==
+              stripAnalysisFields(analysis.recommendedArgs)
+            ) {
+              return currentState.copy(
+                currentStepIndex = index + 1,
+                completedSteps = currentState.completedSteps + index,
+                usedRecordings = currentState.usedRecordings + (index to false),
+                retryCount = 0,
+              )
+            }
           }
 
           // Action succeeded but objective not yet achieved - continue loop
@@ -343,6 +359,16 @@ class TrailStepPlanner(
       appendLine("Try a DIFFERENT approach if previous actions did not achieve the objective.")
     }
   }
+}
+
+/**
+ * Returns a [JsonObject] containing only tool-specific parameters, stripping out
+ * analysis metadata (reasoning, screenSummary, confidence, etc.) so that two LLM
+ * responses can be compared by their actionable content.
+ */
+private fun stripAnalysisFields(args: JsonObject): JsonObject {
+  val analysisKeys = ToolCallAnalysisResponse.fieldNames
+  return JsonObject(args.filterKeys { it !in analysisKeys })
 }
 
 /**

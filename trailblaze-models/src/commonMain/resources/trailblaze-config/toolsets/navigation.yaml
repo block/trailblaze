@@ -1,0 +1,12 @@
+# Tools for moving between screens and navigating through the app.
+id: navigation
+description: "Back button, scroll until visible, open URLs, and app launching."
+drivers:
+  - android-ondevice-instrumentation
+  - android-ondevice-accessibility
+  - ios-host
+tools:
+  - launchApp
+  - openUrl
+  - pressBack
+  - scrollUntilTextIsVisible

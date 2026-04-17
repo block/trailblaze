@@ -11,7 +11,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.util.Console
 
 @Serializable
-@TrailblazeToolClass("playwright_scroll")
+@TrailblazeToolClass("web_scroll")
 @LLMDescription(
   """
 Scroll the page or a specific container in the specified direction.

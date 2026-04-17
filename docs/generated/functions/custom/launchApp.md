@@ -17,6 +17,7 @@ Use this to open an app on the device as if a user tapped on the app icon in the
   "RESUME",
   "FORCE_RESTART"
 ]`
+- `reasoning`: `String`
 
 
 

@@ -12,19 +12,19 @@
     - step: Take a snapshot of the current page
 
     # Verify sidebar top item is visible
-    - step: Use the playwright_verify_text_visible tool to verify "Category 1" is visible
+    - step: Use the web_verify_text_visible tool to verify "Category 1" is visible
 
     # Scroll down within the sidebar navigation
     - step: Scroll down within the sidebar navigation container
 
     # Verify a category that was previously hidden at the bottom is now visible
-    - step: Use the playwright_verify_text_visible tool to verify "Category 15" is visible
+    - step: Use the web_verify_text_visible tool to verify "Category 15" is visible
 
     # Scroll down within the right content panel
     - step: Scroll down within the content panel
 
     # Verify a content item that was previously hidden is now visible
-    - step: Use the playwright_verify_text_visible tool to verify "Item 20" is visible
+    - step: Use the web_verify_text_visible tool to verify "Item 20" is visible
 
     # Scroll back up within the content panel
     - step: Scroll up within the content panel

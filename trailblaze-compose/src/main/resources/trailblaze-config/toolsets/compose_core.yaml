@@ -1,0 +1,11 @@
+# Core Compose Desktop interaction tools.
+id: compose_core
+description: "Click, type, scroll, and other Compose Desktop interactions."
+drivers:
+  - compose
+tools:
+  - compose_click
+  - compose_type
+  - compose_scroll
+  - compose_wait
+  - compose_request_details

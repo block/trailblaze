@@ -1,0 +1,10 @@
+# Tools for understanding the current screen state.
+# Restricted to on-device and host drivers — Revyl has its own screen capture.
+id: observation
+description: "Screenshots and screen inspection."
+drivers:
+  - android-ondevice-instrumentation
+  - android-ondevice-accessibility
+  - ios-host
+tools:
+  - takeSnapshot

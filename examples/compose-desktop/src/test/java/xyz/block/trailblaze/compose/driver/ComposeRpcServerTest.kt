@@ -22,8 +22,7 @@ import xyz.block.trailblaze.compose.driver.tools.ComposeClickTool
 import xyz.block.trailblaze.compose.driver.tools.ComposeToolSet
 import xyz.block.trailblaze.compose.driver.tools.ComposeTypeTool
 import xyz.block.trailblaze.compose.driver.tools.ComposeVerifyTextVisibleTool
-import xyz.block.trailblaze.logs.client.TrailblazeJson
-import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
+import xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.getOrThrow
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
@@ -44,12 +43,7 @@ class ComposeRpcServerTest {
 
 
   init {
-    TrailblazeJsonInstance =
-      TrailblazeJson.createTrailblazeJsonInstance(
-        allToolClasses =
-          TrailblazeToolSet.AllBuiltInTrailblazeToolsForSerializationByToolName +
-            ComposeToolSet.LlmToolSet.toolClasses.associateBy { it.toolName() },
-      )
+    TrailblazeSerializationInitializer.initialize()
   }
 
   @Test

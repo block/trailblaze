@@ -8,6 +8,9 @@ import maestro.orchestra.PressKeyCommand
 import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.toolcalls.MapsToMaestroCommands
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
+import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
+import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.toolcalls.isSuccess
 import xyz.block.trailblaze.yaml.serializers.CaseInsensitiveEnumSerializer
 
 @Serializable
@@ -46,4 +49,12 @@ data class PressKeyTrailblazeTool(
       },
     ),
   )
+
+  override suspend fun execute(
+    toolExecutionContext: TrailblazeToolExecutionContext,
+  ): TrailblazeToolResult {
+    val result = super.execute(toolExecutionContext)
+    if (result.isSuccess()) return TrailblazeToolResult.Success(message = "Pressed ${keyCode.name}")
+    return result
+  }
 }

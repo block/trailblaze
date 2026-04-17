@@ -225,7 +225,7 @@ class TrailMcpTool(
         context = originalConfig?.context,
         source = originalConfig?.source,
         metadata = originalConfig?.metadata,
-        app = originalConfig?.app,
+        target = originalConfig?.target,
         electron = originalConfig?.electron,
         driver = started.trailblazeDeviceInfo.trailblazeDriverType.name,
         platform = started.trailblazeDeviceInfo.platform.name.lowercase(),

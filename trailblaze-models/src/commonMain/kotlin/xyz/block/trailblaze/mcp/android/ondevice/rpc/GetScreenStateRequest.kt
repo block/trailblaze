@@ -14,8 +14,6 @@ import xyz.block.trailblaze.api.ViewHierarchyTreeNode
  * 
  * @param includeScreenshot Whether to include the screenshot bytes in the response.
  *                          Default is true. Set to false for faster, text-only responses.
- * @param setOfMarkEnabled Whether to include set-of-mark annotations on the screenshot.
- *                         Default is false to reduce processing time.
  * @param screenshotMaxDimension1 Maximum dimension for the longer side of the screenshot.
  *                                Default is 1536. Screenshots are scaled down (never up) to fit.
  * @param screenshotMaxDimension2 Maximum dimension for the shorter side of the screenshot.
@@ -28,7 +26,6 @@ import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 @Serializable
 data class GetScreenStateRequest(
   val includeScreenshot: Boolean = true,
-  val setOfMarkEnabled: Boolean = false,
   val screenshotMaxDimension1: Int = 1536,
   val screenshotMaxDimension2: Int = 768,
   val screenshotImageFormat: TrailblazeImageFormat = TrailblazeImageFormat.WEBP,

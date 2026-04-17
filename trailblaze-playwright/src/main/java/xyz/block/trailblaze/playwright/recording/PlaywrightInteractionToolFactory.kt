@@ -12,7 +12,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import kotlin.math.abs
 
 /**
- * Creates Playwright-native tool instances (playwright_click, playwright_type, etc.)
+ * Creates Playwright-native tool instances (web_click, web_type, etc.)
  * from user input events during interactive recording.
  *
  * Resolves taps to ARIA element refs using the [PlaywrightAriaSnapshot] compact element
@@ -37,7 +37,7 @@ class PlaywrightInteractionToolFactory(
       ref = ref ?: "css=html",
       element = description,
     )
-    return tool to "playwright_click"
+    return tool to "web_click"
   }
 
   override fun createLongPressTool(
@@ -57,7 +57,7 @@ class PlaywrightInteractionToolFactory(
   ): Pair<TrailblazeTool, String> {
     val direction = computeScrollDirection(startX, startY, endX, endY)
     val tool = PlaywrightNativeScrollTool(direction = direction)
-    return tool to "playwright_scroll"
+    return tool to "web_scroll"
   }
 
   override fun createInputTextTool(text: String): Pair<TrailblazeTool, String> {
@@ -67,12 +67,12 @@ class PlaywrightInteractionToolFactory(
       element = "",
       clearFirst = false,
     )
-    return tool to "playwright_type"
+    return tool to "web_type"
   }
 
   override fun createPressKeyTool(key: String): Pair<TrailblazeTool, String>? {
     val tool = PlaywrightNativePressKeyTool(key = key)
-    return tool to "playwright_press_key"
+    return tool to "web_press_key"
   }
 
   /**

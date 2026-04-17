@@ -34,7 +34,6 @@ class TrailblazeConnectedDevice(
     screenStateProvider = {
       HostMaestroDriverScreenState(
         maestroDriver = maestroDriver,
-        setOfMarkEnabled = false,
       )
     },
     trailblazeLogger = trailblazeLogger,

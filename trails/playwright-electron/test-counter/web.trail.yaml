@@ -6,7 +6,7 @@
   - step: Click on the "Counter" navigation link
     recording:
       tools:
-      - playwright_click:
+      - web_click:
           ref: e5
           element: link "Counter"
           reasoning: The objective is to click on the "Counter" navigation link. The view hierarchy shows the link with element ID e5, so I will click it to complete the task.
@@ -16,27 +16,27 @@
   - step: Verify the counter value shows "0"
     recording:
       tools:
-      - playwright_verify_text_visible:
+      - web_verify_text_visible:
           text: 'Current value: 0'
           reasoning: 'The objective requires verifying that the counter value displays ''0''. The paragraph element [e9] clearly shows ''Current value: 0'', which matches the expected format. This verification directly addresses the objective.'
   - step: Click the "Increment" button (the + button) three times
     recording:
       tools:
-      - playwright_click:
+      - web_click:
           ref: e11
           element: button Increment
           reasoning: I need to click the 'Increment' (+) button three times. I will start by clicking it once and then repeat the action two more times.
           nodeSelector:
             web:
               cssSelector: "#increment-btn"
-      - playwright_click:
+      - web_click:
           ref: e11
           element: button Increment
           reasoning: The objective requires clicking the Increment (+) button three times. One click has already been made, and the counter increased to 1. I will click the button a second time to continue toward the required three total clicks.
           nodeSelector:
             web:
               cssSelector: "#increment-btn"
-      - playwright_click:
+      - web_click:
           ref: e11
           element: button Increment
           reasoning: 'The objective is to click the Increment (+) button three times. I have clicked it twice; the counter shows ''Current value: 2''. I need to click it once more to complete the objective.'
@@ -46,13 +46,13 @@
   - step: Verify the counter value shows "3"
     recording:
       tools:
-      - playwright_verify_text_visible:
+      - web_verify_text_visible:
           text: 'Current value: 3'
           reasoning: 'The objective requires verifying that the counter value shows ''3''. The paragraph element [e9] contains the text "Current value: 3" as indicated in the view hierarchy. Verifying that this text is visible will confirm that the objective has been met.'
   - step: Click the "Decrement" button (the - button) once
     recording:
       tools:
-      - playwright_click:
+      - web_click:
           ref: e10
           element: button "Decrement"
           reasoning: The objective is to click the 'Decrement' button (the - button) once. The element with ID e10 corresponds to the 'Decrement' button.
@@ -62,13 +62,13 @@
   - step: Verify the counter value shows "2"
     recording:
       tools:
-      - playwright_verify_text_visible:
+      - web_verify_text_visible:
           text: 'Current value: 2'
           reasoning: 'The objective is to verify that the counter value shows ''2''. The screen shows a paragraph with the text ''Current value: 2'', so verifying this text will directly satisfy the objective.'
   - step: Click the "Reset" button
     recording:
       tools:
-      - playwright_click:
+      - web_click:
           ref: e12
           element: button "Reset"
           reasoning: The objective is to click the 'Reset' button. The button is present as [e12]. This action should fulfill the current objective.
@@ -78,6 +78,6 @@
   - step: Verify the counter value shows "0"
     recording:
       tools:
-      - playwright_verify_text_visible:
+      - web_verify_text_visible:
           text: 'Current value: 0'
           reasoning: 'The objective requires verifying that the counter value is ''0''. The paragraph element [e9] displays the text ''Current value: 0'', so I will verify this text is visible on the screen.'

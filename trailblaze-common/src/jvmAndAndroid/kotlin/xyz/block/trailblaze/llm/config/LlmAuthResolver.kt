@@ -8,7 +8,7 @@ import xyz.block.trailblaze.llm.TrailblazeLlmProvider
  *
  * Token resolution priority (per provider):
  * 1. **Environment variable** (always wins — critical for CI where SSO isn't possible)
- * 2. **Custom token provider** (e.g., Databricks OAuth, keychains)
+ * 2. **Custom token provider** (e.g., corporate SSO/OAuth, keychains)
  * 3. **Built-in env var mapping** (fallback for standard providers without YAML config)
  *
  * Produces [ResolvedProviderAuth] instances consumed by:
@@ -50,7 +50,7 @@ object LlmAuthResolver {
    * Resolves auth for all providers in the config.
    *
    * @param config The loaded LLM config
-   * @param customTokenProviders Map of provider ID to token-resolving lambda (e.g., Databricks OAuth).
+   * @param customTokenProviders Map of provider ID to token-resolving lambda (e.g., corporate SSO/OAuth).
    *   These are checked AFTER env vars, so env vars always win.
    */
   fun resolveAll(

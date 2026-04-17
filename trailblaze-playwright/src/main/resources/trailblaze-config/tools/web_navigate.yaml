@@ -1,0 +1,2 @@
+id: web_navigate
+class: xyz.block.trailblaze.playwright.tools.PlaywrightNativeNavigateTool

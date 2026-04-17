@@ -6,7 +6,7 @@
   - step: Verify the heading "Trailblaze Test Fixture" is visible
     recording:
       tools:
-      - playwright_verify_element_visible:
+      - web_verify_element_visible:
           ref: e1
           element: heading 'Trailblaze Test Fixture'
           reasoning: To complete the objective, I need to verify that the heading 'Trailblaze Test Fixture' is visible. The element with ID e1 matches exactly this heading, so verifying its visibility confirms the objective.
@@ -17,7 +17,7 @@
   - step: Click on the "Form" navigation link
     recording:
       tools:
-      - playwright_click:
+      - web_click:
           ref: e4
           element: link "Form"
           reasoning: The objective is to click on the 'Form' navigation link. The element [e4] corresponds to the 'Form' link and should be clicked to fulfill the task.
@@ -27,7 +27,7 @@
   - step: Verify the heading "Contact Form" is visible
     recording:
       tools:
-      - playwright_verify_element_visible:
+      - web_verify_element_visible:
           ref: e8
           element: heading "Contact Form"
           reasoning: The objective is to verify that the heading 'Contact Form' is visible. The view hierarchy confirms there is a heading element matching that label (e8), so verifying its visibility will accomplish the task.
@@ -38,7 +38,7 @@
   - step: Click on the "Counter" navigation link
     recording:
       tools:
-      - playwright_click:
+      - web_click:
           ref: e5
           element: link "Counter"
           reasoning: The objective is to click on the 'Counter' navigation link. The view hierarchy shows a link with the label 'Counter' identified as e5. Clicking this will fulfill the objective.
@@ -48,7 +48,7 @@
   - step: Verify the heading "Counter" is visible
     recording:
       tools:
-      - playwright_verify_element_visible:
+      - web_verify_element_visible:
           ref: e8
           element: heading "Counter"
           reasoning: The objective requires verifying that the heading 'Counter' is visible. This element is present as [e8] and should be confirmed visible to satisfy the objective.
@@ -59,7 +59,7 @@
   - step: Click on the "About" navigation link
     recording:
       tools:
-      - playwright_click:
+      - web_click:
           ref: e6
           element: link "About"
           reasoning: The current objective is to click on the "About" navigation link. The element with ID e6 corresponds to this link, so clicking it fulfills the requirement.
@@ -69,13 +69,13 @@
   - step: Verify the text "Trailblaze is an AI-powered UI testing framework" is visible
     recording:
       tools:
-      - playwright_verify_text_visible:
+      - web_verify_text_visible:
           text: Trailblaze is an AI-powered UI testing framework
           reasoning: The objective requires verifying the visibility of the text 'Trailblaze is an AI-powered UI testing framework'. This verification will check if that exact text is currently displayed on the screen.
   - step: Navigate back to the previous page state by clicking the "Home" navigation link
     recording:
       tools:
-      - playwright_click:
+      - web_click:
           ref: e3
           element: link "Home"
           reasoning: The objective is to navigate back to the previous page state by clicking the 'Home' navigation link. The element for the 'Home' link is present (e3), so I will click it to accomplish the objective.
@@ -85,7 +85,7 @@
   - step: Verify the heading "Welcome" is visible
     recording:
       tools:
-      - playwright_verify_element_visible:
+      - web_verify_element_visible:
           ref: e8
           element: heading "Welcome"
           reasoning: The current objective requires verifying that the heading 'Welcome' is visible. The view hierarchy clearly lists [e8] as heading 'Welcome', so I will verify its visibility directly to fulfill the objective.

@@ -1,0 +1,2 @@
+id: web_select_option
+class: xyz.block.trailblaze.playwright.tools.PlaywrightNativeSelectOptionTool

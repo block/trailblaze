@@ -27,4 +27,13 @@ object TrailblazeConfigPaths {
 
   /** Classpath resource directory for LLM provider YAML definitions. */
   const val PROVIDERS_DIR = "$CONFIG_DIR/providers"
+
+  /** Classpath resource directory for app target YAML definitions. */
+  const val TARGETS_DIR = "$CONFIG_DIR/targets"
+
+  /** Classpath resource directory for toolset YAML definitions. */
+  const val TOOLSETS_DIR = "$CONFIG_DIR/toolsets"
+
+  /** Classpath resource directory for per-tool YAML definitions. */
+  const val TOOLS_DIR = "$CONFIG_DIR/tools"
 }

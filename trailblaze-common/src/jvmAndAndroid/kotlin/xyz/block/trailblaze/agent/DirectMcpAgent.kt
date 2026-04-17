@@ -87,9 +87,9 @@ class DirectMcpAgent(
   private val agentTier: AgentTier = AgentTier.OUTER,
   /**
    * Tool repository that provides the available tools to the LLM. Uses the same tool set
-   * as TrailblazeRunner/KoogLlmClientHelper — typically getLlmToolSet(setOfMarkEnabled=true)
-   * which includes tapOnElementByNodeId, verification tools, and all standard UI tools.
-   * When null, falls back to getLlmToolSet(setOfMarkEnabled=true).
+   * as TrailblazeRunner/KoogLlmClientHelper — typically getLlmToolSet() which includes
+   * tap (ref-based), verification tools, and all standard UI tools.
+   * When null, falls back to getLlmToolSet().
    */
   private val trailblazeToolRepo: TrailblazeToolRepo? = null,
 ) {
@@ -111,14 +111,14 @@ class DirectMcpAgent(
     fun getSystemPrompt(platform: String) = """You are a mobile UI automation assistant for $platform.
 
 You MUST respond with a tool call. Available tools include:
-- Tap: tapOnElementByNodeId (use nodeIds from the view hierarchy, shown as [nodeId: X])
+- Tap: tap (use the ref ID from the snapshot, shown in square brackets e.g. [y778])
 - Other UI: swipe, inputText, pressBack, pressKey (for HOME/ENTER), hideKeyboard, eraseText
 - Navigation: launchApp, openUrl, scrollUntilTextIsVisible
 - Verification: assertVisibleWithNodeId (to check if an element is visible)
 - Control flow: objectiveStatus (to report COMPLETED, IN_PROGRESS, or FAILED status)
 
 GUIDELINES:
-- ALWAYS use tapOnElementByNodeId with the nodeId of the element you want to tap
+- ALWAYS use tap with the ref of the element you want to tap
 - Before tapping buttons, call hideKeyboard if a keyboard may be covering them
 - CRITICAL COMPLETION RULES:
   1. After performing the requested action (tap, type, swipe, etc.), call objectiveStatus(COMPLETED) on the NEXT iteration.
@@ -507,13 +507,12 @@ GUIDELINES:
    * Includes UI interaction tools and objectiveStatus for control flow (COMPLETED/FAILED terminates the loop).
    */
   private fun getAvailableToolDescriptors(): List<TrailblazeToolDescriptor> {
-    // Use the tool repo if provided (matches the tool set configured by the caller, e.g.
-    // getLlmToolSet(setOfMarkEnabled) which includes tapOnElementByNodeId, verification tools,
-    // and all standard UI tools). Falls back to getLlmToolSet(true) for Set-of-Mark tools.
+    // Use the tool repo if provided (matches the tool set configured by the caller).
+    // Falls back to getLlmToolSet() for Set-of-Mark tools.
     if (trailblazeToolRepo != null) {
       return trailblazeToolRepo.getCurrentToolDescriptors().map { it.toTrailblazeToolDescriptor() }
     }
-    return TrailblazeToolSet.getLlmToolSet(setOfMarkEnabled = true).asTools().mapNotNull { toolClass ->
+    return TrailblazeToolSet.getLlmToolSet().asTools().mapNotNull { toolClass ->
       toolClass.toKoogToolDescriptor()?.toTrailblazeToolDescriptor()
     }
   }

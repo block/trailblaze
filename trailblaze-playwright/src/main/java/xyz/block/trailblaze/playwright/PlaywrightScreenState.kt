@@ -12,6 +12,7 @@ import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.setofmark.SetOfMarkAnnotator
 import xyz.block.trailblaze.tracing.TrailblazeTracer
 import java.awt.Image
 import java.awt.image.BufferedImage
@@ -54,7 +55,7 @@ class PlaywrightScreenState(
   /** The raw ARIA snapshot YAML - preferred format for web LLM prompts. */
   val ariaSnapshotYaml: String by lazy {
     TrailblazeTracer.trace("ariaSnapshot", "screenState") {
-      PlaywrightAriaSnapshot.captureAriaSnapshot(page, captureTimeoutMs).yaml
+      PlaywrightAriaSnapshot.captureAriaSnapshot(page, ARIA_SNAPSHOT_TIMEOUT_MS).yaml
     }
   }
 
@@ -329,16 +330,18 @@ class PlaywrightScreenState(
    * - **OFFSCREEN_ELEMENTS requested** ([includeOffscreen] = true): Keeps all elements
    *   and annotates offscreen ones with `(offscreen)` (legacy behavior).
    *
-   * Uses Playwright's native locator resolution via [PlaywrightAriaSnapshot.resolveElementRef]
-   * to check each element's bounding box. This guarantees correct ARIA role matching
-   * (including implicit roles like `<h2>` → heading) without reimplementing accessibility
-   * tree logic in JavaScript.
+   * Uses a **single batched JavaScript evaluation** to check all element positions at once,
+   * instead of making individual Playwright API calls per element. This avoids O(n) CDP
+   * round-trips that caused timeouts on large pages (e.g., Wikipedia's Golden Gate Bridge
+   * article with ~1920 interactive elements).
    *
-   * For typical pages with 10-30 interactive elements, this adds ~50-100ms — acceptable
-   * since it saves the LLM from wasting actions on invisible elements.
+   * The JavaScript function walks the DOM in document order, computes ARIA roles and
+   * accessible names to match elements against the compact list's descriptors, and checks
+   * bounding boxes against the viewport — all in one browser round-trip.
    *
-   * Elements whose position can't be determined (e.g., detached from DOM) are left
-   * unchanged — the LLM can infer from the screenshot whether they're visible.
+   * Elements whose position can't be determined (e.g., role/name mismatch between
+   * Playwright's ARIA snapshot and the simplified JS computation) are left unchanged —
+   * the LLM can infer from the screenshot whether they're visible.
    */
   private fun handleOffscreenElements(
     text: String,
@@ -347,31 +350,8 @@ class PlaywrightScreenState(
   ): String {
     if (compact.elementIdMapping.isEmpty()) return text
 
-    // Check each element's bounding box against the viewport.
-    // Uses a fast locator.count() pre-check to avoid the expensive boundingBox()
-    // timeout when a locator can't resolve (e.g., stale ARIA descriptor after DOM change).
-    val offscreenIds = mutableSetOf<String>()
-    val boundingBoxOptions = Locator.BoundingBoxOptions().setTimeout(captureTimeoutMs)
-    for ((id, elementRef) in compact.elementIdMapping) {
-      try {
-        val locator = PlaywrightAriaSnapshot.resolveElementRef(page, elementRef)
-        // count() returns 0 immediately if no matching elements — avoids a full timeout
-        if (locator.count() == 0) continue
-        val box = locator.boundingBox(boundingBoxOptions)
-        if (box != null) {
-          // Element is offscreen if it doesn't overlap with the viewport at all
-          val inViewport = box.y + box.height > 0 && box.y < viewportHeight &&
-            box.x + box.width > 0 && box.x < viewportWidth &&
-            box.width > 0 && box.height > 0
-          if (!inViewport) {
-            offscreenIds.add(id)
-          }
-        }
-        // null bounding box = can't determine position, leave unannotated
-      } catch (_: Exception) {
-        // Resolution failed — leave unannotated
-      }
-    }
+    // Batch-check all element positions in a single JavaScript evaluation.
+    val offscreenIds = batchCheckOffscreenElements(compact)
 
     if (offscreenIds.isEmpty()) return text
 
@@ -435,6 +415,71 @@ class PlaywrightScreenState(
     val hiddenCount = offscreenIds.size
     result.add("($hiddenCount offscreen elements hidden — request OFFSCREEN_ELEMENTS for full list)")
     return result.joinToString("\n")
+  }
+
+  /**
+   * Checks which elements from the compact list are offscreen using a single batched
+   * JavaScript evaluation instead of per-element Playwright API calls.
+   *
+   * The JS function walks the DOM in document order, computes simplified ARIA roles and
+   * accessible names, and checks bounding boxes — all in one browser round-trip. This
+   * replaces the previous O(n) approach that made individual `count()` + `boundingBox()`
+   * CDP calls per element.
+   *
+   * **Performance**: One CDP round-trip regardless of element count. The JS DOM walk is
+   * fast even for large pages (50K+ nodes) since `querySelectorAll` and
+   * `getBoundingClientRect` are native browser operations.
+   *
+   * **Matching accuracy**: The simplified JS role/name computation may not perfectly match
+   * Playwright's full ARIA snapshot algorithm in edge cases. When a match fails, the
+   * element is left unannotated (kept in the list) — the safe default.
+   *
+   * @return Set of element IDs (e.g., "e1", "e5") that are offscreen.
+   */
+  @Suppress("UNCHECKED_CAST")
+  private fun batchCheckOffscreenElements(
+    compact: PlaywrightAriaSnapshot.CompactAriaElements,
+  ): Set<String> {
+    try {
+      // Build input for the JS function: list of {id, role, name, nth}
+      val elements = compact.elementIdMapping.map { (id, ref) ->
+        val (role, name) = parseAriaDescriptor(ref.descriptor)
+        mapOf("id" to id, "role" to role, "name" to name, "nth" to ref.nthIndex)
+      }
+
+      val offscreenList = page.evaluate(
+        BATCH_VIEWPORT_CHECK_JS,
+        mapOf("elements" to elements, "vw" to viewportWidth, "vh" to viewportHeight),
+      ) as? List<String> ?: return emptySet()
+
+      return offscreenList.toSet()
+    } catch (_: Exception) {
+      return emptySet()
+    }
+  }
+
+  /**
+   * Parses a compact element descriptor into its role and name components.
+   *
+   * Handles three formats produced by [PlaywrightAriaSnapshot.buildAriaDescriptor]:
+   * - `button "Submit"` → ("button", "Submit")
+   * - `text: Hello world` → ("text", "Hello world")
+   * - `navigation` → ("navigation", null)
+   */
+  private fun parseAriaDescriptor(descriptor: String): Pair<String, String?> {
+    // text: Hello world
+    if (descriptor.startsWith("text: ")) {
+      return "text" to descriptor.removePrefix("text: ")
+    }
+    // button "Submit"
+    val quoteIdx = descriptor.indexOf('"')
+    if (quoteIdx > 0) {
+      val role = descriptor.substring(0, quoteIdx).trim()
+      val name = descriptor.substring(quoteIdx + 1).removeSuffix("\"")
+      return role to name
+    }
+    // navigation
+    return descriptor to null
   }
 
   /**
@@ -760,11 +805,19 @@ class PlaywrightScreenState(
   }
 
   /**
-   * Scaled screenshot for LLM requests. Currently identical to [screenshotBytes] since
-   * Playwright does not use set-of-mark annotations.
+   * Scaled screenshot with set-of-mark annotations for LLM requests.
+   * Annotates from raw PNG (before scaling) so element bounds align with the image,
+   * then applies the same scaling as [screenshotBytes] for consistent output.
    */
   override val annotatedScreenshotBytes: ByteArray? by lazy {
-    screenshotBytes
+    val annotated = SetOfMarkAnnotator.annotate(
+      screenshotBytes = rawScreenshotBytes,
+      viewHierarchy = viewHierarchy,
+      screenWidth = deviceWidth,
+      screenHeight = deviceHeight,
+      platform = trailblazeDevicePlatform,
+    )
+    scaleAndEncode(annotated)
   }
 
   /**
@@ -982,11 +1035,20 @@ class PlaywrightScreenState(
   companion object {
 
     /**
-     * Timeout for Playwright API calls during screen state capture (ms).
+     * Timeout for per-element Playwright API calls (bounding box, CSS selector) (ms).
      * Kept short since these calls should be near-instant on a responsive page.
      * If a call exceeds this, it's caught and degraded gracefully.
      */
     private const val CAPTURE_TIMEOUT_MS = 500.0
+
+    /**
+     * Timeout for the ARIA snapshot capture itself (ms).
+     * Content-rich pages (e.g., Wikipedia articles) can produce 500KB+ of ARIA YAML
+     * with thousands of nodes. The default Playwright timeout (30s) is appropriate here
+     * since the call scales with page complexity, not page responsiveness.
+     * Set to 0 to use Playwright's default timeout.
+     */
+    private const val ARIA_SNAPSHOT_TIMEOUT_MS = 0.0
 
     /** Maximum number of hidden CSS-targetable elements to surface to the LLM. */
     private const val MAX_HIDDEN_CSS_ELEMENTS = 50
@@ -998,6 +1060,165 @@ class PlaywrightScreenState(
     private val LANDMARK_HEADER_PATTERN = Regex(
       """^\s*(?:navigation|main|banner|contentinfo|complementary|form|dialog|region|list|table)(?:\s+".*?")?:\s*$""",
     )
+
+    /**
+     * JavaScript function that batch-checks element viewport positions in a single evaluation.
+     *
+     * Receives `{elements: [{id, role, name, nth}], vw, vh}` and returns a list of
+     * element IDs that are offscreen.
+     *
+     * Uses Chromium's `Element.computedRole` and `Element.computedName` properties to
+     * match elements — these are the same values the browser's accessibility tree exposes,
+     * which Playwright's `ariaSnapshot()` reads from. This provides near-exact matching
+     * without reimplementing the ARIA role/name computation in JavaScript.
+     *
+     * Falls back to a simplified manual computation if the browser APIs are unavailable.
+     */
+    private val BATCH_VIEWPORT_CHECK_JS = """(args) => {
+      const { elements, vw, vh } = args;
+
+      // Feature-detect Chromium's computed accessibility properties.
+      // These match what Playwright's ariaSnapshot() reads from the accessibility tree.
+      const testEl = document.createElement('div');
+      const hasComputedAccess = 'computedRole' in testEl;
+
+      // Fallback: manual implicit role mapping (only used if computedRole unavailable)
+      function getFallbackRole(el) {
+        const explicit = el.getAttribute('role');
+        if (explicit) return explicit.toLowerCase();
+        const tag = el.tagName;
+        if (tag === 'A') return el.hasAttribute('href') ? 'link' : null;
+        if (tag === 'AREA') return el.hasAttribute('href') ? 'link' : null;
+        if (tag === 'BUTTON' || tag === 'SUMMARY') return 'button';
+        if (tag === 'INPUT') {
+          const type = (el.type || 'text').toLowerCase();
+          if (type === 'checkbox') return 'checkbox';
+          if (type === 'radio') return 'radio';
+          if (type === 'range') return 'slider';
+          if (type === 'number') return 'spinbutton';
+          if (type === 'search') return 'searchbox';
+          if (type === 'hidden') return null;
+          if (['submit', 'reset', 'button', 'image'].includes(type)) return 'button';
+          return 'textbox';
+        }
+        if (tag === 'SELECT') return el.multiple ? 'listbox' : 'combobox';
+        if (tag === 'TEXTAREA') return 'textbox';
+        if (/^H[1-6]${'$'}/.test(tag)) return 'heading';
+        if (tag === 'IMG') return 'img';
+        if (tag === 'NAV') return 'navigation';
+        if (tag === 'MAIN') return 'main';
+        if (tag === 'ASIDE') return 'complementary';
+        if (tag === 'FORM') return 'form';
+        if (tag === 'DIALOG') return 'dialog';
+        if (tag === 'TABLE') return 'table';
+        if (tag === 'UL' || tag === 'OL') return 'list';
+        if (tag === 'OPTION') return 'option';
+        if (tag === 'PROGRESS') return 'progressbar';
+        if (tag === 'OUTPUT') return 'status';
+        if (tag === 'METER') return 'meter';
+        if (tag === 'DETAILS') return 'group';
+        if (tag === 'HEADER') return el.closest('article, aside, main, nav, section') ? null : 'banner';
+        if (tag === 'FOOTER') return el.closest('article, aside, main, nav, section') ? null : 'contentinfo';
+        return null;
+      }
+
+      // Fallback: simplified accessible name (only used if computedName unavailable)
+      function getFallbackName(el, role) {
+        const ariaLabel = el.getAttribute('aria-label');
+        if (ariaLabel) return ariaLabel;
+        const labelledBy = el.getAttribute('aria-labelledby');
+        if (labelledBy) {
+          const parts = labelledBy.split(/\s+/)
+            .map(id => document.getElementById(id))
+            .filter(Boolean)
+            .map(ref => (ref.innerText || ref.textContent || '').trim());
+          if (parts.length) return parts.join(' ');
+        }
+        if (el.tagName === 'IMG') return el.alt || null;
+        if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT') {
+          if (el.labels && el.labels.length) {
+            return (el.labels[0].innerText || el.labels[0].textContent || '').trim() || null;
+          }
+          if (el.placeholder) return el.placeholder;
+          if (el.title) return el.title;
+          return null;
+        }
+        if (el.tagName === 'TABLE') {
+          const caption = el.querySelector('caption');
+          if (caption) return caption.textContent.trim() || null;
+        }
+        const textRoles = ['link', 'button', 'heading', 'tab', 'menuitem', 'option',
+          'cell', 'columnheader', 'rowheader', 'treeitem', 'switch'];
+        if (textRoles.includes(role)) {
+          const text = (el.innerText || el.textContent || '').trim();
+          return text || null;
+        }
+        if (el.title) return el.title;
+        return null;
+      }
+
+      function getRole(el) {
+        if (hasComputedAccess) {
+          const r = el.computedRole;
+          return (r && r !== 'generic' && r !== 'none' && r !== 'presentation') ? r : null;
+        }
+        return getFallbackRole(el);
+      }
+
+      function getName(el, role) {
+        if (hasComputedAccess) {
+          const n = el.computedName;
+          return n || null;
+        }
+        return getFallbackName(el, role);
+      }
+
+      // Check if an element is hidden from the accessibility tree.
+      // The ARIA snapshot (and compact element list) only includes elements visible
+      // to the accessibility tree, so we must skip hidden elements to keep nth-indices
+      // aligned. Without this, an aria-hidden duplicate would shift all subsequent
+      // nth-indices and cause mismatches.
+      function isHiddenFromAccessibilityTree(el) {
+        // aria-hidden="true" hides the entire subtree
+        if (el.closest('[aria-hidden="true"]')) return true;
+        // display:none / visibility:hidden are not in the accessibility tree
+        const style = window.getComputedStyle(el);
+        if (style.display === 'none' || style.visibility === 'hidden') return true;
+        return false;
+      }
+
+      // Walk DOM in document order (matching the accessibility tree traversal),
+      // build lookup: "role\nname" -> [el, el, ...]
+      // Skips elements hidden from the accessibility tree to keep nth-indices aligned
+      // with Playwright's ariaSnapshot() output.
+      const roleNameMap = {};
+      const allEls = document.querySelectorAll('*');
+      for (const el of allEls) {
+        if (isHiddenFromAccessibilityTree(el)) continue;
+        const role = getRole(el);
+        if (!role) continue;
+        const name = getName(el, role);
+        const key = name != null ? role + '\n' + name : role;
+        if (!roleNameMap[key]) roleNameMap[key] = [];
+        roleNameMap[key].push(el);
+      }
+
+      // Check each requested element's viewport position
+      const offscreen = [];
+      for (const elem of elements) {
+        const key = elem.name != null ? elem.role + '\n' + elem.name : elem.role;
+        const matches = roleNameMap[key];
+        if (!matches || elem.nth >= matches.length) continue;
+        const el = matches[elem.nth];
+        const rect = el.getBoundingClientRect();
+        const inViewport = rect.bottom > 0 && rect.top < vh
+          && rect.right > 0 && rect.left < vw
+          && rect.width > 0 && rect.height > 0;
+        if (!inViewport) offscreen.push(elem.id);
+      }
+
+      return offscreen;
+    }"""
 
     /**
      * Scales a BufferedImage to fit within the specified dimensions while maintaining

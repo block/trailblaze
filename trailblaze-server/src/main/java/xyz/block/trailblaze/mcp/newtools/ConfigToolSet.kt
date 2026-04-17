@@ -46,6 +46,7 @@ class ConfigToolSet(
     config(action=GET) → show all current settings
     config(action=GET, key="androidDriver") → show one setting with options
     config(action=SET, key="androidDriver", value="ANDROID_ONDEVICE_ACCESSIBILITY")
+    config(action=SET, key="llmProvider", value="none") → disable LLM
     config(action=LIST) → show all configurable keys with descriptions
 
     Settings include device drivers, LLM model, agent implementation, and more.
@@ -130,16 +131,39 @@ class ConfigToolSet(
       return ConfigSetResult(success = false, error = error).toJson()
     }
 
+    val isLlmNone = value.equals("none", ignoreCase = true) &&
+      configKey.key in setOf(KEY_LLM_PROVIDER, KEY_LLM_MODEL)
+    val displayMessage = if (isLlmNone) {
+      "Disabled LLM (set ${configKey.key} to none)"
+    } else {
+      "Updated ${configKey.key} to $value"
+    }
+
+    // When switching target app, hint about available custom tools
+    val hint = if (configKey.key == KEY_TARGET_APP && !value.equals("none", ignoreCase = true)) {
+      val driverType = mcpBridge.getDriverType()
+      val target = mcpBridge.getAvailableAppTargets().firstOrNull { it.id.equals(value, ignoreCase = true) }
+      if (target != null && driverType != null) {
+        val toolCount = try { target.getCustomToolsForDriver(driverType).size } catch (_: Exception) { 0 }
+        if (toolCount > 0) {
+          "$toolCount custom tools available for ${target.displayName} on ${driverType.platform.displayName}. Use tools(target=\"${target.id}\") to see them, or blaze(objective=\"...\") to use them automatically."
+        } else null
+      } else if (target != null) {
+        "Connect a device to see available custom tools for ${target.displayName}."
+      } else null
+    } else null
+
     Console.log("")
     Console.log("┌──────────────────────────────────────────────────────────────────────────────")
-    Console.log("│ [config] Updated: ${configKey.key} = $value")
+    Console.log("│ [config] $displayMessage")
     Console.log("└──────────────────────────────────────────────────────────────────────────────")
 
     return ConfigSetResult(
       success = true,
       key = configKey.key,
       value = value,
-      message = "Updated ${configKey.key} to $value",
+      message = displayMessage,
+      hint = hint,
     ).toJson()
   }
 
@@ -327,11 +351,11 @@ class ConfigToolSet(
       ),
       ConfigKeyDef(
         key = KEY_LLM_PROVIDER,
-        description = "LLM provider. Read trailblaze://llm/providers for all supported providers and their models",
+        description = "LLM provider. Set to 'none' to disable LLM. Read trailblaze://llm/providers for all supported providers",
       ),
       ConfigKeyDef(
         key = KEY_LLM_MODEL,
-        description = "LLM model ID. Read trailblaze://llm/providers for all supported models per provider",
+        description = "LLM model ID. Set to 'none' to disable LLM. Read trailblaze://llm/providers for all supported models per provider",
       ),
       ConfigKeyDef(
         key = KEY_AGENT_IMPLEMENTATION,
@@ -383,6 +407,7 @@ data class ConfigSetResult(
   val key: String? = null,
   val value: String? = null,
   val message: String? = null,
+  val hint: String? = null,
   val error: String? = null,
 ) {
   fun toJson(): String = TrailblazeJsonInstance.encodeToString(serializer(), this)

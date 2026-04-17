@@ -4,6 +4,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.toComposeImageBitmap
 import org.jetbrains.skia.Image
 import xyz.block.trailblaze.ui.resolveScreenshot
+import xyz.block.trailblaze.ui.tabs.session.SpriteSheetInfo
 import xyz.block.trailblaze.util.Console
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
@@ -14,8 +15,11 @@ import kotlin.io.encoding.ExperimentalEncodingApi
  */
 private const val WASM_EMBEDDED_FPS = 2
 
-actual fun createVideoFrameCache(videoPath: String, fps: Int): VideoFrameCache =
-  WasmEmbeddedVideoFrameCache(sessionId = videoPath)
+actual fun createVideoFrameCache(
+  videoPath: String,
+  fps: Int,
+  spriteInfo: SpriteSheetInfo?,
+): VideoFrameCache = WasmEmbeddedVideoFrameCache(sessionId = videoPath)
 
 /**
  * WASM video frame cache that lazily loads pre-extracted frames from the embedded report data.

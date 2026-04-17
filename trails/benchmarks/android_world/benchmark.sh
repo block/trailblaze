@@ -12,7 +12,7 @@
 #
 # Options:
 #   --filter <pattern>   Only run trails whose path contains <pattern>
-#   --device <id>        Device ID to run on (passed to trailblaze run --device)
+#   --device <id>        Device ID to run on (passed to trailblaze trail --device)
 #   --dry-run            List trails that would be run without executing them
 #
 # Prerequisites: An Android emulator must be running and ./trailblaze must be available.

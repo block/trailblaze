@@ -44,7 +44,7 @@ Provider YAML filenames **must** match the `provider_id` field inside the file:
 - Filename: `{provider_id}.yaml` (snake_case)
 - Inside the file: `provider_id: {provider_id}`
 
-Example: `databricks.yaml` contains `provider_id: databricks`.
+Example: `my_custom_provider.yaml` contains `provider_id: my_custom_provider`.
 
 ### How users contribute providers
 

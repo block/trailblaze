@@ -21,6 +21,8 @@ data class CliStatusResponse(
   val activeSessionId: String? = null,
   /** Uptime in seconds */
   val uptimeSeconds: Long,
+  /** Build version of the running daemon (e.g., "v20260413.171351.abc1234 (Internal)") */
+  val version: String? = null,
 )
 
 /**

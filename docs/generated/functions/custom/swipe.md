@@ -17,6 +17,7 @@ The start and end points are automatically calculated based on the direction and
 ]`
 - `swipeOnElementText`: `String`
   The text value to swipe on. If not provided, the swipe will be performed on the center of the screen.
+- `reasoning`: `String`
 
 
 

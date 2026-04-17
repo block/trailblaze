@@ -179,7 +179,6 @@ class CliDocsGenerator(
     appendLine("trailblaze config llm-provider openai                # Set provider only")
     appendLine("trailblaze config llm-model gpt-4-1                  # Set model only")
     appendLine("trailblaze config agent MULTI_AGENT_V3               # Set agent implementation")
-    appendLine("trailblaze config set-of-mark false                  # Disable Set of Mark")
     appendLine("trailblaze config models                             # List available LLM models")
     appendLine("trailblaze config agents                             # List agent implementations")
     appendLine("trailblaze config drivers                            # List driver types")

@@ -16,5 +16,3 @@ dependencies {
 }
 
 tasks.test { useJUnit() }
-
-project.tasks.named("check") { dependsOn.removeIf { it.toString().contains("test") } }

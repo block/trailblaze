@@ -74,36 +74,35 @@ object AccessibilityServiceSetupUtils {
   }
 
   /**
-   * Checks if the accessibility service is currently enabled in system settings.
-   */
-  fun isAccessibilityServiceEnabled(deviceId: TrailblazeDeviceId, hostPackage: String): Boolean {
-    val services = runAdbShellCommand(deviceId, "settings get secure enabled_accessibility_services")
-    return services.contains(getServiceComponent(hostPackage))
-  }
-
-  /**
-   * Ensures the accessibility service is enabled and ready.
+   * Disables the Trailblaze accessibility service on the device.
    *
-   * The service is declared in the `trailblaze-accessibility` library manifest which gets
-   * merged into the host APK. No separate APK installation is needed — the service is
-   * part of the test runner APK.
-   *
-   * @param hostPackage the package name of the APK that hosts the accessibility service
+   * This should be called before force-stopping the runner process, because a registered
+   * accessibility service causes the system to immediately restart the process after
+   * `am force-stop`, preventing a clean shutdown.
    */
-  fun ensureAccessibilityServiceReady(
+  fun disableAccessibilityService(
     deviceId: TrailblazeDeviceId,
     hostPackage: String,
     sendProgressMessage: (String) -> Unit = {},
   ) {
-    if (!isAccessibilityServiceEnabled(deviceId, hostPackage)) {
-      enableAccessibilityService(deviceId, hostPackage, sendProgressMessage)
-    } else {
-      sendProgressMessage("Accessibility service is already enabled.")
+    val serviceComponent = getServiceComponent(hostPackage)
+    val currentServices = runAdbShellCommand(deviceId, "settings get secure enabled_accessibility_services")
+
+    if (currentServices.isBlank() || currentServices.trim() == "null" || !currentServices.contains(serviceComponent)) {
+      return
     }
 
-    // Give the system a moment to start the service after enabling
-    sendProgressMessage("Waiting for accessibility service to start...")
-    Thread.sleep(2000)
+    val newServices = currentServices.trim()
+      .split(":")
+      .filter { it != serviceComponent }
+      .joinToString(":")
+
+    if (newServices.isBlank()) {
+      runAdbShellCommand(deviceId, "settings put secure enabled_accessibility_services null")
+    } else {
+      runAdbShellCommand(deviceId, "settings put secure enabled_accessibility_services $newServices")
+    }
+    sendProgressMessage("Accessibility service disabled.")
   }
 
   private fun runAdbShellCommand(deviceId: TrailblazeDeviceId, command: String): String {

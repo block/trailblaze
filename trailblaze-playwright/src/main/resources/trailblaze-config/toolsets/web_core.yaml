@@ -1,0 +1,17 @@
+# Core Playwright web interaction tools.
+id: web_core
+description: "Click, type, navigate, scroll, and other web interactions via Playwright."
+drivers:
+  - playwright-native
+  - playwright-electron
+tools:
+  - web_click
+  - web_type
+  - web_navigate
+  - web_scroll
+  - web_hover
+  - web_press_key
+  - web_select_option
+  - web_wait
+  - web_snapshot
+  - web_request_details

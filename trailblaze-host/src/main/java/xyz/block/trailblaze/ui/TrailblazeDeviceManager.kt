@@ -229,8 +229,8 @@ class TrailblazeDeviceManager(
         overrideSessionId = existingSessionId,
         sendSessionStartLog = sendSessionStartLog,
         sendSessionEndLog = sendSessionEndLog,
-        setOfMarkEnabled = settingsState.appConfig.setOfMarkEnabled,
         browserHeadless = !settingsState.appConfig.showWebBrowser,
+        preferHostAgent = settingsState.appConfig.preferHostAgent,
       ),
       trailblazeDeviceId = trailblazeDeviceId,
       referrer = referrer,
@@ -378,7 +378,6 @@ class TrailblazeDeviceManager(
         // Use RPC for on-device Android instrumentation
         getCurrentScreenStateViaRpc(trailblazeDeviceId)
       }
-      TrailblazeDriverType.ANDROID_HOST,
       TrailblazeDriverType.IOS_HOST,
       TrailblazeDriverType.PLAYWRIGHT_NATIVE,
       TrailblazeDriverType.PLAYWRIGHT_ELECTRON -> {
@@ -416,7 +415,6 @@ class TrailblazeDeviceManager(
       
       val request = GetScreenStateRequest(
         includeScreenshot = true,
-        setOfMarkEnabled = false,
       )
       
       when (val result = rpcClient.rpcCall(request)) {
@@ -457,7 +455,6 @@ class TrailblazeDeviceManager(
     return try {
       HostMaestroDriverScreenState(
         maestroDriver = driver,
-        setOfMarkEnabled = false,
       )
     } catch (e: Exception) {
       Console.log("❌ Exception getting screen state via driver: ${e.message}")
@@ -513,7 +510,7 @@ class TrailblazeDeviceManager(
         emptyList()
       }
       val iosSimulators = try {
-        iosFuture.get(10, TimeUnit.SECONDS)
+        iosFuture.get(60, TimeUnit.SECONDS)
       } catch (e: Exception) {
         Console.log("iOS device discovery timed out or failed: ${e.message}")
         emptyList()
@@ -542,13 +539,6 @@ class TrailblazeDeviceManager(
           add(
             TrailblazeConnectedDeviceSummary(
               trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
-              instanceId = instanceId,
-              description = description,
-            )
-          )
-          add(
-            TrailblazeConnectedDeviceSummary(
-              trailblazeDriverType = TrailblazeDriverType.ANDROID_HOST,
               instanceId = instanceId,
               description = description,
             )
@@ -603,44 +593,45 @@ class TrailblazeDeviceManager(
           )
         }
 
-        // Revyl cloud devices — default presets always included as fallbacks.
-        add(
-          TrailblazeConnectedDeviceSummary(
-            trailblazeDriverType = TrailblazeDriverType.REVYL_ANDROID,
-            instanceId = "revyl-android-phone",
-            description = "Revyl Android (Default)",
-          )
-        )
-        add(
-          TrailblazeConnectedDeviceSummary(
-            trailblazeDriverType = TrailblazeDriverType.REVYL_IOS,
-            instanceId = "revyl-ios-iphone",
-            description = "Revyl iOS (Default)",
-          )
-        )
-
-        // Dynamically register each model from the Revyl device catalog.
-        // Uses `revyl device targets --json` so the list stays in sync
-        // with the backend without code changes.
-        val targets = runWithTimeout(10, "revyl-catalog", "device targets") {
-          revylCliClient.getDeviceTargets()
-        } ?: emptyList()
-        for (target in targets) {
-          val driverType = if (target.platform == "android")
-            TrailblazeDriverType.REVYL_ANDROID else TrailblazeDriverType.REVYL_IOS
+        // Revyl cloud devices — only show if the CLI is installed.
+        if (revylCliClient.isCliAvailable) {
           add(
             TrailblazeConnectedDeviceSummary(
-              trailblazeDriverType = driverType,
-              instanceId = "revyl-model:${target.model}::${target.osVersion}",
-              description = "Revyl ${target.model} (${target.osVersion})",
+              trailblazeDriverType = TrailblazeDriverType.REVYL_ANDROID,
+              instanceId = "revyl-android-phone",
+              description = "Revyl Android (Default)",
             )
           )
+          add(
+            TrailblazeConnectedDeviceSummary(
+              trailblazeDriverType = TrailblazeDriverType.REVYL_IOS,
+              instanceId = "revyl-ios-iphone",
+              description = "Revyl iOS (Default)",
+            )
+          )
+
+          val targets = runWithTimeout(10, "revyl-catalog", "device targets") {
+            revylCliClient.getDeviceTargets()
+          } ?: emptyList()
+          for (target in targets) {
+            val driverType = if (target.platform == TrailblazeDevicePlatform.ANDROID)
+              TrailblazeDriverType.REVYL_ANDROID else TrailblazeDriverType.REVYL_IOS
+            add(
+              TrailblazeConnectedDeviceSummary(
+                trailblazeDriverType = driverType,
+                instanceId = "revyl-model:${target.model}::${target.osVersion}",
+                description = "Revyl ${target.model} (${target.osVersion})",
+              )
+            )
+          }
         }
       }
 
-      // Always filter for device state — all three Android driver variants share the same
+      Console.log("[loadDevices] Discovered ${allDevices.size} device(s): ${allDevices.map { "${it.trailblazeDriverType.name}/${it.instanceId}" }}")
+
+      // Always filter for device state — Android driver variants share the same
       // TrailblazeDeviceId key (instanceId + platform), so unfiltered results would let
-      // ANDROID_HOST (added last) overwrite the configured driver type.
+      // the last-added variant overwrite the configured driver type.
       val devicesForState = targetDeviceFilter(allDevices)
       val devicesToReturn = if (applyDriverFilter) devicesForState else allDevices
 
@@ -1081,22 +1072,25 @@ class TrailblazeDeviceManager(
         val process = ProcessBuilder("xcrun", "simctl", "list", "devices", "booted")
           .redirectErrorStream(true)
           .start()
-        val finished = process.waitFor(10, TimeUnit.SECONDS)
+        val finished = process.waitFor(60, TimeUnit.SECONDS)
         if (!finished) {
           process.destroyForcibly()
-          Console.log("[loadDevices] [iOS] xcrun simctl timed out after 10s")
+          process.waitFor(5, TimeUnit.SECONDS)
+          Console.log("[loadDevices] [iOS] xcrun simctl timed out after 60s")
           return emptyList()
         }
-        val output = process.inputStream.bufferedReader().readText()
+        val output = process.inputStream.bufferedReader().use { it.readText() }
         // Parse lines like "    iPad (A16) (6171FEAD-...) (Booted)"
         val deviceRegex = Regex("""^\s+(.+?)\s+\(([0-9A-Fa-f-]{36})\)\s+\(Booted\)""")
-        output.lines().mapNotNull { line ->
+        val results = output.lines().mapNotNull { line ->
           deviceRegex.find(line)?.let { match ->
             val name = match.groupValues[1]
             val udid = match.groupValues[2]
             udid to name
           }
         }
+        Console.log("[loadDevices] [iOS] Found ${results.size} booted simulator(s)")
+        results
       } catch (e: Exception) {
         Console.log("[loadDevices] [iOS] xcrun simctl failed: ${e.message}")
         emptyList()

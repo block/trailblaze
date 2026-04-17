@@ -27,7 +27,7 @@ import xyz.block.trailblaze.ui.composables.ScreenshotAnnotation
 /**
  * Displays a video frame bitmap with an optional action overlay (tap point, swipe, etc.).
  *
- * Handles: frame display, "Extracting frame..." placeholder, and aspect-ratio-correct action
+ * Handles: frame display, loading placeholder, and aspect-ratio-correct action
  * annotation positioning. Used by both SessionTimelineView and SessionCombinedView.
  */
 @Composable
@@ -53,7 +53,7 @@ internal fun VideoFrameWithOverlay(
         contentAlignment = Alignment.Center,
       ) {
         Text(
-          "Extracting frame...",
+          "Loading frame...",
           color = Color.White.copy(alpha = 0.5f),
           style = MaterialTheme.typography.bodySmall,
         )

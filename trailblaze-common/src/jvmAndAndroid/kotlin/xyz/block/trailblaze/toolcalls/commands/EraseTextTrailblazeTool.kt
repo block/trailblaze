@@ -6,7 +6,11 @@ import maestro.orchestra.Command
 import maestro.orchestra.EraseTextCommand
 import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.toolcalls.MapsToMaestroCommands
+import xyz.block.trailblaze.toolcalls.ReasoningTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
+import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
+import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.toolcalls.isSuccess
 
 @Serializable
 @TrailblazeToolClass("eraseText")
@@ -20,10 +24,22 @@ Erases characters from the currently focused text field.
 )
 data class EraseTextTrailblazeTool(
   val charactersToErase: Int? = null,
-) : MapsToMaestroCommands() {
+  override val reasoning: String? = null,
+) : MapsToMaestroCommands(), ReasoningTrailblazeTool {
   override fun toMaestroCommands(memory: AgentMemory): List<Command> = listOf(
     EraseTextCommand(
       charactersToErase = charactersToErase,
     ),
   )
+
+  override suspend fun execute(
+    toolExecutionContext: TrailblazeToolExecutionContext,
+  ): TrailblazeToolResult {
+    val result = super.execute(toolExecutionContext)
+    if (result.isSuccess()) {
+      val detail = charactersToErase?.let { "Erased $it characters" } ?: "Erased all text"
+      return TrailblazeToolResult.Success(message = detail)
+    }
+    return result
+  }
 }

@@ -6,12 +6,11 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
 import kotlinx.datetime.Instant
-import xyz.block.trailblaze.AgentMemory
-import xyz.block.trailblaze.TrailblazeAgentContext
+import xyz.block.trailblaze.BaseTrailblazeAgent
+import xyz.block.trailblaze.logToolExecution
 import xyz.block.trailblaze.api.AgentActionType
 import xyz.block.trailblaze.api.AgentDriverAction
 import xyz.block.trailblaze.api.ScreenState
-import xyz.block.trailblaze.api.TrailblazeAgent
 import xyz.block.trailblaze.compose.driver.tools.ComposeClickTool
 import xyz.block.trailblaze.compose.driver.tools.ComposeExecutableTool
 import xyz.block.trailblaze.compose.driver.tools.ComposeRequestDetailsTool
@@ -27,18 +26,14 @@ import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.logs.model.TraceId
-import xyz.block.trailblaze.logs.model.TraceId.Companion.TraceOrigin
 import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.commands.memory.MemoryTrailblazeTool
-import xyz.block.trailblaze.toolcalls.getIsRecordableFromAnnotation
-import xyz.block.trailblaze.toolcalls.getToolNameFromAnnotation
 import xyz.block.trailblaze.toolcalls.isSuccess
 import xyz.block.trailblaze.util.Console
-import xyz.block.trailblaze.utils.ElementComparator
 
 /**
  * Compose implementation of [TrailblazeAgent].
@@ -59,7 +54,7 @@ class ComposeTrailblazeAgent(
   override val sessionProvider: TrailblazeSessionProvider,
   private val viewportWidth: Int = DEFAULT_VIEWPORT_WIDTH,
   private val viewportHeight: Int = DEFAULT_VIEWPORT_HEIGHT,
-) : TrailblazeAgent, TrailblazeAgentContext {
+) : BaseTrailblazeAgent() {
 
   companion object {
     /**
@@ -74,8 +69,6 @@ class ComposeTrailblazeAgent(
     const val DEFAULT_VIEWPORT_HEIGHT = 800
   }
 
-  override val memory = AgentMemory()
-
   private val pendingDetailRequests =
     AtomicReference<Set<ComposeViewHierarchyDetail>>(emptySet())
 
@@ -84,116 +77,64 @@ class ComposeTrailblazeAgent(
     ComposeScreenState(target, viewportWidth, viewportHeight, requestedDetails = details)
   }
 
-  fun clearMemory() {
-    memory.clear()
+  override fun buildExecutionContext(
+    traceId: TraceId,
+    screenState: ScreenState?,
+    screenStateProvider: (() -> ScreenState)?,
+  ): TrailblazeToolExecutionContext {
+    val trailblazeDeviceInfo = trailblazeDeviceInfoProvider()
+    return TrailblazeToolExecutionContext(
+      screenState = screenState,
+      traceId = traceId,
+      trailblazeDeviceInfo = trailblazeDeviceInfo,
+      sessionProvider = sessionProvider,
+      screenStateProvider = screenStateProvider ?: this.screenStateProvider,
+      trailblazeLogger = trailblazeLogger,
+      memory = memory,
+      maestroTrailblazeAgent = null,
+    )
   }
 
-  override fun runTrailblazeTools(
-    tools: List<TrailblazeTool>,
-    traceId: TraceId?,
-    screenState: ScreenState?,
-    elementComparator: ElementComparator,
-    screenStateProvider: (() -> ScreenState)?,
-  ): TrailblazeAgent.RunTrailblazeToolsResult {
-    val resolvedTraceId = traceId ?: TraceId.generate(TraceOrigin.TOOL)
-    val trailblazeDeviceInfo = trailblazeDeviceInfoProvider()
-    val executionContext =
-      TrailblazeToolExecutionContext(
-        screenState = screenState,
-        traceId = resolvedTraceId,
-        trailblazeDeviceInfo = trailblazeDeviceInfo,
-        sessionProvider = sessionProvider,
-        screenStateProvider = screenStateProvider ?: this.screenStateProvider,
-        trailblazeLogger = trailblazeLogger,
-        memory = memory,
-        maestroTrailblazeAgent = null,
-      )
-
-    val toolsExecuted = mutableListOf<TrailblazeTool>()
-    var lastSuccessResult: TrailblazeToolResult = TrailblazeToolResult.Success()
-    for (tool in tools) {
-      when (tool) {
-        is ComposeExecutableTool -> {
-          toolsExecuted.add(tool)
-          val result = executeComposeToolBlocking(tool, executionContext)
-          if (!result.isSuccess()) {
-            return TrailblazeAgent.RunTrailblazeToolsResult(
-              inputTools = tools,
-              executedTools = toolsExecuted,
-              result = result,
-            )
-          }
-          if (tool is ComposeRequestDetailsTool) {
-            pendingDetailRequests.set(tool.include.toSet())
-          }
-          lastSuccessResult = result
+  override fun executeTool(
+    tool: TrailblazeTool,
+    context: TrailblazeToolExecutionContext,
+    toolsExecuted: MutableList<TrailblazeTool>,
+  ): TrailblazeToolResult {
+    return when (tool) {
+      is ComposeExecutableTool -> {
+        toolsExecuted.add(tool)
+        val result = executeComposeToolBlocking(tool, context)
+        if (result.isSuccess() && tool is ComposeRequestDetailsTool) {
+          pendingDetailRequests.set(tool.include.toSet())
         }
-
-        is ExecutableTrailblazeTool -> {
-          toolsExecuted.add(tool)
-          val result = executeToolBlocking(tool, executionContext)
-          if (!result.isSuccess()) {
-            return TrailblazeAgent.RunTrailblazeToolsResult(
-              inputTools = tools,
-              executedTools = toolsExecuted,
-              result = result,
-            )
-          }
-          lastSuccessResult = result
-        }
-
-        is DelegatingTrailblazeTool -> {
-          val mappedTools = tool.toExecutableTrailblazeTools(executionContext)
-          logDelegatingTool(tool, resolvedTraceId, mappedTools)
-          val originalTools = listOf(tool)
-          for (mappedTool in mappedTools) {
-            toolsExecuted.add(mappedTool)
-            val result =
-              if (mappedTool is ComposeExecutableTool) {
-                executeComposeToolBlocking(mappedTool, executionContext)
-              } else {
-                executeToolBlocking(mappedTool, executionContext)
-              }
-            if (!result.isSuccess()) {
-              return TrailblazeAgent.RunTrailblazeToolsResult(
-                inputTools = originalTools,
-                executedTools = toolsExecuted,
-                result = result,
-              )
-            }
-            lastSuccessResult = result
-          }
-        }
-
-        is MemoryTrailblazeTool -> {
-          toolsExecuted.add(tool)
-          tool.execute(
-            memory = memory,
-            elementComparator = elementComparator,
-          )
-        }
-
-        else ->
-          throw TrailblazeException(
-            message =
-              buildString {
-                appendLine(
-                  "Unhandled Trailblaze tool ${tool::class.java.simpleName} - $tool."
-                )
-                appendLine("ComposeTrailblazeAgent supports:")
-                appendLine("- ${ComposeExecutableTool::class.java.simpleName}")
-                appendLine("- ${ExecutableTrailblazeTool::class.java.simpleName}")
-                appendLine("- ${DelegatingTrailblazeTool::class.java.simpleName}")
-                appendLine("- ${MemoryTrailblazeTool::class.java.simpleName}")
-              },
-          )
+        result
       }
+      is ExecutableTrailblazeTool -> {
+        toolsExecuted.add(tool)
+        executeToolBlocking(tool, context)
+      }
+      is DelegatingTrailblazeTool -> {
+        executeDelegatingTool(tool, context, toolsExecuted) { mappedTool ->
+          if (mappedTool is ComposeExecutableTool) {
+            executeComposeToolBlocking(mappedTool, context)
+          } else {
+            executeToolBlocking(mappedTool, context)
+          }
+        }
+      }
+      else ->
+        throw TrailblazeException(
+          message =
+            buildString {
+              appendLine("Unhandled Trailblaze tool ${tool::class.java.simpleName} - $tool.")
+              appendLine("ComposeTrailblazeAgent supports:")
+              appendLine("- ${ComposeExecutableTool::class.java.simpleName}")
+              appendLine("- ${ExecutableTrailblazeTool::class.java.simpleName}")
+              appendLine("- ${DelegatingTrailblazeTool::class.java.simpleName}")
+              appendLine("- ${MemoryTrailblazeTool::class.java.simpleName}")
+            },
+        )
     }
-    return TrailblazeAgent.RunTrailblazeToolsResult(
-      inputTools = tools,
-      executedTools = toolsExecuted,
-      result = lastSuccessResult,
-    )
   }
 
   private fun executeComposeToolBlocking(
@@ -227,49 +168,6 @@ class ComposeTrailblazeAgent(
     val result = tool.execute(context)
     logToolExecution(tool, timeBeforeExecution, context, result)
     result
-  }
-
-  private fun logToolExecution(
-    tool: ExecutableTrailblazeTool,
-    timeBeforeExecution: Instant,
-    context: TrailblazeToolExecutionContext,
-    result: TrailblazeToolResult,
-  ) {
-    val session = sessionProvider.invoke()
-    val toolLog =
-      TrailblazeLog.TrailblazeToolLog(
-        trailblazeTool = tool,
-        toolName = tool.getToolNameFromAnnotation(),
-        exceptionMessage = (result as? TrailblazeToolResult.Error)?.errorMessage,
-        successful = result.isSuccess(),
-        durationMs =
-          Clock.System.now().toEpochMilliseconds() -
-            timeBeforeExecution.toEpochMilliseconds(),
-        timestamp = timeBeforeExecution,
-        traceId = context.traceId,
-        session = session.sessionId,
-        isRecordable = tool.getIsRecordableFromAnnotation(),
-      )
-    trailblazeLogger.log(session, toolLog)
-  }
-
-  private fun logDelegatingTool(
-    tool: DelegatingTrailblazeTool,
-    traceId: TraceId?,
-    executableTools: List<ExecutableTrailblazeTool>,
-  ) {
-    val session = sessionProvider.invoke()
-    trailblazeLogger.log(
-      session,
-      TrailblazeLog.DelegatingTrailblazeToolLog(
-        trailblazeTool = tool,
-        toolName = tool.getToolNameFromAnnotation(),
-        executableTools = executableTools,
-        session = session.sessionId,
-        traceId = traceId,
-        timestamp = Clock.System.now(),
-      ),
-    )
   }
 
   /**

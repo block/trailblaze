@@ -11,7 +11,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.util.Console
 
 @Serializable
-@TrailblazeToolClass("playwright_hover")
+@TrailblazeToolClass("web_hover")
 @LLMDescription(
   """
 Hover over a web element identified by its element ID, ARIA descriptor, or CSS selector.

@@ -11,6 +11,7 @@ import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.host.yaml.DesktopYamlRunner
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.llm.TrailblazeReferrer
+import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.server.TrailblazeMcpServer
 import xyz.block.trailblaze.logs.server.endpoints.CliRunRequest
@@ -43,7 +44,7 @@ abstract class TrailblazeDesktopApp(
   abstract fun startTrailblazeDesktopApp(headless: Boolean = false)
 
   /**
-   * Creates the CLI report generator used by `trailblaze run`.
+   * Creates the CLI report generator used by `trailblaze trail`.
    *
    * The base implementation uses [CliReportGenerator] backed by `trailblaze-report`.
    * Subclasses can override this to return a customized report generator.
@@ -81,7 +82,7 @@ abstract class TrailblazeDesktopApp(
     val serverPort = portManager.httpPort
     val serverHttpsPort = portManager.httpsPort
     val daemon = DaemonClient(port = serverPort)
-    if (daemon.isRunning()) {
+    if (daemon.isRunningBlocking()) {
       return false // Server already running — we don't own it
     }
 
@@ -97,12 +98,12 @@ abstract class TrailblazeDesktopApp(
 
     // Wait for server to be ready
     var attempts = 0
-    while (!daemon.isRunning() && attempts < 30) {
+    while (!daemon.isRunningBlocking() && attempts < 30) {
       Thread.sleep(200)
       attempts++
     }
 
-    if (daemon.isRunning()) {
+    if (daemon.isRunningBlocking()) {
       Console.log("Server started on port $serverPort")
       return true
     } else {
@@ -118,14 +119,14 @@ abstract class TrailblazeDesktopApp(
    * Called automatically by [ensureServerRunning] and [startTrailblazeDesktopApp].
    */
   fun installRunHandler() {
-    trailblazeMcpServer.onRunRequest = { request -> handleCliRunRequest(request) }
+    trailblazeMcpServer.onRunRequest = { request, onProgress -> handleCliRunRequest(request, onProgress) }
   }
 
   /**
    * Handles a CLI run request by resolving device/LLM, executing the trail,
    * and returning the result synchronously.
    */
-  private suspend fun handleCliRunRequest(request: CliRunRequest): CliRunResponse = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+  private suspend fun handleCliRunRequest(request: CliRunRequest, onProgress: (String) -> Unit = {}): CliRunResponse = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
     // Determine YAML content
     val yamlContent = request.yamlContent
       ?: request.runYamlRequest?.yaml
@@ -188,20 +189,24 @@ abstract class TrailblazeDesktopApp(
       false
     }
 
+    val agentImpl = request.agentImplementation?.let {
+      try { AgentImplementation.valueOf(it.uppercase()) } catch (_: IllegalArgumentException) { null }
+    } ?: AgentImplementation.DEFAULT
+
     val runYamlRequest = resolvedRunRequest ?: RunYamlRequest(
       testName = testName,
       yaml = resolvedYaml,
       trailFilePath = request.trailFilePath,
-      targetAppName = trailConfig?.app,
+      targetAppName = trailConfig?.target,
       useRecordedSteps = effectiveUseRecordedSteps,
       trailblazeDeviceId = targetDevice.trailblazeDeviceId,
       trailblazeLlmModel = llmModel,
       driverType = trailDriverType,
       config = TrailblazeConfig(
-        setOfMarkEnabled = request.setOfMark,
         browserHeadless = !request.showBrowser,
       ),
       referrer = TrailblazeReferrer(id = "cli-daemon", display = "CLI (Daemon)"),
+      agentImplementation = agentImpl,
     )
 
     // Execute and wait for completion
@@ -216,10 +221,13 @@ abstract class TrailblazeDesktopApp(
     val params = DesktopAppRunYamlParams(
       forceStopTargetApp = request.forceStopTargetApp,
       runYamlRequest = runYamlRequest,
-      targetTestApp = trailConfig?.app?.let { desktopAppConfig.availableAppTargets.findById(it) }
+      targetTestApp = trailConfig?.target?.let { desktopAppConfig.availableAppTargets.findById(it) }
         ?: deviceManager.getCurrentSelectedTargetApp(),
       noLogging = request.noLogging,
-      onProgressMessage = { message -> Console.info(message) },
+      onProgressMessage = { message ->
+        Console.info(message)
+        onProgress(message)
+      },
       onConnectionStatus = { status ->
         if (status is DeviceConnectionStatus.DeviceConnectionError.ConnectionFailure) {
           errorMessage = status.errorMessage
@@ -259,7 +267,15 @@ abstract class TrailblazeDesktopApp(
     val waitStart = System.currentTimeMillis()
     while (System.currentTimeMillis() - waitStart < maxWaitMs) {
       newSessionIds = logsRepo.getSessionIds().filter { it !in existingSessionIds }
-      val allEnded = newSessionIds.isNotEmpty() && newSessionIds.all { sessionId ->
+      // Only consider sessions that have a TrailblazeSessionStatusChangeLog (i.e., real
+      // trail sessions). RPC tool execution sessions created by HostOnDeviceRpcAgent set
+      // sendSessionStartLog=false and never emit status change logs, so their session
+      // directories appear in the logs folder but getSessionInfo() returns null. Without
+      // this filter those orphan sessions block the loop indefinitely.
+      val trailSessions = newSessionIds.filter { sessionId ->
+        logsRepo.getSessionInfo(sessionId) != null
+      }
+      val allEnded = trailSessions.isNotEmpty() && trailSessions.all { sessionId ->
         val status = logsRepo.getSessionInfo(sessionId)?.latestStatus
         status is SessionStatus.Ended
       }
@@ -303,6 +319,14 @@ abstract class TrailblazeDesktopApp(
     )
   }
 
+  /**
+   * Resolves a target device from the available list.
+   *
+   * [deviceId] supports three formats (matching the CLI `--device` flag):
+   *   - `"platform/instance-id"` (e.g., `"android/emulator-5554"`)
+   *   - `"platform"` (e.g., `"android"`, `"ios"`, `"web"`)
+   *   - raw instance ID (e.g., `"emulator-5554"`)
+   */
   private fun resolveDevice(
     devices: List<TrailblazeConnectedDeviceSummary>,
     deviceId: String?,
@@ -310,8 +334,21 @@ abstract class TrailblazeDesktopApp(
     platform: TrailblazeDevicePlatform?,
   ): TrailblazeConnectedDeviceSummary? {
     if (deviceId != null) {
-      return devices.find { it.trailblazeDeviceId.instanceId == deviceId }
-        ?: devices.find { it.trailblazeDeviceId.instanceId.contains(deviceId) }
+      val parts = deviceId.split("/", limit = 2)
+      val specPlatform = TrailblazeDevicePlatform.fromString(parts[0])
+      val specInstanceId = if (specPlatform != null) parts.getOrNull(1) else deviceId
+
+      if (specInstanceId != null) {
+        val candidates = if (specPlatform != null) devices.filter { it.platform == specPlatform } else devices
+        return candidates.find { it.trailblazeDeviceId.instanceId == specInstanceId }
+          ?: candidates.find { it.trailblazeDeviceId.instanceId.contains(specInstanceId) }
+      }
+      // Platform only — auto-select
+      if (specPlatform != null) {
+        val platformDevices = devices.filter { it.platform == specPlatform }
+        return platformDevices.find { it.trailblazeDriverType == TrailblazeDriverType.PLAYWRIGHT_NATIVE }
+          ?: platformDevices.firstOrNull()
+      }
     }
     if (driverType != null) {
       return devices.find { it.trailblazeDriverType == driverType }

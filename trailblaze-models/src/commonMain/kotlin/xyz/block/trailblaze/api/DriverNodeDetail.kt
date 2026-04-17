@@ -37,6 +37,16 @@ sealed interface DriverNodeDetail {
    */
   val matchablePropertyNames: Set<String>
 
+  /**
+   * Returns true if this node has at least one non-blank text or identity property
+   * that selector generators can use to produce a meaningful match.
+   *
+   * A node without identifiable properties (e.g. an empty decorative container) can only
+   * be matched by index, which is fragile. During hit-testing, nodes with identifiable
+   * properties should be preferred over propertyless ones of similar or smaller area.
+   */
+  val hasIdentifiableProperties: Boolean
+
   // ---------------------------------------------------------------------------
   // Android via AccessibilityNodeInfo (Maestro-free path)
   // ---------------------------------------------------------------------------
@@ -313,6 +323,15 @@ sealed interface DriverNodeDetail {
     override val matchablePropertyNames: Set<String>
       get() = MATCHABLE_PROPERTIES
 
+    override val hasIdentifiableProperties: Boolean
+      get() =
+        !text.isNullOrBlank() ||
+          !resourceId.isNullOrBlank() ||
+          !uniqueId.isNullOrBlank() ||
+          !contentDescription.isNullOrBlank() ||
+          !hintText.isNullOrBlank() ||
+          !className.isNullOrBlank()
+
     /** Resolves text priority: text > hintText > contentDescription (same as Maestro). */
     fun resolveText(): String? = text ?: hintText ?: contentDescription
 
@@ -403,6 +422,13 @@ sealed interface DriverNodeDetail {
     override val matchablePropertyNames: Set<String>
       get() = MATCHABLE_PROPERTIES
 
+    override val hasIdentifiableProperties: Boolean
+      get() =
+        !text.isNullOrBlank() ||
+          !resourceId.isNullOrBlank() ||
+          !accessibilityText.isNullOrBlank() ||
+          !hintText.isNullOrBlank()
+
     /** Resolves text priority: text > hintText > accessibilityText (Maestro convention). */
     fun resolveText(): String? = text ?: hintText ?: accessibilityText
 
@@ -456,6 +482,14 @@ sealed interface DriverNodeDetail {
 
     override val matchablePropertyNames: Set<String>
       get() = MATCHABLE_PROPERTIES
+
+    override val hasIdentifiableProperties: Boolean
+      get() =
+        !ariaRole.isNullOrBlank() ||
+          !ariaName.isNullOrBlank() ||
+          !ariaDescriptor.isNullOrBlank() ||
+          !cssSelector.isNullOrBlank() ||
+          !dataTestId.isNullOrBlank()
 
     companion object {
       val MATCHABLE_PROPERTIES: Set<String> = setOf(
@@ -515,6 +549,13 @@ sealed interface DriverNodeDetail {
     override val matchablePropertyNames: Set<String>
       get() = MATCHABLE_PROPERTIES
 
+    override val hasIdentifiableProperties: Boolean
+      get() =
+        !text.isNullOrBlank() ||
+          !resourceId.isNullOrBlank() ||
+          !accessibilityText.isNullOrBlank() ||
+          !hintText.isNullOrBlank()
+
     /** Resolves text priority: text > hintText > accessibilityText (Maestro convention). */
     fun resolveText(): String? = text ?: hintText ?: accessibilityText
 
@@ -570,6 +611,14 @@ sealed interface DriverNodeDetail {
 
     override val matchablePropertyNames: Set<String>
       get() = MATCHABLE_PROPERTIES
+
+    override val hasIdentifiableProperties: Boolean
+      get() =
+        !testTag.isNullOrBlank() ||
+          !role.isNullOrBlank() ||
+          !text.isNullOrBlank() ||
+          !editableText.isNullOrBlank() ||
+          !contentDescription.isNullOrBlank()
 
     /** Resolves text priority: editableText > text > contentDescription. */
     fun resolveText(): String? = editableText ?: text ?: contentDescription

@@ -36,6 +36,7 @@ In this case the additional fields will be used to identify the specific view to
   "TOP",
   "BOTTOM"
 ]`
+- `reasoning`: `String`
 
 
 

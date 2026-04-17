@@ -45,7 +45,7 @@ jobs:
         run: chmod +x gradlew
 
       - name: Build Desktop JAR
-        run: ./gradlew :trailblaze-desktop:shrinkUberJar -Ptrailblaze.proguard=true
+        run: ./gradlew :trailblaze-desktop:shrinkUberJar -Ptrailblaze.proguard=true -Ptrailblaze.wasm=true
 
       - name: Upload Desktop JAR
         uses: actions/upload-artifact@v4

@@ -167,13 +167,22 @@ internal object HostIosDriverFactory {
     /**
      * Use custom driver from [TrailblazeHostAppTarget] if provided, otherwise use default driver
      */
-    val iosDriver: Driver = appTarget?.getCustomIosDriverFactory(
+    val customResult = appTarget?.getCustomIosDriverFactory(
       trailblazeDeviceId = TrailblazeDeviceId(
         instanceId = deviceId,
         trailblazeDevicePlatform = TrailblazeDevicePlatform.IOS,
       ),
       originalIosDriver = baseIosDriver
-    ) as? Driver ?: baseIosDriver
+    )
+    val iosDriver: Driver = customResult as? Driver ?: baseIosDriver
+    if (appTarget != null) {
+      val isCustom = customResult != null && customResult !== baseIosDriver
+      Console.log("[iOS Driver] appTarget=${appTarget.id}, hasCustomIosDriver=${appTarget.hasCustomIosDriver}, " +
+        "customResult=${customResult?.javaClass?.simpleName}, isCustomDriver=$isCustom, " +
+        "driverClass=${iosDriver.javaClass.simpleName}")
+    } else {
+      Console.log("[iOS Driver] appTarget=null, using base IOSDriver")
+    }
 
     val maestro = Maestro.ios(
       driver = iosDriver,

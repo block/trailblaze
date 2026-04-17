@@ -1,7 +1,18 @@
 package xyz.block.trailblaze.android.accessibility
 
+import android.bluetooth.BluetoothManager
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.net.wifi.WifiManager
+import android.telephony.TelephonyManager
 import kotlinx.datetime.Clock
+import xyz.block.trailblaze.AdbCommandUtil
+import xyz.block.trailblaze.InstrumentationUtil.withInstrumentation
+import xyz.block.trailblaze.api.DriverNodeDetail
 import xyz.block.trailblaze.api.ScreenState
+import xyz.block.trailblaze.api.TrailblazeNode
+import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.api.TrailblazeNodeSelectorResolver
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.util.Console
@@ -23,7 +34,6 @@ import xyz.block.trailblaze.util.Console
  * - **AI agent tools**: direct device control with built-in settle guarantees
  */
 class AccessibilityDeviceManager(
-  private val setOfMarkEnabled: Boolean = true,
   private val deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
 ) {
 
@@ -43,7 +53,6 @@ class AccessibilityDeviceManager(
   fun getScreenState(): ScreenState {
     waitForReady()
     return AccessibilityServiceScreenState(
-      setOfMarkEnabled = setOfMarkEnabled,
       deviceClassifiers = deviceClassifiers,
     )
   }
@@ -54,7 +63,6 @@ class AccessibilityDeviceManager(
    */
   fun captureScreenStateForLogging(): ScreenState {
     return AccessibilityServiceScreenState(
-      setOfMarkEnabled = setOfMarkEnabled,
       deviceClassifiers = deviceClassifiers,
     )
   }
@@ -139,6 +147,10 @@ class AccessibilityDeviceManager(
         pressHome()
         ExecutionResult()
       }
+      is AccessibilityAction.PressKey -> {
+        AdbCommandUtil.pressKey(action.code)
+        ExecutionResult()
+      }
       is AccessibilityAction.HideKeyboard -> {
         hideKeyboard()
         ExecutionResult()
@@ -151,6 +163,48 @@ class AccessibilityDeviceManager(
         executeLaunchApp(action)
         ExecutionResult()
       }
+      is AccessibilityAction.SetClipboard -> {
+        TrailblazeAccessibilityService.setClipboard(action.text)
+        ExecutionResult()
+      }
+      is AccessibilityAction.PasteText -> {
+        val text = TrailblazeAccessibilityService.getClipboardText()
+        if (text != null) {
+          inputText(text)
+        }
+        ExecutionResult()
+      }
+      is AccessibilityAction.CopyTextFrom -> executeCopyTextFrom(action)
+      is AccessibilityAction.StopApp -> {
+        AdbCommandUtil.forceStopApp(action.appId)
+        ExecutionResult()
+      }
+      is AccessibilityAction.KillApp -> {
+        AdbCommandUtil.forceStopApp(action.appId)
+        ExecutionResult()
+      }
+      is AccessibilityAction.ClearState -> {
+        AdbCommandUtil.clearPackageData(action.appId)
+        ExecutionResult()
+      }
+      is AccessibilityAction.OpenLink -> {
+        executeOpenLink(action)
+        ExecutionResult()
+      }
+      is AccessibilityAction.SetOrientation -> {
+        AdbCommandUtil.execShellCommand("settings put system accelerometer_rotation 0")
+        AdbCommandUtil.execShellCommand("settings put system user_rotation ${action.rotation}")
+        ExecutionResult()
+      }
+      is AccessibilityAction.SetAirplaneMode -> {
+        executeSetAirplaneMode(action.enabled)
+        ExecutionResult()
+      }
+      is AccessibilityAction.ToggleAirplaneMode -> {
+        executeSetAirplaneMode(!isAirplaneModeEnabled())
+        ExecutionResult()
+      }
+      is AccessibilityAction.ScrollUntilVisible -> executeScrollUntilVisible(action)
       is AccessibilityAction.TapOnElement -> executeTapOnElement(action)
       is AccessibilityAction.AssertVisible -> executeAssertVisible(action)
       is AccessibilityAction.AssertNotVisible -> executeAssertNotVisible(action)
@@ -226,6 +280,117 @@ class AccessibilityDeviceManager(
     TrailblazeAccessibilityService.launchApp(action.appId)
     // Wait for the app to render and settle
     TrailblazeAccessibilityService.waitForSettled(timeoutMs = 10_000L)
+  }
+
+  // --- Clipboard ---
+
+  /**
+   * Resolves an element via [TrailblazeNodeSelector], reads its text, and sets the clipboard.
+   * Mirrors Maestro Orchestra's [CopyTextFromCommand] behavior.
+   */
+  private fun executeCopyTextFrom(action: AccessibilityAction.CopyTextFrom): ExecutionResult {
+    val startTime = Clock.System.now().toEpochMilliseconds()
+    while (Clock.System.now().toEpochMilliseconds() - startTime < action.timeoutMs) {
+      val tree = getAccessibilityTree()
+      if (tree != null) {
+        val trailblazeTree = tree.toTrailblazeNode()
+        val result = TrailblazeNodeSelectorResolver.resolve(trailblazeTree, action.nodeSelector)
+        when (result) {
+          is TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch -> {
+            return copyTextAndSetClipboard(result.node, action.nodeSelector)
+          }
+          is TrailblazeNodeSelectorResolver.ResolveResult.MultipleMatches -> {
+            return copyTextAndSetClipboard(result.nodes.first(), action.nodeSelector)
+          }
+          is TrailblazeNodeSelectorResolver.ResolveResult.NoMatch -> { /* keep polling */ }
+        }
+      }
+      Thread.sleep(POLL_INTERVAL_MS)
+    }
+    error("Copy text failed: ${action.nodeSelector.description()} not found within ${action.timeoutMs}ms")
+  }
+
+  private fun copyTextAndSetClipboard(
+    node: TrailblazeNode,
+    selector: TrailblazeNodeSelector,
+  ): ExecutionResult {
+    val detail = node.driverDetail as? DriverNodeDetail.AndroidAccessibility
+    // Match Maestro Orchestra's resolveText() priority: text > hintText > contentDescription
+    val text = detail?.text ?: detail?.hintText ?: detail?.contentDescription
+      ?: error("Element matched but has no text: ${selector.description()}")
+    TrailblazeAccessibilityService.setClipboard(text)
+    Console.log("Copied text \"$text\" to clipboard from ${selector.description()}")
+    val center = node.centerPoint()
+    return ExecutionResult(resolvedX = center?.first, resolvedY = center?.second)
+  }
+
+  // --- Links ---
+
+  /** Opens a URL via Intent.ACTION_VIEW, matching MaestroAndroidUiAutomatorDriver.openLink(). */
+  private fun executeOpenLink(action: AccessibilityAction.OpenLink) {
+    withInstrumentation {
+      val intent = Intent(Intent.ACTION_VIEW, Uri.parse(action.link)).apply {
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        addCategory(Intent.CATEGORY_BROWSABLE)
+      }
+      context.startActivity(intent)
+    }
+    TrailblazeAccessibilityService.waitForSettled(timeoutMs = 10_000L)
+  }
+
+  // --- Airplane mode ---
+
+  /** Matches MaestroAndroidUiAutomatorDriver.setAirplaneMode(). */
+  private fun executeSetAirplaneMode(enabled: Boolean) {
+    val enableOrDisable = if (enabled) "disable" else "enable"
+    AdbCommandUtil.execShellCommand("svc wifi $enableOrDisable")
+    AdbCommandUtil.execShellCommand("svc data $enableOrDisable")
+    AdbCommandUtil.execShellCommand("svc bluetooth $enableOrDisable")
+  }
+
+  /** Matches MaestroAndroidUiAutomatorDriver.isSimulatedAirplaneModeEnabled(). */
+  private fun isAirplaneModeEnabled(): Boolean {
+    return withInstrumentation {
+      val wifiManager = context.getSystemService(Context.WIFI_SERVICE) as WifiManager
+      val telephonyManager = context.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
+      val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
+      val isWifiOff = !wifiManager.isWifiEnabled
+      val isDataOff = !telephonyManager.isDataEnabled
+      val isBluetoothOff = !bluetoothManager.adapter.isEnabled
+      isWifiOff && isDataOff && isBluetoothOff
+    }
+  }
+
+  // --- Scroll until visible ---
+
+  /**
+   * Scrolls in [direction] until the element matching [nodeSelector] is visible or timeout.
+   * Matches Maestro Orchestra's scrollUntilVisible() behavior.
+   */
+  private fun executeScrollUntilVisible(action: AccessibilityAction.ScrollUntilVisible): ExecutionResult {
+    val (screenWidth, screenHeight) = getScreenDimensions()
+    val startTime = Clock.System.now().toEpochMilliseconds()
+
+    while (Clock.System.now().toEpochMilliseconds() - startTime < action.timeoutMs) {
+      val tree = getAccessibilityTree()
+      if (tree != null) {
+        val trailblazeTree = tree.toTrailblazeNode()
+        val result = TrailblazeNodeSelectorResolver.resolve(trailblazeTree, action.nodeSelector)
+        when (result) {
+          is TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch -> {
+            val center = result.node.centerPoint()
+            return ExecutionResult(resolvedX = center?.first, resolvedY = center?.second)
+          }
+          is TrailblazeNodeSelectorResolver.ResolveResult.MultipleMatches -> {
+            val center = result.nodes.first().centerPoint()
+            return ExecutionResult(resolvedX = center?.first, resolvedY = center?.second)
+          }
+          is TrailblazeNodeSelectorResolver.ResolveResult.NoMatch -> { /* scroll and retry */ }
+        }
+      }
+      executeSwipeDirection(action.direction, screenWidth, screenHeight, action.scrollDurationMs)
+    }
+    error("Scroll until visible failed: ${action.nodeSelector.description()} not found within ${action.timeoutMs}ms")
   }
 
   // --- Keyboard ---

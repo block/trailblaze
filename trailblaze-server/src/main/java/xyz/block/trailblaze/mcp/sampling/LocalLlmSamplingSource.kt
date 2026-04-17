@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.mcp.sampling
 
 import ai.koog.agents.core.tools.ToolDescriptor
+import ai.koog.prompt.llm.LLMCapability
 import ai.koog.agents.core.tools.ToolParameterDescriptor
 import xyz.block.trailblaze.toolcalls.asToolType
 import ai.koog.prompt.dsl.Prompt
@@ -444,7 +445,8 @@ class LocalLlmSamplingSource(
       Message.User(
         parts = buildList {
           add(ContentPart.Text(text = userMessage))
-          if (screenshotBytes != null && screenshotBytes.isNotEmpty()) {
+          val supportsVision = llmModel?.capabilities?.contains(LLMCapability.Vision.Image) != false
+          if (screenshotBytes != null && screenshotBytes.isNotEmpty() && supportsVision) {
             add(
               ContentPart.Image(
                 content = AttachmentContent.Binary.Bytes(screenshotBytes),

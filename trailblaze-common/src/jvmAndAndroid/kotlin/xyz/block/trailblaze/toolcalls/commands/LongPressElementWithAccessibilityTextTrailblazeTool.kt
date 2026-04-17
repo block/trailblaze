@@ -26,7 +26,7 @@ provided exactly matches elsewhere on the screen. In this case the additional fi
 used to identify the specific view to long press on.
       """,
 )
-@Deprecated("Use [TapOnElementByNodeIdTrailblazeTool] or [TapOnByElementSelector].")
+@Deprecated("Use [TapTrailblazeTool] or [TapOnByElementSelector].")
 data class LongPressElementWithAccessibilityTextTrailblazeTool(
   @LLMDescription(REQUIRED_ACCESSIBILITY_TEXT_DESCRIPTION)
   val accessibilityText: String,

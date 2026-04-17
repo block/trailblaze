@@ -151,7 +151,7 @@ interface PlaywrightExecutableTool : ExecutableTrailblazeTool {
       if (locator.count() == 0) {
         return null to TrailblazeToolResult.Error.ExceptionThrown(
           "No element found matching '$ref' ($description). " +
-            "Use playwright_snapshot to refresh the page state.",
+            "Use web_snapshot to refresh the page state.",
         )
       }
       return locator to null

@@ -5,12 +5,8 @@ import androidx.compose.ui.test.runComposeUiTest
 import kotlin.test.Ignore
 import kotlin.test.Test
 import xyz.block.trailblaze.compose.driver.rpc.ComposeRpcServer
-import xyz.block.trailblaze.compose.driver.tools.ComposeToolSet
 import xyz.block.trailblaze.compose.target.ComposeUiTestTarget
-import xyz.block.trailblaze.logs.client.TrailblazeJson
-import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
-import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
-import xyz.block.trailblaze.toolcalls.toolName
+import xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer
 import xyz.block.trailblaze.util.Console
 
 /**
@@ -18,7 +14,7 @@ import xyz.block.trailblaze.util.Console
  *
  * Run this test, then in a separate terminal execute:
  * ```
- * ./trailblaze run opensource/trails/compose-desktop/test-add-todo/desktop.trail.yaml --use-recorded-steps
+ * ./trailblaze trail opensource/trails/compose-desktop/test-add-todo/desktop.trail.yaml --use-recorded-steps
  * ```
  */
 @Ignore("Interactive server launchers for local CLI testing — not meant for CI")
@@ -26,12 +22,7 @@ import xyz.block.trailblaze.util.Console
 class ComposeRpcServerLauncher {
 
   init {
-    TrailblazeJsonInstance =
-      TrailblazeJson.createTrailblazeJsonInstance(
-        allToolClasses =
-          TrailblazeToolSet.AllBuiltInTrailblazeToolsForSerializationByToolName +
-            ComposeToolSet.LlmToolSet.toolClasses.associateBy { it.toolName() },
-      )
+    TrailblazeSerializationInitializer.initialize()
   }
 
   @Test

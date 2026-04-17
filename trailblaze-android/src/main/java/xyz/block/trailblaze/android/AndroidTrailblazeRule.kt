@@ -75,14 +75,12 @@ open class AndroidTrailblazeRule(
   )
 
   private val trailblazeToolRepo = TrailblazeToolRepo.withDynamicToolSets(
-    setOfMarkEnabled = config.setOfMarkEnabled,
     customToolClasses = customToolClasses?.initialToolRepoToolClasses ?: emptySet(),
   )
 
   private val screenStateProvider: () -> ScreenState = screenStateProviderOverride ?: {
     AndroidOnDeviceUiAutomatorScreenState(
       includeScreenshot = true,
-      setOfMarkEnabled = config.setOfMarkEnabled,
       deviceClassifiers = trailblazeLoggingRule.trailblazeDeviceInfoProvider().classifiers,
     )
   }

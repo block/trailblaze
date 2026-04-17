@@ -15,8 +15,7 @@ import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.host.rules.TrailblazeHostLlmConfig.DEFAULT_TRAILBLAZE_LLM_MODEL
 import xyz.block.trailblaze.http.DynamicLlmClient
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
-import xyz.block.trailblaze.logs.client.TrailblazeJson
-import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
+import xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
@@ -56,13 +55,9 @@ class BaseComposeTest(
 ) {
 
   init {
-    TrailblazeJsonInstance =
-      TrailblazeJson.createTrailblazeJsonInstance(
-        allToolClasses =
-          TrailblazeToolSet.AllBuiltInTrailblazeToolsForSerializationByToolName +
-            (ComposeToolSet.LlmToolSet.toolClasses + allSerializationToolClasses)
-              .associateBy { it.toolName() },
-      )
+    TrailblazeSerializationInitializer.initialize(
+      additionalToolClasses = allSerializationToolClasses,
+    )
   }
 
   val trailblazeDeviceInfo: TrailblazeDeviceInfo

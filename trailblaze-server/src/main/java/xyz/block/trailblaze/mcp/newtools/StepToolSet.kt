@@ -3,15 +3,22 @@ package xyz.block.trailblaze.mcp.newtools
 import ai.koog.agents.core.tools.annotations.LLMDescription
 import ai.koog.agents.core.tools.annotations.Tool
 import ai.koog.agents.core.tools.reflect.ToolSet
+import kotlinx.coroutines.delay
 import kotlinx.datetime.Clock
 import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.mcp.McpToolProfile
+import xyz.block.trailblaze.mcp.ViewHierarchyVerbosity
+import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.agent.Confidence
 import xyz.block.trailblaze.agent.ExecutionResult
 import xyz.block.trailblaze.agent.RecommendationContext
 import xyz.block.trailblaze.agent.ScreenAnalyzer
 import xyz.block.trailblaze.agent.UiActionExecutor
+import xyz.block.trailblaze.api.AndroidCompactElementList
+import xyz.block.trailblaze.api.DriverNodeDetail
+import xyz.block.trailblaze.api.IosCompactElementList
 import xyz.block.trailblaze.api.ScreenState
+import xyz.block.trailblaze.api.SnapshotDetail
 import xyz.block.trailblaze.logs.client.LogEmitter
 import xyz.block.trailblaze.logs.client.ObjectiveLogHelper
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
@@ -32,18 +39,20 @@ import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import kotlin.reflect.KClass
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.DirectionStep
+import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.VerificationStep
+import xyz.block.trailblaze.yaml.createTrailblazeYaml
 
 /**
  * Primary MCP tools for UI automation:
- * - blaze: Take an action toward a goal (or verify with hint="VERIFY")
+ * - blaze: Take an action toward an objective (or verify with hint="VERIFY")
  * - ask: Ask a question and get an answer
  */
 @Suppress("unused")
 class StepToolSet(
-  private val screenAnalyzer: ScreenAnalyzer,
+  private val screenAnalyzer: ScreenAnalyzer? = null,
   private val executor: UiActionExecutor,
-  private val screenStateProvider: () -> ScreenState?,
+  private val screenStateProvider: (fast: Boolean) -> ScreenState?,
   private val sessionContext: TrailblazeMcpSessionContext? = null,
   /** Provider for available UI tools. The analyzer uses these for type-safe recommendations. */
   private val availableToolsProvider: () -> List<TrailblazeToolDescriptor> = { emptyList() },
@@ -61,11 +70,109 @@ class StepToolSet(
    * tool sets (e.g., Compose tools) to be injected without a direct module dependency.
    */
   private val toolClassesOverrideProvider: (() -> Set<KClass<out TrailblazeTool>>?)? = null,
+  /** Executes a raw TrailblazeTool directly on the device, bypassing the AI agent. */
+  private val rawToolExecutor: (suspend (TrailblazeTool) -> String)? = null,
+  /** Captures the current screen summary after direct tool execution. */
+  private val screenSummaryProvider: (suspend (Set<SnapshotDetail>) -> String?)? = null,
+  /** Saves a screenshot to disk and returns the absolute file path. */
+  private val screenshotSaver: (suspend (ByteArray) -> String?)? = null,
+  /** Provides custom tool classes (target-specific) for YAML parsing in direct tool execution. */
+  private val customToolClassesProvider: (() -> Set<KClass<out TrailblazeTool>>)? = null,
 ) : ToolSet {
+
+  private fun parseSnapshotDetails(value: String?): Set<SnapshotDetail> {
+    if (value.isNullOrBlank()) return emptySet()
+    return value.split(",").mapNotNull { token ->
+      try { SnapshotDetail.valueOf(token.trim().uppercase()) } catch (_: Exception) { null }
+    }.toSet()
+  }
+
+  companion object {
+    /** Max time to wait for the device driver to finish initializing. */
+    private const val DRIVER_INIT_TIMEOUT_MS = 30_000L
+    /** Shorter timeout for transient capture failures (driver ready but session warming up). */
+    private const val SCREEN_CAPTURE_RETRY_MS = 5_000L
+    private const val POLL_INTERVAL_MS = 1_000L
+  }
+
+  /**
+   * Builds a text summary from a [ScreenState], respecting [SnapshotDetail] options.
+   * Used by the fast snapshot path to avoid a second device round-trip.
+   */
+  private fun describeScreenState(
+    screenState: ScreenState,
+    details: Set<SnapshotDetail> = emptySet(),
+  ): String? {
+    // Try pre-computed text representation first (available for iOS Maestro, Android on-device)
+    val preComputed = screenState.viewHierarchyTextRepresentation
+
+    // If we have a TrailblazeNode tree, build or rebuild the compact element list.
+    // This handles: detail enrichment (BOUNDS, OFFSCREEN) and cases where
+    // viewHierarchyTextRepresentation is null (e.g., Android HOST mode).
+    val tree = screenState.trailblazeNodeTree
+    if (tree != null) {
+      val platform = detectPlatformFromTree(tree)
+      if (platform != null && (details.isNotEmpty() || preComputed == null)) {
+        val elements = when (platform) {
+          "android" -> AndroidCompactElementList.build(tree, details, screenState.deviceHeight).text
+          "ios" -> IosCompactElementList.build(tree, details, screenState.deviceHeight).text
+          else -> null
+        }
+        if (elements != null) {
+          val pageContext = screenState.pageContextSummary
+          return if (pageContext != null) "$pageContext\n\n$elements" else elements
+        }
+      }
+    }
+
+    return preComputed
+  }
+
+  /** Detects platform from the TrailblazeNode tree by checking root and first child. */
+  private fun detectPlatformFromTree(tree: xyz.block.trailblaze.api.TrailblazeNode): String? {
+    if (tree.driverDetail is DriverNodeDetail.AndroidAccessibility) return "android"
+    if (tree.driverDetail is DriverNodeDetail.AndroidMaestro) return "android"
+    if (tree.driverDetail is DriverNodeDetail.IosMaestro) return "ios"
+    val firstChild = tree.children.firstOrNull() ?: return null
+    if (firstChild.driverDetail is DriverNodeDetail.AndroidAccessibility) return "android"
+    if (firstChild.driverDetail is DriverNodeDetail.AndroidMaestro) return "android"
+    if (firstChild.driverDetail is DriverNodeDetail.IosMaestro) return "ios"
+    return null
+  }
+
+  /**
+   * Waits for [screenStateProvider] to return a non-null [ScreenState].
+   *
+   * Screen capture can fail transiently in two scenarios:
+   * 1. Driver is still initializing (reported by [driverStatusProvider]) — polls up to 30s.
+   * 2. Driver is ready but the Maestro session hasn't warmed up yet — polls up to 5s.
+   *
+   * Returns the screen state once available, or null if capture never succeeds.
+   */
+  private suspend fun awaitScreenState(fast: Boolean = false): ScreenState? {
+    // Fast path — already ready
+    screenStateProvider(fast)?.let { return it }
+
+    val status = driverStatusProvider?.invoke()
+    val timeoutMs = when {
+      status != null && "initializing" in status -> DRIVER_INIT_TIMEOUT_MS
+      // No error status but capture failed — transient; retry briefly
+      status == null -> SCREEN_CAPTURE_RETRY_MS
+      // Driver reported a real error (e.g., "No device connected") — don't retry
+      else -> return null
+    }
+
+    val deadline = System.currentTimeMillis() + timeoutMs
+    while (System.currentTimeMillis() < deadline) {
+      delay(POLL_INTERVAL_MS)
+      screenStateProvider(fast)?.let { return it }
+    }
+    return null
+  }
 
   @LLMDescription(
     """
-    Take a step toward your goal, or verify an assertion.
+    Take a step toward your objective, or verify an assertion.
 
     Each blaze() call should be a COMPLETE USER-FACING ACTION with all relevant
     parameters — not individual UI taps, but not multi-screen journeys either.
@@ -73,18 +180,18 @@ class StepToolSet(
     setup, onboarding, etc.) and needs full context to select the right one.
 
     GOOD scope — one action with all its details:
-      blaze(goal="Login with test@example.com")
-      blaze(goal="Search flights from Paris to London on October 4")
-      blaze(goal="Enter shipping address: 123 Main St, Springfield, IL 62701")
+      blaze(objective="Login with test@example.com")
+      blaze(objective="Search flights from Paris to London on October 4")
+      blaze(objective="Enter shipping address: 123 Main St, Springfield, IL 62701")
 
     BAD scope — too granular, strips context the inner agent needs:
-      blaze(goal="Launch the app")  ← inner agent can't tell this is part of a login
-      blaze(goal="Tap the email field")
-      blaze(goal="Type test@example.com")
+      blaze(objective="Launch the app")  ← inner agent can't tell this is part of a login
+      blaze(objective="Tap the email field")
+      blaze(objective="Type test@example.com")
 
     Trailblaze can handle larger objectives autonomously — it will break them down
-    internally and use specialized tools. Larger goals mean less back-and-forth but
-    slower feedback. Smaller goals give faster feedback but risk losing context.
+    internally and use specialized tools. Larger objectives mean less back-and-forth but
+    slower feedback. Smaller objectives give faster feedback but risk losing context.
     When in doubt, go bigger — include all details the inner agent might need.
 
     Returns what happened plus a screenSummary showing visible text and actionable
@@ -98,30 +205,97 @@ class StepToolSet(
   @Tool(McpToolProfile.TOOL_BLAZE)
   suspend fun blaze(
     @LLMDescription("A complete user-facing action with all relevant details (e.g., 'Login with test@example.com', 'Search flights Paris to London Oct 4'). Include credentials, search terms, and parameters — the inner agent needs this context to select specialized tools.")
-    goal: String,
+    objective: String,
     @LLMDescription("Context from previous steps (optional)")
     context: String? = null,
     @LLMDescription("hint=\"VERIFY\" to check an assertion using read-only tools (returns passed: true/false). Omit for normal action.")
     hint: String? = null,
+    @LLMDescription("YAML tool sequence to execute directly, bypassing AI agent. Same format as recording.tools in trail files.")
+    tools: String? = null,
+    @LLMDescription("Comma-separated snapshot detail levels: BOUNDS, OFFSCREEN. Enriches the screen summary in the response.")
+    snapshotDetails: String? = null,
+    @LLMDescription("Text-only mode: skip screenshots, use text-only screen analysis (no vision tokens), and skip disk logging.")
+    fast: Boolean = false,
+    @LLMDescription("Save a screenshot to disk and return the file path. Works with fast mode.")
+    screenshot: Boolean = false,
   ): String {
     val traceId = TraceId.generate(TraceId.Companion.TraceOrigin.LLM)
     val isVerify = BlazeHint.from(hint) == BlazeHint.VERIFY
+    val isFast = fast
+    val wantsScreenshot = screenshot
 
-    val screenState = screenStateProvider()
+    // Parse snapshot detail options for screen summary enrichment
+    val parsedSnapshotDetails = parseSnapshotDetails(snapshotDetails)
+
+    // When screenshot is requested, capture with screenshots even in fast mode.
+    val skipScreenshot = isFast && !wantsScreenshot
+    val screenState = awaitScreenState(fast = skipScreenshot)
       ?: return StepResult(
         executed = false,
         error = driverStatusProvider?.invoke()
           ?: "No device connected. Use device(action=ANDROID), device(action=IOS), or device(action=WEB) first.",
       ).toMarkdown()
 
-    val promptStep = if (isVerify) VerificationStep(verify = goal) else DirectionStep(step = goal)
+    // Snapshot short-circuit: skip tool execution entirely and return the
+    // view hierarchy text from the already-captured screen state. Avoids a second
+    // device round-trip (screenshot + hierarchy) and all disk I/O from takeSnapshot.
+    // Also used for non-fast snapshot when screenshot/bounds/offscreen are requested,
+    // since the screen state was already captured with full detail above.
+    if (tools != null && "takeSnapshot" in tools) {
+      // Try to build screen summary from the already-captured screen state.
+      // Falls back to screenSummaryProvider for platforms where the screen state
+      // doesn't carry a pre-built text representation (e.g., Android HOST/Maestro).
+      val screenSummary = describeScreenState(screenState, parsedSnapshotDetails)
+        ?: try { screenSummaryProvider?.invoke(parsedSnapshotDetails) } catch (_: Exception) { null }
+
+      // Save screenshot to disk if requested
+      val screenshotPath = if (wantsScreenshot) {
+        val bytes = screenState.screenshotBytes
+        if (bytes != null && screenshotSaver != null) {
+          try { screenshotSaver.invoke(bytes) } catch (_: Exception) { null }
+        } else null
+      } else null
+
+      Console.log("")
+      Console.log("┌──────────────────────────────────────────────────────────────────────────────")
+      Console.log("│ [snapshot] Captured${if (screenshotPath != null) " (screenshot: $screenshotPath)" else ""}")
+      Console.log("└──────────────────────────────────────────────────────────────────────────────")
+
+      val result = if (screenshotPath != null) {
+        "Snapshot captured\n\n**Screenshot:** $screenshotPath"
+      } else {
+        "Snapshot captured"
+      }
+      return StepResult(
+        executed = true,
+        done = true,
+        result = result,
+        screenSummary = screenSummary,
+      ).toMarkdown()
+    }
+
+    // Direct tool execution mode — bypass the AI agent, execute provided tools as-is
+    if (tools != null) {
+      return executeDirectTools(objective, tools, traceId, isFast, parsedSnapshotDetails)
+    }
+
+    // AI agent mode requires an LLM — fail clearly if not configured
+    if (screenAnalyzer == null) {
+      return StepResult(
+        executed = false,
+        error = "No AI provider configured. Set one up with 'trailblaze config' or drive the device directly with 'trailblaze tool' (no AI needed).",
+      ).toMarkdown()
+    }
+
+    val promptStep = if (isVerify) VerificationStep(verify = objective) else DirectionStep(step = objective)
     val stepStartTime = Clock.System.now()
 
     val recommendationContext = RecommendationContext(
-      objective = goal,
+      objective = objective,
       progressSummary = context,
       hint = if (isVerify) "Verify this assertion using read-only tools only. Do not tap, swipe, or type." else null,
       attemptNumber = 1,
+      fast = isFast,
     )
 
     val tools = selectToolsForHint(hint)
@@ -149,10 +323,10 @@ class StepToolSet(
     Console.log("")
     Console.log("┌──────────────────────────────────────────────────────────────────────────────")
     if (isVerify) {
-      Console.log("│ [verify] $goal")
+      Console.log("│ [verify] $objective")
       Console.log("│ Result: ${if (analysis.objectiveAppearsAchieved) "PASSED" else if (analysis.objectiveAppearsImpossible) "FAILED" else "UNCERTAIN"}")
     } else {
-      Console.log("│ [blaze] Goal: $goal")
+      Console.log("│ [blaze${if (isFast) " --fast" else ""}] Objective: $objective")
     }
     Console.log("│ Screen: ${analysis.screenSummary}")
     Console.log("│ Confidence: ${analysis.confidence}")
@@ -165,14 +339,14 @@ class StepToolSet(
         executed = false,
         done = true,
         passed = if (isVerify) true else null,
-        result = if (isVerify) "Assertion passed" else "Goal already achieved",
+        result = if (isVerify) "Assertion passed" else "Objective already achieved",
         screenSummary = analysis.screenSummary,
       ).toMarkdown()
     }
 
     // Impossible / assertion failed?
     if (analysis.objectiveAppearsImpossible) {
-      val failureReason = if (isVerify) "Assertion failed: ${analysis.reasoning}" else "Cannot achieve goal: ${analysis.reasoning}"
+      val failureReason = if (isVerify) "Assertion failed: ${analysis.reasoning}" else "Cannot achieve objective: ${analysis.reasoning}"
       emitObjectiveComplete(promptStep, stepStartTime, success = false, failureReason = failureReason)
       return StepResult(
         executed = false,
@@ -230,7 +404,7 @@ class StepToolSet(
       sessionContext?.recordStep(
         RecordedStep(
           type = if (isVerify) RecordedStepType.VERIFY else RecordedStepType.STEP,
-          input = goal,
+          input = objective,
           toolCalls = listOf(
             RecordedToolCall(
               toolName = analysis.recommendedTool,
@@ -257,26 +431,149 @@ class StepToolSet(
     ).toMarkdown()
   }
 
+  /**
+   * Executes a YAML tool sequence directly, bypassing the AI agent.
+   * Records the step with the NL objective paired with the tool execution,
+   * so it produces a proper trail step when saved.
+   */
+  private suspend fun executeDirectTools(
+    objective: String,
+    toolsYaml: String,
+    traceId: TraceId,
+    fast: Boolean = false,
+    snapshotDetails: Set<SnapshotDetail> = emptySet(),
+  ): String {
+    val toolExecutor = rawToolExecutor
+      ?: return StepResult(executed = false, error = "Direct tool execution not available").toMarkdown()
+
+    val promptStep = DirectionStep(step = objective)
+    val stepStartTime = Clock.System.now()
+    emitObjectiveStart(promptStep)
+
+    // Parse the user's raw tool list using the type-safe YAML parser.
+    // Supports two formats:
+    //   Wrapped (trail format):  - tools:\n    - tapOnPoint:\n        x: 100
+    //   Unwrapped (raw tools):   - tapOnPoint:\n    x: 100
+    val customClasses = customToolClassesProvider?.invoke() ?: emptySet()
+    val yaml = createTrailblazeYaml(customClasses)
+    val toolWrappers = try {
+      // Try trail format first (handles `- tools:` wrapper)
+      val trailItems = yaml.decodeTrail(toolsYaml)
+      trailItems.filterIsInstance<TrailYamlItem.ToolTrailItem>().flatMap { it.tools }
+    } catch (_: Exception) {
+      try {
+        // Fall back to raw tool list format
+        yaml.decodeTools(toolsYaml)
+      } catch (e: Exception) {
+        emitObjectiveComplete(promptStep, stepStartTime, success = false, failureReason = "Failed to parse tools YAML: ${e.message}")
+        return StepResult(executed = false, error = "Failed to parse tools YAML: ${e.message}").toMarkdown()
+      }
+    }
+
+    if (toolWrappers.isEmpty()) {
+      emitObjectiveComplete(promptStep, stepStartTime, success = false, failureReason = "No tools found in YAML")
+      return StepResult(executed = false, error = "No tools found in YAML").toMarkdown()
+    }
+
+    // Reject unknown tool names — OtherTrailblazeTool means the name wasn't in the registry
+    val unknownTools = toolWrappers.filter { it.trailblazeTool is OtherTrailblazeTool }.map { it.name }
+    if (unknownTools.isNotEmpty()) {
+      val msg = "Unknown tool${if (unknownTools.size > 1) "s" else ""}: ${unknownTools.joinToString(", ")}. Use toolbox() to see available tools."
+      emitObjectiveComplete(promptStep, stepStartTime, success = false, failureReason = msg)
+      return StepResult(executed = false, error = msg).toMarkdown()
+    }
+
+    Console.log("")
+    Console.log("┌──────────────────────────────────────────────────────────────────────────────")
+    Console.log("│ [blaze${if (fast) " --fast" else ""}] Objective: $objective (${toolWrappers.size} tools)")
+
+    // Execute each tool sequentially
+    val recordedToolCalls = mutableListOf<RecordedToolCall>()
+    for (wrapper in toolWrappers) {
+      try {
+        toolExecutor(wrapper.trailblazeTool)
+        recordedToolCalls.add(RecordedToolCall(toolName = wrapper.name, args = emptyMap()))
+        Console.log("│ ✓ Executed: ${wrapper.name}")
+      } catch (e: Exception) {
+        Console.log("│ ✗ Failed: ${wrapper.name} — ${e.message}")
+        Console.log("└──────────────────────────────────────────────────────────────────────────────")
+        emitObjectiveComplete(promptStep, stepStartTime, success = false, failureReason = "Tool ${wrapper.name} failed: ${e.message}")
+        sessionContext?.recordStep(RecordedStep(
+          type = RecordedStepType.STEP,
+          input = objective,
+          toolCalls = recordedToolCalls,
+          result = "Failed at ${wrapper.name}: ${e.message}",
+          success = false,
+        ))
+        return StepResult(executed = true, error = "Tool ${wrapper.name} failed: ${e.message}").toMarkdown()
+      }
+    }
+
+    // In fast mode, skip post-action screen capture (the expensive part).
+    // The next command will capture fresh state if needed.
+    val screenSummary = if (fast) {
+      null
+    } else {
+      try {
+        screenSummaryProvider?.invoke(snapshotDetails)
+      } catch (e: Exception) {
+        Console.log("│ Screen summary capture failed: ${e.message}")
+        null
+      }
+    }
+
+    Console.log("└──────────────────────────────────────────────────────────────────────────────")
+
+    emitObjectiveComplete(promptStep, stepStartTime, success = true)
+    sessionContext?.recordStep(RecordedStep(
+      type = RecordedStepType.STEP,
+      input = objective,
+      toolCalls = recordedToolCalls,
+      result = "Executed ${toolWrappers.size} tools",
+      success = true,
+    ))
+
+    return StepResult(
+      executed = true,
+      done = true,
+      result = "Executed ${toolWrappers.size} tools for: $objective",
+      screenSummary = screenSummary,
+    ).toMarkdown()
+  }
+
   @LLMDescription(
     """
-    Ask a question, get an answer.
+    Observe the screen and optionally answer a question.
 
     ask(question="What's the current balance?")
     ask(question="What buttons are visible?")
-    ask(question="Is there an error message?")
+    ask(question="What's on screen?", includeScreenshot=true)
+    ask(question="Show me the layout", viewHierarchy="FULL")
 
-    Unlike blaze(hint="VERIFY"), this returns information - not pass/fail.
+    Returns a screen summary (visible text and elements) by default.
+    With an LLM configured, also answers questions about the screen.
+    Without an LLM, returns raw screen state — useful for external agents
+    that provide their own reasoning.
+
+    Use includeScreenshot=true to save a screenshot to disk and get the file path.
+    Use viewHierarchy to get the raw view hierarchy at different detail levels:
+      MINIMAL  — interactable elements with coordinates only
+      STANDARD — interactable elements with descriptions and hierarchy
+      FULL     — complete view tree including non-interactable elements
+
+    Unlike blaze(hint="VERIFY"), this returns information — not pass/fail.
     """
   )
   @Tool(McpToolProfile.TOOL_ASK)
   suspend fun ask(
     @LLMDescription("Your question (e.g., 'What's the current balance?')")
     question: String,
+    @LLMDescription("Save a screenshot to disk and return the file path (default: false)")
+    includeScreenshot: Boolean = false,
+    @LLMDescription("Include raw view hierarchy: MINIMAL, STANDARD, or FULL (default: not included)")
+    viewHierarchy: ViewHierarchyVerbosity? = null,
   ): String {
-    val traceId = TraceId.generate(TraceId.Companion.TraceOrigin.LLM)
-    val startTime = Clock.System.now()
-
-    val screenState = screenStateProvider()
+    val screenState = awaitScreenState()
     if (screenState == null) {
       val driverStatus = driverStatusProvider?.invoke()
         ?: "No device connected. Use device(action=ANDROID), device(action=IOS), or device(action=WEB) first."
@@ -286,45 +583,90 @@ class StepToolSet(
         error = driverStatus,
       ).toMarkdown()
     }
-    val recommendationContext = RecommendationContext(
-      objective = "Answer this question: $question",
-      progressSummary = null,
-      hint = "Put a direct, concise answer to the question in the `answer` field. If the question is about what's on the screen, the answer should just be the screen summary. Don't take any action.",
-      attemptNumber = 1,
-    )
 
-    val analysis = try {
-      screenAnalyzer.analyze(
-        context = recommendationContext,
-        screenState = screenState,
-        traceId = traceId,
-        availableTools = availableToolsProvider(),
+    // Screenshot: save to disk and return path (never inline base64)
+    val screenshotPath = if (includeScreenshot) {
+      val bytes = screenState.screenshotBytes
+      if (bytes != null && screenshotSaver != null) {
+        try {
+          screenshotSaver.invoke(bytes)
+        } catch (e: Exception) {
+          Console.error("[ask] Screenshot save failed: ${e.message}")
+          null
+        }
+      } else null
+    } else null
+
+    // View hierarchy at requested verbosity
+    val viewHierarchyText = if (viewHierarchy != null) {
+      ViewHierarchyFormatter.format(screenState, viewHierarchy)
+    } else null
+
+    // With LLM: answer the question using the AI agent
+    if (screenAnalyzer != null) {
+      val traceId = TraceId.generate(TraceId.Companion.TraceOrigin.LLM)
+      val startTime = Clock.System.now()
+
+      val recommendationContext = RecommendationContext(
+        objective = "Answer this question: $question",
+        progressSummary = null,
+        hint = "Put a direct, concise answer to the question in the `answer` field. If the question is about what's on the screen, the answer should just be the screen summary. Don't take any action.",
+        attemptNumber = 1,
       )
-    } catch (e: Exception) {
-      Console.error("[ask] screenAnalyzer.analyze() FAILED: ${e::class.simpleName}: ${e.message}")
-      emitAskLog(question, null, null, e.message, traceId, startTime)
-      return AskResult(
-        answer = null,
-        error = "Failed to analyze screen: ${e.message}",
-      ).toMarkdown()
+
+      val analysis = try {
+        screenAnalyzer.analyze(
+          context = recommendationContext,
+          screenState = screenState,
+          traceId = traceId,
+          availableTools = availableToolsProvider(),
+        )
+      } catch (e: Exception) {
+        Console.error("[ask] screenAnalyzer.analyze() FAILED: ${e::class.simpleName}: ${e.message}")
+        emitAskLog(question, null, null, e.message, traceId, startTime)
+        return AskResult(
+          answer = null,
+          error = "Failed to analyze screen: ${e.message}",
+          screenshotPath = screenshotPath,
+          viewHierarchy = viewHierarchyText,
+        ).toMarkdown()
+      }
+
+      Console.log("")
+      Console.log("┌──────────────────────────────────────────────────────────────────────────────")
+      Console.log("│ [ask] $question")
+      Console.log("│ Answer: ${analysis.screenSummary}")
+      Console.log("└──────────────────────────────────────────────────────────────────────────────")
+
+      val result = AskResult(
+        answer = analysis.answer ?: analysis.reasoning,
+        screenSummary = analysis.screenSummary,
+        screenshotPath = screenshotPath,
+        viewHierarchy = viewHierarchyText,
+      )
+
+      emitAskLog(question, result.answer, result.screenSummary, null, traceId, startTime)
+      return result.toMarkdown()
     }
+
+    // No-LLM fallback: return raw screen state for external agents
+    // ask() has no snapshotDetails parameter — always use default (no enrichment).
+    val screenSummary = try {
+      screenSummaryProvider?.invoke(emptySet())
+    } catch (_: Exception) { null }
 
     Console.log("")
     Console.log("┌──────────────────────────────────────────────────────────────────────────────")
-    Console.log("│ [ask] $question")
-    Console.log("│ Answer: ${analysis.screenSummary}")
+    Console.log("│ [ask] $question (no LLM — returning raw screen state)")
+    Console.log("│ Screen: ${screenSummary?.take(80) ?: "(no summary)"}")
     Console.log("└──────────────────────────────────────────────────────────────────────────────")
 
-    val result = AskResult(
-      answer = analysis.answer ?: analysis.reasoning,
-      screenSummary = analysis.screenSummary,
-    )
-
-    // Ask is for the outer agent's situational awareness only — not recorded in trails.
-    // Only blaze() calls (including hint="VERIFY") are tracked as trail steps.
-    emitAskLog(question, result.answer, result.screenSummary, null, traceId, startTime)
-
-    return result.toMarkdown()
+    return AskResult(
+      answer = "No AI provider configured — cannot interpret the screen. Run 'trailblaze config' to set up an AI provider, or use 'trailblaze snapshot' to see the raw UI tree. Raw screen state below.",
+      screenSummary = screenSummary,
+      screenshotPath = screenshotPath,
+      viewHierarchy = viewHierarchyText,
+    ).toMarkdown()
   }
 
   /**
@@ -471,19 +813,29 @@ data class AskResult(
   val answer: String?,
   val error: String? = null,
   val screenSummary: String? = null,
+  val screenshotPath: String? = null,
+  val viewHierarchy: String? = null,
 ) {
   fun toJson(): String = TrailblazeJsonInstance.encodeToString(serializer(), this)
 
   /** Human-readable markdown format for MCP tool responses. */
   fun toMarkdown(): String = buildString {
     if (error != null) {
-      append("**❌ Error** — $error")
+      append("**Error** — $error")
     } else if (answer != null) {
       append("**Answer:** $answer")
     }
 
     if (screenSummary != null) {
       append("\n\n**Screen:** $screenSummary")
+    }
+
+    if (screenshotPath != null) {
+      append("\n\n**Screenshot:** $screenshotPath")
+    }
+
+    if (viewHierarchy != null) {
+      append("\n\n**View Hierarchy:**\n$viewHierarchy")
     }
   }
 }

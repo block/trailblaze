@@ -198,7 +198,7 @@ class TrailComparatorTest {
         - step: Do something
           recording:
             tools:
-              - tap:
+              - tapOnPoint:
                   x: 100
                   y: 200
         - verify: Check result

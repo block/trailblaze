@@ -4,7 +4,6 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
 import maestro.orchestra.Command
 import xyz.block.trailblaze.api.ScreenState
-import xyz.block.trailblaze.api.TrailblazeAgent
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.device.AndroidDeviceCommandExecutor
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
@@ -13,16 +12,13 @@ import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.logs.model.TraceId
-import xyz.block.trailblaze.logs.model.TraceId.Companion.TraceOrigin
 import xyz.block.trailblaze.model.NodeSelectorMode
 import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
-import xyz.block.trailblaze.toolcalls.commands.memory.MemoryTrailblazeTool
 import xyz.block.trailblaze.toolcalls.isSuccess
-import xyz.block.trailblaze.utils.ElementComparator
 
 /**
  * Abstract class for Trailblaze agents that handle Maestro commands.
@@ -37,7 +33,7 @@ abstract class MaestroTrailblazeAgent(
   override val sessionProvider: TrailblazeSessionProvider,
   /** Controls nodeSelector vs legacy Maestro path for playback and recording. */
   val nodeSelectorMode: NodeSelectorMode = NodeSelectorMode.DEFAULT,
-) : TrailblazeAgent, TrailblazeAgentContext {
+) : BaseTrailblazeAgent() {
 
   /**
    * Whether this agent uses the accessibility driver instead of Maestro/UiAutomator.
@@ -49,8 +45,6 @@ abstract class MaestroTrailblazeAgent(
     commands: List<Command>,
     traceId: TraceId?,
   ): TrailblazeToolResult
-
-  override val memory = AgentMemory()
 
   /**
    * Executes a tap using the rich [TrailblazeNodeSelector], bypassing the Maestro command layer.
@@ -98,12 +92,10 @@ abstract class MaestroTrailblazeAgent(
     traceId: TraceId?,
   ): TrailblazeToolResult? = null
 
-  // Clear any variables that exist in the agent's memory between test runs
-  fun clearMemory() {
-    memory.clear()
-  }
-
-  @Deprecated("Prefer the suspend version of this function.")
+  @Deprecated(
+    message = "Use the suspend function runMaestroCommands() instead.",
+    replaceWith = ReplaceWith("runMaestroCommands(maestroCommands, traceId)"),
+  )
   fun runMaestroCommandsBlocking(
     maestroCommands: List<Command>,
     traceId: TraceId?,
@@ -124,23 +116,19 @@ abstract class MaestroTrailblazeAgent(
         traceId = traceId,
       )
       if (!result.isSuccess()) {
-        // Exit early if any command fails
         return result
       }
     }
     return TrailblazeToolResult.Success()
   }
 
-  override fun runTrailblazeTools(
-    tools: List<TrailblazeTool>,
-    traceId: TraceId?,
+  override fun buildExecutionContext(
+    traceId: TraceId,
     screenState: ScreenState?,
-    elementComparator: ElementComparator,
     screenStateProvider: (() -> ScreenState)?,
-  ): TrailblazeAgent.RunTrailblazeToolsResult {
-    val traceId = traceId ?: TraceId.generate(TraceOrigin.TOOL)
+  ): TrailblazeToolExecutionContext {
     val trailblazeDeviceInfo = trailblazeDeviceInfoProvider()
-    val trailblazeExecutionContext = TrailblazeToolExecutionContext(
+    return TrailblazeToolExecutionContext(
       screenState = screenState,
       traceId = traceId,
       trailblazeDeviceInfo = trailblazeDeviceInfo,
@@ -152,78 +140,46 @@ abstract class MaestroTrailblazeAgent(
       maestroTrailblazeAgent = this,
       nodeSelectorMode = nodeSelectorMode,
     )
-
-    val toolsExecuted = mutableListOf<TrailblazeTool>()
-    var lastSuccessResult: TrailblazeToolResult = TrailblazeToolResult.Success()
-    for (trailblazeTool in tools) {
-      when (trailblazeTool) {
-        is ExecutableTrailblazeTool -> {
-          toolsExecuted.add(trailblazeTool)
-          val result = handleExecutableToolBlocking(trailblazeTool, trailblazeExecutionContext)
-          if (!result.isSuccess()) {
-            // Exit early if any tool execution fails
-            return TrailblazeAgent.RunTrailblazeToolsResult(inputTools = toolsExecuted, executedTools = toolsExecuted, result = result)
-          }
-          lastSuccessResult = result
-        }
-
-        is DelegatingTrailblazeTool -> {
-          val mappedExecutableTools = trailblazeTool.toExecutableTrailblazeTools(trailblazeExecutionContext)
-          logDelegatingTool(
-            tool = trailblazeTool,
-            traceId = traceId,
-            executableTools = mappedExecutableTools,
-          )
-
-          val originalTools = listOf(trailblazeTool)
-
-          for (mappedTool in mappedExecutableTools) {
-            toolsExecuted.add(mappedTool)
-            val result = handleExecutableToolBlocking(mappedTool, trailblazeExecutionContext)
-            if (!result.isSuccess()) {
-              // Exit early if any tool execution fails
-              return TrailblazeAgent.RunTrailblazeToolsResult(inputTools = originalTools, executedTools = toolsExecuted, result = result)
-            }
-            lastSuccessResult = result
-          }
-        }
-
-        is MemoryTrailblazeTool -> {
-          // Execute the memory tool with the execution context and the handleMemoryTool lambda
-          // The lambda will call the TrailblazeElementComparator
-          trailblazeTool.execute(
-            memory = trailblazeExecutionContext.memory,
-            elementComparator = elementComparator,
-          )
-        }
-
-        is OtherTrailblazeTool -> throw TrailblazeException(
-          message = buildString {
-            appendLine("Unknown tool '${trailblazeTool.toolName}' is not registered and cannot be executed.")
-            appendLine("This usually means the tool's class is not in the custom tool classes for this app target.")
-            appendLine("Ensure the app target is selected (e.g., in the UI or via CLI) and that it registers this tool via getCustomToolsForDriver().")
-            appendLine("Raw parameters: ${trailblazeTool.raw}")
-          },
-        )
-
-        else -> throw TrailblazeException(
-          message = buildString {
-            appendLine("Unhandled Trailblaze tool ${trailblazeTool::class.java.simpleName} - ${trailblazeTool}.")
-            appendLine("Supported Trailblaze Tools must implement one of the following:")
-            appendLine("- ${ExecutableTrailblazeTool::class.java.simpleName}")
-            appendLine("- ${DelegatingTrailblazeTool::class.java.simpleName}")
-          },
-        )
-      }
-    }
-    return TrailblazeAgent.RunTrailblazeToolsResult(
-      inputTools = toolsExecuted,
-      executedTools = toolsExecuted,
-      result = lastSuccessResult,
-    )
   }
 
-  @Deprecated("Starting in Maestro 2.0.0 their api uses a suspend function. Prefer that implementation.")
+  override fun executeTool(
+    tool: TrailblazeTool,
+    context: TrailblazeToolExecutionContext,
+    toolsExecuted: MutableList<TrailblazeTool>,
+  ): TrailblazeToolResult {
+    return when (tool) {
+      is ExecutableTrailblazeTool -> {
+        toolsExecuted.add(tool)
+        handleExecutableToolBlocking(tool, context)
+      }
+      is DelegatingTrailblazeTool -> {
+        executeDelegatingTool(tool, context, toolsExecuted) { mappedTool ->
+          handleExecutableToolBlocking(mappedTool, context)
+        }
+      }
+      is OtherTrailblazeTool -> throw TrailblazeException(
+        message = buildString {
+          appendLine("Unknown tool '${tool.toolName}' is not registered and cannot be executed.")
+          appendLine("This usually means the tool's class is not in the custom tool classes for this app target.")
+          appendLine("Ensure the app target is selected (e.g., in the UI or via CLI) and that it registers this tool via getCustomToolsForDriver().")
+          appendLine("Raw parameters: ${tool.raw}")
+        },
+      )
+      else -> throw TrailblazeException(
+        message = buildString {
+          appendLine("Unhandled Trailblaze tool ${tool::class.java.simpleName} - ${tool}.")
+          appendLine("Supported Trailblaze Tools must implement one of the following:")
+          appendLine("- ${ExecutableTrailblazeTool::class.java.simpleName}")
+          appendLine("- ${DelegatingTrailblazeTool::class.java.simpleName}")
+        },
+      )
+    }
+  }
+
+  @Deprecated(
+    message = "Use the suspend function handleExecutableTool() instead.",
+    replaceWith = ReplaceWith("handleExecutableTool(trailblazeTool, trailblazeExecutionContext)"),
+  )
   private fun handleExecutableToolBlocking(
     trailblazeTool: ExecutableTrailblazeTool,
     trailblazeExecutionContext: TrailblazeToolExecutionContext,
@@ -247,5 +203,4 @@ abstract class MaestroTrailblazeAgent(
     )
     return trailblazeToolResult
   }
-
 }

@@ -4,6 +4,7 @@ import ai.koog.prompt.executor.clients.LLMClient
 import ai.koog.prompt.executor.llms.MultiLLMPromptExecutor
 import ai.koog.prompt.executor.model.PromptExecutor
 import ai.koog.prompt.llm.LLMProvider
+import io.ktor.client.HttpClient
 import xyz.block.trailblaze.http.DynamicLlmClient
 import xyz.block.trailblaze.http.TrailblazeHttpClientFactory
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
@@ -15,11 +16,9 @@ import xyz.block.trailblaze.llm.providers.TrailblazeDynamicLlmTokenProvider
 class TrailblazeHostDynamicLlmClientProvider(
   private val trailblazeLlmModel: TrailblazeLlmModel,
   val trailblazeDynamicLlmTokenProvider: TrailblazeDynamicLlmTokenProvider,
+  private val baseClient: HttpClient =
+    TrailblazeHttpClientFactory.createInsecureTrustAllCertsHttpClient(timeoutInSeconds = 120),
 ) : DynamicLlmClient {
-
-  private val baseClient = TrailblazeHttpClientFactory.createInsecureTrustAllCertsHttpClient(
-    timeoutInSeconds = 120,
-  )
 
   private val llmClients: Map<LLMProvider, LLMClient> = buildMap {
     trailblazeDynamicLlmTokenProvider.supportedProviders().forEach { llmProvider ->

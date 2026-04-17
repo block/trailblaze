@@ -14,28 +14,30 @@ plugins {
 
 kotlin {
 
-  @OptIn(ExperimentalWasmDsl::class)
-  wasmJs {
-    outputModuleName.set("composeApp")
-    browser {
-      val rootDirPath = project.rootDir.path
-      val projectDirPath = project.projectDir.path
-      commonWebpackConfig {
-        outputFileName = "composeApp.js"
-        // Optimize for embedding - ensure single file output
-        // Configure output for better embedding - use mode to optimize for single file output
-        mode =
-          if (project.hasProperty("production")) KotlinWebpackConfig.Mode.PRODUCTION else KotlinWebpackConfig.Mode.DEVELOPMENT
-        devServer = (devServer ?: KotlinWebpackConfig.DevServer()).apply {
-          static = (static ?: mutableListOf()).apply {
-            // Serve sources to debug inside browser
-            add(rootDirPath)
-            add(projectDirPath)
+  if (findProperty("trailblaze.wasm")?.toString()?.toBoolean() != false) {
+    @OptIn(ExperimentalWasmDsl::class)
+    wasmJs {
+      outputModuleName.set("composeApp")
+      browser {
+        val rootDirPath = project.rootDir.path
+        val projectDirPath = project.projectDir.path
+        commonWebpackConfig {
+          outputFileName = "composeApp.js"
+          // Optimize for embedding - ensure single file output
+          // Configure output for better embedding - use mode to optimize for single file output
+          mode =
+            if (project.hasProperty("production")) KotlinWebpackConfig.Mode.PRODUCTION else KotlinWebpackConfig.Mode.DEVELOPMENT
+          devServer = (devServer ?: KotlinWebpackConfig.DevServer()).apply {
+            static = (static ?: mutableListOf()).apply {
+              // Serve sources to debug inside browser
+              add(rootDirPath)
+              add(projectDirPath)
+            }
           }
         }
       }
+      binaries.executable()
     }
-    binaries.executable()
   }
   jvm {
     this.compilerOptions {
@@ -75,8 +77,10 @@ kotlin {
       implementation(libs.ktor.serialization.kotlinx.json)
 
     }
-    wasmJsMain.dependencies {
-      implementation(libs.ktor.client.js)
+    if (findProperty("trailblaze.wasm")?.toString()?.toBoolean() != false) {
+      wasmJsMain.dependencies {
+        implementation(libs.ktor.client.js)
+      }
     }
     jvmMain.dependencies {
       implementation(project(":trailblaze-models"))

@@ -12,7 +12,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.util.Console
 
 @Serializable
-@TrailblazeToolClass("playwright_verify_value")
+@TrailblazeToolClass("web_verify_value")
 @LLMDescription(
   """
 Verify the value of an element on the page. Supports checking:

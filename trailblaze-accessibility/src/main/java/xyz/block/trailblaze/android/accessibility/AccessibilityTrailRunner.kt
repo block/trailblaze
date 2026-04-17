@@ -6,6 +6,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
+import xyz.block.trailblaze.api.AgentActionType
 import xyz.block.trailblaze.api.AgentDriverAction
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.logs.client.TrailblazeLog
@@ -203,6 +204,9 @@ object AccessibilityTrailRunner {
       is AccessibilityAction.PressHome ->
         AgentDriverAction.PressHome
 
+      is AccessibilityAction.PressKey ->
+        AgentDriverAction.OtherAction(type = AgentActionType.PRESS_KEY)
+
       is AccessibilityAction.HideKeyboard ->
         AgentDriverAction.HideKeyboard
 
@@ -237,6 +241,40 @@ object AccessibilityTrailRunner {
 
       is AccessibilityAction.LaunchApp ->
         AgentDriverAction.LaunchApp(appId = action.appId)
+
+      // Clipboard actions have no dedicated AgentActionType; use closest existing types.
+      is AccessibilityAction.SetClipboard ->
+        AgentDriverAction.EnterText(text = "[clipboard] ${action.text}")
+
+      is AccessibilityAction.PasteText ->
+        AgentDriverAction.EnterText(text = "[paste]")
+
+      is AccessibilityAction.CopyTextFrom ->
+        AgentDriverAction.OtherAction(type = AgentActionType.ASSERT_CONDITION)
+
+      is AccessibilityAction.StopApp ->
+        AgentDriverAction.StopApp(appId = action.appId)
+
+      is AccessibilityAction.KillApp ->
+        AgentDriverAction.KillApp(appId = action.appId)
+
+      is AccessibilityAction.ClearState ->
+        AgentDriverAction.ClearAppState(appId = action.appId)
+
+      is AccessibilityAction.OpenLink ->
+        AgentDriverAction.OtherAction(type = AgentActionType.LAUNCH_APP)
+
+      is AccessibilityAction.SetOrientation ->
+        AgentDriverAction.OtherAction(type = AgentActionType.SWIPE)
+
+      is AccessibilityAction.SetAirplaneMode ->
+        AgentDriverAction.AirplaneMode(enable = action.enabled)
+
+      is AccessibilityAction.ToggleAirplaneMode ->
+        AgentDriverAction.AirplaneMode(enable = true) // Actual direction unknown at log time
+
+      is AccessibilityAction.ScrollUntilVisible ->
+        AgentDriverAction.Scroll(forward = action.direction == AccessibilityAction.Direction.DOWN)
 
       is AccessibilityAction.WaitForSettle ->
         AgentDriverAction.WaitForSettle(timeoutMs = action.timeoutMs)

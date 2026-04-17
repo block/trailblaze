@@ -11,6 +11,7 @@ import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.toolcalls.isSuccess
 
 @Serializable
 @TrailblazeToolClass("hideKeyboard")
@@ -31,10 +32,12 @@ class HideKeyboardTrailblazeTool : ExecutableTrailblazeTool {
       orientation = toolExecutionContext.trailblazeDeviceInfo.orientation,
     )
 
-    return toolExecutionContext.trailblazeAgent.runMaestroCommands(
+    val result = toolExecutionContext.trailblazeAgent.runMaestroCommands(
       maestroCommands = maestroCommands,
       traceId = toolExecutionContext.traceId,
     )
+    if (result.isSuccess()) return TrailblazeToolResult.Success(message = "Keyboard hidden")
+    return result
   }
 
   companion object {
@@ -53,8 +56,8 @@ class HideKeyboardTrailblazeTool : ExecutableTrailblazeTool {
      * Dismisses the keyboard on iOS with a short, gentle downward swipe above the keyboard.
      *
      * In landscape, Maestro's native hideKeyboard swipes at 50%,50%, which lands on the keyboard
-     * on iPad, so we instead swipe from 50%,30% to 50%,33% to stay above the keyboard while still
-     * triggering dismissal.
+     * on iPad, so we instead swipe from 50%,47% to 50%,50% to stay just above the keyboard while
+     * still triggering dismissal.
      *
      * In portrait, we use a similarly short downward swipe from 50%,60% to 50%,63%, starting just
      * above where the keyboard typically appears and moving slightly downward to gently nudge the
@@ -64,8 +67,8 @@ class HideKeyboardTrailblazeTool : ExecutableTrailblazeTool {
       return when (orientation) {
         TrailblazeDeviceOrientation.LANDSCAPE -> listOf(
           SwipeCommand(
-            startRelative = "50%,30%",
-            endRelative = "50%,33%",
+            startRelative = "50%,47%",
+            endRelative = "50%,50%",
             duration = 50,
           )
         )

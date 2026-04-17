@@ -6,6 +6,7 @@ import maestro.orchestra.Command
 import maestro.orchestra.OpenLinkCommand
 import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.toolcalls.MapsToMaestroCommands
+import xyz.block.trailblaze.toolcalls.ReasoningTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 
 @Serializable
@@ -18,7 +19,8 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 data class OpenUrlTrailblazeTool(
   @LLMDescription("The URL to open that starts with https")
   val url: String,
-) : MapsToMaestroCommands() {
+  override val reasoning: String? = null,
+) : MapsToMaestroCommands(), ReasoningTrailblazeTool {
   override fun toMaestroCommands(memory: AgentMemory): List<Command> = listOf(
     OpenLinkCommand(
       link = memory.interpolateVariables(url),

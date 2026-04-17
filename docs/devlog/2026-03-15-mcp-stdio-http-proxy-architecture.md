@@ -40,7 +40,7 @@ There are two sessions: Client-to-Proxy (never breaks) and Proxy-to-Daemon (brea
 
 **Separate command for now, unification later.** The proxy lives as `trailblaze mcp-proxy`. The long-term plan is for `trailblaze mcp` to become the proxy internally — it would auto-start the daemon if none is running (via `ensureServerRunning()`), then proxy to it. This matches how `trailblaze run` already works as a client of the daemon. For now, keeping them separate avoids touching the existing STDIO code path.
 
-**Never auto-kill the daemon.** When the proxy exits (client disconnects), it does not shut down the daemon — even if it could have started one. This avoids the edge case where multiple proxy instances share a daemon and one exiting kills it for the others. `trailblaze stop` is the explicit cleanup.
+**Never auto-kill the daemon.** When the proxy exits (client disconnects), it does not shut down the daemon — even if it could have started one. This avoids the edge case where multiple proxy instances share a daemon and one exiting kills it for the others. `trailblaze app --stop` is the explicit cleanup.
 
 ## Dead Ends Considered
 
@@ -58,7 +58,7 @@ trailblaze mcp-proxy
 trailblaze
 
 # After code changes:
-trailblaze stop
+trailblaze app --stop
 ./gradlew :trailblaze-host:classes
 trailblaze
 # Proxy reconnects automatically, MCP client doesn't notice

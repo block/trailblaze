@@ -19,11 +19,6 @@ const val AI_FALLBACK_DEFAULT: Boolean = false
  * making it easier to add new configuration parameters without modifying method signatures
  * throughout the codebase.
  *
- * Configuration must be explicitly created at the entry point of your test or application
- * and passed through the system, ensuring clarity about what configuration is being used.
- *
- * @property setOfMarkEnabled If true, uses Set of Mark tools for UI interaction;
- *                            if false, uses Device Control tools.
  * @property aiFallback If true, allows AI fallback when recorded steps fail;
  *                      if false, disables AI fallback (useful for debugging recorded steps).
  * @property browserHeadless If true, the Playwright browser runs headless (no visible window);
@@ -31,7 +26,6 @@ const val AI_FALLBACK_DEFAULT: Boolean = false
  */
 @Serializable
 data class TrailblazeConfig(
-  val setOfMarkEnabled: Boolean,
   val sendSessionStartLog: Boolean = true,
   val sendSessionEndLog: Boolean = true,
   /** Provide a non-null session ID to override the default session ID generation. */
@@ -39,18 +33,17 @@ data class TrailblazeConfig(
   val aiFallback: Boolean = AI_FALLBACK_DEFAULT,
   val browserHeadless: Boolean = true,
   val nodeSelectorMode: NodeSelectorMode = NodeSelectorMode.DEFAULT,
+  /**
+   * When true and using an on-device driver (accessibility or instrumentation), the agent
+   * loop runs on the host with individual tool calls dispatched to the device via RPC.
+   * When false, the entire agent loop runs on the device.
+   *
+   * Only applies when running from a host (desktop app / MCP). On device farms where there
+   * is no host, the agent always runs on-device regardless of this setting.
+   */
+  val preferHostAgent: Boolean = true,
 ) {
   companion object {
-    /**
-     * Default configuration with Set of Mark enabled and AI fallback disabled.
-     * Use this for most UI testing scenarios.
-     */
-    val DEFAULT = TrailblazeConfig(setOfMarkEnabled = true)
-
-    /**
-     * Configuration with Set of Mark disabled (uses Device Control instead).
-     * Use this for web testing or scenarios where Set of Mark is not suitable.
-     */
-    val DEVICE_CONTROL = TrailblazeConfig(setOfMarkEnabled = false)
+    val DEFAULT = TrailblazeConfig()
   }
 }
