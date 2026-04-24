@@ -297,4 +297,54 @@ class TrailblazeNodeMapperTest {
     assertEquals(1, result.children.size)
     assertEquals(4L, result.children[0].nodeId)
   }
+
+  // --- response-size guard ---
+  // The filter must not broaden beyond `isImportantForAccessibility`. A node
+  // that is editable / clickable / focusable or exposes interactive actions
+  // but is NOT marked important is dropped by default — users can reach it
+  // via the --all / ALL_ELEMENTS flag. This keeps the default tree compact.
+
+  private fun nodeWithDetail(
+    id: Long,
+    detail: DriverNodeDetail.AndroidAccessibility,
+    children: List<TrailblazeNode> = emptyList(),
+  ): TrailblazeNode = TrailblazeNode(
+    nodeId = id,
+    driverDetail = detail,
+    children = children,
+  )
+
+  @Test
+  fun `filterImportantForAccessibility drops non-important editable or clickable nodes`() {
+    // If this ever regresses to a broad keep-rule (editable / clickable /
+    // focusable / ACTION_SET_TEXT), every background view that happens to be
+    // clickable will start showing up and the snapshot will balloon. Per-signal
+    // coverage ensures we fail loudly if any single signal is added back.
+    val root = node(
+      1, true,
+      listOf(
+        nodeWithDetail(
+          10,
+          DriverNodeDetail.AndroidAccessibility(isImportantForAccessibility = false, isEditable = true),
+        ),
+        nodeWithDetail(
+          11,
+          DriverNodeDetail.AndroidAccessibility(isImportantForAccessibility = false, isClickable = true),
+        ),
+        nodeWithDetail(
+          12,
+          DriverNodeDetail.AndroidAccessibility(isImportantForAccessibility = false, isFocusable = true),
+        ),
+        nodeWithDetail(
+          13,
+          DriverNodeDetail.AndroidAccessibility(
+            isImportantForAccessibility = false,
+            actions = listOf("ACTION_SET_TEXT", "ACTION_CLICK"),
+          ),
+        ),
+      ),
+    )
+    val result = root.filterImportantForAccessibility()
+    assertEquals(0, result.children.size, "All non-important nodes should be dropped regardless of interactive signals")
+  }
 }

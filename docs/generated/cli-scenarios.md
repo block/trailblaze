@@ -6,13 +6,13 @@ Auto-generated from `@Scenario` test annotations. Each scenario has a passing te
 
 ### Configure CLI settings
 
-Read or write CLI configuration keys. Valid keys: llm, ai-fallback, agent, android-driver, ios-driver, mode, device, target. Values are validated before persisting.
+Read or write CLI configuration keys. Valid keys: llm, self-heal, agent, android-driver, ios-driver, mode, device, target. Values are validated before persisting.
 
 **CLI:**
 
 ```bash
 trailblaze config llm anthropic/claude-sonnet-4-6
-trailblaze config ai-fallback true
+trailblaze config self-heal true
 trailblaze config agent MULTI_AGENT_V3
 ```
 

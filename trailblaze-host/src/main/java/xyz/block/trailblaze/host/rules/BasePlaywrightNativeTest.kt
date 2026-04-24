@@ -12,7 +12,6 @@ import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.host.rules.TrailblazeHostLlmConfig.DEFAULT_TRAILBLAZE_LLM_MODEL
 import xyz.block.trailblaze.http.DynamicLlmClient
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
-import xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
@@ -22,15 +21,16 @@ import xyz.block.trailblaze.playwright.PlaywrightBrowserManager
 import xyz.block.trailblaze.playwright.PlaywrightNativeIdlingConfig
 import xyz.block.trailblaze.playwright.PlaywrightPageManager
 import xyz.block.trailblaze.playwright.PlaywrightTrailblazeAgent
-import xyz.block.trailblaze.playwright.tools.PlaywrightNativeToolSet
+import xyz.block.trailblaze.playwright.tools.WebToolSetIds
 import xyz.block.trailblaze.rules.TrailblazeLoggingRule
 import xyz.block.trailblaze.rules.TrailblazeRunnerUtil
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
+import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.yaml.TrailYamlItem
-import xyz.block.trailblaze.yaml.createTrailblazeYaml
+import xyz.block.trailblaze.yaml.TrailblazeYaml
 import xyz.block.trailblaze.util.toPascalCaseIdentifier
 import xyz.block.trailblaze.util.toSnakeCaseIdentifier
 import kotlin.reflect.KClass
@@ -50,7 +50,6 @@ class BasePlaywrightNativeTest(
     trailblazeDynamicLlmTokenProvider = TrailblazeHostDynamicLlmTokenProvider,
   ),
   customToolClasses: Set<KClass<out TrailblazeTool>> = setOf(),
-  allSerializationToolClasses: Set<KClass<out TrailblazeTool>> = customToolClasses,
   appTarget: TrailblazeHostAppTarget? = null,
   val trailblazeDeviceId: TrailblazeDeviceId,
   val idlingConfig: PlaywrightNativeIdlingConfig = PlaywrightNativeIdlingConfig(),
@@ -63,12 +62,6 @@ class BasePlaywrightNativeTest(
    */
   existingBrowserManager: PlaywrightPageManager? = null,
 ) {
-
-  init {
-    TrailblazeSerializationInitializer.initialize(
-      additionalToolClasses = allSerializationToolClasses,
-    )
-  }
 
   // When an existing browser is provided, the caller owns its lifecycle — close() will not
   // shut it down. When we create the browser ourselves, we own it and close() will shut it down.
@@ -89,7 +82,7 @@ class BasePlaywrightNativeTest(
       classifiers = listOf(TrailblazeDevicePlatform.WEB.asTrailblazeDeviceClassifier()),
     )
 
-  val loggingRule: TrailblazeLoggingRule = HostTrailblazeLoggingRule(
+  val loggingRule: HostTrailblazeLoggingRule = HostTrailblazeLoggingRule(
     trailblazeDeviceInfoProvider = { trailblazeDeviceInfo },
   )
 
@@ -99,13 +92,20 @@ class BasePlaywrightNativeTest(
       trailblazeLogger = loggingRule.logger,
       trailblazeDeviceInfoProvider = { trailblazeDeviceInfo },
       sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
+      trailblazeToolRepo = toolRepo,
     )
   }
 
-  private val toolRepo = TrailblazeToolRepo(
+  private val resolvedWebToolSet = TrailblazeToolSetCatalog.resolveForDriver(
+    driverType = TrailblazeDriverType.PLAYWRIGHT_NATIVE,
+    requestedIds = WebToolSetIds.ALL,
+  )
+
+  internal val toolRepo = TrailblazeToolRepo(
     TrailblazeToolSet.DynamicTrailblazeToolSet(
-      "Playwright Native Tool Set",
-      PlaywrightNativeToolSet.LlmToolSet.toolClasses + customToolClasses,
+      name = "Playwright Native Tool Set",
+      toolClasses = resolvedWebToolSet.toolClasses + customToolClasses,
+      yamlToolNames = resolvedWebToolSet.yamlToolNames,
     ),
   )
 
@@ -131,9 +131,7 @@ class BasePlaywrightNativeTest(
     )
   }
 
-  private val trailblazeYaml = createTrailblazeYaml(
-    customTrailblazeToolClasses = PlaywrightNativeToolSet.LlmToolSet.toolClasses + allSerializationToolClasses,
-  )
+  private val trailblazeYaml = TrailblazeYaml.Default
 
   private val trailblazeRunnerUtil by lazy {
     TrailblazeRunnerUtil(

@@ -196,14 +196,9 @@ private fun DrawScope.drawTrailblazeNodeOverlay(
     style = Stroke(width = strokeWidth)
   )
 
-  // Fill for interactive elements based on driver detail
-  val isInteractive = when (val detail = node.driverDetail) {
-    is DriverNodeDetail.AndroidAccessibility -> detail.isClickable || detail.isFocusable || detail.isScrollable
-    is DriverNodeDetail.AndroidMaestro -> detail.clickable || detail.focusable || detail.scrollable
-    is DriverNodeDetail.Web -> detail.isInteractive
-    is DriverNodeDetail.Compose -> detail.hasClickAction || detail.hasScrollAction
-    is DriverNodeDetail.IosMaestro -> detail.clickable || detail.focusable || detail.scrollable
-  }
+  // Fill for interactive elements based on the driver-native predicate centralized on
+  // DriverNodeDetail. Same concept surfaces in the tapOnPoint → ref hit-test.
+  val isInteractive = node.driverDetail.isInteractive
 
   if (isInteractive) {
     val fillAlpha = when {
@@ -315,6 +310,7 @@ private fun TrailblazeNodeTreeItem(
         is DriverNodeDetail.AndroidAccessibility -> "android"
         is DriverNodeDetail.AndroidMaestro -> "android"
         is DriverNodeDetail.IosMaestro -> "ios"
+        is DriverNodeDetail.IosAxe -> "ios-axe"
         is DriverNodeDetail.Web -> "web"
         is DriverNodeDetail.Compose -> "compose"
       }
@@ -389,6 +385,15 @@ private fun resolveDisplayText(node: TrailblazeNode): String {
         !detail.accessibilityText.isNullOrBlank() -> "[${detail.accessibilityText}]"
         !detail.resourceId.isNullOrBlank() -> "#${detail.resourceId}"
         !detail.className.isNullOrBlank() -> "<${detail.className?.substringAfterLast(".")}>"
+        else -> "(empty)"
+      }
+    }
+    is DriverNodeDetail.IosAxe -> {
+      when {
+        !detail.label.isNullOrBlank() -> "\"${detail.label}\""
+        !detail.value.isNullOrBlank() -> "[${detail.value}]"
+        !detail.uniqueId.isNullOrBlank() -> "#${detail.uniqueId}"
+        !detail.type.isNullOrBlank() -> "<${detail.type}>"
         else -> "(empty)"
       }
     }
@@ -490,6 +495,7 @@ internal fun TrailblazeNodeDetailsPanel(
           is DriverNodeDetail.AndroidAccessibility -> "Android Properties"
           is DriverNodeDetail.AndroidMaestro -> "Android Properties"
           is DriverNodeDetail.IosMaestro -> "iOS Properties"
+          is DriverNodeDetail.IosAxe -> "iOS AXe Properties"
           is DriverNodeDetail.Web -> "Web Properties"
           is DriverNodeDetail.Compose -> "Compose Properties"
         }
@@ -749,7 +755,29 @@ private fun DriverNodeDetailProperties(
     is DriverNodeDetail.Web -> WebProperties(detail, fontScale)
     is DriverNodeDetail.Compose -> ComposeProperties(detail, fontScale)
     is DriverNodeDetail.IosMaestro -> IosMaestroProperties(detail, fontScale)
+    is DriverNodeDetail.IosAxe -> IosAxeProperties(detail, fontScale)
   }
+}
+
+@Composable
+private fun IosAxeProperties(
+  detail: DriverNodeDetail.IosAxe,
+  fontScale: Float,
+) {
+  detail.role?.let { TrailblazeDetailRow(label = "Role", value = it, fontScale = fontScale) }
+  detail.subrole?.let { TrailblazeDetailRow(label = "Subrole", value = it, fontScale = fontScale) }
+  detail.roleDescription?.let { TrailblazeDetailRow(label = "Role Description", value = it, fontScale = fontScale) }
+  detail.type?.let { TrailblazeDetailRow(label = "Type", value = it, fontScale = fontScale) }
+  detail.label?.let { TrailblazeDetailRow(label = "Label", value = it, fontScale = fontScale) }
+  detail.value?.let { TrailblazeDetailRow(label = "Value", value = it, fontScale = fontScale) }
+  detail.uniqueId?.let { TrailblazeDetailRow(label = "AX Identifier", value = it, fontScale = fontScale) }
+  detail.title?.let { TrailblazeDetailRow(label = "Title", value = it, fontScale = fontScale) }
+  detail.help?.let { TrailblazeDetailRow(label = "Help", value = it, fontScale = fontScale) }
+  if (detail.customActions.isNotEmpty()) {
+    TrailblazeDetailRow(label = "Custom Actions", value = detail.customActions.joinToString(", "), fontScale = fontScale)
+  }
+  TrailblazeDetailRow(label = "Enabled", value = detail.enabled.toString(), fontScale = fontScale)
+  detail.pid?.let { TrailblazeDetailRow(label = "PID", value = it.toString(), fontScale = fontScale) }
 }
 
 @Composable

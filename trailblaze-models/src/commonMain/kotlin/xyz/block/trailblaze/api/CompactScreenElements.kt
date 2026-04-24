@@ -64,5 +64,15 @@ data class CompactScreenElements(
       val r = IosCompactElementList.build(tree, details, screenHeight, screenWidth)
       return CompactScreenElements(r.text, r.elementNodeIds, r.elementBounds, r.refMapping)
     }
+
+    fun buildForIosAxe(
+      tree: TrailblazeNode,
+      details: Set<SnapshotDetail> = emptySet(),
+      screenHeight: Int = 0,
+      screenWidth: Int = 0,
+    ): CompactScreenElements {
+      val r = IosAxeCompactElementList.build(tree, details, screenHeight, screenWidth)
+      return CompactScreenElements(r.text, r.elementNodeIds, r.elementBounds, r.refMapping)
+    }
   }
 }

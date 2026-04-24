@@ -13,7 +13,7 @@
  *   - driver-&#42;/maestro-driver-ios*.zip            (Maestro iOS XCTest bundles)
  *
  * Usage in a build.gradle.kts:
- *   apply(from = rootProject.file("opensource/gradle/proguard-utils.gradle.kts"))
+ *   apply(from = rootProject.file("gradle/proguard-utils.gradle.kts"))
  *   val proguardInjarsResourceFilter: String by extra
  *   val restoreArchiveEntries: (File, File) -> Unit by extra
  */

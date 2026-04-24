@@ -20,9 +20,15 @@ class DriverTypeKeyTest {
   }
 
   @Test
-  fun `ios resolves to IOS_HOST only`() {
+  fun `ios resolves to all iOS driver types`() {
+    // The "ios" platform shorthand covers every iOS driver (except Revyl, which is
+    // cloud-hosted). Toolsets that declare `drivers: [ios]` apply to both IOS_HOST
+    // (Maestro/XCUITest) and IOS_AXE (direct AXe CLI).
     assertEquals(
-      setOf(TrailblazeDriverType.IOS_HOST),
+      setOf(
+        TrailblazeDriverType.IOS_HOST,
+        TrailblazeDriverType.IOS_AXE,
+      ),
       DriverTypeKey.resolve("ios"),
     )
   }
@@ -30,6 +36,11 @@ class DriverTypeKeyTest {
   @Test
   fun `ios-host resolves to IOS_HOST only`() {
     assertEquals(setOf(TrailblazeDriverType.IOS_HOST), DriverTypeKey.resolve("ios-host"))
+  }
+
+  @Test
+  fun `ios-axe resolves to IOS_AXE only`() {
+    assertEquals(setOf(TrailblazeDriverType.IOS_AXE), DriverTypeKey.resolve("ios-axe"))
   }
 
   @Test

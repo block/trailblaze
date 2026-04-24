@@ -135,8 +135,8 @@ abstract class TrailblazeDesktopAppConfig(
   abstract val appIconProvider: AppIconProvider
 
   /**
-   * Provider for device classifier icons. Internal builds can override
-   * to add custom icons for customized use cases.
+   * Provider for device classifier icons. Downstream builds can override to add
+   * custom icons for project-specific device categories.
    */
   open val deviceClassifierIconProvider: DeviceClassifierIconProvider =
     DefaultDeviceClassifierIconProvider
@@ -159,6 +159,14 @@ abstract class TrailblazeDesktopAppConfig(
     val serverState = trailblazeSettingsRepo.serverStateFlow.value
     val savedProviderId = serverState.appConfig.llmProvider
     val savedModelId: String = serverState.appConfig.llmModel
+
+    // `trailblaze config llm none` disables the LLM entirely. Return a sentinel model so
+    // downstream client resolution picks NoOpLlmClient, which fails fast if any step needs
+    // live inference — rather than silently falling through to the hardcoded default.
+    if (savedProviderId == TrailblazeLlmProvider.NONE.id) {
+      return TrailblazeLlmModel.fallback(TrailblazeLlmProvider.NONE, savedModelId)
+    }
+
     val currentProviderModelList =
       getCurrentlyAvailableLlmModelLists().firstOrNull { it.provider.id == savedProviderId }
         ?: defaultProviderModelList
@@ -178,6 +186,10 @@ abstract class TrailblazeDesktopAppConfig(
    * exactly. Returns null if no match is found.
    */
   fun resolveLlmModel(providerId: String?, modelId: String?): TrailblazeLlmModel? {
+    // `--llm-provider none` disables the LLM; no model list lookup needed.
+    if (providerId.equals(TrailblazeLlmProvider.NONE.id, ignoreCase = true)) {
+      return TrailblazeLlmModel.fallback(TrailblazeLlmProvider.NONE, modelId ?: TrailblazeLlmProvider.NONE.id)
+    }
     val allModelLists = getAllSupportedLlmModelLists()
     val providerLists = if (providerId != null) {
       allModelLists.filter { it.provider.id.equals(providerId, ignoreCase = true) }

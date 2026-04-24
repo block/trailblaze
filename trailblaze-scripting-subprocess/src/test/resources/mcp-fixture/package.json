@@ -1,0 +1,15 @@
+{
+  "name": "trailblaze-subprocess-ts-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Real-SDK MCP server used by SubprocessRuntimeEndToEndTest's opt-in TypeScript path. See fixture.ts.",
+  "type": "module",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "zod": "4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "25.6.0",
+    "typescript": "6.0.3"
+  }
+}

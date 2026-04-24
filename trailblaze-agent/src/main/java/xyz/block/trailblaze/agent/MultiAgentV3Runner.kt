@@ -10,6 +10,7 @@ import xyz.block.trailblaze.agent.blaze.initialBlazeState
 import xyz.block.trailblaze.agent.trail.DeterministicTrailExecutor
 import xyz.block.trailblaze.agent.trail.DefaultConditionChecker
 import xyz.block.trailblaze.logs.client.LogEmitter
+import xyz.block.trailblaze.logs.client.TrailblazeSessionManager
 import xyz.block.trailblaze.agent.trail.EnhancedRecording
 import xyz.block.trailblaze.agent.trail.RecordingValidator
 import xyz.block.trailblaze.agent.trail.RecoveryStrategy
@@ -99,7 +100,7 @@ class MultiAgentV3Runner private constructor(
    */
   suspend fun blaze(
     objective: String,
-    sessionId: SessionId = SessionId.generate(),
+    sessionId: SessionId = TrailblazeSessionManager.generateSessionId("blaze"),
   ): BlazeResult {
     val startTime = System.currentTimeMillis()
 
@@ -175,7 +176,7 @@ class MultiAgentV3Runner private constructor(
     steps: List<PromptStep>,
     recordings: List<EnhancedRecording>? = null,
     config: TrailConfig = TrailConfig.DEFAULT,
-    sessionId: SessionId = SessionId.generate(),
+    sessionId: SessionId = TrailblazeSessionManager.generateSessionId("trail_with_recordings"),
   ): TrailResult {
     val startTime = System.currentTimeMillis()
 
@@ -254,7 +255,7 @@ class MultiAgentV3Runner private constructor(
   suspend fun trail(
     steps: List<PromptStep>,
     config: TrailConfig = TrailConfig.DEFAULT,
-    sessionId: SessionId = SessionId.generate(),
+    sessionId: SessionId = TrailblazeSessionManager.generateSessionId("trail"),
     initialActionHistory: List<String> = emptyList(),
   ): TrailResult {
     val startTime = System.currentTimeMillis()

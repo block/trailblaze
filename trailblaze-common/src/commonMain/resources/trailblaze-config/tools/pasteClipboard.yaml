@@ -1,0 +1,2 @@
+id: pasteClipboard
+class: xyz.block.trailblaze.toolcalls.commands.PasteClipboardTrailblazeTool

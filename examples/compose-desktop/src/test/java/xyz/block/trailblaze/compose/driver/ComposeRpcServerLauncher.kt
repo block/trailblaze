@@ -6,7 +6,6 @@ import kotlin.test.Ignore
 import kotlin.test.Test
 import xyz.block.trailblaze.compose.driver.rpc.ComposeRpcServer
 import xyz.block.trailblaze.compose.target.ComposeUiTestTarget
-import xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer
 import xyz.block.trailblaze.util.Console
 
 /**
@@ -14,16 +13,12 @@ import xyz.block.trailblaze.util.Console
  *
  * Run this test, then in a separate terminal execute:
  * ```
- * ./trailblaze trail opensource/trails/compose-desktop/test-add-todo/desktop.trail.yaml --use-recorded-steps
+ * ./trailblaze trail trails/compose-desktop/test-add-todo/desktop.trail.yaml --use-recorded-steps
  * ```
  */
 @Ignore("Interactive server launchers for local CLI testing — not meant for CI")
 @OptIn(ExperimentalTestApi::class)
 class ComposeRpcServerLauncher {
-
-  init {
-    TrailblazeSerializationInitializer.initialize()
-  }
 
   @Test
   fun `start SampleTodoApp server`() = runComposeUiTest {

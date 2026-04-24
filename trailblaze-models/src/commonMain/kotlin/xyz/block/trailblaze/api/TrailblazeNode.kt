@@ -160,6 +160,8 @@ fun TrailblazeNode.describe(): String {
       detail.resolveText() to detail.className?.substringAfterLast('.')
     is DriverNodeDetail.IosMaestro ->
       detail.resolveText() to detail.className
+    is DriverNodeDetail.IosAxe ->
+      detail.resolveText() to detail.type
     is DriverNodeDetail.Compose ->
       detail.resolveText() to detail.role
     is DriverNodeDetail.Web ->

@@ -19,7 +19,6 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
-import xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.model.SessionId
@@ -44,10 +43,6 @@ import xyz.block.trailblaze.util.Console
  */
 @OptIn(ExperimentalTestApi::class)
 class ComposeTrailFileTest {
-
-  init {
-    TrailblazeSerializationInitializer.initialize()
-  }
 
   private val trailblazeYaml = TrailblazeYaml.Default
 

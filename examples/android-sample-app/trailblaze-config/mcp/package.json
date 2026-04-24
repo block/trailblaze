@@ -1,0 +1,15 @@
+{
+  "name": "trailblaze-sample-app-mcp-tools",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MCP tools shipped with the Trailblaze android-sample-app example. See tools.ts.",
+  "type": "module",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "zod": "4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "25.6.0",
+    "typescript": "6.0.3"
+  }
+}

@@ -64,7 +64,7 @@ UI code lives primarily in `trailblaze-ui` (shared components) and `trailblaze-d
 The project uses Gradle with Kotlin DSL and a multi-module structure:
 
 ```
-opensource/
+.
 ├── build.gradle.kts              # Root build configuration
 ├── gradle/libs.versions.toml     # Centralized dependency versions
 ├── trailblaze-agent/             # Core agent logic

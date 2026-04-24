@@ -5,10 +5,10 @@
 # then builds a combined markdown report at
 # docs/benchmarks/android-world-benchmarks.md.
 #
-# Usage:
-#   bash opensource/trails/benchmarks/android_world/benchmark.sh
-#   bash opensource/trails/benchmarks/android_world/benchmark.sh --filter clock
-#   bash opensource/trails/benchmarks/android_world/benchmark.sh --filter "clock/timer_entry"
+# Usage (run from the repo root):
+#   bash trails/benchmarks/android_world/benchmark.sh
+#   bash trails/benchmarks/android_world/benchmark.sh --filter clock
+#   bash trails/benchmarks/android_world/benchmark.sh --filter "clock/timer_entry"
 #
 # Options:
 #   --filter <pattern>   Only run trails whose path contains <pattern>
@@ -20,8 +20,12 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-ROOT_DIR="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
-BENCHMARK_MD_DIR="$ROOT_DIR/opensource/docs/benchmarks"
+# Walk up three levels from trails/benchmarks/android_world/ to land at the repo root
+# (for the standalone layout) or at the embedded Trailblaze root (for a nested layout
+# where Trailblaze lives as a subdirectory of a larger repo). Either way the
+# docs/benchmarks/ output directory sits directly underneath this root.
+ROOT_DIR="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+BENCHMARK_MD_DIR="$ROOT_DIR/docs/benchmarks"
 TRAILS_DIR="$SCRIPT_DIR"
 
 # Parse arguments
@@ -158,5 +162,5 @@ mkdir -p "$BENCHMARK_MD_DIR"
   done
 } > "$COMBINED_MD"
 
-echo "Markdown report: opensource/docs/benchmarks/android-world-benchmarks.md"
+echo "Markdown report: docs/benchmarks/android-world-benchmarks.md"
 echo ""

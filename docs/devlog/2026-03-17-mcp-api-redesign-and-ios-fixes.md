@@ -17,12 +17,12 @@ A session of design discussion and bug fixes covering: collapsing `verify()` int
 ### Session progress UI: child tool blocks inside objectives
 - **Problem:** In MCP mode, tool logs (e.g. `launchApp`) arrive *after* `ObjectiveCompleteLog` due to fire-and-forget timing. They were rendering as a separate sibling row rather than inside the objective's expanded section.
 - **Fix:** `buildProgressItems` (SessionProgressHelpers.kt) now gathers `toolsBetween` before emitting the `ObjectiveItem` so a `ToolBlockItem` always follows its parent. The composable (`SessionProgressComposable.kt`) was updated to pass the child tool block into `ObjectiveStepRow` and render it inside the `AnimatedVisibility` expanded section. Sibling rendering with `padding(start=32.dp)` was removed.
-- **Files:** `opensource/trailblaze-ui/src/commonMain/kotlin/xyz/block/trailblaze/ui/tabs/session/SessionProgressComposable.kt`, `SessionProgressHelpers.kt`
+- **Files:** `trailblaze-ui/src/commonMain/kotlin/xyz/block/trailblaze/ui/tabs/session/SessionProgressComposable.kt`, `SessionProgressHelpers.kt`
 
 ### iOS launchApp on system apps
 - **Problem:** `launchApp(appId="com.apple.mobilecal", launchMode=REINSTALL)` always failed on iOS system apps because `clearState=true` triggers `simctl erase`/uninstall, which is prohibited for system-defined apps. The exception was thrown before the actual launch.
 - **Fix:** `Orchestra.kt` now catches `clearAppState` and `setPermissions` failures individually, logs warnings, and proceeds to `maestro.launchApp()` rather than aborting. This makes `launchApp` resilient for system apps without breaking user app behavior.
-- **File:** `opensource/trailblaze-android/src/main/java/xyz/block/trailblaze/android/maestro/orchestra/Orchestra.kt`
+- **File:** `trailblaze-android/src/main/java/xyz/block/trailblaze/android/maestro/orchestra/Orchestra.kt`
 
 ---
 

@@ -7,6 +7,9 @@ import xyz.block.trailblaze.capture.CaptureStream
 import xyz.block.trailblaze.capture.DeviceClock
 import xyz.block.trailblaze.capture.model.CaptureArtifact
 import xyz.block.trailblaze.capture.model.CaptureType
+import xyz.block.trailblaze.devices.TrailblazeDeviceId
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.util.AndroidHostAdbUtils
 import xyz.block.trailblaze.util.Console
 
 /**
@@ -93,8 +96,10 @@ class AndroidVideoCapture : CaptureStream {
 
     // Stop screenrecord on device
     try {
-      ProcessBuilder("adb", "-s", dev, "shell", "pkill", "-INT", "screenrecord")
-        .redirectErrorStream(true)
+      AndroidHostAdbUtils.createAdbCommandProcessBuilder(
+          args = listOf("shell", "pkill", "-INT", "screenrecord"),
+          deviceId = TrailblazeDeviceId(dev, TrailblazeDevicePlatform.ANDROID),
+        )
         .start()
         .waitFor()
       // Give screenrecord time to finalize the MP4
@@ -118,8 +123,10 @@ class AndroidVideoCapture : CaptureStream {
       val localFile = File(dir, File(segment).name)
       try {
         val pullProcess =
-          ProcessBuilder("adb", "-s", dev, "pull", segment, localFile.absolutePath)
-            .redirectErrorStream(true)
+          AndroidHostAdbUtils.createAdbCommandProcessBuilder(
+              args = listOf("pull", segment, localFile.absolutePath),
+              deviceId = TrailblazeDeviceId(dev, TrailblazeDevicePlatform.ANDROID),
+            )
             .start()
         val pullOutput = pullProcess.inputStream.bufferedReader().readText()
         pullProcess.waitFor()
@@ -137,8 +144,10 @@ class AndroidVideoCapture : CaptureStream {
     // Clean up device files
     for (segment in segmentsSnapshot) {
       try {
-        ProcessBuilder("adb", "-s", dev, "shell", "rm", "-f", segment)
-          .redirectErrorStream(true)
+        AndroidHostAdbUtils.createAdbCommandProcessBuilder(
+            args = listOf("shell", "rm", "-f", segment),
+            deviceId = TrailblazeDeviceId(dev, TrailblazeDevicePlatform.ANDROID),
+          )
           .start()
           .waitFor()
       } catch (_: Exception) {}
@@ -203,8 +212,10 @@ class AndroidVideoCapture : CaptureStream {
   private fun getDeviceDisplaySize(deviceId: String): Pair<Int, Int>? {
     try {
       val proc =
-        ProcessBuilder("adb", "-s", deviceId, "shell", "wm", "size")
-          .redirectErrorStream(true)
+        AndroidHostAdbUtils.createAdbCommandProcessBuilder(
+            args = listOf("shell", "wm", "size"),
+            deviceId = TrailblazeDeviceId(deviceId, TrailblazeDevicePlatform.ANDROID),
+          )
           .start()
       val output = proc.inputStream.bufferedReader().readText().trim()
       proc.waitFor(5, TimeUnit.SECONDS)
@@ -226,11 +237,15 @@ class AndroidVideoCapture : CaptureStream {
 
     synchronized(deviceSegments) { deviceSegments.add(devicePath) }
 
+    val trailblazeDeviceId = TrailblazeDeviceId(dev, TrailblazeDevicePlatform.ANDROID)
+
     // Gracefully stop any previous recording so the MP4 container is finalized.
     // destroyForcibly() would corrupt the segment — mirror the SIGINT approach from stop().
     try {
-      ProcessBuilder("adb", "-s", dev, "shell", "pkill", "-INT", "screenrecord")
-        .redirectErrorStream(true)
+      AndroidHostAdbUtils.createAdbCommandProcessBuilder(
+          args = listOf("shell", "pkill", "-INT", "screenrecord"),
+          deviceId = trailblazeDeviceId,
+        )
         .start()
         .waitFor()
       Thread.sleep(500) // Brief wait for MP4 finalization
@@ -240,19 +255,18 @@ class AndroidVideoCapture : CaptureStream {
 
     try {
       process =
-        ProcessBuilder(
-            "adb",
-            "-s",
-            dev,
-            "shell",
-            "screenrecord",
-            "--size",
-            videoSize,
-            "--bit-rate",
-            BIT_RATE,
-            devicePath,
+        AndroidHostAdbUtils.createAdbCommandProcessBuilder(
+            args = listOf(
+              "shell",
+              "screenrecord",
+              "--size",
+              videoSize,
+              "--bit-rate",
+              BIT_RATE,
+              devicePath,
+            ),
+            deviceId = trailblazeDeviceId,
           )
-          .redirectErrorStream(true)
           .start()
     } catch (e: Exception) {
       Console.log("Failed to start screenrecord segment $index: ${e.message}")

@@ -48,4 +48,11 @@ data class RecommendationContext(
   val attemptNumber: Int = 1,
   /** Text-only mode: skip screenshots, use text-only screen analysis (no vision tokens), and skip disk logging. */
   val fast: Boolean = false,
+  /**
+   * True when [objective] is a verification assertion (YAML `verify:`), not an instruction
+   * (YAML `step:`). For verification steps the agent should call `objectiveStatus` as soon as
+   * the screen matches the description — taking a UI action defeats the assertion. The analyzer
+   * uses this to flip its default "prefer action over status" guidance.
+   */
+  val isVerification: Boolean = false,
 )

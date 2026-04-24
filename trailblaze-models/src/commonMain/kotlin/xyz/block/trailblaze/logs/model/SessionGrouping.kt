@@ -40,13 +40,19 @@ data class SessionGroup(
 }
 
 /**
- * Groups sessions by [SessionInfo.displayName] and picks the best result per test.
+ * Groups sessions by [SessionInfo.displayName] and device classifiers, then picks the best result
+ * per group.
  *
  * This provides a deduplicated view of sessions where retried tests appear once
  * (with the best outcome), while still preserving access to all attempts.
+ * Sessions on different devices are kept separate so that per-device pass/fail is accurate.
  */
 fun List<SessionInfo>.groupByTest(): List<SessionGroup> {
-  return groupBy { it.displayName }
+  return groupBy { session ->
+    val classifierKey = session.trailblazeDeviceInfo?.classifiers
+      ?.joinToString(",") { it.classifier } ?: ""
+    session.displayName to classifierKey
+  }
     .values
     .map { attempts ->
       val sorted = attempts.sortedBy { it.timestamp }

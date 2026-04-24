@@ -24,7 +24,14 @@ fun toPascalCaseIdentifier(input: String, prefixIfStartsWithDigit: String = "C")
   return result
 }
 
-/** Returns a snake_case identifier generated directly from arbitrary input. */
+/**
+ * Returns a snake_case identifier generated directly from arbitrary input.
+ *
+ * Not for session IDs. For session-ID sanitization use
+ * `SessionId.sanitized` — it is idempotent and preserves long suffixes
+ * (e.g., TestRail `__suite__section__case`), which this helper would
+ * collapse into a single underscore.
+ */
 fun toSnakeCaseIdentifier(input: String, prefixIfStartsWithDigit: String = "c_"): String {
   val baseName = stripPathAndExtension(input)
   var cleaned = baseName.replace(Regex("[^A-Za-z0-9]"), "_")

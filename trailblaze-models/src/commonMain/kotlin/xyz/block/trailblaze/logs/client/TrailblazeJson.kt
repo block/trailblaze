@@ -19,10 +19,16 @@ object TrailblazeJson {
 
   fun createTrailblazeJsonInstance(
     allToolClasses: Map<ToolName, KClass<out TrailblazeTool>>,
-  ): Json = createTrailblazeJsonInstance(allToolClasses, {})
+  ): Json = createTrailblazeJsonInstance(allToolClasses, emptyMap(), {})
 
   fun createTrailblazeJsonInstance(
     allToolClasses: Map<ToolName, KClass<out TrailblazeTool>>,
+    yamlDefinedSerializers: Map<ToolName, KSerializer<out TrailblazeTool>>,
+  ): Json = createTrailblazeJsonInstance(allToolClasses, yamlDefinedSerializers, {})
+
+  fun createTrailblazeJsonInstance(
+    allToolClasses: Map<ToolName, KClass<out TrailblazeTool>>,
+    yamlDefinedSerializers: Map<ToolName, KSerializer<out TrailblazeTool>>,
     serializerModuleModifier: (SerializersModuleBuilder) -> Unit,
   ): Json = Json {
     classDiscriminator = "class" // Key to determine subclass
@@ -45,7 +51,7 @@ object TrailblazeJson {
         value::class.serializer() as? KSerializer<SessionStatus>
       }
 
-      this.registerTrailblazeToolSerializer(allToolClasses)
+      this.registerTrailblazeToolSerializer(allToolClasses, yamlDefinedSerializers)
 
       serializerModuleModifier(this)
     }

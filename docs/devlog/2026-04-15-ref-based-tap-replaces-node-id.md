@@ -47,7 +47,6 @@ Key properties:
 ### Updated
 
 - `TrailblazeToolSetCatalog` — `TapTrailblazeTool` is now the only tap-by-element tool in the core set.
-- `ToolSetCategory.getInnerAgentMinimalTools()` — uses `TapTrailblazeTool` instead.
 - `DirectMcpAgent` system prompt — instructs the LLM to use `tap` with ref IDs instead of `tapOnElementByNodeId` with node IDs.
 - `CoreTools` — added `TAP = "tap"` constant, added to `TAP_NAMES` for classification.
 

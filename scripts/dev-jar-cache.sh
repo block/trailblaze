@@ -29,9 +29,6 @@ dev_source_hash() {
 dev_jar_dir() {
   local module_dir="${TRAILBLAZE_MODULE#:}"
   module_dir="${module_dir//://}"
-  if [ -d "opensource/$module_dir" ]; then
-    module_dir="opensource/$module_dir"
-  fi
   echo "$module_dir/build/compose/jars"
 }
 
@@ -102,10 +99,26 @@ dev_ensure_jar() {
       return 1
     fi
     echo "$current_hash" > "$hash_file"
+    dev_prune_stale_siblings "$jar_dir" "$jar_path"
   fi
 
   DEV_JAR_PATH="$jar_path"
   return 0
+}
+
+# Delete old timestamped JARs (and their CDS .jsa siblings) kept around by the
+# Compose plugin — we only ever use the newest one, and each old JAR/JSA pair
+# is ~270MB + ~30MB of stale debris.
+dev_prune_stale_siblings() {
+  local jar_dir="$1"
+  local keep_jar="$2"
+  find "$jar_dir" -maxdepth 1 -type f \( -name '*.jar' -o -name '*.jsa' \) 2>/dev/null \
+    | while IFS= read -r f; do
+        case "$f" in
+          "$keep_jar"|"${keep_jar%.jar}.jsa") ;;  # keep the current pair
+          *) rm -f "$f" ;;
+        esac
+      done
 }
 
 # Rebuild the uber JAR so the next default run (JAR mode) starts instantly.
@@ -116,10 +129,13 @@ dev_update_jar_cache() {
   if [ $? -eq 0 ]; then
     local hash=$(dev_source_hash)
     echo "$hash" > "$jar_dir/.blaze-source-hash"
+    local jar_path
+    jar_path=$(dev_find_jar "$jar_dir")
+    [ -n "$jar_path" ] && dev_prune_stale_siblings "$jar_dir" "$jar_path"
   fi
 }
 
-# JVM args matching production launcher (opensource/scripts/trailblaze).
+# JVM args matching production launcher (scripts/trailblaze).
 DEV_JVM_ARGS="-Xmx4g"
 if [[ "$(uname)" == "Darwin" ]]; then
   DEV_JVM_ARGS="$DEV_JVM_ARGS --add-opens java.desktop/sun.awt=ALL-UNNAMED --add-opens java.desktop/sun.lwawt=ALL-UNNAMED --add-opens java.desktop/sun.lwawt.macosx=ALL-UNNAMED"

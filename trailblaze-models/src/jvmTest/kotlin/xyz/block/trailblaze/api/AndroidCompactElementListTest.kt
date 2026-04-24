@@ -494,6 +494,43 @@ class AndroidCompactElementListTest {
   }
 
   @Test
+  fun `non-important labeled text is filtered by default`() {
+    // A TextView with text but marked as not-important-for-accessibility is normally
+    // filtered from the compact list (isMeaningful requires isImportantForAccessibility
+    // when the node's only signal is a label).
+    val text = node(
+      detail = DriverNodeDetail.AndroidAccessibility(
+        className = "android.widget.TextView",
+        text = "Decorative text",
+        isImportantForAccessibility = false,
+      ),
+    )
+    val root = node(children = listOf(text))
+    val result = AndroidCompactElementList.build(root)
+
+    assertTrue(
+      !result.text.contains("Decorative text"),
+      "Non-important labeled TextView should be filtered out. Actual:\n${result.text}",
+    )
+  }
+
+  @Test
+  fun `ALL_ELEMENTS detail includes normally-filtered labeled nodes`() {
+    // Same TextView as above — should now appear under ALL_ELEMENTS.
+    val text = node(
+      detail = DriverNodeDetail.AndroidAccessibility(
+        className = "android.widget.TextView",
+        text = "Decorative text",
+        isImportantForAccessibility = false,
+      ),
+    )
+    val root = node(children = listOf(text))
+    val result = AndroidCompactElementList.build(root, setOf(SnapshotDetail.ALL_ELEMENTS))
+
+    assertContains(result.text, "Decorative text")
+  }
+
+  @Test
   fun `offscreen detail marks elements below viewport`() {
     val visible = node(
       detail = DriverNodeDetail.AndroidAccessibility(
@@ -516,5 +553,164 @@ class AndroidCompactElementListTest {
 
     assertTrue(!result.text.contains("\"Visible\" (offscreen)"), "Visible element should not be offscreen")
     assertContains(result.text, "\"Below\" (offscreen)")
+  }
+
+  // -- Stable identifier annotation (port of AXe [id=…] treatment) --
+
+  @Test
+  fun `resourceId surfaces as id= annotation`() {
+    val btn =
+      node(
+        detail =
+          DriverNodeDetail.AndroidAccessibility(
+            className = "android.widget.Button",
+            text = "Sign In",
+            resourceId = "com.example:id/btn_signin",
+            isClickable = true,
+          ),
+      )
+    val root = node(children = listOf(btn))
+    val result = AndroidCompactElementList.build(root)
+
+    assertContains(result.text, "Button \"Sign In\"")
+    assertContains(result.text, "[id=com.example:id/btn_signin]")
+  }
+
+  @Test
+  fun `uniqueId is preferred over resourceId when both are set`() {
+    val btn =
+      node(
+        detail =
+          DriverNodeDetail.AndroidAccessibility(
+            className = "android.widget.Button",
+            text = "Submit",
+            resourceId = "com.example:id/btn_submit",
+            uniqueId = "SubmitButton",
+            isClickable = true,
+          ),
+      )
+    val root = node(children = listOf(btn))
+    val result = AndroidCompactElementList.build(root)
+
+    assertContains(result.text, "[id=SubmitButton]")
+    assertTrue(
+      !result.text.contains("[id=com.example:id/btn_submit]"),
+      "uniqueId should take precedence over resourceId",
+    )
+  }
+
+  @Test
+  fun `id annotation comes before state annotations`() {
+    val btn =
+      node(
+        detail =
+          DriverNodeDetail.AndroidAccessibility(
+            className = "android.widget.Button",
+            text = "Delete",
+            resourceId = "com.example:id/btn_delete",
+            isClickable = true,
+            isEnabled = false,
+          ),
+      )
+    val root = node(children = listOf(btn))
+    val result = AndroidCompactElementList.build(root)
+
+    val line = result.text.lines().first { "Delete" in it }
+    val idIdx = line.indexOf("[id=")
+    val disabledIdx = line.indexOf("[disabled]")
+    assertTrue(idIdx > 0 && idIdx < disabledIdx, "id before disabled in: $line")
+  }
+
+  // -- Label + value composite for input fields (port of AXe label: value) --
+
+  @Test
+  fun `EditText with hintText and text composes as 'hint, text'`() {
+    val input =
+      node(
+        detail =
+          DriverNodeDetail.AndroidAccessibility(
+            className = "android.widget.EditText",
+            text = "user@example.com",
+            hintText = "Email address",
+            isEditable = true,
+          ),
+      )
+    val root = node(children = listOf(input))
+    val result = AndroidCompactElementList.build(root)
+
+    assertContains(result.text, "EditText \"Email address: user@example.com\"")
+  }
+
+  @Test
+  fun `EditText with only hintText still renders as hint`() {
+    val input =
+      node(
+        detail =
+          DriverNodeDetail.AndroidAccessibility(
+            className = "android.widget.EditText",
+            hintText = "Search",
+            isEditable = true,
+          ),
+      )
+    val root = node(children = listOf(input))
+    val result = AndroidCompactElementList.build(root)
+
+    assertContains(result.text, "EditText \"Search\"")
+    assertTrue(!result.text.contains(":"), "no colon when only hintText present")
+  }
+
+  @Test
+  fun `labeledByText composes with text when field has no own label`() {
+    val input =
+      node(
+        detail =
+          DriverNodeDetail.AndroidAccessibility(
+            className = "android.widget.EditText",
+            text = "hunter2",
+            labeledByText = "Password",
+            isEditable = true,
+          ),
+      )
+    val root = node(children = listOf(input))
+    val result = AndroidCompactElementList.build(root)
+
+    assertContains(result.text, "EditText \"Password: hunter2\"")
+  }
+
+  @Test
+  fun `labeledByText is used as label when no text hint or contentDescription`() {
+    val input =
+      node(
+        detail =
+          DriverNodeDetail.AndroidAccessibility(
+            className = "android.widget.EditText",
+            labeledByText = "Email",
+            isEditable = true,
+          ),
+      )
+    val root = node(children = listOf(input))
+    val result = AndroidCompactElementList.build(root)
+
+    assertContains(result.text, "EditText \"Email\"")
+  }
+
+  @Test
+  fun `hintText equal to text does not duplicate`() {
+    // Some inputs echo hint into text; don't render "Search: Search".
+    val input =
+      node(
+        detail =
+          DriverNodeDetail.AndroidAccessibility(
+            className = "android.widget.EditText",
+            text = "Search",
+            hintText = "Search",
+            isEditable = true,
+          ),
+      )
+    val root = node(children = listOf(input))
+    val result = AndroidCompactElementList.build(root)
+
+    assertContains(result.text, "EditText \"Search\"")
+    assertTrue(!result.text.contains("Search: Search"), "identical hint/text should dedupe")
   }
 }

@@ -6,7 +6,7 @@ plugins {
 
 android {
   namespace = "xyz.block.trailblaze.examples.sampleapp.uitests"
-  compileSdk = 35
+  compileSdk = 36
   defaultConfig {
     minSdk = 28
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -15,7 +15,12 @@ android {
   sourceSets {
     getByName("androidTest") {
       // Bundle sample-app trails as assets in the test APK so runFromAsset() can read them.
-      assets.srcDirs("../android-sample-app/trails")
+      // `src/androidTest/assets/` is added so A5's fixture bundle JS
+      // (`fixtures/bundle-roundtrip-fixture.js`) ships alongside the trails — the
+      // on-device round-trip test loads it via `AndroidAssetBundleJsSource` to exercise
+      // the same asset-path resolution production `AndroidTrailblazeRule.mcpServers`
+      // consumers will use.
+      assets.srcDirs("../android-sample-app/trails", "src/androidTest/assets")
       java.srcDirs("src/androidTest/java", "src/androidTest/generated")
     }
   }
@@ -41,6 +46,10 @@ android {
 dependencies {
   androidTestImplementation(project(":trailblaze-common"))
   androidTestImplementation(project(":trailblaze-android"))
+  // PR A5: the on-device bundle runtime. Tests here exercise `McpBundleSession.connect`
+  // directly from an instrumentation context to prove QuickJS + the in-process MCP
+  // transport work on a real device — a step up from the JVM-side fixture round-trip.
+  androidTestImplementation(project(":trailblaze-scripting-bundle"))
   androidTestImplementation(libs.junit)
   androidTestImplementation(libs.koog.prompt.executor.ollama)
   androidTestImplementation(libs.koog.prompt.executor.openai)

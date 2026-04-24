@@ -35,6 +35,7 @@ import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
+import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.commands.LaunchAppTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.OpenUrlTrailblazeTool
@@ -60,6 +61,7 @@ class PlaywrightTrailblazeAgent(
   override val trailblazeLogger: TrailblazeLogger,
   override val trailblazeDeviceInfoProvider: () -> TrailblazeDeviceInfo,
   override val sessionProvider: TrailblazeSessionProvider,
+  override val trailblazeToolRepo: TrailblazeToolRepo? = null,
 ) : BaseTrailblazeAgent() {
 
   /**
@@ -141,7 +143,7 @@ class PlaywrightTrailblazeAgent(
   /**
    * When true, skips DOM stability in post-action settle and relies on element readiness
    * waits instead. This dramatically speeds up recording playback where DOM stability
-   * never resolves on real-world SPAs (e.g., Square staging always times out at 2s per action).
+   * never resolves on real-world SPAs (stability checks time out on every action).
    *
    * Set by the test runner when using `--use-recorded-steps`.
    */
@@ -149,7 +151,7 @@ class PlaywrightTrailblazeAgent(
 
   /**
    * Default timeout for waiting for a target element to be present before executing a tool.
-   * 10 seconds handles slow page transitions (e.g., login → password form on Square staging).
+   * 10 seconds handles slow page transitions (e.g., login → password form on staging sites).
    */
   private val elementReadinessTimeoutMs = 10_000.0
 
@@ -329,10 +331,10 @@ class PlaywrightTrailblazeAgent(
 
     // Refresh screen state so element ID mappings reflect the current DOM.
     // getScreenState() internally calls waitForPageReady() with 2000ms DOM stability.
-    // On SPAs like Square's login, continuous DOM mutations (resource loads, script
-    // execution, reCAPTCHA initialization, analytics) keep the MutationObserver active
-    // for the full 2000ms, which is enough time for third-party scripts to initialize.
-    // On simpler pages with no mutations, DOM stability resolves immediately.
+    // On SPA login pages with continuous DOM mutations (resource loads, script
+    // execution, reCAPTCHA initialization, analytics), this keeps the MutationObserver
+    // active for the full 2000ms, which is enough time for third-party scripts to
+    // initialize. On simpler pages with no mutations, DOM stability resolves immediately.
     if (result == "ok") {
       val freshScreenState = browserManager.getScreenState()
       return TrailblazeToolExecutionContext(

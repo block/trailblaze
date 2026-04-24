@@ -86,10 +86,14 @@ class DirectMcpAgent(
   /** Which tier this agent represents (OUTER for planning, INNER would use ScreenAnalyzer) */
   private val agentTier: AgentTier = AgentTier.OUTER,
   /**
-   * Tool repository that provides the available tools to the LLM. Uses the same tool set
-   * as TrailblazeRunner/KoogLlmClientHelper — typically getLlmToolSet() which includes
-   * tap (ref-based), verification tools, and all standard UI tools.
-   * When null, falls back to getLlmToolSet().
+   * Tool repository used to look up available tools each iteration (so runtime changes via
+   * `setActiveToolSets` take effect) and to route [ConfigTrailblazeTool] calls that modify
+   * the tool set itself.
+   *
+   * When null, the agent falls back to [TrailblazeToolSet.DefaultLlmTrailblazeTools] for
+   * descriptor generation — sufficient for basic use, but `setActiveToolSets` becomes a
+   * no-op ("Dynamic toolsets not configured") and YAML-defined tools are not advertised
+   * (they require a repo to resolve).
    */
   private val trailblazeToolRepo: TrailblazeToolRepo? = null,
 ) {
@@ -114,7 +118,7 @@ You MUST respond with a tool call. Available tools include:
 - Tap: tap (use the ref ID from the snapshot, shown in square brackets e.g. [y778])
 - Other UI: swipe, inputText, pressBack, pressKey (for HOME/ENTER), hideKeyboard, eraseText
 - Navigation: launchApp, openUrl, scrollUntilTextIsVisible
-- Verification: assertVisibleWithNodeId (to check if an element is visible)
+- Verification: assertVisible (assert an element IS visible by ref from the snapshot), assertNotVisibleWithText (assert text is NOT visible)
 - Control flow: objectiveStatus (to report COMPLETED, IN_PROGRESS, or FAILED status)
 
 GUIDELINES:
@@ -507,12 +511,11 @@ GUIDELINES:
    * Includes UI interaction tools and objectiveStatus for control flow (COMPLETED/FAILED terminates the loop).
    */
   private fun getAvailableToolDescriptors(): List<TrailblazeToolDescriptor> {
-    // Use the tool repo if provided (matches the tool set configured by the caller).
-    // Falls back to getLlmToolSet() for Set-of-Mark tools.
     if (trailblazeToolRepo != null) {
       return trailblazeToolRepo.getCurrentToolDescriptors().map { it.toTrailblazeToolDescriptor() }
     }
-    return TrailblazeToolSet.getLlmToolSet().asTools().mapNotNull { toolClass ->
+    // Fallback: class-backed tools only. YAML-defined tools need a repo to resolve.
+    return TrailblazeToolSet.DefaultLlmTrailblazeTools.mapNotNull { toolClass ->
       toolClass.toKoogToolDescriptor()?.toTrailblazeToolDescriptor()
     }
   }

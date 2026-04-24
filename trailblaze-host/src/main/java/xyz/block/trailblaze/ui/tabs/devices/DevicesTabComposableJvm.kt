@@ -33,6 +33,8 @@ import maestro.Driver
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.host.devices.AxeConnectedDevice
+import xyz.block.trailblaze.host.devices.MaestroConnectedDevice
 import xyz.block.trailblaze.host.devices.TrailblazeDeviceService
 import xyz.block.trailblaze.host.devices.WebBrowserState
 import xyz.block.trailblaze.host.recording.MaestroDeviceScreenStream
@@ -195,12 +197,18 @@ private fun MobileDevicePreviewPanel(
                 val connectedDevice = withContext(Dispatchers.IO) {
                   TrailblazeDeviceService.getConnectedDevice(deviceId, driverType)
                 }
-                if (connectedDevice != null) {
-                  val driver = connectedDevice.getMaestroDriver()
-                  val stream = MaestroDeviceScreenStream(driver)
-                  previewState = MobilePreviewState.Connected(driver, stream)
-                } else {
-                  previewState = MobilePreviewState.Error("Device not found: ${deviceId.instanceId}")
+                when (connectedDevice) {
+                  is MaestroConnectedDevice -> {
+                    val driver = connectedDevice.getMaestroDriver()
+                    val stream = MaestroDeviceScreenStream(driver)
+                    previewState = MobilePreviewState.Connected(driver, stream)
+                  }
+                  is AxeConnectedDevice -> {
+                    previewState = MobilePreviewState.Error("Live preview not yet supported for IOS_AXE driver")
+                  }
+                  null -> {
+                    previewState = MobilePreviewState.Error("Device not found: ${deviceId.instanceId}")
+                  }
                 }
               } catch (e: Exception) {
                 previewState = MobilePreviewState.Error(e.message ?: "Connection failed")

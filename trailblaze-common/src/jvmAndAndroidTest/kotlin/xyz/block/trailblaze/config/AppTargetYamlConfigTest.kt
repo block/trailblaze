@@ -127,6 +127,181 @@ class AppTargetYamlConfigTest {
   }
 
   @Test
+  fun `parses mcp_servers with script entry`() {
+    val config = yaml.decodeFromString(
+      AppTargetYamlConfig.serializer(),
+      """
+      id: sample
+      display_name: Sample App
+      mcp_servers:
+        - script: ./tools/sample/login.ts
+      """.trimIndent(),
+    )
+    val servers = config.mcpServers!!
+    assertEquals(1, servers.size)
+    assertEquals("./tools/sample/login.ts", servers[0].script)
+    assertNull(servers[0].command)
+    assertTrue(servers[0].isBundleable)
+  }
+
+  @Test
+  fun `parses mcp_servers with command entry`() {
+    val config = yaml.decodeFromString(
+      AppTargetYamlConfig.serializer(),
+      """
+      id: sample
+      display_name: Sample App
+      mcp_servers:
+        - command: python
+          args: [./tools/sample/validators.py]
+          env:
+            API_BASE_URL: https://api.example.com
+      """.trimIndent(),
+    )
+    val server = config.mcpServers!!.single()
+    assertNull(server.script)
+    assertEquals("python", server.command)
+    assertEquals(listOf("./tools/sample/validators.py"), server.args)
+    assertEquals(mapOf("API_BASE_URL" to "https://api.example.com"), server.env)
+    assertFalse(server.isBundleable)
+  }
+
+  @Test
+  fun `parses mcp_servers with mixed script and command entries`() {
+    val config = yaml.decodeFromString(
+      AppTargetYamlConfig.serializer(),
+      """
+      id: sample
+      display_name: Sample App
+      mcp_servers:
+        - script: ./tools/sample/login.ts
+        - command: python
+          args: [./tools/sample/validators.py]
+          env:
+            FOO: bar
+      """.trimIndent(),
+    )
+    val servers = config.mcpServers!!
+    assertEquals(2, servers.size)
+    // First entry: script — bundleable.
+    assertEquals("./tools/sample/login.ts", servers[0].script)
+    assertNull(servers[0].command)
+    assertTrue(servers[0].isBundleable)
+    // Second entry: command — host-only.
+    assertNull(servers[1].script)
+    assertEquals("python", servers[1].command)
+    assertEquals(listOf("./tools/sample/validators.py"), servers[1].args)
+    assertEquals(mapOf("FOO" to "bar"), servers[1].env)
+    assertFalse(servers[1].isBundleable)
+  }
+
+  @Test
+  fun `mcp_servers absent is null`() {
+    val config = yaml.decodeFromString(
+      AppTargetYamlConfig.serializer(),
+      """
+      id: sample
+      display_name: Sample App
+      """.trimIndent(),
+    )
+    assertNull(config.mcpServers)
+  }
+
+  @Test
+  fun `mcp_servers entry with neither script nor command fails`() {
+    try {
+      yaml.decodeFromString(
+        AppTargetYamlConfig.serializer(),
+        """
+        id: sample
+        display_name: Sample App
+        mcp_servers:
+          - args: [foo]
+        """.trimIndent(),
+      )
+      error("Expected parse/validation failure")
+    } catch (e: IllegalArgumentException) {
+      assertTrue(e.message!!.contains("exactly one of `script:` or `command:`"))
+    }
+  }
+
+  @Test
+  fun `mcp_servers script entry with args fails`() {
+    try {
+      yaml.decodeFromString(
+        AppTargetYamlConfig.serializer(),
+        """
+        id: sample
+        display_name: Sample App
+        mcp_servers:
+          - script: ./tools/login.ts
+            args: [foo]
+        """.trimIndent(),
+      )
+      error("Expected parse/validation failure")
+    } catch (e: IllegalArgumentException) {
+      assertTrue(e.message!!.contains("`args:` and `env:` are only valid alongside `command:`"))
+    }
+  }
+
+  @Test
+  fun `mcp_servers script entry with env fails`() {
+    try {
+      yaml.decodeFromString(
+        AppTargetYamlConfig.serializer(),
+        """
+        id: sample
+        display_name: Sample App
+        mcp_servers:
+          - script: ./tools/login.ts
+            env:
+              FOO: bar
+        """.trimIndent(),
+      )
+      error("Expected parse/validation failure")
+    } catch (e: IllegalArgumentException) {
+      assertTrue(e.message!!.contains("`args:` and `env:` are only valid alongside `command:`"))
+    }
+  }
+
+  @Test
+  fun `mcp_servers entry with blank script fails`() {
+    try {
+      yaml.decodeFromString(
+        AppTargetYamlConfig.serializer(),
+        """
+        id: sample
+        display_name: Sample App
+        mcp_servers:
+          - script: ""
+        """.trimIndent(),
+      )
+      error("Expected parse/validation failure")
+    } catch (e: IllegalArgumentException) {
+      assertTrue(e.message!!.contains("exactly one of `script:` or `command:`"))
+    }
+  }
+
+  @Test
+  fun `mcp_servers entry with both script and command fails`() {
+    try {
+      yaml.decodeFromString(
+        AppTargetYamlConfig.serializer(),
+        """
+        id: sample
+        display_name: Sample App
+        mcp_servers:
+          - script: ./tools/login.ts
+            command: python
+        """.trimIndent(),
+      )
+      error("Expected parse/validation failure")
+    } catch (e: IllegalArgumentException) {
+      assertTrue(e.message!!.contains("exactly one of `script:` or `command:`"))
+    }
+  }
+
+  @Test
   fun `ignores unknown YAML fields (forward compatibility)`() {
     val config = yaml.decodeFromString(
       AppTargetYamlConfig.serializer(),

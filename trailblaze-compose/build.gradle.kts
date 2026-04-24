@@ -31,7 +31,12 @@ dependencies {
   implementation(libs.ktor.serialization.kotlinx.json)
   implementation(libs.ktor.client.okhttp)
   implementation(libs.ktor.client.content.negotiation)
+
+  testImplementation(libs.kotlin.test.junit4)
+  testImplementation(libs.assertk)
 }
+
+tasks.test { useJUnit() }
 
 dependencyGuard {
   configuration("runtimeClasspath") {

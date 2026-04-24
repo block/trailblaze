@@ -164,7 +164,7 @@ object IosHostUtils {
    * then reads the Info.plist once to extract all requested keys.
    *
    * @param trailblazeDeviceId The device ID for the simulator
-   * @param appId The bundle identifier (e.g., "com.squareup.square")
+   * @param appId The bundle identifier (e.g., "com.example.app")
    * @param additionalPlistKeys Extra plist keys to read in the same pass (results available via
    *   [AppVersionInfo.additionalPlistData])
    * @return AppVersionInfo with version details, or null if the app is not installed or parsing fails
@@ -188,7 +188,7 @@ object IosHostUtils {
       ).runProcess {}
 
       // Parse the app path from listapps output
-      // Format: "com.squareup.square" = { ... Path = "/path/to/App.app"; ... }
+      // Format: "com.example.app" = { ... Path = "/path/to/App.app"; ... }
       val appPath = parseAppPathFromListApps(listAppsOutput.fullOutput, appId)
       if (appPath.isNullOrBlank()) {
         return null

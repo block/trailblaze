@@ -7,6 +7,8 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDevicePort.getMaestroOnDeviceSpecificPort
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.host.axe.AxeCli
+import xyz.block.trailblaze.host.axe.AxeJsonMapper
 import xyz.block.trailblaze.host.toTrailblazeDevicePlatform
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 
@@ -39,7 +41,7 @@ object TrailblazeDeviceService {
     }
 
   /**
-   * Gets the first connected iOS Device.
+   * Gets the first connected iOS Device backed by the Maestro/XCUITest driver.
    *
    * @param appTarget Optional - Configuration for the target application under test
    */
@@ -62,10 +64,47 @@ object TrailblazeDeviceService {
       platformConfiguration = null,
       appTarget = appTarget,
     )
-    return TrailblazeConnectedDevice(
+    return MaestroConnectedDevice(
       maestroDriver = iosDriver.driver,
       trailblazeDriverType = TrailblazeDriverType.IOS_HOST,
       instanceId = connectedDevice.instanceId,
+    )
+  }
+
+  /**
+   * Gets a connected iOS Simulator via the AXe CLI. Simulator-only by design — AXe uses
+   * Apple's private Accessibility APIs which are not available on real devices.
+   */
+  fun getConnectedIosAxeDevice(trailblazeDeviceId: TrailblazeDeviceId): TrailblazeConnectedDevice? {
+    if (!AxeCli.isAvailable()) {
+      System.err.println("axe binary not found. Install it with: brew install cameroncooke/axe/axe")
+      return null
+    }
+    val udid = trailblazeDeviceId.instanceId
+
+    // Bounds come from the AXe root `AXApplication` frame — the `application` element is
+    // sized to the screen. Cheaper than calling `xcrun simctl` and doesn't require an
+    // extra subprocess.
+    val describe = AxeCli.describeUi(udid)
+    if (!describe.success) {
+      System.err.println("[IOS_AXE] axe describe-ui failed for $udid: ${describe.stderr.trim()}")
+      return null
+    }
+    val tree = try {
+      AxeJsonMapper.parse(describe.stdout)
+    } catch (e: Exception) {
+      System.err.println("[IOS_AXE] axe describe-ui produced unparseable JSON for $udid: ${e.message}")
+      return null
+    }
+    val bounds = tree.bounds ?: run {
+      System.err.println("[IOS_AXE] axe describe-ui returned no bounds for root — can't resolve device size")
+      return null
+    }
+
+    return AxeConnectedDevice(
+      udid = udid,
+      deviceWidth = bounds.width,
+      deviceHeight = bounds.height,
     )
   }
 
@@ -87,10 +126,13 @@ object TrailblazeDeviceService {
       // Android drivers communicate via RPC and do not need a Maestro host driver.
       null
     }
-    TrailblazeDevicePlatform.IOS -> getConnectedIosDevice(
-      trailblazeDeviceId = trailblazeDeviceId,
-      appTarget = appTarget
-    )
+    TrailblazeDevicePlatform.IOS -> when (driverType) {
+      TrailblazeDriverType.IOS_AXE -> getConnectedIosAxeDevice(trailblazeDeviceId)
+      else -> getConnectedIosDevice(
+        trailblazeDeviceId = trailblazeDeviceId,
+        appTarget = appTarget,
+      )
+    }
 
     TrailblazeDevicePlatform.WEB -> error(
       "Web tests use PLAYWRIGHT_NATIVE path (BasePlaywrightNativeTest), not TrailblazeDeviceService"

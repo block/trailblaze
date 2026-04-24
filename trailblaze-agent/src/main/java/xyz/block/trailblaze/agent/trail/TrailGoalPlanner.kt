@@ -15,6 +15,7 @@ import xyz.block.trailblaze.logs.model.TraceId.Companion.TraceOrigin
 import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
 import xyz.block.trailblaze.yaml.PromptStep
 import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
+import xyz.block.trailblaze.yaml.VerificationStep
 
 /**
  * Action to execute for a trail step.
@@ -243,6 +244,7 @@ class TrailStepPlanner(
           objective = step.prompt,
           progressSummary = buildProgressSummary(currentState, index, actionHistory),
           attemptNumber = attempts,
+          isVerification = step is VerificationStep,
         ),
         screenState = screenState,
         traceId = traceId,
@@ -285,6 +287,7 @@ class TrailStepPlanner(
               context = RecommendationContext(
                 objective = step.prompt,
                 progressSummary = buildProgressSummary(currentState, index, actionHistory),
+                isVerification = step is VerificationStep,
               ),
               screenState = verifyScreen,
               traceId = TraceId.generate(TraceOrigin.LLM),

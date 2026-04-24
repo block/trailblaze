@@ -29,13 +29,13 @@ class IosHostUtilsTest {
               CFBundleVersion = 1;
               Path = "/Applications/Preferences.app";
           };
-          "com.squareup.square" =     {
+          "com.example.app" =     {
               ApplicationType = User;
-              Bundle = "file:///Users/test/Library/Developer/CoreSimulator/Devices/ABC123/data/Containers/Bundle/Application/DEF456/Square.app/";
-              CFBundleDisplayName = Square;
-              CFBundleIdentifier = "com.squareup.square";
+              Bundle = "file:///Users/test/Library/Developer/CoreSimulator/Devices/ABC123/data/Containers/Bundle/Application/DEF456/ExampleApp.app/";
+              CFBundleDisplayName = ExampleApp;
+              CFBundleIdentifier = "com.example.app";
               CFBundleVersion = 6940515;
-              Path = "/Users/test/Library/Developer/CoreSimulator/Devices/ABC123/data/Containers/Bundle/Application/DEF456/Square.app";
+              Path = "/Users/test/Library/Developer/CoreSimulator/Devices/ABC123/data/Containers/Bundle/Application/DEF456/ExampleApp.app";
           };
           "com.apple.mobilesafari" =     {
               ApplicationType = System;
@@ -49,7 +49,7 @@ class IosHostUtilsTest {
 
     assertEquals(3, appIds.size)
     assertContains(appIds, "com.apple.Preferences")
-    assertContains(appIds, "com.squareup.square")
+    assertContains(appIds, "com.example.app")
     assertContains(appIds, "com.apple.mobilesafari")
   }
 
@@ -60,7 +60,7 @@ class IosHostUtilsTest {
           "com.apple.Preferences" =     {
               Path = "/Applications/Preferences.app";
           };
-          "group.com.squareup.square" =     {
+          "group.com.example.app" =     {
               Path = "/some/group/path";
           };
           "group.com.example.shared" =     {
@@ -135,11 +135,11 @@ class IosHostUtilsTest {
               CFBundleIdentifier = "com.apple.Preferences";
               Path = "/Applications/Preferences.app";
           };
-          "com.squareup.square" =     {
+          "com.example.app" =     {
               ApplicationType = User;
-              CFBundleIdentifier = "com.squareup.square";
+              CFBundleIdentifier = "com.example.app";
               CFBundleVersion = 6940515;
-              Path = "/Users/test/Library/Developer/CoreSimulator/Devices/ABC123/data/Containers/Bundle/Application/DEF456/Square.app";
+              Path = "/Users/test/Library/Developer/CoreSimulator/Devices/ABC123/data/Containers/Bundle/Application/DEF456/ExampleApp.app";
           };
           "com.apple.mobilesafari" =     {
               ApplicationType = System;
@@ -149,9 +149,9 @@ class IosHostUtilsTest {
       }
     """.trimIndent()
 
-    val squarePath = IosHostUtils.parseAppPathFromListApps(output, "com.squareup.square")
+    val squarePath = IosHostUtils.parseAppPathFromListApps(output, "com.example.app")
     assertEquals(
-      "/Users/test/Library/Developer/CoreSimulator/Devices/ABC123/data/Containers/Bundle/Application/DEF456/Square.app",
+      "/Users/test/Library/Developer/CoreSimulator/Devices/ABC123/data/Containers/Bundle/Application/DEF456/ExampleApp.app",
       squarePath
     )
 
@@ -217,18 +217,18 @@ class IosHostUtilsTest {
   fun `parseAppPathFromListApps does not match partial app IDs`() {
     val output = """
       {
-          "com.squareup.square.debug" =     {
-              Path = "/path/to/SquareDebug.app";
+          "com.example.app.debug" =     {
+              Path = "/path/to/ExampleAppDebug.app";
           };
-          "com.squareup.square" =     {
-              Path = "/path/to/Square.app";
+          "com.example.app" =     {
+              Path = "/path/to/ExampleApp.app";
           };
       }
     """.trimIndent()
 
     // Should match exact app ID, not partial
-    val path = IosHostUtils.parseAppPathFromListApps(output, "com.squareup.square")
-    assertEquals("/path/to/Square.app", path)
+    val path = IosHostUtils.parseAppPathFromListApps(output, "com.example.app")
+    assertEquals("/path/to/ExampleApp.app", path)
   }
 
   @Test
@@ -249,16 +249,16 @@ class IosHostUtilsTest {
       <plist version="1.0">
       <dict>
           <key>CFBundleExecutable</key>
-          <string>Square</string>
+          <string>ExampleApp</string>
           <key>CFBundleIdentifier</key>
-          <string>com.squareup.square</string>
+          <string>com.example.app</string>
           <key>CFBundleName</key>
-          <string>Square</string>
+          <string>ExampleApp</string>
           <key>CFBundleShortVersionString</key>
           <string>6.94</string>
           <key>CFBundleVersion</key>
           <string>6940515</string>
-          <key>SQBuildNumber</key>
+          <key>AppBuildNumber</key>
           <string>6515</string>
       </dict>
       </plist>
@@ -266,8 +266,8 @@ class IosHostUtilsTest {
 
     assertEquals("6.94", IosHostUtils.parseXmlPlistKey(content, "CFBundleShortVersionString"))
     assertEquals("6940515", IosHostUtils.parseXmlPlistKey(content, "CFBundleVersion"))
-    assertEquals("6515", IosHostUtils.parseXmlPlistKey(content, "SQBuildNumber"))
-    assertEquals("com.squareup.square", IosHostUtils.parseXmlPlistKey(content, "CFBundleIdentifier"))
+    assertEquals("6515", IosHostUtils.parseXmlPlistKey(content, "AppBuildNumber"))
+    assertEquals("com.example.app", IosHostUtils.parseXmlPlistKey(content, "CFBundleIdentifier"))
   }
 
   @Test
@@ -324,14 +324,14 @@ class IosHostUtilsTest {
           <string>  6940515  </string>
           <key>CFBundleName</key>
           <string>
-              Square Point of Sale
+              Example App Long Name
           </string>
       </dict>
       </plist>
     """.trimIndent()
 
     assertEquals("6940515", IosHostUtils.parseXmlPlistKey(content, "CFBundleVersion"))
-    assertEquals("Square Point of Sale", IosHostUtils.parseXmlPlistKey(content, "CFBundleName"))
+    assertEquals("Example App Long Name", IosHostUtils.parseXmlPlistKey(content, "CFBundleName"))
   }
 
   @Test
@@ -385,7 +385,7 @@ class IosHostUtilsTest {
       Console.log("  trailblazeDeviceId: ${versionInfo.trailblazeDeviceId}")
       Console.log("  versionCode: ${versionInfo.versionCode}")
       Console.log("  versionName: ${versionInfo.versionName}")
-      // Note: buildNumber is app-specific (e.g., SQBuildNumber for Square apps)
+      // Note: buildNumber is app-specific (e.g., a custom Info.plist key per app)
       // and is populated by app-specific implementations, not the generic IosHostUtils
 
       assertNotNull(versionInfo.versionCode)

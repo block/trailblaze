@@ -4,11 +4,8 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.model.TrailblazeConfig
-import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
-import xyz.block.trailblaze.toolcalls.commands.HideKeyboardTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.TapOnPointTrailblazeTool
-import kotlin.reflect.KClass
+import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
 
 abstract class BaseWebTrailblazeTest :
   BaseHostTrailblazeTest(
@@ -20,19 +17,12 @@ abstract class BaseWebTrailblazeTest :
     config = TrailblazeConfig.DEFAULT,
     systemPromptTemplate = WEB_SYSTEM_PROMPT,
     trailblazeToolSet = TrailblazeToolSet.DynamicTrailblazeToolSet(
-      toolClasses = mutableSetOf<KClass<out TrailblazeTool>>().apply {
-        addAll(TrailblazeToolSet.DefaultSetOfMarkTrailblazeToolSet.toolClasses)
-
-        // We want to avoid tapping on X/Y coordinates for higher recording quality.
-        removeAll(
-          setOf(
-            TapOnPointTrailblazeTool::class,
-          ),
-        )
-        // Hiding the Keyboard isn't applicable on Web
-        remove(HideKeyboardTrailblazeTool::class)
-      },
-      name = "Device Control Ui Interactions - Do Not Combine with Set of Mark",
+      name = "Playwright Native Base Tools",
+      // Driver-aware: the catalog's `drivers:` declarations already keep mobile-only tools
+      // (TapOnPoint, HideKeyboard, etc. from core_interaction.yaml) out of Playwright sessions.
+      toolClasses = TrailblazeToolSetCatalog.defaultToolClassesForDriver(
+        TrailblazeDriverType.PLAYWRIGHT_NATIVE,
+      ),
     ),
   ) {
   companion object {

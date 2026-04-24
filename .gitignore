@@ -60,3 +60,5 @@ __pycache__/
 /sdks/python/.venv/
 
 package-lock.json
+bun.lock
+bun.lockb

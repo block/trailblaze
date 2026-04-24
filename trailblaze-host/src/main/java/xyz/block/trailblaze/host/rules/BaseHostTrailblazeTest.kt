@@ -33,6 +33,7 @@ import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.host.HostMaestroTrailblazeAgent
 import xyz.block.trailblaze.host.MaestroHostRunnerImpl
 import xyz.block.trailblaze.agent.AgentUiActionExecutor
+import xyz.block.trailblaze.host.devices.MaestroConnectedDevice
 import xyz.block.trailblaze.host.devices.TrailblazeConnectedDevice
 import xyz.block.trailblaze.host.devices.TrailblazeDeviceService
 import xyz.block.trailblaze.host.devices.TrailblazeHostDeviceClassifier
@@ -40,6 +41,7 @@ import xyz.block.trailblaze.host.rules.TrailblazeHostLlmConfig.DEFAULT_TRAILBLAZ
 import xyz.block.trailblaze.http.DynamicLlmClient
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.logs.client.TrailblazeLog
+import xyz.block.trailblaze.logs.client.TrailblazeSessionManager
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.mcp.AgentImplementation
@@ -50,6 +52,7 @@ import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.rules.RetryRule
 import xyz.block.trailblaze.rules.TrailblazeLoggingRule
 import xyz.block.trailblaze.rules.TrailblazeRunnerUtil
+import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
@@ -58,7 +61,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.TemplatingUtil
 import xyz.block.trailblaze.yaml.TrailYamlItem
-import xyz.block.trailblaze.yaml.createTrailblazeYaml
+import xyz.block.trailblaze.yaml.TrailblazeYaml
 import kotlin.reflect.KClass
 
 abstract class BaseHostTrailblazeTest(
@@ -72,9 +75,8 @@ abstract class BaseHostTrailblazeTest(
   protected val systemPromptTemplate: String? = null,
   trailblazeToolSet: TrailblazeToolSet? = null,
   customToolClasses: Set<KClass<out TrailblazeTool>> = setOf(),
+  customYamlToolNames: Set<ToolName> = setOf(),
   excludedToolClasses: Set<KClass<out TrailblazeTool>> = setOf(),
-  /** All custom tool classes for YAML serialization/deserialization. Defaults to [customToolClasses]. */
-  allSerializationToolClasses: Set<KClass<out TrailblazeTool>> = customToolClasses,
   maxRetries: Int = 0,
   appTarget: TrailblazeHostAppTarget? = null,
   explicitDeviceId: TrailblazeDeviceId? = null,
@@ -145,17 +147,19 @@ abstract class BaseHostTrailblazeTest(
   val trailblazeDeviceClassifiers: List<TrailblazeDeviceClassifier> by lazy {
     TrailblazeHostDeviceClassifier(
       trailblazeDriverType = trailblazeDriverType,
-      maestroDeviceInfoProvider = { connectedDevice.initialMaestroDeviceInfo },
+      maestroDeviceInfoProvider = {
+        (connectedDevice as? MaestroConnectedDevice)?.initialMaestroDeviceInfo
+          ?: error("Host-test device classification currently requires a Maestro-backed device; got ${connectedDevice::class.simpleName}")
+      },
     ).getDeviceClassifiers()
   }
 
   val trailblazeDeviceInfo: TrailblazeDeviceInfo by lazy {
-    val initialMaestroDeviceInfo = connectedDevice.initialMaestroDeviceInfo
     TrailblazeDeviceInfo(
       trailblazeDeviceId = trailblazeDeviceId,
       trailblazeDriverType = trailblazeDriverType,
-      widthPixels = initialMaestroDeviceInfo.widthPixels,
-      heightPixels = initialMaestroDeviceInfo.heightPixels,
+      widthPixels = connectedDevice.deviceWidth,
+      heightPixels = connectedDevice.deviceHeight,
       classifiers = trailblazeDeviceClassifiers,
     )
   }
@@ -167,6 +171,10 @@ abstract class BaseHostTrailblazeTest(
   )
 
   val loggingRule: TrailblazeLoggingRule = hostLoggingRule
+
+  init {
+    loggingRule.failureScreenStateProvider = { hostRunner.screenStateProvider() }
+  }
 
   /**
    * RuleChain ensures RetryRule is the outermost rule, wrapping all other rules.
@@ -196,6 +204,7 @@ abstract class BaseHostTrailblazeTest(
       trailblazeDeviceInfoProvider = loggingRule.trailblazeDeviceInfoProvider,
       sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
       nodeSelectorMode = config.nodeSelectorMode,
+      trailblazeToolRepo = toolRepo,
     )
   }
 
@@ -212,14 +221,17 @@ abstract class BaseHostTrailblazeTest(
     // Explicit tool set override — bypass dynamic catalog
     TrailblazeToolRepo(
       trailblazeToolSet = TrailblazeToolSet.DynamicTrailblazeToolSet(
-        "Custom Tool Set",
-        trailblazeToolSet.toolClasses + customToolClasses - excludedToolClasses,
+        name = "Custom Tool Set",
+        toolClasses = trailblazeToolSet.toolClasses + customToolClasses - excludedToolClasses,
+        yamlToolNames = trailblazeToolSet.yamlToolNames + customYamlToolNames,
       ),
     )
   } else {
     TrailblazeToolRepo.withDynamicToolSets(
       customToolClasses = customToolClasses,
+      customYamlToolNames = customYamlToolNames,
       excludedToolClasses = excludedToolClasses,
+      driverType = trailblazeDriverType,
     )
   }
 
@@ -327,16 +339,25 @@ abstract class BaseHostTrailblazeTest(
       availableToolsProvider = availableToolsProvider,
     )
 
+    // sessionIdProvider is invoked once per tool/step. If we hit the fallback
+    // path, we must return the *same* fallback ID across calls — otherwise
+    // consecutive tool invocations in one test would write to different session
+    // directories — and we should log the unexpected fallback exactly once.
+    var cachedFallbackSessionId: SessionId? = null
     return MultiAgentV3TestAgentRunner(
       v3Runner = v3Runner,
       screenStateProvider = hostRunner.screenStateProvider,
-      sessionIdProvider = { loggingRule.session?.sessionId ?: SessionId.generate() },
+      sessionIdProvider = {
+        loggingRule.session?.sessionId ?: cachedFallbackSessionId ?: run {
+          Console.error("⚠️ No active loggingRule session; generating fallback session ID")
+          TrailblazeSessionManager.generateSessionId("host_test_fallback")
+            .also { cachedFallbackSessionId = it }
+        }
+      },
     )
   }
 
-  private val trailblazeYaml = createTrailblazeYaml(
-    customTrailblazeToolClasses = allSerializationToolClasses,
-  )
+  private val trailblazeYaml = TrailblazeYaml.Default
 
   private val trailblazeRunnerUtil by lazy {
     TrailblazeRunnerUtil(

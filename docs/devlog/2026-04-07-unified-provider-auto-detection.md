@@ -56,7 +56,7 @@ The `isProviderAvailable` and `getFirstModel` lambdas keep the detector platform
 
 Replace the inline `PROVIDER_PRIORITY` loop in `resolveModel()` stage 3 with a call to the shared detector. The resolution chain stays the same (config → instrumentation arg → auto-detect), just the auto-detect step delegates.
 
-Key file: `opensource/trailblaze-android/src/main/java/xyz/block/trailblaze/android/AndroidLlmClientResolver.kt`
+Key file: `trailblaze-android/src/main/java/xyz/block/trailblaze/android/AndroidLlmClientResolver.kt`
 
 ### 3. Desktop: use auto-detection in `getCurrentLlmModel()` fallback
 
@@ -70,8 +70,8 @@ Key file: `opensource/trailblaze-android/src/main/java/xyz/block/trailblaze/andr
 This replaces the `defaultLlmModel` constructor parameter — or at minimum makes it the last resort after auto-detection.
 
 Key files:
-- `opensource/trailblaze-host/src/main/java/xyz/block/trailblaze/desktop/TrailblazeDesktopAppConfig.kt` — `getCurrentLlmModel()` at line 156
-- `opensource/trailblaze-desktop/src/main/java/xyz/block/trailblaze/desktop/OpenSourceTrailblazeDesktopAppConfig.kt` — passes hardcoded `defaultLlmModel = OpenAITrailblazeLlmModelList.OPENAI_GPT_4_1`
+- `trailblaze-host/src/main/java/xyz/block/trailblaze/desktop/TrailblazeDesktopAppConfig.kt` — `getCurrentLlmModel()` at line 156
+- `trailblaze-desktop/src/main/java/xyz/block/trailblaze/desktop/OpenSourceTrailblazeDesktopAppConfig.kt` — passes hardcoded `defaultLlmModel = OpenAITrailblazeLlmModelList.OPENAI_GPT_4_1`
 - Organization-specific subclasses of `TrailblazeDesktopAppConfig` follow the same pattern
 
 ### 4. Organization-specific overrides

@@ -31,9 +31,10 @@ class SingleToolStrategy : ToolProcessingStrategy {
         traceId = traceId,
       )
     } else {
-      Console.log("[WARNING] No tool call detected - forcing tool call on next iteration")
+      // Should be unreachable under ToolChoice.Required, but log + record defensively if the
+      // provider ever returns a tools-less response anyway.
+      Console.log("[WARNING] No tool call detected from LLM despite tool_choice=Required")
       stepStatus.handleEmptyToolCall(llmMessage)
-      helper.setShouldForceToolCall(true)
     }
   }
 }

@@ -1,0 +1,2 @@
+id: assertMath
+class: xyz.block.trailblaze.toolcalls.commands.memory.AssertMathTrailblazeTool

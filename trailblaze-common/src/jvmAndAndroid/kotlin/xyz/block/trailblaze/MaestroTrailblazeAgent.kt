@@ -17,6 +17,7 @@ import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
+import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.isSuccess
 
@@ -33,7 +34,15 @@ abstract class MaestroTrailblazeAgent(
   override val sessionProvider: TrailblazeSessionProvider,
   /** Controls nodeSelector vs legacy Maestro path for playback and recording. */
   val nodeSelectorMode: NodeSelectorMode = NodeSelectorMode.DEFAULT,
+  /**
+   * Session tool repo — threaded to the base so `OtherTrailblazeTool` instances (e.g.
+   * subprocess MCP tool names in a trail YAML) can resolve through
+   * [xyz.block.trailblaze.toolcalls.TrailblazeToolRepo] before driver dispatch.
+   */
+  trailblazeToolRepo: TrailblazeToolRepo? = null,
 ) : BaseTrailblazeAgent() {
+
+  override val trailblazeToolRepo: TrailblazeToolRepo? = trailblazeToolRepo
 
   /**
    * Whether this agent uses the accessibility driver instead of Maestro/UiAutomator.

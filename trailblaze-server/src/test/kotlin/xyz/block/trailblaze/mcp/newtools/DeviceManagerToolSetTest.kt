@@ -17,8 +17,10 @@ import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateResponse
 import xyz.block.trailblaze.mcp.models.McpSessionId
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
+import kotlin.reflect.full.valueParameters
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 /**
  * Tests for [DeviceManagerToolSet].
@@ -115,6 +117,145 @@ class DeviceManagerToolSetTest {
     )
 
     assertContains(result, "No Android")
+  }
+
+  @Test
+  fun `device ANDROID with deviceId selects requested emulator when multiple available`() = runTest {
+    val firstEmulator = TrailblazeConnectedDeviceSummary(
+      trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+      instanceId = "emulator-5554",
+      description = "Pixel 6 API 34",
+    )
+    val secondEmulator = TrailblazeConnectedDeviceSummary(
+      trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+      instanceId = "emulator-5560",
+      description = "Pixel 7 API 34",
+    )
+    val bridge = DeviceTestBridge(devices = setOf(firstEmulator, secondEmulator))
+    val toolSet = DeviceManagerToolSet(
+      sessionContext = createSessionContext(),
+      mcpBridge = bridge,
+    )
+
+    val result = toolSet.device(
+      action = DeviceManagerToolSet.DeviceAction.ANDROID,
+      deviceId = "emulator-5560",
+    )
+
+    assertContains(result, "emulator-5560")
+    assertEquals("emulator-5560", bridge.lastSelectedDeviceId?.instanceId)
+  }
+
+  @Test
+  fun `device ANDROID with unknown deviceId returns error`() = runTest {
+    val bridge = DeviceTestBridge(devices = setOf(androidDevice))
+    val toolSet = DeviceManagerToolSet(
+      sessionContext = createSessionContext(),
+      mcpBridge = bridge,
+    )
+
+    val result = toolSet.device(
+      action = DeviceManagerToolSet.DeviceAction.ANDROID,
+      deviceId = "emulator-9999",
+    )
+
+    assertContains(result, "emulator-9999")
+    assertContains(result, "not found")
+  }
+
+  @Test
+  fun `device IOS with deviceId selects requested simulator when multiple available`() = runTest {
+    val firstSim = TrailblazeConnectedDeviceSummary(
+      trailblazeDriverType = TrailblazeDriverType.IOS_HOST,
+      instanceId = "iphone-15-sim",
+      description = "iPhone 15 Simulator",
+    )
+    val secondSim = TrailblazeConnectedDeviceSummary(
+      trailblazeDriverType = TrailblazeDriverType.IOS_HOST,
+      instanceId = "iphone-16-sim",
+      description = "iPhone 16 Simulator",
+    )
+    val bridge = DeviceTestBridge(devices = setOf(firstSim, secondSim))
+    val toolSet = DeviceManagerToolSet(
+      sessionContext = createSessionContext(),
+      mcpBridge = bridge,
+    )
+
+    val result = toolSet.device(
+      action = DeviceManagerToolSet.DeviceAction.IOS,
+      deviceId = "iphone-16-sim",
+    )
+
+    assertContains(result, "iphone-16-sim")
+    assertEquals("iphone-16-sim", bridge.lastSelectedDeviceId?.instanceId)
+  }
+
+  @Test
+  fun `device IOS with unknown deviceId returns error`() = runTest {
+    val bridge = DeviceTestBridge(devices = setOf(iosDevice))
+    val toolSet = DeviceManagerToolSet(
+      sessionContext = createSessionContext(),
+      mcpBridge = bridge,
+    )
+
+    val result = toolSet.device(
+      action = DeviceManagerToolSet.DeviceAction.IOS,
+      deviceId = "iphone-unknown",
+    )
+
+    assertContains(result, "iphone-unknown")
+    assertContains(result, "not found")
+  }
+
+  @Test
+  fun `device ANDROID with blank deviceId falls back to auto-select`() = runTest {
+    val bridge = DeviceTestBridge(devices = setOf(androidDevice))
+    val toolSet = DeviceManagerToolSet(
+      sessionContext = createSessionContext(),
+      mcpBridge = bridge,
+    )
+
+    val result = toolSet.device(
+      action = DeviceManagerToolSet.DeviceAction.ANDROID,
+      deviceId = "   ",
+    )
+
+    assertContains(result, androidDevice.instanceId)
+    assertEquals(androidDevice.instanceId, bridge.lastSelectedDeviceId?.instanceId)
+  }
+
+  @Test
+  fun `device IOS with blank deviceId falls back to auto-select`() = runTest {
+    val bridge = DeviceTestBridge(devices = setOf(iosDevice))
+    val toolSet = DeviceManagerToolSet(
+      sessionContext = createSessionContext(),
+      mcpBridge = bridge,
+    )
+
+    val result = toolSet.device(
+      action = DeviceManagerToolSet.DeviceAction.IOS,
+      deviceId = "",
+    )
+
+    assertContains(result, iosDevice.instanceId)
+    assertEquals(iosDevice.instanceId, bridge.lastSelectedDeviceId?.instanceId)
+  }
+
+  /**
+   * Regression guard: [DeviceManagerToolSet.PARAM_DEVICE_ID] exists because MCP binds
+   * arguments by the Kotlin parameter name. If someone renames the `deviceId` parameter
+   * on [DeviceManagerToolSet.device] without updating the constant, the CLI client silently
+   * drops the argument (the original bug this constant was added to prevent). This test
+   * anchors the constant to the real parameter name.
+   */
+  @Test
+  fun `PARAM_DEVICE_ID matches an actual device function parameter name`() {
+    val paramNames = DeviceManagerToolSet::device.valueParameters.map { it.name }
+    assertTrue(
+      DeviceManagerToolSet.PARAM_DEVICE_ID in paramNames,
+      "PARAM_DEVICE_ID='${DeviceManagerToolSet.PARAM_DEVICE_ID}' does not match any parameter " +
+        "of device(). Found: $paramNames. If you renamed the parameter, update the constant.",
+    )
   }
 
   // ── LIST action - description shown ─────────────────────────────────────
@@ -289,6 +430,92 @@ class DeviceManagerToolSetTest {
 
     assertContains(result.lowercase(), "device")
   }
+
+  // ── INFO action with driver status ───────────────────────────────────────
+  // Contract: when a driver is installing/initializing/failed, INFO must still
+  // emit the device header (Instance ID, Platform) AND append the status. The
+  // CLI regex-parses "Instance ID:" / "Platform:" to drive the session-reuse
+  // short-circuit, so the header must not disappear during driver transitions.
+
+  @Test
+  fun `device INFO includes header and status when Playwright is installing`() = runTest {
+    val webDevice = TrailblazeConnectedDeviceSummary(
+      trailblazeDriverType = TrailblazeDriverType.PLAYWRIGHT_NATIVE,
+      instanceId = "playwright-chromium",
+      description = "Web browser",
+    )
+    val bridge = DeviceTestBridge(
+      devices = setOf(webDevice),
+      driverType = TrailblazeDriverType.PLAYWRIGHT_NATIVE,
+      driverConnectionStatus =
+        "Playwright browser installing (12s elapsed, timeout in 888s): [42%] Downloading Chromium",
+    )
+    bridge.lastSelectedDeviceId = TrailblazeDeviceId(
+      instanceId = "playwright-chromium",
+      trailblazeDevicePlatform = TrailblazeDevicePlatform.WEB,
+    )
+    val toolSet = DeviceManagerToolSet(
+      sessionContext = createSessionContext(),
+      mcpBridge = bridge,
+    )
+
+    val result = toolSet.device(action = DeviceManagerToolSet.DeviceAction.INFO)
+
+    // Header lines must be present so CLI parsing still works.
+    assertContains(result, "Instance ID: playwright-chromium")
+    assertContains(result, "Platform: Web")
+    // Driver status must also be present so polling loops detect "installing".
+    assertContains(result, "Driver status:")
+    assertContains(result, "installing")
+    assertContains(result, "[42%] Downloading Chromium")
+  }
+
+  @Test
+  fun `device INFO surfaces failed driver status alongside header`() = runTest {
+    val bridge = DeviceTestBridge(
+      devices = setOf(androidDevice),
+      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+      driverConnectionStatus =
+        "Device driver failed to create: adb connection refused",
+    )
+    bridge.lastSelectedDeviceId = TrailblazeDeviceId(
+      instanceId = "emulator-5554",
+      trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
+    )
+    val toolSet = DeviceManagerToolSet(
+      sessionContext = createSessionContext(),
+      mcpBridge = bridge,
+    )
+
+    val result = toolSet.device(action = DeviceManagerToolSet.DeviceAction.INFO)
+
+    assertContains(result, "Instance ID: emulator-5554")
+    assertContains(result, "Platform: Android")
+    assertContains(result, "failed")
+  }
+
+  @Test
+  fun `device INFO with no driver status emits only the header block`() = runTest {
+    val bridge = DeviceTestBridge(
+      devices = setOf(androidDevice),
+      driverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+      driverConnectionStatus = null,
+    )
+    bridge.lastSelectedDeviceId = TrailblazeDeviceId(
+      instanceId = "emulator-5554",
+      trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
+    )
+    val toolSet = DeviceManagerToolSet(
+      sessionContext = createSessionContext(),
+      mcpBridge = bridge,
+    )
+
+    val result = toolSet.device(action = DeviceManagerToolSet.DeviceAction.INFO)
+
+    assertContains(result, "Instance ID: emulator-5554")
+    assertContains(result, "Platform: Android")
+    kotlin.test.assertFalse(result.contains("Driver status:"), "No status expected when driver is ready")
+  }
 }
 
 /**
@@ -298,6 +525,7 @@ class DeviceTestBridge(
   private val devices: Set<TrailblazeConnectedDeviceSummary> = emptySet(),
   private val driverType: TrailblazeDriverType? = null,
   private val installedApps: Set<String> = emptySet(),
+  var driverConnectionStatus: String? = null,
 ) : TrailblazeMcpBridge {
 
   var lastSelectedDeviceId: TrailblazeDeviceId? = null
@@ -319,9 +547,12 @@ class DeviceTestBridge(
   override suspend fun endSession(): Boolean = true
   override fun isOnDeviceInstrumentation(): Boolean = false
   override fun getDriverType(): TrailblazeDriverType? = if (lastSelectedDeviceId != null) driverType else null
+  override fun getDriverConnectionStatus(deviceId: TrailblazeDeviceId?): String? = driverConnectionStatus
   override suspend fun getScreenStateViaRpc(
     includeScreenshot: Boolean,
     screenshotScalingConfig: ScreenshotScalingConfig,
+    includeAnnotatedScreenshot: Boolean,
+    includeAllElements: Boolean,
   ): GetScreenStateResponse? = null
   override fun getActiveSessionId(): SessionId? = null
   override fun cancelAutomation(deviceId: TrailblazeDeviceId) {}

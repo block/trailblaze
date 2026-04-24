@@ -11,13 +11,20 @@ plugins {
 
 android {
   namespace = "xyz.block.trailblaze.common"
-  compileSdk = 35
+  compileSdk = 36
   defaultConfig {
     minSdk = 26
   }
   compileOptions {
     sourceCompatibility = JavaVersion.VERSION_17
     targetCompatibility = JavaVersion.VERSION_17
+  }
+  // KMP commonMain/resources/ are not automatically included as Java resources on Android.
+  // Explicitly add them so trailblaze-config/tools/*.yaml files are bundled into the AAR/APK
+  // and discoverable as Android assets from on-device instrumentation tests.
+  sourceSets.getByName("main") {
+    resources.srcDirs("src/commonMain/resources")
+    assets.srcDirs("src/commonMain/resources")
   }
 }
 

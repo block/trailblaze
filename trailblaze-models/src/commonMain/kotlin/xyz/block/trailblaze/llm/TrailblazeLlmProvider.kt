@@ -17,6 +17,7 @@ data class TrailblazeLlmProvider(
     LLMProvider.Google.id -> LLMProvider.Google
     DATABRICKS_KOOG_LLM_PROVIDER.id -> DATABRICKS_KOOG_LLM_PROVIDER
     MCP_SAMPLING_KOOG_LLM_PROVIDER.id -> MCP_SAMPLING_KOOG_LLM_PROVIDER
+    NONE_KOOG_LLM_PROVIDER.id -> NONE_KOOG_LLM_PROVIDER
     else -> customKoogProviderCache.getOrPut(id) {
       object : LLMProvider(id = id, display = display) {}
     }
@@ -44,6 +45,15 @@ data class TrailblazeLlmProvider(
       display = "MCP Sampling (Client)",
     ) {}
 
+    /**
+     * Sentinel provider for recordings-only runs where no LLM inference is needed.
+     * Any trail step that reaches the LLM will fail fast with a clear error.
+     */
+    val NONE_KOOG_LLM_PROVIDER = object : LLMProvider(
+      id = "none",
+      display = "None (recordings only)",
+    ) {}
+
     val ANTHROPIC: TrailblazeLlmProvider = fromKoogLlmProvider(LLMProvider.Anthropic)
     val DATABRICKS: TrailblazeLlmProvider = fromKoogLlmProvider(DATABRICKS_KOOG_LLM_PROVIDER)
     val GOOGLE: TrailblazeLlmProvider = fromKoogLlmProvider(LLMProvider.Google)
@@ -57,11 +67,20 @@ data class TrailblazeLlmProvider(
      */
     val MCP_SAMPLING: TrailblazeLlmProvider = fromKoogLlmProvider(MCP_SAMPLING_KOOG_LLM_PROVIDER)
 
+    /**
+     * Recordings-only sentinel — no LLM is configured. Any trail step that reaches the LLM
+     * will fail fast with a clear error instead of a confusing connection-refused from Ollama.
+     *
+     * Use this when running trails that are fully recorded and need no live inference.
+     */
+    val NONE: TrailblazeLlmProvider = fromKoogLlmProvider(NONE_KOOG_LLM_PROVIDER)
+
     val ALL_PROVIDERS: List<TrailblazeLlmProvider> = listOf(
       ANTHROPIC,
       DATABRICKS,
       GOOGLE,
       MCP_SAMPLING,
+      NONE,
       OLLAMA,
       OPENAI,
       OPEN_ROUTER,

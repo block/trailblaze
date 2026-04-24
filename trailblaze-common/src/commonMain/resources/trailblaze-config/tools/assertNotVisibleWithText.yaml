@@ -1,0 +1,2 @@
+id: assertNotVisibleWithText
+class: xyz.block.trailblaze.toolcalls.commands.AssertNotVisibleWithTextTrailblazeTool

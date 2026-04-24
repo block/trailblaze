@@ -1,14 +1,18 @@
 # Essential UI interaction tools for basic device control.
 # Available on host-driven and on-device drivers only — Revyl has its own tool implementations.
+#
+# `tapOnPoint` is included for completeness; the framework recommends `tap` by ref id as the
+# primary interaction primitive (more resilient to UI changes). Targets that want to force the
+# LLM away from x/y coordinates can exclude it at the target level via `excluded_tools:
+# [tapOnPoint]` in the target's own YAML.
 id: core_interaction
 description: "Tap, swipe, type, and other basic device interactions."
+always_enabled: true
 drivers:
   - android-ondevice-instrumentation
   - android-ondevice-accessibility
   - ios-host
 tools:
-  - assertNotVisibleWithText
-  - assertVisibleWithNodeId
   - eraseText
   - hideKeyboard
   - inputText

@@ -14,14 +14,14 @@ tools — branching behavior based on device state, memory values, or runtime co
 
 ### Current Limitation: Conditional Logic Requires Kotlin
 
-When a tool needs to do something like "if the merchant has a subscription, take path A;
+When a tool needs to do something like "if the user is already signed in, take path A;
 otherwise take path B," the only option today is to write a `DelegatingTrailblazeTool` in
 Kotlin:
 
 ```kotlin
-class EnsureMerchantReadyTool(...) : DelegatingTrailblazeTool {
+class EnsureUserReadyTool(...) : DelegatingTrailblazeTool {
   override fun toExecutableTrailblazeTools(ctx): List<ExecutableTrailblazeTool> {
-    return if (ctx.trailblazeAgent.memory.variables["merchant_token"] != null) {
+    return if (ctx.trailblazeAgent.memory.variables["test_user_token"] != null) {
       listOf(LaunchAppSignedInTool(...))
     } else {
       listOf(LoadAccountTool(...), LaunchAppSignedInTool(...))
@@ -68,19 +68,19 @@ a **future investment** — current work remains Kotlin-based.
 
 A TypeScript file is the unit of authorship for scripted tools. A single file may export one
 or more tool definitions, each conforming to Trailblaze's tool naming convention (Decision 005,
-e.g., `merchantFactory_*`, `myapp_*`). The tool names defined in the script become first-class
+e.g., `testUser_*`, `myapp_*`). The tool names defined in the script become first-class
 citizens in the tool registry alongside Kotlin-defined tools.
 
 ```typescript
-// merchant-factory/scripts/ensure-account.ts
+// test-user/scripts/ensure-account.ts
 
-export const merchantFactory_ensureAccount = tool({
-  name: "merchantFactory_ensureAccount",
-  description: "Loads a merchant account if not already in memory, otherwise no-ops.",
+export const testUser_ensureAccount = tool({
+  name: "testUser_ensureAccount",
+  description: "Loads a test-user account if not already in memory, otherwise no-ops.",
   params: { key: string() },
   run(ctx, { key }) {
-    if (ctx.memory.has("merchant_token")) return [];
-    return [{ tool: "merchantFactory_loadAccount", params: { key } }];
+    if (ctx.memory.has("test_user_token")) return [];
+    return [{ tool: "testUser_loadAccount", params: { key } }];
   },
 });
 ```
@@ -107,8 +107,8 @@ Fabrice Bellard. QuickJS is suitable because:
 - Supports ES2020 including async/await via promise resolution driven by the host
 
 Recommended binding: **`quickjs-kt`** (Kotlin-idiomatic, coroutine-backed async, Maven
-Central). Cash App's **Zipline** library uses QuickJS under the hood for dynamic code loading
-on Android.
+Central). **Zipline** (an open-source QuickJS-backed Kotlin/JS library) is another option
+for dynamic code loading on Android.
 
 #### 4. Restricted API Surface
 
@@ -131,10 +131,10 @@ Scripts decide **what tools to call** (`trailblaze.emit()`). Kotlin then execute
 calls through the normal execution path, which handles memory writes, logging, and recording.
 
 **HTTP is explicitly excluded** from the on-device scripting surface. API-calling tools (like
-`merchantFactory_*`) must remain Kotlin-based, as they require proper network error handling,
-authentication (Cloudflare tokens, etc.), and robust retry logic that is already implemented
-in Kotlin. If HTTP is needed in scripts running on the JVM host (not on device), that can be
-revisited separately.
+test-user provisioning tools that hit an internal API) must remain Kotlin-based, as they
+require proper network error handling, authentication, and robust retry logic that is already
+implemented in Kotlin. If HTTP is needed in scripts running on the JVM host (not on device),
+that can be revisited separately.
 
 #### 5. Integration as `DelegatingTrailblazeTool`
 
@@ -172,16 +172,16 @@ This resolves the Android on-device constraint: QuickJS only needs to run where 
 ### LLM as Dynamic Orchestrator
 
 For account selection and similar decisions, **the LLM already provides dynamic logic at no
-additional cost**. A trail step like "Sign in with a US coffee shop merchant that has a Free
-subscription" causes the LLM to call `merchantFactory_loadAccount(account: COFFEE_SHOP)` —
-no scripting required. TypeScript scripting is intended for **deterministic conditional logic**
+additional cost**. A trail step like "Sign in as a US test user on the Free subscription tier"
+causes the LLM to call `testUser_loadAccount(account: FREE_US)` — no scripting required.
+TypeScript scripting is intended for **deterministic conditional logic**
 that must behave identically on every run regardless of LLM inference, not for decisions that
 are naturally expressed in natural language.
 
 ### Current State
 
 **This vision is not yet implemented.** All conditional tool logic remains Kotlin-based.
-The merchant factory module is the intended first real-world use case once scripting is
+Test-user provisioning is the intended first real-world use case once scripting is
 available, but its current implementation is pure Kotlin and meets current needs.
 
 ## Consequences
@@ -189,7 +189,7 @@ available, but its current implementation is pure Kotlin and meets current needs
 **Positive:**
 
 - Conditional tool logic becomes accessible to test engineers without Kotlin expertise
-- TypeScript is familiar to the broader mobile/web engineering community at Block
+- TypeScript is familiar to the broader mobile/web engineering community
 - The precompile step keeps runtime simple and eliminates scripting toolchain dependencies
   from test execution environments
 - Compatible with Android on-device tests via the recording model (scripts run during
@@ -212,5 +212,5 @@ available, but its current implementation is pure Kotlin and meets current needs
 - Decision 009: Kotlin as Primary Language — TypeScript scripting is an additive layer, not a
   replacement; Kotlin remains primary for framework code and API-calling tools
 - Decision 010: Custom Tool Authoring — this decision extends the future directions noted there
-- Decision 023: Merchant Factory Provisioning Trails — intended first real-world application
-  for scripted conditional provisioning logic
+- Decision 023: Test-User Provisioning Trails — intended first real-world application for
+  scripted conditional provisioning logic

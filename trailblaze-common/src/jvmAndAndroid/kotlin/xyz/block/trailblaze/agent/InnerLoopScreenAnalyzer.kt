@@ -476,8 +476,11 @@ Before acting, check if the screen shows a non-normal state. If so, set `screenS
 
   /**
    * Builds the user message combining context and screen state.
+   *
+   * `internal` so tests can assert the verification-vs-direction prompt branch directly
+   * without wiring up a full `analyze(...)` invocation.
    */
-  private fun buildUserMessage(
+  internal fun buildUserMessage(
     context: RecommendationContext,
     viewHierarchy: String,
   ): String = buildString {
@@ -523,7 +526,11 @@ Before acting, check if the screen shows a non-normal state. If so, set `screenS
     appendLine(viewHierarchy)
     appendLine()
     appendLine("Analyze the screen and call ONE of the available tools with your chosen action.")
-    appendLine("IMPORTANT: Always prefer taking a UI action (tap, scroll, input) over calling objectiveStatus. Only call objectiveStatus after you have performed the actual actions needed.")
+    if (context.isVerification) {
+      appendLine("IMPORTANT: This is a verification step — an assertion about state, not an instruction to change it. If the screen matches the objective, call objectiveStatus with objectiveAppearsAchieved=true. Do not tap or input; you may scroll only if needed to locate the target element on screen, never to interact with it.")
+    } else {
+      appendLine("IMPORTANT: Always prefer taking a UI action (tap, scroll, input) over calling objectiveStatus. Only call objectiveStatus after you have performed the actual actions needed.")
+    }
     appendLine("Remember to include reasoning, screenSummary, and confidence in your tool call.")
   }
 

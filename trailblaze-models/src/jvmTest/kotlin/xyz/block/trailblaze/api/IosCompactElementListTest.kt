@@ -132,6 +132,26 @@ class IosCompactElementListTest {
   }
 
   @Test
+  fun `ALL_ELEMENTS detail emits unlabeled non-interactive nodes`() {
+    // A UIImageView with no clickable/focused/label is filtered by default but
+    // should appear under ALL_ELEMENTS.
+    val img =
+      node(
+        detail = DriverNodeDetail.IosMaestro(className = "UIImageView"),
+      )
+    val root = node(children = listOf(img))
+
+    val defaultResult = IosCompactElementList.build(root)
+    val allResult = IosCompactElementList.build(root, setOf(SnapshotDetail.ALL_ELEMENTS))
+
+    assertTrue(
+      !defaultResult.text.contains("UIImageView"),
+      "Unlabeled UIImageView should be filtered out by default",
+    )
+    assertContains(allResult.text, "UIImageView")
+  }
+
+  @Test
   fun `structural wrapper nodes are transparent - children promoted`() {
     val btn =
       node(
@@ -407,5 +427,191 @@ class IosCompactElementListTest {
     )
     assertTrue(lines.any { it.contains("UIButton \"Back\"") })
     assertTrue(lines.any { it.contains("UILabel \"Settings\"") })
+  }
+
+  // -- Stable identifier annotation (port of AXe [id=…] treatment) --
+
+  @Test
+  fun `resourceId surfaces as id= annotation`() {
+    val btn =
+      node(
+        detail =
+          DriverNodeDetail.IosMaestro(
+            className = "UIButton",
+            text = "Sign In",
+            resourceId = "signin_button",
+            clickable = true,
+          ),
+      )
+    val root = node(children = listOf(btn))
+    val result = IosCompactElementList.build(root)
+
+    assertContains(result.text, "UIButton \"Sign In\"")
+    assertContains(result.text, "[id=signin_button]")
+  }
+
+  @Test
+  fun `id annotation leads disabled annotation`() {
+    val btn =
+      node(
+        detail =
+          DriverNodeDetail.IosMaestro(
+            className = "UIButton",
+            text = "Delete",
+            resourceId = "delete_button",
+            clickable = true,
+            enabled = false,
+          ),
+      )
+    val root = node(children = listOf(btn))
+    val result = IosCompactElementList.build(root)
+
+    val line = result.text.lines().first { "Delete" in it }
+    val idIdx = line.indexOf("[id=")
+    val disabledIdx = line.indexOf("[disabled]")
+    assertTrue(idIdx in 0..disabledIdx, "id before disabled in: $line")
+  }
+
+  // -- hintText + text composite (port of AXe label: value) --
+
+  @Test
+  fun `UITextField with hintText and text composes as 'hint, text'`() {
+    val input =
+      node(
+        detail =
+          DriverNodeDetail.IosMaestro(
+            className = "UITextField",
+            text = "user@example.com",
+            hintText = "Email",
+            clickable = true,
+          ),
+      )
+    val root = node(children = listOf(input))
+    val result = IosCompactElementList.build(root)
+
+    assertContains(result.text, "UITextField \"Email: user@example.com\"")
+  }
+
+  @Test
+  fun `UITextField with only hintText still renders as hint`() {
+    val input =
+      node(
+        detail =
+          DriverNodeDetail.IosMaestro(
+            className = "UITextField",
+            hintText = "Search",
+            clickable = true,
+          ),
+      )
+    val root = node(children = listOf(input))
+    val result = IosCompactElementList.build(root)
+
+    assertContains(result.text, "UITextField \"Search\"")
+    assertTrue(!result.text.contains(":"), "no colon when only hintText present")
+  }
+
+  @Test
+  fun `identical hint and text dedupe to one`() {
+    val input =
+      node(
+        detail =
+          DriverNodeDetail.IosMaestro(
+            className = "UITextField",
+            text = "Search",
+            hintText = "Search",
+            clickable = true,
+          ),
+      )
+    val root = node(children = listOf(input))
+    val result = IosCompactElementList.build(root)
+
+    assertContains(result.text, "UITextField \"Search\"")
+    assertTrue(!result.text.contains("Search: Search"), "identical hint/text should dedupe")
+  }
+
+  // -- accessibilityText + text composite (surfaces Maestro's AX label trapped in accessibilityText) --
+
+  @Test
+  fun `accessibilityText and text compose as 'label, value' for Contacts-style rows`() {
+    // In Maestro's IOSDriver.mapViewHierarchy, AX label lands in attributes["accessibilityText"]
+    // and AX value lands in attributes["text"]. A Contacts row for a mobile phone number has:
+    //   accessibilityText = "mobile"      (from AXLabel)
+    //   text              = "(408) 555-5270" (from AXValue via title-or-value fallback)
+    val row =
+      node(
+        detail =
+          DriverNodeDetail.IosMaestro(
+            className = "XCUIElementTypeStaticText",
+            text = "(408) 555-5270",
+            accessibilityText = "mobile",
+          ),
+      )
+    val root = node(children = listOf(row))
+    val result = IosCompactElementList.build(root)
+
+    assertContains(result.text, "\"mobile: (408) 555-5270\"")
+  }
+
+  @Test
+  fun `hintText takes precedence over accessibilityText as category`() {
+    // When both are present, the placeholder (hintText) wins — it's a stronger semantic
+    // signal for input fields than the AX label.
+    val input =
+      node(
+        detail =
+          DriverNodeDetail.IosMaestro(
+            className = "UITextField",
+            text = "user@example.com",
+            hintText = "Email",
+            accessibilityText = "Email field",
+            clickable = true,
+          ),
+      )
+    val root = node(children = listOf(input))
+    val result = IosCompactElementList.build(root)
+
+    assertContains(result.text, "\"Email: user@example.com\"")
+    assertTrue(
+      !result.text.contains("Email field:"),
+      "hintText should win over accessibilityText as the category",
+    )
+  }
+
+  @Test
+  fun `identical accessibilityText and text dedupe to one`() {
+    val row =
+      node(
+        detail =
+          DriverNodeDetail.IosMaestro(
+            className = "XCUIElementTypeButton",
+            text = "OK",
+            accessibilityText = "OK",
+            clickable = true,
+          ),
+      )
+    val root = node(children = listOf(row))
+    val result = IosCompactElementList.build(root)
+
+    assertContains(result.text, "\"OK\"")
+    assertTrue(!result.text.contains("OK: OK"), "identical label/value should dedupe")
+  }
+
+  @Test
+  fun `accessibilityText-only fallback still renders just the ax label`() {
+    // An icon button with no text body — accessibilityText is the only label we have.
+    val icon =
+      node(
+        detail =
+          DriverNodeDetail.IosMaestro(
+            className = "XCUIElementTypeButton",
+            accessibilityText = "Close",
+            clickable = true,
+          ),
+      )
+    val root = node(children = listOf(icon))
+    val result = IosCompactElementList.build(root)
+
+    assertContains(result.text, "\"Close\"")
+    assertTrue(!result.text.contains(":"), "no colon when only ax label present")
   }
 }

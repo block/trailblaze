@@ -87,6 +87,25 @@ expect object Console {
   fun enableQuietMode()
 
   /**
+   * Restore normal [log] output after a prior [enableQuietMode].
+   *
+   * Required for callers that toggle quiet mode around a bounded operation —
+   * notably the daemon's in-process CLI path, where a forwarded `snapshot`
+   * would otherwise leave the long-lived daemon permanently silenced.
+   *
+   * No-op on Android and wasmJs.
+   */
+  fun disableQuietMode()
+
+  /**
+   * Current quiet-mode flag. Used by bounded-scope toggles to save-and-restore
+   * the prior state rather than blanket-reset via [disableQuietMode].
+   *
+   * Always `false` on Android and wasmJs (quiet mode is a no-op there).
+   */
+  fun isQuietMode(): Boolean
+
+  /**
    * Redirect [info] output to stderr, keeping stdout clean for JSON.
    *
    * Call this from CLI commands that use `--json` so that progress messages

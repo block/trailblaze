@@ -1,0 +1,2 @@
+id: androidworldbenchmarks_assertFileExistsOnDevice
+class: xyz.block.trailblaze.android.tools.androidworldbenchmarks.AndroidWorldBenchmarksAssertFileExistsOnDeviceTrailblazeTool

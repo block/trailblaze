@@ -83,24 +83,10 @@ internal fun iosMaestroStrategies(
       selectorWith(DriverNodeMatch.IosMaestro(classNameRegex = escapeForSelector(cn)))
     }
   },
-  "Child of parent" to {
-    findUniqueParentSelector(root, target, parentMap)?.let { parentSelector ->
-      val targetMatch = buildTargetMatch(detail)
-      TrailblazeNodeSelector.withMatch(targetMatch, childOf = parentSelector)
-    }
-  },
-  "Contains child" to {
-    findUniqueChildSelector(root, target)?.let { childSelector ->
-      val targetMatch = buildTargetMatch(detail)
-      TrailblazeNodeSelector.withMatch(targetMatch, containsChild = childSelector)
-    }
-  },
-  "Spatial relationship" to {
-    findSpatialSelector(root, target, parentMap)
-  },
-  "Index fallback" to {
-    computeIndexSelectorForMatch(root, target, buildTargetMatch(detail))
-  },
+  childOfUniqueParentStrategy(root, target, detail, parentMap),
+  containsUniqueChildStrategy(root, target, detail),
+  spatialStrategy(root, target, parentMap),
+  indexFallbackStrategy(root, target, detail),
 )
 
 // ---------------------------------------------------------------------------
@@ -123,28 +109,10 @@ internal fun namedStructuralIosMaestroStrategies(
       selectorWith(DriverNodeMatch.IosMaestro(classNameRegex = escapeForSelector(cn)))
     }
   },
-  "Structural: child of parent" to {
-    findUniqueStructuralParentSelector(root, target, parentMap)?.let { parentSelector ->
-      val match = buildStructuralMatch(detail)
-      TrailblazeNodeSelector.withMatch(match, childOf = parentSelector)
-    }
-  },
-  "Structural: child of labeled parent" to {
-    findContentParentSelectorForStructural(root, target, parentMap)?.let { parentSelector ->
-      val match = buildStructuralMatch(detail)
-      TrailblazeNodeSelector.withMatch(match, childOf = parentSelector)
-    }
-  },
-  "Structural: contains child" to {
-    findStructuralContainsChildSelector(root, target)
-  },
-  "Structural: spatial (labeled anchor)" to {
-    findContentAnchoredSpatialSelector(root, target, parentMap)
-  },
-  "Structural: scoped index in parent" to {
-    computeScopedIndexSelector(root, target, parentMap, buildStructuralMatch(detail))
-  },
-  "Structural: class + index" to {
-    computeIndexSelectorForMatch(root, target, buildStructuralMatch(detail))
-  },
+  structuralChildOfParentStrategy(root, target, detail, parentMap),
+  structuralChildOfLabeledParentStrategy(root, target, detail, parentMap),
+  structuralContainsChildStrategy(root, target),
+  structuralContentAnchoredSpatialStrategy(root, target, parentMap),
+  structuralScopedIndexStrategy(root, target, detail, parentMap),
+  structuralIndexFallbackStrategy(root, target, detail, name = "Structural: class + index"),
 )

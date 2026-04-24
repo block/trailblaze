@@ -22,7 +22,7 @@ NOTE:
 - Use this tool whenever an objective begins with the word expect, verify, confirm, or assert (case-insensitive).
 """,
 )
-@Deprecated("Use [AssertVisibleByNodeIdTrailblazeTool] or [AssertVisibleBySelectorTrailblazeTool].")
+@Deprecated("Use [AssertVisibleTrailblazeTool].")
 data class AssertVisibleWithResourceIdTrailblazeTool(
   @LLMDescription("Resource ID of the view to assert visibility for. This should be the full resource ID string.")
   val resourceId: String,

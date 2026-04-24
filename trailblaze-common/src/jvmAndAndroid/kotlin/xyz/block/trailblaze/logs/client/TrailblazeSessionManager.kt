@@ -74,8 +74,10 @@ class TrailblazeSessionManager(
    * Creates a session with an explicit session ID.
    * Useful when client provides the ID (e.g., MCP server resuming a session).
    *
-   * The session ID will be sanitized (truncated to 100 chars, non-alphanumeric
-   * characters replaced with underscores, converted to lowercase).
+   * The session ID will be sanitized (non-alphanumeric characters replaced
+   * with underscores, converted to lowercase) via [SessionId.sanitized] — the
+   * same sanitization applied to host-generated IDs, so an ID generated on
+   * the host and forwarded as an override survives the round-trip unchanged.
    *
    * ## Example
    * ```kotlin
@@ -94,7 +96,7 @@ class TrailblazeSessionManager(
     metadata: SessionMetadata = SessionMetadata(),
   ): TrailblazeSession {
     return TrailblazeSession(
-      sessionId = truncateSessionId(sessionId.value),
+      sessionId = SessionId.sanitized(sessionId.value),
       startTime = Clock.System.now(),
       metadata = metadata,
     )
@@ -278,8 +280,6 @@ class TrailblazeSessionManager(
   }
 
   companion object {
-    private const val MAX_SESSION_ID_LENGTH = 100
-
     @Suppress("SimpleDateFormat")
     private val dateTimeFormat = SimpleDateFormat("yyyy_MM_dd_HH_mm_ss", Locale.US)
 
@@ -292,10 +292,14 @@ class TrailblazeSessionManager(
     /**
      * Generates a session ID with timestamp and random suffix.
      *
-     * Format: `YYYY_MM_DD_HH_MM_SS_<seed>_<random>`, then sanitized via [truncateSessionId]
-     * so a host-generated ID passed to the on-device handler (which re-sanitizes any
-     * override ID) survives the round-trip unchanged — otherwise host and device end up
-     * writing to two different session directories that differ only by dot vs underscore.
+     * Format: `YYYY_MM_DD_HH_MM_SS_<seed>_<random>`, sanitized via [SessionId.sanitized].
+     *
+     * The full test name (including TestRail suite/section/case suffixes) is
+     * preserved so downstream tooling can reliably map session IDs back to test
+     * identifiers. Both host-generated and externally-provided IDs flow through
+     * [SessionId.sanitized] so a host-generated ID passed to the on-device handler
+     * (which re-sanitizes any override ID) survives the round-trip unchanged —
+     * otherwise host and device would write to two different session directories.
      *
      * Example: `2026_01_07_14_30_45_mytest_1234`
      *
@@ -304,23 +308,7 @@ class TrailblazeSessionManager(
      */
     fun generateSessionId(seed: String): SessionId {
       val randomNumber = random.nextInt(0, 9999)
-      return truncateSessionId("${dateTimeFormat.format(Date())}_${seed}_${randomNumber}")
+      return SessionId.sanitized("${dateTimeFormat.format(Date())}_${seed}_${randomNumber}")
     }
-
-    /**
-     * Truncates and sanitizes session ID to ensure it's filesystem-safe.
-     *
-     * - Truncates to 100 characters max
-     * - Replaces non-alphanumeric characters with underscores
-     * - Converts to lowercase
-     *
-     * @param sessionId The session ID to sanitize
-     * @return The sanitized session ID
-     */
-    fun truncateSessionId(sessionId: String): SessionId = SessionId(
-      sessionId.take(minOf(sessionId.length, MAX_SESSION_ID_LENGTH))
-        .replace(Regex("[^a-zA-Z0-9]"), "_")
-        .lowercase()
-    )
   }
 }

@@ -14,6 +14,9 @@ import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.server.endpoints.AgentLogEndpoint
+import xyz.block.trailblaze.logs.server.endpoints.CliExecEndpoint
+import xyz.block.trailblaze.logs.server.endpoints.CliExecRequest
+import xyz.block.trailblaze.logs.server.endpoints.CliExecResponse
 import xyz.block.trailblaze.logs.server.endpoints.CliRunAsyncEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.CliRunManager
 import xyz.block.trailblaze.logs.server.endpoints.CliRunRequest
@@ -30,6 +33,7 @@ import xyz.block.trailblaze.logs.server.endpoints.LogTracePostEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.PingEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.GenerateReportEndpoint
 import xyz.block.trailblaze.logs.server.endpoints.ReverseProxyEndpoint
+import xyz.block.trailblaze.logs.server.endpoints.ScriptingCallbackEndpoint
 import xyz.block.trailblaze.llm.config.LlmAuthResolver
 import xyz.block.trailblaze.llm.config.LlmConfigLoader
 import xyz.block.trailblaze.llm.config.ResolvedProviderAuth
@@ -50,6 +54,12 @@ data class CliEndpointCallbacks(
   val onShowWindowRequest: () -> Unit,
   /** Provides current daemon status */
   val statusProvider: () -> CliStatusResponse,
+  /**
+   * Called when CLI wants to execute a subcommand in-process on the daemon
+   * (IPC fast path). Null means the feature isn't wired up and the endpoint
+   * responds 404.
+   */
+  val onCliExecRequest: (suspend (CliExecRequest) -> CliExecResponse)? = null,
 )
 
 /**
@@ -87,6 +97,7 @@ object ServerEndpoints {
       LogTracePostEndpoint.register(this, logsRepo)
       ReverseProxyEndpoint.register(this, logsRepo, auths)
       GenerateReportEndpoint.register(this, logsRepo)
+      ScriptingCallbackEndpoint.register(this)
       staticFiles("/static", logsRepo.logsDir)
 
       // CLI endpoints (only registered if callbacks provided)
@@ -100,6 +111,7 @@ object ServerEndpoints {
         CliShutdownEndpoint.register(this, callbacks.onShutdownRequest)
         CliShowWindowEndpoint.register(this, callbacks.onShowWindowRequest)
         CliStatusEndpoint.register(this, callbacks.statusProvider)
+        callbacks.onCliExecRequest?.let { CliExecEndpoint.register(this, it) }
       }
 
       route("{...}") {

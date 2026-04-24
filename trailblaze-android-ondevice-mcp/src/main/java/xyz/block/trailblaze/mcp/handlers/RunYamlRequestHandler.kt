@@ -1,25 +1,42 @@
 package xyz.block.trailblaze.mcp.handlers
 
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import xyz.block.trailblaze.agent.TrailblazeProgressEvent
 import xyz.block.trailblaze.android.accessibility.TrailblazeAccessibilityService
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
+import xyz.block.trailblaze.llm.OnDeviceRpcTimeouts
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.llm.RunYamlResponse
 import xyz.block.trailblaze.logs.client.TrailblazeSession
-import xyz.block.trailblaze.logs.client.TrailblazeSessionManager
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.RpcHandler
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
 import xyz.block.trailblaze.mcp.progress.ProgressSessionManager
+import xyz.block.trailblaze.rules.TrailblazeLoggingRule
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.toSnakeCaseIdentifier
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
+
+/**
+ * Default implementation of the UI-settle seam — used on real Android where the
+ * accessibility service singleton is bound. Top-level (not inside the handler class) so
+ * JVM tests that construct the handler with a test lambda never touch this reference, and
+ * so the Android-loading of [TrailblazeAccessibilityService] is deferred until the first
+ * real invocation.
+ */
+private suspend fun defaultWaitForSettled() {
+  if (TrailblazeAccessibilityService.isServiceRunning()) {
+    TrailblazeAccessibilityService.waitForSettled()
+  }
+}
 
 /**
  * Handler for test execution requests.
@@ -43,7 +60,10 @@ class RunYamlRequestHandler(
   private val backgroundScope: CoroutineScope,
   private val getCurrentJob: () -> Job?,
   private val setCurrentJob: (Job?) -> Unit,
-  private val sessionManager: TrailblazeSessionManager,
+  /** Source of the session manager, logger, and [TrailblazeLoggingRule.failureScreenStateProvider]
+   *  for capturing failure screenshots. The rule must have its provider wired before the first
+   *  request — see the callers of [OnDeviceRpcServer]. */
+  private val loggingRule: TrailblazeLoggingRule,
   /** Callback to run via TrailblazeRunner (legacy YAML processing) */
   private val runTrailblazeYaml: suspend (RunYamlRequest, TrailblazeSession) -> TrailblazeSession,
   /** Provider for device info including classifiers - used in session start logs.
@@ -55,11 +75,30 @@ class RunYamlRequestHandler(
   /** Callback to run via MultiAgentV3. When null (default for on-device), MULTI_AGENT_V3
    *  requests fall back to TRAILBLAZE_RUNNER. V3 is intended to run on the host, not on-device. */
   private val runMultiAgentV3Callback: (suspend (RunYamlRequest, TrailblazeSession) -> TrailblazeSession)? = null,
+  /**
+   * Seam for waiting on the UI to settle before and after each tool dispatch. Default calls
+   * into the Android [xyz.block.trailblaze.android.accessibility.TrailblazeAccessibilityService]
+   * singleton. JVM unit tests override this with a no-op because loading that Android class
+   * requires the Android framework.
+   */
+  private val waitForSettled: suspend () -> Unit = ::defaultWaitForSettled,
 ) : RpcHandler<RunYamlRequest, RunYamlResponse> {
+
+  private val sessionManager = loggingRule.sessionManager
 
   /** Tracks the session associated with the currently running job, so we can end the correct
    *  session when a new request arrives and cancels the previous one. */
   @Volatile private var currentRunningSession: TrailblazeSession? = null
+
+  /** Terminal outcome signalled from inside the launched block to the sync awaiter. */
+  private sealed interface Outcome {
+    object Success : Outcome
+
+    object Cancelled : Outcome
+
+    data class Failure(val message: String) : Outcome
+  }
+
 
   override suspend fun handle(request: RunYamlRequest): RpcResult<RunYamlResponse> {
     // Create a single YAML parser instance for consistent usage throughout the handler
@@ -151,7 +190,14 @@ class RunYamlRequestHandler(
 
       val startTimeMs = System.currentTimeMillis()
 
-      // Launch the job in the background scope so it doesn't block the response
+      // Outcome is signalled by the launched block on every terminal path (success, failure,
+      // cancellation). When [RunYamlRequest.awaitCompletion] is true the handler awaits this
+      // before replying, so the HTTP response carries the terminal state inline — no polling.
+      val outcome = CompletableDeferred<Outcome>()
+
+      // Launch the job in the background scope so it doesn't block the response.
+      // Fire-and-forget callers observe progress via SubscribeToProgressHandler; sync callers
+      // observe completion via [outcome] below.
       val job = backgroundScope.launch {
         try {
           // Emit execution started progress event
@@ -172,9 +218,7 @@ class RunYamlRequestHandler(
           // have completed. Without this, rapid sequential tool dispatches (e.g.,
           // tap → inputText → tap → inputText) can overwhelm the accessibility
           // service and crash the on-device server.
-          if (TrailblazeAccessibilityService.isServiceRunning()) {
-            TrailblazeAccessibilityService.waitForSettled()
-          }
+          waitForSettled()
 
           // Route to appropriate agent implementation
           // For TRAILBLAZE_RUNNER, suppress the Started log in the callback since
@@ -204,11 +248,9 @@ class RunYamlRequestHandler(
           }
 
           // Wait for the UI to settle after execution before signaling completion.
-          // The host polls for COMPLETED status and immediately dispatches the next
-          // tool, so the UI must be stable before we transition.
-          if (TrailblazeAccessibilityService.isServiceRunning()) {
-            TrailblazeAccessibilityService.waitForSettled()
-          }
+          // Sync callers observe completion via the RPC response itself; the next tool
+          // dispatches immediately after we return, so the UI must be stable before then.
+          waitForSettled()
 
           val endTimeMs = System.currentTimeMillis()
 
@@ -233,8 +275,21 @@ class RunYamlRequestHandler(
           } else {
             // Keep the session open
           }
+
+          outcome.complete(Outcome.Success)
         } catch (e: Exception) {
+          // Propagate cancellation without capturing a failure screenshot —
+          // cancelled sessions aren't failures. Signal the sync awaiter first so
+          // it doesn't wait the full timeout budget for a cancelled job.
+          if (e is CancellationException) {
+            outcome.complete(Outcome.Cancelled)
+            throw e
+          }
+
           e.printStackTrace()
+
+          // Capture failure screenshot before ending the session
+          loggingRule.captureFailureScreenshot(session)
 
           val endTimeMs = System.currentTimeMillis()
 
@@ -258,11 +313,68 @@ class RunYamlRequestHandler(
               exception = e,
             )
           }
+
+          outcome.complete(Outcome.Failure(e.message ?: e::class.simpleName ?: "Unknown error"))
         }
       }
 
       currentRunningSession = session
       setCurrentJob(job)
+
+      if (request.awaitCompletion) {
+        val resolved = withTimeoutOrNull(OnDeviceRpcTimeouts.HANDLER_AWAIT_CAP_MS) { outcome.await() }
+        if (resolved == null) {
+          // Hard cap so a hung tool can't tie up an HTTP socket indefinitely. Cancel the job
+          // and launch a background cleanup: the launched block's catch path exits via
+          // `CancellationException` and short-circuits session-end + progress-event emission,
+          // so without this the ProgressSessionManager would stay in RUNNING and the session
+          // would never get a terminal log. We do the end-session and ExecutionCompleted
+          // emission here ourselves after joining the cancelled job, so every RunYamlRequest
+          // lifecycle ends with a terminal state regardless of how it unwinds.
+          val timeoutMessage =
+            "RunYamlRequest awaitCompletion exceeded ${OnDeviceRpcTimeouts.HANDLER_AWAIT_CAP_MS}ms"
+          val timeoutTimeMs = System.currentTimeMillis()
+          job.cancel(CancellationException(timeoutMessage))
+          backgroundScope.launch {
+            job.join()
+            progressManager?.onProgressEvent(
+              TrailblazeProgressEvent.ExecutionCompleted(
+                timestamp = timeoutTimeMs,
+                sessionId = session.sessionId,
+                deviceId = request.trailblazeDeviceId,
+                success = false,
+                totalDurationMs = timeoutTimeMs - startTimeMs,
+                totalActions = 0,
+                errorMessage = timeoutMessage,
+              ),
+            )
+            if (request.config.sendSessionEndLog) {
+              sessionManager.endSession(
+                session = session,
+                endedStatus = SessionStatus.Ended.Cancelled(
+                  durationMs = timeoutTimeMs - startTimeMs,
+                  cancellationMessage = timeoutMessage,
+                ),
+              )
+            }
+          }
+          return RpcResult.Success(
+            RunYamlResponse(
+              sessionId = session.sessionId,
+              success = false,
+              errorMessage = "Execution timed out after ${OnDeviceRpcTimeouts.HANDLER_AWAIT_CAP_MS}ms",
+            ),
+          )
+        }
+        return RpcResult.Success(
+          RunYamlResponse(
+            sessionId = session.sessionId,
+            success = resolved is Outcome.Success,
+            errorMessage = (resolved as? Outcome.Failure)?.message
+              ?: (resolved as? Outcome.Cancelled)?.let { "Execution cancelled" },
+          ),
+        )
+      }
 
       RpcResult.Success(
         RunYamlResponse(

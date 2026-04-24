@@ -1,0 +1,2 @@
+id: android_sendBroadcast
+class: xyz.block.trailblaze.mobile.tools.AndroidSendBroadcastTrailblazeTool

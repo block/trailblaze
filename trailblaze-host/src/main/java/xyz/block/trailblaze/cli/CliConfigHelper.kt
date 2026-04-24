@@ -3,6 +3,7 @@ package xyz.block.trailblaze.cli
 import kotlinx.serialization.json.Json
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.llm.TrailblazeLlmProvider
 import xyz.block.trailblaze.logs.client.TrailblazeJson
 import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
@@ -24,8 +25,12 @@ data class ConfigKey(
   val set: (SavedTrailblazeAppConfig, String) -> SavedTrailblazeAppConfig?,
 )
 
-/** Sentinel value indicating no LLM is configured. */
-const val LLM_NONE = "none"
+/**
+ * Sentinel value indicating no LLM is configured. Mirrors the framework's
+ * [TrailblazeLlmProvider.NONE] so that `trailblaze config llm none` resolves
+ * to the NoOpLlmClient and fails fast on any live inference attempt.
+ */
+val LLM_NONE: String = TrailblazeLlmProvider.NONE.id
 
 private fun String.isLlmNoneValue(): Boolean = equals(LLM_NONE, ignoreCase = true)
 
@@ -84,7 +89,7 @@ val CONFIG_KEYS: Map<String, ConfigKey> = listOf(
     validValues = "App target ID. Run 'trailblaze config target' to see all.",
     get = { config -> config.selectedTargetAppId ?: "(not set)" },
     set = { config, value ->
-      if (!value.lowercase().matches(Regex("^[a-z0-9]+$"))) {
+      if (!TrailblazeHostAppTarget.isValidId(value.lowercase())) {
         null
       } else {
         config.copy(selectedTargetAppId = value.lowercase())
@@ -103,7 +108,8 @@ val CONFIG_KEYS: Map<String, ConfigKey> = listOf(
   ConfigKey(
     name = "android-driver",
     description = "Android driver type",
-    validValues = "HOST, ONDEVICE, ACCESSIBILITY",
+    validValues = TrailblazeDriverType.selectableForPlatform(TrailblazeDevicePlatform.ANDROID)
+      .joinToString(", ") { it.cliShortName!! },
     get = { config ->
       (config.selectedTrailblazeDriverTypes[TrailblazeDevicePlatform.ANDROID] ?: "not set").toString()
     },
@@ -119,7 +125,8 @@ val CONFIG_KEYS: Map<String, ConfigKey> = listOf(
   ConfigKey(
     name = "ios-driver",
     description = "iOS driver type",
-    validValues = "HOST",
+    validValues = TrailblazeDriverType.selectableForPlatform(TrailblazeDevicePlatform.IOS)
+      .joinToString(", ") { it.cliShortName!! },
     get = { config ->
       (config.selectedTrailblazeDriverTypes[TrailblazeDevicePlatform.IOS] ?: "not set").toString()
     },
@@ -133,12 +140,12 @@ val CONFIG_KEYS: Map<String, ConfigKey> = listOf(
     },
   ),
   ConfigKey(
-    name = "ai-fallback",
-    description = "Enable/disable AI fallback when recorded steps fail",
+    name = "self-heal",
+    description = "Enable/disable self-heal (AI takes over) when recorded steps fail",
     validValues = "true, false",
-    get = { config -> config.aiFallbackEnabled.toString() },
+    get = { config -> config.selfHealEnabled.toString() },
     set = { config, value ->
-      value.toBooleanStrictOrNull()?.let { config.copy(aiFallbackEnabled = it) }
+      value.toBooleanStrictOrNull()?.let { config.copy(selfHealEnabled = it) }
     },
   ),
   ConfigKey(
@@ -176,14 +183,86 @@ object CliConfigHelper {
   private val json: Json = TrailblazeJson.defaultWithoutToolsInstance
 
   /**
-   * Gets the path to the settings file.
+   * Gets the path to the settings file, matching the resolution order used by the Block
+   * desktop app (see BlockTrailblazeDesktopAppConfig.defaultAppDataDir):
+   * 1. `trailblaze.appdata.dir` system property (set by the Homebrew wrapper)
+   * 2. Git repository root `<repo>/.trailblaze/trailblaze-settings.json` (dev workflow)
+   * 3. `~/.trailblaze/trailblaze-settings.json` (default)
+   *
+   * Without this, the CLI would write to the home-dir file while the daemon — running in
+   * a git repo — reads from the repo-local one, silently dropping every `config` change.
    */
-  fun getSettingsFile(): File = TrailblazeDesktopUtil.getDefaultSettingsFile()
+  fun getSettingsFile(): File {
+    val systemPropertyDir = System.getProperty("trailblaze.appdata.dir")
+    val appDataDir = when {
+      systemPropertyDir != null -> File(systemPropertyDir)
+      else -> findGitRoot()?.let { File(it, TrailblazeDesktopUtil.DOT_TRAILBLAZE_DIR_NAME) }
+        ?: TrailblazeDesktopUtil.getDefaultAppDataDirectory()
+    }
+    return File(appDataDir, TrailblazeDesktopUtil.SETTINGS_FILENAME)
+  }
+
+  /**
+   * Cache the git-root lookup for the lifetime of this JVM. `git rev-parse --show-toplevel`
+   * is cheap but nonzero (subprocess fork + IO), and [getSettingsFile] is called many times
+   * per CLI invocation. The repo root doesn't move within a single process.
+   *
+   * Sentinel: we cache the nullability too, so repeated "not in a git repo" lookups don't
+   * re-shell. Marker value `MISSING_GIT_ROOT` distinguishes "not yet resolved" from "resolved
+   * to null".
+   */
+  private val MISSING_GIT_ROOT = File("")
+  @Volatile private var cachedGitRoot: File? = null
+
+  private fun findGitRoot(): File? {
+    val cached = cachedGitRoot
+    if (cached != null) {
+      return if (cached === MISSING_GIT_ROOT) null else cached
+    }
+    val resolved = resolveGitRoot()
+    cachedGitRoot = resolved ?: MISSING_GIT_ROOT
+    return resolved
+  }
+
+  private fun resolveGitRoot(): File? = try {
+    val process = ProcessBuilder("git", "rev-parse", "--show-toplevel")
+      .redirectErrorStream(false)
+      .start()
+    val finished = process.waitFor(2, java.util.concurrent.TimeUnit.SECONDS)
+    if (!finished) {
+      process.destroyForcibly()
+      null
+    } else if (process.exitValue() == 0) {
+      File(process.inputStream.bufferedReader().readText().trim()).takeIf { it.isDirectory }
+    } else {
+      null
+    }
+  } catch (_: Exception) {
+    null
+  }
   
   /**
    * Reads the current config from disk, or returns null if not found.
+   *
+   * Applies in-memory hydration for forward-compat: older config files may
+   * predate [SavedTrailblazeAppConfig.selectedTargetAppId] and deserialize to
+   * `null`. We materialize the default target (`"none"`) on read instead of
+   * writing to disk, so that a plain setup check is read-only. The value is
+   * persisted naturally the next time the user mutates their config.
+   *
+   * If you need the exact on-disk state (e.g. for a diagnostic command that
+   * shows the raw settings file), use [readConfigRaw] instead.
    */
-  fun readConfig(): SavedTrailblazeAppConfig? {
+  fun readConfig(): SavedTrailblazeAppConfig? = readConfigRaw()?.hydrateDefaults()
+
+  /**
+   * Reads the config from disk without any hydration — returns exactly what
+   * was deserialized. Intended for diagnostic tooling that needs to report the
+   * true on-disk state (e.g. to distinguish "user explicitly set none" from
+   * "field is missing and we're defaulting"). Normal callers should use
+   * [readConfig].
+   */
+  fun readConfigRaw(): SavedTrailblazeAppConfig? {
     val file = getSettingsFile()
     return try {
       if (file.exists()) {
@@ -196,6 +275,13 @@ object CliConfigHelper {
       null
     }
   }
+
+  private fun SavedTrailblazeAppConfig.hydrateDefaults(): SavedTrailblazeAppConfig =
+    if (selectedTargetAppId.isNullOrBlank()) {
+      copy(selectedTargetAppId = TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget.id)
+    } else {
+      this
+    }
   
   /**
    * Resolves the effective HTTP port using CLI settings.
@@ -225,7 +311,7 @@ object CliConfigHelper {
    */
   fun defaultConfig(): SavedTrailblazeAppConfig = SavedTrailblazeAppConfig(
     selectedTrailblazeDriverTypes = mapOf(
-      TrailblazeDevicePlatform.ANDROID to TrailblazeDriverType.DEFAULT_ANDROID_ON_DEVICE,
+      TrailblazeDevicePlatform.ANDROID to TrailblazeDriverType.DEFAULT_ANDROID,
       TrailblazeDevicePlatform.IOS to TrailblazeDriverType.IOS_HOST,
     ),
     selectedTargetAppId = TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget.id,
@@ -248,27 +334,25 @@ object CliConfigHelper {
   }
   
   /**
-   * Parse Android driver string to TrailblazeDriverType.
+   * Parse a per-platform driver override. Matches (case-insensitively) on either the enum
+   * name (`ANDROID_ONDEVICE_ACCESSIBILITY`) or the short CLI name
+   * ([TrailblazeDriverType.cliShortName], e.g. `accessibility`, `axe`). Returns null if the
+   * value doesn't match any driver whose platform matches [platform] and whose short name
+   * is non-null (i.e. is user-selectable from the CLI).
    */
-  fun parseAndroidDriver(driver: String): TrailblazeDriverType? {
-    return when (driver.uppercase()) {
-      "HOST", "ANDROID_HOST", "ONDEVICE", "INSTRUMENTATION", "ANDROID_ONDEVICE_INSTRUMENTATION" ->
-        TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION
-      "ACCESSIBILITY", "ANDROID_ONDEVICE_ACCESSIBILITY" ->
-        TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY
-      else -> null
+  fun parseDriver(platform: TrailblazeDevicePlatform, driver: String): TrailblazeDriverType? {
+    val normalized = driver.trim()
+    return TrailblazeDriverType.selectableForPlatform(platform).firstOrNull {
+      it.cliShortName.equals(normalized, ignoreCase = true) ||
+        it.name.equals(normalized, ignoreCase = true)
     }
   }
-  
-  /**
-   * Parse iOS driver string to TrailblazeDriverType.
-   */
-  fun parseIosDriver(driver: String): TrailblazeDriverType? {
-    return when (driver.uppercase()) {
-      "HOST", "IOS_HOST" -> TrailblazeDriverType.IOS_HOST
-      else -> null
-    }
-  }
+
+  fun parseAndroidDriver(driver: String): TrailblazeDriverType? =
+    parseDriver(TrailblazeDevicePlatform.ANDROID, driver)
+
+  fun parseIosDriver(driver: String): TrailblazeDriverType? =
+    parseDriver(TrailblazeDevicePlatform.IOS, driver)
   
   /**
    * Parse agent implementation string.

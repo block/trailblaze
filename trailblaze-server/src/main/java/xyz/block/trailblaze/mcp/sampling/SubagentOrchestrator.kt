@@ -16,6 +16,7 @@ import xyz.block.trailblaze.mcp.toolsets.ToolSetCategory
 import xyz.block.trailblaze.mcp.toolsets.ToolSetCategoryMapping
 import xyz.block.trailblaze.mcp.utils.ScreenStateCaptureUtil
 import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
+import xyz.block.trailblaze.toolcalls.KoogToolExt
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.toKoogToolDescriptor
 import xyz.block.trailblaze.toolcalls.trailblazeToolClassAnnotation
@@ -47,14 +48,21 @@ class SubagentOrchestrator(
 ) {
   private val samplingClient = McpSamplingClient(sessionContext)
 
-  /** Tool classes available for subagent orchestration */
-  private val availableToolClasses: Set<KClass<out TrailblazeTool>> =
-    ToolSetCategoryMapping.getToolClasses(ToolSetCategory.CORE_INTERACTION) +
-      ToolSetCategoryMapping.getToolClasses(ToolSetCategory.NAVIGATION)
+  /** Tool surface (class-backed + YAML-defined) available for subagent orchestration. */
+  private val availableTools = ToolSetCategoryMapping.resolve(
+    setOf(ToolSetCategory.CORE_INTERACTION, ToolSetCategory.NAVIGATION),
+  )
 
-  /** Map of tool name -> tool class for deserialization */
+  /** Map of tool name -> tool class for class-backed lookup. */
   private val toolClassByName: Map<String, KClass<out TrailblazeTool>> =
-    availableToolClasses.associateBy { it.trailblazeToolClassAnnotation().name }
+    availableTools.toolClasses.associateBy { it.trailblazeToolClassAnnotation().name }
+
+  /** Known YAML-defined tool names — must be accepted in [executeAction] even though they
+   *  share one backing class via the polymorphic serializer. */
+  private val yamlToolNamesSet: Set<String> =
+    availableTools.yamlToolNames.map { it.toolName }.toSet()
+
+  private val allKnownToolNames: Set<String> get() = toolClassByName.keys + yamlToolNamesSet
 
   companion object {
     /** Maximum number of LLM requests before giving up (safety valve) */
@@ -82,15 +90,17 @@ RULES:
 - If stuck after several attempts, respond with failed"""
   }
 
-  /** Generate the full system prompt with tool descriptions from actual tool classes */
+  /** Generate the full system prompt with tool descriptions from actual tool classes and
+   *  YAML-defined tools. */
   private fun generateSystemPrompt(): String = buildString {
     appendLine(SYSTEM_PROMPT_BASE)
     appendLine()
     appendLine("AVAILABLE TOOLS:")
     appendLine()
 
-    availableToolClasses.forEach { toolClass ->
-      val descriptor = toolClass.toKoogToolDescriptor() ?: return@forEach
+    val classDescriptors = availableTools.toolClasses.mapNotNull { it.toKoogToolDescriptor() }
+    val yamlDescriptors = KoogToolExt.buildDescriptorsForYamlDefined(availableTools.yamlToolNames)
+    (classDescriptors + yamlDescriptors).forEach { descriptor ->
       appendLine("## ${descriptor.name}")
       appendLine(descriptor.description)
       if (descriptor.requiredParameters.isNotEmpty()) {
@@ -338,11 +348,14 @@ RULES:
   }
 
   private suspend fun executeAction(action: ParsedAction.Tool): String {
-    val toolClass = toolClassByName[action.name]
-      ?: return "[ERROR] Unknown tool: ${action.name}. Available: ${toolClassByName.keys}"
+    if (action.name !in allKnownToolNames) {
+      return "[ERROR] Unknown tool: ${action.name}. Available: $allKnownToolNames"
+    }
 
     return try {
-      // Build JSON with the tool discriminator and deserialize
+      // Build JSON with the tool discriminator and deserialize. The polymorphic serializer
+      // routes class-backed names to their KClass serializer and YAML-defined names to the
+      // pre-bound YamlDefinedToolSerializer, so both flavors land here without branching.
       val toolJson = buildToolJsonString(action.name, action.args)
       val tool = TrailblazeJsonInstance.decodeFromString<TrailblazeTool>(toolJson)
       // Guard against silent fallback to OtherTrailblazeTool — the polymorphic serializer

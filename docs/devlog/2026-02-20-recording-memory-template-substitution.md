@@ -20,23 +20,23 @@ When a trail step is driven by the LLM, `AgentMemory.interpolateVariables()` res
 variables _before_ the tool executes:
 
 ```
-${merchant_email}  →  "trailblaze+merchant.coffee-shop.abc123@example.com"
+${test_user_email}  →  "trailblaze+test.user.abc123@example.com"
 ```
 
 The tool then executes with the resolved value. When the session is recorded, the tool is
 serialized with the already-resolved literal string. The resulting recording looks like:
 
 ```yaml
-- step: Launch Square app signed in as the coffee shop merchant
+- step: Launch the app signed in as the test user
   recording:
     tools:
     - myapp_ios_launchAppSignedIn:
-        email: trailblaze+merchant.coffee-shop.abc123@example.com  # ← literal
+        email: trailblaze+test.user.abc123@example.com  # ← literal
         password: password
 ```
 
 On a future replay, if a different `account.json` has been committed (e.g., after the staging
-account was regenerated), `merchantFactory_loadAccount` runs and puts a _new_ email into memory
+account was regenerated), `testUser_loadAccount` runs and puts a _new_ email into memory
 — but the recording still hardcodes the old email. The replay will attempt to log in with a
 stale address and fail.
 
@@ -44,7 +44,7 @@ The recording should instead capture:
 
 ```yaml
 - myapp_ios_launchAppSignedIn:
-    email: ${merchant_email}   # ← template variable
+    email: ${test_user_email}   # ← template variable
     password: password
 ```
 
@@ -107,8 +107,8 @@ During recording generation, for each `TrailblazeToolLog` that has a non-null `m
 the tool's serialized YAML is post-processed to substitute literal values back to `${key}`:
 
 ```
-"trailblaze+merchant.coffee-shop.abc123@example.com"  →  "${merchant_email}"
-"ML4XV8YWNMESK"                                       →  "${merchant_token}"
+"trailblaze+test.user.abc123@example.com"  →  "${test_user_email}"
+"OPAQUE_TOKEN_VALUE_12345"                 →  "${test_user_token}"
 ```
 
 The algorithm:
@@ -124,7 +124,7 @@ Not all parameter values that happen to match a memory value should be templated
 - **Minimum value length**: Only substitute values of 8+ characters. Short values like `"US"`,
   `"password"`, or `"true"` are too ambiguous.
 - **Known memory-writing tools**: Give higher confidence to substitutions where the memory key
-  was written by a known provisioning tool (`merchantFactory_*`, `rememberWithAi`, etc.). These
+  was written by a known provisioning tool (`testUser_*`, `rememberWithAi`, etc.). These
   can be substituted regardless of length.
 - **Exact match only**: Only substitute exact full-field matches, not substrings within a
   longer string.
@@ -160,5 +160,5 @@ generation layer with no changes to execution semantics.
 ## Related Decisions
 
 - Decision 002: Trail Recording Format (YAML) — defines the recording schema this improves
-- Decision 023: Merchant Factory Provisioning Trails — the primary consumer of this improvement
-  (`${merchant_email}`, `${merchant_token}` being the most common affected variables)
+- Decision 023: Test-User Provisioning Trails — the primary consumer of this improvement
+  (`${test_user_email}`, `${test_user_token}` being the most common affected variables)

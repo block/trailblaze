@@ -73,6 +73,32 @@ class LlmConfigLoaderTest {
   }
 
   @Test
+  fun `load walks up from projectDir to find trailblaze_yaml in an ancestor`() {
+    // projectDir no longer needs to be the exact workspace root — findWorkspaceRoot walks
+    // up looking for trailblaze.yaml. Regression guard for anyone running `trailblaze`
+    // from a nested subdirectory of their project.
+    File(tempFolder.root, "trailblaze.yaml").writeText(
+      """
+      llm:
+        providers:
+          openai:
+            models:
+              - id: gpt-4.1
+        defaults:
+          model: openai/gpt-4.1
+      """.trimIndent(),
+    )
+    val nested = File(tempFolder.root, "nested/deep").apply { mkdirs() }
+
+    val config = LlmConfigLoader.load(
+      userHomeDir = File(tempFolder.root, "no-user-config"),
+      projectDir = nested,
+    )
+
+    assertEquals("openai/gpt-4.1", config.defaults.model)
+  }
+
+  @Test
   fun `project-level config overrides user-level`() {
     // User-level config
     val trailblazeDir = File(tempFolder.root, ".trailblaze").also { it.mkdirs() }

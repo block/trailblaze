@@ -1,0 +1,2 @@
+id: assertEquals
+class: xyz.block.trailblaze.toolcalls.commands.memory.AssertEqualsTrailblazeTool

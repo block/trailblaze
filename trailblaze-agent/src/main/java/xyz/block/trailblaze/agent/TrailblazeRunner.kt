@@ -132,6 +132,22 @@ class TrailblazeRunner(
       val traceId = TraceId.generate(TraceOrigin.LLM)
 
       val toolDescriptors = trailblazeToolRepo.getToolDescriptorsForStep(prompt)
+
+      // Fail fast before the LLM call. A planner with zero tools is a critical misconfiguration
+      // (toolset catalog discovery returned nothing, or a YAML tool migration broke registration) —
+      // not something to paper over by relaxing tool_choice. Surface the root cause with an
+      // actionable message instead of letting the provider return an opaque "tool_choice is only
+      // allowed when tools are specified" 400.
+      if (toolDescriptors.isEmpty()) {
+        throw TrailblazeException(
+          "No tool descriptors registered for step type ${prompt::class.simpleName}. " +
+            "This is a critical misconfiguration — the LLM cannot act without tools. " +
+            "Check toolset catalog discovery (TrailblazeToolSetCatalog.defaultEntries()) and " +
+            "that YAML tool/toolset resources are reachable in this runtime (e.g. packaged as " +
+            "Android assets when running on-device).",
+        )
+      }
+
       Console.appendInfo("  LLM ")
       val llmCallStartTime = Clock.System.now()
       val koogLlmResponseMessages: List<Message.Response> = coroutineScope {
@@ -146,11 +162,9 @@ class TrailblazeRunner(
             KoogLlmRequestData(
               messages = koogLlmRequestMessages,
               toolDescriptors = toolDescriptors,
-              toolChoice = if (llmClientHelper.getShouldForceToolCall()) {
-                LLMParams.ToolChoice.Required
-              } else {
-                LLMParams.ToolChoice.Auto
-              },
+              // Trailblaze is tools-only: every LLM response is a tool call. Never Auto,
+              // never a text reply. Mixing messages and tools confuses models.
+              toolChoice = LLMParams.ToolChoice.Required,
             ),
           )
         } catch (e: LLMClientException) {

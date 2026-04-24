@@ -14,6 +14,13 @@ import java.io.File
 /**
  * Context for handling Trailblaze tools.
  * Provides access to session, agent, and device information needed for tool execution.
+ *
+ * ## Thread-safety
+ * Not thread-safe. A single instance is typically built once per `runTrailblazeTools(...)`
+ * batch and reused across every tool in that batch — sequentially. The mutable
+ * [recordedToolOverride] field relies on that sequencing: each tool's `execute()` may
+ * set it, and `logToolExecution` clears it after reading. Concurrent dispatch on a
+ * shared context would race on that field and mis-record tools.
  */
 class TrailblazeToolExecutionContext(
   val screenState: ScreenState?,
@@ -49,6 +56,21 @@ class TrailblazeToolExecutionContext(
   /** Controls whether playback/recording uses nodeSelector or legacy Maestro path. */
   val nodeSelectorMode: NodeSelectorMode = NodeSelectorMode.DEFAULT,
 ) {
+  /**
+   * Set by a tool during [ExecutableTrailblazeTool.execute] to replace the invoked tool
+   * with a different representation in the recorded trail based on what was discovered at
+   * execution time. For example, a recorded
+   * [xyz.block.trailblaze.toolcalls.commands.TapOnPointTrailblazeTool] gets replaced with
+   * [xyz.block.trailblaze.toolcalls.commands.TapOnTrailblazeTool] carrying the selector and
+   * relative point resolved at execute time — the raw coordinate tap still fires in-session,
+   * only the recorded YAML changes so replays survive screen reflow.
+   *
+   * Cleared immediately after each log emit by [xyz.block.trailblaze.logToolExecution] so
+   * the override can't bleed into the next tool executed on the same shared context.
+   * Null when the invoked tool form should be recorded as-is.
+   */
+  var recordedToolOverride: TrailblazeTool? = null
+
   @Deprecated("Use maestroTrailblazeAgent, trailblazeLogger, or memory directly")
   val trailblazeAgent: MaestroTrailblazeAgent
     get() =

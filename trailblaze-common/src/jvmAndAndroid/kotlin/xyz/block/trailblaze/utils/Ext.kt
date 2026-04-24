@@ -12,16 +12,15 @@ import java.util.regex.Pattern
 
 object Ext {
 
-  fun JsonObject.asMaestroCommand(): Command? = try {
-    TrailblazeJsonInstance.decodeFromString(
-      GenericGsonJsonSerializer(MaestroCommand::class),
-      this.toString(),
-    ).asCommand()
-  } catch (e: Exception) {
-    Console.error("Failed to deserialize MaestroCommand from JSON: ${e.message}")
-    null
-  }
-
+  /**
+   * Gson round-trip of a [MaestroCommand] — paired with [asMaestroCommand] for log-only
+   * shapes (e.g. [maestro.orchestra.MaestroValidationError.commandJsonObject] and
+   * [xyz.block.trailblaze.logs.client.TrailblazeLog.MaestroCommandLog.maestroCommandJsonObj]).
+   * Do NOT use this as an execution or transport format; it emits Gson field names (e.g.
+   * `backPressCommand`) that Maestro's YAML parser does not accept. For transport, render
+   * commands via [xyz.block.trailblaze.maestro.MaestroYamlSerializer.toYaml] and execute
+   * through [xyz.block.trailblaze.maestro.MaestroYamlParser.parseYaml].
+   */
   fun MaestroCommand.asJsonObject(): JsonObject = try {
     val maestroCommandJson = TrailblazeJsonInstance.encodeToString(
       GenericGsonJsonSerializer(MaestroCommand::class),
@@ -32,19 +31,23 @@ object Ext {
     error(e)
   }
 
-  /**
-   * Converts raw Maestro command JsonObjects to executable Commands via Gson deserialization.
-   * Previously used MaestroYamlParser but Maestro 2.3.0 YAML parser no longer accepts
-   * the Gson property names (e.g. "launchAppCommand" vs "launchApp").
-   */
-  fun List<JsonObject>.asMaestroCommands(): List<Command> {
-    if (isEmpty()) return emptyList()
-    return mapNotNull { it.asMaestroCommand() }
-  }
-
-  fun List<Command>.asJsonObjects(): List<JsonObject> = this.map { it.asJsonObject() }
-
   fun Command.asJsonObject(): JsonObject = MaestroCommand(this).asJsonObject()
+
+  /**
+   * Inverse of [asJsonObject]. Only valid on JsonObjects produced by the matching
+   * [asJsonObject] call (i.e. in Gson field-name shape) — used to reconstruct a [Command]
+   * from a log record for rendering. Not a general-purpose Maestro-YAML decoder; for those,
+   * route through [xyz.block.trailblaze.maestro.MaestroYamlParser.parseYaml].
+   */
+  fun JsonObject.asMaestroCommand(): Command? = try {
+    TrailblazeJsonInstance.decodeFromString(
+      GenericGsonJsonSerializer(MaestroCommand::class),
+      this.toString(),
+    ).asCommand()
+  } catch (e: Exception) {
+    Console.error("Failed to deserialize MaestroCommand from JSON: ${e.message}")
+    null
+  }
 
   fun TreeNode.toViewHierarchyTreeNode(): ViewHierarchyTreeNode? {
     data class UIElementBounds(

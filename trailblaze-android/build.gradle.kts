@@ -9,7 +9,7 @@ plugins {
 
 android {
   namespace = "xyz.block.trailblaze.android"
-  compileSdk = 35
+  compileSdk = 36
   defaultConfig {
     minSdk = 26
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -32,6 +32,12 @@ android {
 
 dependencies {
   api(project(":trailblaze-common"))
+  // PR A5: on-device MCP bundle runtime. `AndroidTrailblazeRule` launches declared
+  // `mcp_servers:` bundles at session start via `McpBundleRuntimeLauncher`, registering the
+  // advertised tools into the session's `TrailblazeToolRepo`. `api` because the rule's
+  // public constructor takes `McpServerConfig` — callers constructing the rule need the
+  // model class on their compile classpath.
+  api(project(":trailblaze-scripting-bundle"))
 
   api(libs.androidx.uiautomator)
   api(libs.ktor.client.okhttp)

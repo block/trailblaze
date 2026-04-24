@@ -7,4 +7,4 @@ package xyz.block.trailblaze.android.tools
  * quote, restart quote) so the value is treated as a single shell argument. This prevents
  * shell injection via special characters like `;`, `|`, `$`, backticks, etc.
  */
-internal fun String.shellEscape(): String = "'${replace("'", "'\\''")}'"
+fun String.shellEscape(): String = "'${replace("'", "'\\''")}'"

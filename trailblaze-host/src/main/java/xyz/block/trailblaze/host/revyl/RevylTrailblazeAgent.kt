@@ -14,6 +14,7 @@ import xyz.block.trailblaze.revyl.RevylScreenState
 import xyz.block.trailblaze.revyl.tools.RevylExecutableTool
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
+import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool
 import xyz.block.trailblaze.toolcalls.getToolNameFromAnnotation
@@ -39,6 +40,7 @@ class RevylTrailblazeAgent(
   override val trailblazeLogger: TrailblazeLogger,
   override val trailblazeDeviceInfoProvider: () -> TrailblazeDeviceInfo,
   override val sessionProvider: TrailblazeSessionProvider,
+  override val trailblazeToolRepo: TrailblazeToolRepo? = null,
 ) : BaseTrailblazeAgent() {
 
   override fun buildExecutionContext(

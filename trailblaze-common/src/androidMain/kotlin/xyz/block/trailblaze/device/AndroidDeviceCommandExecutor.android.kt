@@ -41,6 +41,7 @@ actual class AndroidDeviceCommandExecutor actual constructor(
           is Boolean -> putExtra(key, value)
           is Int -> putExtra(key, value)
           is Long -> putExtra(key, value)
+          is Float -> putExtra(key, value)
           else -> putExtra(key, value.toString())
         }
       }

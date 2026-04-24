@@ -1,0 +1,2 @@
+id: hideKeyboard
+class: xyz.block.trailblaze.toolcalls.commands.HideKeyboardTrailblazeTool

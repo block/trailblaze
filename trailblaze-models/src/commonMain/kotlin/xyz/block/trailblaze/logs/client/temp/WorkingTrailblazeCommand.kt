@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.logs.client.temp
 
 import kotlinx.serialization.InternalSerializationApi
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.modules.SerializersModuleBuilder
 import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
@@ -12,12 +13,15 @@ import kotlin.reflect.KClass
  * This allows us to handle commands that are not on the classpath gracefully.
  */
 @OptIn(InternalSerializationApi::class)
-fun SerializersModuleBuilder.registerTrailblazeToolSerializer(allToolClasses: Map<ToolName, KClass<out TrailblazeTool>>) {
+fun SerializersModuleBuilder.registerTrailblazeToolSerializer(
+  allToolClasses: Map<ToolName, KClass<out TrailblazeTool>>,
+  yamlDefinedSerializers: Map<ToolName, KSerializer<out TrailblazeTool>> = emptyMap(),
+) {
   polymorphicDefaultDeserializer(TrailblazeTool::class) { className ->
-    OtherTrailblazeToolSerializer(allToolClasses)
+    OtherTrailblazeToolSerializer(allToolClasses, yamlDefinedSerializers)
   }
 
   polymorphicDefaultSerializer(TrailblazeTool::class) { value ->
-    OtherTrailblazeToolSerializer(allToolClasses)
+    OtherTrailblazeToolSerializer(allToolClasses, yamlDefinedSerializers)
   }
 }

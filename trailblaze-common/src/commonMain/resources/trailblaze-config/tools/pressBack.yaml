@@ -1,0 +1,10 @@
+id: pressBack
+description: |
+  Navigates back one screen. On Android this is the system back button; on
+  iOS Maestro simulates a back swipe from the left edge. Use `wait`
+  afterward if the app is loading a new screen.
+parameters: []
+tools:
+  - maestro:
+      commands:
+        - back: {}

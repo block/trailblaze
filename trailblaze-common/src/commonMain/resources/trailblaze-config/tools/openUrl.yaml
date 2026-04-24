@@ -1,0 +1,2 @@
+id: openUrl
+class: xyz.block.trailblaze.toolcalls.commands.OpenUrlTrailblazeTool

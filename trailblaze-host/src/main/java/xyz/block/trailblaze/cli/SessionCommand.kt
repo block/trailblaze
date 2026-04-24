@@ -114,10 +114,10 @@ class SessionStartCommand : Callable<Int> {
   var verbose: Boolean = false
 
   override fun call(): Int {
+    var currentConfig = CliConfigHelper.getOrCreateConfig()
+
     // Apply --target and --mode to global config if provided.
     if (target != null || mode != null) {
-      var currentConfig = CliConfigHelper.getOrCreateConfig()
-
       if (target != null) {
         currentConfig = currentConfig.copy(selectedTargetAppId = target!!.lowercase())
       }
@@ -132,13 +132,6 @@ class SessionStartCommand : Callable<Int> {
       }
 
       CliConfigHelper.writeConfig(currentConfig)
-    }
-
-    // Gate: config must be complete (target/mode set) before starting a session.
-    val setupError = checkSetupComplete()
-    if (setupError != null) {
-      Console.error(setupError)
-      return CommandLine.ExitCode.SOFTWARE
     }
 
     if (!verbose) Console.enableQuietMode()

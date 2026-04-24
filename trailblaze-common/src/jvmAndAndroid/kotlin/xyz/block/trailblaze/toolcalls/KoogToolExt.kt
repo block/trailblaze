@@ -1,6 +1,14 @@
 package xyz.block.trailblaze.toolcalls
 
+import ai.koog.agents.core.tools.ToolDescriptor
 import kotlinx.serialization.Serializable
+import xyz.block.trailblaze.config.ToolYamlConfig
+import xyz.block.trailblaze.config.YamlDefinedToolSerializer
+import xyz.block.trailblaze.config.YamlDefinedTrailblazeTool
+import xyz.block.trailblaze.config.toTrailblazeToolDescriptor
+import xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer
+import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toKoogToolDescriptor
+import xyz.block.trailblaze.util.Console
 import kotlin.reflect.KClass
 import kotlin.reflect.full.hasAnnotation
 
@@ -29,5 +37,80 @@ object KoogToolExt {
     buildString {
       append("Executed tool: ${args::class.simpleName} and result was trailblazeToolResult: $trailblazeToolResult")
     }
+  }
+
+  /**
+   * Builds Koog tools for YAML-defined (`tools:` mode) tools referenced by name. Each tool's
+   * descriptor and arg serializer come from the [ToolYamlConfig] loaded at startup; each tool
+   * shares the [YamlDefinedTrailblazeTool] implementation class, differentiated at execute time
+   * by the config captured in its serializer.
+   *
+   * Names without a matching config (e.g. a typo in a toolset's `yamlToolNames`) log a warning
+   * and are skipped rather than crashing registration.
+   */
+  fun buildKoogToolsForYamlDefined(
+    yamlToolNames: Set<ToolName>,
+    trailblazeToolContextProvider: () -> TrailblazeToolExecutionContext,
+  ): List<TrailblazeKoogTool<out TrailblazeTool>> {
+    if (yamlToolNames.isEmpty()) return emptyList()
+    val configsByName = TrailblazeSerializationInitializer.buildYamlDefinedTools()
+    return yamlToolNames.mapNotNull { name ->
+      val config = configsByName[name]
+      if (config == null) {
+        Console.log(
+          "buildKoogToolsForYamlDefined: no YAML config registered for tool '${name.toolName}' — skipping. " +
+            "Either the referencing toolset has a typo or the tool's YAML resource is missing " +
+            "from the classpath.",
+        )
+        return@mapNotNull null
+      }
+      buildYamlDefinedKoogTool(config, trailblazeToolContextProvider)
+    }
+  }
+
+  /**
+   * Builds LLM-facing [ToolDescriptor]s for YAML-defined tools referenced by name — without
+   * wiring up the execute side. Used when the LLM request needs to list YAML-defined tools
+   * alongside class-backed ones (e.g. [TrailblazeToolRepo.getCurrentToolDescriptors]) and no
+   * execution context is available yet.
+   *
+   * Skips unknown names with a warning, same as [buildKoogToolsForYamlDefined].
+   */
+  fun buildDescriptorsForYamlDefined(yamlToolNames: Set<ToolName>): List<ToolDescriptor> {
+    if (yamlToolNames.isEmpty()) return emptyList()
+    val configsByName = TrailblazeSerializationInitializer.buildYamlDefinedTools()
+    return yamlToolNames.mapNotNull { name ->
+      val config = configsByName[name]
+      if (config == null) {
+        Console.log(
+          "buildDescriptorsForYamlDefined: no YAML config registered for tool '${name.toolName}' — skipping.",
+        )
+        return@mapNotNull null
+      }
+      // YAML-defined tools: author-controlled schema via `ToolYamlConfig.parameters[*].type`,
+      // so unknown types are a config bug worth erroring on at registration.
+      config.toTrailblazeToolDescriptor().toKoogToolDescriptor(strict = true)
+    }
+  }
+
+  private fun buildYamlDefinedKoogTool(
+    config: ToolYamlConfig,
+    trailblazeToolContextProvider: () -> TrailblazeToolExecutionContext,
+  ): TrailblazeKoogTool<YamlDefinedTrailblazeTool> {
+    val descriptor = config.toTrailblazeToolDescriptor().toKoogToolDescriptor(strict = true)
+    val serializer = YamlDefinedToolSerializer(config)
+    return TrailblazeKoogTool(
+      argsSerializer = serializer,
+      descriptor = descriptor,
+      executeTool = { args: YamlDefinedTrailblazeTool ->
+        val ctx = trailblazeToolContextProvider()
+        val expanded = args.toExecutableTrailblazeTools(ctx)
+        val results = expanded.map { it.execute(ctx) }
+        buildString {
+          append("Executed YAML-defined tool: ${config.id} — expanded to ")
+          append("${expanded.size} primitive(s). Results: $results")
+        }
+      },
+    )
   }
 }

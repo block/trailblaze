@@ -260,13 +260,58 @@ object PlaywrightDriverManager {
     return if (value in 0..100) value else null
   }
 
+  /** Maximum number of times to invoke `playwright install chromium` before giving up. */
+  private const val INSTALL_MAX_ATTEMPTS = 3
+
+  /** Backoff before retrying a failed `playwright install chromium` invocation. */
+  private val INSTALL_RETRY_BACKOFF = java.time.Duration.ofSeconds(5)
+
   /**
-   * Spawns a subprocess to run `playwright install chromium`.
+   * Spawns a subprocess to run `playwright install chromium`, retrying transient failures.
+   *
+   * The ~150 MB Chromium download occasionally fails with a non-zero exit code when a CDN
+   * connection drops mid-download or a DNS lookup flakes. Those failures are retry-recoverable;
+   * retrying in-process avoids surfacing the error to callers (and their timeouts).
    *
    * Must run as a subprocess (not via [com.microsoft.playwright.CLI.main]) because the CLI
    * calls [System.exit] on completion, which would terminate the host JVM.
    */
   private fun runPlaywrightInstallChromium(onProgress: ((Int, String) -> Unit)? = null) {
+    var lastError: String? = null
+    repeat(INSTALL_MAX_ATTEMPTS) { attemptIndex ->
+      val attempt = attemptIndex + 1
+      try {
+        runPlaywrightInstallChromiumOnce(onProgress, attempt, INSTALL_MAX_ATTEMPTS)
+        return
+      } catch (t: Throwable) {
+        lastError = t.message
+        if (attempt < INSTALL_MAX_ATTEMPTS) {
+          println(
+            "[Playwright] install attempt $attempt/$INSTALL_MAX_ATTEMPTS failed " +
+              "(${t.message}); retrying in ${INSTALL_RETRY_BACKOFF.seconds}s…"
+          )
+          try {
+            Thread.sleep(INSTALL_RETRY_BACKOFF.toMillis())
+          } catch (ie: InterruptedException) {
+            Thread.currentThread().interrupt()
+            throw t
+          }
+        }
+      }
+    }
+    error(
+      "playwright install chromium failed after $INSTALL_MAX_ATTEMPTS attempts " +
+        "(last error: $lastError). " +
+        "Run `playwright install chromium` manually to install the browser."
+    )
+  }
+
+  /** Single invocation of `playwright install chromium`. Throws on timeout or non-zero exit. */
+  private fun runPlaywrightInstallChromiumOnce(
+    onProgress: ((Int, String) -> Unit)?,
+    attempt: Int,
+    maxAttempts: Int,
+  ) {
     val javaHome = System.getProperty("java.home")
     val javaBin = File(javaHome, "bin/java").absolutePath
     val classPath = System.getProperty("java.class.path")
@@ -296,7 +341,7 @@ object PlaywrightDriverManager {
       try {
         process.inputStream.bufferedReader().useLines { lines ->
           lines.forEach { line ->
-            println("[Playwright] $line")
+            println("[Playwright] [attempt $attempt/$maxAttempts] $line")
             if (onProgress != null && line.isNotBlank()) {
               onProgress(parseProgressPercent(line) ?: 0, line.trim())
             }
@@ -314,16 +359,14 @@ object PlaywrightDriverManager {
       process.destroyForcibly()
       readerThread.join(5_000)
       error(
-        "playwright install chromium timed out after 15 minutes. " +
-          "Run `playwright install chromium` manually to install the browser."
+        "playwright install chromium timed out after 15 minutes (attempt $attempt/$maxAttempts)."
       )
     }
     readerThread.join(5_000)
     val exitCode = process.exitValue()
     if (exitCode != 0) {
       error(
-        "playwright install chromium failed (exit code $exitCode). " +
-          "Run `playwright install chromium` manually to install the browser."
+        "playwright install chromium exited with code $exitCode (attempt $attempt/$maxAttempts)."
       )
     }
   }

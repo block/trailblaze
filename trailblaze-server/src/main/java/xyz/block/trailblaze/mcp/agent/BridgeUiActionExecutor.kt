@@ -354,6 +354,7 @@ class BridgeUiActionExecutor(
         is DriverNodeDetail.AndroidAccessibility -> describeAndroidAccessibilityNode(detail)
         is DriverNodeDetail.AndroidMaestro -> describeAndroidMaestroNode(detail)
         is DriverNodeDetail.IosMaestro -> describeIosMaestroNode(detail)
+        is DriverNodeDetail.IosAxe -> detail.resolveText()
         is DriverNodeDetail.Web -> describeWebNode(detail)
         is DriverNodeDetail.Compose -> describeComposeNode(detail)
       }

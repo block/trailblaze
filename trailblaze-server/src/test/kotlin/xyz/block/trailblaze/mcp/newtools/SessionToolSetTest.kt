@@ -376,6 +376,8 @@ class SessionTestBridge(
   override suspend fun getScreenStateViaRpc(
     includeScreenshot: Boolean,
     screenshotScalingConfig: ScreenshotScalingConfig,
+    includeAnnotatedScreenshot: Boolean,
+    includeAllElements: Boolean,
   ): GetScreenStateResponse? = null
 
   override fun getActiveSessionId(): SessionId? = activeSessionId

@@ -4,7 +4,6 @@ import ai.koog.agents.core.tools.annotations.LLMDescription
 import ai.koog.agents.core.tools.annotations.Tool
 import ai.koog.agents.core.tools.reflect.ToolSet
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
@@ -14,6 +13,7 @@ import xyz.block.trailblaze.mcp.toolsets.ToolSetCategory
 import xyz.block.trailblaze.mcp.toolsets.ToolSetCategoryMapping
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget
+import xyz.block.trailblaze.toolcalls.KoogToolExt
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeToolDescriptor
@@ -46,7 +46,7 @@ class ToolDiscoveryToolSet(
     toolbox() → index of all tool categories and available targets
     toolbox(detail=true) → full parameter details for every tool
     toolbox(name="tapOnElement") → single tool with full descriptor
-    toolbox(target="square") → tools for a specific target app
+    toolbox(target="sampleapp") → tools for a specific target app
 
     Use this to understand what actions are possible before calling blaze().
     """
@@ -255,18 +255,22 @@ class ToolDiscoveryToolSet(
     val currentTarget = currentTargetProvider()
     val results = mutableListOf<ToolDiscoverySearchMatch>()
 
-    // Search platform tools
-    DISCOVERABLE_CATEGORIES.forEach { category ->
-      getToolDescriptorsForCategory(category)
-        .filter { matches(it) }
-        .forEach { descriptor ->
-          results.add(
-            ToolDiscoverySearchMatch(
-              tool = descriptor,
-              source = category.displayName,
-            )
+    // Search platform tools — use platform-filtered toolsets (same as index mode)
+    // so tools inapplicable to the current device don't appear in results
+    // (e.g., openUrl won't show for web since the none.yaml only includes web_core).
+    val excludedToolNames = getExcludedToolNames(currentTarget, currentDriverType)
+    val platformToolsets = buildPlatformToolsets(
+      detail = true, excludedToolNames = excludedToolNames, driverType = currentDriverType,
+    )
+    for (toolset in platformToolsets) {
+      toolset.toolDetails?.filter { matches(it) }?.forEach { descriptor ->
+        results.add(
+          ToolDiscoverySearchMatch(
+            tool = descriptor,
+            source = toolset.name.replaceFirstChar { it.titlecase() },
           )
-        }
+        )
+      }
     }
 
     // Search target tools — scoped to connected driver if available
@@ -327,7 +331,7 @@ class ToolDiscoveryToolSet(
    */
   private fun resolveDefaultDriverType(platform: TrailblazeDevicePlatform): TrailblazeDriverType {
     return when (platform) {
-      TrailblazeDevicePlatform.ANDROID -> TrailblazeDriverType.DEFAULT_ANDROID_ON_DEVICE
+      TrailblazeDevicePlatform.ANDROID -> TrailblazeDriverType.DEFAULT_ANDROID
       TrailblazeDevicePlatform.IOS -> TrailblazeDriverType.IOS_HOST
       TrailblazeDevicePlatform.WEB -> TrailblazeDriverType.PLAYWRIGHT_NATIVE
     }
@@ -346,7 +350,7 @@ class ToolDiscoveryToolSet(
     val noneTarget = allTargetAppsProvider().find { it.id == DefaultTrailblazeHostAppTarget.id }
     if (noneTarget != null) {
       // Use a driver type for group filtering (default to Android if none provided)
-      val effectiveDriver = driverType ?: TrailblazeDriverType.DEFAULT_ANDROID_ON_DEVICE
+      val effectiveDriver = driverType ?: TrailblazeDriverType.DEFAULT_ANDROID
       val groups = noneTarget.getCustomToolGroupsForDriver(effectiveDriver)
       if (groups.isNotEmpty()) {
         return groups.mapNotNull { group ->
@@ -473,9 +477,14 @@ class ToolDiscoveryToolSet(
   private fun getToolDescriptorsForCategory(
     category: ToolSetCategory,
   ): List<TrailblazeToolDescriptor> {
-    return ToolSetCategoryMapping.getToolClasses(category)
+    val resolved = ToolSetCategoryMapping.resolve(category)
+    val classDescriptors = resolved.toolClasses
       .mapNotNull { it.toKoogToolDescriptor()?.toTrailblazeToolDescriptor() }
-      .sortedWith(compareBy { it.name })
+    // Include YAML-defined tools (e.g. `pressBack` in NAVIGATION) so discovery output
+    // matches what the executor will actually accept.
+    val yamlDescriptors = KoogToolExt.buildDescriptorsForYamlDefined(resolved.yamlToolNames)
+      .map { it.toTrailblazeToolDescriptor() }
+    return (classDescriptors + yamlDescriptors).sortedWith(compareBy { it.name })
   }
 
   /**

@@ -1,0 +1,2 @@
+id: takeSnapshot
+class: xyz.block.trailblaze.toolcalls.commands.TakeSnapshotTool

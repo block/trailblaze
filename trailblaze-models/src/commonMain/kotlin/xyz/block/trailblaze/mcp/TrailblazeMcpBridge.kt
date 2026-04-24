@@ -132,11 +132,21 @@ interface TrailblazeMcpBridge {
    * @param includeScreenshot Whether to include screenshot bytes
    * @param screenshotScalingConfig Configuration for scaling/compressing screenshots on-device
    *                                before transfer. Scaling on-device saves bandwidth and tokens.
+   * @param includeAnnotatedScreenshot Whether to render and include the set-of-mark annotated
+   *                                   screenshot. Defaults to true for backward compatibility;
+   *                                   non-LLM callers should explicitly pass false to save CPU,
+   *                                   memory, and bandwidth.
+   * @param includeAllElements Whether the on-device agent should skip its accessibility
+   *                           importance filter and return every node. Defaults to false to
+   *                           keep the default response small; set true for `--all` /
+   *                           [SnapshotDetail.ALL_ELEMENTS] callers.
    * @return GetScreenStateResponse on success, null on failure or if not using on-device mode
    */
   suspend fun getScreenStateViaRpc(
     includeScreenshot: Boolean = true,
     screenshotScalingConfig: ScreenshotScalingConfig = ScreenshotScalingConfig.DEFAULT,
+    includeAnnotatedScreenshot: Boolean = true,
+    includeAllElements: Boolean = false,
   ): GetScreenStateResponse? = null
 
   /**
@@ -270,8 +280,9 @@ interface TrailblazeMcpBridge {
    * Returns the built-in tool classes for the inner agent based on the currently connected device.
    *
    * Returns an empty set by default — [TrailblazeMcpServer] falls back to the standard Maestro
-   * tool set when this is empty. Overridden by [TrailblazeMcpBridgeImpl] to return
-   * [PlaywrightNativeToolSet.LlmToolSet.toolClasses] when a WEB device is connected.
+   * tool set when this is empty. Overridden by `TrailblazeMcpBridgeImpl` to resolve driver-scoped
+   * tools from the YAML toolset catalog (e.g., `web_core`/`web_verification` for Playwright) when
+   * a non-mobile device is connected.
    */
   fun getInnerAgentBuiltInToolClasses(): Set<KClass<out TrailblazeTool>> = emptySet()
 }

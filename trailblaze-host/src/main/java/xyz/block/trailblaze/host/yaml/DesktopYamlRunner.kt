@@ -32,7 +32,9 @@ import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.util.AccessibilityServiceSetupUtils
 import xyz.block.trailblaze.util.HostAndroidDeviceConnectUtils
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import java.io.File
+import java.io.IOException
 
 class DesktopYamlRunner(
   private val trailblazeDeviceManager: TrailblazeDeviceManager,
@@ -331,6 +333,81 @@ class DesktopYamlRunner(
   }
 
   /**
+   * Connects on-device instrumentation, optionally enables the accessibility service, and
+   * polls readiness. Single path for every host→device trail dispatcher in this file.
+   *
+   * ### Zombie-instrumentation recovery
+   *
+   * `connectToInstrumentationAndInstallAppIfNotAvailable` decides "already running" by checking
+   * `isAppRunning(testAppId)` via ADB — that only confirms the OS process exists, not that the
+   * HTTP server inside it is accepting connections. A process that's been killed gracelessly
+   * (app crash, emulator hiccup, accessibility service rebind) can linger as a zombie: the PID
+   * is alive, ADB reports it's running, but every probe times out because the server never
+   * started or died. When that happens, `waitForReady` throws [IOException] after its budget
+   * expires. Here we catch it and retry the whole setup with `forceRestart = true`, which
+   * force-stops the process, reinstalls the test APK, and relaunches instrumentation — the
+   * only thing that actually recovers a zombie. The common flow pays nothing for this fallback
+   * (the first `waitForReady` succeeds), so the retry only fires on genuinely stuck devices.
+   */
+  private suspend fun connectAndEnsureReady(
+    onDeviceRpc: OnDeviceRpcClient,
+    trailblazeDeviceId: TrailblazeDeviceId,
+    trailblazeOnDeviceInstrumentationTarget: TrailblazeOnDeviceInstrumentationTarget,
+    additionalInstrumentationArgs: Map<String, String>,
+    onProgressMessage: (String) -> Unit,
+    enableAccessibility: Boolean,
+    requireAndroidAccessibilityService: Boolean,
+  ): DeviceConnectionStatus {
+    // Step 1: connect (install/reuse) and enable accessibility if needed. Any IOException in
+    // here is an infrastructure-level failure (ADB, instrumentation launch, APK install) that
+    // a `forceRestart` retry would just repeat — so we let it propagate rather than hiding it
+    // behind a misleading "readiness probe failed" log.
+    suspend fun doConnectAndEnable(forceRestart: Boolean): DeviceConnectionStatus {
+      val status = HostAndroidDeviceConnectUtils.connectToInstrumentationAndInstallAppIfNotAvailable(
+        sendProgressMessage = onProgressMessage,
+        deviceId = trailblazeDeviceId,
+        trailblazeOnDeviceInstrumentationTarget = trailblazeOnDeviceInstrumentationTarget,
+        additionalInstrumentationArgs = additionalInstrumentationArgs,
+        forceRestart = forceRestart,
+      )
+      if (enableAccessibility) {
+        // The on-device GetScreenState handler (triggered below by waitForReady) uses the
+        // reliable in-process TrailblazeAccessibilityService singleton — dumpsys parsing is
+        // unreliable on API 35+.
+        AccessibilityServiceSetupUtils.enableAccessibilityService(
+          deviceId = trailblazeDeviceId,
+          hostPackage = trailblazeOnDeviceInstrumentationTarget.testAppId,
+          sendProgressMessage = onProgressMessage,
+        )
+      }
+      return status
+    }
+
+    val initialStatus = doConnectAndEnable(forceRestart = false)
+
+    // Step 2: readiness probe. This is the specific failure mode we retry — the instrumentation
+    // process is alive (so `isAppRunning` returned true and `forceRestart=false` reused it) but
+    // the HTTP server inside it is stuck or dead. Force-restart reinstalls the APK and relaunches
+    // instrumentation, which is the only thing that actually recovers a zombie. The common path
+    // pays nothing for this fallback: the first `waitForReady` succeeds in ms on a warm device.
+    return try {
+      onDeviceRpc.waitForReady(
+        requireAndroidAccessibilityService = requireAndroidAccessibilityService,
+      )
+      initialStatus
+    } catch (e: IOException) {
+      onProgressMessage(
+        "Device readiness probe failed (${e.message}); force-restarting instrumentation and retrying once.",
+      )
+      val restartedStatus = doConnectAndEnable(forceRestart = true)
+      onDeviceRpc.waitForReady(
+        requireAndroidAccessibilityService = requireAndroidAccessibilityService,
+      )
+      restartedStatus
+    }
+  }
+
+  /**
    * Connects instrumentation on-device and runs MULTI_AGENT_V3 on the host, using the
    * on-device accessibility driver for individual tool execution.
    *
@@ -350,26 +427,19 @@ class DesktopYamlRunner(
     targetTestApp: TrailblazeHostAppTarget?,
   ): SessionId? {
     return withContext(Dispatchers.IO) {
-      val status = HostAndroidDeviceConnectUtils.connectToInstrumentationAndInstallAppIfNotAvailable(
-        sendProgressMessage = onProgressMessage,
-        deviceId = connectedTrailblazeDevice.trailblazeDeviceId,
+      // V3 + on-host path always uses the accessibility driver on-device.
+      val status = connectAndEnsureReady(
+        onDeviceRpc = onDeviceRpc,
+        trailblazeDeviceId = connectedTrailblazeDevice.trailblazeDeviceId,
         trailblazeOnDeviceInstrumentationTarget = trailblazeOnDeviceInstrumentationTarget,
         additionalInstrumentationArgs = additionalInstrumentationArgs,
-      )
-
-      // Enable the service in ADB settings, then block on-device until it's connected.
-      // The on-device check uses the reliable in-process TrailblazeAccessibilityService
-      // singleton rather than host-side dumpsys parsing which is unreliable on API 35+.
-      AccessibilityServiceSetupUtils.enableAccessibilityService(
-        deviceId = connectedTrailblazeDevice.trailblazeDeviceId,
-        hostPackage = trailblazeOnDeviceInstrumentationTarget.testAppId,
-        sendProgressMessage = onProgressMessage,
+        onProgressMessage = onProgressMessage,
+        enableAccessibility = true,
+        requireAndroidAccessibilityService = true,
       )
 
       withContext(Dispatchers.Default) {
         onConnectionStatus(status)
-        onDeviceRpc.verifyServerIsRunning()
-        onDeviceRpc.ensureAccessibilityServiceReady()
 
         TrailblazeHostYamlRunner.runHostV3WithAccessibilityYaml(
           dynamicLlmClient = dynamicLlmClient,
@@ -399,30 +469,20 @@ class DesktopYamlRunner(
     targetTestApp: TrailblazeHostAppTarget?,
   ): SessionId? {
     return withContext(Dispatchers.IO) {
-      val status = HostAndroidDeviceConnectUtils.connectToInstrumentationAndInstallAppIfNotAvailable(
-        sendProgressMessage = onProgressMessage,
-        deviceId = connectedTrailblazeDevice.trailblazeDeviceId,
+      val needsAccessibility =
+        runYamlRequest.driverType == TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY
+      val status = connectAndEnsureReady(
+        onDeviceRpc = onDeviceRpc,
+        trailblazeDeviceId = connectedTrailblazeDevice.trailblazeDeviceId,
         trailblazeOnDeviceInstrumentationTarget = trailblazeOnDeviceInstrumentationTarget,
         additionalInstrumentationArgs = additionalInstrumentationArgs,
+        onProgressMessage = onProgressMessage,
+        enableAccessibility = needsAccessibility,
+        requireAndroidAccessibilityService = needsAccessibility,
       )
-
-      // Enable the service in ADB settings, then block on-device until it's connected.
-      // The on-device check uses the reliable in-process TrailblazeAccessibilityService
-      // singleton rather than host-side dumpsys parsing which is unreliable on API 35+.
-      if (runYamlRequest.driverType == TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY) {
-        AccessibilityServiceSetupUtils.enableAccessibilityService(
-          deviceId = connectedTrailblazeDevice.trailblazeDeviceId,
-          hostPackage = trailblazeOnDeviceInstrumentationTarget.testAppId,
-          sendProgressMessage = onProgressMessage,
-        )
-      }
 
       withContext(Dispatchers.Default) {
         onConnectionStatus(status)
-        onDeviceRpc.verifyServerIsRunning()
-        if (runYamlRequest.driverType == TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY) {
-          onDeviceRpc.ensureAccessibilityServiceReady()
-        }
 
         TrailblazeHostYamlRunner.runHostTrailblazeRunnerWithOnDeviceRpc(
           dynamicLlmClient = dynamicLlmClient,
@@ -449,30 +509,20 @@ class DesktopYamlRunner(
     additionalInstrumentationArgs: Map<String, String>,
   ): SessionId? {
     return withContext(Dispatchers.IO) {
-      val status = HostAndroidDeviceConnectUtils.connectToInstrumentationAndInstallAppIfNotAvailable(
-        sendProgressMessage = onProgressMessage,
-        deviceId = trailblazeConnectedDevice.trailblazeDeviceId,
+      val needsAccessibility =
+        runYamlRequest.driverType == TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY
+      val status = connectAndEnsureReady(
+        onDeviceRpc = onDeviceRpc,
+        trailblazeDeviceId = trailblazeConnectedDevice.trailblazeDeviceId,
         trailblazeOnDeviceInstrumentationTarget = trailblazeOnDeviceInstrumentationTarget,
         additionalInstrumentationArgs = additionalInstrumentationArgs,
+        onProgressMessage = onProgressMessage,
+        enableAccessibility = needsAccessibility,
+        requireAndroidAccessibilityService = needsAccessibility,
       )
-
-      // Enable the service in ADB settings, then block on-device until it's connected.
-      // The on-device check uses the reliable in-process TrailblazeAccessibilityService
-      // singleton rather than host-side dumpsys parsing which is unreliable on API 35+.
-      if (runYamlRequest.driverType == TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY) {
-        AccessibilityServiceSetupUtils.enableAccessibilityService(
-          deviceId = trailblazeConnectedDevice.trailblazeDeviceId,
-          hostPackage = trailblazeOnDeviceInstrumentationTarget.testAppId,
-          sendProgressMessage = onProgressMessage,
-        )
-      }
 
       withContext(Dispatchers.Default) {
         onConnectionStatus(status)
-        onDeviceRpc.verifyServerIsRunning()
-        if (runYamlRequest.driverType == TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY) {
-          onDeviceRpc.ensureAccessibilityServiceReady()
-        }
         when (val result: RpcResult<RunYamlResponse> = onDeviceRpc.rpcCall(runYamlRequest)) {
           is RpcResult.Failure -> {
             onProgressMessage("Failed to start YAML execution: ${result.message}${result.details?.let { " | $it" } ?: ""}")

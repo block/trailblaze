@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.yaml.models
 
-import kotlinx.serialization.json.JsonObject
+import maestro.orchestra.Command
+import xyz.block.trailblaze.maestro.MaestroYamlSerializer
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.MaestroTrailblazeTool
 import xyz.block.trailblaze.yaml.DirectionStep
@@ -93,8 +94,14 @@ class TrailblazeYamlBuilder {
   }
 
   fun maestro(
-    commands: List<JsonObject>,
-  ) = tools(listOf(MaestroTrailblazeTool(commands)))
+    commands: List<Command>,
+  ) = tools(
+    listOf(
+      MaestroTrailblazeTool(
+        yaml = MaestroYamlSerializer.toYaml(commands, includeConfiguration = false),
+      ),
+    ),
+  )
 
   fun build() = recordings
 

@@ -1,0 +1,2 @@
+id: longPressOnElementWithText
+class: xyz.block.trailblaze.toolcalls.commands.LongPressOnElementWithTextTrailblazeTool

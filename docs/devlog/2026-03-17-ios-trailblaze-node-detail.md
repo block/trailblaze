@@ -14,16 +14,16 @@ Added `DriverNodeDetail.IosMaestro` so iOS view hierarchies get preserved as typ
 
 - **New variant:** `DriverNodeDetail.IosMaestro` — same shape as `AndroidMaestro` plus `visible` and `ignoreBoundsFiltering` (iOS-specific filtering flags)
 - **New match type:** `DriverNodeMatch.IosMaestro` + `TrailblazeNodeSelector.iosMaestro` field
-- **Two conversion paths:** `TreeNode.toTrailblazeNodeIosMaestro()` (Maestro fallback) and `ViewHierarchyTreeNode.toIosMaestroTrailblazeNode()` (Square custom hierarchy)
+- **Two conversion paths:** `TreeNode.toTrailblazeNodeIosMaestro()` (Maestro fallback) and `ViewHierarchyTreeNode.toIosMaestroTrailblazeNode()` (downstream app-specific custom hierarchy)
 - **Backward compat adapter:** `TrailblazeNode.toViewHierarchyTreeNode()` for all 5 driver types
-- **Wired into drivers:** `HostMaestroDriverScreenState` and `SquareTrailblazeIosDriver` both populate `trailblazeNodeTree`
+- **Wired into drivers:** `HostMaestroDriverScreenState` and downstream app-specific iOS drivers both populate `trailblazeNodeTree`
 - **39 new tests** covering conversion, serialization, resolver matching, and round-trip compat
 
 ## Key Decisions
 
 ### One iOS variant, not two
 
-The original plan had `DriverNodeDetail.IosSquare` (Square custom hierarchy) and `DriverNodeDetail.IosMaestro` (Maestro fallback) as separate variants. We dropped `IosSquare` after realizing the Square on-device service serializes to `ViewHierarchyTreeNode` — the same ~18 properties Maestro captures. There's no fidelity gain from having a separate type. If the on-device service later sends richer data (accessibility traits, custom UIKit properties), we can reintroduce a dedicated variant then.
+The original plan had a dedicated `DriverNodeDetail` variant for downstream app-specific custom hierarchies alongside `DriverNodeDetail.IosMaestro` (the Maestro fallback). We dropped the dedicated variant after realizing the downstream on-device service serializes to `ViewHierarchyTreeNode` — the same ~18 properties Maestro captures. There's no fidelity gain from having a separate type. If a downstream on-device service later sends richer data (accessibility traits, custom UIKit properties), we can reintroduce a dedicated variant then.
 
 ### Remove non-native iOS boolean properties from matchable set
 
@@ -49,7 +49,7 @@ Initially built `buildHeterogeneousTrailblazeNodeTree()` that walked the custom 
 
 ## Known Gap
 
-`HostMaestroDriverScreenState` builds its `stableTrailblazeNodeTree` from the raw Maestro `TreeNode` (before custom hierarchy merge). When `SquareTrailblazeIosDriver` is active, its `lastTrailblazeNodeTree` has richer merged data, but the host module can't read it due to module boundaries (trailblaze-host can't depend on uitests-block). Fixing this needs a callback/provider pattern or shared interface — future work.
+`HostMaestroDriverScreenState` builds its `stableTrailblazeNodeTree` from the raw Maestro `TreeNode` (before custom hierarchy merge). When a downstream app-specific iOS driver is active, its `lastTrailblazeNodeTree` has richer merged data, but the host module can't read it due to module boundaries (trailblaze-host can't depend on the downstream app's UI-test module). Fixing this needs a callback/provider pattern or shared interface — future work.
 
 ## Future Work
 
@@ -74,4 +74,4 @@ Plan saved in `.agents/knowledge/ios-trailblaze-node-phase4-plan.md`. Priority o
 | `TrailblazeNodeMapperIosMaestro.kt` | **NEW** — `ViewHierarchyTreeNode.toIosMaestroTrailblazeNode()` |
 | `TrailblazeNodeCompat.kt` | **NEW** — backward compat adapter |
 | `HostMaestroDriverScreenState.kt` | Populate `trailblazeNodeTree` for iOS |
-| `SquareTrailblazeIosDriver.kt` | `lastTrailblazeNodeTree` at all return paths |
+| Downstream app-specific iOS driver | `lastTrailblazeNodeTree` at all return paths |

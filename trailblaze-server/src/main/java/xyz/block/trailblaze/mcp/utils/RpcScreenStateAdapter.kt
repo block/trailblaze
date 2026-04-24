@@ -27,11 +27,25 @@ class RpcScreenStateAdapter(
     response.screenshotBase64?.decodeBase64Bytes()
   }
 
+  private val _annotatedScreenshotBytes: ByteArray? by lazy {
+    response.annotatedScreenshotBase64?.decodeBase64Bytes() ?: _screenshotBytes
+  }
+
   override val screenshotBytes: ByteArray?
     get() = _screenshotBytes
 
+  /**
+   * Annotated (set-of-mark) screenshot bytes. When the caller requested
+   * `includeAnnotatedScreenshot = false`, the daemon does not render
+   * annotation — this getter then falls back to the clean screenshot so the
+   * non-null [ScreenState] contract still holds. LLM consumers that depend on
+   * actually seeing the set-of-mark overlay must gate on their own
+   * `includeAnnotatedScreenshot` flag rather than inspecting these bytes;
+   * there is no runtime signal distinguishing "annotation rendered" from
+   * "annotation was skipped and we're returning the clean image."
+   */
   override val annotatedScreenshotBytes: ByteArray
-    get() = _screenshotBytes ?: ByteArray(0)
+    get() = _annotatedScreenshotBytes ?: ByteArray(0)
 
   override val viewHierarchy: ViewHierarchyTreeNode
     get() = response.viewHierarchy
@@ -73,7 +87,7 @@ class RpcScreenStateAdapter(
     get() = TrailblazeDevicePlatform.ANDROID
 
   override val deviceClassifiers: List<TrailblazeDeviceClassifier>
-    get() = emptyList()
+    get() = response.deviceClassifiers?.map { TrailblazeDeviceClassifier(it) } ?: emptyList()
 }
 
 /**
@@ -106,6 +120,8 @@ object ScreenStateCaptureUtil {
     timeoutMs: Long = CAPTURE_TIMEOUT_MS,
     screenshotScalingConfig: ScreenshotScalingConfig = ScreenshotScalingConfig.DEFAULT,
     fast: Boolean = false,
+    includeAnnotatedScreenshot: Boolean = true,
+    includeAllElements: Boolean = false,
   ): ScreenState? {
     return withTimeoutOrNull(timeoutMs) {
       // Priority 1: RPC for on-device instrumentation (most reliable for Android)
@@ -113,6 +129,8 @@ object ScreenStateCaptureUtil {
         mcpBridge.getScreenStateViaRpc(
           includeScreenshot = !fast,
           screenshotScalingConfig = screenshotScalingConfig,
+          includeAnnotatedScreenshot = includeAnnotatedScreenshot,
+          includeAllElements = includeAllElements,
         )?.let { rpcResponse ->
           return@withTimeoutOrNull RpcScreenStateAdapter(rpcResponse)
         }

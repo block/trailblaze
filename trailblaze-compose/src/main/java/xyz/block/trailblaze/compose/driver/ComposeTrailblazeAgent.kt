@@ -30,6 +30,7 @@ import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
+import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.commands.memory.MemoryTrailblazeTool
 import xyz.block.trailblaze.toolcalls.isSuccess
@@ -54,6 +55,7 @@ class ComposeTrailblazeAgent(
   override val sessionProvider: TrailblazeSessionProvider,
   private val viewportWidth: Int = DEFAULT_VIEWPORT_WIDTH,
   private val viewportHeight: Int = DEFAULT_VIEWPORT_HEIGHT,
+  override val trailblazeToolRepo: TrailblazeToolRepo? = null,
 ) : BaseTrailblazeAgent() {
 
   companion object {

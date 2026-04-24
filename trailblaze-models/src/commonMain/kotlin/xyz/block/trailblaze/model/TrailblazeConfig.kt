@@ -4,13 +4,13 @@ import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.logs.model.SessionId
 
 /**
- * Default value for whether AI fallback is enabled.
+ * Default value for whether self-heal is enabled.
  *
- * AI fallback can mask issues with recordings by recovering via LLM calls when a recorded tool
- * sequence fails. Keeping it disabled by default makes failures more actionable and ensures
- * recordings are validated unless explicitly opted-in.
+ * Self-heal (also known as "AI fallback") recovers via LLM calls when a recorded tool sequence
+ * fails, and can update the recording so the test heals itself. Keeping it disabled by default
+ * makes failures more actionable and ensures recordings are validated unless explicitly opted-in.
  */
-const val AI_FALLBACK_DEFAULT: Boolean = false
+const val SELF_HEAL_DEFAULT: Boolean = false
 
 
 /**
@@ -19,8 +19,8 @@ const val AI_FALLBACK_DEFAULT: Boolean = false
  * making it easier to add new configuration parameters without modifying method signatures
  * throughout the codebase.
  *
- * @property aiFallback If true, allows AI fallback when recorded steps fail;
- *                      if false, disables AI fallback (useful for debugging recorded steps).
+ * @property selfHeal If true, allows self-heal (AI takes over) when recorded steps fail;
+ *                    if false, disables self-heal (useful for debugging recorded steps).
  * @property browserHeadless If true, the Playwright browser runs headless (no visible window);
  *                           if false, the browser window is shown on screen.
  */
@@ -30,7 +30,7 @@ data class TrailblazeConfig(
   val sendSessionEndLog: Boolean = true,
   /** Provide a non-null session ID to override the default session ID generation. */
   val overrideSessionId: SessionId? = null,
-  val aiFallback: Boolean = AI_FALLBACK_DEFAULT,
+  val selfHeal: Boolean = SELF_HEAL_DEFAULT,
   val browserHeadless: Boolean = true,
   val nodeSelectorMode: NodeSelectorMode = NodeSelectorMode.DEFAULT,
   /**

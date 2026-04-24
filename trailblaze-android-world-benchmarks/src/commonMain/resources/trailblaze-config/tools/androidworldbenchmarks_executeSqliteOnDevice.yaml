@@ -1,0 +1,2 @@
+id: androidworldbenchmarks_executeSqliteOnDevice
+class: xyz.block.trailblaze.android.tools.androidworldbenchmarks.AndroidWorldBenchmarksExecuteSqliteOnDeviceTrailblazeTool

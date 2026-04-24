@@ -76,6 +76,7 @@ import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
 import xyz.block.trailblaze.mcp.models.McpSessionId
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.mcp.newtools.ConfigToolSet
+import xyz.block.trailblaze.mcp.newtools.LogcatToolSet
 import xyz.block.trailblaze.mcp.newtools.ToolDiscoveryToolSet
 import xyz.block.trailblaze.mcp.newtools.SessionToolSet
 import xyz.block.trailblaze.mcp.newtools.StepToolSet
@@ -98,6 +99,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
 import xyz.block.trailblaze.mcp.utils.TrailblazeToolToMcpBridge
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
+import xyz.block.trailblaze.toolcalls.KoogToolExt
 import xyz.block.trailblaze.toolcalls.ToolSetCatalogEntry
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
 import xyz.block.trailblaze.toolcalls.toolName
@@ -169,6 +171,12 @@ class TrailblazeMcpServer(
   /** Optional callback to handle CLI run requests (for CLI integration) */
   var onRunRequest: (suspend (CliRunRequest, onProgress: (String) -> Unit) -> CliRunResponse)? = null,
   /**
+   * Optional callback for the daemon-side CLI fast path. When set,
+   * `POST /cli/exec` routes incoming argv through this callback so the daemon can
+   * run a whitelisted subcommand in-process and skip the CLI's JVM cold start.
+   */
+  var onCliExecRequest: (suspend (xyz.block.trailblaze.logs.server.endpoints.CliExecRequest) -> xyz.block.trailblaze.logs.server.endpoints.CliExecResponse)? = null,
+  /**
    * Optional provider for the LLM client to use for local sampling.
    * When provided, enables the Koog agent to use Trailblaze's configured LLM
    * instead of requiring MCP client sampling support.
@@ -196,9 +204,10 @@ class TrailblazeMcpServer(
    * Default operating mode for new MCP sessions.
    *
    * - [TrailblazeMcpMode.TRAILBLAZE_AS_AGENT]: Trailblaze handles LLM reasoning internally.
-   *   Default for Block internal usage where an LLM is already configured.
+   *   Appropriate when Trailblaze is running with a provider/model already configured.
    * - [TrailblazeMcpMode.MCP_CLIENT_AS_AGENT]: MCP client handles all LLM reasoning.
-   *   Recommended for OSS usage — no Trailblaze-side LLM required.
+   *   Recommended when no Trailblaze-side LLM is configured — the connected MCP client
+   *   (Claude Code, Goose, etc.) supplies the model.
    */
   var defaultMode: TrailblazeMcpMode = TrailblazeMcpMode.TRAILBLAZE_AS_AGENT
 
@@ -833,6 +842,9 @@ class TrailblazeMcpServer(
             // Call the callback if it's set (it's set by the UI after startup)
             onShowWindowRequest?.invoke()
           },
+          onCliExecRequest = onCliExecRequest?.let { handler ->
+            { request -> handler(request) }
+          },
           statusProvider = {
             val deviceCount = try {
               kotlinx.coroutines.runBlocking { mcpBridge.getAvailableDevices().size }
@@ -1033,7 +1045,8 @@ class TrailblazeMcpServer(
     // Callback for when the LLM requests a toolset change via setActiveToolSets
     val onActiveToolSetsChanged: (List<String>, List<ToolSetCatalogEntry>) -> Unit =
       { activeToolSetIds, catalog ->
-        val newToolClasses = TrailblazeToolSetCatalog.resolve(activeToolSetIds, catalog)
+        val resolved = TrailblazeToolSetCatalog.resolve(activeToolSetIds, catalog)
+        val newToolClasses = resolved.toolClasses
 
         // Remove previously registered TrailblazeTool MCP tools
         if (registeredTrailblazeToolNames.isNotEmpty()) {
@@ -1123,6 +1136,14 @@ class TrailblazeMcpServer(
         ).asTools(),
       )
 
+      // Logcat query/assert tool (for verifying internal app state: analytics, UJ signals)
+      tools(
+        LogcatToolSet(
+          sessionContext = sessionContext,
+          deviceIdProvider = { sessionContext.associatedDeviceId },
+        ).asTools(),
+      )
+
       // Two-tier agent MCP tools: blaze(), ask()
       // blaze(tools=...) works without an LLM (direct tool execution mode).
       // blaze() without tools and ask() require an LLM for screen analysis.
@@ -1179,15 +1200,29 @@ class TrailblazeMcpServer(
           // For Android/iOS: returns empty → falls back to ALL Maestro tools so that
           // availableToolsProvider() delivers the complete toolset to StepToolSet.
           val bridgeToolClasses = mcpBridge.getInnerAgentBuiltInToolClasses()
-          val builtInToolClasses = bridgeToolClasses.ifEmpty {
+          val usingBridgeTools = bridgeToolClasses.isNotEmpty()
+          val builtInToolClasses = if (usingBridgeTools) {
+            bridgeToolClasses
+          } else {
             ToolSetCategoryMapping.getToolClasses(ToolSetCategory.ALL)
           }
           val customToolClasses = customToolClassesProvider()
           // Custom tools first so the LLM sees app-specific tools (e.g., sign-in)
           // before generic alternatives (e.g., launchApp), improving selection.
-          val allTools = (customToolClasses + builtInToolClasses)
+          val classDescriptors = (customToolClasses + builtInToolClasses)
             .mapNotNull { it.toKoogToolDescriptor()?.toTrailblazeToolDescriptor() }
-          Console.log("[TrailblazeMcpServer] Inner agent total tools: ${allTools.size} (driver=$driverType, custom: ${customToolClasses.size})")
+          // Yaml-defined tools only ride along on the fallback (Android/iOS) path — the
+          // bridge path is a complete driver-specific replacement (e.g. Playwright), and
+          // driver-compatibility filtering for yaml tools lives in the catalog, not here.
+          val yamlDescriptors = if (usingBridgeTools) {
+            emptyList()
+          } else {
+            KoogToolExt.buildDescriptorsForYamlDefined(
+              ToolSetCategoryMapping.getYamlToolNames(ToolSetCategory.ALL),
+            ).map { it.toTrailblazeToolDescriptor() }
+          }
+          val allTools = classDescriptors + yamlDescriptors
+          Console.log("[TrailblazeMcpServer] Inner agent total tools: ${allTools.size} (driver=$driverType, custom: ${customToolClasses.size}, yaml: ${yamlDescriptors.size})")
           allTools
         }
       } else {
@@ -1201,7 +1236,7 @@ class TrailblazeMcpServer(
         StepToolSet(
           screenAnalyzer = screenAnalyzer,
           executor = uiActionExecutor,
-          screenStateProvider = { fast ->
+          screenStateProvider = { fast, includeAnnotated, includeAllElements ->
             // Capture the device ID from the current thread's context before entering
             // runBlocking, which creates a new coroutine scope that doesn't inherit
             // the parent's ThreadLocal-based context element.
@@ -1211,7 +1246,12 @@ class TrailblazeMcpServer(
                 deviceId?.let { McpDeviceContext.currentDeviceId.asContextElement(it) }
                   ?: EmptyCoroutineContext
               ) {
-                ScreenStateCaptureUtil.captureScreenState(mcpBridge, fast = fast)
+                ScreenStateCaptureUtil.captureScreenState(
+                  mcpBridge,
+                  fast = fast,
+                  includeAnnotatedScreenshot = includeAnnotated,
+                  includeAllElements = includeAllElements,
+                )
               }
             } catch (e: Throwable) {
               Console.error("[MCP] screenStateProvider: FAILED — ${e::class.simpleName}: ${e.message}")
@@ -1249,7 +1289,7 @@ class TrailblazeMcpServer(
 
     if (!isMinimalProfile) {
       // Register core TrailblazeTools (progressive disclosure) — skipped in MINIMAL mode
-      val coreToolClasses = TrailblazeToolSetCatalog.resolve(emptyList(), toolSetCatalog)
+      val coreToolClasses = TrailblazeToolSetCatalog.resolve(emptyList(), toolSetCatalog).toolClasses
       trailblazeToolBridge.registerTrailblazeTools(
         toolClasses = coreToolClasses,
         mcpServer = mcpServer,

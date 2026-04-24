@@ -10,7 +10,10 @@ import xyz.block.trailblaze.api.TrailblazeNode
  * removed and their children are promoted up to take their place, preserving any important
  * descendants. Non-Android nodes are always kept.
  *
- * The root node is always kept regardless of its importance flag.
+ * The root node is always kept regardless of its importance flag. When an app fails to mark
+ * a legitimately interactive node as important (e.g. a buggy Compose text field), the user
+ * can reach it via the `--all` CLI flag / `SnapshotDetail.ALL_ELEMENTS`, which bypasses the
+ * downstream meaningful-element filter. The default response stays small.
  */
 internal fun TrailblazeNode.filterImportantForAccessibility(): TrailblazeNode {
   fun processChildren(children: List<TrailblazeNode>): List<TrailblazeNode> =

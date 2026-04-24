@@ -47,7 +47,7 @@ class RunYamlRequestFactory(
     useRecordedSteps = useRecordedSteps,
     targetAppName = appConfig.selectedTargetAppId,
     config = TrailblazeConfig(
-      aiFallback = appConfig.aiFallbackEnabled,
+      selfHeal = appConfig.selfHealEnabled,
       overrideSessionId = null,
       preferHostAgent = appConfig.preferHostAgent,
     ),

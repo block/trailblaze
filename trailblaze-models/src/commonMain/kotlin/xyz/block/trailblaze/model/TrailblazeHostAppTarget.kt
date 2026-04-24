@@ -1,9 +1,11 @@
 package xyz.block.trailblaze.model
 
+import xyz.block.trailblaze.config.McpServerConfig
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.model.TrailblazeOnDeviceInstrumentationTarget.Companion.DEFAULT_ANDROID_ON_DEVICE
+import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import kotlin.reflect.KClass
 
@@ -23,10 +25,7 @@ abstract class TrailblazeHostAppTarget(
 ) {
 
   init {
-    // Validation to ensure key matches requirements
-    require(id.matches(Regex("^[a-z0-9]+$"))) {
-      "ID (${id}) for $displayName must be lowercase alphanumeric, no spaces or special characters"
-    }
+    require(isValidId(id)) { invalidIdMessage(id, displayName) }
   }
 
   abstract fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): Set<String>?
@@ -36,8 +35,19 @@ abstract class TrailblazeHostAppTarget(
     internalGetCustomToolsForDriver(driverType)
 
   /**
+   * YAML-defined (`tools:` mode) tool names this target exposes for the given driver.
+   *
+   * Mirrors [getCustomToolsForDriver] but for tools whose behavior is composed in YAML
+   * (no [KClass] backing). Default empty; YAML-backed targets populate it from their
+   * toolsets and per-platform `tools:` lists so name-based toolset references
+   * (e.g. `eraseText` in `core_interaction.yaml`) flow through the same way as
+   * class-backed tools.
+   */
+  open fun getCustomYamlToolNamesForDriver(driverType: TrailblazeDriverType): Set<ToolName> = emptySet()
+
+  /**
    * A named group of tools for discovery output. Allows targets to organize their
-   * custom tools into logical groups (e.g., "card-reader", "merchant-factory").
+   * custom tools into logical groups (e.g., "onboarding", "checkout", "settings").
    */
   data class ToolGroup(
     val id: String,
@@ -50,7 +60,7 @@ abstract class TrailblazeHostAppTarget(
    *
    * Default implementation wraps all custom tools in a single group named after the target.
    * Override in app-specific targets to provide meaningful grouping (e.g., separating
-   * card reader tools from merchant factory tools from app launch tools).
+   * onboarding tools from checkout tools from settings tools).
    */
   open fun getCustomToolGroupsForDriver(driverType: TrailblazeDriverType): List<ToolGroup> {
     val tools = getCustomToolsForDriver(driverType)
@@ -65,6 +75,18 @@ abstract class TrailblazeHostAppTarget(
   open fun getExcludedToolsForDriver(driverType: TrailblazeDriverType): Set<KClass<out TrailblazeTool>> =
     emptySet()
 
+  /**
+   * MCP server declarations for this target (Decision 038 / `mcp_servers:` in target YAML).
+   *
+   * Returns the raw [McpServerConfig] entries declared at the target root. The session-startup
+   * wiring layer (in `:trailblaze-scripting-subprocess`) spawns each entry as a subprocess, runs
+   * the MCP handshake, and registers advertised tools into the session's tool repo.
+   *
+   * Default is empty — Kotlin-code targets don't contribute MCP servers. YAML-backed targets
+   * override to return [xyz.block.trailblaze.config.AppTargetYamlConfig.mcpServers].
+   */
+  open fun getMcpServers(): List<McpServerConfig> = emptyList()
+
   fun getAllCustomToolClassesForSerialization(): Set<KClass<out TrailblazeTool>> =
     TrailblazeDriverType.entries.flatMap { trailblazeDriverType ->
       getCustomToolsForDriver(trailblazeDriverType)
@@ -76,7 +98,7 @@ abstract class TrailblazeHostAppTarget(
 
   /**
    * We're provided with the original iOS Driver from Maestro
-   * Then we are instantiating our custom Square Driver, wrapped around the original
+   * Then we are instantiating a downstream app-specific iOS driver, wrapped around the original
    *
    * @param originalIosDriver is actually of type "IOSDriver" and is provided by Maestro.
    *   NOTE: It is typed as [Any] because it's in KMP code and Maestro is JVM Only.
@@ -146,7 +168,7 @@ abstract class TrailblazeHostAppTarget(
    * Formats the version information for display in the UI.
    *
    * Override this in app-specific implementations to provide human-readable version strings.
-   * For example, Square might format "6940515" as "6.94 (build 6515)".
+   * For example, an app-specific target might format "12345678" as "1.23 (build 5678)".
    *
    * @param platform The platform (ANDROID or IOS)
    * @param versionInfo The raw version information from the device
@@ -189,7 +211,7 @@ abstract class TrailblazeHostAppTarget(
   open fun isVersionAcceptable(platform: TrailblazeDevicePlatform, versionInfo: AppVersionInfo): Boolean {
     val minVersion = getMinBuildVersion(platform) ?: return true
 
-    // For iOS, compare buildNumber (SQBuildNumber) if available, otherwise versionCode
+    // For iOS, compare buildNumber if available, otherwise versionCode
     // For Android, compare versionCode
     val installedVersion = when (platform) {
       TrailblazeDevicePlatform.IOS -> versionInfo.buildNumber ?: versionInfo.versionCode
@@ -203,6 +225,25 @@ abstract class TrailblazeHostAppTarget(
       // If versions aren't numeric, do string comparison
       installedVersion >= minVersion
     }
+  }
+
+  companion object {
+    /**
+     * Validation regex for target IDs. Target IDs are internal identifiers — artifact names
+     * in CI, YAML filenames, CLI config keys. They don't need to round-trip as LLM tool names,
+     * so hyphens and underscores are allowed alongside lowercase alphanumeric.
+     *
+     * Tool names that DO get registered with LLMs by exact string (see [ToolName] /
+     * `@TrailblazeToolClass`) keep their own stricter constraints separately.
+     */
+    private val ID_PATTERN = Regex("^[a-z0-9_-]+$")
+
+    /** Returns `true` if [id] is a well-formed target identifier. */
+    fun isValidId(id: String): Boolean = id.matches(ID_PATTERN)
+
+    /** The error message produced when an invalid ID is supplied; shared across call sites. */
+    fun invalidIdMessage(id: String, displayName: String): String =
+      "ID ($id) for $displayName must be lowercase alphanumeric, hyphens, or underscores only"
   }
 }
 

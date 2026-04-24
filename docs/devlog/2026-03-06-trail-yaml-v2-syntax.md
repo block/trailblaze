@@ -21,7 +21,7 @@ The current `.trail.yaml` syntax uses generic keywords (`prompts`, `tools`, `con
 - **No support for pre-seeded variables** — test data like emails, card numbers, and credentials must be hardcoded in step text or the `context` string rather than declared as structured, referenceable values.
 - **No test setup concept** — setup steps (launch, sign in, navigate) are mixed in with test steps. There's no checkpoint to replay when iterating, and no way to distinguish "couldn't reach the starting point" from "test failed."
 - **File is a list of items** — `[config, prompts, tools]` when there's exactly one of each. A document with named properties is simpler.
-- **Maestro was a YAML primitive** — now replaced by `MaestroTrailblazeTool` (see PR #1944), but the broader syntax should be updated to match.
+- **Maestro was a YAML primitive** — now replaced by `MaestroTrailblazeTool`, but the broader syntax should be updated to match.
 
 ## What we decided
 

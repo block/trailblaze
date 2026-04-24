@@ -3,6 +3,7 @@ package xyz.block.trailblaze.mcp.newtools
 import kotlinx.datetime.Clock
 import kotlinx.datetime.Instant
 import kotlinx.serialization.Serializable
+import xyz.block.trailblaze.config.project.TrailDiscovery
 import xyz.block.trailblaze.logs.client.ObjectiveLogHelper
 import xyz.block.trailblaze.logs.client.LogEmitter
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
@@ -412,10 +413,32 @@ class TrailExecutorImpl(
   }
 
   /**
-   * Resolves a file path, checking multiple locations.
-   * Validates that the resolved path stays within the trails directory to prevent path traversal.
+   * Resolves a trail file path, checking multiple locations and rejecting path-traversal
+   * attempts before returning.
+   *
+   * Resolution strategy (first match wins):
+   *  1. **Absolute path** — validated via `canonicalPath` prefix check against
+   *     `trailsDirectory`. Absolute paths outside the trails tree are rejected rather
+   *     than silently resolved, because MCP callers can supply arbitrary strings.
+   *  2. **Relative-to-trailsDirectory as-is** — the common case: `flows/login.trail.yaml`
+   *     resolves to `<trailsDir>/flows/login.trail.yaml`.
+   *  3. **Relative with `.trail.yaml` auto-append** — lets callers pass a bare name like
+   *     `login` and get `<trailsDir>/login.trail.yaml`.
+   *  4. **Recursive name search via [TrailDiscovery.findFirstTrail]** — last because it
+   *     is the most expensive and the least predictable (first filesystem-order match
+   *     wins). Exists so MCP callers who only know the trail's basename can still find
+   *     it without scanning the tree themselves. Traversal protection is applied to
+   *     whatever path comes back from the walk.
+   *
+   * Every returned path goes through [validateWithinTrailsDir], so even the non-existent
+   * fallback path at step 5 is a guaranteed-safe value (callers can trust
+   * `file.absolutePath` never escapes the trails tree).
+   *
+   * Visibility is `internal` so `TrailExecutorTest` can exercise the traversal guards
+   * directly — the guards are load-bearing for MCP security, so going through
+   * `executeFromFile` for a test would couple the check to unrelated device-side setup.
    */
-  private fun resolveFilePath(filePath: String): File {
+  internal fun resolveFilePath(filePath: String): File {
     val trailsDirCanonical = File(trailsDirectory).canonicalPath
 
     // If it's an absolute path, validate it's within the trails directory
@@ -445,14 +468,18 @@ class TrailExecutorImpl(
       }
     }
 
-    // Search recursively in trails directory
+    // Search recursively via TrailDiscovery's streaming API — prunes build/, .gradle/,
+    // etc. and short-circuits on first match, so name lookups stay
+    // cheap even on large workspaces. The walk visits files in filesystem order (not
+    // sorted); that is acceptable here because the path-traversal check below rejects
+    // unsafe results regardless of which of multiple same-basename files is hit first.
     val trailsDir = File(trailsDirectory)
     if (trailsDir.exists()) {
       val baseName = File(filePath).name
-      trailsDir.walkTopDown()
-        .filter { it.isFile && (it.name == baseName || it.name == "$baseName.trail.yaml") }
-        .firstOrNull()
-        ?.let { return validateWithinTrailsDir(it, trailsDirCanonical, filePath) }
+      TrailDiscovery.findFirstTrail(trailsDir.toPath()) { path ->
+        val name = path.fileName?.toString()
+        name == baseName || name == "$baseName.trail.yaml"
+      }?.toFile()?.let { return validateWithinTrailsDir(it, trailsDirCanonical, filePath) }
     }
 
     // Return relative to trails dir (will fail with "not found" if it doesn't exist)

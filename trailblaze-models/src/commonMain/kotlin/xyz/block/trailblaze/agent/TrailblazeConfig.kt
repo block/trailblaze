@@ -103,6 +103,23 @@ data class TrailConfig(
     )
 
     /**
+     * Recording-first with an AI-level retry budget.
+     *
+     * Plays the recorded tool calls from each step's `.trail.yaml` first and only falls
+     * back to the LLM analyzer when playback actually fails. Keeps [AI_ONLY]'s
+     * `maxRetries = 3` so fallback/AI-executed steps get the same attempt budget they
+     * would have under pure AI mode.
+     *
+     * Use this when you have authored recordings but want AI resilience for transient
+     * playback failures (e.g. selector drift, timing issues) rather than trading those
+     * for [DETERMINISTIC]'s harder failure mode.
+     */
+    val RECORDING_WITH_AI_RETRIES = TrailConfig(
+      mode = TrailExecutionMode.RECORDING_WITH_FALLBACK,
+      maxRetries = 3,
+    )
+
+    /**
      * CI/CD configuration for deterministic trail execution.
      *
      * Optimized for continuous integration environments where determinism,

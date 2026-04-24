@@ -21,10 +21,9 @@ import xyz.block.trailblaze.toolcalls.commands.AssertVisibleWithTextTrailblazeTo
 import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.LaunchAppTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.LaunchAppTrailblazeTool.LaunchMode
-import xyz.block.trailblaze.toolcalls.commands.PressBackTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.PasteClipboardTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnElementWithTextTrailblazeTool
 import xyz.block.trailblaze.utils.Ext.asJsonObject
-import xyz.block.trailblaze.utils.Ext.asJsonObjects
 import xyz.block.trailblaze.yaml.models.TrailblazeYamlBuilder
 import kotlin.test.assertEquals
 import xyz.block.trailblaze.util.Console
@@ -38,7 +37,7 @@ class TrailSerializerTest {
   fun simpleTest() {
     val yaml = trailblazeYamlInstance.encodeToString(
       LaunchAppTrailblazeTool(
-        "com.squareup",
+        "com.example.app",
         launchMode = LaunchMode.FORCE_RESTART,
       ),
     )
@@ -75,7 +74,7 @@ class TrailSerializerTest {
         recordable = true,
         recording = listOf(
           InputTextTrailblazeTool("Hello World"),
-          PressBackTrailblazeTool,
+          PasteClipboardTrailblazeTool,
         ),
       )
       .prompt(
@@ -89,7 +88,7 @@ class TrailSerializerTest {
         listOf(
           SwipeCommand(SwipeDirection.UP),
           BackPressCommand(),
-        ).asJsonObjects(),
+        ),
       ).build()
 
     val yaml: String = trailblazeYamlInstance.encodeToString(
@@ -148,7 +147,7 @@ class TrailSerializerTest {
           recording = ToolRecording(
             tools = listOf(
               fromTrailblazeTool(InputTextTrailblazeTool("Hello World")),
-              fromTrailblazeTool(PressBackTrailblazeTool),
+              fromTrailblazeTool(PasteClipboardTrailblazeTool),
             ),
           ),
         ),

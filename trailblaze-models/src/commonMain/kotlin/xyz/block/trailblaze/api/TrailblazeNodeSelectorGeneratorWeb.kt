@@ -41,15 +41,8 @@ internal fun webStrategies(
       null
     }
   },
-  "Child of parent" to {
-    findUniqueParentSelector(root, target, parentMap)?.let { parentSelector ->
-      val match = buildTargetMatch(detail)
-      TrailblazeNodeSelector.withMatch(match, childOf = parentSelector)
-    }
-  },
-  "Spatial relationship" to {
-    findSpatialSelector(root, target, parentMap)
-  },
+  childOfUniqueParentStrategy(root, target, detail, parentMap),
+  spatialStrategy(root, target, parentMap),
 )
 
 // ---------------------------------------------------------------------------
@@ -82,31 +75,11 @@ internal fun namedStructuralWebStrategies(
       null
     }
   },
-  "Structural: child of parent" to {
-    findUniqueStructuralParentSelector(root, target, parentMap)?.let { parentSelector ->
-      val match = buildStructuralMatch(detail)
-      TrailblazeNodeSelector.withMatch(match, childOf = parentSelector)
-    }
-  },
-  "Structural: child of labeled parent" to {
-    findContentParentSelectorForStructural(root, target, parentMap)?.let { parentSelector ->
-      val match = buildStructuralMatch(detail)
-      TrailblazeNodeSelector.withMatch(match, childOf = parentSelector)
-    }
-  },
-  "Structural: contains child" to {
-    findStructuralContainsChildSelector(root, target)
-  },
-  "Structural: spatial" to {
-    findStructuralSpatialSelector(root, target, parentMap)
-  },
-  "Structural: spatial (labeled anchor)" to {
-    findContentAnchoredSpatialSelector(root, target, parentMap)
-  },
-  "Structural: scoped index in parent" to {
-    computeScopedIndexSelector(root, target, parentMap, buildStructuralMatch(detail))
-  },
-  "Structural: role + index" to {
-    computeIndexSelectorForMatch(root, target, buildStructuralMatch(detail))
-  },
+  structuralChildOfParentStrategy(root, target, detail, parentMap),
+  structuralChildOfLabeledParentStrategy(root, target, detail, parentMap),
+  structuralContainsChildStrategy(root, target),
+  structuralSpatialStrategy(root, target, parentMap),
+  structuralContentAnchoredSpatialStrategy(root, target, parentMap),
+  structuralScopedIndexStrategy(root, target, detail, parentMap),
+  structuralIndexFallbackStrategy(root, target, detail, name = "Structural: role + index"),
 )

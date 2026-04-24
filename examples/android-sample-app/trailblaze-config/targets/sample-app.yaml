@@ -1,0 +1,25 @@
+# App target for the Trailblaze sample Android app.
+#
+# Declares the app under the `sampleapp` id so trails resolve it via `target: sampleapp`. The
+# `mcp_servers:` block spawns a TypeScript MCP server at session start and registers its
+# advertised tools (generateTestUser, currentEpochMillis — see ../mcp/tools.ts) into the
+# session's tool repo.
+#
+# NOTE — `script:` path is currently resolved against the JVM cwd (the dir you launched
+# `./trailblaze` from). For this sample the absolute-ish repo-relative path below is what
+# works when running from the repo root. A future iteration of the loader will anchor
+# filesystem-sourced YAMLs against their own dir so a plain `./mcp/tools.ts` would suffice.
+id: sampleapp
+display_name: Trailblaze Sample App
+platforms:
+  android:
+    app_ids:
+      - xyz.block.trailblaze.examples.sampleapp
+
+mcp_servers:
+  # Raw @modelcontextprotocol/sdk authoring surface (the original example).
+  - script: ./examples/android-sample-app/trailblaze-config/mcp/tools.ts
+  # @trailblaze/scripting SDK authoring surface — same two tools implemented via the SDK so the
+  # before/after diff stays visible. Tools advertise unique names (no collision); both paths
+  # register into the session's tool repo when spawned together.
+  - script: ./examples/android-sample-app/trailblaze-config/mcp-sdk/tools.ts

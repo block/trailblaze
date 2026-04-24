@@ -228,8 +228,8 @@ After that: trail(action=RUN, name="my-setup-trail") — instant, free
 Make `step()` accept user-level goals and execute via MultiAgentV3 when in `TRAILBLAZE_AS_AGENT` mode.
 
 **Files:**
-- `opensource/trailblaze-server/.../StepTool.kt`
-- `opensource/trailblaze-host/.../TrailblazeMcpBridgeImpl.kt`
+- `trailblaze-server/.../StepTool.kt`
+- `trailblaze-host/.../TrailblazeMcpBridgeImpl.kt`
 
 **Approach:** Build single-objective YAML from the goal, call `runYamlBlocking()` with MultiAgentV3, capture final screen as NL summary. `verify()` and `ask()` remain single-action.
 
@@ -238,8 +238,8 @@ Make `step()` accept user-level goals and execute via MultiAgentV3 when in `TRAI
 Add `sessionDir` and `appState` to all MCP tool responses.
 
 **Files:**
-- `opensource/trailblaze-server/.../StepTool.kt` — StepResult, VerifyResult, AskResult
-- `opensource/trailblaze-server/.../TrailblazeMcpSessionContext.kt`
+- `trailblaze-server/.../StepTool.kt` — StepResult, VerifyResult, AskResult
+- `trailblaze-server/.../TrailblazeMcpSessionContext.kt`
 
 **Approach:** Wire `LogsRepo.getSessionDir()` through to StepTool. Check `AdbCommandUtil.isAppRunning()` on errors to determine `appState`.
 
@@ -248,9 +248,9 @@ Add `sessionDir` and `appState` to all MCP tool responses.
 External developers create app targets by package name.
 
 **Files:**
-- `opensource/trailblaze-server/.../DeviceManagerToolSet.kt`
-- `opensource/trailblaze-models/.../TrailblazeHostAppTarget.kt`
-- `opensource/trailblaze-host/.../TrailblazeMcpBridgeImpl.kt`
+- `trailblaze-server/.../DeviceManagerToolSet.kt`
+- `trailblaze-models/.../TrailblazeHostAppTarget.kt`
+- `trailblaze-host/.../TrailblazeMcpBridgeImpl.kt`
 
 ### Phase 4: YAML v2 Syntax with Trailhead (High)
 
@@ -285,20 +285,20 @@ Phases 1 + 2 + 6 are the MVP. Once those ship, a developer can add Trailblaze as
 
 | File | Purpose |
 |---|---|
-| `opensource/trailblaze-server/.../StepTool.kt` | MCP tools: step(), verify(), ask() |
-| `opensource/trailblaze-server/.../TrailTool.kt` | Trail management: START/SAVE/RUN/LIST/END |
-| `opensource/trailblaze-server/.../DeviceManagerToolSet.kt` | Device connection, app targets, runPrompt |
-| `opensource/trailblaze-host/.../TrailblazeMcpBridgeImpl.kt` | Bridge: runYaml, runYamlBlocking, device selection |
-| `opensource/trailblaze-models/.../TrailblazeMcpBridge.kt` | Bridge interface |
-| `opensource/trailblaze-models/.../AgentImplementation.kt` | MULTI_AGENT_V3 enum |
-| `opensource/trailblaze-models/.../TrailblazeMcpMode.kt` | TRAILBLAZE_AS_AGENT vs MCP_CLIENT_AS_AGENT |
-| `opensource/trailblaze-models/.../TrailblazeHostAppTarget.kt` | App target abstract class |
-| `opensource/trailblaze-models/.../ScreenAnalysis.kt` | ExceptionalScreenState (crash detection) |
-| `opensource/trailblaze-agent/.../MultiAgentV3Runner.kt` | MultiAgentV3 implementation |
-| `opensource/trailblaze-server/.../TrailblazeMcpSessionContext.kt` | Per-MCP-session state |
-| `opensource/trailblaze-report/.../LogsRepo.kt` | Session log storage |
-| `opensource/trailblaze-host/.../TrailblazeCli.kt` | CLI commands |
-| `opensource/trailblaze-common/.../AdbCommandUtil.kt` | ADB shell commands, isAppRunning() |
+| `trailblaze-server/.../StepTool.kt` | MCP tools: step(), verify(), ask() |
+| `trailblaze-server/.../TrailTool.kt` | Trail management: START/SAVE/RUN/LIST/END |
+| `trailblaze-server/.../DeviceManagerToolSet.kt` | Device connection, app targets, runPrompt |
+| `trailblaze-host/.../TrailblazeMcpBridgeImpl.kt` | Bridge: runYaml, runYamlBlocking, device selection |
+| `trailblaze-models/.../TrailblazeMcpBridge.kt` | Bridge interface |
+| `trailblaze-models/.../AgentImplementation.kt` | MULTI_AGENT_V3 enum |
+| `trailblaze-models/.../TrailblazeMcpMode.kt` | TRAILBLAZE_AS_AGENT vs MCP_CLIENT_AS_AGENT |
+| `trailblaze-models/.../TrailblazeHostAppTarget.kt` | App target abstract class |
+| `trailblaze-models/.../ScreenAnalysis.kt` | ExceptionalScreenState (crash detection) |
+| `trailblaze-agent/.../MultiAgentV3Runner.kt` | MultiAgentV3 implementation |
+| `trailblaze-server/.../TrailblazeMcpSessionContext.kt` | Per-MCP-session state |
+| `trailblaze-report/.../LogsRepo.kt` | Session log storage |
+| `trailblaze-host/.../TrailblazeCli.kt` | CLI commands |
+| `trailblaze-common/.../AdbCommandUtil.kt` | ADB shell commands, isAppRunning() |
 
 ## Consequences
 

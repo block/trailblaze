@@ -37,18 +37,24 @@ class TrailblazeYaml(
     )
 
     /**
-     * Shared default instance. Set this via [initDefault] during app startup to configure
-     * tool serializers. On JVM, call [initDefault] with a fully-configured instance
-     * (e.g., from the `createTrailblazeYaml(customToolClasses)` factory function in trailblaze-common).
+     * Shared default instance, lazily built on first access.
      *
-     * If not explicitly initialized, defaults to an instance with no tool serializers.
+     * On JVM/Android, first read invokes [buildTrailblazeYamlDefault], which calls
+     * `TrailblazeSerializationInitializer.buildAllTools()` to collect classpath-discovered
+     * and imperatively-registered tool classes. That call seals the tool set — any later
+     * imperative registration of a new class throws. All registrations must complete
+     * before any serialization read.
+     *
+     * On wasmJs the actual returns an empty [TrailblazeYaml] (wasmJs consumers decode
+     * unknown tools via the `OtherTrailblazeTool` fallback and do not need typed
+     * serializers).
+     *
+     * To register tool classes that are not classpath-discoverable (e.g. Android on-device
+     * runners loading YAML from AssetManager), call
+     * `TrailblazeSerializationInitializer.registerImperativeToolClasses(...)` during
+     * class-load init blocks.
      */
-    var Default: TrailblazeYaml = TrailblazeYaml()
-      private set
-
-    fun initDefault(instance: TrailblazeYaml) {
-      Default = instance
-    }
+    val Default: TrailblazeYaml by lazy { buildTrailblazeYamlDefault() }
 
     fun toolToYaml(toolName: String, trailblazeTool: TrailblazeTool): String =
       Default.encodeToolToYaml(toolName, trailblazeTool)

@@ -66,6 +66,7 @@ import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 import xyz.block.trailblaze.host.rules.BasePlaywrightElectronTest
 import xyz.block.trailblaze.host.rules.BasePlaywrightNativeTest
+import xyz.block.trailblaze.util.AndroidHostAdbUtils
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.isMacOs
 import xyz.block.trailblaze.revyl.RevylCliClient
@@ -384,6 +385,19 @@ class TrailblazeDeviceManager(
         // Use direct Maestro driver access for host drivers
         getCurrentScreenStateViaDriver(trailblazeDeviceId)
       }
+      TrailblazeDriverType.IOS_AXE -> {
+        val axeDevice = deviceState.device as? xyz.block.trailblaze.host.devices.AxeConnectedDevice
+        if (axeDevice == null) {
+          Console.log("⚠️ IOS_AXE driver type but connected device is not AxeConnectedDevice")
+          null
+        } else {
+          xyz.block.trailblaze.host.screenstate.AxeScreenState(
+            udid = axeDevice.udid,
+            deviceWidth = axeDevice.deviceWidth,
+            deviceHeight = axeDevice.deviceHeight,
+          )
+        }
+      }
       TrailblazeDriverType.COMPOSE -> {
         // Not currently supported for direct screen capture
         Console.log("⚠️ Screen state capture not supported for ${driverType.name} driver")
@@ -545,7 +559,11 @@ class TrailblazeDeviceManager(
           )
         }
 
-        // Connected iOS Simulators
+        // Connected iOS Simulators — always emit IOS_HOST; emit IOS_AXE only when the
+        // `axe` CLI is installed on this host. Otherwise users would see an IOS_AXE
+        // entry they can't actually use, which would fail at connect time with a
+        // confusing error.
+        val axeAvailable = xyz.block.trailblaze.host.axe.AxeCli.isAvailable()
         iosSimulators.forEach { (udid, name) ->
           add(
             TrailblazeConnectedDeviceSummary(
@@ -554,6 +572,15 @@ class TrailblazeDeviceManager(
               description = name,
             )
           )
+          if (axeAvailable) {
+            add(
+              TrailblazeConnectedDeviceSummary(
+                trailblazeDriverType = TrailblazeDriverType.IOS_AXE,
+                instanceId = udid,
+                description = name,
+              )
+            )
+          }
         }
 
         // Include web browser device only if the browser is currently running
@@ -1033,11 +1060,15 @@ class TrailblazeDeviceManager(
     /**
      * Lists connected Android devices via `adb devices`.
      * Returns list of (instanceId, description) pairs.
+     * For emulators, resolves the AVD name as the description; for physical devices,
+     * uses the product model. Falls back to the serial number if resolution fails.
      */
     internal fun listConnectedAdbDevices(): List<Pair<String, String>> {
       return try {
-        val process = ProcessBuilder("adb", "devices")
-          .redirectErrorStream(true)
+        val process = AndroidHostAdbUtils.createAdbCommandProcessBuilder(
+            args = listOf("devices"),
+            deviceId = null,
+          )
           .start()
         val finished = process.waitFor(DEVICE_DISCOVERY_TIMEOUT_SECONDS, TimeUnit.SECONDS)
         if (!finished) {
@@ -1053,12 +1084,50 @@ class TrailblazeDeviceManager(
             val parts = line.split("\t")
             if (parts.size == 2 && parts[1].trim() == "device") {
               val instanceId = parts[0].trim()
-              instanceId to instanceId
+              val description = resolveAndroidDeviceName(instanceId)
+              instanceId to description
             } else null
           }
       } catch (e: Exception) {
         Console.log("[loadDevices] [Android] adb devices failed: ${e.message}")
         emptyList()
+      }
+    }
+
+    /**
+     * Resolves a human-readable name for an Android device given its ADB serial.
+     * For emulators, queries the AVD name; for physical devices, queries the product model.
+     * Falls back to the serial number if both fail.
+     */
+    private fun resolveAndroidDeviceName(serial: String): String {
+      val deviceId = TrailblazeDeviceId(serial, TrailblazeDevicePlatform.ANDROID)
+      // For emulators, try AVD name — stored in different properties depending on
+      // the emulator/API version.
+      if (serial.startsWith("emulator-")) {
+        val avdName =
+          queryAdbProperty(deviceId, "ro.boot.qemu.avd_name")
+            ?: queryAdbProperty(deviceId, "ro.kernel.qemu.avd_name")
+        if (avdName != null) return avdName
+      }
+      // Fall back to product model (e.g., "sdk_gphone64_arm64", "Pixel 6")
+      return queryAdbProperty(deviceId, "ro.product.model") ?: serial
+    }
+
+    private fun queryAdbProperty(deviceId: TrailblazeDeviceId, property: String): String? {
+      return try {
+        val process = AndroidHostAdbUtils.createAdbCommandProcessBuilder(
+          args = listOf("shell", "getprop", property),
+          deviceId = deviceId,
+        ).start()
+        if (!process.waitFor(DEVICE_DISCOVERY_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+          process.destroyForcibly()
+          return null
+        }
+        if (process.exitValue() != 0) return null
+        val value = process.inputStream.bufferedReader().use { it.readText() }.trim()
+        value.takeIf { it.isNotEmpty() && !it.startsWith("error:", ignoreCase = true) }
+      } catch (_: Exception) {
+        null
       }
     }
 

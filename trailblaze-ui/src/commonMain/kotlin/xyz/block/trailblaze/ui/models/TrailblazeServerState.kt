@@ -6,7 +6,7 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.llm.providers.OpenAITrailblazeLlmModelList
 import xyz.block.trailblaze.mcp.AgentImplementation
-import xyz.block.trailblaze.model.AI_FALLBACK_DEFAULT
+import xyz.block.trailblaze.model.SELF_HEAL_DEFAULT
 import xyz.block.trailblaze.ui.editors.yaml.YamlVisualEditorView
 import xyz.block.trailblaze.ui.editors.yaml.YamlEditorMode
 import xyz.block.trailblaze.ui.tabs.session.SessionViewMode
@@ -30,7 +30,7 @@ data class TrailblazeServerState(
     val themeMode: ThemeMode = ThemeMode.System,
     val llmProvider: String = DEFAULT_DESKTOP_APP_MODEL_LLM_MODEL.trailblazeLlmProvider.id,
     val llmModel: String = DEFAULT_DESKTOP_APP_MODEL_LLM_MODEL.modelId, // Default to GPT-4.1 model
-    val aiFallbackEnabled: Boolean = AI_FALLBACK_DEFAULT,
+    val selfHealEnabled: Boolean = SELF_HEAL_DEFAULT,
     /** Agent implementation to use. Defaults to [AgentImplementation.DEFAULT]. */
     val agentImplementation: AgentImplementation = AgentImplementation.DEFAULT,
     val yamlContent: String = """
@@ -60,6 +60,11 @@ data class TrailblazeServerState(
     val logsDirectory: String? = null,
     // Trails directory path (null means use default: ~/.trailblaze/trails)
     val trailsDirectory: String? = null,
+    // Per-project Trailblaze config directory — layered on top of the classpath-bundled
+    // framework config. When null, the settings repo falls back to
+    // `${trailsDirectory}/../trailblaze-config/` if that sibling exists, then to null
+    // (classpath-only). `TRAILBLAZE_CONFIG_DIR` env var wins over this when set.
+    val trailblazeConfigDirectory: String? = null,
     // Root app data directory path (null means use default: ~/.trailblaze)
     val appDataDirectory: String? = null,
     // Tab visibility settings

@@ -60,7 +60,7 @@ Implement a **multi-path custom tool architecture** with:
 │ Primitives:   │ │ App-specific: │ │ App-specific: │ │ App-specific: │
 │ - tap         │ │ - login       │ │ - transfer    │ │ - login       │
 │ - inputText   │ │ - checkout    │ │ - banking     │ │ - acceptRide  │
-│ - launchApp   │ │ - cardReader  │ │               │ │               │
+│ - launchApp   │ │ - scanBarcode │ │               │ │               │
 │               │ │               │ │               │ │               │
 │ Registry: ✓   │ │ Registry: ✓   │ │ Registry: ✓   │ │ Registry: ✓   │
 └───────────────┘ └───────────────┘ └───────────────┘ └───────────────┘

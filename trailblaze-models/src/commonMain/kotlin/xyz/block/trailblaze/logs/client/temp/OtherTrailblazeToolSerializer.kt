@@ -6,6 +6,7 @@ import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonDecoder
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonEncoder
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -14,12 +15,23 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.serializer
+import xyz.block.trailblaze.config.ToolYamlConfig
+import xyz.block.trailblaze.toolcalls.InstanceNamedTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import kotlin.reflect.KClass
 
 @OptIn(InternalSerializationApi::class)
-class OtherTrailblazeToolSerializer(private val allToolClasses: Map<ToolName, KClass<out TrailblazeTool>>) : KSerializer<TrailblazeTool> {
+class OtherTrailblazeToolSerializer(
+  private val allToolClasses: Map<ToolName, KClass<out TrailblazeTool>>,
+  /**
+   * Serializers for YAML-defined (`tools:` mode) tool names. Each entry maps a tool name to a
+   * pre-bound serializer that knows how to decode/encode payloads into / from
+   * `YamlDefinedTrailblazeTool(config, params)`. Registered by
+   * `TrailblazeSerializationInitializer.buildYamlDefinedToolSerializers()` on the JVM side.
+   */
+  private val yamlDefinedSerializers: Map<ToolName, KSerializer<out TrailblazeTool>> = emptyMap(),
+) : KSerializer<TrailblazeTool> {
   override val descriptor = OtherTrailblazeTool.serializer().descriptor
 
   private val lenientJson = Json {
@@ -36,6 +48,22 @@ class OtherTrailblazeToolSerializer(private val allToolClasses: Map<ToolName, KC
 
     val className = jsonObject["class"]?.jsonPrimitive?.contentOrNull
     val toolName = jsonObject["toolName"]?.jsonPrimitive?.contentOrNull
+
+    // YAML-defined tools (`tools:` mode) share one Kotlin class across many tool names, so they
+    // can't be looked up by class — route by name. The pre-bound serializer knows the matching
+    // ToolYamlConfig and constructs `YamlDefinedTrailblazeTool(config, params)`.
+    if (toolName != null) {
+      val yamlSerializer = yamlDefinedSerializers[ToolName(toolName)]
+      if (yamlSerializer != null) {
+        val rawParams = jsonObject["raw"] as? JsonObject ?: JsonObject(
+          jsonObject.entries
+            .filter { it.key != "class" && it.key != "toolName" && it.key != "raw" }
+            .associate { it.key to it.value },
+        )
+        return lenientJson.decodeFromString(yamlSerializer, rawParams.toString())
+      }
+    }
+
     val toolClassOnClasspath: KClass<out TrailblazeTool>? = if (toolName != null) {
       allToolClasses.entries.firstOrNull { it.key.toolName == toolName }?.value
     } else {
@@ -71,6 +99,26 @@ class OtherTrailblazeToolSerializer(private val allToolClasses: Map<ToolName, KC
   override fun serialize(encoder: Encoder, value: TrailblazeTool) {
     val output = encoder as? JsonEncoder
       ?: error("Only JsonEncoder is supported")
+
+    // YAML-defined tools: the instance carries its own logical name, so route via the pre-bound
+    // serializer map by name. The serializer encodes only the params (not the config), which
+    // become the `raw` payload on OtherTrailblazeTool.
+    if (value is InstanceNamedTrailblazeTool) {
+      val yamlSerializer = yamlDefinedSerializers[ToolName(value.instanceToolName)]
+      if (yamlSerializer != null) {
+        @Suppress("UNCHECKED_CAST")
+        val paramsJson = lenientJson.encodeToString(
+          yamlSerializer as KSerializer<TrailblazeTool>,
+          value,
+        )
+        val rawParams = lenientJson.parseToJsonElement(paramsJson).jsonObject
+        val wrapped = OtherTrailblazeTool(value.instanceToolName, rawParams)
+        output.encodeJsonElement(
+          lenientJson.parseToJsonElement(lenientJson.encodeToString(wrapped)),
+        )
+        return
+      }
+    }
 
     val valueClass = value::class
     val standardSerializer = value::class.serializer() as? KSerializer<TrailblazeTool>

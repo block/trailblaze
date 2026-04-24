@@ -1,23 +1,19 @@
 package xyz.block.trailblaze.host
 
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
 import maestro.orchestra.Command
 import xyz.block.trailblaze.MaestroTrailblazeAgent
 import xyz.block.trailblaze.toolcalls.commands.MaestroTrailblazeTool
-import xyz.block.trailblaze.utils.Ext.asJsonObjects
-import xyz.block.trailblaze.agent.ExecutionState
+import xyz.block.trailblaze.maestro.MaestroYamlSerializer
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
-import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.mcp.AgentImplementation
-import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetExecutionStatusRequest
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateRequest
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRpcClient
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
@@ -26,6 +22,7 @@ import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
+import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.requiresHost
 import xyz.block.trailblaze.util.Console
@@ -41,9 +38,10 @@ import kotlin.reflect.KClass
  * running on the host.
  *
  * Each tool call is serialized as single-step trail YAML and sent to the device as a
- * [RunYamlRequest] with [AgentImplementation.TRAILBLAZE_RUNNER]. The device executes the tool
- * via whichever driver is specified in the request's `driverType` and the host polls for
- * completion.
+ * [RunYamlRequest] with [AgentImplementation.TRAILBLAZE_RUNNER] and
+ * [RunYamlRequest.awaitCompletion] = `true`. The device executes the tool via whichever
+ * driver is specified in the request's `driverType` and the terminal state comes back
+ * inline on the response — no status polling.
  *
  * This mirrors the [HostAccessibilityRpcClient] pattern used by Multi-Agent V3, but integrated
  * with the [MaestroTrailblazeAgent] interface so it works with the legacy TrailblazeRunner.
@@ -55,20 +53,88 @@ class HostOnDeviceRpcTrailblazeAgent(
   trailblazeDeviceInfoProvider: () -> TrailblazeDeviceInfo,
   sessionProvider: TrailblazeSessionProvider,
   customToolClasses: Set<KClass<out TrailblazeTool>> = emptySet(),
+  /**
+   * Whether mid-trail re-warm probes must confirm the accessibility service is bound. Should
+   * be true when this agent drives `ANDROID_ONDEVICE_ACCESSIBILITY` so a post-blip UiAutomator
+   * fallback can't silently take over; false for instrumentation-driver flows.
+   */
+  private val requireAndroidAccessibilityServiceOnRewarm: Boolean = false,
+  /**
+   * Session tool repo — threaded to [MaestroTrailblazeAgent] (and then [BaseTrailblazeAgent])
+   * so an [OtherTrailblazeTool] naming a subprocess MCP tool in a trail YAML resolves to its
+   * registered [SubprocessTrailblazeTool][xyz.block.trailblaze.scripting.subprocess.SubprocessTrailblazeTool]
+   * instead of hitting "Unsupported tool type for RPC execution".
+   */
+  trailblazeToolRepo: TrailblazeToolRepo? = null,
 ) : MaestroTrailblazeAgent(
   trailblazeLogger = trailblazeLogger,
   trailblazeDeviceInfoProvider = trailblazeDeviceInfoProvider,
   sessionProvider = sessionProvider,
+  trailblazeToolRepo = trailblazeToolRepo,
 ) {
 
   override val usesAccessibilityDriver: Boolean = true
 
   private val trailblazeYaml = createTrailblazeYaml(customToolClasses)
 
+  /** Last observed RPC failure from [captureScreenState], surfaced by [screenStateProvider]. */
+  @Volatile private var lastCaptureFailure: String? = null
+
   /** RPC-backed screen state provider for the host-side TrailblazeRunner. */
   val screenStateProvider: () -> ScreenState = {
     runBlocking { captureScreenState() }
-      ?: error("Failed to capture screen state from device via RPC")
+      ?: error(
+        "Failed to capture screen state from device via RPC" +
+          (lastCaptureFailure?.let { ": $it" } ?: ""),
+      )
+  }
+
+  /**
+   * Captures current screen state via RPC. The [OnDeviceRpcClient.waitForReady] handshake at
+   * trail start proves `GetScreenState` works; a failure here means the connection transitioned
+   * from warm to cold mid-session (app/service restart, transient network blip). In that case
+   * we re-run the readiness probe once and retry the capture — no blanket retry loop.
+   */
+  suspend fun captureScreenState(): ScreenState? {
+    when (val first = rpcClient.rpcCall(GetScreenStateRequest())) {
+      is RpcResult.Success -> return RpcScreenStateAdapter(first.data)
+      is RpcResult.Failure -> {
+        val detail = first.message + (first.details?.let { " | $it" } ?: "")
+        lastCaptureFailure = detail
+        Console.log(
+          "[HostOnDeviceRpcAgent] GetScreenState ${first.errorType}: ${first.message}" +
+            (first.details?.let { "\n  Details: $it" } ?: "") +
+            "\n  Re-warming connection and retrying once.",
+        )
+      }
+    }
+    try {
+      rpcClient.waitForReady(
+        timeoutMs = 10_000L,
+        requireAndroidAccessibilityService = requireAndroidAccessibilityServiceOnRewarm,
+      )
+    } catch (e: Exception) {
+      val detail = "re-warm failed: ${e.message}"
+      lastCaptureFailure = "$lastCaptureFailure | $detail"
+      Console.log("[HostOnDeviceRpcAgent] $detail")
+      return null
+    }
+    return when (val retry = rpcClient.rpcCall(GetScreenStateRequest())) {
+      is RpcResult.Success -> {
+        lastCaptureFailure = null
+        RpcScreenStateAdapter(retry.data)
+      }
+      is RpcResult.Failure -> {
+        val detail = retry.message + (retry.details?.let { " | $it" } ?: "")
+        lastCaptureFailure = "$lastCaptureFailure | retry: $detail"
+        Console.log(
+          "[HostOnDeviceRpcAgent] GetScreenState retry after re-warm still failed " +
+            "${retry.errorType}: ${retry.message}" +
+            (retry.details?.let { "\n  Details: $it" } ?: ""),
+        )
+        null
+      }
+    }
   }
 
   override fun executeTool(
@@ -108,7 +174,9 @@ class HostOnDeviceRpcTrailblazeAgent(
     Console.log(
       "[HostOnDeviceRpcAgent] Forwarding ${commands.size} maestro command(s) to device via RPC",
     )
-    val maestroTool = MaestroTrailblazeTool(commands = commands.asJsonObjects())
+    val maestroTool = MaestroTrailblazeTool(
+      yaml = MaestroYamlSerializer.toYaml(commands, includeConfiguration = false),
+    )
     return executeToolViaRpc(maestroTool)
   }
 
@@ -120,39 +188,6 @@ class HostOnDeviceRpcTrailblazeAgent(
     // Return null so the caller falls through to executeMaestroCommands() which
     // now properly forwards commands to the device via RPC. The on-device agent
     // will handle nodeSelector resolution with its own view hierarchy.
-    return null
-  }
-
-  suspend fun captureScreenState(
-    maxRetries: Int = 5,
-    initialDelayMs: Long = 500L,
-  ): ScreenState? {
-    var lastError: String? = null
-    repeat(maxRetries) { attempt ->
-      try {
-        when (val result = rpcClient.rpcCall(GetScreenStateRequest())) {
-          is RpcResult.Success -> return RpcScreenStateAdapter(result.data)
-          is RpcResult.Failure -> {
-            lastError = result.message + (result.details?.let { " | $it" } ?: "")
-            val delayMs = initialDelayMs * (attempt + 1)
-            Console.log(
-              "[HostOnDeviceRpcAgent] GetScreenState ${result.errorType} (attempt ${attempt + 1}/$maxRetries): " +
-                "${result.message}${result.details?.let { "\n  Details: $it" } ?: ""}, retrying in ${delayMs}ms...",
-            )
-            delay(delayMs)
-          }
-        }
-      } catch (e: Exception) {
-        lastError = e.message
-        val delayMs = initialDelayMs * (attempt + 1)
-        Console.log(
-          "[HostOnDeviceRpcAgent] GetScreenState exception (attempt ${attempt + 1}/$maxRetries): " +
-            "${e.message}, retrying in ${delayMs}ms..."
-        )
-        delay(delayMs)
-      }
-    }
-    Console.log("[HostOnDeviceRpcAgent] GetScreenState failed after $maxRetries attempts: $lastError")
     return null
   }
 
@@ -171,6 +206,9 @@ class HostOnDeviceRpcTrailblazeAgent(
         val request = runYamlRequestTemplate.copy(
           yaml = yaml,
           agentImplementation = AgentImplementation.TRAILBLAZE_RUNNER,
+          // Per-tool RPCs block the HTTP response on on-device completion. Explicit for
+          // clarity even though the request default is also true.
+          awaitCompletion = true,
           config = runYamlRequestTemplate.config.copy(
             overrideSessionId = sessionProvider.invoke().sessionId,
             sendSessionStartLog = false,
@@ -193,18 +231,20 @@ class HostOnDeviceRpcTrailblazeAgent(
           }
           is RpcResult.Success -> {
             val name = tool::class.simpleName ?: "unknown"
-            Console.log(
-              "[HostOnDeviceRpcAgent] '$name' dispatched, " +
-                "awaiting session ${rpcResult.data.sessionId.value}",
-            )
-            val success = awaitToolCompletion(rpcResult.data.sessionId)
-            val durationMs = Clock.System.now().toEpochMilliseconds() - timeBeforeExecution.toEpochMilliseconds()
-            if (success) {
-              Console.log("[HostOnDeviceRpcAgent] '$name' completed in ${durationMs}ms")
-              TrailblazeToolResult.Success()
-            } else {
-              TrailblazeToolResult.Error.ExceptionThrown(
-                errorMessage = "Tool '$name' execution failed or timed out on-device",
+            val durationMs =
+              Clock.System.now().toEpochMilliseconds() - timeBeforeExecution.toEpochMilliseconds()
+            when (rpcResult.data.success) {
+              true -> {
+                Console.log("[HostOnDeviceRpcAgent] '$name' completed in ${durationMs}ms")
+                TrailblazeToolResult.Success()
+              }
+              false -> TrailblazeToolResult.Error.ExceptionThrown(
+                errorMessage = rpcResult.data.errorMessage
+                  ?: "Tool '$name' execution failed on-device",
+              )
+              null -> TrailblazeToolResult.Error.ExceptionThrown(
+                errorMessage = "On-device server returned null success inline for '$name' — " +
+                  "contract violation for awaitCompletion=true (expected true/false, got null)",
               )
             }
           }
@@ -221,32 +261,4 @@ class HostOnDeviceRpcTrailblazeAgent(
     }
   }
 
-  private suspend fun awaitToolCompletion(
-    sessionId: SessionId,
-    maxWaitMs: Long = 120_000L,
-    pollIntervalMs: Long = 500L,
-  ): Boolean {
-    val startTime = System.currentTimeMillis()
-    while (System.currentTimeMillis() - startTime < maxWaitMs) {
-      val statusResult = rpcClient.rpcCall(GetExecutionStatusRequest(sessionId.value))
-      when (statusResult) {
-        is RpcResult.Success -> {
-          if (!statusResult.data.found) {
-            delay(pollIntervalMs)
-            continue
-          }
-          when (statusResult.data.status?.state) {
-            ExecutionState.COMPLETED -> return true
-            ExecutionState.FAILED, ExecutionState.CANCELLED -> return false
-            else -> delay(pollIntervalMs)
-          }
-        }
-        is RpcResult.Failure -> delay(pollIntervalMs)
-      }
-    }
-    Console.log(
-      "[HostOnDeviceRpcAgent] Timed out waiting for tool completion (session ${sessionId.value})",
-    )
-    return false
-  }
 }

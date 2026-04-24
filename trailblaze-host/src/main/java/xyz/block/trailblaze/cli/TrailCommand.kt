@@ -7,7 +7,7 @@ import picocli.CommandLine.Option
 import picocli.CommandLine.Parameters
 import xyz.block.trailblaze.capture.CaptureOptions
 import xyz.block.trailblaze.compose.driver.rpc.ComposeRpcServer
-import xyz.block.trailblaze.compose.driver.tools.ComposeToolSet
+import xyz.block.trailblaze.compose.driver.tools.ComposeToolSetIds
 import xyz.block.trailblaze.desktop.TrailblazeDesktopAppConfig
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
@@ -28,10 +28,12 @@ import xyz.block.trailblaze.model.DeviceConnectionStatus
 import xyz.block.trailblaze.model.TrailExecutionResult
 import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.model.findById
-import xyz.block.trailblaze.playwright.tools.PlaywrightNativeToolSet
+import xyz.block.trailblaze.playwright.tools.WebToolSetIds
 import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.report.utils.TrailblazeYamlSessionRecording.generateRecordedYaml
+import xyz.block.trailblaze.revyl.tools.RevylToolSetIds
+import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
 import xyz.block.trailblaze.ui.TrailblazeDesktopApp
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
 import xyz.block.trailblaze.util.Console
@@ -45,12 +47,14 @@ import java.util.concurrent.CountDownLatch
 import kotlin.system.exitProcess
 
 /**
- * Run a .trail.yaml file or directory of trail files on a connected device.
+ * Run one or more trail files (`.trail.yaml` or `blaze.yaml`) on a connected device.
+ * Takes either explicit file arguments or a shell glob that expands to file paths;
+ * does not accept directory arguments.
  */
 @Command(
   name = "trail",
   mixinStandardHelpOptions = true,
-  description = ["Run a trail file (.trail.yaml) — execute a scripted test on a device"]
+  description = ["Run a trail file (.trail.yaml) — execute a scripted test on a device"],
 )
 open class TrailCommand : Callable<Int> {
 
@@ -61,10 +65,12 @@ open class TrailCommand : Callable<Int> {
   @Volatile private var cancelled = false
 
   @Parameters(
-    index = "0",
-    description = ["Path to a .trail.yaml file or directory containing trail files"]
+    index = "0..*",
+    arity = "1..*",
+    paramLabel = "<trailFile>",
+    description = ["One or more trail files (.trail.yaml or blaze.yaml). Use your shell's glob to run a batch (e.g., flows/**/*.trail.yaml)."]
   )
-  lateinit var trailFile: File
+  lateinit var trailFiles: List<File>
 
   @Option(
     names = ["-d", "--device"],
@@ -211,23 +217,28 @@ open class TrailCommand : Callable<Int> {
       device = CliConfigHelper.readConfig()?.cliDevicePlatform
     }
 
-    // Validate trail file/directory exists
-    if (!trailFile.exists()) {
-      Console.error("Error: Trail file or directory does not exist: ${trailFile.absolutePath}")
-      return CommandLine.ExitCode.SOFTWARE
-    }
-
-    // Validate: must be a regular file or directory
-    if (!trailFile.isFile && !trailFile.isDirectory) {
-      Console.error("Error: Not a file or directory: ${trailFile.absolutePath}")
-      return CommandLine.ExitCode.USAGE
-    }
-
-    // Validate file extension for single-file mode
-    if (trailFile.isFile && !trailFile.name.endsWith(TrailRecordings.DOT_TRAIL_DOT_YAML_FILE_SUFFIX)) {
-      Console.error("Error: Expected a ${TrailRecordings.DOT_TRAIL_DOT_YAML_FILE_SUFFIX} file, got: ${trailFile.name}")
-      Console.error("Usage: trailblaze trail my-test.trail.yaml")
-      return CommandLine.ExitCode.USAGE
+    // Validate every trail file: must exist, be a regular file, and be a known trail name.
+    // Directory arguments are not accepted — use your shell's glob to expand to a list
+    // (e.g., `trailblaze trail flows/**/*.trail.yaml`) or pass files explicitly. The
+    // recognized trail names are `*.trail.yaml` (platform-specific recordings) and
+    // `blaze.yaml` (NL-only definitions).
+    for (file in trailFiles) {
+      if (!file.exists()) {
+        Console.error("Error: Trail file does not exist: ${file.absolutePath}")
+        return CommandLine.ExitCode.SOFTWARE
+      }
+      if (file.isDirectory) {
+        Console.error("Error: '${file.absolutePath}' is a directory; pass trail files explicitly or via a shell glob (e.g., flows/**/*.trail.yaml).")
+        return CommandLine.ExitCode.USAGE
+      }
+      if (!file.isFile) {
+        Console.error("Error: Not a regular file: ${file.absolutePath}")
+        return CommandLine.ExitCode.USAGE
+      }
+      if (!TrailRecordings.isTrailFile(file.name)) {
+        Console.error("Error: Expected a trail file (${TrailRecordings.DOT_TRAIL_DOT_YAML_FILE_SUFFIX} or blaze.yaml), got: ${file.name}")
+        return CommandLine.ExitCode.USAGE
+      }
     }
 
     // Check if a daemon is already running — delegate to it to avoid starting a second
@@ -245,89 +256,16 @@ open class TrailCommand : Callable<Int> {
       daemon.shutdownBlocking()
     }
 
-    // Directory mode: find and run all .trail.yaml files
-    if (trailFile.isDirectory) {
-      val trailFiles = trailFile.walkTopDown()
-        .filter { it.isFile && it.name.endsWith(".trail.yaml") }
-        .sortedBy { it.absolutePath }
-        .toList()
+    // In-process run. Single-file and multi-file callers share the same per-file loop
+    // so accounting, recording, and reporting are consistent at any N.
+    Console.info("Running ${trailFiles.size} trail file(s)")
+    Console.info(SECTION_DIVIDER)
 
-      if (trailFiles.isEmpty()) {
-        Console.error("Error: No .trail.yaml files found in ${trailFile.absolutePath}")
-        return CommandLine.ExitCode.SOFTWARE
-      }
+    var passed = 0
+    var failed = 0
+    val allNewSessionIds = mutableListOf<SessionId>()
 
-      Console.info("Found ${trailFiles.size} trail file(s) in ${trailFile.absolutePath}")
-      Console.info(SECTION_DIVIDER)
-
-      var passed = 0
-      var failed = 0
-      val allNewSessionIds = mutableListOf<SessionId>()
-
-      // Initialize the app once for all files
-      val app = parent.appProvider()
-
-      // Apply port overrides from env vars / saved settings
-      if (parent.hasPortOverride()) {
-        app.applyPortOverrides(httpPort = parent.getEffectivePort(), httpsPort = parent.getEffectiveHttpsPort())
-      }
-      app.ensureServerRunning()
-
-      // Register shutdown hook for Ctrl+C
-      Runtime.getRuntime().addShutdownHook(Thread {
-        cancelled = true
-        Console.info("\n\nExecution stopped by user.")
-      })
-
-      for ((index, file) in trailFiles.withIndex()) {
-        if (cancelled) break
-        Console.info("\n[${index + 1}/${trailFiles.size}] Running: ${file.relativeTo(trailFile)}")
-        Console.info(ITEM_DIVIDER)
-        val (exitCode, sessionIds) = runSingleTrailFile(file, app)
-        allNewSessionIds.addAll(sessionIds)
-        if (exitCode == CommandLine.ExitCode.OK) {
-          passed++
-          // Save recording to trail source directory on success
-          if (!noRecord && sessionIds.isNotEmpty()) {
-            val logsRepo = app.deviceManager.logsRepo
-            for (sessionId in sessionIds) {
-              val classifiers = logsRepo.getSessionInfo(sessionId)
-                ?.trailblazeDeviceInfo?.classifiers?.map { it.classifier } ?: emptyList()
-              saveRecordingToTrailDirectory(file, sessionId, classifiers)
-            }
-          }
-        } else {
-          failed++
-        }
-      }
-
-      // Print summary
-      Console.info("\n" + SECTION_DIVIDER)
-      Console.info("Results: $passed passed, $failed failed out of ${trailFiles.size} total")
-
-      // Generate combined report
-      if (!noReport && allNewSessionIds.isNotEmpty()) {
-        try {
-          val logsRepo = app.deviceManager.logsRepo
-          val reportGenerator = app.createCliReportGenerator()
-          reportGenerator.printSummary(logsRepo, allNewSessionIds)
-          val reportFile = reportGenerator.generateReport(logsRepo, allNewSessionIds)
-          if (reportFile != null) {
-            Console.info("\nReport: file://${reportFile.absolutePath}")
-          }
-        } catch (e: Exception) {
-          Console.error("Failed to generate report: ${e.message}")
-        }
-      }
-
-      exitProcess(if (failed > 0) CommandLine.ExitCode.SOFTWARE else CommandLine.ExitCode.OK)
-    }
-
-    // Single file mode
-    if (!TrailRecordings.isTrailFile(trailFile.name) && !trailFile.name.endsWith(".yaml")) {
-      Console.error("Warning: File does not have .trail.yaml extension: ${trailFile.name}")
-    }
-
+    // Initialize the app once for all files
     val app = parent.appProvider()
 
     // Apply port overrides from env vars / saved settings
@@ -342,26 +280,39 @@ open class TrailCommand : Callable<Int> {
       Console.info("\n\nExecution stopped by user.")
     })
 
-    val (exitCode, newSessionIds) = runSingleTrailFile(trailFile, app)
-
-    // Save recording to trail source directory
-    if (!noRecord && exitCode == CommandLine.ExitCode.OK && newSessionIds.isNotEmpty()) {
-      val logsRepo = app.deviceManager.logsRepo
-      for (sessionId in newSessionIds) {
-        val classifiers = logsRepo.getSessionInfo(sessionId)
-          ?.trailblazeDeviceInfo?.classifiers?.map { it.classifier } ?: emptyList()
-        saveRecordingToTrailDirectory(trailFile, sessionId, classifiers)
+    for ((index, file) in trailFiles.withIndex()) {
+      if (cancelled) break
+      Console.info("\n[${index + 1}/${trailFiles.size}] Running: ${file.name}")
+      Console.info(ITEM_DIVIDER)
+      val (exitCode, sessionIds) = runSingleTrailFile(file, app)
+      allNewSessionIds.addAll(sessionIds)
+      if (exitCode == CommandLine.ExitCode.OK) {
+        passed++
+        // Save recording to trail source directory on success
+        if (!noRecord && sessionIds.isNotEmpty()) {
+          val logsRepo = app.deviceManager.logsRepo
+          for (sessionId in sessionIds) {
+            val classifiers = logsRepo.getSessionInfo(sessionId)
+              ?.trailblazeDeviceInfo?.classifiers?.map { it.classifier } ?: emptyList()
+            saveRecordingToTrailDirectory(file, sessionId, classifiers)
+          }
+        }
+      } else {
+        failed++
       }
     }
 
-    // Print pass/fail summary and generate report
-    val logsRepo = app.deviceManager.logsRepo
-    val reportGenerator = app.createCliReportGenerator()
-    reportGenerator.printSummary(logsRepo, newSessionIds)
+    // Print summary
+    Console.info("\n" + SECTION_DIVIDER)
+    Console.info("Results: $passed passed, $failed failed out of ${trailFiles.size} total")
 
-    if (!noReport && newSessionIds.isNotEmpty()) {
+    // Generate combined report
+    if (!noReport && allNewSessionIds.isNotEmpty()) {
       try {
-        val reportFile = reportGenerator.generateReport(logsRepo, newSessionIds)
+        val logsRepo = app.deviceManager.logsRepo
+        val reportGenerator = app.createCliReportGenerator()
+        reportGenerator.printSummary(logsRepo, allNewSessionIds)
+        val reportFile = reportGenerator.generateReport(logsRepo, allNewSessionIds)
         if (reportFile != null) {
           Console.info("\nReport: file://${reportFile.absolutePath}")
         }
@@ -371,9 +322,11 @@ open class TrailCommand : Callable<Int> {
     }
 
     // Generate markdown report if --markdown was specified
-    if (markdown && newSessionIds.isNotEmpty()) {
+    if (markdown && allNewSessionIds.isNotEmpty()) {
       try {
-        val markdownFile = reportGenerator.generateMarkdownReport(logsRepo, newSessionIds)
+        val logsRepo = app.deviceManager.logsRepo
+        val reportGenerator = app.createCliReportGenerator()
+        val markdownFile = reportGenerator.generateMarkdownReport(logsRepo, allNewSessionIds)
         if (markdownFile != null) {
           Console.info("Markdown: file://${markdownFile.absolutePath}")
         }
@@ -382,40 +335,21 @@ open class TrailCommand : Callable<Int> {
       }
     }
 
-    exitProcess(exitCode)
+    exitProcess(if (failed > 0) CommandLine.ExitCode.SOFTWARE else CommandLine.ExitCode.OK)
   }
 
   /**
-   * Delegates trail execution to a running daemon via HTTP.
+   * Delegates trail execution to a running daemon via HTTP, one file at a time.
    *
    * This avoids starting a second Gradle JVM — the daemon already has device
    * discovery, LLM config, and the trail runner ready to go.
    */
   private fun delegateToDaemon(daemon: DaemonClient): Int {
-    if (trailFile.isDirectory) {
-      return delegateDirectoryToDaemon(daemon)
-    }
+    Console.info("Delegating ${trailFiles.size} trail file(s) to running Trailblaze daemon...")
+    Console.info(SECTION_DIVIDER)
 
-    Console.info("Delegating to running Trailblaze daemon...")
-
-    val rawYaml = trailFile.readText()
-    val yamlContent = TrailYamlTemplateResolver.resolve(rawYaml, trailFile)
-
-    val testName = deriveTestName(trailFile)
-
-    val request = CliRunRequest(
-      yamlContent = yamlContent,
-      trailFilePath = trailFile.absolutePath,
-      testName = testName,
-      driverType = driverType,
-      deviceId = device,
-      llmProvider = llmProvider,
-      llmModel = llmModel,
-      useRecordedSteps = useRecordedSteps,
-      showBrowser = showBrowser,
-      noLogging = noLogging,
-      agentImplementation = agent.takeIf { it != AgentImplementation.DEFAULT.name },
-    )
+    var passed = 0
+    var failed = 0
 
     // Register Ctrl+C handler to cancel the in-flight daemon run
     Runtime.getRuntime().addShutdownHook(Thread {
@@ -428,80 +362,8 @@ open class TrailCommand : Callable<Int> {
 
     // Capture is handled by the daemon's DesktopYamlRunner — running two screenrecord/simctl
     // processes on the same device causes conflicts, so we skip capture in the CLI delegate path.
-
-    val response = daemon.runSync(request) { progress ->
-      Console.info(progress)
-    }
-
-    if (response.success) {
-      Console.info("\n✅ Trail completed successfully!")
-      if (response.sessionId != null) {
-        Console.info("Session: ${response.sessionId}")
-      }
-      // Generate recording from session logs, then save to trail source directory.
-      // This runs in the CLI process (separate from the daemon) so it doesn't
-      // block the daemon's HTTP server from receiving trailing log POSTs.
-      val sid = response.sessionId
-      if (!noRecord && sid != null) {
-        val sessionId = SessionId(sid)
-        generateRecordingForSession(sessionId)
-        saveRecordingToTrailDirectory(
-          trailFile, sessionId, response.deviceClassifiers,
-        )
-      }
-    } else {
-      Console.error("\n❌ Trail failed: ${response.error ?: "Unknown error"}")
-    }
-
-    // Flush output before exiting so error messages are visible in CI logs
-    System.out.flush()
-    System.err.flush()
-    exitProcess(if (response.success) CommandLine.ExitCode.OK else CommandLine.ExitCode.SOFTWARE)
-  }
-
-  /** Moves a file, falling back to copy+delete when renameTo fails (e.g., cross-filesystem). */
-  private fun moveFile(src: File, dest: File): Boolean {
-    if (src.renameTo(dest)) return true
-    // renameTo fails across filesystems; fall back to copy + delete
-    return try {
-      src.copyTo(dest, overwrite = true)
-      src.delete()
-      true
-    } catch (e: Exception) {
-      false
-    }
-  }
-
-  /**
-   * Delegates a directory of trail files to a running daemon, one at a time.
-   */
-  private fun delegateDirectoryToDaemon(daemon: DaemonClient): Int {
-    val trailFiles = trailFile.walkTopDown()
-      .filter { it.isFile && (it.name.endsWith(".trail.yaml") || it.name == "blaze.yaml") }
-      .sortedBy { it.absolutePath }
-      .toList()
-
-    if (trailFiles.isEmpty()) {
-      Console.error("Error: No trail files found in ${trailFile.absolutePath}")
-      return CommandLine.ExitCode.SOFTWARE
-    }
-
-    Console.info("Delegating ${trailFiles.size} trail file(s) to running Trailblaze daemon...")
-    Console.info(SECTION_DIVIDER)
-
-    var passed = 0
-    var failed = 0
-
-    // Register Ctrl+C handler to cancel the in-flight daemon run
-    Runtime.getRuntime().addShutdownHook(Thread {
-      val runId = daemon.currentRunId
-      if (runId != null) {
-        daemon.cancelRunBlocking(runId)
-      }
-    })
-
     for ((index, file) in trailFiles.withIndex()) {
-      Console.info("\n[${index + 1}/${trailFiles.size}] Running: ${file.relativeTo(trailFile)}")
+      Console.info("\n[${index + 1}/${trailFiles.size}] Running: ${file.name}")
       Console.info(ITEM_DIVIDER)
 
       val rawYaml = file.readText()
@@ -525,10 +387,11 @@ open class TrailCommand : Callable<Int> {
       val response = daemon.runSync(request) { progress ->
         Console.info(progress)
       }
+
       if (response.success) {
         Console.info("✅ PASSED")
         passed++
-        // Generate recording and save to trail source directory
+        // Generate recording from session logs, then save to trail source directory.
         val sid = response.sessionId
         if (!noRecord && sid != null) {
           val sessionId = SessionId(sid)
@@ -545,8 +408,30 @@ open class TrailCommand : Callable<Int> {
 
     Console.info("\n" + SECTION_DIVIDER)
     Console.info("Results: $passed passed, $failed failed out of ${trailFiles.size} total")
+    // Match the success marker emitted by the in-process path at the per-file `onComplete`
+    // site, so `./trailblaze trail <file>` prints the same phrase regardless of whether it
+    // runs in-process or via the daemon.
+    if (failed == 0) {
+      Console.info("\n✅ Trail completed successfully!")
+    }
 
+    // Flush output before exiting so error messages are visible in CI logs
+    System.out.flush()
+    System.err.flush()
     exitProcess(if (failed > 0) CommandLine.ExitCode.SOFTWARE else CommandLine.ExitCode.OK)
+  }
+
+  /** Moves a file, falling back to copy+delete when renameTo fails (e.g., cross-filesystem). */
+  private fun moveFile(src: File, dest: File): Boolean {
+    if (src.renameTo(dest)) return true
+    // renameTo fails across filesystems; fall back to copy + delete
+    return try {
+      src.copyTo(dest, overwrite = true)
+      src.delete()
+      true
+    } catch (e: Exception) {
+      false
+    }
   }
 
   /**
@@ -1042,15 +927,22 @@ open class TrailCommand : Callable<Int> {
       val driverType = startedStatus?.trailblazeDeviceInfo?.trailblazeDriverType
       val customToolClasses = when (driverType) {
         TrailblazeDriverType.PLAYWRIGHT_NATIVE ->
-          PlaywrightNativeToolSet.LlmToolSet.toolClasses
+          TrailblazeToolSetCatalog.resolveForDriver(
+            driverType, WebToolSetIds.ALL,
+          ).toolClasses
         TrailblazeDriverType.PLAYWRIGHT_ELECTRON ->
-          PlaywrightNativeToolSet.LlmToolSet.toolClasses +
-              BasePlaywrightElectronTest.ELECTRON_BUILT_IN_TOOL_CLASSES
+          TrailblazeToolSetCatalog.resolveForDriver(
+            driverType, WebToolSetIds.ALL,
+          ).toolClasses + BasePlaywrightElectronTest.ELECTRON_BUILT_IN_TOOL_CLASSES
         TrailblazeDriverType.COMPOSE ->
-          ComposeToolSet.LlmToolSet.toolClasses
+          TrailblazeToolSetCatalog.resolveForDriver(
+            driverType, ComposeToolSetIds.ALL,
+          ).toolClasses
         TrailblazeDriverType.REVYL_ANDROID,
         TrailblazeDriverType.REVYL_IOS ->
-          xyz.block.trailblaze.revyl.tools.RevylNativeToolSet.RevylLlmToolSet.toolClasses
+          TrailblazeToolSetCatalog.resolveForDriver(
+            driverType, RevylToolSetIds.ALL,
+          ).toolClasses
         else -> emptySet()
       }
 

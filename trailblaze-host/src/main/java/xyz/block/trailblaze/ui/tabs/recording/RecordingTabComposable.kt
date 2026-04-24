@@ -38,6 +38,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.datetime.Clock
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.host.devices.MaestroConnectedDevice
 import xyz.block.trailblaze.host.devices.TrailblazeDeviceService
 import xyz.block.trailblaze.host.devices.WebBrowserState
 import xyz.block.trailblaze.host.recording.MaestroDeviceScreenStream
@@ -350,7 +351,9 @@ private suspend fun connectToDevice(
           TrailblazeDeviceService.getConnectedDevice(device.trailblazeDeviceId, device.trailblazeDriverType)
         } ?: return ConnectionState.Error("Device not found: ${device.instanceId}")
 
-        val driver = connectedDevice.getMaestroDriver()
+        val maestroDevice = connectedDevice as? MaestroConnectedDevice
+          ?: return ConnectionState.Error("Recording currently requires a Maestro-backed device; got ${connectedDevice::class.simpleName}")
+        val driver = maestroDevice.getMaestroDriver()
         val stream = MaestroDeviceScreenStream(driver)
         val toolFactory = MaestroInteractionToolFactory(
           deviceWidth = stream.deviceWidth,

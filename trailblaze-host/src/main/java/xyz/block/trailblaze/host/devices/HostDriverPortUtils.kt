@@ -2,6 +2,9 @@ package xyz.block.trailblaze.host.devices
 
 import java.net.ServerSocket
 import java.util.concurrent.TimeUnit
+import xyz.block.trailblaze.devices.TrailblazeDeviceId
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.util.AndroidHostAdbUtils
 import xyz.block.trailblaze.util.Console
 
 /**
@@ -83,10 +86,10 @@ internal object HostDriverPortUtils {
   fun removeStaleAdbPortForward(deviceInstanceId: String, port: Int) {
     try {
       val process =
-        ProcessBuilder(
-            listOf("adb", "-s", deviceInstanceId, "forward", "--remove", "tcp:$port"),
+        AndroidHostAdbUtils.createAdbCommandProcessBuilder(
+            args = listOf("forward", "--remove", "tcp:$port"),
+            deviceId = TrailblazeDeviceId(deviceInstanceId, TrailblazeDevicePlatform.ANDROID),
           )
-          .redirectErrorStream(true)
           .start()
       val completed = process.waitFor(5, TimeUnit.SECONDS)
       if (!completed) {

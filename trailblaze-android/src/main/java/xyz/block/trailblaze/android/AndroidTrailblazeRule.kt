@@ -1,7 +1,9 @@
 package xyz.block.trailblaze.android
 
 import ai.koog.prompt.executor.clients.LLMClient
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlinx.datetime.Clock
 import maestro.orchestra.Command
 import org.junit.runner.Description
@@ -18,6 +20,7 @@ import xyz.block.trailblaze.android.devices.TrailblazeAndroidOnDeviceClassifier
 import xyz.block.trailblaze.android.uiautomator.AndroidOnDeviceUiAutomatorScreenState
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TestAgentRunner
+import xyz.block.trailblaze.config.McpServerConfig
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
@@ -27,10 +30,15 @@ import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.model.CustomTrailblazeTools
 import xyz.block.trailblaze.model.TrailblazeConfig
+import xyz.block.trailblaze.model.toTrailblazeToolRepo
 import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.rules.SimpleTestRuleChain
 import xyz.block.trailblaze.rules.TrailblazeRule
 import xyz.block.trailblaze.rules.TrailblazeRunnerUtil
+import xyz.block.trailblaze.scripting.bundle.AndroidAssetBundleJsSource
+import xyz.block.trailblaze.scripting.bundle.BundleJsSource
+import xyz.block.trailblaze.scripting.bundle.LaunchedBundleRuntime
+import xyz.block.trailblaze.scripting.bundle.McpBundleRuntimeLauncher
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
@@ -64,6 +72,35 @@ open class AndroidTrailblazeRule(
   customToolClasses: CustomTrailblazeTools? = null,
   agentOverride: MaestroTrailblazeAgent? = null,
   screenStateProviderOverride: (() -> ScreenState)? = null,
+  /**
+   * MCP bundle declarations for tools authored in TypeScript and compiled to a JS bundle
+   * (PR A5 on-device path). Each entry should have `script:` set to a relative path that
+   * resolves to a `.js` asset shipped in the APK — the launcher reads via
+   * `android.content.res.AssetManager`. `command:` entries are silently skipped since they
+   * aren't bundleable.
+   *
+   * Default empty so tests that don't exercise scripted MCP tools don't have to provide a
+   * list. When non-empty, [runSuspend] launches the bundles at session start, registers
+   * advertised tools into [trailblazeToolRepo], and tears them down after the trail ends.
+   * Host-only tools (`_meta["trailblaze/requiresHost"]: true`) are dropped at
+   * registration — on-device has no host agent, so advertising them would create a
+   * silent-fail path the PR A5 scope devlog explicitly rules out.
+   */
+  private val mcpServers: List<McpServerConfig> = emptyList(),
+  /**
+   * Resolver that maps each [McpServerConfig] to a [BundleJsSource] the launcher can read.
+   * Default: treats the `script:` path as an Android asset path, reading via the test
+   * instrumentation's AssetManager. Override for tests that want to hand in an inline JS
+   * fixture or read from a non-default asset root.
+   */
+  private val bundleSourceResolver: (McpServerConfig) -> BundleJsSource = { entry ->
+    AndroidAssetBundleJsSource(
+      assetPath = requireNotNull(entry.script) {
+        "mcpServers entry is missing `script:` — `command:` entries are host-only and " +
+          "cannot bundle on-device."
+      },
+    )
+  },
 ) : SimpleTestRuleChain(trailblazeLoggingRule),
   TrailblazeRule {
 
@@ -74,15 +111,18 @@ open class AndroidTrailblazeRule(
     nodeSelectorMode = config.nodeSelectorMode,
   )
 
-  private val trailblazeToolRepo = TrailblazeToolRepo.withDynamicToolSets(
-    customToolClasses = customToolClasses?.initialToolRepoToolClasses ?: emptySet(),
-  )
+  private val trailblazeToolRepo =
+    customToolClasses?.toTrailblazeToolRepo() ?: TrailblazeToolRepo.withDynamicToolSets()
 
   private val screenStateProvider: () -> ScreenState = screenStateProviderOverride ?: {
     AndroidOnDeviceUiAutomatorScreenState(
       includeScreenshot = true,
       deviceClassifiers = trailblazeLoggingRule.trailblazeDeviceInfoProvider().classifiers,
     )
+  }
+
+  init {
+    trailblazeLoggingRule.failureScreenStateProvider = screenStateProvider
   }
 
   private val elementComparator = TrailblazeElementComparator(
@@ -152,14 +192,54 @@ open class AndroidTrailblazeRule(
       )
     }
     trailblazeAgent.clearMemory()
-    trailItems.forEach { item ->
-      val itemResult = when (item) {
-        is TrailYamlItem.PromptsTrailItem -> trailblazeRunnerUtil.runPrompt(item.promptSteps, useRecordedSteps)
-        is TrailYamlItem.ToolTrailItem -> runTrailblazeTool(item.tools.map { it.trailblazeTool })
-        is TrailYamlItem.ConfigTrailItem -> handleConfig(item.config)
+
+    // PR A5: launch the target-declared MCP bundles at session start, so advertised tools
+    // are registered into [trailblazeToolRepo] before the LLM selects a tool. Tear down in
+    // the `finally` so subprocess teardown still runs even if a trail step throws — the
+    // same invariant the host subprocess launcher uses in [TrailblazeHostYamlRunner]. Host
+    // wraps in `withContext(NonCancellable)` there; here the trail's calling coroutine is
+    // already scoped to the runner so a trail-level cancellation shouldn't strand the
+    // bundle session, but `runCatching` on `shutdownAll` protects against that edge.
+    val launchedBundleRuntime: LaunchedBundleRuntime? = if (mcpServers.isNotEmpty()) {
+      McpBundleRuntimeLauncher.launchAll(
+        mcpServers = mcpServers,
+        deviceInfo = trailblazeLoggingRule.trailblazeDeviceInfoProvider(),
+        sessionId = (trailblazeLoggingRule.session
+          ?: error("Session not available for MCP bundle launch")).sessionId,
+        toolRepo = trailblazeToolRepo,
+        bundleSourceResolver = bundleSourceResolver,
+        // Callback channel is wired unconditionally by the launcher — there's no daemon
+        // HTTP server on-device, so `_meta.trailblaze.runtime = "ondevice"` tells the TS
+        // SDK to dispatch `client.callTool(…)` through the in-process QuickJS binding
+        // instead of fetch. See [McpBundleRuntimeLauncher.launchAll]'s kdoc.
+      )
+    } else {
+      null
+    }
+
+    try {
+      trailItems.forEach { item ->
+        val itemResult = when (item) {
+          is TrailYamlItem.PromptsTrailItem -> trailblazeRunnerUtil.runPrompt(item.promptSteps, useRecordedSteps)
+          is TrailYamlItem.ToolTrailItem -> runTrailblazeTool(item.tools.map { it.trailblazeTool })
+          is TrailYamlItem.ConfigTrailItem -> handleConfig(item.config)
+        }
+        if (itemResult is TrailblazeToolResult.Error) {
+          throw TrailblazeException(itemResult.errorMessage)
+        }
       }
-      if (itemResult is TrailblazeToolResult.Error) {
-        throw TrailblazeException(itemResult.errorMessage)
+    } finally {
+      launchedBundleRuntime?.let { runtime ->
+        // Wrap in `withContext(NonCancellable)` so a cancelled trail (timeout, abort,
+        // user cancel) still runs the bundle teardown through to completion rather than
+        // cancelling at the first suspension point inside `McpBundleSession.shutdown()`.
+        // Without this, a cancelled run would leak the QuickJS native allocation plus
+        // the dynamic-tool registrations into the next session's tool repo. Mirrors the
+        // host-side pattern in `TrailblazeHostYamlRunner.launchSubprocessMcpServersIfAny`'s
+        // caller. Flagged during code review.
+        withContext(NonCancellable) {
+          runCatching { runtime.shutdownAll() }
+        }
       }
     }
   }
@@ -288,7 +368,7 @@ open class AndroidTrailblazeRule(
      */
     @Deprecated("Only use this on-device when no deviceId is available (like in a connectedDebugAndroidTest)")
     val DEFAULT_JUNIT_TEST_ANDROID_ON_DEVICE_TRAILBLAZE_DEVICE_ID = TrailblazeDeviceId(
-      instanceId = TrailblazeDriverType.DEFAULT_ANDROID_ON_DEVICE.name,
+      instanceId = TrailblazeDriverType.DEFAULT_ANDROID.name,
       trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
     )
   }

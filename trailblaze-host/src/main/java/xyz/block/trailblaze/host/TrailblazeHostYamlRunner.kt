@@ -10,6 +10,7 @@ import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import kotlinx.datetime.Clock
 import kotlinx.serialization.json.Json
@@ -29,7 +30,6 @@ import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.compose.driver.ComposeTrailblazeAgent
 import xyz.block.trailblaze.compose.driver.rpc.ComposeRpcClient
 import xyz.block.trailblaze.compose.driver.rpc.ComposeRpcTrailblazeAgent
-import xyz.block.trailblaze.compose.driver.tools.ComposeToolSet
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
@@ -41,6 +41,7 @@ import xyz.block.trailblaze.host.golden.SnapshotGoldenComparison
 import xyz.block.trailblaze.host.ios.MobileDeviceUtils
 import xyz.block.trailblaze.host.revyl.RevylTrailblazeAgent
 import xyz.block.trailblaze.revyl.RevylCliClient
+import xyz.block.trailblaze.revyl.tools.RevylToolSetIds
 import xyz.block.trailblaze.revyl.RevylScreenState
 import xyz.block.trailblaze.revyl.RevylSession
 import xyz.block.trailblaze.host.rules.BaseComposeTest
@@ -54,26 +55,30 @@ import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.llm.TrailblazeReferrer
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
-import xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer
 import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.mcp.AgentImplementation
+import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateRequest
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRpcClient
+import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
 import xyz.block.trailblaze.mcp.sampling.LocalLlmSamplingSource
+import xyz.block.trailblaze.compose.driver.tools.ComposeToolSetIds
+import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
-import xyz.block.trailblaze.playwright.tools.PlaywrightNativeToolSet
+import xyz.block.trailblaze.playwright.tools.WebToolSetIds
 import xyz.block.trailblaze.report.utils.TrailblazeYamlSessionRecording.generateRecordedYaml
-import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.rules.TrailblazeLoggingRule
 import xyz.block.trailblaze.rules.TrailblazeRunnerUtil
+import xyz.block.trailblaze.scripting.subprocess.LaunchedSubprocessRuntime
+import xyz.block.trailblaze.scripting.subprocess.McpSubprocessRuntimeLauncher
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
-import xyz.block.trailblaze.toolcalls.toolName
+import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
 import xyz.block.trailblaze.tracing.TrailblazeTraceExporter
 import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.ui.TrailblazeDeviceManager
@@ -87,22 +92,14 @@ import xyz.block.trailblaze.yaml.createTrailblazeYaml
 object TrailblazeHostYamlRunner {
 
   /**
-   * Captures a screenshot at the moment of failure and logs it as a snapshot.
-   * Catches all exceptions internally so it never disrupts the error handling flow.
+   * Resolved Playwright tool classes used for recording generation. Called from both the Native
+   * and Electron paths; each passes its own driver type so the resolution is explicit at the
+   * call site. Today the two drivers resolve to identical classes (pinned by
+   * `WebToolSetCatalogTest`), but the parameter keeps this correct if the YAMLs ever diverge.
    */
-  private fun captureFailureScreenshot(
-    session: TrailblazeSession,
-    loggingRule: TrailblazeLoggingRule,
-    screenStateProvider: () -> ScreenState,
-  ) {
-    try {
-      val screenState = screenStateProvider()
-      loggingRule.logger.logSnapshot(session, screenState, displayName = "failure_screenshot")
-      Console.log("📸 Failure screenshot captured for session ${session.sessionId.value}")
-    } catch (e: Exception) {
-      Console.log("Failed to capture failure screenshot: ${e.message}")
-    }
-  }
+  private fun resolveWebToolClasses(driverType: TrailblazeDriverType) = TrailblazeToolSetCatalog
+    .resolveForDriver(driverType, WebToolSetIds.ALL)
+    .toolClasses
 
   /**
    * Exports trace data after a session ends. Tries posting to the server first;
@@ -136,6 +133,50 @@ object TrailblazeHostYamlRunner {
   }
 
   /**
+   * Spawn target-declared subprocess MCP servers (if any) and register their tools into the
+   * session's [TrailblazeToolRepo]. Shared across every runner path so subprocess MCP is wired
+   * universally — one spawn model, one stderr-file convention, one teardown shape, independent
+   * of driver. Must be called from inside [executeTrailSession]'s session lambda since it
+   * needs the live [SessionId].
+   *
+   * Returns `null` when the target declares no launchable (`script:`) entries — callers can
+   * skip appending to their cleanup-tracking list in that case (an empty list in the cleanup
+   * lambda is already a no-op, so the return-value check is just an optimization + a hook for
+   * progress-message suppression).
+   *
+   * Cleanup is the caller's responsibility: wrap `runtime.shutdownAll()` in the cleanup lambda
+   * inside `withContext(NonCancellable)` so teardown completes even when the surrounding
+   * coroutine is cancelled (trail timeout, user abort) — otherwise subprocess + stderr-file
+   * handles leak.
+   */
+  private suspend fun launchSubprocessMcpServersIfAny(
+    targetTestApp: TrailblazeHostAppTarget?,
+    config: TrailblazeConfig,
+    sessionId: SessionId,
+    deviceInfo: TrailblazeDeviceInfo,
+    logsRepo: xyz.block.trailblaze.report.utils.LogsRepo,
+    toolRepo: TrailblazeToolRepo,
+    onProgressMessage: (String) -> Unit,
+  ): LaunchedSubprocessRuntime? {
+    val mcpServers = targetTestApp?.getMcpServers().orEmpty()
+    val launchableCount = mcpServers.count { it.script != null }
+    if (launchableCount == 0) return null
+    onProgressMessage("Launching $launchableCount subprocess MCP server(s)...")
+    return McpSubprocessRuntimeLauncher.launchAll(
+      mcpServers = mcpServers,
+      deviceInfo = deviceInfo,
+      config = config,
+      sessionId = sessionId,
+      sessionLogDir = logsRepo.getSessionDir(sessionId),
+      toolRepo = toolRepo,
+      // Null when no HTTP server was registered for this process (unit-tested runner paths).
+      // The launcher degrades gracefully — envelope omits `_meta.trailblaze.baseUrl` and no
+      // callbacks can fire, which is the right behaviour for those paths.
+      baseUrl = xyz.block.trailblaze.scripting.callback.JsScriptingCallbackBaseUrl.get(),
+    )
+  }
+
+  /**
    * Common session lifecycle wrapper for trail execution.
    *
    * Handles session creation, standardized exception handling (cancellation,
@@ -150,7 +191,7 @@ object TrailblazeHostYamlRunner {
     deviceLabel: String,
     sendSessionEndLog: Boolean,
     onProgressMessage: (String) -> Unit,
-    screenshotProvider: (() -> ScreenState)? = null,
+    screenshotProvider: () -> ScreenState,
     noLogging: Boolean = false,
     cleanup: suspend () -> Unit = {},
     execute: suspend (TrailblazeSession) -> SessionId?,
@@ -176,9 +217,7 @@ object TrailblazeHostYamlRunner {
     } catch (e: Exception) {
       Console.log("❌ ${e::class.simpleName} in $deviceLabel: ${e.message}")
       onProgressMessage("Test execution failed: ${e.message}")
-      if (screenshotProvider != null) {
-        captureFailureScreenshot(session, loggingRule, screenshotProvider)
-      }
+      loggingRule.captureFailureScreenshot(session, screenshotProvider)
       if (sendSessionEndLog) {
         sessionManager.endSession(session, isSuccess = false, exception = e)
       }
@@ -254,14 +293,9 @@ object TrailblazeHostYamlRunner {
       else "Initializing Playwright-native test runner..."
     )
 
-    val allSerializationToolClasses = deviceManager.availableAppTargets
-      .flatMap { it.getAllCustomToolClassesForSerialization() }
-      .toSet()
-
     val playwrightTest = existingTest ?: BasePlaywrightNativeTest(
       customToolClasses = runOnHostParams.targetTestApp
         ?.getCustomToolsForDriver(runOnHostParams.trailblazeDriverType) ?: emptySet(),
-      allSerializationToolClasses = allSerializationToolClasses,
       dynamicLlmClient = dynamicLlmClient,
       trailblazeLlmModel = runYamlRequest.trailblazeLlmModel,
       config = runYamlRequest.config,
@@ -287,6 +321,7 @@ object TrailblazeHostYamlRunner {
 
     onProgressMessage("Launching browser...")
 
+    val subprocessRuntimes = mutableListOf<LaunchedSubprocessRuntime>()
     return executeTrailSession(
       loggingRule = playwrightTest.loggingRule,
       overrideSessionId = runYamlRequest.config.overrideSessionId,
@@ -297,12 +332,24 @@ object TrailblazeHostYamlRunner {
       screenshotProvider = playwrightTest.browserManager::getScreenState,
       noLogging = runOnHostParams.noLogging,
       cleanup = {
+        withContext(NonCancellable) {
+          subprocessRuntimes.forEach { it.shutdownAll() }
+        }
         if (!keepBrowserAlive) {
           playwrightTest.close()
           deviceManager.cancelSessionForDevice(trailblazeDeviceId)
         }
       },
     ) { session ->
+      launchSubprocessMcpServersIfAny(
+        targetTestApp = runOnHostParams.targetTestApp,
+        config = runYamlRequest.config,
+        sessionId = session.sessionId,
+        deviceInfo = playwrightTest.trailblazeDeviceInfo,
+        logsRepo = playwrightTest.loggingRule.logsRepo,
+        toolRepo = playwrightTest.toolRepo,
+        onProgressMessage = onProgressMessage,
+      )?.let { subprocessRuntimes += it }
       onProgressMessage("Executing YAML test...")
       Console.log("▶️ Starting Playwright-native runTrailblazeYamlSuspend for device: ${trailblazeDeviceId.instanceId}")
       val sessionId = playwrightTest.runTrailblazeYamlSuspend(
@@ -326,7 +373,7 @@ object TrailblazeHostYamlRunner {
         ?.getCustomToolsForDriver(runOnHostParams.trailblazeDriverType) ?: emptySet()
       generateAndSaveRecording(
         sessionId = sessionId,
-        customToolClasses = PlaywrightNativeToolSet.LlmToolSet.toolClasses + customToolClasses,
+        customToolClasses = resolveWebToolClasses(TrailblazeDriverType.PLAYWRIGHT_NATIVE) + customToolClasses,
       )
 
       sessionId
@@ -375,15 +422,10 @@ object TrailblazeHostYamlRunner {
     // Resolve ElectronAppConfig from trail YAML or environment variables
     val electronConfig = resolveElectronAppConfig(runYamlRequest.yaml)
 
-    val allSerializationToolClasses = deviceManager.availableAppTargets
-      .flatMap { it.getAllCustomToolClassesForSerialization() }
-      .toSet()
-
     val electronTest = existingTest ?: BasePlaywrightElectronTest(
       electronAppConfig = electronConfig,
       customToolClasses = runOnHostParams.targetTestApp
         ?.getCustomToolsForDriver(runOnHostParams.trailblazeDriverType) ?: emptySet(),
-      allSerializationToolClasses = allSerializationToolClasses,
       dynamicLlmClient = dynamicLlmClient,
       trailblazeLlmModel = runYamlRequest.trailblazeLlmModel,
       config = runYamlRequest.config,
@@ -403,6 +445,7 @@ object TrailblazeHostYamlRunner {
 
     onProgressMessage("Connecting to Electron app...")
 
+    val subprocessRuntimes = mutableListOf<LaunchedSubprocessRuntime>()
     return executeTrailSession(
       loggingRule = electronTest.loggingRule,
       overrideSessionId = runYamlRequest.config.overrideSessionId,
@@ -413,12 +456,24 @@ object TrailblazeHostYamlRunner {
       screenshotProvider = electronTest.browserManager::getScreenState,
       noLogging = runOnHostParams.noLogging,
       cleanup = {
+        withContext(NonCancellable) {
+          subprocessRuntimes.forEach { it.shutdownAll() }
+        }
         if (!keepAlive) {
           electronTest.close()
           deviceManager.cancelSessionForDevice(trailblazeDeviceId)
         }
       },
     ) { session ->
+      launchSubprocessMcpServersIfAny(
+        targetTestApp = runOnHostParams.targetTestApp,
+        config = runYamlRequest.config,
+        sessionId = session.sessionId,
+        deviceInfo = electronTest.trailblazeDeviceInfo,
+        logsRepo = electronTest.loggingRule.logsRepo,
+        toolRepo = electronTest.toolRepo,
+        onProgressMessage = onProgressMessage,
+      )?.let { subprocessRuntimes += it }
       onProgressMessage("Executing YAML test...")
       Console.log("▶️ Starting Playwright-electron runTrailblazeYamlSuspend for device: ${trailblazeDeviceId.instanceId}")
       val sessionId = electronTest.runTrailblazeYamlSuspend(
@@ -442,7 +497,7 @@ object TrailblazeHostYamlRunner {
         ?.getCustomToolsForDriver(runOnHostParams.trailblazeDriverType) ?: emptySet()
       generateAndSaveRecording(
         sessionId = sessionId,
-        customToolClasses = PlaywrightNativeToolSet.LlmToolSet.toolClasses +
+        customToolClasses = resolveWebToolClasses(TrailblazeDriverType.PLAYWRIGHT_ELECTRON) +
           BasePlaywrightElectronTest.ELECTRON_BUILT_IN_TOOL_CLASSES + customToolClasses,
       )
 
@@ -533,14 +588,11 @@ object TrailblazeHostYamlRunner {
       classifiers = listOf(TrailblazeDeviceClassifier("desktop"), TrailblazeDeviceClassifier("compose")),
     )
 
-    // Initialize JSON serialization with Compose tool classes.
     // Wrap agent creation in try-catch so rpcClient is closed if setup fails before
     // the agent (which owns the client lifecycle) is constructed.
     val agent: ComposeRpcTrailblazeAgent
     val loggingRule: HostTrailblazeLoggingRule
     try {
-      TrailblazeSerializationInitializer.initialize()
-
       loggingRule = HostTrailblazeLoggingRule(
         trailblazeDeviceInfoProvider = { trailblazeDeviceInfo },
         noLogging = runOnHostParams.noLogging,
@@ -559,10 +611,15 @@ object TrailblazeHostYamlRunner {
       throw e
     }
 
+    val composeToolSet = TrailblazeToolSetCatalog.resolveForDriver(
+      driverType = TrailblazeDriverType.COMPOSE,
+      requestedIds = ComposeToolSetIds.ALL,
+    )
     val toolRepo = TrailblazeToolRepo(
       TrailblazeToolSet.DynamicTrailblazeToolSet(
-        "Compose RPC Tool Set",
-        ComposeToolSet.LlmToolSet.toolClasses,
+        name = "Compose RPC Tool Set",
+        toolClasses = composeToolSet.toolClasses,
+        yamlToolNames = composeToolSet.yamlToolNames,
       ),
     )
 
@@ -589,7 +646,7 @@ object TrailblazeHostYamlRunner {
     )
 
     val trailblazeYaml = createTrailblazeYaml(
-      customTrailblazeToolClasses = ComposeToolSet.LlmToolSet.toolClasses,
+      customTrailblazeToolClasses = composeToolSet.toolClasses,
     )
 
     val trailblazeRunnerUtil = TrailblazeRunnerUtil(
@@ -613,6 +670,7 @@ object TrailblazeHostYamlRunner {
       },
     )
 
+    val subprocessRuntimes = mutableListOf<LaunchedSubprocessRuntime>()
     return executeTrailSession(
       loggingRule = loggingRule,
       overrideSessionId = runYamlRequest.config.overrideSessionId,
@@ -623,10 +681,22 @@ object TrailblazeHostYamlRunner {
       screenshotProvider = screenStateProvider,
       noLogging = runOnHostParams.noLogging,
       cleanup = {
+        withContext(NonCancellable) {
+          subprocessRuntimes.forEach { it.shutdownAll() }
+        }
         agent.close()
         deviceManager.cancelSessionForDevice(trailblazeDeviceId)
       },
     ) { session ->
+      launchSubprocessMcpServersIfAny(
+        targetTestApp = runOnHostParams.targetTestApp,
+        config = runYamlRequest.config,
+        sessionId = session.sessionId,
+        deviceInfo = trailblazeDeviceInfo,
+        logsRepo = loggingRule.logsRepo,
+        toolRepo = toolRepo,
+        onProgressMessage = onProgressMessage,
+      )?.let { subprocessRuntimes += it }
       onProgressMessage("Executing YAML test via Compose RPC...")
       Console.log("▶️ Starting Compose RPC execution for device: ${trailblazeDeviceId.instanceId}")
 
@@ -672,7 +742,7 @@ object TrailblazeHostYamlRunner {
 
       generateAndSaveRecording(
         sessionId = session.sessionId,
-        customToolClasses = ComposeToolSet.LlmToolSet.toolClasses,
+        customToolClasses = composeToolSet.toolClasses,
       )
 
       // Run golden comparison before ending the session so failures are reflected in session status.
@@ -775,16 +845,20 @@ object TrailblazeHostYamlRunner {
         RevylScreenState(cliClient, platform, session.screenWidth, session.screenHeight)
       }
 
-      val allSerializationToolClasses = deviceManager.availableAppTargets
-        .flatMap { it.getAllCustomToolClassesForSerialization() }
-        .toSet()
-
-      TrailblazeSerializationInitializer.initialize(
-        additionalToolClasses = allSerializationToolClasses,
-      )
-
       val loggingRule = HostTrailblazeLoggingRule(
         trailblazeDeviceInfoProvider = { trailblazeDeviceInfo },
+      )
+
+      val revylToolSet = TrailblazeToolSetCatalog.resolveForDriver(
+        driverType = runOnHostParams.trailblazeDriverType,
+        requestedIds = RevylToolSetIds.ALL,
+      )
+      val toolRepo = TrailblazeToolRepo(
+        TrailblazeToolSet.DynamicTrailblazeToolSet(
+          name = "Revyl Native Tool Set",
+          toolClasses = revylToolSet.toolClasses,
+          yamlToolNames = revylToolSet.yamlToolNames,
+        ),
       )
 
       val agent = RevylTrailblazeAgent(
@@ -795,10 +869,7 @@ object TrailblazeHostYamlRunner {
         sessionProvider = {
           loggingRule.session ?: error("Session not available - ensure test is running")
         },
-      )
-
-      val toolRepo = TrailblazeToolRepo(
-        xyz.block.trailblaze.revyl.tools.RevylNativeToolSet.RevylLlmToolSet,
+        trailblazeToolRepo = toolRepo,
       )
 
       val trailblazeRunner = TrailblazeRunner(
@@ -821,7 +892,7 @@ object TrailblazeHostYamlRunner {
       )
 
       val trailblazeYaml = createTrailblazeYaml(
-        customTrailblazeToolClasses = xyz.block.trailblaze.revyl.tools.RevylNativeToolSet.RevylLlmToolSet.toolClasses,
+        customTrailblazeToolClasses = revylToolSet.toolClasses,
       )
 
       val trailblazeRunnerUtil = TrailblazeRunnerUtil(
@@ -845,6 +916,7 @@ object TrailblazeHostYamlRunner {
         },
       )
 
+      val subprocessRuntimes = mutableListOf<LaunchedSubprocessRuntime>()
       return executeTrailSession(
         loggingRule = loggingRule,
         overrideSessionId = runYamlRequest.config.overrideSessionId,
@@ -855,9 +927,21 @@ object TrailblazeHostYamlRunner {
         screenshotProvider = screenStateProvider,
         noLogging = runOnHostParams.noLogging,
         cleanup = {
+          withContext(NonCancellable) {
+            subprocessRuntimes.forEach { it.shutdownAll() }
+          }
           deviceManager.cancelSessionForDevice(trailblazeDeviceId)
         },
       ) { session ->
+        launchSubprocessMcpServersIfAny(
+          targetTestApp = runOnHostParams.targetTestApp,
+          config = runYamlRequest.config,
+          sessionId = session.sessionId,
+          deviceInfo = trailblazeDeviceInfo,
+          logsRepo = loggingRule.logsRepo,
+          toolRepo = toolRepo,
+          onProgressMessage = onProgressMessage,
+        )?.let { subprocessRuntimes += it }
         onProgressMessage("Executing YAML test via Revyl cloud device...")
         Console.log("▶️ Starting Revyl execution for device: ${trailblazeDeviceId.instanceId}")
 
@@ -907,7 +991,7 @@ object TrailblazeHostYamlRunner {
 
         generateAndSaveRecording(
           sessionId = session.sessionId,
-          customToolClasses = xyz.block.trailblaze.revyl.tools.RevylNativeToolSet.RevylLlmToolSet.toolClasses,
+          customToolClasses = revylToolSet.toolClasses,
         )
 
         session.sessionId
@@ -954,13 +1038,6 @@ object TrailblazeHostYamlRunner {
 
     val runYamlRequest = runOnHostParams.runYamlRequest
 
-    // Gather ALL custom tool classes from ALL available app targets for YAML deserialization.
-    // This ensures any tool referenced in a trail file can be deserialized regardless of which
-    // app target is selected. The LLM tool repo still uses the target-specific customToolClasses.
-    val allSerializationToolClasses = deviceManager.availableAppTargets
-      .flatMap { it.getAllCustomToolClassesForSerialization() }
-      .toSet()
-
     val hostTbRunner = object : BaseHostTrailblazeTest(
       trailblazeDriverType = runOnHostParams.trailblazeDriverType,
       customToolClasses = runOnHostParams.targetTestApp
@@ -971,7 +1048,6 @@ object TrailblazeHostYamlRunner {
         ?.getExcludedToolsForDriver(
           runOnHostParams.trailblazeDriverType,
         ) ?: emptySet(),
-      allSerializationToolClasses = allSerializationToolClasses,
       dynamicLlmClient = dynamicLlmClient,
       trailblazeLlmModel = runYamlRequest.trailblazeLlmModel,
       config = runYamlRequest.config,
@@ -996,6 +1072,19 @@ object TrailblazeHostYamlRunner {
 
     val keepDriverAlive = runOnHostParams.referrer == TrailblazeReferrer.MCP
 
+    // Decision 038 session-startup wiring: per-session subprocess MCP servers declared by the
+    // target's `mcp_servers:` YAML. The launcher spawns each entry, runs the MCP handshake,
+    // registers filtered tools into hostTbRunner.toolRepo, and hands back a teardown handle.
+    // Launch must happen inside the executeTrailSession lambda — we need the SessionId for
+    // the env-var contract and for the session-log directory; both are available there.
+    //
+    // Modeled as a mutable list of resources (empty when the target declares no
+    // `mcp_servers:`, populated once launch succeeds) so the cleanup lambda can reference
+    // the collection directly without a forward-declared nullable var. Today launch is
+    // called at most once per session, but the list shape naturally accommodates
+    // splitting per-server launches later without reshaping the control flow.
+    val subprocessRuntimes = mutableListOf<LaunchedSubprocessRuntime>()
+
     return executeTrailSession(
       loggingRule = hostTbRunner.loggingRule,
       overrideSessionId = runYamlRequest.config.overrideSessionId,
@@ -1006,6 +1095,17 @@ object TrailblazeHostYamlRunner {
       screenshotProvider = hostTbRunner.hostRunner.screenStateProvider,
       noLogging = runOnHostParams.noLogging,
       cleanup = {
+        // Shut down subprocess MCP servers before the driver goes away — they're tied to
+        // this session's lifetime and every registration's sessionProvider closes over
+        // them. Empty list when nothing was launched; no branch needed.
+        //
+        // Wrapped in `NonCancellable` so teardown completes even when the surrounding
+        // coroutine is cancelled (trail timeout, user abort). Without this, cancellation
+        // would prevent `session.shutdown()` from running and leak the subprocess +
+        // stderr-capture file handle.
+        withContext(NonCancellable) {
+          subprocessRuntimes.forEach { it.shutdownAll() }
+        }
         if (keepDriverAlive) {
           Console.log("🔗 MCP referrer detected - keeping driver alive for device: ${trailblazeDeviceId.instanceId}")
           deviceManager.clearCoroutineScopeForDevice(trailblazeDeviceId)
@@ -1014,6 +1114,20 @@ object TrailblazeHostYamlRunner {
         }
       },
     ) { session ->
+      // Spawn target-declared subprocess MCP servers + register their tools into the
+      // session's repo. Runs before trail execution so the LLM's first tools/list reflects
+      // the full registry. Fail-fast: if any spawn fails, executeTrailSession's catch path
+      // reports it and the cleanup lambda tears down anything partial.
+      launchSubprocessMcpServersIfAny(
+        targetTestApp = runOnHostParams.targetTestApp,
+        config = runYamlRequest.config,
+        sessionId = session.sessionId,
+        deviceInfo = hostTbRunner.trailblazeDeviceInfo,
+        logsRepo = hostTbRunner.hostLoggingRule.logsRepo,
+        toolRepo = hostTbRunner.toolRepo,
+        onProgressMessage = onProgressMessage,
+      )?.let { subprocessRuntimes += it }
+
       onProgressMessage("Executing YAML test...")
       Console.log("▶️ Starting runTrailblazeYamlSuspend for device: ${trailblazeDeviceId.instanceId}")
       val sessionId = hostTbRunner.runTrailblazeYamlSuspend(
@@ -1092,6 +1206,11 @@ object TrailblazeHostYamlRunner {
       return null
     }
 
+    // Query the device for its actual classifiers via a lightweight screen state probe.
+    val classifiers = queryDeviceClassifiers(onDeviceRpc).ifEmpty {
+      listOf(TrailblazeDevicePlatform.ANDROID.asTrailblazeDeviceClassifier())
+    }
+
     // Set up host-side logging (session start/end logs are emitted here, not on-device)
     val loggingRule = HostTrailblazeLoggingRule(
       trailblazeDeviceInfoProvider = {
@@ -1100,10 +1219,7 @@ object TrailblazeHostYamlRunner {
           trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
           widthPixels = 0,
           heightPixels = 0,
-          classifiers = listOf(
-            TrailblazeDeviceClassifier("android"),
-            TrailblazeDeviceClassifier("accessibility"),
-          ),
+          classifiers = classifiers,
         )
       },
     )
@@ -1145,6 +1261,7 @@ object TrailblazeHostYamlRunner {
       },
     )
 
+    val subprocessRuntimes = mutableListOf<LaunchedSubprocessRuntime>()
     return executeTrailSession(
       loggingRule = loggingRule,
       overrideSessionId = runYamlRequest.config.overrideSessionId,
@@ -1155,8 +1272,22 @@ object TrailblazeHostYamlRunner {
       screenshotProvider = {
         runBlocking { executor.captureScreenState() } ?: error("No screen state available")
       },
-      cleanup = { executor.close() },
+      cleanup = {
+        withContext(NonCancellable) {
+          subprocessRuntimes.forEach { it.shutdownAll() }
+        }
+        executor.close()
+      },
     ) { session ->
+      launchSubprocessMcpServersIfAny(
+        targetTestApp = targetTestApp,
+        config = runYamlRequest.config,
+        sessionId = session.sessionId,
+        deviceInfo = loggingRule.trailblazeDeviceInfoProvider(),
+        logsRepo = loggingRule.logsRepo,
+        toolRepo = toolRepo,
+        onProgressMessage = onProgressMessage,
+      )?.let { subprocessRuntimes += it }
       if (runYamlRequest.config.sendSessionStartLog) {
         val deviceInfo = loggingRule.trailblazeDeviceInfoProvider()
         loggingRule.logger.log(
@@ -1233,45 +1364,74 @@ object TrailblazeHostYamlRunner {
 
       onProgressMessage("Starting V3 runner on host with accessibility driver (${promptSteps.size} steps)...")
 
-      // Execute pre-action tools (e.g. launchApp) before running V3 prompt steps
-      for (toolItem in toolItems) {
+      // Execute pre-action tools (e.g. launchApp) before running V3 prompt steps.
+      // Reuse the host's top-level session ID so pre-action logs land in the same
+      // on-device session directory as the main V3 loop — matches the per-tool
+      // dispatch path in HostAccessibilityRpcClient.execute().
+      //
+      // Pre-action failure short-circuits the trail: `launchApp` failing means the main V3
+      // loop would otherwise run against the wrong app state, producing a confusing
+      // mid-trail failure instead of a clean "couldn't launch the app under test" one.
+      var preActionFailure: String? = null
+      preActionLoop@ for (toolItem in toolItems) {
         for (toolWrapper in toolItem.tools) {
           val toolYaml = trailblazeYaml.encodeToString(
             listOf(TrailYamlItem.ToolTrailItem(listOf(toolWrapper))),
           )
-          val toolCallSessionId = SessionId.generate()
           val singleToolRequest = runYamlRequest.copy(
             yaml = toolYaml,
             agentImplementation = AgentImplementation.TRAILBLAZE_RUNNER,
             config = runYamlRequest.config.copy(
-              overrideSessionId = toolCallSessionId,
+              overrideSessionId = session.sessionId,
               sendSessionStartLog = false,
               sendSessionEndLog = false,
             ),
           )
-          executor.executePreAction(singleToolRequest, toolCallSessionId)
+          val ok = executor.executePreAction(singleToolRequest)
+          if (!ok) {
+            preActionFailure =
+              "Pre-action '${toolWrapper.trailblazeTool::class.simpleName ?: "unknown"}' " +
+                "failed on-device; aborting trail before V3 prompt steps run. See prior log lines " +
+                "for the on-device error message."
+            break@preActionLoop
+          }
         }
       }
 
-      val result = v3Runner.trail(
-        steps = promptSteps,
-        config = TrailConfig.AI_ONLY,
-        sessionId = session.sessionId,
-      )
-      onProgressMessage(
-        if (result.success) "V3 trail completed successfully"
-        else "V3 trail failed: ${result.errorMessage}",
-      )
+      // Recording-first with AI-level retry budget. AI_ONLY here caused every step to re-plan
+      // via LLM even when the recording matched — why the V3 a11y step had been running 100%
+      // AI-driven on main.
+      //
+      // Skip the V3 trail entirely if a pre-action failed — see preActionFailure above.
+      val trailSuccess: Boolean
+      val trailErrorMessage: String?
+      if (preActionFailure != null) {
+        onProgressMessage("V3 trail aborted: $preActionFailure")
+        trailSuccess = false
+        trailErrorMessage = preActionFailure
+      } else {
+        val result = v3Runner.trail(
+          steps = promptSteps,
+          config = TrailConfig.RECORDING_WITH_AI_RETRIES,
+          sessionId = session.sessionId,
+        )
+        trailSuccess = result.success
+        trailErrorMessage = result.errorMessage
+        onProgressMessage(
+          if (result.success) "V3 trail completed successfully"
+          else "V3 trail failed: ${result.errorMessage}",
+        )
+      }
 
       if (runYamlRequest.config.sendSessionEndLog) {
         val sessionManager = loggingRule.sessionManager
-        if (result.success) {
+        if (trailSuccess) {
           sessionManager.endSession(session, isSuccess = true)
         } else {
           sessionManager.endSession(
             session,
             isSuccess = false,
-            exception = Exception(result.errorMessage ?: "Trail execution failed"),
+            exception = Exception(trailErrorMessage ?: "Trail execution failed"),
           )
         }
       }
@@ -1304,7 +1464,7 @@ object TrailblazeHostYamlRunner {
     targetTestApp: TrailblazeHostAppTarget?,
   ): SessionId? {
     val driverType = runYamlRequest.driverType
-      ?: TrailblazeDriverType.DEFAULT_ANDROID_ON_DEVICE
+      ?: TrailblazeDriverType.DEFAULT_ANDROID
     val customToolClasses = targetTestApp
       ?.getCustomToolsForDriver(driverType)
       ?: emptySet()
@@ -1322,12 +1482,11 @@ object TrailblazeHostYamlRunner {
     }
     val trailConfig = trailblazeYaml.extractTrailConfig(trailItems)
 
-    // Set up host-side logging
-    val driverClassifier = when (driverType) {
-      TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY -> "accessibility"
-      TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION -> "instrumentation"
-      else -> driverType.name.lowercase()
+    // Query the device for its actual classifiers via a lightweight screen state probe.
+    val classifiers = queryDeviceClassifiers(onDeviceRpc).ifEmpty {
+      listOf(TrailblazeDevicePlatform.ANDROID.asTrailblazeDeviceClassifier())
     }
+
     val loggingRule = HostTrailblazeLoggingRule(
       trailblazeDeviceInfoProvider = {
         TrailblazeDeviceInfo(
@@ -1335,10 +1494,7 @@ object TrailblazeHostYamlRunner {
           trailblazeDriverType = driverType,
           widthPixels = 0,
           heightPixels = 0,
-          classifiers = listOf(
-            TrailblazeDeviceClassifier("android"),
-            TrailblazeDeviceClassifier(driverClassifier),
-          ),
+          classifiers = classifiers,
         )
       },
     )
@@ -1358,6 +1514,9 @@ object TrailblazeHostYamlRunner {
       trailblazeDeviceInfoProvider = loggingRule.trailblazeDeviceInfoProvider,
       sessionProvider = { loggingRule.session ?: error("Session not available") },
       customToolClasses = customToolClasses,
+      requireAndroidAccessibilityServiceOnRewarm =
+        runYamlRequest.driverType == TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+      trailblazeToolRepo = toolRepo,
     )
 
     val runner = TrailblazeRunner(
@@ -1396,6 +1555,7 @@ object TrailblazeHostYamlRunner {
       sessionProvider = { loggingRule.session ?: error("Session not available") },
     )
 
+    val subprocessRuntimes = mutableListOf<LaunchedSubprocessRuntime>()
     return executeTrailSession(
       loggingRule = loggingRule,
       overrideSessionId = runYamlRequest.config.overrideSessionId,
@@ -1406,7 +1566,21 @@ object TrailblazeHostYamlRunner {
       screenshotProvider = {
         runBlocking { agent.captureScreenState() } ?: error("No screen state available")
       },
+      cleanup = {
+        withContext(NonCancellable) {
+          subprocessRuntimes.forEach { it.shutdownAll() }
+        }
+      },
     ) { session ->
+      launchSubprocessMcpServersIfAny(
+        targetTestApp = targetTestApp,
+        config = runYamlRequest.config,
+        sessionId = session.sessionId,
+        deviceInfo = loggingRule.trailblazeDeviceInfoProvider(),
+        logsRepo = loggingRule.logsRepo,
+        toolRepo = toolRepo,
+        onProgressMessage = onProgressMessage,
+      )?.let { subprocessRuntimes += it }
       if (runYamlRequest.config.sendSessionStartLog) {
         val deviceInfo = loggingRule.trailblazeDeviceInfoProvider()
         loggingRule.logger.log(
@@ -1429,7 +1603,7 @@ object TrailblazeHostYamlRunner {
       }
 
       onProgressMessage(
-        "Starting TrailblazeRunner on host with $driverClassifier driver via RPC (${trailItems.size} trail items)...",
+        "Starting TrailblazeRunner on host with ${driverType.name.lowercase()} driver via RPC (${trailItems.size} trail items)...",
       )
 
       for (item in trailItems) {
@@ -1458,6 +1632,32 @@ object TrailblazeHostYamlRunner {
       )
 
       session.sessionId
+    }
+  }
+
+  /**
+   * Queries the on-device agent for its device classifiers via a lightweight screen state probe.
+   * Returns the classifiers (e.g., ["android", "phone"]) or an empty list if the device
+   * doesn't provide them (older on-device agents without classifier support).
+   */
+  private suspend fun queryDeviceClassifiers(
+    onDeviceRpc: OnDeviceRpcClient,
+  ): List<TrailblazeDeviceClassifier> {
+    val probe = GetScreenStateRequest(
+      includeScreenshot = false,
+      includeAnnotatedScreenshot = false,
+    )
+    return when (val result = onDeviceRpc.rpcCall(probe)) {
+      is RpcResult.Success -> {
+        result.data.deviceClassifiers?.map { TrailblazeDeviceClassifier(it) } ?: emptyList()
+      }
+      is RpcResult.Failure -> {
+        Console.log(
+          "[Trailblaze] Failed to query device classifiers from on-device agent; " +
+            "falling back to default classifiers. RPC failure: ${result.message}",
+        )
+        emptyList()
+      }
     }
   }
 

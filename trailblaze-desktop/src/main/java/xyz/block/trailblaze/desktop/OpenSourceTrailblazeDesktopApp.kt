@@ -4,7 +4,6 @@ import xyz.block.trailblaze.host.rules.TrailblazeHostDynamicLlmClientProvider
 import xyz.block.trailblaze.host.rules.TrailblazeHostDynamicLlmTokenProvider
 import xyz.block.trailblaze.host.yaml.DesktopYamlRunner
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
-import xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer
 import xyz.block.trailblaze.logs.server.TrailblazeMcpServer
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridgeImpl
@@ -22,13 +21,6 @@ import xyz.block.trailblaze.util.Console
 class OpenSourceTrailblazeDesktopApp : TrailblazeDesktopApp(
   desktopAppConfig = OpenSourceTrailblazeDesktopAppConfig()
 ) {
-
-  init {
-    TrailblazeSerializationInitializer.initialize(
-      additionalToolClasses = desktopAppConfig.availableAppTargets
-        .flatMap { it.getAllCustomToolClassesForSerialization() }.toSet(),
-    )
-  }
 
   fun createDynamicClient(trailblazeLlmModel: TrailblazeLlmModel): TrailblazeHostDynamicLlmClientProvider {
     return TrailblazeHostDynamicLlmClientProvider(

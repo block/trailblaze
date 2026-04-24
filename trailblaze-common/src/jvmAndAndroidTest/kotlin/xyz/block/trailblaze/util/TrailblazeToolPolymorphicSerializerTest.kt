@@ -8,9 +8,11 @@ import org.junit.Test
 import xyz.block.trailblaze.logs.client.TrailblazeJson
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
+import xyz.block.trailblaze.config.ToolYamlLoader
+import xyz.block.trailblaze.mobile.tools.ListInstalledAppsTrailblazeTool
+import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
-import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.toolcalls.commands.TapTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.WaitForIdleSyncTrailblazeTool
 import xyz.block.trailblaze.toolcalls.toolName
@@ -22,6 +24,27 @@ import kotlin.test.assertEquals
 private data class TestTrailblazeTool(val x: Int, val y: Int) : TrailblazeTool
 
 class TrailblazeToolPolymorphicSerializerTest {
+
+  /**
+   * Regression guard for silent YAML → class drops. `ToolYamlLoader.discoverAndLoadAll()` logs a
+   * warning and returns an incomplete map when a `trailblaze-config/tools/<name>.yaml` file has a
+   * typo'd `class:` FQCN or the class has been renamed/moved without updating the YAML. Without an
+   * explicit assertion, such regressions are invisible to the test suite and only surface at
+   * runtime as "Could not find Trailblaze tool for name: ..." from the scripting callback
+   * endpoint. Asserting one tool's mapping here is cheap and catches the whole failure class —
+   * add future tools to this assertion if you want the same guarantee for them.
+   */
+  @Test
+  fun mobileListInstalledAppsYamlResolvesToClass() {
+    val discovered = ToolYamlLoader.discoverAndLoadAll()
+    assertEquals(
+      expected = ListInstalledAppsTrailblazeTool::class,
+      actual = discovered[ToolName("mobile_listInstalledApps")],
+      message = "mobile_listInstalledApps.yaml did not resolve to ListInstalledAppsTrailblazeTool. " +
+        "Check `trailblaze-common/src/commonMain/resources/trailblaze-config/tools/mobile_listInstalledApps.yaml` " +
+        "for a typo'd or stale `class:` FQCN.",
+    )
+  }
 
   @Test
   fun testSerialize() {
@@ -72,7 +95,7 @@ class TrailblazeToolPolymorphicSerializerTest {
       TestTrailblazeTool(10, 10),
     )
     val jsonInstance = TrailblazeJson.createTrailblazeJsonInstance(
-      TrailblazeToolSet.AllBuiltInTrailblazeToolsForSerializationByToolName + mapOf(
+      ToolYamlLoader.discoverAndLoadAll() + mapOf(
         TestTrailblazeTool::class.toolName() to TestTrailblazeTool::class,
       ),
     )

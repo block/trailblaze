@@ -5,8 +5,8 @@ import kotlinx.datetime.Clock
 import xyz.block.trailblaze.agent.TrailblazeElementComparator
 import xyz.block.trailblaze.agent.TrailblazeRunner
 import xyz.block.trailblaze.compose.driver.ComposeTrailblazeAgent
+import xyz.block.trailblaze.compose.driver.tools.ComposeToolSetIds
 import xyz.block.trailblaze.compose.target.ComposeTestTarget
-import xyz.block.trailblaze.compose.driver.tools.ComposeToolSet
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
@@ -15,20 +15,20 @@ import xyz.block.trailblaze.exception.TrailblazeException
 import xyz.block.trailblaze.host.rules.TrailblazeHostLlmConfig.DEFAULT_TRAILBLAZE_LLM_MODEL
 import xyz.block.trailblaze.http.DynamicLlmClient
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
-import xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.rules.TrailblazeLoggingRule
 import xyz.block.trailblaze.rules.TrailblazeRunnerUtil
+import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
-import xyz.block.trailblaze.toolcalls.toolName
+import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
 import xyz.block.trailblaze.yaml.TrailYamlItem
-import xyz.block.trailblaze.yaml.createTrailblazeYaml
+import xyz.block.trailblaze.yaml.TrailblazeYaml
 import kotlin.reflect.KClass
 
 /**
@@ -48,17 +48,11 @@ class BaseComposeTest(
       trailblazeDynamicLlmTokenProvider = TrailblazeHostDynamicLlmTokenProvider,
     ),
   customToolClasses: Set<KClass<out TrailblazeTool>> = setOf(),
-  allSerializationToolClasses: Set<KClass<out TrailblazeTool>> = customToolClasses,
+  customYamlToolNames: Set<ToolName> = setOf(),
   val trailblazeDeviceId: TrailblazeDeviceId,
   val viewportWidth: Int = ComposeTrailblazeAgent.DEFAULT_VIEWPORT_WIDTH,
   val viewportHeight: Int = ComposeTrailblazeAgent.DEFAULT_VIEWPORT_HEIGHT,
 ) {
-
-  init {
-    TrailblazeSerializationInitializer.initialize(
-      additionalToolClasses = allSerializationToolClasses,
-    )
-  }
 
   val trailblazeDeviceInfo: TrailblazeDeviceInfo
     get() =
@@ -75,21 +69,25 @@ class BaseComposeTest(
       trailblazeDeviceInfoProvider = { trailblazeDeviceInfo },
     )
 
-  private val allToolClasses = ComposeToolSet.LlmToolSet.toolClasses + customToolClasses
+  private val resolvedComposeToolSet =
+    TrailblazeToolSetCatalog.resolveForDriver(
+      driverType = TrailblazeDriverType.COMPOSE,
+      requestedIds = ComposeToolSetIds.ALL,
+    )
+
+  private val allToolClasses = resolvedComposeToolSet.toolClasses + customToolClasses
+  private val allYamlToolNames = resolvedComposeToolSet.yamlToolNames + customYamlToolNames
 
   private val toolRepo =
     TrailblazeToolRepo(
       TrailblazeToolSet.DynamicTrailblazeToolSet(
-        "Compose Desktop Tool Set",
-        allToolClasses,
+        name = "Compose Desktop Tool Set",
+        toolClasses = allToolClasses,
+        yamlToolNames = allYamlToolNames,
       ),
     )
 
-  private val trailblazeYaml =
-    createTrailblazeYaml(
-      customTrailblazeToolClasses =
-        ComposeToolSet.LlmToolSet.toolClasses + allSerializationToolClasses,
-    )
+  private val trailblazeYaml = TrailblazeYaml.Default
 
   /**
    * Runs a trail YAML against a Compose UI test instance.

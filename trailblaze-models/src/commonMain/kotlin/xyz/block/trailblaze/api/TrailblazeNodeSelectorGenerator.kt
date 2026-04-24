@@ -129,6 +129,8 @@ object TrailblazeNodeSelectorGenerator {
         namedStructuralComposeStrategies(root, target, detail, parentMap)
       is DriverNodeDetail.IosMaestro ->
         namedStructuralIosMaestroStrategies(root, target, detail, parentMap)
+      is DriverNodeDetail.IosAxe ->
+        namedStructuralIosAxeStrategies(root, target, detail, parentMap)
     }
 
     for ((name, strategy) in namedStrategies) {
@@ -255,22 +257,11 @@ object TrailblazeNodeSelectorGenerator {
       composeStrategies(root, target, detail, parentMap)
     is DriverNodeDetail.IosMaestro ->
       iosMaestroStrategies(root, target, detail, parentMap)
+    is DriverNodeDetail.IosAxe ->
+      iosAxeStrategies(root, target, detail, parentMap)
   }
 
   // --- Private helpers ---
-
-  /** Builds a map from child nodeId to parent node for the entire tree. */
-  private fun buildParentMap(root: TrailblazeNode): Map<Long, TrailblazeNode> {
-    val parentMap = mutableMapOf<Long, TrailblazeNode>()
-    fun visit(node: TrailblazeNode) {
-      for (child in node.children) {
-        parentMap[child.nodeId] = node
-        visit(child)
-      }
-    }
-    visit(root)
-    return parentMap
-  }
 
   /**
    * Global index fallback: assigns an index among ALL nodes in the tree.

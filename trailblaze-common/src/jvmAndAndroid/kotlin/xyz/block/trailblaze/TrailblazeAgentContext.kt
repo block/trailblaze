@@ -10,6 +10,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
+import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.getIsRecordableFromAnnotation
@@ -37,10 +38,15 @@ fun TrailblazeAgentContext.logToolExecution(
   context: TrailblazeToolExecutionContext,
   result: TrailblazeToolResult,
 ) {
+  // If the tool stamped an override (e.g. TapOnPointTrailblazeTool upgrading to
+  // TapOnTrailblazeTool), record EVERYTHING from the override — instance, toolName, and
+  // isRecordable must all agree, since downstream recording code keys serialization by
+  // toolName while encoding the instance. Mixing them produces a type/serializer mismatch.
+  val recordedTool: TrailblazeTool = context.recordedToolOverride ?: tool
   val toolLog =
     TrailblazeLog.TrailblazeToolLog(
-      trailblazeTool = tool,
-      toolName = tool.getToolNameFromAnnotation(),
+      trailblazeTool = recordedTool,
+      toolName = recordedTool.getToolNameFromAnnotation(),
       exceptionMessage = (result as? TrailblazeToolResult.Error)?.errorMessage,
       successful = result.isSuccess(),
       durationMs =
@@ -48,8 +54,13 @@ fun TrailblazeAgentContext.logToolExecution(
       timestamp = timeBeforeExecution,
       traceId = context.traceId,
       session = sessionProvider.invoke().sessionId,
-      isRecordable = tool.getIsRecordableFromAnnotation(),
+      isRecordable = recordedTool.getIsRecordableFromAnnotation(),
     )
+  // Clear the override after consuming it. The execution context is reused across every
+  // tool in a single runTrailblazeTools(...) batch, so a stale override would bleed into
+  // the next tool's log and mis-record it.
+  context.recordedToolOverride = null
+
   val toolLogJson = TrailblazeJsonInstance.encodeToString(toolLog)
   Console.log("toolLogJson: $toolLogJson")
 

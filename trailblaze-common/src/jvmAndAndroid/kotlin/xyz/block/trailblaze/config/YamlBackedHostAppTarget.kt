@@ -5,6 +5,7 @@ import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.model.AppVersionInfo
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
+import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.util.Console
 import kotlin.reflect.KClass
@@ -42,19 +43,23 @@ class YamlBackedHostAppTarget(
 
   // --- Custom tools per driver type ---
 
+  private data class ToolsByDriver(
+    val classes: Map<TrailblazeDriverType, Set<KClass<out TrailblazeTool>>>,
+    val yamlNames: Map<TrailblazeDriverType, Set<ToolName>>,
+  )
+
   /**
-   * For each driver type, the resolved set of custom tool classes.
-   * Computed lazily from the YAML's platform sections + companion contributions.
+   * For each driver type, the resolved set of custom tools (both class-backed and
+   * YAML-defined). Computed lazily from the YAML's platform sections + companion contributions.
    */
-  private val resolvedCustomToolsByDriver:
-      Map<TrailblazeDriverType, Set<KClass<out TrailblazeTool>>> by lazy {
-    val result = mutableMapOf<TrailblazeDriverType, MutableSet<KClass<out TrailblazeTool>>>()
+  private val resolvedCustomToolsByDriver: ToolsByDriver by lazy {
+    val classes = mutableMapOf<TrailblazeDriverType, MutableSet<KClass<out TrailblazeTool>>>()
+    val yamlNames = mutableMapOf<TrailblazeDriverType, MutableSet<ToolName>>()
 
     config.platforms?.forEach { (platformKey, platformConfig) ->
-      // Resolve the platform key to driver types
       val driverTypes = platformConfig.resolveDriverTypes(platformKey)
 
-      // Resolve toolsets
+      // Resolve toolsets — both backings flow through.
       platformConfig.toolSets?.forEach { toolSetId ->
         val toolSet = availableToolSets[toolSetId]
         if (toolSet == null) {
@@ -62,32 +67,46 @@ class YamlBackedHostAppTarget(
           return@forEach
         }
         for (dt in driverTypes) {
-          if (toolSet.isCompatibleWith(dt)) {
-            result.getOrPut(dt) { mutableSetOf() }.addAll(toolSet.resolvedToolClasses)
-          }
+          if (!toolSet.isCompatibleWith(dt)) continue
+          classes.getOrPut(dt) { mutableSetOf() }.addAll(toolSet.resolvedToolClasses)
+          yamlNames.getOrPut(dt) { mutableSetOf() }.addAll(toolSet.resolvedYamlToolNames)
         }
       }
 
-      // Resolve individual tools
+      // Resolve individual tools — look up by bare name; route to the right bucket.
+      // `resolveYamlNameOrNull` returns a typed `ToolName?`, so classification hands back
+      // the already-wrapped value and we avoid a re-wrap here (Decision 038's
+      // wrap-at-the-boundary pattern).
       platformConfig.tools?.forEach { toolName ->
         val toolClass = toolNameResolver.resolveOrNull(toolName)
-        if (toolClass == null) {
-          Console.log("Warning: App target '$id' platform '$platformKey' references unknown tool '$toolName'")
-          return@forEach
-        }
-        for (dt in driverTypes) {
-          result.getOrPut(dt) { mutableSetOf() }.add(toolClass)
+        val yamlName = toolNameResolver.resolveYamlNameOrNull(toolName)
+        when {
+          toolClass != null -> for (dt in driverTypes) {
+            classes.getOrPut(dt) { mutableSetOf() }.add(toolClass)
+          }
+          yamlName != null -> for (dt in driverTypes) {
+            yamlNames.getOrPut(dt) { mutableSetOf() }.add(yamlName)
+          }
+          else -> Console.log(
+            "Warning: App target '$id' platform '$platformKey' references unknown tool '$toolName'",
+          )
         }
       }
     }
 
-    result
+    ToolsByDriver(classes = classes, yamlNames = yamlNames)
   }
 
   override fun internalGetCustomToolsForDriver(
     driverType: TrailblazeDriverType,
   ): Set<KClass<out TrailblazeTool>> {
-    return resolvedCustomToolsByDriver[driverType] ?: emptySet()
+    return resolvedCustomToolsByDriver.classes[driverType] ?: emptySet()
+  }
+
+  override fun getCustomYamlToolNamesForDriver(
+    driverType: TrailblazeDriverType,
+  ): Set<ToolName> {
+    return resolvedCustomToolsByDriver.yamlNames[driverType] ?: emptySet()
   }
 
   // --- Excluded tools ---
@@ -116,6 +135,10 @@ class YamlBackedHostAppTarget(
     driverType: TrailblazeDriverType,
   ): Set<KClass<out TrailblazeTool>> =
     resolvedExcludedTools[driverType] ?: emptySet()
+
+  // --- MCP server declarations (Decision 038) ---
+
+  override fun getMcpServers(): List<McpServerConfig> = config.mcpServers ?: emptyList()
 
   // --- Version info ---
 

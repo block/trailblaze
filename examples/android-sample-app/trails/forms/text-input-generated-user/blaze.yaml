@@ -1,0 +1,14 @@
+- config:
+    id: "sampleapp/forms/text-input-generated-user"
+    target: sampleapp
+- tools:
+    - launchApp:
+        appId: "xyz.block.trailblaze.examples.sampleapp"
+        launchMode: "REINSTALL"
+- prompts:
+    - step: Navigate to the "Forms" tab
+    - step: Call the generateTestUser tool to get a fresh {name, email}. Remember both values.
+    - step: Tap the "Name" field and type the name you generated
+    - step: Tap the "Email" field and type the email you generated
+    - step: Tap the "Submit" button
+    - step: Verify the generated name and email appear in the submission result

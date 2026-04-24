@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.mcp.newtools
 
+import xyz.block.trailblaze.config.project.TrailDiscovery
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.mcp.RecordedStep
 import xyz.block.trailblaze.mcp.RecordedStepType
@@ -224,16 +225,19 @@ class TrailFileManager(
         }
     }
 
-    // Recursive search for files containing the name (walkTopDown is bounded to dir)
-    return dir.walkTopDown()
-      .filter { file ->
-        file.isFile &&
-          file.extension == "yaml" &&
-          (file.name.contains(name, ignoreCase = true) ||
-            file.parentFile?.name?.contains(name, ignoreCase = true) == true)
-      }
-      .firstOrNull()
-      ?.absolutePath
+    // Recursive search via TrailDiscovery's streaming API — prunes build/, .gradle/,
+    // etc. and short-circuits the walk on first match, so an early-directory hit in
+    // a 10k-trail workspace stays cheap.
+    //
+    // Note: `contains` is byte-wise and does not account for Unicode normalization.
+    // On macOS filesystems the filename bytes are NFD ("café.yaml") but a
+    // user-supplied `name` may be NFC ("café.yaml"); the two will not match. Rare
+    // in practice for trail names, but worth flagging before a future i18n pass.
+    return TrailDiscovery.findFirstTrail(dir.toPath()) { path ->
+      val file = path.toFile()
+      file.name.contains(name, ignoreCase = true) ||
+        file.parentFile?.name?.contains(name, ignoreCase = true) == true
+    }?.toFile()?.absolutePath
   }
 
   /**
@@ -258,6 +262,11 @@ class TrailFileManager(
   /**
    * Lists trail files matching an optional filter, with pagination.
    *
+   * Performance note: when [filter] is null (the common "show me all" case), title
+   * extraction only runs on the returned page slice — we do not open YAML files for trails
+   * the caller won't see. When [filter] is non-null the title has to be read so
+   * `info.title.contains(filter)` can be evaluated, so the eager shape is used there.
+   *
    * @param filter Optional filter string (matches file path, directory name, or trail title)
    * @param page 1-based page number (default 1)
    * @param pageSize Number of results per page (default 20)
@@ -269,39 +278,102 @@ class TrailFileManager(
       trails = emptyList(), totalCount = 0, page = page, pageSize = pageSize, hasMore = false,
     )
 
-    val allTrails = dir.walkTopDown()
-      .filter { it.isFile && it.name.endsWith(".trail.yaml") }
-      .map { file ->
-        val relativePath = file.relativeTo(dir).path
-        val title = try {
-          val yamlContent = file.readText()
-          val trailItems = trailblazeYaml.decodeTrail(yamlContent)
-          trailblazeYaml.extractTrailConfig(trailItems)?.title
-        } catch (_: Exception) {
-          null
-        }
-        TrailInfo(path = relativePath, title = title)
-      }
+    // TrailDiscovery prunes build/, .gradle/, etc. and surfaces both .trail.yaml and
+    // NL-definition files (blaze.yaml / nested trailblaze.yaml).
+    val discoveredFiles = TrailDiscovery.discoverTrailFiles(dir.toPath())
+
+    return if (filter == null) {
+      paginateWithoutTitleFilter(discoveredFiles, dir, page, pageSize)
+    } else {
+      paginateWithTitleFilter(discoveredFiles, dir, filter, page, pageSize)
+    }
+  }
+
+  /**
+   * Fast path: paginate by path first, then read YAML titles only for the page slice.
+   * A 10k-trail workspace costs ~pageSize YAML reads instead of 10k.
+   *
+   * Sorts by absolute path so the ordering key matches [TrailDiscovery.discoverTrails]
+   * exactly — the two sort keys would agree on every file sharing the same root
+   * regardless, but aligning them defends against future callers that might pass an
+   * un-prefiltered list.
+   */
+  private fun paginateWithoutTitleFilter(
+    discoveredFiles: List<File>,
+    dir: File,
+    page: Int,
+    pageSize: Int,
+  ): TrailListPage {
+    val sortedFiles = discoveredFiles.sortedBy { it.absolutePath }
+    val bounds = paginationBounds(sortedFiles.size, page, pageSize)
+    val pageTrails = sortedFiles.subList(bounds.startIndex, bounds.endIndex).map { file ->
+      TrailInfo(path = file.relativeTo(dir).path, title = readTrailTitle(file))
+    }
+    return bounds.toPage(pageTrails)
+  }
+
+  /**
+   * Slow path: title-matching requires reading every file's YAML so the filter can run
+   * against `info.title`. Kept identical to pre-Phase-3 eager behavior — callers that
+   * pass a filter already accept the O(n) read cost in exchange for a full search.
+   *
+   * Note on ordering: the sort runs **before** the filter so `discoveredFiles` is
+   * ordered by absolute path (matching [TrailDiscovery.discoverTrails]'s key) at the
+   * time YAML titles are read. Moving the filter earlier would skip reads for
+   * path-mismatched trails but would drop title-only matches — preserving the
+   * pre-Phase-3 contract is worth the wasted sort on filtered-out entries.
+   */
+  private fun paginateWithTitleFilter(
+    discoveredFiles: List<File>,
+    dir: File,
+    filter: String,
+    page: Int,
+    pageSize: Int,
+  ): TrailListPage {
+    val allTrails = discoveredFiles
+      .sortedBy { it.absolutePath }
+      .map { file -> TrailInfo(path = file.relativeTo(dir).path, title = readTrailTitle(file)) }
       .filter { info ->
-        if (filter == null) return@filter true
         info.path.contains(filter, ignoreCase = true) ||
           info.title?.contains(filter, ignoreCase = true) == true
       }
-      .sortedBy { it.path }
-      .toList()
+    val bounds = paginationBounds(allTrails.size, page, pageSize)
+    return bounds.toPage(allTrails.subList(bounds.startIndex, bounds.endIndex))
+  }
 
-    val totalCount = allTrails.size
-    val startIndex = ((page - 1) * pageSize).coerceAtMost(totalCount)
-    val endIndex = (startIndex + pageSize).coerceAtMost(totalCount)
-    val pageTrails = allTrails.subList(startIndex, endIndex)
+  /**
+   * Pre-computed slice bounds for a page request — shared by both paginate branches so
+   * the start/end arithmetic and `hasMore` calculation live in one place.
+   */
+  private data class PaginationBounds(
+    val totalCount: Int,
+    val page: Int,
+    val pageSize: Int,
+    val startIndex: Int,
+    val endIndex: Int,
+  ) {
+    val hasMore: Boolean get() = endIndex < totalCount
 
-    return TrailListPage(
-      trails = pageTrails,
+    fun toPage(trails: List<TrailInfo>) = TrailListPage(
+      trails = trails,
       totalCount = totalCount,
       page = page,
       pageSize = pageSize,
-      hasMore = endIndex < totalCount,
+      hasMore = hasMore,
     )
+  }
+
+  private fun paginationBounds(totalCount: Int, page: Int, pageSize: Int): PaginationBounds {
+    val startIndex = ((page - 1) * pageSize).coerceAtMost(totalCount)
+    val endIndex = (startIndex + pageSize).coerceAtMost(totalCount)
+    return PaginationBounds(totalCount, page, pageSize, startIndex, endIndex)
+  }
+
+  private fun readTrailTitle(file: File): String? = try {
+    val trailItems = trailblazeYaml.decodeTrail(file.readText())
+    trailblazeYaml.extractTrailConfig(trailItems)?.title
+  } catch (_: Exception) {
+    null
   }
 
   /**

@@ -427,6 +427,8 @@ private class MockTrailblazeMcpBridge : TrailblazeMcpBridge {
   override suspend fun getScreenStateViaRpc(
     includeScreenshot: Boolean,
     screenshotScalingConfig: ScreenshotScalingConfig,
+    includeAnnotatedScreenshot: Boolean,
+    includeAllElements: Boolean,
   ): GetScreenStateResponse? =
     throw NotImplementedError("Not needed for parsing tests")
 

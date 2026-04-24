@@ -31,6 +31,13 @@ class AccessibilityServiceScreenState(
   private val includeScreenshot: Boolean = true,
   deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
   private val screenshotScalingConfig: ScreenshotScalingConfig = ScreenshotScalingConfig.ON_DEVICE,
+  /**
+   * When true, skip [filterImportantForAccessibility] so the resulting tree contains every
+   * node the accessibility framework reported — even those with
+   * `isImportantForAccessibility = false`. Used by `--all` / [SnapshotDetail.ALL_ELEMENTS]
+   * callers that are willing to pay the larger response size for full fidelity.
+   */
+  private val includeAllElements: Boolean = false,
 ) : ScreenState {
 
   override var deviceWidth: Int = -1
@@ -98,8 +105,9 @@ class AccessibilityServiceScreenState(
             ?: ViewHierarchyTreeNode())
           .relabelWithFreshIds()
 
-      trailblazeNodeTree = rootNodeInfo?.toAccessibilityNode()?.toTrailblazeNode()
-        ?.filterImportantForAccessibility()
+      val rawTree = rootNodeInfo?.toAccessibilityNode()?.toTrailblazeNode()
+      trailblazeNodeTree =
+        if (includeAllElements) rawTree else rawTree?.filterImportantForAccessibility()
     } finally {
       rootNodeInfo?.recycle()
     }

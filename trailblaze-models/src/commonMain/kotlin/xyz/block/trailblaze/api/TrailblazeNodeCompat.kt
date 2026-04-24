@@ -101,5 +101,18 @@ fun TrailblazeNode.toViewHierarchyTreeNode(): ViewHierarchyTreeNode {
       password = detail.isPassword,
       children = children.map { it.toViewHierarchyTreeNode() },
     )
+    is DriverNodeDetail.IosAxe -> ViewHierarchyTreeNode(
+      nodeId = nodeId,
+      x1 = b?.left ?: 0,
+      y1 = b?.top ?: 0,
+      x2 = b?.right ?: 0,
+      y2 = b?.bottom ?: 0,
+      className = detail.type,
+      resourceId = detail.uniqueId,
+      text = detail.label,
+      accessibilityText = detail.value,
+      enabled = detail.enabled,
+      children = children.map { it.toViewHierarchyTreeNode() },
+    )
   }
 }

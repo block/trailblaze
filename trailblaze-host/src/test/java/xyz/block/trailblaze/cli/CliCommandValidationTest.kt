@@ -107,26 +107,39 @@ class CliCommandValidationTest {
   }
 
   // ---------------------------------------------------------------------------
-  // checkSetupComplete — top-level function
+  // CliConfigHelper.readConfig — in-memory target hydration
   // ---------------------------------------------------------------------------
 
   @Test
-  fun `checkSetupComplete returns null when target is configured`() {
-    // Ensure a target is set so setup check passes.
-    CliConfigHelper.updateConfig { it.copy(selectedTargetAppId = "testapp") }
+  fun `readConfig hydrates missing target to 'none' without writing to disk`() {
+    // When selectedTargetAppId is missing (older config file predating the
+    // field), readConfig materializes the default "none" target in memory.
+    // The on-disk file must stay untouched until the user actually mutates
+    // their config — we don't want a setup check to silently rewrite settings.
+    CliConfigHelper.updateConfig { it.copy(selectedTargetAppId = null) }
+    val beforeContents = CliConfigHelper.getSettingsFile().readText()
 
-    val result = checkSetupComplete()
+    val hydrated = CliConfigHelper.readConfig()
 
-    assertNull(result)
+    assertEquals(
+      "none",
+      hydrated?.selectedTargetAppId,
+      "readConfig should hydrate missing target to 'none'",
+    )
+    assertEquals(
+      beforeContents,
+      CliConfigHelper.getSettingsFile().readText(),
+      "readConfig must not write to disk when only hydration is needed",
+    )
   }
 
   @Test
-  fun `checkSetupComplete returns error when target is not configured`() {
-    CliConfigHelper.updateConfig { it.copy(selectedTargetAppId = null) }
+  fun `readConfig passes through an explicitly configured target unchanged`() {
+    CliConfigHelper.updateConfig { it.copy(selectedTargetAppId = "testapp") }
 
-    val result = checkSetupComplete()
+    val result = CliConfigHelper.readConfig()
 
-    assertNotNull(result)
+    assertEquals("testapp", result?.selectedTargetAppId)
   }
 
   // ---------------------------------------------------------------------------
@@ -135,12 +148,28 @@ class CliCommandValidationTest {
 
   @Test
   fun `config target with invalid characters returns USAGE`() {
+    // Use a space — always invalid. Hyphens and underscores are now allowed (target IDs are
+    // internal identifiers and don't need to round-trip as LLM tool names), so `my-app` is a
+    // valid target id.
+    val cmd = ConfigTargetCommand()
+    cmd.targetId = "my app"
+
+    val exitCode = cmd.call()
+
+    assertEquals(CommandLine.ExitCode.USAGE, exitCode)
+  }
+
+  @Test
+  fun `config target with hyphen is accepted`() {
+    // Regression guard: target IDs allow hyphens (e.g. `team-app`, `dashboard-web`) for
+    // readability. Tool names that get registered with LLMs keep their own stricter
+    // lowercase-alphanumeric constraint separately.
     val cmd = ConfigTargetCommand()
     cmd.targetId = "my-app"
 
     val exitCode = cmd.call()
 
-    assertEquals(CommandLine.ExitCode.USAGE, exitCode)
+    assertEquals(CommandLine.ExitCode.OK, exitCode)
   }
 
   @Test
@@ -182,11 +211,11 @@ class CliCommandValidationTest {
     commands =
       [
         "trailblaze config llm anthropic/claude-sonnet-4-6",
-        "trailblaze config ai-fallback true",
+        "trailblaze config self-heal true",
         "trailblaze config agent MULTI_AGENT_V3",
       ],
     description =
-      "Read or write CLI configuration keys. Valid keys: llm, ai-fallback, agent, android-driver, ios-driver, mode, device, target. Values are validated before persisting.",
+      "Read or write CLI configuration keys. Valid keys: llm, self-heal, agent, android-driver, ios-driver, mode, device, target. Values are validated before persisting.",
     category = "Configuration",
   )
   @Test
@@ -229,10 +258,10 @@ class CliCommandValidationTest {
   }
 
   @Test
-  fun `config executeConfig with invalid boolean for ai-fallback returns USAGE`() {
+  fun `config executeConfig with invalid boolean for self-heal returns USAGE`() {
     val cmd = ConfigCommand()
 
-    val exitCode = cmd.executeConfig("ai-fallback", "maybe")
+    val exitCode = cmd.executeConfig("self-heal", "maybe")
 
     assertEquals(CommandLine.ExitCode.USAGE, exitCode)
   }
@@ -265,10 +294,10 @@ class CliCommandValidationTest {
   }
 
   @Test
-  fun `config executeConfig with valid ai-fallback value returns OK`() {
+  fun `config executeConfig with valid self-heal value returns OK`() {
     val cmd = ConfigCommand()
 
-    val exitCode = cmd.executeConfig("ai-fallback", "true")
+    val exitCode = cmd.executeConfig("self-heal", "true")
 
     assertEquals(CommandLine.ExitCode.OK, exitCode)
   }

@@ -1,0 +1,2 @@
+id: launchApp
+class: xyz.block.trailblaze.toolcalls.commands.LaunchAppTrailblazeTool

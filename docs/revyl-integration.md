@@ -12,7 +12,7 @@ The Revyl integration provides:
 
 - **RevylCliClient** (`trailblaze-revyl`) – Shells out to the `revyl` CLI binary for all device interactions.
 - **RevylTrailblazeAgent** (`trailblaze-host`) – Maps every Trailblaze tool to a `revyl device` CLI command.
-- **RevylNativeToolSet** (`trailblaze-revyl`) – Revyl-specific LLM tools (tap, type, swipe, assert) using natural language targeting and AI-powered visual grounding.
+- **`revyl_core` / `revyl_verification` YAML toolsets** (`trailblaze-revyl`) – Revyl-specific LLM tools (tap, type, swipe, assert) using natural language targeting and AI-powered visual grounding. Resolved through `TrailblazeToolSetCatalog.resolveForDriver(REVYL_ANDROID | REVYL_IOS, ...)`.
 
 Core data classes and the CLI client live in the `trailblaze-revyl` module. Host-level wiring (agent, blaze support) lives in `trailblaze-host/.../host/revyl/`.
 

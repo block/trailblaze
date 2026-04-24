@@ -9,11 +9,11 @@ import kotlinx.serialization.Serializable
  *
  * Example:
  * ```yaml
- * id: merchant_factory
- * description: "Merchant factory provisioning tools"
+ * id: test_user_setup
+ * description: "Tools that provision throwaway users for sign-up and login flows"
  * tools:
- *   - merchantFactory_createMerchant
- *   - merchantFactory_createMerchantWithCatalog
+ *   - testUser_create
+ *   - testUser_createWithPreferences
  * ```
  */
 @Serializable

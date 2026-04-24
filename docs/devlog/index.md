@@ -11,6 +11,24 @@ Entries tagged as **Decision** record significant architectural or technical cho
 
 | Date | Title | Type |
 | :--- | :--- | :--- |
+| 2026-04-23 | [On-device MCP tool callbacks — direct QuickJS binding](2026-04-23-on-device-callback-channel.md) | Decision |
+| 2026-04-22 | [A TrailblazeTool is a function call (MCP tool, RPC request — same thing)](2026-04-22-trailblaze-tool-is-an-rpc-request.md) | Devlog |
+| 2026-04-22 | [Scripting SDK — Envelope Migration & Callback Transport (D1 + D2)](2026-04-22-scripting-sdk-envelope-migration.md) | Decision |
+| 2026-04-22 | [Scripting SDK — client.callTool Round-Trip](2026-04-22-scripting-sdk-client-calltool.md) | Decision |
+| 2026-04-22 | [@trailblaze/scripting — Authoring Vision & Roadmap (for TS authors)](2026-04-22-scripting-sdk-authoring-vision.md) | Decision |
+| 2026-04-21 | [Waypoint Discovery via `matchWaypoint` — Agent-Driven, Retroactive](2026-04-21-waypoint-discovery-and-matching.md) | Devlog |
+| 2026-04-21 | [Scripted Tools — MCP Server Integration Patterns (forward-looking)](2026-04-21-scripted-tools-mcp-integration-patterns.md) | Decision |
+| 2026-04-21 | [runTrail: Trail-as-Tool Primitive (Proposal)](2026-04-21-run-trail-tool-proposal.md) | Devlog |
+| 2026-04-21 | [Maestro Scripting & Flow Control — Comparison and Self-Validation](2026-04-21-maestro-scripting-and-control-flow-comparison.md) | Devlog |
+| 2026-04-20 | [YAML-Defined Tools (the `tools:` mode)](2026-04-20-yaml-defined-tools.md) | Decision |
+| 2026-04-20 | [Scripted Tools — Toolset Consolidation & Revised Sequencing](2026-04-20-scripted-tools-toolset-consolidation.md) | Decision |
+| 2026-04-20 | [Scripted Tools PR A5 — MCP Toolsets Bundled for On-Device](2026-04-20-scripted-tools-on-device-bundle.md) | Decision |
+| 2026-04-20 | [Scripted Tools PR A3 — MCP SDK Subprocess Toolsets](2026-04-20-scripted-tools-mcp-subprocess.md) | Decision |
+| 2026-04-20 | [Scripted Tools — MCP Extension Conventions](2026-04-20-scripted-tools-mcp-conventions.md) | Decision |
+| 2026-04-20 | [Scripted Tools Execution Model (QuickJS + Synchronous Host Bridge)](2026-04-20-scripted-tools-execution-model.md) | Decision |
+| 2026-04-20 | [Scripted Tools PR A3 Phase 1 — Subprocess MCP Client, Lifecycle, and Registration](2026-04-20-scripted-tools-a3-subprocess-impl.md) | Decision |
+| 2026-04-20 | [Scripted Tools PR A3 — Host-Side Subprocess MCP Toolsets (Scope)](2026-04-20-scripted-tools-a3-host-subprocess.md) | Decision |
+| 2026-04-20 | [Scripted Tools PR A2 — Synchronous Tool Execution from JS](2026-04-20-scripted-tools-a2-sync-execute.md) | Decision |
 | 2026-04-15 | [Ref-Based Tap Replaces Node ID Tap](2026-04-15-ref-based-tap-replaces-node-id.md) | Decision |
 | 2026-04-12 | [Platform-Native Hierarchical Snapshots with Stable Element Refs](2026-04-12-platform-native-hierarchical-snapshots.md) | Decision |
 | 2026-04-10 | [CLI and MCP Session Management: Device State and Multi-Terminal Behavior](2026-04-10-cli-mcp-session-and-device-state.md) | Devlog |

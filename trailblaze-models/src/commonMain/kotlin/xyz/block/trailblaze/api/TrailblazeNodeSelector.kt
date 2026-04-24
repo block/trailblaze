@@ -54,6 +54,9 @@ data class TrailblazeNodeSelector(
   /** iOS Maestro accessibility hierarchy matcher. */
   val iosMaestro: DriverNodeMatch.IosMaestro? = null,
 
+  /** iOS AXe (Apple Accessibility API) matcher — used when the tree is [DriverNodeDetail.IosAxe]. */
+  val iosAxe: DriverNodeMatch.IosAxe? = null,
+
   // --- Spatial relationships ---
 
   /** Target must be below (lower Y) an element matching this selector. */
@@ -93,7 +96,7 @@ data class TrailblazeNodeSelector(
    */
   @kotlinx.serialization.Transient
   val driverMatch: DriverNodeMatch?
-    get() = androidAccessibility ?: androidMaestro ?: web ?: compose ?: iosMaestro
+    get() = androidAccessibility ?: androidMaestro ?: web ?: compose ?: iosMaestro ?: iosAxe
 
   companion object {
     /**
@@ -116,6 +119,7 @@ data class TrailblazeNodeSelector(
       web = match as? DriverNodeMatch.Web,
       compose = match as? DriverNodeMatch.Compose,
       iosMaestro = match as? DriverNodeMatch.IosMaestro,
+      iosAxe = match as? DriverNodeMatch.IosAxe,
       below = below,
       above = above,
       leftOf = leftOf,
@@ -164,6 +168,14 @@ data class TrailblazeNodeSelector(
         idRegex = match.resourceIdRegex
         focused = match.focused
         selected = match.selected
+      }
+      is DriverNodeMatch.IosAxe -> {
+        // Legacy adapter: map AX-native match fields onto the Maestro-shaped
+        // TrailblazeElementSelector as best we can. AX-only concepts (subrole,
+        // role, customAction) have no equivalent and get dropped.
+        textRegex = match.labelRegex ?: match.valueRegex ?: match.titleRegex
+        idRegex = match.uniqueId
+        enabled = match.enabled
       }
       is DriverNodeMatch.AndroidMaestro -> {
         textRegex = match.textRegex ?: match.hintTextRegex ?: match.accessibilityTextRegex
@@ -398,6 +410,59 @@ sealed interface DriverNodeMatch {
       hintTextRegex?.let { parts.add("hint~\"$it\"") }
       focused?.let { parts.add(if (it) "focused" else "not focused") }
       selected?.let { parts.add(if (it) "selected" else "not selected") }
+      append(parts.joinToString(", "))
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // iOS AXe matcher (Apple Accessibility APIs via the AXe CLI)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Matches against [DriverNodeDetail.IosAxe] nodes using Apple-native AX vocabulary
+   * — `role` (AXButton/AXStaticText/…), `subrole`, `customActions`, etc. — rather than
+   * the Maestro-inferred shape in [IosMaestro].
+   *
+   * String fields support regex patterns (with literal case-insensitive fallback when
+   * the pattern is not valid regex, so selectors like `$0.00` still work). `uniqueId`
+   * is exact-match because app-assigned accessibility identifiers are identity, not text.
+   *
+   * Only properties in [DriverNodeDetail.IosAxe.MATCHABLE_PROPERTIES] are exposed here.
+   */
+  @Serializable
+  @SerialName("iosAxe")
+  data class IosAxe(
+    /** **Matchable.** Apple AX role (e.g. `AXButton`, `AXStaticText`, `AXApplication`). */
+    val roleRegex: String? = null,
+    /** **Matchable.** Apple AX subrole (e.g. `AXSecureTextField`). Often null. */
+    val subroleRegex: String? = null,
+    /** **Matchable.** AXLabel — primary accessibility label. */
+    val labelRegex: String? = null,
+    /** **Matchable.** AXValue — current value/state string. */
+    val valueRegex: String? = null,
+    /** **Matchable.** Exact match on `accessibilityIdentifier` set by the app. */
+    val uniqueId: String? = null,
+    /** **Matchable.** Short element type (e.g. `Button`, `StaticText`). */
+    val typeRegex: String? = null,
+    /** **Matchable.** AXTitle — section/window title. */
+    val titleRegex: String? = null,
+    /** **Matchable.** The node's `custom_actions` list must contain this string. */
+    val customAction: String? = null,
+    /** **Matchable.** Whether the element is enabled (from `AXEnabled`). */
+    val enabled: Boolean? = null,
+  ) : DriverNodeMatch {
+
+    override fun description(): String = buildString {
+      val parts = mutableListOf<String>()
+      roleRegex?.let { parts.add("role~\"$it\"") }
+      subroleRegex?.let { parts.add("subrole~\"$it\"") }
+      labelRegex?.let { parts.add("\"$it\"") }
+      valueRegex?.let { parts.add("value~\"$it\"") }
+      uniqueId?.let { parts.add("uid=\"$it\"") }
+      typeRegex?.let { parts.add("type~\"$it\"") }
+      titleRegex?.let { parts.add("title~\"$it\"") }
+      customAction?.let { parts.add("action=\"$it\"") }
+      enabled?.let { parts.add(if (it) "enabled" else "disabled") }
       append(parts.joinToString(", "))
     }
   }

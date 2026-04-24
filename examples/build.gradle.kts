@@ -30,7 +30,7 @@ val trailblazeHttpsPort = System.getenv("TRAILBLAZE_HTTPS_PORT")?.toIntOrNull() 
 
 android {
   namespace = "xyz.block.trailblaze.examples"
-  compileSdk = 35
+  compileSdk = 36
   defaultConfig {
     minSdk = 28
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

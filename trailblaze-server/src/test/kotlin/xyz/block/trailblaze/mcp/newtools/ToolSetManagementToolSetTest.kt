@@ -11,8 +11,7 @@ import xyz.block.trailblaze.mcp.models.McpSessionId
 import xyz.block.trailblaze.mcp.toolsets.DynamicToolSetManager
 import xyz.block.trailblaze.mcp.toolsets.ToolLoadingStrategy
 import xyz.block.trailblaze.mcp.toolsets.ToolSetCategory
-import xyz.block.trailblaze.toolcalls.TrailblazeTool
-import kotlin.reflect.KClass
+import xyz.block.trailblaze.toolcalls.ResolvedToolSet
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 
@@ -43,7 +42,10 @@ class ToolSetManagementToolSetTest {
     ServerOptions(capabilities = ServerCapabilities()),
   )
 
-  private var lastToolsChanged: Set<KClass<out TrailblazeTool>> = emptySet()
+  private var lastToolsChanged: ResolvedToolSet = ResolvedToolSet(
+    toolClasses = emptySet(),
+    yamlToolNames = emptySet(),
+  )
 
   private fun createManager(
     sessionContext: TrailblazeMcpSessionContext = createSessionContext(),

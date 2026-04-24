@@ -1,11 +1,10 @@
 package xyz.block.trailblaze.mcp.android.ondevice.rpc
 
-import io.ktor.client.request.get
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.SerializationException
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePort.getTrailblazeOnDeviceSpecificPort
-import xyz.block.trailblaze.http.TrailblazeHttpClientFactory
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcRequest.Companion.toRpcPath
 import xyz.block.trailblaze.mcp.utils.HttpRequestUtils
@@ -13,7 +12,6 @@ import xyz.block.trailblaze.mcp.utils.HttpRequestUtils.HttpRpcException
 import java.io.IOException
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
-import xyz.block.trailblaze.util.Console
 
 /**
  * This is a pseudo-RPC client that communicates with the on-device server.
@@ -48,8 +46,8 @@ class OnDeviceRpcClient(
    * // Response type is automatically inferred!
    * val result = rpcCall(DeviceStatusRequest) // Returns RpcResult<DeviceStatusResponse>
    * when (result) {
-   *   is RpcResult.Success -> Console.log(result.data)
-   *   is RpcResult.Failure -> Console.log(result.message)
+   *   is RpcResult.Success -> println(result.data)
+   *   is RpcResult.Failure -> println(result.message)
    * }
    * ```
    */
@@ -64,7 +62,8 @@ class OnDeviceRpcClient(
       val jsonInputString = TrailblazeJsonInstance.encodeToString(request)
       val responseJson = httpRequestUtils.postRequest(
         urlPath = urlPath,
-        jsonPostBody = jsonInputString
+        jsonPostBody = jsonInputString,
+        requestTimeoutMs = request.requestTimeoutMs,
       )
       val response: TResponse = TrailblazeJsonInstance.decodeFromString(responseJson)
       RpcResult.Success(response)
@@ -117,8 +116,8 @@ class OnDeviceRpcClient(
    * ```
    * rpcCall(
    *   request = runYamlRequest,
-   *   onSuccess = { response -> Console.log("Started: ${response.message}") },
-   *   onFailure = { failure -> Console.log("Error: ${failure.message}") }
+   *   onSuccess = { response -> println("Started: ${response.message}") },
+   *   onFailure = { failure -> println("Error: ${failure.message}") }
    * )
    * ```
    */
@@ -134,43 +133,98 @@ class OnDeviceRpcClient(
   }
 
   /**
-   * Blocks until the on-device accessibility service is connected.
-   * Uses the reliable in-process check on-device rather than host-side dumpsys parsing.
+   * Polls [GetScreenStateRequest] until it succeeds, proving the device is ready to serve real
+   * RPC calls: HTTP server is up, the accessibility service is actually bound (when
+   * [requireAndroidAccessibilityService] is true), and the window is populated. Subsumes the older weaker
+   * checks (ping the HTTP server, or check that the service instance field is set) which could
+   * return "ready" while the very first real `GetScreenState` still failed — the root cause of
+   * the flakiness that retry loops used to paper over.
+   *
+   * Uses a minimal payload (no screenshot, no annotation) since we only care that the call
+   * returns `Success`. The first call after a fresh instrumentation launch can take several
+   * seconds while the accessibility service binds; on a warm connection it returns in ms.
+   *
+   * @param requireAndroidAccessibilityService When true, the on-device handler returns `Failure` unless the
+   *   accessibility service is bound — preventing UiAutomator fallback from faking readiness
+   *   on accessibility-driver flows. Callers using `ANDROID_ONDEVICE_ACCESSIBILITY` MUST set
+   *   this true; instrumentation-driver flows should leave it false.
    */
-  suspend fun ensureAccessibilityServiceReady() {
-    when (val result = rpcCall(EnsureAccessibilityReadyRequest())) {
-      is RpcResult.Success -> {
-        sendProgressMessage("Accessibility service verified as running on-device.")
+  @OptIn(ExperimentalTime::class)
+  suspend fun waitForReady(
+    // Default of 60s reflects the real cold-start cost on CI emulators: instrumentation launch,
+    // app install, HTTP server listener, and accessibility service binding can collectively
+    // exceed 30s. Callers with a faster-known-good path can pass a tighter budget.
+    timeoutMs: Long = 60_000L,
+    pollIntervalMs: Long = 500L,
+    requireAndroidAccessibilityService: Boolean = false,
+  ) {
+    val startMs = Clock.System.now().toEpochMilliseconds()
+    val probe = GetScreenStateRequest(
+      includeScreenshot = false,
+      includeAnnotatedScreenshot = false,
+      requireAndroidAccessibilityService = requireAndroidAccessibilityService,
+    )
+    var attempt = 0
+    // Prefer a real server Failure message over a probe-timeout synthetic message — a server
+    // that always 500s is far more informative to operators than "probe timed out".
+    var lastRpcFailure: String? = null
+    var lastTimeoutMs: Long? = null
+    var nextProgressMs = PROGRESS_REPORT_INTERVAL_MS
+    while (true) {
+      attempt++
+      val elapsedAtProbeStart = Clock.System.now().toEpochMilliseconds() - startMs
+      val remainingMs = timeoutMs - elapsedAtProbeStart
+      if (remainingMs <= 0L) {
+        // Budget already exhausted — don't bother probing, just report.
+        throw IOException(
+          "Device not ready after ${elapsedAtProbeStart}ms (${attempt - 1} probe(s)): " +
+            (lastRpcFailure ?: lastTimeoutMs?.let { "probe timed out after ${it}ms" } ?: "no response"),
+        )
       }
-      is RpcResult.Failure -> {
-        throw IOException("On-device accessibility check failed: ${result.message}")
+      // HttpRequestUtils's default request timeout (300s) would swallow our overall readiness
+      // budget if a server accepts the TCP connection but never responds. Cap each probe at
+      // the remaining budget (bounded by PROBE_MAX_MS) so `timeoutMs` is actually honored.
+      val probeBudgetMs = minOf(remainingMs, PROBE_MAX_MS)
+      val result = withTimeoutOrNull(probeBudgetMs) { rpcCall(probe) }
+      when (result) {
+        is RpcResult.Success -> {
+          val elapsedMs = Clock.System.now().toEpochMilliseconds() - startMs
+          sendProgressMessage("Device ready after ${elapsedMs}ms ($attempt probe(s))")
+          return
+        }
+        is RpcResult.Failure -> {
+          lastRpcFailure = result.message + (result.details?.let { " | $it" } ?: "")
+        }
+        null -> {
+          lastTimeoutMs = probeBudgetMs
+        }
       }
+      val elapsedMs = Clock.System.now().toEpochMilliseconds() - startMs
+      if (elapsedMs >= timeoutMs) {
+        throw IOException(
+          "Device not ready after ${elapsedMs}ms ($attempt probe(s)): " +
+            (lastRpcFailure ?: lastTimeoutMs?.let { "probe timed out after ${it}ms" } ?: "no response"),
+        )
+      }
+      // First probe usually succeeds in ms on a warm connection; only emit progress on a
+      // genuine cold start so we don't spam the log with a line per attempt.
+      if (elapsedMs >= nextProgressMs) {
+        sendProgressMessage("Waiting for device... (${elapsedMs}ms, $attempt probe(s))")
+        nextProgressMs += PROGRESS_REPORT_INTERVAL_MS
+      }
+      delay(pollIntervalMs)
     }
   }
 
-  @OptIn(ExperimentalTime::class)
-  suspend fun verifyServerIsRunning(): Boolean {
-    val startTimeSeconds = Clock.System.now().epochSeconds
-    (0..5).forEach {
-      try {
-        delay(it * 500L)
-        val client = TrailblazeHttpClientFactory.createDefaultHttpClient(2L)
-        val response = client.get("$baseUrl/ping")
-        client.close()
-        val timeElapsed = Clock.System.now().epochSeconds - startTimeSeconds
-        if (response.status.value == 200) {
-          sendProgressMessage("Verified on-device server is running after $timeElapsed seconds ($it pings)")
-          return true // Server is running
-        } else {
-          sendProgressMessage("Waiting for server to start ($timeElapsed seconds elapsed)")
-        }
-      } catch (e: Exception) {
-        // Ignore Exception
-      }
-    }
-    val timeElapsed = Clock.System.now().epochSeconds - startTimeSeconds
-    sendProgressMessage("Failed to verify on-device is running after 5 attempts over $timeElapsed seconds")
-    return false
+  private companion object {
+    /** How often to emit a "still waiting" progress message while polling for readiness. */
+    const val PROGRESS_REPORT_INTERVAL_MS = 5_000L
+
+    /**
+     * Upper bound on a single probe. The HTTP client's own request timeout (300s) is useless
+     * as a probe budget; this keeps one stuck probe from blowing the overall readiness window.
+     */
+    const val PROBE_MAX_MS = 5_000L
   }
 
   override fun close() {

@@ -31,19 +31,19 @@ class CliMcpClientSessionFileTest {
 
   @Test
   fun `readSessionFile reads new two-line format`() {
-    val file = tempFileWith("abc-123\nsquare")
+    val file = tempFileWith("abc-123\nsampleapp")
     val (sessionId, targetAppId) = CliMcpClient.readSessionFile(file)
     assertEquals("abc-123", sessionId)
-    assertEquals("square", targetAppId)
+    assertEquals("sampleapp", targetAppId)
     file.delete()
   }
 
   @Test
   fun `readSessionFile trims whitespace`() {
-    val file = tempFileWith("  abc-123  \n  square  ")
+    val file = tempFileWith("  abc-123  \n  sampleapp  ")
     val (sessionId, targetAppId) = CliMcpClient.readSessionFile(file)
     assertEquals("abc-123", sessionId)
-    assertEquals("square", targetAppId)
+    assertEquals("sampleapp", targetAppId)
     file.delete()
   }
 
@@ -80,8 +80,8 @@ class CliMcpClientSessionFileTest {
   @Test
   fun `writeSessionFile writes both session ID and target app ID`() {
     val file = File.createTempFile("session", ".txt")
-    CliMcpClient.writeSessionFile(file, "abc-123", "square")
-    assertEquals("abc-123\nsquare", file.readText())
+    CliMcpClient.writeSessionFile(file, "abc-123", "sampleapp")
+    assertEquals("abc-123\nsampleapp", file.readText())
     file.delete()
   }
 

@@ -21,6 +21,25 @@ internal val REGEX_METACHARACTERS = setOf(
 internal fun escapeForSelector(text: String): String =
   if (text.any { it in REGEX_METACHARACTERS }) Regex.escape(text) else text
 
+/**
+ * Builds a map from each child node's id to its parent node, for the entire tree.
+ *
+ * Used by every hierarchy and spatial strategy to walk upward from a target — pre-computed
+ * once per resolution so repeated walks don't each traverse the tree. Kept `internal` so
+ * generator code, strategy factories, and tests share one implementation.
+ */
+internal fun buildParentMap(root: TrailblazeNode): Map<Long, TrailblazeNode> {
+  val parentMap = mutableMapOf<Long, TrailblazeNode>()
+  fun visit(node: TrailblazeNode) {
+    for (child in node.children) {
+      parentMap[child.nodeId] = node
+      visit(child)
+    }
+  }
+  visit(root)
+  return parentMap
+}
+
 /** Checks that a selector resolves to exactly the target node. */
 internal fun isUniqueMatch(
   root: TrailblazeNode,
@@ -105,6 +124,27 @@ internal fun buildTargetMatch(detail: DriverNodeDetail): DriverNodeMatch? = when
       null
     }
   }
+  is DriverNodeDetail.IosAxe -> {
+    // Prefer uniqueId (stable app-assigned identifier) when present. Otherwise fall back to
+    // label/value, carrying role when we have it so generated selectors exploit Apple's
+    // native AX vocabulary rather than the Maestro-shaped lowest-common-denominator.
+    val uid = detail.uniqueId
+    val label = detail.label?.takeIf { it.isNotBlank() }
+    val value = detail.value?.takeIf { it.isNotBlank() }
+    val title = detail.title?.takeIf { it.isNotBlank() }
+    val role = detail.role
+    if (uid != null || label != null || value != null || title != null || role != null) {
+      DriverNodeMatch.IosAxe(
+        uniqueId = uid,
+        labelRegex = label?.let { escapeForSelector(it) },
+        valueRegex = if (label == null) value?.let { escapeForSelector(it) } else null,
+        titleRegex = if (label == null && value == null) title?.let { escapeForSelector(it) } else null,
+        roleRegex = role?.let { escapeForSelector(it) },
+      )
+    } else {
+      null
+    }
+  }
 }
 
 /**
@@ -171,6 +211,22 @@ internal fun buildStructuralMatch(detail: DriverNodeDetail): DriverNodeMatch? = 
       DriverNodeMatch.IosMaestro(
         resourceIdRegex = rid?.let { escapeForSelector(it) },
         classNameRegex = className?.let { escapeForSelector(it) },
+      )
+    } else {
+      null
+    }
+  }
+  is DriverNodeDetail.IosAxe -> {
+    // Structural-only match: identity + type/role, no content. Mirrors the AndroidAccessibility
+    // / IosMaestro shape of "class + uniqueId" but uses AX-native `type` and `role` instead.
+    val uid = detail.uniqueId
+    val type = detail.type
+    val role = detail.role
+    if (uid != null || type != null || role != null) {
+      DriverNodeMatch.IosAxe(
+        uniqueId = uid,
+        typeRegex = type?.let { escapeForSelector(it) },
+        roleRegex = role?.let { escapeForSelector(it) },
       )
     } else {
       null
@@ -496,4 +552,150 @@ internal fun findStructuralContainsChildSelector(
     depth++
   }
   return null
+}
+
+// ---------------------------------------------------------------------------
+// Shared strategy factories
+// ---------------------------------------------------------------------------
+//
+// Each generator (AndroidAccessibility, AndroidMaestro, Compose, IosMaestro, Web) enumerates
+// a list of `Pair<String, () -> TrailblazeNodeSelector?>` strategies, written as
+// `"name" to { /* returns TrailblazeNodeSelector? */ }`. The content-field strategies at
+// the top of each list are necessarily bespoke — they read driver-specific properties.
+// But the trailing hierarchy/spatial/index strategies have the same structure across every
+// generator: wrap a shared finder in a named lambda.
+//
+// The factories below collapse those pattern-identical strategies into one place, each
+// taking an optional `name` so generators that use a different label (e.g. "Structural:
+// global index fallback" vs. "Structural: class + index") can still share the body.
+// Per-generator quirks (e.g. AndroidMaestro's inline-text "Child of parent") stay bespoke
+// in the generator file — not every strategy generalizes cleanly.
+
+/**
+ * Target match + `childOf` a uniquely-identifiable parent.
+ * Uses [buildTargetMatch] for the target — the precise per-driver field selection.
+ */
+internal fun childOfUniqueParentStrategy(
+  root: TrailblazeNode,
+  target: TrailblazeNode,
+  detail: DriverNodeDetail,
+  parentMap: Map<Long, TrailblazeNode>,
+  name: String = "Child of parent",
+): Pair<String, () -> TrailblazeNodeSelector?> = name to {
+  findUniqueParentSelector(root, target, parentMap)?.let { parentSelector ->
+    TrailblazeNodeSelector.withMatch(buildTargetMatch(detail), childOf = parentSelector)
+  }
+}
+
+/** Target match + `containsChild` a uniquely-identifiable descendant. */
+internal fun containsUniqueChildStrategy(
+  root: TrailblazeNode,
+  target: TrailblazeNode,
+  detail: DriverNodeDetail,
+  name: String = "Contains child",
+): Pair<String, () -> TrailblazeNodeSelector?> = name to {
+  findUniqueChildSelector(root, target)?.let { childSelector ->
+    TrailblazeNodeSelector.withMatch(buildTargetMatch(detail), containsChild = childSelector)
+  }
+}
+
+/** Target + positional relationship to a uniquely-identifiable neighbor. */
+internal fun spatialStrategy(
+  root: TrailblazeNode,
+  target: TrailblazeNode,
+  parentMap: Map<Long, TrailblazeNode>,
+  name: String = "Spatial relationship",
+): Pair<String, () -> TrailblazeNodeSelector?> = name to {
+  findSpatialSelector(root, target, parentMap)
+}
+
+/** Target match + global index. Last resort — always produces something. */
+internal fun indexFallbackStrategy(
+  root: TrailblazeNode,
+  target: TrailblazeNode,
+  detail: DriverNodeDetail,
+  name: String = "Index fallback",
+): Pair<String, () -> TrailblazeNodeSelector?> = name to {
+  computeIndexSelectorForMatch(root, target, buildTargetMatch(detail))
+}
+
+// --- Structural variants (identity + type only, no content) ---
+
+/** Structural match + `childOf` a structurally-identifiable parent. */
+internal fun structuralChildOfParentStrategy(
+  root: TrailblazeNode,
+  target: TrailblazeNode,
+  detail: DriverNodeDetail,
+  parentMap: Map<Long, TrailblazeNode>,
+  name: String = "Structural: child of parent",
+): Pair<String, () -> TrailblazeNodeSelector?> = name to {
+  findUniqueStructuralParentSelector(root, target, parentMap)?.let { parentSelector ->
+    TrailblazeNodeSelector.withMatch(buildStructuralMatch(detail), childOf = parentSelector)
+  }
+}
+
+/** Structural match + `childOf` a content-labeled parent (hybrid anchor). */
+internal fun structuralChildOfLabeledParentStrategy(
+  root: TrailblazeNode,
+  target: TrailblazeNode,
+  detail: DriverNodeDetail,
+  parentMap: Map<Long, TrailblazeNode>,
+  name: String = "Structural: child of labeled parent",
+): Pair<String, () -> TrailblazeNodeSelector?> = name to {
+  findContentParentSelectorForStructural(root, target, parentMap)?.let { parentSelector ->
+    TrailblazeNodeSelector.withMatch(buildStructuralMatch(detail), childOf = parentSelector)
+  }
+}
+
+/** Structural match identifies the target by a unique structural descendant. */
+internal fun structuralContainsChildStrategy(
+  root: TrailblazeNode,
+  target: TrailblazeNode,
+  name: String = "Structural: contains child",
+): Pair<String, () -> TrailblazeNodeSelector?> = name to {
+  findStructuralContainsChildSelector(root, target)
+}
+
+/** Structural match + positional relationship to a structurally-identifiable sibling. */
+internal fun structuralSpatialStrategy(
+  root: TrailblazeNode,
+  target: TrailblazeNode,
+  parentMap: Map<Long, TrailblazeNode>,
+  name: String = "Structural: spatial",
+): Pair<String, () -> TrailblazeNodeSelector?> = name to {
+  findStructuralSpatialSelector(root, target, parentMap)
+}
+
+/** Structural match + spatial anchor based on a content-labeled sibling. */
+internal fun structuralContentAnchoredSpatialStrategy(
+  root: TrailblazeNode,
+  target: TrailblazeNode,
+  parentMap: Map<Long, TrailblazeNode>,
+  name: String = "Structural: spatial (labeled anchor)",
+): Pair<String, () -> TrailblazeNodeSelector?> = name to {
+  findContentAnchoredSpatialSelector(root, target, parentMap)
+}
+
+/** Structural match + scoped index within the nearest identifiable parent. */
+internal fun structuralScopedIndexStrategy(
+  root: TrailblazeNode,
+  target: TrailblazeNode,
+  detail: DriverNodeDetail,
+  parentMap: Map<Long, TrailblazeNode>,
+  name: String = "Structural: scoped index in parent",
+): Pair<String, () -> TrailblazeNodeSelector?> = name to {
+  computeScopedIndexSelector(root, target, parentMap, buildStructuralMatch(detail))
+}
+
+/**
+ * Structural match + global index. Generators name this after their primary type
+ * (e.g. "Structural: class + index", "Structural: role + index"), so [name] is required.
+ */
+internal fun structuralIndexFallbackStrategy(
+  root: TrailblazeNode,
+  target: TrailblazeNode,
+  detail: DriverNodeDetail,
+  name: String,
+): Pair<String, () -> TrailblazeNodeSelector?> = name to {
+  computeIndexSelectorForMatch(root, target, buildStructuralMatch(detail))
 }

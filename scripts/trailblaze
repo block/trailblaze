@@ -16,6 +16,9 @@
 #   TRAILBLAZE_PORT           - HTTP port (default: 52525). Override to run multiple instances.
 #   TRAILBLAZE_HTTPS_PORT     - HTTPS port (default: 8443). Override to run multiple instances.
 #   TRAILBLAZE_JAR            - Path to the uber JAR (default: trailblaze.jar next to this script)
+#   TRAILBLAZE_IPC            - Set to 0 to disable the daemon IPC fast path (default: 1).
+#                               The fast path requires `jq` on PATH; if jq is missing the CLI
+#                               falls back silently to the JVM path. Install jq to benefit.
 #
 # Logs are saved automatically by the JVM to ~/.trailblaze/desktop-logs/
 # (port-specific filenames for parallel instances).
@@ -45,6 +48,83 @@ if [[ "$(uname)" == "Darwin" ]]; then
 fi
 
 TRAILBLAZE_JAR="${TRAILBLAZE_JAR:-$SCRIPT_DIR/trailblaze.jar}"
+
+# ---------------------------------------------------------------------------
+# AppCDS — class data sharing archive for faster JVM startup
+# ---------------------------------------------------------------------------
+# Generates a .jsa sibling to the JAR on first use, then passes
+# -XX:SharedArchiveFile=<path> -Xshare:auto on every subsequent invocation.
+#
+# Why static CDS (-Xshare:dump) and not dynamic CDS (-XX:ArchiveClassesAtExit):
+# dynamic CDS requires a pre-existing base archive (Temurin's default classes.jsa),
+# which is NOT shipped in the Temurin 17 macOS build — the JVM fails with
+# "DynamicDumpSharedSpaces is unsupported when base CDS archive is not loaded".
+# Static CDS builds a standalone archive from a class list with no base needed.
+#
+# Why a sibling file and not a JAR entry: CDS binds the archive to the exact
+# JAR contents (size + mtime) at dump time. Adding the .jsa as a JAR entry
+# changes the JAR's fingerprint and makes the archive unusable ("A jar file
+# is not the one used while building the shared archive file"). Keeping the
+# .jsa outside the JAR preserves the fingerprint.
+#
+# -Xshare:auto (not :on) means fingerprint mismatches — JVM version skew,
+# replaced JAR — silently fall back to standard class loading. Pure upside.
+#
+# Escape hatch: set BLAZE_CDS=0 to disable. Regenerated automatically when
+# the JAR is newer than the .jsa (e.g., after a dev rebuild).
+
+tb_ensure_cds_archive() {
+  local jar="$1"
+  # The CDS archive path gets injected into unquoted $TRAILBLAZE_JVM_ARGS (same
+  # pattern as --add-opens). Bail if the JAR path contains whitespace so we
+  # don't word-split the JVM arg and break startup; plain JAR mode still works.
+  case "$jar" in *[[:space:]]*) return 1 ;; esac
+
+  local jsa="${jar%.jar}.jsa"
+
+  if [ -f "$jsa" ] && [ ! "$jar" -nt "$jsa" ]; then
+    printf '%s' "$jsa"
+    return 0
+  fi
+  [ -w "$(dirname "$jsa")" ] || return 1
+
+  echo "Building CDS archive for faster Trailblaze startup (one-time, ~1.5s)..." >&2
+  local classlist tmp_jsa
+  classlist="$(mktemp "${TMPDIR:-/tmp}/trailblaze-classlist.XXXXXX")" || return 1
+  tmp_jsa="${jsa}.tmp.$$"
+
+  # Class list is dumped from `config show` (not --help) because it exercises
+  # CLI parsing + Ktor init for ~60% more coverage without needing a device.
+  #
+  # After dumping, verify the archive actually loads by running `trail --help`
+  # with it. Some JDK 17 builds have a CDS verifier bug with Kotlin enums that
+  # manifests as `VerifyError: Bad type on operand stack` when TrailCommand.<init>
+  # loads — and that bug is JVM-version-specific, so we need to detect it at
+  # generate time rather than pretend it doesn't exist. If the verification
+  # command fails, we discard the broken archive and the caller falls back to
+  # plain JAR mode for that JAR/JDK combination.
+  if java $TRAILBLAZE_JVM_ARGS -XX:DumpLoadedClassList="$classlist" \
+         -jar "$jar" config show >/dev/null 2>&1 \
+     && java $TRAILBLAZE_JVM_ARGS -XX:SharedClassListFile="$classlist" \
+         -XX:SharedArchiveFile="$tmp_jsa" -Xshare:dump \
+         -jar "$jar" >/dev/null 2>&1 \
+     && java $TRAILBLAZE_JVM_ARGS -XX:SharedArchiveFile="$tmp_jsa" -Xshare:auto \
+         -jar "$jar" trail --help >/dev/null 2>&1 \
+     && mv -f "$tmp_jsa" "$jsa"; then
+    rm -f "$classlist"
+    printf '%s' "$jsa"
+    return 0
+  fi
+  rm -f "$classlist" "$tmp_jsa"
+  return 1
+}
+
+if [ "${BLAZE_CDS:-1}" = "1" ] && [ -f "$TRAILBLAZE_JAR" ]; then
+  TRAILBLAZE_CDS_ARCHIVE="$(tb_ensure_cds_archive "$TRAILBLAZE_JAR")"
+  if [ -n "$TRAILBLAZE_CDS_ARCHIVE" ]; then
+    TRAILBLAZE_JVM_ARGS="$TRAILBLAZE_JVM_ARGS -XX:SharedArchiveFile=$TRAILBLAZE_CDS_ARCHIVE -Xshare:auto"
+  fi
+fi
 
 # Execution functions — overridable by defining them before sourcing this script.
 # All functions accept variadic args to preserve quoting (e.g., YAML with newlines).
@@ -90,6 +170,78 @@ export TRAILBLAZE_HTTPS_PORT
 
 is_daemon_running() {
     curl -s --connect-timeout 1 "http://localhost:${TRAILBLAZE_PORT}/ping" > /dev/null 2>&1
+}
+
+# ---------------------------------------------------------------------------
+# CLI-via-daemon IPC fast path
+# ---------------------------------------------------------------------------
+#
+# When the daemon is already running, forward argv to it over HTTP instead of
+# spinning up a fresh JVM. The daemon runs the picocli command in-process and
+# returns {stdout, stderr, exitCode}; this shim prints them and exits.
+#
+# The daemon is the single source of truth for which subcommands it will run
+# in-process (TrailblazeCli.FORWARDABLE_SUBCOMMANDS). Anything else responds
+# with forwarded=false and we fall through. We don't mirror the allowlist here
+# — the only cost of trying is one localhost round-trip, negligible next to
+# the ~1s JVM startup we're about to pay anyway.
+#
+# Falls through to the normal JVM path if:
+#   - jq isn't installed (we can't assemble/parse JSON safely without it)
+#   - the daemon is unreachable
+#   - the daemon responds with forwarded=false (subcommand not in allowlist)
+#   - the curl POST fails for any reason (HTTP error, network blip)
+#
+# Disable explicitly with `--direct` or `--no-daemon` on the CLI, or by setting
+# TRAILBLAZE_IPC=0 in the environment.
+
+# Attempt to run via the daemon's /cli/exec endpoint.
+# On success prints stdout/stderr and exits with the daemon's exit code.
+# On any form of failure, returns 1 so the caller can fall through.
+ipc_try_forward() {
+    command -v jq >/dev/null 2>&1 || return 1
+    # Build the args JSON array by appending each arg with `jq --arg`, which
+    # passes the string through without any in-band delimiter parsing. The
+    # previous `printf '%s\n' | jq -R . | jq -s .` pipeline silently split
+    # on embedded newlines, corrupting multi-line args (realistic for `ask`
+    # prompts that contain quoted code or paragraphs).
+    local args_json="[]"
+    local a
+    for a in "$@"; do
+      args_json=$(jq --arg a "$a" '. + [$a]' <<<"$args_json") || return 1
+    done
+    local payload
+    payload=$(jq -n --argjson args "$args_json" '{args: $args}') || return 1
+
+    local response
+    response=$(curl -sS --connect-timeout 2 --max-time 600 \
+        -X POST "http://localhost:${TRAILBLAZE_PORT}/cli/exec" \
+        -H "Content-Type: application/json" \
+        -d "$payload" 2>/dev/null) || return 1
+
+    # Daemon returned non-JSON (endpoint missing on older daemon, etc.) — fall through.
+    echo "$response" | jq -e . >/dev/null 2>&1 || return 1
+
+    local forwarded
+    forwarded=$(echo "$response" | jq -r '.forwarded // false')
+    [ "$forwarded" = "true" ] || return 1
+
+    local stdout stderr exit_code
+    stdout=$(echo "$response" | jq -r '.stdout // ""')
+    stderr=$(echo "$response" | jq -r '.stderr // ""')
+    # Clamp exitCode to a shell-valid integer 0-255. jq returns the literal
+    # string "null" if the field is missing, and bash `exit "$str"` fails
+    # noisily with "numeric argument required" on anything non-numeric.
+    exit_code=$(echo "$response" | jq -r '
+        if .exitCode | type == "number" then
+          (.exitCode | floor | if . < 0 then 256 + (. % 256) elif . > 255 then . % 256 else . end)
+        else 1 end
+    ')
+    [[ "$exit_code" =~ ^[0-9]+$ ]] || exit_code=1
+
+    [ -n "$stdout" ] && printf '%s' "$stdout"
+    [ -n "$stderr" ] && printf '%s' "$stderr" >&2
+    exit "$exit_code"
 }
 
 show_window() {
@@ -196,6 +348,14 @@ if [ "$1" = "stop" ]; then
     stop_daemon
 elif [ "$1" = "status" ]; then
     get_status
+elif [ "${TRAILBLAZE_IPC:-1}" = "1" ] \
+    && [ "$HAS_DIRECT" = false ] \
+    && [ "$STDIO_MODE" = false ] \
+    && is_daemon_running; then
+    # Fast path: forward to the already-running daemon instead of spawning a JVM.
+    # ipc_try_forward either exits (success) or returns nonzero so we fall through
+    # to the normal JVM path below.
+    ipc_try_forward "${ARGS_ARRAY[@]}" || tb_run_quiet "${ARGS_ARRAY[@]}"
 elif [ "$STDIO_MODE" = true ]; then
     # STDIO MCP mode: quiet output so only JSON-RPC goes to stdout.
 

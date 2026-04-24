@@ -55,7 +55,7 @@ Workflow:
 
 ## trail<>: Goal Planner with Predefined Actions
 
-**When a trail file has complete recordings for all steps, execution uses zero LLM calls.** The A* search through predefined steps is deterministic — no LLM needed when the plan is already known. LLM calls only happen for steps without recordings or recordings that fail at runtime (if `aiFallbackEnabled`).
+**When a trail file has complete recordings for all steps, execution uses zero LLM calls.** The A* search through predefined steps is deterministic — no LLM needed when the plan is already known. LLM calls only happen for steps without recordings or recordings that fail at runtime (if `selfHealEnabled`).
 
 | Scenario | Executor | LLM Calls |
 |----------|----------|-----------|

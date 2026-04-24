@@ -1,0 +1,8 @@
+# Revyl visual verification tools.
+id: revyl_verification
+description: "Assert visual conditions on the device screen via Revyl's AI-powered grounding."
+drivers:
+  - revyl-android
+  - revyl-ios
+tools:
+  - revyl_assert

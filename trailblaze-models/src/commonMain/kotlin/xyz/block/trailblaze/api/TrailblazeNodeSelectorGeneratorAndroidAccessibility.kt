@@ -227,21 +227,10 @@ internal fun androidAccessibilityStrategies(
 
   // === Hierarchy strategies ===
 
-  // Strategy 17: target + childOf unique parent
-  "Child of parent" to {
-    findUniqueParentSelector(root, target, parentMap)?.let { parentSelector ->
-      val targetMatch = buildTargetMatch(detail)
-      TrailblazeNodeSelector.withMatch(targetMatch, childOf = parentSelector)
-    }
-  },
-  // Strategy 18: containsChild (unique child content)
-  "Contains child" to {
-    findUniqueChildSelector(root, target)?.let { childSelector ->
-      val targetMatch = buildTargetMatch(detail)
-      TrailblazeNodeSelector.withMatch(targetMatch, containsChild = childSelector)
-    }
-  },
-  // Strategy 19: collectionItemInfo (semantic list/grid position)
+  // Strategies 17-18: target + childOf / containsChild — shared with other generators.
+  childOfUniqueParentStrategy(root, target, detail, parentMap),
+  containsUniqueChildStrategy(root, target, detail),
+  // Strategy 19: collectionItemInfo (semantic list/grid position) — AndroidAccessibility-specific.
   "Collection item info" to {
     detail.collectionItemInfo?.let { ci ->
       val targetMatch = buildTargetMatch(detail)?.let { m ->
@@ -254,19 +243,10 @@ internal fun androidAccessibilityStrategies(
     }
   },
 
-  // === Spatial strategies ===
-
-  // Strategy 20: spatial relationship to a uniquely identifiable sibling
-  "Spatial relationship" to {
-    findSpatialSelector(root, target, parentMap)
-  },
-
-  // === Index fallback ===
-
-  // Strategy 21: Index as last resort (before the global fallback)
-  "Index fallback" to {
-    computeIndexSelectorForMatch(root, target, buildTargetMatch(detail))
-  },
+  // === Spatial + index ===
+  // Strategies 20-21: spatial neighbor, then global index fallback — shared.
+  spatialStrategy(root, target, parentMap),
+  indexFallbackStrategy(root, target, detail),
 )
 
 // ---------------------------------------------------------------------------
@@ -339,38 +319,12 @@ internal fun namedStructuralAndroidAccessibilityStrategies(
       match?.let { selectorWith(it) }
     }
   },
-  // 6: childOf structurally unique parent
-  "Structural: child of parent" to {
-    findUniqueStructuralParentSelector(root, target, parentMap)?.let { parentSelector ->
-      val targetMatch = buildStructuralMatch(detail)
-      TrailblazeNodeSelector.withMatch(targetMatch, childOf = parentSelector)
-    }
-  },
-  // 7: childOf content-identifiable parent (target stays structural, parent uses content)
-  "Structural: child of labeled parent" to {
-    findContentParentSelectorForStructural(root, target, parentMap)?.let { parentSelector ->
-      val targetMatch = buildStructuralMatch(detail)
-      TrailblazeNodeSelector.withMatch(targetMatch, childOf = parentSelector)
-    }
-  },
-  // 8: containsChild (target identified by having a unique descendant)
-  "Structural: contains child" to {
-    findStructuralContainsChildSelector(root, target)
-  },
-  // 9: spatial relationship to structurally identifiable sibling
-  "Structural: spatial" to {
-    findStructuralSpatialSelector(root, target, parentMap)
-  },
-  // 10: spatial with content-based anchor (target structural, anchor uses content)
-  "Structural: spatial (labeled anchor)" to {
-    findContentAnchoredSpatialSelector(root, target, parentMap)
-  },
-  // 11: scoped index within identifiable parent (much better than global index)
-  "Structural: scoped index in parent" to {
-    computeScopedIndexSelector(root, target, parentMap, buildStructuralMatch(detail))
-  },
-  // 12: structural match + global index (last resort before bare global index)
-  "Structural: class + index" to {
-    computeIndexSelectorForMatch(root, target, buildStructuralMatch(detail))
-  },
+  // 6-12: structural hierarchy / spatial / index — all shared with the other generators.
+  structuralChildOfParentStrategy(root, target, detail, parentMap),
+  structuralChildOfLabeledParentStrategy(root, target, detail, parentMap),
+  structuralContainsChildStrategy(root, target),
+  structuralSpatialStrategy(root, target, parentMap),
+  structuralContentAnchoredSpatialStrategy(root, target, parentMap),
+  structuralScopedIndexStrategy(root, target, detail, parentMap),
+  structuralIndexFallbackStrategy(root, target, detail, name = "Structural: class + index"),
 )

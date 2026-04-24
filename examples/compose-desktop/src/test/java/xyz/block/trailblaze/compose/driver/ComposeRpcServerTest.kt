@@ -19,15 +19,11 @@ import xyz.block.trailblaze.compose.driver.rpc.ComposeRpcServer
 import xyz.block.trailblaze.compose.driver.rpc.ExecuteToolsRequest
 import xyz.block.trailblaze.compose.target.ComposeUiTestTarget
 import xyz.block.trailblaze.compose.driver.tools.ComposeClickTool
-import xyz.block.trailblaze.compose.driver.tools.ComposeToolSet
 import xyz.block.trailblaze.compose.driver.tools.ComposeTypeTool
 import xyz.block.trailblaze.compose.driver.tools.ComposeVerifyTextVisibleTool
-import xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.getOrThrow
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
-import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.toolcalls.isSuccess
-import xyz.block.trailblaze.toolcalls.toolName
 import java.net.ServerSocket
 
 /**
@@ -40,11 +36,6 @@ import java.net.ServerSocket
 class ComposeRpcServerTest {
 
   private fun findAvailablePort(): Int = ServerSocket(0).use { it.localPort }
-
-
-  init {
-    TrailblazeSerializationInitializer.initialize()
-  }
 
   @Test
   fun `ping returns running status`() = runComposeUiTest {

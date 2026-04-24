@@ -1,0 +1,2 @@
+id: longPressElementWithAccessibilityText
+class: xyz.block.trailblaze.toolcalls.commands.LongPressElementWithAccessibilityTextTrailblazeTool

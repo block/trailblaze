@@ -1,11 +1,14 @@
 package xyz.block.trailblaze.ui.tabs.session
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -30,6 +33,7 @@ import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.FilterList
@@ -71,6 +75,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -636,15 +641,39 @@ fun SessionListComposable(
                 Spacer(modifier = Modifier.height(4.dp))
               }
 
-              items(sessionsForDay.sortedByDescending { it.timestamp }) { session: SessionInfo ->
-                SessionCard(
-                  session = session,
-                  importedSessionIds = importedSessionIds,
-                  sessionClicked = sessionClicked,
-                  deleteSession = deleteSession,
-                  openLogsFolder = openLogsFolder,
-                  onExportSession = onExportSession,
-                )
+              // Group sessions by (displayName, device classifiers) so retries and
+              // re-runs of the same test on the same platform collapse into one row.
+              val grouped = sessionsForDay
+                .sortedByDescending { it.timestamp }
+                .groupBy { session ->
+                  val classifierKey = session.trailblazeDeviceInfo?.classifiers
+                    ?.joinToString(",") { it.classifier } ?: ""
+                  session.displayName to classifierKey
+                }
+
+              items(
+                items = grouped.values.toList(),
+                key = { group -> group.first().sessionId.value },
+              ) { groupSessions ->
+                if (groupSessions.size == 1) {
+                  SessionCard(
+                    session = groupSessions.first(),
+                    importedSessionIds = importedSessionIds,
+                    sessionClicked = sessionClicked,
+                    deleteSession = deleteSession,
+                    openLogsFolder = openLogsFolder,
+                    onExportSession = onExportSession,
+                  )
+                } else {
+                  GroupedSessionCard(
+                    sessions = groupSessions,
+                    importedSessionIds = importedSessionIds,
+                    sessionClicked = sessionClicked,
+                    deleteSession = deleteSession,
+                    openLogsFolder = openLogsFolder,
+                    onExportSession = onExportSession,
+                  )
+                }
               }
             }
 
@@ -1135,6 +1164,120 @@ private fun FilterSection(
 }
 
 // ─── Session Card ──────────────────────────────────────────────────────────────
+
+// ─── Grouped Session Card (collapsible retry/re-run group) ────────────────────
+
+/**
+ * Renders a collapsible card for multiple sessions of the same test on the same platform.
+ * Shows the most recent session as the primary row with a count badge and expand indicator.
+ * Clicking the expand area reveals all previous attempts underneath.
+ */
+@Composable
+private fun GroupedSessionCard(
+  sessions: List<SessionInfo>,
+  importedSessionIds: Set<SessionId>,
+  sessionClicked: (SessionInfo) -> Unit,
+  deleteSession: ((SessionInfo) -> Unit)?,
+  openLogsFolder: ((SessionInfo) -> Unit)?,
+  onExportSession: ((SessionInfo) -> Unit)?,
+) {
+  var expanded by remember { mutableStateOf(false) }
+  val rotationAngle by animateFloatAsState(targetValue = if (expanded) 180f else 0f)
+  val peekBottom by animateDpAsState(targetValue = if (expanded) 0.dp else 6.dp)
+  val peekStart by animateDpAsState(targetValue = if (expanded) 0.dp else 6.dp)
+  val peekEnd by animateDpAsState(targetValue = if (expanded) 0.dp else 2.dp)
+  val peekTop by animateDpAsState(targetValue = if (expanded) 0.dp else 4.dp)
+  val peekAlpha by animateFloatAsState(targetValue = if (expanded) 0f else 0.6f)
+  val primary = sessions.first() // Most recent (already sorted desc by timestamp)
+
+  Column(modifier = Modifier.fillMaxWidth()) {
+    // Primary session card with stacked card peek + badge overlay
+    Box(modifier = Modifier.fillMaxWidth()) {
+      // Stacked card peek — offset behind the primary card so its bottom edge peeks out
+      Card(
+        modifier = Modifier
+          .matchParentSize()
+          .padding(start = peekStart, end = peekEnd, top = peekTop),
+        shape = RoundedCornerShape(12.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        colors = CardDefaults.cardColors(
+          containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = peekAlpha),
+        ),
+      ) {}
+
+      // Primary card on top — shifted up so the peek card's bottom edge shows
+      Box(modifier = Modifier.padding(bottom = peekBottom)) {
+        SessionCard(
+          session = primary,
+          importedSessionIds = importedSessionIds,
+          sessionClicked = sessionClicked,
+          deleteSession = deleteSession,
+          openLogsFolder = openLogsFolder,
+          onExportSession = onExportSession,
+        )
+      }
+
+      // Count badge + expand arrow — bottom-end corner of the card
+      Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier
+          .align(Alignment.BottomEnd)
+          .padding(end = 12.dp, bottom = 14.dp)
+          .clickable { expanded = !expanded },
+      ) {
+        Surface(
+          shape = CircleShape,
+          color = MaterialTheme.colorScheme.secondaryContainer,
+          modifier = Modifier.size(24.dp),
+        ) {
+          Box(contentAlignment = Alignment.Center) {
+            Text(
+              text = "+${sessions.size - 1}",
+              style = MaterialTheme.typography.labelSmall,
+              fontWeight = FontWeight.Bold,
+              color = MaterialTheme.colorScheme.onSecondaryContainer,
+            )
+          }
+        }
+        Icon(
+          imageVector = Icons.Default.ExpandMore,
+          contentDescription = if (expanded) "Collapse" else "Expand",
+          modifier = Modifier.size(18.dp).rotate(rotationAngle),
+          tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+        )
+      }
+    }
+
+    // Expanded: show previous attempts
+    AnimatedVisibility(
+      visible = expanded,
+      enter = expandVertically() + fadeIn(),
+      exit = shrinkVertically() + fadeOut(),
+    ) {
+      Column(
+        modifier = Modifier.padding(start = 16.dp, end = 8.dp, bottom = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+      ) {
+        Text(
+          text = "Previous attempts",
+          style = MaterialTheme.typography.labelSmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+          modifier = Modifier.padding(bottom = 2.dp),
+        )
+        sessions.drop(1).forEach { session ->
+          SessionCard(
+            session = session,
+            importedSessionIds = importedSessionIds,
+            sessionClicked = sessionClicked,
+            deleteSession = deleteSession,
+            openLogsFolder = openLogsFolder,
+            onExportSession = onExportSession,
+          )
+        }
+      }
+    }
+  }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

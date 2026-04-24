@@ -16,10 +16,10 @@ import xyz.block.trailblaze.llm.TrailblazeLlmProvider
 import xyz.block.trailblaze.llm.config.LlmAuthResolver
 import xyz.block.trailblaze.http.DefaultDynamicLlmClient
 import xyz.block.trailblaze.http.DynamicLlmClient
+import xyz.block.trailblaze.http.NoOpLlmClient
 import xyz.block.trailblaze.http.TrailblazeHttpClientFactory
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
-import xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer
 
 /**
  * This would be the single test that runs the MCP server.  It blocks the instrumentation test
@@ -28,10 +28,6 @@ import xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer
  * OPEN SOURCE VERSION
  */
 class AndroidStandaloneServerTest : BaseAndroidStandaloneServerTest() {
-
-  init {
-    TrailblazeSerializationInitializer.initialize()
-  }
 
   // Cache the HTTP client to prevent "unknown client" errors on subsequent calls
   private val cachedHttpClient by lazy {
@@ -69,6 +65,7 @@ class AndroidStandaloneServerTest : BaseAndroidStandaloneServerTest() {
     return DefaultDynamicLlmClient(
       trailblazeLlmModel = trailblazeLlmModel,
       llmClients = mutableMapOf<LLMProvider, LLMClient>(
+        TrailblazeLlmProvider.NONE.toKoogLlmProvider() to NoOpLlmClient(),
         LLMProvider.Ollama to OllamaClient(
           baseUrl = ollamaBaseUrl ?: "http://localhost:11434",
           baseClient = cachedHttpClient,
@@ -99,13 +96,14 @@ class AndroidStandaloneServerTest : BaseAndroidStandaloneServerTest() {
     OnDeviceAccessibilityServiceSetup.ensureUiAutomationDoesNotSuppressAccessibility()
 
     val onDeviceRpcServer = OnDeviceRpcServer(
-      sessionManager = trailblazeLoggingRule.sessionManager,
+      loggingRule = trailblazeLoggingRule,
       runTrailblazeYaml = createRunTrailblazeYamlCallback(),
       trailblazeDeviceInfoProvider = { deviceId ->
         // Set the lateinit property early so the logging rule's provider can access it
         this.trailblazeDeviceId = deviceId
         trailblazeLoggingRule.trailblazeDeviceInfoProvider()
       },
+      deviceClassifiers = getDeviceClassifiers(),
     )
     onDeviceRpcServer.startServer(port = adbReversePort, wait = true)
   }

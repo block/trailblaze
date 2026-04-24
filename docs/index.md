@@ -20,6 +20,7 @@ and reporting capabilities.
 
 - **AI-Powered Testing**: More resilient tests using natural language test steps
 - **On-Device Execution**: Runs directly on Android devices using standard instrumentation tests (Espresso, UiAutomator)
+- **[Zero-Ceremony Project Layout](project_layout.md)**: Drop a `.trail.yaml` anywhere in your project — no `trails/` directory required. Run by path or shell glob from the CLI; auto-discovered by MCP and the desktop UI.
 - **[Custom Agent Tools](architecture.md#custom-tools)**: Extend functionality by providing app-specific `TrailblazeTool`s to the agent
 - **[Detailed Reporting](logging.md)**: Comprehensive test execution reports
 - **Maestro Integration**: Uses a custom on-device driver for Maestro to leverage intuitive, platform-agnostic UI interactions

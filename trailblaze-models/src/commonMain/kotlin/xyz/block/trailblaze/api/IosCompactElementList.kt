@@ -44,12 +44,14 @@ object IosCompactElementList {
     val refTracker = ElementRef.RefTracker()
     val includeBounds = SnapshotDetail.BOUNDS in details
     val includeOffscreen = SnapshotDetail.OFFSCREEN in details
+    val includeAllElements = SnapshotDetail.ALL_ELEMENTS in details
     var offscreenCount = 0
     val emittedLabels = mutableSetOf<String>()
     buildRecursive(
       root, 0, lines, elementNodeIds, elementBounds, refMapping, refTracker, emittedLabels,
       includeBounds = includeBounds,
       includeOffscreen = includeOffscreen,
+      includeAllElements = includeAllElements,
       screenHeight = screenHeight,
       screenWidth = screenWidth,
       offscreenCounter = { offscreenCount++ },
@@ -80,6 +82,7 @@ object IosCompactElementList {
     parentLabel: String? = null,
     includeBounds: Boolean = false,
     includeOffscreen: Boolean = false,
+    includeAllElements: Boolean = false,
     screenHeight: Int = 0,
     screenWidth: Int = 0,
     offscreenCounter: () -> Unit = {},
@@ -117,23 +120,23 @@ object IosCompactElementList {
         else if (label != null && !isDuplicate) "\"$label\""
         else {
           for (child in node.children) {
-            buildRecursive(child, depth, lines, elementNodeIds, elementBounds, refMapping, refTracker, emittedLabels, label, includeBounds, includeOffscreen, screenHeight, screenWidth, offscreenCounter)
+            buildRecursive(child, depth, lines, elementNodeIds, elementBounds, refMapping, refTracker, emittedLabels, label, includeBounds, includeOffscreen, includeAllElements, screenHeight, screenWidth, offscreenCounter)
           }
           return
         }
       lines.add("$indent$containerLabel:")
       val childLabels = mutableSetOf<String>()
       for (child in node.children) {
-        buildRecursive(child, depth + 1, lines, elementNodeIds, elementBounds, refMapping, refTracker, childLabels, label, includeBounds, includeOffscreen, screenHeight, screenWidth, offscreenCounter)
+        buildRecursive(child, depth + 1, lines, elementNodeIds, elementBounds, refMapping, refTracker, childLabels, label, includeBounds, includeOffscreen, includeAllElements, screenHeight, screenWidth, offscreenCounter)
       }
-    } else if (!isDuplicate && isMeaningful(detail, label)) {
+    } else if (!isDuplicate && (includeAllElements || isMeaningful(detail, label))) {
       val descriptor =
         if (label != null && shortClass.isNotEmpty()) "$shortClass \"$label\""
         else if (label != null) "\"$label\""
         else if (shortClass.isNotEmpty()) shortClass
         else {
           for (child in node.children) {
-            buildRecursive(child, depth, lines, elementNodeIds, elementBounds, refMapping, refTracker, emittedLabels, parentLabel, includeBounds, includeOffscreen, screenHeight, screenWidth, offscreenCounter)
+            buildRecursive(child, depth, lines, elementNodeIds, elementBounds, refMapping, refTracker, emittedLabels, parentLabel, includeBounds, includeOffscreen, includeAllElements, screenHeight, screenWidth, offscreenCounter)
           }
           return
         }
@@ -154,7 +157,15 @@ object IosCompactElementList {
         if (!childDetail.visible && !includeOffscreen) continue
         if (isSystemUi(childDetail, child)) continue
         val childLabel = resolveLabel(childDetail)?.truncate(MAX_LABEL_LENGTH)
-        if (childLabel != null && childLabel == label) continue
+        // Dedupe against the parent label whether the parent's label is raw
+        // ("Sign In") or a composite ("mobile: (408) 555-5270"). Without the
+        // suffix check, an XCUIElement row wrapping a single text node would
+        // redundantly echo the value as a child quoted string.
+        if (childLabel != null &&
+          (childLabel == label || label?.endsWith(": $childLabel") == true)
+        ) {
+          continue
+        }
         val childInteractive = childDetail.clickable || childDetail.checked || childDetail.selected
         if (childLabel != null && !childInteractive) {
           // Non-interactive text → quoted string (skip if already emitted)
@@ -163,25 +174,60 @@ object IosCompactElementList {
             emittedLabels.add(childLabel)
           }
         } else if (childLabel == null || childLabel != label) {
-          buildRecursive(child, depth + 1, lines, elementNodeIds, elementBounds, refMapping, refTracker, emittedLabels, label, includeBounds, includeOffscreen, screenHeight, screenWidth, offscreenCounter)
+          buildRecursive(child, depth + 1, lines, elementNodeIds, elementBounds, refMapping, refTracker, emittedLabels, label, includeBounds, includeOffscreen, includeAllElements, screenHeight, screenWidth, offscreenCounter)
         }
       }
     } else {
       // Structural/transparent: skip this node, recurse children at same depth
       for (child in node.children) {
-        buildRecursive(child, depth, lines, elementNodeIds, elementBounds, refMapping, refTracker, emittedLabels, label ?: parentLabel, includeBounds, includeOffscreen, screenHeight, screenWidth, offscreenCounter)
+        buildRecursive(child, depth, lines, elementNodeIds, elementBounds, refMapping, refTracker, emittedLabels, label ?: parentLabel, includeBounds, includeOffscreen, includeAllElements, screenHeight, screenWidth, offscreenCounter)
       }
     }
   }
 
-  /** Resolves the best display label for a node. Normalizes whitespace to single line. */
+  /**
+   * Resolves the best display label for a node.
+   *
+   * Composes a category + value when both are available — the AX *label* (category) goes
+   * in front of the AX *value* (data). Two places the category can come from:
+   *
+   *   1. `hintText` — Maestro maps iOS `placeholderValue` here. For a UITextField with
+   *      placeholder "Email" and current input "user@example.com" this composes to
+   *      `"Email: user@example.com"`.
+   *
+   *   2. `accessibilityText` — Maestro maps iOS AX `label` here (see
+   *      [IOSDriver.mapViewHierarchy](https://github.com/mobile-dev-inc/Maestro/blob/main/maestro-client/src/main/java/maestro/drivers/IOSDriver.kt)
+   *      : `attributes["accessibilityText"] = element.label`). For a Contacts row with
+   *      label "mobile" and value "(408) 555-5270" this composes to
+   *      `"mobile: (408) 555-5270"` — same shape we get on the AXe path.
+   *
+   *   Maestro itself prefers `title ?: value` for `attributes["text"]`, so whichever
+   *   of value or title is present ends up in [DriverNodeDetail.IosMaestro.text]. The
+   *   AX *label* always lives in `accessibilityText`. Either category source composes
+   *   cleanly — this was the trapped data that made Host rows render as
+   *   `"(408) 555-5270"` with no idea it was the *mobile* number.
+   *
+   * Fallback when no category is present: text > hintText > accessibilityText. Whitespace
+   * normalized.
+   */
   private fun resolveLabel(detail: DriverNodeDetail.IosMaestro): String? {
-    val raw = detail.text?.takeIf { it.isNotBlank() }
-      ?: detail.accessibilityText?.takeIf { it.isNotBlank() }
-      ?: detail.hintText?.takeIf { it.isNotBlank() }
-      ?: return null
-    return raw.replace('\n', ' ').replace(Regex("\\s+"), " ").trim()
+    val text = detail.text?.takeIf { it.isNotBlank() }?.normalize()
+    val hint = detail.hintText?.takeIf { it.isNotBlank() }?.normalize()
+    val ax = detail.accessibilityText?.takeIf { it.isNotBlank() }?.normalize()
+
+    val category = when {
+      hint != null && hint != text -> hint
+      ax != null && ax != text -> ax
+      else -> null
+    }
+    if (category != null && text != null) {
+      return "$category: $text"
+    }
+    return text ?: hint ?: ax
   }
+
+  private fun String.normalize(): String =
+    replace('\n', ' ').replace(Regex("\\s+"), " ").trim()
 
   /** Truncates a string to [maxLength] with "..." suffix. */
   private fun String.truncate(maxLength: Int): String {
@@ -223,9 +269,17 @@ object IosCompactElementList {
     return false
   }
 
-  /** Builds state annotation string. Only non-default states are shown. */
+  /**
+   * Builds state annotation string. Only non-default states are shown.
+   *
+   * Leads with `[id=…]` when the element has an `accessibilityIdentifier` (exposed as
+   * `resourceId` on [DriverNodeDetail.IosMaestro]). That's the most stable selector an
+   * iOS app can provide; exposing it in the compact text lets the LLM prefer it over
+   * brittle text matches.
+   */
   private fun buildAnnotations(detail: DriverNodeDetail.IosMaestro): String {
     val parts = mutableListOf<String>()
+    detail.resourceId?.takeIf { it.isNotBlank() }?.let { parts.add("[id=$it]") }
     if (detail.checked) parts.add("[checked]")
     if (detail.selected) parts.add("[selected]")
     if (detail.focused) parts.add("[focused]")

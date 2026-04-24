@@ -92,6 +92,7 @@ dependencies {
   implementation(project(":trailblaze-common"))
   implementation(project(":trailblaze-revyl"))
   implementation(project(":trailblaze-compose"))
+  implementation(project(":trailblaze-scripting-subprocess"))
   implementation(libs.compose.ui.test.junit4)
   implementation(project(":trailblaze-playwright"))
   implementation(project(":trailblaze-report"))

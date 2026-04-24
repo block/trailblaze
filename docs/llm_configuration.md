@@ -326,7 +326,7 @@ adb shell am instrument \
 
 **Alternative: Auto-detection**
 
-If neither a config file nor a `trailblaze.llm.default_model` arg is present, `AndroidLlmClientResolver` auto-detects the provider from the first available API key token. The provider priority order is: OpenAI, OpenRouter, Anthropic, Google, Ollama. The provider's `default_model` (defined in the built-in provider YAML) is used. This order is defined in [`PROVIDER_PRIORITY` in `AndroidLlmClientResolver`](https://github.com/block/trailblaze/blob/main/opensource/trailblaze-android/src/main/java/xyz/block/trailblaze/android/AndroidLlmClientResolver.kt).
+If neither a config file nor a `trailblaze.llm.default_model` arg is present, `AndroidLlmClientResolver` auto-detects the provider from the first available API key token. The provider priority order is: OpenAI, OpenRouter, Anthropic, Google, Ollama. The provider's `default_model` (defined in the built-in provider YAML) is used. This order is defined in [`PROVIDER_PRIORITY` in `AndroidLlmClientResolver`](https://github.com/block/trailblaze/blob/main/trailblaze-android/src/main/java/xyz/block/trailblaze/android/AndroidLlmClientResolver.kt).
 
 ## Built-in Models
 

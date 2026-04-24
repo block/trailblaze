@@ -1,0 +1,26 @@
+{
+  "name": "@trailblaze/scripting",
+  "version": "0.1.0",
+  "private": true,
+  "description": "TypeScript SDK for authoring Trailblaze MCP tools — wraps @modelcontextprotocol/sdk with the Trailblaze `_meta.trailblaze` envelope reader and a `trailblaze.tool`/`trailblaze.run` authoring surface. Marked private while the SDK surface stabilizes: package.json `main` / `exports` / `types` point at `./src/index.ts` and the package has no build step. Authors consume via a TS-capable runtime (bun/tsx) through the `file:` link used by the sample-app example. Publishing to a registry (with a proper `dist/` build + `.js` / `.d.ts` outputs) is a follow-up — until that ships, `private: true` blocks accidental `npm publish`.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "files": [
+    "src"
+  ],
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "zod": "4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "25.6.0",
+    "typescript": "6.0.3"
+  }
+}

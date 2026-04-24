@@ -3,6 +3,8 @@ package xyz.block.trailblaze.llm.config
 import com.charleskorn.kaml.Yaml
 import com.charleskorn.kaml.YamlConfiguration
 import java.io.File
+import xyz.block.trailblaze.config.project.WorkspaceRoot
+import xyz.block.trailblaze.config.project.findWorkspaceRoot
 import xyz.block.trailblaze.util.Console
 
 /**
@@ -45,9 +47,18 @@ object LlmConfigLoader {
     val userConfigFile = File(userHomeDir, "$DOT_TRAILBLAZE_DIR/$CONFIG_FILENAME")
     config = mergeFromConfigFile(config, userConfigFile, "user-level")
 
-    // 2. Project-level config: ./trailblaze.yaml (llm: key)
+    // 2. Project-level config: trailblaze.yaml found by walk-up from projectDir.
+    //    Walk-up is the single-primitive discovery rule — callers that pass
+    //    a nested directory (e.g. running `trailblaze` from `my-app/flows/`) now find the
+    //    workspace's trailblaze.yaml the same way the rest of the framework does. If no
+    //    workspace config exists anywhere up the tree, Scratch still points at projectDir,
+    //    so the legacy "look in projectDir only" behaviour is preserved when trailblaze.yaml
+    //    sits exactly at projectDir.
     if (projectDir != null) {
-      val projectConfigFile = File(projectDir, CONFIG_FILENAME)
+      val projectConfigFile = when (val workspace = findWorkspaceRoot(projectDir.toPath())) {
+        is WorkspaceRoot.Configured -> workspace.configFile.toFile()
+        is WorkspaceRoot.Scratch -> File(projectDir, CONFIG_FILENAME)
+      }
       config = mergeFromConfigFile(config, projectConfigFile, "project-level")
     }
 

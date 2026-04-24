@@ -132,7 +132,7 @@ Time breakdown (~2.0s): ~250ms JVM startup + class loading, ~400ms MCP client co
 
 ### The 120ms direct-curl floor
 
-The Maestro XCTest runner exposes an HTTP API on a deterministic port (`TrailblazeDevicePort.getPortForDevice(deviceId, "maestro")`). A raw `curl -X POST localhost:<port>/viewHierarchy` returns the full iOS accessibility tree in ~120ms. Shelved because: (1) refs from a standalone formatter wouldn't match `IosCompactElementList` refs, breaking `tap ref=...` after a snapshot; (2) Square iOS apps use `SquareTrailblazeIosDriver` for a richer SwiftUI view hierarchy that the direct-curl path misses; (3) tree shape differs (nesting, keyboard merging, coordinate transforms).
+The Maestro XCTest runner exposes an HTTP API on a deterministic port (`TrailblazeDevicePort.getPortForDevice(deviceId, "maestro")`). A raw `curl -X POST localhost:<port>/viewHierarchy` returns the full iOS accessibility tree in ~120ms. Shelved because: (1) refs from a standalone formatter wouldn't match `IosCompactElementList` refs, breaking `tap ref=...` after a snapshot; (2) downstream apps with a custom iOS driver rely on a richer SwiftUI view hierarchy that the direct-curl path misses; (3) tree shape differs (nesting, keyboard merging, coordinate transforms).
 
 If sub-second snapshot is needed: daemon-side caching of the last compact element list, a persistent CLI process (Unix socket, no JVM startup), or extracting the ref algorithm to a standalone script.
 

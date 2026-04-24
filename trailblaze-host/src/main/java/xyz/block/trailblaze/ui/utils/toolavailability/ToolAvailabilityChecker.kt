@@ -3,29 +3,10 @@ package xyz.block.trailblaze.ui.utils.toolavailability
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import xyz.block.trailblaze.util.AndroidSdkPaths
 import xyz.block.trailblaze.util.isWindows
 
 object ToolAvailabilityChecker {
-
-  /**
-   * Well-known locations where the Android SDK may be installed. The list is checked in order; the
-   * first match wins.
-   */
-  private val CANDIDATE_SDK_PATHS: List<String> by lazy {
-    val home = System.getProperty("user.home") ?: ""
-    val localAppData = System.getenv("LOCALAPPDATA") ?: ""
-    listOfNotNull(
-      System.getenv("ANDROID_HOME"),
-      System.getenv("ANDROID_SDK_ROOT"),
-      "$home/Library/Android/sdk", // Android Studio default on macOS
-      "$home/Android/Sdk", // Android Studio default on Linux
-      "/usr/local/share/android-sdk", // Homebrew cask location
-      "$home/.android/sdk",
-      // Windows locations
-      "$localAppData\\Android\\Sdk".takeIf { localAppData.isNotEmpty() },
-      "$home\\AppData\\Local\\Android\\Sdk",
-    )
-  }
 
   /** Well-known locations where Xcode.app may live. */
   private val CANDIDATE_XCODE_PATHS =
@@ -46,20 +27,15 @@ object ToolAvailabilityChecker {
   // ADB
   // ---------------------------------------------------------------------------
 
-  /** ADB executable filenames to probe inside SDK directories. */
-  private val ADB_FILENAMES: List<String> by lazy {
-    if (isWindows()) listOf("adb.exe", "adb") else listOf("adb")
-  }
-
-  /** Tiered detection for ADB. */
+  /** Tiered detection for ADB. Shares SDK-path and filename lists with [AndroidSdkPaths]. */
   private fun detectAdb(): AdbStatus {
     // Tier 1: ADB is already on the shell PATH.
-    if (isCommandAvailable("adb")) return AdbStatus.Available
+    if (isCommandAvailable(AndroidSdkPaths.ADB_EXECUTABLE)) return AdbStatus.Available
 
     // Tier 2: Look for ADB inside known SDK locations.
-    for (sdkPath in CANDIDATE_SDK_PATHS) {
+    for (sdkPath in AndroidSdkPaths.CANDIDATE_PATHS) {
       if (sdkPath.isBlank()) continue
-      for (adbName in ADB_FILENAMES) {
+      for (adbName in AndroidSdkPaths.ADB_FILENAMES) {
         val adbFile = File(sdkPath, "platform-tools${File.separator}$adbName")
         if (adbFile.exists() && adbFile.canExecute()) {
           return AdbStatus.SdkFoundNotOnPath(

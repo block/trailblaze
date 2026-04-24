@@ -3,6 +3,7 @@ package xyz.block.trailblaze.mcp.newtools
 import ai.koog.agents.core.tools.annotations.LLMDescription
 import ai.koog.agents.core.tools.annotations.Tool
 import ai.koog.agents.core.tools.reflect.ToolSet
+import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
@@ -92,7 +93,7 @@ class DeviceManagerToolSet(
   suspend fun device(
     @LLMDescription("Action: LIST, CONNECT, ANDROID, IOS, WEB, or INFO")
     action: DeviceAction,
-    @LLMDescription("Device ID (only for CONNECT action)")
+    @LLMDescription("Device ID / instance ID (for CONNECT, ANDROID, IOS actions)")
     deviceId: String? = null,
     @LLMDescription("Force takeover if device is claimed by another session (default: false)")
     force: Boolean = false,
@@ -139,44 +140,47 @@ class DeviceManagerToolSet(
         val currentDeviceId = mcpBridge.getCurrentlySelectedDeviceId()
           ?: return "Error: No device connected. Use device(action=LIST) to see available devices, then connect with ANDROID, IOS, WEB, or CONNECT."
 
+        // Driver status (non-null means the driver is installing, initializing, or failed
+        // to create). We emit the full device info block AND the status, so both agents
+        // and humans see what's running AND what state it's in. CLI polling loops look
+        // for "installing"/"failed"/"error" substrings in the response, which still match
+        // when the status is appended to the structured block.
+        val driverStatus = mcpBridge.getDriverConnectionStatus(currentDeviceId)
+
         when (detail) {
-          DeviceDetail.SUMMARY -> {
-            val driverType = mcpBridge.getDriverType()
-            buildString {
-              appendLine("Connected device:")
-              appendLine("  Instance ID: ${currentDeviceId.instanceId}")
-              appendLine("  Platform: ${currentDeviceId.trailblazeDevicePlatform.displayName}")
-              if (driverType != null) {
-                appendLine("  Driver: $driverType")
-              }
-              val toolSummary = buildAvailableToolsSummary()
-              if (toolSummary != null) {
-                appendLine()
-                append(toolSummary)
-              }
+          DeviceDetail.SUMMARY -> buildString {
+            appendDeviceHeader(currentDeviceId)
+            appendDriverStatusIfPresent(driverStatus)
+            val toolSummary = buildAvailableToolsSummary()
+            if (toolSummary != null) {
+              appendLine()
+              append(toolSummary)
             }
           }
           DeviceDetail.APPS -> {
-            val apps = mcpBridge.getInstalledAppIds()
-            if (apps.isEmpty()) {
-              "No installed apps found on device."
-            } else {
+            // Apps list requires a ready driver — surface the status verbatim instead.
+            if (driverStatus != null) {
               buildString {
-                appendLine("Installed apps (${apps.size}):")
-                apps.sorted().forEach { appendLine("  - $it") }
+                appendDeviceHeader(currentDeviceId)
+                appendDriverStatusIfPresent(driverStatus)
+              }
+            } else {
+              val apps = mcpBridge.getInstalledAppIds()
+              if (apps.isEmpty()) {
+                "No installed apps found on device."
+              } else {
+                buildString {
+                  appendLine("Installed apps (${apps.size}):")
+                  apps.sorted().forEach { appendLine("  - $it") }
+                }
               }
             }
           }
-          DeviceDetail.FULL -> {
-            val driverType = mcpBridge.getDriverType()
-            val apps = mcpBridge.getInstalledAppIds()
-            buildString {
-              appendLine("Connected device:")
-              appendLine("  Instance ID: ${currentDeviceId.instanceId}")
-              appendLine("  Platform: ${currentDeviceId.trailblazeDevicePlatform.displayName}")
-              if (driverType != null) {
-                appendLine("  Driver: $driverType")
-              }
+          DeviceDetail.FULL -> buildString {
+            appendDeviceHeader(currentDeviceId)
+            appendDriverStatusIfPresent(driverStatus)
+            if (driverStatus == null) {
+              val apps = mcpBridge.getInstalledAppIds()
               appendLine()
               appendLine("Installed apps (${apps.size}):")
               apps.sorted().forEach { appendLine("  - $it") }
@@ -189,6 +193,9 @@ class DeviceManagerToolSet(
         if (deviceId.isNullOrBlank()) {
           return "Error: deviceId required for CONNECT action. Use LIST to see available devices."
         }
+        // CONNECT is intentionally platform-agnostic: the caller has chosen CONNECT
+        // precisely because they want to resolve a specific instanceId without caring
+        // about platform. ANDROID/IOS are the platform-scoped forms.
         val devices = mcpBridge.getAvailableDevices()
         val device = devices.find { it.instanceId == deviceId }
           ?: return "Error: Device '$deviceId' not found. Use LIST to see available devices."
@@ -197,33 +204,23 @@ class DeviceManagerToolSet(
       }
 
       DeviceAction.ANDROID -> {
-        val devices = mcpBridge.getAvailableDevices()
-        val configuredDriverType = mcpBridge.getConfiguredDriverType(TrailblazeDevicePlatform.ANDROID)
-        // Prefer the device matching the configured driver type from settings.
-        // Fall back to any Android device if no configured type matches.
-        val androidDevice = if (configuredDriverType != null) {
-          devices.find { it.trailblazeDriverType == configuredDriverType }
-            ?: devices.find { it.platform == TrailblazeDevicePlatform.ANDROID }
-        } else {
-          devices.find { it.platform == TrailblazeDevicePlatform.ANDROID }
+        when (val selection = selectDeviceForPlatform(TrailblazeDevicePlatform.ANDROID, deviceId)) {
+          is SelectResult.Found -> connectToDeviceUnified(selection.device.trailblazeDeviceId, force, testName)
+          SelectResult.NoneOnPlatform ->
+            "Error: No Android device available. Connect an Android device or start an emulator."
+          is SelectResult.IdNotFound ->
+            "Error: Android device '${selection.requestedId}' not found. Available: ${selection.availableIds.joinToString()}."
         }
-          ?: return "Error: No Android device available. Connect an Android device or start an emulator."
-
-        connectToDeviceUnified(androidDevice.trailblazeDeviceId, force, testName)
       }
 
       DeviceAction.IOS -> {
-        val devices = mcpBridge.getAvailableDevices()
-        val configuredDriverType = mcpBridge.getConfiguredDriverType(TrailblazeDevicePlatform.IOS)
-        val iosDevice = if (configuredDriverType != null) {
-          devices.find { it.trailblazeDriverType == configuredDriverType }
-            ?: devices.find { it.platform == TrailblazeDevicePlatform.IOS }
-        } else {
-          devices.find { it.platform == TrailblazeDevicePlatform.IOS }
+        when (val selection = selectDeviceForPlatform(TrailblazeDevicePlatform.IOS, deviceId)) {
+          is SelectResult.Found -> connectToDeviceUnified(selection.device.trailblazeDeviceId, force, testName)
+          SelectResult.NoneOnPlatform ->
+            "Error: No iOS device available. Start an iOS simulator."
+          is SelectResult.IdNotFound ->
+            "Error: iOS device '${selection.requestedId}' not found. Available: ${selection.availableIds.joinToString()}."
         }
-          ?: return "Error: No iOS device available. Start an iOS simulator."
-
-        connectToDeviceUnified(iosDevice.trailblazeDeviceId, force, testName)
       }
 
       DeviceAction.WEB -> {
@@ -426,14 +423,15 @@ Call with an empty list to reset to only the core tools.""",
 
     onActiveToolSetsChanged(toolSetIds, toolSetCatalog)
 
-    val resolvedTools = TrailblazeToolSetCatalog.resolve(toolSetIds, toolSetCatalog)
-    val toolNames = resolvedTools.map {
+    val resolved = TrailblazeToolSetCatalog.resolve(toolSetIds, toolSetCatalog)
+    val classNames = resolved.toolClasses.map {
         it.simpleName?.removeSuffix("TrailblazeTool")?.removeSuffix("Tool") ?: it.toString()
       }
+    val toolNames = classNames + resolved.yamlToolNames.map { it.toolName }
     return buildString {
       appendLine("Active tool sets updated.")
       appendLine("Enabled sets: ${(toolSetIds + "core").distinct()}")
-      appendLine("Total tools available: ${resolvedTools.size}")
+      appendLine("Total tools available: ${toolNames.size}")
       appendLine("Tools: $toolNames")
     }
   }
@@ -469,6 +467,68 @@ Call with an empty list to reset to only the core tools.""",
     }
   }
 
+  /**
+   * Emits the `Connected device:` header with Instance ID, Platform, and Driver lines.
+   * Parsed by `CliMcpClient.parseConnectedInstanceId` / `parseDevicePlatform`, so the
+   * format must stay stable even when a driver status is also reported.
+   */
+  private fun StringBuilder.appendDeviceHeader(deviceId: TrailblazeDeviceId) {
+    val driverType = mcpBridge.getDriverType()
+    appendLine("Connected device:")
+    appendLine("  Instance ID: ${deviceId.instanceId}")
+    appendLine("  Platform: ${deviceId.trailblazeDevicePlatform.displayName}")
+    if (driverType != null) {
+      appendLine("  Driver: $driverType")
+    }
+  }
+
+  /**
+   * Appends a `Driver status:` block when the driver is installing, initializing,
+   * or has failed to start. Keeps the original wording (including "installing" /
+   * "failed" / "error" keywords) so CLI polling loops still match on substring.
+   */
+  private fun StringBuilder.appendDriverStatusIfPresent(driverStatus: String?) {
+    if (driverStatus == null) return
+    appendLine()
+    appendLine("Driver status: $driverStatus")
+  }
+
+  /**
+   * Selects a device on [platform]. When [deviceId] is non-blank the caller has
+   * asked for a specific instance, so we never silently pick a different one.
+   * Otherwise we prefer the configured driver type from settings, falling back
+   * to the first device on the platform.
+   */
+  private suspend fun selectDeviceForPlatform(
+    platform: TrailblazeDevicePlatform,
+    deviceId: String?,
+  ): SelectResult {
+    val platformDevices = mcpBridge.getAvailableDevices().filter { it.platform == platform }
+    if (!deviceId.isNullOrBlank()) {
+      if (platformDevices.isEmpty()) return SelectResult.NoneOnPlatform
+      val match = platformDevices.find { it.instanceId == deviceId }
+        ?: return SelectResult.IdNotFound(
+          deviceId,
+          platformDevices.map { it.instanceId }.distinct().sorted(),
+        )
+      return SelectResult.Found(match)
+    }
+    val configuredDriverType = mcpBridge.getConfiguredDriverType(platform)
+    val auto = if (configuredDriverType != null) {
+      platformDevices.find { it.trailblazeDriverType == configuredDriverType }
+        ?: platformDevices.firstOrNull()
+    } else {
+      platformDevices.firstOrNull()
+    }
+    return auto?.let { SelectResult.Found(it) } ?: SelectResult.NoneOnPlatform
+  }
+
+  private sealed interface SelectResult {
+    data class Found(val device: TrailblazeConnectedDeviceSummary) : SelectResult
+    object NoneOnPlatform : SelectResult
+    data class IdNotFound(val requestedId: String, val availableIds: List<String>) : SelectResult
+  }
+
   companion object {
     // Tool names - referenced in @Tool annotations and LLM descriptions
     const val TOOL_GET_INSTALLED_APPS = "getInstalledApps"
@@ -480,6 +540,12 @@ Call with an empty list to reset to only the core tools.""",
     const val TOOL_RUN_PROMPT = "runPrompt"
     const val TOOL_END_SESSION = "endSession"
     const val TOOL_SET_ACTIVE_TOOLSETS = "setActiveToolSets"
+
+    // Parameter names for the `device` tool. MCP binds arguments by the Kotlin
+    // parameter name via reflection, so these string keys must exactly match
+    // the parameter names on [device]. Callers (e.g. CliMcpClient) should reference
+    // these constants instead of hardcoding the string.
+    const val PARAM_DEVICE_ID = "deviceId"
   }
 }
 

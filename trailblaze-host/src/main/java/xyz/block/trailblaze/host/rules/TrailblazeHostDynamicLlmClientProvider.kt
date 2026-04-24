@@ -6,8 +6,10 @@ import ai.koog.prompt.executor.model.PromptExecutor
 import ai.koog.prompt.llm.LLMProvider
 import io.ktor.client.HttpClient
 import xyz.block.trailblaze.http.DynamicLlmClient
+import xyz.block.trailblaze.http.NoOpLlmClient
 import xyz.block.trailblaze.http.TrailblazeHttpClientFactory
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
+import xyz.block.trailblaze.llm.TrailblazeLlmProvider
 import xyz.block.trailblaze.llm.providers.TrailblazeDynamicLlmTokenProvider
 
 /**
@@ -29,6 +31,7 @@ class TrailblazeHostDynamicLlmClientProvider(
         put(llmProvider.toKoogLlmProvider(), llmClient)
       }
     }
+    put(TrailblazeLlmProvider.NONE.toKoogLlmProvider(), NoOpLlmClient())
   }
 
   override fun createPromptExecutor(): PromptExecutor = MultiLLMPromptExecutor(llmClients = llmClients)

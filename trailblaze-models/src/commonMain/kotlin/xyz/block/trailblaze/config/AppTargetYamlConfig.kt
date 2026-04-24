@@ -44,6 +44,18 @@ data class AppTargetYamlConfig(
   @SerialName("display_name") val displayName: String,
   val platforms: Map<String, PlatformConfig>? = null,
   @SerialName("has_custom_ios_driver") val hasCustomIosDriver: Boolean = false,
+  /**
+   * MCP server declarations that contribute tools to the Trailblaze tool
+   * registry for sessions targeting this app (Decision 038). Each entry
+   * is a [McpServerConfig] — currently only `script:` entries are
+   * implemented; `command:` entries are reserved for a follow-up per
+   * `docs/devlog/2026-04-21-scripted-tools-mcp-integration-patterns.md`.
+   *
+   * Spawning requires a resolved session (target + driver + agent-mode).
+   * Tool registration applies the standard filters (platform / driver /
+   * host-required) from annotations on each contributed tool.
+   */
+  @SerialName("mcp_servers") val mcpServers: List<McpServerConfig>? = null,
 )
 
 /**

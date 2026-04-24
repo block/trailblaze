@@ -6,6 +6,9 @@ import xyz.block.trailblaze.capture.CaptureStream
 import xyz.block.trailblaze.capture.DeviceClock
 import xyz.block.trailblaze.capture.model.CaptureArtifact
 import xyz.block.trailblaze.capture.model.CaptureType
+import xyz.block.trailblaze.devices.TrailblazeDeviceId
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.util.AndroidHostAdbUtils
 import xyz.block.trailblaze.util.Console
 
 /**
@@ -33,10 +36,14 @@ class AndroidLogcatCapture : CaptureStream {
     startTimestampMs = DeviceClock.nowMs(deviceId)
     outputFile = File(sessionDir, "logcat.txt")
 
+    val trailblazeDeviceId = TrailblazeDeviceId(deviceId, TrailblazeDevicePlatform.ANDROID)
+
     // Clear logcat buffer before starting
     try {
-      ProcessBuilder("adb", "-s", deviceId, "logcat", "-c")
-        .redirectErrorStream(true)
+      AndroidHostAdbUtils.createAdbCommandProcessBuilder(
+          args = listOf("logcat", "-c"),
+          deviceId = trailblazeDeviceId,
+        )
         .start()
         .waitFor()
     } catch (e: Exception) {
@@ -44,19 +51,23 @@ class AndroidLogcatCapture : CaptureStream {
     }
 
     // Start logcat capture with epoch timestamps, streaming to file
-    val command = mutableListOf("adb", "-s", deviceId, "logcat", "-v", "epoch", "-v", "printable")
+    val logcatArgs = mutableListOf("logcat", "-v", "epoch", "-v", "printable")
 
     // Filter to app PID if appId is known and app is running
     if (appId != null) {
       val pid = getAppPid(deviceId, appId)
       if (pid != null) {
-        command.addAll(listOf("--pid=$pid"))
+        logcatArgs.add("--pid=$pid")
         Console.log("Filtering logcat to PID $pid ($appId)")
       }
     }
 
     try {
-      val pb = ProcessBuilder(command).redirectOutput(outputFile).redirectErrorStream(true)
+      val pb = AndroidHostAdbUtils.createAdbCommandProcessBuilder(
+          args = logcatArgs,
+          deviceId = trailblazeDeviceId,
+        )
+        .redirectOutput(outputFile)
       process = pb.start()
     } catch (e: Exception) {
       Console.log("Failed to start logcat capture: ${e.message}")
@@ -81,8 +92,10 @@ class AndroidLogcatCapture : CaptureStream {
   private fun getAppPid(deviceId: String, appId: String): String? =
     try {
       val result =
-        ProcessBuilder("adb", "-s", deviceId, "shell", "pidof", appId)
-          .redirectErrorStream(true)
+        AndroidHostAdbUtils.createAdbCommandProcessBuilder(
+            args = listOf("shell", "pidof", appId),
+            deviceId = TrailblazeDeviceId(deviceId, TrailblazeDevicePlatform.ANDROID),
+          )
           .start()
       val output = result.inputStream.bufferedReader().readText().trim()
       result.waitFor()

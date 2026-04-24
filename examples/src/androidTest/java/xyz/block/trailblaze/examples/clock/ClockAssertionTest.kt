@@ -11,7 +11,7 @@ import xyz.block.trailblaze.examples.rules.ExamplesAndroidTrailblazeRule
  * When run with the accessibility driver (via agentOverride), assertions go through
  * AccessibilityDeviceManager.executeAssertVisible/executeAssertNotVisible instead of Maestro.
  *
- * Trail files live in `opensource/trails/clock/`.
+ * Trail files live in `trails/clock/`.
  */
 class ClockAssertionTest {
 

@@ -63,18 +63,6 @@ class TrailblazeKoogLlmClientHelper(
   val screenStateProvider: (() -> ScreenState)? = null,
 ) {
 
-  // This field will be used to determine whether or not our next request to the LLM should require
-  // a tool call. This occasionally happens when the LLM returns the tool call in the message
-  // instead of actually triggering the tool. In this case we already have the model's reasoning
-  // so we can just force it to call a tool next.
-  private var shouldForceToolCall = false
-
-  fun setShouldForceToolCall(force: Boolean) {
-    shouldForceToolCall = force
-  }
-
-  fun getShouldForceToolCall(): Boolean = shouldForceToolCall
-
   /**
    * Builds a device description string that combines classifiers, platform, and screen dimensions.
    * Only includes the platform in parentheses if it differs from the first classifier.

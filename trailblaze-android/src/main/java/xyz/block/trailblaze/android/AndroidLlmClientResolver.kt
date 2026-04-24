@@ -8,6 +8,7 @@ import ai.koog.prompt.executor.ollama.client.OllamaClient
 import ai.koog.prompt.llm.LLMProvider
 import xyz.block.trailblaze.android.openai.OpenAiInstrumentationArgUtil
 import xyz.block.trailblaze.http.DefaultDynamicLlmClient
+import xyz.block.trailblaze.http.NoOpLlmClient
 import xyz.block.trailblaze.http.TrailblazeHttpClientFactory
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
@@ -74,7 +75,8 @@ object AndroidLlmClientResolver {
     for (candidate in candidates) {
       val model = BuiltInLlmModelRegistry.find(candidate) ?: continue
       val tokenKey = LlmAuthResolver.resolve(model.trailblazeLlmProvider)
-      if (model.trailblazeLlmProvider == TrailblazeLlmProvider.OLLAMA ||
+      if (model.trailblazeLlmProvider == TrailblazeLlmProvider.NONE ||
+        model.trailblazeLlmProvider == TrailblazeLlmProvider.OLLAMA ||
         InstrumentationArgUtil.getInstrumentationArg(tokenKey) != null
       ) {
         Console.log("AndroidLlmClientResolver: Resolved model from candidate: $candidate")
@@ -145,6 +147,7 @@ object AndroidLlmClientResolver {
    * from instrumentation args and constructing the appropriate client.
    */
   fun createClient(model: TrailblazeLlmModel): LLMClient {
+    if (model.trailblazeLlmProvider == TrailblazeLlmProvider.NONE) return NoOpLlmClient()
     val llmClients = buildMap<LLMProvider, LLMClient> {
       // Ollama (no token needed)
       val ollamaBaseUrl =

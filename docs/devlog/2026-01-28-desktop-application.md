@@ -121,7 +121,6 @@ Trailblaze is distributed as a **CLI tool that bundles the desktop application**
 | Audience | Channel | Command |
 | :--- | :--- | :--- |
 | **Open source** | Homebrew | `brew install block/tap/trailblaze` |
-| **Block internal** | Internal package source | `brew install block-internal/tap/trailblaze` |
 
 The `trailblaze` CLI is the primary entry point. It supports headless operation for CI/CD and scripting, and can launch the desktop GUI when needed:
 

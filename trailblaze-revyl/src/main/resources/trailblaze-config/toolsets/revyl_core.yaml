@@ -1,0 +1,17 @@
+# Core Revyl mobile interaction tools.
+# Revyl uses cloud-hosted devices with natural-language targeting and AI-powered
+# visual grounding, so it intentionally uses its own tool set instead of the generic
+# mobile core_interaction tools.
+id: revyl_core
+description: "Tap, type, swipe, navigate, and other Revyl-native mobile interactions."
+drivers:
+  - revyl-android
+  - revyl-ios
+tools:
+  - revyl_tap
+  - revyl_doubleTap
+  - revyl_type
+  - revyl_swipe
+  - revyl_navigate
+  - revyl_back
+  - revyl_pressKey

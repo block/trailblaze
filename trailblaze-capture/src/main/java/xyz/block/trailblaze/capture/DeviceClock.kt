@@ -1,5 +1,8 @@
 package xyz.block.trailblaze.capture
 
+import xyz.block.trailblaze.devices.TrailblazeDeviceId
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.util.AndroidHostAdbUtils
 import xyz.block.trailblaze.util.Console
 
 /**
@@ -17,8 +20,10 @@ object DeviceClock {
   fun nowMs(deviceId: String): Long {
     return try {
       val p =
-        ProcessBuilder("adb", "-s", deviceId, "shell", "date", "+%s%3N")
-          .redirectErrorStream(true)
+        AndroidHostAdbUtils.createAdbCommandProcessBuilder(
+            args = listOf("shell", "date", "+%s%3N"),
+            deviceId = TrailblazeDeviceId(deviceId, TrailblazeDevicePlatform.ANDROID),
+          )
           .start()
       val output = p.inputStream.bufferedReader().readText().trim()
       p.waitFor()

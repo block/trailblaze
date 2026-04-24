@@ -19,6 +19,7 @@ import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
+import xyz.block.trailblaze.toolcalls.HostLocalExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
@@ -54,9 +55,30 @@ class BaseTrailblazeAgentTest {
     ): List<ExecutableTrailblazeTool> = expandedTools
   }
 
+  // ── Stub host-local tool ──
+  //
+  // Dynamically-built host-local tool stand-in (what subprocess MCP tools look like at
+  // runtime). Exposes a count of how many times `execute` fired so tests can prove it's
+  // dispatched via the base class short-circuit rather than the agent's `executeTool`.
+
+  private class StubHostLocalTool(
+    override val advertisedToolName: String = "stub_host_local",
+    val result: TrailblazeToolResult = TrailblazeToolResult.Success(),
+  ) : HostLocalExecutableTrailblazeTool {
+    var executeCount: Int = 0
+      private set
+
+    override suspend fun execute(
+      toolExecutionContext: TrailblazeToolExecutionContext,
+    ): TrailblazeToolResult {
+      executeCount++
+      return result
+    }
+  }
+
   // ── Test agent ──
 
-  private class TestAgent : BaseTrailblazeAgent() {
+  private open class TestAgent : BaseTrailblazeAgent() {
     override val trailblazeLogger = TrailblazeLogger.createNoOp()
     override val trailblazeDeviceInfoProvider = {
       TrailblazeDeviceInfo(
@@ -254,5 +276,65 @@ class BaseTrailblazeAgentTest {
 
     assertThat(result.result).isInstanceOf(TrailblazeToolResult.Success::class)
     assertThat(result.executedTools).containsExactly(t1, sub1, sub2, t2)
+  }
+
+  // ── Host-local dispatch tests ──
+
+  @Test
+  fun `HostLocalExecutableTrailblazeTool runs via execute - not executeTool`() {
+    // Agent whose executeTool fails any tool that reaches it. A HostLocal tool should
+    // short-circuit in the base class and never hit executeTool, so the run succeeds.
+    val agent = object : TestAgent() {
+      override fun executeTool(
+        tool: TrailblazeTool,
+        context: TrailblazeToolExecutionContext,
+        toolsExecuted: MutableList<TrailblazeTool>,
+      ): TrailblazeToolResult = TrailblazeToolResult.Error.ExceptionThrown(
+        errorMessage = "executeTool should not be called for host-local tools",
+        command = tool,
+        stackTrace = "",
+      )
+    }
+    val hostLocal = StubHostLocalTool()
+
+    val result = run(agent, hostLocal)
+
+    assertThat(result.result).isInstanceOf(TrailblazeToolResult.Success::class)
+    assertThat(hostLocal.executeCount).isEqualTo(1)
+    assertThat(result.executedTools).containsExactly(hostLocal)
+  }
+
+  @Test
+  fun `HostLocalExecutableTrailblazeTool error stops execution like any other failure`() {
+    val agent = TestAgent()
+    val failing = StubHostLocalTool(
+      result = TrailblazeToolResult.Error.ExceptionThrown(
+        errorMessage = "host-local boom",
+        command = StubTool(),
+        stackTrace = "",
+      ),
+    )
+    val neverRuns = StubTool()
+
+    val result = run(agent, failing, neverRuns)
+
+    assertThat(result.result).isInstanceOf(TrailblazeToolResult.Error::class)
+    assertThat(result.executedTools).containsExactly(failing)
+    assertThat(failing.executeCount).isEqualTo(1)
+  }
+
+  @Test
+  fun `HostLocal tools interleave with regular and memory tools`() {
+    val agent = TestAgent()
+    val t1 = StubTool()
+    val hostLocal = StubHostLocalTool()
+    val memTool = DumpMemoryTrailblazeTool
+    val t2 = StubTool()
+
+    val result = run(agent, t1, hostLocal, memTool, t2)
+
+    assertThat(result.result).isInstanceOf(TrailblazeToolResult.Success::class)
+    assertThat(result.executedTools).containsExactly(t1, hostLocal, memTool, t2)
+    assertThat(hostLocal.executeCount).isEqualTo(1)
   }
 }

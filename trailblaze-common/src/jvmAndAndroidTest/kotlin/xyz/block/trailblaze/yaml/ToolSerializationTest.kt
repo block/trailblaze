@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.yaml
 
 import assertk.assertThat
+import assertk.assertions.contains
 import assertk.assertions.isEqualTo
 import assertk.assertions.isInstanceOf
 import assertk.assertions.isNotNull
@@ -10,14 +11,12 @@ import xyz.block.trailblaze.api.DriverNodeMatch
 import xyz.block.trailblaze.api.TrailblazeElementSelector
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleBySelectorTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.EraseTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.HideKeyboardTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.LaunchAppTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.LaunchAppTrailblazeTool.LaunchMode
 import xyz.block.trailblaze.toolcalls.commands.LongPressElementWithAccessibilityTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.LongPressOnElementWithTextTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.PressBackTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.PressKeyTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.PressKeyTrailblazeTool.PressKeyCode
 import xyz.block.trailblaze.toolcalls.commands.SwipeTrailblazeTool
@@ -255,12 +254,12 @@ class ToolSerializationTest {
       assertThat(size).isEqualTo(1)
       with(get(0) as TrailYamlItem.ToolTrailItem) {
         assertThat(tools.size).isEqualTo(1)
-        TrailblazeToolYamlWrapper(
-          name = "inputText",
-          trailblazeTool = EraseTextTrailblazeTool(
-            charactersToErase = null,
-          ),
-        )
+        val wrapper = tools[0]
+        assertThat(wrapper.name).isEqualTo("eraseText")
+        // eraseText is now a YAML-defined (`tools:` mode) tool — decodes to
+        // YamlDefinedTrailblazeTool with an empty caller-params map.
+        assertThat(wrapper.trailblazeTool)
+          .isInstanceOf(xyz.block.trailblaze.config.YamlDefinedTrailblazeTool::class)
       }
     }
   }
@@ -278,18 +277,18 @@ class ToolSerializationTest {
       assertThat(size).isEqualTo(1)
       with(get(0) as TrailYamlItem.ToolTrailItem) {
         assertThat(tools.size).isEqualTo(1)
-        TrailblazeToolYamlWrapper(
-          name = "inputText",
-          trailblazeTool = EraseTextTrailblazeTool(
-            charactersToErase = 10,
-          ),
-        )
+        val wrapper = tools[0]
+        assertThat(wrapper.name).isEqualTo("eraseText")
+        val tool = wrapper.trailblazeTool as xyz.block.trailblaze.config.YamlDefinedTrailblazeTool
+        assertThat(tool.params.containsKey("charactersToErase")).isEqualTo(true)
       }
     }
   }
 
   @Test
   fun deserializePressBackTool() {
+    // `pressBack` is now a YAML-defined tool (see trailblaze-config/tools/pressBack.yaml).
+    // It deserializes as a YamlDefinedTrailblazeTool rather than a KClass-backed data object.
     val yaml = """
 - tools:
     - pressBack: {}
@@ -300,10 +299,9 @@ class ToolSerializationTest {
       assertThat(size).isEqualTo(1)
       with(get(0) as TrailYamlItem.ToolTrailItem) {
         assertThat(tools.size).isEqualTo(1)
-        TrailblazeToolYamlWrapper(
-          name = "inputText",
-          trailblazeTool = PressBackTrailblazeTool,
-        )
+        val wrapper = tools[0]
+        assertThat(wrapper.name).isEqualTo("pressBack")
+        assertThat(wrapper.trailblazeTool).isInstanceOf(xyz.block.trailblaze.config.YamlDefinedTrailblazeTool::class)
       }
     }
   }
@@ -866,9 +864,11 @@ class ToolSerializationTest {
         assertThat(tools[0].name).isEqualTo("maestro")
         assertThat(tools[0].trailblazeTool).isInstanceOf(MaestroTrailblazeTool::class)
         with(tools[0].trailblazeTool as MaestroTrailblazeTool) {
-          assertThat(commands.size).isEqualTo(1)
-          assertThat(commands[0]["extendedWaitUntil"].toString())
-            .isEqualTo("""{"notVisible":"Gift card added to cart","timeout":20000}""")
+          // yaml holds the Maestro commands-list YAML; substring checks keep this stable
+          // whether kaml renders flow style or block style.
+          assertThat(yaml).contains("extendedWaitUntil")
+          assertThat(yaml).contains("Gift card added to cart")
+          assertThat(yaml).contains("20000")
         }
       }
     }
@@ -892,7 +892,8 @@ class ToolSerializationTest {
       with(get(0) as TrailYamlItem.ToolTrailItem) {
         assertThat(tools.size).isEqualTo(1)
         with(tools[0].trailblazeTool as MaestroTrailblazeTool) {
-          assertThat(commands.size).isEqualTo(2)
+          assertThat(yaml).contains("assertVisible")
+          assertThat(yaml).contains("tapOn")
         }
       }
     }
@@ -919,7 +920,7 @@ class ToolSerializationTest {
         assertThat(tools.size).isEqualTo(1)
         assertThat(tools[0].name).isEqualTo("maestro")
         with(tools[0].trailblazeTool as MaestroTrailblazeTool) {
-          assertThat(commands.size).isEqualTo(1)
+          assertThat(yaml).contains("extendedWaitUntil")
         }
       }
     }
@@ -942,9 +943,8 @@ class ToolSerializationTest {
         assertThat(tools[0].name).isEqualTo("maestro")
         assertThat(tools[0].trailblazeTool).isInstanceOf(MaestroTrailblazeTool::class)
         with(tools[0].trailblazeTool as MaestroTrailblazeTool) {
-          assertThat(commands.size).isEqualTo(1)
-          assertThat(commands[0].containsKey("setOrientation")).isEqualTo(true)
-          assertThat(commands[0]["setOrientation"].toString()).isEqualTo("\"LANDSCAPE_LEFT\"")
+          assertThat(yaml).contains("setOrientation")
+          assertThat(yaml).contains("LANDSCAPE_LEFT")
         }
       }
     }
@@ -969,8 +969,7 @@ class ToolSerializationTest {
         assertThat(tools.size).isEqualTo(1)
         assertThat(tools[0].name).isEqualTo("maestro")
         with(tools[0].trailblazeTool as MaestroTrailblazeTool) {
-          assertThat(commands.size).isEqualTo(1)
-          assertThat(commands[0].containsKey("setOrientation")).isEqualTo(true)
+          assertThat(yaml).contains("setOrientation")
         }
       }
     }

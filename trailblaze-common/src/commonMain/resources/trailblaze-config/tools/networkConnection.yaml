@@ -1,0 +1,2 @@
+id: networkConnection
+class: xyz.block.trailblaze.toolcalls.commands.NetworkConnectionTrailblazeTool

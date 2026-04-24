@@ -18,7 +18,7 @@ configurations.all {
 
 android {
   namespace = "xyz.block.trailblaze.models"
-  compileSdk = 35
+  compileSdk = 36
   defaultConfig {
     minSdk = 26
   }
@@ -27,10 +27,16 @@ android {
     targetCompatibility = JavaVersion.VERSION_17
   }
   // KMP commonMain/resources/ are not automatically included as Java resources on Android.
-  // Explicitly add them so trailblaze-config/providers/*.yaml files are bundled into the AAR/APK.
+  // Explicitly add them so trailblaze-config/{providers,toolsets,targets}/*.yaml files are
+  // bundled into the AAR/APK and also exposed as Android assets. Android's classloader cannot
+  // enumerate resource directories, so the classpath fallback alone is insufficient in an
+  // on-device instrumentation-test context — AssetManagerConfigResourceSource needs the
+  // configs reachable via the app's assets.
   sourceSets.getByName("main") {
     resources.srcDirs("src/commonMain/resources")
+    assets.srcDirs("src/commonMain/resources")
   }
+
 }
 
 kotlin {
@@ -89,6 +95,11 @@ kotlin {
 
     androidMain {
       dependsOn(jvmAndAndroid)
+      dependencies {
+        // AssetManager-backed ConfigResourceSource resolves the Android Context via
+        // InstrumentationRegistry. Trailblaze only runs on Android under instrumentation.
+        api(libs.androidx.test.monitor)
+      }
     }
 
     jvmTest.dependencies {

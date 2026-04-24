@@ -23,6 +23,7 @@ import kotlinx.serialization.json.putJsonObject
 import xyz.block.trailblaze.TrailblazeVersion
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
+import xyz.block.trailblaze.mcp.newtools.DeviceManagerToolSet
 import xyz.block.trailblaze.util.Console
 import java.io.File
 import java.util.concurrent.atomic.AtomicInteger
@@ -375,12 +376,21 @@ class CliMcpClient(
           platformDevices.joinToString("\n") { "  --device ${it.spec}" }
       }
 
-      // Validate the instance ID against available devices
-      if (instanceId != null && platform != TrailblazeDevicePlatform.WEB) {
-        val knownIds = platformDevices.map { it.instanceId }
-        if (knownIds.isNotEmpty() && instanceId !in knownIds) {
-          val available = knownIds.joinToString(", ") { "${platform.name.lowercase()}/$it" }
-          return "Device '${platform.name.lowercase()}/$instanceId' not found. Available: $available"
+      // Validate the instance ID against available devices — policy is per-platform.
+      if (instanceId != null) {
+        when (platform) {
+          TrailblazeDevicePlatform.ANDROID, TrailblazeDevicePlatform.IOS -> {
+            val knownIds = platformDevices.map { it.instanceId }
+            if (knownIds.isNotEmpty() && instanceId !in knownIds) {
+              val available = knownIds.joinToString(", ") { "${platform.name.lowercase()}/$it" }
+              return "Device '${platform.name.lowercase()}/$instanceId' not found. Available: $available"
+            }
+          }
+          TrailblazeDevicePlatform.WEB -> {
+            // Playwright targets (e.g. "playwright-chromium") aren't enumerated in
+            // the device LIST the same way mobile devices are, so we skip ID
+            // validation and let the daemon accept or reject the target.
+          }
         }
       }
     }
@@ -390,9 +400,21 @@ class CliMcpClient(
       Console.info("First connection may take 10–30s while the driver is set up on the device. The driver is cached and immediately available for subsequent connections.")
     }
     val args = mutableMapOf<String, Any?>("action" to platform.name, "force" to true)
-    if (instanceId != null) args["instanceId"] = instanceId
+    if (instanceId != null) args[DeviceManagerToolSet.PARAM_DEVICE_ID] = instanceId
     val result = callTool("device", args)
     if (result.isError) return "Error connecting to device: ${result.content}"
+
+    // Per-platform post-connect setup. Each branch is the hook point for any
+    // async install/warmup a platform grows; today only Web needs one.
+    when (platform) {
+      TrailblazeDevicePlatform.WEB ->
+        PlaywrightInstallWaiter.awaitIfInstalling(result, this)?.let { return it }
+      TrailblazeDevicePlatform.ANDROID, TrailblazeDevicePlatform.IOS -> {
+        // No post-connect setup required. Add driver warmup or install-progress
+        // polling here (e.g. iOS driver prep) if it becomes necessary.
+      }
+    }
+
     // Echo the full device spec so the agent knows what was connected
     val connectedId = parseConnectedInstanceId(result) ?: instanceId
     Console.info("Connected: ${platform.name.lowercase()}/${connectedId ?: "default"}")

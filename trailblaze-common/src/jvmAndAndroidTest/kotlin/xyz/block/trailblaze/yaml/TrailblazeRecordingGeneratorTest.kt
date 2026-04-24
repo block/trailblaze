@@ -21,7 +21,7 @@ import xyz.block.trailblaze.toolcalls.commands.AssertVisibleBySelectorTrailblaze
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleWithTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.LaunchAppTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.PressBackTrailblazeTool
+import xyz.block.trailblaze.toolcalls.commands.PasteClipboardTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.SwipeTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.TapOnByElementSelector
 import xyz.block.trailblaze.toolcalls.commands.WaitForIdleSyncTrailblazeTool
@@ -162,7 +162,7 @@ class TrailblazeRecordingGeneratorTest {
       toolLog(InputTextTrailblazeTool(text = "hello"), "inputText"),
       objectiveComplete(step1),
       objectiveStart(step2),
-      toolLog(PressBackTrailblazeTool, "pressBack"),
+      toolLog(PasteClipboardTrailblazeTool, "pasteClipboard"),
       objectiveComplete(step2),
     )
 
@@ -178,7 +178,7 @@ class TrailblazeRecordingGeneratorTest {
       |  - step: Press back
       |    recording:
       |      tools:
-      |      - pressBack: {}
+      |      - pasteClipboard: {}
     """.trimMargin() + "\n"
     assertThat(yaml).isEqualTo(expected)
   }
@@ -243,7 +243,7 @@ class TrailblazeRecordingGeneratorTest {
     // ToolTrailItem (e.g., launchApp before any objectives)
     val logs = listOf(
       toolLog(InputTextTrailblazeTool(text = "hello"), "inputText"),
-      toolLog(PressBackTrailblazeTool, "pressBack"),
+      toolLog(PasteClipboardTrailblazeTool, "pasteClipboard"),
     )
 
     val yaml = logs.generateRecordedYaml(trailblazeYaml)
@@ -252,7 +252,7 @@ class TrailblazeRecordingGeneratorTest {
       |- tools:
       |  - inputText:
       |      text: hello
-      |  - pressBack: {}
+      |  - pasteClipboard: {}
     """.trimMargin() + "\n"
     assertThat(yaml).isEqualTo(expected)
   }
@@ -296,7 +296,7 @@ class TrailblazeRecordingGeneratorTest {
       toolLog(InputTextTrailblazeTool(text = "hello"), "inputText"),
       objectiveStart(step2),
       objectiveComplete(step2),
-      toolLog(PressBackTrailblazeTool, "pressBack"),
+      toolLog(PasteClipboardTrailblazeTool, "pasteClipboard"),
     )
 
     val yaml = logs.generateRecordedYaml(trailblazeYaml)
@@ -306,7 +306,7 @@ class TrailblazeRecordingGeneratorTest {
     val prompts = decoded[0] as TrailYamlItem.PromptsTrailItem
     assertThat(prompts.promptSteps.size).isEqualTo(2)
     assertThat(prompts.promptSteps[0].recording!!.tools[0].name).isEqualTo("inputText")
-    assertThat(prompts.promptSteps[1].recording!!.tools[0].name).isEqualTo("pressBack")
+    assertThat(prompts.promptSteps[1].recording!!.tools[0].name).isEqualTo("pasteClipboard")
   }
 
   @Test
@@ -366,7 +366,7 @@ class TrailblazeRecordingGeneratorTest {
       |  - step: Press back
       |    recording:
       |      tools:
-      |      - pressBack: {}
+      |      - pasteClipboard: {}
       |  - verify: Login button visible
       |    recording:
       |      tools:
@@ -532,7 +532,7 @@ class TrailblazeRecordingGeneratorTest {
       |      tools:
       |      - inputText:
       |          text: testuser
-      |      - pressBack: {}
+      |      - pasteClipboard: {}
       |      - inputText:
       |          text: password123
     """.trimMargin()
@@ -709,7 +709,7 @@ class TrailblazeRecordingGeneratorTest {
     val logs = listOf(
       toolLog(InputTextTrailblazeTool(text = "hello"), "inputText"),
       toolLog(InputTextTrailblazeTool(text = "ignored"), "takeSnapshot", isRecordable = false),
-      toolLog(PressBackTrailblazeTool, "pressBack"),
+      toolLog(PasteClipboardTrailblazeTool, "pasteClipboard"),
     )
 
     val yaml = logs.generateRecordedYaml(trailblazeYaml)
@@ -718,7 +718,7 @@ class TrailblazeRecordingGeneratorTest {
     val tools = decoded[0] as TrailYamlItem.ToolTrailItem
     assertThat(tools.tools.size).isEqualTo(2)
     assertThat(tools.tools[0].name).isEqualTo("inputText")
-    assertThat(tools.tools[1].name).isEqualTo("pressBack")
+    assertThat(tools.tools[1].name).isEqualTo("pasteClipboard")
   }
 
   @Test
@@ -844,7 +844,7 @@ class TrailblazeRecordingGeneratorTest {
       maestroCommandLog(),
       maestroCommandLog(),
       objectiveStart(step2),
-      toolLog(PressBackTrailblazeTool, "pressBack"),
+      toolLog(PasteClipboardTrailblazeTool, "pasteClipboard"),
       objectiveComplete(step2),
     )
 
@@ -954,7 +954,7 @@ class TrailblazeRecordingGeneratorTest {
     val logs = listOf(
       objectiveStart(step),
       toolLog(InputTextTrailblazeTool(text = "hello"), "inputText"),
-      toolLog(PressBackTrailblazeTool, "pressBack"),
+      toolLog(PasteClipboardTrailblazeTool, "pasteClipboard"),
       toolLog(WaitForIdleSyncTrailblazeTool(timeToWaitInSeconds = 3), "wait"),
       toolLog(
         SwipeTrailblazeTool(direction = maestro.SwipeDirection.UP),
@@ -985,7 +985,7 @@ class TrailblazeRecordingGeneratorTest {
     val tools = prompts.promptSteps[0].recording!!.tools
     assertThat(tools.size).isEqualTo(6)
     assertThat(tools.map { it.name }).isEqualTo(
-      listOf("inputText", "pressBack", "wait", "swipe", "tapOnElementBySelector", "assertVisibleBySelector"),
+      listOf("inputText", "pasteClipboard", "wait", "swipe", "tapOnElementBySelector", "assertVisibleBySelector"),
     )
 
     // Verify round-trip stability

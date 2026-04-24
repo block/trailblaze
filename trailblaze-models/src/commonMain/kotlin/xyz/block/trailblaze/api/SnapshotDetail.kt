@@ -26,4 +26,17 @@ enum class SnapshotDetail {
    * Useful for finding elements that require scrolling to reach.
    */
   OFFSCREEN,
+
+  /**
+   * Include all visible elements, bypassing the "meaningful" filter.
+   *
+   * By default, snapshots only show interactive or content-bearing elements
+   * (clickable, editable, focused, labeled, etc.). This option disables that
+   * filter so every visible node in the accessibility tree is shown, even if
+   * it has no text, no accessibility label, or isn't marked interactive.
+   *
+   * Useful for debugging missing elements — e.g., text fields that the OS
+   * accessibility framework doesn't mark as editable.
+   */
+  ALL_ELEMENTS,
 }

@@ -372,6 +372,30 @@ class ToolDiscoveryToolSetTest {
   // -- Additional edge cases --------------------------------------------------
 
   @Test
+  fun `INDEX mode includes YAML-defined pressBack under navigation`() = runTest {
+    // Regression guard: ToolDiscoveryToolSet.getToolDescriptorsForCategory must union
+    // class-backed AND YAML-defined tool names per category. Before the fix, the
+    // `navigation` category advertised only its class-backed tools and silently dropped
+    // pressBack (now a YAML-defined tool), hiding it from LLM discovery.
+    val toolSet = createToolSet()
+
+    val result = toolSet.toolbox(detail = false)
+    val obj = json.parseToJsonElement(result).jsonObject
+
+    val platformToolsets = obj["platformToolsets"]!!.jsonArray
+    val navigation =
+      platformToolsets.first {
+        it.jsonObject["name"]!!.jsonPrimitive.content == "navigation"
+      }
+    val toolNames = navigation.jsonObject["tools"]!!.jsonArray
+      .map { it.jsonPrimitive.content }
+    assertTrue(
+      "pressBack" in toolNames,
+      "navigation category should include pressBack (YAML-defined). Got: $toolNames",
+    )
+  }
+
+  @Test
   fun `INDEX mode excludes ALL and SESSION categories from platformToolsets`() = runTest {
     val toolSet = createToolSet()
 
@@ -470,6 +494,80 @@ class ToolDiscoveryToolSetTest {
     // Key assertion: no error
     assertNull(obj["error"], "Should not return error")
     assertNotNull(obj["query"], "Should return the query")
+  }
+
+  // -- SEARCH mode platform filtering ------------------------------------------
+  // Search results must respect the current driver's tool exclusions, so e.g.
+  // mobile-only tools don't surface when a Web driver is connected. Previously
+  // SEARCH iterated raw categories and ignored the target's excluded-tools list —
+  // INDEX mode always filtered but SEARCH did not.
+
+  /** Test target that excludes [OpenUrlTrailblazeTool] when connected to a Web driver. */
+  private class WebFilteringTarget : TrailblazeHostAppTarget(
+    id = "webfiltered",
+    displayName = "Web Filtered Target",
+  ) {
+    override fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): Set<String>? = null
+
+    override fun internalGetCustomToolsForDriver(
+      driverType: TrailblazeDriverType,
+    ): Set<KClass<out TrailblazeTool>> = emptySet()
+
+    override fun getExcludedToolsForDriver(
+      driverType: TrailblazeDriverType,
+    ): Set<KClass<out TrailblazeTool>> =
+      if (driverType.platform == TrailblazeDevicePlatform.WEB) {
+        setOf(xyz.block.trailblaze.toolcalls.commands.OpenUrlTrailblazeTool::class)
+      } else {
+        emptySet()
+      }
+  }
+
+  @Test
+  fun `SEARCH excludes tools filtered for the current driver`() = runTest {
+    val webTarget = WebFilteringTarget()
+    val toolSet = ToolDiscoveryToolSet(
+      sessionContext = null,
+      allTargetAppsProvider = { setOf(webTarget) },
+      currentTargetProvider = { webTarget },
+      currentDriverTypeProvider = { TrailblazeDriverType.PLAYWRIGHT_NATIVE },
+    )
+
+    val result = toolSet.toolbox(search = "openUrl")
+    val obj = json.parseToJsonElement(result).jsonObject
+
+    // openUrl is excluded for the Web driver — search must not return it.
+    val matches = obj["matches"]?.jsonArray ?: JsonArray(emptyList())
+    val toolNames =
+      matches.map { it.jsonObject["tool"]!!.jsonObject["name"]!!.jsonPrimitive.content }
+    assertTrue(
+      toolNames.none { it.equals("openUrl", ignoreCase = true) },
+      "openUrl should be filtered out for Web driver. Got: $toolNames",
+    )
+  }
+
+  @Test
+  fun `SEARCH includes tools not filtered for the current driver`() = runTest {
+    // Same target, but now connected via Android — openUrl is NOT excluded,
+    // so it should appear in search results.
+    val webTarget = WebFilteringTarget()
+    val toolSet = ToolDiscoveryToolSet(
+      sessionContext = null,
+      allTargetAppsProvider = { setOf(webTarget) },
+      currentTargetProvider = { webTarget },
+      currentDriverTypeProvider = { TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION },
+    )
+
+    val result = toolSet.toolbox(search = "openUrl")
+    val obj = json.parseToJsonElement(result).jsonObject
+
+    val matches = obj["matches"]?.jsonArray ?: JsonArray(emptyList())
+    val toolNames =
+      matches.map { it.jsonObject["tool"]!!.jsonObject["name"]!!.jsonPrimitive.content }
+    assertTrue(
+      toolNames.any { it.equals("openUrl", ignoreCase = true) },
+      "openUrl should appear for Android driver. Got: $toolNames",
+    )
   }
 
   // -- Driver type filtering tests --------------------------------------------

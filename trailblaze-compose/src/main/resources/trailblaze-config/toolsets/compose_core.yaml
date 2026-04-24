@@ -9,3 +9,4 @@ tools:
   - compose_scroll
   - compose_wait
   - compose_request_details
+  - takeSnapshot

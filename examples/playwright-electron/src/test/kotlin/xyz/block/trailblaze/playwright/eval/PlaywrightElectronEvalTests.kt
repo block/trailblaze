@@ -16,8 +16,8 @@ import xyz.block.trailblaze.yaml.ElectronAppConfig
 /**
  * Eval tests for the Playwright Electron driver.
  *
- * Each test runs a trail YAML file from `opensource/trails/playwright-electron/` against the sample
- * Electron app in `opensource/examples/playwright-electron/sample-app/` which loads the same
+ * Each test runs a trail YAML file from `trails/playwright-electron/` against the sample
+ * Electron app in `examples/playwright-electron/sample-app/` which loads the same
  * `index.html` fixture used by the playwright-native tests.
  *
  * Unlike the playwright-native trails, these trails do NOT include an initial navigate step —

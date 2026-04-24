@@ -89,9 +89,9 @@ object InstrumentationArgUtil {
     return aiEnabled
   }
 
-  fun isAiFallbackEnabled(): Boolean? {
+  fun isSelfHealEnabled(): Boolean? {
     // Returns null if not set, allowing config to be the default
-    return instrumentationArguments.getString("trailblaze.aiFallbackEnabled")?.toBoolean()
+    return instrumentationArguments.getString("trailblaze.selfHeal")?.toBoolean()
   }
 
   /**

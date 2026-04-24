@@ -27,4 +27,7 @@ object CliEndpoints {
   
   /** Show/bring window to front */
   const val SHOW_WINDOW = "/cli/show-window"
+
+  /** Execute a CLI subcommand in-process on the daemon (IPC fast path). */
+  const val EXEC = "/cli/exec"
 }

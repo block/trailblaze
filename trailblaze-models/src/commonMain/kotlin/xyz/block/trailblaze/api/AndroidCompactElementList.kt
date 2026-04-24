@@ -46,10 +46,11 @@ object AndroidCompactElementList {
     val refTracker = ElementRef.RefTracker()
     val includeBounds = SnapshotDetail.BOUNDS in details
     val includeOffscreen = SnapshotDetail.OFFSCREEN in details
+    val includeAllElements = SnapshotDetail.ALL_ELEMENTS in details
     var offscreenCount = 0
     buildRecursive(
       root, depth = 0, lines, elementNodeIds, elementBounds, refMapping, refTracker,
-      includeBounds, includeOffscreen, screenHeight,
+      includeBounds, includeOffscreen, includeAllElements, screenHeight,
     ) {
       offscreenCount++
     }
@@ -84,9 +85,12 @@ object AndroidCompactElementList {
   private class AndroidNodeProps private constructor(
     val className: String?,
     val packageName: String?,
+    val resourceId: String?,
+    val uniqueId: String?,
     val text: String?,
     val contentDescription: String?,
     val hintText: String?,
+    val labeledByText: String?,
     val stateDescription: String?,
     val paneTitle: String?,
     val error: String?,
@@ -110,9 +114,12 @@ object AndroidCompactElementList {
       fun from(d: DriverNodeDetail.AndroidAccessibility) = AndroidNodeProps(
         className = d.className,
         packageName = d.packageName,
+        resourceId = d.resourceId,
+        uniqueId = d.uniqueId,
         text = d.text,
         contentDescription = d.contentDescription,
         hintText = d.hintText,
+        labeledByText = d.labeledByText,
         stateDescription = d.stateDescription,
         paneTitle = d.paneTitle,
         error = d.error,
@@ -136,9 +143,12 @@ object AndroidCompactElementList {
       fun from(d: DriverNodeDetail.AndroidMaestro) = AndroidNodeProps(
         className = d.className,
         packageName = d.resourceId?.substringBefore(':')?.takeIf { '.' in it },
+        resourceId = d.resourceId,
+        uniqueId = null,
         text = d.text,
         contentDescription = d.accessibilityText,
         hintText = d.hintText,
+        labeledByText = null,
         stateDescription = null,
         paneTitle = null,
         error = null,
@@ -181,6 +191,7 @@ object AndroidCompactElementList {
     refTracker: ElementRef.RefTracker,
     includeBounds: Boolean = false,
     includeOffscreen: Boolean = false,
+    includeAllElements: Boolean = false,
     screenHeight: Int = 0,
     offscreenCounter: () -> Unit = {},
   ) {
@@ -207,7 +218,7 @@ object AndroidCompactElementList {
     // For clickable containers without direct text, absorb the first child's label
     val label = resolveLabel(props) ?: resolveChildLabel(node, props)
     val isContainer = isContainer(props, shortClass)
-    val isMeaningful = isMeaningful(props, label)
+    val isMeaningful = includeAllElements || isMeaningful(props, label)
     val indent = "  ".repeat(depth)
 
     if (isContainer && hasVisibleDescendants(node)) {
@@ -225,7 +236,7 @@ object AndroidCompactElementList {
       for (child in node.children) {
         buildRecursive(
           child, depth + 1, lines, elementNodeIds, elementBounds, refMapping,
-          refTracker, includeBounds, includeOffscreen, screenHeight, offscreenCounter,
+          refTracker, includeBounds, includeOffscreen, includeAllElements, screenHeight, offscreenCounter,
         )
       }
     } else if (isMeaningful) {
@@ -269,7 +280,7 @@ object AndroidCompactElementList {
           // Interactive or container child → recurse
           buildRecursive(
             child, depth + 1, lines, elementNodeIds, elementBounds, refMapping,
-            refTracker, includeBounds, includeOffscreen, screenHeight, offscreenCounter,
+            refTracker, includeBounds, includeOffscreen, includeAllElements, screenHeight, offscreenCounter,
           )
         }
       }
@@ -278,23 +289,46 @@ object AndroidCompactElementList {
       for (child in node.children) {
         buildRecursive(
           child, depth, lines, elementNodeIds, elementBounds, refMapping,
-          refTracker, includeBounds, includeOffscreen, screenHeight, offscreenCounter,
+          refTracker, includeBounds, includeOffscreen, includeAllElements, screenHeight, offscreenCounter,
         )
       }
     }
   }
 
-  /** Resolves the best display label for a node. Normalizes whitespace to single line. */
+  /**
+   * Resolves the best display label for a node.
+   *
+   * Composes **hintText + text** when both are present — an EditText with the placeholder
+   * "Email address" and current value "user@example.com" renders as
+   * `"Email address: user@example.com"` instead of either half alone, mirroring the AXe
+   * label+value fix. Same treatment for `labeledByText + text` when the field's semantic
+   * label comes from a sibling node (API 28+).
+   *
+   * Falls back through: text > hintText > contentDescription > labeledByText > stateDescription >
+   * paneTitle, with duplicates deduped.
+   *
+   * Normalizes whitespace to single line.
+   */
   private fun resolveLabel(props: AndroidNodeProps): String? {
-    val raw = props.text?.takeIf { it.isNotBlank() }
-      ?: props.contentDescription?.takeIf { it.isNotBlank() }
-      ?: props.hintText?.takeIf { it.isNotBlank() }
-      ?: props.stateDescription?.takeIf { it.isNotBlank() }
-      ?: props.paneTitle?.takeIf { it.isNotBlank() }
-      ?: return null
-    // Collapse newlines and multiple spaces into single spaces
-    return raw.replace('\n', ' ').replace(Regex("\\s+"), " ").trim()
+    val text = props.text?.takeIf { it.isNotBlank() }?.normalize()
+    val hint = props.hintText?.takeIf { it.isNotBlank() }?.normalize()
+    val labeledBy = props.labeledByText?.takeIf { it.isNotBlank() }?.normalize()
+    val cd = props.contentDescription?.takeIf { it.isNotBlank() }?.normalize()
+    val state = props.stateDescription?.takeIf { it.isNotBlank() }?.normalize()
+    val pane = props.paneTitle?.takeIf { it.isNotBlank() }?.normalize()
+
+    // Compose: an input field with both a visible label (hint or labeledBy) and a value.
+    // The *label* describes the category, the *value* is the data — LLMs need both.
+    val semanticLabel = hint ?: labeledBy
+    if (semanticLabel != null && text != null && semanticLabel != text) {
+      return "$semanticLabel: $text"
+    }
+
+    return text ?: cd ?: hint ?: labeledBy ?: state ?: pane
   }
+
+  private fun String.normalize(): String =
+    replace('\n', ' ').replace(Regex("\\s+"), " ").trim()
 
   /**
    * For clickable/actionable containers without direct text (e.g., a clickable LinearLayout),
@@ -317,12 +351,21 @@ object AndroidCompactElementList {
   /**
    * Builds state annotation string for a meaningful element.
    * Uses native Android accessibility terminology. Only non-default states are shown.
+   *
+   * Leads with `[id=…]` when a stable developer-assigned identifier is present — either
+   * `uniqueId` (API 33+, preferred) or `resourceId` (e.g. `com.example:id/btn_continue`).
+   * Exposing these in the compact text lets the LLM prefer stable selectors over brittle
+   * text matches (mirrors the AXe uniqueId treatment).
    */
   private fun buildAnnotations(
     props: AndroidNodeProps,
     label: String?,
   ): String {
     val parts = mutableListOf<String>()
+    // Stable identifier first — the LLM should prefer this as a selector.
+    val stableId = props.uniqueId?.takeIf { it.isNotBlank() }
+      ?: props.resourceId?.takeIf { it.isNotBlank() }
+    if (stableId != null) parts.add("[id=$stableId]")
     if (props.isCheckable && props.isChecked) parts.add("[checked]")
     if (props.isSelected) parts.add("[selected]")
     if (props.isFocused) parts.add("[focused]")

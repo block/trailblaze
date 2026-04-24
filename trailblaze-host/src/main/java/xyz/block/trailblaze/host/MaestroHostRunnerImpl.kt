@@ -16,6 +16,7 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.host.devices.MaestroConnectedDevice
 import xyz.block.trailblaze.host.devices.TrailblazeConnectedDevice
 import xyz.block.trailblaze.host.devices.TrailblazeDeviceService
 import xyz.block.trailblaze.host.screenstate.HostMaestroDriverScreenState
@@ -63,7 +64,8 @@ class MaestroHostRunnerImpl(
   }
 
   val loggingDriver: LoggingDriver by lazy {
-    connectedDevice.getLoggingDriver(trailblazeLogger, sessionProvider)
+    (connectedDevice as? MaestroConnectedDevice)?.getLoggingDriver(trailblazeLogger, sessionProvider)
+      ?: error("MaestroHostRunner requires a Maestro-backed device; got ${connectedDevice::class.simpleName}")
   }
 
   companion object {

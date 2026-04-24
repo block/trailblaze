@@ -1,0 +1,23 @@
+# Pinned trail — no LLM. Direct-dispatches the built-in `mobile_listInstalledApps` tool (the
+# Kotlin class-backed `@TrailblazeToolClass` added in trailblaze-common) to prove it executes
+# end-to-end in CI:
+#
+#   1. The CLI dispatches `mobile_listInstalledApps` below.
+#   2. The daemon looks up the session's TrailblazeToolRepo, finds the class-backed tool by
+#      its YAML-registered name, and calls `execute(ctx)`.
+#   3. The tool delegates to `AndroidDeviceCommandExecutor.listInstalledApps()`. The JVM
+#      actual uses adb `pm list packages`; the Android actual uses `PackageManager`. Same
+#      trail works against either surface because the tool lives in `trailblaze-common`.
+#   4. The JSON `{"appIds":[...]}` comes back as the tool result.
+#
+# The TS callback round-trip (`client.callTool("mobile_listInstalledApps", ...)`) is covered
+# separately by SampleAppMcpSdkToolsTest's `signUpNewUserSdk` generic callback test; this
+# trail isolates the Kotlin tool from any TS/bun/node setup so its green/red signal on PR
+# is unambiguous.
+- config:
+    id: sample-app/mcp-tools/mobile-list-installed-apps
+    target: xyz.block.trailblaze.examples.sampleapp
+    platform: android
+    driver: ANDROID_ONDEVICE_INSTRUMENTATION
+- tools:
+    - mobile_listInstalledApps: {}

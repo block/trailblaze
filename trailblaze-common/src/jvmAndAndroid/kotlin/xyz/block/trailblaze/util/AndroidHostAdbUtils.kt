@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.util
 
+import xyz.block.trailblaze.android.tools.shellEscape
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.model.AppVersionInfo
 import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils.runProcess
@@ -7,27 +8,40 @@ import java.io.File
 
 object AndroidHostAdbUtils {
 
+  /**
+   * Builds the argv list for `adb shell am broadcast ...`. Every user-supplied arg is
+   * wrapped in single quotes via [shellEscape] because `adb shell` joins argv with
+   * spaces and hands the result to the device's `sh`, which would otherwise split
+   * on whitespace or interpret metacharacters (`;`, `$`, backtick, etc.) inside
+   * action, component, extra keys, or extra values.
+   */
   fun intentToAdbBroadcastCommandArgs(
     action: String,
     component: String,
-    extras: Map<String, String>,
+    extras: Map<String, Any>,
   ): List<String> {
     val args = buildList<String> {
       add("am")
       add("broadcast")
       if (action.isNotEmpty()) {
         add("-a")
-        add(action)
+        add(action.shellEscape())
       }
       if (component.isNotEmpty()) {
         add("-n")
-        add(component)
+        add(component.shellEscape())
       }
       extras.forEach { (key, value) ->
-        add("--es")
-        add(key)
-        add(value)
-        // Extend this if you need more types (e.g., --ez for booleans, etc.)
+        val flag = when (value) {
+          is Boolean -> "--ez"
+          is Int -> "--ei"
+          is Long -> "--el"
+          is Float -> "--ef"
+          else -> "--es"
+        }
+        add(flag)
+        add(key.shellEscape())
+        add(value.toString().shellEscape())
       }
     }
     return args
@@ -51,7 +65,7 @@ object AndroidHostAdbUtils {
     deviceId: TrailblazeDeviceId?,
   ): ProcessBuilder {
     val args = mutableListOf<String>().apply {
-      add("adb")
+      add(AdbPathResolver.ADB_COMMAND)
       if (deviceId != null) {
         add("-s")
         add(deviceId.instanceId)
@@ -246,7 +260,7 @@ object AndroidHostAdbUtils {
    * Parses output like: `versionCode=67500009 minSdk=28 targetSdk=34`
    *
    * @param deviceId The device to query
-   * @param packageName The package name of the app (e.g., "com.squareup.development")
+   * @param packageName The package name of the app (e.g., "com.example.app")
    * @return AppVersionInfo with version details, or null if the app is not installed or parsing fails
    */
   fun getAppVersionInfo(deviceId: TrailblazeDeviceId, packageName: String): AppVersionInfo? = try {
@@ -255,22 +269,23 @@ object AndroidHostAdbUtils {
       args = listOf("dumpsys", "package", packageName),
     )
 
-    // Find the versionCode line that appears after codePath=/data/app (to get the installed version)
-    // The output contains multiple versionCode entries, we want the one for the installed app
+    // Find the versionCode line that appears after a codePath (to get the installed version).
+    // The output contains multiple versionCode entries; we want the one for the installed app.
+    // Match both user-installed apps (/data/app) and system apps (/system/, /product/).
     val lines = output.lines()
-    var foundDataApp = false
+    var foundCodePath = false
     var versionCode: String? = null
     var minSdk: Int? = null
     var versionName: String? = null
 
     for (line in lines) {
-      // Look for codePath that indicates installed app location
-      if (line.contains("codePath=/data/app")) {
-        foundDataApp = true
+      // Look for codePath that indicates the app location
+      if (line.trimStart().startsWith("codePath=")) {
+        foundCodePath = true
       }
 
       // After finding the app path, look for version info
-      if (foundDataApp && line.contains("versionCode=")) {
+      if (foundCodePath && line.contains("versionCode=")) {
         // Parse: versionCode=67500009 minSdk=28 targetSdk=34
         val versionCodeMatch = Regex("versionCode=(\\d+)").find(line)
         val minSdkMatch = Regex("minSdk=(\\d+)").find(line)
@@ -281,7 +296,7 @@ object AndroidHostAdbUtils {
       }
 
       // Also look for versionName (comes after versionCode in the output)
-      if (foundDataApp && line.trim().startsWith("versionName=")) {
+      if (foundCodePath && line.trim().startsWith("versionName=")) {
         versionName = line.trim().substringAfter("versionName=")
         // Now we have all the info we need
         if (versionCode != null) break

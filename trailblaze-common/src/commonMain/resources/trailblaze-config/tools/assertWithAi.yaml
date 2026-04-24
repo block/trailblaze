@@ -1,0 +1,2 @@
+id: assertWithAi
+class: xyz.block.trailblaze.toolcalls.commands.memory.AssertWithAiTrailblazeTool

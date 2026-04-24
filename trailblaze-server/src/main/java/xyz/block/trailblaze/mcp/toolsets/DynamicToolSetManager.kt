@@ -3,11 +3,11 @@ package xyz.block.trailblaze.mcp.toolsets
 import io.modelcontextprotocol.kotlin.sdk.server.Server
 import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
 import xyz.block.trailblaze.mcp.models.McpSessionId
-import xyz.block.trailblaze.toolcalls.TrailblazeTool
+import xyz.block.trailblaze.toolcalls.KoogToolExt
+import xyz.block.trailblaze.toolcalls.ResolvedToolSet
 import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
 import xyz.block.trailblaze.toolcalls.toKoogToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeToolDescriptor
-import kotlin.reflect.KClass
 
 /**
  * Manages dynamic tool registration for MCP sessions.
@@ -39,7 +39,13 @@ class DynamicToolSetManager(
   private val mcpServer: Server,
   private val sessionContext: TrailblazeMcpSessionContext,
   private val mcpSessionId: McpSessionId,
-  private val onToolsChanged: (Set<KClass<out TrailblazeTool>>) -> Unit,
+  /**
+   * Invoked (outside the synchronization lock) each time the registered tool set changes.
+   * Carries both class-backed and YAML-defined tool names so the downstream MCP registrar
+   * can advertise both halves — the regression guarded by this contract is "class-only
+   * consumers silently drop YAML-defined tools like pressBack."
+   */
+  private val onToolsChanged: (ResolvedToolSet) -> Unit,
 ) {
   /**
    * Currently enabled categories for this session.
@@ -69,9 +75,12 @@ class DynamicToolSetManager(
     }
 
   /**
-   * Currently registered tool classes.
+   * Currently registered tool surface (class-backed + YAML-defined).
    */
-  private var registeredToolClasses: Set<KClass<out TrailblazeTool>> = emptySet()
+  private var registeredTools: ResolvedToolSet = ResolvedToolSet(
+    toolClasses = emptySet(),
+    yamlToolNames = emptySet(),
+  )
 
   /**
    * Gets the currently enabled categories.
@@ -85,10 +94,12 @@ class DynamicToolSetManager(
    * to the LLM in a type-safe manner.
    */
   fun getCurrentToolDescriptors(): List<TrailblazeToolDescriptor> = synchronized(lock) {
-    registeredToolClasses.mapNotNull { toolClass ->
-      // Convert KClass -> ToolDescriptor -> TrailblazeToolDescriptor
+    val classDescriptors = registeredTools.toolClasses.mapNotNull { toolClass ->
       toolClass.toKoogToolDescriptor()?.toTrailblazeToolDescriptor()
     }
+    val yamlDescriptors = KoogToolExt.buildDescriptorsForYamlDefined(registeredTools.yamlToolNames)
+      .map { it.toTrailblazeToolDescriptor() }
+    classDescriptors + yamlDescriptors
   }
 
   /**
@@ -101,7 +112,7 @@ class DynamicToolSetManager(
         appendLine("- ${category.displayName}: ${category.description.take(80)}...")
       }
       appendLine()
-      appendLine("Total tools available: ${registeredToolClasses.size}")
+      appendLine("Total tools available: ${registeredTools.toolClasses.size + registeredTools.yamlToolNames.size}")
     }
   }
 
@@ -116,7 +127,7 @@ class DynamicToolSetManager(
    * @return Description of what changed
    */
   fun setCategories(categories: Set<ToolSetCategory>): String {
-    val changedTools: Set<KClass<out TrailblazeTool>>?
+    val changedTools: ResolvedToolSet?
     val result = synchronized(lock) {
       // Warn if trying to enable primitive tools when includePrimitiveTools is false
       val primitiveWarning = if (!sessionContext.includePrimitiveTools && categories.isNotEmpty()) {
@@ -154,7 +165,7 @@ class DynamicToolSetManager(
           appendLine("Removed categories: ${removed.joinToString { it.displayName }}")
         }
         appendLine("Active categories: ${enabledCategories.joinToString { it.displayName }.ifEmpty { "(none)" }}")
-        appendLine("Tools available: ${registeredToolClasses.size}")
+        appendLine("Tools available: ${registeredTools.toolClasses.size + registeredTools.yamlToolNames.size}")
         appendLine("Mode: ${sessionContext.mode.name}")
         appendLine("Include primitive tools: ${sessionContext.includePrimitiveTools}")
       }
@@ -171,7 +182,7 @@ class DynamicToolSetManager(
    * @return Description of what changed
    */
   fun addCategory(category: ToolSetCategory): String {
-    val changedTools: Set<KClass<out TrailblazeTool>>?
+    val changedTools: ResolvedToolSet?
     val result = synchronized(lock) {
       if (category in enabledCategories) {
         return "Category '${category.displayName}' is already enabled."
@@ -193,7 +204,7 @@ class DynamicToolSetManager(
    * @return Description of what changed
    */
   fun removeCategory(category: ToolSetCategory): String {
-    val changedTools: Set<KClass<out TrailblazeTool>>?
+    val changedTools: ResolvedToolSet?
     val result = synchronized(lock) {
       if (category !in enabledCategories) {
         return "Category '${category.displayName}' is not currently enabled."
@@ -246,7 +257,7 @@ class DynamicToolSetManager(
    * Respects the includePrimitiveTools setting.
    */
   fun onModeChanged() {
-    val changedTools: Set<KClass<out TrailblazeTool>>?
+    val changedTools: ResolvedToolSet?
     synchronized(lock) {
       enabledCategories = if (sessionContext.includePrimitiveTools) {
         ToolSetCategory.getDefaultCategoriesForMode(
@@ -266,7 +277,7 @@ class DynamicToolSetManager(
    * Enables or disables primitive tool categories accordingly.
    */
   fun onIncludePrimitiveToolsChanged() {
-    val changedTools: Set<KClass<out TrailblazeTool>>?
+    val changedTools: ResolvedToolSet?
     synchronized(lock) {
       if (sessionContext.includePrimitiveTools) {
         // Enable default categories for the current mode and strategy
@@ -293,18 +304,18 @@ class DynamicToolSetManager(
    * Refreshes the registered tools based on current categories.
    * Called internally when categories change (always within synchronized(lock)).
    *
-   * Updates [registeredToolClasses] inside the lock but defers the [onToolsChanged]
+   * Updates [registeredTools] inside the lock but defers the [onToolsChanged]
    * callback to after the lock is released, preventing potential deadlock if the
    * callback reads back into this manager.
    *
-   * @return The new tool classes if they changed, or null if no change.
+   * @return The new resolved tool set if it changed, or null if no change.
    */
-  private fun computeToolRefresh(): Set<KClass<out TrailblazeTool>>? {
-    val newToolClasses = ToolSetCategoryMapping.getToolClasses(enabledCategories)
+  private fun computeToolRefresh(): ResolvedToolSet? {
+    val newTools = ToolSetCategoryMapping.resolve(enabledCategories)
 
-    return if (newToolClasses != registeredToolClasses) {
-      registeredToolClasses = newToolClasses
-      newToolClasses
+    return if (newTools != registeredTools) {
+      registeredTools = newTools
+      newTools
     } else {
       null
     }
@@ -315,7 +326,7 @@ class DynamicToolSetManager(
    * Call this after creating the manager to register initial tools.
    */
   fun initialize() {
-    val changedTools: Set<KClass<out TrailblazeTool>>?
+    val changedTools: ResolvedToolSet?
     synchronized(lock) {
       changedTools = computeToolRefresh()
     }

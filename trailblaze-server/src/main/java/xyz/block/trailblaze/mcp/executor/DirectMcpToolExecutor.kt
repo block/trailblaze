@@ -7,6 +7,8 @@ import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
 import xyz.block.trailblaze.mcp.toolsets.ToolSetCategory
 import xyz.block.trailblaze.mcp.toolsets.ToolSetCategoryMapping
 import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
+import xyz.block.trailblaze.toolcalls.KoogToolExt
+import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeToolDescriptor
@@ -32,31 +34,49 @@ class DirectMcpToolExecutor(
     ),
 ) : McpToolExecutor {
 
-  /** Tool classes available based on configured categories */
-  private val availableToolClasses: Set<KClass<out TrailblazeTool>> by lazy {
-    ToolSetCategoryMapping.getToolClasses(categories)
-  }
+  /**
+   * Combined class-backed + YAML-defined tool surface for the configured categories. Routed
+   * through [ToolSetCategoryMapping.resolve] so we can't accidentally advertise only one
+   * half — catalog entries like `navigation` include YAML-only tools (e.g. `pressBack`)
+   * that MCP must handle alongside class-backed tools.
+   */
+  private val availableTools by lazy { ToolSetCategoryMapping.resolve(categories) }
+  private val availableToolClasses: Set<KClass<out TrailblazeTool>> get() = availableTools.toolClasses
+  private val availableYamlToolNames: Set<ToolName> get() = availableTools.yamlToolNames
 
   /** Map of tool name -> tool class for lookup */
   private val toolClassByName: Map<String, KClass<out TrailblazeTool>> by lazy {
     availableToolClasses.associateBy { it.toolName().toolName }
   }
 
-  /** Cached tool descriptors */
+  /** Cached tool descriptors (class-backed + YAML-defined). */
   private val toolDescriptors: List<TrailblazeToolDescriptor> by lazy {
-    availableToolClasses.mapNotNull { toolClass ->
+    val classDescriptors = availableToolClasses.mapNotNull { toolClass ->
       toolClass.toKoogToolDescriptor()?.toTrailblazeToolDescriptor()
     }
+    val yamlDescriptors = KoogToolExt.buildDescriptorsForYamlDefined(availableYamlToolNames)
+      .map { it.toTrailblazeToolDescriptor() }
+    classDescriptors + yamlDescriptors
+  }
+
+  /**
+   * All tool names the executor will accept. Derived from [toolDescriptors] so the
+   * advertised surface and the acceptance gate are guaranteed to match — if
+   * [KoogToolExt.buildDescriptorsForYamlDefined] skips a malformed YAML config (it logs a
+   * warning and returns null), that name will also not pass the `ToolNotFound` check.
+   */
+  private val knownToolNames: Set<String> by lazy {
+    toolDescriptors.map { it.name }.toSet()
   }
 
   override suspend fun executeToolByName(
     toolName: String,
     args: JsonObject,
   ): ToolExecutionResult {
-    if (toolName !in toolClassByName) {
+    if (toolName !in knownToolNames) {
       return ToolExecutionResult.ToolNotFound(
         requestedTool = toolName,
-        availableTools = toolClassByName.keys.toList(),
+        availableTools = knownToolNames.toList(),
       )
     }
 
@@ -79,7 +99,11 @@ class DirectMcpToolExecutor(
 
   /**
    * Deserializes a tool from name and args.
-   * Uses the same pattern as SubagentOrchestrator.
+   *
+   * Routes through [TrailblazeJsonInstance]'s polymorphic tool serializer by stamping `toolName`
+   * into the payload. The serializer dispatches on that name to either a class-backed serializer
+   * or a pre-bound [xyz.block.trailblaze.config.YamlDefinedToolSerializer], so both tool flavors
+   * land here without the executor needing a separate code path per flavor.
    */
   private fun deserializeTool(toolName: String, args: JsonObject): TrailblazeTool {
     // OtherTrailblazeToolSerializer looks for "toolName" to match tool classes by their ToolName

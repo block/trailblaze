@@ -1,0 +1,2 @@
+id: dumpMemory
+class: xyz.block.trailblaze.toolcalls.commands.memory.DumpMemoryTrailblazeTool

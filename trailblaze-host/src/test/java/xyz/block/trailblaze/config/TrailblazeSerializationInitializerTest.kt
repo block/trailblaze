@@ -4,17 +4,15 @@ import assertk.assertThat
 import assertk.assertions.contains
 import assertk.assertions.hasSize
 import assertk.assertions.isNotEmpty
-import assertk.assertions.isSameInstanceAs
 import assertk.assertions.isTrue
 import org.junit.Test
-import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
-import xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.yaml.TrailblazeYaml
 
 /**
- * Tests for [TrailblazeSerializationInitializer] — the central entry point that discovers tool
- * classes from YAML and configures [TrailblazeJsonInstance] and [TrailblazeYaml.Default].
+ * Tests that the lazy-initialized [TrailblazeYaml.Default] (and the underlying
+ * [xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer]) correctly
+ * discovers every classpath-registered tool.
  *
  * These tests run in the `trailblaze-host` module which depends on all driver modules
  * (Playwright, Compose, Revyl), so all opensource YAML-registered tools are on the classpath.
@@ -22,31 +20,17 @@ import xyz.block.trailblaze.yaml.TrailblazeYaml
 class TrailblazeSerializationInitializerTest {
 
   @Test
-  fun `initialize discovers YAML tools and configures serialization`() {
-    TrailblazeSerializationInitializer.initialize()
-
-    // web_snapshot is only registered via YAML (not built-in), so if this
-    // decodes without error the YAML discovery pipeline is working end-to-end.
+  fun `TrailblazeYaml Default auto-initializes on first access and decodes YAML tools`() {
+    // `web_snapshot` is only registered via YAML (not a Kotlin built-in set). If this
+    // decodes without error, lazy YAML discovery → serializer registration → polymorphic
+    // decode end-to-end is working.
     val items = TrailblazeYaml.Default.decodeTools(
       """
       - web_snapshot:
           screenName: test
-      """.trimIndent()
+      """.trimIndent(),
     )
     assertThat(items).hasSize(1)
-  }
-
-  @Test
-  fun `initialize is idempotent — second call with same tools is a no-op`() {
-    TrailblazeSerializationInitializer.initialize()
-    val firstJson = TrailblazeJsonInstance
-    val firstYaml = TrailblazeYaml.Default
-
-    TrailblazeSerializationInitializer.initialize()
-
-    // Same tool set → early return → instances unchanged
-    assertThat(TrailblazeJsonInstance).isSameInstanceAs(firstJson)
-    assertThat(TrailblazeYaml.Default).isSameInstanceAs(firstYaml)
   }
 
   @Test
@@ -54,7 +38,7 @@ class TrailblazeSerializationInitializerTest {
     val discoveredTools = ToolYamlLoader.discoverAndLoadAll()
     assertThat(discoveredTools.entries).isNotEmpty()
 
-    for ((toolName, kClass) in discoveredTools) {
+    for ((_, kClass) in discoveredTools) {
       assertThat(TrailblazeTool::class.java.isAssignableFrom(kClass.java)).isTrue()
     }
   }
@@ -87,8 +71,7 @@ class TrailblazeSerializationInitializerTest {
   }
 
   @Test
-  fun `initialized TrailblazeYaml can decode tools from every driver`() {
-    TrailblazeSerializationInitializer.initialize()
+  fun `TrailblazeYaml Default can decode tools from every driver`() {
     val yaml = TrailblazeYaml.Default
 
     // Playwright

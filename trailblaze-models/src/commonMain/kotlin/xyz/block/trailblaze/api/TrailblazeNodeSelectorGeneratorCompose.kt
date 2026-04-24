@@ -90,34 +90,11 @@ internal fun composeStrategies(
 
   // === Hierarchy strategies ===
 
-  // Strategy 8: childOf unique parent
-  "Child of parent" to {
-    findUniqueParentSelector(root, target, parentMap)?.let { parentSelector ->
-      val targetMatch = buildTargetMatch(detail)
-      TrailblazeNodeSelector.withMatch(targetMatch, childOf = parentSelector)
-    }
-  },
-  // Strategy 9: containsChild (unique child content)
-  "Contains child" to {
-    findUniqueChildSelector(root, target)?.let { childSelector ->
-      val targetMatch = buildTargetMatch(detail)
-      TrailblazeNodeSelector.withMatch(targetMatch, containsChild = childSelector)
-    }
-  },
-
-  // === Spatial strategies ===
-
-  // Strategy 10: spatial relationship to a uniquely identifiable sibling
-  "Spatial relationship" to {
-    findSpatialSelector(root, target, parentMap)
-  },
-
-  // === Index fallback ===
-
-  // Strategy 11: index as last resort
-  "Index fallback" to {
-    computeIndexSelectorForMatch(root, target, buildTargetMatch(detail))
-  },
+  // Strategies 8-11: hierarchy, spatial, and index — shared across all generators.
+  childOfUniqueParentStrategy(root, target, detail, parentMap),
+  containsUniqueChildStrategy(root, target, detail),
+  spatialStrategy(root, target, parentMap),
+  indexFallbackStrategy(root, target, detail),
 )
 
 // ---------------------------------------------------------------------------
@@ -140,31 +117,11 @@ internal fun namedStructuralComposeStrategies(
       selectorWith(DriverNodeMatch.Compose(role = role))
     }
   },
-  "Structural: child of parent" to {
-    findUniqueStructuralParentSelector(root, target, parentMap)?.let { parentSelector ->
-      val match = buildStructuralMatch(detail)
-      TrailblazeNodeSelector.withMatch(match, childOf = parentSelector)
-    }
-  },
-  "Structural: child of labeled parent" to {
-    findContentParentSelectorForStructural(root, target, parentMap)?.let { parentSelector ->
-      val match = buildStructuralMatch(detail)
-      TrailblazeNodeSelector.withMatch(match, childOf = parentSelector)
-    }
-  },
-  "Structural: contains child" to {
-    findStructuralContainsChildSelector(root, target)
-  },
-  "Structural: spatial" to {
-    findStructuralSpatialSelector(root, target, parentMap)
-  },
-  "Structural: spatial (labeled anchor)" to {
-    findContentAnchoredSpatialSelector(root, target, parentMap)
-  },
-  "Structural: scoped index in parent" to {
-    computeScopedIndexSelector(root, target, parentMap, buildStructuralMatch(detail))
-  },
-  "Structural: role + index" to {
-    computeIndexSelectorForMatch(root, target, buildStructuralMatch(detail))
-  },
+  structuralChildOfParentStrategy(root, target, detail, parentMap),
+  structuralChildOfLabeledParentStrategy(root, target, detail, parentMap),
+  structuralContainsChildStrategy(root, target),
+  structuralSpatialStrategy(root, target, parentMap),
+  structuralContentAnchoredSpatialStrategy(root, target, parentMap),
+  structuralScopedIndexStrategy(root, target, detail, parentMap),
+  structuralIndexFallbackStrategy(root, target, detail, name = "Structural: role + index"),
 )

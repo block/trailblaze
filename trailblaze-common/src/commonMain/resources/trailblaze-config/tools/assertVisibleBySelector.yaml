@@ -1,0 +1,2 @@
+id: assertVisibleBySelector
+class: xyz.block.trailblaze.toolcalls.commands.AssertVisibleBySelectorTrailblazeTool

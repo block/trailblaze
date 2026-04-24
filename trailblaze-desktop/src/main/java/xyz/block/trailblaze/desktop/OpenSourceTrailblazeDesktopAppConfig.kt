@@ -40,6 +40,7 @@ class OpenSourceTrailblazeDesktopAppConfig : TrailblazeDesktopAppConfig(
     TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
     TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
     TrailblazeDriverType.IOS_HOST,
+    TrailblazeDriverType.IOS_AXE,
     TrailblazeDriverType.PLAYWRIGHT_NATIVE,
     TrailblazeDriverType.PLAYWRIGHT_ELECTRON,
     TrailblazeDriverType.REVYL_ANDROID,
@@ -48,14 +49,12 @@ class OpenSourceTrailblazeDesktopAppConfig : TrailblazeDesktopAppConfig(
 
   // Start with no platforms enabled by default - user must explicitly enable them
   private val initialDriverTypesMap: Map<TrailblazeDevicePlatform, TrailblazeDriverType> = mapOf(
-    TrailblazeDevicePlatform.ANDROID to TrailblazeDriverType.DEFAULT_ANDROID_ON_DEVICE,
+    TrailblazeDevicePlatform.ANDROID to TrailblazeDriverType.DEFAULT_ANDROID,
     TrailblazeDevicePlatform.IOS to TrailblazeDriverType.IOS_HOST,
   )
 
   override val defaultAppDataDir: File = TrailblazeDesktopUtil.getDefaultAppDataDirectory().apply { mkdirs() }
 
-  override val availableAppTargets: Set<TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget> =
-    setOf(TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget)
   override val defaultAppTarget: TrailblazeHostAppTarget = TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget
   override val trailblazeSettingsRepo = TrailblazeSettingsRepo(
     settingsFile = File(defaultAppDataDir, TrailblazeDesktopUtil.SETTINGS_FILENAME),
@@ -64,6 +63,18 @@ class OpenSourceTrailblazeDesktopAppConfig : TrailblazeDesktopAppConfig(
     defaultHostAppTarget = defaultAppTarget,
     allTargetApps = { availableAppTargets }
   )
+
+  // Lazy so the settings repo is fully constructed before discovery touches it; the
+  // configDirProvider reads from the repo so env var / saved setting / trails-sibling
+  // fallback all flow through one place. Discovery runs on first access and caches.
+  // See `AppTargetDiscovery` — same helper `BlockAppTargets` uses, just with opensource
+  // defaults (no companions, DefaultTrailblazeHostAppTarget fallback).
+  override val availableAppTargets: Set<TrailblazeHostAppTarget> by lazy {
+    xyz.block.trailblaze.host.AppTargetDiscovery.discover(
+      trailblazeConfigDirProvider = { trailblazeSettingsRepo.getCurrentTrailblazeConfigDir() },
+      logPrefix = "[OpenSourceAppTargets]",
+    )
+  }
   val logsDir = File(
     TrailblazeDesktopUtil.getEffectiveLogsDirectory(
       trailblazeSettingsRepo.serverStateFlow.value.appConfig,

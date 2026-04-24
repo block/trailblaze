@@ -14,8 +14,8 @@ import xyz.block.trailblaze.util.TrailYamlTemplateResolver
 /**
  * Eval tests for the Playwright Native driver.
  *
- * Each test runs a trail YAML file from `opensource/trails/playwright-native/` against the sample
- * web app in `opensource/examples/playwright-native/sample-app/` using the Playwright Native driver
+ * Each test runs a trail YAML file from `trails/playwright-native/` against the sample
+ * web app in `examples/playwright-native/sample-app/` using the Playwright Native driver
  * (no Maestro).
  *
  * Trail files use `{{PROJECT_ROOT}}` template variables for file:// URLs so they work on any

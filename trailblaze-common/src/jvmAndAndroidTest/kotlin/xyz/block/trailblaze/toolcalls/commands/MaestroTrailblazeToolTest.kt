@@ -2,13 +2,16 @@ package xyz.block.trailblaze.toolcalls.commands
 
 import assertk.assertThat
 import assertk.assertions.contains
+import assertk.assertions.hasSize
+import assertk.assertions.isEqualTo
 import assertk.assertions.isInstanceOf
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonObject
+import maestro.orchestra.BackPressCommand
 import maestro.orchestra.Command
 import maestro.orchestra.ElementSelector
+import maestro.orchestra.EraseTextCommand
+import maestro.orchestra.InputTextCommand
 import maestro.orchestra.TapOnElementCommand
 import org.junit.Test
 import xyz.block.trailblaze.MaestroTrailblazeAgent
@@ -21,13 +24,16 @@ import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TraceId
+import xyz.block.trailblaze.maestro.MaestroYamlParser
+import xyz.block.trailblaze.maestro.MaestroYamlSerializer
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
-import xyz.block.trailblaze.utils.Ext.asJsonObjects
 
 /**
  * Tests for [MaestroTrailblazeTool] focusing on:
  * - Detecting and reporting command deserialization failures instead of silently dropping them
+ * - Accepting the canonical Maestro YAML syntax documented at
+ *   https://docs.maestro.dev/reference/commands-available
  */
 class MaestroTrailblazeToolTest {
 
@@ -74,12 +80,12 @@ class MaestroTrailblazeToolTest {
   }
 
   @Test
-  fun `valid command round-trips through serialization and executes successfully`() {
+  fun `valid command round-trips through MaestroYamlSerializer and executes successfully`() {
     runBlocking {
-      // Create a command via the real Maestro API, serialize to JSON, and verify round-trip
       val command = TapOnElementCommand(selector = ElementSelector(textRegex = "OK"))
-      val jsonObjects = listOf(command).asJsonObjects()
-      val tool = MaestroTrailblazeTool(commands = jsonObjects)
+      val tool = MaestroTrailblazeTool(
+        yaml = MaestroYamlSerializer.toYaml(listOf(command), includeConfiguration = false),
+      )
 
       val result = tool.execute(createContext())
 
@@ -88,21 +94,17 @@ class MaestroTrailblazeToolTest {
   }
 
   @Test
-  fun `invalid command returns error instead of being silently dropped`() {
+  fun `invalid YAML surfaces an error instead of silently dropping commands`() {
     runBlocking {
-      // This JSON doesn't match any known Maestro command structure
-      val invalidCommand = buildJsonObject {
-        put(
-          "totallyFakeCommand",
-          buildJsonObject { put("bogus", JsonPrimitive("value")) },
-        )
-      }
-      val tool = MaestroTrailblazeTool(commands = listOf(invalidCommand))
+      val tool = MaestroTrailblazeTool(
+        yaml = """
+        - totallyFakeCommand:
+            bogus: value
+        """.trimIndent(),
+      )
 
       val result = tool.execute(createContext())
 
-      // Before the fix, this would return Success with 0 commands executed.
-      // After the fix, it should return an error because the command failed to deserialize.
       assertThat(result).isInstanceOf(TrailblazeToolResult.Error::class)
       val errorMessage = (result as TrailblazeToolResult.Error).errorMessage
       assertThat(errorMessage).contains("failed to deserialize")
@@ -110,34 +112,42 @@ class MaestroTrailblazeToolTest {
   }
 
   @Test
-  fun `mix of valid and invalid commands returns error`() {
-    runBlocking {
-      // Create a valid command via Maestro API, and an invalid one as raw JSON
-      val validJsonObjects = listOf(
-        TapOnElementCommand(selector = ElementSelector(textRegex = "OK")),
-      ).asJsonObjects()
-      val invalidCommand = buildJsonObject {
-        put(
-          "notARealCommand",
-          buildJsonObject { put("x", JsonPrimitive(42)) },
-        )
-      }
-      val tool =
-        MaestroTrailblazeTool(commands = validJsonObjects + listOf(invalidCommand))
-
-      val result = tool.execute(createContext())
-
-      // Should detect that 1 of 2 commands failed to deserialize
-      assertThat(result).isInstanceOf(TrailblazeToolResult.Error::class)
-      val errorMessage = (result as TrailblazeToolResult.Error).errorMessage
-      assertThat(errorMessage).contains("1 of 2")
-    }
+  fun `maestro YAML short names from docs-maestro-dev decode to commands`() {
+    // https://docs.maestro.dev/reference/commands-available is the canonical spec. The
+    // `maestro:` tool block in a trail feeds its YAML straight to MaestroYamlParser, so
+    // the accepted surface is whatever Maestro's YAML reference accepts.
+    val commands = MaestroYamlParser.parseYaml(
+      """
+      - eraseText:
+          charactersToErase: 5
+      - back
+      - inputText: hello
+      """.trimIndent(),
+    )
+    assertThat(commands).hasSize(3)
+    assertThat((commands[0] as EraseTextCommand).charactersToErase).isEqualTo(5)
+    assertThat(commands[1] is BackPressCommand).isEqualTo(true)
+    assertThat((commands[2] as InputTextCommand).text).isEqualTo("hello")
   }
 
   @Test
-  fun `empty commands list returns success`() {
+  fun `JSON-flavoured YAML (our internal serializer form) also decodes`() {
+    // The serializer renders each authored YAML command back to JSON flow style before
+    // feeding Maestro's parser, so prove that flow style roundtrips too.
+    val commands = MaestroYamlParser.parseYaml(
+      """
+      - {"eraseText":{"charactersToErase":3}}
+      - {"back":{}}
+      """.trimIndent(),
+    )
+    assertThat((commands[0] as EraseTextCommand).charactersToErase).isEqualTo(3)
+    assertThat(commands[1] is BackPressCommand).isEqualTo(true)
+  }
+
+  @Test
+  fun `empty yaml returns success`() {
     runBlocking {
-      val tool = MaestroTrailblazeTool(commands = emptyList())
+      val tool = MaestroTrailblazeTool(yaml = "")
 
       val result = tool.execute(createContext())
 

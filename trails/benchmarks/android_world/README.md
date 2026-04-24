@@ -6,13 +6,13 @@ Trailblaze test definitions adapted from [Google Research Android World](https:/
 
 ```bash
 # Run a single benchmark
-./trailblaze trail opensource/trails/benchmarks/android_world/clock/timer_entry/android.trail.yaml
+./trailblaze trail trails/benchmarks/android_world/clock/timer_entry/android.trail.yaml
 
 # Run all benchmarks
-bash opensource/trails/benchmarks/android_world/benchmark.sh
+bash trails/benchmarks/android_world/benchmark.sh
 
 # Run a subset
-bash opensource/trails/benchmarks/android_world/benchmark.sh --filter clock
+bash trails/benchmarks/android_world/benchmark.sh --filter clock
 ```
 
 ## Overview

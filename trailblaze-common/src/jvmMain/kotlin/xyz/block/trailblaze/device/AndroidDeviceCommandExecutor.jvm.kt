@@ -22,12 +22,17 @@ actual class AndroidDeviceCommandExecutor actual constructor(
   }
 
   actual fun sendBroadcast(intent: BroadcastIntent) {
-    val component = "${intent.componentPackage}/${intent.componentClass}"
-    val extras = intent.extras.mapValues { it.value.toString() }
+    // Only emit -n when both pieces are present so action-only broadcasts work
+    // and we don't ship an invalid "/" component. Matches the androidMain path.
+    val component = if (intent.componentPackage.isNotEmpty() && intent.componentClass.isNotEmpty()) {
+      "${intent.componentPackage}/${intent.componentClass}"
+    } else {
+      ""
+    }
     val args = AndroidHostAdbUtils.intentToAdbBroadcastCommandArgs(
       action = intent.action,
       component = component,
-      extras = extras,
+      extras = intent.extras,
     )
     AndroidHostAdbUtils.execAdbShellCommand(
       deviceId = deviceId,

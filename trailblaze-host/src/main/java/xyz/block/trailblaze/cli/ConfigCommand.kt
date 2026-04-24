@@ -6,7 +6,10 @@ import picocli.CommandLine.Option
 import picocli.CommandLine.Parameters
 import xyz.block.trailblaze.desktop.LlmTokenStatus
 import xyz.block.trailblaze.desktop.TrailblazeDesktopAppConfig
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.llm.LlmProviderEnvVarUtil
+import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.util.Console
 import java.util.concurrent.Callable
 import kotlin.system.exitProcess
@@ -141,18 +144,61 @@ class ConfigCommand : Callable<Int> {
       }
     }
 
+    // Drivers section: show per-platform driver selection. `(default)` marks each platform's
+    // built-in default regardless of what's currently selected; `*` marks the active driver.
     Console.info("")
-    Console.info("  trailblaze config llm <provider/model>  Set LLM")
-    Console.info("  trailblaze config llm none              Disable LLM")
-    Console.info("  trailblaze config target <name>         Set target app")
-    Console.info("  trailblaze config models                List available models")
-    Console.info("  trailblaze config reset                 Reset all settings to defaults")
+    Console.info("Drivers:")
+    listOf(
+      "Android:" to TrailblazeDevicePlatform.ANDROID,
+      "iOS:" to TrailblazeDevicePlatform.IOS,
+    ).forEach { (label, platform) ->
+      printDriverRow(
+        label = label,
+        current = currentConfig.selectedTrailblazeDriverTypes[platform],
+        default = TrailblazeDriverType.defaultForPlatform(platform),
+        options = TrailblazeDriverType.selectableForPlatform(platform),
+      )
+    }
+
+    Console.info("")
+    Console.info("  trailblaze config llm <provider/model>   Set LLM")
+    Console.info("  trailblaze config llm none               Disable LLM")
+    Console.info("  trailblaze config target <name>          Set target app")
+    Console.info("  trailblaze config android-driver <type>  Set Android driver (instrumentation|accessibility)")
+    Console.info("  trailblaze config ios-driver <type>      Set iOS driver (host|axe)")
+    Console.info("  trailblaze config models                 List available models")
+    Console.info("  trailblaze config reset                  Reset all settings to defaults")
     Console.info("")
     Console.info("For advanced settings, use the Trailblaze desktop app.")
     Console.info("")
 
     // Force exit to terminate background services started by configProvider
     exitProcess(CommandLine.ExitCode.OK)
+  }
+
+  /**
+   * Prints a single per-platform driver row. The active row (user selection, falling back to
+   * [default] when unset) is marked `* [x]`; every other row is `  [ ]`. Each driver that is
+   * the platform's built-in [default] gets a trailing ` (default)` label regardless of the
+   * current selection, so readers can see both what's selected and what the platform defaults
+   * to without having to guess.
+   */
+  private fun printDriverRow(
+    label: String,
+    current: TrailblazeDriverType?,
+    default: TrailblazeDriverType?,
+    options: List<TrailblazeDriverType>,
+  ) {
+    val effective = current ?: default
+    Console.info("  $label")
+    for (driverType in options) {
+      val selected = driverType == effective
+      val isDefault = driverType == default
+      val prefix = if (selected) "*" else " "
+      val check = if (selected) "x" else " "
+      val defaultTag = if (isDefault) " (default)" else ""
+      Console.info("    $prefix [$check] ${driverType.cliShortName}$defaultTag")
+    }
   }
 
   private fun showLlmConfig(): Int {
@@ -275,9 +321,9 @@ class ConfigTargetCommand : Callable<Int> {
   private fun applyTarget(): Int {
     var currentConfig = CliConfigHelper.getOrCreateConfig()
     val normalizedTarget = targetId!!.lowercase()
-    if (!normalizedTarget.matches(Regex("^[a-z0-9]+$"))) {
+    if (!TrailblazeHostAppTarget.isValidId(normalizedTarget)) {
       Console.error(
-        "Error: target must be lowercase alphanumeric (got '$targetId').\n" +
+        "Error: target must be lowercase alphanumeric, hyphens, or underscores only (got '$targetId').\n" +
           "Run 'trailblaze config target' to see available targets."
       )
       return CommandLine.ExitCode.USAGE

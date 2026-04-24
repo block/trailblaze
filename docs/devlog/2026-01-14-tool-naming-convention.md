@@ -22,7 +22,7 @@ Tool names must be **globally unique** because our serialization system uses the
 | Platform primitive | `{platform}_{verbNoun}` | `ios_clearKeychain`, `android_pressSystemBack` |
 | Org-wide | `org_{verbNoun}` | `org_mockServer`, `org_resetTestEnvironment` |
 | Org-wide + platform | `org_{platform}_{verbNoun}` | `org_ios_configureTestUser` |
-| App-specific | `{app}_{verbNoun}` | `myapp_launchAppSignedIn`, `payments_addFunds` |
+| App-specific | `{app}_{verbNoun}` | `myapp_launchAppSignedIn`, `checkout_applyCoupon` |
 | App + platform | `{app}_{platform}_{verbNoun}` | `myapp_ios_scroll` |
 
 **Key rules:**

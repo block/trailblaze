@@ -178,6 +178,8 @@ object TrailblazeNodeSelectorResolver {
       detail is DriverNodeDetail.Compose && matchesCompose(detail, match)
     is DriverNodeMatch.IosMaestro ->
       detail is DriverNodeDetail.IosMaestro && matchesIosMaestro(detail, match)
+    is DriverNodeMatch.IosAxe ->
+      detail is DriverNodeDetail.IosAxe && matchesIosAxe(detail, match)
   }
 
   private fun matchesAndroidAccessibility(
@@ -274,6 +276,24 @@ object TrailblazeNodeSelectorResolver {
     if (!requirePattern(match.hintTextRegex, detail.hintText)) return false
     if (!requireEqual(match.focused, detail.focused)) return false
     if (!requireEqual(match.selected, detail.selected)) return false
+    return true
+  }
+
+  private fun matchesIosAxe(
+    detail: DriverNodeDetail.IosAxe,
+    match: DriverNodeMatch.IosAxe,
+  ): Boolean {
+    if (!requirePattern(match.roleRegex, detail.role)) return false
+    if (!requirePattern(match.subroleRegex, detail.subrole)) return false
+    if (!requirePattern(match.labelRegex, detail.label)) return false
+    if (!requirePattern(match.valueRegex, detail.value)) return false
+    if (!requireEqual(match.uniqueId, detail.uniqueId)) return false
+    if (!requirePattern(match.typeRegex, detail.type)) return false
+    if (!requirePattern(match.titleRegex, detail.title)) return false
+    match.customAction?.let { needed ->
+      if (needed !in detail.customActions) return false
+    }
+    if (!requireEqual(match.enabled, detail.enabled)) return false
     return true
   }
 

@@ -15,30 +15,6 @@ import xyz.block.trailblaze.util.Console
 internal const val DAEMON_NOT_RUNNING_ERROR =
   "Error: Trailblaze daemon is not running. Start it with: trailblaze app"
 
-// ---------------------------------------------------------------------------
-// Setup checks (moved from TrailblazeCli.kt)
-// ---------------------------------------------------------------------------
-
-/**
- * Checks that initial setup is complete.
- * Config auto-creates with defaults — no mandatory setup step needed.
- * Target is optional (sticky), mode is per-session (--solo flag).
- */
-fun checkSetupComplete(): String? {
-  val config = CliConfigHelper.getOrCreateConfig()
-  if (config.selectedTargetAppId == null) {
-    val targets = discoverTargetSummaries()
-    val targetList = if (targets.isNotEmpty()) {
-      "\n\nAvailable targets:\n" +
-        targets.joinToString("\n") { (id, name) -> "  [$id] $name" }
-    } else {
-      ""
-    }
-    return "No target configured. Set one with:\n" +
-      "  trailblaze config target <name>" + targetList
-  }
-  return null
-}
 
 /**
  * Lightweight classpath scan for target IDs and display names — no full app init needed.
@@ -62,23 +38,17 @@ fun cliWithDevice(
   device: String?,
   action: suspend (CliMcpClient) -> Int,
 ): Int {
-  val setupError = checkSetupComplete()
-  if (setupError != null) {
-    Console.error(setupError)
-    return CommandLine.ExitCode.SOFTWARE
-  }
-
   if (!verbose) Console.enableQuietMode()
-  val config = CliConfigHelper.readConfig()
+  val config = CliConfigHelper.getOrCreateConfig()
   val port = CliConfigHelper.resolveEffectiveHttpPort()
-  val targetAppId = config?.selectedTargetAppId
+  val targetAppId = config.selectedTargetAppId
 
   return runBlocking {
     val mcpClient = connectOrStartDaemon(port, targetAppId = targetAppId)
       ?: return@runBlocking CommandLine.ExitCode.SOFTWARE
 
     mcpClient.use { client ->
-      val effectiveDevice = device ?: config?.cliDevicePlatform
+      val effectiveDevice = device ?: config.cliDevicePlatform
       val deviceError = client.ensureDevice(effectiveDevice)
       if (deviceError != null) {
         Console.error(deviceError)
@@ -103,15 +73,9 @@ fun cliWithDaemon(
   verbose: Boolean,
   action: suspend (CliMcpClient) -> Int,
 ): Int {
-  val setupError = checkSetupComplete()
-  if (setupError != null) {
-    Console.error(setupError)
-    return CommandLine.ExitCode.SOFTWARE
-  }
-
   if (!verbose) Console.enableQuietMode()
   val port = CliConfigHelper.resolveEffectiveHttpPort()
-  val targetAppId = CliConfigHelper.readConfig()?.selectedTargetAppId
+  val targetAppId = CliConfigHelper.getOrCreateConfig().selectedTargetAppId
 
   return runBlocking {
     val mcpClient = connectOrStartDaemon(port, targetAppId = targetAppId)

@@ -1,0 +1,2 @@
+id: rememberNumber
+class: xyz.block.trailblaze.toolcalls.commands.memory.RememberNumberTrailblazeTool

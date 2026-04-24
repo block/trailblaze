@@ -86,11 +86,13 @@ class TargetToolBaselineGenerator(
 
     val toolEntries = mutableMapOf<String, ToolEntry>()
 
-    // From toolsets
+    // From toolsets — both class-backed and YAML-defined tools are addressed by bare name.
     for ((tsId, scopedDrivers) in toolSetDriverScope) {
       val toolSet = allToolSets[tsId] ?: continue
-      for (toolClass in toolSet.resolvedToolClasses) {
-        val toolName = toolClass.toolName().toolName
+      val namesFromToolSet =
+        toolSet.resolvedToolClasses.map { it.toolName().toolName } +
+          toolSet.resolvedYamlToolNames.map { it.toolName }
+      for (toolName in namesFromToolSet) {
         val entry = toolEntries.getOrPut(toolName) { ToolEntry() }
         entry.toolSets.add(tsId)
         for (dt in scopedDrivers) {

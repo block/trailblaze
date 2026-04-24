@@ -8,7 +8,7 @@ plugins {
 
 android {
   namespace = "xyz.block.trailblaze.android.mcp.ondevice"
-  compileSdk = 35
+  compileSdk = 36
   defaultConfig {
     minSdk = 26
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -60,6 +60,10 @@ dependencies {
   implementation(libs.androidx.test.monitor)
 
   androidTestImplementation(libs.androidx.test.runner)
+
+  testImplementation(libs.kotlin.test)
+  testImplementation(libs.junit5.jupiter.engine)
+  testImplementation(libs.kotlinx.coroutines.test)
 }
 
 dependencyGuard {

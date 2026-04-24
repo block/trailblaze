@@ -47,6 +47,27 @@ sealed interface DriverNodeDetail {
    */
   val hasIdentifiableProperties: Boolean
 
+  /**
+   * Returns true if this node represents an interactive element — one the user can
+   * tap, type into, scroll, or otherwise act on.
+   *
+   * Current consumers:
+   * - `InspectTrailblazeNodeComposable` — fills interactive nodes on the inspector overlay.
+   * - `BridgeUiActionExecutor` — filter for which nodes are candidates for MCP UI actions.
+   *
+   * Note: this property is NOT consumed by `TrailblazeNode.hitTest` or
+   * `TrailblazeNodeSelectorGenerator.resolveFromTap`. Those use [hasIdentifiableProperties]
+   * for their ranking — "can we generate a stable selector for this node?" — which is a
+   * separate concern from "is the user likely to tap it?". Don't conflate the two: a node
+   * can be `hasIdentifiableProperties=true, isInteractive=false` (a labeled heading) or
+   * `hasIdentifiableProperties=false, isInteractive=true` (an anonymous clickable row).
+   *
+   * Per-variant definitions reflect each driver's native actionability signals (e.g.
+   * `isClickable` on Android, `hasClickAction` on Compose, custom actions + AX role
+   * whitelist on iOS AXe).
+   */
+  val isInteractive: Boolean
+
   // ---------------------------------------------------------------------------
   // Android via AccessibilityNodeInfo (Maestro-free path)
   // ---------------------------------------------------------------------------
@@ -332,6 +353,9 @@ sealed interface DriverNodeDetail {
           !hintText.isNullOrBlank() ||
           !className.isNullOrBlank()
 
+    override val isInteractive: Boolean
+      get() = isClickable || isEditable || isCheckable || isFocusable || isScrollable
+
     /** Resolves text priority: text > hintText > contentDescription (same as Maestro). */
     fun resolveText(): String? = text ?: hintText ?: contentDescription
 
@@ -429,6 +453,9 @@ sealed interface DriverNodeDetail {
           !accessibilityText.isNullOrBlank() ||
           !hintText.isNullOrBlank()
 
+    override val isInteractive: Boolean
+      get() = clickable || focusable || scrollable
+
     /** Resolves text priority: text > hintText > accessibilityText (Maestro convention). */
     fun resolveText(): String? = text ?: hintText ?: accessibilityText
 
@@ -475,7 +502,7 @@ sealed interface DriverNodeDetail {
      */
     val nthIndex: Int = 0,
     /** **Display-only.** Whether this element is interactive (button, link, input, etc.). */
-    val isInteractive: Boolean = false,
+    override val isInteractive: Boolean = false,
     /** **Display-only.** Whether this element is a landmark section (nav, main, etc.). */
     val isLandmark: Boolean = false,
   ) : DriverNodeDetail {
@@ -507,9 +534,9 @@ sealed interface DriverNodeDetail {
    * iOS view properties as captured by Maestro's TreeNode on iOS.
    *
    * Same shape as [AndroidMaestro] plus iOS-specific properties ([visible],
-   * [ignoreBoundsFiltering]). Used for all iOS paths: both the Square custom
-   * hierarchy (which produces the same fidelity as Maestro's TreeNode) and
-   * the Maestro accessibility fallback.
+   * [ignoreBoundsFiltering]). Used for all iOS paths: both downstream
+   * app-specific custom hierarchies (which produce the same fidelity as
+   * Maestro's TreeNode) and the Maestro accessibility fallback.
    */
   @Serializable
   @SerialName("iosMaestro")
@@ -556,6 +583,9 @@ sealed interface DriverNodeDetail {
           !accessibilityText.isNullOrBlank() ||
           !hintText.isNullOrBlank()
 
+    override val isInteractive: Boolean
+      get() = clickable || focusable || scrollable
+
     /** Resolves text priority: text > hintText > accessibilityText (Maestro convention). */
     fun resolveText(): String? = text ?: hintText ?: accessibilityText
 
@@ -565,6 +595,109 @@ sealed interface DriverNodeDetail {
       val MATCHABLE_PROPERTIES: Set<String> = setOf(
         "text", "resourceId", "accessibilityText", "className", "hintText",
         "focused", "selected",
+      )
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // iOS via AXe CLI (Apple Accessibility APIs, Simulator only)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * iOS Simulator view properties as captured directly from Apple's Accessibility
+   * APIs via the [AXe CLI](https://github.com/cameroncooke/AXe).
+   *
+   * Unlike [IosMaestro], these fields mirror Apple's native AX vocabulary with no
+   * cross-platform smoothing: [role] is a raw AX role (`AXButton`), [subrole] and
+   * [customActions] have no Maestro equivalent, and enabled/value come straight from
+   * `AXUIElement` rather than being inferred from traits.
+   */
+  @Serializable
+  @SerialName("iosAxe")
+  data class IosAxe(
+    /** **Matchable.** Apple AX role (e.g. "AXButton", "AXStaticText", "AXApplication"). */
+    val role: String? = null,
+    /** **Matchable.** Apple AX subrole (e.g. "AXSecureTextField"). Often null. */
+    val subrole: String? = null,
+    /** **Display-only.** Human-readable role description ("button", "application"). */
+    val roleDescription: String? = null,
+    /** **Matchable.** AXLabel — accessibility label. */
+    val label: String? = null,
+    /** **Matchable.** AXValue — current value or state string. */
+    val value: String? = null,
+    /** **Matchable.** accessibilityIdentifier set by the app. Often null in system UI. */
+    val uniqueId: String? = null,
+    /** **Matchable.** Short element type string ("Button", "Application"). */
+    val type: String? = null,
+    /** **Matchable.** AXTitle — window/section title. Rarely set on individual elements. */
+    val title: String? = null,
+    /** **Display-only.** AXHelp — tooltip/help text. */
+    val help: String? = null,
+    /** **Matchable.** Apple's custom accessibility gesture actions (e.g. ["Edit mode", "Today"]). */
+    val customActions: List<String> = emptyList(),
+    /** **Matchable.** Whether the element is enabled for interaction. */
+    val enabled: Boolean = true,
+    /** **Display-only.** AX `content_required` flag — rarely useful. */
+    val contentRequired: Boolean = false,
+    /** **Display-only.** Owning process id. Useful for distinguishing app vs system UI. */
+    val pid: Int? = null,
+  ) : DriverNodeDetail {
+
+    override val matchablePropertyNames: Set<String>
+      get() = MATCHABLE_PROPERTIES
+
+    override val hasIdentifiableProperties: Boolean
+      get() =
+        !label.isNullOrBlank() ||
+          !value.isNullOrBlank() ||
+          !uniqueId.isNullOrBlank() ||
+          !title.isNullOrBlank()
+
+    /**
+     * AXe reports `enabled = true` for nearly every node (including static text), so we
+     * can't use that as the interactive signal. A node is interactive if it has custom
+     * accessibility actions, or its AX role is in [INTERACTIVE_ROLES] (the native Apple
+     * vocabulary for controls).
+     */
+    override val isInteractive: Boolean
+      get() = customActions.isNotEmpty() || (role != null && role in INTERACTIVE_ROLES)
+
+    /** Resolves text priority: label > value > title. */
+    fun resolveText(): String? =
+      label?.takeIf { it.isNotBlank() }
+        ?: value?.takeIf { it.isNotBlank() }
+        ?: title?.takeIf { it.isNotBlank() }
+
+    companion object {
+      val MATCHABLE_PROPERTIES: Set<String> = setOf(
+        "role", "subrole", "label", "value", "uniqueId", "type", "title",
+        "customActions", "enabled",
+      )
+
+      /**
+       * AX roles that represent interactive controls. Anything outside this list is
+       * treated as static content (text, containers, decorations).
+       */
+      val INTERACTIVE_ROLES: Set<String> = setOf(
+        "AXButton",
+        "AXLink",
+        "AXTextField",
+        "AXSecureTextField",
+        "AXSearchField",
+        "AXSwitch",
+        "AXSlider",
+        "AXCheckBox",
+        "AXMenuItem",
+        "AXPopUpButton",
+        "AXRadioButton",
+        "AXSegmentedControl",
+        "AXStepper",
+        "AXComboBox",
+        "AXToolbarButton",
+        "AXBackButton",
+        "AXPickerWheel",
+        "AXTab",
+        "AXCell",
       )
     }
   }
@@ -619,6 +752,9 @@ sealed interface DriverNodeDetail {
           !text.isNullOrBlank() ||
           !editableText.isNullOrBlank() ||
           !contentDescription.isNullOrBlank()
+
+    override val isInteractive: Boolean
+      get() = hasClickAction || hasScrollAction
 
     /** Resolves text priority: editableText > text > contentDescription. */
     fun resolveText(): String? = editableText ?: text ?: contentDescription

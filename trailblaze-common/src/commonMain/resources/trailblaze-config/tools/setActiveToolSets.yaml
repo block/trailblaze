@@ -1,0 +1,2 @@
+id: setActiveToolSets
+class: xyz.block.trailblaze.toolcalls.commands.SetActiveToolSetsTrailblazeTool

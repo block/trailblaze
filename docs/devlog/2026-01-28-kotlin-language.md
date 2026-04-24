@@ -17,7 +17,7 @@ Trailblaze is an AI-powered UI testing agent that needs to run in multiple envir
 
 We needed a language that could satisfy these runtime requirements while also integrating well with the existing mobile testing ecosystem.
 
-A key requirement was leveraging Block's existing Android device farm infrastructure, which enables massive parallelization for test execution. Running the agent on-device (rather than from a host) allows us to use this infrastructure without building custom connectivity solutions.
+A key requirement was integrating with existing Android device farm infrastructure that enables massive parallelization for test execution. Running the agent on-device (rather than from a host) allows us to use such infrastructure without building custom connectivity solutions.
 
 ## What we decided
 
@@ -68,7 +68,7 @@ Kotlin's type system catches errors at compile time, which is valuable for an ag
 **Positive:**
 
 - Single codebase runs on Android devices (via instrumentation) and host machines
-- Enables execution on Block's device farm infrastructure without custom solutions
+- Enables execution on existing Android device farm infrastructure without custom solutions
 - Seamless integration with Maestro and Android ecosystem
 - Shared models and UI components between agent and web-based reports via Compose Web
 - Strong typing reduces runtime errors in tool definitions and LLM parsing

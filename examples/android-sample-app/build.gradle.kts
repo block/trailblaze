@@ -6,7 +6,7 @@ plugins {
 
 android {
   namespace = "xyz.block.trailblaze.examples.sampleapp"
-  compileSdk = 35
+  compileSdk = 36
   defaultConfig {
     applicationId = "xyz.block.trailblaze.examples.sampleapp"
     minSdk = 28

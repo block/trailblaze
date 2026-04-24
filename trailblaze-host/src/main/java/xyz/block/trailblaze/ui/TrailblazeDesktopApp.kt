@@ -1,9 +1,12 @@
 package xyz.block.trailblaze.ui
 
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import xyz.block.trailblaze.cli.CliReportGenerator
 import xyz.block.trailblaze.cli.DaemonClient
+import xyz.block.trailblaze.cli.TrailblazeCli
 import xyz.block.trailblaze.desktop.TrailblazeDesktopAppConfig
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
@@ -66,6 +69,9 @@ abstract class TrailblazeDesktopApp(
     portManager.setRuntimeOverrides(httpPort, httpsPort)
     // Update the global server URL used by NetworkImageLoader for screenshot loading
     NetworkImageLoader.currentServerBaseUrl = portManager.serverUrl
+    // And the callback-endpoint URL subprocess MCP tools hit. Must mirror port-override changes
+    // or subprocesses spawned after an override would see the pre-override URL.
+    xyz.block.trailblaze.scripting.callback.JsScriptingCallbackBaseUrl.set(portManager.serverUrl)
   }
 
   /**
@@ -95,6 +101,10 @@ abstract class TrailblazeDesktopApp(
         wait = false,
       )
     }
+    // Advertise the live daemon URL to subprocess MCP plumbing so session spawns can
+    // populate `_meta.trailblaze.baseUrl`. Set AFTER the server binds so the URL is
+    // actually reachable when a consumer reads the holder.
+    xyz.block.trailblaze.scripting.callback.JsScriptingCallbackBaseUrl.set(portManager.serverUrl)
 
     // Wait for server to be ready
     var attempts = 0
@@ -120,6 +130,14 @@ abstract class TrailblazeDesktopApp(
    */
   fun installRunHandler() {
     trailblazeMcpServer.onRunRequest = { request, onProgress -> handleCliRunRequest(request, onProgress) }
+    // CLI-via-daemon IPC fast path. Runs whitelisted subcommands
+    // in-process on the daemon thread, eliminating the CLI's JVM cold start.
+    // Offloaded to Dispatchers.IO because `executeForDaemon` runs picocli which
+    // blocks on `runBlocking` inside `cliWithDevice` — we must not park a Ktor
+    // HTTP server thread on that.
+    trailblazeMcpServer.onCliExecRequest = { request ->
+      withContext(Dispatchers.IO) { TrailblazeCli.executeForDaemon(request) }
+    }
   }
 
   /**

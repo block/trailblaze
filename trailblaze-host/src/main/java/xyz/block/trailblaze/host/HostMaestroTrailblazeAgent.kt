@@ -13,6 +13,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.model.NodeSelectorMode
+import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.viewmatcher.matching.toTrailblazeNodeIosMaestro
 
@@ -26,11 +27,13 @@ class HostMaestroTrailblazeAgent(
   trailblazeDeviceInfoProvider: () -> TrailblazeDeviceInfo,
   sessionProvider: TrailblazeSessionProvider,
   nodeSelectorMode: NodeSelectorMode = NodeSelectorMode.DEFAULT,
+  trailblazeToolRepo: TrailblazeToolRepo? = null,
 ) : MaestroTrailblazeAgent(
   trailblazeLogger = trailblazeLogger,
   trailblazeDeviceInfoProvider = trailblazeDeviceInfoProvider,
   sessionProvider = sessionProvider,
   nodeSelectorMode = nodeSelectorMode,
+  trailblazeToolRepo = trailblazeToolRepo,
 ) {
 
   val connectedDevice: TrailblazeConnectedDevice by lazy {

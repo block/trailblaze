@@ -23,7 +23,7 @@ import java.util.concurrent.Callable
  *   trailblaze toolbox                           - Show tool index
  *   trailblaze toolbox --detail                  - Show full parameter descriptions
  *   trailblaze toolbox --name tapOnElement        - Show single tool details
- *   trailblaze toolbox --target square           - Show tools for a target app
+ *   trailblaze toolbox --target sampleapp        - Show tools for a target app
  */
 @Command(
   name = "toolbox",
@@ -91,7 +91,7 @@ class ToolboxCommand : Callable<Int> {
 
       Console.error("")
       Console.error("Example:")
-      Console.error("  trailblaze toolbox --device android --target square")
+      Console.error("  trailblaze toolbox --device android --target sampleapp")
       Console.error("")
       Console.error("Use --name <tool> to look up a specific tool without --device/--target.")
       return CommandLine.ExitCode.USAGE

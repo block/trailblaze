@@ -2,7 +2,6 @@ package xyz.block.trailblaze.mcp.newtools
 
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
-import org.junit.Before
 import xyz.block.trailblaze.agent.Confidence
 import org.junit.Test
 import xyz.block.trailblaze.agent.ExecutionResult
@@ -24,7 +23,6 @@ import xyz.block.trailblaze.mcp.models.McpSessionId
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
 import xyz.block.trailblaze.toolcalls.commands.TapOnPointTrailblazeTool
-import xyz.block.trailblaze.yaml.initTrailblazeYamlDefault
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -84,13 +82,6 @@ class StepToolSetDirectToolsTest {
       mode = TrailblazeMcpMode.MCP_CLIENT_AS_AGENT,
     )
 
-  @Before
-  fun setUp() {
-    // Initialize TrailblazeYaml.Default with all built-in tool serializers
-    // so that YAML parsing works in tests.
-    initTrailblazeYamlDefault()
-  }
-
   // -- 1. Happy path: parse and execute YAML tools ----------------------------
 
   @Scenario(
@@ -110,7 +101,7 @@ class StepToolSetDirectToolsTest {
       StepToolSet(
         screenAnalyzer = throwingScreenAnalyzer,
         executor = throwingExecutor,
-        screenStateProvider = { _ -> dummyScreenState },
+        screenStateProvider = { _, _, _ -> dummyScreenState },
         rawToolExecutor = { tool ->
           executedTools.add(tool)
           "OK"
@@ -155,7 +146,7 @@ class StepToolSetDirectToolsTest {
       StepToolSet(
         screenAnalyzer = throwingScreenAnalyzer,
         executor = throwingExecutor,
-        screenStateProvider = { _ -> dummyScreenState },
+        screenStateProvider = { _, _, _ -> dummyScreenState },
         rawToolExecutor = { tool ->
           executedTools.add(tool)
           "OK"
@@ -182,7 +173,7 @@ class StepToolSetDirectToolsTest {
       StepToolSet(
         screenAnalyzer = throwingScreenAnalyzer,
         executor = throwingExecutor,
-        screenStateProvider = { _ -> dummyScreenState },
+        screenStateProvider = { _, _, _ -> dummyScreenState },
         rawToolExecutor = { tool ->
           executedTools.add(tool)
           "OK"
@@ -218,7 +209,7 @@ class StepToolSetDirectToolsTest {
       StepToolSet(
         screenAnalyzer = throwingScreenAnalyzer,
         executor = throwingExecutor,
-        screenStateProvider = { _ -> dummyScreenState },
+        screenStateProvider = { _, _, _ -> dummyScreenState },
         rawToolExecutor = { _ ->
           executorCalled = true
           "OK"
@@ -245,7 +236,7 @@ class StepToolSetDirectToolsTest {
       StepToolSet(
         screenAnalyzer = throwingScreenAnalyzer,
         executor = throwingExecutor,
-        screenStateProvider = { _ -> dummyScreenState },
+        screenStateProvider = { _, _, _ -> dummyScreenState },
         rawToolExecutor = { _ ->
           executorCalled = true
           "OK"
@@ -276,7 +267,7 @@ class StepToolSetDirectToolsTest {
       StepToolSet(
         screenAnalyzer = throwingScreenAnalyzer,
         executor = throwingExecutor,
-        screenStateProvider = { _ -> dummyScreenState },
+        screenStateProvider = { _, _, _ -> dummyScreenState },
         rawToolExecutor = { _ ->
           executorCalled = true
           "OK"
@@ -306,7 +297,7 @@ class StepToolSetDirectToolsTest {
       StepToolSet(
         screenAnalyzer = throwingScreenAnalyzer,
         executor = throwingExecutor,
-        screenStateProvider = { _ -> dummyScreenState },
+        screenStateProvider = { _, _, _ -> dummyScreenState },
         sessionContext = sessionContext,
         rawToolExecutor = { tool ->
           val tap = tool as TapOnPointTrailblazeTool
@@ -361,7 +352,7 @@ class StepToolSetDirectToolsTest {
       StepToolSet(
         screenAnalyzer = throwingScreenAnalyzer,
         executor = throwingExecutor,
-        screenStateProvider = { _ -> dummyScreenState },
+        screenStateProvider = { _, _, _ -> dummyScreenState },
         // rawToolExecutor not provided (defaults to null)
       )
 
@@ -400,7 +391,7 @@ class StepToolSetDirectToolsTest {
         StepToolSet(
           screenAnalyzer = throwingScreenAnalyzer,
           executor = throwingExecutor,
-          screenStateProvider = { _ -> dummyScreenState },
+          screenStateProvider = { _, _, _ -> dummyScreenState },
           sessionContext = sessionContext,
           rawToolExecutor = { _ -> "tap executed" },
         )
@@ -439,7 +430,7 @@ class StepToolSetDirectToolsTest {
       StepToolSet(
         screenAnalyzer = throwingScreenAnalyzer,
         executor = throwingExecutor,
-        screenStateProvider = { _ -> null }, // No device
+        screenStateProvider = { _, _, _ -> null }, // No device
         rawToolExecutor = { _ ->
           executorCalled = true
           "OK"
@@ -471,7 +462,7 @@ class StepToolSetDirectToolsTest {
       StepToolSet(
         screenAnalyzer = throwingScreenAnalyzer,
         executor = throwingExecutor,
-        screenStateProvider = { _ -> null },
+        screenStateProvider = { _, _, _ -> null },
         driverStatusProvider = { "Connecting to emulator-5554..." },
         rawToolExecutor = { _ -> "OK" },
       )
@@ -501,7 +492,7 @@ class StepToolSetDirectToolsTest {
       StepToolSet(
         screenAnalyzer = throwingScreenAnalyzer,
         executor = throwingExecutor,
-        screenStateProvider = { _ -> dummyScreenState },
+        screenStateProvider = { _, _, _ -> dummyScreenState },
         sessionContext = null, // No session context
         rawToolExecutor = { tool ->
           executedTools.add(tool)
@@ -549,7 +540,7 @@ class StepToolSetDirectToolsTest {
       StepToolSet(
         screenAnalyzer = screenAnalyzer,
         executor = throwingExecutor,
-        screenStateProvider = { _ -> dummyScreenState },
+        screenStateProvider = { _, _, _ -> dummyScreenState },
         rawToolExecutor = { _ -> "OK" },
       )
 
@@ -568,7 +559,7 @@ class StepToolSetDirectToolsTest {
       StepToolSet(
         screenAnalyzer = null, // No LLM configured
         executor = throwingExecutor,
-        screenStateProvider = { _ -> dummyScreenState },
+        screenStateProvider = { _, _, _ -> dummyScreenState },
         rawToolExecutor = { _ -> "OK" },
       )
 
@@ -587,7 +578,7 @@ class StepToolSetDirectToolsTest {
       StepToolSet(
         screenAnalyzer = null, // No LLM configured
         executor = throwingExecutor,
-        screenStateProvider = { _ -> dummyScreenState },
+        screenStateProvider = { _, _, _ -> dummyScreenState },
         rawToolExecutor = { tool ->
           executedTools.add(tool)
           "OK"
@@ -612,7 +603,7 @@ class StepToolSetDirectToolsTest {
       StepToolSet(
         screenAnalyzer = null, // No LLM configured
         executor = throwingExecutor,
-        screenStateProvider = { _ -> dummyScreenState },
+        screenStateProvider = { _, _, _ -> dummyScreenState },
         screenSummaryProvider = { "Login screen | [button] Sign in | [input] Email" },
       )
 
@@ -630,7 +621,7 @@ class StepToolSetDirectToolsTest {
       StepToolSet(
         screenAnalyzer = null,
         executor = throwingExecutor,
-        screenStateProvider = { _ -> null },
+        screenStateProvider = { _, _, _ -> null },
       )
 
     val result = toolSet.ask(question = "What is on the screen?")
@@ -646,7 +637,7 @@ class StepToolSetDirectToolsTest {
       StepToolSet(
         screenAnalyzer = null,
         executor = throwingExecutor,
-        screenStateProvider = { _ -> dummyScreenState },
+        screenStateProvider = { _, _, _ -> dummyScreenState },
         screenSummaryProvider = { "Login screen" },
         screenshotSaver = { _ -> "/tmp/screenshots/screen_001.png" },
       )
@@ -664,7 +655,7 @@ class StepToolSetDirectToolsTest {
       StepToolSet(
         screenAnalyzer = null,
         executor = throwingExecutor,
-        screenStateProvider = { _ -> dummyScreenState },
+        screenStateProvider = { _, _, _ -> dummyScreenState },
         screenSummaryProvider = { "Login screen" },
         screenshotSaver = { _ ->
           saverCalled = true
@@ -686,7 +677,7 @@ class StepToolSetDirectToolsTest {
       StepToolSet(
         screenAnalyzer = null,
         executor = throwingExecutor,
-        screenStateProvider = { _ -> dummyScreenState },
+        screenStateProvider = { _, _, _ -> dummyScreenState },
         screenSummaryProvider = { "Login screen" },
       )
 
@@ -726,7 +717,7 @@ class StepToolSetDirectToolsTest {
       StepToolSet(
         screenAnalyzer = screenAnalyzer,
         executor = throwingExecutor,
-        screenStateProvider = { _ -> dummyScreenState },
+        screenStateProvider = { _, _, _ -> dummyScreenState },
         screenshotSaver = { _ -> "/tmp/screenshots/screen_002.png" },
       )
 
@@ -746,7 +737,7 @@ class StepToolSetDirectToolsTest {
       StepToolSet(
         screenAnalyzer = throwingScreenAnalyzer,
         executor = throwingExecutor,
-        screenStateProvider = { _ ->
+        screenStateProvider = { _, _, _ ->
           callCount++
           if (callCount <= 2) null else dummyScreenState // Succeeds on 3rd call
         },
@@ -782,7 +773,7 @@ class StepToolSetDirectToolsTest {
       StepToolSet(
         screenAnalyzer = throwingScreenAnalyzer,
         executor = throwingExecutor,
-        screenStateProvider = { _ -> dummyScreenState },
+        screenStateProvider = { _, _, _ -> dummyScreenState },
         rawToolExecutor = { _ -> "OK" },
         screenSummaryProvider = { "Login screen | [button] Sign in | [input] Email" },
       )
@@ -806,7 +797,7 @@ class StepToolSetDirectToolsTest {
       StepToolSet(
         screenAnalyzer = throwingScreenAnalyzer,
         executor = throwingExecutor,
-        screenStateProvider = { _ -> dummyScreenState },
+        screenStateProvider = { _, _, _ -> dummyScreenState },
         rawToolExecutor = { _ -> "OK" },
         // screenSummaryProvider not provided (defaults to null)
       )
@@ -821,6 +812,51 @@ class StepToolSetDirectToolsTest {
     assertFalse(result.contains("**Screen:**"), "Should not include screen summary when provider is null")
   }
 
+  // -- 14.5 resolveAwaitTimeoutMs: driver-status classification -----------------
+  // Pure helper test — verifies the branch selection in awaitScreenState.
+  // Covering this directly is the only practical way to assert that Playwright
+  // "installing" gets the longer timeout without running the coroutine loop.
+
+  @Test
+  fun `resolveAwaitTimeoutMs picks Playwright timeout when status mentions installing`() {
+    val result = StepToolSet.resolveAwaitTimeoutMs(
+      "Playwright browser installing (12s elapsed, timeout in 888s): [42%] Downloading Chromium",
+    )
+    assertEquals(StepToolSet.PLAYWRIGHT_INSTALL_TIMEOUT_MS, result)
+  }
+
+  @Test
+  fun `resolveAwaitTimeoutMs picks driver-init timeout when status mentions initializing`() {
+    val result = StepToolSet.resolveAwaitTimeoutMs(
+      "Device driver is still initializing (8s elapsed). Try again shortly.",
+    )
+    assertEquals(StepToolSet.DRIVER_INIT_TIMEOUT_MS, result)
+  }
+
+  @Test
+  fun `resolveAwaitTimeoutMs picks short retry when status is null`() {
+    val result = StepToolSet.resolveAwaitTimeoutMs(null)
+    assertEquals(StepToolSet.SCREEN_CAPTURE_RETRY_MS, result)
+  }
+
+  @Test
+  fun `resolveAwaitTimeoutMs returns null for non-transient driver error`() {
+    // Unknown/terminal status — caller must return null immediately instead of looping.
+    val result = StepToolSet.resolveAwaitTimeoutMs("Device disconnected unexpectedly")
+    kotlin.test.assertNull(result)
+  }
+
+  @Test
+  fun `resolveAwaitTimeoutMs picks Playwright over initializing when both words appear`() {
+    // Order-sensitivity guard — the "installing" branch must be evaluated first
+    // because the two driver states have distinct timeouts but status messages
+    // could theoretically contain both strings (e.g., compound error paths).
+    val result = StepToolSet.resolveAwaitTimeoutMs(
+      "Playwright installing and Maestro initializing in parallel",
+    )
+    assertEquals(StepToolSet.PLAYWRIGHT_INSTALL_TIMEOUT_MS, result)
+  }
+
   // -- 15. awaitScreenState: driver error returns immediately -------------------
 
   @Test
@@ -829,7 +865,7 @@ class StepToolSetDirectToolsTest {
       StepToolSet(
         screenAnalyzer = throwingScreenAnalyzer,
         executor = throwingExecutor,
-        screenStateProvider = { _ -> null },
+        screenStateProvider = { _, _, _ -> null },
         driverStatusProvider = { "Device disconnected unexpectedly" },
         rawToolExecutor = { _ -> "OK" },
       )

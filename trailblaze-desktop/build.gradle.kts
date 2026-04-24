@@ -10,7 +10,7 @@ plugins {
 
 // JVM args required for Compose Desktop on macOS — Skiko's JNI native code needs
 // access to internal AWT classes. Without these, `java -jar` crashes with SIGSEGV.
-// The canonical source for these is opensource/scripts/trailblaze (used at runtime).
+// The canonical source for these is scripts/trailblaze (used at runtime).
 // They're duplicated here for native distributions (DMG) and development run tasks.
 val macOsJvmArgs = listOf(
   "--add-opens", "java.desktop/sun.awt=ALL-UNNAMED",
@@ -39,6 +39,7 @@ configurations.all {
 
 dependencies {
   implementation(project(":trailblaze-agent"))
+  implementation(project(":trailblaze-android-world-benchmarks"))
   implementation(project(":trailblaze-common"))
   implementation(project(":trailblaze-compose"))
   implementation(project(":trailblaze-host"))
@@ -224,7 +225,8 @@ afterEvaluate {
   }
 
   tasks.withType<JavaExec> {
-    // Run from the repository root so relative paths (e.g., merchant-factory/trails/) resolve correctly.
+    // Run from the repository root so relative paths in target configs (e.g., `trails/` directories
+    // referenced by a target YAML) resolve correctly.
     workingDir = rootProject.projectDir
     // Forward stdin to the JVM process so STDIO MCP transport can read JSON-RPC
     // from the parent process's stdin (e.g., `./trailblaze mcp`).

@@ -39,16 +39,23 @@ class SnapshotCommand : Callable<Int> {
   @Option(names = ["--screenshot"], description = ["Save a screenshot to disk and print the file path"])
   var screenshot: Boolean = false
 
+  @Option(
+    names = ["--all"],
+    description = ["Show all visible elements, including those normally filtered as non-interactive"],
+  )
+  var all: Boolean = false
+
   override fun call(): Int {
     return cliWithDevice(verbose, device) { client ->
       val yaml = "- takeSnapshot:\n    screenName: \"snap\""
       val details = buildList {
         if (bounds) add("BOUNDS")
         if (offscreen) add("OFFSCREEN")
+        if (all) add("ALL_ELEMENTS")
       }.joinToString(",").ifEmpty { null }
       // Use fast mode only when no detail enrichment is needed — bounds/offscreen
       // require a full screen capture to build the compact element list with coordinates.
-      val needsFullCapture = bounds || offscreen || screenshot
+      val needsFullCapture = bounds || offscreen || screenshot || all
       val args = mutableMapOf<String, Any?>(
         "objective" to "Capture screen state",
         "tools" to yaml,

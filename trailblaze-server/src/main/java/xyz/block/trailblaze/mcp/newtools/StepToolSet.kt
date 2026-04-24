@@ -32,6 +32,7 @@ import xyz.block.trailblaze.mcp.RecordedToolCall
 import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
 import xyz.block.trailblaze.mcp.toolsets.ToolSetCategory
 import xyz.block.trailblaze.mcp.toolsets.ToolSetCategoryMapping
+import xyz.block.trailblaze.toolcalls.KoogToolExt
 import xyz.block.trailblaze.toolcalls.toKoogToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
@@ -52,7 +53,7 @@ import xyz.block.trailblaze.yaml.createTrailblazeYaml
 class StepToolSet(
   private val screenAnalyzer: ScreenAnalyzer? = null,
   private val executor: UiActionExecutor,
-  private val screenStateProvider: (fast: Boolean) -> ScreenState?,
+  private val screenStateProvider: (fast: Boolean, includeAnnotated: Boolean, includeAllElements: Boolean) -> ScreenState?,
   private val sessionContext: TrailblazeMcpSessionContext? = null,
   /** Provider for available UI tools. The analyzer uses these for type-safe recommendations. */
   private val availableToolsProvider: () -> List<TrailblazeToolDescriptor> = { emptyList() },
@@ -89,10 +90,37 @@ class StepToolSet(
 
   companion object {
     /** Max time to wait for the device driver to finish initializing. */
-    private const val DRIVER_INIT_TIMEOUT_MS = 30_000L
+    internal const val DRIVER_INIT_TIMEOUT_MS = 30_000L
+    /** Longer timeout for Playwright browser installation (~150MB download). */
+    internal const val PLAYWRIGHT_INSTALL_TIMEOUT_MS = 300_000L
     /** Shorter timeout for transient capture failures (driver ready but session warming up). */
-    private const val SCREEN_CAPTURE_RETRY_MS = 5_000L
+    internal const val SCREEN_CAPTURE_RETRY_MS = 5_000L
     private const val POLL_INTERVAL_MS = 1_000L
+
+    /**
+     * Chooses the await-screen-state timeout for a given driver status string.
+     *
+     * Returns `null` when the driver reports a non-transient error (e.g. a real
+     * disconnection): the caller should stop polling and surface the error.
+     *
+     * Branch order matters: `installing` is checked before `initializing` because
+     * a compound status message could in principle contain both substrings, and
+     * the two states have different timeouts. Do not reorder without updating
+     * the ordering test in `StepToolSetDirectToolsTest`.
+     *
+     * Pure function on a string so it can be unit-tested without running the
+     * coroutine loop.
+     */
+    internal fun resolveAwaitTimeoutMs(driverStatus: String?): Long? = when {
+      // Playwright browser installing (~150MB download) — wait longer to cover the download.
+      driverStatus != null && "installing" in driverStatus -> PLAYWRIGHT_INSTALL_TIMEOUT_MS
+      // Maestro driver still initializing — wait up to 30s for the handshake.
+      driverStatus != null && "initializing" in driverStatus -> DRIVER_INIT_TIMEOUT_MS
+      // No status → transient capture failure while a ready driver warms up.
+      driverStatus == null -> SCREEN_CAPTURE_RETRY_MS
+      // Anything else is a real error — caller should return null immediately.
+      else -> null
+    }
   }
 
   /**
@@ -115,7 +143,15 @@ class StepToolSet(
       if (platform != null && (details.isNotEmpty() || preComputed == null)) {
         val elements = when (platform) {
           "android" -> AndroidCompactElementList.build(tree, details, screenState.deviceHeight).text
-          "ios" -> IosCompactElementList.build(tree, details, screenState.deviceHeight).text
+          "ios" -> if (tree.driverDetail is DriverNodeDetail.IosAxe ||
+            tree.children.firstOrNull()?.driverDetail is DriverNodeDetail.IosAxe
+          ) {
+            xyz.block.trailblaze.api.IosAxeCompactElementList.build(
+              tree, details, screenState.deviceHeight, screenState.deviceWidth,
+            ).text
+          } else {
+            IosCompactElementList.build(tree, details, screenState.deviceHeight).text
+          }
           else -> null
         }
         if (elements != null) {
@@ -133,10 +169,12 @@ class StepToolSet(
     if (tree.driverDetail is DriverNodeDetail.AndroidAccessibility) return "android"
     if (tree.driverDetail is DriverNodeDetail.AndroidMaestro) return "android"
     if (tree.driverDetail is DriverNodeDetail.IosMaestro) return "ios"
+    if (tree.driverDetail is DriverNodeDetail.IosAxe) return "ios"
     val firstChild = tree.children.firstOrNull() ?: return null
     if (firstChild.driverDetail is DriverNodeDetail.AndroidAccessibility) return "android"
     if (firstChild.driverDetail is DriverNodeDetail.AndroidMaestro) return "android"
     if (firstChild.driverDetail is DriverNodeDetail.IosMaestro) return "ios"
+    if (firstChild.driverDetail is DriverNodeDetail.IosAxe) return "ios"
     return null
   }
 
@@ -149,23 +187,21 @@ class StepToolSet(
    *
    * Returns the screen state once available, or null if capture never succeeds.
    */
-  private suspend fun awaitScreenState(fast: Boolean = false): ScreenState? {
+  private suspend fun awaitScreenState(
+    fast: Boolean = false,
+    includeAnnotated: Boolean = true,
+    includeAllElements: Boolean = false,
+  ): ScreenState? {
     // Fast path — already ready
-    screenStateProvider(fast)?.let { return it }
+    screenStateProvider(fast, includeAnnotated, includeAllElements)?.let { return it }
 
     val status = driverStatusProvider?.invoke()
-    val timeoutMs = when {
-      status != null && "initializing" in status -> DRIVER_INIT_TIMEOUT_MS
-      // No error status but capture failed — transient; retry briefly
-      status == null -> SCREEN_CAPTURE_RETRY_MS
-      // Driver reported a real error (e.g., "No device connected") — don't retry
-      else -> return null
-    }
+    val timeoutMs = resolveAwaitTimeoutMs(status) ?: return null
 
     val deadline = System.currentTimeMillis() + timeoutMs
     while (System.currentTimeMillis() < deadline) {
       delay(POLL_INTERVAL_MS)
-      screenStateProvider(fast)?.let { return it }
+      screenStateProvider(fast, includeAnnotated, includeAllElements)?.let { return it }
     }
     return null
   }
@@ -212,7 +248,7 @@ class StepToolSet(
     hint: String? = null,
     @LLMDescription("YAML tool sequence to execute directly, bypassing AI agent. Same format as recording.tools in trail files.")
     tools: String? = null,
-    @LLMDescription("Comma-separated snapshot detail levels: BOUNDS, OFFSCREEN. Enriches the screen summary in the response.")
+    @LLMDescription("Comma-separated snapshot detail levels: BOUNDS, OFFSCREEN, ALL_ELEMENTS. Enriches the screen summary in the response.")
     snapshotDetails: String? = null,
     @LLMDescription("Text-only mode: skip screenshots, use text-only screen analysis (no vision tokens), and skip disk logging.")
     fast: Boolean = false,
@@ -229,7 +265,20 @@ class StepToolSet(
 
     // When screenshot is requested, capture with screenshots even in fast mode.
     val skipScreenshot = isFast && !wantsScreenshot
-    val screenState = awaitScreenState(fast = skipScreenshot)
+    // Only the LLM analysis path needs the set-of-mark annotated screenshot.
+    // Snapshot short-circuits and direct-tool execution skip the LLM, and without
+    // a configured analyzer the LLM path can't run either, so we can tell the
+    // on-device agent not to render or transfer the annotated version.
+    val needsAnnotation = tools == null && screenAnalyzer != null
+    // ALL_ELEMENTS propagates all the way to the on-device accessibility capture so
+    // the tree arrives unfiltered — the downstream compact-list bypass alone is not
+    // enough once filterImportantForAccessibility runs on-device.
+    val wantsAllElements = SnapshotDetail.ALL_ELEMENTS in parsedSnapshotDetails
+    val screenState = awaitScreenState(
+      fast = skipScreenshot,
+      includeAnnotated = needsAnnotation,
+      includeAllElements = wantsAllElements,
+    )
       ?: return StepResult(
         executed = false,
         error = driverStatusProvider?.invoke()
@@ -298,7 +347,7 @@ class StepToolSet(
       fast = isFast,
     )
 
-    val tools = selectToolsForHint(hint)
+    val tools = selectInnerAgentTools()
 
     // Emit objective start BEFORE analyze so that tool calls made by the inner agent
     // during analysis are correctly associated with this objective in the report.
@@ -573,7 +622,9 @@ class StepToolSet(
     @LLMDescription("Include raw view hierarchy: MINIMAL, STANDARD, or FULL (default: not included)")
     viewHierarchy: ViewHierarchyVerbosity? = null,
   ): String {
-    val screenState = awaitScreenState()
+    // Annotation is only needed when the LLM analyzer is going to consume the
+    // screenshot; the no-LLM fallback path just returns raw screen state.
+    val screenState = awaitScreenState(includeAnnotated = screenAnalyzer != null)
     if (screenState == null) {
       val driverStatus = driverStatusProvider?.invoke()
         ?: "No device connected. Use device(action=ANDROID), device(action=IOS), or device(action=WEB) first."
@@ -670,32 +721,31 @@ class StepToolSet(
   }
 
   /**
-   * Selects tools for the inner agent based on the hint.
-   *
-   * - hint="VERIFY": read-only assertion tools (OBSERVATION + VERIFICATION)
-   * - everything else: all available tools
-   *
-   * When [toolClassesOverrideProvider] returns non-null, those classes are used instead of
-   * the default [ToolSetCategoryMapping] selection. This allows driver-specific tool sets
-   * (e.g., Compose tools) to replace native tools that don't work with that driver.
+   * Selects tools for the inner agent:
+   * 1. If [toolClassesOverrideProvider] returns a non-null class set, use those classes
+   *    (driver-specific override, e.g. Compose tools).
+   * 2. Otherwise, prefer the device-specific [availableToolsProvider] which already
+   *    accounts for driver + YAML catalog.
+   * 3. Fallback (no device connected yet): full ALL-category class + YAML descriptor list.
    */
-  private fun selectToolsForHint(hint: String?): List<TrailblazeToolDescriptor> {
+  private fun selectInnerAgentTools(): List<TrailblazeToolDescriptor> {
     val overrideClasses = toolClassesOverrideProvider?.invoke()
-    val toolClasses = if (overrideClasses != null) {
-      overrideClasses
-    } else if (BlazeHint.from(hint) == BlazeHint.VERIFY) {
-      ToolSetCategoryMapping.getToolClasses(ToolSetCategory.OBSERVATION) +
-        ToolSetCategoryMapping.getToolClasses(ToolSetCategory.VERIFICATION)
-    } else {
-      ToolSetCategoryMapping.getToolClasses(ToolSetCategory.ALL)
+    if (overrideClasses != null) {
+      return overrideClasses.mapNotNull { it.toKoogToolDescriptor()?.toTrailblazeToolDescriptor() }
     }
     val tools = availableToolsProvider()
     if (tools.isNotEmpty()) {
       return tools
     }
     // Fallback when no device-specific tools are available (e.g. no device connected yet).
-    return ToolSetCategoryMapping.getToolClasses(ToolSetCategory.ALL)
+    // Must include YAML-defined tools (e.g. pressBack) alongside class-backed ones so the
+    // LLM sees the full toolset even in the no-device state.
+    val classDescriptors = ToolSetCategoryMapping.getToolClasses(ToolSetCategory.ALL)
       .mapNotNull { it.toKoogToolDescriptor()?.toTrailblazeToolDescriptor() }
+    val yamlDescriptors = KoogToolExt.buildDescriptorsForYamlDefined(
+      ToolSetCategoryMapping.getYamlToolNames(ToolSetCategory.ALL),
+    ).map { it.toTrailblazeToolDescriptor() }
+    return classDescriptors + yamlDescriptors
   }
 
   // ─────────────────────────────────────────────────────────────────────────────

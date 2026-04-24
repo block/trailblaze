@@ -1,20 +1,24 @@
 package xyz.block.trailblaze.config
 
 import xyz.block.trailblaze.devices.TrailblazeDriverType
-import xyz.block.trailblaze.llm.config.ClasspathConfigResourceSource
 import xyz.block.trailblaze.llm.config.ConfigResourceSource
 import xyz.block.trailblaze.llm.config.TrailblazeConfigPaths
+import xyz.block.trailblaze.llm.config.platformConfigResourceSource
+import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.ToolSetCatalogEntry
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import kotlin.reflect.KClass
 
 /**
- * A toolset whose tool names have been resolved to [KClass] references.
+ * A toolset whose tool names have been resolved to their backing implementations. Splits into
+ * class-backed tools ([resolvedToolClasses]) and YAML-defined tools ([resolvedYamlToolNames]) —
+ * the name-based authoring surface doesn't distinguish, but the runtime does.
  */
 data class ResolvedToolSet(
   val config: ToolSetYamlConfig,
   val resolvedToolClasses: Set<KClass<out TrailblazeTool>>,
   val compatibleDriverTypes: Set<TrailblazeDriverType>,
+  val resolvedYamlToolNames: Set<ToolName> = emptySet(),
 ) {
   fun isCompatibleWith(driverType: TrailblazeDriverType): Boolean =
     compatibleDriverTypes.isEmpty() || driverType in compatibleDriverTypes
@@ -23,7 +27,9 @@ data class ResolvedToolSet(
     id = config.id,
     description = config.description,
     toolClasses = resolvedToolClasses,
+    yamlToolNames = resolvedYamlToolNames,
     alwaysEnabled = config.alwaysEnabled,
+    compatibleDriverTypes = compatibleDriverTypes,
   )
 }
 
@@ -64,7 +70,7 @@ object ToolSetYamlLoader {
    */
   fun discoverAndLoadAll(
     toolNameResolver: ToolNameResolver,
-    resourceSource: ConfigResourceSource = ClasspathConfigResourceSource,
+    resourceSource: ConfigResourceSource = platformConfigResourceSource(),
   ): Map<String, ResolvedToolSet> {
     val yamlContents =
       resourceSource.discoverAndLoad(
@@ -78,16 +84,17 @@ object ToolSetYamlLoader {
     config: ToolSetYamlConfig,
     toolNameResolver: ToolNameResolver,
   ): ResolvedToolSet {
-    val toolClasses =
-      toolNameResolver.resolveAllLenient(config.tools, context = "toolset '${config.id}'")
+    val partitioned =
+      toolNameResolver.partitionLenient(config.tools, context = "toolset '${config.id}'")
     val driverTypes = buildSet {
       config.platforms?.forEach { addAll(DriverTypeKey.resolve(it)) }
       config.drivers?.forEach { addAll(DriverTypeKey.resolve(it)) }
     }
     return ResolvedToolSet(
       config = config,
-      resolvedToolClasses = toolClasses,
+      resolvedToolClasses = partitioned.classBacked,
       compatibleDriverTypes = driverTypes,
+      resolvedYamlToolNames = partitioned.yamlDefinedNames,
     )
   }
 }

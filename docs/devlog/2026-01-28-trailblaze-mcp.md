@@ -17,9 +17,9 @@ Historically, single-agent approaches to UI automation required the agent to mai
 
 Trailblaze addresses this with a **subagent architecture**: each step is handled by a fresh agent conversation that only receives the current screen state. The orchestrating layer maintains continuity while subagents operate statelessly on the latest UI.
 
-External and internal teams have expressed interest in integrating with Trailblaze via MCP for device control:
+Multiple audiences have expressed interest in integrating with Trailblaze via MCP for device control:
 
-- **Block mobile engineers and Firebender**: Automate mobile UI interactions to remove human-in-the-loop friction during development—typically throwaway trails for quick validation of a flow
+- **Mobile engineers and AI coding assistants (e.g. Firebender, Claude Code)**: Automate mobile UI interactions to remove human-in-the-loop friction during development—typically throwaway trails for quick validation of a flow
 - **Test authoring, execution, and infrastructure**: Enable developers and QE to create, run, and manage persistent UI tests that run continuously
 - **General device control**: Provide MCP-based mobile device control for any agent or tool that needs to interact with mobile applications
 
@@ -27,7 +27,7 @@ A key principle: **author once, run deterministically**. While the subagent appr
 
 **Trail recording** works through sessions: a new session starts automatically when interactions begin, and everything within that session is recorded. Users explicitly indicate when they want to finalize a trail from their actions, allowing them to review in the Trailblaze desktop app before sending it for automated execution.
 
-**Trail storage**: Trails are persisted as `trail.yaml` files on disk. At Block, trails are stored in a dedicated directory and referenced by path. For the internal test infrastructure, if a trail doesn't exist on disk, it can be generated from natural language via the TestTrail system.
+**Trail storage**: Trails are persisted as `trail.yaml` files on disk, stored in a project-level directory and referenced by path. Downstream test infrastructures may additionally generate trails from natural language when one doesn't exist on disk.
 
 **AI fallback** can recover from trail failures due to UI changes, but is disabled by default. This preserves determinism and avoids LLM costs. When a trail step fails, Trailblaze reports the failure to the MCP client, which can then decide whether to invoke AI-assisted recovery using natural language prompts.
 

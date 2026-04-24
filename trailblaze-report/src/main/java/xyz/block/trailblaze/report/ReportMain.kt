@@ -101,9 +101,12 @@ open class GenerateReportCliCommand :
     val trailblazeReportHtmlFile = File(logsDir, "trailblaze_report.html")
     Console.log("file://${trailblazeReportHtmlFile.absolutePath}")
 
-    val isInternal = File(rootWorkingDir, "opensource").exists()
+    // Trailblaze supports two layouts: standalone (the default — `trailblaze-ui/` sits
+    // next to the working dir) and nested (Trailblaze embedded as `opensource/` under a
+    // larger repo).
+    val isNested = File(rootWorkingDir, "opensource").exists()
 
-    val trailblazeUiProjectDir = if (isInternal) {
+    val trailblazeUiProjectDir = if (isNested) {
       File(rootWorkingDir, "opensource/trailblaze-ui")
     } else {
       File(rootWorkingDir, "trailblaze-ui")

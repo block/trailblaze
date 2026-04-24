@@ -6,10 +6,14 @@ import picocli.CommandLine.IVersionProvider
 import xyz.block.trailblaze.TrailblazeVersion
 import xyz.block.trailblaze.desktop.TrailblazeDesktopAppConfig
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
+import xyz.block.trailblaze.logs.server.endpoints.CliExecRequest
+import xyz.block.trailblaze.logs.server.endpoints.CliExecResponse
 import xyz.block.trailblaze.ui.TrailblazeDesktopApp
 import xyz.block.trailblaze.ui.TrailblazePortManager
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.canRunDesktopGui
+import kotlinx.coroutines.CancellationException
+import java.io.ByteArrayOutputStream
 import java.util.concurrent.Callable
 import kotlin.system.exitProcess
 
@@ -60,11 +64,26 @@ object TrailblazeCli {
    * @param appProvider Factory function to create the app instance
    * @param configProvider Factory function to get the config (for CLI commands that need it before app creation)
    */
+  /**
+   * Providers captured by [run] and reused by [executeForDaemon] when the daemon
+   * is asked to run a CLI subcommand in-process via the `/cli/exec` fast path.
+   */
+  @Volatile private var appProviderRef: (() -> TrailblazeDesktopApp)? = null
+  @Volatile private var configProviderRef: (() -> TrailblazeDesktopAppConfig)? = null
+
   fun run(
     args: Array<String>,
     appProvider: () -> TrailblazeDesktopApp,
     configProvider: () -> TrailblazeDesktopAppConfig,
   ) {
+    // Install thread-local stdout/stderr capture BEFORE any code references
+    // `System.out` — Console.jvm.kt caches it into a field at class init time,
+    // so the capture has to be in place before the first Console.log call.
+    CliOutCapture.install()
+
+    appProviderRef = appProvider
+    configProviderRef = configProvider
+
     // Suppress SLF4J "multiple providers" warnings on stderr.
     // Must be set before any SLF4J class is loaded.
     System.setProperty("slf4j.internal.verbosity", "ERROR")
@@ -91,6 +110,9 @@ object TrailblazeCli {
       GroupedCommandListRenderer()
 
     // Support `sq` CLI integration: output JSON describing subcommands and exit.
+    // Must stay above anything that could trigger AdbPathResolver.ADB_COMMAND (lazy),
+    // since its `Console.log` output would leak onto stdout before Console.useStdErr()
+    // runs in --direct STDIO mode.
     if (args.contains("--describe-commands")) {
       println(commandLine.describeCommands())
       return
@@ -110,6 +132,139 @@ object TrailblazeCli {
   private fun resolvePortFromArgs(): Int {
     return System.getenv(TrailblazePortManager.HTTP_PORT_ENV_VAR)?.toIntOrNull()
       ?: TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTP_PORT
+  }
+
+  /**
+   * Subcommands safe to run in-process on the daemon via `/cli/exec`. The rest
+   * of the set must keep going through the existing JVM path because they either
+   * directly touch desktop UI state (`app`), call `kotlin.system.exitProcess`
+   * inside their `call()` (would kill the daemon), or need the caller's cwd/env
+   * (`config`, `trail` with relative paths).
+   *
+   * Snapshot and ask are thin wrappers over MCP tool calls with no env-var
+   * reads, so running them in-process is a pure win: we skip the JVM cold
+   * start and hit the local MCP bridge over loopback HTTP.
+   *
+   * `verify` is intentionally NOT on this list even though it would benefit:
+   * `VerifyCommand` reads `BLAZE_FAST` from the caller's environment, but the
+   * IPC request only forwards argv, so a forwarded `BLAZE_FAST=1 verify ...`
+   * would silently run in non-fast mode. Adding env forwarding is a follow-up
+   * (would also unlock `blaze`/`tool`, which read the same var).
+   */
+  private val FORWARDABLE_SUBCOMMANDS = setOf("snapshot", "ask")
+
+  /**
+   * Serializes in-process CLI executions on the daemon. The thread-local
+   * capture in [CliOutCapture] is per-thread, but commands still share picocli's
+   * cached `AppCommand.parent` state on the root [TrailblazeCliCommand], so
+   * running two at once against the same root would race on initialization.
+   * Sequential execution is correct and sufficient for the expected load
+   * (interactive shell + occasional scripts).
+   */
+  private val execLock = Any()
+
+  /**
+   * Entry point for the `/cli/exec` daemon endpoint. Runs [args] through a
+   * fresh picocli [TrailblazeCliCommand] with stdout/stderr captured per-thread
+   * and returns the captured output plus exit code. Returns `forwarded=false`
+   * when the subcommand isn't in [FORWARDABLE_SUBCOMMANDS] so the CLI shim can
+   * fall back to its normal JVM path.
+   */
+  fun executeForDaemon(request: CliExecRequest): CliExecResponse {
+    val args = request.args
+    val first = args.firstOrNull()
+    if (first == null || first !in FORWARDABLE_SUBCOMMANDS) {
+      return CliExecResponse(stdout = "", stderr = "", exitCode = 0, forwarded = false)
+    }
+
+    val appProvider = appProviderRef
+    val configProvider = configProviderRef
+    if (appProvider == null || configProvider == null) {
+      return CliExecResponse(
+        stdout = "",
+        stderr = "cli/exec: daemon missing providers (run() not called)\n",
+        exitCode = 1,
+        forwarded = true,
+      )
+    }
+
+    val stdoutBuf = CappedByteArrayOutputStream(MAX_CAPTURE_BYTES)
+    val stderrBuf = CappedByteArrayOutputStream(MAX_CAPTURE_BYTES)
+
+    val exitCode = synchronized(execLock) {
+      // Save/restore the global `Console.quietMode` flag. `cliWithDevice(verbose=false)`
+      // flips it for the duration of the CLI command, but there's no reset path in
+      // the CLI itself; without this wrapper the long-lived daemon would go silent
+      // for every Console.log after the first forwarded invocation. Save-restore is
+      // safer than unconditional `disableQuietMode()` because a future daemon
+      // feature could legitimately set quiet mode outside this scope.
+      val priorQuiet = Console.isQuietMode()
+      CliOutCapture.withCapture(stdoutBuf, stderrBuf) {
+        val cli = TrailblazeCliCommand(appProvider, configProvider)
+        val commandLine = CommandLine(cli).setCaseInsensitiveEnumValuesAllowed(true)
+        commandLine.helpSectionMap[CommandLine.Model.UsageMessageSpec.SECTION_KEY_COMMAND_LIST] =
+          GroupedCommandListRenderer()
+        try {
+          commandLine.execute(*args.toTypedArray())
+        } catch (e: CancellationException) {
+          throw e
+        } catch (e: Throwable) {
+          System.err.println("cli/exec: uncaught ${e::class.simpleName}: ${e.message}")
+          1
+        } finally {
+          if (priorQuiet) Console.enableQuietMode() else Console.disableQuietMode()
+        }
+      }
+    }
+
+    return CliExecResponse(
+      stdout = stdoutBuf.toString(Charsets.UTF_8),
+      stderr = stderrBuf.toString(Charsets.UTF_8),
+      exitCode = exitCode,
+      forwarded = true,
+    )
+  }
+
+  /**
+   * Cap on captured stdout/stderr per forwarded CLI invocation. A pathological
+   * `snapshot` on a dense UI tree or a tight error-logging loop shouldn't be
+   * able to OOM the daemon by producing megabytes of output.
+   */
+  private const val MAX_CAPTURE_BYTES: Int = 4 * 1024 * 1024 // 4 MiB
+
+  /**
+   * [java.io.ByteArrayOutputStream] that silently stops accepting bytes once
+   * [limit] is reached and appends a truncation marker the first time it
+   * happens. The surrounding picocli command is unaware — its `println` calls
+   * just become no-ops — which is the right behavior for the daemon fast path
+   * (stopping execution on output overflow would be a bigger surprise).
+   */
+  private class CappedByteArrayOutputStream(val limit: Int) : ByteArrayOutputStream() {
+    private var truncated: Boolean = false
+    private val marker: ByteArray = "\n[cli/exec: output truncated at $limit bytes]\n"
+      .toByteArray(Charsets.UTF_8)
+
+    @Synchronized override fun write(b: Int) {
+      if (tryTruncate(1)) return
+      super.write(b)
+    }
+
+    @Synchronized override fun write(b: ByteArray, off: Int, len: Int) {
+      if (tryTruncate(len)) return
+      val remaining = limit - size()
+      if (remaining <= 0) return
+      super.write(b, off, minOf(len, remaining))
+      if (size() >= limit) tryTruncate(0)
+    }
+
+    private fun tryTruncate(incoming: Int): Boolean {
+      if (size() + incoming <= limit) return false
+      if (!truncated) {
+        truncated = true
+        super.write(marker, 0, marker.size)
+      }
+      return true
+    }
   }
 }
 

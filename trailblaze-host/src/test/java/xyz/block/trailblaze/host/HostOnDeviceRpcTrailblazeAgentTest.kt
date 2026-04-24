@@ -2,11 +2,17 @@ package xyz.block.trailblaze.host
 
 import assertk.assertThat
 import assertk.assertions.contains
+import assertk.assertions.hasSize
+import assertk.assertions.isEmpty
+import assertk.assertions.isEqualTo
 import assertk.assertions.isInstanceOf
 import assertk.assertions.isNull
 import io.ktor.http.HttpStatusCode
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import maestro.orchestra.ElementSelector
 import maestro.orchestra.TapOnElementCommand
 import org.junit.After
@@ -150,6 +156,62 @@ class HostOnDeviceRpcTrailblazeAgentTest {
   }
 
   @Test
+  fun `per-tool RunYamlRequests reuse the host session ID as overrideSessionId`() {
+    // Pin the invariant that every per-tool RPC dispatch carries the host's top-level
+    // session ID as overrideSessionId, so on-device logs consolidate into a single session
+    // directory. A regression here (generating a fresh per-tool session ID) would silently
+    // re-scatter logs into per-tool session directories.
+    mockServer.onPost("/rpc/RunYamlRequest") {
+      HttpStatusCode.OK to """{"sessionId":"test-session","success":true}"""
+    }
+
+    val agent = createAgent()
+    val commands =
+      listOf(TapOnElementCommand(selector = ElementSelector(textRegex = ".*OK.*")))
+    runBlocking {
+      repeat(2) {
+        agent.runMaestroCommands(commands, TraceId.generate(TraceId.Companion.TraceOrigin.TOOL))
+      }
+    }
+
+    val runYamlBodies = mockServer.requestLog["/rpc/RunYamlRequest"].orEmpty()
+    assertThat(runYamlBodies).hasSize(2)
+    runYamlBodies.forEach { body ->
+      val overrideSessionId = Json.parseToJsonElement(body)
+        .jsonObject["config"]!!.jsonObject["overrideSessionId"]!!.jsonPrimitive.content
+      assertThat(overrideSessionId).isEqualTo("test-session")
+    }
+    // Regression pin: the old polling path made a GetExecutionStatusRequest per tool. The
+    // sync-response contract removes that round-trip entirely — if this ever goes non-empty,
+    // the client regressed back to polling.
+    assertThat(mockServer.requestLog["/rpc/GetExecutionStatusRequest"].orEmpty()).isEmpty()
+  }
+
+  /**
+   * Defensive contract check: the per-tool RPC dispatches with `awaitCompletion = true` (the
+   * request default + explicit set in the client). If the server returns a fire-and-forget
+   * shape (no `success` field), we cannot safely interpret that as success — treat as a
+   * server contract violation and surface the error.
+   */
+  @Test
+  fun `null success on sync dispatch surfaces as contract violation error`() {
+    mockServer.onPost("/rpc/RunYamlRequest") {
+      HttpStatusCode.OK to """{"sessionId":"test-session"}"""
+    }
+
+    val commands =
+      listOf(TapOnElementCommand(selector = ElementSelector(textRegex = ".*OK.*")))
+    val result = runBlocking {
+      createAgent()
+        .runMaestroCommands(commands, TraceId.generate(TraceId.Companion.TraceOrigin.TOOL))
+    }
+
+    assertThat(result).isInstanceOf(TrailblazeToolResult.Error::class)
+    val errorMessage = (result as TrailblazeToolResult.Error).errorMessage
+    assertThat(errorMessage).contains("contract violation")
+  }
+
+  @Test
   fun `executeNodeSelectorTap returns null to delegate to maestro commands`() {
     val result = runBlocking {
       createAgent()
@@ -164,4 +226,5 @@ class HostOnDeviceRpcTrailblazeAgentTest {
     }
     assertThat(result).isNull()
   }
+
 }

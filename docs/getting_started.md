@@ -30,6 +30,16 @@ Trailblaze includes built-in support for the following providers:
 The desktop app reads these values from your shell environment at startup, so make sure they are set before launching.
 
 For advanced configuration (custom endpoints, enterprise gateways, workspace defaults), see [LLM Configuration](llm_configuration.md). For the full list of built-in models, see [Built-in LLM Models](generated/LLM_MODELS.md).
+### Running Your First Trail
+Drop a `.trail.yaml` file anywhere in your project and run it:
+```bash
+trailblaze trail path/to/login.trail.yaml
+```
+To run multiple trails, pass them explicitly or use a shell glob:
+```bash
+trailblaze trail flows/**/*.trail.yaml
+```
+No `trails/` directory required — put trail files wherever makes sense and glob them into the CLI. For the full rules (file naming, workspace config, symlinks), see [Project Layout](project_layout.md).
 ### Next: Android On-Device Testing
 If you want to run tests on Android devices or emulators, see [Android On-Device Testing](android_on_device.md).
 ### Optional: Host JVM Unit Tests

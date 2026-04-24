@@ -57,4 +57,34 @@ data class RunYamlRequest(
    * - [AgentImplementation.MULTI_AGENT_V3]: Mobile-Agent-v3 inspired implementation
    */
   val agentImplementation: AgentImplementation = AgentImplementation.DEFAULT,
-) : RpcRequest<RunYamlResponse>
+
+  /**
+   * Whether the on-device handler should block the RPC response until execution finishes
+   * (including post-action UI-settle) and return the terminal result inline on
+   * [RunYamlResponse.success] / [RunYamlResponse.errorMessage].
+   *
+   * Default is `true` — matches every other on-device RPC handler (e.g. `GetScreenState`),
+   * which return when their work is done. This eliminates the need for callers to poll
+   * [xyz.block.trailblaze.mcp.android.ondevice.rpc.GetExecutionStatusRequest]; the RPC
+   * response itself is the completion signal.
+   *
+   * Callers that want async-kickoff semantics (dispatch a long-running trail and observe
+   * progress out-of-band via [xyz.block.trailblaze.mcp.handlers.SubscribeToProgressHandler])
+   * can set this to `false`. No in-repo caller currently uses `false`; the flag is preserved
+   * to support that dispatch mode when a concrete use case lands.
+   */
+  val awaitCompletion: Boolean = true,
+) : RpcRequest<RunYamlResponse> {
+  /**
+   * Sync dispatches can run for minutes (cold app launches, agentic AI reflection loops,
+   * whole-trail runs). Uses [OnDeviceRpcTimeouts.HTTP_REQUEST_CAP_MS], which is defined as
+   * [OnDeviceRpcTimeouts.HANDLER_AWAIT_CAP_MS] plus a fixed buffer — so the socket stays
+   * open strictly longer than the on-device handler's own await cap, guaranteeing the
+   * handler's structured timeout response lands before the socket itself closes.
+   *
+   * Falls back to the HttpClient default when the request is fire-and-forget
+   * (`awaitCompletion = false`), since that dispatch returns immediately anyway.
+   */
+  override val requestTimeoutMs: Long?
+    get() = if (awaitCompletion) OnDeviceRpcTimeouts.HTTP_REQUEST_CAP_MS else null
+}

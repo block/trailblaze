@@ -2,15 +2,11 @@ package xyz.block.trailblaze.mcp.toolsets
 
 import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.mcp.TrailblazeMcpMode
+import xyz.block.trailblaze.toolcalls.ResolvedToolSet
+import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
-import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.PressBackTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.SwipeTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.TakeSnapshotTool
-import xyz.block.trailblaze.toolcalls.commands.TapOnPointTrailblazeTool
-import xyz.block.trailblaze.toolcalls.commands.TapTrailblazeTool
+import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
 import kotlin.reflect.KClass
 
 /**
@@ -54,8 +50,9 @@ enum class ToolSetCategory(
    */
   CORE_INTERACTION(
     displayName = "Core Interaction",
-    description = "Essential UI interaction tools: tap at coordinates, swipe gestures, and text input. " +
-      "This is the minimal toolset for basic device control.",
+    description = "Essential UI interaction tools: tap, swipe, type, and coordinate taps. " +
+      "This is the minimal toolset for basic device control. Prefer `tap` by ref id over " +
+      "`tapOnPoint` unless coordinates are genuinely required.",
     useCases = listOf(
       "Simple navigation tasks",
       "Tapping buttons and links",
@@ -170,13 +167,6 @@ enum class ToolSetCategory(
     val STANDARD = setOf(CORE_INTERACTION, NAVIGATION, OBSERVATION)
 
     /**
-     * Minimal set optimized for inner agent performance.
-     * Only includes the most common tools to reduce token usage.
-     * ~6 tools instead of ~17, saving ~2,000+ tokens per request.
-     */
-    val INNER_AGENT_MINIMAL = setOf(CORE_INTERACTION)
-
-    /**
      * Full set for testing scenarios.
      */
     val TESTING = setOf(CORE_INTERACTION, NAVIGATION, OBSERVATION, VERIFICATION, MEMORY)
@@ -228,15 +218,19 @@ enum class ToolSetCategory(
 object ToolSetCategoryMapping {
 
   /**
-   * Gets the TrailblazeTool classes for a category.
+   * Gets the TrailblazeTool classes for a category. Routes every category through
+   * [TrailblazeToolSetCatalog.entryToolClasses] so MCP sees the same tool surface as the YAML
+   * catalog — no Kotlin-only special cases. `tapOnPoint` is part of `core_interaction`; targets
+   * that want to disable it for their own app surface can use YAML `excluded_tools:` at the
+   * target level (e.g. `excluded_tools: [tapOnPoint]` in a target YAML).
    */
   fun getToolClasses(category: ToolSetCategory): Set<KClass<out TrailblazeTool>> {
     return when (category) {
-      ToolSetCategory.CORE_INTERACTION -> TrailblazeToolSet.DeviceControlTrailblazeToolSet.toolClasses
-      ToolSetCategory.NAVIGATION -> getNavigationTools()
-      ToolSetCategory.OBSERVATION -> getObservationTools()
-      ToolSetCategory.VERIFICATION -> TrailblazeToolSet.VerifyToolSet.toolClasses
-      ToolSetCategory.MEMORY -> TrailblazeToolSet.RememberTrailblazeToolSet.toolClasses
+      ToolSetCategory.CORE_INTERACTION -> TrailblazeToolSetCatalog.entryToolClasses("core_interaction")
+      ToolSetCategory.NAVIGATION -> TrailblazeToolSetCatalog.entryToolClasses("navigation")
+      ToolSetCategory.OBSERVATION -> TrailblazeToolSetCatalog.entryToolClasses("observation")
+      ToolSetCategory.VERIFICATION -> TrailblazeToolSetCatalog.entryToolClasses("verification")
+      ToolSetCategory.MEMORY -> TrailblazeToolSetCatalog.entryToolClasses("memory")
       ToolSetCategory.SESSION -> emptySet() // Session tools are Koog ToolSets, not TrailblazeTools
       ToolSetCategory.ALL -> TrailblazeToolSet.DefaultLlmTrailblazeTools
     }
@@ -249,46 +243,61 @@ object ToolSetCategoryMapping {
     return categories.flatMap { getToolClasses(it) }.toSet()
   }
 
-  private fun getNavigationTools(): Set<KClass<out TrailblazeTool>> {
-    // Navigation-specific subset
-    return setOf(
-      xyz.block.trailblaze.toolcalls.commands.PressBackTrailblazeTool::class,
-      xyz.block.trailblaze.toolcalls.commands.OpenUrlTrailblazeTool::class,
-      xyz.block.trailblaze.toolcalls.commands.LaunchAppTrailblazeTool::class,
-      xyz.block.trailblaze.toolcalls.commands.ScrollUntilTextIsVisibleTrailblazeTool::class,
-    )
-  }
-
-  private fun getObservationTools(): Set<KClass<out TrailblazeTool>> {
-    // Observation tools are primarily in DeviceManagerToolSet (Koog), not TrailblazeTools
-    // This returns snapshot tool which captures screen state
-    return setOf(
-      TakeSnapshotTool::class,
-    )
+  /**
+   * Gets the YAML-defined tool names for a category. Parallel to [getToolClasses] for the
+   * `tools:` composition case — e.g. `navigation` includes `pressBack` (no Kotlin class).
+   *
+   * Routes through [TrailblazeToolSetCatalog.entryYamlToolNames] so MCP sees the same
+   * YAML-defined surface as other catalog consumers. [ToolSetCategory.ALL] returns every
+   * YAML-defined name from every catalog entry so the "give me everything" path doesn't
+   * silently drop YAML-only tools.
+   */
+  fun getYamlToolNames(category: ToolSetCategory): Set<ToolName> {
+    return when (category) {
+      ToolSetCategory.CORE_INTERACTION -> TrailblazeToolSetCatalog.entryYamlToolNames("core_interaction")
+      ToolSetCategory.NAVIGATION -> TrailblazeToolSetCatalog.entryYamlToolNames("navigation")
+      ToolSetCategory.OBSERVATION -> TrailblazeToolSetCatalog.entryYamlToolNames("observation")
+      ToolSetCategory.VERIFICATION -> TrailblazeToolSetCatalog.entryYamlToolNames("verification")
+      ToolSetCategory.MEMORY -> TrailblazeToolSetCatalog.entryYamlToolNames("memory")
+      ToolSetCategory.SESSION -> emptySet()
+      ToolSetCategory.ALL -> TrailblazeToolSetCatalog.defaultEntries().flatMap { it.yamlToolNames }.toSet()
+    }
   }
 
   /**
-   * Minimal tool set for the inner agent, optimized for token efficiency.
-   *
-   * Only includes the most commonly used tools:
-   * - tap / tapOnPoint: Click on elements
-   * - inputText: Type text
-   * - swipe: Scroll/navigate
-   * - pressBack: Back navigation
-   * - objectiveStatus: Report completion
-   *
-   * Saves ~3,000+ tokens compared to STANDARD (6 tools vs ~17).
+   * Gets the combined YAML-defined tool names for multiple categories.
    */
-  fun getInnerAgentMinimalTools(): Set<KClass<out TrailblazeTool>> {
-    return setOf(
-      TapTrailblazeTool::class,
-      TapOnPointTrailblazeTool::class,
-      InputTextTrailblazeTool::class,
-      SwipeTrailblazeTool::class,
-      PressBackTrailblazeTool::class,
-      ObjectiveStatusTrailblazeTool::class,
-    )
+  fun getYamlToolNames(categories: Set<ToolSetCategory>): Set<ToolName> {
+    return categories.flatMap { getYamlToolNames(it) }.toSet()
   }
+
+  /**
+   * Class set + YAML-defined tool names for a single category, bundled so callers can't
+   * accidentally consume only half. Prefer this over the split [getToolClasses] /
+   * [getYamlToolNames] pair when you need a complete tool surface — every live MCP entrypoint
+   * (DirectMcpToolExecutor, SubagentOrchestrator, the inner-agent fallback in
+   * TrailblazeMcpServer, DynamicToolSetManager) must advertise both, and the regression this
+   * API guards against is exactly the "class-only lookup silently drops YAML-defined tools"
+   * bug that shipped with the pressBack migration.
+   *
+   * Returns [ResolvedToolSet] — the same type the catalog-level
+   * [TrailblazeToolSetCatalog.resolve] returns, so callers can use one API regardless of
+   * whether they selected tools by category or by catalog id.
+   */
+  fun resolve(category: ToolSetCategory): ResolvedToolSet = ResolvedToolSet(
+    toolClasses = getToolClasses(category),
+    yamlToolNames = getYamlToolNames(category),
+  )
+
+  /**
+   * Class set + YAML-defined tool names for a set of categories, bundled. Same rationale as
+   * [resolve] — the combined entry point so callers can't miss the YAML half.
+   */
+  fun resolve(categories: Set<ToolSetCategory>): ResolvedToolSet = ResolvedToolSet(
+    toolClasses = getToolClasses(categories),
+    yamlToolNames = getYamlToolNames(categories),
+  )
+
 }
 
 /**

@@ -60,6 +60,12 @@ actual object Console {
     // noise should be suppressed via logback.xml configuration instead.
   }
 
+  actual fun disableQuietMode() {
+    quietMode = false
+  }
+
+  actual fun isQuietMode(): Boolean = quietMode
+
   actual fun enableJsonMode() {
     // Redirect info() to stderr so stdout is reserved for JSON output.
     userOut = System.err

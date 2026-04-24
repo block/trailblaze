@@ -49,10 +49,10 @@ The existing deep merge behavior means users can override just `reasoning_effort
 
 ## Key Files
 
-- `opensource/trailblaze-models/src/commonMain/kotlin/xyz/block/trailblaze/llm/config/LlmModelConfigEntry.kt`
-- `opensource/trailblaze-models/src/commonMain/kotlin/xyz/block/trailblaze/llm/TrailblazeLlmModel.kt`
-- `opensource/trailblaze-models/src/commonMain/kotlin/xyz/block/trailblaze/llm/config/LlmConfigMerger.kt`
-- `opensource/trailblaze-models/src/commonMain/kotlin/xyz/block/trailblaze/llm/config/LlmConfigResolver.kt`
-- `opensource/trailblaze-agent/src/main/java/xyz/block/trailblaze/agent/TrailblazeKoogLlmClientHelper.kt`
+- `trailblaze-models/src/commonMain/kotlin/xyz/block/trailblaze/llm/config/LlmModelConfigEntry.kt`
+- `trailblaze-models/src/commonMain/kotlin/xyz/block/trailblaze/llm/TrailblazeLlmModel.kt`
+- `trailblaze-models/src/commonMain/kotlin/xyz/block/trailblaze/llm/config/LlmConfigMerger.kt`
+- `trailblaze-models/src/commonMain/kotlin/xyz/block/trailblaze/llm/config/LlmConfigResolver.kt`
+- `trailblaze-agent/src/main/java/xyz/block/trailblaze/agent/TrailblazeKoogLlmClientHelper.kt`
 - Koog source: `ai.koog.prompt.executor.clients.openai.OpenAIParams` (OpenAIChatParams class)
 - Koog source: `ai.koog.prompt.executor.clients.openai.base.models.ReasoningEffort` (enum)

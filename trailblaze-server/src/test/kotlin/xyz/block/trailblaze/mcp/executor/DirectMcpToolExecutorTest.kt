@@ -50,6 +50,10 @@ class DirectMcpToolExecutorTest {
 
     assertTrue(tools.isNotEmpty(), "Should have at least one tool")
     assertTrue(
+      tools.any { it.name == "tap" },
+      "Should include tap from CORE_INTERACTION",
+    )
+    assertTrue(
       tools.any { it.name == "tapOnPoint" },
       "Should include tapOnPoint from CORE_INTERACTION",
     )
@@ -62,12 +66,18 @@ class DirectMcpToolExecutorTest {
 
     assertTrue(tools.isNotEmpty(), "Should have tools")
     assertTrue(
-      tools.any { it.name == "tapOnPoint" },
-      "Should include tapOnPoint from CORE_INTERACTION",
+      tools.any { it.name == "tap" },
+      "Should include tap from CORE_INTERACTION",
     )
     assertTrue(
       tools.any { it.name == "openUrl" },
       "Should include openUrl from NAVIGATION",
+    )
+    // pressBack is YAML-defined and part of the NAVIGATION catalog entry; it must appear in
+    // the advertised descriptor list or the LLM won't know it's available.
+    assertTrue(
+      tools.any { it.name == "pressBack" },
+      "Should include pressBack (YAML-defined) from NAVIGATION",
     )
   }
 
@@ -76,6 +86,7 @@ class DirectMcpToolExecutorTest {
     val executor = createExecutor(setOf(ToolSetCategory.CORE_INTERACTION))
     val names = executor.getAvailableToolNames()
 
+    assertTrue("tap" in names, "Should include tap")
     assertTrue("tapOnPoint" in names, "Should include tapOnPoint")
     assertTrue("swipe" in names, "Should include swipe")
   }
@@ -85,6 +96,8 @@ class DirectMcpToolExecutorTest {
     val executor = createExecutor()
 
     assertTrue(executor.isToolAvailable("tapOnPoint"), "tapOnPoint should be available")
+    // YAML-defined tool must be reported as available the same way class-backed tools are.
+    assertTrue(executor.isToolAvailable("pressBack"), "pressBack (YAML-defined) should be available")
   }
 
   @Test
@@ -101,6 +114,20 @@ class DirectMcpToolExecutorTest {
     val executor = createExecutor()
 
     assertFalse(executor.isToolAvailable("unknownTool"), "unknownTool should not be available")
+  }
+
+  @Test
+  fun `VERIFICATION category is isolated from CORE_INTERACTION tools`() {
+    // Progressive-disclosure clients (e.g. StepToolSet hint="VERIFY") request just
+    // VERIFICATION + OBSERVATION and expect a read-only surface. Interaction tools
+    // like tap/inputText must not leak in via alwaysEnabled auto-inclusion.
+    val executor = createExecutor(setOf(ToolSetCategory.VERIFICATION, ToolSetCategory.OBSERVATION))
+    val names = executor.getAvailableToolNames()
+
+    assertTrue("assertNotVisibleWithText" in names, "Should include verify tool")
+    assertTrue("takeSnapshot" in names, "Should include observation tool")
+    assertFalse("tap" in names, "Should NOT include CORE_INTERACTION tools")
+    assertFalse("inputText" in names, "Should NOT include CORE_INTERACTION tools")
   }
 
   // endregion
@@ -205,6 +232,12 @@ class DirectMcpToolExecutorTest {
   @Test
   fun `executeToolByName handles pressBack from NAVIGATION category`() =
     runTest {
+      // pressBack is a YAML-defined tool (`trailblaze-config/tools/pressBack.yaml` via
+      // `tools:` composition) that ships as part of the `navigation` catalog entry. This
+      // is the load-bearing regression guard for YAML-defined tool execution through
+      // DirectMcpToolExecutor: the executor must advertise `pressBack` in the NAVIGATION
+      // category and route its execution through the same polymorphic tool serializer
+      // that handles class-backed tools.
       val mockBridge =
         ConfigurableMockBridge().apply {
           executeToolResult = "[OK] Pressed back"
@@ -296,6 +329,8 @@ class ConfigurableMockBridge : TrailblazeMcpBridge {
   override suspend fun getScreenStateViaRpc(
     includeScreenshot: Boolean,
     screenshotScalingConfig: ScreenshotScalingConfig,
+    includeAnnotatedScreenshot: Boolean,
+    includeAllElements: Boolean,
   ): GetScreenStateResponse? =
     throw NotImplementedError("Not needed for executor tests")
 

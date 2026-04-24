@@ -56,11 +56,15 @@ abstract class TrailblazeLoggingRule(
     private set
 
   /**
-   * Optional provider that captures the current screen state at the moment of failure.
-   * Set this after the test runner is initialized so that failure screenshots can be
-   * logged automatically when a test fails.
+   * Provider that captures the current screen state at the moment of failure.
+   *
+   * Must be assigned after the test runner is initialized (the provider lambda typically
+   * references dependents of this rule, which is why it isn't a constructor parameter).
+   * All three run methods — JUnit, on-device RPC, host CLI — wire this from their
+   * wrapping rule's `init` block. If a caller forgets to set it, [captureFailureScreenshot]
+   * logs a warning instead of silently no-op'ing.
    */
-  var failureScreenStateProvider: (() -> ScreenState)? = null
+  lateinit var failureScreenStateProvider: () -> ScreenState
 
   /**
    * Allows external session injection for non-JUnit usage (e.g., desktop app runner).
@@ -155,11 +159,15 @@ abstract class TrailblazeLoggingRule(
 
   override fun ruleCreation(description: Description) {
     this.description = description
+  }
+
+  override fun beforeTestExecution(description: Description) {
+    TrailblazeTracer.clear()
 
     val testName = "${description.testClass.canonicalName}_${description.methodName}"
 
-    // Start new session with metadata so title resolution uses class/method
-    // instead of falling back to the session ID (which contains a timestamp prefix)
+    // Create a fresh session for each test execution attempt. This ensures retries
+    // (via RetryRule) get their own session directory with separate logs.
     session = sessionManager.startSession(
       sessionName = testName,
       metadata = SessionMetadata(
@@ -167,17 +175,14 @@ abstract class TrailblazeLoggingRule(
         testMethodName = description.methodName,
       ),
     )
-  }
 
-  override fun beforeTestExecution(description: Description) {
-    TrailblazeTracer.clear()
     super.beforeTestExecution(description)
   }
 
   override fun afterTestExecution(description: Description, result: Result<Nothing?>) {
     // Capture failure screenshot before ending the session
     if (result.isFailure) {
-      captureFailureScreenshot()
+      session?.let { captureFailureScreenshot(it) }
     }
 
     // End session if it exists
@@ -190,17 +195,45 @@ abstract class TrailblazeLoggingRule(
     }
 
     exportTraces()
+    session = null
   }
 
-  private fun captureFailureScreenshot() {
-    val currentSession = session ?: return
-    val provider = failureScreenStateProvider ?: return
+  /**
+   * Captures a screenshot at the moment of failure and logs it as a snapshot.
+   * Uses the rule's configured [failureScreenStateProvider]; logs a warning and
+   * returns if the provider was never assigned.
+   *
+   * Single entry point for all run methods (JUnit, on-device RPC, host CLI) so
+   * failure-screenshot behavior stays consistent.
+   */
+  fun captureFailureScreenshot(session: TrailblazeSession) {
+    if (!this::failureScreenStateProvider.isInitialized) {
+      Console.log(
+        "⚠️  Skipping failure screenshot for session ${session.sessionId.value}: " +
+          "no failureScreenStateProvider wired on TrailblazeLoggingRule"
+      )
+      return
+    }
+    captureFailureScreenshot(session, failureScreenStateProvider)
+  }
+
+  /**
+   * Overload that takes an explicit [screenStateProvider]. Used by host-side runners
+   * where the provider varies per driver (Playwright, Electron, Maestro, etc.) and
+   * isn't pre-wired onto the rule.
+   */
+  fun captureFailureScreenshot(session: TrailblazeSession, screenStateProvider: () -> ScreenState) {
     try {
-      val screenState = provider()
-      logger.logSnapshot(currentSession, screenState, displayName = "failure_screenshot")
-      Console.log("📸 Failure screenshot captured for session ${currentSession.sessionId.value}")
+      val screenState = screenStateProvider()
+      logger.logSnapshot(session, screenState, displayName = "failure_screenshot")
+      Console.log("📸 Failure screenshot captured for session ${session.sessionId.value}")
     } catch (e: Exception) {
-      Console.log("Failed to capture failure screenshot: ${e.message}")
+      Console.log(
+        "Failed to capture failure screenshot:\n" +
+          "  type=${e::class.simpleName}\n" +
+          "  message=${e.message}\n" +
+          e.stackTraceToString(),
+      )
     }
   }
 

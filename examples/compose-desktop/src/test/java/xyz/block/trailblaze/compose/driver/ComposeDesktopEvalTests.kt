@@ -17,7 +17,7 @@ import xyz.block.trailblaze.util.TrailYamlTemplateResolver
 /**
  * Eval tests for the Compose Desktop driver.
  *
- * Each test runs a trail YAML file from `opensource/trails/compose-desktop/` against sample Compose
+ * Each test runs a trail YAML file from `trails/compose-desktop/` against sample Compose
  * apps using the full Trailblaze pipeline: trail YAML -> TrailblazeRunner -> recorded steps -> tools.
  *
  * Mirrors the pattern of [PlaywrightNativeEvalTests] but for Compose Desktop.

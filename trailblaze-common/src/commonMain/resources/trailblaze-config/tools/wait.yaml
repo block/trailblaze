@@ -1,0 +1,2 @@
+id: wait
+class: xyz.block.trailblaze.toolcalls.commands.WaitForIdleSyncTrailblazeTool

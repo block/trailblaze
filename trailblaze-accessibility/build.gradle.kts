@@ -8,7 +8,7 @@ plugins {
 
 android {
   namespace = "xyz.block.trailblaze.android.accessibility.app"
-  compileSdk = 35
+  compileSdk = 36
   defaultConfig {
     minSdk = 26
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

@@ -50,6 +50,7 @@ enum class McpToolProfile {
     const val TOOL_CONFIG = "config"
     const val TOOL_SESSION = "session"
     const val TOOL_TOOLS = "toolbox"
+    const val TOOL_LOGCAT = "logcat"
 
     /** Tool names exposed in MINIMAL mode. */
     val MINIMAL_TOOL_NAMES =
@@ -62,6 +63,7 @@ enum class McpToolProfile {
         TOOL_CONFIG,
         TOOL_SESSION,
         TOOL_TOOLS,
+        TOOL_LOGCAT,
       )
   }
 }

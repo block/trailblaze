@@ -3,8 +3,13 @@ package xyz.block.trailblaze.docs
 import ai.koog.agents.core.tools.ToolParameterDescriptor
 import ai.koog.agents.core.tools.ToolParameterType
 import com.google.gson.GsonBuilder
+import xyz.block.trailblaze.config.ToolYamlConfig
+import xyz.block.trailblaze.config.ToolYamlLoader
+import xyz.block.trailblaze.config.toTrailblazeToolDescriptor
+import xyz.block.trailblaze.toolcalls.ToolSetCatalogEntry
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
-import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
+import xyz.block.trailblaze.toolcalls.TrailblazeToolParameterDescriptor
+import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
 import xyz.block.trailblaze.toolcalls.toKoogToolDescriptor
 import xyz.block.trailblaze.toolcalls.toolName
 import java.io.File
@@ -96,15 +101,80 @@ $THIS_DOC_IS_GENERATED_MESSAGE
     }
 
     fun generate() {
-        TrailblazeToolSet.AllBuiltInTrailblazeToolsForSerialization
+        // Wipe custom tool pages so docs for removed/renamed tools don't linger. CI wipes the
+        // whole `docs/generated/` tree before running the generator; doing the equivalent here
+        // keeps local `./gradlew :docs:generator:run` in lockstep with CI.
+        File(generatedFunctionsDocsDir, "custom").deleteRecursively()
+
+        ToolYamlLoader.discoverAndLoadAll().values
             .forEach { toolClass: KClass<out TrailblazeTool> ->
                 createPageForCommand(toolClass)
             }
-        createFunctionsIndexPage(TrailblazeToolSet.AllDefaultTrailblazeToolSets)
+        ToolYamlLoader.discoverYamlDefinedTools().values
+            .forEach { config: ToolYamlConfig ->
+                createPageForYamlDefinedTool(config)
+            }
+        createFunctionsIndexPage(TrailblazeToolSetCatalog.defaultEntries())
     }
 
-    private fun createFunctionsIndexPage(toolSets: Set<TrailblazeToolSet>) {
-        val map = toolSets.associate { it.name to it.toolClasses.filter { it.toKoogToolDescriptor() != null }.map { it.toolName().toolName }.toSet() }
+    fun createPageForYamlDefinedTool(config: ToolYamlConfig) {
+        val descriptor = config.toTrailblazeToolDescriptor()
+        val pagePath = "custom/${descriptor.name}.md"
+
+        val propertiesMarkdown = buildString {
+            if (descriptor.requiredParameters.isNotEmpty()) {
+                appendLine("### Required Parameters")
+                appendLine(yamlParamsString(descriptor.requiredParameters))
+            }
+            if (descriptor.optionalParameters.isNotEmpty()) {
+                appendLine("### Optional Parameters")
+                appendLine(yamlParamsString(descriptor.optionalParameters))
+            }
+        }
+
+        File(generatedFunctionsDocsDir, pagePath).also { file ->
+            file.parentFile.mkdirs()
+            file.writeText(
+                """
+## Tool `${descriptor.name}`
+
+## Description
+${descriptor.description}
+
+### Source
+YAML-defined tool (no Kotlin class). Expanded from `trailblaze-config/tools/${config.id}.yaml`.
+$propertiesMarkdown
+
+$THIS_DOC_IS_GENERATED_MESSAGE
+          """.trimMargin()
+            )
+        }
+    }
+
+    private fun yamlParamsString(params: List<TrailblazeToolParameterDescriptor>): String = buildString {
+        params.forEach { param ->
+            appendLine("- `${param.name}`: `${yamlTypeDisplay(param.type)}`")
+            if (!param.description.isNullOrBlank() && param.description != param.name) {
+                appendLine("  ${param.description}")
+            }
+        }
+    }
+
+    private fun yamlTypeDisplay(type: String): String = when (type.trim().lowercase()) {
+        "string" -> "String"
+        "integer", "int", "long" -> "Integer"
+        "number", "float", "double" -> "Float"
+        "boolean", "bool" -> "Boolean"
+        else -> type
+    }
+
+    private fun createFunctionsIndexPage(catalog: List<ToolSetCatalogEntry>) {
+        val map = catalog.associate { entry ->
+            val classToolNames = entry.toolClasses
+                .filter { it.toKoogToolDescriptor() != null }
+                .map { it.toolName().toolName }
+            entry.id to (classToolNames + entry.yamlToolNames.map { it.toolName }).toSet()
+        }
 
         File(generatedDir, "TOOLS.md").also { file ->
             val text = buildString {

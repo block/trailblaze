@@ -25,10 +25,13 @@ NOTE:
 
 // Make this a top-level public function so it can be used elsewhere
 @Suppress("UNCHECKED_CAST")
-fun TrailblazeTool.getToolNameFromAnnotation(): String = if (this is OtherTrailblazeTool) {
-  this.toolName
-} else {
-  try {
+fun TrailblazeTool.getToolNameFromAnnotation(): String = when {
+  this is OtherTrailblazeTool -> this.toolName
+  // Dynamically-constructed host-local tools (e.g. subprocess MCP) have no class-level
+  // @TrailblazeToolClass — the advertised name flows through the marker interface so
+  // session logging picks up the right identifier instead of the bare class simpleName.
+  this is HostLocalExecutableTrailblazeTool -> this.advertisedToolName
+  else -> try {
     val kClass = this::class
     val annotation = kClass.findAnnotation<TrailblazeToolClass>()
     annotation?.name ?: kClass.simpleName ?: "UnknownTool"

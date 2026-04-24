@@ -3,6 +3,7 @@ package xyz.block.trailblaze.config
 import xyz.block.trailblaze.llm.config.ClasspathConfigResourceSource
 import xyz.block.trailblaze.llm.config.ConfigResourceSource
 import xyz.block.trailblaze.llm.config.TrailblazeConfigPaths
+import xyz.block.trailblaze.llm.config.platformConfigResourceSource
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.util.Console
 
@@ -84,7 +85,7 @@ object AppTargetYamlLoader {
    * @param resourceSource where to discover YAML files; defaults to JVM classpath scanning
    */
   fun discoverConfigs(
-    resourceSource: ConfigResourceSource = ClasspathConfigResourceSource,
+    resourceSource: ConfigResourceSource = platformConfigResourceSource(),
   ): List<AppTargetYamlConfig> {
     if (resourceSource === ClasspathConfigResourceSource) {
       cachedConfigs?.let { return it }
@@ -116,7 +117,7 @@ object AppTargetYamlLoader {
     toolNameResolver: ToolNameResolver,
     availableToolSets: Map<String, ResolvedToolSet> = emptyMap(),
     companions: Map<String, AppTargetCompanion> = emptyMap(),
-    resourceSource: ConfigResourceSource = ClasspathConfigResourceSource,
+    resourceSource: ConfigResourceSource = platformConfigResourceSource(),
   ): Set<TrailblazeHostAppTarget> {
     return loadAllFromYamlContents(
       yamlContents = discoverYamlContents(resourceSource),

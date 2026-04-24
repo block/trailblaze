@@ -143,6 +143,7 @@ trailblaze snapshot [OPTIONS]
 | `--bounds` | Include bounding box {x,y,w,h} for each element | - |
 | `--offscreen` | Include offscreen elements marked (offscreen) | - |
 | `--screenshot` | Save a screenshot to disk and print the file path | - |
+| `--all` | Show all visible elements, including those normally filtered as non-interactive | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
 
@@ -219,7 +220,7 @@ trailblaze trail [OPTIONS] <<trailFile>>
 
 | Argument | Description | Required |
 |----------|-------------|----------|
-| `<<trailFile>>` | Path to a .trail.yaml file or directory containing trail files | Yes |
+| `<<trailFile>>` | One or more trail files (.trail.yaml or blaze.yaml). Use your shell's glob to run a batch (e.g., flows/**/*.trail.yaml). | Yes |
 
 **Options:**
 
@@ -522,9 +523,9 @@ trailblaze config reset
 | `llm-model` | LLM model ID | e.g., gpt-4-1, claude-sonnet-4-20250514, gemini-3-flash or 'none' to disable |
 | `target` | Target app for device connections and custom tools | App target ID. Run 'trailblaze config target' to see all. |
 | `agent` | Agent implementation | TRAILBLAZE_RUNNER, MULTI_AGENT_V3 |
-| `android-driver` | Android driver type | HOST, ONDEVICE, ACCESSIBILITY |
-| `ios-driver` | iOS driver type | HOST |
-| `ai-fallback` | Enable/disable AI fallback when recorded steps fail | true, false |
+| `android-driver` | Android driver type | accessibility, instrumentation |
+| `ios-driver` | iOS driver type | host, axe |
+| `self-heal` | Enable/disable self-heal (AI takes over) when recorded steps fail | true, false |
 | `mode` | CLI working mode: trail (author reproducible trails) or blaze (explore device) | trail, blaze |
 | `device` | Default device platform for CLI commands | android, ios, web |
 
