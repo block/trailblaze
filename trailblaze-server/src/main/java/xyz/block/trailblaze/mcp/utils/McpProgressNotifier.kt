@@ -182,6 +182,21 @@ class McpProgressNotifier(
       )
     }
 
+    is TrailblazeLog.PrerequisiteStartLog -> {
+      ProgressNotificationData(
+        message = "Running prerequisite: ${log.prerequisiteTitle ?: log.prerequisiteTrailId}",
+        category = "prerequisite",
+      )
+    }
+
+    is TrailblazeLog.PrerequisiteCompleteLog -> {
+      val status = if (log.passed) "PASSED" else "FAILED"
+      ProgressNotificationData(
+        message = "Prerequisite ${log.prerequisiteTitle ?: log.prerequisiteTrailId}: $status (${log.durationMs}ms)",
+        category = "prerequisite",
+      )
+    }
+
     // Log types we don't surface as progress notifications (yet)
     is TrailblazeLog.AccessibilityActionLog,
     is TrailblazeLog.TrailblazeAgentTaskStatusChangeLog,

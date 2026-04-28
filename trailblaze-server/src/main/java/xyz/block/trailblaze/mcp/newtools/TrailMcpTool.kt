@@ -3,9 +3,11 @@ package xyz.block.trailblaze.mcp.newtools
 import ai.koog.agents.core.tools.annotations.LLMDescription
 import ai.koog.agents.core.tools.annotations.Tool
 import ai.koog.agents.core.tools.reflect.ToolSet
+import kotlinx.datetime.Clock
 import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.logs.client.LogEmitter
+import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.getSessionStartedInfo
@@ -360,7 +362,13 @@ class TrailMcpTool(
 
     val stepCount = loadResult.promptSteps?.size ?: 0
 
-    // Connect to device if needed
+    // Get effective config by merging variant config with NL definition config.
+    // This ensures prerequisites (and other config fields) defined in blaze.yaml
+    // are available even when running a platform-specific .trail.yaml variant.
+    val effectiveConfig = trailFileManager.getEffectiveConfig(trailFile, loadResult.config)
+
+    // Connect to device BEFORE prerequisites — both prerequisites and the main trail
+    // need a connected device to execute tool calls.
     if (platform != null || device != null) {
       val connectResult = connectToDevice(platform, device)
       if (connectResult.startsWith("Error")) {
@@ -381,10 +389,24 @@ class TrailMcpTool(
       }
     }
 
+    // Auto-execute prerequisites before the main trail steps
+    val prerequisites = effectiveConfig?.prerequisites
+    if (!prerequisites.isNullOrEmpty()) {
+      val prereqResult = executePrerequisites(
+        prerequisites = prerequisites,
+        currentTrailId = effectiveConfig?.id ?: name ?: file ?: "unknown",
+        platform = platform,
+        device = device,
+      )
+      if (prereqResult != null) {
+        return prereqResult
+      }
+    }
+
     Console.log("")
     Console.log("┌──────────────────────────────────────────────────────────────────────────────")
     Console.log("│ [trail] Running: $trailFile")
-    Console.log("│ Title: ${loadResult.config?.title ?: "untitled"}")
+    Console.log("│ Title: ${effectiveConfig?.title ?: "untitled"}")
     Console.log("│ Steps: $stepCount")
 
     // Execute the trail deterministically using TrailExecutor
@@ -397,7 +419,7 @@ class TrailMcpTool(
     }
     val executionResult = trailExecutor.execute(
       trailItems = trailItems,
-      trailName = loadResult.config?.title ?: File(trailFile).nameWithoutExtension,
+      trailName = effectiveConfig?.title ?: File(trailFile).nameWithoutExtension,
     ) { progress ->
       Console.log("│ $progress")
       sessionContext?.sendIndeterminateProgressMessage(progress)
@@ -478,6 +500,8 @@ class TrailMcpTool(
     MOVE,
     /** Strip recordings from steps so they run with AI next time */
     CLEAR_RECORDING,
+    /** Set prerequisite trail IDs that must run before this trail */
+    SET_PREREQUISITES,
   }
 
   @LLMDescription(
@@ -494,6 +518,7 @@ class TrailMcpTool(
     - DELETE: Remove steps
     - MOVE: Reorder a step
     - CLEAR_RECORDING: Strip recordings so steps run with AI on next execution
+    - SET_PREREQUISITES: Set prerequisite trail IDs that auto-run before this trail
 
     Workflow: Edit prompts → Run trail (AI handles unrecorded steps) → Save to capture recordings
 
@@ -505,6 +530,8 @@ class TrailMcpTool(
     - trailEdit(operation=MOVE, name="login_flow", index=5, position=2)
     - trailEdit(operation=CLEAR_RECORDING, name="login_flow", index=3)
     - trailEdit(operation=CLEAR_RECORDING, name="login_flow") → clears ALL recordings
+    - trailEdit(operation=SET_PREREQUISITES, name="checkout_flow", prerequisites=["login_flow", "add_to_cart"])
+    - trailEdit(operation=SET_PREREQUISITES, name="checkout_flow", prerequisites=[]) → clears prerequisites
     """
   )
   @Tool(McpToolProfile.TOOL_TRAIL_EDIT)
@@ -523,6 +550,8 @@ class TrailMcpTool(
     prompt: String? = null,
     @LLMDescription("Step type: 'step' (default) or 'verify'")
     stepType: String? = null,
+    @LLMDescription("List of prerequisite trail IDs (for SET_PREREQUISITES). Pass empty list to clear.")
+    prerequisites: List<String>? = null,
   ): String {
     // Resolve trail file
     val trailFile = trailFileManager.findTrailByName(name)
@@ -538,6 +567,7 @@ class TrailMcpTool(
       TrailEditOperation.DELETE -> handleEditDelete(trailFile, index, count)
       TrailEditOperation.MOVE -> handleEditMove(trailFile, index, position)
       TrailEditOperation.CLEAR_RECORDING -> handleEditClearRecording(trailFile, index, count)
+      TrailEditOperation.SET_PREREQUISITES -> handleSetPrerequisites(trailFile, name, prerequisites)
     }
   }
 
@@ -563,6 +593,7 @@ class TrailMcpTool(
       success = true,
       file = trailFile,
       title = config?.title,
+      prerequisites = config?.prerequisites,
       steps = stepInfos,
       totalSteps = steps.size,
       recordedSteps = recorded,
@@ -848,9 +879,227 @@ class TrailMcpTool(
     }
   }
 
+  private fun handleSetPrerequisites(
+    trailFile: String,
+    trailName: String,
+    prerequisites: List<String>?,
+  ): String {
+    if (prerequisites == null) {
+      return TrailEditResult(
+        success = false,
+        error = "Missing prerequisites parameter. Example: trailEdit(operation=SET_PREREQUISITES, name='...', prerequisites=['login_flow'])",
+      ).toJson()
+    }
+
+    val (config, steps) = trailFileManager.getEditableSteps(trailFile)
+      ?: return TrailEditResult(success = false, error = "Failed to load trail").toJson()
+
+    val trailId = config?.id ?: trailName
+
+    if (prerequisites.isNotEmpty()) {
+      // Validate all prerequisite IDs exist
+      val validationErrors = trailFileManager.validatePrerequisites(
+        config?.copy(prerequisites = prerequisites)
+          ?: TrailConfig(prerequisites = prerequisites),
+      )
+      if (validationErrors.isNotEmpty()) {
+        return TrailEditResult(
+          success = false,
+          error = validationErrors.joinToString("; "),
+        ).toJson()
+      }
+
+      // Check for circular dependencies
+      val circularError = trailFileManager.detectCircularDependency(trailId, prerequisites)
+      if (circularError != null) {
+        return TrailEditResult(
+          success = false,
+          error = circularError,
+        ).toJson()
+      }
+    }
+
+    // Update config with new prerequisites
+    val updatedConfig = (config ?: TrailConfig(id = trailId)).copy(
+      prerequisites = prerequisites.ifEmpty { null },
+    )
+
+    val result = trailFileManager.saveEditedSteps(trailFile, updatedConfig, steps)
+    return if (result.success) {
+      val changeDesc = if (prerequisites.isEmpty()) {
+        "Cleared all prerequisites"
+      } else {
+        "Set prerequisites: ${prerequisites.joinToString(", ")}"
+      }
+      TrailEditResult(
+        success = true,
+        file = trailFile,
+        totalSteps = result.totalSteps,
+        recordedSteps = result.recordedSteps,
+        unrecordedSteps = result.unrecordedSteps,
+        changes = listOf(changeDesc),
+        message = if (prerequisites.isEmpty()) {
+          "Prerequisites cleared."
+        } else {
+          "Prerequisites set. These trails will auto-run before this trail on RUN."
+        },
+      ).toJson()
+    } else {
+      TrailEditResult(success = false, error = result.error).toJson()
+    }
+  }
+
   // ─────────────────────────────────────────────────────────────────────────────
   // Helper methods
   // ─────────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Auto-executes prerequisite trails before the main trail.
+   *
+   * @param prerequisites List of prerequisite trail IDs to execute
+   * @param currentTrailId ID of the current trail (for circular dependency detection)
+   * @param platform Optional platform for device connection
+   * @param device Optional specific device ID
+   * @return An error JSON string if any prerequisite fails, or null if all succeeded
+   */
+  private suspend fun executePrerequisites(
+    prerequisites: List<String>,
+    currentTrailId: String,
+    platform: TrailblazeDevicePlatform?,
+    device: String?,
+    visited: MutableSet<String> = mutableSetOf(),
+  ): String? {
+    visited.add(currentTrailId)
+
+    Console.log("│ Prerequisites: ${prerequisites.joinToString(", ")}")
+
+    // Check for circular dependencies before executing any prerequisites
+    val circularError = trailFileManager.detectCircularDependency(currentTrailId, prerequisites)
+    if (circularError != null) {
+      return TrailRunResult(
+        success = false,
+        error = circularError,
+      ).toJson()
+    }
+
+    for (prereqId in prerequisites) {
+      val prereqFile = trailFileManager.findTrailByName(prereqId)
+      if (prereqFile == null) {
+        return TrailRunResult(
+          success = false,
+          error = "Prerequisite trail '$prereqId' not found. Use trail(action=LIST) to see available trails.",
+        ).toJson()
+      }
+
+      val prereqLoad = trailFileManager.loadTrail(prereqFile)
+      if (!prereqLoad.success) {
+        return TrailRunResult(
+          success = false,
+          error = "Failed to load prerequisite trail '$prereqId': ${prereqLoad.error}",
+        ).toJson()
+      }
+
+      val prereqEffectiveConfig = trailFileManager.getEffectiveConfig(prereqFile, prereqLoad.config)
+
+      // Recursively execute nested prerequisites (if any) before running this one
+      val nestedPrereqs = prereqEffectiveConfig?.prerequisites
+        ?.filter { it !in visited }
+      if (!nestedPrereqs.isNullOrEmpty()) {
+        val nestedResult = executePrerequisites(
+          prerequisites = nestedPrereqs,
+          currentTrailId = prereqId,
+          platform = platform,
+          device = device,
+          visited = visited,
+        )
+        if (nestedResult != null) {
+          return nestedResult
+        }
+      }
+
+      Console.log("│ Running prerequisite: $prereqId")
+
+      val prereqTitle = prereqEffectiveConfig?.title
+      val sessionId = sessionIdProvider?.invoke()
+
+      // Emit prerequisite start log
+      if (sessionId != null) {
+        logEmitter?.emit(
+          TrailblazeLog.PrerequisiteStartLog(
+            prerequisiteTrailId = prereqId,
+            prerequisiteTitle = prereqTitle,
+            parentTrailId = currentTrailId,
+            session = sessionId,
+            timestamp = Clock.System.now(),
+          )
+        )
+      }
+
+      val prereqStartTime = Clock.System.now()
+
+      // Execute the prerequisite trail
+      val prereqItems = prereqLoad.trailItems
+      if (prereqItems == null) {
+        // Emit failure log before returning
+        if (sessionId != null) {
+          logEmitter?.emit(
+            TrailblazeLog.PrerequisiteCompleteLog(
+              prerequisiteTrailId = prereqId,
+              prerequisiteTitle = prereqTitle,
+              parentTrailId = currentTrailId,
+              passed = false,
+              stepsExecuted = 0,
+              durationMs = (Clock.System.now() - prereqStartTime).inWholeMilliseconds,
+              failureReason = "Prerequisite trail has no executable items",
+              session = sessionId,
+              timestamp = Clock.System.now(),
+            )
+          )
+        }
+        return TrailRunResult(
+          success = false,
+          error = "Prerequisite trail '$prereqId' has no executable items",
+        ).toJson()
+      }
+
+      val prereqResult = trailExecutor.execute(
+        trailItems = prereqItems,
+        trailName = prereqTitle ?: prereqId,
+      ) { progress ->
+        Console.log("│   [prereq] $progress")
+        sessionContext?.sendIndeterminateProgressMessage("[prereq: $prereqId] $progress")
+      }
+
+      // Emit prerequisite complete log
+      if (sessionId != null) {
+        logEmitter?.emit(
+          TrailblazeLog.PrerequisiteCompleteLog(
+            prerequisiteTrailId = prereqId,
+            prerequisiteTitle = prereqTitle,
+            parentTrailId = currentTrailId,
+            passed = prereqResult.passed,
+            stepsExecuted = prereqResult.stepsExecuted,
+            durationMs = prereqResult.durationMs,
+            failureReason = prereqResult.failureReason,
+            session = sessionId,
+            timestamp = Clock.System.now(),
+          )
+        )
+      }
+
+      if (!prereqResult.passed) {
+        Console.log("│ Prerequisite '$prereqId' FAILED at step ${prereqResult.failedAtStep}: ${prereqResult.failureReason}")
+        return TrailRunResult(
+          success = false,
+          error = "Prerequisite trail '$prereqId' failed at step ${prereqResult.failedAtStep}: ${prereqResult.failureReason}",
+        ).toJson()
+      }
+
+      Console.log("│ Prerequisite '$prereqId' PASSED (${prereqResult.stepsExecuted} steps, ${prereqResult.durationMs}ms)")
+    }
+
+    return null // All prerequisites passed
+  }
 
   private suspend fun connectToDevice(
     platform: TrailblazeDevicePlatform?,
@@ -972,6 +1221,7 @@ data class TrailEditGetResult(
   val success: Boolean,
   val file: String? = null,
   val title: String? = null,
+  val prerequisites: List<String>? = null,
   val steps: List<TrailEditStepInfo>? = null,
   val totalSteps: Int? = null,
   val recordedSteps: Int? = null,

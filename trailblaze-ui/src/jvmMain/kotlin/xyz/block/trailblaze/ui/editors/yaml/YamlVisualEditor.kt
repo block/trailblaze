@@ -86,6 +86,7 @@ fun YamlVisualEditor(
   onYamlContentChange: (String) -> Unit,
   visualEditorView: YamlVisualEditorView,
   onVisualEditorViewChange: (YamlVisualEditorView) -> Unit,
+  availableTrailIds: List<String> = emptyList(),
   modifier: Modifier = Modifier,
 ) {
   // Parse YAML content
@@ -181,6 +182,7 @@ fun YamlVisualEditor(
               updateYamlFromItems()
             },
             onItemDelete = {},
+            availableTrailIds = availableTrailIds,
             modifier = Modifier.fillMaxWidth()
           )
         }
@@ -294,6 +296,7 @@ private fun TrailYamlItemCard(
   onMoveDown: () -> Unit,
   onItemUpdate: (TrailYamlItem) -> Unit,
   onItemDelete: () -> Unit,
+  availableTrailIds: List<String> = emptyList(),
   modifier: Modifier = Modifier,
 ) {
   var showDeleteDialog by remember { mutableStateOf(false) }
@@ -357,6 +360,7 @@ private fun TrailYamlItemCard(
           is TrailYamlItem.ConfigTrailItem -> ConfigItemContent(
             item = item,
             onUpdate = { onItemUpdate(it) },
+            availableTrailIds = availableTrailIds,
           )
 
           is TrailYamlItem.PromptsTrailItem -> PromptsItemContent(
@@ -394,6 +398,7 @@ private fun TrailYamlItemCard(
 private fun ConfigItemContent(
   item: TrailYamlItem.ConfigTrailItem,
   onUpdate: (TrailYamlItem.ConfigTrailItem) -> Unit,
+  availableTrailIds: List<String> = emptyList(),
 ) {
   Text(
     text = "Configuration",
@@ -592,6 +597,122 @@ private fun ConfigItemContent(
         )
       }
     }
+  }
+
+  // Prerequisites section
+  Spacer(modifier = Modifier.height(8.dp))
+  Row(
+    modifier = Modifier.fillMaxWidth(),
+    horizontalArrangement = Arrangement.SpaceBetween,
+    verticalAlignment = Alignment.CenterVertically
+  ) {
+    Text(
+      text = "Prerequisites",
+      style = MaterialTheme.typography.titleSmall,
+      fontWeight = FontWeight.Medium
+    )
+    FilledTonalButton(
+      onClick = {
+        val currentPrereqs = item.config.prerequisites ?: emptyList()
+        // Add an empty placeholder that the user will fill via the dropdown
+        val newPrereqs = currentPrereqs + ""
+        onUpdate(item.copy(config = item.config.copy(prerequisites = newPrereqs)))
+      }
+    ) {
+      Icon(
+        Icons.Filled.Add,
+        contentDescription = "Add Prerequisite",
+        modifier = Modifier.size(16.dp).padding(end = 4.dp)
+      )
+      Text("Add")
+    }
+  }
+
+  val prerequisites = item.config.prerequisites ?: emptyList()
+  // Filter available trails: exclude the current trail's own ID and already-selected prerequisites
+  val currentTrailId = item.config.id ?: ""
+
+  prerequisites.forEachIndexed { prereqIndex, prereqId ->
+    var prereqDropdownExpanded by remember { mutableStateOf(prereqId.isBlank()) }
+    val selectableTrailIds = availableTrailIds.filter { trailId ->
+      trailId != currentTrailId && (trailId == prereqId || trailId !in prerequisites)
+    }
+
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
+      verticalAlignment = Alignment.CenterVertically
+    ) {
+      ExposedDropdownMenuBox(
+        expanded = prereqDropdownExpanded,
+        onExpandedChange = { prereqDropdownExpanded = it },
+        modifier = Modifier.weight(1f)
+      ) {
+        OutlinedTextField(
+          value = prereqId,
+          onValueChange = { newValue ->
+            // Allow manual typing as well
+            val newPrereqs = prerequisites.toMutableList().apply {
+              set(prereqIndex, newValue)
+            }
+            onUpdate(item.copy(config = item.config.copy(
+              prerequisites = newPrereqs.filter { it.isNotBlank() }.takeIf { it.isNotEmpty() }
+            )))
+          },
+          label = { Text("Trail ID") },
+          placeholder = { Text("Select or type a trail ID") },
+          trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = prereqDropdownExpanded) },
+          singleLine = true,
+          modifier = Modifier
+            .fillMaxWidth()
+            .menuAnchor()
+        )
+        if (selectableTrailIds.isNotEmpty()) {
+          ExposedDropdownMenu(
+            expanded = prereqDropdownExpanded,
+            onDismissRequest = { prereqDropdownExpanded = false }
+          ) {
+            selectableTrailIds.forEach { trailId ->
+              DropdownMenuItem(
+                text = { Text(trailId) },
+                onClick = {
+                  val newPrereqs = prerequisites.toMutableList().apply {
+                    set(prereqIndex, trailId)
+                  }
+                  onUpdate(item.copy(config = item.config.copy(
+                    prerequisites = newPrereqs.filter { it.isNotBlank() }.takeIf { it.isNotEmpty() }
+                  )))
+                  prereqDropdownExpanded = false
+                }
+              )
+            }
+          }
+        }
+      }
+      IconButton(
+        onClick = {
+          val newPrereqs = prerequisites.toMutableList().apply { removeAt(prereqIndex) }
+          onUpdate(item.copy(config = item.config.copy(
+            prerequisites = newPrereqs.takeIf { it.isNotEmpty() }
+          )))
+        }
+      ) {
+        Icon(
+          Icons.Filled.Delete,
+          contentDescription = "Remove prerequisite",
+          tint = MaterialTheme.colorScheme.error,
+          modifier = Modifier.size(20.dp)
+        )
+      }
+    }
+  }
+
+  if (prerequisites.isEmpty()) {
+    Text(
+      text = "No prerequisites. Add trails that should run before this one.",
+      style = MaterialTheme.typography.bodySmall,
+      color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
   }
 }
 

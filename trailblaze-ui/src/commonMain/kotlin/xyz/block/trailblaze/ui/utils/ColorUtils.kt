@@ -24,6 +24,8 @@ object ColorUtils {
       ) // yellow
       is TrailblazeLog.ObjectiveStartLog -> if (isSystemInDarkTheme) Color(0xFFC3883A) else Color(0xFFf5b042) // orange
       is TrailblazeLog.ObjectiveCompleteLog -> if (isSystemInDarkTheme) Color(0xFFC2689A) else Color(0xFFf49ac2) // magenta/pink
+      is TrailblazeLog.PrerequisiteStartLog -> if (isSystemInDarkTheme) Color(0xFF6B8E8A) else Color(0xFF88C9BF) // teal
+      is TrailblazeLog.PrerequisiteCompleteLog -> if (isSystemInDarkTheme) Color(0xFF5A8575) else Color(0xFF7AB89E) // darker teal
       is TrailblazeLog.AccessibilityActionLog -> if (isSystemInDarkTheme) Color(0xFF7BA3C4) else Color(0xFFadd8e6) // light blue
       else -> if (isSystemInDarkTheme) Color(0xFF666666) else Color(0xFF000000) // fallback color
     }

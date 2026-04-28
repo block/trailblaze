@@ -199,6 +199,18 @@ fun LogListRow(
       duration = null,
       elapsedTime = elapsedTimeMs
     )
+
+    is TrailblazeLog.PrerequisiteStartLog -> LogCardData(
+      title = "Prerequisite Start: ${log.prerequisiteTitle ?: log.prerequisiteTrailId}",
+      duration = null,
+      elapsedTime = elapsedTimeMs
+    )
+
+    is TrailblazeLog.PrerequisiteCompleteLog -> LogCardData(
+      title = if (log.passed) "Prerequisite Passed" else "Prerequisite Failed",
+      duration = log.durationMs,
+      elapsedTime = elapsedTimeMs
+    )
   }
 
   val elapsedMs = log.timestamp.toEpochMilliseconds() - sessionStartTime.toEpochMilliseconds()

@@ -18,6 +18,7 @@ import xyz.block.trailblaze.yaml.VerificationStep
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
+import xyz.block.trailblaze.recordings.TrailRecordings
 import java.io.File
 
 /**
@@ -109,7 +110,8 @@ class TrailFileManager(
         dir.mkdirs()
       }
 
-      // Build trail YAML items
+      // Build trail YAML items (prerequisite validation happens at the MCP tool layer
+      // since saveTrail builds its own config without prerequisites)
       val trailItems = buildTrailYamlItems(name, steps, platform, metadata)
 
       // Encode to YAML
@@ -214,9 +216,19 @@ class TrailFileManager(
       } catch (_: IllegalArgumentException) { null }
     }
 
-    // Try directory with any platform variant
+    // Try directory with NL definition file (blaze.yaml / trailblaze.yaml)
     val trailDir = File(dir, name)
     if (trailDir.exists() && trailDir.isDirectory) {
+      for (nlFileName in TrailRecordings.NL_DEFINITION_FILENAMES) {
+        val nlFile = File(trailDir, nlFileName)
+        if (nlFile.exists()) {
+          return try {
+            validateWithinTrailsDir(nlFile, name).absolutePath
+          } catch (_: IllegalArgumentException) { null }
+        }
+      }
+
+      // Try directory with any platform variant
       trailDir.listFiles()?.firstOrNull { it.name.endsWith(".trail.yaml") }
         ?.let {
           return try {
@@ -404,6 +416,275 @@ class TrailFileManager(
     }
   }
 
+  /**
+   * Loads the NL definition config (from blaze.yaml / trailblaze.yaml) for a trail directory.
+   * This is useful when a variant file (e.g., android.trail.yaml) is loaded but its config
+   * may not contain all fields (like prerequisites) that are defined in the NL definition file.
+   *
+   * @param variantFilePath Path to any file within the trail directory
+   * @return The TrailConfig from the NL definition file, or null if not found
+   */
+  fun loadNlDefinitionConfig(variantFilePath: String): TrailConfig? {
+    val parentDir = File(variantFilePath).parentFile ?: return null
+    for (nlFileName in TrailRecordings.NL_DEFINITION_FILENAMES) {
+      val nlFile = File(parentDir, nlFileName)
+      if (nlFile.exists()) {
+        return try {
+          val yamlContent = nlFile.readText()
+          trailblazeYaml.extractTrailConfig(yamlContent)
+        } catch (_: Exception) {
+          null
+        }
+      }
+    }
+    return null
+  }
+
+  /**
+   * Returns the effective config for a trail, merging the variant config with the NL definition
+   * config. The variant config takes precedence, but NL definition config fills in missing fields
+   * (like prerequisites).
+   *
+   * @param variantFilePath Path to the variant trail file
+   * @param variantConfig Config extracted from the variant file (may be null)
+   * @return Merged config with prerequisites from NL definition if not set in variant
+   */
+  fun getEffectiveConfig(variantFilePath: String, variantConfig: TrailConfig?): TrailConfig? {
+    val nlConfig = loadNlDefinitionConfig(variantFilePath)
+    if (nlConfig == null) return variantConfig
+    if (variantConfig == null) return nlConfig
+
+    // Merge: variant config takes precedence, NL config fills in missing fields
+    return variantConfig.copy(
+      prerequisites = variantConfig.prerequisites ?: nlConfig.prerequisites,
+      id = variantConfig.id ?: nlConfig.id,
+      title = variantConfig.title ?: nlConfig.title,
+      description = variantConfig.description ?: nlConfig.description,
+      priority = variantConfig.priority ?: nlConfig.priority,
+      context = variantConfig.context ?: nlConfig.context,
+      source = variantConfig.source ?: nlConfig.source,
+      metadata = if (variantConfig.metadata != null) variantConfig.metadata else nlConfig.metadata,
+      app = variantConfig.app ?: nlConfig.app,
+      platform = variantConfig.platform ?: nlConfig.platform,
+      driver = variantConfig.driver ?: nlConfig.driver,
+    )
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Prerequisite validation
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Validates that all prerequisite trail IDs in [config] resolve to existing trail files.
+   *
+   * @param config The trail config whose prerequisites should be validated
+   * @return A list of validation error strings. Empty list means all prerequisites are valid.
+   */
+  fun validatePrerequisites(config: TrailConfig?): List<String> {
+    val prerequisites = config?.prerequisites
+    if (prerequisites.isNullOrEmpty()) return emptyList()
+
+    val errors = mutableListOf<String>()
+    for (prereqId in prerequisites) {
+      if (findTrailByName(prereqId) == null) {
+        errors.add("Prerequisite trail '$prereqId' not found")
+      }
+    }
+    return errors
+  }
+
+  /**
+   * Detects circular dependencies between trails using a full depth-first traversal.
+   *
+   * Checks whether [targetTrailId] adding [newPrerequisites] would create a cycle,
+   * including transitive chains (e.g., A → B → C → A).
+   *
+   * @param targetTrailId The ID of the trail being updated
+   * @param newPrerequisites The prerequisite IDs to set
+   * @return A circular dependency error message, or null if no cycle detected
+   */
+  fun detectCircularDependency(targetTrailId: String, newPrerequisites: List<String>): String? {
+    // Direct self-reference
+    if (targetTrailId in newPrerequisites) {
+      return "Circular dependency: trail '$targetTrailId' cannot be a prerequisite of itself"
+    }
+
+    // DFS through the full prerequisite graph looking for a path back to targetTrailId
+    val visited = mutableSetOf<String>()
+    val stack = ArrayDeque(newPrerequisites)
+
+    while (stack.isNotEmpty()) {
+      val prereqId = stack.removeLast()
+      if (!visited.add(prereqId)) continue
+
+      val prereqFile = findTrailByName(prereqId) ?: continue
+      val prereqConfig = getEffectiveConfig(prereqFile, getTrailInfo(prereqFile)?.first)
+      val transitiveDeps = prereqConfig?.prerequisites ?: continue
+
+      for (dep in transitiveDeps) {
+        if (dep == targetTrailId) {
+          return "Circular dependency: trail '$targetTrailId' is reachable through '$prereqId' → '$dep'"
+        }
+        if (dep !in visited) {
+          stack.addLast(dep)
+        }
+      }
+    }
+
+    return null
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Prerequisite flattening
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Flattens prerequisite trail steps into the given YAML content.
+   *
+   * When a trail has `prerequisites: [trailA, trailB]` in its config, this method:
+   * 1. Loads each prerequisite trail file
+   * 2. Extracts their prompt steps
+   * 3. Prepends them before the main trail's steps
+   * 4. Returns the combined YAML content
+   *
+   * This is used by the Desktop UI to ensure prerequisite steps are executed as part
+   * of the same session when running a trail from the trails browser or YAML editor.
+   *
+   * If no prerequisites are defined, or if prerequisite resolution fails, the original
+   * YAML content is returned unchanged.
+   *
+   * @param yamlContent The YAML content of the main trail
+   * @param variantFilePath Optional file path of the trail variant (used to resolve
+   *   NL definition config for prerequisites defined in blaze.yaml)
+   * @return Flattened YAML with prerequisite steps prepended, or original content if
+   *   no prerequisites exist
+   */
+  fun flattenPrerequisites(
+    yamlContent: String,
+    variantFilePath: String? = null,
+  ): String {
+    return flattenPrerequisitesRecursive(yamlContent, variantFilePath, mutableSetOf())
+  }
+
+  private fun flattenPrerequisitesRecursive(
+    yamlContent: String,
+    variantFilePath: String? = null,
+    visited: MutableSet<String>,
+  ): String {
+    val trailItems = try {
+      trailblazeYaml.decodeTrail(yamlContent)
+    } catch (e: Exception) {
+      Console.log("[TrailFileManager] Failed to parse YAML for prerequisite flattening: ${e.message}")
+      return yamlContent
+    }
+
+    val config = trailblazeYaml.extractTrailConfig(trailItems)
+
+    // Merge with NL definition config to pick up prerequisites defined in blaze.yaml
+    val effectiveConfig = if (variantFilePath != null) {
+      getEffectiveConfig(variantFilePath, config)
+    } else {
+      config
+    }
+
+    // Track this trail in visited set to prevent circular dependency loops.
+    // We add both the config ID and the directory name (used for prerequisite lookups)
+    // so that cycle detection works even when a trail's config ID differs from its directory name.
+    val currentId = effectiveConfig?.id
+    if (currentId != null) {
+      if (currentId in visited) {
+        Console.log("[TrailFileManager] Circular dependency detected for '$currentId', skipping")
+        return yamlContent
+      }
+      visited.add(currentId)
+    }
+    val directoryName = variantFilePath?.let { File(it).parentFile?.name }
+    if (directoryName != null && directoryName !in visited) {
+      visited.add(directoryName)
+    }
+
+    val prerequisites = effectiveConfig?.prerequisites
+    if (prerequisites.isNullOrEmpty()) return yamlContent
+
+    Console.log("[TrailFileManager] Flattening ${prerequisites.size} prerequisite(s): ${prerequisites.joinToString(", ")}")
+
+    // Collect all prerequisite prompt steps (in order)
+    val prereqPromptSteps = mutableListOf<PromptStep>()
+    for (prereqId in prerequisites) {
+      if (prereqId in visited) {
+        Console.log("[TrailFileManager] Skipping already-visited prerequisite '$prereqId' (circular dependency)")
+        continue
+      }
+
+      val prereqFile = findTrailByName(prereqId)
+      if (prereqFile == null) {
+        Console.log("[TrailFileManager] Warning: prerequisite trail '$prereqId' not found, skipping")
+        continue
+      }
+
+      val prereqLoad = loadTrail(prereqFile)
+      if (!prereqLoad.success || prereqLoad.trailItems == null) {
+        Console.log("[TrailFileManager] Warning: failed to load prerequisite trail '$prereqId', skipping")
+        continue
+      }
+
+      // Also recursively flatten the prerequisite's own prerequisites
+      val prereqConfig = prereqLoad.config
+      val prereqEffConfig = getEffectiveConfig(prereqFile, prereqConfig)
+      val nestedPrereqs = prereqEffConfig?.prerequisites
+      val prereqItems = if (!nestedPrereqs.isNullOrEmpty()) {
+        // Re-encode the prerequisite trail, flatten recursively, then re-decode
+        val prereqYaml = trailblazeYaml.encodeToString(prereqLoad.trailItems)
+        val flattenedPrereqYaml = flattenPrerequisitesRecursive(prereqYaml, prereqFile, visited)
+        try {
+          trailblazeYaml.decodeTrail(flattenedPrereqYaml)
+        } catch (_: Exception) {
+          prereqLoad.trailItems
+        }
+      } else {
+        prereqLoad.trailItems
+      }
+
+      val steps = prereqItems
+        .filterIsInstance<TrailYamlItem.PromptsTrailItem>()
+        .flatMap { it.promptSteps }
+      prereqPromptSteps.addAll(steps)
+      Console.log("[TrailFileManager] Added ${steps.size} steps from prerequisite '$prereqId'")
+    }
+
+    if (prereqPromptSteps.isEmpty()) return yamlContent
+
+    // Reconstruct the trail items with prerequisite steps prepended
+    val mainPromptSteps = trailItems
+      .filterIsInstance<TrailYamlItem.PromptsTrailItem>()
+      .flatMap { it.promptSteps }
+
+    val combinedSteps = prereqPromptSteps + mainPromptSteps
+
+    // Rebuild trail items: config (without prerequisites, since they're now flattened)
+    // + combined prompts + any other non-prompt/non-config items
+    val newItems = mutableListOf<TrailYamlItem>()
+
+    // Keep the config but clear prerequisites since they're now inline
+    val configWithoutPrereqs = effectiveConfig?.copy(prerequisites = null)
+    if (configWithoutPrereqs != null) {
+      newItems.add(TrailYamlItem.ConfigTrailItem(configWithoutPrereqs))
+    }
+
+    // Add the combined prompt steps
+    newItems.add(TrailYamlItem.PromptsTrailItem(combinedSteps))
+
+    // Preserve any tool items that aren't part of prompt steps
+    trailItems.filterIsInstance<TrailYamlItem.ToolTrailItem>().forEach { newItems.add(it) }
+
+    return try {
+      trailblazeYaml.encodeToString(newItems)
+    } catch (e: Exception) {
+      Console.log("[TrailFileManager] Failed to encode flattened YAML: ${e.message}")
+      yamlContent
+    }
+  }
+
   // ─────────────────────────────────────────────────────────────────────────────
   // Trail editing
   // ─────────────────────────────────────────────────────────────────────────────
@@ -455,6 +736,15 @@ class TrailFileManager(
     config: TrailConfig?,
     steps: List<EditableStep>,
   ): EditResult {
+    // Validate prerequisites if present
+    val prereqErrors = validatePrerequisites(config)
+    if (prereqErrors.isNotEmpty()) {
+      return EditResult(
+        success = false,
+        error = "Invalid prerequisites: ${prereqErrors.joinToString("; ")}",
+      )
+    }
+
     return try {
       val file = validateWithinTrailsDir(File(filePath), filePath)
       val items = reconstructTrailItems(config, steps)

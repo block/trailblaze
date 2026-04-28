@@ -146,6 +146,20 @@ fun TrailDetailsView(
         )
       }
       
+      // Prerequisites (from config)
+      trail.prerequisites?.takeIf { it.isNotEmpty() }?.let { prereqs ->
+        Spacer(modifier = Modifier.height(12.dp))
+        Text(
+          text = "Prerequisites",
+          style = MaterialTheme.typography.titleSmall,
+          fontWeight = FontWeight.SemiBold
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        prereqs.forEach { prereqId ->
+          DetailRow(label = "→", value = prereqId, isMonospace = true)
+        }
+      }
+
       // Metadata (from config)
       if (trail.metadata.isNotEmpty()) {
         Spacer(modifier = Modifier.height(12.dp))

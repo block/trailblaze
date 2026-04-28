@@ -224,6 +224,44 @@ sealed interface TrailblazeLog {
   ) : TrailblazeLog,
     HasPromptStep
 
+  /**
+   * Log entry emitted when a prerequisite trail begins execution.
+   */
+  @Serializable
+  data class PrerequisiteStartLog(
+    /** The trail ID of the prerequisite being executed */
+    val prerequisiteTrailId: String,
+    /** The title of the prerequisite trail, if available */
+    val prerequisiteTitle: String? = null,
+    /** The trail ID of the trail that requires this prerequisite */
+    val parentTrailId: String,
+    override val session: SessionId,
+    override val timestamp: Instant,
+  ) : TrailblazeLog
+
+  /**
+   * Log entry emitted when a prerequisite trail finishes execution.
+   */
+  @Serializable
+  data class PrerequisiteCompleteLog(
+    /** The trail ID of the prerequisite that was executed */
+    val prerequisiteTrailId: String,
+    /** The title of the prerequisite trail, if available */
+    val prerequisiteTitle: String? = null,
+    /** The trail ID of the trail that requires this prerequisite */
+    val parentTrailId: String,
+    /** Whether the prerequisite trail passed */
+    val passed: Boolean,
+    /** Number of steps executed in the prerequisite trail */
+    val stepsExecuted: Int,
+    /** Execution duration in milliseconds */
+    val durationMs: Long,
+    /** Failure reason if the prerequisite failed */
+    val failureReason: String? = null,
+    override val session: SessionId,
+    override val timestamp: Instant,
+  ) : TrailblazeLog
+
   @Serializable
   data class AttemptAiFallbackLog(
     override val promptStep: PromptStep,

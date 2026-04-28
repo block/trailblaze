@@ -90,6 +90,8 @@ data class SessionSummary(
             is TrailblazeLog.McpToolCallResponseLog,
             is TrailblazeLog.TrailblazeProgressLog,
             is TrailblazeLog.McpAskLog,
+            is TrailblazeLog.PrerequisiteStartLog,
+            is TrailblazeLog.PrerequisiteCompleteLog,
             -> it
           }
         }.sortedBy { log -> log.timestamp }
@@ -245,6 +247,8 @@ data class SessionSummary(
             is TrailblazeLog.McpToolCallResponseLog,
             is TrailblazeLog.TrailblazeProgressLog,
             is TrailblazeLog.McpAskLog,
+            is TrailblazeLog.PrerequisiteStartLog,
+            is TrailblazeLog.PrerequisiteCompleteLog,
             -> null
           }
         }

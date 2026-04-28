@@ -41,8 +41,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.llm.TrailblazeReferrer
 import xyz.block.trailblaze.model.DesktopAppRunYamlParams
@@ -57,6 +59,8 @@ import xyz.block.trailblaze.ui.editors.yaml.YamlEditorMode
 import xyz.block.trailblaze.ui.editors.yaml.YamlTextEditor
 import xyz.block.trailblaze.ui.editors.yaml.YamlVisualEditor
 import xyz.block.trailblaze.ui.editors.yaml.YamlVisualEditorView
+import xyz.block.trailblaze.mcp.newtools.TrailFileManager
+import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.ui.editors.yaml.validateYaml
 
 /**
@@ -76,6 +80,8 @@ fun YamlTabComposable(
   additionalInstrumentationArgs: (suspend () -> Map<String, String>),
 ) {
   val serverState by trailblazeSettingsRepo.serverStateFlow.collectAsState()
+  val trailsDir = TrailblazeDesktopUtil.getEffectiveTrailsDirectory(serverState.appConfig)
+  val trailFileManager = remember(trailsDir) { TrailFileManager(trailsDir) }
   val savedYamlContent = serverState.appConfig.yamlContent
   val savedEditorMode = serverState.appConfig.yamlEditorMode
   val savedVisualEditorView = serverState.appConfig.yamlVisualEditorView
@@ -282,29 +288,37 @@ fun YamlTabComposable(
           }
 
           val targetTestApp = deviceManager.getCurrentSelectedTargetApp()
-          // Run on each selected device
-          selectedDevices.forEach { device ->
-            val runYamlRequest = requestFactory.create(
-              device = device,
-              yaml = localYamlContent,
-              testName = "Yaml",
-              referrer = TrailblazeReferrer.YAML_TAB,
-            )
 
-            coroutineScope.launch {
-              try {
-                yamlRunner(
-                  DesktopAppRunYamlParams(
-                    forceStopTargetApp = forceStopApp,
-                    runYamlRequest = runYamlRequest,
-                    onProgressMessage = onProgressMessage,
-                    onConnectionStatus = onConnectionStatus,
-                    targetTestApp = targetTestApp,
-                    additionalInstrumentationArgs = additionalInstrumentationArgs()
+          coroutineScope.launch {
+            // Flatten prerequisites into YAML so Desktop UI runs them like MCP does
+            val flattenedYaml = withContext(Dispatchers.IO) {
+              trailFileManager.flattenPrerequisites(localYamlContent)
+            }
+
+            // Run on each selected device
+            selectedDevices.forEach { device ->
+              val runYamlRequest = requestFactory.create(
+                device = device,
+                yaml = flattenedYaml,
+                testName = "Yaml",
+                referrer = TrailblazeReferrer.YAML_TAB,
+              )
+
+              launch {
+                try {
+                  yamlRunner(
+                    DesktopAppRunYamlParams(
+                      forceStopTargetApp = forceStopApp,
+                      runYamlRequest = runYamlRequest,
+                      onProgressMessage = onProgressMessage,
+                      onConnectionStatus = onConnectionStatus,
+                      targetTestApp = targetTestApp,
+                      additionalInstrumentationArgs = additionalInstrumentationArgs()
+                    )
                   )
-                )
-              } catch (e: Exception) {
-                onProgressMessage("Error on device ${device.instanceId}: ${e.message}")
+                } catch (e: Exception) {
+                  onProgressMessage("Error on device ${device.instanceId}: ${e.message}")
+                }
               }
             }
 

@@ -49,6 +49,7 @@ import xyz.block.trailblaze.mcp.sampling.LocalLlmSamplingSource
 import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.recordings.TrailRecordings
+import java.io.File
 import xyz.block.trailblaze.rules.RetryRule
 import xyz.block.trailblaze.rules.TrailblazeLoggingRule
 import xyz.block.trailblaze.rules.TrailblazeRunnerUtil
@@ -60,6 +61,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.TemplatingUtil
+import xyz.block.trailblaze.yaml.TrailConfig
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.TrailblazeYaml
 import kotlin.reflect.KClass
@@ -381,6 +383,146 @@ abstract class BaseHostTrailblazeTest(
   }
 
   /**
+   * Loads and executes prerequisite trails before the main trail.
+   *
+   * For each prerequisite ID, locates its trail directory (sibling to the current trail),
+   * loads the NL definition file, decodes it, and runs it. Emits PrerequisiteStart/Complete
+   * logs so the session detail page shows prerequisite execution.
+   */
+  private suspend fun runPrerequisiteTrails(
+    prerequisiteIds: List<String>,
+    trailFilePath: String?,
+    currentTrailId: String,
+    useRecordedSteps: Boolean,
+    visited: MutableSet<String> = mutableSetOf(),
+  ) {
+    if (prerequisiteIds.isEmpty() || trailFilePath == null) return
+    visited.add(currentTrailId)
+
+    // Derive the trails root directory from the current trail's file path.
+    // Trail files live at: <trailsDir>/<trailId>/blaze.yaml (or *.trail.yaml)
+    val trailFile = File(trailFilePath)
+    val trailDir = trailFile.parentFile ?: return
+    val trailsRootDir = trailDir.parentFile ?: return
+
+    val session = loggingRule.session
+
+    for (prereqId in prerequisiteIds) {
+      val prereqDir = File(trailsRootDir, prereqId)
+      if (!prereqDir.isDirectory) {
+        Console.log("⚠️ Prerequisite trail directory not found: $prereqId")
+        continue
+      }
+
+      // Find the NL definition file (blaze.yaml or trailblaze.yaml)
+      val prereqYamlFile = TrailRecordings.NL_DEFINITION_FILENAMES
+        .map { File(prereqDir, it) }
+        .firstOrNull { it.exists() }
+
+      if (prereqYamlFile == null) {
+        Console.log("⚠️ No NL definition file found for prerequisite: $prereqId")
+        continue
+      }
+
+      val prereqYaml: String
+      val prereqItems: List<TrailYamlItem>
+      val prereqConfig: TrailConfig?
+      try {
+        prereqYaml = prereqYamlFile.readText()
+        prereqItems = trailblazeYaml.decodeTrail(prereqYaml)
+        prereqConfig = trailblazeYaml.extractTrailConfig(prereqItems)
+      } catch (e: Exception) {
+        Console.log("⚠️ Failed to load prerequisite '$prereqId': ${e.message}")
+        continue
+      }
+
+      // Recursively run nested prerequisites before this one
+      val nestedPrereqs = prereqConfig?.prerequisites.orEmpty().filter { it !in visited }
+      if (nestedPrereqs.isNotEmpty()) {
+        runPrerequisiteTrails(
+          prerequisiteIds = nestedPrereqs,
+          trailFilePath = prereqYamlFile.absolutePath,
+          currentTrailId = prereqId,
+          useRecordedSteps = useRecordedSteps,
+          visited = visited,
+        )
+      }
+
+      val prereqTitle = prereqConfig?.title
+      val totalStepCount = prereqItems.filterIsInstance<TrailYamlItem.PromptsTrailItem>()
+        .sumOf { it.promptSteps.size }
+
+      // Emit prerequisite start log
+      if (session != null) {
+        loggingRule.logger.log(
+          session,
+          TrailblazeLog.PrerequisiteStartLog(
+            prerequisiteTrailId = prereqId,
+            prerequisiteTitle = prereqTitle,
+            parentTrailId = currentTrailId,
+            session = session.sessionId,
+            timestamp = Clock.System.now(),
+          ),
+        )
+      }
+
+      Console.log("▶️ Running prerequisite: ${prereqTitle ?: prereqId} ($totalStepCount steps)")
+      val startTime = Clock.System.now()
+      var passed = true
+      var failureReason: String? = null
+      var stepsExecuted = 0
+
+      try {
+        for (item in prereqItems) {
+          val itemResult = when (item) {
+            is TrailYamlItem.PromptsTrailItem -> {
+              trailblazeRunnerUtil.runPromptSuspend(item.promptSteps, useRecordedSteps)
+            }
+            is TrailYamlItem.ToolTrailItem -> trailblazeRunnerUtil.runTrailblazeTool(item.tools.map { it.trailblazeTool })
+            is TrailYamlItem.ConfigTrailItem -> item.config.context?.let { trailblazeRunner.appendToSystemPrompt(it) }
+          }
+          if (itemResult is TrailblazeToolResult.Error) {
+            throw TrailblazeException(itemResult.errorMessage)
+          }
+          if (item is TrailYamlItem.PromptsTrailItem) {
+            stepsExecuted += item.promptSteps.size
+          }
+        }
+      } catch (e: Exception) {
+        passed = false
+        failureReason = e.message
+        Console.log("❌ Prerequisite '$prereqId' failed: ${e.message}")
+      }
+
+      val durationMs = (Clock.System.now() - startTime).inWholeMilliseconds
+
+      // Emit prerequisite complete log
+      if (session != null) {
+        loggingRule.logger.log(
+          session,
+          TrailblazeLog.PrerequisiteCompleteLog(
+            prerequisiteTrailId = prereqId,
+            prerequisiteTitle = prereqTitle,
+            parentTrailId = currentTrailId,
+            passed = passed,
+            stepsExecuted = stepsExecuted,
+            durationMs = durationMs,
+            failureReason = failureReason,
+            session = session.sessionId,
+            timestamp = Clock.System.now(),
+          ),
+        )
+      }
+
+      if (passed) {
+        Console.log("✅ Prerequisite '$prereqId' passed (${durationMs}ms)")
+      } else {
+        throw TrailblazeException("Prerequisite trail '$prereqId' failed: $failureReason")
+      }
+    }
+  }
+
+  /**
    * Suspend version of runTrail that checks for coroutine cancellation.
    * This allows proper cancellation propagation when running in a coroutine context.
    */
@@ -442,6 +584,13 @@ abstract class BaseHostTrailblazeTest(
         )
       }
     }
+
+    // Execute prerequisite trails before the main trail
+    val prerequisiteIds = trailConfig?.prerequisites.orEmpty()
+    val currentTrailId = trailConfig?.id ?: trailFilePath?.let { File(it).parentFile?.name } ?: "unknown"
+    runPrerequisiteTrails(prerequisiteIds, trailFilePath, currentTrailId, useRecordedSteps)
+
+    // Run the main trail
     runTrail(trailItems, useRecordedSteps)
     return loggingRule.session?.sessionId ?: SessionId("unknown")
   }
