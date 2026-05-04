@@ -28,7 +28,7 @@ import xyz.block.trailblaze.viewmatcher.strategies.IndexStrategy
  * Works both on-device (inner agent) and host-side (CLI).
  */
 @Serializable
-@TrailblazeToolClass("tap")
+@TrailblazeToolClass(name = "tap", isRecordable = false)
 @LLMDescription(
   "Tap an element by its ref ID from the snapshot. Use the short hash ref shown in " +
     "square brackets (e.g., y778 from [y778] \"Network & internet\"). " +

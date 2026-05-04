@@ -76,8 +76,12 @@ data class AppTargetYamlConfig(
    * the framework default). Use this to express target-specific guidance — what the app is,
    * what testers commonly want — without each test author having to re-pass a Kotlin resource.
    *
-   * Authored as inline string in the pack manifest (multi-line YAML `|` block recommended for
-   * readability). Path-based references are not supported in this schema slot.
+   * **Post-resolution shape.** Authors don't write this field directly on a pack manifest. They
+   * set [PackTargetConfig.systemPromptFile][xyz.block.trailblaze.config.project.PackTargetConfig.systemPromptFile]
+   * (a relative file path); the build-time pack generator and runtime pack loader both read that
+   * file and inline its content into this field on the generated / resolved [AppTargetYamlConfig].
+   * Downstream consumers ([xyz.block.trailblaze.config.YamlBackedHostAppTarget] and Block-side
+   * `BundledTargetYamlLookup`) read this field directly.
    */
   @SerialName("system_prompt") val systemPrompt: String? = null,
   /**

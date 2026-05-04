@@ -76,7 +76,10 @@ class DeterministicTrailExecutor(
   suspend fun execute(steps: List<PromptStep>): TrailResult {
     val startTime = System.currentTimeMillis()
 
-    // Validate all steps have recordings
+    // Validate all steps have recordings. An auto-satisfied recording (empty `tools` list with
+    // `autoSatisfied = true`) is a valid deterministic step — `executeStep` advances past it
+    // without invoking AI because the recording author observed the objective was already
+    // complete from the prior step's actions.
     val missingRecordings = steps.mapIndexedNotNull { index, step ->
       if (step.recording == null) index else null
     }
@@ -87,7 +90,7 @@ class DeterministicTrailExecutor(
         currentStepIndex = missingRecordings.first(),
         failed = true,
         failureReason = "Steps missing recordings: ${missingRecordings.joinToString()}. " +
-          "DeterministicTrailExecutor requires all steps to have recordings.",
+          "DeterministicTrailExecutor requires all steps to have recordings (auto-satisfied is allowed).",
       )
       return TrailResult(
         success = false,

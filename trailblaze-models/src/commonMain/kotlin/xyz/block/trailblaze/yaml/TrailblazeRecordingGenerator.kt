@@ -85,9 +85,19 @@ fun List<TrailblazeLog>.generateRecordedYaml(
             .map { log -> wrapTrailblazeTool(log.trailblazeTool, log.toolName) }
 
           val recording = if (toolWrappers.isNotEmpty()) {
-            ToolRecording(toolWrappers)
+            ToolRecording(
+              tools = toolWrappers,
+              autoSatisfied = false
+            )
           } else {
-            null
+            // Author observed: zero recordable tools fired during this objective window —
+            // the prior step's actions already satisfied this prompt. Emit an explicit
+            // auto-satisfied marker so replay can skip deterministically instead of falling
+            // through to AI. See ToolRecording KDoc for replay semantics.
+            ToolRecording(
+              tools = emptyList(),
+              autoSatisfied = true
+            )
           }
 
           val newStep = when (promptStep) {
@@ -129,7 +139,9 @@ fun List<TrailblazeLog>.generateRecordedYaml(
             if (lastItem is TrailYamlItem.PromptsTrailItem && lastItem.promptSteps.isNotEmpty()) {
               val lastStep = lastItem.promptSteps.last()
               val existingTools = lastStep.recording?.tools ?: emptyList()
-              val updatedRecording = ToolRecording(existingTools + wrapper)
+              // Once a tool attaches to the step, it can no longer be auto-satisfied
+              // by definition — the prior auto-satisfied marker (if any) is replaced.
+              val updatedRecording = ToolRecording(tools = existingTools + wrapper, autoSatisfied = false)
               val updatedStep = when (lastStep) {
                 is DirectionStep -> lastStep.copy(recording = updatedRecording)
                 is VerificationStep -> lastStep.copy(recording = updatedRecording)

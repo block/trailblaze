@@ -9,8 +9,11 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
+import kotlinx.serialization.SerializationException
+import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.agent.blaze.detectActionCycleHint
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
+import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.agent.model.AgentTaskStatus.Success.ObjectiveComplete
 import xyz.block.trailblaze.agent.model.AgentTaskStatusData
 import xyz.block.trailblaze.agent.model.PromptRecordingResult
@@ -219,16 +222,18 @@ class TrailblazeRunner(
       }
 
       // --- Stuck detection: bail out early if the agent is looping ---
-      // Track tool fingerprints (tool name + args) in a fixed-size sliding window
-      // and look for repeating cycles in the suffix. This catches both consecutive
-      // identical actions (length-1 cycle) AND alternating loops like
-      // tap(A) → tap(B) → tap(A) → tap(B) … (length-2), plus three-step cycles.
-      // Only fully identical actions match (same tool AND same args) to avoid false
-      // positives on legitimate sequences like tapping different elements or
-      // entering repeated PIN digits.
+      // Track tool fingerprints (tool name + tool-specific args) in a fixed-size
+      // sliding window and look for repeating cycles in the suffix. This catches
+      // both consecutive identical actions (length-1 cycle) AND alternating loops
+      // like tap(A) → tap(B) → tap(A) → tap(B) … (length-2), plus three-step cycles.
+      //
+      // Strip analysis-only fields (reasoning, screenSummary, confidence, etc.)
+      // from the args before fingerprinting — those vary per call by design and
+      // would otherwise mask a real loop where the underlying action is identical
+      // but the LLM's free-text reasoning differs each time.
       val toolCalls = koogLlmResponseMessages.filterIsInstance<Message.Tool>()
       for (toolCall in toolCalls) {
-        val fingerprint = "${toolCall.tool}:${toolCall.content}"
+        val fingerprint = "${toolCall.tool}:${stripAnalysisFromContent(toolCall.content)}"
         if (recentToolFingerprints.size >= STUCK_FINGERPRINT_WINDOW) {
           recentToolFingerprints.removeFirst()
         }
@@ -340,13 +345,11 @@ class TrailblazeRunner(
 
   companion object {
     /**
-     * Number of consecutive identical actions (same tool + same args) before
-     * declaring the agent stuck. Set high enough to allow legitimate repetition
-     * (e.g., entering repeated PIN digits) but low enough to catch true loops.
+     * Sliding window over the last N tool fingerprints, used by `detectActionCycleHint`
+     * to spot repeating cycles (length 1, 2, or 3) in the suffix. Sized to comfortably
+     * cover a length-3 cycle repeated 3 times (9 entries) with headroom; also covers a
+     * length-2 cycle repeated 5 times (10 entries) and length-1 repeated 12 times.
      */
-    // Sliding window over the last N tool fingerprints. Sized to comfortably cover
-    // a length-3 cycle repeated 3 times (9 entries) with headroom; also covers a
-    // length-2 cycle repeated 5 times (10 entries) and length-1 repeated 12 times.
     private const val STUCK_FINGERPRINT_WINDOW = 12
 
     val baseSystemPrompt = TemplatingUtil.getResourceAsText(
@@ -386,4 +389,27 @@ class TrailblazeRunner(
 private fun PromptStep.getToolStrategy() = when (this) {
   is DirectionStep -> SingleToolStrategy()
   is VerificationStep -> MultipleToolStrategy()
+}
+
+/**
+ * Strips analysis-only fields ([ToolCallAnalysisResponse.fieldNames] — `reasoning`,
+ * `screenSummary`, `confidence`, etc.) from a koog [Message.Tool.content] JSON
+ * payload before it is fingerprinted for cycle detection. Those fields are written
+ * fresh by the LLM on every call and would otherwise mask real loops where the
+ * underlying tool action is identical but the surrounding rationale differs.
+ *
+ * Falls back to the raw content when the payload isn't a JSON object — the only
+ * cost of a non-stripped fingerprint is potentially missing a cycle hint, which
+ * is no worse than the pre-strip behaviour.
+ */
+private fun stripAnalysisFromContent(content: String): String = try {
+  val parsed = TrailblazeJsonInstance.parseToJsonElement(content)
+  if (parsed is JsonObject) {
+    val analysisKeys = ToolCallAnalysisResponse.fieldNames
+    JsonObject(parsed.filterKeys { it !in analysisKeys }).toString()
+  } else {
+    content
+  }
+} catch (_: SerializationException) {
+  content
 }

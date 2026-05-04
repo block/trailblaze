@@ -6,6 +6,7 @@ import maestro.orchestra.LaunchAppCommand
 import xyz.block.trailblaze.AdbCommandUtil
 import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.MaestroTrailblazeAgent
+import xyz.block.trailblaze.android.maestro.MaestroPermissionTranslator
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
@@ -119,14 +120,17 @@ class AccessibilityTrailblazeAgent(
       AdbCommandUtil.clearPackageData(appId)
     }
 
-    // Grant permissions — matches MaestroAndroidUiAutomatorDriver.setPermissions() behavior.
+    // Grant permissions — matches MaestroAndroidUiAutomatorDriver.setPermissions() behavior,
+    // including the short-name → fully-qualified Android permission translation.
     val permissionsToGrant =
       command.permissions?.filterValues { it == "allow" }?.keys ?: emptySet()
-    for (permission in permissionsToGrant) {
-      try {
-        AdbCommandUtil.grantPermission(appId, permission)
-      } catch (e: Exception) {
-        Console.log("Failed to grant $permission to $appId: ${e.message}")
+    for (shortName in permissionsToGrant) {
+      MaestroPermissionTranslator.translate(shortName).forEach { fqPermission ->
+        try {
+          AdbCommandUtil.grantPermission(appId, fqPermission)
+        } catch (e: Exception) {
+          Console.log("Failed to grant $fqPermission to $appId: ${e.message}")
+        }
       }
     }
 

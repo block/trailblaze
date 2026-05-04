@@ -523,9 +523,9 @@ class LocalLlmSamplingSource(
     val screenshotFile = if (screenshotBytes != null && screenshotBytes.isNotEmpty()) {
       try {
         repo.saveScreenshotBytes(
-          sessionId,
-          screenshotBytes,
-          ImageFormatDetector.detectFormat(screenshotBytes).fileExtension,
+          sessionId = sessionId,
+          bytes = screenshotBytes,
+          fileExtension = ImageFormatDetector.detectFormat(screenshotBytes).fileExtension,
         )
       } catch (e: Exception) {
         Console.log("[LocalLlmSamplingSource] Failed to save screenshot: ${e.message}")

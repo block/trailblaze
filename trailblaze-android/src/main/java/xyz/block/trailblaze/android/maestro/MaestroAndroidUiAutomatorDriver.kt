@@ -248,10 +248,10 @@ object MaestroAndroidUiAutomatorDriver : Driver {
   }
 
   override fun setPermissions(appId: String, permissions: Map<String, String>) {
-    val permissionsToGrant = permissions.filterValues { it == "allow" }.keys.toSet()
-    if (permissionsToGrant.isNotEmpty()) {
-      permissionsToGrant.forEach { permission ->
-        AdbCommandUtil.grantPermission(appId, permission)
+    val permissionsToGrant = permissions.filterValues { it == "allow" }.keys
+    permissionsToGrant.forEach { shortName ->
+      MaestroPermissionTranslator.translate(shortName).forEach { fqPermission ->
+        AdbCommandUtil.grantPermission(appId, fqPermission)
       }
     }
   }

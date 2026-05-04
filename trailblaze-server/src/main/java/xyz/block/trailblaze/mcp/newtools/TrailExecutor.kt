@@ -290,15 +290,37 @@ class TrailExecutorImpl(
       is VerificationStep -> "verify"
     }
 
-    // Check for recording
+    // Check for recording. An auto-satisfied recording (empty tools, autoSatisfied=true) is a
+    // valid deterministic step — the recording author observed the prior step's actions already
+    // satisfied this objective, so we advance without executing any tool.
     val recording = promptStep.recording
-    if (recording == null || recording.tools.isEmpty()) {
+    if (recording == null) {
       return StepExecutionResult(
         stepIndex = stepIndex,
         prompt = promptStep.prompt,
         stepType = stepType,
         passed = false,
         error = "No recording for this step. Deterministic execution requires recorded tool calls.",
+        toolsExecuted = 0,
+      )
+    }
+    if (recording.autoSatisfied && recording.tools.isEmpty()) {
+      return StepExecutionResult(
+        stepIndex = stepIndex,
+        prompt = promptStep.prompt,
+        stepType = stepType,
+        passed = true,
+        error = null,
+        toolsExecuted = 0,
+      )
+    }
+    if (recording.tools.isEmpty()) {
+      return StepExecutionResult(
+        stepIndex = stepIndex,
+        prompt = promptStep.prompt,
+        stepType = stepType,
+        passed = false,
+        error = "Recording has no tools and is not auto-satisfied. Deterministic execution requires recorded tool calls.",
         toolsExecuted = 0,
       )
     }

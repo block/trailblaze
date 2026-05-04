@@ -3,6 +3,8 @@ import com.charleskorn.kaml.YamlConfiguration
 import com.charleskorn.kaml.YamlMap
 import java.io.File
 import javax.inject.Inject
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
 import org.gradle.api.DefaultTask
 import org.gradle.api.GradleException
 import org.gradle.api.file.DirectoryProperty
@@ -15,6 +17,33 @@ import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
 import xyz.block.trailblaze.bundle.yaml.YamlEmitter
+
+/**
+ * Minimal typed shape for the pack-manifest fields the generator consumes. Mirrors a subset of
+ * the runtime [xyz.block.trailblaze.config.project.PackTargetConfig] schema so this build-logic
+ * task can read system-prompt configuration through the same field names as the runtime, via
+ * kaml's typed decode, instead of looking them up as inline string keys on a generic
+ * `Map<String, Any?>`.
+ *
+ * Only the fields needed for build-time resolution are captured here — kaml ignores the rest
+ * because [Yaml.configuration]'s `strictMode` is false in this task. The rest of the generator
+ * keeps walking the pack manifest as a generic Map so unknown / future fields still flow through
+ * to the emitted target YAML untouched.
+ *
+ * Build-logic intentionally does NOT depend on `:trailblaze-models` (avoids inflating the
+ * Gradle classpath with the multiplatform graph), so this shape is duplicated here. Keep the
+ * `@SerialName` values aligned with `PackTargetConfig` — same drift contract as
+ * `mergeInheritedDefaults` keeps with `PackDependencyResolver`.
+ */
+@Serializable
+private data class PackManifestPromptShape(
+  val target: PackTargetPromptShape? = null,
+) {
+  @Serializable
+  data class PackTargetPromptShape(
+    @SerialName("system_prompt_file") val systemPromptFile: String? = null,
+  )
+}
 
 abstract class TrailblazeBundledConfigExtension @Inject constructor(objects: ObjectFactory) {
   val packsDir: DirectoryProperty = objects.directoryProperty()
@@ -151,7 +180,7 @@ internal class PackTargetGenerator(
     packsById.values.forEach { (packFile, pack) ->
       val packId = pack.requiredString("id", packFile)
       val target = pack["target"] as? Map<*, *> ?: return@forEach
-      val normalizedTarget = normalizeMap(target)
+      val normalizedTarget = resolveSystemPromptFile(normalizeMap(target), packFile)
       // If `target.id` is set, it must be a string. Silently falling back to the pack
       // id when the author wrote `id: 123` (or anything non-string) would lose their
       // intent without warning — better to fail loudly so the misuse is fixable at
@@ -310,6 +339,56 @@ internal class PackTargetGenerator(
     return out
   }
 
+  /**
+   * Resolves a `system_prompt_file:` field on the pack target into an inlined `system_prompt:`
+   * value, mirroring the runtime [PackTargetConfig.toAppTargetYamlConfig] behavior. The file
+   * path is resolved against the pack manifest's parent directory; missing or unreadable files
+   * fail the build with a clear message so authoring errors don't slip into a stale generated
+   * target. Returns the target map unchanged if neither field is present.
+   *
+   * The read side is typed via [PackManifestPromptShape] (kaml typed decode against the same
+   * `@SerialName` keys the runtime uses); the write side rebuilds a [LinkedHashMap] because the
+   * generator's outer pipeline preserves arbitrary unknown fields by passing them through as a
+   * generic map.
+   */
+  private fun resolveSystemPromptFile(target: Map<String, Any?>, packFile: File): Map<String, Any?> {
+    val promptShape =
+      yaml.decodeFromString(PackManifestPromptShape.serializer(), packFile.readText())
+    val promptFile = promptShape.target?.systemPromptFile ?: return target
+    val packDir = packFile.parentFile
+      ?: throw GradleException("Pack manifest ${packFile.absolutePath} has no parent directory")
+    val resolved = packDir.resolve(promptFile).canonicalFile
+    val packDirCanonical = packDir.canonicalFile
+    // Path-element containment (not character-prefix). Without the trailing separator, a
+    // sibling directory sharing the pack name as a prefix (e.g. `pack-extras/foo.md` against a
+    // pack root `/.../pack`) would pass a raw startsWith check because they share the literal
+    // prefix string. Comparing `path + separator` makes the check require a real directory
+    // boundary, so siblings sharing a prefix can't escape the pack root.
+    val packDirPath = packDirCanonical.path + File.separator
+    if (resolved == packDirCanonical || !resolved.path.startsWith(packDirPath)) {
+      throw GradleException(
+        "system_prompt_file '$promptFile' in ${packFile.absolutePath} resolves outside the pack " +
+          "directory (${packDir.absolutePath}); only pack-relative paths are allowed.",
+      )
+    }
+    if (!resolved.isFile) {
+      throw GradleException(
+        "system_prompt_file '$promptFile' referenced by ${packFile.absolutePath} not found at " +
+          "${resolved.absolutePath}.",
+      )
+    }
+    val content = resolved.readText()
+    val out = linkedMapOf<String, Any?>()
+    target.forEach { (key, value) ->
+      when (key) {
+        SYSTEM_PROMPT_FILE_KEY -> out[SYSTEM_PROMPT_KEY] = content
+        else -> out[key] = value
+      }
+    }
+    return out
+  }
+
+
   private data class PackInfo(val packFile: File, val manifest: Map<String, Any?>)
 
   fun findManagedTargetFiles(): List<File> {
@@ -376,5 +455,13 @@ internal class PackTargetGenerator(
 
   companion object {
     private const val GENERATED_HEADER = "# GENERATED FILE. DO NOT EDIT."
+
+    // String keys for the pack-target YAML fields read/written by `resolveSystemPromptFile`.
+    // Pulled out so the resolver doesn't sprinkle inline string literals at field boundaries —
+    // single source of truth, kept in step with `PackManifestPromptShape`'s @SerialName values
+    // (and ultimately the runtime `PackTargetConfig.system_prompt_file` /
+    // `AppTargetYamlConfig.system_prompt` `@SerialName`s).
+    const val SYSTEM_PROMPT_FILE_KEY = "system_prompt_file"
+    const val SYSTEM_PROMPT_KEY = "system_prompt"
   }
 }

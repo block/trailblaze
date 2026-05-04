@@ -115,19 +115,32 @@ data class PackTargetConfig(
   @SerialName("platforms") val platforms: Map<String, PlatformConfig>? = null,
   @SerialName("has_custom_ios_driver") val hasCustomIosDriver: Boolean = false,
   @SerialName("mcp_servers") val mcpServers: List<McpServerConfig>? = null,
-  @SerialName("system_prompt") val systemPrompt: String? = null,
+  /**
+   * Path (relative to the pack directory) of a markdown / text file containing the system-prompt
+   * template. The pack loader reads the file and inlines its content into the generated
+   * [AppTargetYamlConfig.systemPrompt] field.
+   *
+   * **Authoring contract:** prompts MUST live in a standalone file referenced from here — there
+   * is no inline string slot on [PackTargetConfig]. Standalone files are easier to read and edit
+   * than long YAML strings, and the file-reference shape leaves room for future per-device or
+   * per-classifier prompt selection (e.g. `app-tablet.prompt.md` next to the pack manifest)
+   * without an authoring-side schema change.
+   */
+  @SerialName("system_prompt_file") val systemPromptFile: String? = null,
   @SerialName("tools") val tools: List<String> = emptyList(),
 ) {
   fun toAppTargetYamlConfig(
     defaultId: String,
     resolvedTools: List<InlineScriptToolConfig>,
-  ): AppTargetYamlConfig = AppTargetYamlConfig(
-    id = id ?: defaultId,
-    displayName = displayName,
-    platforms = platforms,
-    hasCustomIosDriver = hasCustomIosDriver,
-    mcpServers = mcpServers,
-    systemPrompt = systemPrompt,
-    tools = resolvedTools.takeIf { it.isNotEmpty() },
-  )
+    resolvedSystemPrompt: String? = null,
+  ): AppTargetYamlConfig =
+    AppTargetYamlConfig(
+      id = id ?: defaultId,
+      displayName = displayName,
+      platforms = platforms,
+      hasCustomIosDriver = hasCustomIosDriver,
+      mcpServers = mcpServers,
+      systemPrompt = resolvedSystemPrompt,
+      tools = resolvedTools.takeIf { it.isNotEmpty() },
+    )
 }

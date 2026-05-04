@@ -127,6 +127,27 @@ compose.desktop {
   }
 }
 
+// Bundle the report template HTML into the uber JAR for production/release use.
+// Skipped when trailblaze.wasm=false — dev builds don't need the WASM template.
+// At runtime, ReportTemplateResolver falls back to building the template on demand
+// if it isn't bundled.
+val wasmEnabled = findProperty("trailblaze.wasm")?.toString()?.toBoolean() != false
+
+val bundleReportTemplate by tasks.registering(Copy::class) {
+  description = "Copies the report template for bundling into the uber JAR"
+  group = "report"
+  if (wasmEnabled) {
+    dependsOn(":trailblaze-report:generateReportTemplate")
+  }
+  from(
+    project(":trailblaze-report").layout.buildDirectory.file(
+      "report-template/trailblaze_report.html",
+    ),
+  )
+  into(layout.buildDirectory.dir("generated-resources/report-template"))
+  rename { "trailblaze_report_template.html" }
+}
+
 // ---------------------------------------------------------------------------
 // ProGuard shrinking (standalone task with correct kotlin-metadata-jvm version)
 // Enable with: -Ptrailblaze.proguard=true
@@ -220,8 +241,14 @@ val releaseArtifacts by tasks.registering(Copy::class) {
 
 afterEvaluate {
   // The uber JAR exceeds 65 535 entries; enable zip64 so packaging succeeds.
-  tasks.named("packageUberJarForCurrentOS") {
-    (this as org.gradle.api.tasks.bundling.Zip).isZip64 = true
+  tasks.named<org.gradle.jvm.tasks.Jar>("packageUberJarForCurrentOS") {
+    isZip64 = true
+    // Always include the template directory so a pre-built template gets bundled.
+    // Only depend on the generation task when WASM is enabled.
+    if (wasmEnabled) {
+      dependsOn(bundleReportTemplate)
+    }
+    from(layout.buildDirectory.dir("generated-resources/report-template"))
   }
 
   tasks.withType<JavaExec> {

@@ -316,7 +316,12 @@ class TrailblazeRunnerUtilTest {
   }
 
   @Test
-  fun `empty recording tools falls through to AI runSuspend`() = runBlocking {
+  fun `null recording falls through to AI runSuspend`() = runBlocking {
+    // Pre-existing contract for unrecorded steps (recording = null) is unchanged: replay
+    // falls through to the AI runner. The previous variant of this test used
+    // ToolRecording(emptyList()), which is now invalid construction (see ToolRecording's
+    // init { require(...) } block); auto-satisfied is the explicit alternative for empty
+    // tool recordings.
     val runner = FakeTestAgentRunner(runSuspendReturn = { objectiveComplete("ran") })
     val callbackInvocations = mutableListOf<List<TrailblazeTool>>()
     val util =
@@ -328,8 +333,7 @@ class TrailblazeRunnerUtilTest {
         trailblazeRunner = runner,
       )
 
-    val step =
-      DirectionStep(step = "Log in", recordable = true, recording = ToolRecording(emptyList()))
+    val step = DirectionStep(step = "Log in", recordable = true, recording = null)
 
     val result =
       util.runPromptSuspend(prompts = listOf(step), useRecordedSteps = true, selfHeal = false)
@@ -337,6 +341,38 @@ class TrailblazeRunnerUtilTest {
     assertTrue(result is TrailblazeToolResult.Success)
     assertTrue(callbackInvocations.isEmpty())
     assertEquals(listOf<PromptStep>(step), runner.runSuspendCalls)
+  }
+
+  @Test
+  fun `auto-satisfied recording is treated as recorded and skipped without AI fallback`() = runBlocking {
+    // Auto-satisfied recordings are explicit no-op recorded steps. They must NOT fall through
+    // to the AI runner — they advance deterministically with zero tools fired.
+    val runner = FakeTestAgentRunner(runSuspendReturn = { objectiveComplete("ai-ran") })
+    val callbackInvocations = mutableListOf<List<TrailblazeTool>>()
+    val util =
+      TrailblazeRunnerUtil(
+        runTrailblazeTool = { tools ->
+          callbackInvocations += tools
+          TrailblazeToolResult.Success()
+        },
+        trailblazeRunner = runner,
+      )
+
+    val step = DirectionStep(
+      step = "Skip on this platform",
+      recordable = true,
+      recording = ToolRecording(tools = emptyList(), autoSatisfied = true),
+    )
+
+    val result =
+      util.runPromptSuspend(prompts = listOf(step), useRecordedSteps = true, selfHeal = false)
+
+    assertTrue(result is TrailblazeToolResult.Success)
+    assertTrue(callbackInvocations.isEmpty(), "Auto-satisfied step should not fire any tools")
+    assertTrue(
+      runner.runSuspendCalls.isEmpty(),
+      "Auto-satisfied step should not fall through to AI runSuspend; got ${runner.runSuspendCalls}",
+    )
   }
 
   // --- helpers -----------------------------------------------------------------------------

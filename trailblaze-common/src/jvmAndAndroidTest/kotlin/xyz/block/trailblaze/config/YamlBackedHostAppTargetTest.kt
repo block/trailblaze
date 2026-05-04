@@ -35,6 +35,33 @@ class YamlBackedHostAppTargetTest {
   }
 
   @Test
+  fun `system_prompt round-trips from YAML to getSystemPromptTemplate`() {
+    val target = AppTargetYamlLoader.loadFromYaml(
+      """
+      id: test
+      display_name: Test
+      system_prompt: |
+        You are testing Test App.
+        Be direct.
+      """.trimIndent(),
+      toolNameResolver = resolver,
+    )
+    assertEquals("You are testing Test App.\nBe direct.", target.getSystemPromptTemplate())
+  }
+
+  @Test
+  fun `system_prompt absent returns null`() {
+    val target = AppTargetYamlLoader.loadFromYaml(
+      """
+      id: test
+      display_name: Test
+      """.trimIndent(),
+      toolNameResolver = resolver,
+    )
+    assertNull(target.getSystemPromptTemplate())
+  }
+
+  @Test
   fun `app ids resolve by platform`() {
     val target = AppTargetYamlLoader.loadFromYaml(
       """

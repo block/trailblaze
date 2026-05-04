@@ -192,8 +192,14 @@ class TrailblazeRunnerUtil(
     )
   }
 
-  private fun PromptStep.canPromptStepUseRecording() =
-    recordable && recording?.tools?.isNotEmpty() == true
+  private fun PromptStep.canPromptStepUseRecording(): Boolean {
+    if (!recordable) return false
+    val r = recording ?: return false
+    // An auto-satisfied recording is a valid recorded step — `runRecordedTools` with an empty
+    // tools list returns Success and the step completes deterministically. A normal recording
+    // has non-empty tools.
+    return r.autoSatisfied || r.tools.isNotEmpty()
+  }
 
   private fun TrailblazeToolResult.errorMessageOrToString(): String =
     (this as? TrailblazeToolResult.Error)?.errorMessage ?: toString()

@@ -426,10 +426,18 @@ object TrailblazeProjectConfigLoader {
           loadPackSibling(path, loadedManifest.source, PackScriptedToolFile.serializer(), "pack scripted tool")
             .toInlineScriptToolConfig()
         }
+    val resolvedSystemPrompt: String? =
+      loadedManifest.manifest.target?.systemPromptFile?.let { path ->
+        loadedManifest.source.readSibling(path)
+          ?: throw TrailblazeProjectConfigException(
+            "Referenced system_prompt_file not found: $path (in ${loadedManifest.source.describe()})",
+          )
+      }
     val target = loadedManifest.manifest.target
       ?.toAppTargetYamlConfig(
         defaultId = loadedManifest.manifest.id,
         resolvedTools = resolvedScriptedTools,
+        resolvedSystemPrompt = resolvedSystemPrompt,
       )
     val resolvedToolsets = loadedManifest.manifest.toolsets
       .map { path -> loadPackSibling(path, loadedManifest.source, ToolSetYamlConfig.serializer(), "pack toolset") }

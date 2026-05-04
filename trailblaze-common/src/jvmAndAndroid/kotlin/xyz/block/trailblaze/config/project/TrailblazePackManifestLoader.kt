@@ -240,6 +240,7 @@ object TrailblazePackManifestLoader {
         "Pack manifest $identifier must not be empty",
       )
     }
+    errorOnLegacyInlineSystemPrompt(content, identifier)
     val manifest = try {
       TrailblazeProjectConfigLoader.yaml.decodeFromString(
         TrailblazePackManifest.serializer(),
@@ -354,6 +355,31 @@ object TrailblazePackManifestLoader {
    * the same id (workspace + classpath, two classpath jars) each get one warning, but a
    * given source warning doesn't re-fire on every load.
    */
+  /**
+   * The `system_prompt:` field used to live on `PackTargetConfig` as an inline string. It's been
+   * replaced by `system_prompt_file:` (file-only authoring). Because the YAML loader runs in
+   * lenient mode and silently drops unknown keys, a legacy pack manifest that still declares
+   * `system_prompt:` would lose its prompt content with no diagnostic. This pre-decode regex
+   * catches that case and fails the load with a clear migration message before the silent-drop
+   * can happen. Matches the field name as a YAML key (start-of-line, optional indent, the literal
+   * `system_prompt:` followed by a value) — `system_prompt_file:` is not matched because the
+   * trailing colon must come directly after `system_prompt`.
+   */
+  private val LEGACY_INLINE_SYSTEM_PROMPT_PATTERN =
+    Regex("""^\s*system_prompt:\s*\S""", RegexOption.MULTILINE)
+
+  private fun errorOnLegacyInlineSystemPrompt(content: String, identifier: String) {
+    if (LEGACY_INLINE_SYSTEM_PROMPT_PATTERN.containsMatchIn(content)) {
+      throw TrailblazeProjectConfigException(
+        "Pack manifest $identifier declares the removed inline `system_prompt:` field. " +
+          "Inline prompts are no longer supported on PackTargetConfig — move the content to a " +
+          "sibling file and reference it as `system_prompt_file: <relative-path>`. The pack " +
+          "loader will inline the file content into the generated target YAML at build time. " +
+          "See PackTargetConfig kdoc for the file-only authoring contract.",
+      )
+    }
+  }
+
   private fun warnOnReservedFields(manifest: TrailblazePackManifest, identifier: String) {
     val populated = buildList {
       if (manifest.trails.isNotEmpty()) add("trails")
