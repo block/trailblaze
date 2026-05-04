@@ -27,7 +27,7 @@ import kotlin.test.Test
 
 /**
  * CI coverage for the **reference** subprocess MCP tools shipped with the
- * android-sample-app example (`examples/android-sample-app/trailblaze-config/mcp/tools.ts`).
+ * android-sample-app example (`examples/android-sample-app/trails/config/mcp/tools.ts`).
  *
  * `SubprocessRuntimeEndToEndTest` exercises the runtime via dedicated `fixture.js` / `fixture.ts`
  * under this module's own test resources — those catch regressions in the runtime, not in the
@@ -95,7 +95,7 @@ class SampleAppMcpToolsTest {
       } else {
         assumeTrue(
           "Sample-app MCP tool deps not installed. Run from the repo root:\n" +
-            "  cd examples/android-sample-app/trailblaze-config/mcp && bun install\n" +
+            "  cd examples/android-sample-app/trails/config/mcp && bun install\n" +
             "(or `npm install`). CI installs these automatically via the " +
             "`installSampleAppMcpTools` Gradle task.",
           depsInstalled,

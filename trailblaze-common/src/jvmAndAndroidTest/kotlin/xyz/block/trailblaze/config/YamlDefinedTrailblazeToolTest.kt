@@ -65,7 +65,11 @@ class YamlDefinedTrailblazeToolTest {
   }
 
   @Test
-  fun `eraseText with no caller args substitutes null default`() {
+  fun `eraseText with no caller args drops the key so Maestro erases all`() {
+    // Regression test: previously 'default: null' produced 'charactersToErase: null' in the
+    // Maestro YAML, which Maestro silently ignores (no-op). The fix removes 'default: null'
+    // so the parameter uses DropIfOmitted — the key is absent from the command, which is
+    // what triggers Maestro's erase-all behavior.
     val yaml = """
 - tools:
     - eraseText: {}
@@ -77,9 +81,37 @@ class YamlDefinedTrailblazeToolTest {
 
     val expanded = yamlDefined.toExecutableTrailblazeTools(createContext())
     val yamlText = (expanded[0] as MaestroTrailblazeTool).yaml
-    // YAML declares `default: null`, so omitted caller arg resolves to explicit null (not
-    // key-drop and not missing). Maestro's EraseTextCommand treats null as "erase all".
-    assertThat(yamlText).contains("null")
+    assertThat(yamlText).contains("eraseText")
+    // The key must be absent — not 'charactersToErase: null' which Maestro treats as a no-op.
+    assertThat(yamlText).transform("should not contain charactersToErase") {
+      !it.contains("charactersToErase")
+    }.isEqualTo(true)
+  }
+
+  @Test
+  fun `eraseText with explicit null from LLM drops the key — JsonNull treated as omitted`() {
+    // Regression test: when the LLM passes null for an optional param, JsonNull is a
+    // non-null Kotlin object. Previously 'caller != null' was true for JsonNull, so it
+    // bypassed DropIfOmitted and produced 'key: null' in YAML (no-op in Maestro).
+    // The fix treats JsonNull the same as a missing parameter.
+    val yaml = """
+- tools:
+    - eraseText:
+        charactersToErase: null
+    """.trimIndent()
+
+    val items = TrailblazeYaml.Default.decodeTrail(yaml)
+    val tools = (items[0] as TrailYamlItem.ToolTrailItem).tools
+    val yamlDefined = tools[0].trailblazeTool as YamlDefinedTrailblazeTool
+    // The LLM passed null, which should resolve to DropIfOmitted (same as absent).
+    assertThat(yamlDefined.params.containsKey("charactersToErase")).isEqualTo(true)
+
+    val expanded = yamlDefined.toExecutableTrailblazeTools(createContext())
+    val yamlText = (expanded[0] as MaestroTrailblazeTool).yaml
+    assertThat(yamlText).contains("eraseText")
+    assertThat(yamlText).transform("should not contain charactersToErase") {
+      !it.contains("charactersToErase")
+    }.isEqualTo(true)
   }
 
   @Test

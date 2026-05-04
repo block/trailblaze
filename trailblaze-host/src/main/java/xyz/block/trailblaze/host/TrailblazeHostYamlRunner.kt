@@ -52,7 +52,9 @@ import xyz.block.trailblaze.host.rules.HostTrailblazeLoggingRule
 import xyz.block.trailblaze.host.yaml.RunOnHostParams
 import xyz.block.trailblaze.http.DynamicLlmClient
 import xyz.block.trailblaze.llm.RunYamlRequest
+import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.llm.TrailblazeReferrer
+import xyz.block.trailblaze.playwright.PlaywrightPageManager
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeSession
@@ -71,6 +73,7 @@ import xyz.block.trailblaze.report.utils.TrailblazeYamlSessionRecording.generate
 import xyz.block.trailblaze.rules.TrailblazeLoggingRule
 import xyz.block.trailblaze.rules.TrailblazeRunnerUtil
 import xyz.block.trailblaze.scripting.subprocess.LaunchedSubprocessRuntime
+import xyz.block.trailblaze.scripting.subprocess.InlineScriptToolServerSynthesizer
 import xyz.block.trailblaze.scripting.subprocess.McpSubprocessRuntimeLauncher
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeToolDescriptor
@@ -90,6 +93,51 @@ import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
 
 object TrailblazeHostYamlRunner {
+
+  /**
+   * How [runPlaywrightNativeYaml] should treat the cached Playwright-native test
+   * for a given device when a new run-yaml request arrives. Sealed so the three
+   * states are exhaustive at the call site and the impossible "reuse the test
+   * AND give back its browser" combination can't be constructed.
+   *
+   * See [resolvePlaywrightCacheReuse] for the decision logic.
+   */
+  internal sealed interface PlaywrightCacheResolution {
+    /** Nothing cached — construct a fresh test around a fresh browser. */
+    data object NoCachedTest : PlaywrightCacheResolution
+
+    /** Cached test's model matches the request — use it as-is. */
+    data object ReuseCachedTest : PlaywrightCacheResolution
+
+    /**
+     * Cached test's model doesn't match the request (e.g. user ran
+     * `trailblaze config llm <provider>` after the daemon cached the initial
+     * test). Discard the test but keep [browser] alive so URL / cookies /
+     * in-flight forms survive the rebuild.
+     */
+    data class RebuildWithCachedBrowser(val browser: PlaywrightPageManager) :
+      PlaywrightCacheResolution
+  }
+
+  /**
+   * Decides how to handle a cached [BasePlaywrightNativeTest] for an incoming
+   * run-yaml request. Pure function — no side effects, exhaustively covered by
+   * `PlaywrightCacheReuseTest`.
+   */
+  internal fun resolvePlaywrightCacheReuse(
+    cachedModel: TrailblazeLlmModel?,
+    cachedBrowserManager: PlaywrightPageManager?,
+    requestedModel: TrailblazeLlmModel,
+  ): PlaywrightCacheResolution = when {
+    cachedModel == null -> PlaywrightCacheResolution.NoCachedTest
+    cachedModel == requestedModel -> PlaywrightCacheResolution.ReuseCachedTest
+    cachedBrowserManager != null ->
+      PlaywrightCacheResolution.RebuildWithCachedBrowser(cachedBrowserManager)
+    // Defensive: cached model exists but no browser to reuse — treat as no cache.
+    // In practice cachedBrowserManager is always non-null when cachedModel is, but
+    // pinning this branch keeps the function total instead of relying on caller invariants.
+    else -> PlaywrightCacheResolution.NoCachedTest
+  }
 
   /**
    * Resolved Playwright tool classes used for recording generation. Called from both the Native
@@ -158,7 +206,12 @@ object TrailblazeHostYamlRunner {
     toolRepo: TrailblazeToolRepo,
     onProgressMessage: (String) -> Unit,
   ): LaunchedSubprocessRuntime? {
-    val mcpServers = targetTestApp?.getMcpServers().orEmpty()
+    val sessionDir = logsRepo.getSessionDir(sessionId)
+    val inlineToolServers = InlineScriptToolServerSynthesizer.synthesize(
+      tools = targetTestApp?.getInlineScriptTools().orEmpty(),
+      outputDir = File(sessionDir, "inline-script-tools"),
+    )
+    val mcpServers = targetTestApp?.getMcpServers().orEmpty() + inlineToolServers
     val launchableCount = mcpServers.count { it.script != null }
     if (launchableCount == 0) return null
     onProgressMessage("Launching $launchableCount subprocess MCP server(s)...")
@@ -167,7 +220,7 @@ object TrailblazeHostYamlRunner {
       deviceInfo = deviceInfo,
       config = config,
       sessionId = sessionId,
-      sessionLogDir = logsRepo.getSessionDir(sessionId),
+      sessionLogDir = sessionDir,
       toolRepo = toolRepo,
       // Null when no HTTP server was registered for this process (unit-tested runner paths).
       // The launcher degrades gracefully — envelope omits `_meta.trailblaze.baseUrl` and no
@@ -209,7 +262,12 @@ object TrailblazeHostYamlRunner {
     } catch (e: TrailblazeSessionCancelledException) {
       Console.log("🚫 Session cancelled for $deviceLabel")
       onProgressMessage("Test session cancelled")
-      null
+      // Re-throw so DesktopYamlRunner.runYaml sees the cancel rather than a
+      // silent null return that the outer layer would interpret as Success.
+      // TrailblazeSessionCancelledException extends Exception (not
+      // CancellationException), so DesktopYamlRunner catches it explicitly
+      // and sets TrailExecutionResult.Cancelled.
+      throw e
     } catch (e: CancellationException) {
       Console.log("🚫 Coroutine cancelled for $deviceLabel: ${e.message}")
       onProgressMessage("Test execution cancelled")
@@ -221,7 +279,13 @@ object TrailblazeHostYamlRunner {
       if (sendSessionEndLog) {
         sessionManager.endSession(session, isSuccess = false, exception = e)
       }
-      null
+      // Re-throw so the failure propagates to DesktopYamlRunner.runYaml's outer catch,
+      // which sets executionResult = Failed. Returning null here was the silent-failure
+      // bug uncovered while debugging a cached-LLM-model issue: a thrown
+      // IllegalStateException inside a Playwright run got swallowed here, the runner
+      // saw null and reported Success up the stack, and MCP told the user "✓ Done"
+      // while the page was actually blank.
+      throw e
     } finally {
       exportAndSaveTrace(session.sessionId, loggingRule, noLogging = noLogging)
       loggingRule.setSession(null)
@@ -271,14 +335,31 @@ object TrailblazeHostYamlRunner {
     val requestDeviceId = runYamlRequest.trailblazeDeviceId
     val keepBrowserAlive = !runYamlRequest.config.sendSessionEndLog
 
-    // Try to reuse a cached Playwright test instance (only when keeping browser alive)
-    val existingTest =
+    // Try to reuse a cached Playwright test instance (only when keeping browser alive).
+    // If the cached test was constructed for a different LLM model than this request
+    // (e.g. user ran `trailblaze config llm <provider>` after the daemon cached the
+    // initial test), we evict it but keep the live browser — otherwise the cached
+    // model/client sticks around for the daemon's lifetime and silently runs every
+    // web tool with the wrong provider.
+    val cachedTest =
       if (keepBrowserAlive) deviceManager.getActivePlaywrightNativeTest(requestDeviceId) else null
+    val cacheResolution = resolvePlaywrightCacheReuse(
+      cachedModel = cachedTest?.trailblazeLlmModel,
+      cachedBrowserManager = cachedTest?.browserManager,
+      requestedModel = runYamlRequest.trailblazeLlmModel,
+    )
+    val existingTest =
+      if (cacheResolution is PlaywrightCacheResolution.ReuseCachedTest) cachedTest else null
+    val staleBrowserToReuse =
+      (cacheResolution as? PlaywrightCacheResolution.RebuildWithCachedBrowser)?.browser
     val isReusingTest = existingTest != null
+    val isRebuildingForModelChange = staleBrowserToReuse != null
 
-    // Use stable device ID when reusing, unique suffix when fresh
+    // Stable device ID when reusing the same test or rebuilding-with-existing-browser
+    // (same logical session — only the LLM client is being swapped); unique suffix only
+    // for genuinely fresh test runs.
     val trailblazeDeviceId =
-      if (isReusingTest) {
+      if (isReusingTest || isRebuildingForModelChange) {
         requestDeviceId
       } else {
         val sessionSuffix = UUID.randomUUID().toString().take(8)
@@ -289,8 +370,12 @@ object TrailblazeHostYamlRunner {
       }
 
     onProgressMessage(
-      if (isReusingTest) "Reusing Playwright-native browser session..."
-      else "Initializing Playwright-native test runner..."
+      when {
+        isReusingTest -> "Reusing Playwright-native browser session..."
+        staleBrowserToReuse != null ->
+          "LLM config changed — rebuilding Playwright-native test with current model..."
+        else -> "Initializing Playwright-native test runner..."
+      }
     )
 
     val playwrightTest = existingTest ?: BasePlaywrightNativeTest(
@@ -301,6 +386,7 @@ object TrailblazeHostYamlRunner {
       config = runYamlRequest.config,
       appTarget = runOnHostParams.targetTestApp,
       trailblazeDeviceId = trailblazeDeviceId,
+      existingBrowserManager = staleBrowserToReuse,
     )
 
     // Reset the browser session only when starting a new Trailblaze session.
@@ -356,6 +442,7 @@ object TrailblazeHostYamlRunner {
         yaml = runYamlRequest.yaml,
         trailFilePath = runYamlRequest.trailFilePath,
         trailblazeDeviceId = trailblazeDeviceId,
+        traceId = runYamlRequest.traceId,
         useRecordedSteps = runYamlRequest.useRecordedSteps,
         sendSessionStartLog = runYamlRequest.config.sendSessionStartLog,
         onStepProgress = { step, total, text ->
@@ -480,6 +567,7 @@ object TrailblazeHostYamlRunner {
         yaml = runYamlRequest.yaml,
         trailFilePath = runYamlRequest.trailFilePath,
         trailblazeDeviceId = trailblazeDeviceId,
+        traceId = runYamlRequest.traceId,
         useRecordedSteps = runYamlRequest.useRecordedSteps,
         sendSessionStartLog = runYamlRequest.config.sendSessionStartLog,
         onStepProgress = { step, total, text ->
@@ -652,22 +740,19 @@ object TrailblazeHostYamlRunner {
     val trailblazeRunnerUtil = TrailblazeRunnerUtil(
       trailblazeRunner = trailblazeRunner,
       runTrailblazeTool = { trailblazeTools: List<TrailblazeTool> ->
-        val result = agent.runTrailblazeTools(
+        agent.runTrailblazeTools(
           trailblazeTools,
-          null,
+          runYamlRequest.traceId,
           screenState = screenStateProvider(),
           elementComparator = elementComparator,
           screenStateProvider = screenStateProvider,
-        )
-        when (val toolResult = result.result) {
-          is TrailblazeToolResult.Success -> toolResult
-          is TrailblazeToolResult.Error -> throw TrailblazeException(toolResult.errorMessage)
-        }
+        ).result
       },
       trailblazeLogger = loggingRule.logger,
       sessionProvider = {
         loggingRule.session ?: error("Session not available - ensure test is running")
       },
+      sessionUpdater = { loggingRule.setSession(it) },
     )
 
     val subprocessRuntimes = mutableListOf<LaunchedSubprocessRuntime>()
@@ -723,10 +808,21 @@ object TrailblazeHostYamlRunner {
         )
       }
 
+      requireActionableSteps(
+        trailblazeYaml = trailblazeYaml,
+        trailItems = trailItems,
+        trailName = trailConfig?.title ?: runYamlRequest.trailFilePath,
+        trailUrl = trailConfig?.metadata?.get("testRailUrl"),
+      )
+
       for (item in trailItems) {
         val itemResult = when (item) {
           is TrailYamlItem.PromptsTrailItem ->
-            trailblazeRunnerUtil.runPromptSuspend(item.promptSteps, runYamlRequest.useRecordedSteps)
+            trailblazeRunnerUtil.runPromptSuspend(
+              prompts = item.promptSteps,
+              useRecordedSteps = runYamlRequest.useRecordedSteps,
+              selfHeal = runYamlRequest.config.selfHeal,
+            )
           is TrailYamlItem.ToolTrailItem ->
             trailblazeRunnerUtil.runTrailblazeTool(item.tools.map { it.trailblazeTool })
           is TrailYamlItem.ConfigTrailItem ->
@@ -898,22 +994,19 @@ object TrailblazeHostYamlRunner {
       val trailblazeRunnerUtil = TrailblazeRunnerUtil(
         trailblazeRunner = trailblazeRunner,
         runTrailblazeTool = { trailblazeTools: List<TrailblazeTool> ->
-          val result = agent.runTrailblazeTools(
+          agent.runTrailblazeTools(
             trailblazeTools,
-            null,
+            runYamlRequest.traceId,
             screenState = screenStateProvider(),
             elementComparator = elementComparator,
             screenStateProvider = screenStateProvider,
-          )
-          when (val toolResult = result.result) {
-            is TrailblazeToolResult.Success -> toolResult
-            is TrailblazeToolResult.Error -> throw TrailblazeException(toolResult.errorMessage)
-          }
+          ).result
         },
         trailblazeLogger = loggingRule.logger,
         sessionProvider = {
           loggingRule.session ?: error("Session not available - ensure test is running")
         },
+        sessionUpdater = { loggingRule.setSession(it) },
       )
 
       val subprocessRuntimes = mutableListOf<LaunchedSubprocessRuntime>()
@@ -968,10 +1061,21 @@ object TrailblazeHostYamlRunner {
           )
         }
 
+        requireActionableSteps(
+          trailblazeYaml = trailblazeYaml,
+          trailItems = trailItems,
+          trailName = trailConfig?.title ?: runYamlRequest.trailFilePath,
+          trailUrl = trailConfig?.metadata?.get("testRailUrl"),
+        )
+
         for (item in trailItems) {
           val itemResult = when (item) {
             is TrailYamlItem.PromptsTrailItem ->
-              trailblazeRunnerUtil.runPromptSuspend(item.promptSteps, runYamlRequest.useRecordedSteps)
+              trailblazeRunnerUtil.runPromptSuspend(
+                prompts = item.promptSteps,
+                useRecordedSteps = runYamlRequest.useRecordedSteps,
+                selfHeal = runYamlRequest.config.selfHeal,
+              )
             is TrailYamlItem.ToolTrailItem ->
               trailblazeRunnerUtil.runTrailblazeTool(item.tools.map { it.trailblazeTool })
             is TrailYamlItem.ConfigTrailItem ->
@@ -998,10 +1102,18 @@ object TrailblazeHostYamlRunner {
       }
     } catch (e: CancellationException) {
       throw e
+    } catch (e: TrailblazeSessionCancelledException) {
+      // executeTrailSession already logged the cancel and ended the session.
+      // Order matters: TSCE extends Exception (not CancellationException), so it
+      // must be caught before the generic branch below — same constraint as
+      // DesktopYamlRunner.runYaml's catch order.
+      throw e
     } catch (e: Exception) {
       Console.log("Revyl setup failed for device: ${trailblazeDeviceId.instanceId} - ${e::class.simpleName}: ${e.message}")
       onProgressMessage("Error: ${e.message}")
-      return null
+      // Re-throw so DesktopYamlRunner.runYaml's outer catch sets executionResult = Failed.
+      // Returning null was the silent-failure pattern previously fixed for executeTrailSession.
+      throw e
     } finally {
       if (runYamlRequest.config.sendSessionEndLog) {
         deviceManager.removeActiveRevylCliClient(trailblazeDeviceId)
@@ -1135,6 +1247,7 @@ object TrailblazeHostYamlRunner {
         forceStopApp = runOnHostParams.forceStopTargetApp,
         trailFilePath = runYamlRequest.trailFilePath,
         trailblazeDeviceId = trailblazeDeviceId,
+        traceId = runYamlRequest.traceId,
         sendSessionStartLog = runYamlRequest.config.sendSessionStartLog,
       )
       Console.log("✅ runTrailblazeYamlSuspend completed successfully for device: ${trailblazeDeviceId.instanceId}")
@@ -1167,7 +1280,10 @@ object TrailblazeHostYamlRunner {
    * @param trailblazeDeviceId The Android device being tested
    * @param onProgressMessage Callback for progress messages
    * @param targetTestApp Optional app target (provides custom tool classes)
-   * @return The host session ID on completion, or null on failure/cancellation
+   * @return The host session ID on completion. Throws [TrailblazeException] for
+   *   trails with no executable steps (false-positive guard). Failures and
+   *   cancellations also propagate as exceptions — this function does NOT swallow
+   *   exceptions and return null. See [executeTrailSession] re-throw semantics.
    */
   suspend fun runHostV3WithAccessibilityYaml(
     dynamicLlmClient: DynamicLlmClient,
@@ -1176,6 +1292,12 @@ object TrailblazeHostYamlRunner {
     trailblazeDeviceId: TrailblazeDeviceId,
     onProgressMessage: (String) -> Unit,
     targetTestApp: TrailblazeHostAppTarget?,
+    /**
+     * Same contract as the on-device-RPC runner's callback — fired exactly once after the session
+     * is established so callers can attach session-scoped infrastructure (e.g. the network capture
+     * bridge). Defaulted to a no-op so existing callers stay compatible.
+     */
+    onSessionStarted: (SessionId) -> Unit = {},
   ): SessionId? {
     val customToolClasses = targetTestApp
       ?.getCustomToolsForDriver(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY)
@@ -1192,8 +1314,11 @@ object TrailblazeHostYamlRunner {
     val trailItems = try {
       trailblazeYaml.decodeTrail(runYamlRequest.yaml)
     } catch (e: Exception) {
+      Console.log("❌ Failed to decode V3 trail YAML: ${e::class.simpleName}: ${e.message}")
       onProgressMessage("Failed to decode trail YAML: ${e.message}")
-      return null
+      // Re-throw so DesktopYamlRunner.runYaml's outer catch sets executionResult = Failed.
+      // Returning null was the silent-failure pattern previously fixed for executeTrailSession.
+      throw e
     }
     val trailConfig = trailblazeYaml.extractTrailConfig(trailItems)
     val toolItems = trailItems.filterIsInstance<TrailYamlItem.ToolTrailItem>()
@@ -1202,8 +1327,10 @@ object TrailblazeHostYamlRunner {
       .flatMap { it.promptSteps }
 
     if (promptSteps.isEmpty()) {
-      onProgressMessage("No prompt steps found in trail YAML for V3 execution")
-      return null
+      throw TrailblazeException(
+        "Trail has no executable prompt steps — this would be a false positive pass. " +
+          "Add steps to this trail file or the TestRail case.",
+      )
     }
 
     // Query the device for its actual classifiers via a lightweight screen state probe.
@@ -1244,21 +1371,27 @@ object TrailblazeHostYamlRunner {
       excludedToolClasses = excludedToolClasses,
     )
 
+    // Single AgentMemory shared between host-local tool execution contexts and the RPC
+    // client's per-tool arg interpolation, so values written by host-local tools are visible
+    // to subsequent RPC dispatches. AgentMemory is backed by a ConcurrentHashMap, so this
+    // sharing is safe even if tool execution is ever parallelized.
+    val sharedAgentMemory = AgentMemory()
     val executor = HostAccessibilityRpcClient(
       rpcClient = onDeviceRpc,
       toolRepo = toolRepo,
       runYamlRequestTemplate = runYamlRequest,
       sessionProvider = { loggingRule.session ?: error("Session not available") },
-      toolExecutionContextProvider = {
+      toolExecutionContextProvider = { traceId ->
         TrailblazeToolExecutionContext(
           screenState = null,
-          traceId = null,
+          traceId = traceId,
           trailblazeDeviceInfo = loggingRule.trailblazeDeviceInfoProvider(),
           sessionProvider = { loggingRule.session ?: error("Session not available") },
           trailblazeLogger = loggingRule.logger,
-          memory = AgentMemory(),
+          memory = sharedAgentMemory,
         )
       },
+      memory = sharedAgentMemory,
     )
 
     val subprocessRuntimes = mutableListOf<LaunchedSubprocessRuntime>()
@@ -1306,6 +1439,17 @@ object TrailblazeHostYamlRunner {
             session = session.sessionId,
             timestamp = Clock.System.now(),
           ),
+        )
+      }
+
+      // Fire the session-started callback BEFORE the planner runs so any session-scoped
+      // out-of-band infrastructure (network capture bridge, etc.) is up before the first tool.
+      try {
+        onSessionStarted(session.sessionId)
+      } catch (t: Throwable) {
+        Console.log(
+          "[runHostV3WithAccessibilityYaml] onSessionStarted callback threw — continuing: " +
+            "${t::class.java.simpleName}: ${t.message}"
         )
       }
 
@@ -1414,6 +1558,7 @@ object TrailblazeHostYamlRunner {
           steps = promptSteps,
           config = TrailConfig.RECORDING_WITH_AI_RETRIES,
           sessionId = session.sessionId,
+          caseTitle = trailConfig?.title,
         )
         trailSuccess = result.success
         trailErrorMessage = result.errorMessage
@@ -1454,6 +1599,10 @@ object TrailblazeHostYamlRunner {
    * executes the tool via whichever driver is specified in the request's `driverType`.
    * Mirrors the [runHostV3WithAccessibilityYaml] pattern but using [TrailblazeRunner]
    * instead of [MultiAgentV3Runner].
+   *
+   * @return The host session ID on completion. Failures and cancellations propagate
+   *   as exceptions — this function does NOT swallow exceptions and return null.
+   *   See [executeTrailSession] re-throw semantics + the silent-failure fix.
    */
   suspend fun runHostTrailblazeRunnerWithOnDeviceRpc(
     dynamicLlmClient: DynamicLlmClient,
@@ -1462,6 +1611,14 @@ object TrailblazeHostYamlRunner {
     trailblazeDeviceId: TrailblazeDeviceId,
     onProgressMessage: (String) -> Unit,
     targetTestApp: TrailblazeHostAppTarget?,
+    /**
+     * Fired exactly once after the session is established (after `executeTrailSession` resolves
+     * the session id), BEFORE we start dispatching trail items. Caller hooks session-scoped
+     * out-of-band infrastructure here — most importantly the host-driven Android network capture
+     * bridge, which has to be polling /proc/net/unix before the launch tool's first network
+     * call. Defaulted to a no-op so existing callers (CLI, MCP, tests) stay compatible.
+     */
+    onSessionStarted: (SessionId) -> Unit = {},
   ): SessionId? {
     val driverType = runYamlRequest.driverType
       ?: TrailblazeDriverType.DEFAULT_ANDROID
@@ -1477,8 +1634,11 @@ object TrailblazeHostYamlRunner {
     val trailItems = try {
       trailblazeYaml.decodeTrail(runYamlRequest.yaml)
     } catch (e: Exception) {
+      Console.log("❌ Failed to decode on-device-RPC trail YAML: ${e::class.simpleName}: ${e.message}")
       onProgressMessage("Failed to decode trail YAML: ${e.message}")
-      return null
+      // Re-throw so DesktopYamlRunner.runYaml's outer catch sets executionResult = Failed.
+      // Returning null was the silent-failure pattern previously fixed for executeTrailSession.
+      throw e
     }
     val trailConfig = trailblazeYaml.extractTrailConfig(trailItems)
 
@@ -1539,20 +1699,17 @@ object TrailblazeHostYamlRunner {
     val runnerUtil = TrailblazeRunnerUtil(
       trailblazeRunner = runner,
       runTrailblazeTool = { tools ->
-        val result = agent.runTrailblazeTools(
+        agent.runTrailblazeTools(
           tools = tools,
-          traceId = null,
+          traceId = runYamlRequest.traceId,
           screenState = agent.screenStateProvider(),
           elementComparator = elementComparator,
           screenStateProvider = agent.screenStateProvider,
-        )
-        when (val toolResult = result.result) {
-          is TrailblazeToolResult.Success -> toolResult
-          is TrailblazeToolResult.Error -> throw TrailblazeException(toolResult.errorMessage)
-        }
+        ).result
       },
       trailblazeLogger = loggingRule.logger,
       sessionProvider = { loggingRule.session ?: error("Session not available") },
+      sessionUpdater = { loggingRule.setSession(it) },
     )
 
     val subprocessRuntimes = mutableListOf<LaunchedSubprocessRuntime>()
@@ -1606,10 +1763,42 @@ object TrailblazeHostYamlRunner {
         "Starting TrailblazeRunner on host with ${driverType.name.lowercase()} driver via RPC (${trailItems.size} trail items)...",
       )
 
+      requireActionableSteps(
+        trailblazeYaml = trailblazeYaml,
+        trailItems = trailItems,
+        trailName = trailConfig?.title ?: runYamlRequest.trailFilePath,
+        trailUrl = trailConfig?.metadata?.get("testRailUrl"),
+      )
+
+      // Fire the session-started callback BEFORE dispatching trail items but AFTER
+      // [requireActionableSteps] above. Order matters and is intentional:
+      // - AFTER requireActionableSteps: a YAML that fails the actionable-steps gate has no
+      //   tools to run and would generate no out-of-band traffic, so spinning up session-scoped
+      //   infrastructure (e.g. the network capture bridge) just to immediately tear it down
+      //   would be wasted work and would confuse the operator with a phantom CONNECTED state
+      //   on a session that never actually ran a tool.
+      // - BEFORE the trail-item loop: the registered [AndroidNetworkCaptureActivator] has to be
+      //   polling for the target's discovery side-channel before the first launch tool's first
+      //   network call, otherwise it can miss a freshly-opened socket — see the activator's own
+      //   stale-discovery resilience for the race the order avoids.
+      // Errors are swallowed so a misbehaving listener can't take down the test.
+      try {
+        onSessionStarted(session.sessionId)
+      } catch (t: Throwable) {
+        Console.log(
+          "[runHostTrailblazeRunnerWithOnDeviceRpc] onSessionStarted callback threw — " +
+            "continuing test run: ${t::class.java.simpleName}: ${t.message}"
+        )
+      }
+
       for (item in trailItems) {
         val itemResult = when (item) {
           is TrailYamlItem.PromptsTrailItem ->
-            runnerUtil.runPromptSuspend(item.promptSteps, useRecordedSteps = true)
+            runnerUtil.runPromptSuspend(
+              prompts = item.promptSteps,
+              useRecordedSteps = true,
+              selfHeal = runYamlRequest.config.selfHeal,
+            )
           is TrailYamlItem.ToolTrailItem ->
             runnerUtil.runTrailblazeTool(item.tools.map { it.trailblazeTool })
           is TrailYamlItem.ConfigTrailItem ->
@@ -1715,6 +1904,21 @@ object TrailblazeHostYamlRunner {
     } catch (e: Exception) {
       Console.log("[Golden] Comparison error (non-fatal): ${e.message}")
       null
+    }
+  }
+
+  private fun requireActionableSteps(
+    trailblazeYaml: xyz.block.trailblaze.yaml.TrailblazeYaml,
+    trailItems: List<TrailYamlItem>,
+    trailName: String?,
+    trailUrl: String?,
+  ) {
+    if (!trailblazeYaml.hasActionableSteps(trailItems)) {
+      throw TrailblazeException(
+        "Trail '${trailName ?: "unknown"}' has no executable steps — this would be a false positive pass. " +
+          "Add prompts or tool steps to this trail file." +
+          (trailUrl?.let { " $it" } ?: ""),
+      )
     }
   }
 

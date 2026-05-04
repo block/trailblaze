@@ -1,0 +1,28 @@
+// TypeScript config for per-pack Tier-1 tool authoring. Picked up automatically by VS Code,
+// IntelliJ, and other TS-aware IDEs to power autocomplete on `args`, `ctx`, and `client`
+// references in both `.ts` files and JSDoc-annotated `.js` files in this directory.
+//
+// `allowJs: true` + `checkJs: false` is the current transition default — it lets the existing
+// flat `.js` tools coexist with new `.ts` files and benefit from JSDoc-driven autocomplete
+// without forcing the strict-typecheck overhead onto unconverted `.js`. Once the existing
+// `.js` tools either (a) get migrated to `.ts` or (b) carry rich-enough JSDoc that strict
+// checking is welcome rather than disruptive, flip `checkJs: true` to enforce typos and shape
+// errors in `.js` too. There's no tracked issue for that flip — it's a judgment call to make
+// when the cost/benefit shifts; revisit when adding the next batch of tools or migrating to
+// TS.
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "Node16",
+    "moduleResolution": "Node16",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "noEmit": true,
+    "allowJs": true,
+    "checkJs": false
+  },
+  "include": ["**/*.ts", "**/*.js"],
+  "exclude": ["node_modules"]
+}

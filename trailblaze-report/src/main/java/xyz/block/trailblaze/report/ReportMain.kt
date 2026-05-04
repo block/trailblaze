@@ -101,16 +101,12 @@ open class GenerateReportCliCommand :
     val trailblazeReportHtmlFile = File(logsDir, "trailblaze_report.html")
     Console.log("file://${trailblazeReportHtmlFile.absolutePath}")
 
-    // Trailblaze supports two layouts: standalone (the default — `trailblaze-ui/` sits
-    // next to the working dir) and nested (Trailblaze embedded as `opensource/` under a
-    // larger repo).
-    val isNested = File(rootWorkingDir, "opensource").exists()
-
-    val trailblazeUiProjectDir = if (isNested) {
-      File(rootWorkingDir, "opensource/trailblaze-ui")
-    } else {
-      File(rootWorkingDir, "trailblaze-ui")
-    }.also {
+    // Trailblaze supports two layouts: standalone (`trailblaze-ui/` next to the
+    // working dir) and nested (Trailblaze embedded under a sibling subdirectory
+    // of a larger repo, where the embedding parent re-exports the framework).
+    val standaloneUiDir = File(rootWorkingDir, "trailblaze-ui")
+    val nestedUiDir = File(File(rootWorkingDir, "opensource"), "trailblaze-ui")
+    val trailblazeUiProjectDir = (if (standaloneUiDir.exists()) standaloneUiDir else nestedUiDir).also {
       Console.log("Using project directory: ${it.canonicalPath}")
     }
 

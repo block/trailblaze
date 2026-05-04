@@ -12,7 +12,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.util.Console
 
 @Serializable
-@TrailblazeToolClass("web_verify_list_visible")
+@TrailblazeToolClass("web_verify_list_visible", isVerification = true)
 @LLMDescription(
   """
 Verify that a list or group of elements contains the expected items.

@@ -24,7 +24,7 @@ import xyz.block.trailblaze.viewmatcher.TapSelectorV2.findBestTrailblazeElementS
  * mode switching internally.
  */
 @Serializable
-@TrailblazeToolClass("assertVisible")
+@TrailblazeToolClass("assertVisible", isVerification = true)
 @LLMDescription(
   "Assert an element is visible on screen by its ref ID from the snapshot. Use the " +
     "short hash ref shown in square brackets (e.g., y778 from [y778] \"Network & internet\"). " +
@@ -84,17 +84,16 @@ data class AssertVisibleTrailblazeTool(
     // Generate a rich TrailblazeNodeSelector where possible; AssertVisibleBySelectorTrailblazeTool
     // honors nodeSelector vs legacy selector based on NodeSelectorMode internally, so we just
     // supply both and let the downstream tool decide.
-    val nodeSelector = run {
-      val targetTrailblazeNode = tree.hitTest(center.first, center.second)
-      targetTrailblazeNode?.let { target ->
-        try {
-          TrailblazeNodeSelectorGenerator.findBestSelector(tree, target)
-        } catch (e: Exception) {
-          Console.log(
-            "WARNING: TrailblazeNodeSelector generation failed, falling back to legacy selector: ${e.message}",
-          )
-          null
-        }
+    // hitTest resolves the frontmost interactive node at the coordinates — the same round-trip
+    // validation as TapTrailblazeTool (see TrailblazeNode.hitTest for tiebreaker logic).
+    val nodeSelector = tree.hitTest(center.first, center.second)?.let { hitTestNode ->
+      try {
+        TrailblazeNodeSelectorGenerator.findBestSelector(tree, hitTestNode)
+      } catch (e: Exception) {
+        Console.log(
+          "WARNING: TrailblazeNodeSelector generation failed, falling back to legacy selector: ${e.message}",
+        )
+        null
       }
     }
 

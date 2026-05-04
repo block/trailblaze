@@ -209,15 +209,15 @@ class IosVideoCapture : CaptureStream {
 
     val endTimestampMs = System.currentTimeMillis()
 
-    // Generate a sprite sheet from the video — one tall JPEG with all frames stacked vertically.
-    // If ffmpeg is available, this replaces the full video with a ~3-7MB image.
+    // Generate a WebP sprite sheet from the video.
+    // If ffmpeg is available, this replaces the full video with a compact sprite image.
     // If not, fall back to keeping the original video.
     val spriteSheet =
       VideoSpriteExtractor.generateSpriteSheet(
         file,
         fps = options.spriteFrameFps,
         frameHeight = options.spriteFrameHeight,
-        jpegQuality = options.spriteJpegQuality,
+        webpQuality = options.spriteQuality,
         isLandscape = isLandscape,
       )
     if (spriteSheet != null) {

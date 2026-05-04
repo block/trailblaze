@@ -17,20 +17,12 @@ object DeviceClock {
    * Returns the device's current epoch time in milliseconds, falling back to the host clock if the
    * adb query fails.
    */
-  fun nowMs(deviceId: String): Long {
-    return try {
-      val p =
-        AndroidHostAdbUtils.createAdbCommandProcessBuilder(
-            args = listOf("shell", "date", "+%s%3N"),
-            deviceId = TrailblazeDeviceId(deviceId, TrailblazeDevicePlatform.ANDROID),
-          )
-          .start()
-      val output = p.inputStream.bufferedReader().readText().trim()
-      p.waitFor()
-      output.toLongOrNull() ?: System.currentTimeMillis()
-    } catch (e: Exception) {
-      Console.log("DeviceClock: failed to query device time, using host clock: ${e.message}")
-      System.currentTimeMillis()
-    }
+  fun nowMs(deviceId: String): Long = try {
+    AndroidHostAdbUtils.getDeviceEpochMs(
+      TrailblazeDeviceId(deviceId, TrailblazeDevicePlatform.ANDROID),
+    )
+  } catch (e: Exception) {
+    Console.log("DeviceClock: failed to query device time, using host clock: ${e.message}")
+    System.currentTimeMillis()
   }
 }

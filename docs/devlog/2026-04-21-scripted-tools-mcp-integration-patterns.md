@@ -68,7 +68,7 @@ vendored 3rd-party servers. That's this devlog.
 ### Target root — for sources that contribute broadly
 
 ```yaml
-# trailblaze-config/targets/myapp.yaml
+# trails/config/targets/myapp.yaml
 id: myapp
 display_name: Example App
 

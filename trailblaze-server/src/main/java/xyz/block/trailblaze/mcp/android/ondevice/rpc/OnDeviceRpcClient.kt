@@ -9,6 +9,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcRequest.Companion.toRpcPath
 import xyz.block.trailblaze.mcp.utils.HttpRequestUtils
 import xyz.block.trailblaze.mcp.utils.HttpRequestUtils.HttpRpcException
+import xyz.block.trailblaze.util.AndroidHostAdbUtils
 import java.io.IOException
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
@@ -17,12 +18,20 @@ import kotlin.time.ExperimentalTime
  * This is a pseudo-RPC client that communicates with the on-device server.
  */
 class OnDeviceRpcClient(
-  trailblazeDeviceId: TrailblazeDeviceId,
+  private val trailblazeDeviceId: TrailblazeDeviceId,
   private val sendProgressMessage: (String) -> Unit = {},
 ) : AutoCloseable {
 
+  /**
+   * Single source of truth for the on-device HTTP server's port. Computed once from
+   * [trailblazeDeviceId] so [baseUrl] and the ADB-forward recovery in
+   * [recoverFromNetworkError] can't drift.
+   */
   @PublishedApi
-  internal val baseUrl = "http://localhost:${trailblazeDeviceId.getTrailblazeOnDeviceSpecificPort()}"
+  internal val port: Int = trailblazeDeviceId.getTrailblazeOnDeviceSpecificPort()
+
+  @PublishedApi
+  internal val baseUrl = "http://localhost:$port"
 
   @PublishedApi
   internal val httpRequestUtils: HttpRequestUtils = HttpRequestUtils(
@@ -84,10 +93,16 @@ class OnDeviceRpcClient(
         url = fullUrl
       )
     } catch (e: IOException) {
+      // ADB forward can drop silently mid-session on Android — every RPC over this client
+      // eats the same IOException when that happens. Diagnose-and-heal here so the next
+      // call has a fresh tunnel, and fold a structured port-presence note into details so
+      // future triage can tell at a glance whether the silent-drop hypothesis was
+      // load-bearing for this particular failure (PRESENT vs ABSENT).
+      val recoveryNote = recoverFromNetworkError()
       RpcResult.Failure(
         errorType = RpcResult.ErrorType.NETWORK_ERROR,
         message = "Network error during RPC call",
-        details = e.message,
+        details = listOfNotNull(e.message, recoveryNote).joinToString(" | "),
         method = methodName,
         url = fullUrl
       )
@@ -214,6 +229,32 @@ class OnDeviceRpcClient(
       }
       delay(pollIntervalMs)
     }
+  }
+
+  /**
+   * Diagnose-and-heal for [RpcResult.ErrorType.NETWORK_ERROR] failures. Delegates the adb
+   * subprocess work to [AndroidHostAdbUtils.diagnoseAndReAdbPortForward] and translates its
+   * boolean pre-recovery state into a short structured note (`host_forward=PRESENT|ABSENT|
+   * UNKNOWN, re-forwarded`) suitable for inclusion in [RpcResult.Failure.details], so future
+   * triage can tell at a glance whether the silent-drop hypothesis was load-bearing for that
+   * particular failure.
+   *
+   * Public so the inline [rpcCall] can invoke it from its `IOException` branch — every
+   * Android RPC over this client benefits.
+   */
+  fun recoverFromNetworkError(): String {
+    val portStatus = when (
+      AndroidHostAdbUtils.diagnoseAndReAdbPortForward(
+        deviceId = trailblazeDeviceId,
+        localPort = port,
+        remotePort = port,
+      )
+    ) {
+      true -> "PRESENT"
+      false -> "ABSENT"
+      null -> "UNKNOWN"
+    }
+    return "host_forward=$portStatus, re-forwarded"
   }
 
   private companion object {

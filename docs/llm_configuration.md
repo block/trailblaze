@@ -12,7 +12,7 @@ Configuration is loaded from multiple locations. Later sources override earlier 
 |----------|----------|---------|
 | 1 (lowest) | Built-in defaults | Ship with Trailblaze binary |
 | 2 | `~/.trailblaze/trailblaze.yaml` (under `llm:` key) | User-level preferences |
-| 3 | `./trailblaze.yaml` (under `llm:` key) | Project/workspace defaults |
+| 3 | `./trails/config/trailblaze.yaml` (under `llm:` key) | Project/workspace defaults |
 | 4 (highest) | Environment variables | CI/CD and runtime overrides |
 
 If no YAML config files exist, Trailblaze uses the built-in defaults with API keys from environment variables (same behavior as before YAML config was introduced).
@@ -29,9 +29,9 @@ export OPENAI_API_KEY="sk-..."
 
 Trailblaze will use the built-in model list for that provider.
 
-### Project defaults via `trailblaze.yaml`
+### Project defaults via `trails/config/trailblaze.yaml`
 
-Create a `trailblaze.yaml` at your project root to set defaults for everyone on the team:
+Create `trails/config/trailblaze.yaml` in your workspace to set defaults for everyone on the team:
 
 ```yaml
 llm:
@@ -51,7 +51,7 @@ When anyone clones the repo and launches Trailblaze, they get these models by de
 For organizations with a private Gen AI gateway (e.g., Azure OpenAI, a corporate proxy, or a managed LLM service):
 
 ```yaml
-# trailblaze.yaml at project root
+# trails/config/trailblaze.yaml
 llm:
   providers:
     corp_gateway:
@@ -177,7 +177,7 @@ These can be overridden by environment variables:
 
 ## Workspace Defaults
 
-A `trailblaze.yaml` at the project root sets defaults for everyone working in that repo. This is the recommended way for teams and organizations to configure LLM providers.
+`trails/config/trailblaze.yaml` sets defaults for everyone working in that workspace. This is the recommended way for teams and organizations to configure LLM providers.
 
 **Why set workspace defaults?**
 
@@ -189,7 +189,7 @@ A `trailblaze.yaml` at the project root sets defaults for everyone working in th
 **Example:** An organization using a private gateway:
 
 ```yaml
-# trailblaze.yaml (committed to repo)
+# trails/config/trailblaze.yaml (committed to repo)
 llm:
   providers:
     acme_gateway:
@@ -218,7 +218,7 @@ When Ollama is installed, Trailblaze automatically discovers locally available m
 
 ### Project-configured models
 
-You can list Ollama models in your project's `trailblaze.yaml` even if they are not currently installed on the developer's machine. This is useful when a project recommends specific local models:
+You can list Ollama models in your workspace's `trails/config/trailblaze.yaml` even if they are not currently installed on the developer's machine. This is useful when a project recommends specific local models:
 
 ```yaml
 llm:

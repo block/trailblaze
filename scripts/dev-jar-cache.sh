@@ -13,14 +13,28 @@
 # Source fingerprint: HEAD commit + content hash of modified/new build-relevant files.
 # Uses `git diff` for tracked files (captures actual content changes) and file stat
 # for untracked files. ~0.2s — fast enough for a launcher.
+#
+# Excludes trail recordings (`trails/**/*.trail.yaml`, `trails/**/blaze.yaml`) —
+# these are *output* from trail runs, not inputs to the build. Including them
+# meant every `./trailblaze trail` (which writes a recording) silently changed
+# the source hash, so the very next CLI invocation would force-stop the daemon
+# and rebuild the uber JAR even though nothing about the CLI binary had changed.
 dev_source_hash() {
   {
     git rev-parse HEAD
-    # Content diff of tracked files (catches edits to already-dirty files)
-    git diff HEAD -- '*.kt' '*.java' '*.kts' '*.properties' '*.toml' '*.xml' '*.json' '*.yaml' '*.yml' '*.pro' '*.sql' 2>/dev/null
-    # Untracked files: list names + sizes so new files are detected
+    # Content diff of tracked files (catches edits to already-dirty files).
+    # The `:!trails/**/...` pathspecs exclude trail recordings — they're test
+    # artifacts, not source. Mirrors the untracked-files filter below: drop
+    # `*.trail.yaml`, `blaze.yaml`, and `*.blaze.yaml` (which is what
+    # `./trailblaze trail` writes alongside the original blaze.yaml entrypoint).
+    git diff HEAD -- '*.kt' '*.java' '*.kts' '*.properties' '*.toml' '*.xml' '*.json' '*.yaml' '*.yml' '*.pro' '*.sql' \
+      ':!trails/**/*.trail.yaml' ':!trails/**/blaze.yaml' ':!trails/**/*.blaze.yaml' 2>/dev/null
+    # Untracked files: list names + sizes so new files are detected.
+    # Skip trail recordings (`trails/**/*.trail.yaml`, `trails/**/blaze.yaml`,
+    # `trails/**/*.blaze.yaml`) for the same reason as the diff filter above.
     git ls-files --others --exclude-standard \
       | grep -E '\.(kt|java|kts|properties|toml|xml|html|json|yaml|yml|pro|sql)$' \
+      | grep -vE '^trails/.*(\.trail\.yaml|/blaze\.yaml|\.blaze\.yaml)$' \
       | while read -r f; do stat -f '%N %z' "$f" 2>/dev/null || stat --format='%n %s' "$f" 2>/dev/null; done
   } | if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi | cut -d' ' -f1
 }

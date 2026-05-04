@@ -5,7 +5,6 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.util.AndroidHostAdbUtils
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.PollingUtils
-import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils.runProcess
 
 /**
  * JVM implementation of AndroidDeviceCommandExecutor that delegates to AndroidHostAdbUtils.
@@ -19,6 +18,14 @@ actual class AndroidDeviceCommandExecutor actual constructor(
       deviceId = deviceId,
       args = command.split(" "),
     )
+  }
+
+  actual fun executeShellCommandAs(appId: String, command: String): String {
+    // Delegates to `adb shell`, which runs as UID 2000 (shell). That's the privilege
+    // `run-as` needs to switch into a debuggable app's UID. See the expect-class KDoc
+    // for the full rationale.
+    validateRunAsArgs(appId, command)
+    return executeShellCommand("run-as $appId $command")
   }
 
   actual fun sendBroadcast(intent: BroadcastIntent) {
@@ -96,20 +103,13 @@ actual class AndroidDeviceCommandExecutor actual constructor(
     // Step 3: Write the actual file content through the content provider.
     // Piping content via stdin to `adb shell content write` is the equivalent
     // of ContentResolver.openOutputStream(uri) on device.
-    val writeProcess = AndroidHostAdbUtils.createAdbCommandProcessBuilder(
+    val result = AndroidHostAdbUtils.shellWithStdin(
       deviceId = deviceId,
-      args = listOf("shell", "content", "write", "--uri", "$MEDIASTORE_DOWNLOADS_URI/$mediaStoreId"),
-    ).start()
-
-    writeProcess.outputStream.use { stdin ->
-      stdin.write(content)
-      stdin.flush()
-    }
-
-    val exitCode = writeProcess.waitFor()
-    if (exitCode != 0) {
-      val stderr = writeProcess.errorStream.bufferedReader().readText()
-      error("Failed to write content to MediaStore entry $mediaStoreId: $stderr")
+      command = "content write --uri $MEDIASTORE_DOWNLOADS_URI/$mediaStoreId",
+      stdin = content,
+    )
+    if (result.exitCode != 0) {
+      error("Failed to write content to MediaStore entry $mediaStoreId: ${result.errorOutput}")
     }
 
     Console.log("Wrote ${content.size} bytes to MediaStore Downloads: $fileName (id=$mediaStoreId)")
@@ -262,11 +262,12 @@ actual class AndroidDeviceCommandExecutor actual constructor(
         shellCommand("mkdir", "-p", parentDir)
       }
 
-      // Push file to device via adb push
-      AndroidHostAdbUtils.createAdbCommandProcessBuilder(
+      // Push file to device via dadb (over the adb wire protocol)
+      AndroidHostAdbUtils.pushFile(
         deviceId = deviceId,
-        args = listOf("push", tempFile.absolutePath, devicePath),
-      ).runProcess {}
+        localFile = tempFile,
+        remotePath = devicePath,
+      )
     } finally {
       tempFile.delete()
     }

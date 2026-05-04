@@ -81,6 +81,66 @@ export interface TrailblazeCallToolResult {
 }
 
 /**
+ * Open type map of `tool name → arg shape`. Empty by default; augmented by:
+ *
+ *  - The vendored `built-in-tools.d.ts` shipped with this SDK (well-known framework tools
+ *    like `tapOnElementWithText`, `inputText`).
+ *  - Per-pack `.d.ts` files emitted by the `trailblaze.bundle` Gradle plugin
+ *    (one entry per scripted tool declared in the pack's resolved target manifest).
+ *
+ * Augmentation pattern (declaration merging):
+ *
+ * ```ts
+ * declare module "@trailblaze/scripting" {
+ *   interface TrailblazeToolMap {
+ *     myScriptedTool: { foo: string; bar?: number };
+ *   }
+ * }
+ * ```
+ *
+ * A tool listed here lights up the strict `callTool` overload (autocomplete on the name,
+ * type-checked args) and surfaces on `client.tools.<name>(...)`. Tools NOT listed fall
+ * through to the untyped `(string, Record)` overload — fully backward-compatible with code
+ * written against the original signature.
+ *
+ * **Preferred surface.** New code should use `client.tools.<name>(args)` for every tool
+ * that has a typed entry — single autocomplete list across built-ins and per-pack scripted
+ * tools, hover JSDoc on both the name and the args. `client.callTool(name, args)` is the
+ * lower-level escape hatch for genuinely-dynamic tool names (e.g. names produced at
+ * runtime). Both surfaces dispatch through the same wire path; the choice is purely about
+ * type-safety ergonomics at the call site.
+ *
+ * **Multi-pack collision risk.** Within a single pack the Gradle generator fails the build
+ * if two scripted tools share a name. Across packs (a TS consumer that imports two pack
+ * roots' generated `.d.ts` files), TypeScript declaration merging will silently pick one
+ * shape for the colliding key — the static type passes, the runtime mismatches. Tool names
+ * MUST be globally unique across every pack a single consumer installs. There is no
+ * automated cross-pack enforcement today; conventions and code review carry the load until
+ * a multi-pack consumer demands one.
+ */
+// eslint-disable-next-line @typescript-eslint/no-empty-interface
+export interface TrailblazeToolMap {}
+
+/**
+ * Method-style namespace derived from [TrailblazeToolMap]. Each augmented entry surfaces as
+ * a typed method — e.g. given `interface TrailblazeToolMap { inputText: { text: string } }`,
+ * the namespace exposes `inputText(args: { text: string }): Promise<TrailblazeCallToolResult>`.
+ *
+ * This is the preferred surface for tools that have a typed entry in the map: the IDE shows
+ * every available tool when you type `client.tools.`, hover gives JSDoc on both the name and
+ * the args, and a wrong-keyed/missing-field args object errors at compile time without any
+ * string-literal fiddling.
+ *
+ * Tools not represented in the map (dynamically-registered, packs without generated
+ * bindings) live on `client.callTool(name, args)` with the untyped fallback signature.
+ */
+export type TrailblazeToolMethods = {
+  [K in keyof TrailblazeToolMap]: (
+    args: TrailblazeToolMap[K],
+  ) => Promise<TrailblazeCallToolResult>;
+};
+
+/**
  * Third handler argument on `trailblaze.tool(name, spec, handler)`. Exposes the callback
  * channel so tools can compose other Trailblaze tools. Always provided (never `undefined`) —
  * when the envelope is missing, the client's preflight check still runs and throws a clear
@@ -90,6 +150,20 @@ export interface TrailblazeClient {
   /**
    * Dispatches Trailblaze tool [name] with [args] against the live Trailblaze session and
    * returns the result.
+   *
+   * **Typed args via [TrailblazeToolMap].** The arg shape is selected by a conditional type:
+   *
+   *  - Name IS a key of [TrailblazeToolMap] (vendored built-ins + per-pack-generated entries):
+   *    `args` must match the typed shape. Wrong keys / missing required fields error at
+   *    compile time. Autocomplete shows the tool's parameters.
+   *  - Name is NOT a key (dynamically-registered tools, packs without generated bindings,
+   *    ad-hoc one-offs): `args` is the fallback `Record<string, unknown>` — same as the
+   *    pre-bindings signature. Existing untyped code keeps compiling.
+   *
+   * The single conditional signature (rather than two overloads) is deliberate: with two
+   * overloads, `callTool("knownTool", { wrongShape })` silently falls through to the
+   * fallback overload because `Record<string, unknown>` accepts any object. The conditional
+   * picks one branch per call-site, so the strict branch's mismatch cannot be evaded.
    *
    * **Transports.** Picked automatically from the envelope — authors never branch on this:
    *
@@ -135,7 +209,24 @@ export interface TrailblazeClient {
    * concurrent-safe today). Serialize the access locally or avoid composed mutations when
    * correctness matters.
    */
-  callTool(name: string, args: Record<string, unknown>): Promise<TrailblazeCallToolResult>;
+  callTool<K extends string>(
+    name: K,
+    args: K extends keyof TrailblazeToolMap ? TrailblazeToolMap[K] : Record<string, unknown>,
+  ): Promise<TrailblazeCallToolResult>;
+
+  /**
+   * Method-style namespace — `client.tools.inputText({ text: "hi" })`. Each property is a
+   * typed method derived from a [TrailblazeToolMap] augmentation. `client.tools.<TAB>` in
+   * an IDE lists every known tool; mistype an arg key or miss a required field and `tsc`
+   * errors at compile time. See [TrailblazeToolMethods] for the type derivation.
+   *
+   * The runtime is a `Proxy` — any property access becomes a `callTool(propertyName, args)`
+   * dispatch. That means a tool not in the map (e.g. typed against an old SDK, or augmented
+   * by a bindings file the consumer hasn't pulled in yet) still dispatches at runtime; the
+   * static type just won't show it. For genuinely-dynamic tool names use [callTool] with
+   * the untyped fallback overload.
+   */
+  tools: TrailblazeToolMethods;
 }
 
 // ---- Implementation ---------------------------------------------------------------------------
@@ -191,9 +282,73 @@ const CLIENT_FETCH_TIMEOUT_MS = resolveClientFetchTimeoutMs();
  * through the right one.
  */
 export function createClient(ctx: TrailblazeContext | undefined): TrailblazeClient {
-  return {
-    callTool: (name: string, args: Record<string, unknown>) => callTool(ctx, name, args),
-  };
+  const callToolImpl = <K extends string>(
+    name: K,
+    args: K extends keyof TrailblazeToolMap ? TrailblazeToolMap[K] : Record<string, unknown>,
+  ): Promise<TrailblazeCallToolResult> => callTool(ctx, name, args as Record<string, unknown>);
+
+  // `client.tools.<toolName>(args)` namespace. Built as a Proxy so the SDK doesn't need to
+  // know which keys are augmented — any property access becomes a `callTool(propertyName,
+  // args)` dispatch at runtime. The static type (TrailblazeToolMethods) constrains what the
+  // IDE/tsc see; the runtime is intentionally permissive so a downstream that augments
+  // TrailblazeToolMap without touching the SDK's runtime still works end-to-end.
+  return { callTool: callToolImpl, tools: createToolsProxy(callToolImpl) };
+}
+
+/**
+ * Property names the JavaScript runtime probes implicitly. Returning a callable for any of
+ * these from `client.tools` would trigger silent `callTool` dispatches against the daemon —
+ * the worst offender being `then`, which `await client.tools` (or any code path that
+ * resolves the namespace as a possibly-thenable value) reads to detect Promise-likes. Block
+ * the whole well-known set so introspection sees `undefined` instead of a tool dispatcher.
+ *
+ * The list mirrors what eg. Node's `util.inspect`, Promise.resolve, and structuredClone
+ * touch on plain objects; not exhaustive, but covers every probe path observed in practice
+ * for similar Proxy-as-namespace patterns.
+ */
+const TOOLS_PROXY_RESERVED_PROPS = new Set<string>([
+  // Thenable detection — the critical one. Without this, `await client.tools` (or any
+  // value-coercion path) reads `.then`, gets back a fn, calls it, and dispatches a
+  // `callTool("then", { ... })` to the daemon. Has bitten Proxy-as-namespace patterns in
+  // multiple SDKs.
+  "then",
+  "catch",
+  "finally",
+  // Object-protocol introspection — `client.tools.constructor.name`, `String(client.tools)`,
+  // `+client.tools`, `JSON.stringify(client.tools)`, `Object.getPrototypeOf(...)`, etc. All
+  // would otherwise resolve to a tool dispatcher.
+  "constructor",
+  "prototype",
+  "__proto__",
+  "toString",
+  "valueOf",
+  "toJSON",
+]);
+
+function createToolsProxy(
+  callToolImpl: (name: string, args: Record<string, unknown>) => Promise<TrailblazeCallToolResult>,
+): TrailblazeToolMethods {
+  return new Proxy({} as TrailblazeToolMethods, {
+    get(_target, prop, _receiver) {
+      // Symbol-keyed access (Symbol.iterator, Symbol.toPrimitive, util.inspect.custom, etc.)
+      // — never a tool name, always a runtime probe. Return undefined so the runtime sees
+      // "no, this object doesn't have that protocol" rather than a callable.
+      if (typeof prop !== "string") return undefined;
+      // Reserved JS-protocol names — see [TOOLS_PROXY_RESERVED_PROPS] kdoc.
+      if (TOOLS_PROXY_RESERVED_PROPS.has(prop)) return undefined;
+      // Blank / whitespace-only names can't possibly be valid tools. Returning a callable
+      // and letting the daemon reject `callTool("", ...)` is correct but wastes a round-trip
+      // and surfaces the failure far from the typo. Throw at the access site instead so the
+      // stack trace points at the offending `client.tools[someBadKey]` line.
+      if (prop.trim() === "") {
+        throw new Error(
+          `client.tools[${JSON.stringify(prop)}]: tool name must not be empty or whitespace-only.`,
+        );
+      }
+      return (args: Record<string, unknown>) =>
+        callToolImpl(prop, args ?? ({} as Record<string, unknown>));
+    },
+  });
 }
 
 async function callTool(

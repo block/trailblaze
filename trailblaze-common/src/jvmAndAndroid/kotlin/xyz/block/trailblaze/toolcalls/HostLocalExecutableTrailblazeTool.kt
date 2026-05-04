@@ -20,7 +20,17 @@ package xyz.block.trailblaze.toolcalls
  * — dynamically-constructed tools have no class-level `@TrailblazeToolClass` to read the name
  * from, so it flows through the marker instead.
  */
-interface HostLocalExecutableTrailblazeTool : ExecutableTrailblazeTool {
+interface HostLocalExecutableTrailblazeTool : ExecutableTrailblazeTool, InstanceNamedTrailblazeTool {
   /** The tool name that shows up in session logs for this execution. */
   val advertisedToolName: String
+
+  /**
+   * Surfaces [advertisedToolName] under the [InstanceNamedTrailblazeTool] contract so that
+   * the canonical encoder ([toOtherTrailblazeToolPayload]) and any path that reads instance
+   * name from the marker interface (rather than the class-level annotation) see the same
+   * dynamic name. Without this, encoding a HostLocal tool through the JSON contextual
+   * serializer would fall through to `class.simpleName` and produce a name that differs from
+   * what `getToolNameFromAnnotation` returns for the same instance.
+   */
+  override val instanceToolName: String get() = advertisedToolName
 }

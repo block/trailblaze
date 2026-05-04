@@ -1,11 +1,11 @@
 package xyz.block.trailblaze.yaml
 
+import xyz.block.trailblaze.config.project.TrailDiscovery
 import xyz.block.trailblaze.recordings.TrailRecordings
 import java.io.File
 
 /**
- * Utility object for validating trail YAML files (trailblaze.yaml and *.trail.yaml).
- * Provides static methods for finding and validating trail YAML files in a directory.
+ * Utility object for validating trail YAML files discovered in a workspace.
  */
 object TrailYamlValidator {
 
@@ -40,32 +40,35 @@ object TrailYamlValidator {
    * @param directory The directory to search
    * @return List of all trail YAML files found
    */
-  fun findAllTrailYamlFiles(directory: File): List<File> {
-    val trailFiles = mutableListOf<File>()
-
-    if (!directory.exists() || !directory.isDirectory) {
-      return trailFiles
+  fun findAllTrailYamlFiles(directory: File): List<File> =
+    if (!directory.exists() || !directory.isDirectory) emptyList()
+    else {
+      TrailDiscovery
+        .discoverTrailFiles(directory.toPath())
+        .filterNot(::isProjectConfigFile)
     }
 
-    directory.walkTopDown()
-      .onEnter { dir -> dir.name != "build" }
-      .filter { it.isFile && TrailRecordings.isTrailFile(it.name) }
-      .filter { !isProjectConfigFile(it) }
-      .forEach { trailFiles.add(it) }
-
-    return trailFiles
-  }
-
   /**
-   * Returns true if this trailblaze.yaml file is a project config file (contains llm: or
-   * target: keys) rather than a trail NL definition file. Project config files use the
-   * same filename but a different schema and should not be validated as trail YAML.
+   * Returns true if this `trailblaze.yaml` is acting as project/workspace config rather than a
+   * trail definition. Covers both populated project configs (`llm:`, `targets:`, etc.) and
+   * comment-only / otherwise empty workspace anchors.
    */
   private fun isProjectConfigFile(file: File): Boolean {
     if (file.name != TrailRecordings.TRAILBLAZE_DOT_YAML) return false
     return try {
-      val content = file.readText()
-      content.contains("llm:") || content.contains("target:")
+      val meaningfulLines = file.readLines()
+        .map { it.substringBefore("#").trim() }
+        .filter { it.isNotEmpty() }
+      if (meaningfulLines.isEmpty()) return true
+      meaningfulLines.any { line ->
+        line.startsWith("defaults:") ||
+          line.startsWith("packs:") ||
+          line.startsWith("targets:") ||
+          line.startsWith("toolsets:") ||
+          line.startsWith("tools:") ||
+          line.startsWith("providers:") ||
+          line.startsWith("llm:")
+      }
     } catch (_: Exception) {
       false
     }

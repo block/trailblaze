@@ -1,0 +1,24 @@
+# This file is a CHECKED-IN baseline of CLI output rendered by trailblaze-host's CLI helpers.
+# It is NOT a contract — if a test fails here because output drifted, decide whether the
+# drift is intentional. The test always (re)writes this file from the current rendered output,
+# then asserts the working tree is clean. So `git diff` of this file IS the failure message.
+# Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
+# small wording / spacing changes can be intentional or accidental.
+# ----------------------------------------------------------------------
+Usage: trailblaze session [-hV] [COMMAND]
+Every blaze records a session — save it as a replayable trail
+  -h, --help      Show this help message and exit.
+  -V, --version   Print version information and exit.
+Commands:
+  start      Start a new session with automatic video and log capture
+  stop       Stop the current session and finalize captures
+  save       Write the recorded steps to a *.trail.yaml file you can replay
+               later (does not end the session)
+  recording  Output the recording YAML for a session
+  info       Show information about a session
+  list       List recent sessions
+  artifacts  List artifacts in a session
+  delete     Delete a session's logs and artifacts
+  end        End the CLI session and release the device (deprecated: use 'stop'
+               instead)
+  report     Generate an HTML or JSON report for this session

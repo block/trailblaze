@@ -1,5 +1,5 @@
 # No LLM required — every tool call is pinned. Proves that the subprocess MCP server
-# (../../trailblaze-config/mcp/tools.ts) is spawned at session start, its tools get
+# (../../config/mcp/tools.ts) is spawned at session start, its tools get
 # registered into the session's tool repo, and direct dispatch round-trips through
 # the subprocess.
 - config:

@@ -22,8 +22,8 @@ import java.util.concurrent.Callable
  * Examples:
  *   trailblaze toolbox                           - Show tool index
  *   trailblaze toolbox --detail                  - Show full parameter descriptions
- *   trailblaze toolbox --name tapOnElement        - Show single tool details
- *   trailblaze toolbox --target sampleapp        - Show tools for a target app
+ *   trailblaze toolbox --name tap                - Show single tool details
+ *   trailblaze toolbox --target default          - Show tools for a target app
  */
 @Command(
   name = "toolbox",
@@ -91,7 +91,7 @@ class ToolboxCommand : Callable<Int> {
 
       Console.error("")
       Console.error("Example:")
-      Console.error("  trailblaze toolbox --device android --target sampleapp")
+      Console.error("  trailblaze toolbox --device android --target default")
       Console.error("")
       Console.error("Use --name <tool> to look up a specific tool without --device/--target.")
       return CommandLine.ExitCode.USAGE
@@ -211,18 +211,11 @@ class ToolboxCommand : Callable<Int> {
         val otherNames = otherTargets.map { it.jsonObject["name"]?.jsonPrimitive?.content ?: "?" }
         Console.info("Other targets: ${otherNames.joinToString(", ")} (use --target <name> to explore)")
       } else {
-        // Discovery mode: no target set, show full list with platforms
-        val others = otherTargets.joinToString(", ") { other ->
-          val obj = other.jsonObject
-          val n = obj["name"]?.jsonPrimitive?.content ?: "?"
-          val platforms = obj["platforms"]?.jsonArray?.joinToString(", ") {
-            it.jsonPrimitive.content
-          }
-          if (platforms != null) "$n ($platforms)" else n
-        }
-        Console.info("Targets: $others")
-        Console.info("  Use --target <name> to see target-specific tools.")
-        Console.info("  Target is set per session. End session to switch.")
+        // Discovery mode: no target set. Parse the JSON array into typed summaries so a
+        // malformed daemon response can't crash the renderer, then hand the typed list
+        // to the formatter that unit tests also use.
+        val summaries = ToolboxFormatter.parseTargetSummariesJson(otherTargets)
+        ToolboxFormatter.renderTargetListBlock(summaries).forEach { Console.info(it) }
       }
     }
 
@@ -375,27 +368,32 @@ class ToolboxCommand : Callable<Int> {
       val obj = toolset.jsonObject
       val tsName = obj["name"]?.jsonPrimitive?.content ?: continue
       val desc = obj["description"]?.jsonPrimitive?.content ?: ""
-      if (showDetail) {
-        Console.info("")
-        Console.info("  [$tsName]  $desc")
-        val toolDetails = obj["toolDetails"]?.jsonArray
-        toolDetails?.forEach { tool ->
-          val toolObj = tool.jsonObject
-          val toolName = toolObj["name"]?.jsonPrimitive?.content ?: return@forEach
-          val toolDesc = toolObj["description"]?.jsonPrimitive?.content ?: ""
+      Console.info("")
+      Console.info("  [$tsName]  $desc")
+      val toolDetails = obj["toolDetails"]?.jsonArray
+      toolDetails?.forEach { tool ->
+        val toolObj = tool.jsonObject
+        val toolName = toolObj["name"]?.jsonPrimitive?.content ?: return@forEach
+        val toolDesc = toolObj["description"]?.jsonPrimitive?.content ?: ""
+        if (showDetail) {
+          // Detail mode: full description + parameters. Description rendered verbatim
+          // because users explicitly opted into the firehose.
           Console.info("    - $toolName: $toolDesc")
           formatParameters(toolObj, "        ")
+        } else {
+          // Compact mode: name + a one-line "peek" of the description (see
+          // ToolboxFormatter for ellipsis + truncation rules). Required parameters are
+          // NOT shown — `--name <tool>` is the right path for parameter exploration.
+          Console.info("    ${ToolboxFormatter.compactToolPeekLine(toolName, toolDesc)}")
         }
-      } else {
-        val tools = obj["tools"]?.jsonArray?.joinToString(", ") {
-          it.jsonPrimitive.content
-        } ?: ""
-        Console.info("")
-        Console.info("  [$tsName]  $desc")
-        Console.info("    $tools")
       }
     }
+    if (!showDetail) {
+      Console.info("")
+      Console.info("  Use --name <tool> for full description, parameters, and usage.")
+    }
   }
+
 
   private fun formatParameters(toolObj: kotlinx.serialization.json.JsonObject, indent: String) {
     val required = toolObj["requiredParameters"]?.jsonArray

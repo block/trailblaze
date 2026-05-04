@@ -3,7 +3,6 @@ package xyz.block.trailblaze.yaml
 import kotlinx.serialization.InternalSerializationApi
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.serializer
-import xyz.block.trailblaze.config.ToolYamlLoader
 import xyz.block.trailblaze.logs.client.TrailblazeSerializationInitializer
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.toolName
@@ -13,14 +12,17 @@ import kotlin.reflect.KClass
  * Builds a fresh [TrailblazeYaml] containing serializers for every YAML-discovered tool
  * class plus any extra [customTrailblazeToolClasses] the caller wants included.
  *
- * Pure factory — does not mutate [TrailblazeYaml.Default] or register any globals. Callers
- * that just want the shared default should read [TrailblazeYaml.Default] directly.
+ * Uses [TrailblazeSerializationInitializer.buildAllTools] so that any imperatively-registered
+ * tool classes (via [TrailblazeSerializationInitializer.registerImperativeToolClasses]) are
+ * included alongside classpath-discovered ones. Pure factory — does not mutate
+ * [TrailblazeYaml.Default] or register any globals. Callers that just want the shared default
+ * should read [TrailblazeYaml.Default] directly.
  */
 fun createTrailblazeYaml(
   customTrailblazeToolClasses: Set<KClass<out TrailblazeTool>> = emptySet(),
 ): TrailblazeYaml {
-  val discovered = ToolYamlLoader.discoverAndLoadAll().values.toSet()
-  return createTrailblazeYamlFromAllTools(discovered + customTrailblazeToolClasses)
+  val allDiscovered = TrailblazeSerializationInitializer.buildAllTools().values.toSet()
+  return createTrailblazeYamlFromAllTools(allDiscovered + customTrailblazeToolClasses)
 }
 
 /**

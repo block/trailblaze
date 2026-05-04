@@ -14,6 +14,7 @@ import picocli.CommandLine.Command
 import picocli.CommandLine.Option
 import picocli.CommandLine.Parameters
 import xyz.block.trailblaze.util.Console
+import java.io.File
 import java.util.concurrent.Callable
 
 /**
@@ -27,8 +28,8 @@ import java.util.concurrent.Callable
  * The daemon must be running (`trailblaze app --headless` or the desktop app).
  *
  * Examples:
- *   trailblaze blaze "Tap the login button"
- *   trailblaze blaze --verify "The email field is visible"
+ *   trailblaze blaze -d android/emulator-5554 "Tap the login button"
+ *   trailblaze blaze -d ios/SIM-UUID --verify "The email field is visible"
  *   trailblaze blaze -d ANDROID "Open settings"
  */
 @Command(
@@ -37,12 +38,17 @@ import java.util.concurrent.Callable
   description = ["Drive a device with AI — describe what to do in plain English"]
 )
 class BlazeCommand : Callable<Int> {
+  // The shared per-device CLI session scope ([cliDeviceSessionScope]) and
+  // [readLastCliSessionScope] / [writeLastCliSessionScope] live in
+  // CliInfrastructure.kt so `tool`, `snapshot`, `ask`, `verify`, and `blaze`
+  // all funnel into the same recording session per device — `blaze --save`
+  // can then export a session that recorded any mix of those calls.
 
   @Parameters(
     description = ["Objective or assertion (e.g., 'Tap login', 'The email field is visible')"],
     arity = "0..*",
   )
-  var goalWords: List<String> = emptyList()
+  var objectiveWords: List<String> = emptyList()
 
   @Option(
     names = ["--verify"],
@@ -52,8 +58,7 @@ class BlazeCommand : Callable<Int> {
 
   @Option(
     names = ["-d", "--device"],
-    description = ["Device: platform (android, ios, web) or platform/id (e.g., android/emulator-5554). " +
-      "Switches the daemon's active device for all clients. Required for multi-device workflows."]
+    description = ["Device: platform (android, ios, web) or platform/id (e.g., android/emulator-5554). Required for interactive blaze/verify execution."]
   )
   var device: String? = null
 
@@ -71,15 +76,23 @@ class BlazeCommand : Callable<Int> {
 
   @Option(
     names = ["--target"],
-    description = ["Target app ID. Saved for future commands."]
+    description = [
+      "Target app ID, saved as the default for future commands. " +
+        "List available targets with `trailblaze toolbox` (no args)."
+    ]
   )
   var target: String? = null
 
   @Option(
-    names = ["--fast"],
-    description = ["Text-only mode: skip screenshots, use text-only screen analysis (no vision tokens sent to LLM), and skip disk logging. Also enabled by BLAZE_FAST=1 env var."],
+    names = ["--no-screenshots", "--text-only"],
+    description = [
+      "Skip screenshots — the LLM only sees the textual view hierarchy, no vision " +
+        "tokens, and disk logging of screenshots is skipped too. Faster and cheaper " +
+        "for short objectives where the visual layout doesn't matter; some tasks need " +
+        "vision and will degrade without it."
+    ],
   )
-  var fast: Boolean = System.getenv("BLAZE_FAST") == "1"
+  var noScreenshots: Boolean = false
 
   @Option(
     names = ["--save"],
@@ -98,6 +111,9 @@ class BlazeCommand : Callable<Int> {
     description = ["Save without setup steps. Use with --save."]
   )
   var noSetup: Boolean = false
+
+  @CommandLine.Mixin
+  val headlessOption: HeadlessOption = HeadlessOption()
 
   override fun call(): Int {
     // Save --target to sticky config if provided
@@ -121,32 +137,39 @@ class BlazeCommand : Callable<Int> {
     }
 
     // Goal is always required (unless --save)
-    val goal = goalWords.joinToString(" ").trim()
+    val goal = objectiveWords.joinToString(" ").trim()
     if (goal.isEmpty()) {
       Console.error("Error: blaze requires an objective. Usage: trailblaze blaze \"Tap login\"")
       return CommandLine.ExitCode.USAGE
     }
 
-    return cliWithDevice(verbose, device) { client ->
+    // Validate the device once here so we can build a sound sessionScope. The
+    // helper validates again defensively, but doing it up front lets us keep
+    // `device.orEmpty()` out of scope construction.
+    val device = device
+    if (device.isNullOrBlank()) {
+      Console.error("Error: --device is required for this command.")
+      return CommandLine.ExitCode.USAGE
+    }
+    val sessionScope = cliDeviceSessionScope(device)
+    return cliReusableWithDevice(
+      verbose = verbose,
+      device = device,
+      sessionScope = sessionScope,
+      webHeadless = headlessOption.resolve(),
+    ) { client ->
       // Execute blaze action
       val arguments = mutableMapOf<String, Any?>("objective" to goal)
       if (verify) arguments["hint"] = "VERIFY"
       if (context != null) arguments["context"] = context
-      if (fast) arguments["fast"] = true
+      if (noScreenshots) arguments["fast"] = true
 
-      val isNewDevice = !client.hasExistingDevice
       val result = client.callTool("blaze", arguments)
 
       formatBlazeResult(result)
-      // Show Trailblaze session ID after the first action in a new session
-      if (isNewDevice && result.isSuccess) {
-        client.getTrailblazeSessionId()?.let {
-          Console.info("Session: trailblaze session info --id $it")
-        }
-      }
 
       if (result.isError) {
-        return@cliWithDevice CommandLine.ExitCode.SOFTWARE
+        return@cliReusableWithDevice CommandLine.ExitCode.SOFTWARE
       }
 
       // Parse JSON once for error/verify checks
@@ -156,16 +179,20 @@ class BlazeCommand : Callable<Int> {
         // Not JSON — for verify, parse markdown for pass/fail status
         if (verify) {
           val passed = parseVerifyPassedFromMarkdown(result.content)
-          return@cliWithDevice if (passed) CommandLine.ExitCode.OK else CommandLine.ExitCode.SOFTWARE
+          return@cliReusableWithDevice if (passed) CommandLine.ExitCode.OK else CommandLine.ExitCode.SOFTWARE
         }
-        return@cliWithDevice CommandLine.ExitCode.OK
+        return@cliReusableWithDevice CommandLine.ExitCode.OK
       }
 
       // Check JSON payload for errors
       val error = parsedJson["error"]?.jsonPrimitive?.content
       if (!error.isNullOrBlank()) {
-        return@cliWithDevice CommandLine.ExitCode.SOFTWARE
+        return@cliReusableWithDevice CommandLine.ExitCode.SOFTWARE
       }
+
+      // `cliReusableWithDevice` already wrote the last-scope file before the
+      // action ran, so `blaze --save` can find this session even on partial
+      // failures — no need to re-write it here.
 
       if (verify) {
         val passed = parsedJson["passed"]?.jsonPrimitive?.content?.toBoolean() ?: false
@@ -224,10 +251,16 @@ class BlazeCommand : Callable<Int> {
     if (!verbose) Console.enableQuietMode()
 
     val port = CliConfigHelper.resolveEffectiveHttpPort()
+    val sessionScope = device?.takeIf { it.isNotBlank() }?.let(::cliDeviceSessionScope)
+      ?: readLastCliSessionScope(port)
 
     return runBlocking {
+      if (sessionScope == null) {
+        Console.error("Error: No recorded blaze session. Run blaze first, or pass --device to choose a device-scoped blaze session.")
+        return@runBlocking CommandLine.ExitCode.SOFTWARE
+      }
       val client = try {
-        CliMcpClient.connectToDaemon(port)
+        CliMcpClient.connectReusable(port, sessionScope = sessionScope)
       } catch (e: Exception) {
         Console.error("Error: No active session. ${e.message}")
         return@runBlocking CommandLine.ExitCode.SOFTWARE
@@ -317,7 +350,7 @@ class BlazeCommand : Callable<Int> {
       emptySet()
     }
 
-    val file = java.io.File(path)
+    val file = File(path)
     val title = file.nameWithoutExtension.removeSuffix(".trail")
 
     val saveResult = client.callTool("session", mapOf("action" to "SAVE", "title" to title))
@@ -345,15 +378,24 @@ class BlazeCommand : Callable<Int> {
       return CommandLine.ExitCode.SOFTWARE
     }
 
-    val generatedFile = java.io.File(generatedPath)
+    val generatedFile = File(generatedPath)
     if (!generatedFile.exists()) {
       Console.error("Error: Generated trail file not found: $generatedPath")
       return CommandLine.ExitCode.SOFTWARE
     }
 
     val yamlContent = generatedFile.readText()
-    val outputFile = file.let { f ->
-      if (f.isAbsolute) f else java.io.File(System.getProperty("user.dir"), path)
+    // Resolve --save path. If it points at an existing directory, drop the generated
+    // trail file inside it (mirroring `session save`'s default behavior). Without this,
+    // `--save=trails/foo` against an existing folder would crash with FileNotFoundException
+    // ("Is a directory") on the writeText below.
+    val resolvedPath = file.let { f ->
+      if (f.isAbsolute) f else File(System.getProperty("user.dir"), path)
+    }
+    val outputFile = if (resolvedPath.isDirectory) {
+      File(resolvedPath, File(generatedPath).name)
+    } else {
+      resolvedPath
     }
     outputFile.parentFile?.let { dir ->
       if (!dir.exists()) dir.mkdirs()

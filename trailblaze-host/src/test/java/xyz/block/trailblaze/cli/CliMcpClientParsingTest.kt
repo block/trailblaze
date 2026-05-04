@@ -20,7 +20,20 @@ class CliMcpClientParsingTest {
     assertEquals(1, entries.size)
     assertEquals("emulator-5554", entries[0].instanceId)
     assertEquals(TrailblazeDevicePlatform.ANDROID, entries[0].platform)
+    assertEquals("Google Pixel 6", entries[0].description)
     assertEquals("android/emulator-5554", entries[0].spec)
+  }
+
+  @Test
+  fun `parseDeviceList captures null description when omitted`() {
+    // The daemon omits the trailing ` - <desc>` segment for entries it doesn't have a
+    // human-readable name for (e.g. virtual web devices like `playwright-native`).
+    val content = "  - playwright-native (Web Browser)"
+    val entries = CliMcpClient.parseDeviceList(content)
+
+    assertEquals(1, entries.size)
+    assertEquals("playwright-native", entries[0].instanceId)
+    assertEquals(null, entries[0].description)
   }
 
   @Test

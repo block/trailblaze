@@ -2,8 +2,8 @@
 
 # 🧭 Trailblaze
 
-_**Blaze your own trails on iOS, Android, and Web.**_
-_AI-powered UI testing. Any agent. One CLI. Zero LLM config._
+_**An AI-powered UI testing framework for iOS, Android, and Web.**_
+_Platform-native drivers, an agent loop, deterministic replay, a desktop app, and a CLI any LLM can drive._
 
 <p style="text-align: center;">
   <a href="https://opensource.org/licenses/Apache-2.0">
@@ -18,26 +18,31 @@ _AI-powered UI testing. Any agent. One CLI. Zero LLM config._
 curl -fsSL https://raw.githubusercontent.com/block/trailblaze/main/install.sh | bash
 ```
 
-## Claude, Codex, Any Agent — All Through the Trailblaze CLI
+## Two Ways to Drive — Same CLI
 
-**If your agent can run a shell command, it can drive a device with Trailblaze.**
+Trailblaze ships its own agent and also plays nicely with any AI coding agent:
 
-Every Trailblaze tool is a CLI subcommand. Claude Code, Codex, Cursor, Goose, Aider, Continue, your own homegrown
-agent, your CI runner, a bash script — they all invoke Trailblaze the same way. No MCP server to install.
-No provider keys to wire up. No protocols to negotiate. No Trailblaze-side LLM config.
-
-Your agent already knows how to use a CLI. That's all Trailblaze needs.
+- **`trailblaze blaze "<goal>"`** — runs Trailblaze's built-in agent end-to-end. Plans, acts, recovers from popups
+  and stuck states, and produces a recording. No external coding agent required; this is what powers the CI
+  pipeline and `--self-heal`.
+- **Claude Code, Codex, Cursor, Goose, Aider, Continue, your own homegrown agent, a CI runner, a bash script** —
+  they all invoke the same CLI primitives the same way. No SDK to install, no protocol to negotiate, no provider
+  keys to wire up on the agent's side.
 
 ## Quickstart
 
 ```bash
-# Connect a device (iOS, Android, or Web)
-trailblaze device
+# List devices, then connect one (iOS, Android, or Web)
+trailblaze device list
+trailblaze device connect android
 
-# Drive it from any agent — or from your shell
-trailblaze snapshot                                              # See what's on screen
-trailblaze tool tapOnElement ref="Sign In" -o "Tap sign in"      # Act, with intent
-trailblaze verify "Welcome screen is visible"                    # Pass/fail (exit 0/1)
+# Drive end-to-end with Trailblaze's built-in agent
+trailblaze blaze -d android "Sign in as test@example.com and confirm the welcome screen"
+
+# Or drive primitives directly — by hand or from any AI coding agent
+trailblaze snapshot -d android                                              # See what's on screen
+trailblaze tool tapOnElement -d android ref="Sign In" -o "Tap sign in"      # Act, with intent
+trailblaze verify -d android "Welcome screen is visible"                    # Pass/fail (exit 0/1)
 ```
 
 Paste those into Claude Code, Codex, Goose, or anything that can run bash and you're already authoring tests.
@@ -54,7 +59,7 @@ You have access to the `trailblaze` CLI. Use it to drive the connected device:
   - `trailblaze toolbox` — list available tools for the current platform
 
 Task: Log in with test@example.com / hunter2 and confirm the welcome screen.
-When done, run `trailblaze session save login_flow` to persist the trail.
+When done, run `trailblaze session save --title "login_flow"` to persist the trail.
 ```
 
 That's the whole integration. No installation steps for the agent. No config files. No protocol plumbing.
@@ -91,8 +96,20 @@ trailblaze tool tapOnElement ref="Sign In" --objective "Tap sign in"
 trailblaze tool inputText text="test@example.com" --objective "Enter email"
 ```
 
-When the UI drifts, the recorded trail can self-heal against the objective instead of breaking on a brittle
-selector. Objectives are what make agent-authored trails durable.
+Objectives are what make agent-authored trails durable. When the UI drifts, **self-heal** uses them to recover.
+
+### Self-Heal
+
+Recorded trails replay deterministically by default — no LLM in the loop, no flake. When a recorded step
+genuinely doesn't match the screen anymore, opt in to self-heal and the `blaze` agent steps back in to patch the
+failing step and update the recording on success:
+
+```bash
+trailblaze trail flows/login.trail.yaml --self-heal
+```
+
+A real UI change becomes a one-line trail update instead of a broken build. Self-heal is opt-in: the default is
+fail-loud, so a flake or regression doesn't get silently masked.
 
 ### Read-Only Primitives
 
@@ -130,14 +147,41 @@ gets the same desktop app, HTML reports, session history, and deterministic repl
 
 ## Core Features
 
-- **Agent-First CLI**: Every tool is a shell command. Any agent that can run bash can drive a device — no MCP,
-  no SDK, no protocol
-- **Cross-Platform**: Android, iOS, and Web from the same CLI with the same commands
-- **Resilient by Design**: Natural-language `--objective`s let recorded trails self-heal against UI changes
+- **Built-in `blaze` agent**: `trailblaze blaze "<goal>"` plans, acts, and self-corrects end-to-end. The same
+  agent powers self-heal and the recommended CI workflow.
+- **AI coding agent integration**: Every tool is a shell command. Any agent that can run bash can drive a device
+  through the same CLI — no SDK, no protocol, no provider keys on the agent's side.
+- **Self-heal on replay**: opt in (`--self-heal`) and `blaze` patches a failing recorded step and updates the
+  recording on success. Default is fail-loud.
+- **Cross-Platform, Platform-Native**: Android, iOS, and Web from the same CLI with the same commands.
+  Each driver speaks its host platform's native vocabulary (Android UiAutomator, iOS XCUITest, Playwright DOM)
+  — no flattening to a lowest-common-denominator abstraction.
+- **Resilient by Design**: Natural-language `--objective`s capture intent so recorded trails can recover against
+  UI changes instead of breaking on brittle selectors.
 - **Custom Tools**: Extend the tool surface with app-specific `TrailblazeTool`s — automatically available to the
-  CLI and any agent calling it
-- **Detailed Reporting**: Rich HTML/JSON reports with screenshots, per-step timing, and objective-vs-action diffs
-- **Desktop App**: Visual trail authoring, replay, and report browsing for humans who want a GUI
+  CLI and any agent calling it.
+- **Multi-Device Sessions**: Drive Android + iOS + web from the same shell, in parallel, each bound to a
+  specific device.
+- **High-Fidelity Reporting**: Rich reports with screenshots, per-step timing, recorded tool calls,
+  full LLM transcripts, and video replay. CI exposes the report inline on every build; the desktop app shows the
+  same UI for local sessions.
+
+## Active Prototypes
+
+Trailblaze is moving fast. These are landing now and are worth knowing about even if they're not stable yet:
+
+- **Packs** — reusable target-aware capability bundles (tools + waypoints + routes + recorded trails) shipped
+  per app, consumed by humans and agents alike. Think Robot Pattern, generalized and shippable.
+  ([devlog](docs/devlog/2026-04-26-target-packs-local-first.md))
+- **Scripted Tools (JS/TS)** — write custom tools in TypeScript with the `@trailblaze/scripting` SDK. No Kotlin,
+  no Gradle build. Tools execute in a QuickJS sandbox on-device or in a host subprocess.
+  ([devlog](docs/devlog/2026-04-22-scripting-sdk-authoring-vision.md))
+- **Waypoints** — named, assertable app locations defined structurally (element identity, stable labels), never
+  by content. Agents can ask "am I on the Inbox?", land on a waypoint after a step, or use waypoints as trail
+  checkpoints. ([devlog](docs/devlog/2026-03-11-waypoints-and-app-navigation-graphs.md))
+- **Trail-as-Tool** — expose a saved trail as a tool so other trails (and agents) can call it. A
+  `loginAsTestUser` trail becomes a one-line setup step inside any other test.
+  ([devlog](docs/devlog/2026-04-21-run-trail-tool-proposal.md))
 
 ## Desktop App & Reporting
 
@@ -146,14 +190,6 @@ trailblaze app        # Launch the desktop app for visual trail authoring and re
 ```
 
 The desktop app, HTML reports, and session browser all work the same regardless of how the trail was authored.
-
-## Other Integrations
-
-- **`trailblaze blaze "<goal>"`** — Trailblaze has a built-in agent that can drive end-to-end from a single
-  prompt. It needs an AI provider configured (`trailblaze config`). Most users will want to use an external
-  agent via the CLI instead — it's simpler and doesn't require Trailblaze-side LLM setup.
-- **`trailblaze mcp`** — An MCP server also ships for MCP-native hosts. We no longer recommend it as the default
-  integration; the CLI is simpler, works everywhere, and requires zero host configuration.
 
 ## Documentation
 

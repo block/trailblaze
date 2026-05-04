@@ -50,6 +50,11 @@ data class ClearAppDataTrailblazeTool(
           return TrailblazeToolResult.Error.ExceptionThrown(
             errorMessage = "clearAppData is not supported for web devices.",
           )
+
+        TrailblazeDevicePlatform.DESKTOP ->
+          return TrailblazeToolResult.Error.ExceptionThrown(
+            errorMessage = "clearAppData is not supported for the Compose desktop driver.",
+          )
       }
       TrailblazeToolResult.Success(
         message = "Cleared app data for package '$packageName'.",

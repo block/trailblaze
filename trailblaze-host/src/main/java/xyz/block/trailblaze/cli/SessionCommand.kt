@@ -39,12 +39,64 @@ import java.util.concurrent.Callable
     SessionArtifactsCommand::class,
     SessionDeleteCommand::class,
     SessionEndCommand::class,
+    SessionReportCommand::class,
   ],
 )
 class SessionCommand : Callable<Int> {
+  // Reach the root command so subcommands like `session report` can call
+  // `appProvider()` to access the same logs repo and report generator that
+  // `trailblaze report` uses.
+  @CommandLine.ParentCommand
+  internal lateinit var cliRoot: TrailblazeCliCommand
+
   override fun call(): Int {
     CommandLine(this).usage(System.out)
     return CommandLine.ExitCode.OK
+  }
+}
+
+@Command(
+  name = "report",
+  mixinStandardHelpOptions = true,
+  description = ["Generate an HTML or JSON report for this session"],
+)
+class SessionReportCommand : Callable<Int> {
+
+  @CommandLine.ParentCommand
+  private lateinit var parent: SessionCommand
+
+  @Option(
+    names = ["--id"],
+    description = ["Session ID to report on (defaults to current session, supports prefix matching)"],
+  )
+  var id: String? = null
+
+  @Option(
+    names = ["--open"],
+    description = ["Open the report in the default browser after generation (HTML only)"],
+  )
+  var open: Boolean = false
+
+  @Option(
+    names = ["--format"],
+    description = ["Output format: html (default) or json — JSON emits a CiSummaryReport artifact"],
+  )
+  var format: ReportFormat = ReportFormat.HTML
+
+  override fun call(): Int {
+    val effectiveId = id ?: runBlocking {
+      val port = CliConfigHelper.resolveEffectiveHttpPort()
+      try {
+        CliMcpClient.connectReusable(port).use { it.getTrailblazeSessionId() }
+      } catch (_: Exception) {
+        null
+      }
+    }
+    if (effectiveId == null) {
+      Console.error("Error: No active session. Pass --id to specify which session to report on.")
+      return CommandLine.ExitCode.SOFTWARE
+    }
+    return generateSessionReport(parent.cliRoot.appProvider(), effectiveId, open, format)
   }
 }
 
@@ -53,12 +105,13 @@ class SessionCommand : Callable<Int> {
  *
  * Accepts `--target`, `--mode`, and `--device` to configure and start in one step.
  * If target/mode are already configured, they can be omitted.
- * Device is per-session — two terminals can have different devices.
+ * Session commands still reuse the shared CLI MCP session. The per-invocation
+ * device isolation in this PR applies to one-shot commands like blaze/ask/verify.
  *
  * Examples:
  *   trailblaze session start --target myapp --mode trail --device android
- *   trailblaze session start --device ios      (target/mode already configured)
- *   trailblaze session start                   (uses configured defaults)
+  *   trailblaze session start --device ios      (target/mode already configured)
+  *   trailblaze session start                   (uses configured defaults)
  */
 @Command(
   name = "start",
@@ -85,7 +138,7 @@ class SessionStartCommand : Callable<Int> {
   @Option(
     names = ["-d", "--device"],
     description = ["Device: platform (android, ios, web) or platform/id (e.g., ios/DEVICE-UUID). " +
-      "Switches the daemon's active device for all clients. Required for multi-device workflows."],
+      "Binds the shared CLI session to that device for session workflows."],
   )
   var device: String? = null
 
@@ -113,6 +166,9 @@ class SessionStartCommand : Callable<Int> {
   )
   var verbose: Boolean = false
 
+  @CommandLine.Mixin
+  val headlessOption: HeadlessOption = HeadlessOption()
+
   override fun call(): Int {
     var currentConfig = CliConfigHelper.getOrCreateConfig()
 
@@ -136,15 +192,23 @@ class SessionStartCommand : Callable<Int> {
 
     if (!verbose) Console.enableQuietMode()
     val port = CliConfigHelper.resolveEffectiveHttpPort()
+    // currentConfig was just refreshed above with the latest --target value, so its
+    // selectedTargetAppId is what should anchor the persisted reusable session — passing
+    // it in lets connectReusable invalidate the session if the target later changes.
+    val targetAppId = currentConfig.selectedTargetAppId
 
     return runBlocking {
-      val client = connectOrStartDaemon(port) ?: return@runBlocking CommandLine.ExitCode.SOFTWARE
+      val client = connectOrStartDaemonReusable(port, targetAppId = targetAppId)
+        ?: return@runBlocking CommandLine.ExitCode.SOFTWARE
 
       client.use {
         // Connect device: per-command flag → config default → auto-detect
         val effectiveDevice = device ?: CliConfigHelper.readConfig()?.cliDevicePlatform
         if (effectiveDevice != null) {
-          val deviceError = it.ensureDevice(effectiveDevice)
+          val deviceError = it.ensureDevice(
+            effectiveDevice,
+            webHeadless = headlessOption.resolve(),
+          )
           if (deviceError != null) {
             Console.error(deviceError)
             return@runBlocking CommandLine.ExitCode.SOFTWARE
@@ -221,7 +285,7 @@ class SessionStopCommand : Callable<Int> {
 
     return runBlocking {
       val client = try {
-        CliMcpClient.connectToDaemon(port)
+        CliMcpClient.connectReusable(port)
       } catch (_: Exception) {
         Console.log("No active session.")
         CliMcpClient.clearSession(port)
@@ -287,7 +351,7 @@ class SessionListCommand : Callable<Int> {
 
     return runBlocking {
       val client = try {
-        CliMcpClient.connectToDaemon(port)
+        CliMcpClient.connectReusable(port)
       } catch (_: Exception) {
         Console.error(DAEMON_NOT_RUNNING_ERROR)
         return@runBlocking CommandLine.ExitCode.SOFTWARE
@@ -394,7 +458,7 @@ class SessionArtifactsCommand : Callable<Int> {
 
     return runBlocking {
       val client = try {
-        CliMcpClient.connectToDaemon(port)
+        CliMcpClient.connectReusable(port)
       } catch (_: Exception) {
         Console.error(DAEMON_NOT_RUNNING_ERROR)
         return@runBlocking CommandLine.ExitCode.SOFTWARE
@@ -464,7 +528,7 @@ class SessionDeleteCommand : Callable<Int> {
 
     return runBlocking {
       val client = try {
-        CliMcpClient.connectToDaemon(port)
+        CliMcpClient.connectReusable(port)
       } catch (_: Exception) {
         Console.error(DAEMON_NOT_RUNNING_ERROR)
         return@runBlocking CommandLine.ExitCode.SOFTWARE
@@ -524,7 +588,7 @@ class SessionEndCommand : Callable<Int> {
 
     return runBlocking {
       val client = try {
-        CliMcpClient.connectToDaemon(port)
+        CliMcpClient.connectReusable(port)
       } catch (e: Exception) {
         Console.log("No active session.")
         CliMcpClient.clearSession(port)
@@ -557,7 +621,7 @@ class SessionEndCommand : Callable<Int> {
 @Command(
   name = "save",
   mixinStandardHelpOptions = true,
-  description = ["Save the current recording as a trail without ending the session"],
+  description = ["Write the recorded steps to a *.trail.yaml file you can replay later (does not end the session)"],
 )
 class SessionSaveCommand : Callable<Int> {
 
@@ -597,7 +661,7 @@ class SessionSaveCommand : Callable<Int> {
 
     return runBlocking {
       val client = try {
-        CliMcpClient.connectToDaemon(port)
+        CliMcpClient.connectReusable(port)
       } catch (e: Exception) {
         Console.error("Error: No active session. ${e.message}")
         return@runBlocking CommandLine.ExitCode.SOFTWARE
@@ -657,7 +721,7 @@ class SessionRecordingCommand : Callable<Int> {
 
     return runBlocking {
       val client = try {
-        CliMcpClient.connectToDaemon(port)
+        CliMcpClient.connectReusable(port)
       } catch (_: Exception) {
         Console.error(DAEMON_NOT_RUNNING_ERROR)
         return@runBlocking CommandLine.ExitCode.SOFTWARE
@@ -721,7 +785,7 @@ class SessionInfoCommand : Callable<Int> {
 
     return runBlocking {
       val client = try {
-        CliMcpClient.connectToDaemon(port)
+        CliMcpClient.connectReusable(port)
       } catch (_: Exception) {
         Console.log("No active session.")
         return@runBlocking CommandLine.ExitCode.OK

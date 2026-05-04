@@ -1,0 +1,18 @@
+{
+  "name": "@trailblaze/tools",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Tiny on-device-compatible authoring SDK for Trailblaze tools. No MCP, no @modelcontextprotocol/sdk, no transport — just a globalThis-backed registry the QuickJS runtime reads after evaluation. See devlog 2026-04-30-scripted-tools-not-mcp.md for the architecture rationale.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "files": [
+    "src"
+  ]
+}

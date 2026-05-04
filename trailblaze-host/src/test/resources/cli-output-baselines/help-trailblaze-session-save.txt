@@ -1,0 +1,16 @@
+# This file is a CHECKED-IN baseline of CLI output rendered by trailblaze-host's CLI helpers.
+# It is NOT a contract — if a test fails here because output drifted, decide whether the
+# drift is intentional. The test always (re)writes this file from the current rendered output,
+# then asserts the working tree is clean. So `git diff` of this file IS the failure message.
+# Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
+# small wording / spacing changes can be intentional or accidental.
+# ----------------------------------------------------------------------
+Usage: trailblaze session save [-hV] [--id=<id>] [-t=<title>]
+Write the recorded steps to a *.trail.yaml file you can replay later (does not
+end the session)
+  -h, --help            Show this help message and exit.
+      --id=<id>         Session ID to save (defaults to current session,
+                          supports prefix matching)
+  -t, --title=<title>   Title for the saved trail (uses session title if not
+                          specified)
+  -V, --version         Print version information and exit.

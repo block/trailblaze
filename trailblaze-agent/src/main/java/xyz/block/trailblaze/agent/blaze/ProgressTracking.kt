@@ -88,21 +88,23 @@ internal fun buildProgressSummary(state: BlazeState, config: BlazeConfig): Strin
 }
 
 /**
- * Detects when the agent is repeating the same action without making progress.
+ * Detects when the agent is repeating actions without making progress.
  *
  * This is a **tool-agnostic** detector — it doesn't hardcode specific tool names.
- * Instead, it looks at the recent action history and detects when the same tool
- * with the same (or very similar) arguments is called consecutively. This works
- * for any tool, including dynamically provided tools.
+ * Instead, it looks at the recent action history and detects two failure modes:
  *
- * Common patterns this catches:
- * - Clicking the same field repeatedly instead of typing
- * - Scrolling in the same direction without new content appearing
- * - Any action that keeps repeating without the screen state changing
+ * 1. The same tool+args repeated consecutively (e.g. tapping the same field over and over).
+ * 2. A short cycle of actions repeating (e.g. tap → undo → tap → undo → …), which is
+ *    common when the agent's tap appears to navigate but lands on the wrong screen,
+ *    so it backs out and tries the same tap again.
  *
- * The hint escalates in urgency based on how many times the action repeated:
- * - 2 repetitions: gentle suggestion to try a different approach
- * - 3+ repetitions: strong warning that the current approach isn't working
+ * Cycles of length 1 (consecutive identical), 2 (alternating, A-B-A-B), and 3
+ * (A-B-C-A-B-C) are detected. Lengths beyond 3 are intentionally not flagged: in
+ * practice they more often represent legitimate exploration than a stuck loop.
+ *
+ * The hint escalates in urgency based on how many full cycles have repeated:
+ * - 2 full cycles: gentle suggestion to try a different approach
+ * - 3+ full cycles: strong warning that the current approach isn't working
  *
  * @return Corrective hint string, or null if no repetition is detected
  */
@@ -116,34 +118,84 @@ internal fun detectRepetitiveActionHint(state: BlazeState): String? {
     state.actionHistory.size
   }
   val subtaskActions = state.actionHistory.takeLast(actionScope)
-  if (subtaskActions.size < 2) return null
+  val signatures = subtaskActions.map { "${it.toolName}(${it.toolArgs})" }
+  return detectActionCycleHint(signatures)
+}
 
-  // Count consecutive identical actions from the end of subtask history
-  val lastAction = subtaskActions.last()
-  var consecutiveCount = 1
-  for (i in subtaskActions.size - 2 downTo 0) {
-    val action = subtaskActions[i]
-    if (action.toolName == lastAction.toolName &&
-      action.toolArgs.toString() == lastAction.toolArgs.toString()
-    ) {
-      consecutiveCount++
-    } else {
-      break
+/**
+ * Generic cycle detector over a list of action signatures.
+ *
+ * Each entry in [signatures] should be a stable string representation of one action
+ * (typically `"toolName(args)"`). Two actions are considered "the same" when their
+ * signatures are equal. The detector scans the tail for cycles of length 1, 2, and 3
+ * — shortest match wins, so a true single-action repeat reports as length 1 even
+ * though it would also match length 2.
+ *
+ * @return Hint message describing the loop, or null if no loop is detected.
+ */
+internal fun detectActionCycleHint(signatures: List<String>): String? {
+  if (signatures.size < 2) return null
+
+  for (cycleLen in 1..3) {
+    if (signatures.size < cycleLen * 2) continue
+
+    val tail = signatures.takeLast(cycleLen)
+    var fullRepeats = 1 // tail itself counts as one occurrence
+    var i = signatures.size - cycleLen * 2
+    while (i >= 0) {
+      val candidate = signatures.subList(i, i + cycleLen)
+      if (candidate == tail) {
+        fullRepeats++
+        i -= cycleLen
+      } else {
+        break
+      }
+    }
+
+    if (fullRepeats >= 2) {
+      return formatCycleHint(tail, cycleLen, fullRepeats)
     }
   }
+  return null
+}
 
-  if (consecutiveCount < 2) return null
-
-  // Build a tool-agnostic hint based on severity
-  val toolDesc = "'${lastAction.toolName}'"
-  return if (consecutiveCount == 2) {
-    "WARNING: You have called $toolDesc with the same arguments $consecutiveCount times in a row. " +
-      "This action is not making progress. Try a DIFFERENT action or approach to achieve the objective."
-  } else {
-    "CRITICAL: You have called $toolDesc with the same arguments $consecutiveCount times " +
-      "consecutively without progress. STOP repeating this action. The current approach is not working. " +
-      "Try a completely different strategy — use a different tool, different coordinates, or address " +
-      "what might be blocking progress (e.g., dismiss a keyboard, close a dialog, navigate differently)."
+/**
+ * Formats a corrective hint for a detected loop. Length-1 phrasing is preserved from
+ * the prior single-action detector to avoid regressing prompt quality on the most
+ * common case; length-2/3 phrasing surfaces the cycle explicitly.
+ */
+private fun formatCycleHint(cycle: List<String>, cycleLen: Int, fullRepeats: Int): String {
+  val isCritical = fullRepeats >= 3
+  return when (cycleLen) {
+    1 -> {
+      val signature = cycle.first()
+      val toolName = signature.substringBefore('(', missingDelimiterValue = signature)
+      val toolDesc = "'$toolName'"
+      if (!isCritical) {
+        "WARNING: You have called $toolDesc with the same arguments $fullRepeats times in a row. " +
+          "This action is not making progress. Try a DIFFERENT action or approach to achieve the objective."
+      } else {
+        "CRITICAL: You have called $toolDesc with the same arguments $fullRepeats times " +
+          "consecutively without progress. STOP repeating this action. The current approach is not working. " +
+          "Try a completely different strategy — use a different tool, different coordinates, or address " +
+          "what might be blocking progress (e.g., dismiss a keyboard, close a dialog, navigate differently)."
+      }
+    }
+    else -> {
+      val seq = cycle.joinToString(" → ") { sig ->
+        "'${sig.substringBefore('(', missingDelimiterValue = sig)}'"
+      }
+      if (!isCritical) {
+        "WARNING: You have repeated a cycle of $cycleLen actions ($seq) $fullRepeats times. " +
+          "This pattern is not making progress — the actions appear to be undoing each other or " +
+          "returning to the same state. Try a DIFFERENT approach to achieve the objective."
+      } else {
+        "CRITICAL: You have repeated a cycle of $cycleLen actions ($seq) $fullRepeats times " +
+          "without progress. STOP this loop. Try a completely different strategy — use a different " +
+          "element, address what might be blocking progress (e.g., dismiss a popup, scroll the screen, " +
+          "navigate via a different path)."
+      }
+    }
   }
 }
 

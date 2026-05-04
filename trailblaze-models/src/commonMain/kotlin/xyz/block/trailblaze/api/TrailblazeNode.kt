@@ -127,19 +127,29 @@ data class TrailblazeNode(
   }
 
   /**
-   * Hit-tests the tree at (x, y) and returns the frontmost (deepest/smallest) node
-   * whose bounds contain the point, or null if no node contains it.
+   * Hit-tests the tree at (x, y) and returns the frontmost node whose bounds contain
+   * the point, or null if no node contains it.
    *
-   * Prefers nodes with identifiable driver properties (text, resourceId, etc.) over
-   * propertyless containers, then uses the smallest-area heuristic. On iOS especially,
-   * the smallest node at a given point is often an empty decorative container with no
-   * properties — selecting it produces only fragile index-based selectors.
+   * Priority order:
+   * 1. Interactive nodes (clickable, focusable, etc.) first — hitTest models what the OS
+   *    routes touch events to. A non-interactive node can never be a real tap target and
+   *    should not be used as a selector source even if it has a resourceId.
+   * 2. Nodes with identifiable driver properties (text, resourceId, etc.) over
+   *    propertyless containers — among interactive (or equally non-interactive) nodes,
+   *    identifiable ones produce more stable selectors.
+   * 3. Smallest area — the most specific element wins when interactivity and
+   *    identifiability are tied.
+   *
+   * On iOS with the default Maestro hierarchy, buttons often contain a small icon child
+   * (e.g. UIImageView with resourceId="x") that is non-interactive and smaller than the
+   * parent NativeButton. Putting isInteractive first ensures the tappable parent wins.
    */
   fun hitTest(x: Int, y: Int): TrailblazeNode? =
     aggregate()
       .filter { it.bounds?.containsPoint(x, y) == true }
       .minWithOrNull(
-        compareByDescending<TrailblazeNode> { it.driverDetail.hasIdentifiableProperties }
+        compareByDescending<TrailblazeNode> { it.driverDetail.isInteractive }
+          .thenByDescending { it.driverDetail.hasIdentifiableProperties }
           .thenBy {
             val b = it.bounds!!
             b.width.toLong() * b.height.toLong()

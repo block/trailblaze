@@ -53,6 +53,9 @@ class MaestroHostRunnerImpl(
       )
       TrailblazeDevicePlatform.IOS -> TrailblazeDriverType.IOS_HOST
       TrailblazeDevicePlatform.WEB -> error("Web tests do not use MaestroHostRunnerImpl")
+      TrailblazeDevicePlatform.DESKTOP -> error(
+        "Compose desktop driver does not use MaestroHostRunnerImpl — it routes through ComposeRpcClient.",
+      )
     }
     TrailblazeDeviceService.getConnectedDevice(
       trailblazeDeviceId = trailblazeDeviceId,

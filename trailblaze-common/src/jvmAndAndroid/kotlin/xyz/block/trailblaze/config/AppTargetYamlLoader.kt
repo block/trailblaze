@@ -79,6 +79,35 @@ object AppTargetYamlLoader {
   }
 
   /**
+   * Loads app targets from already-parsed configs.
+   */
+  fun loadAllFromConfigs(
+    configs: List<AppTargetYamlConfig>,
+    toolNameResolver: ToolNameResolver,
+    availableToolSets: Map<String, ResolvedToolSet> = emptyMap(),
+    companions: Map<String, AppTargetCompanion> = emptyMap(),
+  ): Set<TrailblazeHostAppTarget> {
+    return configs
+      .mapNotNull { config ->
+        try {
+          YamlBackedHostAppTarget(
+            config = config,
+            toolNameResolver = toolNameResolver,
+            availableToolSets = availableToolSets,
+            companion = companions[config.id],
+          )
+        } catch (e: Exception) {
+          Console.log(
+            "Warning: Failed to load app target '${config.id}': " +
+              "${e::class.simpleName}: ${e.message}",
+          )
+          null
+        }
+      }
+      .toSet()
+  }
+
+  /**
    * Discovers all target YAML configs and returns just the parsed [AppTargetYamlConfig]s.
    * Lightweight -- no tool resolution needed. Results are cached for the default classpath source.
    *
@@ -119,8 +148,8 @@ object AppTargetYamlLoader {
     companions: Map<String, AppTargetCompanion> = emptyMap(),
     resourceSource: ConfigResourceSource = platformConfigResourceSource(),
   ): Set<TrailblazeHostAppTarget> {
-    return loadAllFromYamlContents(
-      yamlContents = discoverYamlContents(resourceSource),
+    return loadAllFromConfigs(
+      configs = discoverConfigs(resourceSource),
       toolNameResolver = toolNameResolver,
       availableToolSets = availableToolSets,
       companions = companions,

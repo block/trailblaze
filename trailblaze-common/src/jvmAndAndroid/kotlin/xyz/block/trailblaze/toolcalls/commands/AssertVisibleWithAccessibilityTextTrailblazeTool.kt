@@ -12,15 +12,15 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeTools.REQUIRED_ACCESSIBILITY_TEXT_DESCRIPTION
 
 @Serializable
-@TrailblazeToolClass("assertVisibleWithAccessibilityText")
+@TrailblazeToolClass("assertVisibleWithAccessibilityText", isForLlm = false, isVerification = true)
 @LLMDescription(
   """
-Asserts that an element with the provided accessibility text is visible on the screen. The accessibilityText argument is required. Only provide additional fields if the accessibility text provided exactly matches elsewhere on the screen. In this case, the additional fields will be used to identify the specific view to assert visibility for.
+Assert that an element with the provided accessibility text is visible on the screen. The accessibilityText argument is required. Only provide additional fields if the accessibility text matches elsewhere on the screen — the additional fields disambiguate the specific view.
 
 NOTE:
-- This will wait for the item to appear if it is not visible yet.
+- Waits for the item to appear if it is not visible yet.
 - You may need to scroll down the page or close the keyboard if it is not visible in the screenshot.
-- Use this tool whenever an objective begins with the word expect, verify, confirm, or assert (case-insensitive).
+- Reach for this tool when an objective begins with the word expect, verify, confirm, or assert (case-insensitive).
 """,
 )
 @Deprecated("Use [AssertVisibleTrailblazeTool].")

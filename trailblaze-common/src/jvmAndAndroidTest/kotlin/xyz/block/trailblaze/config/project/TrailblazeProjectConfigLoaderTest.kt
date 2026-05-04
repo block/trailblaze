@@ -8,9 +8,14 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.test.fail
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import xyz.block.trailblaze.api.waypoint.WaypointDefinition
+import xyz.block.trailblaze.testing.ClasspathFixture
 import xyz.block.trailblaze.config.AppTargetYamlConfig
 import xyz.block.trailblaze.config.PlatformConfig
 import xyz.block.trailblaze.config.TrailblazeConfigYaml
@@ -19,8 +24,13 @@ import xyz.block.trailblaze.llm.config.BuiltInProviderConfig
 import xyz.block.trailblaze.llm.config.LlmModelConfigEntry
 
 /**
- * Tests for [TrailblazeProjectConfigLoader]. The loader is not yet wired into runtime code
- * paths, so behaviour is exercised here directly.
+ * Unit tests for [TrailblazeProjectConfigLoader]. These exercise the loader's behaviour
+ * directly with synthetic workspace fixtures so failure modes are isolated; runtime
+ * integration is covered by `AppTargetDiscoveryTest` and the waypoint CLI smoke tests.
+ *
+ * Tests pass `includeClasspathPacks = false` (or rely on the default `loadResolved`
+ * non-classpath path) where they need to assert workspace-only behaviour without the
+ * framework-bundled packs in `trailblaze-models` polluting the result set.
  */
 class TrailblazeProjectConfigLoaderTest {
 
@@ -40,6 +50,7 @@ class TrailblazeProjectConfigLoaderTest {
     assertNotNull(loaded)
     val raw = loaded.raw
     assertNull(raw.defaults)
+    assertTrue(raw.packs.isEmpty())
     assertTrue(raw.targets.isEmpty())
     assertTrue(raw.toolsets.isEmpty())
     assertTrue(raw.tools.isEmpty())
@@ -168,6 +179,273 @@ class TrailblazeProjectConfigLoaderTest {
     val inline = assertIs<ProviderEntry.Inline>(resolved.providers.single())
     assertEquals("custom", inline.config.providerId)
     assertEquals("x-1", inline.config.defaultModel)
+  }
+
+  @Test
+  fun `pack ref resolves relative to trailblaze_yaml dir`() {
+    val packDir = File(tempFolder.root, "packs/sampleapp").apply { mkdirs() }
+    File(packDir, "pack.yaml").writeText(
+      """
+      id: sampleapp
+      target:
+        display_name: Sample App Pack
+        platforms:
+          web:
+            base_url: https://example.test
+        tools:
+          - tools/open_sample.yaml
+      """.trimIndent(),
+    )
+    File(packDir, "tools").mkdirs()
+    File(packDir, "tools/open_sample.yaml").writeText(
+      """
+      script: ./tools/open_sample.js
+      name: openSample
+      description: Open the sample app
+      inputSchema:
+        relativePath:
+          type: string
+          description: Sample-app fixture path.
+      """.trimIndent(),
+    )
+    val file = tempFolder.writeConfig(
+      """
+      packs:
+        - packs/sampleapp/pack.yaml
+      """.trimIndent(),
+    )
+
+    val resolved = TrailblazeProjectConfigLoader.loadResolved(file)!!
+
+    assertEquals(listOf("packs/sampleapp/pack.yaml"), resolved.packs)
+    val target = assertIs<TargetEntry.Inline>(resolved.targets.single()).config
+    assertEquals("sampleapp", target.id)
+    assertEquals("Sample App Pack", target.displayName)
+    assertEquals("https://example.test", target.platforms?.get("web")?.baseUrl)
+    val tool = target.tools?.single()
+    assertEquals("openSample", tool?.name)
+    assertEquals("Open the sample app", tool?.description)
+    // Confirms the loader wraps the flat author shape into a JSON-Schema-conformant
+    // object with `type: object`, `properties`, and `required` derived from the
+    // (default-true) `required` flag on each property.
+    val schema = assertNotNull(tool?.inputSchema)
+    assertEquals(JsonPrimitive("object"), schema["type"])
+    val properties = assertIs<JsonObject>(assertNotNull(schema["properties"]))
+    val relativePath = assertIs<JsonObject>(assertNotNull(properties["relativePath"]))
+    assertEquals(JsonPrimitive("string"), relativePath["type"])
+    assertEquals(JsonPrimitive("Sample-app fixture path."), relativePath["description"])
+    assertEquals(JsonArray(listOf(JsonPrimitive("relativePath"))), schema["required"])
+  }
+
+  @Test
+  fun `pack toolset and tool refs resolve relative to pack dir`() {
+    val packDir = File(tempFolder.root, "packs/sampleapp").apply { mkdirs() }
+    File(packDir, "pack.yaml").writeText(
+      """
+      id: sampleapp
+      toolsets:
+        - toolsets/pack-toolset.yaml
+      tools:
+        - tools/pack-tool.yaml
+      """.trimIndent(),
+    )
+    File(packDir, "toolsets").mkdirs()
+    File(packDir, "toolsets/pack-toolset.yaml").writeText(
+      """
+      id: pack_toolset
+      description: Pack toolset
+      tools:
+        - pack_tool
+      """.trimIndent(),
+    )
+    File(packDir, "tools").mkdirs()
+    File(packDir, "tools/pack-tool.yaml").writeText(
+      """
+      id: pack_tool
+      description: Pack tool
+      parameters: []
+      tools:
+        - tapOnElementWithText:
+            text: "{{params.label}}"
+      """.trimIndent(),
+    )
+    val file = tempFolder.writeConfig(
+      """
+      packs:
+        - packs/sampleapp/pack.yaml
+      """.trimIndent(),
+    )
+
+    val resolved = TrailblazeProjectConfigLoader.loadResolved(file)!!
+
+    assertEquals("pack_toolset", assertIs<ToolsetEntry.Inline>(resolved.toolsets.single()).config.id)
+    assertEquals("pack_tool", assertIs<ToolEntry.Inline>(resolved.tools.single()).config.id)
+  }
+
+  @Test
+  fun `pack with dependencies inherits per-platform defaults via the loader pipeline`() {
+    // End-to-end integration test for the dependencies-based composition: verifies the loader's two-pass
+    // (sibling resolution → dep-graph defaults) actually wires PackDependencyResolver
+    // correctly. The resolver is well-tested in isolation; this guards against
+    // regressions in the *wiring* between the loader and the resolver.
+    //
+    // Workspace shape:
+    //   - `framework`: a library pack (no `target:`) publishing per-platform defaults
+    //   - `myapp`: consumer with `dependencies: [framework]`, app-specific app_ids,
+    //     omitted tool_sets on android (should inherit), explicit override on web
+    val frameworkPackDir = File(tempFolder.root, "packs/framework").apply { mkdirs() }
+    File(frameworkPackDir, "pack.yaml").writeText(
+      """
+      id: framework
+      defaults:
+        android:
+          tool_sets:
+            - core_interaction
+            - memory
+        web:
+          drivers: [playwright-native, playwright-electron]
+          tool_sets:
+            - web_core
+            - memory
+      """.trimIndent(),
+    )
+    val appPackDir = File(tempFolder.root, "packs/myapp").apply { mkdirs() }
+    File(appPackDir, "pack.yaml").writeText(
+      """
+      id: myapp
+      dependencies:
+        - framework
+      target:
+        display_name: My App
+        platforms:
+          android:
+            app_ids:
+              - com.example.myapp
+          web:
+            tool_sets:
+              - only_my_tool
+      """.trimIndent(),
+    )
+    val file = tempFolder.writeConfig(
+      """
+      packs:
+        - packs/framework/pack.yaml
+        - packs/myapp/pack.yaml
+      """.trimIndent(),
+    )
+
+    val resolved = TrailblazeProjectConfigLoader.loadResolved(file)!!
+
+    // Library pack (`framework`) has no `target:` and isn't surfaced as a runnable target.
+    val target = assertIs<TargetEntry.Inline>(resolved.targets.single()).config
+    assertEquals("myapp", target.id)
+
+    // Android: consumer set app_ids; tool_sets inherited from framework defaults.
+    val android = assertNotNull(target.platforms?.get("android"))
+    assertEquals(listOf("com.example.myapp"), android.appIds)
+    assertEquals(listOf("core_interaction", "memory"), android.toolSets)
+
+    // Web: consumer's explicit tool_sets wins entirely (no list concat); drivers
+    // inherited from framework defaults because consumer didn't set them.
+    val web = assertNotNull(target.platforms?.get("web"))
+    assertEquals(listOf("only_my_tool"), web.toolSets)
+    assertEquals(listOf("playwright-native", "playwright-electron"), web.drivers)
+
+    // Both workspace packs report as successfully landed (framework has no target,
+    // myapp's target made it through dep resolution).
+    assertEquals(
+      listOf("packs/framework/pack.yaml", "packs/myapp/pack.yaml"),
+      resolved.packs,
+    )
+  }
+
+
+  @Test
+  fun `pack with missing dependency is skipped while sibling packs continue to load`() {
+    // Integration counterpart to PackDependencyResolverTest's missing-dep unit tests:
+    // verifies the loader catches the resolver's TrailblazeProjectConfigException and
+    // applies the documented atomic-per-pack failure-isolation contract — sibling
+    // packs continue to load, the broken pack's target is excluded from the result,
+    // and (per the `successfulWorkspaceRefs` semantics) its workspace ref is NOT
+    // recorded as successful. Without this test, a future refactor could swallow the
+    // exception too aggressively or too narrowly without any regression signal.
+    val validPackDir = File(tempFolder.root, "packs/valid-pack").apply { mkdirs() }
+    File(validPackDir, "pack.yaml").writeText(
+      """
+      id: validpack
+      target:
+        display_name: Valid Pack
+        platforms:
+          android:
+            app_ids: [com.example.valid]
+      """.trimIndent(),
+    )
+    val brokenPackDir = File(tempFolder.root, "packs/broken-dep").apply { mkdirs() }
+    File(brokenPackDir, "pack.yaml").writeText(
+      """
+      id: brokendep
+      dependencies:
+        - this-pack-does-not-exist
+      target:
+        display_name: Broken Dep Pack
+        platforms:
+          android:
+            app_ids: [com.example.broken]
+      """.trimIndent(),
+    )
+    val file = tempFolder.writeConfig(
+      """
+      packs:
+        - packs/valid-pack/pack.yaml
+        - packs/broken-dep/pack.yaml
+      """.trimIndent(),
+    )
+
+    val resolved = TrailblazeProjectConfigLoader.loadResolved(file)!!
+
+    // Only the valid pack lands as a target; the broken-dep pack is skipped.
+    assertEquals(
+      listOf("validpack"),
+      resolved.targets.map { assertIs<TargetEntry.Inline>(it).config.id },
+    )
+    // Per `successfulWorkspaceRefs` semantics, only refs whose target made it into
+    // the resolved config are recorded; the broken pack contributed no target so its
+    // ref is excluded.
+    assertEquals(listOf("packs/valid-pack/pack.yaml"), resolved.packs)
+  }
+
+  @Test
+  fun `broken pack does not abort sibling pack resolution`() {
+    val validPackDir = File(tempFolder.root, "packs/valid-pack").apply { mkdirs() }
+    File(validPackDir, "pack.yaml").writeText(
+      """
+      id: validpack
+      target:
+        display_name: Valid Pack
+      """.trimIndent(),
+    )
+    val brokenPackDir = File(tempFolder.root, "packs/broken-pack").apply { mkdirs() }
+    File(brokenPackDir, "pack.yaml").writeText(
+      """
+      id: brokenpack
+      target:
+        display_name: Broken Pack
+      toolsets:
+        - toolsets/missing-toolset.yaml
+      """.trimIndent(),
+    )
+    val file = tempFolder.writeConfig(
+      """
+      packs:
+        - packs/valid-pack/pack.yaml
+        - packs/broken-pack/pack.yaml
+      """.trimIndent(),
+    )
+
+    val resolved = TrailblazeProjectConfigLoader.loadResolved(file)!!
+
+    assertEquals(listOf("packs/valid-pack/pack.yaml"), resolved.packs)
+    assertEquals("validpack", assertIs<TargetEntry.Inline>(resolved.targets.single()).config.id)
   }
 
   @Test
@@ -393,6 +671,240 @@ class TrailblazeProjectConfigLoaderTest {
       assertContains(e.message ?: "", "Failed to parse")
     }
   }
+
+  // ===========================================================================
+  // Tests for pack-bundled waypoint resolution and classpath/workspace precedence.
+  // ===========================================================================
+
+  @Test
+  fun `pack-bundled waypoints surface in resolved runtime config`() {
+    val packDir = File(tempFolder.root, "packs/sampleapp").apply { mkdirs() }
+    val waypointsDir = File(packDir, "waypoints").apply { mkdirs() }
+    File(waypointsDir, "ready.waypoint.yaml").writeText(
+      """
+      id: "sampleapp/ready"
+      description: "Sample app's main screen, ready for input."
+      """.trimIndent(),
+    )
+    File(packDir, "pack.yaml").writeText(
+      """
+      id: sampleapp
+      target:
+        display_name: Sample App
+      waypoints:
+        - waypoints/ready.waypoint.yaml
+      """.trimIndent(),
+    )
+    val configFile = tempFolder.writeConfig(
+      """
+      packs:
+        - packs/sampleapp/pack.yaml
+      """.trimIndent(),
+    )
+
+    val resolved = TrailblazeProjectConfigLoader.loadResolvedRuntime(
+      configFile = configFile,
+      includeClasspathPacks = false,
+    )
+
+    assertNotNull(resolved)
+    assertEquals(1, resolved.waypoints.size)
+    val waypoint = resolved.waypoints.single()
+    assertEquals("sampleapp/ready", waypoint.id)
+    assertEquals("Sample app's main screen, ready for input.", waypoint.description)
+  }
+
+  @Test
+  fun `pack with broken waypoint ref drops the whole pack from resolved waypoints`() {
+    val packDir = File(tempFolder.root, "packs/broken").apply { mkdirs() }
+    File(packDir, "pack.yaml").writeText(
+      """
+      id: broken
+      target:
+        display_name: Broken Pack
+      waypoints:
+        - waypoints/missing.waypoint.yaml
+      """.trimIndent(),
+    )
+    val configFile = tempFolder.writeConfig(
+      """
+      packs:
+        - packs/broken/pack.yaml
+      """.trimIndent(),
+    )
+
+    val resolved = TrailblazeProjectConfigLoader.loadResolvedRuntime(
+      configFile = configFile,
+      includeClasspathPacks = false,
+    )
+
+    assertNotNull(resolved)
+    // Atomic-per-pack: a broken waypoint ref drops the WHOLE pack — including the
+    // target — so neither the waypoint nor the target appears in the result.
+    assertTrue(resolved.waypoints.isEmpty())
+    assertTrue(resolved.projectConfig.targets.isEmpty())
+    assertTrue(resolved.projectConfig.packs.isEmpty())
+  }
+
+  @Test
+  fun `workspace pack wholesale shadows same-id classpath pack`() {
+    val classpathRoot = newTempDir()
+    val classpathPackDir = File(classpathRoot, "trailblaze-config/packs/sampleapp").apply { mkdirs() }
+    File(classpathPackDir, "pack.yaml").writeText(
+      """
+      id: sampleapp
+      target:
+        display_name: Classpath Sample App (should be shadowed)
+      toolsets:
+        - toolsets/classpath_only.yaml
+      tools:
+        - tools/classpath_only.yaml
+      waypoints:
+        - waypoints/classpath.waypoint.yaml
+      """.trimIndent(),
+    )
+    File(File(classpathPackDir, "waypoints").apply { mkdirs() }, "classpath.waypoint.yaml").writeText(
+      """
+      id: "sampleapp/classpath-only"
+      description: "Should NOT appear when workspace pack shadows."
+      """.trimIndent(),
+    )
+    File(File(classpathPackDir, "toolsets").apply { mkdirs() }, "classpath_only.yaml").writeText(
+      """
+      id: classpath_only_toolset
+      description: Should NOT appear when workspace pack shadows.
+      tools:
+        - some_tool
+      """.trimIndent(),
+    )
+    File(File(classpathPackDir, "tools").apply { mkdirs() }, "classpath_only.yaml").writeText(
+      """
+      id: classpath_only_tool
+      class: xyz.block.trailblaze.fake.ClasspathOnlyTool
+      """.trimIndent(),
+    )
+
+    val workspacePackDir = File(tempFolder.root, "packs/sampleapp").apply { mkdirs() }
+    File(File(workspacePackDir, "waypoints").apply { mkdirs() }, "workspace.waypoint.yaml").writeText(
+      """
+      id: "sampleapp/workspace-only"
+      description: "Workspace pack contributes this."
+      """.trimIndent(),
+    )
+    File(File(workspacePackDir, "toolsets").apply { mkdirs() }, "workspace_only.yaml").writeText(
+      """
+      id: workspace_only_toolset
+      description: Workspace pack contributes this.
+      tools:
+        - some_tool
+      """.trimIndent(),
+    )
+    File(File(workspacePackDir, "tools").apply { mkdirs() }, "workspace_only.yaml").writeText(
+      """
+      id: workspace_only_tool
+      class: xyz.block.trailblaze.fake.WorkspaceOnlyTool
+      """.trimIndent(),
+    )
+    File(workspacePackDir, "pack.yaml").writeText(
+      """
+      id: sampleapp
+      target:
+        display_name: Workspace Sample App (should win)
+      toolsets:
+        - toolsets/workspace_only.yaml
+      tools:
+        - tools/workspace_only.yaml
+      waypoints:
+        - waypoints/workspace.waypoint.yaml
+      """.trimIndent(),
+    )
+    val configFile = tempFolder.writeConfig(
+      """
+      packs:
+        - packs/sampleapp/pack.yaml
+      """.trimIndent(),
+    )
+
+    val resolved = withClasspathRoot(classpathRoot) {
+      TrailblazeProjectConfigLoader.loadResolvedRuntime(
+        configFile = configFile,
+        includeClasspathPacks = true,
+      )
+    }
+
+    assertNotNull(resolved)
+
+    // Target: workspace's display_name wins.
+    val target = assertIs<TargetEntry.Inline>(resolved.projectConfig.targets.single()).config
+    assertEquals("sampleapp", target.id)
+    assertEquals(
+      expected = "Workspace Sample App (should win)",
+      actual = target.displayName,
+      message = "Workspace pack should shadow classpath pack of the same id",
+    )
+
+    // Waypoints: only the workspace one appears — classpath pack is shadowed wholesale.
+    val waypointIds = resolved.waypoints.map(WaypointDefinition::id)
+    assertEquals(listOf("sampleapp/workspace-only"), waypointIds)
+
+    // Toolsets: same wholesale-shadow rule. Only the workspace toolset appears,
+    // and the classpath toolset must NOT leak through. The pack-id collision
+    // documented on TrailblazeResolvedConfig is the contract this test gates.
+    val toolsetIds = resolved.projectConfig.toolsets
+      .map { assertIs<ToolsetEntry.Inline>(it).config.id }
+    assertEquals(listOf("workspace_only_toolset"), toolsetIds)
+
+    // Tools: same. The classpath pack's `class:`-backed tool is shadowed completely
+    // — it's not merged in, just dropped.
+    val toolIds = resolved.projectConfig.tools
+      .map { assertIs<ToolEntry.Inline>(it).config.id }
+    assertEquals(listOf("workspace_only_tool"), toolIds)
+  }
+
+  @Test
+  fun `classpath pack contributes when workspace declares no same-id pack`() {
+    val classpathRoot = newTempDir()
+    val classpathPackDir = File(classpathRoot, "trailblaze-config/packs/framework").apply { mkdirs() }
+    File(classpathPackDir, "pack.yaml").writeText(
+      """
+      id: framework
+      target:
+        display_name: Framework-Bundled Pack
+      """.trimIndent(),
+    )
+
+    val configFile = tempFolder.writeConfig("")
+
+    val resolved = withClasspathRoot(classpathRoot) {
+      TrailblazeProjectConfigLoader.loadResolvedRuntime(
+        configFile = configFile,
+        includeClasspathPacks = true,
+      )
+    }
+
+    assertNotNull(resolved)
+    val ids = resolved.projectConfig.targets.map { assertIs<TargetEntry.Inline>(it).config.id }
+    assertContains(ids, "framework")
+  }
+
+  // ===========================================================================
+  // Test infrastructure.
+  // ===========================================================================
+
+  private val classpath = ClasspathFixture()
+
+  @org.junit.After fun cleanup() = classpath.cleanup()
+
+  /** Creates a temp dir tracked for cleanup at @After. Used as a fake classpath root. */
+  private fun newTempDir(): File = classpath.newTempDir(prefix = "project-config-loader-test")
+
+  /**
+   * Runs [block] with [Thread.currentThread]'s context classloader swapped for one rooted
+   * at [root], so classpath-pack discovery sees the fixture instead of the framework's
+   * actual bundled packs.
+   */
+  private fun <T> withClasspathRoot(root: File, block: () -> T): T =
+    classpath.withClasspathRoot(root, block)
 
   private fun TemporaryFolder.writeConfig(yaml: String): File {
     val file = File(root, "trailblaze.yaml")

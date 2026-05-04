@@ -263,35 +263,45 @@ object PlaywrightDriverManager {
   /** Maximum number of times to invoke `playwright install chromium` before giving up. */
   private const val INSTALL_MAX_ATTEMPTS = 3
 
-  /** Backoff before retrying a failed `playwright install chromium` invocation. */
-  private val INSTALL_RETRY_BACKOFF = java.time.Duration.ofSeconds(5)
+  /** Initial backoff before retrying a failed `playwright install chromium` invocation. */
+  private val INSTALL_RETRY_BACKOFF_INITIAL = java.time.Duration.ofSeconds(5)
+
+  /**
+   * Cap on per-retry backoff. Even with exponential growth, no single sleep exceeds this —
+   * keeps total wait bounded if [INSTALL_MAX_ATTEMPTS] is ever raised.
+   */
+  private val INSTALL_RETRY_BACKOFF_CAP = java.time.Duration.ofSeconds(60)
 
   /**
    * Spawns a subprocess to run `playwright install chromium`, retrying transient failures.
    *
    * The ~150 MB Chromium download occasionally fails with a non-zero exit code when a CDN
    * connection drops mid-download or a DNS lookup flakes. Those failures are retry-recoverable;
-   * retrying in-process avoids surfacing the error to callers (and their timeouts).
+   * retrying in-process avoids surfacing the error to callers (and their timeouts). Backoff is
+   * exponential (5s → 15s → 45s, capped at 60s — see [backoffForAttempt]) so a CDN that takes
+   * longer than a few seconds to recover gets a real chance instead of three near-simultaneous
+   * retries that all hit the same broken state.
    *
    * Must run as a subprocess (not via [com.microsoft.playwright.CLI.main]) because the CLI
    * calls [System.exit] on completion, which would terminate the host JVM.
    */
   private fun runPlaywrightInstallChromium(onProgress: ((Int, String) -> Unit)? = null) {
-    var lastError: String? = null
+    val attemptErrors = mutableListOf<String>()
     repeat(INSTALL_MAX_ATTEMPTS) { attemptIndex ->
       val attempt = attemptIndex + 1
       try {
         runPlaywrightInstallChromiumOnce(onProgress, attempt, INSTALL_MAX_ATTEMPTS)
         return
       } catch (t: Throwable) {
-        lastError = t.message
+        attemptErrors += "attempt $attempt/$INSTALL_MAX_ATTEMPTS: ${t.message ?: t::class.simpleName}"
         if (attempt < INSTALL_MAX_ATTEMPTS) {
+          val backoff = backoffForAttempt(attempt)
           println(
             "[Playwright] install attempt $attempt/$INSTALL_MAX_ATTEMPTS failed " +
-              "(${t.message}); retrying in ${INSTALL_RETRY_BACKOFF.seconds}s…"
+              "(${t.message}); retrying in ${backoff.seconds}s…"
           )
           try {
-            Thread.sleep(INSTALL_RETRY_BACKOFF.toMillis())
+            Thread.sleep(backoff.toMillis())
           } catch (ie: InterruptedException) {
             Thread.currentThread().interrupt()
             throw t
@@ -300,10 +310,33 @@ object PlaywrightDriverManager {
       }
     }
     error(
-      "playwright install chromium failed after $INSTALL_MAX_ATTEMPTS attempts " +
-        "(last error: $lastError). " +
+      "playwright install chromium failed after $INSTALL_MAX_ATTEMPTS attempts. " +
+        "Errors:\n  - ${attemptErrors.joinToString("\n  - ")}\n" +
         "Run `playwright install chromium` manually to install the browser."
     )
+  }
+
+  /**
+   * Backoff for the *next* sleep after a failed attempt: exponential 3x growth from
+   * [INSTALL_RETRY_BACKOFF_INITIAL], capped at [INSTALL_RETRY_BACKOFF_CAP].
+   *
+   * Schedule: attempt 1 → 5s, attempt 2 → 15s, attempt 3 → 45s, attempt 4+ → 60s.
+   * 3x rather than 2x because most CDN/network flakes that cause Chromium downloads
+   * to fail mid-stream take longer than 10–20s to clear, and this only adds latency
+   * on the failure path — successful first attempts pay zero extra.
+   *
+   * Visible for testing; do not call from production code outside
+   * [runPlaywrightInstallChromium].
+   */
+  internal fun backoffForAttempt(failedAttempt: Int): java.time.Duration {
+    val capSeconds = INSTALL_RETRY_BACKOFF_CAP.seconds
+    var seconds = INSTALL_RETRY_BACKOFF_INITIAL.seconds
+    val growths = (failedAttempt - 1).coerceAtLeast(0)
+    repeat(growths) {
+      seconds *= 3
+      if (seconds >= capSeconds) return INSTALL_RETRY_BACKOFF_CAP
+    }
+    return java.time.Duration.ofSeconds(seconds)
   }
 
   /** Single invocation of `playwright install chromium`. Throws on timeout or non-zero exit. */

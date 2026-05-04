@@ -189,6 +189,7 @@ object TrailblazeNodeSelectorResolver {
     if (!requirePattern(match.classNameRegex, detail.className)) return false
     if (!requirePattern(match.resourceIdRegex, detail.resourceId)) return false
     if (!requireEqual(match.uniqueId, detail.uniqueId)) return false
+    if (!requirePattern(match.composeTestTagRegex, detail.composeTestTag)) return false
     // textRegex matches resolveText() (text > hintText > contentDescription)
     if (!requirePattern(match.textRegex, detail.resolveText())) return false
     if (!requirePattern(match.contentDescriptionRegex, detail.contentDescription)) return false
@@ -196,6 +197,7 @@ object TrailblazeNodeSelectorResolver {
     if (!requirePattern(match.labeledByTextRegex, detail.labeledByText)) return false
     if (!requirePattern(match.stateDescriptionRegex, detail.stateDescription)) return false
     if (!requirePattern(match.paneTitleRegex, detail.paneTitle)) return false
+    if (!requirePattern(match.roleDescriptionRegex, detail.roleDescription)) return false
     if (!requireEqual(match.isEnabled, detail.isEnabled)) return false
     if (!requireEqual(match.isClickable, detail.isClickable)) return false
     if (!requireEqual(match.isCheckable, detail.isCheckable)) return false

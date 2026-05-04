@@ -49,7 +49,7 @@ class OpenSourceTrailblazeDesktopAppConfig : TrailblazeDesktopAppConfig(
 
   // Start with no platforms enabled by default - user must explicitly enable them
   private val initialDriverTypesMap: Map<TrailblazeDevicePlatform, TrailblazeDriverType> = mapOf(
-    TrailblazeDevicePlatform.ANDROID to TrailblazeDriverType.DEFAULT_ANDROID,
+    TrailblazeDevicePlatform.ANDROID to TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
     TrailblazeDevicePlatform.IOS to TrailblazeDriverType.IOS_HOST,
   )
 
@@ -64,14 +64,13 @@ class OpenSourceTrailblazeDesktopAppConfig : TrailblazeDesktopAppConfig(
     allTargetApps = { availableAppTargets }
   )
 
-  // Lazy so the settings repo is fully constructed before discovery touches it; the
-  // configDirProvider reads from the repo so env var / saved setting / trails-sibling
-  // fallback all flow through one place. Discovery runs on first access and caches.
-  // See `AppTargetDiscovery` — same helper `BlockAppTargets` uses, just with opensource
-  // defaults (no companions, DefaultTrailblazeHostAppTarget fallback).
+  // Lazy so the settings repo is fully constructed before discovery touches it. Workspace
+  // discovery now flows through the shared `trailblaze.yaml` + `trailblaze-config/`
+  // resolver used by both LLM config loading and target discovery. Discovery runs on first
+  // access and caches. See `AppTargetDiscovery` — same helper `BlockAppTargets` uses, just
+  // with opensource defaults (no companions, DefaultTrailblazeHostAppTarget fallback).
   override val availableAppTargets: Set<TrailblazeHostAppTarget> by lazy {
     xyz.block.trailblaze.host.AppTargetDiscovery.discover(
-      trailblazeConfigDirProvider = { trailblazeSettingsRepo.getCurrentTrailblazeConfigDir() },
       logPrefix = "[OpenSourceAppTargets]",
     )
   }

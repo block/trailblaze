@@ -41,6 +41,9 @@ object MobileDeviceUtils {
       )
 
       TrailblazeDevicePlatform.WEB -> null
+      // Compose desktop is the host app itself — it doesn't have an installable app
+      // bundle, so version info doesn't apply. Same shape as WEB.
+      TrailblazeDevicePlatform.DESKTOP -> null
     }
   }
 
@@ -55,6 +58,7 @@ object MobileDeviceUtils {
       )
 
       TrailblazeDevicePlatform.WEB -> emptyList()
+      TrailblazeDevicePlatform.DESKTOP -> emptyList()
     }.toSet()
   }
 
@@ -87,6 +91,11 @@ object MobileDeviceUtils {
       TrailblazeDevicePlatform.WEB -> {
         // Currently nothing to do here
       }
+
+      TrailblazeDevicePlatform.DESKTOP -> {
+        // Compose desktop driver doesn't manage app processes — the desktop *is* the
+        // app. No-op for parity with WEB.
+      }
     }
   }
 
@@ -105,6 +114,11 @@ object MobileDeviceUtils {
       TrailblazeDevicePlatform.WEB -> InstallResult(
         success = false,
         message = "Web browser devices do not support app installation.",
+      )
+
+      TrailblazeDevicePlatform.DESKTOP -> InstallResult(
+        success = false,
+        message = "Compose desktop driver does not support app installation — it drives the host app directly.",
       )
     }
   }

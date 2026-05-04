@@ -7,6 +7,7 @@ plugins {
   alias(libs.plugins.kotlin.serialization)
   alias(libs.plugins.dependency.guard)
   alias(libs.plugins.vanniktech.maven.publish)
+  id("trailblaze.bundled-config")
 }
 
 configurations.all {
@@ -111,4 +112,17 @@ kotlin {
 
 dependencyGuard {
   configuration("jvmMainRuntimeClasspath")
+}
+
+// Compile bundled framework packs (clock, contacts, wikipedia) into materialized flat
+// `targets/<id>.yaml` files at build time. Library packs (`trailblaze`, no `target:`)
+// contribute defaults but produce no target output. The generated targets are checked in
+// alongside the pack sources via a regenerate-and-commit workflow, so the JAR ships
+// pre-resolved targets that the daemon's existing flat-target discovery reads directly
+// without any pack-aware runtime path. The `verifyBundledTrailblazeConfig` task is wired
+// into `:check` and fails CI if a pack edit landed without a corresponding regen.
+bundledTrailblazeConfig {
+  packsDir.set(layout.projectDirectory.dir("src/commonMain/resources/trailblaze-config/packs"))
+  targetsDir.set(layout.projectDirectory.dir("src/commonMain/resources/trailblaze-config/targets"))
+  regenerateCommand.set("./gradlew :trailblaze-models:generateBundledTrailblazeConfig")
 }

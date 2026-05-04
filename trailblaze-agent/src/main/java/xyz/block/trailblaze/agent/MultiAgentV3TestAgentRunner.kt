@@ -24,11 +24,16 @@ import xyz.block.trailblaze.yaml.PromptStep
  * @param v3Runner The underlying V3 runner
  * @param screenStateProvider Provider for current screen state
  * @param sessionIdProvider Provider for the current session ID
+ * @param caseTitleProvider Returns the current test case title (e.g. TestRail case name).
+ *   Invoked per step so the title can change between trails when the runner is reused.
+ *   The value is forwarded as [RecommendationContext.overallObjective] so the inner agent
+ *   can detect impossible steps early instead of exhausting all retries.
  */
 class MultiAgentV3TestAgentRunner(
   private val v3Runner: MultiAgentV3Runner,
   override val screenStateProvider: () -> ScreenState,
   private val sessionIdProvider: () -> SessionId,
+  private val caseTitleProvider: () -> String? = { null },
 ) : TestAgentRunner {
 
   override fun run(
@@ -47,6 +52,7 @@ class MultiAgentV3TestAgentRunner(
       steps = listOf(prompt),
       config = TrailConfig.AI_ONLY,
       sessionId = sessionIdProvider(),
+      caseTitle = caseTitleProvider(),
     )
     return result.toAgentTaskStatus(prompt, startTime)
   }
@@ -61,12 +67,14 @@ class MultiAgentV3TestAgentRunner(
       config = TrailConfig.AI_ONLY,
       sessionId = sessionIdProvider(),
       initialActionHistory = recordingResult.toActionHistory(),
+      caseTitle = caseTitleProvider(),
     )
     result.toAgentTaskStatus(promptStep, startTime)
   }
 
   override fun appendToSystemPrompt(context: String) {
-    // No-op: V3 doesn't use mutable system prompts
+    // No-op: V3 builds context from RecommendationContext per call, not a mutable system prompt.
+    // Case title context flows via caseTitleProvider; per-step context flows via progressSummary.
   }
 
   /**

@@ -1,230 +1,139 @@
-// Hand-crafted MCP-speaking JS fixture for OnDeviceBundleCallbackRoundTripTest.
+// Plain-JS fixture for OnDeviceBundleClientCallToolTest — authored against the
+// `@trailblaze/scripting` SDK that the on-device bundle runtime now ships as part of its
+// prelude. Drop-in replacement for the hand-rolled MCP-over-__trailblazeInProcessTransport
+// fixture this file used to contain. That earlier file spoke MCP wire protocol directly
+// because there was no author-side SDK on-device; the prelude now pre-installs
+// `globalThis.trailblaze` + `globalThis.fromMeta` via `BundleRuntimePrelude.SDK_BUNDLE_SOURCE`,
+// so author code is just `trailblaze.tool(...)` + `await trailblaze.run()` in a single file.
+// No npm install, no esbuild step at author time, no MCP boilerplate.
 //
-// Same authoring shape as `bundle-roundtrip-fixture.js` — speaks MCP wire protocol directly
-// against `globalThis.__trailblazeInProcessTransport` so the Kotlin transport plumbing stays
-// exercised WITHOUT bundling the real @modelcontextprotocol/sdk. Difference: this fixture
-// also exercises the on-device CALLBACK channel by having `outerCompose`'s handler call
-// `globalThis.__trailblazeCallback(...)` (the same binding the TS SDK uses when
-// `ctx.runtime === "ondevice"`) to dispatch a Kotlin-side tool (`reverseEcho`) and wrap
-// the result.
-//
-// Author note: this fixture hand-rolls what the TS SDK's `TrailblazeClient.callTool` does
-// because QuickJS can't parse TypeScript and the TS→JS bundler automation is still
-// open. When that lands, a follow-up converts this to a real SDK-authored tool whose
-// handler calls `ctx.client.callTool("reverseEcho", ...)` — the Kotlin-side transport being
-// exercised here is identical either way.
-//
-// Why the callback target is a KOTLIN tool, not another bundle tool:
-// Recursive bundle→bundle callbacks would re-acquire `InProcessMcpTransport.evalMutex`
-// while the outer send still holds it and deadlock. The current consumer only needs
-// bundle→Kotlin-tool composition, so that's what this fixture exercises; a follow-up will
-// teach the in-process transport to suspend its mutex across a callback dispatch so
-// bundle→bundle composition becomes safe.
+// This file also serves as the acceptance signal for the TS→JS bundler automation: if the
+// SDK bundle regresses — console shim stripped, callback binding shadowed, Server.connect
+// refusing the in-process transport — the 5 tests in OnDeviceBundleClientCallToolTest fail
+// loud rather than passing against the old hand-rolled code.
 //
 // Advertises:
-//   outerCompose    — takes { text: string }; dispatches the Kotlin-side `reverseEcho`
-//                     tool via `__trailblazeCallback`, wraps the result as
-//                     `{ composedFrom: "reverseEcho", original, reversed }` JSON.
-//   callInvalidTool — callback dispatches a tool that isn't registered; used to assert
-//                     the inner-failure path surfaces cleanly.
-//   callBadSession  — forges a session_id that doesn't match the outer invocation; used
-//                     to prove the Kotlin-side session-mismatch guard fires through the
-//                     in-process binding, same as the HTTP endpoint.
+//   outerCompose    — { text: string } → composes the Kotlin-side `reverseEcho` tool via the
+//                     SDK's `client.callTool(...)` and wraps the reversed text in
+//                     { composedFrom, original, reversed } JSON. The one tool that's purely
+//                     SDK-authored — the happy path for on-device `client.callTool`.
+//   callInvalidTool — exercises the dispatcher's unknown-tool branch. The SDK's callTool
+//                     throws on an error envelope, so this tool drops to the raw
+//                     `__trailblazeCallback` binding to read the wire-shape result the test
+//                     asserts on. Not a regression in the SDK authoring story — it's
+//                     testing a transport branch the SDK deliberately doesn't expose.
+//   callBadSession  — same raw-binding approach; forges a session_id the Kotlin dispatcher
+//                     rejects, exercising the session-mismatch branch.
+//
+// Why the callback target is a Kotlin tool, not another bundle tool:
+// Recursive bundle→bundle callbacks would re-acquire `InProcessMcpTransport.evalMutex` while
+// the outer send still holds it and deadlock. The current consumer only needs bundle→Kotlin
+// composition, so that's what this fixture exercises. Fixing the deadlock (teach the
+// transport to suspend across callback dispatch) is a separate issue.
 
-(function() {
-  const SERVER_INFO = { name: "ondevice-callback-fixture-bundle", version: "1.0.0" };
-  const CALLBACK_TARGET_TOOL = "reverseEcho";
+const CALLBACK_TARGET_TOOL = "reverseEcho";
 
-  const tools = [
-    {
-      name: "outerCompose",
-      description: "Composes reverseEcho via the on-device callback channel and wraps the result.",
-      inputSchema: {
-        type: "object",
-        properties: { text: { type: "string", description: "Text to compose via reverseEcho" } },
-        required: ["text"]
-      }
-    },
-    {
-      name: "callInvalidTool",
-      description: "Exercises the inner-tool-failure branch by dispatching a tool that isn't registered.",
-      inputSchema: { type: "object", properties: {}, required: [] }
-    },
-    {
-      name: "callBadSession",
-      description: "Exercises the session-mismatch branch by forging a session_id.",
-      inputSchema: { type: "object", properties: {}, required: [] }
-    }
-  ];
-
-  const transport = globalThis.__trailblazeInProcessTransport;
-  if (!transport) {
-    throw new Error("Fixture bundle: __trailblazeInProcessTransport missing. Prelude must evaluate first.");
-  }
-
-  function readTrailblazeMeta(msg) {
-    // The Kotlin runtime stamps `_meta.trailblaze` on every tools/call it dispatches when a
-    // JsScriptingCallbackContext is wired — sessionId + invocationId + runtime + device + memory. Throw
-    // loudly if it's missing: the whole test premise is that this envelope is there.
-    const meta = msg.params && msg.params._meta && msg.params._meta.trailblaze;
-    if (!meta) {
-      throw new Error(
-        "outerCompose: no _meta.trailblaze envelope — Kotlin runtime should have stamped " +
-        "runtime=ondevice + sessionId + invocationId. Aborting."
-      );
-    }
-    return meta;
-  }
-
-  async function callBackSession(meta, toolName, argsObj, sessionOverride) {
-    // Build the same JsScriptingCallbackRequest the TS SDK's `TrailblazeClient.callTool` would build.
-    // Wire shape: { version, session_id, invocation_id, action }. `arguments_json` is a
-    // STRING, not a nested object (see JsScriptingCallbackContract.kt D2 decision).
-    const request = {
-      version: 1,
-      session_id: sessionOverride != null ? sessionOverride : meta.sessionId,
-      invocation_id: meta.invocationId,
-      action: {
-        type: "call_tool",
-        tool_name: toolName,
-        arguments_json: JSON.stringify(argsObj)
-      }
-    };
-
-    if (typeof globalThis.__trailblazeCallback !== "function") {
-      throw new Error("outerCompose: globalThis.__trailblazeCallback not installed by Kotlin.");
-    }
-
-    const responseJson = await globalThis.__trailblazeCallback(JSON.stringify(request));
-    const envelope = JSON.parse(responseJson);
-    const result = envelope && envelope.result;
-    if (!result) {
-      throw new Error("outerCompose: callback envelope missing result: " + responseJson);
-    }
-    return result;
-  }
-
-  transport.onmessage = async function(msg) {
-    try {
-      if (msg.method === "initialize") {
-        transport.send({
-          jsonrpc: "2.0",
-          id: msg.id,
-          result: {
-            protocolVersion: "2025-06-18",
-            capabilities: { tools: {} },
-            serverInfo: SERVER_INFO
-          }
-        });
-        return;
-      }
-      if (msg.method === "notifications/initialized") {
-        return;
-      }
-      if (msg.method === "tools/list") {
-        transport.send({
-          jsonrpc: "2.0",
-          id: msg.id,
-          result: { tools: tools }
-        });
-        return;
-      }
-      if (msg.method === "tools/call") {
-        const params = msg.params;
-
-        if (params.name === "outerCompose") {
-          const meta = readTrailblazeMeta(msg);
-          const input = (params.arguments && params.arguments.text) || "";
-          // Validates the on-device `console` shim end-to-end: this line will appear in ATF
-          // logcat tagged `[bundle] level=log msg=outerCompose received ...`, proving the
-          // shim routes variadic args through the Kotlin binding. If the prelude fails to
-          // install `globalThis.console`, this line throws ReferenceError and the test
-          // fails loud.
-          console.log("outerCompose received", { text: input, sessionId: meta.sessionId });
-          const innerResult = await callBackSession(meta, CALLBACK_TARGET_TOOL, { text: input });
-          if (innerResult.type !== "call_tool_result" || innerResult.success !== true) {
-            // Surface the inner failure loudly — this path should never fire in the happy-
-            // path test, and a regression in the Kotlin-side dispatcher that silently fails
-            // is exactly what we need the test to catch.
-            throw new Error(
-              "outerCompose: reverseEcho callback failed: " + JSON.stringify(innerResult)
-            );
-          }
-          const composed = {
+// Why `inputSchema: {}` instead of an omitted key or a JSON Schema: MCP's `registerTool`
+// wants a zod schema or raw zod shape there, not a JSON Schema object. An empty raw shape
+// (`{}`) is the no-args path — valid without needing zod as a global. Omitting the key is
+// NOT equivalent: the MCP SDK falls back to a different handler signature (extra-only, no
+// args) when `inputSchema` is undefined, which breaks the `(args, ctx, client)` contract
+// the TS SDK wraps. Follow-up issue can stamp `globalThis.z` in the SDK bundle footer so
+// plain-JS authors can pin their argument shapes.
+trailblaze.tool(
+  "outerCompose",
+  {
+    description: "Composes reverseEcho via the on-device callback channel and wraps the result.",
+    inputSchema: {},
+  },
+  async (args, ctx, client) => {
+    const text = (args && typeof args.text === "string") ? args.text : "";
+    // Validates the on-device `console` shim end-to-end: this line will appear in ATF logcat
+    // tagged `[bundle] level=log msg=outerCompose received ...`, proving the shim routes
+    // variadic args through the Kotlin binding. If the prelude fails to install
+    // `globalThis.console` or the SDK bundle shadows it, this line throws ReferenceError and
+    // the happy-path test fails loud.
+    console.log("outerCompose received", { text: text, sessionId: ctx && ctx.sessionId });
+    const inner = await client.callTool(CALLBACK_TARGET_TOOL, { text: text });
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
             composedFrom: CALLBACK_TARGET_TOOL,
-            original: input,
-            reversed: innerResult.text_content
-          };
-          transport.send({
-            jsonrpc: "2.0",
-            id: msg.id,
-            result: {
-              content: [{ type: "text", text: JSON.stringify(composed) }],
-              isError: false
-            }
-          });
-          return;
-        }
+            original: text,
+            reversed: inner.textContent,
+          }),
+        },
+      ],
+      isError: false,
+    };
+  },
+);
 
-        if (params.name === "callInvalidTool") {
-          const meta = readTrailblazeMeta(msg);
-          const innerResult = await callBackSession(meta, "tool_that_does_not_exist", {});
-          // Echo whatever the callback produced so the test can assert on its shape.
-          transport.send({
-            jsonrpc: "2.0",
-            id: msg.id,
-            result: {
-              content: [{ type: "text", text: JSON.stringify(innerResult) }],
-              isError: false
-            }
-          });
-          return;
-        }
+// Below: `callInvalidTool` and `callBadSession` need to SEE the raw dispatcher envelope (for
+// the test's assertions on `type` / `success` / `error_message`), so they bypass the SDK's
+// `client.callTool` — which throws on error envelopes — and dispatch through the
+// `__trailblazeCallback` binding directly. Same wire shape the SDK would build; just without
+// the SDK's throw-on-failure unwrap. Not the vibe-up story — it's test scaffolding.
 
-        if (params.name === "callBadSession") {
-          const meta = readTrailblazeMeta(msg);
-          const innerResult = await callBackSession(
-            meta,
-            CALLBACK_TARGET_TOOL,
-            { text: "x" },
-            "not-the-real-session-id"
-          );
-          transport.send({
-            jsonrpc: "2.0",
-            id: msg.id,
-            result: {
-              content: [{ type: "text", text: JSON.stringify(innerResult) }],
-              isError: false
-            }
-          });
-          return;
-        }
-
-        transport.send({
-          jsonrpc: "2.0",
-          id: msg.id,
-          error: { code: -32601, message: "Unknown tool: " + params.name }
-        });
-        return;
-      }
-      transport.send({
-        jsonrpc: "2.0",
-        id: msg.id,
-        error: { code: -32601, message: "Unknown method: " + msg.method }
-      });
-    } catch (e) {
-      // Top-level guard: an unhandled throw inside an async handler would reject the
-      // transport's pending Promise, which the Kotlin-side Client would see as a protocol
-      // error with no diagnostic. Mapping to `isError: true` with the message gives the
-      // test a readable failure to assert against.
-      transport.send({
-        jsonrpc: "2.0",
-        id: msg.id,
-        result: {
-          content: [{ type: "text", text: "fixture threw: " + (e && e.message ? e.message : String(e)) }],
-          isError: true
-        }
-      });
-    }
+async function rawCallback(meta, toolName, argsObj, sessionOverride) {
+  if (!meta) {
+    throw new Error(
+      "rawCallback: no _meta.trailblaze envelope — Kotlin runtime should have stamped " +
+      "runtime=ondevice + sessionId + invocationId. Aborting.",
+    );
+  }
+  if (typeof globalThis.__trailblazeCallback !== "function") {
+    throw new Error("rawCallback: globalThis.__trailblazeCallback not installed by Kotlin.");
+  }
+  const request = {
+    version: 1,
+    session_id: sessionOverride != null ? sessionOverride : meta.sessionId,
+    invocation_id: meta.invocationId,
+    action: {
+      type: "call_tool",
+      tool_name: toolName,
+      arguments_json: JSON.stringify(argsObj),
+    },
   };
-})();
+  const responseJson = await globalThis.__trailblazeCallback(JSON.stringify(request));
+  const envelope = JSON.parse(responseJson);
+  const result = envelope && envelope.result;
+  if (!result) {
+    throw new Error("rawCallback: envelope missing result: " + responseJson);
+  }
+  return result;
+}
+
+trailblaze.tool(
+  "callInvalidTool",
+  {
+    description: "Exercises the inner-tool-failure branch by dispatching a tool that isn't registered.",
+    inputSchema: {},
+  },
+  async (_args, ctx) => {
+    const inner = await rawCallback(ctx, "tool_that_does_not_exist", {});
+    return {
+      content: [{ type: "text", text: JSON.stringify(inner) }],
+      isError: false,
+    };
+  },
+);
+
+trailblaze.tool(
+  "callBadSession",
+  {
+    description: "Exercises the session-mismatch branch by forging a session_id.",
+    inputSchema: {},
+  },
+  async (_args, ctx) => {
+    const inner = await rawCallback(ctx, CALLBACK_TARGET_TOOL, { text: "x" }, "not-the-real-session-id");
+    return {
+      content: [{ type: "text", text: JSON.stringify(inner) }],
+      isError: false,
+    };
+  },
+);
+
+await trailblaze.run({ name: "ondevice-callback-fixture-bundle", version: "1.0.0" });

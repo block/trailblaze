@@ -11,6 +11,9 @@ Entries tagged as **Decision** record significant architectural or technical cho
 
 | Date | Title | Type |
 | :--- | :--- | :--- |
+| 2026-04-27 | [Pack Manifest V1](2026-04-27-pack-manifest-v1.md) | Decision |
+| 2026-04-26 | [Target Packs: Local-First Packaging for Target-Aware Capabilities](2026-04-26-target-packs-local-first.md) | Decision |
+| 2026-04-26 | [Trailblaze as the Robot Pattern — and More](2026-04-26-robot-pattern-plus-packs.md) | Devlog |
 | 2026-04-23 | [On-device MCP tool callbacks — direct QuickJS binding](2026-04-23-on-device-callback-channel.md) | Decision |
 | 2026-04-22 | [A TrailblazeTool is a function call (MCP tool, RPC request — same thing)](2026-04-22-trailblaze-tool-is-an-rpc-request.md) | Devlog |
 | 2026-04-22 | [Scripting SDK — Envelope Migration & Callback Transport (D1 + D2)](2026-04-22-scripting-sdk-envelope-migration.md) | Decision |
@@ -55,7 +58,7 @@ Entries tagged as **Decision** record significant architectural or technical cho
 | 2026-02-04 | [App Target Configuration](2026-02-04-app-target-configuration.md) | Decision |
 | 2026-02-03 | [Custom Tool Architecture](2026-02-03-custom-tool-architecture.md) | Decision |
 | 2026-01-29 | [Device-Specific Trail Recordings](2026-01-29-device-specific-trail-recordings.md) | Decision |
-| 2026-01-29 | [AI Fallback](2026-01-29-ai-fallback.md) | Decision |
+| 2026-01-29 | [Self-Heal](2026-01-29-ai-fallback.md) | Decision |
 | 2026-01-28 | [Trailblaze MCP](2026-01-28-trailblaze-mcp.md) | Decision |
 | 2026-01-28 | [Logging and Reporting Architecture](2026-01-28-logging-and-reporting.md) | Decision |
 | 2026-01-28 | [Kotlin as Primary Language](2026-01-28-kotlin-language.md) | Decision |

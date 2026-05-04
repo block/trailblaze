@@ -26,4 +26,4 @@
       appPackageName: com.simplemobiletools.calendar.pro
 
 # --- Benchmark Run History ---
-# [2026-03-11] Build #27 FAILED - gRPC UNAVAILABLE after 120s. Emulator instability.
+# [2026-03-11] FAILED - gRPC UNAVAILABLE after 120s. Emulator instability.

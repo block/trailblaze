@@ -9,11 +9,11 @@ import androidx.compose.runtime.setValue
 import getTrailblazeReportJsonFromBrowser
 import kotlinx.browser.window
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.serialization.json.Json
 import xyz.block.trailblaze.ui.images.ImageLoader
 import xyz.block.trailblaze.ui.images.NetworkImageLoader
 import xyz.block.trailblaze.ui.tabs.session.CaptureMetadataModel
 import xyz.block.trailblaze.ui.tabs.session.VideoMetadata
+import xyz.block.trailblaze.ui.utils.JsonDefaults
 import xyz.block.trailblaze.util.Console
 
 actual fun createLogsFileSystemImageLoader(): ImageLoader {
@@ -35,8 +35,8 @@ actual fun openVideoInSystemPlayer(filePath: String) {
 
 actual suspend fun loadCaptureVideoMetadata(sessionId: String): VideoMetadata? {
     return try {
-        val json = loadCaptureMetadataJson(sessionId) ?: return null
-        val metadata = Json { ignoreUnknownKeys = true }
+        val json = fetchReportJsonOrNull("capture_metadata/$sessionId") ?: return null
+        val metadata = JsonDefaults.FORWARD_COMPATIBLE
             .decodeFromString<CaptureMetadataModel>(json)
         // The WASM timeline has no way to decode a raw mp4 — it can only render
         // frames when the report embeds a sprite sheet (VIDEO_FRAMES). If sprite
@@ -57,13 +57,61 @@ actual suspend fun loadCaptureVideoMetadata(sessionId: String): VideoMetadata? {
     }
 }
 
-private suspend fun loadCaptureMetadataJson(sessionId: String): String? {
+actual suspend fun loadDeviceLogs(sessionId: String): String? {
+    val json = fetchReportJsonOrNull("device_logs/$sessionId") ?: return null
+    // The report embeds device logs as a JSON-encoded string (to survive JSON.parse
+    // in the JS decompression pipeline). Decode it back to raw text.
+    return decodeWrappedStringOrPassThrough(json)
+}
+
+actual suspend fun loadNetworkLogs(sessionId: String): String? {
+    // TODO(https://github.com/block/trailblaze/issues/125): WasmReport.kt does not yet
+    // embed a `network_logs/<sessionId>` entry into the hosted-report bundle, so this
+    // dispatch always falls through to the index.html "no key" branch and returns null.
+    // The Network tab therefore never appears on hosted reports today. Once `WasmReport`
+    // grows a `compressedNetworkLogs` parameter and `index.html` gains a `network_logs/`
+    // lookup branch (mirroring the existing `device_logs/` path), this function returns
+    // data without further changes here.
+    val json = fetchReportJsonOrNull("network_logs/$sessionId") ?: return null
+    return decodeWrappedStringOrPassThrough(json)
+}
+
+/**
+ * Fetches a JSON entry from the embedded WASM report bundle by key, returning null when
+ * the dispatcher reports no entry for that key (the browser-side handler in `index.html`
+ * returns the literal `"{}"` placeholder when a key isn't found, distinct from a real
+ * empty-object response).
+ *
+ * Centralizes the empty-response check so individual `loadX` functions don't each
+ * re-derive the "no data" sentinel — three sites used to inline `json == "{}" || json.isBlank()`.
+ */
+private suspend fun fetchReportJsonOrNull(key: String): String? {
     val deferred = CompletableDeferred<String?>()
-    getTrailblazeReportJsonFromBrowser("capture_metadata/$sessionId") { json ->
-        deferred.complete(if (json == "{}" || json.isBlank()) null else json)
+    getTrailblazeReportJsonFromBrowser(key) { json ->
+        deferred.complete(if (isMissingReportEntry(json)) null else json)
     }
     return deferred.await()
 }
+
+/**
+ * True when the report bundle's browser-side dispatcher returned the "no entry" sentinel for a
+ * key. The dispatcher in `index.html` returns the literal string `"{}"` (or empty string,
+ * depending on the path taken) when a key isn't present in the compressed bundle.
+ */
+private fun isMissingReportEntry(json: String): Boolean = json == "{}" || json.isBlank()
+
+/**
+ * Decodes a JSON-encoded string literal back to raw text, falling back to the input unchanged
+ * when it isn't actually JSON-quoted. Device logs and network logs are both embedded as JSON
+ * strings (so JS `JSON.parse` in the decompression pipeline doesn't mangle their content) and
+ * need to be unwrapped after fetching.
+ */
+private fun decodeWrappedStringOrPassThrough(json: String): String =
+    try {
+        JsonDefaults.FORWARD_COMPATIBLE.decodeFromString<String>(json)
+    } catch (_: Exception) {
+        json
+    }
 
 @Composable
 actual fun resolveImageModel(sessionId: String, screenshotFile: String?, imageLoader: ImageLoader): Any? {

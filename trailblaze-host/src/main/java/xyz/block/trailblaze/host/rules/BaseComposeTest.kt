@@ -141,23 +141,19 @@ class BaseComposeTest(
       TrailblazeRunnerUtil(
         trailblazeRunner = trailblazeRunner,
         runTrailblazeTool = { trailblazeTools: List<TrailblazeTool> ->
-          val result =
-            agent.runTrailblazeTools(
-              trailblazeTools,
-              null,
-              screenState = screenStateProvider(),
-              elementComparator = elementComparator,
-              screenStateProvider = screenStateProvider,
-            )
-          when (val toolResult = result.result) {
-            is TrailblazeToolResult.Success -> toolResult
-            is TrailblazeToolResult.Error -> throw TrailblazeException(toolResult.errorMessage)
-          }
+          agent.runTrailblazeTools(
+            trailblazeTools,
+            null,
+            screenState = screenStateProvider(),
+            elementComparator = elementComparator,
+            screenStateProvider = screenStateProvider,
+          ).result
         },
         trailblazeLogger = loggingRule.logger,
         sessionProvider = {
           loggingRule.session ?: error("Session not available - ensure test is running")
         },
+        sessionUpdater = { loggingRule.setSession(it) },
       )
 
     val trailItems: List<TrailYamlItem> = trailblazeYaml.decodeTrail(yaml)
@@ -191,7 +187,11 @@ class BaseComposeTest(
       val itemResult =
         when (item) {
           is TrailYamlItem.PromptsTrailItem ->
-            trailblazeRunnerUtil.runPromptSuspend(item.promptSteps, useRecordedSteps)
+            trailblazeRunnerUtil.runPromptSuspend(
+              prompts = item.promptSteps,
+              useRecordedSteps = useRecordedSteps,
+              selfHeal = config.selfHeal,
+            )
           is TrailYamlItem.ToolTrailItem ->
             trailblazeRunnerUtil.runTrailblazeTool(item.tools.map { it.trailblazeTool })
           is TrailYamlItem.ConfigTrailItem ->

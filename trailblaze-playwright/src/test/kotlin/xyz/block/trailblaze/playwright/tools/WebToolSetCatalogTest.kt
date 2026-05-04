@@ -48,6 +48,7 @@ class WebToolSetCatalogTest {
       PlaywrightNativeVerifyElementVisibleTool::class,
       PlaywrightNativeVerifyValueTool::class,
       PlaywrightNativeVerifyListVisibleTool::class,
+      PlaywrightNativeAssertNetworkEventTool::class,
     )
   }
 

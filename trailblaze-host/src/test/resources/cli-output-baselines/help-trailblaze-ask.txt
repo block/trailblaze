@@ -1,0 +1,24 @@
+# This file is a CHECKED-IN baseline of CLI output rendered by trailblaze-host's CLI helpers.
+# It is NOT a contract — if a test fails here because output drifted, decide whether the
+# drift is intentional. The test always (re)writes this file from the current rendered output,
+# then asserts the working tree is clean. So `git diff` of this file IS the failure message.
+# Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
+# small wording / spacing changes can be intentional or accidental.
+# ----------------------------------------------------------------------
+Usage: trailblaze ask [-hvV] -d=<device> [--headless=<headless>]
+                      <questionWords>...
+Ask a question about what's on screen (uses AI vision, no actions taken)
+      <questionWords>...   Question about the screen (e.g., 'What's the current
+                             balance?')
+  -d, --device=<device>    Device: platform (android, ios, web) or platform/id
+                             (e.g., android/emulator-5554). Required.
+  -h, --help               Show this help message and exit.
+      --headless=<headless>
+                           For --device web/...: launch the Playwright browser
+                             headless. When omitted, falls back to the
+                             persisted `web-headless` config (see `trailblaze
+                             config web-headless`). Pass --headless=false to
+                             force a visible browser, --headless=true to force
+                             headless. Ignored for non-web devices.
+  -v, --verbose            Enable verbose output (show daemon logs, MCP calls)
+  -V, --version            Print version information and exit.

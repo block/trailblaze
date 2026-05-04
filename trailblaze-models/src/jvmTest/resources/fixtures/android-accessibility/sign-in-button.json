@@ -1,0 +1,54 @@
+{
+  "nodeId": 1,
+  "children": [
+    {
+      "nodeId": 8,
+      "children": [
+        {
+          "nodeId": 6,
+          "bounds": { "left": 412, "top": 1752, "right": 509, "bottom": 1800 },
+          "driverDetail": {
+            "class": "androidAccessibility",
+            "className": "android.widget.TextView",
+            "text": "Sign in",
+            "packageName": "com.squareup",
+            "isVisibleToUser": true,
+            "isImportantForAccessibility": true,
+            "actions": ["ACTION_256", "ACTION_512", "ACTION_64", "ACTION_SET_SELECTION"]
+          }
+        },
+        {
+          "nodeId": 7,
+          "bounds": { "left": 80, "top": 1712, "right": 840, "bottom": 1840 },
+          "driverDetail": {
+            "class": "androidAccessibility",
+            "className": "android.widget.Button",
+            "packageName": "com.squareup",
+            "isVisibleToUser": true,
+            "isImportantForAccessibility": true,
+            "actions": ["ACTION_64"]
+          }
+        }
+      ],
+      "bounds": { "left": 80, "top": 1712, "right": 840, "bottom": 1840 },
+      "driverDetail": {
+        "class": "androidAccessibility",
+        "className": "android.view.View",
+        "packageName": "com.squareup",
+        "isClickable": true,
+        "isFocusable": true,
+        "isVisibleToUser": true,
+        "isImportantForAccessibility": true,
+        "actions": ["ACTION_FOCUS", "ACTION_64", "ACTION_CLICK"]
+      }
+    }
+  ],
+  "bounds": { "left": 0, "top": 0, "right": 1080, "bottom": 1920 },
+  "driverDetail": {
+    "class": "androidAccessibility",
+    "className": "android.widget.FrameLayout",
+    "packageName": "com.squareup",
+    "isVisibleToUser": true,
+    "isImportantForAccessibility": false
+  }
+}

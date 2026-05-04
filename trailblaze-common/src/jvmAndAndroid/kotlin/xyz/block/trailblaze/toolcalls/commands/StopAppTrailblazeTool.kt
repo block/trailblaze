@@ -12,7 +12,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 @TrailblazeToolClass("stopApp")
 @LLMDescription(
   """
-Kills the app with the provided appId. This is useful for stopping the app when it is in a bad state.
+Kill the app with the provided appId. Use to stop the app when it is in a bad state.
     """,
 )
 data class StopAppTrailblazeTool(val appId: String) : MapsToMaestroCommands() {

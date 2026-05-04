@@ -28,6 +28,15 @@ actual class AndroidDeviceCommandExecutor actual constructor(
     return AdbCommandUtil.execShellCommand(command)
   }
 
+  actual fun executeShellCommandAs(appId: String, command: String): String {
+    // Delegates to executeShellCommand → UiDevice.executeShellCommand → UiAutomation, which
+    // runs the wrapping shell as UID 2000 (shell). That's the privilege `run-as` needs to
+    // switch into a debuggable app's UID, even though our test process has its own unrelated
+    // UID. See the expect-class KDoc for the full rationale.
+    validateRunAsArgs(appId, command)
+    return executeShellCommand("run-as $appId $command")
+  }
+
   actual fun sendBroadcast(intent: BroadcastIntent) {
     val context = InstrumentationRegistry.getInstrumentation().context
     val androidIntent = Intent(intent.action).apply {

@@ -1,0 +1,36 @@
+# Per-file scripted tool for the iOS Contacts pack. Resolved by the pack loader and
+# translated into the runtime InlineScriptToolConfig shape (see PackScriptedToolFile).
+script: ./trails/config/tools/contacts_ios_createContact.js
+name: contacts_ios_createContact
+description: Launch Contacts, create a new contact, and save it.
+_meta:
+  trailblaze/supportedPlatforms: [ios]
+  trailblaze/requiresContext: true
+inputSchema:
+  appId:
+    type: string
+    description: iOS bundle id of the Contacts app.
+  firstName:
+    type: string
+    description: First name to type into the contact's First Name field.
+  lastName:
+    type: string
+    description: Last name to type into the contact's Last Name field.
+  phoneNumber:
+    type: string
+    description: Phone number to type into the contact's Phone field. Formatting is preserved verbatim.
+  addButtonLabel:
+    type: string
+    description: Accessibility label of the "+" / Add button (locale-dependent).
+  firstNameLabel:
+    type: string
+    description: Accessibility label of the First Name field (locale-dependent).
+  lastNameLabel:
+    type: string
+    description: Accessibility label of the Last Name field (locale-dependent).
+  addPhoneLabel:
+    type: string
+    description: Accessibility label of the "Add Phone" / "Add new phone" affordance (locale-dependent).
+  doneButtonLabel:
+    type: string
+    description: Accessibility label of the Done / Save button (locale-dependent).

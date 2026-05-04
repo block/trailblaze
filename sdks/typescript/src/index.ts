@@ -11,9 +11,16 @@
 
 import { run, type RunOptions } from "./run.js";
 import { tool, type TrailblazeToolHandler, type TrailblazeToolSpec } from "./tool.js";
+export { z } from "zod";
 
 export { fromMeta, type TrailblazeContext, type TrailblazeDevice } from "./context.js";
-export type { TrailblazeCallToolResult, TrailblazeClient } from "./client.js";
+export type { TrailblazeCallToolResult, TrailblazeClient, TrailblazeToolMap } from "./client.js";
+
+// Side-effect import — pulls in the vendored built-in-tool bindings so authors get
+// autocomplete / type-checking on framework tools (`tapOnElementWithText`, `inputText`,
+// etc.) the moment they import anything from `@trailblaze/scripting`. The imported file is
+// pure declaration merging on `TrailblazeToolMap`; no runtime values are added.
+import "./built-in-tools.js";
 export type { RunOptions, TrailblazeToolHandler, TrailblazeToolSpec };
 
 /**

@@ -1,0 +1,19 @@
+# This file is a CHECKED-IN baseline of CLI output rendered by trailblaze-host's CLI helpers.
+# It is NOT a contract — if a test fails here because output drifted, decide whether the
+# drift is intentional. The test always (re)writes this file from the current rendered output,
+# then asserts the working tree is clean. So `git diff` of this file IS the failure message.
+# Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
+# small wording / spacing changes can be intentional or accidental.
+# ----------------------------------------------------------------------
+Usage: trailblaze waypoint segment list [-hV] [--root=<root>]
+                                        --session=<session>
+List trail segments observed in a session log directory.
+A segment is a transition from one matched waypoint to another, with the tool
+calls that drove it.
+  -h, --help                Show this help message and exit.
+      --root=<root>         Additional directory to scan for *.waypoint.yaml
+                              files (default: ./trails, resolved against the
+                              current working directory). Pack waypoints are
+                              always included regardless of --root.
+      --session=<session>   Session log directory (containing *.json log files)
+  -V, --version             Print version information and exit.

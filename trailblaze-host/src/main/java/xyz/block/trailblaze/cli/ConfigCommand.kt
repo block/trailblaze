@@ -11,6 +11,7 @@ import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.llm.LlmProviderEnvVarUtil
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.util.runQuiet
 import java.util.concurrent.Callable
 import kotlin.system.exitProcess
 
@@ -96,9 +97,17 @@ class ConfigCommand : Callable<Int> {
   private fun showAllConfig(): Int {
     val currentConfig = CliConfigHelper.getOrCreateConfig()
 
-    // Fetch provider data (triggers full init)
-    Console.enableQuietMode()
-    val config = getConfigProvider()
+    // Fetch provider data (triggers full init). `runQuiet` ensures the daemon's quiet-mode
+    // flag is restored even if `getConfigProvider()` throws — without it, a config-provider
+    // failure would silence every subsequent `Console.log` for the lifetime of the daemon.
+    val config = Console.runQuiet { getConfigProvider() }
+
+    // Show which settings file is in effect — `getSettingsFile()` prefers a
+    // git-root `.trailblaze/` over `~/.trailblaze/`, which surprises users when
+    // a project-local file exists with stale or unexpected values. Print the
+    // path up front (as the very first line of the report) so what's reported
+    // below has an obvious source of truth.
+    Console.info("Settings file: ${CliConfigHelper.getSettingsFile().absolutePath}")
 
     // LLM section: model + auth, selected provider first
     val currentProvider = currentConfig.llmProvider
@@ -172,7 +181,12 @@ class ConfigCommand : Callable<Int> {
     Console.info("For advanced settings, use the Trailblaze desktop app.")
     Console.info("")
 
-    // Force exit to terminate background services started by configProvider
+    // Force exit to terminate background services started by configProvider.
+    // When running forwarded inside the daemon (DaemonSettingsBridge wired up),
+    // those background services *are* the daemon — killing them takes the whole
+    // daemon down. Return normally instead and let the IPC fast path return
+    // captured stdout to the shell shim.
+    if (DaemonSettingsBridge.settingsRepo != null) return CommandLine.ExitCode.OK
     exitProcess(CommandLine.ExitCode.OK)
   }
 
@@ -204,9 +218,8 @@ class ConfigCommand : Callable<Int> {
   private fun showLlmConfig(): Int {
     val currentConfig = CliConfigHelper.getOrCreateConfig()
 
-    // Fetch provider data (triggers full init)
-    Console.enableQuietMode()
-    val config = getConfigProvider()
+    // Fetch provider data (triggers full init). See `showAllConfig` for the runQuiet rationale.
+    val config = Console.runQuiet { getConfigProvider() }
 
     val currentProvider = currentConfig.llmProvider
 
@@ -267,7 +280,12 @@ class ConfigCommand : Callable<Int> {
     Console.info("  trailblaze config llm none              Disable LLM")
     Console.info("")
 
-    // Force exit to terminate background services started by configProvider
+    // Force exit to terminate background services started by configProvider.
+    // When running forwarded inside the daemon (DaemonSettingsBridge wired up),
+    // those background services *are* the daemon — killing them takes the whole
+    // daemon down. Return normally instead and let the IPC fast path return
+    // captured stdout to the shell shim.
+    if (DaemonSettingsBridge.settingsRepo != null) return CommandLine.ExitCode.OK
     exitProcess(CommandLine.ExitCode.OK)
   }
 }
@@ -296,7 +314,7 @@ class ConfigShowCommand : Callable<Int> {
  * Examples:
  *   trailblaze config target             - List available targets
  *   trailblaze config target myapp       - Set target to "myapp"
- *   trailblaze config target none        - Clear target
+ *   trailblaze config target default     - Use the default (no-app) target
  */
 @Command(
   name = "target",
@@ -328,6 +346,21 @@ class ConfigTargetCommand : Callable<Int> {
       )
       return CommandLine.ExitCode.USAGE
     }
+    // Format-valid but unknown target ids would otherwise persist silently and
+    // resurface later as a confusing "Target app changed (X → <unknown>)" line
+    // in subsequent device commands. Resolve once against the same target list
+    // we'd print in the LIST view, and reject anything that isn't there.
+    val availableIds = Console.runQuiet {
+      parent.getConfigProvider().availableAppTargets.map { it.id }.toSet()
+    }
+    Console.log("config target validation: resolved ${availableIds.size} target ids")
+    if (normalizedTarget !in availableIds) {
+      Console.error(
+        "Error: '$normalizedTarget' is not a known target app.\n" +
+          "Available: ${availableIds.sorted().joinToString(", ")}"
+      )
+      return CommandLine.ExitCode.USAGE
+    }
     currentConfig = currentConfig.copy(selectedTargetAppId = normalizedTarget)
     CliConfigHelper.writeConfig(currentConfig)
     Console.log("Target set: $normalizedTarget")
@@ -335,8 +368,7 @@ class ConfigTargetCommand : Callable<Int> {
   }
 
   private fun listTargets(): Int {
-    Console.enableQuietMode()
-    val config = parent.getConfigProvider()
+    val config = Console.runQuiet { parent.getConfigProvider() }
     val currentTargetId = CliConfigHelper.readConfig()?.selectedTargetAppId
     val targets = config.availableAppTargets.sortedBy { it.displayName }
 
@@ -353,7 +385,12 @@ class ConfigTargetCommand : Callable<Int> {
     Console.info("Set with: trailblaze config target <id>")
     Console.log("")
 
-    // Force exit to terminate background services started by configProvider
+    // Force exit to terminate background services started by configProvider.
+    // When running forwarded inside the daemon (DaemonSettingsBridge wired up),
+    // those background services *are* the daemon — killing them takes the whole
+    // daemon down. Return normally instead and let the IPC fast path return
+    // captured stdout to the shell shim.
+    if (DaemonSettingsBridge.settingsRepo != null) return CommandLine.ExitCode.OK
     exitProcess(CommandLine.ExitCode.OK)
   }
 }
@@ -372,8 +409,7 @@ class ConfigModelsCommand : Callable<Int> {
   private lateinit var parent: ConfigCommand
 
   override fun call(): Int {
-    Console.enableQuietMode()
-    val config = parent.getConfigProvider()
+    val config = Console.runQuiet { parent.getConfigProvider() }
     val modelLists = config.getAllSupportedLlmModelLists()
 
     Console.info("")
@@ -393,7 +429,12 @@ class ConfigModelsCommand : Callable<Int> {
 
     Console.info("")
 
-    // Force exit to terminate background services started by configProvider
+    // Force exit to terminate background services started by configProvider.
+    // When running forwarded inside the daemon (DaemonSettingsBridge wired up),
+    // those background services *are* the daemon — killing them takes the whole
+    // daemon down. Return normally instead and let the IPC fast path return
+    // captured stdout to the shell shim.
+    if (DaemonSettingsBridge.settingsRepo != null) return CommandLine.ExitCode.OK
     exitProcess(CommandLine.ExitCode.OK)
   }
 }

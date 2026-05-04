@@ -15,7 +15,7 @@ import xyz.block.trailblaze.util.Console
  * described in natural language.
  */
 @Serializable
-@TrailblazeToolClass("revyl_assert")
+@TrailblazeToolClass("revyl_assert", isVerification = true)
 @LLMDescription(
   "Assert a visual condition on the device screen. Describe what should be true. " +
     "Examples: 'the cart total shows \$42.99', 'a success message is visible', " +

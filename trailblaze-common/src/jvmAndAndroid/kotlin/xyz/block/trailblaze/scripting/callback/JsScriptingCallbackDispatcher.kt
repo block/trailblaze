@@ -198,7 +198,9 @@ object JsScriptingCallbackDispatcher {
       // at the next callback, not the one after it.
       withTimeout(timeoutMs) {
         withContext(JsScriptingCallbackDispatchDepth(entry.depth + 1)) {
-          when (val result = tool.execute(entry.executionContext)) {
+          val result = entry.executionContext.nestedToolExecutor?.invoke(tool)
+            ?: tool.execute(entry.executionContext)
+          when (result) {
             is TrailblazeToolResult.Success ->
               JsScriptingCallbackResult.CallToolResult(
                 success = true,

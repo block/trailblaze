@@ -18,10 +18,12 @@ import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import xyz.block.trailblaze.capture.logcat.LogcatParser
 import xyz.block.trailblaze.llm.LlmLogCostEnricher
 import xyz.block.trailblaze.llm.LlmUsageAndCostExt.computeUsageSummary
 import xyz.block.trailblaze.llm.config.BuiltInLlmModelRegistry
 import xyz.block.trailblaze.logs.client.TrailblazeLog
+import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.recordings.TrailRecordings
 import xyz.block.trailblaze.report.models.CiRunMetadata
@@ -130,11 +132,14 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
       watchFileSystem = false,
       costEnricher = costEnricher::enrich,
     )
-    // Use cached session IDs from init (already populated during LogsRepo construction)
-    // instead of re-listing the directory, which may fail if the volume becomes unavailable.
-    val sessionIds = logsRepo.sessionsFlow.value
+    // Use precomputed SessionInfo from LogsRepo init (instead of raw directory names) so
+    // orphan helper-session folders — e.g. MCP-only logs with no SessionStatusChangeLog —
+    // are ignored by report generation.
+    val sessionInfos = logsRepo.sessionInfoFlow.value
+      .filterNot(::isMcpHelperSession)
+      .associateBy { it.sessionId }
 
-    if (sessionIds.isEmpty()) {
+    if (sessionInfos.isEmpty()) {
       logsRepo.close()
       Console.log("⚠️  No sessions found in: ${logsDir.absolutePath}")
       return
@@ -146,14 +151,9 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
     val errors = mutableListOf<String>()
     val allSessionToolUsage = mutableListOf<SessionToolUsage>()
 
-    for (sessionId in sessionIds) {
+    for ((sessionId, sessionInfo) in sessionInfos) {
       try {
-        val sessionInfo = logsRepo.getSessionInfo(sessionId)
         val logs = logsRepo.getCachedLogsForSession(sessionId)
-        if (sessionInfo == null) {
-          errors.add("$sessionId: Could not load session info")
-          continue
-        }
 
         val platform = sessionInfo.trailblazeDeviceInfo?.platform?.name?.lowercase() ?: "unknown"
         val outcome = mapStatusToOutcome(sessionInfo.latestStatus)
@@ -165,6 +165,9 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
           }
           ?: sessionInfo.testClass
           ?: sessionId.value
+
+        // Stable key used to group retries — see [SessionInfo.stableTestKey].
+        val testKey = sessionInfo.stableTestKey
         val sessionRecordingInfo = SessionRecordingInfo.fromLogs(logs)
         // Get timestamps
         val firstLog = logs.firstOrNull()
@@ -173,10 +176,16 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
         // Collect tool usage from TrailblazeToolLog entries
         allSessionToolUsage.add(extractToolUsage(title, outcome, logs))
 
+        // Extract device log excerpt for failed sessions
+        val deviceLogExcerpt = if (outcome != Outcome.PASSED) {
+          extractDeviceLogExcerpt(logsRepo, sessionId)
+        } else null
+
         sessionResults.add(
           SessionResult(
             session_id = sessionId,
             title = title,
+            test_key = testKey,
             platform = platform,
             execution_mode = determineExecutionMode(
               status = sessionInfo.latestStatus,
@@ -187,6 +196,7 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
               ?.joinToString("-") { it.classifier },
             outcome = outcome,
             failure_reason = extractFailureReason(sessionInfo.latestStatus),
+            device_log_excerpt = deviceLogExcerpt,
             has_recorded_steps = sessionInfo.hasRecordedSteps,
             recording_available = sessionRecordingInfo.available,
             recording_skip_reason = sessionRecordingInfo.skipReason,
@@ -274,6 +284,16 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
           if (result.failure_reason != null) {
             appendLine("   Reason: ${result.failure_reason}")
           }
+          if (result.device_log_excerpt != null) {
+            appendLine("   Device Logs (excerpt):")
+            result.device_log_excerpt.lines().take(20).forEach { line ->
+              appendLine("     $line")
+            }
+            val totalExcerptLines = result.device_log_excerpt.lines().size
+            if (totalExcerptLines > 20) {
+              appendLine("     ... (${totalExcerptLines - 20} more lines)")
+            }
+          }
           appendLine("   Session: ${result.session_id}")
         }
         appendLine()
@@ -298,7 +318,9 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
       ios_build_url = getEnv("IOS_BUILD_URL"),
       retry_count = getEnv("TRAILBLAZE_TEST_RETRY_COUNT")?.toIntOrNull() ?: 0,
       ai_enabled = getEnv("TRAILBLAZE_AI_ENABLED")?.toBoolean() ?: true,
-      ai_fallback_enabled = getEnv("TRAILBLAZE_AI_FALLBACK_ENABLED")?.toBoolean() ?: true,
+      // Source of truth is the `TRAILBLAZE_SELF_HEAL_ENABLED` env var that a CI pipeline runner
+      // may emit on runner steps.
+      self_heal_enabled = getEnv("TRAILBLAZE_SELF_HEAL_ENABLED")?.toBoolean() ?: true,
       parallel_execution = getEnv("TRAILBLAZE_PARALLEL_EXECUTION")?.toBoolean() ?: false,
       ci_build_url = getEnv("BUILDKITE_BUILD_URL") ?: getEnv("CI_BUILD_URL"),
       ci_build_number = getEnv("BUILDKITE_BUILD_NUMBER") ?: getEnv("CI_BUILD_NUMBER"),
@@ -312,9 +334,9 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
 
   private fun mapStatusToOutcome(status: SessionStatus): Outcome = when (status) {
     is SessionStatus.Ended.Succeeded -> Outcome.PASSED
-    is SessionStatus.Ended.SucceededWithFallback -> Outcome.PASSED
+    is SessionStatus.Ended.SucceededWithSelfHeal -> Outcome.PASSED
     is SessionStatus.Ended.Failed -> Outcome.FAILED
-    is SessionStatus.Ended.FailedWithFallback -> Outcome.FAILED
+    is SessionStatus.Ended.FailedWithSelfHeal -> Outcome.FAILED
     is SessionStatus.Ended.Cancelled -> Outcome.CANCELLED
     is SessionStatus.Ended.TimeoutReached -> Outcome.TIMEOUT
     is SessionStatus.Ended.MaxCallsLimitReached -> Outcome.MAX_CALLS_REACHED
@@ -324,9 +346,9 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
 
   private fun determineExecutionMode(status: SessionStatus, sessionRecordingInfo: SessionRecordingInfo): ExecutionMode {
     return when {
-      status is SessionStatus.Ended.SucceededWithFallback -> ExecutionMode.AI_FALLBACK
-      status is SessionStatus.Ended.FailedWithFallback -> ExecutionMode.AI_FALLBACK
-      sessionRecordingInfo.usedAiFallback -> ExecutionMode.AI_FALLBACK
+      status is SessionStatus.Ended.SucceededWithSelfHeal -> ExecutionMode.SELF_HEAL
+      status is SessionStatus.Ended.FailedWithSelfHeal -> ExecutionMode.SELF_HEAL
+      sessionRecordingInfo.usedSelfHeal -> ExecutionMode.SELF_HEAL
       sessionRecordingInfo.skipReason == RecordingSkipReason.DISABLED_BY_CONFIG -> ExecutionMode.RECORDING_SKIPPED
       sessionRecordingInfo.available -> ExecutionMode.RECORDING_ONLY
       !sessionRecordingInfo.available -> ExecutionMode.AI_ONLY
@@ -336,7 +358,7 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
 
   private fun extractFailureReason(status: SessionStatus): String? = when (status) {
     is SessionStatus.Ended.Failed -> status.exceptionMessage
-    is SessionStatus.Ended.FailedWithFallback -> status.exceptionMessage
+    is SessionStatus.Ended.FailedWithSelfHeal -> status.exceptionMessage
     is SessionStatus.Ended.Cancelled -> status.cancellationMessage
     is SessionStatus.Ended.TimeoutReached -> status.message
     is SessionStatus.Ended.MaxCallsLimitReached ->
@@ -346,17 +368,54 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
   }
 
   /**
-   * Deduplicates retried tests by keeping one result per unique (title, device_classifier) pair.
+   * Extracts a relevant excerpt from the device log for a session.
    *
-   * When a test is retried, multiple sessions share the same title and device_classifier.
+   * Looks for crash-related lines (FATAL, Exception, ANR, crash) first. If found,
+   * returns those lines with surrounding context. Otherwise returns the last 50 lines.
+   * Returns null if no device log file exists.
+   */
+  private fun extractDeviceLogExcerpt(
+    logsRepo: LogsRepo,
+    sessionId: xyz.block.trailblaze.logs.model.SessionId,
+    maxLines: Int = 50,
+  ): String? {
+    val sessionDir = logsRepo.getSessionDir(sessionId)
+    if (!sessionDir.exists()) return null
+    val logcatFile = LogcatParser.findDeviceLogFile(sessionDir) ?: return null
+    if (!logcatFile.exists() || logcatFile.length() == 0L) return null
+
+    val allLines = logcatFile.readLines()
+    if (allLines.isEmpty()) return null
+
+    val errorPatterns = listOf("FATAL", "Exception", "ANR", "crash")
+    val errorLineIndices = allLines.indices.filter { idx ->
+      errorPatterns.any { pattern -> allLines[idx].contains(pattern, ignoreCase = true) }
+    }
+
+    return if (errorLineIndices.isNotEmpty()) {
+      val lastErrorIdx = errorLineIndices.last()
+      val contextStart = (lastErrorIdx - 5).coerceAtLeast(0)
+      val contextEnd = (lastErrorIdx + maxLines - 5).coerceAtMost(allLines.size)
+      allLines.subList(contextStart, contextEnd).joinToString("\n")
+    } else {
+      allLines.takeLast(maxLines).joinToString("\n")
+    }
+  }
+
+  /**
+   * Deduplicates retried tests by keeping one result per unique (test_key, device_classifier)
+   * pair, falling back to title when no stable key is available.
+   *
+   * When a test is retried, multiple sessions share the same test_key and device_classifier.
    * This groups them by both fields, picks the best result (preferring PASSED, then latest
    * attempt), and annotates the kept result with retry metadata (attempt number, total attempts,
    * replaced session IDs). Using device_classifier ensures that the same test run on different
-   * devices (e.g. phone vs tablet) is preserved as separate results.
+   * devices (e.g. phone vs tablet) is preserved as separate results. Using test_key (rather than
+   * the human-readable title) ensures distinct tests that share a title stay separate.
    */
   private fun deduplicateRetries(results: List<SessionResult>): List<SessionResult> {
     return results
-      .groupBy { listOf(it.title, it.device_classifier.orEmpty()) }
+      .groupBy { listOf(it.test_key ?: it.title, it.device_classifier.orEmpty()) }
       .values
       .map { attempts ->
         if (attempts.size == 1) return@map attempts.single()
@@ -674,6 +733,14 @@ open class GenerateTestResultsCliCommand : CliktCommand(name = "generate-test-re
     Console.log(output)
   }
 }
+
+// MCP helper sessions are the side-sessions the MCP server opens to take a snapshot /
+// answer a tool call. They have testClass="MCP", no trailConfig, and no trailFilePath —
+// distinguishing them from real MCP-driven trail runs, which carry a trailConfig.
+private fun isMcpHelperSession(sessionInfo: SessionInfo): Boolean =
+  sessionInfo.testClass == "MCP" &&
+    sessionInfo.trailConfig == null &&
+    sessionInfo.trailFilePath == null
 
 private fun Instant.toIso8601String(): String {
   val localDateTime = this.toLocalDateTime(TimeZone.UTC)

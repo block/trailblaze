@@ -1,0 +1,14 @@
+{
+  "name": "trailblaze-sample-app-host-tools",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Sample-app host-only tools. Identical author surface to the on-device-compatible flavor under ../quickjs-tools — same `@trailblaze/tools` import, same `trailblaze.tool(...)` registration shape. Host-only-ness comes from the handlers reaching for `node:fs` / `node:os`, NOT from importing a different SDK.",
+  "type": "module",
+  "dependencies": {
+    "@trailblaze/tools": "file:../../../../sdks/typescript-tools"
+  },
+  "devDependencies": {
+    "@types/node": "25.6.0",
+    "typescript": "6.0.3"
+  }
+}

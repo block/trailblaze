@@ -169,6 +169,11 @@ data class TrailblazeElementSelector(
         }
       }
       TrailblazeDevicePlatform.WEB -> null
+      // The Compose desktop driver uses [TrailblazeNodeSelector] natively (selectors are
+      // authored against [DriverNodeMatch.Compose]); converting from the legacy
+      // Maestro-shaped [TrailblazeElementSelector] is lossy in the same way Web is and
+      // not used in the Compose authoring path. Mirror Web's "drop the conversion" stance.
+      TrailblazeDevicePlatform.DESKTOP -> null
     }
 
     return TrailblazeNodeSelector(

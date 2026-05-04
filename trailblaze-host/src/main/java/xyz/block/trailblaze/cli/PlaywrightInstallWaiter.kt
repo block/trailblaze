@@ -76,10 +76,15 @@ internal object PlaywrightInstallWaiter {
     overallDeadlineMs: Long = INSTALL_DEADLINE_MS,
     now: () -> Long = { System.currentTimeMillis() },
   ): String? {
-    val initialProgress = extractProgress(initialContent)
-    onProgress("Installing Playwright browser (first time only)...")
-    if (initialProgress != null) onProgress("  $initialProgress")
+    // CLI users see one up-front notice, then the call blocks until ready, with
+    // per-tick percentage lines printed as the daemon advances. The blocking shape
+    // matters: previous behaviour returned with MCP-style "Call device(action=WEB)
+    // to check status" trailers, which were dead-end advice for a CLI user. Showing
+    // percentages keeps users from thinking the CLI is wedged.
+    onProgress("Installing Playwright (this may take up to 2 minutes)...")
 
+    val initialProgress = extractProgress(initialContent)
+    if (initialProgress != null) onProgress("  $initialProgress")
     val startTime = now()
     var lastProgress = initialProgress ?: ""
     var lastProgressChangeAt = startTime
@@ -122,10 +127,10 @@ internal object PlaywrightInstallWaiter {
       if (driverStatusLine != null) {
         val lowered = driverStatusLine.lowercase()
         if ("failed" in lowered || "error" in lowered) {
-          return "Playwright browser install failed: $driverStatusLine"
+          return "Playwright install failed: $driverStatusLine"
         }
       }
-      onProgress("Playwright browser ready.")
+      onProgress("Done.")
       return null
     }
   }

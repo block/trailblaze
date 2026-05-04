@@ -36,11 +36,13 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
@@ -55,6 +57,8 @@ import androidx.compose.ui.unit.dp
 import kotlin.time.TimeSource
 import xyz.block.trailblaze.yaml.TrailblazeYaml
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import xyz.block.trailblaze.api.AgentDriverAction
@@ -64,6 +68,7 @@ import xyz.block.trailblaze.logs.model.HasScreenshot
 import xyz.block.trailblaze.logs.model.HasTraceId
 import xyz.block.trailblaze.logs.model.HasTrailblazeTool
 import xyz.block.trailblaze.logs.model.SessionStatus
+import xyz.block.trailblaze.logs.model.getSessionInfo
 import xyz.block.trailblaze.logs.model.isInProgress
 import xyz.block.trailblaze.ui.composables.ScreenshotAnnotation
 import xyz.block.trailblaze.ui.composables.ScreenshotImage
@@ -73,10 +78,21 @@ import xyz.block.trailblaze.ui.images.ImageLoader
 import xyz.block.trailblaze.ui.images.NetworkImageLoader
 import xyz.block.trailblaze.ui.Platform
 import xyz.block.trailblaze.ui.getPlatform
+import xyz.block.trailblaze.ui.loadDeviceLogs
+import xyz.block.trailblaze.ui.loadNetworkLogs
 import xyz.block.trailblaze.ui.openVideoInSystemPlayer
 import xyz.block.trailblaze.ui.resolveImageModel
 import xyz.block.trailblaze.ui.utils.FormattingUtils
 import xyz.block.trailblaze.ui.utils.FormattingUtils.formatDuration
+
+/** Polling interval for refreshing device-log and network capture files during live sessions. */
+private const val SESSION_LOGS_POLL_INTERVAL_MS = 1_000L
+
+/**
+ * Fallback duration applied to the last child event when no concrete `completedAt`
+ * timestamp is available — gives the highlight window something to span instead of zero.
+ */
+private const val UNFINISHED_EVENT_FALLBACK_DURATION_MS = 1_000L
 
 /**
  * Combined view: step-grouped event hierarchy + video frame + vertical scrub bar.
@@ -113,6 +129,31 @@ internal fun SessionCombinedView(
       val timestamps = logs.mapNotNull { it.timestamp.toEpochMilliseconds() }
       sessionStartMs = timestamps.minOrNull() ?: 0L
       sessionEndMs = timestamps.maxOrNull() ?: 0L
+    }
+  }
+
+  // Load device logs (logcat / iOS log stream) and network capture (network.ndjson) for this
+  // session. Loads run in parallel (async/await) since the two file reads are independent — on
+  // slow disks or NFS this halves the responsiveness ceiling of the 1s poll cycle. During live
+  // sessions, poll every second to pick up new lines. Network NDJSON: web and on-device mobile
+  // captures both write to the same path with the same NetworkEvent schema, so a single loader
+  // covers every source.
+  var deviceLogs by remember { mutableStateOf<String?>(null) }
+  var networkLogs by remember { mutableStateOf<String?>(null) }
+  val isSessionLive = overallStatus?.isInProgress == true
+  LaunchedEffect(sessionId, isSessionLive) {
+    suspend fun refresh() = coroutineScope {
+      val device = async { loadDeviceLogs(sessionId) }
+      val network = async { loadNetworkLogs(sessionId) }
+      deviceLogs = device.await()
+      networkLogs = network.await()
+    }
+    refresh()
+    if (isSessionLive) {
+      while (true) {
+        delay(SESSION_LOGS_POLL_INTERVAL_MS)
+        refresh()
+      }
     }
   }
 
@@ -285,9 +326,11 @@ internal fun SessionCombinedView(
     }
   }
 
+  Column(modifier = Modifier.fillMaxSize()) {
   Row(
     modifier =
-      Modifier.fillMaxSize()
+      Modifier.weight(1f).fillMaxWidth()
+        .clipToBounds()
         .focusRequester(focusRequester)
         .focusable()
         .onPreviewKeyEvent { event ->
@@ -581,6 +624,53 @@ internal fun SessionCombinedView(
       modifier = Modifier.padding(start = 6.dp, end = 4.dp),
     )
   }
+
+  // Compute the active event's time range for device log highlighting
+  val activeEventRange =
+    remember(currentTimestamp, selectedEventKey, childEventsPerItem, activeItemIndex) {
+      if (activeItemIndex == null) return@remember null
+      val children = childEventsPerItem.getOrNull(activeItemIndex) ?: return@remember null
+      val activeIdx =
+        if (selectedEventKey != null) {
+          children.indexOfFirst { it.selectionKey() == selectedEventKey }
+        } else {
+          children.indexOfLast { it.timestampMs <= currentTimestamp }
+        }
+      if (activeIdx < 0) return@remember null
+      val start = children[activeIdx].timestampMs
+      val end =
+        if (activeIdx < children.lastIndex) {
+          children[activeIdx + 1].timestampMs
+        } else {
+          progressItems
+            .getOrNull(activeItemIndex)
+            ?.completedAt
+            ?.toEpochMilliseconds()
+            ?: (start + UNFINISHED_EVENT_FALLBACK_DURATION_MS)
+        }
+      start to end
+    }
+
+  // Bottom: pluggable, timeline-synced log panel. Two sources — device logs (Android logcat /
+  // iOS system log) and network NDJSON (web + on-device mobile, same schema). Entries whose
+  // content is null/blank are filtered by the panel — for example, web-only sessions don't
+  // surface a Device Logs tab, and mobile sessions without web capture don't surface a Network
+  // tab. Route the device-log parser to the right format up front when we know the platform.
+  val sessionPlatform = (overallStatus as? SessionStatus.Started)?.trailblazeDeviceInfo?.platform
+    ?: logs.getSessionInfo()?.trailblazeDeviceInfo?.platform
+  val deviceSource = remember(sessionPlatform) { DeviceLogSource.forPlatform(sessionPlatform) }
+  SessionLogsPanel(
+    entries = listOf(
+      SessionLogEntry(deviceSource, deviceLogs),
+      SessionLogEntry(NetworkLogSource, networkLogs),
+    ),
+    currentTimestampMs = currentTimestamp,
+    sessionStartMs = sessionStartMs,
+    sessionEndMs = sessionEndMs,
+    activeEventStartMs = activeEventRange?.first,
+    activeEventEndMs = activeEventRange?.second,
+  )
+  } // end Column
 }
 
 // -- Child event model --
@@ -615,8 +705,10 @@ internal fun CombinedEvent.selectionKey(): String = "$timestampMs:${type.name}:$
 
 /**
  * Build child events for a single progress item by filtering logs within its time window.
- * Events are ordered by timestamp and indented by TraceId: LLM Request (depth 0) →
- * Tool call (depth 1) → Driver action (depth 2). Events without a traceId sit at depth 0.
+ * Events are ordered by timestamp and indented by TraceId. The first event seen for a given
+ * trace is treated as the originator (depth 0); later events reusing that trace render as
+ * children. Driver actions stay one level deeper than sibling child tool/log events so the
+ * existing "tool contains actions" shape still reads cleanly in the timeline.
  */
 internal fun buildChildEvents(
   logs: List<TrailblazeLog>,
@@ -625,22 +717,23 @@ internal fun buildChildEvents(
 ): List<CombinedEvent> {
   val startMs = item.startedAt?.toEpochMilliseconds() ?: return emptyList()
   val endMs = item.completedAt?.toEpochMilliseconds() ?: Long.MAX_VALUE
-
-  // Collect traceIds initiated by LLM requests so we can assign depth to related logs
-  val llmTraceIds = mutableSetOf<String>()
-  for (log in logs) {
-    if (log is TrailblazeLog.TrailblazeLlmRequestLog) {
-      llmTraceIds.add(log.traceId.traceId)
+  val logsInWindow = logs
+    .asSequence()
+    .filter { log ->
+      val tsMs = log.timestamp.toEpochMilliseconds()
+      tsMs in startMs..endMs
     }
-  }
+    .sortedBy { it.timestamp.toEpochMilliseconds() }
+    .toList()
 
   val events = mutableListOf<CombinedEvent>()
-  for (log in logs) {
+  val seenTraceIds = mutableSetOf<String>()
+  for (log in logsInWindow) {
     val tsMs = log.timestamp.toEpochMilliseconds()
-    if (tsMs < startMs || tsMs > endMs) continue
     val relMs = (tsMs - sessionStartMs).coerceAtLeast(0L)
     val traceId = (log as? HasTraceId)?.traceId?.traceId
-    val hasParentLlm = traceId != null && traceId in llmTraceIds
+    val isTraceOrigin = traceId != null && seenTraceIds.add(traceId)
+    val childDepth = if (traceId == null || isTraceOrigin) 0 else 1
 
     when (log) {
       is TrailblazeLog.AgentDriverLog -> {
@@ -652,7 +745,7 @@ internal fun buildChildEvents(
             title = describeAction(log.action),
             detail = "${log.durationMs}ms",
             hasScreenshot = log.screenshotFile != null,
-            depth = if (hasParentLlm) 2 else 0,
+            depth = if (childDepth == 0) 0 else 2,
             sourceLog = log,
           ),
         )
@@ -666,7 +759,7 @@ internal fun buildChildEvents(
             type = CombinedEventType.ToolCall,
             title = "Tool: ${log.toolName}",
             detail = "$status (${log.durationMs}ms)",
-            depth = if (hasParentLlm) 1 else 0,
+            depth = childDepth,
             toolYaml = formatToolYaml(log.toolName, log),
           ),
         )
@@ -689,7 +782,7 @@ internal fun buildChildEvents(
             type = CombinedEventType.LlmRequest,
             title = "LLM Request",
             detail = detailParts.joinToString(" \u2022 "),
-            depth = 0,
+            depth = childDepth,
             toolYaml = formatLlmActionsYaml(log.actions),
             sourceLog = log,
           ),
@@ -755,6 +848,7 @@ private fun ColumnScope.VideoFramePanel(
   onShowInspectUI: ((TrailblazeLog) -> Unit)? = null,
 ) {
   val watchVideoPath = videoMetadata.videoFilePath
+    ?: videoMetadata.filePath.takeIf { videoMetadata.spriteInfo == null }
   if (watchVideoPath != null && getPlatform() != Platform.WASM) {
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
       Text(

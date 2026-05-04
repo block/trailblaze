@@ -17,8 +17,8 @@ import java.util.concurrent.Callable
  * The daemon must be running (`trailblaze app --headless` or the desktop app).
  *
  * Examples:
- *   trailblaze ask "What's the current balance?"
- *   trailblaze ask "What buttons are visible?"
+ *   trailblaze ask -d android/emulator-5554 "What's the current balance?"
+ *   trailblaze ask -d ios/SIM-UUID "What buttons are visible?"
  *   trailblaze ask -d ANDROID "What screen is this?"
  */
 @Command(
@@ -36,8 +36,8 @@ class AskCommand : Callable<Int> {
 
   @Option(
     names = ["-d", "--device"],
-    description = ["Device: platform (android, ios, web) or platform/id (e.g., android/emulator-5554). " +
-      "Switches the daemon's active device for all clients. Required for multi-device workflows."]
+    required = true,
+    description = ["Device: platform (android, ios, web) or platform/id (e.g., android/emulator-5554). Required."]
   )
   var device: String? = null
 
@@ -47,24 +47,39 @@ class AskCommand : Callable<Int> {
   )
   var verbose: Boolean = false
 
-  override fun call(): Int = cliWithDevice(verbose, device) { client ->
-    val isNewDevice = !client.hasExistingDevice
-    val question = questionWords.joinToString(" ")
-    val result = client.callTool("ask", mapOf("question" to question))
+  @CommandLine.Mixin
+  val headlessOption: HeadlessOption = HeadlessOption()
 
-    formatAskResult(result)
-    // Show Trailblaze session ID after the first action in a new session
-    if (isNewDevice && result.isSuccess) {
-      client.getTrailblazeSessionId()?.let { Console.info("Session: $it") }
+  override fun call(): Int {
+    val deviceArg = device
+    if (deviceArg.isNullOrBlank()) {
+      Console.error("Error: --device is required for this command.")
+      return CommandLine.ExitCode.USAGE
     }
+    return cliReusableWithDevice(
+      verbose = verbose,
+      device = deviceArg,
+      sessionScope = cliDeviceSessionScope(deviceArg),
+      webHeadless = headlessOption.resolve(),
+    ) { client ->
+      val isNewDevice = !client.hasExistingDevice
+      val question = questionWords.joinToString(" ")
+      val result = client.callTool("ask", mapOf("question" to question))
 
-    val hasError = result.isError || try {
-      val json = Json.parseToJsonElement(result.content).jsonObject
-      !json["error"]?.jsonPrimitive?.content.isNullOrBlank()
-    } catch (_: Exception) {
-      false
+      formatAskResult(result)
+      // Show Trailblaze session ID after the first action in a new session
+      if (isNewDevice && result.isSuccess) {
+        client.getTrailblazeSessionId()?.let { Console.info("Session: $it") }
+      }
+
+      val hasError = result.isError || try {
+        val json = Json.parseToJsonElement(result.content).jsonObject
+        !json["error"]?.jsonPrimitive?.content.isNullOrBlank()
+      } catch (_: Exception) {
+        false
+      }
+      if (hasError) CommandLine.ExitCode.SOFTWARE else CommandLine.ExitCode.OK
     }
-    if (hasError) CommandLine.ExitCode.SOFTWARE else CommandLine.ExitCode.OK
   }
 
   private fun formatAskResult(result: CliMcpClient.ToolResult) = formatAskResultAgent(result)

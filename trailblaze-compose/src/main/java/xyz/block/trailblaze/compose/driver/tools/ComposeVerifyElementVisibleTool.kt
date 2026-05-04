@@ -9,7 +9,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.util.Console
 
 @Serializable
-@TrailblazeToolClass("compose_verify_element_visible")
+@TrailblazeToolClass("compose_verify_element_visible", isVerification = true)
 @LLMDescription(
   """
 Verify that a UI element is visible.

@@ -15,6 +15,7 @@ import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import xyz.block.trailblaze.AgentMemory
 import kotlinx.coroutines.Job
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
@@ -58,7 +59,7 @@ import xyz.block.trailblaze.rules.TrailblazeLoggingRule
  */
 class OnDeviceRpcServer(
   private val loggingRule: TrailblazeLoggingRule,
-  private val runTrailblazeYaml: suspend (RunYamlRequest, TrailblazeSession) -> TrailblazeSession,
+  private val runTrailblazeYaml: suspend (RunYamlRequest, TrailblazeSession, AgentMemory) -> TrailblazeSession,
   private val trailblazeDeviceInfoProvider: (TrailblazeDeviceId) -> TrailblazeDeviceInfo,
   private val progressManager: ProgressSessionManager = ProgressSessionManager(),
   private val deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),

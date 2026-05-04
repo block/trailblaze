@@ -15,8 +15,8 @@ import org.junit.rules.TemporaryFolder
 /**
  * Tests for [TrailDiscovery]. Covers:
  *  - Globbing `**`/`*.trail.yaml`, `blaze.yaml`, and nested `trailblaze.yaml`
- *  - Workspace-anchor exclusion: `trailblaze.yaml` at the scan root is skipped, but
- *    nested `trailblaze.yaml` (legacy NL definitions) are surfaced
+ *  - Workspace-config exclusion: `trails/config/trailblaze.yaml` is skipped, while
+ *    legacy `trailblaze.yaml` trail definitions elsewhere are surfaced
  *  - Pruning the hardcoded [TrailDiscovery.DEFAULT_EXCLUDED_DIRS] set
  *  - Deterministic sort order
  *  - [TrailDiscovery.findFirstTrail] short-circuiting
@@ -62,15 +62,16 @@ class TrailDiscoveryTest {
   }
 
   @Test
-  fun `trailblaze_yaml at the scan root is not surfaced as a trail`() {
-    // trailblaze.yaml at the discovery root is the workspace anchor — never a trail.
-    newFile("trailblaze.yaml")
-    val trail = newFile("nested/login.trail.yaml")
+  fun `workspace config manifest under trails config is not surfaced as a trail`() {
+    newFile("trails/config/trailblaze.yaml")
+    val rootTrail = newFile("trails/trailblaze.yaml")
+    val nestedTrail = newFile("trails/nested/login.trail.yaml")
 
-    val result = TrailDiscovery.discoverTrails(root.toPath()).map { it.toFile() }
+    val result = TrailDiscovery.discoverTrails(File(root, "trails").toPath()).map { it.toFile() }
 
-    assertEquals(1, result.size, "root-anchor must be excluded: $result")
-    assertEquals(trail.canonicalPath, result.single().canonicalPath)
+    assertEquals(2, result.size, "workspace config manifest must be excluded: $result")
+    assertTrue(result.map { it.canonicalPath }.contains(rootTrail.canonicalPath))
+    assertTrue(result.map { it.canonicalPath }.contains(nestedTrail.canonicalPath))
   }
 
   @Test
@@ -190,19 +191,22 @@ class TrailDiscoveryTest {
 
   @Test
   fun `findFirstTrail skips the workspace anchor`() {
-    // trailblaze.yaml at the root must NOT be offered to the predicate — it's the
-    // workspace anchor, never a trail.
-    val anchor = newFile("trailblaze.yaml")
-    val nested = newFile("legacy/trailblaze.yaml")
+    val anchor = newFile("trails/config/trailblaze.yaml")
+    val rootLegacy = newFile("trails/trailblaze.yaml")
+    val nested = newFile("trails/legacy/trailblaze.yaml")
 
     val visited = mutableListOf<File>()
-    val match = TrailDiscovery.findFirstTrail(root.toPath()) { path ->
+    val match = TrailDiscovery.findFirstTrail(File(root, "trails").toPath()) { path ->
       visited.add(path.toFile())
       false // don't match — we just want to see what the predicate was offered.
     }
 
     assertNull(match)
     val visitedPaths = visited.map { it.canonicalPath }
+    assertTrue(
+      rootLegacy.canonicalPath in visitedPaths,
+      "legacy trailblaze.yaml at the scan root should be visited but was not: $visitedPaths",
+    )
     assertTrue(
       nested.canonicalPath in visitedPaths,
       "nested trailblaze.yaml should be visited but was not: $visitedPaths",
@@ -243,17 +247,17 @@ class TrailDiscoveryTest {
 
   @Test
   fun `deeply nested trailblaze_yaml is surfaced when the scan root sits below a configured workspace`() {
-    // Setup: workspace anchor at `root/trailblaze.yaml` (the real anchor, found via
-    // walk-up from `flows`). A deeply nested `flows/subtrail/trailblaze.yaml` is a
+    // Setup: workspace config manifest at `root/trails/config/trailblaze.yaml` (the real
+    // anchor, found via walk-up from `flows`). A deeply nested `flows/subtrail/trailblaze.yaml` is a
     // legacy NL trail — it is NOT the closest trailblaze.yaml, so `findWorkspaceRoot`
     // does not treat it as a nested workspace. Scanning `root/flows` must surface
     // that nested trail; the true anchor lives ABOVE the scan root and is never
     // visited by the walk.
-    newFile("trailblaze.yaml") // real workspace anchor, above the scan root
-    val nestedTrail = newFile("flows/subtrail/trailblaze.yaml") // legacy NL trail
-    val siblingTrail = newFile("flows/other.trail.yaml")
+    newFile("trails/config/trailblaze.yaml") // real workspace anchor, above the scan root
+    val nestedTrail = newFile("trails/flows/subtrail/trailblaze.yaml") // legacy NL trail
+    val siblingTrail = newFile("trails/flows/other.trail.yaml")
 
-    val result = TrailDiscovery.discoverTrails(File(root, "flows").toPath())
+    val result = TrailDiscovery.discoverTrails(File(root, "trails/flows").toPath())
       .map { it.toFile().canonicalPath }
 
     assertEquals(2, result.size, "subdir scan must include deeply nested trailblaze.yaml: $result")
@@ -262,22 +266,17 @@ class TrailDiscoveryTest {
   }
 
   @Test
-  fun `immediate-child trailblaze_yaml at a scan root is treated as a nested workspace anchor`() {
-    // Pinning Phase 2's `closest trailblaze.yaml wins` semantic: if the scan root
-    // itself contains a `trailblaze.yaml`, the walk-up stops there and treats that
-    // file as the anchor — excluded from discovery results. This is the expected
-    // behavior for nested workspaces (see `WorkspaceRootTest`) and the reason
-    // `nested_trailblaze_yaml_is_surfaced_when_the_scan_root_sits_below_...` uses a
-    // deeply-nested trail rather than an immediate child.
-    val anchor = newFile("flows/trailblaze.yaml")
-    val sibling = newFile("flows/login.trail.yaml")
+  fun `immediate-child trailblaze_yaml at a scan root is surfaced when config lives under config dir`() {
+    newFile("trails/config/trailblaze.yaml")
+    val rootLegacy = newFile("trails/flows/trailblaze.yaml")
+    val sibling = newFile("trails/flows/login.trail.yaml")
 
-    val result = TrailDiscovery.discoverTrails(File(root, "flows").toPath())
+    val result = TrailDiscovery.discoverTrails(File(root, "trails/flows").toPath())
       .map { it.toFile().canonicalPath }
 
-    assertEquals(1, result.size, "immediate-child trailblaze.yaml should be excluded as anchor: $result")
-    assertEquals(sibling.canonicalPath, result.single())
-    assertTrue(anchor.canonicalPath !in result, "anchor must not be surfaced as a trail")
+    assertEquals(2, result.size, "legacy trailblaze.yaml should be surfaced beside recordings: $result")
+    assertTrue(rootLegacy.canonicalPath in result, "legacy trailblaze.yaml should be surfaced")
+    assertTrue(sibling.canonicalPath in result, "sibling trail should be surfaced")
   }
 
   @Test

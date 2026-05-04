@@ -6,7 +6,8 @@ import xyz.block.trailblaze.llm.TrailblazeLlmProvider
 
 /**
  * Top-level LLM configuration matching the schema from Decision 030.
- * Loaded from ~/.trailblaze/trailblaze.yaml and/or ./trailblaze.yaml (under llm: key).
+ * Loaded from ~/.trailblaze/trailblaze.yaml and/or ./trails/config/trailblaze.yaml
+ * (under llm: key).
  */
 @Serializable
 data class LlmConfig(

@@ -1,10 +1,10 @@
 ---
-title: "AI Fallback"
+title: "Self-Heal"
 type: decision
 date: 2026-01-29
 ---
 
-# Trailblaze Decision 021: AI Fallback
+# Trailblaze Decision 021: Self-Heal
 
 ## Context
 
@@ -12,11 +12,11 @@ A core value proposition of Trailblaze is that **natural language is always the 
 
 However, recordings are inherently tied to the application state at the time they were captured. When the application changes—a new onboarding popup appears, button text is updated, a feature flag changes the UI flow—recorded tool calls may fail. Rather than treating this as an immediate test failure, Trailblaze can leverage the natural language source of truth to attempt recovery.
 
-This is **AI Fallback**: when recorded steps fail, Trailblaze falls back to AI interpretation of the natural language steps, allowing tests to navigate through UI inconsistencies and complete successfully.
+This is **Self-Heal**: when recorded steps fail, Trailblaze falls back to AI interpretation of the natural language steps, allowing tests to navigate through UI inconsistencies and complete successfully.
 
 ## Decision
 
-**Trailblaze implements AI Fallback as a configurable execution feature that re-interprets natural language steps when recorded tool calls fail, distinguishing these recoveries with a specific test result status.**
+**Trailblaze implements Self-Heal as a configurable execution feature that re-interprets natural language steps when recorded tool calls fail, distinguishing these recoveries with a specific test result status.**
 
 ### Natural Language as Source of Truth
 
@@ -42,20 +42,20 @@ These steps represent the *intent* of the test. A recording captures *one way* t
               text: Account Settings
 ```
 
-When the recording fails (e.g., the "Settings" button was renamed to "Preferences"), the natural language step "Navigate to Settings" still clearly describes what should happen. AI Fallback uses this to recover.
+When the recording fails (e.g., the "Settings" button was renamed to "Preferences"), the natural language step "Navigate to Settings" still clearly describes what should happen. Self-Heal uses this to recover.
 
-### How AI Fallback Works
+### How Self-Heal Works
 
 1. **Recorded execution begins**: Trailblaze executes the recorded tool calls for each step
 2. **Tool call fails**: A tool call returns an error (element not found, assertion failed, timeout, etc.)
 3. **Fallback triggered**: Instead of failing immediately, Trailblaze switches to AI mode for the current step
 4. **LLM interprets step**: The natural language step is sent to the LLM, which analyzes the current screen state and determines the appropriate actions
 5. **Execution continues**: If the LLM successfully completes the step, execution proceeds to the next step (which may continue in recorded or fallback mode depending on configuration)
-6. **Result marked**: The test result is marked with a distinct status indicating AI Fallback was used
+6. **Result marked**: The test result is marked with a distinct status indicating Self-Heal was used
 
 ### Configuration Options
 
-AI Fallback can be enabled or disabled based on execution context:
+Self-Heal can be enabled or disabled based on execution context:
 
 | Configuration | Behavior |
 | :--- | :--- |
@@ -77,21 +77,21 @@ AI Fallback can be enabled or disabled based on execution context:
 
 ### Test Result Statuses
 
-AI Fallback introduces a distinct test result status to provide visibility into how tests succeeded:
+Self-Heal introduces a distinct test result status to provide visibility into how tests succeeded:
 
 | Status | Description |
 | :--- | :--- |
 | `PASSED` | Test succeeded using recordings only (no AI involvement) |
-| `PASSED_WITH_AI_FALLBACK` | Test succeeded, but one or more steps required AI fallback |
+| `PASSED_WITH_SELF_HEAL` | Test succeeded, but one or more steps required self-heal |
 | `PASSED_AI_MODE` | Test ran entirely in AI mode (no recording or recording intentionally skipped) |
-| `FAILED` | Test failed (even after AI fallback attempts, if enabled) |
+| `FAILED` | Test failed (even after self-heal attempts, if enabled) |
 
-The `PASSED_WITH_AI_FALLBACK` status is critical for several reasons:
+The `PASSED_WITH_SELF_HEAL` status is critical for several reasons:
 
 1. **Recording staleness detection**: A high rate of fallback-assisted passes indicates recordings need updating
 2. **Pipeline health monitoring**: Teams can track fallback usage over time and set thresholds
 3. **Debugging context**: When investigating test behavior, knowing fallback was used helps explain differences from expected execution
-4. **Cost awareness**: AI fallback incurs LLM costs; tracking helps with budget planning
+4. **Cost awareness**: self-heal incurs LLM costs; tracking helps with budget planning
 
 ### Interaction with Step-Level Recordability
 
@@ -102,14 +102,14 @@ As noted in [Decision 002](2025-10-01-trail-recording-format.md), individual ste
   recordable: false  # Always uses AI
 ```
 
-AI Fallback is different—it applies to steps that *have* recordings but whose recordings fail at runtime. The two features are complementary:
+Self-Heal is different—it applies to steps that *have* recordings but whose recordings fail at runtime. The two features are complementary:
 
 - **`recordable: false`**: Intentionally always use AI (design decision)
-- **AI Fallback**: Gracefully recover when recordings unexpectedly fail (resilience mechanism)
+- **Self-Heal**: Gracefully recover when recordings unexpectedly fail (resilience mechanism)
 
 ### Fallback Scope and Continuation
 
-When AI Fallback is triggered for a step:
+When Self-Heal is triggered for a step:
 
 1. **Step scope**: The LLM re-interprets only the failing step, not the entire test
 2. **Screen context**: The LLM receives the current screen state (screenshot, view hierarchy)
@@ -132,9 +132,9 @@ Consider a test with this step:
           accessibilityText: Home
 ```
 
-**Without AI Fallback:** If a new "What's New" popup appears before the Welcome screen, the `waitForElementWithText` call fails, and the test fails immediately.
+**Without Self-Heal:** If a new "What's New" popup appears before the Welcome screen, the `waitForElementWithText` call fails, and the test fails immediately.
 
-**With AI Fallback:** The tool call fails, fallback is triggered, the LLM sees the "What's New" popup, dismisses it, then proceeds to navigate to the main screen. The test passes with `PASSED_WITH_AI_FALLBACK` status.
+**With Self-Heal:** The tool call fails, fallback is triggered, the LLM sees the "What's New" popup, dismisses it, then proceeds to navigate to the main screen. The test passes with `PASSED_WITH_SELF_HEAL` status.
 
 ## Consequences
 
@@ -148,7 +148,7 @@ Consider a test with this step:
 
 **Negative:**
 
-- AI Fallback incurs LLM costs when triggered
+- Self-Heal incurs LLM costs when triggered
 - Fallback-assisted passes may mask recordings that need updating if not monitored
 - Execution time increases when fallback is triggered (LLM latency)
 - Test behavior may vary slightly between recorded and fallback execution paths

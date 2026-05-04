@@ -13,10 +13,10 @@ import kotlin.math.abs
 import xyz.block.trailblaze.util.Console
 
 @Serializable
-@TrailblazeToolClass("assertMath")
+@TrailblazeToolClass("assertMath", isVerification = true)
 @LLMDescription(
   """
-This will calculate the result of an expression and compare it to the expected output value.
+Calculate the result of an expression and compare it to the expected output value.
       """,
 )
 data class AssertMathTrailblazeTool(

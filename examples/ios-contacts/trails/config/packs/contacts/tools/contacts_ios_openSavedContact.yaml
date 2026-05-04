@@ -1,0 +1,15 @@
+# Per-file scripted tool for the iOS Contacts pack. Resolved by the pack loader and
+# translated into the runtime InlineScriptToolConfig shape (see PackScriptedToolFile).
+script: ./trails/config/tools/contacts_ios_openSavedContact.js
+name: contacts_ios_openSavedContact
+description: Launch Contacts, open a saved contact from the list, and verify the detail screen.
+_meta:
+  trailblaze/supportedPlatforms: [ios]
+  trailblaze/requiresContext: true
+inputSchema:
+  appId:
+    type: string
+    description: iOS bundle id of the Contacts app.
+  contactName:
+    type: string
+    description: Display name of the contact to open (typically "FirstName LastName" as it appears in the Contacts list).

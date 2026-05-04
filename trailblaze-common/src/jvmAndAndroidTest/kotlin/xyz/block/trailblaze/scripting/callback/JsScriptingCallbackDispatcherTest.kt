@@ -85,6 +85,18 @@ class CallbackDispatcherTest {
     depth = depth,
   )
 
+  private fun register(
+    sessionId: SessionId,
+    executionContext: TrailblazeToolExecutionContext,
+    depth: Int = 0,
+    repo: TrailblazeToolRepo = makeRepo(),
+  ): JsScriptingInvocationRegistry.Handle = JsScriptingInvocationRegistry.register(
+    sessionId = sessionId,
+    toolRepo = repo,
+    executionContext = executionContext,
+    depth = depth,
+  )
+
   private fun buildCallToolRequest(
     sessionId: String,
     invocationId: String,
@@ -245,6 +257,67 @@ class CallbackDispatcherTest {
       assertThat(cap.success).isEqualTo(true)
       assertThat(cap.textContent).isEqualTo("4")
       assertThat(observedDepths).isInstanceOf(List::class).isEqualTo(listOf(4))
+    } finally {
+      handle.close()
+    }
+  }
+
+  @Test
+  fun `nested tool executor is preferred over direct tool execution`() = runBlocking {
+    var directExecutionCount = 0
+    val dispatchedTools = mutableListOf<TrailblazeTool>()
+    val directTool = object : ExecutableTrailblazeTool {
+      override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult {
+        directExecutionCount += 1
+        return TrailblazeToolResult.Success(message = "direct-execute")
+      }
+    }
+    val registration = object : DynamicTrailblazeToolRegistration {
+      override val name: ToolName = ToolName("nestedExecutorProbe")
+      override val trailblazeDescriptor: TrailblazeToolDescriptor = TrailblazeToolDescriptor(
+        name = name.toolName,
+        description = "Confirms callback dispatch uses the nested tool executor when present.",
+      )
+      override fun buildKoogTool(
+        trailblazeToolContextProvider: () -> TrailblazeToolExecutionContext,
+      ): TrailblazeKoogTool<out TrailblazeTool> =
+        error("buildKoogTool not exercised by the dispatcher test path")
+      override fun decodeToolCall(argumentsJson: String): TrailblazeTool = directTool
+    }
+    val repo = makeRepo()
+    repo.addDynamicTools(listOf(registration))
+    val sessionId = SessionId("nested-executor")
+    val context = makeContext(sessionId).let { base ->
+      TrailblazeToolExecutionContext(
+        screenState = base.screenState,
+        traceId = base.traceId,
+        trailblazeDeviceInfo = base.trailblazeDeviceInfo,
+        sessionProvider = base.sessionProvider,
+        screenStateProvider = base.screenStateProvider,
+        androidDeviceCommandExecutor = base.androidDeviceCommandExecutor,
+        trailblazeLogger = base.trailblazeLogger,
+        memory = base.memory,
+        maestroTrailblazeAgent = base.maestroTrailblazeAgent,
+        nestedToolExecutor = { tool ->
+          dispatchedTools += tool
+          TrailblazeToolResult.Success(message = "nested-executor")
+        },
+        workingDirectory = base.workingDirectory,
+        nodeSelectorMode = base.nodeSelectorMode,
+      )
+    }
+    val handle = register(sessionId = sessionId, executionContext = context, repo = repo)
+    try {
+      val result = JsScriptingCallbackDispatcher.dispatch(
+        buildCallToolRequest(sessionId.value, handle.invocationId, "nestedExecutorProbe"),
+      )
+      val callToolResult =
+        result as? JsScriptingCallbackResult.CallToolResult ?: error("Expected CallToolResult, got: $result")
+      assertThat(callToolResult.success).isEqualTo(true)
+      assertThat(callToolResult.textContent).isEqualTo("nested-executor")
+      assertThat(directExecutionCount).isEqualTo(0)
+      assertThat(dispatchedTools.size).isEqualTo(1)
+      assertThat(dispatchedTools.single()).isEqualTo(directTool)
     } finally {
       handle.close()
     }

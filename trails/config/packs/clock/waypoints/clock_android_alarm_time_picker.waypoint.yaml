@@ -1,0 +1,26 @@
+id: "clock/android/alarm_time_picker"
+description: >
+  Google Clock app, Material time-picker dialog is open with the radial clock
+  face, AM/PM toggle, and OK/Cancel buttons. Reached after tapping the FAB on
+  the alarm tab.
+
+  Resource IDs use a regex alternation to match both the Google variant
+  (com.google.android.deskclock) and the AOSP variant (com.android.deskclock).
+required:
+  - description: "Radial clock face (uniquely indicates the time-picker dialog)"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "(?:com\\.google\\.android\\.deskclock|com\\.android\\.deskclock):id/material_clock_face"
+  - description: "AM toggle button"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "(?:com\\.google\\.android\\.deskclock|com\\.android\\.deskclock):id/material_clock_period_am_button"
+  - description: "OK button to confirm the alarm time"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "(?:com\\.google\\.android\\.deskclock|com\\.android\\.deskclock):id/material_timepicker_ok_button"
+forbidden:
+  - description: "Add-alarm FAB (would mean we are still on the alarm tab, not in the picker)"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "(?:com\\.google\\.android\\.deskclock|com\\.android\\.deskclock):id/fab"

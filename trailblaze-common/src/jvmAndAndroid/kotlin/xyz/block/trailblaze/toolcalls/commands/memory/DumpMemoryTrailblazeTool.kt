@@ -12,9 +12,8 @@ import xyz.block.trailblaze.util.Console
 @TrailblazeToolClass("dumpMemory")
 @LLMDescription(
   """
-Calling this function will dump any of the remembered values from the agent's memory.
-This is useful for debugging tests that remember data from one screen state and compare it to
-a later screen state.
+Dump any of the remembered values from the agent's memory. Useful for debugging tests that
+remember data from one screen state and compare it to a later screen state.
 """,
 )
 data object DumpMemoryTrailblazeTool : MemoryTrailblazeTool {
@@ -30,7 +29,8 @@ data object DumpMemoryTrailblazeTool : MemoryTrailblazeTool {
 private fun AgentMemory.dump() {
   Console.log("DUMPING AGENT MEMORY ---------------------------")
   variables.forEach { item ->
-    Console.log("${item.key} : ${item.value}")
+    val value = if (item.key in sensitiveKeys) "[REDACTED]" else item.value
+    Console.log("${item.key} : $value")
   }
   Console.log("FINISHED DUMPING AGENT MEMORY ---------------------------")
 }

@@ -1,0 +1,16 @@
+script: ./trails/config/tools/playwrightSample_web_incrementCounterToValue.js
+name: playwrightSample_web_incrementCounterToValue
+description: Open the counter demo, click increment repeatedly, and verify the final value.
+_meta:
+  trailblaze/supportedPlatforms: [web]
+  trailblaze/requiresContext: true
+inputSchema:
+  relativePath:
+    type: string
+    description: Counter-demo fixture path relative to the playwright-native examples root.
+  increments:
+    type: integer
+    description: Number of times to click the "+" button before reading the displayed value.
+  expectedValue:
+    type: string
+    description: Final counter value to assert against the rendered display (compared as a string to avoid integer-formatting drift).

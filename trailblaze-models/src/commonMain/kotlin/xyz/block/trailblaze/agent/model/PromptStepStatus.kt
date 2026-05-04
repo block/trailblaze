@@ -45,7 +45,22 @@ data class PromptStepStatus(
   fun getLatestObjectiveStatus(): String? = latestObjectiveStatus
 
   fun getLimitedHistory(): List<Message> {
-    return koogLlmResponseHistory.takeLast(maxHistorySize)
+    val window = koogLlmResponseHistory.takeLast(maxHistorySize)
+    // Anthropic rejects requests where a tool_result block appears without the
+    // matching tool_use immediately before it ("Each tool_result block must have
+    // a corresponding tool_use block in the previous message"). FIFO eviction can
+    // drop a Tool.Call while keeping its paired Tool.Result, which the API then
+    // refuses. Trim any leading orphaned Tool.Result entries from the window so
+    // the conversation it sees always starts on something Anthropic accepts.
+    val firstValidIndex = window.indexOfFirst { it !is Message.Tool.Result }
+    return when {
+      // Window is entirely Tool.Result entries — every one of them is orphaned, so
+      // there's nothing safe to send. Return empty rather than the unmodified window
+      // (which would still start with a tool_result and trip the same Anthropic error).
+      firstValidIndex == -1 -> emptyList()
+      firstValidIndex == 0 -> window
+      else -> window.drop(firstValidIndex)
+    }
   }
 
   private fun getHistorySize() = totalMessageCount
@@ -79,12 +94,22 @@ data class PromptStepStatus(
     llmResponseContent: String?,
     toolName: String?,
     toolArgs: JsonObject?,
+    toolCall: Message.Tool.Call? = null,
   ) {
-    llmResponseContent?.let { llmContent ->
-      addAssistantMessageToChatHistory(
-        llmContent = llmContent,
+    if (toolCall != null && toolName != null && toolArgs != null) {
+      addStructuredToolTurn(
+        toolCall = toolCall,
+        contentString = commandResult.toContentString(
+          toolName = toolName,
+          toolArgs = toolArgs,
+        ),
+        isError = commandResult.isError(),
       )
+      return
     }
+    // Fallback path — no original tool_use to anchor a tool_result against. Used by
+    // handleEmptyToolCall and any caller that doesn't have the LLM's Message.Tool.Call.
+    llmResponseContent?.let { addAssistantMessageToChatHistory(llmContent = it) }
     if (toolName != null && toolArgs != null) {
       addToolExecutionResultUserMessageToChatHistory(
         commandResult = commandResult,
@@ -102,12 +127,20 @@ data class PromptStepStatus(
     llmResponseContent: String?,
     toolNames: List<String>,
     toolArgs: JsonObject?,
+    toolCall: Message.Tool.Call? = null,
   ) {
-    llmResponseContent?.let { llmContent ->
-      addAssistantMessageToChatHistory(
-        llmContent = llmContent,
+    if (toolCall != null && toolNames.isNotEmpty() && toolArgs != null) {
+      addStructuredToolTurn(
+        toolCall = toolCall,
+        contentString = commandResult.toContentString(
+          toolNames = toolNames,
+          toolArgs = toolArgs,
+        ),
+        isError = commandResult.isError(),
       )
+      return
     }
+    llmResponseContent?.let { addAssistantMessageToChatHistory(llmContent = it) }
     if (toolNames.isNotEmpty() && toolArgs != null) {
       addToolExecutionResultUserMessageToChatHistory(
         commandResult = commandResult,
@@ -124,12 +157,19 @@ data class PromptStepStatus(
     commandResult: TrailblazeToolResult,
     llmResponseContent: String?,
     toolsWithArgs: Map<String, JsonObject>,
+    toolCall: Message.Tool.Call? = null,
   ) {
-    llmResponseContent?.let { llmContent ->
-      addAssistantMessageToChatHistory(
-        llmContent = llmContent,
+    if (toolCall != null && toolsWithArgs.isNotEmpty()) {
+      addStructuredToolTurn(
+        toolCall = toolCall,
+        contentString = commandResult.toContentString(
+          toolsWithArgs = toolsWithArgs,
+        ),
+        isError = commandResult.isError(),
       )
+      return
     }
+    llmResponseContent?.let { addAssistantMessageToChatHistory(llmContent = it) }
     if (toolsWithArgs.isNotEmpty()) {
       addToolExecutionResultUserMessageToChatHistory(
         commandResult = commandResult,
@@ -137,6 +177,37 @@ data class PromptStepStatus(
       )
     }
   }
+
+  /**
+   * Adds the LLM's original [Message.Tool.Call] (assistant turn) followed by a paired
+   * [Message.Tool.Result] (user turn) carrying the same `id`. This is the format the
+   * koog Anthropic adapter requires to emit `tool_use` / `tool_result` content blocks —
+   * without a matching pair, Claude treats the prior tool call as unanswered and re-issues
+   * it (the 50× verify-loop we saw on every Claude run in a reproduction).
+   *
+   * The LLM's pre-tool reasoning text (passed via the older `llmResponseContent` path) is
+   * intentionally dropped here: that text is already echoed inside the tool's `reasoning`
+   * argument, and adding a separate [Message.Assistant] would land back-to-back with the
+   * [Message.Tool.Call] which the Anthropic API rejects as consecutive assistant messages.
+   */
+  private fun addStructuredToolTurn(
+    toolCall: Message.Tool.Call,
+    contentString: String,
+    isError: Boolean,
+  ) {
+    addToHistory(toolCall)
+    addToHistory(
+      Message.Tool.Result(
+        id = toolCall.id,
+        tool = toolCall.tool,
+        content = contentString,
+        metaInfo = RequestMetaInfo.create(kotlin.time.Clock.System),
+        isError = isError,
+      ),
+    )
+  }
+
+  private fun TrailblazeToolResult.isError(): Boolean = this is TrailblazeToolResult.Error
 
   private fun addToolExecutionResultUserMessageToChatHistory(
     commandResult: TrailblazeToolResult,

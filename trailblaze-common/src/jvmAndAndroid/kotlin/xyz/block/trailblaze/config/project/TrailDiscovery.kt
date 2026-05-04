@@ -16,16 +16,15 @@ import xyz.block.trailblaze.util.Console
  * Walks a workspace tree and returns every file Trailblaze considers a "trail":
  *  - any file ending in `.trail.yaml` (platform-specific recordings)
  *  - any file named exactly `blaze.yaml` (NL-only definitions)
- *  - any file named exactly `trailblaze.yaml` **except** the workspace-anchor config
+ *  - any file named exactly `trailblaze.yaml` **except** the workspace config manifest
  *    (legacy NL definitions in older workspaces — see [TrailRecordings] for the full
  *    set of names).
  *
- * The anchor rule: a `trailblaze.yaml` that sits at the *workspace root* (as
- * determined by [findWorkspaceRoot] walking up from the discovery root) is the
- * workspace config file and is never surfaced as a trail. A `trailblaze.yaml` at any
- * other location — including the discovery root when the walk-up determines the
- * caller passed a workspace subdir — is a legacy NL trail and is included, matching
- * the pre-Phase-3 behavior of [TrailRecordings.isTrailFile].
+ * The anchor rule: the single `trails/config/trailblaze.yaml` chosen by
+ * [findWorkspaceRoot] walking up from the discovery root is the workspace config file and
+ * is never surfaced as a trail. A `trailblaze.yaml` at any other location is a legacy NL
+ * trail and is included, matching the pre-Phase-3 behavior of
+ * [TrailRecordings.isTrailFile].
  *
  * ## Two call shapes
  *
@@ -182,8 +181,8 @@ object TrailDiscovery {
 
   /**
    * Shared walk implementation used by [findFirstTrail] and [discoverTrails]. Emits
-   * every trail file under [walkRoot] that passes [isTrailFile] and the
-   * workspace-anchor rule (a `trailblaze.yaml` matching [anchorFile] is excluded) via
+ * every trail file under [walkRoot] that passes [isTrailFile] and the
+ * workspace-config rule (a `trailblaze.yaml` matching [anchorFile] is excluded) via
    * [onTrail]. The walk terminates when [onTrail] returns [TraversalAction.Terminate].
    *
    * Failures are handled defensively: permission-denied entries increment a counter
@@ -289,11 +288,10 @@ object TrailDiscovery {
   }
 
   /**
-   * Resolves the true workspace-anchor file (the `trailblaze.yaml` that marks the
-   * workspace this discovery run belongs to) or null when the discovery root is in a
-   * scratch workspace. Delegates to [findWorkspaceRoot]'s walk-up so semantics match
-   * Phase 2's single primitive — callers scanning a subdir of a workspace don't get
-   * their own subdir's `trailblaze.yaml` treated as the anchor.
+   * Resolves the true workspace config file (`trails/config/trailblaze.yaml`) for this
+   * discovery run, or null when the discovery root is in a scratch workspace. Delegates
+   * to [findWorkspaceRoot]'s walk-up so callers scanning a subdir of a workspace don't
+   * get a legacy nested `trailblaze.yaml` treated as the manifest.
    */
   private fun resolveWorkspaceAnchor(walkRoot: Path): Path? =
     when (val ws = findWorkspaceRoot(walkRoot)) {

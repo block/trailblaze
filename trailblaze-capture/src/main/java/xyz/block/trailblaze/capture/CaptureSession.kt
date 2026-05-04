@@ -4,6 +4,7 @@ import java.io.File
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import xyz.block.trailblaze.capture.model.CaptureArtifact
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.util.Console
 
 /**
@@ -71,27 +72,31 @@ class CaptureSession(private val streams: List<CaptureStream>, private val optio
      * Creates a [CaptureSession] from [CaptureOptions], building the appropriate platform-specific
      * streams.
      *
-     * @param platform The device platform, used to select the correct video capture implementation.
-     *   Pass `null` for platforms that don't support capture (e.g., Web).
+     * @param platform The device platform, used to select the correct platform-specific
+     *   capture implementation. Pass `null` for platforms that don't support capture
+     *   (e.g., [TrailblazeDevicePlatform.WEB] today).
      */
-    fun fromOptions(options: CaptureOptions, platform: String?): CaptureSession? {
+    fun fromOptions(options: CaptureOptions, platform: TrailblazeDevicePlatform?): CaptureSession? {
       if (!options.hasAnyCaptureEnabled) return null
       val streams = mutableListOf<CaptureStream>()
       if (options.captureVideo) {
         when (platform) {
-          "ANDROID" -> streams.add(xyz.block.trailblaze.capture.video.AndroidVideoCapture())
+          TrailblazeDevicePlatform.ANDROID ->
+            streams.add(xyz.block.trailblaze.capture.video.AndroidVideoCapture())
           // TODO: iOS video capture disabled — sprite sheet generation needs WebP migration
           //  (ffmpeg 8.0 JPEG encoder rejects iOS simulator's limited-range YUV, and the
           //  desktop UI's ImageIO.read() doesn't support WebP). See IosVideoCapture.kt for
           //  the recording + stale-lock fixes that are ready once the format is sorted out.
-          // "IOS" -> streams.add(xyz.block.trailblaze.capture.video.IosVideoCapture())
+          // TrailblazeDevicePlatform.IOS ->
+          //   streams.add(xyz.block.trailblaze.capture.video.IosVideoCapture())
+          else -> Unit
         }
       }
-      if (options.captureLogcat) {
-        when (platform) {
-          "ANDROID" -> streams.add(xyz.block.trailblaze.capture.logcat.AndroidLogcatCapture())
-          "IOS" -> streams.add(xyz.block.trailblaze.capture.logcat.IosLogCapture())
-        }
+      if (options.captureLogcat && platform == TrailblazeDevicePlatform.ANDROID) {
+        streams.add(xyz.block.trailblaze.capture.logcat.AndroidLogcatCapture())
+      }
+      if (options.captureIosLogs && platform == TrailblazeDevicePlatform.IOS) {
+        streams.add(xyz.block.trailblaze.capture.logcat.IosLogCapture())
       }
       if (streams.isEmpty()) return null
       return CaptureSession(streams, options)

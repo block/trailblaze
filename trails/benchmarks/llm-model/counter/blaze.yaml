@@ -1,0 +1,15 @@
+- config:
+    title: "LLM Benchmark: Counter interactions"
+    driver: PLAYWRIGHT_NATIVE
+    description: |-
+      Click the Counter nav link on the local sample-app index page, then
+      exercise the increment / reset controls. Deterministic — no external
+      network, no relative file paths.
+- prompts:
+    - step: Navigate to http://localhost:8765/index.html
+    - step: Click the "Counter" navigation link
+    - step: Verify the counter value shows "0"
+    - step: Click the Increment button (the + button) three times
+    - step: Verify the counter value shows "3"
+    - step: Click the Reset button
+    - step: Verify the counter value shows "0"

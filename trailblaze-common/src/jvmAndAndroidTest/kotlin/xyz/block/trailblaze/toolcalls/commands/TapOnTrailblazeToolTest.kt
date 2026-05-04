@@ -24,6 +24,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TraceId
+import xyz.block.trailblaze.model.NodeSelectorMode
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import kotlin.test.assertEquals
@@ -402,6 +403,170 @@ class TapOnTrailblazeToolTest {
 
   // endregion
 
+  // region accessibility-driver branch (TapTrailblazeTool.toExecutableTrailblazeTools)
+
+  @Test
+  fun `accessibility-driver path emits single-shape nodeSelector-only recording`() {
+    // When the tree's driverDetail is AndroidAccessibility, the tool should produce a
+    // single TapOnByElementSelector whose `nodeSelector.androidAccessibility` is populated
+    // — the recording must NOT carry a Maestro-shaped fallback selector for that driver.
+    val target = TrailblazeNode(
+      nodeId = nextId++,
+      ref = "p1",
+      bounds = TrailblazeNode.Bounds(100, 200, 300, 260),
+      driverDetail = DriverNodeDetail.AndroidAccessibility(
+        text = "Continue",
+        className = "android.widget.Button",
+        isClickable = true,
+      ),
+    )
+    val root = TrailblazeNode(
+      nodeId = nextId++,
+      bounds = TrailblazeNode.Bounds(0, 0, 1000, 1000),
+      children = listOf(target),
+      driverDetail = DriverNodeDetail.AndroidAccessibility(),
+    )
+    val agent = CapturingAgent()
+    val context = contextWithTree(agent, tree = root)
+
+    val executable = TapTrailblazeTool(ref = "p1", longPress = true)
+      .toExecutableTrailblazeTools(context)
+
+    assertEquals(1, executable.size)
+    val tap = assertIs<TapOnByElementSelector>(executable[0])
+    assertEquals(true, tap.nodeSelector?.androidAccessibility != null)
+    assertEquals(true, tap.longPress)
+  }
+
+  @Test
+  fun `accessibility-driver path with longPress=false propagates`() {
+    val target = TrailblazeNode(
+      nodeId = nextId++,
+      ref = "p2",
+      bounds = TrailblazeNode.Bounds(100, 200, 300, 260),
+      driverDetail = DriverNodeDetail.AndroidAccessibility(text = "Cancel"),
+    )
+    val root = TrailblazeNode(
+      nodeId = nextId++,
+      bounds = TrailblazeNode.Bounds(0, 0, 1000, 1000),
+      children = listOf(target),
+      driverDetail = DriverNodeDetail.AndroidAccessibility(),
+    )
+    val context = contextWithTree(CapturingAgent(), tree = root)
+
+    val tap = assertIs<TapOnByElementSelector>(
+      TapTrailblazeTool(ref = "p2", longPress = false).toExecutableTrailblazeTools(context).single(),
+    )
+    assertEquals(false, tap.longPress)
+    assertEquals(true, tap.nodeSelector?.androidAccessibility != null)
+  }
+
+  // endregion
+
+  // region TapOnByElementSelector accessibility error paths
+
+  @Test
+  fun `TapOnByElementSelector accessibility selector with null agent returns ExceptionThrown`() = runBlocking {
+    val tap = TapOnByElementSelector(
+      selector = xyz.block.trailblaze.api.TrailblazeElementSelector(textRegex = "x"),
+      longPress = false,
+      nodeSelector = TrailblazeNodeSelector(
+        androidAccessibility = DriverNodeMatch.AndroidAccessibility(textRegex = "Continue"),
+      ),
+    )
+    val agentForCtx = CapturingAgent()
+    val ctxWithAgent = contextWithTree(agentForCtx, tree = null)
+    // Re-build context with maestroTrailblazeAgent = null while reusing the rest.
+    val context = TrailblazeToolExecutionContext(
+      screenState = ctxWithAgent.screenState,
+      traceId = null,
+      trailblazeDeviceInfo = ctxWithAgent.trailblazeDeviceInfo,
+      sessionProvider = ctxWithAgent.sessionProvider,
+      trailblazeLogger = ctxWithAgent.trailblazeLogger,
+      memory = AgentMemory(),
+      maestroTrailblazeAgent = null,
+    )
+
+    val result = tap.execute(context)
+    val error = assertIs<TrailblazeToolResult.Error.ExceptionThrown>(result)
+    assertEquals(true, error.errorMessage.contains("AccessibilityTrailblazeAgent"))
+  }
+
+  @Test
+  fun `TapOnByElementSelector accessibility selector with null dispatch returns ExceptionThrown`() = runBlocking {
+    // AccessibilityCapableCapturingAgent advertises [usesAccessibilityDriver] but doesn't
+    // override [executeNodeSelectorTap], so the base class returns null — the "agent ran
+    // but didn't resolve" branch that the tool refuses to fall back from under an
+    // accessibility-capable agent.
+    val tap = TapOnByElementSelector(
+      selector = xyz.block.trailblaze.api.TrailblazeElementSelector(textRegex = "x"),
+      longPress = false,
+      nodeSelector = TrailblazeNodeSelector(
+        androidAccessibility = DriverNodeMatch.AndroidAccessibility(textRegex = "Continue"),
+      ),
+    )
+    val context = contextWithTree(AccessibilityCapableCapturingAgent(), tree = null)
+
+    val result = tap.execute(context)
+    val error = assertIs<TrailblazeToolResult.Error.ExceptionThrown>(result)
+    assertEquals(true, error.errorMessage.contains("Refusing Maestro fallback"))
+  }
+
+  @Test
+  fun `TapOnByElementSelector accessibility selector with non-accessibility agent falls back to Maestro`(): Unit = runBlocking {
+    // Recording carries both the legacy Maestro [selector] and an [androidAccessibility]
+    // nodeSelector (cross-driver-portable). Under a non-accessibility runtime agent
+    // (e.g. AndroidMaestroTrailblazeAgent on the on-device test farm), the strict
+    // accessibility refusal must NOT fire — the tool falls through to the Maestro path
+    // so legacy/cross-driver recordings stay runnable. CapturingAgent.executeMaestroCommands
+    // captures the resulting tap and returns Success.
+    val tap = TapOnByElementSelector(
+      selector = xyz.block.trailblaze.api.TrailblazeElementSelector(textRegex = "Continue"),
+      longPress = false,
+      nodeSelector = TrailblazeNodeSelector(
+        androidAccessibility = DriverNodeMatch.AndroidAccessibility(textRegex = "Continue"),
+      ),
+    )
+    val context = contextWithTree(CapturingAgent(), tree = null)
+
+    val result = tap.execute(context)
+    assertIs<TrailblazeToolResult.Success>(result)
+  }
+
+  @Test
+  fun `TapOnByElementSelector with FORCE_NODE_SELECTOR mode dispatches via agent before fallback`(): Unit = runBlocking {
+    // FORCE_NODE_SELECTOR (non-accessibility-shaped recording, e.g. Maestro selector with no
+    // nodeSelector field). The tool must (a) try agent.executeNodeSelectorTap with the
+    // synthesized nodeSelector first, and (b) fall back to super.execute (Maestro path)
+    // when the agent returns null. Pre-merge no test exercised this branch.
+    val tap = TapOnByElementSelector(
+      selector = xyz.block.trailblaze.api.TrailblazeElementSelector(textRegex = "Continue"),
+      longPress = false,
+      // nodeSelector deliberately null — `selector.toTrailblazeNodeSelector` will synthesize one
+      // based on the runtime device platform inside the FORCE_NODE_SELECTOR branch.
+      nodeSelector = null,
+    )
+    val agent = CapturingAgent()
+    val baseContext = contextWithTree(agent, tree = null)
+    val context = TrailblazeToolExecutionContext(
+      screenState = baseContext.screenState,
+      traceId = null,
+      trailblazeDeviceInfo = baseContext.trailblazeDeviceInfo,
+      sessionProvider = baseContext.sessionProvider,
+      trailblazeLogger = baseContext.trailblazeLogger,
+      memory = AgentMemory(),
+      maestroTrailblazeAgent = agent,
+      nodeSelectorMode = NodeSelectorMode.FORCE_NODE_SELECTOR,
+    )
+
+    val result = tap.execute(context)
+    // CapturingAgent doesn't override executeNodeSelectorTap → returns null → falls to
+    // super.execute which dispatches the Maestro TapOnElementCommand via executeMaestroCommands.
+    assertIs<TrailblazeToolResult.Success>(result)
+  }
+
+  // endregion
+
   // region helpers
 
   private var nextId = 1L
@@ -468,6 +633,38 @@ class TapOnTrailblazeToolTest {
       }
       return TrailblazeToolResult.Success()
     }
+  }
+
+  /**
+   * Capturing agent variant that advertises [usesAccessibilityDriver] = true so the strict
+   * accessibility-refusal branch in [TapOnByElementSelector.execute] applies. Mirrors the
+   * runtime contract of [HostOnDeviceRpcTrailblazeAgent] / [AccessibilityTrailblazeAgent]
+   * without overriding [executeNodeSelectorTap] — base class returns null, exercising the
+   * "agent ran but didn't resolve" path.
+   */
+  private class AccessibilityCapableCapturingAgent : MaestroTrailblazeAgent(
+    trailblazeLogger = TrailblazeLogger.createNoOp(),
+    trailblazeDeviceInfoProvider = {
+      TrailblazeDeviceInfo(
+        trailblazeDeviceId = TrailblazeDeviceId(
+          instanceId = "t",
+          trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
+        ),
+        trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY,
+        widthPixels = 1000,
+        heightPixels = 1000,
+      )
+    },
+    sessionProvider = TrailblazeSessionProvider {
+      TrailblazeSession(sessionId = SessionId("t"), startTime = Clock.System.now())
+    },
+  ) {
+    override val usesAccessibilityDriver: Boolean = true
+
+    override suspend fun executeMaestroCommands(
+      commands: List<Command>,
+      traceId: TraceId?,
+    ): TrailblazeToolResult = TrailblazeToolResult.Success()
   }
 
   // endregion

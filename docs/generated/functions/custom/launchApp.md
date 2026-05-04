@@ -1,7 +1,7 @@
 ## Tool `launchApp`
 
 ## Description
-Use this to open an app on the device as if a user tapped on the app icon in the launcher.
+Open an app on the device as if a user tapped on its icon in the launcher.
 
 ### Command Class
 `xyz.block.trailblaze.toolcalls.commands.LaunchAppTrailblazeTool`

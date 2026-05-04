@@ -1,8 +1,8 @@
 ## Tool `rememberText`
 
 ## Description
-This will find text on the current screen using the natural language prompt parameter.
-Once the text is found it will be saved for future test operations under the variable parameter.
+Find text on the current screen using the natural-language prompt, then save it under the
+variable name for future test operations.
 
 ### Command Class
 `xyz.block.trailblaze.toolcalls.commands.memory.RememberTextTrailblazeTool`

@@ -44,7 +44,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import xyz.block.trailblaze.ui.Platform
 import xyz.block.trailblaze.logs.model.SessionStatus
-import xyz.block.trailblaze.ui.composables.FallbackChip
+import xyz.block.trailblaze.ui.composables.SelfHealChip
 import xyz.block.trailblaze.ui.composables.SelectableText
 import xyz.block.trailblaze.ui.composables.StatusBadge
 import xyz.block.trailblaze.ui.composables.getIcon
@@ -118,9 +118,9 @@ internal fun SessionDetailHeader(
             modifier = Modifier.weight(1f, fill = false),
           )
           overallStatus?.let {
-            if (it is SessionStatus.Ended.SucceededWithFallback ||
-                it is SessionStatus.Ended.FailedWithFallback) {
-              FallbackChip()
+            if (it is SessionStatus.Ended.SucceededWithSelfHeal ||
+                it is SessionStatus.Ended.FailedWithSelfHeal) {
+              SelfHealChip()
             }
             StatusBadge(status = it)
           }

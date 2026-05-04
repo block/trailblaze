@@ -151,7 +151,7 @@ The trail format is the artifact. Trailblaze interprets and executes it.
 
 | Capability | Trail Runtime | Generated Code |
 | :--- | :--- | :--- |
-| AI Fallback | ✅ Re-derive from prompt when recording fails | ❌ Static—fails are just failures |
+| Self-Heal | ✅ Re-derive from prompt when recording fails | ❌ Static—fails are just failures |
 | Self-healing | ✅ Natural language is always available for recovery | ❌ Once generated, prompt is gone |
 | Visual debugging | ✅ Desktop app replays with screenshots | ❌ Stack traces and logs only |
 | Edit by non-engineers | ✅ Modify natural language steps | ❌ Must edit TypeScript/Swift/Kotlin |
@@ -161,7 +161,7 @@ The trail format is the artifact. Trailblaze interprets and executes it.
 
 Code generation would position Trailblaze as "yet another test recorder"—competing with Playwright Codegen, Appium Inspector, Maestro Studio, etc. These tools are mature and do codegen well.
 
-Trailblaze's value is different: **tests defined in natural language, recorded for deterministic replay, with AI fallback when recordings break**. The trail file is not an intermediate artifact to be compiled away—it's the test definition that retains its semantic meaning at runtime.
+Trailblaze's value is different: **tests defined in natural language, recorded for deterministic replay, with self-heal when recordings break**. The trail file is not an intermediate artifact to be compiled away—it's the test definition that retains its semantic meaning at runtime.
 
 **What about exporting for debugging?**
 

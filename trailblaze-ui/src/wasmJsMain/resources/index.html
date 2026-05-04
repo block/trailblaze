@@ -137,6 +137,13 @@
                     compressedData = window.trailblaze_report_compressed.capture_metadata[sessionId];
                 }
             }
+            // Device logs lookup (device_logs/SESSION_ID)
+            else if (key.startsWith("device_logs/")) {
+                const sessionId = key.substring("device_logs/".length);
+                if (window.trailblaze_report_compressed.device_logs) {
+                    compressedData = window.trailblaze_report_compressed.device_logs[sessionId];
+                }
+            }
 
             // Decompress the data if found
             if (compressedData) {

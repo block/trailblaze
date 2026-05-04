@@ -20,7 +20,6 @@ import kotlinx.coroutines.delay
 import kotlin.time.Clock
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.jsonObject
 import xyz.block.trailblaze.MaestroTrailblazeAgent
 import xyz.block.trailblaze.TrailblazeAgentContext
 import xyz.block.trailblaze.agent.model.PromptStepStatus
@@ -41,6 +40,7 @@ import xyz.block.trailblaze.toolcalls.commands.ObjectiveStatusTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ConfigTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.Status
 import xyz.block.trailblaze.toolcalls.getToolNameFromAnnotation
+import xyz.block.trailblaze.toolcalls.toLogPayload
 import xyz.block.trailblaze.util.TemplatingUtil
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
@@ -233,36 +233,27 @@ class TrailblazeKoogLlmClientHelper(
       throw TrailblazeException(fatalToolMessage)
     }
 
-    // Serialize each executed tool to get its actual arguments
+    // Serialize each executed tool's args for the chat history. Use [toLogPayload] which
+    // handles class-backed (concrete kotlinx serializer), YAML-defined (pre-bound serializer),
+    // RawArgumentTrailblazeTool (verbatim), and OtherTrailblazeTool (already wrapped) — and
+    // falls back gracefully for tools that aren't `@Serializable`. Returns the OtherTrailblazeTool
+    // wrapper; we surface its `raw` field to the LLM, which is the flat
+    // ({"text": "Jane Doe"}) shape the tool_use / tool_result blocks need.
     val executedToolsWithArgs = toolExecutionResult.executedTools.associate { executedTool ->
-      // Serialize the tool to JSON string, then parse back to JsonObject to extract its arguments
-      val serializedToolJson = TrailblazeJsonInstance.encodeToString<TrailblazeTool>(executedTool)
-      val toolJsonObject = TrailblazeJsonInstance.decodeFromString<JsonObject>(
-        JsonObject.serializer(),
-        serializedToolJson,
-      )
-
-      // Handle OtherTrailblazeTool wrapper - extract the "raw" field if present
-      val actualArgs = if (toolJsonObject["class"]?.toString()?.contains("OtherTrailblazeTool") == true) {
-        // For OtherTrailblazeTool, use the "raw" field which contains the actual tool parameters
-        toolJsonObject["raw"]?.jsonObject ?: toolJsonObject
-      } else {
-        toolJsonObject
-      }
-
-      // Remove the polymorphic type discriminator fields to flatten the message
-      // Keep only the actual tool parameters that the LLM should see
-      val flattenedArgs = actualArgs.filterKeys { key ->
-        key != "type" && key != "class" && key != "@class" && key != "toolName"
-      }.let { JsonObject(it) }
-
-      executedTool.getToolNameFromAnnotation() to flattenedArgs
+      executedTool.getToolNameFromAnnotation() to executedTool.toLogPayload().raw
     }
 
+    // Pass the original Message.Tool.Call so PromptStepStatus can emit a paired
+    // Message.Tool.Call + Message.Tool.Result in history. This is what the koog
+    // Anthropic adapter needs to produce `tool_use` / `tool_result` content blocks.
+    // Without it, Claude sees no completion for its prior tool call and re-issues it
+    // (50× verify-loop observed on every Claude run in a reproduction).
+    val originalToolCall = tool as? Message.Tool.Call
     step.addCompletedToolCallToChatHistory(
       llmResponseContent = llmMessage,
       toolsWithArgs = executedToolsWithArgs,
       commandResult = toolExecutionResult.result,
+      toolCall = originalToolCall,
     )
   }
 

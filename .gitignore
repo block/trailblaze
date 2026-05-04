@@ -54,6 +54,13 @@ local.settings.gradle
 # Node
 node_modules/
 
+# Trailblaze pack bundle — generated per-pack `.d.ts` files emitted by the
+# `trailblaze.bundle` Gradle plugin (and, eventually, `trailblaze bundle` on the CLI).
+# Derived from the pack manifest, regenerated on build, not source-of-truth. Anchored
+# to the per-pack tools dir so an unrelated future `.trailblaze/` directory elsewhere
+# in the tree (e.g., a config dir) isn't silently ignored.
+**/trailblaze-config/tools/.trailblaze/
+
 # Python
 __pycache__/
 *.pyc

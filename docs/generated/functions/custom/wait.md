@@ -1,9 +1,8 @@
 ## Tool `wait`
 
 ## Description
-Use this when you think you see a loading screen.
-This will force the app to wait for a specified amount of time.
-Prefer using this over the back button.
+Wait for a specified amount of time. Use when you see a loading screen — prefer this over
+pressing the back button.
 
 ### Command Class
 `xyz.block.trailblaze.toolcalls.commands.WaitForIdleSyncTrailblazeTool`

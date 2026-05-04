@@ -81,6 +81,7 @@
 - [web_wait](functions/custom/web_wait.md)
 
 ## web_verification
+- [web_assert_network_event](functions/custom/web_assert_network_event.md)
 - [web_verify_element_visible](functions/custom/web_verify_element_visible.md)
 - [web_verify_list_visible](functions/custom/web_verify_list_visible.md)
 - [web_verify_text_visible](functions/custom/web_verify_text_visible.md)

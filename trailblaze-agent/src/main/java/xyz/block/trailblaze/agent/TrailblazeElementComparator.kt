@@ -329,7 +329,9 @@ class TrailblazeElementComparator(
           add(
             ContentPart.Text("Evaluate this on the current screen: $prompt"),
           )
-          screenState.annotatedScreenshotBytes?.let { screenshotBytes ->
+          // Use clean screenshot (no set-of-mark annotations) for evaluation requests.
+          // Annotations can obscure text on screen, causing the LLM to misread values.
+          screenState.screenshotBytes?.let { screenshotBytes ->
             add(
               ContentPart.Image(
                 content = AttachmentContent.Binary.Bytes(screenshotBytes),

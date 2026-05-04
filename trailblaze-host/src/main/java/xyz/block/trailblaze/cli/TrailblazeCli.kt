@@ -6,6 +6,7 @@ import picocli.CommandLine.IVersionProvider
 import xyz.block.trailblaze.TrailblazeVersion
 import xyz.block.trailblaze.desktop.TrailblazeDesktopAppConfig
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
+import xyz.block.trailblaze.host.WorkspaceCompileBootstrap
 import xyz.block.trailblaze.logs.server.endpoints.CliExecRequest
 import xyz.block.trailblaze.logs.server.endpoints.CliExecResponse
 import xyz.block.trailblaze.ui.TrailblazeDesktopApp
@@ -15,6 +16,7 @@ import xyz.block.trailblaze.util.canRunDesktopGui
 import kotlinx.coroutines.CancellationException
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.Callable
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.system.exitProcess
 
 /** CLI output divider width. */
@@ -52,7 +54,7 @@ internal const val RECORDING_LOG_STABILITY_POLL_MS = 2_000L
  *   trailblaze mcp                 - Start MCP server (STDIO transport + tray icon)
  *   trailblaze report              - Generate HTML report for all sessions
  *   trailblaze device               - List connected devices
- *   TRAILBLAZE_PORT=52526 trailblaze - Launch on a custom port (allows multiple instances)
+ *   TRAILBLAZE_PORT=52900 trailblaze - Launch on a custom port (allows multiple instances)
  *   trailblaze --help              - Show all commands and options
  */
 object TrailblazeCli {
@@ -71,6 +73,15 @@ object TrailblazeCli {
   @Volatile private var appProviderRef: (() -> TrailblazeDesktopApp)? = null
   @Volatile private var configProviderRef: (() -> TrailblazeDesktopAppConfig)? = null
 
+  /**
+   * One-shot guard for the daemon-init workspace compile bootstrap. Set on the first
+   * `appProvider()` call so that subsequent CLI subcommands forwarded to the same JVM
+   * (e.g., via the `/cli/exec` IPC fast path) skip the hash walk entirely. Edits to
+   * pack manifests while the daemon is running are out of scope per #2556 — the user
+   * restarts the daemon after manifest changes, just like any other config edit.
+   */
+  private val bootstrapHasRun = AtomicBoolean(false)
+
   fun run(
     args: Array<String>,
     appProvider: () -> TrailblazeDesktopApp,
@@ -81,8 +92,28 @@ object TrailblazeCli {
     // so the capture has to be in place before the first Console.log call.
     CliOutCapture.install()
 
-    appProviderRef = appProvider
+    // Wrap appProvider so a workspace-pack rebundle runs before the first
+    // TrailblazeDesktopApp instance is constructed. Constructor-time field initializers
+    // (notably the Block desktop's eager `desktopYamlRunner = DesktopYamlRunner(...)`)
+    // force the lazy `availableAppTargets`, which calls `AppTargetDiscovery.discover()`
+    // — so any post-construction hook is too late to keep workspace pack edits visible
+    // on the first discovery pass. The [bootstrapHasRun] guard memoizes the bootstrap
+    // for the JVM lifetime so subsequent `appProvider()` calls (e.g. forwarded CLI
+    // subcommands hitting the daemon-IPC fast path) don't repeat the hash walk. See
+    // issue #2556.
+    val bootstrappedAppProvider: () -> TrailblazeDesktopApp = {
+      if (bootstrapHasRun.compareAndSet(false, true)) {
+        WorkspaceCompileBootstrap.bootstrapOrExit()
+      }
+      appProvider()
+    }
+    appProviderRef = bootstrappedAppProvider
     configProviderRef = configProvider
+
+    // Capture argv so any CliMcpClient created downstream sends it as
+    // `X-Trailblaze-Origin`. The daemon surfaces this in the device-busy
+    // error so users see which command is currently driving the device.
+    CliMcpClient.captureOrigin(args)
 
     // Suppress SLF4J "multiple providers" warnings on stderr.
     // Must be set before any SLF4J class is loaded.
@@ -102,12 +133,16 @@ object TrailblazeCli {
       DesktopLogFileWriter.install(httpPort = httpPort)
     }
 
-    val cli = TrailblazeCliCommand(appProvider, configProvider)
+    val cli = TrailblazeCliCommand(bootstrappedAppProvider, configProvider)
     val commandLine = CommandLine(cli).setCaseInsensitiveEnumValuesAllowed(true)
 
-    // Replace the default flat command list with grouped sections.
+    // Replace the default flat command list with grouped sections. The `--all` flag is
+    // pre-scanned here (rather than read from the parsed `cli.showAll` field) because
+    // help rendering happens during `commandLine.execute()` *before* picocli has bound
+    // option values back onto the command instance — by the time the flag would be
+    // readable from the field, the renderer has already run.
     commandLine.helpSectionMap[CommandLine.Model.UsageMessageSpec.SECTION_KEY_COMMAND_LIST] =
-      GroupedCommandListRenderer()
+      GroupedCommandListRenderer(showHidden = args.contains("--all"))
 
     // Support `sq` CLI integration: output JSON describing subcommands and exit.
     // Must stay above anything that could trigger AdbPathResolver.ADB_COMMAND (lazy),
@@ -139,19 +174,27 @@ object TrailblazeCli {
    * of the set must keep going through the existing JVM path because they either
    * directly touch desktop UI state (`app`), call `kotlin.system.exitProcess`
    * inside their `call()` (would kill the daemon), or need the caller's cwd/env
-   * (`config`, `trail` with relative paths).
+   * (`trail` with relative paths).
    *
-   * Snapshot and ask are thin wrappers over MCP tool calls with no env-var
+   * `snapshot` and `ask` are thin wrappers over MCP tool calls with no env-var
    * reads, so running them in-process is a pure win: we skip the JVM cold
    * start and hit the local MCP bridge over loopback HTTP.
    *
-   * `verify` is intentionally NOT on this list even though it would benefit:
-   * `VerifyCommand` reads `BLAZE_FAST` from the caller's environment, but the
-   * IPC request only forwards argv, so a forwarded `BLAZE_FAST=1 verify ...`
-   * would silently run in non-fast mode. Adding env forwarding is a follow-up
-   * (would also unlock `blaze`/`tool`, which read the same var).
+   * `config` is forwarded for correctness, not speed: the daemon owns the
+   * canonical in-memory `appConfig` and auto-persists it on every mutation, so
+   * a CLI that writes the settings file directly would be silently overwritten
+   * by the daemon's next state save. Forwarding routes the write through the
+   * daemon's [TrailblazeSettingsRepo] (via [DaemonSettingsBridge]), keeping the
+   * daemon and the file in sync. Show paths (`config`, `config show`) bail out
+   * of `exitProcess` when running forwarded — see [ConfigCommand].
+   *
+   * Some heavier commands (`blaze`, `verify`, `tool`) are not on this list
+   * either — they take longer than the cold-start savings would buy, and their
+   * device/session state is messier to reason about under in-process execution.
+   * They keep using the JVM-spawn path until we have a clearer reason to pull
+   * them in.
    */
-  private val FORWARDABLE_SUBCOMMANDS = setOf("snapshot", "ask")
+  private val FORWARDABLE_SUBCOMMANDS = setOf("snapshot", "ask", "config")
 
   /**
    * Serializes in-process CLI executions on the daemon. The thread-local
@@ -177,6 +220,11 @@ object TrailblazeCli {
       return CliExecResponse(stdout = "", stderr = "", exitCode = 0, forwarded = false)
     }
 
+    // In-process forwarded subcommands also need the origin captured so any
+    // MCP self-connection from inside the daemon JVM tags its session with
+    // the right argv (e.g. `snapshot -d android`).
+    CliMcpClient.captureOrigin(args.toTypedArray())
+
     val appProvider = appProviderRef
     val configProvider = configProviderRef
     if (appProvider == null || configProvider == null) {
@@ -192,7 +240,7 @@ object TrailblazeCli {
     val stderrBuf = CappedByteArrayOutputStream(MAX_CAPTURE_BYTES)
 
     val exitCode = synchronized(execLock) {
-      // Save/restore the global `Console.quietMode` flag. `cliWithDevice(verbose=false)`
+      // Save/restore the global `Console.quietMode` flag. cli*WithDevice(verbose=false)
       // flips it for the duration of the CLI command, but there's no reset path in
       // the CLI itself; without this wrapper the long-lived daemon would go silent
       // for every Console.log after the first forwarded invocation. Save-restore is
@@ -203,7 +251,7 @@ object TrailblazeCli {
         val cli = TrailblazeCliCommand(appProvider, configProvider)
         val commandLine = CommandLine(cli).setCaseInsensitiveEnumValuesAllowed(true)
         commandLine.helpSectionMap[CommandLine.Model.UsageMessageSpec.SECTION_KEY_COMMAND_LIST] =
-          GroupedCommandListRenderer()
+          GroupedCommandListRenderer(showHidden = args.contains("--all"))
         try {
           commandLine.execute(*args.toTypedArray())
         } catch (e: CancellationException) {
@@ -293,16 +341,36 @@ class TrailblazeVersionProvider : IVersionProvider {
     TrailCommand::class,
     SessionCommand::class,
     ReportCommand::class,
+    WaypointCommand::class,
     ConfigCommand::class,
     DeviceCommand::class,
     AppCommand::class,
     McpCommand::class,
+    CompileCommand::class,
+    // Hidden — see DesktopCommand. Resolves by name (`trailblaze desktop snapshot`)
+    // but doesn't appear in `--help` or the GroupedCommandListRenderer's groups.
+    DesktopCommand::class,
   ]
 )
 class TrailblazeCliCommand(
   internal val appProvider: () -> TrailblazeDesktopApp,
   internal val configProvider: () -> TrailblazeDesktopAppConfig,
 ) : Callable<Int> {
+
+  /**
+   * Hidden meta-flag that flips `--help` rendering to include `hidden = true` subcommands
+   * (e.g. the Compose desktop driver demo command). Accepted at the top level so users
+   * who know the flag exists can run `trailblaze --help --all`; the renderer reads it
+   * back via a pre-scan of args (see `Main.runFromCli`). Has no effect when not paired
+   * with `--help`.
+   */
+  @Suppress("unused")
+  @CommandLine.Option(
+    names = ["--all"],
+    hidden = true,
+    description = ["Include hidden commands in --help output."],
+  )
+  internal var showAll: Boolean = false
 
   /**
    * Returns the effective HTTP port.
@@ -314,7 +382,8 @@ class TrailblazeCliCommand(
   /**
    * Returns the effective HTTPS port.
    *
-   * Precedence: saved settings (per-install) → TRAILBLAZE_HTTPS_PORT env var → default (8443)
+   * Precedence: saved settings (per-install) → TRAILBLAZE_HTTPS_PORT env var → derived
+   * from the resolved HTTP port (HTTP + 1).
    */
   fun getEffectiveHttpsPort(): Int = CliConfigHelper.resolveEffectiveHttpsPort()
 
@@ -378,7 +447,15 @@ class TrailblazeCliCommand(
  * Custom help section renderer that groups subcommands under headings
  * instead of a flat alphabetical list.
  */
-internal class GroupedCommandListRenderer : CommandLine.IHelpSectionRenderer {
+internal class GroupedCommandListRenderer(
+  /**
+   * When `true`, hidden subcommands (those with `@Command(hidden = true)`) are included
+   * in the rendered help instead of being filtered out. Wired to the top-level `--all`
+   * flag in [TrailblazeCliCommand]. Defaults to `false` so the standard
+   * `trailblaze --help` invocation stays clean.
+   */
+  private val showHidden: Boolean = false,
+) : CommandLine.IHelpSectionRenderer {
 
   private data class Group(val heading: String, val commands: List<String>)
 
@@ -389,16 +466,27 @@ internal class GroupedCommandListRenderer : CommandLine.IHelpSectionRenderer {
     ),
     Group(
       "Trail:",
-      listOf("trail", "session", "report"),
+      listOf("trail", "session", "report", "waypoint"),
     ),
     Group(
       "Setup:",
-      listOf("config", "device", "app", "mcp"),
+      listOf("config", "device", "app", "mcp", "compile"),
     ),
   )
 
   override fun render(help: CommandLine.Help): String {
-    val subcommands = help.subcommands()
+    // Strip hidden subcommands once at the top so neither the named-group rendering
+    // nor the "Other:" tail can leak them. picocli's Help.subcommands() returns a map
+    // that *includes* hidden entries — a `@Command(hidden = true)` only suppresses the
+    // command from picocli's *built-in* renderer, not from custom ones like this. We
+    // filter explicitly here so commands like the Compose desktop driver demo command
+    // stay reachable by name without showing up in the help output, unless the caller
+    // passed `--all` (the flag flips [showHidden] true for that invocation).
+    val subcommands = if (showHidden) {
+      help.subcommands()
+    } else {
+      help.subcommands().filterValues { !it.commandSpec().usageMessage().hidden() }
+    }
     if (subcommands.isEmpty()) return ""
 
     val sb = StringBuilder()
@@ -440,7 +528,7 @@ internal class GroupedCommandListRenderer : CommandLine.IHelpSectionRenderer {
     sb.appendLine("  'session save' to turn your session into a replayable trail.")
     sb.appendLine()
     sb.appendLine("Agents:")
-    sb.appendLine("  Run a tool:        trailblaze tool tapOnElement ref=\"Sign In\" --objective \"Tap sign in\"")
+    sb.appendLine("  Run a tool:        trailblaze --device android tool tap ref=p386 --objective \"Tap sign in\"")
     sb.appendLine("  Browse tools:      trailblaze toolbox")
     sb.appendLine()
     sb.appendLine("  Use 'tool' to run Trailblaze tools directly. Always pass --objective (-o)")

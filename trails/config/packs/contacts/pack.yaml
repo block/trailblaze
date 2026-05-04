@@ -1,0 +1,22 @@
+# Demo pack for the Google Contacts target. Loaded as a workspace pack from the opensource
+# repo's `trails/config/trailblaze.yaml` — not bundled into the Trailblaze JAR. Binary-only
+# adopters running outside this repo do not see this target unless they declare a workspace
+# pack with the same id.
+#
+# The per-platform `tool_sets` and `drivers` come from the `trailblaze` framework pack's
+# `defaults:` map via dependency resolution — closest-wins inheritance. To override, set
+# the field explicitly on the platform; to add app-specific toolsets, list them in
+# `tool_sets:` (this replaces the inherited list — no concat).
+id: contacts
+dependencies:
+  - trailblaze
+target:
+  display_name: Google Contacts
+  platforms:
+    android:
+      app_ids:
+        - com.google.android.contacts
+        - com.android.contacts
+    ios: {}
+    web: {}
+    compose: {}

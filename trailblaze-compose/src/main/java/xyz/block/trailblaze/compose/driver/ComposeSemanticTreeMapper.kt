@@ -49,6 +49,14 @@ object ComposeSemanticTreeMapper {
     val nthIndex: Int,
     /** testTag if available — preferred for stable matching. */
     val testTag: String?,
+    /**
+     * Screen-coordinate bounds at the time the compact list was built. Drives
+     * the `[refLabel]`-keyed set-of-mark annotation in [ComposeScreenState]
+     * (and its RPC variant). Nullable because legacy RPC payloads or
+     * caller-built refs from tests may omit the field; SoM annotation simply
+     * skips refs without bounds.
+     */
+    val bounds: TrailblazeNode.Bounds? = null,
   )
 
   /**
@@ -338,6 +346,12 @@ object ComposeSemanticTreeMapper {
           descriptor = descriptor,
           nthIndex = occurrenceIndex,
           testTag = s.testTag,
+          bounds = TrailblazeNode.Bounds(
+            left = s.bounds.left.toInt(),
+            top = s.bounds.top.toInt(),
+            right = s.bounds.right.toInt(),
+            bottom = s.bounds.bottom.toInt(),
+          ),
         )
 
       append(prefix)

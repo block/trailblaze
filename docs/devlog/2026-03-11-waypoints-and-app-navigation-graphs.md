@@ -10,7 +10,7 @@ date: 2026-03-11
 
 Today, every trail figures out navigation from scratch. If ten trails need to get from the home screen to Settings, the AI navigates there ten times and ten recordings each encode their own copy of that path. When the app changes, all ten break independently.
 
-What's missing is **structural knowledge about the app** — a reusable map of where you can be and how to get between places. The building blocks exist (`blaze`, `ask`, recording optimization, template substitution, AI fallback), but there's no structural layer on top.
+What's missing is **structural knowledge about the app** — a reusable map of where you can be and how to get between places. The building blocks exist (`blaze`, `ask`, recording optimization, template substitution, self-heal), but there's no structural layer on top.
 
 Consider "Set a 7am weekday alarm": steps 1-2 are **navigation** (launch app, go to Alarm tab), steps 3-4 are **task execution** (create alarm, verify). These are fundamentally different concerns but interleaved in a single trail with no separation. This causes redundant exploration, redundant recordings, no spatial reasoning, and brittle composition.
 
@@ -40,7 +40,7 @@ Each step depends on the one before it:
 
 4. **Edge Recording** — Recording mode: assert `from` waypoint, record navigation steps, assert `to` waypoint. Integrates with existing session recording, post-processed through recording optimization (Decision 034) and variable extraction (Decision 024).
 
-5. **Edge Playback and Validation** — Execute a recorded edge: assert `from`, replay steps, assert `to`. Validation mode runs every edge in a graph to produce a pass/fail report. AI fallback (Decision 021) can optionally attempt recovery on step failure.
+5. **Edge Playback and Validation** — Execute a recorded edge: assert `from`, replay steps, assert `to`. Validation mode runs every edge in a graph to produce a pass/fail report. self-heal (Decision 021) can optionally attempt recovery on step failure.
 
 ### Future Phases
 
@@ -69,6 +69,6 @@ With steps 1-5, the system has all primitives. Built on top:
 ## Related Decisions
 
 - Decision 002: Trail Recording Format — edges are small trail recordings
-- Decision 021: AI Fallback — recovery when edge playback fails
+- Decision 021: Self-Heal — recovery when edge playback fails
 - Decision 024: Recording Memory Template Substitution — waypoint captures feed edge variables
 - Decision 034: Recording Optimization Pipeline — edge steps go through same optimization

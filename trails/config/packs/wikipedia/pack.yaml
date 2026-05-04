@@ -1,0 +1,21 @@
+# Demo pack for the Wikipedia (en) target. Loaded as a workspace pack from the opensource
+# repo's `trails/config/trailblaze.yaml` — not bundled into the Trailblaze JAR. Binary-only
+# adopters running outside this repo do not see this target unless they declare a workspace
+# pack with the same id.
+#
+# Per-platform `tool_sets:` and web `drivers:` are inherited from the bundled `trailblaze`
+# framework pack via `dependencies: [trailblaze]`. Platforms that only need defaults are
+# declared as empty maps (`{}`) — the explicit signal "this platform exists, fill in
+# everything from defaults."
+id: wikipedia
+dependencies:
+  - trailblaze
+target:
+  display_name: Wikipedia (en)
+  platforms:
+    android:
+      app_ids:
+        - org.wikipedia
+    ios: {}
+    web: {}
+    compose: {}

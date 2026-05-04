@@ -23,4 +23,4 @@
         appPackageName: com.arduia.expense
 
 # --- Benchmark Run History ---
-# [2026-03-11] Build #27 FAILED - Agent limitation: ObjectiveFailed. Can't navigate Pro Expense app.
+# [2026-03-11] FAILED - Agent limitation: ObjectiveFailed. Can't navigate Pro Expense app.

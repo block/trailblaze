@@ -2,6 +2,9 @@ package xyz.block.trailblaze.mcp.newtools
 
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
+import xyz.block.trailblaze.logs.client.LogEmitter
+import xyz.block.trailblaze.logs.client.TrailblazeLog
+import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.agent.Confidence
 import org.junit.Test
 import xyz.block.trailblaze.agent.ExecutionResult
@@ -102,7 +105,7 @@ class StepToolSetDirectToolsTest {
         screenAnalyzer = throwingScreenAnalyzer,
         executor = throwingExecutor,
         screenStateProvider = { _, _, _ -> dummyScreenState },
-        rawToolExecutor = { tool ->
+        rawToolExecutor = { tool, _ ->
           executedTools.add(tool)
           "OK"
         },
@@ -147,7 +150,7 @@ class StepToolSetDirectToolsTest {
         screenAnalyzer = throwingScreenAnalyzer,
         executor = throwingExecutor,
         screenStateProvider = { _, _, _ -> dummyScreenState },
-        rawToolExecutor = { tool ->
+        rawToolExecutor = { tool, _ ->
           executedTools.add(tool)
           "OK"
         },
@@ -174,7 +177,7 @@ class StepToolSetDirectToolsTest {
         screenAnalyzer = throwingScreenAnalyzer,
         executor = throwingExecutor,
         screenStateProvider = { _, _, _ -> dummyScreenState },
-        rawToolExecutor = { tool ->
+        rawToolExecutor = { tool, _ ->
           executedTools.add(tool)
           "OK"
         },
@@ -200,6 +203,62 @@ class StepToolSetDirectToolsTest {
     assertContains(result, "Executed 1 tools")
   }
 
+  @Test
+  fun `direct tools emit top level recordable tool logs`() = runTest {
+    val emittedLogs = mutableListOf<TrailblazeLog>()
+    val toolSet =
+      StepToolSet(
+        screenAnalyzer = throwingScreenAnalyzer,
+        executor = throwingExecutor,
+        screenStateProvider = { _, _, _ -> dummyScreenState },
+        rawToolExecutor = { _, _ -> "OK" },
+        logEmitter = LogEmitter { emittedLogs += it },
+        sessionIdProvider = { SessionId("recording-session") },
+      )
+
+    val result =
+      toolSet.blaze(
+        objective ="Tap a point",
+        tools = "- tapOnPoint:\n    x: 100\n    y: 200",
+      )
+
+    val toolLogs = emittedLogs.filterIsInstance<TrailblazeLog.TrailblazeToolLog>()
+    assertEquals(1, toolLogs.size)
+    assertEquals("tapOnPoint", toolLogs.single().toolName)
+    assertTrue(toolLogs.single().isTopLevelToolCall)
+    assertTrue(toolLogs.single().isRecordable)
+    assertContains(result, "Executed 1 tools")
+  }
+
+  @Test
+  fun `direct tools reuse one MCP trace across executor and top level tool log`() = runTest {
+    val emittedLogs = mutableListOf<TrailblazeLog>()
+    var executorTraceId: TraceId? = null
+    val toolSet =
+      StepToolSet(
+        screenAnalyzer = throwingScreenAnalyzer,
+        executor = throwingExecutor,
+        screenStateProvider = { _, _, _ -> dummyScreenState },
+        rawToolExecutor = { _, traceId ->
+          executorTraceId = traceId
+          "OK"
+        },
+        logEmitter = LogEmitter { emittedLogs += it },
+        sessionIdProvider = { SessionId("trace-session") },
+      )
+
+    val result =
+      toolSet.blaze(
+        objective ="Tap a point",
+        tools = "- tapOnPoint:\n    x: 100\n    y: 200",
+      )
+
+    val toolLog = emittedLogs.filterIsInstance<TrailblazeLog.TrailblazeToolLog>().single()
+    assertEquals(toolLog.traceId, executorTraceId)
+    assertTrue(toolLog.traceId?.traceId?.startsWith("mcp-") == true)
+    assertContains(result, "Executed 1 tools")
+  }
+
   // -- 4. Invalid YAML --------------------------------------------------------
 
   @Test
@@ -210,7 +269,7 @@ class StepToolSetDirectToolsTest {
         screenAnalyzer = throwingScreenAnalyzer,
         executor = throwingExecutor,
         screenStateProvider = { _, _, _ -> dummyScreenState },
-        rawToolExecutor = { _ ->
+        rawToolExecutor = { _, _ ->
           executorCalled = true
           "OK"
         },
@@ -237,7 +296,7 @@ class StepToolSetDirectToolsTest {
         screenAnalyzer = throwingScreenAnalyzer,
         executor = throwingExecutor,
         screenStateProvider = { _, _, _ -> dummyScreenState },
-        rawToolExecutor = { _ ->
+        rawToolExecutor = { _, _ ->
           executorCalled = true
           "OK"
         },
@@ -268,7 +327,7 @@ class StepToolSetDirectToolsTest {
         screenAnalyzer = throwingScreenAnalyzer,
         executor = throwingExecutor,
         screenStateProvider = { _, _, _ -> dummyScreenState },
-        rawToolExecutor = { _ ->
+        rawToolExecutor = { _, _ ->
           executorCalled = true
           "OK"
         },
@@ -299,7 +358,7 @@ class StepToolSetDirectToolsTest {
         executor = throwingExecutor,
         screenStateProvider = { _, _, _ -> dummyScreenState },
         sessionContext = sessionContext,
-        rawToolExecutor = { tool ->
+        rawToolExecutor = { tool, _ ->
           val tap = tool as TapOnPointTrailblazeTool
           executedTools.add("tap(${tap.x},${tap.y})")
           if (tap.x == 300) {
@@ -342,6 +401,81 @@ class StepToolSetDirectToolsTest {
     // The first successful tool + the second failed one are both recorded
     // (actual code records only the successful ones before failure, so 1)
     assertTrue(steps[0].toolCalls.isNotEmpty())
+  }
+
+  // -- 6b. availableToolsProvider rejection ----------------------------------
+
+  @Test
+  fun `direct tools rejects tools not in availableToolsProvider for current device`() = runTest {
+    // Simulate a non-empty tool catalog that does NOT include `tapOnPoint`. The user's
+    // YAML asks for `tapOnPoint` — fail-fast with a "not valid for the current device/target"
+    // message instead of letting the call fall through to a cryptic cast error.
+    val executedTools = mutableListOf<TrailblazeTool>()
+    val toolSet =
+      StepToolSet(
+        screenAnalyzer = throwingScreenAnalyzer,
+        executor = throwingExecutor,
+        screenStateProvider = { _, _, _ -> dummyScreenState },
+        availableToolsProvider = {
+          listOf(TrailblazeToolDescriptor(name = "web_click"))
+        },
+        rawToolExecutor = { tool, _ ->
+          executedTools.add(tool)
+          "OK"
+        },
+      )
+
+    val result =
+      toolSet.blaze(
+        objective = "Tap on point",
+        tools =
+          """
+          - tools:
+              - tapOnPoint:
+                  x: 100
+                  y: 200
+          """
+            .trimIndent(),
+      )
+
+    assertContains(result, "not valid for the current device/target")
+    assertContains(result, "tapOnPoint")
+    // The rejected tool must not have reached rawToolExecutor.
+    assertEquals(0, executedTools.size)
+  }
+
+  @Test
+  fun `direct tools skip availability check when provider returns empty list`() = runTest {
+    // Empty provider is the transient state during device boot — the gate logs and skips
+    // rather than failing, so the call still proceeds to rawToolExecutor.
+    val executedTools = mutableListOf<TrailblazeTool>()
+    val toolSet =
+      StepToolSet(
+        screenAnalyzer = throwingScreenAnalyzer,
+        executor = throwingExecutor,
+        screenStateProvider = { _, _, _ -> dummyScreenState },
+        availableToolsProvider = { emptyList() },
+        rawToolExecutor = { tool, _ ->
+          executedTools.add(tool)
+          "OK"
+        },
+      )
+
+    val result =
+      toolSet.blaze(
+        objective = "Tap on point",
+        tools =
+          """
+          - tools:
+              - tapOnPoint:
+                  x: 100
+                  y: 200
+          """
+            .trimIndent(),
+      )
+
+    assertEquals(1, executedTools.size)
+    assertContains(result, "Done")
   }
 
   // -- 7. No rawToolExecutor provided -----------------------------------------
@@ -393,7 +527,7 @@ class StepToolSetDirectToolsTest {
           executor = throwingExecutor,
           screenStateProvider = { _, _, _ -> dummyScreenState },
           sessionContext = sessionContext,
-          rawToolExecutor = { _ -> "tap executed" },
+          rawToolExecutor = { _, _ -> "tap executed" },
         )
 
       toolSet.blaze(
@@ -431,7 +565,7 @@ class StepToolSetDirectToolsTest {
         screenAnalyzer = throwingScreenAnalyzer,
         executor = throwingExecutor,
         screenStateProvider = { _, _, _ -> null }, // No device
-        rawToolExecutor = { _ ->
+        rawToolExecutor = { _, _ ->
           executorCalled = true
           "OK"
         },
@@ -464,7 +598,7 @@ class StepToolSetDirectToolsTest {
         executor = throwingExecutor,
         screenStateProvider = { _, _, _ -> null },
         driverStatusProvider = { "Connecting to emulator-5554..." },
-        rawToolExecutor = { _ -> "OK" },
+        rawToolExecutor = { _, _ -> "OK" },
       )
 
     val result =
@@ -494,7 +628,7 @@ class StepToolSetDirectToolsTest {
         executor = throwingExecutor,
         screenStateProvider = { _, _, _ -> dummyScreenState },
         sessionContext = null, // No session context
-        rawToolExecutor = { tool ->
+        rawToolExecutor = { tool, _ ->
           executedTools.add(tool)
           "OK"
         },
@@ -541,7 +675,7 @@ class StepToolSetDirectToolsTest {
         screenAnalyzer = screenAnalyzer,
         executor = throwingExecutor,
         screenStateProvider = { _, _, _ -> dummyScreenState },
-        rawToolExecutor = { _ -> "OK" },
+        rawToolExecutor = { _, _ -> "OK" },
       )
 
     // tools=null means normal path -- analyzer gets called
@@ -560,7 +694,7 @@ class StepToolSetDirectToolsTest {
         screenAnalyzer = null, // No LLM configured
         executor = throwingExecutor,
         screenStateProvider = { _, _, _ -> dummyScreenState },
-        rawToolExecutor = { _ -> "OK" },
+        rawToolExecutor = { _, _ -> "OK" },
       )
 
     val result = toolSet.blaze(objective ="Do something", tools = null)
@@ -579,7 +713,7 @@ class StepToolSetDirectToolsTest {
         screenAnalyzer = null, // No LLM configured
         executor = throwingExecutor,
         screenStateProvider = { _, _, _ -> dummyScreenState },
-        rawToolExecutor = { tool ->
+        rawToolExecutor = { tool, _ ->
           executedTools.add(tool)
           "OK"
         },
@@ -741,7 +875,7 @@ class StepToolSetDirectToolsTest {
           callCount++
           if (callCount <= 2) null else dummyScreenState // Succeeds on 3rd call
         },
-        rawToolExecutor = { tool ->
+        rawToolExecutor = { tool, _ ->
           executedTools.add(tool)
           "OK"
         },
@@ -774,7 +908,7 @@ class StepToolSetDirectToolsTest {
         screenAnalyzer = throwingScreenAnalyzer,
         executor = throwingExecutor,
         screenStateProvider = { _, _, _ -> dummyScreenState },
-        rawToolExecutor = { _ -> "OK" },
+        rawToolExecutor = { _, _ -> "OK" },
         screenSummaryProvider = { "Login screen | [button] Sign in | [input] Email" },
       )
 
@@ -798,7 +932,7 @@ class StepToolSetDirectToolsTest {
         screenAnalyzer = throwingScreenAnalyzer,
         executor = throwingExecutor,
         screenStateProvider = { _, _, _ -> dummyScreenState },
-        rawToolExecutor = { _ -> "OK" },
+        rawToolExecutor = { _, _ -> "OK" },
         // screenSummaryProvider not provided (defaults to null)
       )
 
@@ -867,7 +1001,7 @@ class StepToolSetDirectToolsTest {
         executor = throwingExecutor,
         screenStateProvider = { _, _, _ -> null },
         driverStatusProvider = { "Device disconnected unexpectedly" },
-        rawToolExecutor = { _ -> "OK" },
+        rawToolExecutor = { _, _ -> "OK" },
       )
 
     val result =

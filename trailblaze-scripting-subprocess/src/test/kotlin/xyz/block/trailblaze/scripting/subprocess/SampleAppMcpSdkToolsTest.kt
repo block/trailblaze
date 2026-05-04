@@ -36,7 +36,7 @@ import kotlin.test.Test
 
 /**
  * CI coverage for the `@trailblaze/scripting`-authored sample-app reference tools.ts
- * (`examples/android-sample-app/trailblaze-config/mcp-sdk/tools.ts`).
+ * (`examples/android-sample-app/trails/config/mcp-sdk/tools.ts`).
  *
  * Sister to [SampleAppMcpToolsTest] — same spawn → handshake → `tools/list` → `tools/call`
  * shape, but hits the SDK-authored file instead of the raw-MCP one. Both tests run so CI
@@ -86,7 +86,7 @@ class SampleAppMcpSdkToolsTest {
       } else {
         assumeTrue(
           "Sample-app SDK MCP tool deps not installed. Run from the repo root:\n" +
-            "  cd examples/android-sample-app/trailblaze-config/mcp-sdk && bun install\n" +
+            "  cd examples/android-sample-app/trails/config/mcp-sdk && bun install\n" +
             "(or `npm install`). CI installs these automatically via the " +
             "`installSampleAppMcpSdkTools` Gradle task.",
           depsInstalled,

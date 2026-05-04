@@ -21,13 +21,26 @@ object TemplatingUtil {
 
   /**
    * Replaces `{{key}}` and `{{ key }}` in the template string with the corresponding values from the map.
+   *
+   * Variables in [deferred] are left as `{{var}}` literals in the output and are treated as
+   * satisfied by [assertRequiredTemplateVariablesAvailable]. This lets a load-time resolver
+   * defer session-memory variables (populated by host-local tools at exec time) for the runtime
+   * to substitute via [xyz.block.trailblaze.AgentMemory.interpolateVariables].
+   *
+   * `@JvmOverloads` so externally-compiled Java consumers of the previous 2-arg signature keep
+   * resolving without `NoSuchMethodError`.
    */
-  fun replaceVariables(template: String, values: Map<String, String>): String {
-    // Ensure we have all required template variables
-    assertRequiredTemplateVariablesAvailable(template, values)
+  @JvmOverloads
+  fun replaceVariables(template: String, values: Map<String, String>, deferred: Set<String> = emptySet()): String {
+    // Ensure we have all required template variables (deferred ones count as satisfied)
+    assertRequiredTemplateVariablesAvailable(template, values, deferred)
 
     var result = template
     values.forEach { (key, value) ->
+      // A key explicitly in the deferred set is never substituted at this layer, even if the
+      // caller also placed it in `values`. Defensive — TrailYamlTemplateResolver builds the two
+      // sets disjoint by construction, but other callers may not.
+      if (key in deferred) return@forEach
       // Handles {{key}} and {{ key }}
       // Use literal replacement to avoid treating $ and \ as special characters
       result = result.replace(
@@ -40,10 +53,16 @@ object TemplatingUtil {
 
   /**
    * Ensures we can satisfy all required template variables in the template.
+   *
+   * Variables in [deferred] count as satisfied — useful when a downstream runtime (e.g.
+   * [xyz.block.trailblaze.AgentMemory.interpolateVariables]) will substitute them later.
+   *
+   * `@JvmOverloads` preserves the previous 2-arg signature for externally-compiled Java consumers.
    */
-  fun assertRequiredTemplateVariablesAvailable(template: String, values: Map<String, String>) {
+  @JvmOverloads
+  fun assertRequiredTemplateVariablesAvailable(template: String, values: Map<String, String>, deferred: Set<String> = emptySet()) {
     val requiredVariables = getRequiredTemplateVariables(template)
-    val availableKeys = values.keys
+    val availableKeys = values.keys + deferred
     val missingRequiredKeys = requiredVariables.subtract(availableKeys)
     if (missingRequiredKeys.isNotEmpty()) {
       error(
@@ -55,7 +74,8 @@ object TemplatingUtil {
       )
     }
 
-    val unusedKeys = availableKeys.subtract(requiredVariables)
+    // Only `values` keys can be "unused" — deferred keys are conditional and never required to be in `values`.
+    val unusedKeys = values.keys.subtract(requiredVariables)
     if (unusedKeys.isNotEmpty()) {
       Console.log(
         buildString {

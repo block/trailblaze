@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.ui.composables
 
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.DesktopMac
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.runtime.Composable
@@ -56,6 +57,10 @@ fun TrailblazeDevicePlatform.getIcon(): ImageVector = when (this) {
   TrailblazeDevicePlatform.ANDROID -> Android
   TrailblazeDevicePlatform.IOS -> Apple
   TrailblazeDevicePlatform.WEB -> BrowserChrome
+  // No vendor brand for "Compose Desktop" — use the generic desktop-tower glyph from
+  // Material's filled set so the platform still has a visible icon when surfaced under
+  // `device list --all` or in a filter chip.
+  TrailblazeDevicePlatform.DESKTOP -> Icons.Filled.DesktopMac
 }
 
 /**

@@ -1,0 +1,32 @@
+# Authored pack for the Contacts example. Replaces the legacy flat target at
+# ../../targets/ios-contacts.yaml — this workspace is now pack-driven via the sibling
+# trailblaze.yaml. Each scripted tool lives in its own file under tools/, referenced from
+# the manifest below; the pack loader resolves each ref to a PackScriptedToolFile and
+# wraps its flat inputSchema into a JSON-Schema-conformant object before handing it to
+# the runtime.
+#
+# Pack id is `contacts` (not `ios-contacts`) so the same pack can later host Android /
+# web tools alongside the iOS ones already wired here. This shadows the bundled
+# framework `contacts` pack (Google Contacts) within this example workspace per the
+# pack-id collision rule — fine here, since the example is only meant to demonstrate
+# Contacts-app testing in this workspace, not to also surface Google Contacts.
+id: contacts
+target:
+  display_name: Contacts
+  tools:
+    - tools/contacts_ios_openNewContact.yaml
+    - tools/contacts_ios_createContact.yaml
+    - tools/contacts_ios_openSavedContact.yaml
+
+  platforms:
+    ios:
+      app_ids:
+        - com.apple.MobileAddressBook
+      drivers: [ios-host]
+      tool_sets:
+        - core_interaction
+        - navigation
+        - verification
+        - memory
+      excluded_tools:
+        - tapOnPoint

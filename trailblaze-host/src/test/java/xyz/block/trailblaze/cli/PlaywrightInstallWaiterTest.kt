@@ -126,10 +126,14 @@ class PlaywrightInstallWaiterTest {
     )
 
     assertNull(result, "Expected success; got: $result")
+    assertTrue(
+      progressLines.first().contains("up to 2 minutes", ignoreCase = true),
+      "Expected up-front '~2 minute' notice; got: ${progressLines.first()}",
+    )
     assertTrue(progressLines.any { it.contains("[10%] Downloading") }, "Expected initial progress")
     assertTrue(progressLines.any { it.contains("[50%] Downloading") }, "Expected mid-progress update")
     assertTrue(progressLines.any { it.contains("[90%] Downloading") }, "Expected late-progress update")
-    assertTrue(progressLines.last().contains("ready"), "Expected final ready message")
+    assertTrue(progressLines.last().contains("Done"), "Expected final 'Done.' line; got: ${progressLines.last()}")
   }
 
   // ── awaitReady: failure surfaces ─────────────────────────────────────────

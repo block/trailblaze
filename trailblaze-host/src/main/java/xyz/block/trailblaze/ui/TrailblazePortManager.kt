@@ -11,7 +11,7 @@ import xyz.block.trailblaze.ui.models.TrailblazeServerState.SavedTrailblazeAppCo
  *    (called by the CLI when `-p` flags or env vars are detected).
  * 2. **Persisted settings** — non-default values saved by the Settings UI (or `trailblaze config`).
  * 3. **Environment variables** — `TRAILBLAZE_PORT` / `TRAILBLAZE_HTTPS_PORT`.
- * 4. **Defaults** — 52525 (HTTP), 8443 (HTTPS).
+ * 4. **Defaults** — 52525 (HTTP); HTTPS derives from the resolved HTTP port (+1).
  *
  * @param persistedConfigProvider Supplies the current [SavedTrailblazeAppConfig] for
  *   reading the persisted port values as a fallback.
@@ -100,8 +100,12 @@ class TrailblazePortManager(
     }
  
     fun resolveHttpsPortFromEnvOrDefault(): Int {
+      // Use the explicit HTTPS env var when present. Otherwise, derive HTTPS from the
+      // resolved HTTP port (+1) so a single TRAILBLAZE_PORT override moves both ports
+      // together. When neither env var is set, this derives from the default HTTP port
+      // (HTTP default + 1 = HTTPS default — same value as TRAILBLAZE_DEFAULT_HTTPS_PORT).
       return System.getenv(HTTPS_PORT_ENV_VAR)?.toIntOrNull()
-        ?: TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTPS_PORT
+        ?: (resolveHttpPortFromEnvOrDefault() + 1)
     }
   }
 }

@@ -262,7 +262,7 @@ class IosAxeCompactElementListTest {
         ),
         DriverNodeDetail.IosAxe(
           role = "AXStaticText", type = "StaticText",
-          label = "home", value = "d-higgins@mac.com",
+          label = "home", value = "dale@example.com",
         ),
         DriverNodeDetail.IosAxe(
           role = "AXStaticText", type = "StaticText",

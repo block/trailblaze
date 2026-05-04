@@ -24,7 +24,10 @@ dependencies {
 
   implementation(project(":trailblaze-models"))
   implementation(project(":trailblaze-common"))
+  implementation(project(":trailblaze-capture"))
   implementation(project(":trailblaze-report"))
+  implementation(project(":trailblaze-scripting-mcp-common"))
+  implementation(project(":trailblaze-scripting-subprocess"))
 
   implementation(libs.okhttp)
   implementation(libs.ktor.server.core.jvm)

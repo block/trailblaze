@@ -1,16 +1,15 @@
 package xyz.block.trailblaze.mcp.executor
 
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
 import xyz.block.trailblaze.mcp.toolsets.ToolSetCategory
 import xyz.block.trailblaze.mcp.toolsets.ToolSetCategoryMapping
-import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.toolcalls.KoogToolExt
 import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
+import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
+import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeToolDescriptor
 import xyz.block.trailblaze.toolcalls.toKoogToolDescriptor
 import xyz.block.trailblaze.toolcalls.toolName
@@ -47,6 +46,21 @@ class DirectMcpToolExecutor(
   /** Map of tool name -> tool class for lookup */
   private val toolClassByName: Map<String, KClass<out TrailblazeTool>> by lazy {
     availableToolClasses.associateBy { it.toolName().toolName }
+  }
+
+  /**
+   * Repo that resolves a (toolName, argsJson) pair to a concrete [TrailblazeTool]. Built
+   * lazily from [availableTools] — [ToolSetCategoryMapping.resolve] can be expensive on first
+   * access, so we share that work between [toolDescriptors] and this repo.
+   */
+  private val toolRepo: TrailblazeToolRepo by lazy {
+    TrailblazeToolRepo(
+      TrailblazeToolSet.DynamicTrailblazeToolSet(
+        name = "DirectMcpToolExecutor",
+        toolClasses = availableToolClasses,
+        yamlToolNames = availableYamlToolNames,
+      ),
+    )
   }
 
   /** Cached tool descriptors (class-backed + YAML-defined). */
@@ -98,24 +112,10 @@ class DirectMcpToolExecutor(
   override fun getAvailableTools(): List<TrailblazeToolDescriptor> = toolDescriptors
 
   /**
-   * Deserializes a tool from name and args.
-   *
-   * Routes through [TrailblazeJsonInstance]'s polymorphic tool serializer by stamping `toolName`
-   * into the payload. The serializer dispatches on that name to either a class-backed serializer
-   * or a pre-bound [xyz.block.trailblaze.config.YamlDefinedToolSerializer], so both tool flavors
-   * land here without the executor needing a separate code path per flavor.
+   * Deserializes a tool from (name, args) by routing through [toolRepo]. The repo
+   * dispatches on toolName to the matching class-backed or YAML-defined serializer,
+   * decoding the flat args object directly — no `toolName`/`raw` wrapping involved.
    */
-  private fun deserializeTool(toolName: String, args: JsonObject): TrailblazeTool {
-    // OtherTrailblazeToolSerializer looks for "toolName" to match tool classes by their ToolName
-    val mutableMap = args.toMutableMap()
-    mutableMap["toolName"] = JsonPrimitive(toolName)
-    val toolJson = JsonObject(mutableMap).toString()
-    val tool = TrailblazeJsonInstance.decodeFromString<TrailblazeTool>(toolJson)
-    // Reject silent fallback to OtherTrailblazeTool — typed deserialization likely failed
-    // (e.g., Long/Int type coercion from string-typed LLM responses)
-    if (tool is OtherTrailblazeTool) {
-      error("Tool '$toolName' deserialized as OtherTrailblazeTool — typed serializer likely failed. Args: $args")
-    }
-    return tool
-  }
+  private fun deserializeTool(toolName: String, args: JsonObject): TrailblazeTool =
+    toolRepo.toolCallToTrailblazeTool(toolName, args.toString())
 }

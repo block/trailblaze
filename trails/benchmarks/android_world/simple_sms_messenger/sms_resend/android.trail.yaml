@@ -28,5 +28,5 @@
 #   Precondition error before agent prompt. Needs tool-level fix for contact insertion.
 #   FIX: Migrated SMS cleanup, seed insert, and validation from direct sqlite3 to
 #   content provider API. Validation checks for 2+ rows via "Row: 1" presence.
-# [2026-03-11] Build #27 FAILED - Infrastructure: addContactToDevice tool still fails.
-#   Same as build #24. Needs tool-level fix.
+# [2026-03-11] FAILED - Infrastructure: addContactToDevice tool still fails.
+#   Same as a prior run. Needs tool-level fix.

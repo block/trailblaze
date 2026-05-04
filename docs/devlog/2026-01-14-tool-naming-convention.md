@@ -6,6 +6,18 @@ date: 2026-01-14
 
 # Tool Naming Convention
 
+> **Status (as of 2026-04-26):** This document accurately describes the **current flat
+> runtime tool namespace** and the conventions tools registered against that namespace
+> still use. The original rationale — that names were tightly coupled to finding backing
+> Kotlin classes during serialization and registration — no longer holds. YAML-described
+> tools now point at fully-qualified class names directly, so id shape is no longer
+> driven by class lookup. The forward direction is the pack model in
+> [Target Packs: Local-First Packaging](2026-04-26-target-packs-local-first.md), where
+> ownership is implicit by directory layout and the canonical id shape becomes
+> `<pack>:<local-name>` (e.g. `gmail:web`, `clock:alarm-tab`) rather than the underscore
+> prefix form below. Treat this document as a record of current state, **not** the
+> design argument against pack-scoped simple names going forward.
+
 With multiple tool authors contributing, we needed naming consistency.
 
 ## Background

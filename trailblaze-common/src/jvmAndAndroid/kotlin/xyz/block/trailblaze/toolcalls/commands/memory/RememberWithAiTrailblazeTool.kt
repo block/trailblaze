@@ -12,8 +12,8 @@ import xyz.block.trailblaze.util.Console
 @TrailblazeToolClass("rememberWithAi")
 @LLMDescription(
   """
-This will remember some data about the current screen using the natural language prompt parameter.
-Once the data is found it will be saved for future test operations under the variable parameter.
+Remember some data about the current screen using the natural-language prompt, then save it under
+the variable name for future test operations.
       """,
 )
 data class RememberWithAiTrailblazeTool(

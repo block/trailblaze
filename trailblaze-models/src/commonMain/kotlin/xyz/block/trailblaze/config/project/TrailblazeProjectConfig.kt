@@ -5,8 +5,8 @@ import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.llm.config.LlmConfig
 
 /**
- * Top-level schema for `trailblaze.yaml` — the single config file sitting at a Trailblaze
- * workspace root.
+ * Top-level schema for `trailblaze.yaml` — the single config file sitting at
+ * `trails/config/trailblaze.yaml` inside a Trailblaze workspace.
  *
  * All sections are optional. An empty file (or one that decodes to `{}`) is valid: the
  * framework's built-in classpath config still applies.
@@ -16,6 +16,9 @@ import xyz.block.trailblaze.llm.config.LlmConfig
  * defaults:
  *   target: sampleapp
  *   llm: openai/gpt-4.1
+ *
+ * packs:
+ *   - packs/sampleapp/pack.yaml
  *
  * targets:
  *   # Inline entry:
@@ -49,6 +52,7 @@ import xyz.block.trailblaze.llm.config.LlmConfig
 @Serializable
 data class TrailblazeProjectConfig(
   @SerialName("defaults") val defaults: ProjectDefaults? = null,
+  @SerialName("packs") val packs: List<String> = emptyList(),
   @SerialName("targets") val targets: List<TargetEntry> = emptyList(),
   @SerialName("toolsets") val toolsets: List<ToolsetEntry> = emptyList(),
   @SerialName("tools") val tools: List<ToolEntry> = emptyList(),

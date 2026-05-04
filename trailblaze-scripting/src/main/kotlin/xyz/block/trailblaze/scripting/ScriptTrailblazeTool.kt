@@ -114,7 +114,9 @@ data class ScriptTrailblazeTool(
 
   private fun buildInput(ctx: TrailblazeToolExecutionContext): JsonObject = buildJsonObject {
     put("memory", buildJsonObject {
-      ctx.memory.variables.forEach { (k, v) -> put(k, JsonPrimitive(v)) }
+      ctx.memory.variables.forEach { (k, v) ->
+        if (k !in ctx.memory.sensitiveKeys) put(k, JsonPrimitive(v))
+      }
     })
     put("params", buildJsonObject {
       params.forEach { (k, v) -> put(k, JsonPrimitive(v)) }

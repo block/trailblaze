@@ -17,12 +17,10 @@ import xyz.block.trailblaze.yaml.serializers.CaseInsensitiveEnumSerializer
 @TrailblazeToolClass("pressKey")
 @LLMDescription(
   """
-Use this tool to press special keys that are not used for regular text input.
-Examples of when to use this tool:
-- Press back to navigate to the previous page or state (Android only).
-- Press enter to submit the current form or text input.
-- Press home to go to the device's home screen.
-- Press home to send the current app to the background.
+Press a special key that isn't used for regular text input. Examples:
+- BACK: navigate to the previous page or state (Android only).
+- ENTER: submit the current form or text input.
+- HOME: go to the device's home screen / send the current app to the background.
 """,
 )
 data class PressKeyTrailblazeTool(

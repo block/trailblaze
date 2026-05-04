@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.compose.driver
 
+import xyz.block.trailblaze.api.AnnotationElement
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
@@ -63,13 +64,33 @@ class ComposeScreenState(
 
   override val screenshotBytes: ByteArray? by lazy { capturedImage?.let { imageBitmapToPngBytes(it) } }
 
+  /**
+   * Set-of-mark annotation elements keyed to the same `[eN]` IDs the LLM sees
+   * in [viewHierarchyTextRepresentation]. Bounds come straight from the
+   * compact-list builder ([ComposeSemanticTreeMapper.appendCompactNode]
+   * stores `boundsInRoot` on each [ComposeSemanticTreeMapper.ComposeElementRef]
+   * at the moment the element is assigned its `eN` id), so we don't re-walk
+   * the semantics tree here. Refs without bounds or with zero-size rects are
+   * dropped — drawing a label on the wrong place is worse than skipping it.
+   */
+  override val annotationElements: List<AnnotationElement>? by lazy {
+    val out = mutableListOf<AnnotationElement>()
+    var nodeId = 1L
+    for ((id, ref) in elementIdMapping) {
+      val bounds = ref.bounds ?: continue
+      if (bounds.width <= 0 || bounds.height <= 0) continue
+      out.add(AnnotationElement(nodeId = nodeId++, bounds = bounds, refLabel = id))
+    }
+    out.takeIf { it.isNotEmpty() }
+  }
+
   override val annotatedScreenshotBytes: ByteArray? by lazy {
     SetOfMarkAnnotator.annotate(
       screenshotBytes = screenshotBytes,
-      viewHierarchy = viewHierarchy,
       screenWidth = deviceWidth,
       screenHeight = deviceHeight,
       platform = trailblazeDevicePlatform,
+      annotationElements = annotationElements,
     )
   }
 

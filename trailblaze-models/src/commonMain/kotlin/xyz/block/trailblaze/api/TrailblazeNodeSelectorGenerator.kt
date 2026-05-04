@@ -11,14 +11,14 @@ package xyz.block.trailblaze.api
  *
  * ## Android Accessibility strategy cascade (simplest to most complex)
  *
- * **Identity (1):** Unique stable ID or resource ID.
+ * **Identity (1):** Unique stable ID, resource ID, or Compose testTag.
  * **Text (2-10):** Precise text matching using the specific text field
  * (contentDescription, hintText, text, resourceId+text, labeledByText).
- * **Type + state (11-16):** paneTitle, className, className + state flags, isPassword,
- * inputType, stateDescription — for elements without unique text.
- * **Hierarchy (17-19):** childOf parent, containsChild, collectionItemInfo.
- * **Spatial (20):** Positional relationships to uniquely identifiable neighbors.
- * **Fallback (21):** Index-based positioning as a last resort.
+ * **Type + state (11-17):** paneTitle, className, className + state flags, isPassword,
+ * inputType, stateDescription, roleDescription — for elements without unique text.
+ * **Hierarchy (18-20):** childOf parent, containsChild, collectionItemInfo.
+ * **Spatial (21):** Positional relationships to uniquely identifiable neighbors.
+ * **Fallback (22):** Index-based positioning as a last resort.
  *
  * ## Compose strategy cascade (simplest to most complex)
  *

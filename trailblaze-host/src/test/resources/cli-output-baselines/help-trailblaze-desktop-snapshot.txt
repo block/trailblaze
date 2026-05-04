@@ -1,0 +1,19 @@
+# This file is a CHECKED-IN baseline of CLI output rendered by trailblaze-host's CLI helpers.
+# It is NOT a contract — if a test fails here because output drifted, decide whether the
+# drift is intentional. The test always (re)writes this file from the current rendered output,
+# then asserts the working tree is clean. So `git diff` of this file IS the failure message.
+# Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
+# small wording / spacing changes can be intentional or accidental.
+# ----------------------------------------------------------------------
+Usage: trailblaze desktop snapshot [-hV] [--json] [--out=<out>] [--port=<port>]
+Capture a screen-state snapshot of the running Trailblaze desktop window via
+the Compose RPC server.
+  -h, --help          Show this help message and exit.
+      --json          Print the full GetScreenStateResponse as JSON instead of
+                        the human-readable summary.
+      --out=<out>     When set, decode the response's base64 screenshot and
+                        write the PNG to this path. Skips the file write if the
+                        response has no screenshot.
+      --port=<port>   Port the desktop app's Compose RPC server is listening on
+                        (default: 52600)
+  -V, --version       Print version information and exit.

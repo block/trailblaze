@@ -50,7 +50,10 @@ class LlmConfigLoaderTest {
 
   @Test
   fun `load reads project-level config`() {
-    File(tempFolder.root, "trailblaze.yaml").writeText(
+    val projectConfigFile = File(tempFolder.root, "trails/config/trailblaze.yaml").also {
+      it.parentFile!!.mkdirs()
+    }
+    projectConfigFile.writeText(
       """
       llm:
         providers:
@@ -75,9 +78,12 @@ class LlmConfigLoaderTest {
   @Test
   fun `load walks up from projectDir to find trailblaze_yaml in an ancestor`() {
     // projectDir no longer needs to be the exact workspace root — findWorkspaceRoot walks
-    // up looking for trailblaze.yaml. Regression guard for anyone running `trailblaze`
+    // up looking for trails/config/trailblaze.yaml. Regression guard for anyone running `trailblaze`
     // from a nested subdirectory of their project.
-    File(tempFolder.root, "trailblaze.yaml").writeText(
+    val projectConfigFile = File(tempFolder.root, "trails/config/trailblaze.yaml").also {
+      it.parentFile!!.mkdirs()
+    }
+    projectConfigFile.writeText(
       """
       llm:
         providers:
@@ -115,7 +121,10 @@ class LlmConfigLoaderTest {
     )
 
     // Project-level config overrides the default model
-    File(tempFolder.root, "trailblaze.yaml").writeText(
+    val projectConfigFile = File(tempFolder.root, "trails/config/trailblaze.yaml").also {
+      it.parentFile!!.mkdirs()
+    }
+    projectConfigFile.writeText(
       """
       llm:
         defaults:
@@ -149,7 +158,10 @@ class LlmConfigLoaderTest {
 
   @Test
   fun `project config without llm key is ignored`() {
-    File(tempFolder.root, "trailblaze.yaml").writeText(
+    val projectConfigFile = File(tempFolder.root, "trails/config/trailblaze.yaml").also {
+      it.parentFile!!.mkdirs()
+    }
+    projectConfigFile.writeText(
       """
       target: my_app
       """.trimIndent(),
@@ -167,7 +179,10 @@ class LlmConfigLoaderTest {
   fun `blank config files are ignored`() {
     val trailblazeDir = File(tempFolder.root, ".trailblaze").also { it.mkdirs() }
     File(trailblazeDir, "trailblaze.yaml").writeText("")
-    File(tempFolder.root, "trailblaze.yaml").writeText("")
+    val projectConfigFile = File(tempFolder.root, "trails/config/trailblaze.yaml").also {
+      it.parentFile!!.mkdirs()
+    }
+    projectConfigFile.writeText("")
 
     val config = LlmConfigLoader.load(
       userHomeDir = tempFolder.root,

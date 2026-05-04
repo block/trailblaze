@@ -16,7 +16,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
  *
  *  1. **Legacy arg envelope** under the reserved `_trailblazeContext` argument key — shape
  *     frozen by the conventions devlog (§ 2): `{ memory, device }`. Existing raw-SDK tools
- *     (e.g. `examples/android-sample-app/trailblaze-config/mcp/tools.ts`) read from
+ *     (e.g. `examples/android-sample-app/trails/config/mcp/tools.ts`) read from
  *     this key directly. Must stay backwards-compatible.
  *
  *  2. **`_meta.trailblaze` envelope** — richer shape the scripting SDK consumes, per the
@@ -83,7 +83,9 @@ object TrailblazeContextEnvelope {
   fun buildLegacyArgEnvelope(memory: AgentMemory, device: TrailblazeDeviceInfo): JsonObject =
     buildJsonObject {
       putJsonObject("memory") {
-        memory.variables.forEach { (k, v) -> put(k, JsonPrimitive(v)) }
+        memory.variables.forEach { (k, v) ->
+          if (k !in memory.sensitiveKeys) put(k, JsonPrimitive(v))
+        }
       }
       putDeviceObject(device)
     }
@@ -140,7 +142,9 @@ object TrailblazeContextEnvelope {
       put("invocationId", invocationId)
       putDeviceObject(device)
       putJsonObject("memory") {
-        memory.variables.forEach { (k, v) -> put(k, JsonPrimitive(v)) }
+        memory.variables.forEach { (k, v) ->
+          if (k !in memory.sensitiveKeys) put(k, JsonPrimitive(v))
+        }
       }
     }
   }
@@ -154,9 +158,11 @@ object TrailblazeContextEnvelope {
     putJsonObject("device") {
       // Lowercase — the envelope is a TS-consumed contract, and the SHOUTY_CASE of Kotlin's
       // enum name reads awkwardly as a literal union type ("ios" | "android" | "web" is the
-      // standard TS convention). Intentionally distinct from the `TRAILBLAZE_DEVICE_PLATFORM`
-      // env var (uppercase — that's a separate already-shipped contract) and from
-      // `trailblaze/supportedPlatforms` tool-metadata filter values (also uppercase).
+      // standard TS convention). Distinct from the `TRAILBLAZE_DEVICE_PLATFORM` env var,
+      // which stays uppercase — a separate already-shipped contract. The
+      // `trailblaze/supportedPlatforms` tool-metadata filter values are case-insensitive at
+      // parse time (TrailblazeToolMeta.fromJsonObject normalizes to uppercase), so authors
+      // can write the same lowercase form they see in TS without surprise.
       put("platform", device.platform.name.lowercase())
       put("widthPixels", device.widthPixels)
       put("heightPixels", device.heightPixels)

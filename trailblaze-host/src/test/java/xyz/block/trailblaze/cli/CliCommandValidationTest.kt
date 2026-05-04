@@ -7,6 +7,7 @@ import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.docs.Scenario
+import xyz.block.trailblaze.model.TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
@@ -39,7 +40,7 @@ class CliCommandValidationTest {
   @Test
   fun `blaze without goal returns USAGE`() {
     val cmd = BlazeCommand()
-    cmd.goalWords = emptyList()
+    cmd.objectiveWords = emptyList()
 
     val exitCode = cmd.call()
 
@@ -111,9 +112,9 @@ class CliCommandValidationTest {
   // ---------------------------------------------------------------------------
 
   @Test
-  fun `readConfig hydrates missing target to 'none' without writing to disk`() {
+  fun `readConfig hydrates missing target to 'default' without writing to disk`() {
     // When selectedTargetAppId is missing (older config file predating the
-    // field), readConfig materializes the default "none" target in memory.
+    // field), readConfig materializes the "default" target in memory.
     // The on-disk file must stay untouched until the user actually mutates
     // their config — we don't want a setup check to silently rewrite settings.
     CliConfigHelper.updateConfig { it.copy(selectedTargetAppId = null) }
@@ -122,9 +123,9 @@ class CliCommandValidationTest {
     val hydrated = CliConfigHelper.readConfig()
 
     assertEquals(
-      "none",
+      DefaultTrailblazeHostAppTarget.id,
       hydrated?.selectedTargetAppId,
-      "readConfig should hydrate missing target to 'none'",
+      "readConfig should hydrate missing target to 'default'",
     )
     assertEquals(
       beforeContents,
@@ -159,47 +160,42 @@ class CliCommandValidationTest {
     assertEquals(CommandLine.ExitCode.USAGE, exitCode)
   }
 
+  // Removed format-only "config target accepts X" tests (hyphen/uppercase/alphanumeric/default).
+  // `applyTarget` now validates target IDs against the discovered target list via
+  // `parent.getConfigProvider().availableAppTargets`, which the unit setup doesn't initialize
+  // (`parent` is lateinit and only set when picocli runs through the full CLI). The success-
+  // path coverage now lives in the live CLI tests (`./trailblaze config target …`) and in
+  // ConfigCommandTest where the parent is wired up.
+
+  // ---------------------------------------------------------------------------
+  // TrailCommand --self-heal flag parsing
+  // ---------------------------------------------------------------------------
+
+  @Scenario(
+    title = "Run a trail with self-heal enabled",
+    commands = ["trailblaze trail --self-heal flows/login.trail.yaml"],
+    description =
+      "Use --self-heal to let AI take over when a recorded step fails. When omitted, the persisted 'trailblaze config self-heal' setting is used (opt-in, off by default).",
+    category = "Trail Execution",
+  )
   @Test
-  fun `config target with hyphen is accepted`() {
-    // Regression guard: target IDs allow hyphens (e.g. `team-app`, `dashboard-web`) for
-    // readability. Tool names that get registered with LLMs keep their own stricter
-    // lowercase-alphanumeric constraint separately.
-    val cmd = ConfigTargetCommand()
-    cmd.targetId = "my-app"
+  fun `trail parses --self-heal flag as true`() {
+    val cmd = TrailCommand()
+    val cmdLine = CommandLine(cmd)
 
-    val exitCode = cmd.call()
+    cmdLine.parseArgs("--self-heal", "any.trail.yaml")
 
-    assertEquals(CommandLine.ExitCode.OK, exitCode)
+    assertEquals(true, cmd.selfHeal)
   }
 
   @Test
-  fun `config target with uppercase normalizes and returns OK`() {
-    val cmd = ConfigTargetCommand()
-    cmd.targetId = "Myapp"
+  fun `trail selfHeal is null when the flag is not passed`() {
+    val cmd = TrailCommand()
+    val cmdLine = CommandLine(cmd)
 
-    val exitCode = cmd.call()
+    cmdLine.parseArgs("any.trail.yaml")
 
-    assertEquals(CommandLine.ExitCode.OK, exitCode)
-  }
-
-  @Test
-  fun `config target with valid alphanumeric ID returns OK`() {
-    val cmd = ConfigTargetCommand()
-    cmd.targetId = "myapp"
-
-    val exitCode = cmd.call()
-
-    assertEquals(CommandLine.ExitCode.OK, exitCode)
-  }
-
-  @Test
-  fun `config target none returns OK`() {
-    val cmd = ConfigTargetCommand()
-    cmd.targetId = "none"
-
-    val exitCode = cmd.call()
-
-    assertEquals(CommandLine.ExitCode.OK, exitCode)
+    assertNull(cmd.selfHeal)
   }
 
   // ---------------------------------------------------------------------------
@@ -357,7 +353,7 @@ class CliCommandValidationTest {
     CommandLine(cmd).parseArgs("--verify", "Check", "the", "button", "is", "visible")
 
     assertEquals(true, cmd.verify)
-    assertEquals(listOf("Check", "the", "button", "is", "visible"), cmd.goalWords)
+    assertEquals(listOf("Check", "the", "button", "is", "visible"), cmd.objectiveWords)
   }
 
   @Test
@@ -400,7 +396,7 @@ class CliCommandValidationTest {
     CommandLine(cmd).parseArgs("--target", "myapp", "Tap", "login")
 
     assertEquals("myapp", cmd.target)
-    assertEquals(listOf("Tap", "login"), cmd.goalWords)
+    assertEquals(listOf("Tap", "login"), cmd.objectiveWords)
   }
 
   @Test
@@ -428,12 +424,65 @@ class CliCommandValidationTest {
   }
 
   @Test
-  fun `picocli parses blaze fast flag`() {
+  fun `picocli parses blaze --no-screenshots flag`() {
     val cmd = BlazeCommand()
-    CommandLine(cmd).parseArgs("--fast", "Tap", "login")
+    CommandLine(cmd).parseArgs("--no-screenshots", "Tap", "login")
 
-    assertEquals(true, cmd.fast)
-    assertEquals(listOf("Tap", "login"), cmd.goalWords)
+    assertEquals(true, cmd.noScreenshots)
+    assertEquals(listOf("Tap", "login"), cmd.objectiveWords)
+  }
+
+  @Test
+  fun `picocli parses blaze --text-only as alias for --no-screenshots`() {
+    val cmd = BlazeCommand()
+    CommandLine(cmd).parseArgs("--text-only", "Tap", "login")
+
+    assertEquals(true, cmd.noScreenshots)
+    assertEquals(listOf("Tap", "login"), cmd.objectiveWords)
+  }
+
+  @Test
+  fun `blaze --headless defaults to null when omitted (defer to config)`() {
+    // The field is null when the user didn't pass `--headless`, signalling that
+    // [HeadlessOption.resolve] should fall back to the persisted `web-headless`
+    // / `showWebBrowser` config. The previous "default true" behavior moved into
+    // the resolver so that a one-time `trailblaze config web-headless ...` flips
+    // the default for every downstream command.
+    val cmd = BlazeCommand()
+    CommandLine(cmd).parseArgs("Tap", "login")
+
+    assertNull(cmd.headlessOption.headless)
+  }
+
+  @Test
+  fun `blaze --headless=false disables headless mode (visible browser)`() {
+    // `--headless=false` is the canonical CLI spelling for flipping the option,
+    // matching the form called out in the originating issue.
+    val cmd = BlazeCommand()
+    CommandLine(cmd).parseArgs("--headless=false", "Tap", "login")
+
+    assertEquals(false, cmd.headlessOption.headless)
+  }
+
+  @Test
+  fun `blaze --headless false (space-separated) disables headless mode`() {
+    // The space-separated form `--headless false` is the literal spelling from
+    // the originating issue. With arity=1 picocli accepts both `=` and space forms.
+    val cmd = BlazeCommand()
+    CommandLine(cmd).parseArgs("--headless", "false", "Tap", "login")
+
+    assertEquals(false, cmd.headlessOption.headless)
+  }
+
+  @Test
+  fun `blaze parses --device web with named instance ID`() {
+    // Multi-instance web devices: any --device web/<id> should round-trip through
+    // picocli. The CLI sends the trailing "id" segment to the daemon as the
+    // Playwright browser's instanceId.
+    val cmd = BlazeCommand()
+    CommandLine(cmd).parseArgs("-d", "web/foo", "Tap", "submit")
+
+    assertEquals("web/foo", cmd.device)
   }
 
   @Test
@@ -441,13 +490,13 @@ class CliCommandValidationTest {
     val cmd = BlazeCommand()
     CommandLine(cmd).parseArgs()
 
-    assertEquals(emptyList(), cmd.goalWords)
+    assertEquals(emptyList(), cmd.objectiveWords)
     assertNull(cmd.savePath)
     assertNull(cmd.setup)
     assertEquals(false, cmd.noSetup)
     assertEquals(false, cmd.verify)
     assertEquals(false, cmd.verbose)
-    assertEquals(false, cmd.fast)
+    assertEquals(false, cmd.noScreenshots)
     assertNull(cmd.device)
     assertNull(cmd.context)
     assertNull(cmd.target)

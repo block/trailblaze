@@ -1,15 +1,17 @@
 package xyz.block.trailblaze.cli
 
+import picocli.CommandLine
 import picocli.CommandLine.Command
 import picocli.CommandLine.Option
+import xyz.block.trailblaze.util.Console
 import java.util.concurrent.Callable
 
 /**
  * Capture the current screen state with element refs (no LLM).
  *
  * Examples:
- *   trailblaze snapshot               - Capture screen snapshot
- *   trailblaze snapshot --bounds     - Include bounding boxes
+ *   trailblaze snapshot -d android/emulator-5554         - Capture screen snapshot
+ *   trailblaze snapshot -d ios/SIM-UUID --bounds         - Include bounding boxes
  */
 @Command(
   name = "snapshot",
@@ -20,7 +22,8 @@ class SnapshotCommand : Callable<Int> {
 
   @Option(
     names = ["-d", "--device"],
-    description = ["Device: platform (android, ios, web) or platform/id"],
+    required = true,
+    description = ["Device: platform (android, ios, web) or platform/id. Required."],
   )
   var device: String? = null
 
@@ -45,8 +48,21 @@ class SnapshotCommand : Callable<Int> {
   )
   var all: Boolean = false
 
+  @CommandLine.Mixin
+  val headlessOption: HeadlessOption = HeadlessOption()
+
   override fun call(): Int {
-    return cliWithDevice(verbose, device) { client ->
+    val deviceArg = device
+    if (deviceArg.isNullOrBlank()) {
+      Console.error("Error: --device is required for this command.")
+      return CommandLine.ExitCode.USAGE
+    }
+    return cliReusableWithDevice(
+      verbose = verbose,
+      device = deviceArg,
+      sessionScope = cliDeviceSessionScope(deviceArg),
+      webHeadless = headlessOption.resolve(),
+    ) { client ->
       val yaml = "- takeSnapshot:\n    screenName: \"snap\""
       val details = buildList {
         if (bounds) add("BOUNDS")

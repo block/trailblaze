@@ -12,7 +12,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeTools.REQUIRED_TEXT_DESCRIPTION
 
 @Serializable
-@TrailblazeToolClass("assertVisibleWithText")
+@TrailblazeToolClass("assertVisibleWithText", isForLlm = false, isVerification = true)
 @LLMDescription(
   """
 Asserts that an element with the provided text is visible on the screen. The text argument is required. Only provide additional fields if the text provided exactly matches elsewhere on the screen. In this case, the additional fields will be used to identify the specific view to assert visibility for.

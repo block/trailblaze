@@ -24,6 +24,17 @@ Signs of a blocking overlay:
 | `RATE_LIMITED` | "Too many requests", throttling | `{"type":"HandleRateLimited","waitSeconds":60}` |
 | `SYSTEM_OVERLAY` | System notification, low battery, volume popup | `{"type":"DismissOverlay","dismissMethod":"swipe away\|press back"}` |
 | `APP_NOT_RESPONDING` | ANR dialog, frozen UI | `{"type":"RestartApp","packageId":"com.example.app"}` |
+| `UNKNOWN_OVERLAY` | Any unfamiliar screen or dialog not listed above that does not belong to the current test flow | `{"type":"DismissPopup","dismissTarget":"most obvious close/skip/not-now/done button"}` |
+
+## Blocker Relevance Rule
+
+When a screen appears that does NOT match your Current Subtask, reason about it using the Overall Objective:
+
+1. **Is this screen required to complete the Overall Objective?** If yes, proceed through it — it may be a legitimate part of the test flow.
+2. **Is it not required?** Dismiss it using ≤3 interactions, then resume the Current Subtask.
+3. **Cannot dismiss in 3 interactions?** Set `objectiveAppearsImpossible: true` — the environment is not ready for this test.
+
+Interaction budget: each tap, swipe, or press counts as 1 interaction toward the 3-interaction limit. Waiting does not count.
 
 ## STEP 2: Choose Action
 

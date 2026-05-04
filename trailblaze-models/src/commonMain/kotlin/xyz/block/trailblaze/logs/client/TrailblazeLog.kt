@@ -28,7 +28,7 @@ import xyz.block.trailblaze.agent.AgentTier
 import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.AgentToolTransport
 import xyz.block.trailblaze.mcp.LlmCallStrategy
-import xyz.block.trailblaze.toolcalls.TrailblazeTool
+import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.yaml.PromptStep
@@ -181,18 +181,18 @@ sealed interface TrailblazeLog {
   @Serializable
   data class DelegatingTrailblazeToolLog(
     val toolName: String,
-    override val trailblazeTool: TrailblazeTool,
+    override val trailblazeTool: OtherTrailblazeTool,
     override val session: SessionId,
     override val timestamp: Instant,
     override val traceId: TraceId?,
-    val executableTools: List<TrailblazeTool>,
+    val executableTools: List<OtherTrailblazeTool>,
   ) : TrailblazeLog,
     HasTraceId,
     HasTrailblazeTool
 
   @Serializable
   data class TrailblazeToolLog(
-    override val trailblazeTool: TrailblazeTool,
+    override val trailblazeTool: OtherTrailblazeTool,
     val toolName: String,
     val successful: Boolean,
     override val traceId: TraceId?,
@@ -202,6 +202,11 @@ sealed interface TrailblazeLog {
     override val timestamp: Instant,
     /** Whether this tool is recordable for YAML session recordings. Defaults to true for backward compatibility. */
     val isRecordable: Boolean = true,
+    /**
+     * True when this log represents a top-level tool the caller explicitly invoked, rather than
+     * a lower-level executor tool used to implement it.
+     */
+    val isTopLevelToolCall: Boolean = false,
   ) : TrailblazeLog,
     HasTrailblazeTool,
     HasTraceId,
@@ -225,7 +230,7 @@ sealed interface TrailblazeLog {
     HasPromptStep
 
   @Serializable
-  data class AttemptAiFallbackLog(
+  data class SelfHealInvokedLog(
     override val promptStep: PromptStep,
     override val session: SessionId,
     override val timestamp: Instant,

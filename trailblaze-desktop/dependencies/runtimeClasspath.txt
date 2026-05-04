@@ -194,6 +194,8 @@ io.coil-kt.coil3:coil-network-core:3.3.0
 io.coil-kt.coil3:coil-network-ktor3-jvm:3.3.0
 io.coil-kt.coil3:coil-network-ktor3:3.3.0
 io.coil-kt.coil3:coil:3.3.0
+io.github.dokar3:quickjs-kt-jvm:1.0.5
+io.github.dokar3:quickjs-kt:1.0.5
 io.github.oshai:kotlin-logging-jvm:8.0.01
 io.github.oshai:kotlin-logging:8.0.01
 io.grpc:grpc-api:1.57.2

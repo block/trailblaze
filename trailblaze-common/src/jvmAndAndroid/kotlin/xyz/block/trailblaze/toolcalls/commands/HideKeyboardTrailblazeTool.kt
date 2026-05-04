@@ -17,7 +17,7 @@ import xyz.block.trailblaze.toolcalls.isSuccess
 @TrailblazeToolClass("hideKeyboard")
 @LLMDescription(
   """
-This hide the keyboard on the screen. This is useful to do after entering text into an input field.
+Hide the keyboard on the screen. Use after entering text into an input field.
   """,
 )
 data object HideKeyboardTrailblazeTool : ExecutableTrailblazeTool {

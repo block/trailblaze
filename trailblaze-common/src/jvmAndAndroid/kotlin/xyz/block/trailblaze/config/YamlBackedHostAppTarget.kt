@@ -43,7 +43,12 @@ class YamlBackedHostAppTarget(
 
   // --- Custom tools per driver type ---
 
-  private data class ToolsByDriver(
+  /**
+   * Per-driver classification of resolved tool names into class-backed vs YAML-defined buckets.
+   * Used for both `tools:` (inclusion) and `excluded_tools:` (exclusion) — both sides need the
+   * same split so callers can route each kind through its own API.
+   */
+  private data class ResolvedToolsByDriver(
     val classes: Map<TrailblazeDriverType, Set<KClass<out TrailblazeTool>>>,
     val yamlNames: Map<TrailblazeDriverType, Set<ToolName>>,
   )
@@ -52,7 +57,7 @@ class YamlBackedHostAppTarget(
    * For each driver type, the resolved set of custom tools (both class-backed and
    * YAML-defined). Computed lazily from the YAML's platform sections + companion contributions.
    */
-  private val resolvedCustomToolsByDriver: ToolsByDriver by lazy {
+  private val resolvedCustomToolsByDriver: ResolvedToolsByDriver by lazy {
     val classes = mutableMapOf<TrailblazeDriverType, MutableSet<KClass<out TrailblazeTool>>>()
     val yamlNames = mutableMapOf<TrailblazeDriverType, MutableSet<ToolName>>()
 
@@ -94,7 +99,7 @@ class YamlBackedHostAppTarget(
       }
     }
 
-    ToolsByDriver(classes = classes, yamlNames = yamlNames)
+    ResolvedToolsByDriver(classes = classes, yamlNames = yamlNames)
   }
 
   override fun internalGetCustomToolsForDriver(
@@ -111,34 +116,56 @@ class YamlBackedHostAppTarget(
 
   // --- Excluded tools ---
 
-  private val resolvedExcludedTools:
-      Map<TrailblazeDriverType, Set<KClass<out TrailblazeTool>>> by lazy {
-    val result = mutableMapOf<TrailblazeDriverType, MutableSet<KClass<out TrailblazeTool>>>()
+  /**
+   * For each driver type, the resolved set of *excluded* tools — split into class-backed and
+   * YAML-defined entries. Mirrors [resolvedCustomToolsByDriver]'s classification so a target's
+   * `excluded_tools: [pressBack]` flows through the exclusion API instead of being swallowed
+   * by the resolver as an unknown class.
+   */
+  private val resolvedExcludedToolsByDriver: ResolvedToolsByDriver by lazy {
+    val classes = mutableMapOf<TrailblazeDriverType, MutableSet<KClass<out TrailblazeTool>>>()
+    val yamlNames = mutableMapOf<TrailblazeDriverType, MutableSet<ToolName>>()
 
     config.platforms?.forEach { (platformKey, platformConfig) ->
       val excludedNames = platformConfig.excludedTools ?: return@forEach
       val driverTypes = platformConfig.resolveDriverTypes(platformKey)
-      val toolClasses = excludedNames.mapNotNull { name ->
-        try {
-          toolNameResolver.resolve(name)
-        } catch (_: IllegalArgumentException) { null }
-      }.toSet()
-      for (dt in driverTypes) {
-        result.getOrPut(dt) { mutableSetOf() }.addAll(toolClasses)
+      excludedNames.forEach { name ->
+        val toolClass = toolNameResolver.resolveOrNull(name)
+        val yamlName = toolNameResolver.resolveYamlNameOrNull(name)
+        when {
+          toolClass != null -> for (dt in driverTypes) {
+            classes.getOrPut(dt) { mutableSetOf() }.add(toolClass)
+          }
+          yamlName != null -> for (dt in driverTypes) {
+            yamlNames.getOrPut(dt) { mutableSetOf() }.add(yamlName)
+          }
+          else -> Console.log(
+            "Warning: App target '$id' platform '$platformKey' excluded_tools references unknown tool '$name'",
+          )
+        }
       }
     }
 
-    result
+    ResolvedToolsByDriver(classes = classes, yamlNames = yamlNames)
   }
 
   override fun getExcludedToolsForDriver(
     driverType: TrailblazeDriverType,
   ): Set<KClass<out TrailblazeTool>> =
-    resolvedExcludedTools[driverType] ?: emptySet()
+    resolvedExcludedToolsByDriver.classes[driverType] ?: emptySet()
+
+  override fun getExcludedYamlToolNamesForDriver(
+    driverType: TrailblazeDriverType,
+  ): Set<ToolName> =
+    resolvedExcludedToolsByDriver.yamlNames[driverType] ?: emptySet()
 
   // --- MCP server declarations (Decision 038) ---
 
   override fun getMcpServers(): List<McpServerConfig> = config.mcpServers ?: emptyList()
+
+  override fun getInlineScriptTools(): List<InlineScriptToolConfig> = config.tools ?: emptyList()
+
+  override fun getSystemPromptTemplate(): String? = config.systemPrompt
 
   // --- Version info ---
 

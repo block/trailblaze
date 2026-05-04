@@ -2,11 +2,11 @@ package xyz.block.trailblaze.host
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.JsonObject
+import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.agent.ExecutionResult
 import xyz.block.trailblaze.agent.UiActionExecutor
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.llm.RunYamlRequest
-import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.logs.model.TraceId
@@ -19,7 +19,7 @@ import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
-import xyz.block.trailblaze.toolcalls.requiresHost
+import xyz.block.trailblaze.toolcalls.requiresHostInstance
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.TrailYamlItem
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
@@ -48,7 +48,13 @@ class HostAccessibilityRpcClient(
   /** Provides the host's top-level session so every per-tool RPC shares one on-device session dir. */
   private val sessionProvider: TrailblazeSessionProvider,
   /** Context provider for executing host-only tools (cbot, dip-slot) locally. */
-  private val toolExecutionContextProvider: (() -> TrailblazeToolExecutionContext)? = null,
+  private val toolExecutionContextProvider: ((TraceId?) -> TrailblazeToolExecutionContext)? = null,
+  /**
+   * Host-side memory shared with [toolExecutionContextProvider]'s contexts. Required (no default)
+   * so a caller cannot silently get an isolated empty memory and lose interpolation —
+   * see [interpolateMemoryInTool]. [AgentMemory] is concurrent-safe.
+   */
+  private val memory: AgentMemory,
 ) : UiActionExecutor, AutoCloseable {
 
   private val trailblazeYaml = createTrailblazeYaml()
@@ -64,18 +70,10 @@ class HostAccessibilityRpcClient(
     val argsString = args.toString()
     return try {
       // Deserialize (toolName, args) → TrailblazeTool, then encode as single-step trail YAML.
-      // Fall back to polymorphic decode ONLY when the tool name isn't registered in this repo
-      // — yaml-defined tools (e.g. `tapOnElementBySelector`) that trail recordings use but that
-      // aren't in any toolset catalog entry, because they're never surfaced to the LLM. The
-      // args JSON already carries the full polymorphic shape from
-      // TrailblazeToolYamlWrapper.toJsonArgs, so decoding as TrailblazeTool recovers an
-      // OtherTrailblazeTool wrapper that the on-device runner resolves through its own repo.
-      //
-      // We intentionally scope this to the "tool name not found" case (identified by the
-      // message prefix `toolCallToTrailblazeTool` emits via `error(…)`). Real deserialization
-      // errors for *known* tools (schema drift, malformed args) must propagate — otherwise the
-      // polymorphic serializer can fall back to `OtherTrailblazeTool`, bypassing
-      // `requiresHost()` local execution and forwarding a degraded payload over RPC.
+      // Fall back to a raw OtherTrailblazeTool wrapper ONLY when the tool name isn't
+      // registered in this repo — YAML-defined or device-specific tools that trail recordings
+      // use but that aren't in any toolset catalog entry, because they're never surfaced to
+      // the LLM. The on-device runner resolves these through its own repo.
       val tool = try {
         toolRepo.toolCallToTrailblazeTool(toolName, argsString)
       } catch (lookupFailure: Exception) {
@@ -86,39 +84,32 @@ class HostAccessibilityRpcClient(
         val isUnknownToolName =
           lookupFailure.message?.contains("Could not find Trailblaze tool for name:") == true
         if (!isUnknownToolName) throw lookupFailure
-        val fallback = try {
-          TrailblazeJsonInstance.decodeFromString<TrailblazeTool>(argsString)
-        } catch (fallbackFailure: Exception) {
-          if (fallbackFailure is CancellationException) throw fallbackFailure
-          throw lookupFailure
-        }
-        // Guard against silent drift: the polymorphic serializer will gladly produce an
-        // `OtherTrailblazeTool` with an empty `toolName` if the args JSON doesn't carry
-        // the expected wrapper shape (e.g. an LLM-produced args object that just happens
-        // to reference an unknown tool name). That path bypasses `requiresHost()` and
-        // would RPC a blank-name tool to the device — better to surface the original
-        // lookup error.
-        if (fallback is OtherTrailblazeTool && fallback.toolName.isBlank()) {
-          Console.log(
-            "[HostAccessibilityRpcClient] fallback rejected blank-name tool for '$toolName'",
-          )
-          throw lookupFailure
-        }
+        // Wrap the args verbatim as an OtherTrailblazeTool — the args object already carries
+        // the flat tool params, no decode needed. The on-device runner resolves the wrapped
+        // call through its own repo.
         Console.log(
-          "[HostAccessibilityRpcClient] '$toolName' resolved via polymorphic fallback " +
+          "[HostAccessibilityRpcClient] '$toolName' resolved as OtherTrailblazeTool fallback " +
             "— not in this repo's toolset catalog",
         )
-        fallback
+        OtherTrailblazeTool(toolName, args)
       }
 
+      // Resolve memory tokens once, up front, so both branches (host-only and RPC) see the
+      // same resolved args. Host-only tools like RunCommandTrailblazeTool don't all
+      // self-interpolate; RPC tools must be resolved here because the device's per-request
+      // memory is empty. See [interpolateMemoryInTool].
+      val resolvedTool = interpolateMemoryInTool(tool, memory)
+
       // Host-only tools (cbot, dip-slot) must execute locally — they need ADB/USB on the Mac.
-      if (tool is ExecutableTrailblazeTool && tool::class.requiresHost()) {
-        val context = toolExecutionContextProvider?.invoke()
+      // Use the instance-level helper so YAML-defined tools that set `requires_host: true`
+      // are honored too, not just class-annotated ones.
+      if (resolvedTool is ExecutableTrailblazeTool && resolvedTool.requiresHostInstance()) {
+        val context = toolExecutionContextProvider?.invoke(traceId)
           ?: return ExecutionResult.Failure(
             error = "Host-only tool '$toolName' requires a tool execution context",
             recoverable = false,
           )
-        val result = tool.execute(context)
+        val result = resolvedTool.execute(context)
         val durationMs = System.currentTimeMillis() - startTime
         return when (result) {
           is xyz.block.trailblaze.toolcalls.TrailblazeToolResult.Success ->
@@ -130,7 +121,7 @@ class HostAccessibilityRpcClient(
             ExecutionResult.Failure(error = "Host-only tool '$toolName' failed: $result", recoverable = true)
         }
       }
-      val toolItems = listOf(TrailYamlItem.ToolTrailItem(listOf(fromTrailblazeTool(tool))))
+      val toolItems = listOf(TrailYamlItem.ToolTrailItem(listOf(fromTrailblazeTool(resolvedTool))))
       val yaml = trailblazeYaml.encodeToString(toolItems)
 
       // Reuse the host's top-level session ID so every per-tool RunYamlRequest writes
@@ -141,6 +132,7 @@ class HostAccessibilityRpcClient(
       val singleToolRequest = runYamlRequestTemplate.copy(
         yaml = yaml,
         agentImplementation = AgentImplementation.TRAILBLAZE_RUNNER,
+        traceId = traceId,
         // Per-tool RPCs are bounded in time; block the HTTP response on on-device completion
         // so we don't need a separate GetExecutionStatusRequest poll. Explicit for clarity even
         // though the request default is also true.
@@ -150,6 +142,9 @@ class HostAccessibilityRpcClient(
           sendSessionStartLog = false,
           sendSessionEndLog = false,
         ),
+        // Snapshot host memory so on-device tools can read keys directly (the boundary
+        // pre-resolution above only handles {{var}}/${var} interpolation in tool args).
+        memorySnapshot = memory.variables.toMap(),
       )
 
       when (val rpcResult = rpcClient.rpcCall(singleToolRequest)) {
@@ -162,6 +157,11 @@ class HostAccessibilityRpcClient(
         }
         is RpcResult.Success -> {
           val durationMs = System.currentTimeMillis() - startTime
+          // Apply the on-device agent's post-execution memory back into the host's shared
+          // instance so writes from on-device tools (including TS handlers) are visible to
+          // subsequent host-side or RPC dispatches. Sequential trail execution means the
+          // host can't have written between dispatch and now, so a full replace is safe.
+          applyMemorySnapshot(rpcResult.data.memorySnapshot)
           // `success == true` means the on-device handler ran the tool and its post-action
           // settle completed. `false` carries the on-device errorMessage; `null` should not
           // occur on this path because we set `awaitCompletion = true`, but we treat it
@@ -272,5 +272,11 @@ class HostAccessibilityRpcClient(
 
   override fun close() {
     rpcClient.close()
+  }
+
+  /** Replaces the host's [memory] with the device's post-execution snapshot. */
+  private fun applyMemorySnapshot(deviceSnapshot: Map<String, String>) {
+    memory.variables.clear()
+    memory.variables.putAll(deviceSnapshot)
   }
 }

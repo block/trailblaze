@@ -1,8 +1,8 @@
 ## Tool `rememberWithAi`
 
 ## Description
-This will remember some data about the current screen using the natural language prompt parameter.
-Once the data is found it will be saved for future test operations under the variable parameter.
+Remember some data about the current screen using the natural-language prompt, then save it under
+the variable name for future test operations.
 
 ### Command Class
 `xyz.block.trailblaze.toolcalls.commands.memory.RememberWithAiTrailblazeTool`

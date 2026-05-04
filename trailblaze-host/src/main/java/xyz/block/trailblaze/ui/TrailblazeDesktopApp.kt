@@ -6,6 +6,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import xyz.block.trailblaze.cli.CliReportGenerator
 import xyz.block.trailblaze.cli.DaemonClient
+import xyz.block.trailblaze.cli.DaemonSettingsBridge
 import xyz.block.trailblaze.cli.TrailblazeCli
 import xyz.block.trailblaze.desktop.TrailblazeDesktopAppConfig
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
@@ -15,6 +16,7 @@ import xyz.block.trailblaze.host.yaml.DesktopYamlRunner
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.llm.TrailblazeReferrer
 import xyz.block.trailblaze.mcp.AgentImplementation
+import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.server.TrailblazeMcpServer
 import xyz.block.trailblaze.logs.server.endpoints.CliRunRequest
@@ -133,11 +135,15 @@ abstract class TrailblazeDesktopApp(
     // CLI-via-daemon IPC fast path. Runs whitelisted subcommands
     // in-process on the daemon thread, eliminating the CLI's JVM cold start.
     // Offloaded to Dispatchers.IO because `executeForDaemon` runs picocli which
-    // blocks on `runBlocking` inside `cliWithDevice` — we must not park a Ktor
+    // blocks on `runBlocking` inside the cli*WithDevice helpers — we must not park a Ktor
     // HTTP server thread on that.
     trailblazeMcpServer.onCliExecRequest = { request ->
       withContext(Dispatchers.IO) { TrailblazeCli.executeForDaemon(request) }
     }
+    // Forwarded `config` subcommands need to mutate the daemon's in-memory
+    // settings — not the on-disk file directly — so the daemon's auto-save
+    // doesn't clobber the change with its (now-stale) cached copy.
+    DaemonSettingsBridge.settingsRepo = desktopAppConfig.trailblazeSettingsRepo
   }
 
   /**
@@ -211,6 +217,18 @@ abstract class TrailblazeDesktopApp(
       try { AgentImplementation.valueOf(it.uppercase()) } catch (_: IllegalArgumentException) { null }
     } ?: AgentImplementation.DEFAULT
 
+    // Honor the CLI's --self-heal override when provided; fall back to the daemon's
+    // persisted `trailblaze config self-heal` setting; otherwise stay opt-out.
+    val effectiveSelfHeal =
+      request.selfHeal
+        ?: xyz.block.trailblaze.cli.CliConfigHelper.readConfig()?.selfHealEnabled
+        ?: false
+
+    // Pin a SessionId per delegated trail run so the post-completion status check
+    // can target THIS run's session. See SessionId.pinnedFor for the parallel-safety
+    // rationale (a reproduction surfaced cross-attribution without it).
+    val pinnedSessionId = SessionId.pinnedFor(testName)
+
     val runYamlRequest = resolvedRunRequest ?: RunYamlRequest(
       testName = testName,
       yaml = resolvedYaml,
@@ -222,8 +240,18 @@ abstract class TrailblazeDesktopApp(
       driverType = trailDriverType,
       config = TrailblazeConfig(
         browserHeadless = !request.showBrowser,
+        selfHeal = effectiveSelfHeal,
+        overrideSessionId = pinnedSessionId,
+        // Honor CLI --capture-network / --capture-all. When neither was set,
+        // fall back to the daemon's saved app config (the desktop "Capture
+        // Network Traffic" toggle), so a CLI invocation behaves the same as
+        // a desktop-app run started by the same user.
+        captureNetworkTraffic = request.captureNetworkTraffic ||
+          deviceManager.settingsRepo.serverStateFlow.value.appConfig.captureNetworkTraffic,
       ),
-      referrer = TrailblazeReferrer(id = "cli-daemon", display = "CLI (Daemon)"),
+      // Use "cli" referrer (not "cli-daemon") so DesktopYamlRunner's shared-scope set
+      // matches and parallel CLI delegations don't cancel each other.
+      referrer = TrailblazeReferrer(id = "cli", display = "CLI"),
       agentImplementation = agentImpl,
     )
 
@@ -232,9 +260,7 @@ abstract class TrailblazeDesktopApp(
     var success = false
     var errorMessage: String? = null
 
-    // Snapshot existing sessions to identify new ones
     val logsRepo = deviceManager.logsRepo
-    val existingSessionIds = logsRepo.getSessionIds().toSet()
 
     val params = DesktopAppRunYamlParams(
       forceStopTargetApp = request.forceStopTargetApp,
@@ -242,6 +268,9 @@ abstract class TrailblazeDesktopApp(
       targetTestApp = trailConfig?.target?.let { desktopAppConfig.availableAppTargets.findById(it) }
         ?: deviceManager.getCurrentSelectedTargetApp(),
       noLogging = request.noLogging,
+      captureVideo = request.captureVideo,
+      captureLogcat = request.captureLogcat,
+      captureIosLogs = request.captureIosLogs,
       onProgressMessage = { message ->
         Console.info(message)
         onProgress(message)
@@ -275,46 +304,34 @@ abstract class TrailblazeDesktopApp(
       )
     }
 
-    // Wait for session logs to appear and reach a terminal state.
+    // Wait for THIS run's session logs to appear and reach a terminal state.
     // For on-device instrumentation, the RPC returns before the trail finishes executing
-    // on-device, so we poll until the session reaches Ended status.
+    // on-device, so we poll until the pinned session reaches Ended status. Looking at
+    // sibling sessions in the repo would block forever when one of them hits
+    // MaxCallsLimit / Timeout while ours has already cleanly Ended.
     delay(3000)
-    var newSessionIds = logsRepo.getSessionIds().filter { it !in existingSessionIds }
     val maxWaitMs = 600_000L
     val pollIntervalMs = 500L
     val waitStart = System.currentTimeMillis()
     while (System.currentTimeMillis() - waitStart < maxWaitMs) {
-      newSessionIds = logsRepo.getSessionIds().filter { it !in existingSessionIds }
-      // Only consider sessions that have a TrailblazeSessionStatusChangeLog (i.e., real
-      // trail sessions). RPC tool execution sessions created by HostOnDeviceRpcAgent set
-      // sendSessionStartLog=false and never emit status change logs, so their session
-      // directories appear in the logs folder but getSessionInfo() returns null. Without
-      // this filter those orphan sessions block the loop indefinitely.
-      val trailSessions = newSessionIds.filter { sessionId ->
-        logsRepo.getSessionInfo(sessionId) != null
-      }
-      val allEnded = trailSessions.isNotEmpty() && trailSessions.all { sessionId ->
-        val status = logsRepo.getSessionInfo(sessionId)?.latestStatus
-        status is SessionStatus.Ended
-      }
-      if (allEnded) break
+      val sessionInfo = logsRepo.getSessionInfo(pinnedSessionId)
+      if (sessionInfo != null && sessionInfo.latestStatus is SessionStatus.Ended) break
       delay(pollIntervalMs)
     }
     // Short buffer after Ended for trailing files (screenshots, etc.)
     delay(3000)
-    newSessionIds = logsRepo.getSessionIds().filter { it !in existingSessionIds }
 
-    // Cross-check session status from logs (source of truth for pass/fail)
+    // Cross-check session status from logs (source of truth for pass/fail). Inspect ONLY
+    // the pinned session — sibling sessions belong to parallel trail runs and have no
+    // bearing on this one's success.
+    val pinnedSessionInfo = logsRepo.getSessionInfo(pinnedSessionId)
     if (success) {
-      for (sessionId in newSessionIds) {
-        val sessionInfo = logsRepo.getSessionInfo(sessionId)
-        val status = sessionInfo?.latestStatus
-        if (status is SessionStatus.Ended && status !is SessionStatus.Ended.Succeeded &&
-          status !is SessionStatus.Ended.SucceededWithFallback
-        ) {
-          success = false
-          errorMessage = "Session $sessionId ended with status: ${status::class.simpleName}"
-        }
+      val status = pinnedSessionInfo?.latestStatus
+      if (status is SessionStatus.Ended && status !is SessionStatus.Ended.Succeeded &&
+        status !is SessionStatus.Ended.SucceededWithSelfHeal
+      ) {
+        success = false
+        errorMessage = "Session $pinnedSessionId ended with status: ${status::class.simpleName}"
       }
     }
 
@@ -323,15 +340,13 @@ abstract class TrailblazeDesktopApp(
     // The CLI calls generateRecordingForSession() which polls for trailing
     // log files (TrailblazeToolLog) that arrive after session Ended status.
 
-    // Extract device classifiers from the first new session for recording filename
-    val classifiers = newSessionIds.firstOrNull()?.let { sessionId ->
-      logsRepo.getSessionInfo(sessionId)?.trailblazeDeviceInfo?.classifiers
-        ?.map { it.classifier }
-    } ?: emptyList()
+    // Extract device classifiers from the pinned session for recording filename
+    val classifiers = pinnedSessionInfo?.trailblazeDeviceInfo?.classifiers?.map { it.classifier }
+      ?: emptyList()
 
     CliRunResponse(
       success = success && errorMessage == null,
-      sessionId = newSessionIds.firstOrNull()?.value,
+      sessionId = pinnedSessionId.value,
       error = errorMessage,
       deviceClassifiers = classifiers,
     )

@@ -72,7 +72,6 @@ kotlin {
       implementation(libs.ktor.http)
       implementation(libs.ktor.utils)
       implementation(libs.kotlin.reflect)
-      implementation(libs.snakeyaml)
 
       runtimeOnly(libs.jackson.dataformat.yaml)
       runtimeOnly(libs.jackson.module.kotlin)
@@ -95,7 +94,12 @@ kotlin {
     jvmMain {
       dependsOn(jvmAndAndroid)
       dependencies {
-        // JVM-specific dependencies if needed
+        // dadb: speaks the ADB wire protocol directly so AndroidHostAdbUtils can avoid
+        // shelling out to the `adb` binary for shell/install/push/pull/forward operations.
+        // Scoped to JVM-only — `AndroidHostAdbUtils` and the rest of the host-only ADB code
+        // live under src/jvmMain, so on-device Android consumers do not need (and must not
+        // pay for) this dep.
+        implementation(libs.dadb)
       }
     }
 
@@ -131,6 +135,7 @@ dependencies {
   add("jvmAndAndroidApi", "dev.mobile:maestro-client:$maestroVersion") { isTransitive = false }
   add("jvmAndAndroidApi", "dev.mobile:maestro-utils:$maestroVersion") { isTransitive = false }
   add("jvmAndAndroidImplementation", "dev.mobile:maestro-orchestra:$maestroVersion") { isTransitive = false }
+
 }
 
 dependencyGuard {

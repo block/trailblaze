@@ -34,7 +34,15 @@ private class JvmSpriteFrameCache(
     spriteImage =
       if (spriteFile.exists()) {
         try {
-          ImageIO.read(spriteFile)
+          if (spriteFile.name.endsWith(".webp")) {
+            // ImageIO doesn't support WebP — decode via Skia, re-encode as PNG, then read.
+            val skiaImage = Image.makeFromEncoded(spriteFile.readBytes())
+            val pngData = skiaImage.encodeToData(org.jetbrains.skia.EncodedImageFormat.PNG)
+              ?: throw IllegalStateException("Skia failed to encode sprite sheet as PNG")
+            ImageIO.read(java.io.ByteArrayInputStream(pngData.bytes))
+          } else {
+            ImageIO.read(spriteFile)
+          }
         } catch (e: Exception) {
           Console.log("Failed to load sprite sheet: ${e.message}")
           null

@@ -27,9 +27,15 @@ import xyz.block.trailblaze.utils.ElementComparator
  * construction. Subclasses provide agent-specific tool dispatch via
  * [executeTool] and context construction via [buildExecutionContext].
  */
-abstract class BaseTrailblazeAgent : TrailblazeAgent, TrailblazeAgentContext {
-
-  open override val memory = AgentMemory()
+abstract class BaseTrailblazeAgent(
+  /**
+   * Shared [AgentMemory] for the trail. Defaults to a fresh instance for the common case where
+   * the agent owns its memory; callers that need to thread external memory through the agent
+   * (e.g. the on-device `RunYamlRequestHandler` syncing host snapshots in and out) supply
+   * their own instance so writes are visible across the boundary.
+   */
+  open override val memory: AgentMemory = AgentMemory(),
+) : TrailblazeAgent, TrailblazeAgentContext {
 
   fun clearMemory() {
     memory.clear()

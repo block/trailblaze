@@ -20,6 +20,12 @@ fun main() {
     generatedDir = generatedDir,
   ).generate()
 
+  // Generate external-config documentation for binary users
+  ExternalConfigDocsGenerator(
+    generatedDir = generatedDir,
+    opensourceRoot = gitDir,
+  ).generate()
+
   // Generate CLI documentation (goes in main docs folder, not generated/)
   CliDocsGenerator(
     docsDir = docsDir

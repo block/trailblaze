@@ -1,0 +1,19 @@
+# This file is a CHECKED-IN baseline of CLI output rendered by trailblaze-host's CLI helpers.
+# It is NOT a contract — if a test fails here because output drifted, decide whether the
+# drift is intentional. The test always (re)writes this file from the current rendered output,
+# then asserts the working tree is clean. So `git diff` of this file IS the failure message.
+# Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
+# small wording / spacing changes can be intentional or accidental.
+# ----------------------------------------------------------------------
+Usage: trailblaze device connect [-hV] [--headless=<headless>] <platform>
+Connect a device to your session (ANDROID, IOS, or WEB)
+      <platform>   Device platform: ANDROID, IOS, or WEB
+  -h, --help       Show this help message and exit.
+      --headless=<headless>
+                   For --device web/...: launch the Playwright browser
+                     headless. When omitted, falls back to the persisted
+                     `web-headless` config (see `trailblaze config
+                     web-headless`). Pass --headless=false to force a visible
+                     browser, --headless=true to force headless. Ignored for
+                     non-web devices.
+  -V, --version    Print version information and exit.

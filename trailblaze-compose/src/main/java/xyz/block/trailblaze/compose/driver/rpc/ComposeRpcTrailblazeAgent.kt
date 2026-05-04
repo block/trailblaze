@@ -4,6 +4,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
 import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.TrailblazeAgentContext
+import xyz.block.trailblaze.logToolExecution
 import xyz.block.trailblaze.api.AgentActionType
 import xyz.block.trailblaze.api.AgentDriverAction
 import xyz.block.trailblaze.api.ScreenState
@@ -31,6 +32,7 @@ import xyz.block.trailblaze.toolcalls.commands.memory.MemoryTrailblazeTool
 import xyz.block.trailblaze.toolcalls.getIsRecordableFromAnnotation
 import xyz.block.trailblaze.toolcalls.getToolNameFromAnnotation
 import xyz.block.trailblaze.toolcalls.isSuccess
+import xyz.block.trailblaze.toolcalls.toLogPayload
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.utils.ElementComparator
 import java.io.Closeable
@@ -299,30 +301,6 @@ class ComposeRpcTrailblazeAgent(
 
       else -> AgentDriverAction.OtherAction(AgentActionType.TAP_POINT)
     }
-  }
-
-  private fun logToolExecution(
-    tool: TrailblazeTool,
-    timeBeforeExecution: kotlinx.datetime.Instant,
-    traceId: TraceId,
-    result: TrailblazeToolResult,
-  ) {
-    val session = sessionProvider.invoke()
-    val toolLog =
-      TrailblazeLog.TrailblazeToolLog(
-        trailblazeTool = tool,
-        toolName = tool.getToolNameFromAnnotation(),
-        exceptionMessage = (result as? TrailblazeToolResult.Error)?.errorMessage,
-        successful = result.isSuccess(),
-        durationMs =
-          Clock.System.now().toEpochMilliseconds() - timeBeforeExecution.toEpochMilliseconds(),
-        timestamp = timeBeforeExecution,
-        traceId = traceId,
-        session = session.sessionId,
-        isRecordable = tool.getIsRecordableFromAnnotation(),
-      )
-
-    trailblazeLogger.log(session, toolLog)
   }
 
   override fun close() {

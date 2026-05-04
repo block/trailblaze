@@ -200,7 +200,7 @@ internal fun extractSessionFailureReason(status: SessionStatus): String? {
   return when (status) {
     is SessionStatus.Ended.Failed ->
       status.exceptionMessage?.let { cleanExceptionMessage(it) }
-    is SessionStatus.Ended.FailedWithFallback ->
+    is SessionStatus.Ended.FailedWithSelfHeal ->
       status.exceptionMessage?.let { cleanExceptionMessage(it) }
     is SessionStatus.Ended.TimeoutReached -> status.message
     is SessionStatus.Ended.MaxCallsLimitReached ->
@@ -457,7 +457,7 @@ internal fun latestActivityLabel(log: TrailblazeLog): String {
     is TrailblazeLog.TrailblazeSessionStatusChangeLog ->
       "Session: ${sessionStatusLabel(log.sessionStatus)}"
     is TrailblazeLog.TrailblazeAgentTaskStatusChangeLog -> "Agent task status update"
-    is TrailblazeLog.AttemptAiFallbackLog -> "Attempting AI fallback"
+    is TrailblazeLog.SelfHealInvokedLog -> "Invoking self-heal"
     is TrailblazeLog.TrailblazeSnapshotLog -> "Captured snapshot"
     is TrailblazeLog.AccessibilityActionLog -> "Accessibility: ${log.actionDescription}"
     is TrailblazeLog.McpAgentRunLog -> "MCP agent run"
@@ -566,8 +566,8 @@ internal fun sessionStatusLabel(status: SessionStatus): String {
     is SessionStatus.Ended.Succeeded -> "Succeeded"
     is SessionStatus.Ended.Failed -> "Failed"
     is SessionStatus.Ended.Cancelled -> "Cancelled"
-    is SessionStatus.Ended.SucceededWithFallback -> "Succeeded with fallback"
-    is SessionStatus.Ended.FailedWithFallback -> "Failed with fallback"
+    is SessionStatus.Ended.SucceededWithSelfHeal -> "Succeeded with self-heal"
+    is SessionStatus.Ended.FailedWithSelfHeal -> "Failed with self-heal"
     is SessionStatus.Ended.TimeoutReached -> "Timed out"
     is SessionStatus.Ended.MaxCallsLimitReached -> "Max calls limit reached"
     is SessionStatus.Unknown -> "Unknown"

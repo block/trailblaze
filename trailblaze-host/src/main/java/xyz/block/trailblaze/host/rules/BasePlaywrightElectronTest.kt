@@ -15,6 +15,7 @@ import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
+import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.playwright.ElectronAppManager
@@ -23,8 +24,10 @@ import xyz.block.trailblaze.playwright.PlaywrightElectronBrowserManager
 import xyz.block.trailblaze.playwright.PlaywrightNativeIdlingConfig
 import xyz.block.trailblaze.playwright.PlaywrightPageManager
 import xyz.block.trailblaze.playwright.PlaywrightTrailblazeAgent
+import xyz.block.trailblaze.playwright.network.WebNetworkCapture
 import xyz.block.trailblaze.playwright.tools.PlaywrightDesktopLaunchGooseTool
 import xyz.block.trailblaze.playwright.tools.WebToolSetIds
+import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.rules.TrailblazeLoggingRule
 import xyz.block.trailblaze.rules.TrailblazeRunnerUtil
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
@@ -92,6 +95,7 @@ class BasePlaywrightElectronTest(
       trailblazeDeviceInfoProvider = { trailblazeDeviceInfo },
       sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
       trailblazeToolRepo = toolRepo,
+      sessionDirProvider = loggingRule.logsRepo::getSessionDir,
     )
   }
 
@@ -135,25 +139,23 @@ class BasePlaywrightElectronTest(
   }
 
   private val trailblazeYaml = TrailblazeYaml.Default
+  private var currentToolTraceId: TraceId? = null
 
   private val trailblazeRunnerUtil by lazy {
     TrailblazeRunnerUtil(
       trailblazeRunner = trailblazeRunner,
       runTrailblazeTool = { trailblazeTools: List<TrailblazeTool> ->
-        val result = playwrightAgent.runTrailblazeTools(
+        playwrightAgent.runTrailblazeTools(
           tools = trailblazeTools,
-          traceId = null,
+          traceId = currentToolTraceId,
           screenState = browserManager.getScreenState(),
           elementComparator = elementComparator,
           screenStateProvider = browserManager::getScreenState,
-        )
-        when (val toolResult = result.result) {
-          is TrailblazeToolResult.Success -> toolResult
-          is TrailblazeToolResult.Error -> throw TrailblazeException(toolResult.errorMessage)
-        }
+        ).result
       },
       trailblazeLogger = loggingRule.logger,
       sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
+      sessionUpdater = { loggingRule.setSession(it) },
     )
   }
 
@@ -166,7 +168,13 @@ class BasePlaywrightElectronTest(
 
     for (item in trailItems) {
       val itemResult = when (item) {
-        is TrailYamlItem.PromptsTrailItem -> trailblazeRunnerUtil.runPromptSuspend(item.promptSteps, useRecordedSteps, onStepProgress)
+        is TrailYamlItem.PromptsTrailItem ->
+          trailblazeRunnerUtil.runPromptSuspend(
+            prompts = item.promptSteps,
+            useRecordedSteps = useRecordedSteps,
+            selfHeal = config.selfHeal,
+            onStepProgress = onStepProgress,
+          )
         is TrailYamlItem.ToolTrailItem -> trailblazeRunnerUtil.runTrailblazeTool(item.tools.map { it.trailblazeTool })
         is TrailYamlItem.ConfigTrailItem -> item.config.context?.let { trailblazeRunner.appendToSystemPrompt(it) }
       }
@@ -180,6 +188,7 @@ class BasePlaywrightElectronTest(
     yaml: String,
     trailblazeDeviceId: TrailblazeDeviceId,
     trailFilePath: String?,
+    traceId: TraceId? = null,
     useRecordedSteps: Boolean = true,
     sendSessionStartLog: Boolean,
     onStepProgress: ((stepIndex: Int, totalSteps: Int, stepText: String) -> Unit)? = null,
@@ -214,11 +223,39 @@ class BasePlaywrightElectronTest(
         )
       }
     }
-    runTrail(trailItems, useRecordedSteps, onStepProgress)
+    ensureWebNetworkCaptureStarted()
+    currentToolTraceId = traceId
+    try {
+      runTrail(trailItems, useRecordedSteps, onStepProgress)
+    } finally {
+      currentToolTraceId = null
+    }
     loggingRule.session?.sessionId ?: SessionId("unknown")
   }
 
+  /**
+   * See [BasePlaywrightNativeTest.ensureWebNetworkCaptureStarted] — same
+   * contract, applied to the Electron CDP-managed BrowserContext so trails
+   * exercising an Electron app can capture network traffic the same way.
+   */
+  private fun ensureWebNetworkCaptureStarted() {
+    if (!config.captureNetworkTraffic) return
+    val session = loggingRule.session ?: return
+    val sessionDir = loggingRule.logsRepo.getSessionDir(session.sessionId)
+    try {
+      WebNetworkCapture.start(
+        ctx = browserManager.currentPage.context(),
+        sessionId = session.sessionId.value,
+        sessionDir = sessionDir,
+        tracker = playwrightAgent.inflightRequestTracker,
+      )
+    } catch (e: Exception) {
+      Console.log("Auto-start of web network capture failed: ${e.message}")
+    }
+  }
+
   fun close() {
+    runCatching { WebNetworkCapture.stop(browserManager.currentPage.context()) }
     browserManager.close()
     electronAppManager.close()
   }

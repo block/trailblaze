@@ -13,7 +13,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
   name = "androidSystemUiDemoMode",
   isForLlm = false
 )
-@LLMDescription("Use this to enable demo mode on the device which will freeze the clock and prevent it from changing.")
+@LLMDescription("Enable demo mode on the device, freezing the clock so it doesn't change.")
 data class AndroidSystemUiDemoModeTrailblazeTool(
   @param:LLMDescription("If we should enable demo mode on the device.")
   val enable: Boolean = true,

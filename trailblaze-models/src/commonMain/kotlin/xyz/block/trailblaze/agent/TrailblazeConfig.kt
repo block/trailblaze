@@ -45,7 +45,7 @@ data class TrailConfig(
   val mode: TrailExecutionMode = TrailExecutionMode.RECORDING_WITH_FALLBACK,
 
   /**
-   * LLM model used for AI fallback when recordings fail or don't exist.
+   * LLM model used for self-heal when recordings fail or don't exist.
    *
    * Should be a vision-capable model for screen analysis. Uses GPT-4o-mini
    * by default as a cost-effective choice with good vision capabilities.
@@ -73,7 +73,7 @@ data class TrailConfig(
     /**
      * Default configuration for reliable trail execution.
      *
-     * Uses recordings with AI fallback, suitable for production test runs
+     * Uses recordings with self-heal, suitable for production test runs
      * where reliability is important but some flexibility is acceptable.
      */
     val DEFAULT = TrailConfig()

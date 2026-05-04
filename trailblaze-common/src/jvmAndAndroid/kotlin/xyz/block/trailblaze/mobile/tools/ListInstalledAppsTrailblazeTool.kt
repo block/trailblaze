@@ -60,6 +60,10 @@ data object ListInstalledAppsTrailblazeTool : ExecutableTrailblazeTool {
         TrailblazeDevicePlatform.WEB -> TrailblazeToolResult.Error.ExceptionThrown(
           errorMessage = "mobile_listInstalledApps is not supported for web devices.",
         )
+
+        TrailblazeDevicePlatform.DESKTOP -> TrailblazeToolResult.Error.ExceptionThrown(
+          errorMessage = "mobile_listInstalledApps is not supported for the Compose desktop driver.",
+        )
       }
     } catch (e: CancellationException) {
       // Re-throw so structured-concurrency teardown (agent abort, driver disconnect, session

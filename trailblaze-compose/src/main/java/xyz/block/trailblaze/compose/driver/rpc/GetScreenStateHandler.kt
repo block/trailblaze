@@ -49,6 +49,7 @@ class GetScreenStateHandler(
               descriptor = ref.descriptor,
               nthIndex = ref.nthIndex,
               testTag = ref.testTag,
+              bounds = ref.bounds,
             )
           }
 

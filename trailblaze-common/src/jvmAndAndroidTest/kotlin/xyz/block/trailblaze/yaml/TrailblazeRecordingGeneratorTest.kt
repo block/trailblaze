@@ -17,6 +17,8 @@ import xyz.block.trailblaze.logs.model.TaskId
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
+import xyz.block.trailblaze.toolcalls.toLogPayload
+import xyz.block.trailblaze.toolcalls.toLogPayloads
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleBySelectorTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.AssertVisibleWithTextTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
@@ -83,8 +85,9 @@ class TrailblazeRecordingGeneratorTest {
     tool: xyz.block.trailblaze.toolcalls.TrailblazeTool,
     toolName: String,
     isRecordable: Boolean = true,
+    isTopLevelToolCall: Boolean = false,
   ) = TrailblazeLog.TrailblazeToolLog(
-    trailblazeTool = tool,
+    trailblazeTool = tool.toLogPayload(),
     toolName = toolName,
     successful = true,
     traceId = null,
@@ -92,6 +95,7 @@ class TrailblazeRecordingGeneratorTest {
     session = testSession,
     timestamp = now,
     isRecordable = isRecordable,
+    isTopLevelToolCall = isTopLevelToolCall,
   )
 
   private fun delegatingToolLog(
@@ -99,9 +103,9 @@ class TrailblazeRecordingGeneratorTest {
     toolName: String,
     executableTools: List<xyz.block.trailblaze.toolcalls.TrailblazeTool> = emptyList(),
   ) = TrailblazeLog.DelegatingTrailblazeToolLog(
-    trailblazeTool = tool,
+    trailblazeTool = tool.toLogPayload(),
     toolName = toolName,
-    executableTools = executableTools,
+    executableTools = executableTools.toLogPayloads(),
     session = testSession,
     timestamp = now,
     traceId = null,
@@ -208,6 +212,36 @@ class TrailblazeRecordingGeneratorTest {
     val prompts = decoded[0] as TrailYamlItem.PromptsTrailItem
     assertThat(prompts.promptSteps[0].recording!!.tools.size).isEqualTo(1)
     assertThat(prompts.promptSteps[0].recording!!.tools[0].name).isEqualTo("tapOnElementBySelector")
+  }
+
+  @Test
+  fun topLevelDirectToolLogsArePreferredOverExecutorLogs() {
+    val step = DirectionStep(step = "Create contact through scripted tool")
+    val logs = listOf(
+      objectiveStart(step),
+      toolLog(
+        tool = xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool(
+          toolName = "ios_contacts_create_contact",
+          raw = JsonObject(
+            mapOf(
+              "firstName" to JsonPrimitive("Trailblaze"),
+              "lastName" to JsonPrimitive("Codex0426"),
+            ),
+          ),
+        ),
+        toolName = "ios_contacts_create_contact",
+        isTopLevelToolCall = true,
+      ),
+      toolLog(LaunchAppTrailblazeTool(appId = "com.apple.MobileAddressBook"), "launchApp"),
+      toolLog(InputTextTrailblazeTool(text = "Trailblaze"), "inputText"),
+      objectiveComplete(step),
+    )
+
+    val yaml = logs.generateRecordedYaml(trailblazeYaml)
+
+    assertThat(yaml).contains("ios_contacts_create_contact")
+    assertThat(yaml).doesNotContain("launchApp")
+    assertThat(yaml).doesNotContain("inputText")
   }
 
   @Test
@@ -730,7 +764,7 @@ class TrailblazeRecordingGeneratorTest {
         trailblazeTool = TapOnByElementSelector(
           reason = "Tap button",
           selector = TrailblazeElementSelector(textRegex = "Submit"),
-        ),
+        ).toLogPayload(),
         toolName = "tapOnElementBySelector",
         successful = false,
         exceptionMessage = "Element not found",

@@ -79,7 +79,7 @@ data class SessionSummary(
             is TrailblazeLog.TrailblazeSessionStatusChangeLog,
             is TrailblazeLog.ObjectiveStartLog,
             is TrailblazeLog.ObjectiveCompleteLog,
-            is TrailblazeLog.AttemptAiFallbackLog,
+            is TrailblazeLog.SelfHealInvokedLog,
             is TrailblazeLog.TrailblazeSnapshotLog,
             is TrailblazeLog.AccessibilityActionLog,
             is TrailblazeLog.McpAgentRunLog,
@@ -225,8 +225,8 @@ data class SessionSummary(
               elapsedTimeMs = log.timestamp.toEpochMilliseconds() - sessionStartTimestamp.toEpochMilliseconds(),
             )
 
-            is TrailblazeLog.AttemptAiFallbackLog -> SessionEvent.AttemptAiFallback(
-              details = "Recording failed, attempting AI fallback",
+            is TrailblazeLog.SelfHealInvokedLog -> SessionEvent.SelfHealInvoked(
+              details = "Recording failed, attempting self-heal",
               recordingResult = log.recordingResult,
               timestamp = log.timestamp,
               elapsedTimeMs = log.timestamp.toEpochMilliseconds() - sessionStartTimestamp.toEpochMilliseconds(),

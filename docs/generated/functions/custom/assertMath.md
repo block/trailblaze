@@ -1,7 +1,7 @@
 ## Tool `assertMath`
 
 ## Description
-This will calculate the result of an expression and compare it to the expected output value.
+Calculate the result of an expression and compare it to the expected output value.
 
 ### Command Class
 `xyz.block.trailblaze.toolcalls.commands.memory.AssertMathTrailblazeTool`

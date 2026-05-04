@@ -1,0 +1,5 @@
+# Workspace anchor for the iOS Contacts example. The example's authored unit lives at
+# packs/contacts/pack.yaml; this file replaces the legacy flat target previously at
+# targets/ios-contacts.yaml.
+packs:
+  - packs/contacts/pack.yaml

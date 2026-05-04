@@ -1,7 +1,9 @@
 package xyz.block.trailblaze.ui
 
-import org.yaml.snakeyaml.DumperOptions
-import org.yaml.snakeyaml.Yaml
+import com.charleskorn.kaml.Yaml
+import com.charleskorn.kaml.YamlConfiguration
+import com.charleskorn.kaml.YamlMap
+import xyz.block.trailblaze.bundle.yaml.YamlEmitter
 import xyz.block.trailblaze.util.DesktopOsType
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.ui.goose.GooseRecipe
@@ -54,6 +56,19 @@ object TrailblazeDesktopUtil {
    */
   fun getDesktopLogsDirectory(): File {
     return File(getDefaultAppDataDirectory(), "desktop-logs").apply { mkdirs() }
+  }
+
+  /**
+   * Returns the path to the daemon's combined stdout/stderr log file.
+   *
+   * Centralized here (rather than constructed at each call site) so the daemon,
+   * MCP proxy, and any tooling that surfaces "where do I look when the daemon
+   * dies?" all agree on a single canonical location.
+   *
+   * @return `~/.trailblaze/daemon.log` — directory is created if missing.
+   */
+  fun getDaemonLogFile(): File {
+    return File(getDefaultAppDataDirectory().apply { mkdirs() }, "daemon.log")
   }
 
   /**
@@ -194,28 +209,48 @@ object TrailblazeDesktopUtil {
    * Checks if an extension with matching type and URI already exists.
    * If not found, adds the trailblaze extension to the config.
    *
+   * **YAML library: kaml.** Uses kaml's tree API to read the user-owned config (which has
+   * arbitrary structure — third-party extensions, custom fields), converts to a mutable
+   * Kotlin tree, splices in the Trailblaze extension entry, and re-emits via the shared
+   * `xyz.block.trailblaze.bundle.yaml.YamlEmitter`. SnakeYAML used to handle this round-trip
+   * in one shot via its mutable Map representation; kaml's tree types are immutable, hence
+   * the conversion step. The trade is acceptable: Goose-config interop is a one-off
+   * integration, the file format is simple (no multi-doc, no anchors, no flow style in
+   * practice), and the resulting dependency surface is one library instead of two.
+   *
    * @return [GooseExtensionResult] indicating the outcome
    */
-  @Suppress("UNCHECKED_CAST")
-  fun ensureTrailblazeExtensionInstalledInGoose(): GooseExtensionResult {
-    val configFile = getGooseConfigFile()
+  fun ensureTrailblazeExtensionInstalledInGoose(): GooseExtensionResult =
+    ensureTrailblazeExtensionInstalledIn(getGooseConfigFile())
 
+  /**
+   * Internal seam for tests — same logic as the no-arg public function but operates on
+   * an arbitrary config-file path. Public-facing callers use the path from
+   * [getGooseConfigFile]; tests pass a fixture path inside a temp dir.
+   */
+  internal fun ensureTrailblazeExtensionInstalledIn(configFile: File): GooseExtensionResult {
     if (!configFile.exists()) {
       Console.log("Goose config file not found at: ${configFile.absolutePath}")
       return GooseExtensionResult.ConfigNotFound
     }
 
     return try {
-      val yaml = Yaml()
-      val config: MutableMap<String, Any> = configFile.inputStream().use { yaml.load(it) }
-        ?: mutableMapOf()
+      val yaml = Yaml(configuration = YamlConfiguration(strictMode = false, encodeDefaults = false))
+      val rootNode = yaml.parseToYamlNode(configFile.readText())
+      val rootMapNode = rootNode as? YamlMap
+        ?: return GooseExtensionResult.Error("Goose config root is not a YAML map")
+      val config = YamlEmitter.yamlMapToMutable(rootMapNode)
 
-      // Get or create extensions map
-      val extensions = config.getOrPut("extensions") { mutableMapOf<String, Any>() }
-        as? MutableMap<String, Any>
-        ?: return GooseExtensionResult.Error("Invalid extensions format in config")
+      // Get or create extensions map.
+      @Suppress("UNCHECKED_CAST")
+      val extensions = (config["extensions"] as? MutableMap<String, Any?>)
+        ?: run {
+          val fresh = LinkedHashMap<String, Any?>()
+          config["extensions"] = fresh
+          fresh
+        }
 
-      // Check if an extension with matching type and URI already exists
+      // Check if an extension with matching type and URI already exists.
       val targetType = TrailblazeGooseExtension.type
       val targetUri = TrailblazeGooseExtension.uri
 
@@ -231,32 +266,26 @@ object TrailblazeDesktopUtil {
         return GooseExtensionResult.AlreadyInstalled
       }
 
-      // Add the trailblaze extension
-      val extensionConfig = mutableMapOf(
-        "enabled" to TrailblazeGooseExtension.enabled,
-        "type" to TrailblazeGooseExtension.type,
-        "name" to TrailblazeGooseExtension.name,
-        "description" to TrailblazeGooseExtension.description,
-        "uri" to TrailblazeGooseExtension.uri,
-        "envs" to TrailblazeGooseExtension.envs,
-        "env_keys" to TrailblazeGooseExtension.env_keys,
-        "timeout" to TrailblazeGooseExtension.timeout,
-        "bundled" to TrailblazeGooseExtension.bundled,
-      )
+      // Add the trailblaze extension.
+      val extensionConfig = LinkedHashMap<String, Any?>().apply {
+        this["enabled"] = TrailblazeGooseExtension.enabled
+        this["type"] = TrailblazeGooseExtension.type
+        this["name"] = TrailblazeGooseExtension.name
+        this["description"] = TrailblazeGooseExtension.description
+        this["uri"] = TrailblazeGooseExtension.uri
+        this["envs"] = TrailblazeGooseExtension.envs
+        this["env_keys"] = TrailblazeGooseExtension.env_keys
+        this["timeout"] = TrailblazeGooseExtension.timeout
+        this["bundled"] = TrailblazeGooseExtension.bundled
+      }
 
       extensions["trailblaze"] = extensionConfig
 
-      // Write the updated config back
-      val dumperOptions = DumperOptions().apply {
-        defaultFlowStyle = DumperOptions.FlowStyle.BLOCK
-        isPrettyFlow = true
-        indent = 2
-        indicatorIndent = 0
-      }
-      val yamlWriter = Yaml(dumperOptions)
-
+      // Write the updated config back via the shared emitter. The `Any?`-typed mutable
+      // tree doesn't fit kaml's typed-serializer model, so we go through `YamlEmitter`
+      // (which produces block-style 2-space indent, list dashes flush with parent key).
       FileWriter(configFile).use { writer ->
-        yamlWriter.dump(config, writer)
+        writer.write(YamlEmitter.renderMap(config))
       }
 
       Console.log("Trailblaze extension added to Goose config")

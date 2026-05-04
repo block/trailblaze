@@ -12,17 +12,27 @@ package xyz.block.trailblaze.logs.model
  * val groups = sessions.groupByTest()
  * val uniqueTests = groups.size
  * val retriedTests = groups.count { it.wasRetried }
- * val fallbackTests = groups.count { it.usedFallback }
+ * val selfHealTests = groups.count { it.usedSelfHeal }
  * ```
  */
 data class SessionGroup(
-  /** The best session result for this test (prefers passed, then latest) */
+  /**
+   * The "best" session result for this test (prefers passed, then latest).
+   *
+   * Use [latest] when reporting what the user sees today (a Succeeded → Failed rerun should
+   * read as Failed). Use [best] when reporting whether a test eventually passed (CI-style
+   * "did this test ship green?"). They diverge whenever a test passed in an earlier run and
+   * later failed.
+   */
   val best: SessionInfo,
-  /** All attempts in chronological order */
+  /** All attempts in chronological order (oldest first). */
   val allAttempts: List<SessionInfo>,
-  /** Whether any attempt of this test used AI fallback */
-  val usedFallback: Boolean,
+  /** Whether any attempt of this test used self-heal */
+  val usedSelfHeal: Boolean,
 ) {
+  /** The most recent attempt for this test (chronologically last). */
+  val latest: SessionInfo get() = allAttempts.last()
+
   /** Whether this test was retried (more than one attempt) */
   val wasRetried: Boolean get() = allAttempts.size > 1
 
@@ -33,15 +43,15 @@ data class SessionGroup(
   val replacedAttempts: List<SessionInfo>
     get() = allAttempts.filter { it.sessionId != best.sessionId }
 
-  /** Whether the best result is a pass (Succeeded or SucceededWithFallback) */
+  /** Whether the latest attempt is a pass (Succeeded or SucceededWithSelfHeal). */
   val isPassed: Boolean
-    get() = best.latestStatus is SessionStatus.Ended.Succeeded ||
-      best.latestStatus is SessionStatus.Ended.SucceededWithFallback
+    get() = latest.latestStatus is SessionStatus.Ended.Succeeded ||
+      latest.latestStatus is SessionStatus.Ended.SucceededWithSelfHeal
 }
 
 /**
- * Groups sessions by [SessionInfo.displayName] and device classifiers, then picks the best result
- * per group.
+ * Groups sessions by [SessionInfo.stableTestKey] and device classifiers, then picks the best
+ * result per group.
  *
  * This provides a deduplicated view of sessions where retried tests appear once
  * (with the best outcome), while still preserving access to all attempts.
@@ -51,7 +61,7 @@ fun List<SessionInfo>.groupByTest(): List<SessionGroup> {
   return groupBy { session ->
     val classifierKey = session.trailblazeDeviceInfo?.classifiers
       ?.joinToString(",") { it.classifier } ?: ""
-    session.displayName to classifierKey
+    session.stableTestKey to classifierKey
   }
     .values
     .map { attempts ->
@@ -60,15 +70,15 @@ fun List<SessionInfo>.groupByTest(): List<SessionGroup> {
       // Prefer the latest passed result; if none passed, take the last attempt
       val best = sorted.lastOrNull { session ->
         session.latestStatus is SessionStatus.Ended.Succeeded ||
-          session.latestStatus is SessionStatus.Ended.SucceededWithFallback
+          session.latestStatus is SessionStatus.Ended.SucceededWithSelfHeal
       } ?: sorted.last()
 
       SessionGroup(
         best = best,
         allAttempts = sorted,
-        usedFallback = sorted.any {
-          it.latestStatus is SessionStatus.Ended.SucceededWithFallback ||
-            it.latestStatus is SessionStatus.Ended.FailedWithFallback
+        usedSelfHeal = sorted.any {
+          it.latestStatus is SessionStatus.Ended.SucceededWithSelfHeal ||
+            it.latestStatus is SessionStatus.Ended.FailedWithSelfHeal
         },
       )
     }
@@ -78,19 +88,19 @@ fun List<SessionInfo>.groupByTest(): List<SessionGroup> {
  * Summary statistics computed from grouped sessions.
  *
  * Unlike raw session counts, these stats represent unique tests after deduplication,
- * with additional breakdowns for fallback usage and retries.
+ * with additional breakdowns for self-heal usage and retries.
  */
 data class GroupedSessionStats(
   /** Number of unique tests */
   val uniqueTests: Int,
   /** Total sessions (including retry attempts) */
   val totalSessions: Int,
-  /** Tests whose best result is passed */
+  /** Tests whose most recent attempt passed */
   val passed: Int,
-  /** Tests whose best result is failed */
+  /** Tests whose most recent attempt failed */
   val failed: Int,
-  /** Tests that used AI fallback (subset of passed or failed) */
-  val fallback: Int,
+  /** Tests that used self-heal (subset of passed or failed) */
+  val selfHeal: Int,
   /** Tests that were retried at least once */
   val retried: Int,
   /** Tests currently in progress */
@@ -109,7 +119,7 @@ data class GroupedSessionStats(
 fun List<SessionGroup>.computeGroupedStats(): GroupedSessionStats {
   var passed = 0
   var failed = 0
-  var fallback = 0
+  var selfHeal = 0
   var retried = 0
   var inProgress = 0
   var timeout = 0
@@ -117,14 +127,17 @@ fun List<SessionGroup>.computeGroupedStats(): GroupedSessionStats {
 
   for (group in this) {
     if (group.wasRetried) retried++
-    if (group.usedFallback) fallback++
+    if (group.usedSelfHeal) selfHeal++
 
-    when (group.best.latestStatus) {
+    // Stats reflect what the user sees today — i.e. the most recent attempt — so a
+    // Succeeded → Failed rerun counts as Failed. Use [SessionGroup.best] explicitly if you
+    // need "did the test eventually pass" semantics.
+    when (group.latest.latestStatus) {
       is SessionStatus.Started -> inProgress++
       is SessionStatus.Ended.Succeeded,
-      is SessionStatus.Ended.SucceededWithFallback -> passed++
+      is SessionStatus.Ended.SucceededWithSelfHeal -> passed++
       is SessionStatus.Ended.Failed,
-      is SessionStatus.Ended.FailedWithFallback -> failed++
+      is SessionStatus.Ended.FailedWithSelfHeal -> failed++
       is SessionStatus.Ended.TimeoutReached -> timeout++
       is SessionStatus.Ended.MaxCallsLimitReached -> maxCalls++
       is SessionStatus.Ended.Cancelled -> {} // not counted as a distinct category
@@ -137,7 +150,7 @@ fun List<SessionGroup>.computeGroupedStats(): GroupedSessionStats {
     totalSessions = sumOf { it.allAttempts.size },
     passed = passed,
     failed = failed,
-    fallback = fallback,
+    selfHeal = selfHeal,
     retried = retried,
     inProgress = inProgress,
     timeout = timeout,

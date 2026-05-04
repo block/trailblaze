@@ -61,9 +61,9 @@ data class TrailblazeServerState(
     // Trails directory path (null means use default: ~/.trailblaze/trails)
     val trailsDirectory: String? = null,
     // Per-project Trailblaze config directory — layered on top of the classpath-bundled
-    // framework config. When null, the settings repo falls back to
-    // `${trailsDirectory}/../trailblaze-config/` if that sibling exists, then to null
-    // (classpath-only). `TRAILBLAZE_CONFIG_DIR` env var wins over this when set.
+    // framework config. When null, the settings repo discovers `trails/config/` via the
+    // workspace walk-up rule, then falls back to null (classpath-only).
+    // `TRAILBLAZE_CONFIG_DIR` env var wins over this when set.
     val trailblazeConfigDirectory: String? = null,
     // Root app data directory path (null means use default: ~/.trailblaze)
     val appDataDirectory: String? = null,
@@ -71,6 +71,7 @@ data class TrailblazeServerState(
     val showTrailsTab: Boolean = true, // Default true for backward compatibility
     val showDevicesTab: Boolean = false, // Default hidden - can be enabled in Settings
     val showRecordTab: Boolean = false, // Default hidden - can be enabled in Settings
+    val showWaypointsTab: Boolean = true, // Default visible — Block app overrides via initialConfig to hide as experimental
     val showDeviceStatusPanel: Boolean = false, // Floating device status overlay in bottom-right
     // Navigation rail expanded/collapsed state
     val navRailExpanded: Boolean = true, // Default to expanded
@@ -80,6 +81,18 @@ data class TrailblazeServerState(
     val showWebBrowser: Boolean = true,
     // Local dev capture settings
     val captureLogcat: Boolean = false,
+    // Capture iOS Simulator system logs (off by default — extremely high volume).
+    val captureIosLogs: Boolean = false,
+    /**
+     * When true, every supported session auto-starts the framework network
+     * capture engine — events stream to `<session-dir>/network.ndjson` with no
+     * per-trail capture-start call required. Currently honored by Playwright
+     * (web + Electron); on-device mobile engines plug
+     * into the same flag. Off by default because the per-event I/O adds cost
+     * on the engine's callback thread; flip on when investigating analytics
+     * signals or any cross-cutting network behavior.
+     */
+    val captureNetworkTraffic: Boolean = false,
     // Last navigation route (restored on app restart)
     val lastRoute: String? = null, // Qualified class name of the last visited route
     // Self-test server: expose the live desktop window as a Compose RPC test target

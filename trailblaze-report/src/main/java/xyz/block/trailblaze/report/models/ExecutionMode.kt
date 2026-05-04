@@ -11,8 +11,8 @@ enum class ExecutionMode {
   /** Executed using recording only, no AI */
   RECORDING_ONLY,
 
-  /** Recording failed, fell back to AI */
-  AI_FALLBACK,
+  /** Recording failed, self-heal recovered via LLM */
+  SELF_HEAL,
 
   /** No recording available, used AI only */
   AI_ONLY,

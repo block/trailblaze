@@ -167,10 +167,10 @@ class McpProgressNotifier(
       )
     }
 
-    is TrailblazeLog.AttemptAiFallbackLog -> {
+    is TrailblazeLog.SelfHealInvokedLog -> {
       ProgressNotificationData(
-        message = "Attempting AI fallback for: ${log.promptStep.prompt}",
-        category = "fallback",
+        message = "Invoking self-heal for: ${log.promptStep.prompt}",
+        category = "self_heal",
       )
     }
 

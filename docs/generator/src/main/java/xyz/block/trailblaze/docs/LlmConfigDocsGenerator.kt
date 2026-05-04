@@ -35,7 +35,7 @@ class LlmConfigDocsGenerator(
       appendLine()
       appendLine(
         "Trailblaze ships with the following built-in models. " +
-          "When you reference a model by `id` in your `trailblaze.yaml`, " +
+          "When you reference a model by `id` in your `trails/config/trailblaze.yaml`, " +
           "all specs below are inherited automatically."
       )
       appendLine()
@@ -43,7 +43,7 @@ class LlmConfigDocsGenerator(
         "**These models can change between Trailblaze releases** " +
           "(models added/removed, pricing updated). " +
           "For stable, predictable configuration, set explicit values in your " +
-          "workspace `trailblaze.yaml`."
+          "workspace `trails/config/trailblaze.yaml`."
       )
       appendLine()
 

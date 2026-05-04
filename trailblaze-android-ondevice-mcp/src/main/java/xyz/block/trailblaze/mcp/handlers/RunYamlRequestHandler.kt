@@ -7,6 +7,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.agent.TrailblazeProgressEvent
 import xyz.block.trailblaze.android.accessibility.TrailblazeAccessibilityService
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
@@ -64,8 +65,13 @@ class RunYamlRequestHandler(
    *  for capturing failure screenshots. The rule must have its provider wired before the first
    *  request — see the callers of [OnDeviceRpcServer]. */
   private val loggingRule: TrailblazeLoggingRule,
-  /** Callback to run via TrailblazeRunner (legacy YAML processing) */
-  private val runTrailblazeYaml: suspend (RunYamlRequest, TrailblazeSession) -> TrailblazeSession,
+  /**
+   * Callback to run via TrailblazeRunner (legacy YAML processing). The third argument is a
+   * shared [AgentMemory] that the handler pre-populates from `request.memorySnapshot`; the
+   * callback is responsible for threading it into the constructed agent so writes from
+   * on-device tools land in the same instance the handler reads from afterward.
+   */
+  private val runTrailblazeYaml: suspend (RunYamlRequest, TrailblazeSession, AgentMemory) -> TrailblazeSession,
   /** Provider for device info including classifiers - used in session start logs.
    *  Accepts the device ID from the request so callers can initialize state before
    *  building the info (e.g., setting lateinit properties). */
@@ -76,10 +82,16 @@ class RunYamlRequestHandler(
    *  requests fall back to TRAILBLAZE_RUNNER. V3 is intended to run on the host, not on-device. */
   private val runMultiAgentV3Callback: (suspend (RunYamlRequest, TrailblazeSession) -> TrailblazeSession)? = null,
   /**
-   * Seam for waiting on the UI to settle before and after each tool dispatch. Default calls
-   * into the Android [xyz.block.trailblaze.android.accessibility.TrailblazeAccessibilityService]
-   * singleton. JVM unit tests override this with a no-op because loading that Android class
-   * requires the Android framework.
+   * Seam for waiting on the UI to settle before tool dispatch. Invoked ONCE per handled
+   * request, immediately before the tool(s) execute — not after. (Post-tool settling, when
+   * the caller needs a stable screen, is the responsibility of the next request: another
+   * `RunYamlRequest` pre-settles on entry, and `GetScreenStateRequest` settles on entry too.
+   * See `RunYamlRequestHandler`'s body comment where the post-settle was dropped.)
+   *
+   * Default calls into the Android
+   * [xyz.block.trailblaze.android.accessibility.TrailblazeAccessibilityService] singleton.
+   * JVM unit tests override this with a no-op (or a counter) because loading that Android
+   * class requires the Android framework.
    */
   private val waitForSettled: suspend () -> Unit = ::defaultWaitForSettled,
 ) : RpcHandler<RunYamlRequest, RunYamlResponse> {
@@ -164,6 +176,12 @@ class RunYamlRequestHandler(
     // Extract objective from YAML for progress reporting
     val objective = trailConfig?.title ?: trailConfig?.id ?: request.testName
 
+    // Shared AgentMemory for this RPC. Pre-populated from the host's `request.memorySnapshot`
+    // so on-device tools see the host's memory state at dispatch time (reads work). The
+    // callback threads this same instance into the constructed agent, so writes performed
+    // by on-device tools land here and are returned to the host in `response.memorySnapshot`.
+    val agentMemory = AgentMemory().apply { variables.putAll(request.memorySnapshot) }
+
     return try {
       // Cancel any currently running job before starting a new session.
       // We use currentRunningSession to track which session belongs to the previous job,
@@ -229,7 +247,7 @@ class RunYamlRequestHandler(
               val requestWithStartLogSuppressed = request.copy(
                 config = request.config.copy(sendSessionStartLog = false),
               )
-              runTrailblazeYaml(requestWithStartLogSuppressed, session)
+              runTrailblazeYaml(requestWithStartLogSuppressed, session, agentMemory)
             }
 
             AgentImplementation.MULTI_AGENT_V3 -> {
@@ -242,16 +260,23 @@ class RunYamlRequestHandler(
                 val requestWithStartLogSuppressed = request.copy(
                   config = request.config.copy(sendSessionStartLog = false),
                 )
-                runTrailblazeYaml(requestWithStartLogSuppressed, session)
+                runTrailblazeYaml(requestWithStartLogSuppressed, session, agentMemory)
               }
             }
           }
 
-          // Wait for the UI to settle after execution before signaling completion.
-          // Sync callers observe completion via the RPC response itself; the next tool
-          // dispatches immediately after we return, so the UI must be stable before then.
-          waitForSettled()
-
+          // Post-settle intentionally omitted. The previous version called waitForSettled()
+          // here for up to 5s to ensure a settled UI for any follow-up. That protection is
+          // redundant:
+          //  - The next per-tool RunYamlRequest already pre-settles on entry (see block
+          //    before the tool dispatch above), so tool-to-tool handoff is covered.
+          //  - CLI "tool-then-snapshot" flows capture the post-action screen via a separate
+          //    GetScreenStateRequest, and GetScreenStateRequestHandler settles on entry too.
+          //  - AccessibilityDeviceManager already settles internally after every action, so
+          //    the tool itself doesn't return mid-action.
+          // Dropping this settle halves the worst-case per-tool timeout penalty on noisy UIs
+          // (e.g. text input with an active IME): we pay at most one 5s waitForSettled
+          // timeout per tool-pair instead of two.
           val endTimeMs = System.currentTimeMillis()
 
           // Emit execution completed progress event
@@ -363,6 +388,7 @@ class RunYamlRequestHandler(
               sessionId = session.sessionId,
               success = false,
               errorMessage = "Execution timed out after ${OnDeviceRpcTimeouts.HANDLER_AWAIT_CAP_MS}ms",
+              memorySnapshot = agentMemory.variables.toMap(),
             ),
           )
         }
@@ -372,15 +398,16 @@ class RunYamlRequestHandler(
             success = resolved is Outcome.Success,
             errorMessage = (resolved as? Outcome.Failure)?.message
               ?: (resolved as? Outcome.Cancelled)?.let { "Execution cancelled" },
+            memorySnapshot = agentMemory.variables.toMap(),
           ),
         )
       }
 
-      RpcResult.Success(
-        RunYamlResponse(
-          sessionId = session.sessionId,
-        )
-      )
+      // Fire-and-forget returns before any tool executes; memory sync requires a round-trip,
+      // so the response carries no memorySnapshot. Async callers observe terminal state via
+      // progress events. Enforced by RunYamlResponse's init-block require. Pass `emptyMap()`
+      // explicitly (rather than relying on the default) for symmetry with the sync paths.
+      RpcResult.Success(RunYamlResponse(sessionId = session.sessionId, memorySnapshot = emptyMap()))
     } catch (e: Exception) {
       sessionManager.endSession(
         session = session,

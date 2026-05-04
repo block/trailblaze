@@ -6,25 +6,37 @@ import xyz.block.trailblaze.util.Console
 /**
  * Tracks which MCP session has claimed each device.
  *
- * Ensures exclusive device access: only one MCP session can use a device at a time.
- * This prevents two clients from accidentally controlling the same device simultaneously.
+ * Policy is **yield-unless-busy**: a new claim attempt for a device that
+ * another session already owns will silently take over UNLESS that session is
+ * actively running a tool call right now. In that case the new attempt fails
+ * with a rich [DeviceBusyException] that names the holder, the running tool,
+ * and how long it's been running, so the user can decide whether to wait.
  *
- * Device claims are:
- * - Created when [DeviceManagerToolSet] connects to a device
- * - Released when an MCP session closes (client disconnect)
- * - Force-taken when a client passes `force=true` (e.g., to reclaim a stale session)
+ * Both lookups are nullable for testability — pass them when constructing the
+ * registry for a real server. Without them the registry falls back to "always
+ * yield" (no information, but never blocks).
  */
 class DeviceClaimRegistry(
   /** Maximum age of a claim before it's considered stale and auto-released. Default: 4 hours. */
   private val claimTtlMs: Long = 4 * 60 * 60 * 1000L,
   /**
-   * Optional check for whether an MCP session is still alive.
-   * When provided, claims from dead sessions are auto-released instead of blocking new claims.
-   * This handles the case where a device session crashes (e.g., ExceptionThrown) and the
-   * MCP session closes, but the claim wasn't released (e.g., transport closed uncleanly).
+   * Returns the in-flight tool call for a session, or null when the session is idle.
+   * A null result means the holder isn't actively driving the device, so a new
+   * claimant takes over silently.
    */
-  private val isSessionAlive: ((mcpSessionId: String) -> Boolean)? = null,
+  private val inFlightLookup: ((mcpSessionId: String) -> InFlightToolCall?)? = null,
+  /**
+   * Returns identifying info about a session for the busy-error message.
+   * Null when the session is unknown to the server (already cleaned up).
+   */
+  private val clientInfoLookup: ((mcpSessionId: String) -> ClaimingClientInfo?)? = null,
 ) {
+
+  /** Identifying info about the session holding a claim. Surfaced in [DeviceBusyException]. */
+  data class ClaimingClientInfo(
+    val mcpClientName: String?,
+    val origin: String?,
+  )
 
   data class DeviceClaim(
     val mcpSessionId: String,
@@ -37,16 +49,18 @@ class DeviceClaimRegistry(
   /**
    * Claims a device for an MCP session.
    *
-   * @param deviceId The device to claim
-   * @param mcpSessionId The MCP session claiming the device
-   * @param force If true, takes over the device even if another session owns it
-   * @return The previous claim if force-taken, null if no conflict
-   * @throws DeviceAlreadyClaimedException if claimed by another session and force=false
+   * Same-session re-claims always succeed and refresh the timestamp.
+   * Cross-session claims yield silently when the prior holder is idle, and
+   * throw [DeviceBusyException] when the prior holder is running a tool call.
+   *
+   * @return The previous claim if it was displaced, null when there was no
+   *   conflict. Callers use the non-null return to terminate the displaced
+   *   session cleanly.
+   * @throws DeviceBusyException when the prior holder has a tool call in flight.
    */
   fun claim(
     deviceId: TrailblazeDeviceId,
     mcpSessionId: String,
-    force: Boolean = false,
   ): DeviceClaim? {
     val key = deviceId.instanceId
 
@@ -63,29 +77,21 @@ class DeviceClaimRegistry(
         return null
       }
 
-      // Another session owns this device
+      // Another session owns this device — yield unless they're busy.
       if (existingClaim != null) {
-        if (force) {
-          Console.log(
-            "[DeviceClaimRegistry] Force-claiming $key from session " +
-              "${existingClaim.mcpSessionId} for session $mcpSessionId"
-          )
-        } else if (isSessionAlive != null && !isSessionAlive.invoke(existingClaim.mcpSessionId)) {
-          // Owning session is no longer alive — auto-release the stale claim.
-          // This handles the common case where a device session crashes, the MCP client
-          // disconnects (removing its session context), and then a new session tries
-          // to connect before the TTL eviction kicks in.
-          Console.log(
-            "[DeviceClaimRegistry] Auto-released claim for $key " +
-              "(owning session ${existingClaim.mcpSessionId} is no longer alive)"
-          )
-        } else {
-          throw DeviceAlreadyClaimedException(
+        val inFlight = inFlightLookup?.invoke(existingClaim.mcpSessionId)
+        if (inFlight != null) {
+          throw DeviceBusyException(
             deviceId = deviceId,
             owningSessionId = existingClaim.mcpSessionId,
-            claimedAt = existingClaim.claimedAt,
+            owningClient = clientInfoLookup?.invoke(existingClaim.mcpSessionId),
+            inFlight = inFlight,
           )
         }
+        Console.log(
+          "[DeviceClaimRegistry] Yielded $key from session ${existingClaim.mcpSessionId} " +
+            "to $mcpSessionId (prior holder was idle)"
+        )
       }
 
       claims[key] = DeviceClaim(
@@ -163,17 +169,47 @@ class DeviceClaimRegistry(
 }
 
 /**
- * Thrown when a device is already claimed by another MCP session.
+ * Thrown when a device is currently being driven by another session and
+ * yielding the claim would interrupt real work in progress.
+ *
+ * The message embeds everything the user needs to decide whether to wait:
+ * - which client/origin holds the device,
+ * - what tool is running and (if available) its objective,
+ * - how long it's been running,
+ * - the trace ID for log correlation.
  */
-class DeviceAlreadyClaimedException(
+class DeviceBusyException(
   val deviceId: TrailblazeDeviceId,
   val owningSessionId: String,
-  val claimedAt: Long,
+  val owningClient: DeviceClaimRegistry.ClaimingClientInfo?,
+  val inFlight: InFlightToolCall,
 ) : RuntimeException(
-  "Device ${deviceId.instanceId} is already in use by another MCP session " +
-    "(claimed ${formatTimeSince(claimedAt)}). " +
-    "Use force=true to take over, or disconnect the other session first."
+  buildBusyMessage(deviceId, owningSessionId, owningClient, inFlight),
 )
+
+private fun buildBusyMessage(
+  deviceId: TrailblazeDeviceId,
+  owningSessionId: String,
+  owningClient: DeviceClaimRegistry.ClaimingClientInfo?,
+  inFlight: InFlightToolCall,
+): String {
+  val durationSec = ((System.currentTimeMillis() - inFlight.startedAtMs) / 1000).coerceAtLeast(0)
+  val holder = buildString {
+    append(owningClient?.mcpClientName ?: "another MCP session")
+    owningClient?.origin?.let { append(" (origin=").append(it).append(")") }
+  }
+  val running = buildString {
+    append(inFlight.toolName)
+    inFlight.argsSummary?.takeIf { it.isNotBlank() }?.let { append("(").append(it).append(")") }
+  }
+  return buildString {
+    append("Device ${deviceId.instanceId} is busy.\n")
+    append("  Held by: $holder (session ${owningSessionId.take(8)}…)\n")
+    append("  Running: $running for ${durationSec}s\n")
+    append("  Trace:   ${inFlight.traceId}\n")
+    append("Wait for it to finish, or stop the holder before retrying.")
+  }
+}
 
 private fun formatTimeSince(timestampMs: Long): String {
   val elapsedMs = System.currentTimeMillis() - timestampMs

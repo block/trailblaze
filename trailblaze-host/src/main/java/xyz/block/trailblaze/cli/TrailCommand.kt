@@ -91,6 +91,16 @@ open class TrailCommand : Callable<Int> {
   var useRecordedSteps: Boolean = false
 
   @Option(
+    names = ["--self-heal"],
+    description = [
+      "When a recorded step fails, let AI take over and continue. " +
+        "Overrides the persisted 'trailblaze config self-heal' setting for this run. " +
+        "Omit to inherit the saved setting (opt-in, off by default)."
+    ],
+  )
+  var selfHeal: Boolean? = null
+
+  @Option(
     names = ["-v", "--verbose"],
     description = ["Enable verbose output"]
   )
@@ -102,11 +112,25 @@ open class TrailCommand : Callable<Int> {
   )
   var driverType: String? = null
 
+  // Legacy flag — kept for back-compat with existing scripts. New users should
+  // prefer `--headless=false`. Hidden from `--help` so the new flag is the
+  // single discoverable spelling.
   @Option(
     names = ["--show-browser"],
-    description = ["Show the browser window (default: headless). Useful for debugging web trails."]
+    description = ["[Deprecated] Show the browser window. Prefer --headless=false."],
+    hidden = true,
   )
   var showBrowser: Boolean = false
+
+  @Option(
+    names = ["--headless"],
+    description = [
+      "Launch the Playwright browser headless (default true). Pass --no-headless or " +
+        "--headless=false to surface a visible window. Equivalent to --show-browser when negated.",
+    ],
+    negatable = true,
+  )
+  var headless: Boolean = true
 
   @Option(
     names = ["--llm"],
@@ -178,8 +202,18 @@ open class TrailCommand : Callable<Int> {
   var captureLogcat: Boolean = false
 
   @Option(
+    names = ["--capture-network"],
+    description = [
+      "Auto-capture network requests/responses to <session-dir>/network.ndjson on " +
+        "supported devices (web today; mobile devices added as engines land). " +
+        "Mirrors the desktop-app \"Capture Network Traffic\" toggle.",
+    ],
+  )
+  var captureNetwork: Boolean = false
+
+  @Option(
     names = ["--capture-all"],
-    description = ["Enable all capture streams: video, logcat (local dev mode)"]
+    description = ["Enable all capture streams: video, logcat, network (local dev mode)"]
   )
   var captureAll: Boolean = false
 
@@ -198,18 +232,26 @@ open class TrailCommand : Callable<Int> {
     }
 
     // Resolve --llm shorthand: splits "provider/model" into llmProvider + llmModel.
+    // `--llm=none` is a sentinel for "no LLM configured" — recordings-only mode where the
+    // tool stack runs without inference. Resolve it to (LLM_NONE, LLM_NONE) so downstream
+    // code matches the same shape `trailblaze config llm none` writes (see CliConfigHelper).
     if (llm != null) {
       if (llmProvider != null || llmModel != null) {
         Console.error("Error: --llm is mutually exclusive with --llm-provider and --llm-model.")
         return CommandLine.ExitCode.USAGE
       }
-      val parts = llm!!.split("/", limit = 2)
-      if (parts.size != 2 || parts[0].isBlank() || parts[1].isBlank()) {
-        Console.error("Error: --llm must be in provider/model format (e.g., openai/gpt-4-1).")
-        return CommandLine.ExitCode.USAGE
+      if (llm.equals(LLM_NONE, ignoreCase = true)) {
+        llmProvider = LLM_NONE
+        llmModel = LLM_NONE
+      } else {
+        val parts = llm!!.split("/", limit = 2)
+        if (parts.size != 2 || parts[0].isBlank() || parts[1].isBlank()) {
+          Console.error("Error: --llm must be in provider/model format (e.g., openai/gpt-4-1) or 'none' for recordings-only mode.")
+          return CommandLine.ExitCode.USAGE
+        }
+        llmProvider = parts[0]
+        llmModel = parts[1]
       }
-      llmProvider = parts[0]
-      llmModel = parts[1]
     }
 
     // Resolve --device: flag takes priority, fall back to config default.
@@ -379,9 +421,13 @@ open class TrailCommand : Callable<Int> {
         llmProvider = llmProvider,
         llmModel = llmModel,
         useRecordedSteps = useRecordedSteps,
-        showBrowser = showBrowser,
+        // --show-browser is the legacy flag; --headless is the new spelling. Either
+        // produces a visible browser when explicitly requested. Both are off by default.
+        showBrowser = showBrowser || !headless,
         noLogging = noLogging,
         agentImplementation = agent.takeIf { it != AgentImplementation.DEFAULT.name },
+        selfHeal = selfHeal,
+        captureNetworkTraffic = captureNetwork || captureAll,
       )
 
       val response = daemon.runSync(request) { progress ->
@@ -614,7 +660,7 @@ open class TrailCommand : Callable<Int> {
     file: File,
     app: TrailblazeDesktopApp,
   ): Pair<Int, List<SessionId>> {
-    // Read the YAML file and resolve template variables (e.g., {{CWD}})
+    // Read the YAML file and resolve template variables (e.g., {{CWD}}, {{BASE_URL}})
     val rawYaml = file.readText()
     val yamlContent = TrailYamlTemplateResolver.resolve(rawYaml, file)
     if (verbose) {
@@ -687,6 +733,11 @@ open class TrailCommand : Callable<Int> {
       false
     }
 
+    // Pin a session ID upfront so the post-completion status check can target THIS
+    // trail's session rather than enumerating every "new" session in the logs repo.
+    // See SessionId.pinnedFor — same construction is used in handleCliRunRequest.
+    val pinnedSessionId = SessionId.pinnedFor(testName)
+
     // Create the run request
     val runYamlRequest = RunYamlRequest(
       testName = testName,
@@ -698,13 +749,18 @@ open class TrailCommand : Callable<Int> {
       trailblazeLlmModel = llmModel,
       driverType = trailDriverType,
       config = TrailblazeConfig(
-        browserHeadless = !showBrowser,
+        // Either --show-browser or --no-headless (i.e. headless=false) makes the browser
+        // visible. Both default to off (browser stays headless).
+        browserHeadless = !showBrowser && headless,
+        selfHeal = resolveEffectiveSelfHeal(),
+        overrideSessionId = pinnedSessionId,
+        captureNetworkTraffic = captureNetwork || captureAll,
       ),
       referrer = TrailblazeReferrer(id = "cli", display = "CLI"),
       agentImplementation = agentImpl,
     )
 
-    return executeTrailAndCollectResults(app, runYamlRequest, trailConfig, config, file)
+    return executeTrailAndCollectResults(app, runYamlRequest, trailConfig, config, file, pinnedSessionId)
   }
 
   /**
@@ -721,6 +777,7 @@ open class TrailCommand : Callable<Int> {
     trailConfig: TrailConfig?,
     config: TrailblazeDesktopAppConfig,
     file: File,
+    pinnedSessionId: SessionId,
   ): Pair<Int, List<SessionId>> {
     // Latch to wait for completion
     val completionLatch = CountDownLatch(1)
@@ -811,34 +868,38 @@ open class TrailCommand : Callable<Int> {
     // crashing but the session ended with a failure status). For on-device instrumentation,
     // the RPC call returns immediately so the TrailExecutionResult is always Success.
     // The session logs are the source of truth for pass/fail.
+    //
+    // Only inspect THIS trail's pinned session — `newSessionIds` enumerates every session
+    // that landed in the repo during this run, which includes sibling trails when several
+    // run in parallel against the same daemon (the benchmark fan-out). Without the pin,
+    // a sibling's TimeoutReached gets mis-attributed to this trail and we report 0/3 even
+    // when two trails actually passed (observed during testing on haiku-4-5).
     if (exitCode == CommandLine.ExitCode.OK) {
-      for (sessionId in newSessionIds) {
-        val status = logsRepo.getLogsForSession(sessionId).getSessionStatus()
-        if (status is SessionStatus.Unknown) {
-          Console.error("Session $sessionId has no status (no logs received)")
-          exitCode = CommandLine.ExitCode.SOFTWARE
-        } else if (status is SessionStatus.Ended && status !is SessionStatus.Ended.Succeeded &&
-          status !is SessionStatus.Ended.SucceededWithFallback) {
-          Console.error("Session $sessionId ended with status: ${status::class.simpleName}")
-          exitCode = CommandLine.ExitCode.SOFTWARE
-        } else if (status !is SessionStatus.Ended) {
-          Console.error("Session $sessionId did not complete (status: ${status::class.simpleName})")
-          exitCode = CommandLine.ExitCode.SOFTWARE
-        }
+      val status = logsRepo.getLogsForSession(pinnedSessionId).getSessionStatus()
+      if (status is SessionStatus.Unknown) {
+        Console.error("Session $pinnedSessionId has no status (no logs received)")
+        exitCode = CommandLine.ExitCode.SOFTWARE
+      } else if (status is SessionStatus.Ended && status !is SessionStatus.Ended.Succeeded &&
+        status !is SessionStatus.Ended.SucceededWithSelfHeal) {
+        Console.error("Session $pinnedSessionId ended with status: ${status::class.simpleName}")
+        exitCode = CommandLine.ExitCode.SOFTWARE
+      } else if (status !is SessionStatus.Ended) {
+        Console.error("Session $pinnedSessionId did not complete (status: ${status::class.simpleName})")
+        exitCode = CommandLine.ExitCode.SOFTWARE
       }
     }
 
     // Generate recording YAML from session logs so saveRecordingToTrailDirectory can find it.
     // For host-mode runs, TrailblazeHostYamlRunner already generates this file. For on-device
     // instrumentation runs, the recording is not generated during execution, so we generate
-    // it here from the session logs.
+    // it here from the session logs. Same parallel-safety reasoning as the status check
+    // above — only generate for THIS trail's pinned session, not sibling sessions that
+    // happen to be in the repo.
     if (!noRecord) {
-      for (sessionId in newSessionIds) {
-        generateRecordingForSession(sessionId)
-      }
+      generateRecordingForSession(pinnedSessionId)
     }
 
-    return exitCode to newSessionIds
+    return exitCode to listOf(pinnedSessionId)
   }
 
   /**
@@ -1063,6 +1124,24 @@ open class TrailCommand : Callable<Int> {
       Console.error("Failed to save recording to trail directory: ${e.message}")
     }
   }
+
+  /**
+   * Resolves the effective `self-heal` setting for this run, honoring the usual precedence:
+   *   1. `--self-heal` CLI flag (explicit per-run intent).
+   *   2. `TRAILBLAZE_SELF_HEAL_ENABLED` env var (CI / pipeline intent — a CI pipeline runner
+   *      may set this on runner steps when the pipeline config opts in).
+   *   3. Persisted `trailblaze config self-heal` setting (user's local default).
+   *   4. Opt-in default (off).
+   *
+   * Companion resolver for JUnit runs: [xyz.block.trailblaze.host.rules.BaseHostTrailblazeTest]`
+   * .resolveSelfHealFromEnvOrConfig()`, which is a 2-tier (env → config) subset — tests have no
+   * CLI flag to honor.
+   */
+  internal fun resolveEffectiveSelfHeal(): Boolean =
+    selfHeal
+      ?: System.getenv("TRAILBLAZE_SELF_HEAL_ENABLED")?.lowercase()?.toBooleanStrictOrNull()
+      ?: CliConfigHelper.readConfig()?.selfHealEnabled
+      ?: false
 
   companion object {
     /**

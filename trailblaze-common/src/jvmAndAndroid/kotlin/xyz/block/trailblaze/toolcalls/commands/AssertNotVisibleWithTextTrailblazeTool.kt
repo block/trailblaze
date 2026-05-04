@@ -21,6 +21,7 @@ import xyz.block.trailblaze.toolcalls.isSuccess
 @Serializable
 @TrailblazeToolClass(
   name = "assertNotVisibleWithText",
+  isVerification = true,
 )
 @LLMDescription(
   """
@@ -88,6 +89,16 @@ data class AssertNotVisibleWithTextTrailblazeTool(
         TrailblazeDevicePlatform.WEB -> DriverNodeMatch.AndroidAccessibility(
           textRegex = interpolatedText,
           resourceIdRegex = id,
+          isEnabled = enabled,
+          isSelected = selected,
+        )
+        TrailblazeDevicePlatform.DESKTOP -> DriverNodeMatch.Compose(
+          textRegex = interpolatedText,
+          // [DriverNodeMatch.Compose] uses semantic-tag identifiers (`testTag` is an
+          // exact-string match, not a regex). The legacy [TrailblazeElementSelector.id]
+          // field is regex-shaped, so we drop it on the DESKTOP path rather than
+          // pretending it maps cleanly. Users authoring Compose-driver assertions
+          // should use textRegex / contentDescriptionRegex instead.
           isEnabled = enabled,
           isSelected = selected,
         )

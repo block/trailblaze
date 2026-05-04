@@ -39,7 +39,7 @@ enum class TrailExecutionMode {
    * Use this mode for:
    * - Development and recording generation
    * - Tests with partial recordings
-   * - Environments where occasional AI fallback is acceptable
+   * - Environments where occasional self-heal is acceptable
    *
    * LLM calls are only made when recordings fail.
    */
@@ -279,7 +279,7 @@ data class RecordedAction(
  * @property success True if all steps completed successfully
  * @property state Final state of the trail execution
  * @property durationMs Total execution time in milliseconds
- * @property generatedRecordings Actions recorded during AI fallback execution
+ * @property generatedRecordings Actions recorded during self-heal execution
  * @property errorMessage Error message if execution failed
  */
 @Serializable
@@ -290,7 +290,7 @@ data class TrailResult(
   val state: TrailState,
   /** Total execution time in milliseconds */
   val durationMs: Long,
-  /** Actions recorded during AI fallback execution (for recording generation) */
+  /** Actions recorded during self-heal execution (for recording generation) */
   val generatedRecordings: Map<Int, List<RecordedAction>> = emptyMap(),
   /** Error message if execution failed */
   val errorMessage: String? = null,

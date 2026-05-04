@@ -28,7 +28,7 @@ to compose higher-level behaviour.
 
 ## What authors write today (raw MCP SDK)
 
-Committed reference: `examples/android-sample-app/trailblaze-config/mcp/tools.ts`
+Committed reference: `examples/android-sample-app/trails/config/mcp/tools.ts`
 
 ```typescript
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -64,7 +64,7 @@ spawn), but it's off-contract and inconvenient.
 
 ## What authors will write with `@trailblaze/scripting`
 
-Committed reference: `examples/android-sample-app/trailblaze-config/mcp-sdk/tools.ts`
+Committed reference: `examples/android-sample-app/trails/config/mcp-sdk/tools.ts`
 
 ```typescript
 import { trailblaze } from "@trailblaze/scripting";
@@ -264,7 +264,7 @@ will need to issue.
 
 ## Authoring workflow today
 
-1. **Install** — `cd <your-target>/trailblaze-config/mcp-sdk && bun install` (or `npm install`). The SDK is consumed today via a local `file:` link in the sample example; npm-registry publish is a follow-up.
+1. **Install** — `cd <your-target>/trails/config/mcp-sdk && bun install` (or `npm install`). The SDK is consumed today via a local `file:` link in the sample example; npm-registry publish is a follow-up.
 2. **Author** — `tools.ts` in that directory, using `@trailblaze/scripting`.
 3. **Wire** — add an entry under `mcp_servers:` in the target YAML:
    ```yaml
@@ -336,8 +336,8 @@ file suffixes them (`...Sdk`) so both paths register side-by-side in the
 session without colliding. Read them together to see the diff the SDK
 makes:
 
-- Raw MCP SDK: `examples/android-sample-app/trailblaze-config/mcp/tools.ts`
-- SDK: `examples/android-sample-app/trailblaze-config/mcp-sdk/tools.ts`
+- Raw MCP SDK: `examples/android-sample-app/trails/config/mcp/tools.ts`
+- SDK: `examples/android-sample-app/trails/config/mcp-sdk/tools.ts`
 
 CI exercises both end-to-end via `SampleAppMcpToolsTest` and
 `SampleAppMcpSdkToolsTest` so drift between the two authoring surfaces

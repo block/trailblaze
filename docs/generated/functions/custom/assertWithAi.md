@@ -1,8 +1,8 @@
 ## Tool `assertWithAi`
 
 ## Description
-This tool will interpolate the natural language prompt with any included variables, then use that
-interpolated prompt to verify the current state of the screen using AI.
+Interpolate the natural-language prompt with any included variables, then use the result to verify
+the current state of the screen with AI.
 
 ### Command Class
 `xyz.block.trailblaze.toolcalls.commands.memory.AssertWithAiTrailblazeTool`

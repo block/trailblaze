@@ -93,6 +93,20 @@ internal object BundleRuntimePrelude {
   val SOURCE: String by lazy { loadSource() }
 
   /**
+   * Pre-bundled `@trailblaze/scripting` SDK JS, evaluated after [SOURCE] but before the
+   * author's own bundle. Installs `globalThis.trailblaze` (with `tool` and `run`) plus
+   * `globalThis.fromMeta`, so a plain-JS author file can call `trailblaze.tool(...)` +
+   * `await trailblaze.run()` without an npm/bundler step of its own. See
+   * [SDK_BUNDLE_FILENAME] for the stack-trace attribution name.
+   *
+   * Produced by the `:trailblaze-scripting-bundle:bundleTrailblazeSdk` Gradle task from
+   * `sdks/typescript/src/index.ts` via esbuild. The task wires its output into
+   * the `jvmAndAndroid` source set's generated resources, so the classpath lookup below
+   * finds it on both the JVM jar and the Android AAR.
+   */
+  val SDK_BUNDLE_SOURCE: String by lazy { loadSdkBundle() }
+
+  /**
    * Classpath path to the prelude `.js`. `jvmAndAndroid/resources/` is wired into both
    * the JVM jar and the Android AAR's Java-style resources (see the module's
    * `build.gradle.kts`), so `ClassLoader.getResourceAsStream` reaches it on both
@@ -101,18 +115,30 @@ internal object BundleRuntimePrelude {
   private const val PRELUDE_RESOURCE_PATH: String =
     "trailblaze/scripting/bundle/trailblaze-bundle-prelude.js"
 
+  /** Stack-trace-friendly name for the SDK bundle when passed to `quickJs.evaluate`. */
+  const val SDK_BUNDLE_FILENAME: String = "trailblaze-sdk-bundle.js"
+
   private fun loadSource(): String {
-    val raw = BundleRuntimePrelude::class.java.classLoader
-      ?.getResourceAsStream(PRELUDE_RESOURCE_PATH)
-      ?.use { it.readBytes().decodeToString() }
-      ?: error(
-        "trailblaze-scripting-bundle: missing prelude resource at classpath:$PRELUDE_RESOURCE_PATH. " +
-          "Check that src/jvmAndAndroid/resources/ is wired into both the JVM jar and the " +
-          "Android AAR (see build.gradle.kts sourceSets config).",
-      )
+    val raw = loadResource(PRELUDE_RESOURCE_PATH, "prelude")
     return raw
       .replace("__DELIVER_TO_KOTLIN__", DELIVER_TO_KOTLIN)
       .replace("__IN_PROCESS_TRANSPORT__", IN_PROCESS_TRANSPORT)
       .replace("__CONSOLE_BINDING__", CONSOLE_BINDING)
   }
+
+  // Single source of truth for the bundle's classpath path lives in [SdkBundleResource];
+  // the host-side extract-to-File path uses the same constant, so a rename of the resource
+  // breaks both surfaces at compile time.
+  private fun loadSdkBundle(): String = loadResource(SdkBundleResource.RESOURCE_PATH, "SDK bundle")
+
+  private fun loadResource(path: String, label: String): String =
+    BundleRuntimePrelude::class.java.classLoader
+      ?.getResourceAsStream(path)
+      ?.use { it.readBytes().decodeToString() }
+      ?: error(
+        "trailblaze-scripting-bundle: missing $label resource at classpath:$path. " +
+          "Check that src/jvmAndAndroid/resources/ (prelude) and the generated/sdk-bundle-resources/ " +
+          "output of `bundleTrailblazeSdk` are wired into both the JVM jar and the Android AAR " +
+          "(see build.gradle.kts sourceSets config).",
+      )
 }

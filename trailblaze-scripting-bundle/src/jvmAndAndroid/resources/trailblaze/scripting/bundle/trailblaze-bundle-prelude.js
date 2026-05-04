@@ -131,4 +131,54 @@
     error: function() { emit("error", arguments); },
     debug: function() { emit("debug", arguments); },
   };
+
+  // ---- AbortController / AbortSignal shim ------------------------------------------------
+  // QuickJS is spec-minimal — `AbortController` ships with browsers and Node, not with the
+  // core ES language. The bundled MCP SDK uses it for request-timeout cancellation, so
+  // without this shim the on-device bundle's FIRST `server.connect(transport)` call throws
+  // `ReferenceError: 'AbortController' is not defined` during `_onrequest` wiring.
+  //
+  // Minimal contract the MCP SDK relies on: `new AbortController()` yields `{ signal,
+  // abort() }`; the signal exposes `aborted`, `reason`, and `addEventListener("abort", ...)`
+  // for the fetch-timeout integration. The host path uses real AbortController via fetch;
+  // on-device `client.callTool` takes the `__trailblazeCallback` binding (no fetch, no real
+  // abort), so signal handlers here never actually fire — the shim only has to keep the
+  // constructor and `signal.aborted` accessor alive so SDK-internal code compiles cleanly.
+  if (typeof globalThis.AbortController === "undefined") {
+    globalThis.AbortSignal = function AbortSignal() {
+      this.aborted = false;
+      this.reason = undefined;
+      this._listeners = [];
+    };
+    globalThis.AbortSignal.prototype.addEventListener = function(type, listener) {
+      if (type === "abort") this._listeners.push(listener);
+    };
+    globalThis.AbortSignal.prototype.removeEventListener = function(type, listener) {
+      if (type !== "abort") return;
+      var i = this._listeners.indexOf(listener);
+      if (i >= 0) this._listeners.splice(i, 1);
+    };
+    globalThis.AbortSignal.prototype.dispatchEvent = function(ev) {
+      for (var i = 0; i < this._listeners.length; i++) {
+        try { this._listeners[i].call(this, ev); } catch (_) { /* listener errors don't block abort */ }
+      }
+      return true;
+    };
+    globalThis.AbortSignal.prototype.throwIfAborted = function() {
+      if (this.aborted) {
+        var err = new Error(this.reason != null ? String(this.reason) : "AbortError");
+        err.name = "AbortError";
+        throw err;
+      }
+    };
+    globalThis.AbortController = function AbortController() {
+      this.signal = new globalThis.AbortSignal();
+    };
+    globalThis.AbortController.prototype.abort = function(reason) {
+      if (this.signal.aborted) return;
+      this.signal.aborted = true;
+      this.signal.reason = reason;
+      this.signal.dispatchEvent({ type: "abort", target: this.signal });
+    };
+  }
 })();

@@ -20,6 +20,7 @@ import xyz.block.trailblaze.toolcalls.isSuccess
 @TrailblazeToolClass(
   name = "assertVisibleBySelector",
   isForLlm = false,
+  isVerification = true,
 )
 @LLMDescription("Asserts that an element with the provided selector is visible on the screen.")
 /**

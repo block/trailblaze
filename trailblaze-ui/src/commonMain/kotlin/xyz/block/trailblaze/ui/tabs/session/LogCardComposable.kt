@@ -145,8 +145,8 @@ fun LogCard(
       preformattedText = log.sessionStatus.toString()
     )
 
-    is TrailblazeLog.AttemptAiFallbackLog -> LogCardData(
-      title = "Attempt AI Fallback",
+    is TrailblazeLog.SelfHealInvokedLog -> LogCardData(
+      title = "Self-Heal Invoked",
       duration = null,
       elapsedTime = elapsedTimeMs,
       preformattedText = log.promptStep.prompt
@@ -614,12 +614,12 @@ private fun getSessionStatusIconAndColor(status: SessionStatus): Triple<ImageVec
 
     is SessionStatus.Ended.Failed -> Triple(Icons.Filled.Close, Color(0xFFDC3545), "Failed")
     is SessionStatus.Ended.Cancelled -> Triple(Icons.Filled.Close, Color(0xFFFFC107), "Cancelled")
-    is SessionStatus.Ended.SucceededWithFallback -> Triple(
-      Icons.Filled.Warning, Color(0xFF28A745), "Succeeded with Fallback"
+    is SessionStatus.Ended.SucceededWithSelfHeal -> Triple(
+      Icons.Filled.Warning, Color(0xFF28A745), "Succeeded with Self-Heal"
     )
 
-    is SessionStatus.Ended.FailedWithFallback -> Triple(
-      Icons.Filled.Warning, Color(0xFFDC3545), "Failed with Fallback"
+    is SessionStatus.Ended.FailedWithSelfHeal -> Triple(
+      Icons.Filled.Warning, Color(0xFFDC3545), "Failed with Self-Heal"
     )
 
     is SessionStatus.Unknown -> Triple(Icons.Filled.Warning, Color.Gray, "Unknown")

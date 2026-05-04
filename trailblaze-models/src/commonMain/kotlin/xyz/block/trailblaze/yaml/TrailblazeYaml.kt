@@ -238,6 +238,15 @@ class TrailblazeYaml(
     return configItem?.config
   }
 
+  fun hasActionableSteps(trailItems: List<TrailYamlItem>): Boolean =
+    trailItems.any { item ->
+      when (item) {
+        is TrailYamlItem.PromptsTrailItem -> item.promptSteps.isNotEmpty()
+        is TrailYamlItem.ToolTrailItem -> item.tools.isNotEmpty()
+        is TrailYamlItem.ConfigTrailItem -> false
+      }
+    }
+
   fun hasRecordedSteps(trailItems: List<TrailYamlItem>): Boolean = trailItems.any { item ->
     when (item) {
       is TrailYamlItem.PromptsTrailItem -> {

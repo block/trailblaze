@@ -1,0 +1,15 @@
+- config:
+    title: "LLM Benchmark: Scroll-within-container to find an offscreen item"
+    driver: PLAYWRIGHT_NATIVE
+    description: |-
+      Navigate to the Scroll section, where the right-hand content panel
+      is independently scrollable and only items 1-N are visible without
+      scrolling. Exercises the model's ability to scroll inside a specific
+      container (not the page) until a target item comes into view.
+- prompts:
+    - step: Navigate to http://localhost:8765/index.html
+    - step: Click the "Scroll" navigation link
+    - step: Verify the heading "Scroll Containers" is visible
+    - step: Verify the text "Item 1" is visible in the content panel
+    - step: Scroll the content panel down until the text "Item 18" is visible
+    - step: Verify the text "Item 18" is visible

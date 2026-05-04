@@ -19,3 +19,10 @@ fun KClass<out TrailblazeTool>.toolName(): ToolName = ToolName(this.trailblazeTo
  * Whether this tool requires host-side execution (e.g., ADB, USB hardware).
  */
 fun KClass<out TrailblazeTool>.requiresHost(): Boolean = this.trailblazeToolClassAnnotation().requiresHost
+
+/**
+ * Whether this tool is a read-only verification (assertion) tool whose successful execution
+ * is itself the verify verdict (e.g. `assertVisible`, `web_verify_text_visible`). Used by
+ * `blaze(hint=VERIFY)` to gate which LLM-recommended tools may execute.
+ */
+fun KClass<out TrailblazeTool>.isVerification(): Boolean = this.trailblazeToolClassAnnotation().isVerification

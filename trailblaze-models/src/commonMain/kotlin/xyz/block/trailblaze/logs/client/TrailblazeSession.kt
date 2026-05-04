@@ -20,7 +20,7 @@ import xyz.block.trailblaze.logs.model.SessionId
  * )
  *
  * // Mark fallback used - returns new instance
- * val updatedSession = session.withFallbackUsed()
+ * val updatedSession = session.withSelfHealUsed()
  *
  * // Calculate duration
  * val durationMs = session.calculateDuration()
@@ -30,14 +30,14 @@ import xyz.block.trailblaze.logs.model.SessionId
 data class TrailblazeSession(
   val sessionId: SessionId,
   val startTime: Instant,
-  val usedFallback: Boolean = false,
+  val usedSelfHeal: Boolean = false,
   val metadata: SessionMetadata = SessionMetadata(),
 ) {
   /**
-   * Creates a new session with fallback marked as used.
+   * Creates a new session with self-heal marked as used.
    * Returns a new instance (this class is immutable).
    */
-  fun withFallbackUsed(): TrailblazeSession = copy(usedFallback = true)
+  fun withSelfHealUsed(): TrailblazeSession = copy(usedSelfHeal = true)
 
   /**
    * Calculates duration from session start to now in milliseconds.

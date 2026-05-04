@@ -9,12 +9,11 @@ import xyz.block.trailblaze.agent.TrailConfig
 import xyz.block.trailblaze.agent.TrailExecutionMode
 import xyz.block.trailblaze.agent.TrailState
 import xyz.block.trailblaze.agent.UiActionExecutor
-import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
+import xyz.block.trailblaze.agent.blaze.detectActionCycleHint
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.logs.model.TraceId.Companion.TraceOrigin
 import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
 import xyz.block.trailblaze.yaml.PromptStep
-import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
 import xyz.block.trailblaze.yaml.VerificationStep
 
 /**
@@ -34,7 +33,7 @@ data class TrailStepAction(
 ) {
   enum class ActionType {
     RECORDING,
-    AI_FALLBACK,
+    SELF_HEAL,
   }
 }
 
@@ -42,14 +41,14 @@ data class TrailStepAction(
  * Plans and executes trail files step by step.
  *
  * This planner converts a list of [PromptStep]s into an executable plan,
- * choosing between recordings and AI fallback based on availability and
+ * choosing between recordings and self-heal based on availability and
  * the [TrailConfig.mode].
  *
  * ## Execution Strategy
  *
  * For each step, the planner prefers recordings over AI (lower cost):
  * - **Recording**: Cost 1.0 - fast, deterministic, no LLM calls
- * - **AI fallback**: Cost 5.0 - slower, uses screen analysis
+ * - **self-heal**: Cost 5.0 - slower, uses screen analysis
  *
  * ## Execution Modes
  *
@@ -70,12 +69,22 @@ class TrailStepPlanner(
   private val executor: UiActionExecutor,
   private val availableToolsProvider: () -> List<TrailblazeToolDescriptor> = { emptyList() },
   private val initialActionHistory: List<String> = emptyList(),
+  /**
+   * The overall test case title (e.g. TestRail case name) that encompasses all steps.
+   *
+   * When non-null, this is passed as [RecommendationContext.overallObjective] so the inner
+   * agent can reason about each step in the context of the broader test goal. This enables
+   * early [objectiveAppearsImpossible] detection — for example, recognising that a step
+   * requiring business banking cannot succeed on a personal account — instead of exhausting
+   * all retry attempts before failing.
+   */
+  private val caseTitle: String? = null,
 ) {
 
   /** Cost for executing a recorded action (cheap, fast, deterministic) */
   private companion object {
     const val RECORDING_COST = 1.0
-    const val AI_FALLBACK_COST = 5.0
+    const val SELF_HEAL_COST = 5.0
   }
 
   /**
@@ -112,7 +121,7 @@ class TrailStepPlanner(
           actions.add(TrailStepAction(index, TrailStepAction.ActionType.RECORDING, RECORDING_COST))
         }
         if (screenAnalyzer != null) {
-          actions.add(TrailStepAction(index, TrailStepAction.ActionType.AI_FALLBACK, AI_FALLBACK_COST))
+          actions.add(TrailStepAction(index, TrailStepAction.ActionType.SELF_HEAL, SELF_HEAL_COST))
         }
       }
 
@@ -122,14 +131,14 @@ class TrailStepPlanner(
           actions.add(TrailStepAction(index, TrailStepAction.ActionType.RECORDING, RECORDING_COST))
         }
         if (screenAnalyzer != null) {
-          actions.add(TrailStepAction(index, TrailStepAction.ActionType.AI_FALLBACK, AI_FALLBACK_COST))
+          actions.add(TrailStepAction(index, TrailStepAction.ActionType.SELF_HEAL, SELF_HEAL_COST))
         }
       }
 
       TrailExecutionMode.AI_ONLY -> {
         // Only AI actions
         if (screenAnalyzer != null) {
-          actions.add(TrailStepAction(index, TrailStepAction.ActionType.AI_FALLBACK, AI_FALLBACK_COST))
+          actions.add(TrailStepAction(index, TrailStepAction.ActionType.SELF_HEAL, SELF_HEAL_COST))
         }
       }
     }
@@ -153,7 +162,7 @@ class TrailStepPlanner(
 
     return when (action.type) {
       TrailStepAction.ActionType.RECORDING -> executeRecording(state, step, action.stepIndex)
-      TrailStepAction.ActionType.AI_FALLBACK -> executeWithAi(state, step, action.stepIndex)
+      TrailStepAction.ActionType.SELF_HEAL -> executeWithAi(state, step, action.stepIndex)
     }
   }
 
@@ -242,6 +251,7 @@ class TrailStepPlanner(
       val analysis = analyzer.analyze(
         context = RecommendationContext(
           objective = step.prompt,
+          overallObjective = caseTitle,
           progressSummary = buildProgressSummary(currentState, index, actionHistory),
           attemptNumber = attempts,
           isVerification = step is VerificationStep,
@@ -286,6 +296,7 @@ class TrailStepPlanner(
             val verifyAnalysis = analyzer.analyze(
               context = RecommendationContext(
                 objective = step.prompt,
+                overallObjective = caseTitle,
                 progressSummary = buildProgressSummary(currentState, index, actionHistory),
                 isVerification = step is VerificationStep,
               ),
@@ -360,9 +371,43 @@ class TrailStepPlanner(
         appendLine("  ${i + 1}. $action")
       }
       appendLine("Try a DIFFERENT approach if previous actions did not achieve the objective.")
+
+      // Detect repeating action cycles (single-action repeats AND short A-B-A-B / A-B-C-A-B-C
+      // loops) and surface a stronger nudge. The success/failure suffix is stripped so a tap
+      // that succeeds in landing on the wrong screen still matches the same tap on a later
+      // iteration. Without this, a 2-action ping-pong loop ("tap Items → tap Back → tap Items
+      // → tap Back …") burns through the per-step retry budget without escalation.
+      val signatures = actionHistory.map(::stripActionOutcomeSuffix)
+      detectActionCycleHint(signatures)?.let { hint ->
+        appendLine()
+        appendLine(hint)
+      }
     }
   }
 }
+
+/**
+ * Strips the trailing " → SUCCESS" or " → FAILED[: <error>]" outcome suffix from a Trail
+ * action history entry, leaving the underlying "tool(args)" signature so the cycle detector
+ * can match the same action across success and failure outcomes.
+ *
+ * Anchored at the end of the string with [RegexOption.DOT_MATCHES_ALL], so a `→` that appears
+ * inside a tool argument (e.g. a label like `"Menu → Settings"` or a breadcrumb in typed
+ * text) is preserved instead of accidentally truncating distinct actions to the same prefix.
+ *
+ * Outcome shapes the planner emits today (see [TrailStepPlanner.executeWithAi]):
+ * - `tool(args) → SUCCESS`
+ * - `tool(args) → FAILED: <error message, possibly multi-line>`
+ *
+ * Entries that do not end with one of those outcomes (e.g. pre-formatted history passed in
+ * from elsewhere, or a future planner that records actions before knowing the outcome) pass
+ * through unchanged.
+ */
+internal fun stripActionOutcomeSuffix(entry: String): String =
+  ACTION_OUTCOME_SUFFIX_REGEX.replace(entry, "")
+
+private val ACTION_OUTCOME_SUFFIX_REGEX: Regex =
+  Regex("""\s*→\s*(SUCCESS|FAILED(?::.*)?)\s*$""", RegexOption.DOT_MATCHES_ALL)
 
 /**
  * Returns a [JsonObject] containing only tool-specific parameters, stripping out
@@ -390,13 +435,3 @@ fun initialTrailState(steps: List<PromptStep>): TrailState = TrailState(
   retryCount = 0,
 )
 
-/**
- * Converts the tool wrapper to a JsonObject of arguments for execution.
- *
- * Serializes the [trailblazeTool] to extract its properties as JSON arguments.
- */
-private fun TrailblazeToolYamlWrapper.toJsonArgs(): JsonObject {
-  // Serialize tool to JSON string, then parse back as JsonObject
-  val toolJson = TrailblazeJsonInstance.encodeToString(trailblazeTool)
-  return TrailblazeJsonInstance.decodeFromString<JsonObject>(toolJson)
-}

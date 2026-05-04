@@ -48,7 +48,6 @@ proguardGradle = "7.8.2"
 slf4j = "2.0.17"
 slf4j-android = "1.7.36"
 skiko = "0.144.4" # Must match Compose Multiplatform's expected Skiko version
-snakeyaml = "2.5"
 spotless = "8.1.0"
 testParameterInjector = "1.20"
 truth = "1.4.5"
@@ -175,7 +174,6 @@ skiko = { module = "org.jetbrains.skiko:skiko", version.ref = "skiko" }
 slf4j-android = { module = "org.slf4j:slf4j-android", version.ref = "slf4j-android" }
 slf4j-api = { module = "org.slf4j:slf4j-api", version.ref = "slf4j" }
 slf4j-simple = { module = "org.slf4j:slf4j-simple", version.ref = "slf4j" }
-snakeyaml = { module = "org.yaml:snakeyaml", version.ref = "snakeyaml" }
 test-parameter-injector = { module = "com.google.testparameterinjector:test-parameter-injector", version.ref = "testParameterInjector" }
 truth = { module = "com.google.truth:truth", version.ref = "truth" }
 

@@ -120,4 +120,20 @@ class TrailblazeToolMetaTest {
     assertThat(meta.shouldRegister(TrailblazeDriverType.IOS_HOST, preferHostAgent = false)).isFalse()
     assertThat(meta.shouldRegister(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY, preferHostAgent = true)).isFalse()
   }
+
+  @Test fun `fromJsonObject normalizes supportedPlatforms to uppercase`() {
+    // Authors can write `[web]`, `[WEB]`, or `[Web]` — all collapse to the canonical
+    // uppercase form so the downstream `!in` check against TrailblazeDevicePlatform.name
+    // (always uppercase) stays branch-free. supportedDrivers does NOT get normalized
+    // because driver yamlKeys are conventionally lowercase already (e.g., "ios-host").
+    val mixedCase = buildJsonObject {
+      put("trailblaze/supportedPlatforms", buildJsonArray { add("web"); add("Ios"); add("ANDROID") })
+    }
+    val parsed = TrailblazeToolMeta.fromJsonObject(mixedCase)
+    assertThat(parsed.supportedPlatforms).isEqualTo(listOf("WEB", "IOS", "ANDROID"))
+    // Confirm the filter accepts a session that matches one of the normalized entries.
+    assertThat(parsed.shouldRegister(TrailblazeDriverType.PLAYWRIGHT_NATIVE, preferHostAgent = true)).isTrue()
+    assertThat(parsed.shouldRegister(TrailblazeDriverType.IOS_HOST, preferHostAgent = true)).isTrue()
+    assertThat(parsed.shouldRegister(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY, preferHostAgent = true)).isTrue()
+  }
 }

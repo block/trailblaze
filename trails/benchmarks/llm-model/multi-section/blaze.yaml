@@ -1,0 +1,17 @@
+- config:
+    title: "LLM Benchmark: Multi-section navigation + state preservation"
+    driver: PLAYWRIGHT_NATIVE
+    description: |-
+      Drive the agent across multiple SPA sections (Counter → About → Counter)
+      and verify the counter value survives the navigation round-trip. Tests
+      that the model keeps track of accumulated state across nav clicks
+      instead of resetting its mental model on every section switch.
+- prompts:
+    - step: Navigate to http://localhost:8765/index.html
+    - step: Click the "Counter" navigation link
+    - step: Click the Increment button (the + button) three times
+    - step: Verify the counter value shows "3"
+    - step: Click the "About" navigation link
+    - step: Verify the text "Trailblaze is an AI-powered UI testing framework" is visible
+    - step: Click the "Counter" navigation link
+    - step: Verify the counter value shows "3"

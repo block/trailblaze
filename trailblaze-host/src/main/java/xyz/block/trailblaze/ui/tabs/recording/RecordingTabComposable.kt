@@ -319,6 +319,7 @@ private fun formatDeviceLabel(device: TrailblazeConnectedDeviceSummary): String 
     TrailblazeDevicePlatform.ANDROID -> "Android"
     TrailblazeDevicePlatform.IOS -> "iOS"
     TrailblazeDevicePlatform.WEB -> "Web"
+    TrailblazeDevicePlatform.DESKTOP -> "Desktop"
   }
   return "$platformIcon: ${device.description}"
 }
@@ -365,6 +366,17 @@ private suspend fun connectToDevice(
             toolFactory = toolFactory,
             deviceLabel = formatDeviceLabel(device),
           )
+        )
+      }
+      TrailblazeDevicePlatform.DESKTOP -> {
+        // The Recording tab streams device frames + records interactions for trail
+        // playback. Compose desktop has no equivalent recording flow today — the
+        // Compose RPC server exposes screen-state and tool execution for ad hoc
+        // demo use, not a continuous frame stream. Surface a clear "not yet
+        // wired" error rather than crashing or recording a partial signal.
+        return ConnectionState.Error(
+          "Recording is not wired up for the Compose desktop driver yet. " +
+            "Use the hidden `trailblaze desktop snapshot` command for one-shot captures.",
         )
       }
     }

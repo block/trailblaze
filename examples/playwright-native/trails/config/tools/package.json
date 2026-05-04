@@ -1,0 +1,14 @@
+{
+  "name": "trailblaze-playwright-native-tools",
+  "version": "0.1.0",
+  "private": true,
+  "description": "TypeScript tooling for the playwright-native example pack. Per-pack package.json + tsconfig.json so authors get IDE autocomplete on @trailblaze/scripting types when editing flat per-file Tier-1 tool sources in this directory.",
+  "type": "module",
+  "dependencies": {
+    "@trailblaze/scripting": "file:../../../../../sdks/typescript"
+  },
+  "devDependencies": {
+    "@types/node": "25.6.0",
+    "typescript": "6.0.3"
+  }
+}

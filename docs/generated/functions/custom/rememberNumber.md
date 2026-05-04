@@ -1,8 +1,8 @@
 ## Tool `rememberNumber`
 
 ## Description
-This will find a number on the current screen using the natural language prompt parameter.
-Once the number is found it will be saved for future test operations under the variable parameter.
+Find a number on the current screen using the natural-language prompt, then save it under the
+variable name for future test operations.
 
 ### Command Class
 `xyz.block.trailblaze.toolcalls.commands.memory.RememberNumberTrailblazeTool`

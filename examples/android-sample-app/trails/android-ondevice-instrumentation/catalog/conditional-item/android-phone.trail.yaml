@@ -17,6 +17,10 @@
             containsChild:
               textRegex: Catalog
   - verify: '"Pumpkin Spice" is not visible on the screen'
+    recording:
+      tools:
+      - assertNotVisibleWithText:
+          text: Pumpkin Spice
   - step: Tap "Show seasonal" to reveal seasonal items
     recording:
       tools:

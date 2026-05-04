@@ -1,0 +1,23 @@
+script: ./trails/config/tools/playwrightSample_web_submitContactForm.js
+name: playwrightSample_web_submitContactForm
+description: Fill out the sample contact form, submit it, and verify the success banner.
+_meta:
+  trailblaze/supportedPlatforms: [web]
+  trailblaze/requiresContext: true
+inputSchema:
+  relativePath:
+    type: string
+    description: Contact-form fixture path relative to the playwright-native examples root.
+  name:
+    type: string
+    description: Value to type into the form's "Name" field.
+  email:
+    type: string
+    description: Value to type into the form's "Email" field. No format validation here — the fixture accepts any string.
+  category:
+    type: string
+    description: Category radio/select option to choose. Must be one of the enum values.
+    enum: [support, sales, feedback]
+  message:
+    type: string
+    description: Body text to type into the form's "Message" textarea.

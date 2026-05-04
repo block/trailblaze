@@ -11,7 +11,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeTools.REQUIRED_TEXT_DESCRIPTION
 
 @Serializable
-@TrailblazeToolClass("longPressOnElementWithText")
+@TrailblazeToolClass("longPressOnElementWithText", isForLlm = false)
 @LLMDescription(
   """
 Invoking this function will trigger a long press on the provided text. Ensure that you 

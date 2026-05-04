@@ -12,6 +12,7 @@ import xyz.block.trailblaze.api.ScreenshotScalingConfig
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.logs.server.TrailblazeMcpServer
 import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
@@ -430,7 +431,11 @@ private class TestTrailblazeMcpBridge : TrailblazeMcpBridge {
 
   override fun getDirectScreenStateProvider(skipScreenshot: Boolean): ((ScreenshotScalingConfig) -> ScreenState)? = null
 
-  override suspend fun executeTrailblazeTool(tool: TrailblazeTool, blocking: Boolean): String =
+  override suspend fun executeTrailblazeTool(
+    tool: TrailblazeTool,
+    blocking: Boolean,
+    traceId: TraceId?,
+  ): String =
     "[OK] Tool executed (test mode)"
 
   override suspend fun endSession(): Boolean = true

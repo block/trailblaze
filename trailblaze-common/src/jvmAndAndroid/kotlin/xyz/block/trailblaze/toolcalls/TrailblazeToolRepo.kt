@@ -254,10 +254,14 @@ class TrailblazeToolRepo(
     //    the tool name as a raw String, so wrap it once for the typed map lookup.
     snapshot.dynamic[ToolName(toolName)]?.let { return it.decodeToolCall(toolContent) }
 
-    // 2. Class-backed path — look up by KClass + decode via the class's Kotlin serializer.
+    // 2. Class-backed path — look up by the @TrailblazeToolClass(name=...) value, not by the
+    //    Koog descriptor name. Descriptor lookup misses any tool with isForLlm = false (e.g.
+    //    TapOnByElementSelector), since toKoogToolDescriptor() returns null for those — the
+    //    annotation-name lookup keeps every class-backed tool reachable regardless of LLM
+    //    visibility.
     val trailblazeToolClass: KClass<out TrailblazeTool>? =
       snapshot.toolClasses.firstOrNull { toolKClass ->
-        toolKClass.toKoogToolDescriptor()?.name == toolName
+        toolKClass.toolName().toolName == toolName
       }
     if (trailblazeToolClass != null) {
       @OptIn(InternalSerializationApi::class)

@@ -19,6 +19,7 @@ import java.nio.file.Paths
 import java.nio.file.WatchService
 import kotlin.concurrent.thread
 import kotlin.io.path.name
+import xyz.block.trailblaze.capture.model.CaptureFilenames
 import xyz.block.trailblaze.util.Console
 
 class FileWatchService(
@@ -69,6 +70,17 @@ class FileWatchService(
     // Ignore directories that start with special characters
     // Note: We can't check if it's a directory without I/O, but the filename pattern is good enough
     if (fileNameLower.isNotEmpty() && !fileNameLower[0].isLetterOrDigit() && fileNameLower[0] != '_') {
+      return true
+    }
+
+    // Ignore continuously-written capture files — these generate MODIFY events on every
+    // flush during a live session and would overwhelm watchers monitoring session directories.
+    // The device logs panel handles its own refresh via polling. Legacy `logcat.txt` is
+    // included so older session folders don't generate noise either.
+    if (fileNameLower == CaptureFilenames.DEVICE_LOG ||
+      fileNameLower == CaptureFilenames.LEGACY_LOGCAT_TXT ||
+      fileNameLower.endsWith(CaptureFilenames.VIDEO_EXTENSION)
+    ) {
       return true
     }
 

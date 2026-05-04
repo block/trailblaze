@@ -40,5 +40,4 @@ androidComponents.beforeVariants {
 
 dependencies {
   implementation(project(":trailblaze-android"))
-  implementation(project(":trailblaze-accessibility"))
 }

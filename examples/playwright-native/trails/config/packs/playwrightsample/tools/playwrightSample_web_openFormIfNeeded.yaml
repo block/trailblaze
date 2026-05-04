@@ -1,0 +1,13 @@
+script: ./trails/config/tools/playwrightSample_web_openFormIfNeeded.js
+name: playwrightSample_web_openFormIfNeeded
+description: Open the sample form section only when it is not already visible.
+_meta:
+  trailblaze/supportedPlatforms: [web]
+  trailblaze/requiresContext: true
+inputSchema:
+  relativePath:
+    type: string
+    description: Fixture path relative to the playwright-native examples root.
+  formHeading:
+    type: string
+    description: Heading text the tool searches for to decide if the form is already visible. If found, the tool no-ops; otherwise it clicks the "open form" affordance.

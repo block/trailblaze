@@ -76,11 +76,11 @@ fun SessionStatusIconBadge(
       0xFF2196F3
     ) // Blue play arrow for in-progress
     is SessionStatus.Ended.Succeeded,
-    is SessionStatus.Ended.SucceededWithFallback -> Icons.Filled.Check to Color(
+    is SessionStatus.Ended.SucceededWithSelfHeal -> Icons.Filled.Check to Color(
       0xFF4CAF50
     ) // Green
     is SessionStatus.Ended.Failed,
-    is SessionStatus.Ended.FailedWithFallback,
+    is SessionStatus.Ended.FailedWithSelfHeal,
     is SessionStatus.Ended.TimeoutReached -> Icons.Filled.Close to MaterialTheme.colorScheme.error
 
     is SessionStatus.Ended.MaxCallsLimitReached -> Icons.Filled.Block to MaterialTheme.colorScheme.error

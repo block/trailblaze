@@ -85,6 +85,64 @@ class TrailblazeNodeSelectorResolverTest {
     assertEquals(2, result.nodes.size)
   }
 
+  // -- Compose testTag matching --
+
+  @Test
+  fun `composeTestTag matches via composeTestTagRegex`() {
+    nextId = 1L
+    val target = node(detail = DriverNodeDetail.AndroidAccessibility(composeTestTag = "checkout_btn"))
+    val other = node(detail = DriverNodeDetail.AndroidAccessibility(composeTestTag = "cancel_btn"))
+    val root = node(children = listOf(target, other))
+
+    val selector = TrailblazeNodeSelector.withMatch(
+      DriverNodeMatch.AndroidAccessibility(composeTestTagRegex = "checkout_btn"),
+    )
+    val result = TrailblazeNodeSelectorResolver.resolve(root, selector)
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(result)
+    assertEquals(target.nodeId, result.node.nodeId)
+  }
+
+  @Test
+  fun `composeTestTagRegex with no testTag in node returns NoMatch`() {
+    // A selector that constrains composeTestTag should not match nodes that don't expose one.
+    nextId = 1L
+    val target = node(detail = DriverNodeDetail.AndroidAccessibility(text = "Submit"))
+    val root = node(children = listOf(target))
+
+    val selector = TrailblazeNodeSelector.withMatch(
+      DriverNodeMatch.AndroidAccessibility(composeTestTagRegex = "anything"),
+    )
+    val result = TrailblazeNodeSelectorResolver.resolve(root, selector)
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.NoMatch>(result)
+  }
+
+  // -- roleDescription matching --
+
+  @Test
+  fun `roleDescription matches via roleDescriptionRegex`() {
+    nextId = 1L
+    val target = node(
+      detail = DriverNodeDetail.AndroidAccessibility(
+        roleDescription = "Toggle",
+        className = "android.widget.ImageButton",
+      ),
+    )
+    val other = node(
+      detail = DriverNodeDetail.AndroidAccessibility(
+        roleDescription = "Tab",
+        className = "android.widget.ImageButton",
+      ),
+    )
+    val root = node(children = listOf(target, other))
+
+    val selector = TrailblazeNodeSelector.withMatch(
+      DriverNodeMatch.AndroidAccessibility(roleDescriptionRegex = "Toggle"),
+    )
+    val result = TrailblazeNodeSelectorResolver.resolve(root, selector)
+    assertIs<TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch>(result)
+    assertEquals(target.nodeId, result.node.nodeId)
+  }
+
   // -- Regex special chars --
 
   @Test

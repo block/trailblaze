@@ -4,6 +4,25 @@ import kotlin.math.pow
 
 object FormattingUtils {
   /**
+   * Formats milliseconds as a `m:ss.mmm`-style relative timestamp (e.g., `"1:23.456"`).
+   * Used by the device logs panel for per-line "time since session start" display.
+   */
+  fun formatRelativeTimeWithMillis(ms: Long): String {
+    val totalSec = ms / 1000
+    val min = totalSec / 60
+    val sec = totalSec % 60
+    val millis = ms % 1000
+    val secStr = if (sec < 10) "0$sec" else "$sec"
+    val msStr =
+      when {
+        millis < 10 -> "00$millis"
+        millis < 100 -> "0$millis"
+        else -> "$millis"
+      }
+    return "$min:$secStr.$msStr"
+  }
+
+  /**
    * Formats milliseconds to seconds with 2 decimal places (e.g., "1.25s").
    * Useful for displaying durations, loading times, and performance metrics.
    */

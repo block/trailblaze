@@ -38,5 +38,5 @@
         matchMode: "contains"
 
 # --- Benchmark Run History ---
-# [2026-03-11] Build #27 FAILED - Infrastructure: Missing test resource benchmarks/audio/Sunset Dreams.mp3
+# [2026-03-11] FAILED - Infrastructure: Missing test resource benchmarks/audio/Sunset Dreams.mp3
 #   on classpath. Audio assets need to be bundled with test runner.

@@ -4,6 +4,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
+import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.util.Console
 
 object InstrumentationArgUtil {
@@ -90,8 +91,28 @@ object InstrumentationArgUtil {
   }
 
   fun isSelfHealEnabled(): Boolean? {
-    // Returns null if not set, allowing config to be the default
-    return instrumentationArguments.getString("trailblaze.selfHeal")?.toBoolean()
+    // Returns null if not set OR if set to a non-boolean value, allowing config to be the default.
+    // Uses the same strict parser as the host/CLI resolvers (TrailCommand.resolveEffectiveSelfHeal
+    // and BaseHostTrailblazeTest.resolveSelfHealFromEnvOrConfig) so the same input string behaves
+    // the same way on every platform.
+    return instrumentationArguments.getString("trailblaze.selfHeal")?.lowercase()?.toBooleanStrictOrNull()
+  }
+
+  /**
+   * Returns the [AgentImplementation] from instrumentation args, or [AgentImplementation.DEFAULT].
+   *
+   * Pass via: `-e trailblaze.agent MULTI_AGENT_V3`
+   * In CI: set `TRAILBLAZE_AGENT=MULTI_AGENT_V3` on the Buildkite step (mapped to the
+   * instrumentation arg in root `build.gradle.kts`).
+   */
+  fun agentImplementation(): AgentImplementation {
+    val value = instrumentationArguments.getString("trailblaze.agent") ?: return AgentImplementation.DEFAULT
+    return try {
+      AgentImplementation.valueOf(value)
+    } catch (e: IllegalArgumentException) {
+      Console.log("Unknown agent implementation: $value, falling back to ${AgentImplementation.DEFAULT}")
+      AgentImplementation.DEFAULT
+    }
   }
 
   /**

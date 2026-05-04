@@ -108,7 +108,7 @@ object AgentMessages {
   private fun successContentString(toolName: String, toolArgs: JsonObject, message: String?) = buildString {
     val resultMessage = message.asResultMessage()
     if (resultMessage != null) {
-      appendLine("**Successfully used the `$toolName` tool.** $resultMessage")
+      appendLine("**Executed the `$toolName` tool.** $resultMessage")
     } else {
       appendLine("**Successfully used the `$toolName` tool on the device with the following parameters:**")
       appendLine(asJsonCodeBlock(toolArgs))
@@ -122,7 +122,7 @@ object AgentMessages {
     val resultMessage = message.asResultMessage()
     if (resultMessage != null) {
       val toolNamesStr = toolNames.joinToString(", ") { "`$it`" }
-      appendLine("**Successfully used $toolNamesStr.** $resultMessage")
+      appendLine("**Executed $toolNamesStr.** $resultMessage")
     } else if (toolNames.size == 1) {
       appendLine("**Successfully used the `${toolNames.first()}` tool on the device with the following parameters:**")
       appendLine(asJsonCodeBlock(toolArgs))
@@ -140,7 +140,7 @@ object AgentMessages {
     val resultMessage = message.asResultMessage()
     if (resultMessage != null) {
       val toolNamesStr = toolsWithArgs.keys.joinToString(", ") { "`$it`" }
-      appendLine("**Successfully used $toolNamesStr.** $resultMessage")
+      appendLine("**Executed $toolNamesStr.** $resultMessage")
     } else if (toolsWithArgs.size == 1) {
       val (toolName, toolArgs) = toolsWithArgs.entries.first()
       appendLine("**Successfully used the `$toolName` tool on the device with the following parameters:**")

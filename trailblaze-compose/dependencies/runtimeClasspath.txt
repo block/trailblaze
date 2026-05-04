@@ -118,6 +118,7 @@ com.squareup.okhttp3:okhttp:5.2.1
 com.squareup.okio:okio-jvm:3.16.4
 com.squareup.okio:okio:3.16.4
 com.typesafe:config:1.4.5
+dev.mobile:dadb:1.2.10
 dev.mobile:maestro-client:2.3.0
 dev.mobile:maestro-orchestra-models:2.3.0
 dev.mobile:maestro-orchestra:2.3.0
@@ -230,6 +231,8 @@ org.jetbrains.compose.ui:ui-util:1.11.0-alpha04
 org.jetbrains.compose.ui:ui:1.11.0-alpha04
 org.jetbrains.kotlin:kotlin-bom:2.3.10
 org.jetbrains.kotlin:kotlin-reflect:2.3.20
+org.jetbrains.kotlin:kotlin-stdlib-jdk7:2.3.10
+org.jetbrains.kotlin:kotlin-stdlib-jdk8:2.3.10
 org.jetbrains.kotlin:kotlin-stdlib:2.3.20
 org.jetbrains.kotlinx:atomicfu-jvm:0.28.0
 org.jetbrains.kotlinx:atomicfu:0.28.0

@@ -18,7 +18,7 @@ import xyz.block.trailblaze.yaml.ToolRecording
  * the optimal execution strategy based on [config]:
  *
  * - **DETERMINISTIC mode**: Uses [DeterministicTrailExecutor] for zero-LLM execution
- * - **Other modes**: Uses [TrailStepPlanner] with AI fallback when needed
+ * - **Other modes**: Uses [TrailStepPlanner] with self-heal when needed
  *
  * ## Example Usage
  *
@@ -30,7 +30,7 @@ import xyz.block.trailblaze.yaml.ToolRecording
  *   config = TrailConfig.DETERMINISTIC,
  * )
  *
- * // Execute with AI fallback for missing/failed recordings
+ * // Execute with self-heal for missing/failed recordings
  * val result = trail(
  *   steps = trailFile.steps,
  *   executor = maestroExecutor,
@@ -50,7 +50,7 @@ import xyz.block.trailblaze.yaml.ToolRecording
  *
  * @param steps The trail steps to execute in order
  * @param executor UI action executor for running tools on the device
- * @param screenAnalyzer Screen analyzer for AI fallback (required unless DETERMINISTIC)
+ * @param screenAnalyzer Screen analyzer for self-heal (required unless DETERMINISTIC)
  * @param config Trail execution configuration
  * @param logEmitter Optional log emitter for objective lifecycle events
  * @param sessionId Optional session ID for log correlation
@@ -97,7 +97,7 @@ suspend fun trail(
  * Executes trail steps using the [TrailStepPlanner].
  *
  * This handles all non-deterministic modes by planning and executing
- * one step at a time, with AI fallback when recordings fail.
+ * one step at a time, with self-heal when recordings fail.
  */
 private suspend fun executeWithPlanner(
   steps: List<PromptStep>,
@@ -133,7 +133,7 @@ private suspend fun executeWithPlanner(
         break
       }
 
-      // If this was a recording action and it failed, try the next action (AI fallback)
+      // If this was a recording action and it failed, try the next action (self-heal)
       if (action.type == TrailStepAction.ActionType.RECORDING &&
         config.mode == TrailExecutionMode.RECORDING_WITH_FALLBACK
       ) {

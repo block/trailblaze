@@ -6,6 +6,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
 import org.junit.Rule
+import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.TrailblazeAndroidLoggingRule
 import xyz.block.trailblaze.api.ScreenState
@@ -38,7 +39,15 @@ abstract class BaseAndroidStandaloneServerTest {
   )
 
 
-  abstract fun handleRunRequest(runYamlRequest: RunYamlRequest)
+  /**
+   * Handle a single [RunYamlRequest] on-device. The [agentMemory] is the instance supplied
+   * by the caller; in production it's pre-populated upstream by `RunYamlRequestHandler`
+   * from `request.memorySnapshot` before [createRunTrailblazeYamlCallback] forwards it
+   * here. Implementations should thread it into the constructed agent via
+   * `AndroidTrailblazeRule(agentMemoryOverride = ...)` so writes from on-device tools
+   * land in the same instance the caller reads from after this returns.
+   */
+  abstract fun handleRunRequest(runYamlRequest: RunYamlRequest, agentMemory: AgentMemory)
 
   protected var runTestCoroutineScope: CoroutineScope? = null
 
@@ -73,9 +82,15 @@ abstract class BaseAndroidStandaloneServerTest {
    */
   open fun getCustomToolsForTargetApp(targetAppName: String?): CustomTrailblazeTools? = null
 
-  val adbReversePort =
+  /**
+   * The port the on-device RPC server binds to inside the runner instrumentation. The host
+   * bridges to this port (today via `adb forward`) so calls to localhost:<port> on the host
+   * reach this server. Resolved from the instrumentation arg when present, falling back to
+   * [TrailblazeDevicePort.TRAILBLAZE_DEFAULT_ON_DEVICE_RPC_PORT].
+   */
+  val onDeviceRpcPort =
     InstrumentationArgUtil.getInstrumentationArg(TrailblazeDevicePort.INSTRUMENTATION_ARG_KEY)?.toInt()
-      ?: TrailblazeDevicePort.TRAILBLAZE_DEFAULT_ADB_REVERSE_PORT
+      ?: TrailblazeDevicePort.TRAILBLAZE_DEFAULT_ON_DEVICE_RPC_PORT
 
   /**
    * Creates a callback for running YAML-based tests via TrailblazeRunner.
@@ -83,18 +98,18 @@ abstract class BaseAndroidStandaloneServerTest {
    * This callback handles session lifecycle management around [handleRunRequest].
    * Use this when constructing an [OnDeviceRpcServer] in subclasses.
    */
-  fun createRunTrailblazeYamlCallback(): suspend (RunYamlRequest, TrailblazeSession) -> TrailblazeSession =
-    { runYamlRequest: RunYamlRequest, session: TrailblazeSession ->
+  fun createRunTrailblazeYamlCallback(): suspend (RunYamlRequest, TrailblazeSession, AgentMemory) -> TrailblazeSession =
+    { runYamlRequest: RunYamlRequest, session: TrailblazeSession, agentMemory: AgentMemory ->
       // Set the session on the logging rule so it's available to all components
       // that use sessionProvider (AndroidTrailblazeRule and its subcomponents)
       trailblazeLoggingRule.setSession(session)
       try {
-        handleRunRequest(runYamlRequest)
+        handleRunRequest(runYamlRequest, agentMemory)
       } finally {
         // Clear the session after execution to prevent stale sessions
         trailblazeLoggingRule.setSession(null)
       }
-      session // Return the session unchanged
+      session // Return the session unchanged; memory writes flow through the shared instance.
     }
 
 }

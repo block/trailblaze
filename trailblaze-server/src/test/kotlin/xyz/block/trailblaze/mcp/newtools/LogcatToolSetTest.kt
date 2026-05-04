@@ -7,8 +7,9 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Test
+import xyz.block.trailblaze.devices.TrailblazeDeviceId
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
@@ -177,23 +178,65 @@ class LogcatToolSetTest {
     assertNotNull(json["error"]?.jsonPrimitive?.content)
   }
 
-  // ── Timeout / hung-process path ───────────────────────────────────────────
+  // ── adb timeout / failure path ───────────────────────────────────────────
 
   @Test
-  fun `readProcessOutputWithTimeout destroys hanging process and returns within deadline`() {
-    // Start a process that intentionally hangs so we can verify the timeout fires.
-    val process = ProcessBuilder("sleep", "30").start()
-    val toolSet = LogcatToolSet()
+  fun `error message distinguishes timeout from no-device`() = runTest {
+    // Wire up the test seam to simulate adb returning null (timeout / wedged daemon).
+    // The tool should surface a different error than the "no device connected" case so
+    // operators don't get told to "connect a device" when one is already connected.
+    val deviceId = TrailblazeDeviceId(
+      instanceId = "emulator-5554",
+      trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
+    )
+    val toolSet = LogcatToolSet(
+      deviceIdProvider = { deviceId },
+      readLogcatViaAdbOverride = { null }, // simulate timeout
+    )
 
-    val startMs = System.currentTimeMillis()
-    val lines = toolSet.readProcessOutputWithTimeout(process, timeoutSeconds = 1L)
-    val elapsedMs = System.currentTimeMillis() - startMs
+    val result = toolSet.logcat(action = LogcatToolSet.LogcatAction.QUERY, pattern = ".*")
+    val json = Json.parseToJsonElement(result).jsonObject
+    val errorMessage = json["error"]?.jsonPrimitive?.content
+    assertNotNull(errorMessage)
+    assertTrue(
+      errorMessage.contains("timed out", ignoreCase = true),
+      "Expected timeout-specific error, got: $errorMessage",
+    )
+    assertTrue(
+      errorMessage.contains("emulator-5554"),
+      "Expected the device id in the error so operators can correlate, got: $errorMessage",
+    )
+    // The legacy "Connect an Android device" message should NOT appear here — the device IS
+    // connected, the call just timed out. This is the entire point of the new error path.
+    assertTrue(
+      !errorMessage.contains("Connect an Android device"),
+      "Should not tell user to connect a device when one is already connected: $errorMessage",
+    )
+  }
 
-    // Should return well within 2× the timeout — not block for 30s.
-    assertTrue(elapsedMs < 4_000, "Expected return in <4s, took ${elapsedMs}ms")
-    // Process must be dead — destroyForcibly() was called on timeout.
-    assertFalse(process.isAlive, "Process should be destroyed after timeout")
-    // sleep produces no stdout — result must be empty.
-    assertTrue(lines.isEmpty(), "Expected no output from sleep process, got: $lines")
+  @Test
+  fun `successful adb path returns lines via override`() = runTest {
+    // Round-trip: the override returns lines; the tool should treat them like real adb output.
+    // Confirms the test seam doesn't accidentally short-circuit the filter/match pipeline.
+    val deviceId = TrailblazeDeviceId(
+      instanceId = "emulator-5554",
+      trailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID,
+    )
+    val toolSet = LogcatToolSet(
+      deviceIdProvider = { deviceId },
+      readLogcatViaAdbOverride = {
+        listOf(
+          "1776279402.584  5750  5750 D UserJourney: FRICTION: signal=http-status-403",
+          "1776279402.700  5750  5905 I OkHttp: --> POST /1.0/onboarding",
+        )
+      },
+    )
+
+    val result = toolSet.logcat(
+      action = LogcatToolSet.LogcatAction.ASSERT,
+      pattern = "FRICTION.*http-status-403",
+    )
+    val json = Json.parseToJsonElement(result).jsonObject
+    assertEquals(true, json["passed"]!!.jsonPrimitive.boolean)
   }
 }

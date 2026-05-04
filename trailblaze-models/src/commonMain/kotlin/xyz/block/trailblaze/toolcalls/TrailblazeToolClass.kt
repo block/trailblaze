@@ -11,6 +11,12 @@ package xyz.block.trailblaze.toolcalls
  * @property requiresHost Whether this tool requires host-side execution (e.g., ADB commands,
  *   USB hardware access like cbot). Tools with requiresHost=true are excluded from on-device
  *   agents and can only run from a host JVM process.
+ * @property isVerification Whether this tool is read-only and self-validates a condition (e.g.,
+ *   `assertVisible`, `web_verify_text_visible`). Verification tools never mutate the device, and
+ *   their successful execution is the assertion verdict. Used by `blaze(hint=VERIFY)` to decide
+ *   whether the LLM-recommended tool may be executed: only verification tools are allowed,
+ *   anything else short-circuits to a failed assertion (its success would be unrelated to whether
+ *   the assertion holds, and it could side-effect the device).
  */
 @Target(AnnotationTarget.CLASS)
 @Retention(AnnotationRetention.RUNTIME)
@@ -19,4 +25,5 @@ annotation class TrailblazeToolClass(
   val isForLlm: Boolean = true,
   val isRecordable: Boolean = true,
   val requiresHost: Boolean = false,
+  val isVerification: Boolean = false,
 )

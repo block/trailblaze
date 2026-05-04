@@ -173,8 +173,8 @@ class TrailblazeSessionManager(
    * Automatically determines the correct end status based on parameters:
    *
    * - **MaxCallsLimitReachedException**: [SessionStatus.Ended.MaxCallsLimitReached]
-   * - **With fallback + success**: [SessionStatus.Ended.SucceededWithFallback]
-   * - **With fallback + failure**: [SessionStatus.Ended.FailedWithFallback]
+   * - **With self-heal + success**: [SessionStatus.Ended.SucceededWithSelfHeal]
+   * - **With self-heal + failure**: [SessionStatus.Ended.FailedWithSelfHeal]
    * - **Normal success**: [SessionStatus.Ended.Succeeded]
    * - **Normal failure**: [SessionStatus.Ended.Failed]
    *
@@ -256,8 +256,8 @@ class TrailblazeSessionManager(
     val durationMs = session.calculateDuration()
 
     return when {
-      isSuccess && session.usedFallback -> SessionStatus.Ended.SucceededWithFallback(durationMs)
-      !isSuccess && session.usedFallback -> SessionStatus.Ended.FailedWithFallback(
+      isSuccess && session.usedSelfHeal -> SessionStatus.Ended.SucceededWithSelfHeal(durationMs)
+      !isSuccess && session.usedSelfHeal -> SessionStatus.Ended.FailedWithSelfHeal(
         durationMs = durationMs,
         exceptionMessage = formatException(exception),
       )

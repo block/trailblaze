@@ -1,0 +1,30 @@
+# This file is a CHECKED-IN baseline of CLI output rendered by trailblaze-host's CLI helpers.
+# It is NOT a contract — if a test fails here because output drifted, decide whether the
+# drift is intentional. The test always (re)writes this file from the current rendered output,
+# then asserts the working tree is clean. So `git diff` of this file IS the failure message.
+# Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
+# small wording / spacing changes can be intentional or accidental.
+# ----------------------------------------------------------------------
+Usage: trailblaze verify [-hvV] [--text-only] -d=<device>
+                         [--headless=<headless>] <assertionWords>...
+Check a condition on screen and pass/fail (exit code 0/1, ideal for CI)
+      <assertionWords>...   Assertion to verify (e.g., 'The Sign In button is
+                              visible')
+  -d, --device=<device>     Device: platform (android, ios, web) or
+                              platform/id. Required.
+  -h, --help                Show this help message and exit.
+      --headless=<headless> For --device web/...: launch the Playwright browser
+                              headless. When omitted, falls back to the
+                              persisted `web-headless` config (see `trailblaze
+                              config web-headless`). Pass --headless=false to
+                              force a visible browser, --headless=true to force
+                              headless. Ignored for non-web devices.
+      --text-only, --no-screenshots
+                            Skip screenshots — the LLM only sees the textual
+                              view hierarchy, no vision tokens, and disk
+                              logging of screenshots is skipped too. Faster and
+                              cheaper for short objectives where the visual
+                              layout doesn't matter; some tasks need vision and
+                              will degrade without it.
+  -v, --verbose             Enable verbose output
+  -V, --version             Print version information and exit.

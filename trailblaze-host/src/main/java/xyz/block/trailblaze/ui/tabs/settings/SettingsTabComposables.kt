@@ -525,12 +525,37 @@ object SettingsTabComposables {
         HorizontalDivider()
 
         PreferenceToggle(
-          label = "Capture Logcat",
-          description = "Capture device logs filtered to app under test (Android logcat / iOS log stream)",
+          label = "Capture Android Logcat",
+          description = "Capture Android logcat filtered to the app under test.",
           checked = serverState.appConfig.captureLogcat,
           onCheckedChange = { checkedValue ->
             trailblazeSettingsRepo.updateAppConfig {
               it.copy(captureLogcat = checkedValue)
+            }
+          }
+        )
+
+        PreferenceToggle(
+          label = "Capture iOS Simulator Logs",
+          description = "Capture iOS Simulator system logs via `xcrun simctl spawn log stream`. " +
+            "Off by default — iOS log volume is very high and can fill local disks fast.",
+          checked = serverState.appConfig.captureIosLogs,
+          onCheckedChange = { checkedValue ->
+            trailblazeSettingsRepo.updateAppConfig {
+              it.copy(captureIosLogs = checkedValue)
+            }
+          }
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        PreferenceToggle(
+          label = "Capture Network Traffic",
+          description = "Auto-capture every request/response to <session-dir>/network.ndjson on supported devices (web today, mobile coming) — no per-trail capture-start call needed",
+          checked = serverState.appConfig.captureNetworkTraffic,
+          onCheckedChange = { checkedValue ->
+            trailblazeSettingsRepo.updateAppConfig {
+              it.copy(captureNetworkTraffic = checkedValue)
             }
           }
         )

@@ -1,8 +1,8 @@
-:trailblaze-accessibility
 :trailblaze-agent
 :trailblaze-android
 :trailblaze-common
 :trailblaze-models
+:trailblaze-quickjs-tools
 :trailblaze-scripting-bundle
 :trailblaze-scripting-mcp-common
 :trailblaze-tracing

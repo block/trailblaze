@@ -1,0 +1,8 @@
+# Workspace anchor for the sample app.
+#
+# This file is intentionally small, but it still does real work: commands run from anywhere
+# inside this sample workspace can walk up to `trails/config/trailblaze.yaml` and discover
+# the rest of this `trails/config/` directory automatically. Concrete target/tool/MCP
+# definitions still live under this same directory.
+packs:
+  - packs/sampleapp/pack.yaml

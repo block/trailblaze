@@ -34,9 +34,15 @@ import xyz.block.trailblaze.mcp.toolsets.ToolSetCategory
 import xyz.block.trailblaze.mcp.toolsets.ToolSetCategoryMapping
 import xyz.block.trailblaze.toolcalls.KoogToolExt
 import xyz.block.trailblaze.toolcalls.toKoogToolDescriptor
+import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
+import xyz.block.trailblaze.toolcalls.getIsRecordableFromAnnotation
+import xyz.block.trailblaze.toolcalls.toLogPayload
+import xyz.block.trailblaze.toolcalls.isVerification
+import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
+import kotlin.reflect.full.findAnnotation
 import kotlin.reflect.KClass
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.yaml.DirectionStep
@@ -72,13 +78,15 @@ class StepToolSet(
    */
   private val toolClassesOverrideProvider: (() -> Set<KClass<out TrailblazeTool>>?)? = null,
   /** Executes a raw TrailblazeTool directly on the device, bypassing the AI agent. */
-  private val rawToolExecutor: (suspend (TrailblazeTool) -> String)? = null,
+  private val rawToolExecutor: (suspend (TrailblazeTool, TraceId?) -> String)? = null,
   /** Captures the current screen summary after direct tool execution. */
   private val screenSummaryProvider: (suspend (Set<SnapshotDetail>) -> String?)? = null,
   /** Saves a screenshot to disk and returns the absolute file path. */
   private val screenshotSaver: (suspend (ByteArray) -> String?)? = null,
   /** Provides custom tool classes (target-specific) for YAML parsing in direct tool execution. */
   private val customToolClassesProvider: (() -> Set<KClass<out TrailblazeTool>>)? = null,
+  /** Provides the current session's dynamic-tool repo, if one is loaded. */
+  private val dynamicToolRepoProvider: (suspend () -> TrailblazeToolRepo?)? = null,
 ) : ToolSet {
 
   private fun parseSnapshotDetails(value: String?): Set<SnapshotDetail> {
@@ -131,16 +139,13 @@ class StepToolSet(
     screenState: ScreenState,
     details: Set<SnapshotDetail> = emptySet(),
   ): String? {
-    // Try pre-computed text representation first (available for iOS Maestro, Android on-device)
-    val preComputed = screenState.viewHierarchyTextRepresentation
-
     // If we have a TrailblazeNode tree, build or rebuild the compact element list.
     // This handles: detail enrichment (BOUNDS, OFFSCREEN) and cases where
     // viewHierarchyTextRepresentation is null (e.g., Android HOST mode).
     val tree = screenState.trailblazeNodeTree
     if (tree != null) {
       val platform = detectPlatformFromTree(tree)
-      if (platform != null && (details.isNotEmpty() || preComputed == null)) {
+      if (platform != null && (details.isNotEmpty() || screenState.viewHierarchyTextRepresentation == null)) {
         val elements = when (platform) {
           "android" -> AndroidCompactElementList.build(tree, details, screenState.deviceHeight).text
           "ios" -> if (tree.driverDetail is DriverNodeDetail.IosAxe ||
@@ -161,7 +166,11 @@ class StepToolSet(
       }
     }
 
-    return preComputed
+    // Web/Playwright: re-render the platform's text with the requested details.
+    // Default impl returns the cached text unchanged, so this is a no-op on Maestro
+    // platforms where the AndroidCompactElementList/IosCompactElementList path above
+    // is the canonical detail handler.
+    return screenState.viewHierarchyTextRepresentation(details)
   }
 
   /** Detects platform from the TrailblazeNode tree by checking root and first child. */
@@ -255,7 +264,8 @@ class StepToolSet(
     @LLMDescription("Save a screenshot to disk and return the file path. Works with fast mode.")
     screenshot: Boolean = false,
   ): String {
-    val traceId = TraceId.generate(TraceId.Companion.TraceOrigin.LLM)
+    val traceOrigin = if (tools != null) TraceId.Companion.TraceOrigin.MCP else TraceId.Companion.TraceOrigin.LLM
+    val traceId = TraceId.generate(traceOrigin)
     val isVerify = BlazeHint.from(hint) == BlazeHint.VERIFY
     val isFast = fast
     val wantsScreenshot = screenshot
@@ -375,7 +385,7 @@ class StepToolSet(
       Console.log("│ [verify] $objective")
       Console.log("│ Result: ${if (analysis.objectiveAppearsAchieved) "PASSED" else if (analysis.objectiveAppearsImpossible) "FAILED" else "UNCERTAIN"}")
     } else {
-      Console.log("│ [blaze${if (isFast) " --fast" else ""}] Objective: $objective")
+      Console.log("│ [blaze${if (isFast) " --no-screenshots" else ""}] Objective: $objective")
     }
     Console.log("│ Screen: ${analysis.screenSummary}")
     Console.log("│ Confidence: ${analysis.confidence}")
@@ -406,7 +416,30 @@ class StepToolSet(
       ).toMarkdown()
     }
 
-    // HIGH or MEDIUM confidence → execute
+    // Verify mode is read-only. If the LLM picked a non-verification tool, executing
+    // it could mutate the device, and its success is unrelated to whether the
+    // assertion holds — fail the assertion as "not confirmed" without executing.
+    // If the LLM picked a verification tool (annotated `isVerification = true`), let
+    // the standard execute branch run it: the tool itself validates the condition,
+    // so its execution success/failure is the correct verify verdict.
+    if (isVerify && !isVerificationTool(analysis.recommendedTool)) {
+      Console.log(
+        "│ ✗ Verify rejected non-verification tool: '${analysis.recommendedTool}' " +
+          "(no @TrailblazeToolClass(isVerification = true) annotation)",
+      )
+      val failureReason = "Assertion not confirmed: ${analysis.reasoning}"
+      emitObjectiveComplete(promptStep, stepStartTime, success = false, failureReason = failureReason)
+      return StepResult(
+        executed = false,
+        passed = false,
+        error = failureReason,
+        screenSummary = analysis.screenSummary,
+      ).toMarkdown()
+    }
+
+    // HIGH or MEDIUM confidence → execute. In verify mode this branch only runs
+    // for verification tools (filtered above), so successful execution means
+    // the assertion held.
     if (analysis.confidence == Confidence.HIGH || analysis.confidence == Confidence.MEDIUM) {
       val executionResult = try {
         executor.execute(analysis.recommendedTool, analysis.recommendedArgs, traceId)
@@ -467,9 +500,26 @@ class StepToolSet(
       return result.toMarkdown()
     }
 
-    // LOW confidence → return options (inner agent may also suggest different tools)
+    // LOW confidence
     Console.log("│ ? Low confidence - needs guidance")
     emitObjectiveComplete(promptStep, stepStartTime, success = false, failureReason = "Low confidence: ${analysis.reasoning}")
+
+    // Verify mode: LOW confidence means the LLM couldn't tell whether the assertion
+    // holds. "Maybe" is not a passing verify verdict, so report FAILED rather than
+    // returning needsInput=true (which would render as ⚠️ Needs input and skip the
+    // verify recording type). Failing closed matches the read-only contract.
+    if (isVerify) {
+      val failureReason = "Assertion not confirmed: low confidence — ${analysis.reasoning}"
+      return StepResult(
+        executed = false,
+        passed = false,
+        error = failureReason,
+        screenSummary = analysis.screenSummary,
+      ).toMarkdown()
+    }
+
+    // Blaze mode: surface as a needs-input result so the outer agent can retry with
+    // a different hint or pick a different tool.
     return StepResult(
       executed = false,
       needsInput = true,
@@ -524,26 +574,74 @@ class StepToolSet(
       return StepResult(executed = false, error = "No tools found in YAML").toMarkdown()
     }
 
-    // Reject unknown tool names — OtherTrailblazeTool means the name wasn't in the registry
-    val unknownTools = toolWrappers.filter { it.trailblazeTool is OtherTrailblazeTool }.map { it.name }
+    val dynamicRepo = dynamicToolRepoProvider?.invoke()
+    val resolvedToolWrappers = toolWrappers.map { wrapper ->
+      val otherTool = wrapper.trailblazeTool as? OtherTrailblazeTool ?: return@map wrapper
+      val resolved = dynamicRepo?.runCatching {
+        toolCallToTrailblazeTool(toolName = wrapper.name, toolContent = otherTool.raw.toString())
+      }?.getOrNull() ?: return@map wrapper
+      wrapper.copy(trailblazeTool = resolved)
+    }
+
+    // Reject unknown tool names — OtherTrailblazeTool means the name still wasn't in the registry
+    val unknownTools = resolvedToolWrappers.filter { it.trailblazeTool is OtherTrailblazeTool }.map { it.name }
     if (unknownTools.isNotEmpty()) {
       val msg = "Unknown tool${if (unknownTools.size > 1) "s" else ""}: ${unknownTools.joinToString(", ")}. Use toolbox() to see available tools."
       emitObjectiveComplete(promptStep, stepStartTime, success = false, failureReason = msg)
       return StepResult(executed = false, error = msg).toMarkdown()
     }
 
+    // Reject tools that are registered but not applicable to the current driver/target —
+    // e.g. invoking `openUrl` (Maestro-mapped) on a Playwright web device. Without this gate
+    // the call reaches MapsToMaestroCommands.execute() and surfaces a cryptic
+    // "MapsToMaestroCommands requires MaestroTrailblazeAgent" cast error.
+    //
+    // The empty-provider branch is a transient state — device booting, brief disconnect, or
+    // a slow tool-catalog load. Skipping validation in that case keeps the user moving (the
+    // request may still succeed), but we log so the daemon log shows when the catalog gate
+    // was bypassed, which is useful when debugging "why did I get the cryptic cast error
+    // back" reports.
+    val availableNames = availableToolsProvider().map { it.name }.toSet()
+    if (availableNames.isEmpty()) {
+      Console.log("Tool catalog empty for this device/target; skipping per-tool availability check")
+    } else {
+      val notValidForDevice = resolvedToolWrappers.map { it.name }.filter { it !in availableNames }
+      if (notValidForDevice.isNotEmpty()) {
+        val msg = "Tool${if (notValidForDevice.size > 1) "s" else ""} not valid for the current device/target: " +
+          "${notValidForDevice.joinToString(", ")}. Use toolbox() to see available tools."
+        emitObjectiveComplete(promptStep, stepStartTime, success = false, failureReason = msg)
+        return StepResult(executed = false, error = msg).toMarkdown()
+      }
+    }
+
     Console.log("")
     Console.log("┌──────────────────────────────────────────────────────────────────────────────")
-    Console.log("│ [blaze${if (fast) " --fast" else ""}] Objective: $objective (${toolWrappers.size} tools)")
+    Console.log("│ [blaze${if (fast) " --no-screenshots" else ""}] Objective: $objective (${resolvedToolWrappers.size} tools)")
 
     // Execute each tool sequentially
     val recordedToolCalls = mutableListOf<RecordedToolCall>()
-    for (wrapper in toolWrappers) {
+    for (wrapper in resolvedToolWrappers) {
+      val toolStartTime = Clock.System.now()
       try {
-        toolExecutor(wrapper.trailblazeTool)
+        toolExecutor(wrapper.trailblazeTool, traceId)
+        emitDirectToolLog(
+          tool = wrapper.trailblazeTool,
+          toolName = wrapper.name,
+          traceId = traceId,
+          startTime = toolStartTime,
+          successful = true,
+        )
         recordedToolCalls.add(RecordedToolCall(toolName = wrapper.name, args = emptyMap()))
         Console.log("│ ✓ Executed: ${wrapper.name}")
       } catch (e: Exception) {
+        emitDirectToolLog(
+          tool = wrapper.trailblazeTool,
+          toolName = wrapper.name,
+          traceId = traceId,
+          startTime = toolStartTime,
+          successful = false,
+          exceptionMessage = e.message,
+        )
         Console.log("│ ✗ Failed: ${wrapper.name} — ${e.message}")
         Console.log("└──────────────────────────────────────────────────────────────────────────────")
         emitObjectiveComplete(promptStep, stepStartTime, success = false, failureReason = "Tool ${wrapper.name} failed: ${e.message}")
@@ -578,14 +676,14 @@ class StepToolSet(
       type = RecordedStepType.STEP,
       input = objective,
       toolCalls = recordedToolCalls,
-      result = "Executed ${toolWrappers.size} tools",
+      result = "Executed ${resolvedToolWrappers.size} tools",
       success = true,
     ))
 
     return StepResult(
       executed = true,
       done = true,
-      result = "Executed ${toolWrappers.size} tools for: $objective",
+      result = "Executed ${resolvedToolWrappers.size} tools for: $objective",
       screenSummary = screenSummary,
     ).toMarkdown()
   }
@@ -721,6 +819,54 @@ class StepToolSet(
   }
 
   /**
+   * True if [toolName] is a verification tool — read-only, self-validating, and safe to
+   * execute under `blaze(hint=VERIFY)`. Determined by the
+   * [TrailblazeToolClass.isVerification] annotation on the registered tool class, so the
+   * source of truth lives next to the tool definition (e.g. `assertVisible`,
+   * `web_verify_text_visible`) and individual targets can opt new tools in by setting the
+   * flag — no central allowlist to keep in sync.
+   *
+   * Scans every class-backed tool reachable from the active session:
+   *  1. The driver-specific override (if set) — covers Compose/Revyl/Playwright tools that
+   *     are wired by their host runner.
+   *  2. The session's dynamic tool repo (if available) — covers target-specific tools
+   *     registered at runtime that aren't part of
+   *     [TrailblazeToolSet.DefaultLlmTrailblazeTools].
+   *  3. [ToolSetCategory.ALL] — the framework-level superset of every default class subset.
+   *
+   * YAML-defined verification tools aren't surfaced here yet — none exist in the catalog
+   * today (the `verification.yaml` toolset only references class-backed tools by name) —
+   * and adding them later is a strict superset change once a YAML tool wants to opt in
+   * via `is_verification: true`.
+   *
+   * All reflection is wrapped defensively: if annotation reads fail at runtime (extreme
+   * classpath corner cases), the call returns `false` rather than crashing the verify
+   * call. Returns `false` for unknown / blank names — verify mode treats those as unsafe
+   * and fails the assertion rather than executing.
+   */
+  private suspend fun isVerificationTool(toolName: String): Boolean {
+    if (toolName.isBlank()) return false
+    val classCandidates: Set<KClass<out TrailblazeTool>> = buildSet {
+      toolClassesOverrideProvider?.invoke()?.let { addAll(it) }
+      try {
+        dynamicToolRepoProvider?.invoke()?.getRegisteredTrailblazeTools()?.let { addAll(it) }
+      } catch (e: Exception) {
+        Console.error("Failed to read dynamic tool repo for verify gate: ${e.message}")
+      }
+      addAll(ToolSetCategoryMapping.getToolClasses(ToolSetCategory.ALL))
+    }
+    return try {
+      val match = classCandidates.firstOrNull { kClass ->
+        kClass.findAnnotation<TrailblazeToolClass>()?.name == toolName
+      } ?: return false
+      match.isVerification()
+    } catch (e: Exception) {
+      Console.error("Failed to resolve verification annotation for '$toolName': ${e.message}")
+      false
+    }
+  }
+
+  /**
    * Selects tools for the inner agent:
    * 1. If [toolClassesOverrideProvider] returns a non-null class set, use those classes
    *    (driver-specific override, e.g. Compose tools).
@@ -799,6 +945,33 @@ class StepToolSet(
         durationMs = (now - startTime).inWholeMilliseconds,
         session = sessionId,
         timestamp = now,
+      ),
+    )
+  }
+
+  private fun emitDirectToolLog(
+    tool: TrailblazeTool,
+    toolName: String,
+    traceId: TraceId,
+    startTime: kotlinx.datetime.Instant,
+    successful: Boolean,
+    exceptionMessage: String? = null,
+  ) {
+    val emitter = logEmitter ?: return
+    val sessionId = sessionIdProvider?.invoke() ?: return
+    val now = Clock.System.now()
+    emitter.emit(
+      TrailblazeLog.TrailblazeToolLog(
+        trailblazeTool = tool.toLogPayload(),
+        toolName = toolName,
+        successful = successful,
+        traceId = traceId,
+        exceptionMessage = exceptionMessage,
+        durationMs = (now - startTime).inWholeMilliseconds,
+        session = sessionId,
+        timestamp = startTime,
+        isRecordable = tool.getIsRecordableFromAnnotation(),
+        isTopLevelToolCall = true,
       ),
     )
   }

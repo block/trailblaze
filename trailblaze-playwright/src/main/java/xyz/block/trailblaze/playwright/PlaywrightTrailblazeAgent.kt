@@ -15,7 +15,9 @@ import xyz.block.trailblaze.logToolExecution
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
+import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TraceId
+import xyz.block.trailblaze.network.InflightRequestTracker
 import xyz.block.trailblaze.playwright.tools.PlaywrightExecutableTool
 import xyz.block.trailblaze.playwright.tools.PlaywrightNativeClickTool
 import xyz.block.trailblaze.playwright.tools.PlaywrightNativeHoverTool
@@ -42,6 +44,7 @@ import xyz.block.trailblaze.toolcalls.commands.OpenUrlTrailblazeTool
 import xyz.block.trailblaze.toolcalls.commands.memory.MemoryTrailblazeTool
 import xyz.block.trailblaze.toolcalls.isSuccess
 import xyz.block.trailblaze.tracing.TrailblazeTracer
+import xyz.block.trailblaze.utils.NoOpElementComparator
 import xyz.block.trailblaze.util.Console
 
 /**
@@ -62,6 +65,20 @@ class PlaywrightTrailblazeAgent(
   override val trailblazeDeviceInfoProvider: () -> TrailblazeDeviceInfo,
   override val sessionProvider: TrailblazeSessionProvider,
   override val trailblazeToolRepo: TrailblazeToolRepo? = null,
+  /**
+   * Resolves the on-disk directory for a given session. Threaded through to
+   * tools that need to write artifacts (e.g. network capture). Null in
+   * non-host contexts (e.g. tests without a logs repo).
+   */
+  val sessionDirProvider: ((SessionId) -> java.io.File)? = null,
+  /**
+   * Engine-agnostic in-flight request tracker. The Playwright capture engine
+   * updates this on every observed request start/end so future cross-platform
+   * idling tools can wait on network quiet without engine-specific hooks.
+   * Defaults to a fresh per-agent instance so tools can rely on a non-null
+   * tracker even when the host doesn't supply one explicitly.
+   */
+  val inflightRequestTracker: InflightRequestTracker = InflightRequestTracker(),
 ) : BaseTrailblazeAgent() {
 
   /**
@@ -78,7 +95,8 @@ class PlaywrightTrailblazeAgent(
     screenStateProvider: (() -> ScreenState)?,
   ): TrailblazeToolExecutionContext {
     val trailblazeDeviceInfo = trailblazeDeviceInfoProvider()
-    return TrailblazeToolExecutionContext(
+    lateinit var context: TrailblazeToolExecutionContext
+    context = TrailblazeToolExecutionContext(
       screenState = screenState,
       traceId = traceId,
       trailblazeDeviceInfo = trailblazeDeviceInfo,
@@ -87,8 +105,20 @@ class PlaywrightTrailblazeAgent(
       trailblazeLogger = trailblazeLogger,
       memory = memory,
       maestroTrailblazeAgent = null,
+      nestedToolExecutor = { nestedTool ->
+        runTrailblazeTools(
+          tools = listOf(nestedTool),
+          traceId = context.traceId,
+          screenState = context.screenState,
+          elementComparator = NoOpElementComparator,
+          screenStateProvider = context.screenStateProvider,
+        ).result
+      },
       workingDirectory = workingDirectory,
+      sessionDirProvider = sessionDirProvider,
+      inflightRequestTracker = inflightRequestTracker,
     )
+    return context
   }
 
   override fun executeTool(
@@ -347,6 +377,8 @@ class PlaywrightTrailblazeAgent(
         memory = context.memory,
         maestroTrailblazeAgent = context.maestroTrailblazeAgent,
         workingDirectory = context.workingDirectory,
+        sessionDirProvider = context.sessionDirProvider,
+        inflightRequestTracker = context.inflightRequestTracker,
       )
     }
 

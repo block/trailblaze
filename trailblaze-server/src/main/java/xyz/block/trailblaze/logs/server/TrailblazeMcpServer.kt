@@ -45,6 +45,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlin.time.Duration.Companion.seconds
@@ -68,6 +70,8 @@ import xyz.block.trailblaze.logs.server.endpoints.CliRunResponse
 import xyz.block.trailblaze.logs.server.endpoints.CliStatusResponse
 import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.DeviceClaimRegistry
+import xyz.block.trailblaze.mcp.HostLocalToolDispatchingBridge
+import xyz.block.trailblaze.mcp.InFlightToolCall
 import xyz.block.trailblaze.mcp.McpDeviceContext
 import xyz.block.trailblaze.mcp.McpToolProfile
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
@@ -92,17 +96,25 @@ import xyz.block.trailblaze.mcp.toolsets.ToolSetCategoryMapping
 import xyz.block.trailblaze.mcp.utils.KoogToMcpExt.toMcpJsonSchemaObject
 import xyz.block.trailblaze.mcp.utils.filterNonNullableRequired
 import xyz.block.trailblaze.mcp.utils.simplifyNullableAnyOf
+import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.toolcalls.toKoogToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeToolDescriptor
+import xyz.block.trailblaze.toolcalls.HostLocalExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
+import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.mcp.utils.TrailblazeToolToMcpBridge
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.report.utils.LogsRepo
 import xyz.block.trailblaze.toolcalls.KoogToolExt
+import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.ToolSetCatalogEntry
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
 import xyz.block.trailblaze.toolcalls.toolName
+import xyz.block.trailblaze.scripting.callback.JsScriptingCallbackBaseUrl
+import xyz.block.trailblaze.scripting.subprocess.InlineScriptToolServerSynthesizer
+import xyz.block.trailblaze.scripting.subprocess.LaunchedSubprocessRuntime
+import xyz.block.trailblaze.scripting.subprocess.McpSubprocessRuntimeLauncher
 import xyz.block.trailblaze.util.Console
 import java.io.File
 import kotlin.reflect.KClass
@@ -117,6 +129,7 @@ import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TraceId
 import kotlinx.datetime.Clock
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.devices.TrailblazeDriverType
 import kotlin.coroutines.EmptyCoroutineContext
 
 /**
@@ -213,7 +226,15 @@ class TrailblazeMcpServer(
 
   /** Tracks exclusive device claims across MCP sessions. */
   val deviceClaimRegistry = DeviceClaimRegistry(
-    isSessionAlive = { sessionId -> sessionContexts.containsKey(sessionId) },
+    inFlightLookup = { sessionId -> sessionContexts[sessionId]?.currentToolCall },
+    clientInfoLookup = { sessionId ->
+      sessionContexts[sessionId]?.let { ctx ->
+        DeviceClaimRegistry.ClaimingClientInfo(
+          mcpClientName = ctx.mcpClientName,
+          origin = ctx.origin,
+        )
+      }
+    },
   )
 
   companion object {
@@ -304,10 +325,129 @@ class TrailblazeMcpServer(
     )
   }
 
+  private fun findCurrentTarget(): TrailblazeHostAppTarget? {
+    val targetId = mcpBridge.getCurrentAppTargetId() ?: return null
+    return mcpBridge.getAvailableAppTargets().firstOrNull { it.id == targetId }
+  }
+
+  private fun collectCustomToolClasses(driverType: TrailblazeDriverType): Set<KClass<out TrailblazeTool>> =
+    try {
+      mcpBridge.getAvailableAppTargets().flatMap { target ->
+        target.getCustomToolsForDriver(driverType)
+      }.toSet()
+    } catch (e: Exception) {
+      Console.log("[TrailblazeMcpServer] Custom tool loading failed: ${e.message}")
+      emptySet()
+    }
+
+  private fun collectCustomYamlToolNames(driverType: TrailblazeDriverType): Set<ToolName> =
+    try {
+      mcpBridge.getAvailableAppTargets().flatMap { target ->
+        target.getCustomYamlToolNamesForDriver(driverType)
+      }.toSet()
+    } catch (e: Exception) {
+      Console.log("[TrailblazeMcpServer] Custom YAML tool loading failed: ${e.message}")
+      emptySet()
+    }
+
+  private fun buildSyntheticDeviceInfo(
+    deviceId: TrailblazeDeviceId,
+    driverType: TrailblazeDriverType,
+  ): xyz.block.trailblaze.devices.TrailblazeDeviceInfo {
+    val (width, height) = when (driverType.platform) {
+      TrailblazeDevicePlatform.WEB -> 1440 to 900
+      else -> 1080 to 2400
+    }
+    return xyz.block.trailblaze.devices.TrailblazeDeviceInfo(
+      trailblazeDeviceId = deviceId,
+      trailblazeDriverType = driverType,
+      widthPixels = width,
+      heightPixels = height,
+    )
+  }
+
+  private suspend fun clearSessionScriptToolRuntime(sessionId: String) {
+    val existing = sessionScriptToolRuntimeBySession.remove(sessionId) ?: return
+    runCatching { existing.runtime.shutdownAll() }
+      .onFailure {
+        Console.log("[TrailblazeMcpServer] Failed to shut down scripted runtime for $sessionId: ${it.message}")
+      }
+  }
+
+  private suspend fun ensureSessionScriptToolRuntime(sessionId: String): SessionScriptToolRuntimeState? {
+    val mutex = sessionScriptToolRuntimeMutexes.getOrPut(sessionId) { Mutex() }
+    return mutex.withLock {
+      val sessionContext = sessionContexts[sessionId] ?: return@withLock null
+      val deviceId = sessionContext.associatedDeviceId ?: return@withLock null
+      val target = findCurrentTarget() ?: run {
+        clearSessionScriptToolRuntime(sessionId)
+        return@withLock null
+      }
+      val declaredServers = target.getMcpServers()
+      val inlineTools = target.getInlineScriptTools()
+      if (declaredServers.isEmpty() && inlineTools.isEmpty()) {
+        clearSessionScriptToolRuntime(sessionId)
+        return@withLock null
+      }
+
+      val deviceSummary = mcpBridge.getAvailableDevices().firstOrNull { it.trailblazeDeviceId == deviceId }
+      val driverType = deviceSummary?.trailblazeDriverType ?: mcpBridge.getDriverType() ?: return@withLock null
+
+      val existing = sessionScriptToolRuntimeBySession[sessionId]
+      if (existing != null && existing.targetId == target.id && existing.driverType == driverType) {
+        return@withLock existing
+      }
+      if (existing != null) {
+        clearSessionScriptToolRuntime(sessionId)
+      }
+
+      val toolRepo = TrailblazeToolRepo.withDynamicToolSets(
+        customToolClasses = collectCustomToolClasses(driverType),
+        customYamlToolNames = collectCustomYamlToolNames(driverType),
+        excludedToolClasses = target.getExcludedToolsForDriver(driverType),
+        catalog = TrailblazeToolSetCatalog.defaultEntries(),
+        driverType = driverType,
+      )
+      val launchSessionId = SessionId.sanitized("${sessionId}_${target.id}_${driverType.yamlKey}_script_tools")
+      val sessionDir = logsRepo.getSessionDir(launchSessionId)
+      val inlineToolServers = InlineScriptToolServerSynthesizer.synthesize(
+        tools = inlineTools,
+        outputDir = File(sessionDir, "inline-script-tools"),
+      )
+      val runtime = McpSubprocessRuntimeLauncher.launchAll(
+        mcpServers = declaredServers + inlineToolServers,
+        deviceInfo = buildSyntheticDeviceInfo(deviceId, driverType),
+        config = TrailblazeConfig.DEFAULT,
+        sessionId = launchSessionId,
+        sessionLogDir = sessionDir,
+        toolRepo = toolRepo,
+        baseUrl = JsScriptingCallbackBaseUrl.get(),
+      )
+      val state = SessionScriptToolRuntimeState(
+        targetId = target.id,
+        driverType = driverType,
+        toolRepo = toolRepo,
+        runtime = runtime,
+      )
+      sessionScriptToolRuntimeBySession[sessionId] = state
+      state
+    }
+  }
+
   private val hostMcpToolRegistryBySession = ConcurrentHashMap<String, ToolRegistry>()
 
   // Track registered TrailblazeTool names per MCP session so mode changes can clean up expanded toolsets
   private val registeredTrailblazeToolNamesBySession = ConcurrentHashMap<String, MutableSet<String>>()
+
+  private data class SessionScriptToolRuntimeState(
+    val targetId: String,
+    val driverType: TrailblazeDriverType,
+    val toolRepo: TrailblazeToolRepo,
+    val runtime: LaunchedSubprocessRuntime,
+  )
+
+  private val sessionScriptToolRuntimeBySession = ConcurrentHashMap<String, SessionScriptToolRuntimeState>()
+  private val sessionScriptToolRuntimeMutexes = ConcurrentHashMap<String, Mutex>()
 
   fun getSessionContext(mcpSessionId: McpSessionId): TrailblazeMcpSessionContext? =
     sessionContexts[mcpSessionId.sessionId]
@@ -333,7 +473,16 @@ class TrailblazeMcpServer(
       } catch (e: Exception) {
         Console.error("Error cancelling automation during session termination: ${e.message}")
       }
-      mcpBridge.releasePersistentDeviceConnection(deviceId)
+      // Match the platform-aware policy from
+      // [DeviceManagerToolSet.connectToDeviceUnified]: only iOS Maestro drivers
+      // need to be released across MCP sessions (XCTest connections go stale).
+      // Android drivers handle reconnection at the driver layer, so releasing
+      // the persistent connection here forces an unnecessary teardown that can
+      // race with the displacing session's own selectDevice() and leave the
+      // on-device RPC server in a broken state under rapid takeover cycles.
+      if (deviceId.trailblazeDevicePlatform == TrailblazeDevicePlatform.IOS) {
+        mcpBridge.releasePersistentDeviceConnection(deviceId)
+      }
     }
 
     // Release device claims
@@ -350,6 +499,8 @@ class TrailblazeMcpServer(
     sseNotificationChannels.remove(sessionId)?.close()
     registeredTrailblazeToolNamesBySession.remove(sessionId)
     hostMcpToolRegistryBySession.remove(sessionId)
+    runBlocking { clearSessionScriptToolRuntime(sessionId) }
+    sessionScriptToolRuntimeMutexes.remove(sessionId)
 
     emitDebugState()
     return clientName
@@ -508,6 +659,16 @@ class TrailblazeMcpServer(
           traceId = traceId,
         )
 
+        // Mark this tool call as in-flight on the session — DeviceClaimRegistry
+        // reads currentToolCall to decide whether a competing claim should
+        // yield (idle holder) or fail with a busy error (active holder).
+        activeMcpSessionContext?.beginToolCall(
+          InFlightToolCall(
+            toolName = toolName,
+            argsSummary = summarizeToolArgs(toolName, argumentsJsonObject),
+            traceId = traceId.traceId,
+          ),
+        )
         try {
           val koogToolArgs = koogTool.decodeArgs(
             argumentsJsonObject.toKoogJSONObject(),
@@ -614,6 +775,8 @@ class TrailblazeMcpServer(
             ),
             isError = true,
           )
+        } finally {
+          activeMcpSessionContext?.endToolCall()
         }
       }
       Console.log("[MCP] Registered tool: ${tool.descriptor.name}")
@@ -680,6 +843,7 @@ class TrailblazeMcpServer(
      */
     suspend fun createSessionForClient(
       toolProfileOverride: McpToolProfile? = null,
+      origin: String? = null,
     ): StreamableHttpServerTransport {
       // Create a fresh MCP server for this client
       val mcpServer: Server = configureMcpServer()
@@ -720,6 +884,7 @@ class TrailblazeMcpServer(
           mcpSessionId = mcpSessionId,
           toolProfile = toolProfileOverride ?: defaultToolProfile,
           mode = defaultMode,
+          origin = origin,
         )
 
         // Populate client name from the SDK's initialize handshake.
@@ -790,6 +955,8 @@ class TrailblazeMcpServer(
         sseNotificationChannels.remove(closedSessionId)?.close()
         registeredTrailblazeToolNamesBySession.remove(closedSessionId)
         hostMcpToolRegistryBySession.remove(closedSessionId)
+        runBlocking { clearSessionScriptToolRuntime(closedSessionId) }
+        sessionScriptToolRuntimeMutexes.remove(closedSessionId)
 
         emitDebugState()
       }
@@ -856,12 +1023,26 @@ class TrailblazeMcpServer(
             } else {
               0
             }
+            val anchorFile = try {
+              xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver
+                .resolveConfigFile(java.nio.file.Paths.get(""))
+            } catch (_: Exception) {
+              null
+            }
             CliStatusResponse(
               running = true,
               port = port,
               connectedDevices = deviceCount,
               uptimeSeconds = uptimeSeconds,
               version = readVersionFromClasspath(),
+              workspaceAnchor = anchorFile?.absolutePath,
+              // Captured by WorkspaceCompileBootstrap.bootstrap() at daemon startup;
+              // null if the daemon's running scratch (no workspace) or hasn't
+              // bootstrapped yet. Reading the in-memory snapshot instead of an on-disk
+              // hash file means the value reflects exactly the state the daemon
+              // loaded — no chance of a stale file misrepresenting the daemon.
+              workspaceContentHash =
+                xyz.block.trailblaze.config.project.WorkspaceContentHasher.lastCapturedHash,
             )
           },
         ),
@@ -903,8 +1084,15 @@ class TrailblazeMcpServer(
                   null
                 }
               }
-              Console.log("[MCP] Creating new session for client (profileOverride=$profileOverride)...")
-              createSessionForClient(toolProfileOverride = profileOverride)
+              // Origin header lets the CLI/desktop tell us *where* a session
+              // came from (e.g. argv `snapshot -d android`, or `desktop-ui`).
+              // Surfaced in the device-busy error so users can see what's
+              // currently driving the device.
+              val origin = call.request.headers["X-Trailblaze-Origin"]
+                ?.takeIf { it.isNotBlank() }
+                ?.take(200)
+              Console.log("[MCP] Creating new session for client (profileOverride=$profileOverride, origin=$origin)...")
+              createSessionForClient(toolProfileOverride = profileOverride, origin = origin)
             }
 
             // Set the current MCP session ID for tools to look up the correct session context.
@@ -1079,6 +1267,8 @@ class TrailblazeMcpServer(
           toolSetCatalog = toolSetCatalog,
           onActiveToolSetsChanged = onActiveToolSetsChanged,
           onTerminateSession = ::terminateSession,
+          onDeviceConnected = { ensureSessionScriptToolRuntime(mcpSessionId.sessionId) },
+          onTargetAppChanged = { ensureSessionScriptToolRuntime(mcpSessionId.sessionId) },
         ).asTools(),
       )
 
@@ -1149,7 +1339,11 @@ class TrailblazeMcpServer(
       // blaze() without tools and ask() require an LLM for screen analysis.
       val llmClient = llmClientProvider?.invoke()
       val llmModel = llmModelProvider?.invoke()
-      val uiActionExecutor = BridgeUiActionExecutor(mcpBridge)
+      val dynamicToolRepoProvider = suspend { ensureSessionScriptToolRuntime(mcpSessionId.sessionId)?.toolRepo }
+      val uiActionExecutor = BridgeUiActionExecutor(
+        mcpBridge = mcpBridge,
+        dynamicToolRepoProvider = dynamicToolRepoProvider,
+      )
 
       // Build inner agent components only when an LLM is available
       val screenAnalyzer = if (llmClient != null && llmModel != null) {
@@ -1175,9 +1369,7 @@ class TrailblazeMcpServer(
         try {
           val driverType = mcpBridge.getDriverType()
           val tools = if (driverType != null) {
-            mcpBridge.getAvailableAppTargets().flatMap { target ->
-              target.getCustomToolsForDriver(driverType)
-            }.toSet()
+            collectCustomToolClasses(driverType)
           } else emptySet()
           Console.log("[TrailblazeMcpServer] Custom tools for $driverType: ${tools.map { it.simpleName }}")
           tools
@@ -1194,6 +1386,11 @@ class TrailblazeMcpServer(
         // (navigate, click, type, etc.) instead of the Maestro-based toolset. This lambda
         // is evaluated per blaze() call so it picks up device changes mid-session.
         {
+          val runtimeState = runBlocking { ensureSessionScriptToolRuntime(mcpSessionId.sessionId) }
+          if (runtimeState != null) {
+            runtimeState.toolRepo.getCurrentToolDescriptors()
+              .map { it.toTrailblazeToolDescriptor() }
+          } else {
           val driverType = mcpBridge.getDriverType()
           // Ask the bridge for device-appropriate built-in tools.
           // For WEB/Playwright: returns Playwright-native toolset (complete replacement for Maestro).
@@ -1224,6 +1421,7 @@ class TrailblazeMcpServer(
           val allTools = classDescriptors + yamlDescriptors
           Console.log("[TrailblazeMcpServer] Inner agent total tools: ${allTools.size} (driver=$driverType, custom: ${customToolClasses.size}, yaml: ${yamlDescriptors.size})")
           allTools
+          }
         }
       } else {
         { emptyList<TrailblazeToolDescriptor>() }
@@ -1240,7 +1438,7 @@ class TrailblazeMcpServer(
             // Capture the device ID from the current thread's context before entering
             // runBlocking, which creates a new coroutine scope that doesn't inherit
             // the parent's ThreadLocal-based context element.
-            val deviceId = McpDeviceContext.currentDeviceId.get()
+            val deviceId = McpDeviceContext.currentDeviceId.get() ?: sessionContext.associatedDeviceId
             try {
               runBlocking(
                 deviceId?.let { McpDeviceContext.currentDeviceId.asContextElement(it) }
@@ -1264,7 +1462,15 @@ class TrailblazeMcpServer(
           sessionIdProvider = activeSessionIdProvider,
           driverStatusProvider = { mcpBridge.getDriverConnectionStatus() },
           toolClassesOverrideProvider = { mcpBridge.getInnerAgentToolClasses() },
-          rawToolExecutor = { tool -> mcpBridge.executeTrailblazeTool(tool, blocking = true) },
+          rawToolExecutor = { tool, traceId ->
+            val dynamicRepo = dynamicToolRepoProvider()
+            if (tool is HostLocalExecutableTrailblazeTool && dynamicRepo != null) {
+              (mcpBridge as? HostLocalToolDispatchingBridge)?.executeHostLocalTool(tool, dynamicRepo, traceId)
+                ?: mcpBridge.executeTrailblazeTool(tool, blocking = true, traceId = traceId)
+            } else {
+              mcpBridge.executeTrailblazeTool(tool, blocking = true, traceId = traceId)
+            }
+          },
           screenSummaryProvider = { details -> uiActionExecutor.getScreenSummary(details) },
           screenshotSaver = { bytes ->
             val sessionId = activeSessionIdProvider()
@@ -1276,6 +1482,7 @@ class TrailblazeMcpServer(
             } else null
           },
           customToolClassesProvider = customToolClassesProvider,
+          dynamicToolRepoProvider = dynamicToolRepoProvider,
         ).asTools(),
       )
       Console.log("[TrailblazeMcpServer] blaze(), ask() tools registered${if (screenAnalyzer == null) " (direct-tools-only mode, no LLM)" else ""}")
@@ -1358,7 +1565,7 @@ class TrailblazeMcpServer(
 
         val deviceId = device.trailblazeDeviceId
         val mcpSessionId = sessionContext.mcpSessionId.sessionId
-        deviceClaimRegistry.claim(deviceId, mcpSessionId, force = false)
+        deviceClaimRegistry.claim(deviceId, mcpSessionId)
 
         try {
           mcpBridge.selectDevice(deviceId)
@@ -1377,6 +1584,28 @@ class TrailblazeMcpServer(
     } catch (e: Exception) {
       Console.log("[MCP] Auto-connect failed (non-fatal): ${e::class.simpleName}: ${e.message}")
     }
+  }
+
+  /**
+   * Build a short, human-readable description of what a tool call is doing,
+   * embedded in the device-busy error message so users can see what's running.
+   *
+   * The summary is best-effort: we lift `objective` (blaze/ask/verify), `name`
+   * (trail/session start), and `action` (device) out of the args because those
+   * are the natural descriptions for those tools. Everything else falls
+   * through to a truncated args dump so the message still says *something*
+   * meaningful instead of nothing.
+   */
+  private fun summarizeToolArgs(toolName: String, args: JsonObject): String? {
+    fun stringField(key: String): String? =
+      (args[key] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
+
+    stringField("objective")?.let { return "\"${it.take(80)}\"" }
+    stringField("name")?.let { return "\"${it.take(80)}\"" }
+    stringField("action")?.let { return "action=$it" }
+
+    val rendered = args.toString()
+    return rendered.take(80).takeIf { rendered.isNotEmpty() }
   }
 
   /**
@@ -1539,6 +1768,8 @@ class TrailblazeMcpServer(
       sessionCreationTimes.remove(mcpSessionId.sessionId)
       registeredTrailblazeToolNamesBySession.remove(mcpSessionId.sessionId)
       hostMcpToolRegistryBySession.remove(mcpSessionId.sessionId)
+      runBlocking { clearSessionScriptToolRuntime(mcpSessionId.sessionId) }
+      sessionScriptToolRuntimeMutexes.remove(mcpSessionId.sessionId)
       done.complete()
     }
     done.join()

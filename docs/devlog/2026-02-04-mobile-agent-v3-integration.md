@@ -141,7 +141,7 @@ Execution Modes:
 | AndroidWorld benchmark | 70%+ |
 | OSWorld benchmark | 35%+ |
 | Trail (recorded) success | 99% |
-| Trail (AI fallback) success | 90% |
+| Trail (self-heal) success | 90% |
 | Blaze → Trail conversion | 80% |
 | Exception recovery | 90% |
 

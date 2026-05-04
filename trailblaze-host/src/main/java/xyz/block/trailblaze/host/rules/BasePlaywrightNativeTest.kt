@@ -15,13 +15,16 @@ import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
+import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.playwright.PlaywrightBrowserManager
 import xyz.block.trailblaze.playwright.PlaywrightNativeIdlingConfig
 import xyz.block.trailblaze.playwright.PlaywrightPageManager
 import xyz.block.trailblaze.playwright.PlaywrightTrailblazeAgent
+import xyz.block.trailblaze.playwright.network.WebNetworkCapture
 import xyz.block.trailblaze.playwright.tools.WebToolSetIds
+import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.rules.TrailblazeLoggingRule
 import xyz.block.trailblaze.rules.TrailblazeRunnerUtil
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
@@ -93,6 +96,7 @@ class BasePlaywrightNativeTest(
       trailblazeDeviceInfoProvider = { trailblazeDeviceInfo },
       sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
       trailblazeToolRepo = toolRepo,
+      sessionDirProvider = loggingRule.logsRepo::getSessionDir,
     )
   }
 
@@ -132,25 +136,23 @@ class BasePlaywrightNativeTest(
   }
 
   private val trailblazeYaml = TrailblazeYaml.Default
+  private var currentToolTraceId: TraceId? = null
 
   private val trailblazeRunnerUtil by lazy {
     TrailblazeRunnerUtil(
       trailblazeRunner = trailblazeRunner,
       runTrailblazeTool = { trailblazeTools: List<TrailblazeTool> ->
-        val result = playwrightAgent.runTrailblazeTools(
+        playwrightAgent.runTrailblazeTools(
           tools = trailblazeTools,
-          traceId = null,
+          traceId = currentToolTraceId,
           screenState = browserManager.getScreenState(),
           elementComparator = elementComparator,
           screenStateProvider = browserManager::getScreenState,
-        )
-        when (val toolResult = result.result) {
-          is TrailblazeToolResult.Success -> toolResult
-          is TrailblazeToolResult.Error -> throw TrailblazeException(toolResult.errorMessage)
-        }
+        ).result
       },
       trailblazeLogger = loggingRule.logger,
       sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
+      sessionUpdater = { loggingRule.setSession(it) },
     )
   }
 
@@ -165,7 +167,13 @@ class BasePlaywrightNativeTest(
 
     for (item in trailItems) {
       val itemResult = when (item) {
-        is TrailYamlItem.PromptsTrailItem -> trailblazeRunnerUtil.runPromptSuspend(item.promptSteps, useRecordedSteps, onStepProgress)
+        is TrailYamlItem.PromptsTrailItem ->
+          trailblazeRunnerUtil.runPromptSuspend(
+            prompts = item.promptSteps,
+            useRecordedSteps = useRecordedSteps,
+            selfHeal = config.selfHeal,
+            onStepProgress = onStepProgress,
+          )
         is TrailYamlItem.ToolTrailItem -> trailblazeRunnerUtil.runTrailblazeTool(item.tools.map { it.trailblazeTool })
         is TrailYamlItem.ConfigTrailItem -> item.config.context?.let { trailblazeRunner.appendToSystemPrompt(it) }
       }
@@ -179,6 +187,7 @@ class BasePlaywrightNativeTest(
     yaml: String,
     trailblazeDeviceId: TrailblazeDeviceId,
     trailFilePath: String?,
+    traceId: TraceId? = null,
     useRecordedSteps: Boolean = true,
     sendSessionStartLog: Boolean,
     onStepProgress: ((stepIndex: Int, totalSteps: Int, stepText: String) -> Unit)? = null,
@@ -219,11 +228,64 @@ class BasePlaywrightNativeTest(
         )
       }
     }
-    runTrail(trailItems, useRecordedSteps, onStepProgress)
+    // If the "Capture Network Traffic" toggle is on (desktop, --capture-network
+    // CLI flag, or directly via TrailblazeConfig), start capture before the
+    // trail runs so every request — including any that fire during the very
+    // first navigate — lands in <session-dir>/network.ndjson.
+    ensureWebNetworkCaptureStarted()
+    currentToolTraceId = traceId
+    if (!trailblazeYaml.hasActionableSteps(trailItems)) {
+      val trailName = trailConfig?.title ?: trailFilePath ?: "unknown"
+      val trailUrl = trailConfig?.metadata?.get("testRailUrl")
+      throw xyz.block.trailblaze.exception.TrailblazeException(
+        "Trail '$trailName' has no executable steps — this would be a false positive pass. " +
+          "Add prompts or tool steps to this trail file." +
+          (trailUrl?.let { " $it" } ?: ""),
+      )
+    }
+    try {
+      runTrail(trailItems, useRecordedSteps, onStepProgress)
+    } finally {
+      currentToolTraceId = null
+    }
     loggingRule.session?.sessionId ?: SessionId("unknown")
   }
 
+  /**
+   * Idempotently starts the framework network capture for the current session
+   * when [TrailblazeConfig.captureNetworkTraffic] is on. Safe to call
+   * repeatedly — `WebNetworkCapture.start` short-circuits when the existing
+   * capture matches the session, and rolls over cleanly when it doesn't.
+   * No-op when the flag is off, no session is set, or no logs repo is wired.
+   *
+   * The MCP host-local tool dispatch path bypasses [runTrailblazeYamlSuspend]
+   * (it runs tools individually with a synthetic session that doesn't go
+   * through `loggingRule.session`), so that path inlines the equivalent
+   * `WebNetworkCapture.start(...)` call against its synthetic session
+   * directly — see `TrailblazeMcpBridgeImpl.executeHostLocalPlaywrightTool`.
+   */
+  private fun ensureWebNetworkCaptureStarted() {
+    if (!config.captureNetworkTraffic) return
+    val session = loggingRule.session ?: return
+    val sessionDir = loggingRule.logsRepo.getSessionDir(session.sessionId)
+    try {
+      WebNetworkCapture.start(
+        ctx = browserManager.currentPage.context(),
+        sessionId = session.sessionId.value,
+        sessionDir = sessionDir,
+        tracker = playwrightAgent.inflightRequestTracker,
+      )
+    } catch (e: Exception) {
+      // Don't let a capture-start failure tear down the trail — log and continue.
+      Console.log("Auto-start of web network capture failed: ${e.message}")
+    }
+  }
+
   fun close() {
+    // Always try to stop capture on test teardown — even when we don't own the
+    // browser (MCP path) — so the BufferedWriter closes cleanly. No-op if
+    // capture was never started.
+    runCatching { WebNetworkCapture.stop(browserManager.currentPage.context()) }
     if (ownsTheBrowser) {
       browserManager.close()
     }

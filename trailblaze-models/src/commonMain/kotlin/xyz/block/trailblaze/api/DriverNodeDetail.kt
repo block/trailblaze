@@ -44,6 +44,12 @@ sealed interface DriverNodeDetail {
    * A node without identifiable properties (e.g. an empty decorative container) can only
    * be matched by index, which is fragile. During hit-testing, nodes with identifiable
    * properties should be preferred over propertyless ones of similar or smaller area.
+   *
+   * Rule: a property qualifies for inclusion here only if the corresponding selector
+   * generator can resolve a node using that property **alone**. Properties that the
+   * generator only uses paired with another (e.g. `roleDescription` + `className` on
+   * Android) belong in [matchablePropertyNames] but NOT here, because a node carrying
+   * only the unpaired half can't actually be matched by a selector.
    */
   val hasIdentifiableProperties: Boolean
 
@@ -80,10 +86,11 @@ sealed interface DriverNodeDetail {
    * and [labeledByText] provide powerful disambiguation dimensions for selector generation.
    *
    * ## Matchable properties (stable, use in selectors)
-   * [className], [resourceId], [uniqueId], [text], [contentDescription], [hintText],
-   * [labeledByText], [stateDescription], [paneTitle], [isEnabled], [isClickable],
-   * [isCheckable], [isChecked], [isSelected], [isFocused], [isEditable], [isScrollable],
-   * [isPassword], [isHeading], [isMultiLine], [inputType], [collectionItemInfo]
+   * [className], [resourceId], [uniqueId], [composeTestTag], [text], [contentDescription],
+   * [hintText], [labeledByText], [stateDescription], [paneTitle], [roleDescription],
+   * [isEnabled], [isClickable], [isCheckable], [isChecked], [isSelected], [isFocused],
+   * [isEditable], [isScrollable], [isPassword], [isHeading], [isMultiLine], [inputType],
+   * [collectionItemInfo]
    *
    * ## Display-only properties (transient, for LLM context only)
    * [packageName], [tooltipText], [error], [isShowingHintText], [isContentInvalid],
@@ -164,6 +171,30 @@ sealed interface DriverNodeDetail {
      * **Matchable.** Stable title set by developers for structural containers.
      */
     val paneTitle: String? = null,
+
+    /**
+     * Semantic role override (e.g., "Toggle", "Tab", "Heading"). Sourced from the
+     * `EXTRA_ROLE_DESCRIPTION` extras key on the underlying AccessibilityNodeInfo,
+     * populated by AndroidX `ViewCompat.setAccessibilityDelegate` overrides on the
+     * View path and by Compose `Modifier.semantics { role = ... }` on the Compose
+     * path.
+     *
+     * **Matchable.** App-defined and stable across runs. Often the only way to
+     * disambiguate a custom control from a generic container.
+     */
+    val roleDescription: String? = null,
+
+    /**
+     * Compose `Modifier.testTag(...)` value, when the app has not opted into
+     * `Modifier.semantics { testTagsAsResourceId = true }` (which would surface it
+     * as [resourceId] instead). Read from the AccessibilityNodeInfo extras under
+     * `androidx.compose.ui.semantics.testTag`.
+     *
+     * **Matchable.** Developer-assigned identifier — closest equivalent to a test
+     * ID that Compose offers natively. Null on classic-View screens and on Compose
+     * screens whose authors opted into the resource-id route.
+     */
+    val composeTestTag: String? = null,
 
     // --- Matchable: State ---
 
@@ -349,6 +380,7 @@ sealed interface DriverNodeDetail {
         !text.isNullOrBlank() ||
           !resourceId.isNullOrBlank() ||
           !uniqueId.isNullOrBlank() ||
+          !composeTestTag.isNullOrBlank() ||
           !contentDescription.isNullOrBlank() ||
           !hintText.isNullOrBlank() ||
           !className.isNullOrBlank()
@@ -386,9 +418,9 @@ sealed interface DriverNodeDetail {
     companion object {
       /** Properties safe to use in recorded selectors. */
       val MATCHABLE_PROPERTIES: Set<String> = setOf(
-        "className", "resourceId", "uniqueId",
+        "className", "resourceId", "uniqueId", "composeTestTag",
         "text", "contentDescription", "hintText", "labeledByText",
-        "stateDescription", "paneTitle",
+        "stateDescription", "paneTitle", "roleDescription",
         "isEnabled", "isClickable", "isCheckable", "isChecked",
         "isSelected", "isFocused", "isEditable", "isScrollable",
         "isPassword", "isHeading", "isMultiLine",

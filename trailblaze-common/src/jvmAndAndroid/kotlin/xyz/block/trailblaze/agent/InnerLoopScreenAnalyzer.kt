@@ -307,6 +307,7 @@ Before acting, check if the screen shows a non-normal state. If so, set `screenS
     val screenContext = ScreenContext(
       viewHierarchy = screenState.viewHierarchy,
       viewHierarchyFiltered = filteredHierarchy,
+      trailblazeNodeTree = screenState.trailblazeNodeTree,
       deviceWidth = screenState.deviceWidth,
       deviceHeight = screenState.deviceHeight,
     )

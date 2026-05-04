@@ -16,6 +16,8 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.getIsRecordableFromAnnotation
 import xyz.block.trailblaze.toolcalls.getToolNameFromAnnotation
 import xyz.block.trailblaze.toolcalls.isSuccess
+import xyz.block.trailblaze.toolcalls.toLogPayload
+import xyz.block.trailblaze.toolcalls.toLogPayloads
 import xyz.block.trailblaze.util.Console
 
 /**
@@ -45,7 +47,7 @@ fun TrailblazeAgentContext.logToolExecution(
   val recordedTool: TrailblazeTool = context.recordedToolOverride ?: tool
   val toolLog =
     TrailblazeLog.TrailblazeToolLog(
-      trailblazeTool = recordedTool,
+      trailblazeTool = recordedTool.toLogPayload(),
       toolName = recordedTool.getToolNameFromAnnotation(),
       exceptionMessage = (result as? TrailblazeToolResult.Error)?.errorMessage,
       successful = result.isSuccess(),
@@ -77,12 +79,40 @@ fun TrailblazeAgentContext.logDelegatingTool(
   trailblazeLogger.log(
     session,
     TrailblazeLog.DelegatingTrailblazeToolLog(
-      trailblazeTool = tool,
+      trailblazeTool = tool.toLogPayload(),
       toolName = tool.getToolNameFromAnnotation(),
-      executableTools = executableTools,
+      executableTools = executableTools.toLogPayloads(),
       session = session.sessionId,
       traceId = traceId,
       timestamp = Clock.System.now(),
     ),
   )
+}
+
+/**
+ * Variant of [logToolExecution] for agents that already hold a [TraceId] (rather than a full
+ * [TrailblazeToolExecutionContext]) and dispatch arbitrary [TrailblazeTool]s — Compose's RPC
+ * driver fits both shapes. Encapsulates the [toLogPayload] conversion so call sites work with
+ * the original tool instance and don't have to know the persisted-log shape.
+ */
+fun TrailblazeAgentContext.logToolExecution(
+  tool: TrailblazeTool,
+  timeBeforeExecution: Instant,
+  traceId: TraceId,
+  result: TrailblazeToolResult,
+) {
+  val session = sessionProvider.invoke()
+  val toolLog = TrailblazeLog.TrailblazeToolLog(
+    trailblazeTool = tool.toLogPayload(),
+    toolName = tool.getToolNameFromAnnotation(),
+    exceptionMessage = (result as? TrailblazeToolResult.Error)?.errorMessage,
+    successful = result.isSuccess(),
+    durationMs =
+      Clock.System.now().toEpochMilliseconds() - timeBeforeExecution.toEpochMilliseconds(),
+    timestamp = timeBeforeExecution,
+    traceId = traceId,
+    session = session.sessionId,
+    isRecordable = tool.getIsRecordableFromAnnotation(),
+  )
+  trailblazeLogger.log(session, toolLog)
 }

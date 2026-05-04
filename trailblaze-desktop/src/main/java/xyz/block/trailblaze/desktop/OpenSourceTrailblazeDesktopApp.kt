@@ -80,6 +80,7 @@ class OpenSourceTrailblazeDesktopApp : TrailblazeDesktopApp(
     TrailblazeMcpBridgeImpl(
       trailblazeDeviceManager = deviceManager,
       logsRepo = desktopAppConfig.logsRepo,
+      dynamicLlmClientProvider = { createDynamicClient(it) },
     )
   }
 

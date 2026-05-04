@@ -205,6 +205,18 @@ class TrailblazeMcpSessionContext(
   var mcpClientName: String? = null,
 
   /**
+   * Free-form description of where this session came from, captured from the
+   * `X-Trailblaze-Origin` header on the first POST. The CLI passes its argv
+   * (e.g. `snapshot -d android`); the desktop UI passes a fixed label like
+   * `desktop-ui`. Surfaced in the device-busy error so users can see exactly
+   * which command is currently driving the device.
+   *
+   * Null for clients that don't set the header (Goose, Claude Code, etc.) —
+   * `mcpClientName` is enough identification for those.
+   */
+  var origin: String? = null,
+
+  /**
    * Configuration for the two-tier agent architecture.
    *
    * When enabled, uses separate LLM models for:
@@ -350,6 +362,31 @@ class TrailblazeMcpSessionContext(
     isRecording = false
     recordedSteps.clear()
     Console.log("[Recording] Cleared")
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // In-flight tool call tracking
+  //
+  // Set by the MCP request dispatcher around each tool execution and cleared
+  // in a finally block. The device-claim registry reads this to decide whether
+  // a competing claim should yield (no in-flight call → take over silently)
+  // or fail with a rich busy error (in-flight call → tell the user what's
+  // running so they can wait for it).
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  private val _currentToolCall = AtomicReference<InFlightToolCall?>(null)
+
+  /** Currently-running tool call for this session, or null if idle. */
+  val currentToolCall: InFlightToolCall? get() = _currentToolCall.get()
+
+  /** Set by the request dispatcher when a tool starts executing. */
+  fun beginToolCall(call: InFlightToolCall) {
+    _currentToolCall.set(call)
+  }
+
+  /** Cleared by the request dispatcher in a `finally` after a tool finishes. */
+  fun endToolCall() {
+    _currentToolCall.set(null)
   }
 
   /**
@@ -584,6 +621,29 @@ class TrailblazeMcpSessionContext(
     }
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// In-flight tool call
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Snapshot of a tool call currently executing on a session.
+ *
+ * Carried by [TrailblazeMcpSessionContext.currentToolCall] for the duration of
+ * the call. Read by [DeviceClaimRegistry] when another session tries to claim
+ * the same device — its presence is what flips the registry from "yield" to
+ * "fail with details so the user knows what's actually running."
+ *
+ * [argsSummary] is a short, human-readable description (the `objective` for
+ * `blaze`/`ask`, the trail name for `trail`, etc.). It's surfaced verbatim in
+ * the busy-error message, so keep it concise.
+ */
+data class InFlightToolCall(
+  val toolName: String,
+  val argsSummary: String?,
+  val traceId: String,
+  val startedAtMs: Long = System.currentTimeMillis(),
+)
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Trail Recording Data Types

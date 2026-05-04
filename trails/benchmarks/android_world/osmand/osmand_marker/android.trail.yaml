@@ -24,5 +24,5 @@
 # --- Benchmark Run History ---
 # [2026-03-11] FAILED - gRPC UNAVAILABLE after 120s. Emulator instability.
 #   Not an agent failure — general emulator connection instability.
-# [2026-03-11] Build #27 FAILED - Agent limitation: ObjectiveFailed. No gRPC drop this time
+# [2026-03-11] FAILED - Agent limitation: ObjectiveFailed. No gRPC drop this time
 #   (was gRPC timeout in #24). Agent genuinely can't navigate OsmAnd.

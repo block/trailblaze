@@ -44,6 +44,29 @@ data class SessionInfo(
     }
     ?: testClass
     ?: sessionId.value
+
+  /**
+   * Stable identifier used to group retries of the same test together. Distinct from
+   * [displayName], which is the human-readable label and may collide between unrelated tests.
+   *
+   * Priority — prefers identifiers that are unique per test, falling back to less stable forms:
+   *   1. `trailConfig.id`        — explicit stable id from the YAML
+   *   2. `trailFilePath`         — asset path (stripped of `trails/` prefix and `.trail.yaml`
+   *                                suffix), stable for trail-only runs
+   *   3. `testClass:testName`    — JUnit-style fully-qualified id
+   *   4. [displayName]           — last resort
+   *
+   * `trailFilePath` is preferred over `testClass:testName` because some YAML runners emit fixed
+   * class/method pairs (e.g. `HostAccessibilityV3:run`) that would otherwise collapse unrelated
+   * trails into a single group.
+   */
+  @Transient
+  val stableTestKey: String = trailConfig?.id
+    ?: trailFilePath?.removePrefix("trails/")?.removeSuffix(TrailRecordings.DOT_TRAIL_DOT_YAML_FILE_SUFFIX)
+    ?: testName?.takeIf { it.isNotBlank() }?.let { name ->
+      testClass?.let { cls -> "$cls:$name" } ?: name
+    }
+    ?: displayName
 }
 
 fun List<TrailblazeLog>.getSessionStatus(): SessionStatus = this

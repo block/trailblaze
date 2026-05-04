@@ -249,6 +249,7 @@ class AndroidSendBroadcastSerializationTest {
       TrailblazeDevicePlatform.ANDROID -> TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION
       TrailblazeDevicePlatform.IOS -> TrailblazeDriverType.IOS_HOST
       TrailblazeDevicePlatform.WEB -> TrailblazeDriverType.PLAYWRIGHT_NATIVE
+      TrailblazeDevicePlatform.DESKTOP -> TrailblazeDriverType.COMPOSE
     }
     return TrailblazeToolExecutionContext(
       screenState = null,

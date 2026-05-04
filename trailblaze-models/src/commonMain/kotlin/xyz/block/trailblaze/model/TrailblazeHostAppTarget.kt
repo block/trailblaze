@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.model
 
+import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.config.McpServerConfig
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
@@ -48,11 +49,17 @@ abstract class TrailblazeHostAppTarget(
   /**
    * A named group of tools for discovery output. Allows targets to organize their
    * custom tools into logical groups (e.g., "onboarding", "checkout", "settings").
+   *
+   * [yamlToolNames] carries YAML-defined tool names (no [KClass] backing) so discovery
+   * output can advertise them alongside [toolClasses]. Without this, name-only tools
+   * referenced from toolset YAML (e.g. `eraseText`, `pressBack`) would silently drop
+   * out of `toolbox` listings even though the executor accepts them.
    */
   data class ToolGroup(
     val id: String,
     val description: String,
     val toolClasses: Set<KClass<out TrailblazeTool>>,
+    val yamlToolNames: Set<ToolName> = emptySet(),
   )
 
   /**
@@ -64,8 +71,16 @@ abstract class TrailblazeHostAppTarget(
    */
   open fun getCustomToolGroupsForDriver(driverType: TrailblazeDriverType): List<ToolGroup> {
     val tools = getCustomToolsForDriver(driverType)
-    if (tools.isEmpty()) return emptyList()
-    return listOf(ToolGroup(id = id, description = "$displayName tools", toolClasses = tools))
+    val yamlNames = getCustomYamlToolNamesForDriver(driverType)
+    if (tools.isEmpty() && yamlNames.isEmpty()) return emptyList()
+    return listOf(
+      ToolGroup(
+        id = id,
+        description = "$displayName tools",
+        toolClasses = tools,
+        yamlToolNames = yamlNames,
+      ),
+    )
   }
 
   /**
@@ -74,6 +89,17 @@ abstract class TrailblazeHostAppTarget(
    */
   open fun getExcludedToolsForDriver(driverType: TrailblazeDriverType): Set<KClass<out TrailblazeTool>> =
     emptySet()
+
+  /**
+   * YAML-defined (`tools:` mode) tool names this target wants to exclude for the given driver.
+   *
+   * Mirrors [getExcludedToolsForDriver] for tools that have no [KClass] backing. Without this,
+   * a target YAML's `excluded_tools: [pressBack]` would silently drop on the floor at resolution
+   * time — the parallel of the bug fixed for the inclusion side in `getCustomYamlToolNamesForDriver`.
+   *
+   * Default empty; YAML-backed targets populate from their per-platform `excluded_tools` lists.
+   */
+  open fun getExcludedYamlToolNamesForDriver(driverType: TrailblazeDriverType): Set<ToolName> = emptySet()
 
   /**
    * MCP server declarations for this target (Decision 038 / `mcp_servers:` in target YAML).
@@ -86,6 +112,41 @@ abstract class TrailblazeHostAppTarget(
    * override to return [xyz.block.trailblaze.config.AppTargetYamlConfig.mcpServers].
    */
   open fun getMcpServers(): List<McpServerConfig> = emptyList()
+
+  /**
+   * Inline single-file scripted tools declared at the target root (`tools:` in target YAML).
+   *
+   * Host runners synthesize these into temporary MCP wrapper scripts and launch them through the
+   * existing subprocess runtime. Default empty; YAML-backed targets override from config.
+   */
+  open fun getInlineScriptTools(): List<InlineScriptToolConfig> = emptyList()
+
+  /**
+   * Optional target-specific system-prompt template seeded into the LLM session. Default null;
+   * YAML-backed targets return [xyz.block.trailblaze.config.AppTargetYamlConfig.systemPrompt],
+   * Kotlin targets may override to load from a classpath resource.
+   *
+   * **Extension point.** This is an opt-in hook used by downstream rule frameworks (e.g.
+   * Android on-device rule wrappers). Consumers using only the open-source surface don't need to
+   * override — sessions without a target-specific prompt fall back to the framework default.
+   */
+  open fun getSystemPromptTemplate(): String? = null
+
+  /**
+   * When `true`, on-device app-id resolution falls back to the configured app id even when the
+   * package isn't installed on the device. Use this for targets whose configured id is a stand-in
+   * (e.g. the generic default target) rather than a real product package — the absence of the
+   * package on the device is expected, not a failure.
+   *
+   * Real product targets MUST keep this `false` (the default) so a missing install fails fast at
+   * rule construction with a clear "please install" error, instead of letting the test continue
+   * and produce a less actionable failure when it tries to launch / force-stop a missing package.
+   *
+   * **Extension point.** This is consulted by downstream on-device rule frameworks during app-id
+   * resolution. OSS-only consumers don't need to override — the default `false` is correct for
+   * any target representing a real installed app.
+   */
+  open val allowsAppNotInstalled: Boolean = false
 
   fun getAllCustomToolClassesForSerialization(): Set<KClass<out TrailblazeTool>> =
     TrailblazeDriverType.entries.flatMap { trailblazeDriverType ->
@@ -143,8 +204,8 @@ abstract class TrailblazeHostAppTarget(
   }
 
   data object DefaultTrailblazeHostAppTarget : TrailblazeHostAppTarget(
-    id = "none",
-    displayName = "None",
+    id = "default",
+    displayName = "Default",
   ) {
     override fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): Set<String>? = null
 
@@ -249,4 +310,3 @@ abstract class TrailblazeHostAppTarget(
 
 fun Iterable<TrailblazeHostAppTarget>.findById(id: String): TrailblazeHostAppTarget? =
   firstOrNull { it.id.equals(id, ignoreCase = true) }
-

@@ -116,3 +116,24 @@ expect object Console {
    */
   fun enableJsonMode()
 }
+
+/**
+ * Runs [block] with [Console.enableQuietMode] active and restores the prior quiet-mode
+ * state in a `finally` so an exception inside [block] cannot leave the daemon's Console
+ * permanently silenced.
+ *
+ * Prefer this over a bare [Console.enableQuietMode] / [Console.disableQuietMode] pair —
+ * any throw between the two leaves the JVM in a state where every subsequent
+ * [Console.log] is suppressed, which is silent and painful to debug. This helper
+ * captures the prior state via [Console.isQuietMode] so it composes correctly when
+ * called from within an already-quiet scope.
+ */
+inline fun <T> Console.runQuiet(block: () -> T): T {
+  val wasQuiet = isQuietMode()
+  if (!wasQuiet) enableQuietMode()
+  try {
+    return block()
+  } finally {
+    if (!wasQuiet) disableQuietMode()
+  }
+}

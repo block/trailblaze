@@ -7,7 +7,7 @@ import xyz.block.trailblaze.capture.CaptureOptions
 import xyz.block.trailblaze.util.Console
 
 /**
- * Extracts frames from a video and assembles them into a single sprite sheet JPEG.
+ * Extracts frames from a video and assembles them into WebP sprite sheet(s).
  *
  * **Deduplication**: Near-identical frames (common when the UI is static) are detected via
  * pixel-level comparison with a small perceptual threshold ([DEDUP_PIXEL_THRESHOLD]) and
@@ -16,45 +16,51 @@ import xyz.block.trailblaze.util.Console
  *
  * Unique frames are arranged in a grid: multiple columns of stacked rows, laid out
  * left-to-right, top-to-bottom. Physical frame N is at column `N / rows` and row `N % rows`.
- * This avoids the JPEG 65500px dimension limit that a single tall column would hit.
+ * WebP has a 16383px dimension limit, so for long sessions frames are split across multiple
+ * sprite sheet files (`video_sprites_0.webp`, `video_sprites_1.webp`, etc.).
  *
  * A companion metadata file (`video_sprites.txt`) records the layout so consumers can index
- * into the image:
+ * into the image(s):
  * ```
  * fps=2
  * frames=120
  * height=720
  * columns=2
- * rows=30
+ * rows=22
  * uniqueFrames=60
+ * sheets=1
  * frameMap=0,0,1,2,2,3,...
  * ```
  *
- * This produces a single file that is trivially loadable in Compose, WASM, and desktop
+ * This produces file(s) that are trivially loadable in Compose, WASM, and desktop
  * environments — no video codec or media player required.
  */
 object VideoSpriteExtractor {
 
-  const val SPRITE_FILENAME = "video_sprites.jpg"
+  const val SPRITE_FILENAME = "video_sprites.webp"
   const val SPRITE_META_FILENAME = "video_sprites.txt"
 
-  /** JPEG encoders cap at 65500px per dimension. */
-  private const val MAX_JPEG_DIMENSION = 65500
+  /** Legacy JPEG sprite filename — checked by consumers for backwards compatibility. */
+  const val LEGACY_SPRITE_FILENAME = "video_sprites.jpg"
+
+  /** WebP encoders cap at 16383px per dimension. */
+  private const val MAX_WEBP_DIMENSION = 16383
 
   /**
    * Maximum average pixel difference (per channel, 0–255) for two frames to be considered
-   * identical. JPEG re-encoding can introduce tiny noise even for visually identical frames.
+   * identical. Re-encoding can introduce tiny noise even for visually identical frames.
    * A threshold of 1.0 catches codec noise while still distinguishing real UI changes.
    */
   private const val DEDUP_PIXEL_THRESHOLD = 1.0
 
   /**
-   * Generates a sprite sheet from [videoFile]. Returns the sprite sheet JPEG file, or null
-   * if ffmpeg is unavailable or the extraction fails.
+   * Generates sprite sheet(s) from [videoFile]. Returns the first sprite sheet file, or null
+   * if ffmpeg is unavailable or the extraction fails. Additional sheets (for long sessions)
+   * are written alongside it with sequential suffixes.
    *
    * @param fps Frames per second to extract (default: 2)
    * @param frameHeight Height in pixels for each frame (default: 360)
-   * @param jpegQuality ffmpeg `-q:v` value — lower is better quality (default: 5)
+   * @param webpQuality WebP quality (0–100, higher is better; default: 80)
    * @param isLandscape Whether the device was in landscape orientation during recording.
    *   When true and the video is in portrait orientation (common with iOS simulator's native
    *   pixel buffer), a transpose filter is applied to rotate frames to landscape.
@@ -63,20 +69,19 @@ object VideoSpriteExtractor {
     videoFile: File,
     fps: Int = CaptureOptions.DEFAULT_SPRITE_FPS,
     frameHeight: Int = CaptureOptions.DEFAULT_SPRITE_HEIGHT,
-    jpegQuality: Int = CaptureOptions.DEFAULT_SPRITE_JPEG_QUALITY,
+    webpQuality: Int = CaptureOptions.DEFAULT_SPRITE_QUALITY,
     isLandscape: Boolean = false,
   ): File? {
     val dir = videoFile.parentFile ?: return null
-    val spriteFile = File(dir, SPRITE_FILENAME)
     try {
       val originalKB = videoFile.length() / 1024
-      Console.log("Generating sprite sheet from video (${originalKB}KB) at ${fps}fps, ${frameHeight}p...")
+      Console.log(
+        "Generating sprite sheet from video (${originalKB}KB) at ${fps}fps, ${frameHeight}p..."
+      )
 
       val tempDir = java.nio.file.Files.createTempDirectory("trailblaze_sprites_").toFile()
       try {
-        // Step 1: Extract individual frames.
-        // If the device was in landscape but the video was recorded in portrait
-        // (iOS simulator native buffer), prepend a transpose filter to rotate frames.
+        // Step 1: Extract individual frames as PNG (lossless intermediary for dedup accuracy).
         val (vf, noAutorotate) = buildVideoFilter(videoFile, fps, frameHeight, isLandscape)
         val extractCmd =
           mutableListOf(
@@ -89,11 +94,9 @@ object VideoSpriteExtractor {
           listOf(
             "-vf",
             vf,
-            "-q:v",
-            jpegQuality.toString(),
             "-loglevel",
             "error",
-            "${tempDir.absolutePath}/vf_%06d.jpg",
+            "${tempDir.absolutePath}/vf_%06d.png",
           )
         )
         val extractProcess = ProcessBuilder(extractCmd).redirectErrorStream(true).start()
@@ -105,7 +108,7 @@ object VideoSpriteExtractor {
         }
 
         val frameFiles =
-          tempDir.listFiles { _, name -> name.startsWith("vf_") && name.endsWith(".jpg") }
+          tempDir.listFiles { _, name -> name.startsWith("vf_") && name.endsWith(".png") }
             ?.sortedBy { it.name } ?: emptyList()
         if (frameFiles.isEmpty()) {
           Console.log("No frames extracted from video")
@@ -115,19 +118,14 @@ object VideoSpriteExtractor {
         val frameCount = frameFiles.size
 
         // Step 2: Deduplicate identical (or near-identical) frames.
-        // Mobile UIs often sit still, so many consecutive frames are identical.
-        // We compare pixel data with a small threshold to absorb JPEG codec noise.
-        val frameMap = IntArray(frameCount) // logical frame index -> physical (unique) index
+        val frameMap = IntArray(frameCount)
         val uniqueFrameFiles = mutableListOf<File>()
-        val uniquePixels = mutableListOf<IntArray>() // RGB pixel arrays for each unique frame
+        val uniquePixels = mutableListOf<IntArray>()
 
         for ((logicalIndex, file) in frameFiles.withIndex()) {
           val image = ImageIO.read(file)
           val pixels = image.getRGB(0, 0, image.width, image.height, null, 0, image.width)
 
-          // Compare against recent unique frames to find a perceptual match.
-          // Duplicates are almost always consecutive (static UI), so we only check the last
-          // few unique frames to keep this O(n) overall instead of O(n^2).
           var matchIndex = -1
           val searchWindow = 5.coerceAtMost(uniquePixels.size)
           for (j in 1..searchWindow) {
@@ -151,87 +149,138 @@ object VideoSpriteExtractor {
         val dedupSavings = frameCount - uniqueCount
         if (dedupSavings > 0) {
           Console.log(
-            "Frame dedup: $uniqueCount unique frames from $frameCount total (${dedupSavings} duplicates removed)"
+            "Frame dedup: $uniqueCount unique frames from $frameCount total " +
+              "(${dedupSavings} duplicates removed)"
           )
         }
 
-        // Copy unique frames with sequential names for ffmpeg tile input
-        val tileDir = java.nio.file.Files.createTempDirectory("trailblaze_tile_").toFile()
-        try {
-          for ((index, file) in uniqueFrameFiles.withIndex()) {
-            file.copyTo(File(tileDir, "uf_%06d.jpg".format(index + 1)))
-          }
-
-          // Calculate grid layout: enough rows per column to stay under JPEG max height,
-          // then as many columns as needed to fit all frames.
-          val maxRows = MAX_JPEG_DIMENSION / frameHeight
-          val columns = ((uniqueCount + maxRows - 1) / maxRows).coerceAtLeast(1)
-          val rows = ((uniqueCount + columns - 1) / columns).coerceAtLeast(1)
-
-          // Step 3: Arrange unique frames into a grid sprite sheet using ffmpeg tile filter
-          val tileProcess =
-            ProcessBuilder(
-                "ffmpeg",
-                "-f",
-                "image2",
-                "-framerate",
-                "1",
-                "-i",
-                "${tileDir.absolutePath}/uf_%06d.jpg",
-                "-vf",
-                "tile=${columns}x${rows}",
-                "-q:v",
-                jpegQuality.toString(),
-                "-frames:v",
-                "1",
-                "-loglevel",
-                "error",
-                "-y",
-                spriteFile.absolutePath,
-              )
-              .redirectErrorStream(true)
-              .start()
-          tileProcess.inputStream.bufferedReader().readText()
-          val tileFinished = tileProcess.waitFor(120, TimeUnit.SECONDS)
-          if (!tileFinished || tileProcess.exitValue() != 0 || !spriteFile.exists()) {
-            Console.log("ffmpeg sprite sheet assembly failed")
-            spriteFile.delete()
+        // Read the actual frame width from the first extracted frame
+        val firstFrame = ImageIO.read(uniqueFrameFiles.first())
+          ?: run {
+            Console.log("Failed to decode first video frame — sprite sheet extraction aborted")
             return null
           }
+        val frameWidth = firstFrame.width
 
-          val spriteKB = spriteFile.length() / 1024
+        // Step 3: Assemble sprite sheet(s) as WebP.
+        // WebP max dimension is 16383px in both axes, so constrain rows by height
+        // and columns by width. Split into multiple sheets for long sessions.
+        val maxRows = (MAX_WEBP_DIMENSION / frameHeight).coerceAtLeast(1)
+        val maxCols = (MAX_WEBP_DIMENSION / frameWidth).coerceAtLeast(1)
+        val framesPerSheet = maxRows * maxCols
+        val sheetCount = ((uniqueCount + framesPerSheet - 1) / framesPerSheet).coerceAtLeast(1)
+
+        // Multi-sheet sprites are not yet supported by downstream consumers — the
+        // VideoMetadata / WasmReport / VideoFrameCache code paths only ever load the
+        // first sheet, so frames whose physical index lands on `video_sprites_1.webp`
+        // (or higher) are unreachable. Bail out cleanly so the timeline falls back to
+        // the screenshot slideshow rather than silently dropping frames.
+        if (sheetCount > 1) {
           Console.log(
-            "Sprite sheet: $uniqueCount unique frames from $frameCount total " +
-              "(${columns}x${rows} grid), ${spriteKB}KB (from ${originalKB}KB video)"
+            "Sprite sheet would require $sheetCount sheets ($uniqueCount unique frames), " +
+              "but consumers only support a single sheet — skipping sprite extraction. " +
+              "Reduce session length, frame fps, or frame height to fit one sheet.",
           )
-
-          // Write metadata so consumers know how to index into the sprite.
-          // `frames` = total logical frame count, `uniqueFrames` = physical frames in the grid,
-          // `frameMap` = comma-separated mapping of logical index -> physical index.
-          val metaFile = File(dir, SPRITE_META_FILENAME)
-          val frameMapStr = frameMap.joinToString(",")
-          metaFile.writeText(
-            buildString {
-              appendLine("fps=$fps")
-              appendLine("frames=$frameCount")
-              appendLine("height=$frameHeight")
-              appendLine("columns=$columns")
-              appendLine("rows=$rows")
-              appendLine("uniqueFrames=$uniqueCount")
-              appendLine("frameMap=$frameMapStr")
-            }
-          )
-        } finally {
-          tileDir.deleteRecursively()
+          return null
         }
 
-        return spriteFile
+        var totalSpriteKB = 0L
+        val spriteFiles = mutableListOf<File>()
+
+        // Overall grid dimensions for metadata (describes the logical layout)
+        val columns = ((uniqueCount + maxRows - 1) / maxRows).coerceAtLeast(1).coerceAtMost(maxCols)
+        val rows = ((uniqueCount + columns - 1) / columns).coerceAtLeast(1)
+
+        for (sheetIndex in 0 until sheetCount) {
+          val startFrame = sheetIndex * framesPerSheet
+          val endFrame = ((sheetIndex + 1) * framesPerSheet).coerceAtMost(uniqueCount)
+          val sheetFrameCount = endFrame - startFrame
+
+          val sheetColumns =
+            ((sheetFrameCount + maxRows - 1) / maxRows).coerceAtLeast(1).coerceAtMost(maxCols)
+          val sheetRows =
+            ((sheetFrameCount + sheetColumns - 1) / sheetColumns).coerceAtLeast(1)
+
+          val tileDir = java.nio.file.Files.createTempDirectory("trailblaze_tile_").toFile()
+          try {
+            for ((index, globalIndex) in (startFrame until endFrame).withIndex()) {
+              uniqueFrameFiles[globalIndex].copyTo(
+                File(tileDir, "uf_%06d.png".format(index + 1))
+              )
+            }
+
+            val spriteFilename =
+              if (sheetCount == 1) SPRITE_FILENAME
+              else "video_sprites_$sheetIndex.webp"
+            val spriteFile = File(dir, spriteFilename)
+
+            val tileProcess =
+              ProcessBuilder(
+                  "ffmpeg",
+                  "-f",
+                  "image2",
+                  "-framerate",
+                  "1",
+                  "-i",
+                  "${tileDir.absolutePath}/uf_%06d.png",
+                  "-vf",
+                  "tile=${sheetColumns}x${sheetRows}",
+                  "-c:v",
+                  "libwebp",
+                  "-quality",
+                  webpQuality.toString(),
+                  "-frames:v",
+                  "1",
+                  "-loglevel",
+                  "error",
+                  "-y",
+                  spriteFile.absolutePath,
+                )
+                .redirectErrorStream(true)
+                .start()
+            tileProcess.inputStream.bufferedReader().readText()
+            val tileFinished = tileProcess.waitFor(120, TimeUnit.SECONDS)
+            if (!tileFinished || tileProcess.exitValue() != 0 || !spriteFile.exists()) {
+              Console.log("ffmpeg sprite sheet assembly failed for sheet $sheetIndex")
+              spriteFile.delete()
+              return null
+            }
+
+            totalSpriteKB += spriteFile.length() / 1024
+            spriteFiles.add(spriteFile)
+          } finally {
+            tileDir.deleteRecursively()
+          }
+        }
+
+        Console.log(
+          "Sprite sheet: $uniqueCount unique frames from $frameCount total " +
+            "(${columns}x${rows} grid, $sheetCount sheet(s)), " +
+            "${totalSpriteKB}KB (from ${originalKB}KB video)"
+        )
+
+        // Write metadata so consumers know how to index into the sprite(s).
+        val metaFile = File(dir, SPRITE_META_FILENAME)
+        val frameMapStr = frameMap.joinToString(",")
+        metaFile.writeText(
+          buildString {
+            appendLine("fps=$fps")
+            appendLine("frames=$frameCount")
+            appendLine("height=$frameHeight")
+            appendLine("columns=$columns")
+            appendLine("rows=$rows")
+            appendLine("uniqueFrames=$uniqueCount")
+            appendLine("sheets=$sheetCount")
+            appendLine("frameMap=$frameMapStr")
+          }
+        )
+
+        return spriteFiles.firstOrNull()
       } finally {
         tempDir.deleteRecursively()
       }
     } catch (e: Exception) {
       Console.log("ffmpeg not available for sprite extraction: ${e.message}")
-      spriteFile.delete()
       return null
     }
   }

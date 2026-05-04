@@ -90,6 +90,23 @@ interface ScreenState {
     get() = null
 
   /**
+   * Re-renders [viewHierarchyTextRepresentation] with the given [details] applied.
+   *
+   * The default impl ignores [details] and returns the cached text — drivers that build
+   * their text representation eagerly (Maestro Android/iOS) compute element details
+   * separately in [xyz.block.trailblaze.mcp.newtools.StepToolSet.describeScreenState].
+   *
+   * Drivers whose text representation is rendered from cached data and can be cheaply
+   * re-rendered with different detail levels (e.g. Playwright, where the compact ARIA
+   * element list and bounds resolver are already available on the live [Page]) should
+   * override and produce a fresh string. This is the path the snapshot CLI uses to
+   * surface `--bounds` / `--offscreen` / `--all` to web platforms — without it, those
+   * flags get silently dropped after the screen state is captured.
+   */
+  fun viewHierarchyTextRepresentation(details: Set<SnapshotDetail>): String? =
+    viewHierarchyTextRepresentation
+
+  /**
    * Elements to annotate on screenshots with set-of-mark labels.
    *
    * Returns a list of (nodeId, bounds) pairs corresponding to the elements emitted

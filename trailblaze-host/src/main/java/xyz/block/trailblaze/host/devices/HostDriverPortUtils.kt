@@ -85,17 +85,10 @@ internal object HostDriverPortUtils {
    */
   fun removeStaleAdbPortForward(deviceInstanceId: String, port: Int) {
     try {
-      val process =
-        AndroidHostAdbUtils.createAdbCommandProcessBuilder(
-            args = listOf("forward", "--remove", "tcp:$port"),
-            deviceId = TrailblazeDeviceId(deviceInstanceId, TrailblazeDevicePlatform.ANDROID),
-          )
-          .start()
-      val completed = process.waitFor(5, TimeUnit.SECONDS)
-      if (!completed) {
-        process.destroyForcibly()
-      }
-      // Ignore errors — there may not be a stale forward
+      AndroidHostAdbUtils.removePortForward(
+        deviceId = TrailblazeDeviceId(deviceInstanceId, TrailblazeDevicePlatform.ANDROID),
+        localPort = port,
+      )
     } catch (e: Exception) {
       // Ignore cleanup failures
     }

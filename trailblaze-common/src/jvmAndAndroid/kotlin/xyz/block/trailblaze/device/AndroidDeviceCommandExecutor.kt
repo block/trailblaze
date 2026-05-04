@@ -13,6 +13,46 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceId
  */
 const val APPOPS_MANAGE_EXTERNAL_STORAGE = "MANAGE_EXTERNAL_STORAGE"
 
+/**
+ * Android package-name format: at least two segments, each starting with a letter and
+ * containing only letters/digits/underscores, separated by dots.
+ *
+ * Used to validate `appId` arguments for [AndroidDeviceCommandExecutor.executeShellCommandAs]
+ * before they are interpolated into a shell command. Restricting to the package-name grammar
+ * means an `appId` cannot smuggle shell metacharacters (spaces, `;`, `&`, `|`, quotes,
+ * backticks) through the `run-as` invocation, so we don't need general shell escaping for
+ * that token.
+ */
+private val ANDROID_PACKAGE_NAME_REGEX =
+  Regex("^[a-zA-Z][a-zA-Z0-9_]*(\\.[a-zA-Z][a-zA-Z0-9_]*)+$")
+
+/**
+ * Shared validator used by both `actual` implementations of
+ * [AndroidDeviceCommandExecutor.executeShellCommandAs]. The name reflects the underlying
+ * `run-as` shell command being invoked, while the public API is named for what it does
+ * (executes a shell command as a specific app's UID).
+ *
+ * Lives here (rather than in each `actual`) so the contract is enforced identically on host
+ * and on-device, and so the rationale for each rule travels with one canonical definition.
+ *
+ * @throws IllegalArgumentException if [appId] is not a syntactically valid Android package
+ *   name, or if [command] is blank. The blank-command check matters because `run-as <pkg>`
+ *   with no command drops into an interactive shell, which hangs non-interactive callers
+ *   like our `executeShellCommand` transport.
+ */
+internal fun validateRunAsArgs(appId: String, command: String) {
+  require(appId.isNotBlank()) { "appId must not be blank" }
+  require(ANDROID_PACKAGE_NAME_REGEX.matches(appId)) {
+    "appId must be a syntactically valid Android package name (got: '$appId'). " +
+      "Expected format: 'com.example.app' — letters/digits/underscores in dot-separated " +
+      "segments, each segment starting with a letter."
+  }
+  require(command.isNotBlank()) {
+    "command must not be blank — `run-as <pkg>` without a command drops into an " +
+      "interactive shell, which hangs non-interactive callers."
+  }
+}
+
 expect class AndroidDeviceCommandExecutor(
   deviceId: TrailblazeDeviceId,
 ) {
@@ -27,6 +67,86 @@ expect class AndroidDeviceCommandExecutor(
    * Executes a shell command on the Android device.
    */
   fun executeShellCommand(command: String): String
+
+  /**
+   * Executes a shell command on the device as the specified app's UID via `run-as`.
+   *
+   * **Critical requirement: the target app's APK must be marked `android:debuggable="true"`** in
+   * its manifest. `run-as` is gated on debuggable APKs by the Android platform — it fails with
+   * `run-as: package not debuggable` for release builds. Root is **not** required (and is
+   * irrelevant — `run-as` and root are independent privilege mechanisms).
+   *
+   * ### Why this exists as a first-class method
+   *
+   * `run-as` is the only standard, supported way for an external process — including a
+   * Trailblaze test APK that is **not** signed with the target app's key and **not** running
+   * inside the target app's process — to read or write files in another app's
+   * `/data/data/<package>/` private directory. This is critical for test setup that needs to
+   * seed SharedPreferences, databases, or other private files in an app we cannot modify
+   * (the app APK is whatever the team ships; only the test APK is under our control).
+   *
+   * Without this method documented on the interface, this knowledge is easy to lose and
+   * easy to reinvent badly (e.g. attempting to MITM the network, running emulators with
+   * `adb root`, or asking app teams to add debug-only ContentProviders).
+   *
+   * ### Where it works
+   *
+   * - **Emulators**: works regardless of `adb root` state (rooted or not).
+   * - **Physical devices**: works as long as the target APK is debuggable. Production builds
+   *   from the Play Store are not debuggable; debug variants installed via `adb install` or
+   *   sideload typically are.
+   * - **Hosted CI runners**: works in any environment that accepts a debuggable test+app APK
+   *   pair (Firebase Test Lab, Sauce Labs, and similar device-cloud services).
+   *
+   * ### How both implementations satisfy the privilege requirement
+   *
+   * - **Host JVM driver**: routes through `adb shell`, which executes commands as the
+   *   `shell` user (UID 2000).
+   * - **On-device instrumentation**: routes through [UiDevice.executeShellCommand], which
+   *   uses `UiAutomation.executeShellCommand` — a privileged system bridge that **also**
+   *   executes commands as the `shell` user, regardless of the calling test process's UID
+   *   or signing identity. This is the property that makes `run-as` work for Trailblaze
+   *   even though our test APK runs in its own process, separate from the app under test.
+   *
+   * ### Common uses
+   *
+   * - Seeding SharedPreferences XML files in `/data/data/<pkg>/shared_prefs/` for test setup
+   * - Reading app state (databases, files) for diagnostics during a test
+   * - Cleaning up state between tests without going through the app's UI
+   *
+   * ### Naming
+   *
+   * Named `executeShellCommandAs` to mirror the sibling [executeShellCommand] method on this
+   * interface, with the `As` suffix indicating the privileged identity switch via `run-as`.
+   * The underlying mechanism is the platform `run-as` shell command, but exposing that detail
+   * in the method name would diverge from the existing `execute*` naming on this class.
+   *
+   * ### Example
+   *
+   * ```
+   * executeShellCommandAs(
+   *   appId = "com.example.app",
+   *   command = "sh -c 'mkdir -p /data/data/com.example.app/shared_prefs && " +
+   *     "cp /sdcard/seed_prefs.xml /data/data/com.example.app/shared_prefs/debug.xml'",
+   * )
+   * ```
+   *
+   * @param appId the target app's package name (e.g. `"com.example.app"`).
+   *   Must be a syntactically valid Android package name (letters/digits/underscores in
+   *   dot-separated segments, each segment starting with a letter). Validated to prevent
+   *   shell-metacharacter injection through this token.
+   * @param command the shell command to execute as the target app's UID. **Must be non-blank** —
+   *   `run-as <pkg>` with no command drops into an interactive shell, which hangs
+   *   non-interactive callers like the underlying [executeShellCommand] transport.
+   *   Multi-step commands should be wrapped in `sh -c '...'` (see example above) so quoting
+   *   and `&&` survive the round-trip.
+   * @return stdout from the executed command.
+   * @throws IllegalArgumentException if [appId] is not a valid Android package name, or if
+   *   [command] is blank. See [validateRunAsArgs] for the validation rationale.
+   * @see executeShellCommand
+   * @see <a href="https://developer.android.com/studio/command-line/adb#runas">adb run-as docs</a>
+   */
+  fun executeShellCommandAs(appId: String, command: String): String
 
   /**
    * Force stops the specified app.

@@ -80,17 +80,20 @@ class McpBundleSession internal constructor(
       // Subsequent session starts are fast — the library stays loaded.
       val quickJs = QuickJs.create(Dispatchers.Default)
       try {
-        // The order of the next five lines matters — don't reorder.
+        // The order of the next six evaluations matters — don't reorder.
         //
         // MCP's handshake is symmetric: Client.connect() fires an `initialize` request
         // over the transport, and the JS Server's `server.connect(transport)` is what
         // installs the transport's `onmessage` handler. If we flip the last two steps,
         // the Client's initialize request lands on a transport with no handler and the
-        // prelude rejects it. So: bridge → prelude (installs transport global) → bundle
-        // (bundle's top-level `server.connect(globalThis.__trailblazeInProcessTransport)`
-        // wires the Server onto the transport) → transport → Client.connect.
+        // prelude rejects it. So: bridge → prelude (installs transport global and the
+        // console shim) → SDK bundle (installs globalThis.trailblaze / globalThis.fromMeta
+        // so plain-JS authors can skip the npm/bundler step) → author bundle (top-level
+        // `await trailblaze.run()` picks up the pre-installed in-process transport and
+        // wires its MCP Server onto it) → transport → Client.connect.
         val bridge = QuickJsBridge(quickJs)
         bridge.evaluate(BundleRuntimePrelude.SOURCE, "trailblaze-bundle-prelude.js")
+        bridge.evaluate(BundleRuntimePrelude.SDK_BUNDLE_SOURCE, BundleRuntimePrelude.SDK_BUNDLE_FILENAME)
 
         // Read the author bundle here (not in the catch block below) so asset/filesystem
         // load errors surface with the bundle filename attached, not as a generic

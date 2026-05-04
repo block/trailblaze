@@ -1,7 +1,6 @@
 package xyz.block.trailblaze.agent.trail
 
 import kotlinx.datetime.Clock
-import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.agent.ExecutionResult
 import xyz.block.trailblaze.agent.TrailConfig
 import xyz.block.trailblaze.agent.TrailExecutionMode
@@ -10,7 +9,6 @@ import xyz.block.trailblaze.agent.TrailState
 import xyz.block.trailblaze.agent.UiActionExecutor
 import xyz.block.trailblaze.logs.client.LogEmitter
 import xyz.block.trailblaze.logs.client.ObjectiveLogHelper
-import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.TaskId
 import xyz.block.trailblaze.yaml.PromptStep
@@ -27,7 +25,7 @@ import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
  *
  * This is a **complementary** executor, not a replacement for [TrailStepPlanner].
  * Use this for fully-recorded trails where speed and determinism matter (CI/CD).
- * Use [TrailStepPlanner] when AI fallback is needed for unrecorded or flaky steps.
+ * Use [TrailStepPlanner] when self-heal is needed for unrecorded or flaky steps.
  * The [trail] function in TrailApi.kt automatically selects the right executor
  * based on [TrailExecutionMode].
  *
@@ -53,7 +51,7 @@ import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
  * - Marks the trail as failed immediately
  * - Reports which step and tool failed
  *
- * For AI fallback on failures, use [TrailStepPlanner] with
+ * For self-heal on failures, use [TrailStepPlanner] with
  * [TrailExecutionMode.RECORDING_WITH_FALLBACK].
  *
  * @property executor The UI action executor for running tools
@@ -230,14 +228,3 @@ class DeterministicTrailExecutor(
   }
 }
 
-/**
- * Extension to convert TrailblazeToolYamlWrapper to JsonObject args.
- *
- * Serializes the [TrailblazeTool] to JSON and parses it as a JsonObject
- * to extract the tool arguments.
- */
-private fun TrailblazeToolYamlWrapper.toJsonArgs(): JsonObject {
-  // Serialize tool to JSON string, then parse back as JsonObject
-  val toolJson = TrailblazeJsonInstance.encodeToString(trailblazeTool)
-  return TrailblazeJsonInstance.decodeFromString<JsonObject>(toolJson)
-}

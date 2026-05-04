@@ -1,0 +1,25 @@
+# Trailblaze open source workspace.
+#
+# This is the workspace anchor for anyone working inside this repo. Walk-up discovery
+# finds it from any cwd under the repo root, layering the demo packs below on top of
+# the bundled framework defaults (the `trailblaze` stdlib pack still ships in the JAR;
+# only consumer-facing demos live here).
+#
+# These demo targets used to be bundled into every Trailblaze JAR via classpath
+# resources. They were demoted into this workspace so binary-only adopters running
+# outside the repo see a clean toolbox listing — only their own targets, not framework
+# demos.
+#
+# LLM defaults — recommended settings for open source contributors. Override with
+# ~/.trailblaze/trailblaze.yaml for personal preferences. Provider connection details
+# and model definitions live in:
+#   trailblaze-models/src/commonMain/resources/trailblaze-config/providers/
+
+llm:
+  defaults:
+    model: openai/gpt-4.1
+
+packs:
+  - packs/clock/pack.yaml
+  - packs/contacts/pack.yaml
+  - packs/wikipedia/pack.yaml

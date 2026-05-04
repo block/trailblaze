@@ -1,0 +1,19 @@
+script: ./trails/config/tools/playwrightSample_web_searchProductsAndOpenResult.js
+name: playwrightSample_web_searchProductsAndOpenResult
+description: Search the products demo, open one result, and verify its detail text.
+_meta:
+  trailblaze/supportedPlatforms: [web]
+  trailblaze/requiresContext: true
+inputSchema:
+  relativePath:
+    type: string
+    description: Products-demo fixture path relative to the playwright-native examples root.
+  query:
+    type: string
+    description: Search-box query string to type before reading results.
+  resultId:
+    type: string
+    description: Product id (matches the fixture's data-product-id attribute) to click from the search results.
+  expectedDetailText:
+    type: string
+    description: Detail-panel text the tool asserts is present on the result page.

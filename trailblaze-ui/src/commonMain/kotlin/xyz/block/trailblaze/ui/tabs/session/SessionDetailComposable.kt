@@ -597,7 +597,7 @@ fun SessionDetailComposable(
         // Show retry FAB when session has failed
         val isSessionFailed = when (sessionDetail.overallStatus) {
           is SessionStatus.Ended.Failed,
-          is SessionStatus.Ended.FailedWithFallback,
+          is SessionStatus.Ended.FailedWithSelfHeal,
           is SessionStatus.Ended.TimeoutReached,
           is SessionStatus.Ended.MaxCallsLimitReached -> true
           else -> false

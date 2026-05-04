@@ -10,7 +10,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.util.Console
 
 @Serializable
-@TrailblazeToolClass("compose_verify_text_visible")
+@TrailblazeToolClass("compose_verify_text_visible", isVerification = true)
 @LLMDescription(
   """
 Verify that specific text is visible on screen.

@@ -40,7 +40,7 @@ class BridgeTrailblazeAgent(
         // executeTrailblazeTool is suspend, but runTrailblazeTools is not.
         // Use Dispatchers.IO to avoid deadlocking if the caller is already on a coroutine thread.
         val result = runBlocking(Dispatchers.IO) {
-          mcpBridge.executeTrailblazeTool(tool)
+          mcpBridge.executeTrailblazeTool(tool, traceId = traceId)
         }
         executedTools.add(tool)
         Console.log("[BridgeTrailblazeAgent] Executed ${tool::class.simpleName}: $result")

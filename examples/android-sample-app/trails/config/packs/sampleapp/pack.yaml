@@ -1,0 +1,15 @@
+id: sampleapp
+target:
+  display_name: Trailblaze Sample App
+  platforms:
+    android:
+      app_ids:
+        - xyz.block.trailblaze.examples.sampleapp
+  mcp_servers:
+    - script: ./examples/android-sample-app/trails/config/mcp/tools.ts
+    - script: ./examples/android-sample-app/trails/config/mcp-sdk/tools.ts
+  # Pack scripted tools — flat-schema authoring surface, one tool per file under tools/.
+  # Lighter-weight than the `mcp_servers:` block above (no `bun install` required, no
+  # subprocess MCP server). The host runner synthesizes a small wrapper at session start.
+  tools:
+    - tools/host_writeArtifact.yaml

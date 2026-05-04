@@ -112,6 +112,27 @@ class TrailblazeToolRepoDynamicTest {
     assertThat(repo.getRegisteredDynamicTools().keys.toList()).containsExactly(ToolName("a"))
   }
 
+  @Test fun `toolCallToTrailblazeTool resolves a class-backed tool with isForLlm = false`() {
+    // Regression for the lookup change in #2634: previously the repo matched class-backed
+    // tools via `toKoogToolDescriptor()?.name`, which returns null for `isForLlm = false`
+    // tools (they're not surfaced to the LLM). Now it matches via `toolName().toolName`
+    // straight from the `@TrailblazeToolClass` annotation, so non-LLM-visible tools stay
+    // reachable through the repo for recording-replay paths that never go through the LLM.
+    val repo = TrailblazeToolRepo(
+      trailblazeToolSet = TrailblazeToolSet.DynamicTrailblazeToolSet(
+        name = "non-llm",
+        toolClasses = setOf(NonLlmTool::class),
+        yamlToolNames = emptySet(),
+      ),
+    )
+    val decoded = repo.toolCallToTrailblazeTool(
+      toolName = NonLlmTool::class.toolName().toolName,
+      toolContent = """{"reason":"replay"}""",
+    )
+    assertThat(decoded).isInstanceOf(NonLlmTool::class)
+    assertThat((decoded as NonLlmTool).reason).isEqualTo("replay")
+  }
+
   @Test fun `setActiveToolSets preserves dynamic tools across switches`() {
     // Derive a valid toolset id from the default catalog rather than hardcoding — if the
     // catalog evolves (rename / removal) this test keeps exercising the preservation
@@ -137,6 +158,16 @@ class TrailblazeToolRepoDynamicTest {
 
   @Serializable
   private data class StubDynamicTool(val args: String) : TrailblazeTool
+
+  /**
+   * Stand-in for a non-LLM-visible class-backed tool (e.g. `TapOnByElementSelector`). Has
+   * `isForLlm = false` so its koog descriptor is null — the lookup fix in
+   * `toolCallToTrailblazeTool` must reach it via the `@TrailblazeToolClass(name)` annotation
+   * directly, not via `toKoogToolDescriptor()`.
+   */
+  @Serializable
+  @TrailblazeToolClass(name = "test_non_llm", isForLlm = false)
+  private data class NonLlmTool(val reason: String) : TrailblazeTool
 
   private fun stubRegistration(toolName: String): DynamicTrailblazeToolRegistration =
     object : DynamicTrailblazeToolRegistration {

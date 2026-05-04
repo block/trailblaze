@@ -28,6 +28,10 @@ import xyz.block.trailblaze.utils.Ext.toViewHierarchyTreeNode
 import xyz.block.trailblaze.viewhierarchy.ViewHierarchyTreeNodeUtils
 import xyz.block.trailblaze.viewmatcher.matching.toTrailblazeNodeAndroidMaestro
 import java.io.ByteArrayOutputStream
+import java.util.concurrent.Callable
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 
 /**
  * Snapshot in time of what the screen has in it.
@@ -92,9 +96,20 @@ class AndroidOnDeviceUiAutomatorScreenState(
     var lastViewHierarchyOriginal: ViewHierarchyTreeNode? = null
     var lastMaestroTree: maestro.TreeNode? = null
     var lastScreenshotBytes: ByteArray? = null
+    // Cap total stabilization time: each iteration calls dumpViewHierarchy() twice
+    // (each with its own 30s IPC timeout). Without this cap, slow devices can spin
+    // for minutes and exhaust the enclosing test's JUnit time budget.
+    val initStartMs = System.currentTimeMillis()
+    val initBudgetMs = 60_000L
 
     try {
       while (!matched && attempts < maxAttempts) {
+        if (System.currentTimeMillis() - initStartMs > initBudgetMs) {
+          throw RuntimeException(
+            "AndroidOnDeviceUiAutomatorScreenState init exceeded 60s budget after $attempts " +
+              "stabilization attempts — view hierarchy did not stabilize. Device may be slow or unhealthy."
+          )
+        }
         // Parse via Maestro TreeNode so we can derive both VH and TrailblazeNode
         val xmlDump = dumpViewHierarchy()
         val maestroTree =
@@ -204,12 +219,27 @@ class AndroidOnDeviceUiAutomatorScreenState(
     private inline fun <T> traceOnDeviceUiAutomatorScreenState(name: String, block: () -> T): T = traceRecorder.trace(name, "OnDeviceUiAutomatorScreenState", emptyMap(), block)
 
     fun dumpViewHierarchy(): String = traceOnDeviceUiAutomatorScreenState("dumpViewHierarchy") {
-      ByteArrayOutputStream().use { outputStream ->
-        withUiDevice {
-          setCompressedLayoutHierarchy(false)
-          dumpWindowHierarchy(outputStream)
+      // dumpWindowHierarchy traverses the accessibility tree via IPC and can deadlock
+      // on slow or resource-constrained emulators (AccessibilityInteractionClient.findAccessibilityNodeInfoByAccessibilityId
+      // hangs in Binder IPC). Run with a 30s timeout so callers fail fast rather than
+      // hanging until the JUnit @Rule kills the test after 5 minutes.
+      val executor = Executors.newSingleThreadExecutor()
+      val future = executor.submit(Callable {
+        ByteArrayOutputStream().use { outputStream ->
+          withUiDevice {
+            setCompressedLayoutHierarchy(false)
+            dumpWindowHierarchy(outputStream)
+          }
+          outputStream.toString()
         }
-        outputStream.toString()
+      })
+      try {
+        future.get(30, TimeUnit.SECONDS)
+      } catch (e: TimeoutException) {
+        future.cancel(true)
+        throw RuntimeException("dumpViewHierarchy timed out after 30s — likely an accessibility IPC deadlock. Failing fast.", e)
+      } finally {
+        executor.shutdownNow()
       }
     }
 
@@ -234,7 +264,21 @@ class AndroidOnDeviceUiAutomatorScreenState(
      */
     fun takeScreenshot(): Bitmap? = traceOnDeviceUiAutomatorScreenState("${AndroidOnDeviceUiAutomatorScreenState::class.simpleName}.takeScreenshot") {
       traceOnDeviceUiAutomatorScreenState("takeScreenshot") {
-        withUiAutomation { takeScreenshot() }
+        // UiAutomation.takeScreenshot() uses Binder IPC which can deadlock on slow or
+        // resource-constrained emulators (same failure mode as dumpWindowHierarchy).
+        // Wrap in a 30s timeout so callers fail fast rather than hanging until JUnit kills them.
+        val executor = Executors.newSingleThreadExecutor()
+        val future = executor.submit(Callable<Bitmap?> {
+          withUiAutomation { takeScreenshot() }
+        })
+        try {
+          future.get(30, TimeUnit.SECONDS)
+        } catch (e: TimeoutException) {
+          future.cancel(true)
+          throw RuntimeException("takeScreenshot timed out after 30s — likely a Binder IPC deadlock.", e)
+        } finally {
+          executor.shutdownNow()
+        }
       }
     }
 

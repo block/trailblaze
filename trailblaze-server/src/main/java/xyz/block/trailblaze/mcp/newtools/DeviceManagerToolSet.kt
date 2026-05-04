@@ -6,12 +6,15 @@ import ai.koog.agents.core.tools.reflect.ToolSet
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.devices.WebInstanceIds
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.mcp.AgentImplementation
-import xyz.block.trailblaze.mcp.DeviceAlreadyClaimedException
+import xyz.block.trailblaze.mcp.DeviceBusyException
 import xyz.block.trailblaze.mcp.DeviceClaimRegistry
 import xyz.block.trailblaze.mcp.McpToolProfile
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
+import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
 import xyz.block.trailblaze.toolcalls.toKoogToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeToolDescriptor
@@ -36,8 +39,12 @@ class DeviceManagerToolSet(
   private val deviceClaimRegistry: DeviceClaimRegistry? = null,
   private val toolSetCatalog: List<ToolSetCatalogEntry> = TrailblazeToolSetCatalog.defaultEntries(),
   private val onActiveToolSetsChanged: (activeToolSetIds: List<String>, catalog: List<ToolSetCatalogEntry>) -> Unit = { _, _ -> },
-  /** Callback to terminate a displaced MCP session when force-claiming a device. */
+  /** Callback to terminate a displaced MCP session when yielding a device claim. */
   private val onTerminateSession: ((sessionId: String) -> String?)? = null,
+  /** Callback after the session binds to a device and driver. */
+  private val onDeviceConnected: (suspend () -> Unit)? = null,
+  /** Callback after the current target app changes. */
+  private val onTargetAppChanged: (suspend () -> Unit)? = null,
 ) : ToolSet {
 
   /**
@@ -54,6 +61,13 @@ class DeviceManagerToolSet(
     IOS,
     /** Connect to the web browser (Playwright) */
     WEB,
+    /**
+     * Connect to the Compose desktop driver (the running Trailblaze desktop window's
+     * own UI via the in-process Compose RPC server). Hidden platform: addresses as
+     * `desktop/self`, only available when the desktop app is running with the
+     * self-test server enabled.
+     */
+    DESKTOP,
     /** Show info about the currently connected device */
     INFO,
   }
@@ -79,7 +93,9 @@ class DeviceManagerToolSet(
 
     device(action=ANDROID) → connect to Android
     device(action=IOS) → connect to iOS
-    device(action=WEB) → connect to web browser (always available)
+    device(action=WEB) → connect to default web browser (always available)
+    device(action=WEB, deviceId="foo") → connect to a named browser instance
+    device(action=WEB, deviceId="foo", headless=false) → launch a visible window
     device(action=LIST) → see available devices
     device(action=INFO) → info about the connected device
     device(action=INFO, detail=APPS) → list installed apps
@@ -93,14 +109,14 @@ class DeviceManagerToolSet(
   suspend fun device(
     @LLMDescription("Action: LIST, CONNECT, ANDROID, IOS, WEB, or INFO")
     action: DeviceAction,
-    @LLMDescription("Device ID / instance ID (for CONNECT, ANDROID, IOS actions)")
+    @LLMDescription("Device ID / instance ID (for CONNECT, ANDROID, IOS, WEB actions). For WEB, any value provisions a new browser instance keyed by this ID.")
     deviceId: String? = null,
-    @LLMDescription("Force takeover if device is claimed by another session (default: false)")
-    force: Boolean = false,
     @LLMDescription("Detail level for INFO action: SUMMARY (default), APPS, or FULL")
     detail: DeviceDetail = DeviceDetail.SUMMARY,
     @LLMDescription("Optional display name for this session (shown in the Trailblaze report)")
     testName: String? = null,
+    @LLMDescription("For WEB action: launch the browser headless (default true). Set false to show a visible browser window.")
+    headless: Boolean = true,
   ): String {
     return when (action) {
       DeviceAction.LIST -> {
@@ -200,12 +216,12 @@ class DeviceManagerToolSet(
         val device = devices.find { it.instanceId == deviceId }
           ?: return "Error: Device '$deviceId' not found. Use LIST to see available devices."
 
-        connectToDeviceUnified(device.trailblazeDeviceId, force, testName)
+        connectToDeviceUnified(device.trailblazeDeviceId, testName)
       }
 
       DeviceAction.ANDROID -> {
         when (val selection = selectDeviceForPlatform(TrailblazeDevicePlatform.ANDROID, deviceId)) {
-          is SelectResult.Found -> connectToDeviceUnified(selection.device.trailblazeDeviceId, force, testName)
+          is SelectResult.Found -> connectToDeviceUnified(selection.device.trailblazeDeviceId, testName)
           SelectResult.NoneOnPlatform ->
             "Error: No Android device available. Connect an Android device or start an emulator."
           is SelectResult.IdNotFound ->
@@ -215,7 +231,7 @@ class DeviceManagerToolSet(
 
       DeviceAction.IOS -> {
         when (val selection = selectDeviceForPlatform(TrailblazeDevicePlatform.IOS, deviceId)) {
-          is SelectResult.Found -> connectToDeviceUnified(selection.device.trailblazeDeviceId, force, testName)
+          is SelectResult.Found -> connectToDeviceUnified(selection.device.trailblazeDeviceId, testName)
           SelectResult.NoneOnPlatform ->
             "Error: No iOS device available. Start an iOS simulator."
           is SelectResult.IdNotFound ->
@@ -224,46 +240,94 @@ class DeviceManagerToolSet(
       }
 
       DeviceAction.WEB -> {
-        val devices = mcpBridge.getAvailableDevices()
-        val configuredDriverType = mcpBridge.getConfiguredDriverType(TrailblazeDevicePlatform.WEB)
-        val webDevice = if (configuredDriverType != null) {
-          devices.find { it.trailblazeDriverType == configuredDriverType }
-            ?: devices.find { it.platform == TrailblazeDevicePlatform.WEB }
-        } else {
-          devices.find { it.platform == TrailblazeDevicePlatform.WEB }
-        }
-          ?: return "Error: No web browser available."
+        // Web devices are virtual: any instanceId can be provisioned on demand.
+        // - deviceId=null → fall back to the configured driver-type default
+        //   (PLAYWRIGHT_ELECTRON when configured, otherwise PLAYWRIGHT_NATIVE).
+        // - deviceId="foo" → connect to (or create) a Playwright browser keyed
+        //   by "foo" so multiple CLI commands can run in parallel against
+        //   distinct browsers.
+        val explicitInstance = deviceId?.takeIf { it.isNotBlank() }
+        val resolvedInstanceId = explicitInstance ?: defaultWebInstanceId()
+        val webDeviceId = TrailblazeDeviceId(
+          instanceId = resolvedInstanceId,
+          trailblazeDevicePlatform = TrailblazeDevicePlatform.WEB,
+        )
+        // Headless preference is applied INSIDE connectToDeviceUnified after the
+        // claim succeeds. Setting it here would race against another concurrent
+        // device(action=WEB, deviceId=foo, headless=…) call: the second writer
+        // wins on the side-channel preference even though only one wins the
+        // claim, so the winning command's browser could launch in the wrong mode.
+        connectToDeviceUnified(webDeviceId, testName, webHeadless = headless)
+      }
 
-        connectToDeviceUnified(webDevice.trailblazeDeviceId, force, testName)
+      DeviceAction.DESKTOP -> {
+        // Compose desktop has exactly one logical instance ("self") — the running
+        // Trailblaze desktop window's own UI. The device summary is published by
+        // `TrailblazeDeviceManager.loadDevicesSuspend` only when the in-process
+        // ComposeRpcServer is responding, so finding the device here doubles as
+        // a reachability check.
+        val desktopDevice = mcpBridge.getAvailableDevices()
+          .find { it.platform == TrailblazeDevicePlatform.DESKTOP }
+          ?: return "Error: No Compose desktop driver available. " +
+            "Is the Trailblaze desktop app running with self-test server enabled? " +
+            "Start it with `trailblaze app`."
+
+        connectToDeviceUnified(desktopDevice.trailblazeDeviceId, testName)
       }
     }
   }
 
+  /**
+   * Default instance ID used by `device(action=WEB, deviceId=null)`. Honors the
+   * platform-level configured driver type so installs that have set
+   * `web-driver=playwright-electron` route to the electron singleton instead of
+   * the native default. Falls back to PLAYWRIGHT_NATIVE for any other case.
+   */
+  private fun defaultWebInstanceId(): String =
+    when (mcpBridge.getConfiguredDriverType(TrailblazeDevicePlatform.WEB)) {
+      TrailblazeDriverType.PLAYWRIGHT_ELECTRON -> WebInstanceIds.PLAYWRIGHT_ELECTRON
+      else -> WebInstanceIds.PLAYWRIGHT_NATIVE
+    }
+
   private suspend fun connectToDeviceUnified(
     trailblazeDeviceId: TrailblazeDeviceId,
-    force: Boolean = false,
     testName: String? = null,
+    webHeadless: Boolean? = null,
   ): String {
     // Check exclusive device claim before connecting
     val mcpSessionId = sessionContext?.mcpSessionId?.sessionId
     var displacedSessionInfo: String? = null
+    var displacedFromOtherSession = false
     if (deviceClaimRegistry != null && mcpSessionId != null) {
       try {
-        val previousClaim = deviceClaimRegistry.claim(trailblazeDeviceId, mcpSessionId, force)
-        // If we force-claimed from another session, terminate it cleanly
+        val previousClaim = deviceClaimRegistry.claim(trailblazeDeviceId, mcpSessionId)
+        // Cross-session yield: terminate the displaced session cleanly. The
+        // registry's yield-unless-busy policy already verified the prior holder
+        // was idle, so we're not interrupting real work.
         if (previousClaim != null && previousClaim.mcpSessionId != mcpSessionId) {
           val clientName = onTerminateSession?.invoke(previousClaim.mcpSessionId)
           displacedSessionInfo = clientName ?: previousClaim.mcpSessionId
+          displacedFromOtherSession = true
         }
-      } catch (e: DeviceAlreadyClaimedException) {
+      } catch (e: DeviceBusyException) {
         return "Error: ${e.message}"
       }
     }
 
-    // When force=true on iOS, release any existing persistent driver so selectDevice
-    // creates a fresh one. iOS Maestro drivers can't be reused across MCP sessions
-    // (the XCTest connection goes stale), unlike Android which handles reconnection.
-    if (force && trailblazeDeviceId.trailblazeDevicePlatform == TrailblazeDevicePlatform.IOS) {
+    // Now that we hold the claim, record the WEB headless preference. Done after
+    // the claim so a concurrent caller losing the claim (DeviceBusyException
+    // above) can't overwrite our preference before our selectDevice fires. Same-session
+    // re-claims also pass through this point, so each command's headless choice is
+    // honored on the launch it triggers.
+    if (webHeadless != null && trailblazeDeviceId.trailblazeDevicePlatform == TrailblazeDevicePlatform.WEB) {
+      mcpBridge.setWebBrowserHeadless(trailblazeDeviceId.instanceId, webHeadless)
+    }
+
+    // When yielding from another iOS session, release any existing persistent
+    // driver so selectDevice creates a fresh one. iOS Maestro drivers can't be
+    // reused across MCP sessions (the XCTest connection goes stale), unlike
+    // Android which handles reconnection.
+    if (displacedFromOtherSession && trailblazeDeviceId.trailblazeDevicePlatform == TrailblazeDevicePlatform.IOS) {
       mcpBridge.releasePersistentDeviceConnection(trailblazeDeviceId)
     }
 
@@ -326,6 +390,7 @@ class DeviceManagerToolSet(
     sessionContext?.setAssociatedDevice(trailblazeDeviceId)
     // Session creation deferred to first blaze/ask call for meaningful naming.
     sessionContext?.startImplicitRecording()
+    onDeviceConnected?.invoke()
     return TrailblazeJsonInstance.encodeToString(result)
   }
 
@@ -341,11 +406,14 @@ class DeviceManagerToolSet(
 
   @LLMDescription("Switch the current target app. Read the trailblaze://devices/connected resource to see valid app target IDs.")
   @Tool(TOOL_SWITCH_TARGET)
-  fun switchTargetApp(
+  suspend fun switchTargetApp(
     @LLMDescription("The ID of the app target to switch to (e.g., 'myApp', 'otherApp'). Must match one of the available app target IDs.")
     appTargetId: String,
   ): String {
     val displayName = mcpBridge.selectAppTarget(appTargetId)
+    if (displayName != null) {
+      onTargetAppChanged?.invoke()
+    }
     return if (displayName != null) {
       "Switched target app to: $displayName ($appTargetId)"
     } else {
@@ -444,7 +512,7 @@ Call with an empty list to reset to only the core tools.""",
     val driverType = mcpBridge.getDriverType() ?: return null
     val targetId = mcpBridge.getCurrentAppTargetId() ?: return null
     val target = mcpBridge.getAvailableAppTargets().firstOrNull { it.id == targetId } ?: return null
-    if (target.id == "none") return null
+    if (target.id == TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget.id) return null
 
     val groups = try {
       target.getCustomToolGroupsForDriver(driverType)
@@ -456,8 +524,8 @@ Call with an empty list to reset to only the core tools.""",
     return buildString {
       appendLine("Available ${target.displayName} tools (${driverType.platform.displayName}):")
       for (group in groups) {
-        val toolNames = group.toolClasses
-          .mapNotNull { it.toKoogToolDescriptor()?.toTrailblazeToolDescriptor()?.name }
+        val toolNames = group.toMergedDescriptors()
+          .map { it.name }
           .sorted()
         if (toolNames.isNotEmpty()) {
           appendLine("  ${group.id}: ${toolNames.joinToString(", ")}")
@@ -546,6 +614,6 @@ Call with an empty list to reset to only the core tools.""",
     // the parameter names on [device]. Callers (e.g. CliMcpClient) should reference
     // these constants instead of hardcoding the string.
     const val PARAM_DEVICE_ID = "deviceId"
+    const val PARAM_HEADLESS = "headless"
   }
 }
-

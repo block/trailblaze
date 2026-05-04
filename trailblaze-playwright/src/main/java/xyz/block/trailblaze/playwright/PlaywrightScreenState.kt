@@ -3,10 +3,12 @@ package xyz.block.trailblaze.playwright
 import com.microsoft.playwright.Locator
 import com.microsoft.playwright.Page
 import com.microsoft.playwright.options.ScreenshotAnimations
+import xyz.block.trailblaze.api.AnnotationElement
 import xyz.block.trailblaze.api.DeviceInfoPrefix
 import xyz.block.trailblaze.api.DriverNodeDetail
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ScreenshotScalingConfig
+import xyz.block.trailblaze.api.SnapshotDetail
 import xyz.block.trailblaze.api.TrailblazeImageFormat
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
@@ -124,13 +126,45 @@ class PlaywrightScreenState(
    * ```
    */
   override val viewHierarchyTextRepresentation: String by lazy {
-    TrailblazeTracer.trace("viewHierarchyTextRepresentation", "screenState") {
-      val baseText = if (requestedDetails.isEmpty()) {
+    renderTextRepresentation(requestedDetails)
+  }
+
+  /**
+   * Re-renders the text representation with ad-hoc [details] supplied at call time.
+   *
+   * The constructor's [requestedDetails] still controls the lazily-cached
+   * [viewHierarchyTextRepresentation] for the agent path, but the snapshot CLI
+   * (`trailblaze snapshot --bounds --offscreen --all`) supplies its flags after
+   * the screen state has already been captured. This override lets that path
+   * land enrichment without re-capturing the page — the underlying ARIA
+   * snapshot and the live [page] are both reusable.
+   *
+   * [SnapshotDetail.BOUNDS] maps directly to [ViewHierarchyDetail.BOUNDS].
+   * [SnapshotDetail.OFFSCREEN] maps to [ViewHierarchyDetail.OFFSCREEN_ELEMENTS].
+   * [SnapshotDetail.ALL_ELEMENTS] maps to [ViewHierarchyDetail.CSS_SELECTORS] —
+   * Playwright's compact list already shows interactive + content-bearing nodes,
+   * so "show me everything" is most usefully interpreted as "surface DOM elements
+   * that aren't in the ARIA tree" (which is what CSS_SELECTORS does).
+   */
+  override fun viewHierarchyTextRepresentation(details: Set<SnapshotDetail>): String {
+    if (details.isEmpty()) return viewHierarchyTextRepresentation
+    val translated = buildSet {
+      if (SnapshotDetail.BOUNDS in details) add(ViewHierarchyDetail.BOUNDS)
+      if (SnapshotDetail.OFFSCREEN in details) add(ViewHierarchyDetail.OFFSCREEN_ELEMENTS)
+      if (SnapshotDetail.ALL_ELEMENTS in details) add(ViewHierarchyDetail.CSS_SELECTORS)
+    }
+    if (translated.isEmpty()) return viewHierarchyTextRepresentation
+    return renderTextRepresentation(translated)
+  }
+
+  private fun renderTextRepresentation(details: Set<ViewHierarchyDetail>): String {
+    return TrailblazeTracer.trace("viewHierarchyTextRepresentation", "screenState") {
+      val baseText = if (details.isEmpty()) {
         compactAriaElements.text
       } else {
-        enrichCompactElementList(compactAriaElements)
+        enrichCompactElementList(compactAriaElements, details)
       }
-      val includeOffscreen = ViewHierarchyDetail.OFFSCREEN_ELEMENTS in requestedDetails
+      val includeOffscreen = ViewHierarchyDetail.OFFSCREEN_ELEMENTS in details
       val elementsText = TrailblazeTracer.trace("handleOffscreenElements", "screenState") {
         handleOffscreenElements(baseText, compactAriaElements, includeOffscreen)
       }
@@ -493,9 +527,10 @@ class PlaywrightScreenState(
    */
   private fun enrichCompactElementList(
     compact: PlaywrightAriaSnapshot.CompactAriaElements,
+    details: Set<ViewHierarchyDetail> = requestedDetails,
   ): String {
-    val enrichBounds = ViewHierarchyDetail.BOUNDS in requestedDetails
-    val enrichCss = ViewHierarchyDetail.CSS_SELECTORS in requestedDetails
+    val enrichBounds = ViewHierarchyDetail.BOUNDS in details
+    val enrichCss = ViewHierarchyDetail.CSS_SELECTORS in details
 
     if (!enrichBounds && !enrichCss) {
       return compact.text
@@ -805,6 +840,50 @@ class PlaywrightScreenState(
   }
 
   /**
+   * Set-of-mark annotation elements keyed to the same `[eN]` IDs the LLM sees in
+   * [viewHierarchyTextRepresentation]. Without this override the SoM annotator falls
+   * back to numbering [viewHierarchy] nodes by their internal nodeId, producing
+   * labels like "4, 8, 10, 13" on the screenshot while the LLM is reading "[e4],
+   * [e5], [e6], [e7]" in text — the two never line up, so the model can't reliably
+   * map a label to an element.
+   *
+   * Bounds are resolved through the same locator API that [enrichViewHierarchyWithBounds]
+   * uses, so element positions match Playwright's accessibility tree (the bounds
+   * source the LLM trusts) rather than raw `getBoundingClientRect` (which is wrong
+   * for Compose-Web and other a11y-overlay engines). Elements that fail to resolve
+   * or have zero-size bounds are dropped — we'd rather emit fewer labels than draw
+   * a label in the wrong place.
+   */
+  override val annotationElements: List<AnnotationElement>? by lazy {
+    val out = mutableListOf<AnnotationElement>()
+    var nodeId = 1L
+    for ((id, ref) in elementIdMapping) {
+      try {
+        val locator = PlaywrightAriaSnapshot.resolveElementRef(page, ref)
+        val box = locator.boundingBox(
+          Locator.BoundingBoxOptions().setTimeout(captureTimeoutMs),
+        ) ?: continue
+        if (box.width <= 0 || box.height <= 0) continue
+        out.add(
+          AnnotationElement(
+            nodeId = nodeId++,
+            bounds = TrailblazeNode.Bounds(
+              left = box.x.toInt(),
+              top = box.y.toInt(),
+              right = (box.x + box.width).toInt(),
+              bottom = (box.y + box.height).toInt(),
+            ),
+            refLabel = id,
+          ),
+        )
+      } catch (_: Exception) {
+        // Skip elements that can't be resolved
+      }
+    }
+    out.takeIf { it.isNotEmpty() }
+  }
+
+  /**
    * Scaled screenshot with set-of-mark annotations for LLM requests.
    * Annotates from raw PNG (before scaling) so element bounds align with the image,
    * then applies the same scaling as [screenshotBytes] for consistent output.
@@ -812,10 +891,10 @@ class PlaywrightScreenState(
   override val annotatedScreenshotBytes: ByteArray? by lazy {
     val annotated = SetOfMarkAnnotator.annotate(
       screenshotBytes = rawScreenshotBytes,
-      viewHierarchy = viewHierarchy,
       screenWidth = deviceWidth,
       screenHeight = deviceHeight,
       platform = trailblazeDevicePlatform,
+      annotationElements = annotationElements,
     )
     scaleAndEncode(annotated)
   }

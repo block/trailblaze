@@ -79,7 +79,7 @@ sealed interface SessionEvent {
     HasScreenshot
 
   @Serializable
-  data class AttemptAiFallback(
+  data class SelfHealInvoked(
     val details: String,
     val recordingResult: PromptRecordingResult.Failure,
     override val timestamp: Instant,

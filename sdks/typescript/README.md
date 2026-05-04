@@ -10,7 +10,7 @@ surfaces the Trailblaze-injected envelope (`_meta.trailblaze`) as a typed
 ## Install
 
 ```bash
-cd <your-target>/trailblaze-config/mcp-sdk   # or wherever your tools.ts lives
+cd <your-target>/trails/config/mcp-sdk   # or wherever your tools.ts lives
 bun install   # or `npm install`
 ```
 
@@ -40,7 +40,7 @@ await trailblaze.run();
 Wire the file from your target YAML:
 
 ```yaml
-# trailblaze-config/targets/myapp.yaml
+# trails/config/targets/myapp.yaml
 id: myapp
 mcp_servers:
   - script: ./mcp-sdk/tools.ts
@@ -78,7 +78,7 @@ reentrance cap hit, transport error) — so the happy path is a plain sequence
 of awaits, no success-flag branching.
 
 A working example lives at
-`examples/android-sample-app/trailblaze-config/mcp-sdk/tools.ts`
+`examples/android-sample-app/trails/config/mcp-sdk/tools.ts`
 (look for `signUpNewUserSdk`).
 
 ## Runtimes — the same TS runs in two places
@@ -138,7 +138,7 @@ Marked `private: true` while the SDK surface stabilizes — `package.json`'s
 `main` / `exports` / `types` point at `./src/index.ts` and the package has
 no build step. Authors consume via a TS-capable runtime (bun or node+tsx)
 through the `file:` link shown in the sample-app example
-(`examples/android-sample-app/trailblaze-config/mcp-sdk/package.json`).
+(`examples/android-sample-app/trails/config/mcp-sdk/package.json`).
 Publishing a proper `dist/` build with `.js` + `.d.ts` outputs (and flipping
 `private` off) is a follow-up once the surface stabilizes.
 

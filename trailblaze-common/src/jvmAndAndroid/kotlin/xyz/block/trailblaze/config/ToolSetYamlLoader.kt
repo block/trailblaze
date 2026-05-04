@@ -7,6 +7,7 @@ import xyz.block.trailblaze.llm.config.platformConfigResourceSource
 import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.ToolSetCatalogEntry
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
+import xyz.block.trailblaze.util.Console
 import kotlin.reflect.KClass
 
 /**
@@ -62,6 +63,27 @@ object ToolSetYamlLoader {
       resolved.config.id to resolved
     }.toMap()
   }
+
+  /**
+   * Loads toolsets from already-parsed configs.
+   */
+  fun loadAllFromConfigs(
+    configs: List<ToolSetYamlConfig>,
+    toolNameResolver: ToolNameResolver,
+  ): Map<String, ResolvedToolSet> =
+    buildMap {
+      configs.forEach { config ->
+        try {
+          val resolved = resolve(config, toolNameResolver)
+          put(resolved.config.id, resolved)
+        } catch (e: Exception) {
+          Console.log(
+            "Warning: Failed to load toolset '${config.id}': " +
+              "${e::class.simpleName}: ${e.message}",
+          )
+        }
+      }
+    }
 
   /**
    * Discovers and loads all `.toolset.yaml` files from `trailblaze-config/toolsets/`.

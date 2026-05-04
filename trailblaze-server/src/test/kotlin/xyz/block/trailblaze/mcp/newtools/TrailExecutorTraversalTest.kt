@@ -15,6 +15,7 @@ import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateResponse
@@ -187,7 +188,11 @@ class TrailExecutorTraversalTest {
 
     override suspend fun getCurrentScreenState(): ScreenState? = null
 
-    override suspend fun executeTrailblazeTool(tool: TrailblazeTool, blocking: Boolean): String =
+    override suspend fun executeTrailblazeTool(
+      tool: TrailblazeTool,
+      blocking: Boolean,
+      traceId: TraceId?,
+    ): String =
       throw NotImplementedError()
 
     override suspend fun endSession(): Boolean = false

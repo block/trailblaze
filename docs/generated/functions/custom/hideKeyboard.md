@@ -1,7 +1,7 @@
 ## Tool `hideKeyboard`
 
 ## Description
-This hide the keyboard on the screen. This is useful to do after entering text into an input field.
+Hide the keyboard on the screen. Use after entering text into an input field.
 
 ### Command Class
 `xyz.block.trailblaze.toolcalls.commands.HideKeyboardTrailblazeTool`

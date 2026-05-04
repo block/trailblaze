@@ -1,11 +1,13 @@
 package xyz.block.trailblaze.compose.driver.rpc
 
+import xyz.block.trailblaze.api.AnnotationElement
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.compose.driver.ComposeSemanticTreeMapper
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
+import xyz.block.trailblaze.setofmark.SetOfMarkAnnotator
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
 
@@ -26,6 +28,7 @@ class ComposeRpcScreenState(
         descriptor = ref.descriptor,
         nthIndex = ref.nthIndex,
         testTag = ref.testTag,
+        bounds = ref.bounds,
       )
     }
   }
@@ -43,6 +46,32 @@ class ComposeRpcScreenState(
   @OptIn(ExperimentalEncodingApi::class)
   override val screenshotBytes: ByteArray? by lazy {
     response.screenshotBase64?.let { Base64.decode(it) }
+  }
+
+  /**
+   * `[refLabel]`-keyed annotation elements pulled straight from the RPC
+   * payload. Mirrors the in-process [xyz.block.trailblaze.compose.driver.ComposeScreenState];
+   * see that class's `annotationElements` doc for the rationale.
+   */
+  override val annotationElements: List<AnnotationElement>? by lazy {
+    val out = mutableListOf<AnnotationElement>()
+    var nodeId = 1L
+    for ((id, ref) in elementIdMapping) {
+      val bounds = ref.bounds ?: continue
+      if (bounds.width <= 0 || bounds.height <= 0) continue
+      out.add(AnnotationElement(nodeId = nodeId++, bounds = bounds, refLabel = id))
+    }
+    out.takeIf { it.isNotEmpty() }
+  }
+
+  override val annotatedScreenshotBytes: ByteArray? by lazy {
+    SetOfMarkAnnotator.annotate(
+      screenshotBytes = screenshotBytes,
+      screenWidth = deviceWidth,
+      screenHeight = deviceHeight,
+      platform = trailblazeDevicePlatform,
+      annotationElements = annotationElements,
+    )
   }
 
   override val deviceWidth: Int

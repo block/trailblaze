@@ -122,7 +122,7 @@ When executing a test, Trailblaze resolves the recording based on the device's c
 
 There is intentionally **no middle-tier fallback** (e.g., `android.trail.yaml` for all Android devices). Device-specific recordings scale better for automated generation and require less manual maintenance—when a recording is generated, it's tied to the exact device type that produced it.
 
-> **Note on AI Fallback:** When a recorded test fails during execution, Trailblaze can attempt to recover using AI interpretation. This "AI fallback" functionality is covered in [Decision 021: AI Fallback](2026-01-29-ai-fallback.md).
+> **Note on Self-Heal:** When a recorded test fails during execution, Trailblaze can attempt to recover using AI interpretation. This "self-heal" functionality is covered in [Decision 021: Self-Heal](2026-01-29-ai-fallback.md).
 
 ### Recording Generation Workflow
 

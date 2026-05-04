@@ -3,16 +3,17 @@ package xyz.block.trailblaze.config.project
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
+import xyz.block.trailblaze.llm.config.TrailblazeConfigPaths
 import xyz.block.trailblaze.util.Console
 
 /**
  * Result of resolving a Trailblaze workspace from a starting path.
  *
- * A workspace is the directory containing `trailblaze.yaml`. When a config file is found
- * via walk-up, the workspace is [Configured] and downstream loaders anchor against
- * [configFile]'s parent. When no file is found, the workspace is [Scratch] and callers
- * fall back to framework defaults (or legacy per-project settings) with [dir] as the
- * working anchor.
+ * A workspace is the `trails/` directory that owns `trails/config/trailblaze.yaml`. When a
+ * config file is found via walk-up, the workspace is [Configured] and downstream loaders
+ * anchor against that `trails/` directory. When no file is found, the workspace is
+ * [Scratch] and callers fall back to framework defaults (or legacy per-project settings)
+ * with [dir] as the working anchor.
  *
  * This is the single primitive every entry point uses to pick a workspace — see
  * [findWorkspaceRoot] for the walk-up rule. Four entry points feed a `Path` into
@@ -23,9 +24,9 @@ sealed class WorkspaceRoot {
   abstract val dir: Path
 
   /**
-   * A `trailblaze.yaml` was found via walk-up from the start path. [dir] is the directory
-   * containing the file. Both paths are canonicalized via `toRealPath()` so callers can
-   * compare them across symlinked clones.
+   * A `trails/config/trailblaze.yaml` was found via walk-up from the start path. [dir] is
+   * the owning `trails/` directory. Both paths are canonicalized via `toRealPath()` so
+   * callers can compare them across symlinked clones.
    */
   data class Configured(override val dir: Path, val configFile: Path) : WorkspaceRoot()
 
@@ -37,13 +38,13 @@ sealed class WorkspaceRoot {
 }
 
 /**
- * Walks up from [fromPath] looking for [TrailblazeProjectConfigLoader.CONFIG_FILENAME].
+ * Walks up from [fromPath] looking for [TrailblazeConfigPaths.WORKSPACE_CONFIG_FILE].
  *
  * Resolution rules (mirrors the plan's "Workspace discovery" table):
  * - If [fromPath] points at a file, the search starts from its parent directory; if it
  *   points at a directory (or doesn't exist yet), it's used as the start directory.
- * - Starting from the resolved directory, each ancestor is checked for a regular file
- *   named `trailblaze.yaml`. The first match wins → [WorkspaceRoot.Configured].
+ * - Starting from the resolved directory, each ancestor is checked for a regular file at
+ *   `trails/config/trailblaze.yaml`. The first match wins → [WorkspaceRoot.Configured].
  * - Walk-up stops at the filesystem root; a missed walk returns [WorkspaceRoot.Scratch]
  *   anchored at the start directory. No `$HOME` fallback, no `git rev-parse`.
  *
@@ -57,10 +58,13 @@ fun findWorkspaceRoot(fromPath: Path): WorkspaceRoot {
   val startDir = resolveStartDir(fromPath)
   var current: Path? = startDir
   while (current != null) {
-    val candidate = current.resolve(TrailblazeProjectConfigLoader.CONFIG_FILENAME)
+    val workspaceDir = current.resolve(TrailblazeConfigPaths.WORKSPACE_TRAILS_DIR)
+    val candidate = workspaceDir
+      .resolve(TrailblazeConfigPaths.WORKSPACE_CONFIG_SUBDIR)
+      .resolve(TrailblazeProjectConfigLoader.CONFIG_FILENAME)
     if (Files.isRegularFile(candidate)) {
       return WorkspaceRoot.Configured(
-        dir = current.toRealPathOrNormalized(),
+        dir = workspaceDir.toRealPathOrNormalized(),
         configFile = candidate.toRealPathOrNormalized(),
       )
     }

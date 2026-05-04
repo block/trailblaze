@@ -16,7 +16,7 @@ import xyz.block.trailblaze.toolcalls.isSuccess
 @Serializable
 @TrailblazeToolClass("launchApp")
 @LLMDescription(
-  "Use this to open an app on the device as if a user tapped on the app icon in the launcher.",
+  "Open an app on the device as if a user tapped on its icon in the launcher.",
 )
 data class LaunchAppTrailblazeTool(
   @LLMDescription("The package name of the app to launch. Example: 'com.example.app'")

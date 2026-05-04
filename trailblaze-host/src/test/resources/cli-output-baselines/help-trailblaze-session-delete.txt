@@ -1,0 +1,12 @@
+# This file is a CHECKED-IN baseline of CLI output rendered by trailblaze-host's CLI helpers.
+# It is NOT a contract — if a test fails here because output drifted, decide whether the
+# drift is intentional. The test always (re)writes this file from the current rendered output,
+# then asserts the working tree is clean. So `git diff` of this file IS the failure message.
+# Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
+# small wording / spacing changes can be intentional or accidental.
+# ----------------------------------------------------------------------
+Usage: trailblaze session delete [-hV] --id=<id>
+Delete a session's logs and artifacts
+  -h, --help      Show this help message and exit.
+      --id=<id>   Session ID to delete (supports prefix matching)
+  -V, --version   Print version information and exit.

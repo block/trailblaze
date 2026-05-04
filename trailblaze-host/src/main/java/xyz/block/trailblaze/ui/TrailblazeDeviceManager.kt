@@ -33,6 +33,7 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.devices.WebInstanceIds
 import xyz.block.trailblaze.host.devices.WebBrowserManager
 import xyz.block.trailblaze.host.devices.WebBrowserState
 import xyz.block.trailblaze.host.screenstate.HostMaestroDriverScreenState
@@ -43,6 +44,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeSessionManager
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
+import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateRequest
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRpcClient
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
@@ -214,6 +216,7 @@ class TrailblazeDeviceManager(
     forceStopTargetApp: Boolean = false,
     referrer: TrailblazeReferrer,
     agentImplementation: AgentImplementation = AgentImplementation.DEFAULT,
+    traceId: TraceId? = null,
     onComplete: ((TrailExecutionResult) -> Unit)? = null,
   ) {
     val settingsState = settingsRepo.serverStateFlow.value
@@ -232,10 +235,12 @@ class TrailblazeDeviceManager(
         sendSessionEndLog = sendSessionEndLog,
         browserHeadless = !settingsState.appConfig.showWebBrowser,
         preferHostAgent = settingsState.appConfig.preferHostAgent,
+        captureNetworkTraffic = settingsState.appConfig.captureNetworkTraffic,
       ),
       trailblazeDeviceId = trailblazeDeviceId,
       referrer = referrer,
       agentImplementation = agentImplementation,
+      traceId = traceId,
     )
     val params = DesktopAppRunYamlParams(
       forceStopTargetApp = forceStopTargetApp,
@@ -478,6 +483,15 @@ class TrailblazeDeviceManager(
   }
 
   /**
+   * Last unfiltered result from [loadDevicesSuspendImpl]. Cached so concurrent callers that coalesce
+   * on [loadDevicesMutex] can still satisfy `applyDriverFilter = false` — [deviceStateFlow] only
+   * stores the filtered list ([targetDeviceFilter] strips virtual devices when the user hasn't
+   * set `testingEnvironment = WEB`), so returning it for a CLI caller that asked for everything
+   * would silently drop PLAYWRIGHT_NATIVE etc. and surface as "No matching device found".
+   */
+  @Volatile private var lastAllDevices: List<TrailblazeConnectedDeviceSummary> = emptyList()
+
+  /**
    * Load available devices from the system (suspend version).
    * This will update the deviceStateFlow with the discovered devices and cache installed app IDs.
    */
@@ -485,7 +499,11 @@ class TrailblazeDeviceManager(
     // Coalesce concurrent calls: if a load is already running, wait for it instead of starting another.
     if (!loadDevicesMutex.tryLock()) {
       loadDevicesMutex.withLock { /* wait for the running call to finish */ }
-      return deviceStateFlow.value.devices.values.map { it.device }
+      return if (applyDriverFilter) {
+        deviceStateFlow.value.devices.values.map { it.device }
+      } else {
+        lastAllDevices
+      }
     }
 
     try {
@@ -583,20 +601,26 @@ class TrailblazeDeviceManager(
           }
         }
 
-        // Include web browser device only if the browser is currently running
-        webBrowserManager.getRunningBrowserSummary()?.let { browserSummary ->
-          add(browserSummary)
-        }
+        // Include any currently running web browsers. Each named instance
+        // (e.g. `--device web/foo`) is provisioned on demand by the MCP bridge,
+        // so the running set is what's worth listing alongside the always-on
+        // virtual default below.
+        val runningWebBrowsers = webBrowserManager.getAllRunningBrowserSummaries()
+        runningWebBrowsers.forEach { add(it) }
 
         // Playwright-native is a virtual device (no hardware connection needed) —
-        // always include it so web trails work from both GUI and CLI.
-        add(
-          TrailblazeConnectedDeviceSummary(
-            trailblazeDriverType = TrailblazeDriverType.PLAYWRIGHT_NATIVE,
-            instanceId = PLAYWRIGHT_NATIVE_INSTANCE_ID,
-            description = "Playwright Browser (Native)",
+        // always include it so web trails work from both GUI and CLI even when
+        // no browser has been launched yet. Skip when the running set already
+        // includes it to avoid a duplicate entry.
+        if (runningWebBrowsers.none { it.instanceId == PLAYWRIGHT_NATIVE_INSTANCE_ID }) {
+          add(
+            TrailblazeConnectedDeviceSummary(
+              trailblazeDriverType = TrailblazeDriverType.PLAYWRIGHT_NATIVE,
+              instanceId = PLAYWRIGHT_NATIVE_INSTANCE_ID,
+              description = "Playwright Browser (Native)",
+            )
           )
-        )
+        }
 
         // Playwright-electron — only show if CDP endpoint is responding.
         if (electronAvailable) {
@@ -609,13 +633,16 @@ class TrailblazeDeviceManager(
           )
         }
 
-        // Compose — only show if the RPC server is responding.
+        // Compose — only show if the RPC server is responding. Instance id is "self"
+        // so the device addresses as `desktop/self` (one logical instance per host —
+        // the desktop window itself); the platform is `DESKTOP` per
+        // `TrailblazeDriverType.COMPOSE.platform`.
         if (composeAvailable) {
           add(
             TrailblazeConnectedDeviceSummary(
               trailblazeDriverType = TrailblazeDriverType.COMPOSE,
-              instanceId = "compose",
-              description = "Compose (RPC)",
+              instanceId = "self",
+              description = "Compose Desktop (RPC)",
             )
           )
         }
@@ -655,6 +682,10 @@ class TrailblazeDeviceManager(
       }
 
       Console.log("[loadDevices] Discovered ${allDevices.size} device(s): ${allDevices.map { "${it.trailblazeDriverType.name}/${it.instanceId}" }}")
+
+      // Cache the unfiltered list so concurrent callers who coalesce on loadDevicesMutex with
+      // applyDriverFilter=false still see virtual devices (see [lastAllDevices]).
+      lastAllDevices = allDevices
 
       // Always filter for device state — Android driver variants share the same
       // TrailblazeDeviceId key (instanceId + platform), so unfiltered results would let
@@ -992,8 +1023,8 @@ class TrailblazeDeviceManager(
   }
 
   companion object {
-    const val PLAYWRIGHT_NATIVE_INSTANCE_ID = "playwright-native"
-    const val PLAYWRIGHT_ELECTRON_INSTANCE_ID = "playwright-electron"
+    const val PLAYWRIGHT_NATIVE_INSTANCE_ID: String = WebInstanceIds.PLAYWRIGHT_NATIVE
+    const val PLAYWRIGHT_ELECTRON_INSTANCE_ID: String = WebInstanceIds.PLAYWRIGHT_ELECTRON
 
     private const val DEVICE_DISCOVERY_TIMEOUT_SECONDS = 10L
 
@@ -1058,36 +1089,16 @@ class TrailblazeDeviceManager(
     }
 
     /**
-     * Lists connected Android devices via `adb devices`.
+     * Lists connected Android devices via the adb host-services protocol (no `adb` binary spawn).
      * Returns list of (instanceId, description) pairs.
      * For emulators, resolves the AVD name as the description; for physical devices,
      * uses the product model. Falls back to the serial number if resolution fails.
      */
     internal fun listConnectedAdbDevices(): List<Pair<String, String>> {
       return try {
-        val process = AndroidHostAdbUtils.createAdbCommandProcessBuilder(
-            args = listOf("devices"),
-            deviceId = null,
-          )
-          .start()
-        val finished = process.waitFor(DEVICE_DISCOVERY_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-        if (!finished) {
-          process.destroyForcibly()
-          Console.log("[loadDevices] [Android] adb devices timed out after ${DEVICE_DISCOVERY_TIMEOUT_SECONDS}s")
-          return emptyList()
+        AndroidHostAdbUtils.listConnectedAdbDevices().map { device ->
+          device.instanceId to resolveAndroidDeviceName(device.instanceId)
         }
-        val output = process.inputStream.bufferedReader().readText()
-        // Parse lines like "emulator-5554\tdevice" — skip header and blank/unauthorized lines
-        output.lines()
-          .drop(1) // skip "List of devices attached" header
-          .mapNotNull { line ->
-            val parts = line.split("\t")
-            if (parts.size == 2 && parts[1].trim() == "device") {
-              val instanceId = parts[0].trim()
-              val description = resolveAndroidDeviceName(instanceId)
-              instanceId to description
-            } else null
-          }
       } catch (e: Exception) {
         Console.log("[loadDevices] [Android] adb devices failed: ${e.message}")
         emptyList()
@@ -1115,17 +1126,14 @@ class TrailblazeDeviceManager(
 
     private fun queryAdbProperty(deviceId: TrailblazeDeviceId, property: String): String? {
       return try {
-        val process = AndroidHostAdbUtils.createAdbCommandProcessBuilder(
-          args = listOf("shell", "getprop", property),
+        // Bounded so a single unresponsive device cannot block discovery for all devices —
+        // matches the legacy `process.waitFor(DEVICE_DISCOVERY_TIMEOUT_SECONDS, SECONDS)` guard.
+        val value = AndroidHostAdbUtils.execAdbShellCommandWithTimeout(
           deviceId = deviceId,
-        ).start()
-        if (!process.waitFor(DEVICE_DISCOVERY_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
-          process.destroyForcibly()
-          return null
-        }
-        if (process.exitValue() != 0) return null
-        val value = process.inputStream.bufferedReader().use { it.readText() }.trim()
-        value.takeIf { it.isNotEmpty() && !it.startsWith("error:", ignoreCase = true) }
+          args = listOf("getprop", property),
+          timeoutMs = DEVICE_DISCOVERY_TIMEOUT_SECONDS * 1_000L,
+        )?.trim()
+        value?.takeIf { it.isNotEmpty() && !it.startsWith("error:", ignoreCase = true) }
       } catch (_: Exception) {
         null
       }

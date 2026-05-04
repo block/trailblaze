@@ -8,8 +8,11 @@ import kotlinx.coroutines.withContext
 import xyz.block.trailblaze.capture.CaptureOptions
 import xyz.block.trailblaze.capture.CaptureSession
 import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
+import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import xyz.block.trailblaze.exception.TrailblazeSessionCancelledException
 import xyz.block.trailblaze.host.TrailblazeHostYamlRunner
+import xyz.block.trailblaze.host.networkcapture.AndroidNetworkCaptureRegistry
 import xyz.block.trailblaze.host.ios.MobileDeviceUtils
 import xyz.block.trailblaze.http.DynamicLlmClient
 import xyz.block.trailblaze.llm.RunYamlRequest
@@ -81,10 +84,17 @@ class DesktopYamlRunner(
     val additionalInstrumentationArgs = desktopAppRunYamlParams.additionalInstrumentationArgs
     val onComplete = desktopAppRunYamlParams.onComplete
 
-    // For MCP requests, reuse the existing coroutine scope to maintain persistent connections.
-    // For UI/CLI requests, create a new scope (which cancels any existing one).
-    val isMcpRequest = runYamlRequest.referrer == TrailblazeReferrer.MCP
-    val coroutineScope = if (isMcpRequest) {
+    // MCP and CLI requests reuse the existing scope. The "create a new scope (which cancels
+    // any existing one)" pattern is a UI-only ergonomic — when the user clicks Run while a
+    // prior trail is mid-flight in the desktop app, replace it. For background flows that
+    // come in concurrently (the benchmark fan-out runs three CLI invocations in parallel
+    // against the same daemon, all sharing one device), creating-and-cancelling means each
+    // new arrival cancels the still-running predecessor. A reproduction surfaced this: 2 of 3
+    // trails passed and the 3rd reported "FAILED: Cancelled" with no Initializing log line.
+    // Coroutines launched into a shared scope are independent — `scope.launch { … }` does
+    // not block other launches in the same scope, so reuse is safe for parallel runs.
+    val sharedScopeReferrers = setOf(TrailblazeReferrer.MCP.id, "cli")
+    val coroutineScope = if (runYamlRequest.referrer.id in sharedScopeReferrers) {
       trailblazeDeviceManager.getOrCreateCoroutineScopeForDevice(trailblazeDeviceId)
     } else {
       trailblazeDeviceManager.createNewCoroutineScopeForDevice(trailblazeDeviceId)
@@ -136,15 +146,16 @@ class DesktopYamlRunner(
         ?: appSettingDriverType
         ?: connectedTrailblazeDevice.trailblazeDriverType
       val captureOptions = CaptureOptions(
-        captureVideo = true,
-        captureLogcat = appConfig.captureLogcat,
+        captureVideo = desktopAppRunYamlParams.captureVideo ?: true,
+        captureLogcat = desktopAppRunYamlParams.captureLogcat ?: appConfig.captureLogcat,
+        captureIosLogs = desktopAppRunYamlParams.captureIosLogs ?: appConfig.captureIosLogs,
         spriteFrameFps = 2,
         spriteFrameHeight = 720,
-        spriteJpegQuality = 3,
+        spriteQuality = 80,
       )
       val captureSession = CaptureSession.fromOptions(
         captureOptions,
-        trailblazeDeviceId.trailblazeDevicePlatform.name,
+        trailblazeDeviceId.trailblazeDevicePlatform,
       )
       val captureTempDir = if (captureSession != null) {
         val appId = targetTestApp
@@ -156,13 +167,22 @@ class DesktopYamlRunner(
         )
         tempDir.mkdirs()
         captureSession.startAll(tempDir, trailblazeDeviceId.instanceId, appId)
-        prefixedProgressMessage("Capture started (video=${captureOptions.captureVideo}, logcat=${captureOptions.captureLogcat})")
+        prefixedProgressMessage(
+          "Capture started (video=${captureOptions.captureVideo}, logcat=${captureOptions.captureLogcat}, iosLogs=${captureOptions.captureIosLogs})",
+        )
         tempDir
       } else null
 
       var sessionId: SessionId? = null
       // Snapshot existing session IDs so we can find newly created ones on cancellation
       val preExistingSessionIds = trailblazeDeviceManager.logsRepo.getSessionIds().toSet()
+
+      // Tracks the session ID under which we started the host-driven Android network capture
+      // bridge (if any). The bridge starts inside `onSessionStarted` callbacks below — that's
+      // the first moment we know the actual on-device session ID — so we can't pre-compute it
+      // here. Stop is best-effort in the outer finally, keyed by whatever was captured.
+      // Defined out here so the finally block sees it even if start() never ran.
+      var capturedNetworkBridgeSessionId: String? = null
 
       try {
         trailblazeAnalytics.runTest(trailblazeDriverType, desktopAppRunYamlParams)
@@ -171,6 +191,25 @@ class DesktopYamlRunner(
         )
 
         val trailblazeHostAppTarget = trailblazeHostAppTargetProvider()
+
+        // Capture-aware onSessionStarted callback shared across the three Android dispatch
+        // branches (V3 / preferHostAgent / on-device YAML). Each branch knows the resolved
+        // session id at a slightly different point in its flow; this lambda lets all three
+        // converge on the same activator wiring without duplicating the `runCatching` /
+        // `maybeStartAndroidNetworkCapture` plumbing.
+        val captureSessionStarted: (SessionId) -> Unit = { sid ->
+          capturedNetworkBridgeSessionId =
+            maybeStartAndroidNetworkCapture(
+              runYamlRequest = runYamlRequest,
+              deviceId = trailblazeDeviceId,
+              sessionIdOverride = sid,
+              targetAppId =
+                targetTestApp
+                  ?.getPossibleAppIdsForPlatform(trailblazeDeviceId.trailblazeDevicePlatform)
+                  ?.firstOrNull(),
+              onProgressMessage = prefixedProgressMessage,
+            )
+        }
 
         sessionId = when {
           // V3 on host with accessibility driver: run planner/analyzer on the host JVM,
@@ -195,6 +234,7 @@ class DesktopYamlRunner(
               onConnectionStatus = onConnectionStatus,
               additionalInstrumentationArgs = additionalInstrumentationArgs,
               targetTestApp = targetTestApp,
+              onSessionStarted = captureSessionStarted,
             )
           }
 
@@ -222,6 +262,7 @@ class DesktopYamlRunner(
               onConnectionStatus = onConnectionStatus,
               additionalInstrumentationArgs = additionalInstrumentationArgs,
               targetTestApp = targetTestApp,
+              onSessionStarted = captureSessionStarted,
             )
           }
 
@@ -247,6 +288,7 @@ class DesktopYamlRunner(
               onProgressMessage = prefixedProgressMessage,
               onConnectionStatus = onConnectionStatus,
               additionalInstrumentationArgs = additionalInstrumentationArgs,
+              onSessionStarted = captureSessionStarted,
             )
           }
 
@@ -278,11 +320,30 @@ class DesktopYamlRunner(
             hostSessionId
           }
         }
+
+        // Defensive: any branch that returns null without throwing (e.g.
+        // runYamlOnDevice on RpcResult.Failure) still indicates the test did NOT
+        // succeed. Without this, executionResult would stay at its Success default
+        // and onComplete would lie to the caller — which is exactly the silent-
+        // failure mode that hid the cached-LLM-model bug for so long.
+        if (sessionId == null && executionResult is TrailExecutionResult.Success) {
+          executionResult = TrailExecutionResult.Failed(
+            "Test execution did not produce a session id (see daemon log for details)",
+          )
+        }
       } catch (e: CancellationException) {
         Console.log("⚠️ COROUTINE CANCELLED for device ${trailblazeDeviceId.instanceId}")
         executionResult = TrailExecutionResult.Cancelled
         // Don't re-throw yet — let the finally block save capture artifacts first.
         // CancellationException is re-thrown after cleanup below.
+      } catch (e: TrailblazeSessionCancelledException) {
+        // User-initiated session cancel. Distinct from coroutine cancellation
+        // (TSCE extends Exception, not CancellationException) so we have to
+        // catch it before the generic Exception branch — otherwise it would
+        // be reported as Failed, not Cancelled.
+        Console.log("🚫 Session cancelled by user for device ${trailblazeDeviceId.instanceId}")
+        prefixedProgressMessage("Test session cancelled")
+        executionResult = TrailExecutionResult.Cancelled
       } catch (e: Exception) {
         Console.log("⚠️ EXCEPTION in coroutine for device ${trailblazeDeviceId.instanceId}: ${e::class.simpleName} - ${e.message}")
         prefixedProgressMessage("Error: ${e.message}")
@@ -304,6 +365,15 @@ class DesktopYamlRunner(
         // Process.waitFor and Thread.sleep) don't throw InterruptedException.
         // Without this, xcrun/screenrecord get killed before finalizing the video.
         Thread.interrupted()
+        // Tear down the Android network capture bridge if one was started for this session.
+        // Mirrors `TrailblazeMcpBridgeImpl.endSession`'s wiring on the MCP side. Best-effort —
+        // the activator's own stop() handles bridge cleanup, so any throw here is non-fatal.
+        capturedNetworkBridgeSessionId?.let { sid ->
+          AndroidNetworkCaptureRegistry.activator?.let { activator ->
+            runCatching { activator.stop(sid) }
+              .onFailure { Console.log("Android network capture stop failed for $sid: ${it.message}") }
+          }
+        }
         if (captureSession != null) {
           // On cancellation, sessionId may not have been set yet. Find the session
           // that was created during this test run by matching the device ID in the
@@ -425,6 +495,7 @@ class DesktopYamlRunner(
     onConnectionStatus: (DeviceConnectionStatus) -> Unit,
     additionalInstrumentationArgs: Map<String, String>,
     targetTestApp: TrailblazeHostAppTarget?,
+    onSessionStarted: (SessionId) -> Unit = {},
   ): SessionId? {
     return withContext(Dispatchers.IO) {
       // V3 + on-host path always uses the accessibility driver on-device.
@@ -448,6 +519,7 @@ class DesktopYamlRunner(
           trailblazeDeviceId = connectedTrailblazeDevice.trailblazeDeviceId,
           onProgressMessage = onProgressMessage,
           targetTestApp = targetTestApp,
+          onSessionStarted = onSessionStarted,
         )
       }
     }
@@ -467,6 +539,7 @@ class DesktopYamlRunner(
     onConnectionStatus: (DeviceConnectionStatus) -> Unit,
     additionalInstrumentationArgs: Map<String, String>,
     targetTestApp: TrailblazeHostAppTarget?,
+    onSessionStarted: (SessionId) -> Unit = {},
   ): SessionId? {
     return withContext(Dispatchers.IO) {
       val needsAccessibility =
@@ -491,6 +564,7 @@ class DesktopYamlRunner(
           trailblazeDeviceId = connectedTrailblazeDevice.trailblazeDeviceId,
           onProgressMessage = onProgressMessage,
           targetTestApp = targetTestApp,
+          onSessionStarted = onSessionStarted,
         )
       }
     }
@@ -507,6 +581,16 @@ class DesktopYamlRunner(
     onConnectionStatus: (DeviceConnectionStatus) -> Unit,
     onProgressMessage: (String) -> Unit,
     additionalInstrumentationArgs: Map<String, String>,
+    /**
+     * Fired exactly once after the on-device RPC reports a successful start, BEFORE we begin
+     * polling for completion. The session is live at this point — the on-device runner has
+     * created the session directory and is about to execute the YAML. Callers use this to spin
+     * up out-of-band session-scoped infrastructure that needs to run *while* the YAML executes
+     * (e.g. an Android network-capture activator — it has to be polling its discovery
+     * side-channel before the launch tool's first network call so it can attach to the
+     * target's freshly-opened socket). Defaulted to a no-op so existing callers stay compatible.
+     */
+    onSessionStarted: (SessionId) -> Unit = {},
   ): SessionId? {
     return withContext(Dispatchers.IO) {
       val needsAccessibility =
@@ -532,6 +616,19 @@ class DesktopYamlRunner(
           is RpcResult.Success -> {
             val runYamlResponse = result.data
             onProgressMessage("YAML test execution started for session: ${runYamlResponse.sessionId}")
+
+            // Notify the caller that the session is live, BEFORE we block on completion. This is
+            // the only window in which session-scoped out-of-band infrastructure (the network
+            // capture bridge, mainly) can attach with the right session ID. Errors from the
+            // callback are caught so a misbehaving listener can't crash the test run.
+            try {
+              onSessionStarted(runYamlResponse.sessionId)
+            } catch (t: Throwable) {
+              Console.log(
+                "[runYamlOnDevice] onSessionStarted callback threw — continuing test run: " +
+                  "${t::class.java.simpleName}: ${t.message}"
+              )
+            }
 
             // Wait for the on-device test to complete. The RPC returns immediately
             // (fire-and-forget), but we need to block until the session reaches an
@@ -575,6 +672,51 @@ class DesktopYamlRunner(
   }
 
   /**
+   * If [runYamlRequest]'s config has `captureNetworkTraffic=true` and the target is Android, ask
+   * the registered [AndroidNetworkCaptureRegistry.activator] (optionally set by a downstream
+   * desktop app at startup) to spin up a per-session bridge. Default distributions ship without
+   * an activator and this is a no-op.
+   *
+   * Returns the session id under which the bridge was started (so [runYaml]'s outer `finally`
+   * can stop it), or null when capture wasn't requested / wasn't applicable.
+   *
+   * The MCP-driven path has the equivalent wiring inside `TrailblazeMcpBridgeImpl.executeToolViaRpc`.
+   * Both call sites need to exist because the desktop UI's "Run YAML" button takes the
+   * [DesktopYamlRunner] path, NOT the MCP path — without this method, capture is silently
+   * dropped for every desktop-driven Android session even though the toggle is on.
+   */
+  private fun maybeStartAndroidNetworkCapture(
+    runYamlRequest: RunYamlRequest,
+    deviceId: TrailblazeDeviceId,
+    sessionIdOverride: SessionId,
+    targetAppId: String?,
+    onProgressMessage: (String) -> Unit,
+  ): String? {
+    if (!runYamlRequest.config.captureNetworkTraffic) return null
+    if (deviceId.trailblazeDevicePlatform != TrailblazeDevicePlatform.ANDROID) return null
+    val activator = AndroidNetworkCaptureRegistry.activator ?: return null
+    val sessionDir = trailblazeDeviceManager.logsRepo.getSessionDir(sessionIdOverride)
+    return runCatching {
+        activator.start(
+          sessionId = sessionIdOverride.value,
+          sessionDir = sessionDir,
+          deviceId = deviceId,
+          targetAppId = targetAppId,
+        )
+        onProgressMessage(
+          "Android network capture bridge started for session ${sessionIdOverride.value}",
+        )
+        sessionIdOverride.value
+      }
+      .onFailure {
+        Console.log(
+          "Auto-start of Android network capture failed for ${sessionIdOverride.value}: ${it.message}"
+        )
+      }
+      .getOrNull()
+  }
+
+  /**
    * Stops capture streams and moves artifacts (video, logcat, metadata) into the session log
    * directory so the Timeline view can find them.
    */
@@ -600,9 +742,14 @@ class DesktopYamlRunner(
       if (sessionId != null && captureTempDir != null && tempFiles.isNotEmpty()) {
         val sessionDir = trailblazeDeviceManager.logsRepo.getSessionDir(sessionId)
         // Move all files from the capture temp dir (artifacts, metadata, sprite metadata, etc.)
+        // renameTo can fail across filesystems, so fall back to copy+delete.
         captureTempDir.listFiles()?.forEach { file ->
           val dest = File(sessionDir, file.name)
-          file.renameTo(dest)
+          val moved = file.renameTo(dest)
+          if (!moved) {
+            file.copyTo(dest, overwrite = true)
+            file.delete()
+          }
           onProgressMessage("Capture: ${file.name} -> ${dest.absolutePath}")
         }
       }

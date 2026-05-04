@@ -14,7 +14,7 @@ data class VideoMetadata(
   val endTimestampMs: Long?,
   /** Non-null when the artifact is a sprite sheet instead of a video file. */
   val spriteInfo: SpriteSheetInfo? = null,
-  /** Absolute file system path to the original video MP4 (for external playback). */
+  /** Absolute file system path to the original video MP4 (when [filePath] points to a sprite sheet). */
   val videoFilePath: String? = null,
 )
 

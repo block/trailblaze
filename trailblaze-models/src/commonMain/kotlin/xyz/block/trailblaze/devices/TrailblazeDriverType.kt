@@ -70,12 +70,12 @@ enum class TrailblazeDriverType(
     yamlKey = "revyl-ios",
     cliShortName = null,
   ),
-  // COMPOSE intentionally uses WEB platform: Compose Desktop testing reuses the web
-  // platform's view hierarchy filtering and device infrastructure. Adding a separate
-  // DESKTOP platform would require updating all exhaustive `when` expressions on
-  // TrailblazeDevicePlatform across the codebase (e.g., ViewHierarchyFilter.create).
+  // The Compose desktop driver. Bound to TrailblazeDevicePlatform.DESKTOP. Previously
+  // bound to WEB as a workaround because adding DESKTOP would have required touching
+  // every exhaustive `when` on the platform enum — that surgery has now landed, so
+  // DESKTOP is the correct platform here.
   COMPOSE(
-    platform = TrailblazeDevicePlatform.WEB,
+    platform = TrailblazeDevicePlatform.DESKTOP,
     requiresHost = true,
     yamlKey = "compose",
     cliShortName = null,
@@ -85,6 +85,7 @@ enum class TrailblazeDriverType(
   companion object {
     val DEFAULT_ANDROID = ANDROID_ONDEVICE_INSTRUMENTATION
     val DEFAULT_IOS = IOS_HOST
+    val DEFAULT_DESKTOP = COMPOSE
 
     val ANDROID_ON_DEVICE_DRIVER_TYPES = setOf(
       ANDROID_ONDEVICE_INSTRUMENTATION,

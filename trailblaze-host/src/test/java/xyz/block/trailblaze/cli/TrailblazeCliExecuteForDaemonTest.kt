@@ -27,10 +27,11 @@ class TrailblazeCliExecuteForDaemonTest {
   }
 
   @Test fun `non-forwardable subcommand returns forwarded false`() {
-    // `config show` is a CLI command that exists but is intentionally not on
-    // the fast-path allowlist (it needs the caller's cwd/env). The shim falls
-    // back to the JVM path on forwarded=false.
-    val response = TrailblazeCli.executeForDaemon(CliExecRequest(args = listOf("config", "show")))
+    // `trail` resolves trail YAML against the caller's cwd, so it stays on the
+    // JVM path — the shim falls back when forwarded=false. Use any other
+    // non-allowlisted subcommand (`blaze`, `verify`, etc.) here if `trail`
+    // ever joins the allowlist.
+    val response = TrailblazeCli.executeForDaemon(CliExecRequest(args = listOf("trail", "some.trail.yaml")))
     assertFalse(response.forwarded)
     assertEquals(0, response.exitCode)
     // Response body should be empty — this path is a pure signal, no output.

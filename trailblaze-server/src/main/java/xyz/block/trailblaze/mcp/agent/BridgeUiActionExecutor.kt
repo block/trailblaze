@@ -2,9 +2,7 @@ package xyz.block.trailblaze.mcp.agent
 
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.put
 import xyz.block.trailblaze.agent.ExecutionResult
 import xyz.block.trailblaze.agent.UiActionExecutor
 import xyz.block.trailblaze.api.AndroidCompactElementList
@@ -15,12 +13,13 @@ import xyz.block.trailblaze.api.ScreenshotScalingConfig
 import xyz.block.trailblaze.api.SnapshotDetail
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
-import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
+import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.logs.model.TraceId
+import xyz.block.trailblaze.mcp.HostLocalToolDispatchingBridge
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
 import xyz.block.trailblaze.mcp.utils.ScreenStateCaptureUtil
-import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ConfigTrailblazeTool
+import xyz.block.trailblaze.toolcalls.HostLocalExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
@@ -53,6 +52,7 @@ import xyz.block.trailblaze.util.Console
 class BridgeUiActionExecutor(
   private val mcpBridge: TrailblazeMcpBridge,
   private val trailblazeToolRepo: TrailblazeToolRepo? = null,
+  private val dynamicToolRepoProvider: (suspend () -> TrailblazeToolRepo?)? = null,
   private val screenshotScalingConfig: ScreenshotScalingConfig = ScreenshotScalingConfig.DEFAULT,
 ) : UiActionExecutor {
 
@@ -116,8 +116,13 @@ class BridgeUiActionExecutor(
         }
       }
 
-      // Execute via MCP bridge - blocking so we can capture screen state after completion
-      val bridgeResult = mcpBridge.executeTrailblazeTool(tool, blocking = true)
+      val dynamicRepo = dynamicToolRepoProvider?.invoke()
+      val bridgeResult = if (tool is HostLocalExecutableTrailblazeTool && dynamicRepo != null) {
+        (mcpBridge as? HostLocalToolDispatchingBridge)?.executeHostLocalTool(tool, dynamicRepo, traceId)
+          ?: mcpBridge.executeTrailblazeTool(tool, blocking = true, traceId = traceId)
+      } else {
+        mcpBridge.executeTrailblazeTool(tool, blocking = true, traceId = traceId)
+      }
       Console.log("[BridgeUiActionExecutor] Executed $toolName: $bridgeResult")
 
       val durationMs = System.currentTimeMillis() - startTime
@@ -158,32 +163,45 @@ class BridgeUiActionExecutor(
   }
 
   /**
-   * Maps a tool name and JSON args to a TrailblazeTool using the existing JSON
-   * deserialization infrastructure.
+   * Maps a tool name and JSON args to a TrailblazeTool by routing through a
+   * [TrailblazeToolRepo]. The repo dispatches by toolName and decodes the flat args via
+   * the matching class-backed or YAML-defined serializer.
    *
-   * Uses "toolName" field which is recognized by OtherTrailblazeToolSerializer.
+   * Sessions can legitimately be wired without either repo (e.g. raw bridge use without a
+   * scripting host). In that case we fall back to wrapping the args verbatim as an
+   * [OtherTrailblazeTool] so the bridge can still forward the call to the device. This
+   * mirrors the previous polymorphic-default's "unknown class → OtherTrailblazeTool"
+   * behavior, just without the indirection through the abstract-type dispatcher.
    *
-   * @throws IllegalStateException if deserialization fails or produces an untyped fallback
+   * Visible to module-internal tests so the no-repo and dynamic-repo paths can be pinned
+   * without standing up a full RPC bridge — see `BridgeUiActionExecutorTest`.
+   *
+   * @throws IllegalStateException if a repo is configured but the args don't match the schema
    */
-  private fun mapToTrailblazeTool(toolName: String, args: JsonObject): TrailblazeTool {
-    val toolJson = buildJsonObject {
-      put("toolName", toolName)
-      args.entries.forEach { (key, value) ->
-        put(key, value)
+  internal suspend fun mapToTrailblazeTool(toolName: String, args: JsonObject): TrailblazeTool {
+    val argsJson = args.toString()
+    dynamicToolRepoProvider?.invoke()?.let { repo ->
+      try {
+        return repo.toolCallToTrailblazeTool(toolName, argsJson)
+      } catch (e: kotlin.coroutines.cancellation.CancellationException) {
+        // `runCatching` previously here silently swallowed CancellationException, breaking
+        // cooperative cancellation. Always re-throw cancellation so the suspend chain can
+        // unwind cleanly.
+        throw e
+      } catch (_: Exception) {
+        // Dynamic source didn't recognise the tool — fall through to the static repo and
+        // ultimately the no-repo wrap. The static repo's failure will surface a richer
+        // diagnostic (see below).
       }
     }
-
-    val tool = try {
-      TrailblazeJsonInstance.decodeFromString<TrailblazeTool>(toolJson.toString())
+    val repo = trailblazeToolRepo ?: return OtherTrailblazeTool(toolName, args)
+    return try {
+      repo.toolCallToTrailblazeTool(toolName, argsJson)
+    } catch (e: kotlin.coroutines.cancellation.CancellationException) {
+      throw e
     } catch (e: Exception) {
       error("Tool '$toolName' args do not match the expected schema: ${e.message}")
     }
-
-    check(tool !is OtherTrailblazeTool) {
-      "Tool '$toolName' could not be parsed. Verify argument names and types match the tool schema exactly. Provided args: $args"
-    }
-
-    return tool
   }
 
   /**

@@ -2,6 +2,8 @@ package xyz.block.trailblaze.logs.model
 
 import kotlinx.serialization.Serializable
 import kotlin.jvm.JvmInline
+import kotlin.uuid.ExperimentalUuidApi
+import kotlin.uuid.Uuid
 
 /**
  * Type-safe wrapper for session identifiers.
@@ -65,5 +67,26 @@ value class SessionId(val value: String) {
     fun sanitized(raw: String): SessionId = SessionId(
       raw.replace(NON_ALPHANUMERIC, "_").lowercase(),
     )
+
+    /**
+     * Produces a unique pinned [SessionId] for one trail invocation.
+     *
+     * Used by the CLI / daemon-handler hot path to scope the post-completion
+     * status check to *this* trail's session. Without a pinned ID, the global
+     * "every new session in the logs repo since the run started" enumeration
+     * cross-attributes failures: when N trails run in parallel against one
+     * daemon and any sibling ends with `TimeoutReached` / `MaxCallsLimit`, the
+     * still-running CLI invocations all report failed even when their own
+     * trail succeeded (a benchmark reproduction observed this on every model
+     * that didn't pass 3/3).
+     *
+     * The 8-char UUID suffix is sufficient: collisions across trails sharing
+     * the same `testName` are bounded by the per-step parallelism cap (≤ ~10),
+     * and the [sanitized] step lowercases / normalizes the result so the
+     * pinned id round-trips cleanly through any layer that re-sanitizes.
+     */
+    @OptIn(ExperimentalUuidApi::class)
+    fun pinnedFor(testName: String): SessionId =
+      sanitized("${testName}_${Uuid.random().toString().take(8)}")
   }
 }

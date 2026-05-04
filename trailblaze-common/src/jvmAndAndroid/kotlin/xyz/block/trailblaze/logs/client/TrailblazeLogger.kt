@@ -164,8 +164,8 @@ class TrailblazeLogger(
   }
 
   /**
-   * Logs an attempt to use AI fallback.
-   * Returns a new session with fallback marked as used.
+   * Logs an attempt to use self-heal.
+   * Returns a new session with self-heal marked as used.
    *
    * ## Important
    * This method returns an **updated session** with the fallback flag set.
@@ -173,30 +173,30 @@ class TrailblazeLogger(
    *
    * ```kotlin
    * var currentSession = session
-   * currentSession = logger.logAttemptAiFallback(currentSession, promptStep, recordingResult)
+   * currentSession = logger.logSelfHealInvoked(currentSession, promptStep, recordingResult)
    * // Use currentSession from now on, not the original session
    * ```
    *
    * @param session The current session
    * @param promptStep The prompt step that failed
    * @param recordingResult The recording failure result
-   * @return A new session with fallback marked as used
+   * @return A new session with self-heal marked as used
    */
-  fun logAttemptAiFallback(
+  fun logSelfHealInvoked(
     session: TrailblazeSession,
     promptStep: PromptStep,
     recordingResult: PromptRecordingResult.Failure,
   ): TrailblazeSession {
     log(
       session,
-      TrailblazeLog.AttemptAiFallbackLog(
+      TrailblazeLog.SelfHealInvokedLog(
         promptStep = promptStep,
         session = session.sessionId,
         timestamp = Clock.System.now(),
         recordingResult = recordingResult,
       ),
     )
-    return session.withFallbackUsed()
+    return session.withSelfHealUsed()
   }
 
   /**

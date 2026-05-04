@@ -159,6 +159,18 @@ val CONFIG_KEYS: Map<String, ConfigKey> = listOf(
     },
   ),
   ConfigKey(
+    name = "web-headless",
+    description = "Default for `--headless` on web devices (CLI flag still wins when explicitly passed)",
+    validValues = "true, false",
+    // Backed by the existing `showWebBrowser` setting (semantics inverted): showing the
+    // browser means *not* headless. Reusing that field keeps the CLI and desktop-app
+    // toggles in sync — flipping the toggle in either surface affects both.
+    get = { config -> (!config.showWebBrowser).toString() },
+    set = { config, value ->
+      value.toBooleanStrictOrNull()?.let { headless -> config.copy(showWebBrowser = !headless) }
+    },
+  ),
+  ConfigKey(
     name = "device",
     description = "Default device platform for CLI commands",
     validValues = "android, ios, web",
@@ -246,7 +258,7 @@ object CliConfigHelper {
    *
    * Applies in-memory hydration for forward-compat: older config files may
    * predate [SavedTrailblazeAppConfig.selectedTargetAppId] and deserialize to
-   * `null`. We materialize the default target (`"none"`) on read instead of
+   * `null`. We materialize the default target (`"default"`) on read instead of
    * writing to disk, so that a plain setup check is read-only. The value is
    * persisted naturally the next time the user mutates their config.
    *
@@ -258,11 +270,21 @@ object CliConfigHelper {
   /**
    * Reads the config from disk without any hydration — returns exactly what
    * was deserialized. Intended for diagnostic tooling that needs to report the
-   * true on-disk state (e.g. to distinguish "user explicitly set none" from
+   * true on-disk state (e.g. to distinguish "user explicitly set default" from
    * "field is missing and we're defaulting"). Normal callers should use
    * [readConfig].
    */
   fun readConfigRaw(): SavedTrailblazeAppConfig? {
+    // When running inside the daemon (IPC fast path), the daemon's in-memory
+    // appConfig is the source of truth — the on-disk file may lag behind it.
+    // Wrap the bridge read so a daemon mid-init or partially-broken state falls
+    // through to the on-disk file rather than propagating the exception.
+    DaemonSettingsBridge.settingsRepo?.let { repo ->
+      runCatching { repo.serverStateFlow.value.appConfig }
+        .onFailure { Console.log("Daemon settings bridge read failed; falling back to file: ${it.message}") }
+        .getOrNull()
+        ?.let { return it }
+    }
     val file = getSettingsFile()
     return try {
       if (file.exists()) {
@@ -276,12 +298,20 @@ object CliConfigHelper {
     }
   }
 
-  private fun SavedTrailblazeAppConfig.hydrateDefaults(): SavedTrailblazeAppConfig =
-    if (selectedTargetAppId.isNullOrBlank()) {
-      copy(selectedTargetAppId = TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget.id)
-    } else {
-      this
-    }
+  private fun SavedTrailblazeAppConfig.hydrateDefaults(): SavedTrailblazeAppConfig {
+    val derivedAppDataDir = effectiveAppDataDirectory()
+    val existingDriverTypes = selectedTrailblazeDriverTypes
+    val defaultDriverTypes = defaultDriverTypes()
+    return copy(
+      selectedTrailblazeDriverTypes = existingDriverTypes +
+        defaultDriverTypes.filterKeys { it !in existingDriverTypes },
+      selectedTargetAppId = selectedTargetAppId
+        ?: TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget.id,
+      logsDirectory = logsDirectory ?: derivedLogsDirectory(derivedAppDataDir),
+      trailsDirectory = trailsDirectory ?: derivedTrailsDirectory(derivedAppDataDir),
+      appDataDirectory = appDataDirectory ?: derivedAppDataDir.canonicalPath,
+    )
+  }
   
   /**
    * Resolves the effective HTTP port using CLI settings.
@@ -299,8 +329,18 @@ object CliConfigHelper {
   
   /**
    * Writes the config to disk.
+   *
+   * When a daemon is running and has installed the [DaemonSettingsBridge], the
+   * write goes through the daemon's [xyz.block.trailblaze.ui.TrailblazeSettingsRepo]
+   * instead — its `serverStateFlow` collector handles persistence. This avoids
+   * the lost-update race where the daemon's auto-save would clobber a direct
+   * file write with its stale in-memory copy.
    */
   fun writeConfig(config: SavedTrailblazeAppConfig) {
+    DaemonSettingsBridge.settingsRepo?.let { repo ->
+      repo.updateAppConfig { config }
+      return
+    }
     val file = getSettingsFile()
     file.parentFile?.mkdirs()
     file.writeText(json.encodeToString(SavedTrailblazeAppConfig.serializer(), config))
@@ -309,13 +349,16 @@ object CliConfigHelper {
   /**
    * Returns a default config if none exists.
    */
-  fun defaultConfig(): SavedTrailblazeAppConfig = SavedTrailblazeAppConfig(
-    selectedTrailblazeDriverTypes = mapOf(
-      TrailblazeDevicePlatform.ANDROID to TrailblazeDriverType.DEFAULT_ANDROID,
-      TrailblazeDevicePlatform.IOS to TrailblazeDriverType.IOS_HOST,
-    ),
-    selectedTargetAppId = TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget.id,
-  )
+  fun defaultConfig(): SavedTrailblazeAppConfig {
+    val appDataDir = effectiveAppDataDirectory()
+    return SavedTrailblazeAppConfig(
+      selectedTrailblazeDriverTypes = defaultDriverTypes(),
+      selectedTargetAppId = TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget.id,
+      logsDirectory = derivedLogsDirectory(appDataDir),
+      trailsDirectory = derivedTrailsDirectory(appDataDir),
+      appDataDirectory = appDataDir.canonicalPath,
+    )
+  }
   
   /**
    * Reads or creates config with defaults.
@@ -331,6 +374,29 @@ object CliConfigHelper {
     val current = getOrCreateConfig()
     val updated = modifier(current)
     writeConfig(updated)
+  }
+
+  private fun defaultDriverTypes(): Map<TrailblazeDevicePlatform, TrailblazeDriverType> = mapOf(
+    TrailblazeDevicePlatform.ANDROID to TrailblazeDriverType.DEFAULT_ANDROID,
+    TrailblazeDevicePlatform.IOS to TrailblazeDriverType.IOS_HOST,
+    TrailblazeDevicePlatform.WEB to TrailblazeDriverType.PLAYWRIGHT_NATIVE,
+  )
+
+  private fun effectiveAppDataDirectory(): File {
+    return readConfigRaw()?.appDataDirectory
+      ?.takeIf { it.isNotBlank() }
+      ?.let(::File)
+      ?: getSettingsFile().parentFile
+  }
+
+  private fun derivedLogsDirectory(appDataDir: File): String {
+    val root = appDataDir.canonicalFile.parentFile ?: appDataDir.canonicalFile
+    return File(root, "logs").canonicalPath
+  }
+
+  private fun derivedTrailsDirectory(appDataDir: File): String {
+    val root = appDataDir.canonicalFile.parentFile ?: appDataDir.canonicalFile
+    return File(root, "trails").canonicalPath
   }
   
   /**

@@ -30,4 +30,10 @@ class DesktopAppRunYamlParams(
   val composeRpcPort: Int = TrailblazeDevicePort.COMPOSE_DEFAULT_RPC_PORT,
   /** When true, uses a no-op logger so no session files are written to disk. */
   val noLogging: Boolean = false,
+  /** Override capture video setting (null = use app config default). */
+  val captureVideo: Boolean? = null,
+  /** Override capture Android logcat setting (null = use app config default). */
+  val captureLogcat: Boolean? = null,
+  /** Override capture iOS Simulator system logs setting (null = use app config default). */
+  val captureIosLogs: Boolean? = null,
 )

@@ -1,7 +1,7 @@
 package xyz.block.trailblaze.api
 
 // ---------------------------------------------------------------------------
-// Android Accessibility strategies (21 strategies, most → least precise)
+// Android Accessibility strategies (22 strategies, most → least precise)
 // ---------------------------------------------------------------------------
 
 internal fun androidAccessibilityStrategies(
@@ -13,11 +13,17 @@ internal fun androidAccessibilityStrategies(
   // === Identity strategies ===
 
   // Strategy 1: Unique stable ID (most reliable)
-  "Unique ID / Resource ID" to {
+  // Tier order: developer-assigned IDs in their stability order. uniqueId (API 33+) is the most
+  // stable identity Android offers; resourceId is the long-time standard; composeTestTag picks up
+  // Compose `Modifier.testTag(...)` on apps that did NOT opt into testTagsAsResourceId (the
+  // opt-in already surfaces testTag as resourceId, so it's caught by the second clause).
+  "Unique ID / Resource ID / Compose testTag" to {
     detail.uniqueId?.let { uid ->
       selectorWith(DriverNodeMatch.AndroidAccessibility(uniqueId = uid))
     } ?: detail.resourceId?.let { rid ->
       selectorWith(DriverNodeMatch.AndroidAccessibility(resourceIdRegex = escapeForSelector(rid)))
+    } ?: detail.composeTestTag?.let { tt ->
+      selectorWith(DriverNodeMatch.AndroidAccessibility(composeTestTagRegex = escapeForSelector(tt)))
     }
   },
 
@@ -224,13 +230,31 @@ internal fun androidAccessibilityStrategies(
       null
     }
   },
+  // Strategy 17: roleDescription + className (semantic role overrides like "Toggle" / "Tab" /
+  // "Star Rating"). roleDescription is developer-assigned and stable; pairing with className
+  // narrows it to the same widget instance type so two distinct elements with the same role on
+  // one screen don't collide.
+  "Role description + class" to {
+    val role = detail.roleDescription?.takeIf { it.isNotBlank() }
+    val className = detail.className
+    if (role != null && className != null) {
+      selectorWith(
+        DriverNodeMatch.AndroidAccessibility(
+          roleDescriptionRegex = escapeForSelector(role),
+          classNameRegex = escapeForSelector(className),
+        ),
+      )
+    } else {
+      null
+    }
+  },
 
   // === Hierarchy strategies ===
 
-  // Strategies 17-18: target + childOf / containsChild — shared with other generators.
+  // Strategies 18-19: target + childOf / containsChild — shared with other generators.
   childOfUniqueParentStrategy(root, target, detail, parentMap),
   containsUniqueChildStrategy(root, target, detail),
-  // Strategy 19: collectionItemInfo (semantic list/grid position) — AndroidAccessibility-specific.
+  // Strategy 20: collectionItemInfo (semantic list/grid position) — AndroidAccessibility-specific.
   "Collection item info" to {
     detail.collectionItemInfo?.let { ci ->
       val targetMatch = buildTargetMatch(detail)?.let { m ->
@@ -244,7 +268,7 @@ internal fun androidAccessibilityStrategies(
   },
 
   // === Spatial + index ===
-  // Strategies 20-21: spatial neighbor, then global index fallback — shared.
+  // Strategies 21-22: spatial neighbor, then global index fallback — shared.
   spatialStrategy(root, target, parentMap),
   indexFallbackStrategy(root, target, detail),
 )
@@ -259,12 +283,14 @@ internal fun namedStructuralAndroidAccessibilityStrategies(
   detail: DriverNodeDetail.AndroidAccessibility,
   parentMap: Map<Long, TrailblazeNode>,
 ): List<Pair<String, () -> TrailblazeNodeSelector?>> = listOf(
-  // 1: Unique ID or resource ID (most stable — developer-assigned identifiers)
+  // 1: Unique ID or resource ID or Compose testTag (most stable — developer-assigned identifiers)
   "Structural: unique ID" to {
     detail.uniqueId?.let { uid ->
       selectorWith(DriverNodeMatch.AndroidAccessibility(uniqueId = uid))
     } ?: detail.resourceId?.let { rid ->
       selectorWith(DriverNodeMatch.AndroidAccessibility(resourceIdRegex = escapeForSelector(rid)))
+    } ?: detail.composeTestTag?.let { tt ->
+      selectorWith(DriverNodeMatch.AndroidAccessibility(composeTestTagRegex = escapeForSelector(tt)))
     }
   },
   // 2: className alone (works for singleton widgets: SeekBar, ProgressBar, etc.)

@@ -2,6 +2,9 @@ package xyz.block.trailblaze.config
 
 import com.charleskorn.kaml.Yaml
 import com.charleskorn.kaml.YamlConfiguration
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -19,12 +22,12 @@ class AppTargetYamlConfigTest {
     val config = yaml.decodeFromString(
       AppTargetYamlConfig.serializer(),
       """
-      id: none
-      display_name: None
+      id: default
+      display_name: Default
       """.trimIndent(),
     )
-    assertEquals("none", config.id)
-    assertEquals("None", config.displayName)
+    assertEquals("default", config.id)
+    assertEquals("Default", config.displayName)
     assertNull(config.platforms)
     assertFalse(config.hasCustomIosDriver)
   }
@@ -205,6 +208,50 @@ class AppTargetYamlConfigTest {
       """.trimIndent(),
     )
     assertNull(config.mcpServers)
+  }
+
+  @Test
+  fun `parses root level inline script tools`() {
+    val config = yaml.decodeFromString(
+      AppTargetYamlConfig.serializer(),
+      """
+      id: sample
+      display_name: Sample App
+      tools:
+        - script: ./tools/greet_user.js
+          name: greetUser
+          description: Greets a user.
+          _meta:
+            trailblaze/supportedPlatforms:
+              - WEB
+            trailblaze/toolset: web_core
+          inputSchema:
+            type: object
+            properties:
+              customerId:
+                type: string
+            required:
+              - customerId
+      """.trimIndent(),
+    )
+
+    val tool = config.tools!!.single()
+    assertEquals("./tools/greet_user.js", tool.script)
+    assertEquals("greetUser", tool.name)
+    assertEquals("Greets a user.", tool.description)
+    val meta = tool.meta!!
+    assertEquals(
+      "web_core",
+      meta["trailblaze/toolset"]?.jsonPrimitive?.content,
+    )
+    assertEquals(
+      "WEB",
+      meta["trailblaze/supportedPlatforms"]!!.jsonArray.single().jsonPrimitive.content,
+    )
+    val schema = tool.inputSchema
+    assertEquals("object", schema["type"]?.jsonPrimitive?.content)
+    val properties = schema["properties"]!!.jsonObject
+    assertEquals("string", properties["customerId"]!!.jsonObject["type"]?.jsonPrimitive?.content)
   }
 
   @Test

@@ -4,6 +4,7 @@ import picocli.CommandLine
 import picocli.CommandLine.Command
 import picocli.CommandLine.Option
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
+import xyz.block.trailblaze.ui.TrailblazeDesktopUtil
 import xyz.block.trailblaze.ui.TrailblazePortManager
 import xyz.block.trailblaze.util.Console
 import java.util.concurrent.Callable
@@ -86,7 +87,17 @@ open class AppCommand : Callable<Int> {
         return@use parent.launchDesktop(headless)
       }
 
+      // Route the child's stdout/stderr to ~/.trailblaze/daemon.log instead of
+      // discarding. The daemon runs detached so we can't wait on its pipes, and
+      // without a log file the parent has no way to surface startup failures —
+      // `waitForDaemon` just times out with zero context. Appended so repeated
+      // launches in a CI agent retain history. Path centralized in
+      // TrailblazeDesktopUtil to keep daemon, MCP proxy, and tooling agreeing
+      // on a single canonical location.
+      val daemonLogFile = TrailblazeDesktopUtil.getDaemonLogFile()
+
       Console.log("Starting Trailblaze${if (headless) " daemon" else ""}...")
+      Console.log("Daemon log: ${daemonLogFile.absolutePath}")
       try {
         val command = mutableListOf(launcher.absolutePath, "app", "--foreground")
         if (headless) command.add("--headless")
@@ -95,8 +106,8 @@ open class AppCommand : Callable<Int> {
         if (port != TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTP_PORT) {
           pb.environment()[TrailblazePortManager.HTTP_PORT_ENV_VAR] = port.toString()
         }
-        pb.redirectOutput(ProcessBuilder.Redirect.DISCARD)
-        pb.redirectError(ProcessBuilder.Redirect.DISCARD)
+        pb.redirectOutput(ProcessBuilder.Redirect.appendTo(daemonLogFile))
+        pb.redirectError(ProcessBuilder.Redirect.appendTo(daemonLogFile))
         pb.start()
       } catch (e: Exception) {
         Console.error("Failed to start: ${e.message}")
@@ -111,12 +122,13 @@ open class AppCommand : Callable<Int> {
         Console.log("Trailblaze${if (headless) " daemon" else ""} started on port $port.")
       } else {
         // Re-check: another process may have raced us and already started the daemon,
-        // but our spawn failed silently (output is discarded). If the daemon is now
-        // running, treat it as success rather than reporting a confusing error.
+        // but our spawn failed silently. If the daemon is now running, treat it as
+        // success rather than reporting a confusing error.
         if (daemon.isRunningBlocking()) {
           Console.log("Trailblaze${if (headless) " daemon" else ""} started on port $port.")
         } else {
           Console.error("Trailblaze did not start within 30s. If a source build is in progress it may need more time.")
+          Console.error("Daemon log: ${daemonLogFile.absolutePath}")
           Console.error("Run with --foreground to see startup output directly.")
           return@use CommandLine.ExitCode.SOFTWARE
         }

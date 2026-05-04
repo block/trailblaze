@@ -284,6 +284,17 @@ abstract class ViewHierarchyFilter(
       TrailblazeDevicePlatform.ANDROID -> AndroidViewHierarchyFilter(screenWidth, screenHeight)
       TrailblazeDevicePlatform.IOS -> IosViewHierarchyFilter(screenWidth, screenHeight)
       TrailblazeDevicePlatform.WEB -> WebViewHierarchyFilter(screenWidth, screenHeight)
+      // [ViewHierarchyFilter] is the Maestro-era, [ViewHierarchyTreeNode]-based filter
+      // used by Android / iOS / Web drivers. The Compose desktop driver never produces
+      // a [ViewHierarchyTreeNode] — it works on [TrailblazeNode] directly via
+      // [TrailblazeNodeSelectorResolver] — so this factory should never be called with
+      // [TrailblazeDevicePlatform.DESKTOP]. Throwing surfaces unexpected callers at the
+      // boundary instead of silently returning a misleading filter for another platform.
+      TrailblazeDevicePlatform.DESKTOP ->
+        error(
+          "ViewHierarchyFilter is not used for the Compose desktop driver; " +
+            "the desktop driver uses TrailblazeNode + TrailblazeNodeSelectorResolver natively.",
+        )
     }
 
     /**

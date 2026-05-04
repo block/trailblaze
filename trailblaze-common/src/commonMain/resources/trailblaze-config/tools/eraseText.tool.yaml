@@ -1,0 +1,21 @@
+id: eraseText
+description: |
+  Erases characters from the currently focused text field.
+  - Pass the number of characters you want to erase based on the text currently visible
+    in the field (count from the view hierarchy). Pass a large number (e.g. 500) to erase
+    all text when you cannot determine the exact count.
+  - Omit charactersToErase entirely to erase all text in the field.
+  - Use this BEFORE inputText when you need to replace existing text in a field
+    (e.g. a search bar or form field that already has content).
+parameters:
+  - name: charactersToErase
+    type: integer
+    required: false
+    description: >
+      Number of characters to erase from the end. Estimate from the field's current
+      text in the view hierarchy. Omit to erase all text in the field.
+tools:
+  - maestro:
+      commands:
+        - eraseText:
+            charactersToErase: "{{params.charactersToErase}}"

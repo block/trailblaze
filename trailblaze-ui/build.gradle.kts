@@ -85,11 +85,15 @@ kotlin {
     jvmMain.dependencies {
       implementation(project(":trailblaze-models"))
       implementation(project(":trailblaze-common"))
+      implementation(project(":trailblaze-capture"))
       implementation(project(":trailblaze-server"))
       implementation(project(":trailblaze-report"))
       implementation(libs.ktor.server.core)
       implementation(libs.compose.ui.tooling)
       implementation(libs.compose.ui.tooling.preview)
+    }
+    jvmTest.dependencies {
+      implementation(kotlin("test"))
     }
   }
 }

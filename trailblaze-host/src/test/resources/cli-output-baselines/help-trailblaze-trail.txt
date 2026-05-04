@@ -1,0 +1,72 @@
+# This file is a CHECKED-IN baseline of CLI output rendered by trailblaze-host's CLI helpers.
+# It is NOT a contract — if a test fails here because output drifted, decide whether the
+# drift is intentional. The test always (re)writes this file from the current rendered output,
+# then asserts the working tree is clean. So `git diff` of this file IS the failure message.
+# Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
+# small wording / spacing changes can be intentional or accidental.
+# ----------------------------------------------------------------------
+Usage: trailblaze trail [-hvV] [--capture-all] [--capture-logcat]
+                        [--capture-network] [--[no-]capture-video] [--[no-]
+                        headless] [--markdown] [--no-daemon] [--no-logging]
+                        [--no-record] [--no-report] [--self-heal]
+                        [--use-recorded-steps] [-a=<agent>]
+                        [--compose-port=<composePort>] [-d=<device>]
+                        [--driver=<driverType>] [--llm=<llm>]
+                        [--llm-model=<llmModel>] [--llm-provider=<llmProvider>]
+                        <trailFile>...
+Run a trail file (.trail.yaml) — execute a scripted test on a device
+      <trailFile>...         One or more trail files (.trail.yaml or blaze.
+                               yaml). Use your shell's glob to run a batch (e.
+                               g., flows/**/*.trail.yaml).
+  -a, --agent=<agent>        Agent: TRAILBLAZE_RUNNER, MULTI_AGENT_V3. Default:
+                               TRAILBLAZE_RUNNER
+      --capture-all          Enable all capture streams: video, logcat, network
+                               (local dev mode)
+      --capture-logcat       Capture logcat output filtered to the app under
+                               test (local dev mode)
+      --capture-network      Auto-capture network requests/responses to
+                               <session-dir>/network.ndjson on supported
+                               devices (web today; mobile devices added as
+                               engines land). Mirrors the desktop-app "Capture
+                               Network Traffic" toggle.
+      --[no-]capture-video   Record device screen video for the session (on by
+                               default, use --no-capture-video to disable)
+      --compose-port=<composePort>
+                             RPC port for Compose driver connections (default:
+                               52600)
+  -d, --device=<device>      Device: platform (android, ios, web),
+                               platform/instance-id, or instance ID
+      --driver=<driverType>  Driver type to use (e.g., PLAYWRIGHT_NATIVE,
+                               ANDROID_ONDEVICE_INSTRUMENTATION). Overrides
+                               driver from trail config.
+  -h, --help                 Show this help message and exit.
+      --[no-]headless        Launch the Playwright browser headless (default
+                               true). Pass --no-headless or --headless=false to
+                               surface a visible window. Equivalent to
+                               --show-browser when negated.
+      --llm=<llm>            LLM provider/model shorthand (e.g.,
+                               openai/gpt-4-1). Mutually exclusive with
+                               --llm-provider and --llm-model.
+      --llm-model=<llmModel> LLM model ID override (e.g., gemini-3-flash,
+                               gpt-4-1)
+      --llm-provider=<llmProvider>
+                             LLM provider override (e.g., openai, anthropic,
+                               google)
+      --markdown             Generate a markdown report after execution
+      --no-daemon            Run in-process without delegating to or starting a
+                               persistent daemon. The server shuts down when
+                               the run completes.
+      --no-logging           Disable session logging — no files written to
+                               logs/, session does not appear in Sessions tab
+      --no-record            Skip saving the recording back to the trail source
+                               directory
+      --no-report            Skip HTML report generation after execution
+      --self-heal            When a recorded step fails, let AI take over and
+                               continue. Overrides the persisted 'trailblaze
+                               config self-heal' setting for this run. Omit to
+                               inherit the saved setting (opt-in, off by
+                               default).
+      --use-recorded-steps   Use recorded tool sequences instead of LLM
+                               inference
+  -v, --verbose              Enable verbose output
+  -V, --version              Print version information and exit.

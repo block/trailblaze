@@ -10,11 +10,11 @@ import xyz.block.trailblaze.utils.ElementComparator
 import xyz.block.trailblaze.util.Console
 
 @Serializable
-@TrailblazeToolClass("assertWithAi")
+@TrailblazeToolClass("assertWithAi", isVerification = true)
 @LLMDescription(
   """
-This tool will interpolate the natural language prompt with any included variables, then use that
-interpolated prompt to verify the current state of the screen using AI.
+Interpolate the natural-language prompt with any included variables, then use the result to verify
+the current state of the screen with AI.
       """,
 )
 data class AssertWithAiTrailblazeTool(

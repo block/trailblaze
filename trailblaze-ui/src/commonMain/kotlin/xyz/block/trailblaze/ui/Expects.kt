@@ -32,3 +32,14 @@ expect fun resolveImageModel(sessionId: String, screenshotFile: String?, imageLo
 expect fun openVideoInSystemPlayer(filePath: String)
 
 expect suspend fun loadCaptureVideoMetadata(sessionId: String): VideoMetadata?
+
+/** Loads raw device log content (logcat / iOS log stream) for a session, or null if unavailable. */
+expect suspend fun loadDeviceLogs(sessionId: String): String?
+
+/**
+ * Loads the raw NDJSON content of `<session-dir>/network.ndjson` for a session, or null when no
+ * capture file exists (e.g. capture never ran or the session has no traffic). One line per
+ * [xyz.block.trailblaze.network.NetworkEvent]. Source-agnostic — web and on-device mobile captures
+ * write to the same path with the same schema.
+ */
+expect suspend fun loadNetworkLogs(sessionId: String): String?

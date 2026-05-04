@@ -69,7 +69,7 @@ class McpRealDeviceIntegrationTest : TrailblazeServerTestBase() {
    *   1. Writes a terminal SessionStatus.Ended.Succeeded log so the Trailblaze report
    *      shows PASSED instead of ERROR/TIMEOUT.
    *   2. Releases the device claim so the next test can connect without hitting
-   *      DeviceAlreadyClaimedException.
+   *      DeviceBusyException.
    *
    * This @After runs before TrailblazeServerTestBase.baseTearDown (JUnit 4 runs subclass
    * @After methods first), so the session is properly closed before client.close().
@@ -81,7 +81,7 @@ class McpRealDeviceIntegrationTest : TrailblazeServerTestBase() {
         client.callTool("endSession", emptyMap())
         // Give the server time to release the device claim before the next test's
         // baseSetUp creates a new session. Without this, the new session's auto-connect
-        // races with the old session's cleanup, causing DeviceAlreadyClaimedException.
+        // races with the old session's cleanup, causing DeviceBusyException.
         delay(1_000)
       } catch (_: Exception) {
         // Non-fatal — base teardown will still close the client

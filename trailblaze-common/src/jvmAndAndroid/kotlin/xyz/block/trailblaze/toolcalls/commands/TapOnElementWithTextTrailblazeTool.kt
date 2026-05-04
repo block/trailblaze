@@ -11,7 +11,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeTools.REQUIRED_TEXT_DESCRIPTION
 
 @Serializable
-@TrailblazeToolClass("tapOnElementWithText")
+@TrailblazeToolClass("tapOnElementWithText", isForLlm = false)
 @LLMDescription(
   """
 Invoking this function will trigger a tap/click on an element containing the provided text. 

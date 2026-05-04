@@ -11,6 +11,7 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Test
+import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.agent.TrailblazeProgressEvent
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
@@ -75,7 +76,7 @@ class RunYamlRequestHandlerTest {
   @Test
   fun `sync success returns response with success=true`() = runTest {
     val handler = createHandler(
-      runTrailblazeYaml = { _, session -> session },
+      runTrailblazeYaml = { _, session, _ -> session },
     )
 
     val result = handler.handle(testRequest.copy(awaitCompletion = true))
@@ -86,6 +87,42 @@ class RunYamlRequestHandlerTest {
   }
 
   /**
+   * Bidirectional memory sync — the handler creates one [AgentMemory] per request,
+   * populates it from `request.memorySnapshot` BEFORE the callback runs (so on-device
+   * tools can read host-written keys), passes it through to the callback, and then puts
+   * the post-execution map into `response.memorySnapshot`. The callback in this test
+   * acts like an on-device tool that both reads a host-written key AND writes its own.
+   */
+  @Test
+  fun `request memorySnapshot is forwarded to callback and post-execution memory comes back in response`() = runTest {
+    val seen = mutableMapOf<String, String>()
+    val handler = createHandler(
+      runTrailblazeYaml = { _, session, agentMemory ->
+        // Capture what the on-device side sees as the host's memory at dispatch time.
+        seen.putAll(agentMemory.variables)
+        // Simulate an on-device tool writing back to memory.
+        agentMemory.remember("device_wrote", "from-device")
+        session
+      },
+    )
+
+    val result = handler.handle(
+      testRequest.copy(
+        awaitCompletion = true,
+        memorySnapshot = mapOf("host_wrote" to "from-host"),
+      ),
+    )
+
+    assertTrue(result is RpcResult.Success, "Expected RpcResult.Success, got $result")
+    // Inbound: callback saw the host's snapshot.
+    assertEquals("from-host", seen["host_wrote"])
+    // Outbound: response carries both keys (host-seeded + device-written).
+    val responseSnapshot = result.data.memorySnapshot
+    assertEquals("from-host", responseSnapshot["host_wrote"])
+    assertEquals("from-device", responseSnapshot["device_wrote"])
+  }
+
+  /**
    * Sync dispatch where the callback throws a non-cancellation exception → response carries
    * `success = false` with the exception's message in `errorMessage`. Pins the contract
    * that the host client reads off the response.
@@ -93,7 +130,7 @@ class RunYamlRequestHandlerTest {
   @Test
   fun `sync failure surfaces errorMessage from the thrown exception`() = runTest {
     val handler = createHandler(
-      runTrailblazeYaml = { _, _ -> throw RuntimeException("widget not found") },
+      runTrailblazeYaml = { _, _, _ -> throw RuntimeException("widget not found") },
     )
 
     val result = handler.handle(testRequest.copy(awaitCompletion = true))
@@ -119,7 +156,7 @@ class RunYamlRequestHandlerTest {
       val progressManager = ProgressSessionManager()
       val hungCallbackReleased = CompletableDeferred<Unit>()
       val handler = createHandler(
-        runTrailblazeYaml = { _, _ ->
+        runTrailblazeYaml = { _, _, _ ->
           // Hang in a cancellable way so the handler-side timeout is what ends it.
           try {
             awaitCancellation()
@@ -164,14 +201,15 @@ class RunYamlRequestHandlerTest {
 
   /**
    * Fire-and-forget dispatch (`awaitCompletion = false`): handler must return immediately
-   * with `success = null` (the fire-and-forget sentinel), letting the caller fall back to
-   * progress-event subscription. The background job keeps running on its own.
+   * with `success = null` (the fire-and-forget sentinel) and an empty `memorySnapshot`
+   * (memory sync requires a round-trip; fire-and-forget has no completion event to attach
+   * post-execution memory to). The background job keeps running on its own.
    */
   @Test
-  fun `fire-and-forget dispatch returns immediately with null success`() = runTest {
+  fun `fire-and-forget dispatch returns immediately with null success and empty memory`() = runTest {
     val callbackStarted = CompletableDeferred<Unit>()
     val handler = createHandler(
-      runTrailblazeYaml = { _, _ ->
+      runTrailblazeYaml = { _, _, _ ->
         callbackStarted.complete(Unit)
         awaitCancellation()
       },
@@ -180,10 +218,9 @@ class RunYamlRequestHandlerTest {
     val result = handler.handle(testRequest.copy(awaitCompletion = false))
 
     assertTrue(result is RpcResult.Success, "Expected RpcResult.Success, got $result")
-    // Null success — the wire contract for async-kickoff callers that read via progress
-    // events instead of the inline response.
     assertNull(result.data.success)
     assertNull(result.data.errorMessage)
+    assertTrue(result.data.memorySnapshot.isEmpty(), "Fire-and-forget must not carry memory")
 
     // Let the background job tick forward; confirm it did start (it would run indefinitely
     // in production until cancelled — the test scope will cancel it at the end of runTest).
@@ -191,11 +228,155 @@ class RunYamlRequestHandlerTest {
     assertTrue(callbackStarted.isCompleted, "Background job never started")
   }
 
+  /**
+   * Wire-contract enforcement: combining `awaitCompletion = false` with a non-empty
+   * `memorySnapshot` is structurally invalid — memory sync requires a round-trip and
+   * fire-and-forget has no completion event. The init-block `require` rejects this at
+   * construction so the contract is impossible to violate from any caller.
+   */
+  @Test
+  fun `RunYamlRequest rejects fire-and-forget plus non-empty memory at construction`() {
+    val ex = kotlin.runCatching {
+      testRequest.copy(awaitCompletion = false, memorySnapshot = mapOf("k" to "v"))
+    }.exceptionOrNull()
+    assertNotNull(ex, "Expected IllegalArgumentException, got no throw")
+    assertTrue(
+      ex is IllegalArgumentException,
+      "Expected IllegalArgumentException, got ${ex::class.simpleName}",
+    )
+  }
+
+  /**
+   * Wire-contract enforcement on the response side: a fire-and-forget response
+   * (`success = null`) must not carry a memorySnapshot. Mirrors the request-side require
+   * so neither end can produce a wire payload that violates the round-trip contract.
+   */
+  @Test
+  fun `RunYamlResponse rejects fire-and-forget plus non-empty memory at construction`() {
+    val ex = kotlin.runCatching {
+      xyz.block.trailblaze.llm.RunYamlResponse(
+        sessionId = xyz.block.trailblaze.logs.model.SessionId("s"),
+        success = null,
+        memorySnapshot = mapOf("k" to "v"),
+      )
+    }.exceptionOrNull()
+    assertNotNull(ex, "Expected IllegalArgumentException, got no throw")
+    assertTrue(
+      ex is IllegalArgumentException,
+      "Expected IllegalArgumentException, got ${ex::class.simpleName}",
+    )
+  }
+
+  /**
+   * The init-block requires are load-bearing at the JSON wire boundary, not just for
+   * Kotlin construction. kotlinx.serialization's generated decoder must invoke the init
+   * block after populating fields so a malformed external payload throws at parse time.
+   * This test exercises that path directly so a future serialization-config change that
+   * bypasses init blocks (e.g. switching to a custom serializer) trips immediately.
+   */
+  @Test
+  fun `RunYamlRequest deserialization rejects fire-and-forget plus non-empty memory`() {
+    val malformedRequestJson = """
+      {
+        "testName": "x",
+        "yaml": "",
+        "trailFilePath": null,
+        "targetAppName": null,
+        "useRecordedSteps": false,
+        "trailblazeDeviceId": {"instanceId":"d","trailblazeDevicePlatform":"ANDROID"},
+        "trailblazeLlmModel": {
+          "trailblazeLlmProvider": {"id":"p","display":"P"},
+          "modelId": "m",
+          "inputCostPerOneMillionTokens": 0.0,
+          "outputCostPerOneMillionTokens": 0.0,
+          "contextLength": 1000,
+          "maxOutputTokens": 1000,
+          "capabilityIds": []
+        },
+        "config": {},
+        "referrer": {"id":"r","display":"R"},
+        "awaitCompletion": false,
+        "memorySnapshot": {"k":"v"}
+      }
+    """.trimIndent()
+    val parser = kotlinx.serialization.json.Json { ignoreUnknownKeys = true; isLenient = true }
+    val ex = kotlin.runCatching {
+      parser.decodeFromString(xyz.block.trailblaze.llm.RunYamlRequest.serializer(), malformedRequestJson)
+    }.exceptionOrNull()
+    assertNotNull(ex, "Expected deserialization to throw, got no throw")
+    assertTrue(
+      ex.findIllegalArgumentInChain() != null,
+      "Expected IllegalArgumentException somewhere in the cause chain, got " +
+        "${ex::class.simpleName}: ${ex.message}",
+    )
+  }
+
+  @Test
+  fun `RunYamlResponse deserialization rejects fire-and-forget plus non-empty memory`() {
+    val malformedResponseJson =
+      """{"sessionId":"s","success":null,"memorySnapshot":{"k":"v"}}"""
+    val parser = kotlinx.serialization.json.Json { ignoreUnknownKeys = true; isLenient = true }
+    val ex = kotlin.runCatching {
+      parser.decodeFromString(xyz.block.trailblaze.llm.RunYamlResponse.serializer(), malformedResponseJson)
+    }.exceptionOrNull()
+    assertNotNull(ex, "Expected deserialization to throw, got no throw")
+    assertTrue(
+      ex.findIllegalArgumentInChain() != null,
+      "Expected IllegalArgumentException somewhere in the cause chain, got " +
+        "${ex::class.simpleName}: ${ex.message}",
+    )
+  }
+
+  /**
+   * kotlinx.serialization may wrap the init-block `IllegalArgumentException` in a
+   * `SerializationException`. Walk the cause chain so the test pins the underlying
+   * contract violation rather than the wrapping behavior.
+   */
+  private fun Throwable.findIllegalArgumentInChain(): IllegalArgumentException? {
+    var cur: Throwable? = this
+    while (cur != null) {
+      if (cur is IllegalArgumentException) return cur
+      cur = cur.cause
+    }
+    return null
+  }
+
+  /**
+   * Pin the invocation count of `waitForSettled` — the handler must call it EXACTLY ONCE
+   * per handled request (pre-dispatch only). The post-dispatch settle was dropped
+   * intentionally in the parent PR of this test's companion comment. If a future change
+   * reintroduces a second settle, this catches it immediately without waiting for a
+   * real-device benchmark regression to surface.
+   */
+  @Test
+  fun `waitForSettled fires exactly once per handled sync request`() = runTest {
+    // AtomicInteger because the handler invokes `waitForSettled` from inside the
+    // background-scope coroutine that runs the launched job. Under StandardTestDispatcher +
+    // a single testScheduler this is serialized in practice, but using an atomic keeps the
+    // test correct if the dispatcher or scheduling ever changes.
+    val settleCount = java.util.concurrent.atomic.AtomicInteger(0)
+    val handler = createHandler(
+      runTrailblazeYaml = { _, session, _ -> session },
+      waitForSettled = { settleCount.incrementAndGet() },
+    )
+
+    handler.handle(testRequest.copy(awaitCompletion = true))
+
+    assertEquals(
+      1,
+      settleCount.get(),
+      "Expected exactly one waitForSettled call (pre-dispatch). " +
+        "A count of 2 means the post-dispatch settle was re-introduced; " +
+        "a count of 0 means the pre-dispatch crash-prevention settle was lost.",
+    )
+  }
+
   // ── test infrastructure ──────────────────────────────────────────────────
 
   private fun TestScope.createHandler(
-    runTrailblazeYaml: suspend (RunYamlRequest, TrailblazeSession) -> TrailblazeSession,
+    runTrailblazeYaml: suspend (RunYamlRequest, TrailblazeSession, AgentMemory) -> TrailblazeSession,
     progressManager: ProgressSessionManager? = null,
+    waitForSettled: suspend () -> Unit = { /* no-op */ },
   ): RunYamlRequestHandler {
     // StandardTestDispatcher lets the test control when the launched block runs, which is
     // what makes the virtual-time advanceTimeBy in the timeout test actually trigger the
@@ -219,7 +400,7 @@ class RunYamlRequestHandlerTest {
       progressManager = progressManager,
       // Swap the Android `TrailblazeAccessibilityService.waitForSettled` call — loading that
       // class requires the Android framework which isn't on the JVM test classpath.
-      waitForSettled = { /* no-op */ },
+      waitForSettled = waitForSettled,
     )
   }
 

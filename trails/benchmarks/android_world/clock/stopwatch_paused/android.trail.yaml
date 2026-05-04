@@ -31,4 +31,4 @@
 # --- Benchmark Run History ---
 # [2026-03-11] FAILED - Agent limitation: ObjectiveFailed. Agent couldn't
 #   pause the stopwatch. May have failed to find or tap the pause button.
-# [2026-03-11] Build #27 FAILED - Agent limitation: ObjectiveFailed. Same as build #24.
+# [2026-03-11] FAILED - Agent limitation: ObjectiveFailed. Same as a prior run.

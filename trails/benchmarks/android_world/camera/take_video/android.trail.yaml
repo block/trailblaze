@@ -23,6 +23,6 @@
 # [2026-03-11] FAILED - Assertion: /sdcard/Movies was empty after video recording.
 #   Agent may have recorded but file saved to /sdcard/DCIM/ instead.
 #   FIX: Broadened validation to check both /sdcard/Movies/ and /sdcard/DCIM/.
-# [2026-03-11] Build #27 FAILED - Agent limitation: Both /sdcard/Movies/ and /sdcard/DCIM/ empty.
+# [2026-03-11] FAILED - Agent limitation: Both /sdcard/Movies/ and /sdcard/DCIM/ empty.
 #   Agent didn't actually record/save a video. Broadened path check
 #   confirms this is a genuine agent failure, not a validation issue.

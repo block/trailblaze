@@ -1,6 +1,10 @@
 package xyz.block.trailblaze.config
 
+import kotlinx.serialization.json.Json
 import org.junit.Test
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.toolcalls.commands.SwipeTrailblazeTool
@@ -18,13 +22,13 @@ class YamlBackedHostAppTargetTest {
   fun `minimal app target with no tools or app ids`() {
     val target = AppTargetYamlLoader.loadFromYaml(
       """
-      id: none
-      display_name: None
+      id: default
+      display_name: Default
       """.trimIndent(),
       toolNameResolver = resolver,
     )
-    assertEquals("none", target.id)
-    assertEquals("None", target.displayName)
+    assertEquals("default", target.id)
+    assertEquals("Default", target.displayName)
     assertNull(target.getPossibleAppIdsForPlatform(TrailblazeDevicePlatform.ANDROID))
     assertTrue(target.getCustomToolsForDriver(TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION).isEmpty())
     assertFalse(target.hasCustomIosDriver)
@@ -90,6 +94,35 @@ class YamlBackedHostAppTargetTest {
 
     assertTrue(target.getExcludedToolsForDriver(TrailblazeDriverType.IOS_HOST).contains(SwipeTrailblazeTool::class))
     assertTrue(target.getExcludedToolsForDriver(TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION).isEmpty())
+  }
+
+  @Test
+  fun `excluded YAML-defined tools route to the YAML exclusion bucket`() {
+    // Mirrors the inclusion side: a target YAML can list a YAML-defined tool name
+    // (e.g. `pressBack`) under `excluded_tools` and the resolver classifies it into
+    // the YAML-name bucket instead of throwing it away as an unknown class.
+    val target = AppTargetYamlLoader.loadFromYaml(
+      """
+      id: test
+      display_name: Test
+      platforms:
+        android:
+          excluded_tools: [pressBack, swipe]
+      """.trimIndent(),
+      toolNameResolver = resolver,
+    )
+
+    val androidDriver = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION
+    assertTrue(
+      target.getExcludedToolsForDriver(androidDriver).contains(SwipeTrailblazeTool::class),
+      "Class-backed swipe should still land in the class exclusion bucket",
+    )
+    assertTrue(
+      target.getExcludedYamlToolNamesForDriver(androidDriver)
+        .any { it.toolName == "pressBack" },
+      "YAML-defined pressBack should land in the YAML exclusion bucket. Got: ${target.getExcludedYamlToolNamesForDriver(androidDriver)}",
+    )
+    assertTrue(target.getExcludedYamlToolNamesForDriver(TrailblazeDriverType.IOS_HOST).isEmpty())
   }
 
   @Test
@@ -166,5 +199,43 @@ class YamlBackedHostAppTargetTest {
     assertTrue(target.getCustomToolsForDriver(TrailblazeDriverType.PLAYWRIGHT_NATIVE).contains(TapTrailblazeTool::class))
     // playwright-electron not included because drivers narrowed to playwright-native only
     assertTrue(target.getCustomToolsForDriver(TrailblazeDriverType.PLAYWRIGHT_ELECTRON).isEmpty())
+  }
+
+  @Test
+  fun `root level inline script tools are exposed separately from platform tools`() {
+    val target = AppTargetYamlLoader.loadFromYaml(
+      """
+      id: test
+      display_name: Test
+      tools:
+        - script: ./tools/greet_user.js
+          name: greetUser
+          description: Greets the current user.
+          _meta:
+            trailblaze/supportedPlatforms: [WEB]
+      platforms:
+        android:
+          tools: [tap]
+      """.trimIndent(),
+      toolNameResolver = resolver,
+    )
+
+    assertEquals(
+      listOf(
+        InlineScriptToolConfig(
+          script = "./tools/greet_user.js",
+          name = "greetUser",
+          description = "Greets the current user.",
+          meta = buildJsonObject {
+            put(
+              "trailblaze/supportedPlatforms",
+              Json.parseToJsonElement("""["WEB"]"""),
+            )
+          },
+        ),
+      ),
+      target.getInlineScriptTools(),
+    )
+    assertTrue(target.getCustomToolsForDriver(TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION).contains(TapTrailblazeTool::class))
   }
 }

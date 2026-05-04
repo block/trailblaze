@@ -1,7 +1,11 @@
 package xyz.block.trailblaze.mcp.agent
 
+import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import org.junit.Test
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
+import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.mcp.agent.BridgeUiActionExecutor.Companion.ELEMENT_TYPE_BUTTON
 import xyz.block.trailblaze.mcp.agent.BridgeUiActionExecutor.Companion.ELEMENT_TYPE_CHECKBOX
 import xyz.block.trailblaze.mcp.agent.BridgeUiActionExecutor.Companion.ELEMENT_TYPE_ICON
@@ -13,6 +17,7 @@ import xyz.block.trailblaze.mcp.agent.BridgeUiActionExecutor.Companion.ELEMENT_T
 import xyz.block.trailblaze.mcp.executor.ConfigurableMockBridge
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /**
  * Unit tests for [BridgeUiActionExecutor.inferElementTypeFromVh] and
@@ -245,5 +250,28 @@ class BridgeUiActionExecutorTest {
     )
     val result = executor.stripSystemUiSubtrees(root)
     assertEquals(1, result.children.size)
+  }
+
+  // ---------------------------------------------------------------------------
+  // mapToTrailblazeTool — no-repo fallback (regression for #2634 lead-dev review)
+  // ---------------------------------------------------------------------------
+
+  @Test
+  fun `mapToTrailblazeTool wraps as OtherTrailblazeTool when no repo configured`() {
+    // Pins the no-repo fallback path. With neither `dynamicToolRepoProvider` nor
+    // `trailblazeToolRepo` wired, the executor must wrap the args verbatim so the bridge
+    // can still forward to the device — without this, a callsite that legitimately doesn't
+    // need a repo would hard-fail on every tool dispatch.
+    val executorWithoutRepo = BridgeUiActionExecutor(mcpBridge = ConfigurableMockBridge())
+    val args = buildJsonObject { put("ref", "z639") }
+
+    val tool = runBlocking {
+      executorWithoutRepo.mapToTrailblazeTool(toolName = "tap", args = args)
+    }
+
+    assertTrue(tool is OtherTrailblazeTool, "expected OtherTrailblazeTool wrap, got ${tool::class.simpleName}")
+    val wrapped = tool as OtherTrailblazeTool
+    assertEquals("tap", wrapped.toolName)
+    assertEquals(args, wrapped.raw)
   }
 }

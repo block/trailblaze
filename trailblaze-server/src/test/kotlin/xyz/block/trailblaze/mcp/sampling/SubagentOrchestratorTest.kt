@@ -9,6 +9,7 @@ import xyz.block.trailblaze.devices.TrailblazeConnectedDeviceSummary
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
 import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
@@ -412,7 +413,11 @@ private class MockTrailblazeMcpBridge : TrailblazeMcpBridge {
   override fun getDirectScreenStateProvider(skipScreenshot: Boolean): ((ScreenshotScalingConfig) -> ScreenState)? =
     throw NotImplementedError("Not needed for parsing tests")
 
-  override suspend fun executeTrailblazeTool(tool: TrailblazeTool, blocking: Boolean): String =
+  override suspend fun executeTrailblazeTool(
+    tool: TrailblazeTool,
+    blocking: Boolean,
+    traceId: TraceId?,
+  ): String =
     throw NotImplementedError("Not needed for parsing tests")
 
   override suspend fun endSession(): Boolean =

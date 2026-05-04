@@ -1,0 +1,22 @@
+id: "clock/android/clock_tab"
+description: >
+  Google Clock app, Clock tab is selected at the bottom nav, showing the
+  cities list (RecyclerView). Distinct from clock/android/alarm_tab (no add-alarm FAB).
+
+  Resource IDs use a regex alternation to match both the Google variant
+  (com.google.android.deskclock) and the AOSP variant (com.android.deskclock).
+required:
+  - description: "CLOCK tab in selected state"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "(?:com\\.google\\.android\\.deskclock|com\\.android\\.deskclock):id/tab_menu_clock"
+        isSelected: true
+  - description: "Cities RecyclerView"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "(?:com\\.google\\.android\\.deskclock|com\\.android\\.deskclock):id/cities"
+forbidden:
+  - description: "Time picker OK button (would mean a dialog is open over the tab)"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "(?:com\\.google\\.android\\.deskclock|com\\.android\\.deskclock):id/material_timepicker_ok_button"

@@ -59,19 +59,18 @@ object ReportTemplateResolver {
    */
   private fun findBuildOutputTemplate(gitRoot: File?): File? {
     if (gitRoot == null) return null
-    // Standalone layout: `<trailblaze-report>/build/report-template/trailblaze_report.html`.
+    // Standalone layout: <trailblaze-report>/build/report-template/trailblaze_report.html
     val standalonePath = File(gitRoot, "trailblaze-report/build/report-template/trailblaze_report.html")
     if (standalonePath.exists()) return standalonePath
     // Nested layout: when Trailblaze is embedded as a subdirectory of a larger repo.
-    val nestedPath = File(gitRoot, "opensource/trailblaze-report/build/report-template/trailblaze_report.html")
-    if (nestedPath.exists()) return nestedPath
-    return null
+    val nestedPath = File(File(gitRoot, "opensource"), "trailblaze-report/build/report-template/trailblaze_report.html")
+    return nestedPath.takeIf { it.exists() }
   }
 
   /**
    * Finds the trailblaze-ui project directory relative to the git root.
-   * Supports both the standalone repo layout and a nested layout where Trailblaze
-   * is embedded under a subdirectory of a larger repo.
+   * Supports both the standalone repo layout and a nested layout where
+   * Trailblaze is embedded under a subdirectory of a larger repo.
    *
    * @return the trailblaze-ui directory, or null if not found.
    */
@@ -79,9 +78,8 @@ object ReportTemplateResolver {
     val gitRoot = getGitRoot() ?: return null
     val standalonePath = File(gitRoot, "trailblaze-ui")
     if (standalonePath.exists()) return standalonePath
-    val nestedPath = File(gitRoot, "opensource/trailblaze-ui")
-    if (nestedPath.exists()) return nestedPath
-    return null
+    val nestedPath = File(File(gitRoot, "opensource"), "trailblaze-ui")
+    return nestedPath.takeIf { it.exists() }
   }
 
   fun getGitRoot(): File? = GitUtils.getGitRootViaCommand()?.let { File(it) }

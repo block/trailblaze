@@ -75,9 +75,13 @@ fun List<TrailblazeLog>.generateRecordedYaml(
 
           // Collect recordable TrailblazeToolLog entries within the window
           val logsInWindow = subList(currentLogIndex, completeIndex)
-          val toolWrappers: List<TrailblazeToolYamlWrapper> = logsInWindow
+          val toolLogsInWindow = logsInWindow
             .filterIsInstance<TrailblazeLog.TrailblazeToolLog>()
             .filter { it.isRecordable }
+          val selectedToolLogs = toolLogsInWindow
+            .filter { it.isTopLevelToolCall }
+            .ifEmpty { toolLogsInWindow }
+          val toolWrappers: List<TrailblazeToolYamlWrapper> = selectedToolLogs
             .map { log -> wrapTrailblazeTool(log.trailblazeTool, log.toolName) }
 
           val recording = if (toolWrappers.isNotEmpty()) {

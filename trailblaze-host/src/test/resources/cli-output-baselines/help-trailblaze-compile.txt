@@ -1,0 +1,18 @@
+# This file is a CHECKED-IN baseline of CLI output rendered by trailblaze-host's CLI helpers.
+# It is NOT a contract — if a test fails here because output drifted, decide whether the
+# drift is intentional. The test always (re)writes this file from the current rendered output,
+# then asserts the working tree is clean. So `git diff` of this file IS the failure message.
+# Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
+# small wording / spacing changes can be intentional or accidental.
+# ----------------------------------------------------------------------
+Usage: trailblaze compile [-hV] [-i=<inputDir>] [-o=<outputDir>]
+Compile pack manifests into resolved target YAMLs
+  -h, --help                 Show this help message and exit.
+  -i, --input=<inputDir>     Directory containing one <id>/pack.yaml per pack.
+                               Defaults to <workspace-root>/trails/config
+                               (workspace root is found by walking up from the
+                               current directory looking for `trails/config/`).
+  -o, --output=<outputDir>   Directory to emit resolved <id>.yaml files into.
+                               Defaults to
+                               <workspace-root>/trails/config/dist/targets.
+  -V, --version              Print version information and exit.

@@ -1,0 +1,24 @@
+# This file is a CHECKED-IN baseline of CLI output rendered by trailblaze-host's CLI helpers.
+# It is NOT a contract — if a test fails here because output drifted, decide whether the
+# drift is intentional. The test always (re)writes this file from the current rendered output,
+# then asserts the working tree is clean. So `git diff` of this file IS the failure message.
+# Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
+# small wording / spacing changes can be intentional or accidental.
+# ----------------------------------------------------------------------
+Usage: trailblaze waypoint capture-example [-hV] [--force] --def=<defId>
+       [--root=<root>] [--session=<session>] [--step=<step>]
+       [<positionalLogFile>]
+Capture a sibling <id>.example.json + screenshot next to the waypoint YAML.
+Picks the raw (un-annotated) screenshot twin from the source session.
+      [<positionalLogFile>] Path to a *_TrailblazeLlmRequestLog.json
+                              (alternative to --session/--step)
+      --def=<defId>         Waypoint id to capture an example for (required)
+      --force               Overwrite an existing example pair without
+                              prompting.
+  -h, --help                Show this help message and exit.
+      --root=<root>         Root directory to scan for *.waypoint.yaml files
+                              (default: ./trails)
+      --session=<session>   Session log directory (containing
+                              *_TrailblazeLlmRequestLog.json files)
+      --step=<step>         1-based step within the session (default: last step)
+  -V, --version             Print version information and exit.

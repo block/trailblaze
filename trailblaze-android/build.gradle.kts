@@ -38,9 +38,24 @@ dependencies {
   // public constructor takes `McpServerConfig` — callers constructing the rule need the
   // model class on their compile classpath.
   api(project(":trailblaze-scripting-bundle"))
+  // MCP-free on-device tool runtime. Same surface shape as the legacy bundle runtime
+  // above — `AndroidTrailblazeRule.quickjsToolBundles` takes `McpServerConfig` and the
+  // launcher reads `script:` paths via the supplied resolver. `api` exposes
+  // `BundleSource` / `AndroidAssetBundleSource` so consumers wiring custom resolvers can
+  // reach those types without a separate declaration. See the `:trailblaze-quickjs-tools`
+  // README for the runtime overview.
+  api(project(":trailblaze-quickjs-tools"))
 
   api(libs.androidx.uiautomator)
   api(libs.ktor.client.okhttp)
+  // Folded in from `:trailblaze-accessibility` (api there → preserves the same version
+  // pinning for downstream consumers; ktor 3.3.3 vs the 3.2.2 they'd otherwise resolve to
+  // when this is dropped). No accessibility code uses these directly — they're here to keep
+  // the resolved-classpath stable across the merge.
+  api(libs.ktor.client.content.negotiation.jvm)
+  api(libs.ktor.utils.jvm)
+  api(libs.ktor.events.jvm)
+  api(libs.ktor.serialization.jvm)
   api(libs.kotlinx.serialization.core)
   api(libs.junit)
   api(libs.maestro.orchestra.models) { isTransitive = false }
@@ -68,6 +83,11 @@ dependencies {
   implementation(libs.kotlinx.serialization.json)
 
   runtimeOnly(libs.coroutines.android)
+
+  // Unit-test deps for the accessibility-side tests folded in from `:trailblaze-accessibility`
+  // (`useJUnitPlatform` is already enabled above for this module).
+  testImplementation(libs.kotlin.test)
+  testImplementation(libs.junit5.jupiter.engine)
 }
 
 dependencyGuard {

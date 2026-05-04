@@ -1,0 +1,16 @@
+script: ./trails/config/tools/playwrightSample_web_openDuplicateProductDetail.js
+name: playwrightSample_web_openDuplicateProductDetail
+description: Open the duplicate-list demo, click a specific product row, and verify its detail panel.
+_meta:
+  trailblaze/supportedPlatforms: [web]
+  trailblaze/requiresContext: true
+inputSchema:
+  relativePath:
+    type: string
+    description: Duplicate-list demo fixture path relative to the playwright-native examples root.
+  itemId:
+    type: string
+    description: Product id (matches the fixture's data-product-id attribute) of the row to click. Disambiguates duplicate rows by id rather than position.
+  expectedCategory:
+    type: string
+    description: Category text the tool asserts is present on the resulting detail panel.

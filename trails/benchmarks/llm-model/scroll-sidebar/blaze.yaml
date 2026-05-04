@@ -1,0 +1,17 @@
+- config:
+    title: "LLM Benchmark: Scroll the correct container of two"
+    driver: PLAYWRIGHT_NATIVE
+    description: |-
+      The Scroll section has two independently-scrollable panels: a left
+      "Sidebar navigation" with 15 categories and a right "Content panel"
+      with 20 items. The earlier scroll-find trail exercises the right
+      panel; this one targets the left sidebar so the agent has to
+      disambiguate which container to scroll. Models that scroll the
+      wrong panel (or scroll the page) will fail the final verify.
+- prompts:
+    - step: Navigate to http://localhost:8765/index.html
+    - step: Click the "Scroll" navigation link
+    - step: Verify the heading "Scroll Containers" is visible
+    - step: Verify the text "Category 1" is visible
+    - step: Scroll within the "Sidebar navigation" panel (the left panel containing the Category links) until "Category 14" is visible
+    - step: Verify the text "Category 14" is visible

@@ -135,7 +135,7 @@ fun SessionStatusDetailsFlat(log: TrailblazeLog.TrailblazeSessionStatusChangeLog
   // Extract failure, cancellation, and max calls messages
   val failureMessage = when (val status = log.sessionStatus) {
     is SessionStatus.Ended.Failed -> status.exceptionMessage
-    is SessionStatus.Ended.FailedWithFallback -> status.exceptionMessage
+    is SessionStatus.Ended.FailedWithSelfHeal -> status.exceptionMessage
     else -> null
   }
 
@@ -219,12 +219,12 @@ private fun getSessionStatusIconAndColor(status: SessionStatus): Triple<ImageVec
       Icons.Filled.Close, Color(0xFFFFC107), "Session Cancelled"
     )
 
-    is SessionStatus.Ended.SucceededWithFallback -> Triple(
-      Icons.Filled.Warning, Color(0xFF28A745), "Session Succeeded (with AI Fallback)"
+    is SessionStatus.Ended.SucceededWithSelfHeal -> Triple(
+      Icons.Filled.Warning, Color(0xFF28A745), "Session Succeeded (with Self-Heal)"
     )
 
-    is SessionStatus.Ended.FailedWithFallback -> Triple(
-      Icons.Filled.Warning, Color(0xFFDC3545), "Session Failed (with AI Fallback)"
+    is SessionStatus.Ended.FailedWithSelfHeal -> Triple(
+      Icons.Filled.Warning, Color(0xFFDC3545), "Session Failed (with Self-Heal)"
     )
 
     is SessionStatus.Unknown -> Triple(Icons.Filled.Warning, Color.Gray, "Unknown Status")
@@ -312,8 +312,8 @@ fun ObjectiveCompleteDetailsFlat(log: TrailblazeLog.ObjectiveCompleteLog) {
 }
 
 @Composable
-fun AttemptAiFallbackFlat(
-  log: TrailblazeLog.AttemptAiFallbackLog,
+fun SelfHealInvokedFlat(
+  log: TrailblazeLog.SelfHealInvokedLog,
 ) {
   Column(modifier = Modifier.padding(horizontal = 16.dp)) {
     DetailSection("Objective Complete") {

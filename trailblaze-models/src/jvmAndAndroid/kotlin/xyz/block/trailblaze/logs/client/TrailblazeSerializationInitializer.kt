@@ -26,6 +26,25 @@ object TrailblazeSerializationInitializer {
 
   @Volatile private var cached: Map<ToolName, KClass<out TrailblazeTool>>? = null
   @Volatile private var cachedYamlDefined: Map<ToolName, ToolYamlConfig>? = null
+  @Volatile private var cachedYamlDefinedSerializers:
+    Map<ToolName, KSerializer<out TrailblazeTool>>? = null
+  private val imperativeTools = mutableMapOf<ToolName, KClass<out TrailblazeTool>>()
+
+  /**
+   * Registers tool classes imperatively. These classes are merged with classpath-discovered tools
+   * during [buildAllTools].
+   *
+   * Must be called before [buildAllTools] or [TrailblazeJsonInstance] is first accessed.
+   * Late registration throws [IllegalStateException].
+   */
+  fun registerImperativeToolClasses(tools: Map<ToolName, KClass<out TrailblazeTool>>) {
+    synchronized(this) {
+      check(cached == null) {
+        "Cannot register imperative tools after TrailblazeSerializationInitializer has been initialized"
+      }
+      imperativeTools.putAll(tools)
+    }
+  }
 
   /**
    * Builds and returns the map of YAML-defined (`tools:` mode) tool configs. The result is
@@ -80,7 +99,7 @@ object TrailblazeSerializationInitializer {
       cached ?: run {
         val tools =
           try {
-            ToolYamlLoader.discoverAndLoadAll()
+            ToolYamlLoader.discoverAndLoadAll() + imperativeTools
           } catch (e: Exception) {
             Console.error(
               "YAML tool discovery failed: ${e.message}. " +
@@ -88,7 +107,7 @@ object TrailblazeSerializationInitializer {
                 "fall through to OtherTrailblazeTool for every tool call.\n" +
                 e.stackTraceToString(),
             )
-            emptyMap()
+            imperativeTools
           }
         if (tools.isEmpty()) {
           Console.error(
@@ -124,23 +143,34 @@ object TrailblazeSerializationInitializer {
    * and YAML-defined tools simply won't decode — existing class-backed tools still work.
    */
   @Suppress("UNCHECKED_CAST")
-  internal fun buildYamlDefinedToolSerializers(): Map<ToolName, KSerializer<out TrailblazeTool>> {
-    val configs = buildYamlDefinedTools()
-    if (configs.isEmpty()) return emptyMap()
-    return try {
-      val serializerClass = Class.forName(YAML_DEFINED_TOOL_SERIALIZER_FQCN)
-      val constructor = serializerClass.getConstructor(ToolYamlConfig::class.java)
-      configs.entries.associate { (name, config) ->
-        name to (constructor.newInstance(config) as KSerializer<out TrailblazeTool>)
+  fun buildYamlDefinedToolSerializers(): Map<ToolName, KSerializer<out TrailblazeTool>> {
+    cachedYamlDefinedSerializers?.let { return it }
+    return synchronized(this) {
+      cachedYamlDefinedSerializers ?: run {
+        val configs = buildYamlDefinedTools()
+        val result =
+          if (configs.isEmpty()) {
+            emptyMap()
+          } else {
+            try {
+              val serializerClass = Class.forName(YAML_DEFINED_TOOL_SERIALIZER_FQCN)
+              val constructor = serializerClass.getConstructor(ToolYamlConfig::class.java)
+              configs.entries.associate { (name, config) ->
+                name to (constructor.newInstance(config) as KSerializer<out TrailblazeTool>)
+              }
+            } catch (e: ReflectiveOperationException) {
+              Console.error(
+                "YamlDefinedToolSerializer reflection failed — `tools:`-mode YAML tool definitions " +
+                  "will not decode. Ensure `:trailblaze-common` is on your module's runtime " +
+                  "classpath and YamlDefinedToolSerializer has a public `(ToolYamlConfig)` " +
+                  "constructor. ${e::class.simpleName}: ${e.message}",
+              )
+              emptyMap()
+            }
+          }
+        cachedYamlDefinedSerializers = result
+        result
       }
-    } catch (e: ReflectiveOperationException) {
-      Console.error(
-        "YamlDefinedToolSerializer reflection failed — `tools:`-mode YAML tool definitions will " +
-          "not decode. Ensure `:trailblaze-common` is on your module's runtime classpath and " +
-          "YamlDefinedToolSerializer has a public `(ToolYamlConfig)` constructor. " +
-          "${e::class.simpleName}: ${e.message}",
-      )
-      emptyMap()
     }
   }
 

@@ -50,7 +50,7 @@ Speed: Fast (cached paths)           Speed: Slower (exploring)
 Workflow:
   blaze("objective") → generates → trail.yaml → trail(file) → executes
         ↑                                              │
-        └──────── AI Fallback when recording fails ────┘
+        └──────── Self-Heal when recording fails ────┘
 ```
 
 ## trail<>: Goal Planner with Predefined Actions
@@ -64,7 +64,7 @@ Workflow:
 | Some steps missing recordings | `GoalPlannerTrailExecutor` | Only for missing steps |
 | Complex branching/conditional trails | `GoalPlannerTrailExecutor` | As needed |
 
-Goal planner mapping: each `step:` prompt becomes an action with preconditions (step N requires N-1 done), `recording.tools` provide optimistic beliefs, cost model prefers recordings (cost 1.0) over AI (cost 5.0), and failed recordings trigger AI Fallback ([Decision 021](./2026-01-29-ai-fallback.md)).
+Goal planner mapping: each `step:` prompt becomes an action with preconditions (step N requires N-1 done), `recording.tools` provide optimistic beliefs, cost model prefers recordings (cost 1.0) over AI (cost 5.0), and failed recordings trigger Self-Heal ([Decision 021](./2026-01-29-ai-fallback.md)).
 
 ## blaze<>: Strategy Graph for Exploration
 
@@ -111,7 +111,7 @@ When `blaze()` runs via MCP, progress callbacks report iteration status, action 
 
 ## Related Documents
 
-- [021: AI Fallback](./2026-01-29-ai-fallback.md) - Integrated into `trail<>` execution
+- [021: Self-Heal](./2026-01-29-ai-fallback.md) - Integrated into `trail<>` execution
 - [002: Trail Recording Format](2025-10-01-trail-recording-format.md) - Trail file format used by both modes
 - [011: Agent Loop Implementation](2026-01-28-agent-loop-implementation.md) - Custom loops being replaced
 - [012: Koog LLM Client](2026-01-28-koog-llm-client.md) - Koog integration foundation

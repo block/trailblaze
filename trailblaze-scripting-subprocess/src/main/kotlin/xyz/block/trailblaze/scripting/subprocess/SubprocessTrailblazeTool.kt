@@ -20,6 +20,7 @@ import xyz.block.trailblaze.scripting.callback.JsScriptingInvocationRegistry
 import xyz.block.trailblaze.scripting.mcp.TrailblazeContextEnvelope
 import xyz.block.trailblaze.scripting.mcp.toTrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.HostLocalExecutableTrailblazeTool
+import xyz.block.trailblaze.toolcalls.RawArgumentTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
@@ -59,9 +60,11 @@ class SubprocessTrailblazeTool(
    * wiring construct through the public ctor with a known value.
    */
   private val callbackContext: SubprocessToolRegistration.JsScriptingCallbackContext? = null,
-) : HostLocalExecutableTrailblazeTool {
+) : HostLocalExecutableTrailblazeTool, RawArgumentTrailblazeTool {
 
   override val advertisedToolName: String get() = advertisedName.toolName
+  override val instanceToolName: String get() = advertisedName.toolName
+  override val rawToolArguments: JsonObject get() = args
 
   override suspend fun execute(toolExecutionContext: TrailblazeToolExecutionContext): TrailblazeToolResult {
     val legacyEnvelope = TrailblazeContextEnvelope.buildLegacyArgEnvelope(toolExecutionContext)

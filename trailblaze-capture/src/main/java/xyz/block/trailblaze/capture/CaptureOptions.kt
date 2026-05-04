@@ -7,21 +7,27 @@ package xyz.block.trailblaze.capture
  */
 data class CaptureOptions(
   val captureVideo: Boolean = true,
+  /** Capture Android logcat (only takes effect when running on Android). */
   val captureLogcat: Boolean = false,
+  /**
+   * Capture iOS Simulator system logs via `xcrun simctl spawn log stream`. Off by default —
+   * iOS logs are firehose-volume and can fill local disks fast.
+   */
+  val captureIosLogs: Boolean = false,
   /** Frames per second for sprite sheet extraction. */
   val spriteFrameFps: Int = DEFAULT_SPRITE_FPS,
   /** Height in pixels for each frame in the sprite sheet. Width scales proportionally. */
   val spriteFrameHeight: Int = DEFAULT_SPRITE_HEIGHT,
-  /** JPEG quality for sprite sheet frames (1=worst, 31=best for ffmpeg -q:v, lower is better). */
-  val spriteJpegQuality: Int = DEFAULT_SPRITE_JPEG_QUALITY,
+  /** WebP quality for sprite sheet frames (0–100, higher is better). */
+  val spriteQuality: Int = DEFAULT_SPRITE_QUALITY,
 ) {
   val hasAnyCaptureEnabled: Boolean
-    get() = captureVideo || captureLogcat
+    get() = captureVideo || captureLogcat || captureIosLogs
 
   companion object {
     val NONE = CaptureOptions()
     const val DEFAULT_SPRITE_FPS = 2
     const val DEFAULT_SPRITE_HEIGHT = 360
-    const val DEFAULT_SPRITE_JPEG_QUALITY = 5
+    const val DEFAULT_SPRITE_QUALITY = 80
   }
 }

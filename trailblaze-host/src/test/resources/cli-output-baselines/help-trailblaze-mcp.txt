@@ -1,0 +1,30 @@
+# This file is a CHECKED-IN baseline of CLI output rendered by trailblaze-host's CLI helpers.
+# It is NOT a contract — if a test fails here because output drifted, decide whether the
+# drift is intentional. The test always (re)writes this file from the current rendered output,
+# then asserts the working tree is clean. So `git diff` of this file IS the failure message.
+# Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
+# small wording / spacing changes can be intentional or accidental.
+# ----------------------------------------------------------------------
+Usage: trailblaze mcp [-hV] [--direct] [--http] [--tool-profile=<toolProfile>]
+Start a Model Context Protocol (MCP) server for AI agent integration
+
+Exposes Trailblaze tools via the Model Context Protocol (MCP) so that AI
+coding agents can control devices.
+
+Quick setup:
+  Claude Code:  claude mcp add trailblaze -- trailblaze mcp
+  Cursor:       Add to .cursor/mcp.json with command 'trailblaze mcp'
+  Windsurf:     Add to MCP config with command 'trailblaze mcp'
+      --direct, --no-daemon
+                  Run as an in-process MCP server over STDIO instead of the
+                    default proxy mode. Bypasses the Trailblaze daemon and runs
+                    everything in a single process. Use this for environments
+                    where the HTTP daemon cannot run.
+  -h, --help      Show this help message and exit.
+      --http      Use Streamable HTTP transport instead of STDIO. Starts a
+                    standalone HTTP MCP server.
+      --tool-profile=<toolProfile>
+                  Tool profile: FULL or MINIMAL (only
+                    device/blaze/verify/ask/trail). Defaults to MINIMAL for
+                    STDIO, FULL for HTTP.
+  -V, --version   Print version information and exit.

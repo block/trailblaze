@@ -554,6 +554,7 @@ class LocalLlmSamplingSource(
         agentTaskStatus = agentTaskStatus,
         viewHierarchy = viewHierarchy,
         viewHierarchyFiltered = screenContext.viewHierarchyFiltered,
+        trailblazeNodeTree = screenContext.trailblazeNodeTree,
         instructions = userMessage,
         trailblazeLlmModel = model,
         llmMessages = listOf(

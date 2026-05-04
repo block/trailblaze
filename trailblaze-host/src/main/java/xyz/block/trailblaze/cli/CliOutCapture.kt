@@ -65,7 +65,7 @@ object CliOutCapture {
    * Any call that lands on another thread (coroutine hop to a different dispatcher,
    * OkHttp callback thread, etc.) will miss the override and fall through to the
    * daemon's normal stdout/stderr — acceptable for the in-process CLI shortcut
-   * because `cliWithDevice` uses `runBlocking` which stays on the current thread.
+   * because the cli*WithDevice helpers use `runBlocking` which stays on the current thread.
    */
   fun <T> withCapture(out: OutputStream, err: OutputStream, block: () -> T): T {
     val prevOut = threadOut.get()

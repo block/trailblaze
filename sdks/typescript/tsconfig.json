@@ -10,5 +10,10 @@
     "noEmit": true,
     "declaration": true
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts"],
+  // `*.test.ts` is run by `bun test`, which resolves `bun:test` types natively. tsc has no
+  // such resolution unless `@types/bun` is installed (not on our private registry today).
+  // Excluding test files from this tsconfig keeps `tsc --noEmit` clean while leaving
+  // `bun test` fully functional.
+  "exclude": ["**/*.test.ts"]
 }

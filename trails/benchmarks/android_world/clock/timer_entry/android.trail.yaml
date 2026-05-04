@@ -32,5 +32,5 @@
 # [2026-03-11] FAILED - Agent limitation: Assertion "02h 30m 45s" not visible.
 #   Agent likely entered incorrect timer values or the timer display
 #   format didn't match the expected assertion pattern.
-# [2026-03-11] Build #27 FAILED - Agent limitation: Max LLM calls (50) reached after 386s.
+# [2026-03-11] FAILED - Agent limitation: Max LLM calls (50) reached after 386s.
 #   Agent couldn't figure out how to set timer values.

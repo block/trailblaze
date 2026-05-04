@@ -54,6 +54,7 @@ val generateReportTemplate by tasks.registering(JavaExec::class) {
 }
 
 dependencies {
+  implementation(project(":trailblaze-capture"))
   implementation(project(":trailblaze-common"))
   implementation(project(":trailblaze-models"))
   implementation(libs.kotlinx.datetime)
@@ -64,6 +65,8 @@ dependencies {
   implementation(libs.kaml)
 
   runtimeOnly(libs.slf4j.simple)
+
+  testImplementation(libs.kotlin.test.junit4)
 }
 
 tasks.test {

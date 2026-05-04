@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 # On-device path: runs the trail through `connectedDebugAndroidTest` (classic JUnit
 # instrumentation). The test logic executes inside the test process on the emulator
-# and talks to the headless desktop server on :8443 for agent orchestration.
+# and talks to the headless desktop server on the default HTTPS port for agent orchestration.
 # Note: intentionally not using set -e so that log collection always runs even if build/tests fail
 TRAILBLAZE_LOGS_DIR="$(pwd)/trailblaze-logs"
+
+# Must match TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTPS_PORT
+# (= TRAILBLAZE_DEFAULT_HTTP_PORT + 1 = 52525 + 1).
+TRAILBLAZE_HTTPS_PORT=52526
 TRAILBLAZE_LOCAL_LOGS_DIR="$HOME/.trailblaze/logs"
 
 # Create logs directory early so it always exists for downstream steps
@@ -21,23 +25,23 @@ echo "Building Trailblaze server..."
 if [ "$TEST_FAILED" != "true" ]; then
   echo "Starting Trailblaze server..."
   # `app --foreground --headless` keeps the JVM in the foreground so backgrounding
-  # with `&` lets us poll port 8443 until ready. The `app` subcommand is required —
+  # with `&` lets us poll the HTTPS port until ready. The `app` subcommand is required —
   # bare `--headless` raises "Unknown option: '--headless'".
   ./gradlew :trailblaze-desktop:run --args="app --foreground --headless" > /tmp/trailblaze.log 2>&1 &
   TRAILBLAZE_PID=$!
   echo "Trailblaze server started with PID: $TRAILBLAZE_PID"
-  echo "Waiting for Trailblaze server to be ready on port 8443 (this may take up to 2 minutes)..."
+  echo "Waiting for Trailblaze server to be ready on port $TRAILBLAZE_HTTPS_PORT (this may take up to 2 minutes)..."
   sleep 10
   for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
-    nc -z localhost 8443 > /dev/null 2>&1 && break || (echo "Attempt $attempt/20..." && sleep 5)
+    nc -z localhost "$TRAILBLAZE_HTTPS_PORT" > /dev/null 2>&1 && break || (echo "Attempt $attempt/20..." && sleep 5)
   done
-  if ! nc -z localhost 8443 > /dev/null 2>&1; then
-    echo "ERROR: Trailblaze server failed to start on port 8443"
+  if ! nc -z localhost "$TRAILBLAZE_HTTPS_PORT" > /dev/null 2>&1; then
+    echo "ERROR: Trailblaze server failed to start on port $TRAILBLAZE_HTTPS_PORT"
     echo "=== Trailblaze logs ==="
     cat /tmp/trailblaze.log
     TEST_FAILED=true
   else
-    echo "✓ Trailblaze server is running on port 8443!"
+    echo "✓ Trailblaze server is running on port $TRAILBLAZE_HTTPS_PORT!"
   fi
   echo "========================================="
 fi

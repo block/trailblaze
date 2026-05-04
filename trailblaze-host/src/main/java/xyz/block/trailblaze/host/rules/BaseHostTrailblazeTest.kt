@@ -13,6 +13,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import org.junit.Rule
 import org.junit.rules.RuleChain
+import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.TrailblazeYamlUtil
 import xyz.block.trailblaze.agent.BlazeConfig
 import xyz.block.trailblaze.agent.DefaultProgressReporter
@@ -29,7 +30,9 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDeviceInfo
 import xyz.block.trailblaze.devices.TrailblazeDriverType
+import java.io.File
 import xyz.block.trailblaze.exception.TrailblazeException
+import xyz.block.trailblaze.yaml.createTrailblazeYaml
 import xyz.block.trailblaze.host.HostMaestroTrailblazeAgent
 import xyz.block.trailblaze.host.MaestroHostRunnerImpl
 import xyz.block.trailblaze.agent.AgentUiActionExecutor
@@ -44,6 +47,7 @@ import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeSessionManager
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
+import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.sampling.LocalLlmSamplingSource
 import xyz.block.trailblaze.model.TrailblazeConfig
@@ -92,6 +96,10 @@ abstract class BaseHostTrailblazeTest(
     ?: resolveDeviceForTest(trailblazeDriverType)
 
   companion object {
+    private const val TRAILBLAZE_SELF_HEAL_ENABLED_ENV = "TRAILBLAZE_SELF_HEAL_ENABLED"
+    private const val TRAILBLAZE_TRAIL_CONTEXT_ENV = "TRAILBLAZE_TRAIL_CONTEXT"
+    private const val TRAILBLAZE_SETUP_TRAIL_ID_ENV = "TRAILBLAZE_SETUP_TRAIL_ID"
+
     private fun resolveDeviceForTest(
       trailblazeDriverType: TrailblazeDriverType,
     ): TrailblazeDeviceId {
@@ -281,6 +289,7 @@ abstract class BaseHostTrailblazeTest(
       screenStateProvider = hostRunner.screenStateProvider,
       toolRepo = toolRepo,
       elementComparator = elementComparator,
+      agentMemory = (trailblazeAgent as? xyz.block.trailblaze.BaseTrailblazeAgent)?.memory ?: AgentMemory(),
     )
 
     val plannerLlmCall: PlannerLlmCall = { systemPrompt, userMessage, tools, traceId, screenshotBytes ->
@@ -354,29 +363,43 @@ abstract class BaseHostTrailblazeTest(
             .also { cachedFallbackSessionId = it }
         }
       },
+      caseTitleProvider = { currentCaseTitle },
     )
   }
 
+  /**
+   * The title of the trail currently being executed (e.g. TestRail case name).
+   *
+   * Updated at the start of each [runTrail] call so [MultiAgentV3TestAgentRunner] can
+   * forward it as [RecommendationContext.overallObjective] for every step. This lets the
+   * inner agent recognise impossible objectives early rather than exhausting all retries.
+   *
+   * Thread-safety: JUnit creates a new [BaseHostTrailblazeTest] instance per `@Test`
+   * method, so only one [runTrail] call can ever execute on a given instance at a time.
+   * [Volatile] provides the visibility guarantee needed when the lazy [trailblazeRunner]
+   * reads the field from the coroutine's execution thread.
+   */
+  @Volatile
+  private var currentCaseTitle: String? = null
+
   private val trailblazeYaml = TrailblazeYaml.Default
+  private var currentToolTraceId: TraceId? = null
 
   private val trailblazeRunnerUtil by lazy {
     TrailblazeRunnerUtil(
       trailblazeRunner = trailblazeRunner,
       runTrailblazeTool = { trailblazeTools: List<TrailblazeTool> ->
-        val result = trailblazeAgent.runTrailblazeTools(
+        trailblazeAgent.runTrailblazeTools(
           trailblazeTools,
-          null,
+          currentToolTraceId,
           screenState = hostRunner.screenStateProvider(),
           elementComparator = elementComparator,
           screenStateProvider = hostRunner.screenStateProvider,
-        )
-        when (val toolResult = result.result) {
-          is TrailblazeToolResult.Success -> toolResult
-          is TrailblazeToolResult.Error -> throw TrailblazeException(toolResult.errorMessage)
-        }
+        ).result
       },
       trailblazeLogger = loggingRule.logger,
       sessionProvider = { loggingRule.session ?: error("Session not available - ensure test is running") },
+      sessionUpdater = { loggingRule.setSession(it) },
     )
   }
 
@@ -385,9 +408,49 @@ abstract class BaseHostTrailblazeTest(
    * This allows proper cancellation propagation when running in a coroutine context.
    */
   private suspend fun runTrail(trailItems: List<TrailYamlItem>, useRecordedSteps: Boolean) {
+    // Capture the trail title once so caseTitleProvider in the V3 runner can read it for every
+    // step. We scan for the first ConfigTrailItem rather than relying on item order so the title
+    // is available even if prompts appear before the config block in the YAML.
+    currentCaseTitle = trailItems.filterIsInstance<TrailYamlItem.ConfigTrailItem>()
+      .firstOrNull()?.config?.title
+
+    resolveTrailContextFromEnv()?.let { trailblazeRunner.appendToSystemPrompt(it) }
+    resolveSetupTrailIdFromEnv()?.let { setupTrailId ->
+      val setupFile = File(setupTrailId)
+      if (setupFile.exists()) {
+        val setupItems = createTrailblazeYaml().decodeTrail(setupFile.readText())
+        for (setupItem in setupItems) {
+          val result =
+            when (setupItem) {
+              is TrailYamlItem.PromptsTrailItem ->
+                trailblazeRunnerUtil.runPromptSuspend(
+                  prompts = setupItem.promptSteps,
+                  useRecordedSteps = true,
+                  selfHeal = false,
+                )
+              is TrailYamlItem.ToolTrailItem ->
+                trailblazeRunnerUtil.runTrailblazeTool(
+                  setupItem.tools.map { it.trailblazeTool }
+                )
+              is TrailYamlItem.ConfigTrailItem -> {
+                setupItem.config.context?.let { trailblazeRunner.appendToSystemPrompt(it) }
+                null // ConfigTrailItem has no tool result
+              }
+            }
+          if (result is TrailblazeToolResult.Error) {
+            throw TrailblazeException("Setup trail failed: ${result.errorMessage}")
+          }
+        }
+      }
+    }
     for (item in trailItems) {
       val itemResult = when (item) {
-        is TrailYamlItem.PromptsTrailItem -> trailblazeRunnerUtil.runPromptSuspend(item.promptSteps, useRecordedSteps)
+        is TrailYamlItem.PromptsTrailItem ->
+          trailblazeRunnerUtil.runPromptSuspend(
+            prompts = item.promptSteps,
+            useRecordedSteps = useRecordedSteps,
+            selfHeal = resolveSelfHealFromEnvOrConfig(),
+          )
         is TrailYamlItem.ToolTrailItem -> trailblazeRunnerUtil.runTrailblazeTool(item.tools.map { it.trailblazeTool })
         is TrailYamlItem.ConfigTrailItem -> item.config.context?.let { trailblazeRunner.appendToSystemPrompt(it) }
       }
@@ -396,6 +459,27 @@ abstract class BaseHostTrailblazeTest(
       }
     }
   }
+
+  private fun resolveTrailContextFromEnv(): String? =
+    System.getenv(TRAILBLAZE_TRAIL_CONTEXT_ENV)
+      ?: System.getProperty(TRAILBLAZE_TRAIL_CONTEXT_ENV)
+
+  private fun resolveSetupTrailIdFromEnv(): String? =
+    System.getenv(TRAILBLAZE_SETUP_TRAIL_ID_ENV)
+      ?: System.getProperty(TRAILBLAZE_SETUP_TRAIL_ID_ENV)
+
+  // A CI pipeline runner may set TRAILBLAZE_SELF_HEAL_ENABLED on the runner step's env when the
+  // pipeline config opts in. Gradle's test task forwards the parent env to the forked test JVM by
+  // default, so reading it here picks up the pipeline's intent even when the subclass hardcoded
+  // TrailblazeConfig.DEFAULT. Env var wins over config because the pipeline layer is the one
+  // intentionally overriding for a specific run.
+  //
+  // Companion resolver for CLI runs: TrailCommand.resolveEffectiveSelfHeal() — a 4-tier chain
+  // (flag → env → config → default). Tests have no CLI flag to honor, so this resolver is
+  // intentionally a 2-tier subset.
+  private fun resolveSelfHealFromEnvOrConfig(): Boolean =
+    System.getenv(TRAILBLAZE_SELF_HEAL_ENABLED_ENV)?.lowercase()?.toBooleanStrictOrNull()
+      ?: config.selfHeal
 
   fun runTools(tools: List<TrailblazeTool>): TrailblazeToolResult = trailblazeRunnerUtil.runTrailblazeTool(tools)
 
@@ -407,6 +491,7 @@ abstract class BaseHostTrailblazeTest(
     yaml: String,
     trailblazeDeviceId: TrailblazeDeviceId,
     trailFilePath: String?,
+    traceId: TraceId? = null,
     forceStopApp: Boolean = true,
     useRecordedSteps: Boolean = true,
     sendSessionStartLog: Boolean,
@@ -442,7 +527,21 @@ abstract class BaseHostTrailblazeTest(
         )
       }
     }
-    runTrail(trailItems, useRecordedSteps)
+    currentToolTraceId = traceId
+    try {
+      if (!trailblazeYaml.hasActionableSteps(trailItems)) {
+        val trailName = trailConfig?.title ?: trailFilePath ?: "unknown"
+        val trailUrl = trailConfig?.metadata?.get("testRailUrl")
+        throw xyz.block.trailblaze.exception.TrailblazeException(
+          "Trail '$trailName' has no executable steps — this would be a false positive pass. " +
+            "Add prompts or tool steps to this trail file." +
+            (trailUrl?.let { " $it" } ?: ""),
+        )
+      }
+      runTrail(trailItems, useRecordedSteps)
+    } finally {
+      currentToolTraceId = null
+    }
     return loggingRule.session?.sessionId ?: SessionId("unknown")
   }
 
@@ -454,6 +553,7 @@ abstract class BaseHostTrailblazeTest(
     yaml: String,
     trailblazeDeviceId: TrailblazeDeviceId,
     trailFilePath: String?,
+    traceId: TraceId? = null,
     sendSessionStartLog: Boolean,
     forceStopApp: Boolean = true,
     useRecordedSteps: Boolean = true,
@@ -462,6 +562,7 @@ abstract class BaseHostTrailblazeTest(
       yaml = yaml,
       trailblazeDeviceId = trailblazeDeviceId,
       trailFilePath = trailFilePath,
+      traceId = traceId,
       forceStopApp = forceStopApp,
       useRecordedSteps = useRecordedSteps,
       sendSessionStartLog = sendSessionStartLog

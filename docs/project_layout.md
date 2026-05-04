@@ -6,6 +6,11 @@ title: Project Layout
 
 Trailblaze imposes almost no structure on your project. Put trail files wherever makes sense — pass them to the CLI by path or shell glob; the MCP server and desktop UI auto-discover trails below your workspace root.
 
+This page is about trail/workspace discovery and how trail files run. For the detailed
+shape of `trails/config/` itself — packs, legacy targets, toolsets, tools, provider
+caveats, and MCP script placement — use the generated [External Config](generated/external-config.md)
+reference.
+
 ## The simplest project
 
 A single trail file is a complete Trailblaze project:
@@ -25,20 +30,32 @@ No config, no directory layout, no setup.
 
 ## A configured project
 
-When you want project-level defaults (a target app, an LLM default, custom tools), drop a `trailblaze.yaml` at the project root:
+When you want project-level config (LLM defaults, target definitions, custom tools), put it
+under `trails/config/`:
 
 ```
 my-project/
-├── trailblaze.yaml          ← project config (workspace anchor)
-├── login.trail.yaml         ← trails live wherever you want them
-├── flows/
-│   └── checkout.trail.yaml
-└── catalog/
-    └── overlay/
-        └── blaze.yaml       ← NL-only trail (no platform recording yet)
+└── trails/
+    ├── config/
+    │   └── trailblaze.yaml  ← project config (workspace manifest)
+    ├── login.trail.yaml
+    ├── flows/
+    │   └── checkout.trail.yaml
+    └── catalog/
+        └── overlay/
+            └── blaze.yaml   ← NL-only trail (no platform recording yet)
 ```
 
-The `trailblaze.yaml` file is the **workspace anchor** — the directory that contains it is the workspace root. Trailblaze walks up from the current directory (or the directory containing the trail you invoke) until it finds `trailblaze.yaml`; everything below that directory belongs to the workspace. Trails, recordings, and custom tool scripts referenced from `trailblaze.yaml` are resolved relative to it.
+`trails/` is the workspace anchor. Trailblaze walks up from the current directory (or the
+directory containing the trail you invoke) until it finds `trails/config/trailblaze.yaml`;
+the owning `trails/` directory becomes the workspace root. Trails live under that
+directory, and config refs inside `trails/config/trailblaze.yaml` resolve relative to
+`trails/config/`. The authored unit inside that config directory is now usually a
+`packs/<id>/pack.yaml`; flat `targets/*.yaml` files still work as a compatibility path.
+
+See [Packs](packs.md) for the pack manifest schema, per-file scripted-tool YAMLs, and the
+workspace-vs-classpath precedence rule. For the binary-friendly config bundle story inside
+`trails/config/`, see [External Config](generated/external-config.md).
 
 ## Trail file names
 
@@ -53,7 +70,9 @@ A single directory can hold one `blaze.yaml` alongside one or more `*.trail.yaml
 
 ### The workspace-anchor rule
 
-`trailblaze.yaml` is the workspace config filename — it holds project-level defaults (target app, LLM, custom tools), not trail steps. Trailblaze treats the copy sitting **at the workspace root** as the config file and never runs it as a trail. Use `blaze.yaml` for natural-language trail definitions.
+`trailblaze.yaml` is the workspace config filename, not a trail file. Trailblaze treats the
+copy at `trails/config/trailblaze.yaml` as project config and never runs it as a trail. Use
+`blaze.yaml` for natural-language trail definitions.
 
 ## What gets excluded
 
@@ -131,7 +150,9 @@ Both apply the same excludes and anchor rule as the CLI. An agent that asks for 
 ## Common questions
 
 **Do I need a `trails/` directory?**
-No. Trails can live anywhere under your workspace root — alongside your feature code, under `tests/`, in a single flat directory, wherever. The pre-Phase-3 convention was `trails/` at the project root; that still works, it's just not required.
+No for a one-off trail file you run directly by path. Yes if you want the current
+project-level workspace model: `trails/` is the anchor directory, and
+`trails/config/trailblaze.yaml` is how Trailblaze discovers project config automatically.
 
 **Can I organize by feature?**
 Yes, and it's often clearer. Put a trail next to the code it covers (e.g., `features/checkout/checkout.trail.yaml`) and run it with `trailblaze trail features/checkout/checkout.trail.yaml` or glob the whole tree with `trailblaze trail features/**/*.trail.yaml`.

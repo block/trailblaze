@@ -45,5 +45,5 @@
 #   selecting "Work" — a non-obvious multi-step UI interaction the agent missed.
 # [2026-03-11] PASSED - Agent entered name, phone fields correctly. "Work" label
 #   assertion still fails (see 03-10 entry) but the step itself passed.
-# [2026-03-11] Build #27 FAILED - gRPC UNAVAILABLE after 121s. Emulator instability.
-#   REGRESSION from build #24 where this passed.
+# [2026-03-11] FAILED - gRPC UNAVAILABLE after 121s. Emulator instability.
+#   REGRESSION from a prior run where this passed.

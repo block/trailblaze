@@ -90,12 +90,13 @@ import kotlinx.datetime.toLocalDateTime
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.llm.LlmSessionUsageAndCost
+import xyz.block.trailblaze.logs.model.SessionGroup
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionInfo
 import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.logs.model.computeGroupedStats
 import xyz.block.trailblaze.logs.model.groupByTest
-import xyz.block.trailblaze.ui.composables.FallbackChip
+import xyz.block.trailblaze.ui.composables.SelfHealChip
 import xyz.block.trailblaze.ui.composables.FullScreenModalOverlay
 import xyz.block.trailblaze.ui.composables.PriorityChip
 import xyz.block.trailblaze.ui.composables.SelectableText
@@ -109,18 +110,18 @@ import xyz.block.trailblaze.ui.icons.BrowserChrome
 enum class SessionStatusFilter(val displayName: String) {
   IN_PROGRESS("In Progress"),
   SUCCEEDED("Succeeded"),
-  SUCCEEDED_FALLBACK("Succeeded (Fallback)"),
+  SUCCEEDED_SELF_HEAL("Succeeded (Self-Heal)"),
   FAILED("Failed"),
-  FAILED_FALLBACK("Failed (Fallback)"),
+  FAILED_SELF_HEAL("Failed (Self-Heal)"),
   TIMEOUT("Timeout"),
   MAX_CALLS_LIMIT("Max Calls Limit");
 
   fun matches(status: SessionStatus): Boolean = when (this) {
     IN_PROGRESS -> status is SessionStatus.Started
     SUCCEEDED -> status is SessionStatus.Ended.Succeeded
-    SUCCEEDED_FALLBACK -> status is SessionStatus.Ended.SucceededWithFallback
+    SUCCEEDED_SELF_HEAL -> status is SessionStatus.Ended.SucceededWithSelfHeal
     FAILED -> status is SessionStatus.Ended.Failed
-    FAILED_FALLBACK -> status is SessionStatus.Ended.FailedWithFallback
+    FAILED_SELF_HEAL -> status is SessionStatus.Ended.FailedWithSelfHeal
     TIMEOUT -> status is SessionStatus.Ended.TimeoutReached
     MAX_CALLS_LIMIT -> status is SessionStatus.Ended.MaxCallsLimitReached
   }
@@ -131,9 +132,9 @@ enum class SessionStatusFilter(val displayName: String) {
 private fun statusAccentColor(status: SessionStatus): Color = when (status) {
   is SessionStatus.Started -> Color(0xFFFFC107)
   is SessionStatus.Ended.Succeeded -> Color(0xFF4CAF50)
-  is SessionStatus.Ended.SucceededWithFallback -> Color(0xFF26A69A)
+  is SessionStatus.Ended.SucceededWithSelfHeal -> Color(0xFF26A69A)
   is SessionStatus.Ended.Failed -> Color(0xFFE53935)
-  is SessionStatus.Ended.FailedWithFallback -> Color(0xFF7B1FA2)
+  is SessionStatus.Ended.FailedWithSelfHeal -> Color(0xFF7B1FA2)
   is SessionStatus.Ended.TimeoutReached -> Color(0xFFFF9800)
   is SessionStatus.Ended.MaxCallsLimitReached -> Color(0xFFE53935)
   is SessionStatus.Ended.Cancelled -> Color(0xFFFF9800)
@@ -159,7 +160,7 @@ private data class SessionStats(
   val uniqueTests: Int,
   val passed: Int,
   val failed: Int,
-  val fallback: Int,
+  val selfHeal: Int,
   val retried: Int,
   val inProgress: Int,
   val timeout: Int,
@@ -184,9 +185,10 @@ private fun computeStats(sessions: List<SessionInfo>): SessionStats {
   var totalLlmCost = 0.0
   var totalLlmReqs = 0
 
-  // Compute cost/duration from the best result per group
+  // Compute cost/duration from the most recent attempt per group, so the summary reflects
+  // what the user sees today (consistent with the status counts in computeGroupedStats).
   for (group in groups) {
-    val session = group.best
+    val session = group.latest
     if (session.latestStatus is SessionStatus.Ended.Cancelled) cancelled++
     if (session.durationMs > 0) {
       totalDuration += session.durationMs
@@ -203,7 +205,7 @@ private fun computeStats(sessions: List<SessionInfo>): SessionStats {
     uniqueTests = groupedStats.uniqueTests,
     passed = groupedStats.passed,
     failed = groupedStats.failed,
-    fallback = groupedStats.fallback,
+    selfHeal = groupedStats.selfHeal,
     retried = groupedStats.retried,
     inProgress = groupedStats.inProgress,
     timeout = groupedStats.timeout,
@@ -295,35 +297,55 @@ fun SessionListComposable(
       recordedFilter != null ||
       searchKeyword.isNotEmpty()
 
-  // Filter sessions
-  val filteredSessions = sessions.filter { session ->
-    val priorityMatch = selectedPriorities.isEmpty() ||
-        session.trailConfig?.priority?.let { it in selectedPriorities } == true ||
-        (session.trailConfig?.priority == null && selectedPriorities.isEmpty())
+  // Bucket sessions by date first, then build retry-aware groups *within each day* and filter
+  // those groups by `group.latest` (the most recent attempt). Two reasons:
+  //   1. Filter semantics match what's rendered as the primary card — a Failed→Succeeded rerun
+  //      drops out of a "Failed" filter, while a MaxCalls→Failed rerun stays in (and the earlier
+  //      attempt is still visible under "Previous attempts" when the row is expanded).
+  //   2. Per-day grouping scope preserves the desktop session-history view: a test re-run on a
+  //      later day shows up on each day it ran, instead of collapsing into one row on the most
+  //      recent day. For the WASM report (all retries within minutes) this is equivalent to
+  //      grouping globally.
+  // Cache the (sessions → daily groups) computation so it doesn't re-run on every keystroke
+  // in the search box. It only depends on `sessions`; the filter is applied below as a cheap
+  // per-group predicate.
+  val groupsByDayUnfiltered: Map<LocalDate, List<SessionGroup>> = remember(sessions) {
+    sessions.groupBy { it.timestamp.toLocalDateTime(TimeZone.currentSystemDefault()).date }
+      .mapValues { (_, daySessions) -> daySessions.groupByTest() }
+  }
 
-    val statusMatch = if (selectedStatuses.isEmpty()) {
-      true
-    } else {
-      selectedStatuses.any { it.matches(session.latestStatus) }
+  val groupsByDay: Map<LocalDate, List<SessionGroup>> = groupsByDayUnfiltered.mapValues { (_, dayGroups) ->
+    dayGroups.filter { group ->
+      val latest = group.latest
+      val priorityMatch = selectedPriorities.isEmpty() ||
+          latest.trailConfig?.priority?.let { it in selectedPriorities } == true
+
+      val statusMatch = selectedStatuses.isEmpty() ||
+          selectedStatuses.any { it.matches(latest.latestStatus) }
+
+      val platformMatch = selectedPlatforms.isEmpty() ||
+          latest.trailblazeDeviceInfo?.platform?.name?.let { it in selectedPlatforms } == true
+
+      val classifierMatch = selectedClassifiers.isEmpty() ||
+          latest.trailblazeDeviceInfo?.classifiers?.any { it in selectedClassifiers } == true
+
+      val recordedMatch = recordedFilter == null || latest.hasRecordedSteps == recordedFilter
+
+      val keywordMatch = searchKeyword.isEmpty() ||
+          latest.displayName.contains(searchKeyword, ignoreCase = true) ||
+          latest.trailConfig?.description?.contains(searchKeyword, ignoreCase = true) == true ||
+          latest.trailConfig?.id?.contains(searchKeyword, ignoreCase = true) == true ||
+          latest.testClass?.contains(searchKeyword, ignoreCase = true) == true ||
+          latest.testName?.contains(searchKeyword, ignoreCase = true) == true ||
+          latest.trailConfig?.title?.contains(searchKeyword, ignoreCase = true) == true
+
+      priorityMatch && statusMatch && platformMatch && classifierMatch && recordedMatch && keywordMatch
     }
+  }
 
-    val platformMatch = selectedPlatforms.isEmpty() ||
-        session.trailblazeDeviceInfo?.platform?.name?.let { it in selectedPlatforms } == true
-
-    val classifierMatch = selectedClassifiers.isEmpty() ||
-        session.trailblazeDeviceInfo?.classifiers?.any { it in selectedClassifiers } == true
-
-    val recordedMatch = recordedFilter == null || session.hasRecordedSteps == recordedFilter
-
-    val keywordMatch = searchKeyword.isEmpty() ||
-        session.displayName.contains(searchKeyword, ignoreCase = true) ||
-        session.trailConfig?.description?.contains(searchKeyword, ignoreCase = true) == true ||
-        session.trailConfig?.id?.contains(searchKeyword, ignoreCase = true) == true ||
-        session.testClass?.contains(searchKeyword, ignoreCase = true) == true ||
-        session.testName?.contains(searchKeyword, ignoreCase = true) == true ||
-        session.trailConfig?.title?.contains(searchKeyword, ignoreCase = true) == true
-
-    priorityMatch && statusMatch && platformMatch && classifierMatch && recordedMatch && keywordMatch
+  // Flat list of all attempts in visible groups — used by the day stats and the empty-state copy.
+  val filteredSessions: List<SessionInfo> = groupsByDay.values.flatMap { groups ->
+    groups.flatMap { it.allAttempts }
   }
 
   val stats = remember(sessions) { computeStats(sessions) }
@@ -596,12 +618,12 @@ fun SessionListComposable(
           }
 
           // === Session list grouped by date ===
-          val groupedSessions: Map<LocalDate, List<SessionInfo>> = filteredSessions.groupBy {
-            it.timestamp.toLocalDateTime(TimeZone.currentSystemDefault()).date
-          }
-
-          groupedSessions.toList().sortedByDescending { it.first }
-            .forEach { (date, sessionsForDay) ->
+          // `groupsByDay` is already built per-day above (see the filter block). Drop empty
+          // days (their groups got filtered out entirely) and render most recent first.
+          groupsByDay.toList()
+            .filter { (_, groupsForDay) -> groupsForDay.isNotEmpty() }
+            .sortedByDescending { it.first }
+            .forEach { (date, groupsForDay) ->
               item {
                 Spacer(modifier = Modifier.height(8.dp))
                 SelectionContainer {
@@ -616,8 +638,9 @@ fun SessionListComposable(
                       fontWeight = FontWeight.SemiBold,
                       color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    // Mini pass/fail for the day
-                    val dayStats = computeStats(sessionsForDay)
+                    // Mini pass/fail for the day — count distinct tests, not raw attempts.
+                    val dayAttempts = groupsForDay.flatMap { it.allAttempts }
+                    val dayStats = computeStats(dayAttempts)
                     if (dayStats.completed > 0) {
                       Text(
                         text = "${dayStats.passed}/${dayStats.completed}",
@@ -627,7 +650,7 @@ fun SessionListComposable(
                       )
                     } else {
                       Text(
-                        text = "${sessionsForDay.size}",
+                        text = "${groupsForDay.size}",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                       )
@@ -641,23 +664,26 @@ fun SessionListComposable(
                 Spacer(modifier = Modifier.height(4.dp))
               }
 
-              // Group sessions by (displayName, device classifiers) so retries and
-              // re-runs of the same test on the same platform collapse into one row.
-              val grouped = sessionsForDay
-                .sortedByDescending { it.timestamp }
-                .groupBy { session ->
-                  val classifierKey = session.trailblazeDeviceInfo?.classifiers
-                    ?.joinToString(",") { it.classifier } ?: ""
-                  session.displayName to classifierKey
-                }
+              // Sort groups within the day by their most recent attempt timestamp (desc).
+              // `allAttempts` is sorted ascending by groupByTest(), so `last()` is the most
+              // recent attempt — cheaper than maxOf and computed once per group.
+              val sortedGroups = groupsForDay.sortedByDescending { group ->
+                group.allAttempts.last().timestamp
+              }
 
               items(
-                items = grouped.values.toList(),
-                key = { group -> group.first().sessionId.value },
-              ) { groupSessions ->
-                if (groupSessions.size == 1) {
+                items = sortedGroups,
+                key = { group -> group.allAttempts.first().sessionId.value },
+              ) { sessionGroup ->
+                // Render attempts newest-first so the primary card is the latest run and the
+                // expanded "Previous attempts" list shows older runs (including ones whose
+                // status didn't match the active filter — e.g. a MaxCallsLimitReached run that
+                // preceded the final Failed attempt). `allAttempts` is sorted ascending, so
+                // an O(1) reversed view is sufficient; no need to re-sort.
+                val attemptsDesc = sessionGroup.allAttempts.asReversed()
+                if (attemptsDesc.size == 1) {
                   SessionCard(
-                    session = groupSessions.first(),
+                    session = attemptsDesc.first(),
                     importedSessionIds = importedSessionIds,
                     sessionClicked = sessionClicked,
                     deleteSession = deleteSession,
@@ -666,7 +692,7 @@ fun SessionListComposable(
                   )
                 } else {
                   GroupedSessionCard(
-                    sessions = groupSessions,
+                    sessions = attemptsDesc,
                     importedSessionIds = importedSessionIds,
                     sessionClicked = sessionClicked,
                     deleteSession = deleteSession,
@@ -792,7 +818,7 @@ private fun StatsDashboard(
             label = "Passed",
             color = Color(0xFF4CAF50),
             selected = SessionStatusFilter.SUCCEEDED in selectedStatuses ||
-                SessionStatusFilter.SUCCEEDED_FALLBACK in selectedStatuses,
+                SessionStatusFilter.SUCCEEDED_SELF_HEAL in selectedStatuses,
             onClick = { onStatusToggle(SessionStatusFilter.SUCCEEDED) },
             modifier = Modifier.weight(1f),
           )
@@ -804,7 +830,7 @@ private fun StatsDashboard(
             label = "Failed",
             color = Color(0xFFE53935),
             selected = SessionStatusFilter.FAILED in selectedStatuses ||
-                SessionStatusFilter.FAILED_FALLBACK in selectedStatuses,
+                SessionStatusFilter.FAILED_SELF_HEAL in selectedStatuses,
             onClick = { onStatusToggle(SessionStatusFilter.FAILED) },
             modifier = Modifier.weight(1f),
           )
@@ -842,15 +868,15 @@ private fun StatsDashboard(
             modifier = Modifier.weight(1f),
           )
         }
-        if (stats.fallback > 0 || SessionStatusFilter.SUCCEEDED_FALLBACK in selectedStatuses) {
+        if (stats.selfHeal > 0 || SessionStatusFilter.SUCCEEDED_SELF_HEAL in selectedStatuses) {
           StatusPill(
             icon = Icons.Filled.SmartToy,
-            count = stats.fallback,
-            label = "Fallback",
+            count = stats.selfHeal,
+            label = "Self-Heal",
             color = Color(0xFF26A69A),
-            selected = SessionStatusFilter.SUCCEEDED_FALLBACK in selectedStatuses ||
-                SessionStatusFilter.FAILED_FALLBACK in selectedStatuses,
-            onClick = { onStatusToggle(SessionStatusFilter.SUCCEEDED_FALLBACK) },
+            selected = SessionStatusFilter.SUCCEEDED_SELF_HEAL in selectedStatuses ||
+                SessionStatusFilter.FAILED_SELF_HEAL in selectedStatuses,
+            onClick = { onStatusToggle(SessionStatusFilter.SUCCEEDED_SELF_HEAL) },
             modifier = Modifier.weight(1f),
           )
         }
@@ -1345,9 +1371,9 @@ private fun SessionCard(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(4.dp),
           ) {
-            if (session.latestStatus is SessionStatus.Ended.SucceededWithFallback ||
-                session.latestStatus is SessionStatus.Ended.FailedWithFallback) {
-              FallbackChip()
+            if (session.latestStatus is SessionStatus.Ended.SucceededWithSelfHeal ||
+                session.latestStatus is SessionStatus.Ended.FailedWithSelfHeal) {
+              SelfHealChip()
             }
             StatusBadge(status = session.latestStatus)
 

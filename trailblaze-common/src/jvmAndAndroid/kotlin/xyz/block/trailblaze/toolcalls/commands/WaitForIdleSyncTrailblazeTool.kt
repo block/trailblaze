@@ -15,9 +15,8 @@ import xyz.block.trailblaze.toolcalls.isSuccess
 @TrailblazeToolClass("wait")
 @LLMDescription(
   """
-Use this when you think you see a loading screen.
-This will force the app to wait for a specified amount of time.
-Prefer using this over the back button.
+Wait for a specified amount of time. Use when you see a loading screen — prefer this over
+pressing the back button.
     """,
 )
 data class WaitForIdleSyncTrailblazeTool(

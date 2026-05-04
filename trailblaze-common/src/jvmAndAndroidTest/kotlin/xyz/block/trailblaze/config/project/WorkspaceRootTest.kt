@@ -48,7 +48,7 @@ class WorkspaceRootTest {
     val result = findWorkspaceRoot(workspace.toPath())
 
     val configured = assertIs<WorkspaceRoot.Configured>(result)
-    assertEquals(workspace.toPath().toRealPath(), configured.dir)
+    assertEquals(File(workspace, "trails").toPath().toRealPath(), configured.dir)
     assertEquals(configFile.toPath().toRealPath(), configured.configFile)
   }
 
@@ -61,7 +61,7 @@ class WorkspaceRootTest {
     val result = findWorkspaceRoot(deep.toPath())
 
     val configured = assertIs<WorkspaceRoot.Configured>(result)
-    assertEquals(workspace.toPath().toRealPath(), configured.dir)
+    assertEquals(File(workspace, "trails").toPath().toRealPath(), configured.dir)
   }
 
   @Test
@@ -81,25 +81,25 @@ class WorkspaceRootTest {
   fun `starting path is a file walks up from its parent directory`() {
     val workspace = newDir("workspace")
     writeConfig(workspace)
-    val subdir = File(workspace, "flows").apply { mkdirs() }
+    val subdir = File(workspace, "trails/flows").apply { mkdirs() }
     val trailFile = File(subdir, "login.trail.yaml").apply { writeText("") }
 
     val result = findWorkspaceRoot(trailFile.toPath())
 
     val configured = assertIs<WorkspaceRoot.Configured>(result)
-    assertEquals(workspace.toPath().toRealPath(), configured.dir)
+    assertEquals(File(workspace, "trails").toPath().toRealPath(), configured.dir)
   }
 
   @Test
   fun `starting path is a directory uses it as the search anchor`() {
     val workspace = newDir("workspace")
     writeConfig(workspace)
-    val subdir = File(workspace, "nested").apply { mkdirs() }
+    val subdir = File(workspace, "trails/nested").apply { mkdirs() }
 
     val result = findWorkspaceRoot(subdir.toPath())
 
     val configured = assertIs<WorkspaceRoot.Configured>(result)
-    assertEquals(workspace.toPath().toRealPath(), configured.dir)
+    assertEquals(File(workspace, "trails").toPath().toRealPath(), configured.dir)
   }
 
   @Test
@@ -131,7 +131,7 @@ class WorkspaceRootTest {
     // Configured.dir must be the resolved real path — not the symlink location — so that
     // Phase 6 preferences keying can't create duplicate entries for the same workspace
     // via a user's symlinked clone.
-    assertEquals(realWorkspace.toPath().toRealPath(), configured.dir)
+    assertEquals(File(realWorkspace, "trails").toPath().toRealPath(), configured.dir)
   }
 
   @Test
@@ -177,7 +177,7 @@ class WorkspaceRootTest {
     val result = findWorkspaceRoot(deep.toPath())
 
     val configured = assertIs<WorkspaceRoot.Configured>(result)
-    assertEquals(inner.toPath().toRealPath(), configured.dir)
+    assertEquals(File(inner, "trails").toPath().toRealPath(), configured.dir)
     assertEquals(innerConfig.toPath().toRealPath(), configured.configFile)
   }
 
@@ -188,7 +188,8 @@ class WorkspaceRootTest {
   }
 
   private fun writeConfig(dir: File, contents: String = ""): File {
-    val file = File(dir, TrailblazeProjectConfigLoader.CONFIG_FILENAME)
+    val configDir = File(dir, "trails/config").apply { mkdirs() }
+    val file = File(configDir, TrailblazeProjectConfigLoader.CONFIG_FILENAME)
     file.writeText(contents)
     return file
   }

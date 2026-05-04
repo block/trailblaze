@@ -329,6 +329,53 @@ class TrailblazeNodeHitTestAndTapResolutionTest {
     assertEquals(contactsButton.nodeId, hit.nodeId)
   }
 
+  @Test
+  fun `hitTest prefers interactive NativeButton over non-interactive icon child with resourceId`() {
+    nextId = 1L
+    // Reproduces the iOS dismiss-button failure: a UIImageView icon (resourceId="x", 24×24px)
+    // inside a NativeButton was beating the NativeButton on the area tiebreaker, causing
+    // hitTest to return the non-interactive icon. The generated selector idRegex:"x" matched
+    // the icon but never triggered a tap action — 49 retries, modal unchanged.
+    //
+    // With the isInteractive tiebreaker, NativeButton (clickable=true) wins over the icon
+    // (non-interactive) even though the icon is smaller.
+    val iconChild = TrailblazeNode(
+      nodeId = nextId++,
+      bounds = TrailblazeNode.Bounds(346, 603, 370, 627), // 24×24 px
+      driverDetail = DriverNodeDetail.IosMaestro(className = "UIImageView", resourceId = "x"),
+      children = emptyList(),
+    )
+    val uiView = TrailblazeNode(
+      nodeId = nextId++,
+      bounds = TrailblazeNode.Bounds(346, 602, 370, 628),
+      driverDetail = DriverNodeDetail.IosMaestro(className = "UIView"),
+      children = listOf(iconChild),
+    )
+    val nativeButton = TrailblazeNode(
+      nodeId = nextId++,
+      bounds = TrailblazeNode.Bounds(346, 602, 370, 628), // 24×26 px — larger but interactive
+      driverDetail = DriverNodeDetail.IosMaestro(className = "NativeButton", clickable = true),
+      children = listOf(uiView),
+    )
+    val accessibilityView = TrailblazeNode(
+      nodeId = nextId++,
+      bounds = TrailblazeNode.Bounds(346, 602, 370, 628),
+      driverDetail = DriverNodeDetail.IosMaestro(className = "AccessibilityView", accessibilityText = "Dismiss"),
+      children = listOf(nativeButton),
+    )
+    val root = TrailblazeNode(
+      nodeId = nextId++,
+      bounds = TrailblazeNode.Bounds(0, 0, 400, 874),
+      driverDetail = DriverNodeDetail.IosMaestro(),
+      children = listOf(accessibilityView),
+    )
+
+    val hit = root.hitTest(358, 615)
+    assertNotNull(hit)
+    // Must be NativeButton (interactive), not the UIImageView icon child (non-interactive)
+    assertEquals(nativeButton.nodeId, hit!!.nodeId)
+  }
+
   // ======================================================================
   // resolveFromTap: basic cases
   // ======================================================================
@@ -597,5 +644,92 @@ class TrailblazeNodeHitTestAndTapResolutionTest {
     assertNotNull(result)
     assertEquals(target.nodeId, result.targetNode.nodeId)
     assertTrue(result.roundTripValid)
+  }
+
+  // ======================================================================
+  // Fixture-driven: Android accessibility overlapping-bounds round-trip
+  // ======================================================================
+
+  /**
+   * Regression for the Square pre-login Sign-in tap. Pre-login screens have an unlabeled
+   * clickable `android.view.View` wrapping a TextView that carries the visible label
+   * ("Sign in") but no `ACTION_CLICK`, plus a sibling Button child (also no `ACTION_CLICK`).
+   * All three nodes share a center point — hitTest must pick the clickable wrapper, the
+   * generated selector must round-trip back to it, and the recording must come out single-
+   * shape (`androidAccessibility` populated, no Maestro slot leakage).
+   *
+   * Loaded from `fixtures/android-accessibility/sign-in-button.json` so the assertions sit
+   * against a real captured tree shape, not a hand-rolled approximation. The fixture is
+   * deliberately tiny — root + one wrapper + two children — so the test stays readable.
+   */
+  @Test
+  fun `accessibility hitTest prefers clickable wrapper over text child sharing center`() {
+    val tree = loadAccessibilityFixture("sign-in-button.json")
+    // Center of the wrapper. The TextView "Sign in" (412..509, 1752..1800) and the
+    // unlabeled Button (80..840, 1712..1840) both contain this point too, so the
+    // interactive-first ordering on hitTest is what pins down the right answer.
+    val hit = tree.hitTest(SIGN_IN_CENTER_X, SIGN_IN_CENTER_Y)
+    assertNotNull(hit, "hitTest should return a node at the wrapper center")
+    assertEquals(
+      SIGN_IN_WRAPPER_NODE_ID,
+      hit.nodeId,
+      "hitTest must select the clickable wrapper (nodeId=$SIGN_IN_WRAPPER_NODE_ID), " +
+        "not the TextView (6) or Button (7) children. Got nodeId=${hit.nodeId} " +
+        "(${hit.driverDetail::class.simpleName}).",
+    )
+  }
+
+  @Test
+  fun `accessibility selector for clickable wrapper is single-shape and round-trips`() {
+    val tree = loadAccessibilityFixture("sign-in-button.json")
+    val hit = tree.hitTest(SIGN_IN_CENTER_X, SIGN_IN_CENTER_Y)
+    assertNotNull(hit)
+
+    // findBestSelector verifies isUniqueMatch internally — if it returns at all, the
+    // selector resolves back to exactly `hit`. Pin the *shape* invariant: accessibility
+    // recordings must populate the androidAccessibility slot only, never the maestro one.
+    val selector = TrailblazeNodeSelectorGenerator.findBestSelector(tree, hit)
+    assertNotNull(
+      selector.androidAccessibility,
+      "Selector for an AndroidAccessibility-shaped node must populate `androidAccessibility`",
+    )
+    assertNull(
+      selector.androidMaestro,
+      "Single-format invariant: accessibility recordings must NOT also populate the " +
+        "Maestro slot. Found: ${selector.androidMaestro}",
+    )
+
+    // Full round-trip: tap at center → generate → resolve → re-hit-test must close back
+    // on the same nodeId. resolveFromTap is the canonical entry point that does all of
+    // it, including the roundTripValid check.
+    val resolution = TrailblazeNodeSelectorGenerator.resolveFromTap(
+      tree,
+      SIGN_IN_CENTER_X,
+      SIGN_IN_CENTER_Y,
+    )
+    assertNotNull(resolution)
+    assertEquals(SIGN_IN_WRAPPER_NODE_ID, resolution.targetNode.nodeId)
+    assertTrue(
+      resolution.roundTripValid,
+      "Round-trip closure broken: resolved selector's center hit-tests back to a " +
+        "different node. resolvedCenter=${resolution.resolvedCenter}",
+    )
+  }
+
+  private fun loadAccessibilityFixture(name: String): TrailblazeNode {
+    val resource = checkNotNull(this::class.java.classLoader.getResource("fixtures/android-accessibility/$name")) {
+      "Fixture not found on test classpath: fixtures/android-accessibility/$name"
+    }
+    return xyz.block.trailblaze.logs.client.TrailblazeJson.defaultWithoutToolsInstance
+      .decodeFromString(TrailblazeNode.serializer(), resource.readText())
+  }
+
+  companion object {
+    /** Center of the "Sign in" wrapper in `sign-in-button.json`. */
+    private const val SIGN_IN_CENTER_X = 460
+    private const val SIGN_IN_CENTER_Y = 1776
+
+    /** nodeId of the clickable `android.view.View` wrapper in `sign-in-button.json`. */
+    private const val SIGN_IN_WRAPPER_NODE_ID = 8L
   }
 }

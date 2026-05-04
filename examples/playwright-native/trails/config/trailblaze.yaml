@@ -1,0 +1,5 @@
+# Workspace anchor for the Playwright Sample example. The example's authored unit
+# lives at packs/playwrightsample/pack.yaml; this file replaces the legacy flat target
+# previously at targets/playwright-sample.yaml.
+packs:
+  - packs/playwrightsample/pack.yaml

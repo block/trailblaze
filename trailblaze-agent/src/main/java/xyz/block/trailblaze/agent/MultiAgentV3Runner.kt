@@ -238,7 +238,7 @@ class MultiAgentV3Runner private constructor(
    * [config.mode]:
    *
    * - **DETERMINISTIC**: Uses [DeterministicTrailExecutor] for zero-LLM execution
-   * - **Other modes**: Uses [TrailStepPlanner] with AI fallback when needed
+   * - **Other modes**: Uses [TrailStepPlanner] with self-heal when needed
    *
    * ## Progress Reporting
    *
@@ -257,6 +257,14 @@ class MultiAgentV3Runner private constructor(
     config: TrailConfig = TrailConfig.DEFAULT,
     sessionId: SessionId = TrailblazeSessionManager.generateSessionId("trail"),
     initialActionHistory: List<String> = emptyList(),
+    /**
+     * The overall test case title (e.g. TestRail case name) that encompasses all steps.
+     *
+     * Passed as [RecommendationContext.overallObjective] so the inner agent can reason
+     * about each step in the context of the broader test goal and detect impossible
+     * objectives early instead of exhausting all retry attempts.
+     */
+    caseTitle: String? = null,
   ): TrailResult {
     val startTime = System.currentTimeMillis()
 
@@ -269,7 +277,7 @@ class MultiAgentV3Runner private constructor(
     )
 
     return try {
-      val result = executeTrail(steps, config, sessionId, initialActionHistory)
+      val result = executeTrail(steps, config, sessionId, initialActionHistory, caseTitle)
 
       // Report execution completed
       progressReporter?.onExecutionCompleted(
@@ -520,6 +528,7 @@ class MultiAgentV3Runner private constructor(
     config: TrailConfig,
     sessionId: SessionId,
     initialActionHistory: List<String> = emptyList(),
+    caseTitle: String? = null,
   ): TrailResult {
     // Check if we have the necessary components
     if (executor == null) {
@@ -559,14 +568,14 @@ class MultiAgentV3Runner private constructor(
           )
         }
 
-        val result = executePlannerBased(steps, config, sessionId, screenAnalyzer, executor, initialActionHistory)
+        val result = executePlannerBased(steps, config, sessionId, screenAnalyzer, executor, initialActionHistory, caseTitle)
         result.copy(targetDeviceId = deviceId)
       }
     }
   }
 
   /**
-   * Executes trail using TrailStepPlanner for modes that support AI fallback.
+   * Executes trail using TrailStepPlanner for modes that support self-heal.
    */
   private suspend fun executePlannerBased(
     steps: List<PromptStep>,
@@ -575,9 +584,10 @@ class MultiAgentV3Runner private constructor(
     screenAnalyzer: ScreenAnalyzer,
     executor: UiActionExecutor,
     initialActionHistory: List<String> = emptyList(),
+    caseTitle: String? = null,
   ): TrailResult {
     val startTime = System.currentTimeMillis()
-    val planner = TrailStepPlanner(steps, config, screenAnalyzer, executor, availableToolsProvider, initialActionHistory)
+    val planner = TrailStepPlanner(steps, config, screenAnalyzer, executor, availableToolsProvider, initialActionHistory, caseTitle)
     var state = initialTrailState(steps)
 
     while (!state.isComplete && !state.failed) {
@@ -635,7 +645,7 @@ class MultiAgentV3Runner private constructor(
           break
         }
 
-        // If this was a recording action and it failed, try the next action (AI fallback)
+        // If this was a recording action and it failed, try the next action (self-heal)
         if (action.type.name == "RECORDING" &&
           config.mode == TrailExecutionMode.RECORDING_WITH_FALLBACK
         ) {

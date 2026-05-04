@@ -12,7 +12,7 @@ import xyz.block.trailblaze.util.Console
 @TrailblazeToolClass("takeSnapshot")
 @LLMDescription(
   """
-This tool will take a snapshot of the current page and save it with the provided screen name.
+Take a snapshot of the current page and save it under the provided screen name.
   """,
 )
 class TakeSnapshotTool(

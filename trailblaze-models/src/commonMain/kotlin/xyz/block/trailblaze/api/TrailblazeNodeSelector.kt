@@ -248,6 +248,7 @@ sealed interface DriverNodeMatch {
     val classNameRegex: String? = null,
     val resourceIdRegex: String? = null,
     val uniqueId: String? = null,
+    val composeTestTagRegex: String? = null,
 
     // Text (regex matching)
     val textRegex: String? = null,
@@ -256,6 +257,7 @@ sealed interface DriverNodeMatch {
     val labeledByTextRegex: String? = null,
     val stateDescriptionRegex: String? = null,
     val paneTitleRegex: String? = null,
+    val roleDescriptionRegex: String? = null,
 
     // State (exact matching)
     val isEnabled: Boolean? = null,
@@ -283,12 +285,14 @@ sealed interface DriverNodeMatch {
       classNameRegex?.let { parts.add("class~\"$it\"") }
       resourceIdRegex?.let { parts.add("id~\"$it\"") }
       uniqueId?.let { parts.add("uid=\"$it\"") }
+      composeTestTagRegex?.let { parts.add("testTag~\"$it\"") }
       textRegex?.let { parts.add("\"$it\"") }
       contentDescriptionRegex?.let { parts.add("desc~\"$it\"") }
       hintTextRegex?.let { parts.add("hint~\"$it\"") }
       labeledByTextRegex?.let { parts.add("labeledBy~\"$it\"") }
       stateDescriptionRegex?.let { parts.add("state~\"$it\"") }
       paneTitleRegex?.let { parts.add("pane~\"$it\"") }
+      roleDescriptionRegex?.let { parts.add("role~\"$it\"") }
       isEnabled?.let { parts.add(if (it) "enabled" else "disabled") }
       isClickable?.let { parts.add(if (it) "clickable" else "not clickable") }
       isCheckable?.let { parts.add(if (it) "checkable" else "not checkable") }

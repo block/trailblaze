@@ -47,22 +47,22 @@ sealed interface SessionStatus {
     ) : Ended
 
     /**
-     * Session succeeded but required AI fallback after recording failures
+     * Session succeeded but required self-heal after recording failures
      */
     @Serializable
-    data class SucceededWithFallback(
+    data class SucceededWithSelfHeal(
       override val durationMs: Long,
-      val usedFallback: Boolean = true,
+      val usedSelfHeal: Boolean = true,
     ) : Ended
 
     /**
-     * Session failed after attempting AI fallback following recording failures
+     * Session failed after attempting self-heal following recording failures
      */
     @Serializable
-    data class FailedWithFallback(
+    data class FailedWithSelfHeal(
       override val durationMs: Long,
       val exceptionMessage: String?,
-      val usedFallback: Boolean = true,
+      val usedSelfHeal: Boolean = true,
     ) : Ended
 
     @Serializable

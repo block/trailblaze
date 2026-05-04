@@ -1,0 +1,14 @@
+- config:
+    title: "LLM Benchmark: Disambiguate duplicate items in a list"
+    driver: PLAYWRIGHT_NATIVE
+    description: |-
+      Navigate to the local duplicate-list fixture and click specific items
+      among multiple rows with the same visible text. Exercises the model's
+      ability to use positional/contextual cues.
+- prompts:
+    - step: Navigate to http://localhost:8765/duplicate-list.html
+    - step: Verify the heading "Product List" is visible
+    - step: Click the "View" button on the first "Premium Cable" item in the Electronics section
+    - step: Verify the text "elec-1" is visible in the detail panel
+    - step: Click the "View" button on the second "Premium Cable" item in the Electronics section
+    - step: Verify the text "elec-2" is visible in the detail panel

@@ -1,0 +1,20 @@
+# Per-file scripted tool for the iOS Contacts pack. Resolved by the pack loader and
+# translated into the runtime InlineScriptToolConfig shape (see PackScriptedToolFile).
+#
+# `script:` paths resolve from the JVM working directory, which is the example workspace root when `trailblaze` is invoked there via walk-up discovery.
+script: ./trails/config/tools/contacts_ios_openNewContact.js
+name: contacts_ios_openNewContact
+description: Launch the iOS Contacts app and open the new-contact draft screen.
+_meta:
+  trailblaze/supportedPlatforms: [ios]
+  trailblaze/requiresContext: true
+inputSchema:
+  appId:
+    type: string
+    description: iOS bundle id of the Contacts app to launch (e.g. com.apple.MobileAddressBook).
+  addButtonLabel:
+    type: string
+    description: Accessibility label of the "+" / Add button in the Contacts list (locale-dependent, e.g. "Add" in en-US).
+  firstNameLabel:
+    type: string
+    description: Accessibility label of the First Name field on the new-contact draft (locale-dependent, e.g. "First name" in en-US).

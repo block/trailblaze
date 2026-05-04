@@ -1,0 +1,26 @@
+# Demo pack for the Google Clock target. Loaded as a workspace pack from the opensource
+# repo's `trails/config/trailblaze.yaml` — not bundled into the Trailblaze JAR. Binary-only
+# adopters running outside this repo do not see this target unless they declare a workspace
+# pack with the same id.
+#
+# Per-platform `tool_sets:` and web `drivers:` are inherited from the bundled `trailblaze`
+# framework pack via `dependencies: [trailblaze]`. Platforms that only need defaults are
+# declared as empty maps (`{}`) — the explicit signal "this platform exists, fill in
+# everything from defaults."
+id: clock
+dependencies:
+  - trailblaze
+target:
+  display_name: Google Clock
+  platforms:
+    android:
+      app_ids:
+        - com.google.android.deskclock
+        - com.android.deskclock
+    ios: {}
+    web: {}
+    compose: {}
+waypoints:
+  - waypoints/clock_android_clock_tab.waypoint.yaml
+  - waypoints/clock_android_alarm_tab.waypoint.yaml
+  - waypoints/clock_android_alarm_time_picker.waypoint.yaml

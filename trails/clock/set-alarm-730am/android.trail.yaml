@@ -4,8 +4,19 @@
     - step: Reinstall and launch the Clock app (com.android.deskclock)
       recording:
         tools:
-          - launchApp:
-              appId: com.android.deskclock
+          # Inlined raw Maestro launchApp so we can pass `permissions:` (Maestro-native,
+          # cross-platform) without expanding the Trailblaze launchApp tool's API surface.
+          # Granting `notifications` up front suppresses the POST_NOTIFICATIONS dialog
+          # that the host-rpc on-device runner can't see (it's owned by
+          # com.android.permissioncontroller, a separate process from the foreground app).
+          - maestro:
+              commands:
+                - launchApp:
+                    appId: com.android.deskclock
+                    clearState: true
+                    stopApp: true
+                    permissions:
+                      notifications: allow
     - step: Add a new alarm for 7:30 AM
       recording:
         tools:
@@ -40,11 +51,6 @@
     - step: After it's been added, turn it off
       recording:
         tools:
-          - tapOnElementBySelector:
-              reason: To decline notification permissions for the Clock app as the task requests to turn it off after being added.
-              selector:
-                textRegex: DON’T ALLOW
-                idRegex: com.android.permissioncontroller:id/permission_deny_button
           - tapOnElementBySelector:
               reason: To turn off the alarm added for 7:30 AM as required by the objective.
               selector:

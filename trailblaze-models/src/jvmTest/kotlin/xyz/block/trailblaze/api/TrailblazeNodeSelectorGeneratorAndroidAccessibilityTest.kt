@@ -28,6 +28,67 @@ class TrailblazeNodeSelectorGeneratorAndroidAccessibilityTest : TrailblazeNodeSe
     assertNotNull(match.uniqueId)
   }
 
+  // -- Strategy 1: composeTestTag (third tier of identity strategy) --
+
+  @Test
+  fun `composeTestTag selector when no uniqueId or resourceId`() {
+    nextId = 1L
+    val target = node(detail = DriverNodeDetail.AndroidAccessibility(composeTestTag = "checkout_btn"))
+    val other = node(detail = DriverNodeDetail.AndroidAccessibility(text = "Other"))
+    val root = node(children = listOf(target, other))
+
+    val selector = assertUniqueMatch(root, target)
+    val match = selector.driverMatch as DriverNodeMatch.AndroidAccessibility
+    assertNotNull(match.composeTestTagRegex)
+  }
+
+  @Test
+  fun `resourceId beats composeTestTag in identity tier`() {
+    // When both are present, resourceId wins because it sits above composeTestTag in the
+    // identity-tier fallback chain (uniqueId > resourceId > composeTestTag).
+    nextId = 1L
+    val target = node(
+      detail = DriverNodeDetail.AndroidAccessibility(
+        resourceId = "com.example:id/checkout",
+        composeTestTag = "checkout_btn",
+      ),
+    )
+    val other = node(detail = DriverNodeDetail.AndroidAccessibility(text = "Other"))
+    val root = node(children = listOf(target, other))
+
+    val selector = assertUniqueMatch(root, target)
+    val match = selector.driverMatch as DriverNodeMatch.AndroidAccessibility
+    assertNotNull(match.resourceIdRegex)
+    // composeTestTag is captured on the node but not consulted when resourceId resolves uniquely.
+  }
+
+  // -- Strategy 16b: roleDescription + className --
+
+  @Test
+  fun `roleDescription plus className disambiguation`() {
+    // Two ImageButtons on the same screen, one is a "Toggle", one is a "Tab" — disambiguated by
+    // the developer-set role description override.
+    nextId = 1L
+    val target = node(
+      detail = DriverNodeDetail.AndroidAccessibility(
+        roleDescription = "Toggle",
+        className = "android.widget.ImageButton",
+      ),
+    )
+    val other = node(
+      detail = DriverNodeDetail.AndroidAccessibility(
+        roleDescription = "Tab",
+        className = "android.widget.ImageButton",
+      ),
+    )
+    val root = node(children = listOf(target, other))
+
+    val selector = assertUniqueMatch(root, target)
+    val match = selector.driverMatch as DriverNodeMatch.AndroidAccessibility
+    assertNotNull(match.roleDescriptionRegex)
+    assertNotNull(match.classNameRegex)
+  }
+
   // -- Strategy 2: contentDescription alone --
 
   @Test

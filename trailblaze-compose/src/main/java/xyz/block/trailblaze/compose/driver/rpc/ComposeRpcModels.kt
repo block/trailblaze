@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.compose.driver.rpc
 
+import kotlinx.serialization.Contextual
 import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
@@ -20,6 +21,12 @@ data class SerializableComposeElementRef(
   val descriptor: String,
   val nthIndex: Int,
   val testTag: String?,
+  /**
+   * Screen-coordinate bounds carried over RPC so the host's set-of-mark
+   * annotator can label refs without re-walking the on-device tree.
+   * Nullable for back-compat with older payloads.
+   */
+  val bounds: TrailblazeNode.Bounds? = null,
 )
 
 /** Response containing the captured screen state. */
@@ -37,7 +44,7 @@ data class GetScreenStateResponse(
 /** Request to execute a batch of Compose tools. */
 @Serializable
 data class ExecuteToolsRequest(
-  val tools: List<TrailblazeTool>,
+  val tools: List<@Contextual TrailblazeTool>,
 ) : RpcRequest<ExecuteToolsResponse>
 
 /** Response containing the results of executed tools. */

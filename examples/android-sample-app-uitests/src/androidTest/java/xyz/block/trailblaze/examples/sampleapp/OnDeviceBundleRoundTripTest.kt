@@ -24,8 +24,8 @@ import xyz.block.trailblaze.scripting.bundle.fetchAndFilterTools
  * - `quickjs-kt`'s native library loading under the Android instrumentation runtime.
  * - The Android-side evaluate → async-binding → continuation flow under the instrumentation's
  *   coroutine dispatcher.
- * - **The [AndroidAssetBundleJsSource] asset-path resolver** — code review feedback flagged
- *   that earlier revisions of this test used `FromString` and so left the asset loader unverified
+ * - **The [AndroidAssetBundleJsSource] asset-path resolver** — code review feedback flagged that
+ *   earlier revisions of this test used `FromString` and so left the asset loader unverified
  *   on-device. Loading from an actual asset here means the CI device-farm shard also exercises the
  *   path production `AndroidTrailblazeRule.mcpServers` consumers hit when their target YAML's
  *   `script:` entry resolves to an APK-bundled `.js`.

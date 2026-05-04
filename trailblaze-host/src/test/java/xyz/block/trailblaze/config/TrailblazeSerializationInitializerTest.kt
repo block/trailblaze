@@ -3,6 +3,7 @@ package xyz.block.trailblaze.config
 import assertk.assertThat
 import assertk.assertions.contains
 import assertk.assertions.hasSize
+import assertk.assertions.isGreaterThanOrEqualTo
 import assertk.assertions.isNotEmpty
 import assertk.assertions.isTrue
 import org.junit.Test
@@ -41,6 +42,21 @@ class TrailblazeSerializationInitializerTest {
     for ((_, kClass) in discoveredTools) {
       assertThat(TrailblazeTool::class.java.isAssignableFrom(kClass.java)).isTrue()
     }
+  }
+
+  @Test
+  fun `tool discovery returns a stable count of class-backed tools across the host classpath`() {
+    // Lower-bound count assertion to catch silent partial failures during a tool YAML
+    // refactor. The named-tool tests above pin a specific subset (~31 names across
+    // Playwright/Compose/Revyl); this one catches the case where a less-prominent tool
+    // silently fails to load (e.g., a typo introduced during a bulk rename).
+    //
+    // The threshold (50) is well below the actual count visible to trailblaze-host's
+    // classpath (~80+ class-backed tools across the dependent driver modules) and well
+    // above zero — wide enough to absorb churn from one or two intentionally-removed
+    // tools, narrow enough to flag a regression that drops half the registry.
+    val discoveredCount = ToolYamlLoader.discoverAndLoadAll().size
+    assertThat(discoveredCount).isGreaterThanOrEqualTo(50)
   }
 
   @Test

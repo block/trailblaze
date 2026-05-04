@@ -1,8 +1,8 @@
 # Built-in LLM Models
 
-Trailblaze ships with the following built-in models. When you reference a model by `id` in your `trailblaze.yaml`, all specs below are inherited automatically.
+Trailblaze ships with the following built-in models. When you reference a model by `id` in your `trails/config/trailblaze.yaml`, all specs below are inherited automatically.
 
-**These models can change between Trailblaze releases** (models added/removed, pricing updated). For stable, predictable configuration, set explicit values in your workspace `trailblaze.yaml`.
+**These models can change between Trailblaze releases** (models added/removed, pricing updated). For stable, predictable configuration, set explicit values in your workspace `trails/config/trailblaze.yaml`.
 
 ## Anthropic
 
@@ -49,6 +49,7 @@ Trailblaze ships with the following built-in models. When you reference a model 
 | `gpt-4.1-mini` | 1M | 32K | $0.40 | $1.60 | $0.10 | basic-json-schema, completion, document, image, multipleChoices, openai-endpoint-chat-completions, openai-endpoint-responses, speculation, standard-json-schema, temperature, toolChoice, tools |
 | `gpt-5` | 400K | 128K | $1.25 | $10.00 | $0.13 | basic-json-schema, completion, document, image, multipleChoices, openai-endpoint-chat-completions, openai-endpoint-responses, speculation, standard-json-schema, temperature, toolChoice, tools |
 | `gpt-5-mini` | 400K | 128K | $0.25 | $2.00 | $0.03 | basic-json-schema, completion, document, image, multipleChoices, openai-endpoint-chat-completions, openai-endpoint-responses, speculation, standard-json-schema, temperature, toolChoice, tools |
+| `gpt-5-nano` | 400K | 128K | $0.05 | $0.40 | $0.01 | basic-json-schema, completion, document, image, multipleChoices, openai-endpoint-chat-completions, openai-endpoint-responses, speculation, standard-json-schema, temperature, toolChoice, tools |
 | `gpt-5.2` | 400K | 128K | $1.75 | $14.00 | $0.18 | basic-json-schema, completion, document, image, multipleChoices, openai-endpoint-chat-completions, openai-endpoint-responses, speculation, standard-json-schema, temperature, toolChoice, tools |
 
 ## OpenRouter

@@ -24,4 +24,4 @@
         matchMode: contains
 
 # --- Benchmark Run History ---
-# [2026-03-11] Build #27 FAILED - Agent limitation: ObjectiveFailed. Can't navigate Markor app.
+# [2026-03-11] FAILED - Agent limitation: ObjectiveFailed. Can't navigate Markor app.

@@ -3,7 +3,6 @@ package xyz.block.trailblaze.mcp.sampling
 import io.ktor.util.encodeBase64
 import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.agent.SamplingResult
-import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import xyz.block.trailblaze.api.ScreenState
@@ -15,9 +14,10 @@ import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
 import xyz.block.trailblaze.mcp.toolsets.ToolSetCategory
 import xyz.block.trailblaze.mcp.toolsets.ToolSetCategoryMapping
 import xyz.block.trailblaze.mcp.utils.ScreenStateCaptureUtil
-import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
 import xyz.block.trailblaze.toolcalls.KoogToolExt
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
+import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
+import xyz.block.trailblaze.toolcalls.TrailblazeToolSet
 import xyz.block.trailblaze.toolcalls.toKoogToolDescriptor
 import xyz.block.trailblaze.toolcalls.trailblazeToolClassAnnotation
 import xyz.block.trailblaze.viewhierarchy.ViewHierarchyFilter
@@ -57,12 +57,24 @@ class SubagentOrchestrator(
   private val toolClassByName: Map<String, KClass<out TrailblazeTool>> =
     availableTools.toolClasses.associateBy { it.trailblazeToolClassAnnotation().name }
 
-  /** Known YAML-defined tool names — must be accepted in [executeAction] even though they
-   *  share one backing class via the polymorphic serializer. */
+  /** Known YAML-defined tool names — must be accepted in [executeAction] alongside class-backed names. */
   private val yamlToolNamesSet: Set<String> =
     availableTools.yamlToolNames.map { it.toolName }.toSet()
 
   private val allKnownToolNames: Set<String> get() = toolClassByName.keys + yamlToolNamesSet
+
+  /**
+   * Per-orchestrator repo used to deserialize an LLM tool call by name. Built once from
+   * [availableTools] and reused for every [executeAction] — the tool surface here is fixed,
+   * so we don't pay the [ToolSetCategoryMapping.resolve] cost per call.
+   */
+  private val toolRepo: TrailblazeToolRepo = TrailblazeToolRepo(
+    TrailblazeToolSet.DynamicTrailblazeToolSet(
+      name = "Subagent",
+      toolClasses = availableTools.toolClasses,
+      yamlToolNames = availableTools.yamlToolNames,
+    ),
+  )
 
   companion object {
     /** Maximum number of LLM requests before giving up (safety valve) */
@@ -353,30 +365,13 @@ RULES:
     }
 
     return try {
-      // Build JSON with the tool discriminator and deserialize. The polymorphic serializer
-      // routes class-backed names to their KClass serializer and YAML-defined names to the
-      // pre-bound YamlDefinedToolSerializer, so both flavors land here without branching.
-      val toolJson = buildToolJsonString(action.name, action.args)
-      val tool = TrailblazeJsonInstance.decodeFromString<TrailblazeTool>(toolJson)
-      // Guard against silent fallback to OtherTrailblazeTool — the polymorphic serializer
-      // catches typed deserialization failures and falls back to OtherTrailblazeTool with
-      // potentially wrong/empty params. Reject so the error surfaces.
-      if (tool is OtherTrailblazeTool) {
-        return "[ERROR] Tool '${action.name}' deserialized as OtherTrailblazeTool — typed serializer likely failed. Args: ${action.args}"
-      }
+      // Route by toolName via the repo — class-backed and YAML-defined tools both decode
+      // through the same path with the flat args JSON (no toolName/raw wrapping needed).
+      val tool = toolRepo.toolCallToTrailblazeTool(action.name, action.args.toString())
       mcpBridge.executeTrailblazeTool(tool)
     } catch (e: Exception) {
       "[ERROR] Failed to deserialize or execute tool '${action.name}': ${e.message}"
     }
-  }
-
-  /** Build a JSON string for tool deserialization with the discriminator */
-  private fun buildToolJsonString(toolName: String, args: JsonObject): String {
-    // OtherTrailblazeToolSerializer looks for "toolName" to match tool classes by their ToolName
-    // (see OtherTrailblazeToolSerializer.deserialize() which checks jsonObject["toolName"])
-    val mutableMap = args.toMutableMap()
-    mutableMap["toolName"] = JsonPrimitive(toolName)
-    return JsonObject(mutableMap).toString()
   }
 }
 

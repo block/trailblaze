@@ -6,9 +6,9 @@ import xyz.block.trailblaze.logs.model.SessionId
 /**
  * Default value for whether self-heal is enabled.
  *
- * Self-heal (also known as "AI fallback") recovers via LLM calls when a recorded tool sequence
- * fails, and can update the recording so the test heals itself. Keeping it disabled by default
- * makes failures more actionable and ensures recordings are validated unless explicitly opted-in.
+ * Self-heal recovers via LLM calls when a recorded tool sequence fails, and can update the
+ * recording so the test heals itself. Keeping it disabled by default makes failures more
+ * actionable and ensures recordings are validated unless explicitly opted-in.
  */
 const val SELF_HEAL_DEFAULT: Boolean = false
 
@@ -42,6 +42,15 @@ data class TrailblazeConfig(
    * is no host, the agent always runs on-device regardless of this setting.
    */
   val preferHostAgent: Boolean = true,
+  /**
+   * When true, supported sessions auto-start the framework network capture engine for
+   * the duration of the run — `<session-dir>/network.ndjson` is populated without any
+   * per-trail capture-start call. Currently honored by Playwright web + Electron;
+   * on-device mobile engines plug into the same flag. Mirrors
+   * the desktop-app `captureLogcat` pattern. Off by default; flip via the desktop
+   * settings toggle, the `--capture-network` CLI flag, or set on this config directly.
+   */
+  val captureNetworkTraffic: Boolean = false,
 ) {
   companion object {
     val DEFAULT = TrailblazeConfig()

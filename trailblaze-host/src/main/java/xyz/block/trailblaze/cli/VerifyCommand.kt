@@ -4,6 +4,7 @@ import picocli.CommandLine
 import picocli.CommandLine.Command
 import picocli.CommandLine.Option
 import picocli.CommandLine.Parameters
+import xyz.block.trailblaze.util.Console
 import java.util.concurrent.Callable
 
 /**
@@ -12,8 +13,8 @@ import java.util.concurrent.Callable
  * Exit code 0 if the assertion passes, 1 if it fails.
  *
  * Examples:
- *   trailblaze verify "The Sign In button is visible"
- *   trailblaze verify "The balance shows $50.00"
+ *   trailblaze verify -d android/emulator-5554 "The Sign In button is visible"
+ *   trailblaze verify -d ios/SIM-UUID "The balance shows $50.00"
  */
 @Command(
   name = "verify",
@@ -30,7 +31,8 @@ class VerifyCommand : Callable<Int> {
 
   @Option(
     names = ["-d", "--device"],
-    description = ["Device: platform (android, ios, web) or platform/id"],
+    required = true,
+    description = ["Device: platform (android, ios, web) or platform/id. Required."],
   )
   var device: String? = null
 
@@ -41,16 +43,34 @@ class VerifyCommand : Callable<Int> {
   var verbose: Boolean = false
 
   @Option(
-    names = ["--fast"],
-    description = ["Text-only mode: skip screenshots, use text-only screen analysis (no vision tokens sent to LLM), and skip disk logging. Also enabled by BLAZE_FAST=1 env var."],
+    names = ["--no-screenshots", "--text-only"],
+    description = [
+      "Skip screenshots — the LLM only sees the textual view hierarchy, no vision " +
+        "tokens, and disk logging of screenshots is skipped too. Faster and cheaper " +
+        "for short objectives where the visual layout doesn't matter; some tasks need " +
+        "vision and will degrade without it."
+    ],
   )
-  var fast: Boolean = System.getenv("BLAZE_FAST") == "1"
+  var noScreenshots: Boolean = false
+
+  @CommandLine.Mixin
+  val headlessOption: HeadlessOption = HeadlessOption()
 
   override fun call(): Int {
     val assertion = assertionWords.joinToString(" ")
-    return cliWithDevice(verbose, device) { client ->
+    val deviceArg = device
+    if (deviceArg.isNullOrBlank()) {
+      Console.error("Error: --device is required for this command.")
+      return CommandLine.ExitCode.USAGE
+    }
+    return cliReusableWithDevice(
+      verbose = verbose,
+      device = deviceArg,
+      sessionScope = cliDeviceSessionScope(deviceArg),
+      webHeadless = headlessOption.resolve(),
+    ) { client ->
       val arguments = mutableMapOf<String, Any?>("objective" to assertion, "hint" to "VERIFY")
-      if (fast) arguments["fast"] = true
+      if (noScreenshots) arguments["fast"] = true
       val result = client.callTool("blaze", arguments)
       formatVerifyResultAgent(result)
     }

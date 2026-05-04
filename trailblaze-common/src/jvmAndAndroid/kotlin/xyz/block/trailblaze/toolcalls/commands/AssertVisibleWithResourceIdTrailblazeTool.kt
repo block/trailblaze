@@ -11,7 +11,7 @@ import xyz.block.trailblaze.toolcalls.MapsToMaestroCommands
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 
 @Serializable
-@TrailblazeToolClass("assertVisibleWithResourceId")
+@TrailblazeToolClass("assertVisibleWithResourceId", isForLlm = false, isVerification = true)
 @LLMDescription(
   """
 Asserts that an element with the provided resource ID is visible on the screen. The resourceId argument is required. Only provide additional fields if the resource ID provided exactly matches elsewhere on the screen. In this case, the additional fields will be used to identify the specific view to assert visibility for.

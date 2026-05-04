@@ -11,6 +11,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import xyz.block.trailblaze.capture.logcat.LogcatParser
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.model.HasScreenshot
@@ -40,6 +41,12 @@ object WasmReport {
 
   /** Low FPS for WASM embedded frames to keep report file size reasonable. */
   private const val WASM_VIDEO_FPS = 2
+
+  /** Max raw logcat file size to embed (5MB). Larger files are skipped to keep report small. */
+  private const val MAX_LOGCAT_RAW_BYTES = 5L * 1024 * 1024
+
+  /** Max logcat lines per session to embed. Keeps the tail (most useful for debugging). */
+  private const val MAX_LOGCAT_LINES_PER_SESSION = 5_000
 
   private val compactJsonReformatter = Json {
     prettyPrint = false
@@ -99,6 +106,10 @@ object WasmReport {
       compressStringToBase64(json)
     }
 
+    // Load device logs (logcat) for each session
+    Console.log("\nLoading device logs...")
+    val compressedDeviceLogs = loadAndCompressDeviceLogs(logsRepo, validSessionIds)
+
     // When useRelativeImageUrls is true, skip image embedding entirely so the report stays
     // small. This is useful for very large CI runs where embedding hundreds of screenshots
     // would produce a multi-gigabyte HTML file.
@@ -120,6 +131,7 @@ object WasmReport {
         perSessionData = perSessionData,
         videoFrameImages = videoFrameImages,
         compressedCaptureMetadata = compressedCaptureMetadata,
+        compressedDeviceLogs = compressedDeviceLogs,
       )
     } else {
       Console.log("Generating report from raw WASM UI build artifacts...")
@@ -132,6 +144,7 @@ object WasmReport {
         perSessionData = perSessionData,
         videoFrameImages = videoFrameImages,
         compressedCaptureMetadata = compressedCaptureMetadata,
+        compressedDeviceLogs = compressedDeviceLogs,
       )
     }
 
@@ -184,6 +197,7 @@ object WasmReport {
     perSessionData: Map<String, PerSessionData>,
     videoFrameImages: Map<String, ByteArray> = emptyMap(),
     compressedCaptureMetadata: Map<String, String> = emptyMap(),
+    compressedDeviceLogs: Map<String, String> = emptyMap(),
   ) {
     Console.log("Generating report from template: ${reportTemplateFile.absolutePath}")
 
@@ -251,6 +265,7 @@ object WasmReport {
           compressedPerSessionLogs = compressedPerSessionLogs,
           compressedImages = compressedImages,
           compressedCaptureMetadata = compressedCaptureMetadata,
+          compressedDeviceLogs = compressedDeviceLogs,
           imageAliases = imageAliases,
         )
         // Part 3: everything after the placeholder.
@@ -270,6 +285,7 @@ object WasmReport {
     perSessionData: Map<String, PerSessionData>,
     videoFrameImages: Map<String, ByteArray> = emptyMap(),
     compressedCaptureMetadata: Map<String, String> = emptyMap(),
+    compressedDeviceLogs: Map<String, String> = emptyMap(),
   ) {
     Console.log("Generating report from wasm ui build artifacts: ${trailblazeUiProjectDir.absolutePath}")
 
@@ -316,6 +332,7 @@ object WasmReport {
             compressedPerSessionLogs,
             compressedImages,
             compressedCaptureMetadata,
+            compressedDeviceLogs,
             imageAliases,
           ))
         },
@@ -376,6 +393,7 @@ object WasmReport {
     compressedPerSessionLogs: Map<String, String> = emptyMap(),
     compressedImages: Map<String, String> = emptyMap(),
     compressedCaptureMetadata: Map<String, String> = emptyMap(),
+    compressedDeviceLogs: Map<String, String> = emptyMap(),
     imageAliases: Map<String, String> = emptyMap(),
   ): String = buildString {
     append("window.trailblaze_report_compressed = {\n")
@@ -390,6 +408,12 @@ object WasmReport {
     append("},\n")
     append("  capture_metadata: {")
     append(compressedCaptureMetadata.entries.joinToString(",") { (id, data) ->
+      val escapedId = id.replace("\\", "\\\\").replace("\"", "\\\"")
+      "\"$escapedId\":\"$data\""
+    })
+    append("},\n")
+    append("  device_logs: {")
+    append(compressedDeviceLogs.entries.joinToString(",") { (id, data) ->
       val escapedId = id.replace("\\", "\\\\").replace("\"", "\\\"")
       "\"$escapedId\":\"$data\""
     })
@@ -425,6 +449,7 @@ object WasmReport {
     compressedPerSessionLogs: Map<String, String> = emptyMap(),
     compressedImages: Map<String, String> = emptyMap(),
     compressedCaptureMetadata: Map<String, String> = emptyMap(),
+    compressedDeviceLogs: Map<String, String> = emptyMap(),
     imageAliases: Map<String, String> = emptyMap(),
   ) {
     writer.write("window.trailblaze_report_compressed = {\n")
@@ -443,6 +468,15 @@ object WasmReport {
     writer.write("  capture_metadata: {")
     first = true
     compressedCaptureMetadata.forEach { (id, data) ->
+      if (!first) writer.write(",")
+      first = false
+      val escapedId = id.replace("\\", "\\\\").replace("\"", "\\\"")
+      writer.write("\"$escapedId\":\"$data\"")
+    }
+    writer.write("},\n")
+    writer.write("  device_logs: {")
+    first = true
+    compressedDeviceLogs.forEach { (id, data) ->
       if (!first) writer.write(",")
       first = false
       val escapedId = id.replace("\\", "\\\\").replace("\"", "\\\"")
@@ -960,8 +994,13 @@ object WasmReport {
       ((trimEndMs - startMs) * fps / 1000).toInt().coerceIn(0, frameCount - 1)
     } else frameCount - 1
 
-    // Load the sprite sheet image
-    val spriteImage = javax.imageio.ImageIO.read(spriteFile) ?: return
+    // Load the sprite sheet image. ImageIO doesn't support WebP natively, so decode
+    // via ffmpeg to a temp PNG first. JPEG sprite sheets (legacy) are read directly.
+    val spriteImage = if (spriteFile.name.endsWith(".webp")) {
+      decodeSpriteSheetWebP(spriteFile, sessionId)
+    } else {
+      javax.imageio.ImageIO.read(spriteFile)
+    } ?: return
     val spriteWidth = spriteImage.width
 
     // Crop each frame and write as JPEG bytes, deduplicating via frameMap.
@@ -1003,6 +1042,36 @@ object WasmReport {
       "    Cropped $totalCropped frames from sprite sheet (frames $firstFrameIndex..$lastFrameIndex)" +
         if (aliasCount > 0) ", $aliasCount aliased as duplicates" else ""
     )
+  }
+
+  /**
+   * Decodes a WebP sprite sheet to a BufferedImage via ffmpeg, since ImageIO doesn't
+   * support WebP natively. Returns null if ffmpeg is unavailable or decoding fails.
+   */
+  private fun decodeSpriteSheetWebP(
+    webpFile: File,
+    sessionId: SessionId,
+  ): java.awt.image.BufferedImage? {
+    val tempPng = File.createTempFile("trailblaze_sprite_${sessionId.value}_", ".png")
+    return try {
+      val process = ProcessBuilder(
+        "ffmpeg", "-i", webpFile.absolutePath,
+        "-loglevel", "error", "-y", tempPng.absolutePath,
+      ).redirectErrorStream(true).start()
+      process.inputStream.bufferedReader().readText()
+      val finished = process.waitFor(60, TimeUnit.SECONDS)
+      if (!finished || process.exitValue() != 0 || !tempPng.exists()) {
+        Console.log("  WARNING: Failed to decode WebP sprite sheet for ${sessionId.value}")
+        null
+      } else {
+        javax.imageio.ImageIO.read(tempPng)
+      }
+    } catch (e: Exception) {
+      Console.log("  WARNING: ffmpeg not available to decode WebP sprite: ${e.message}")
+      null
+    } finally {
+      tempPng.delete()
+    }
   }
 
   /** Extracts frames from a raw video file using ffmpeg (legacy path). */
@@ -1118,6 +1187,47 @@ object WasmReport {
       } catch (e: Exception) {
         Console.log("  WARNING: Failed to load capture metadata for ${sessionId.value}: ${e.message}")
       }
+    }
+    return result
+  }
+
+  /**
+   * Loads and compresses device logs (`device.log` — legacy `logcat.txt` / `system_log`
+   * filenames are also recognized via [LogcatParser.findDeviceLogFile]) for each session.
+   * Returns a map of session ID to gzip+base64-compressed log content.
+   *
+   * To keep report file sizes reasonable, the log is capped at [MAX_LOGCAT_LINES_PER_SESSION]
+   * lines per session (keeping the tail, which is most useful for debugging). Files larger than
+   * [MAX_LOGCAT_RAW_BYTES] are skipped entirely.
+   */
+  private fun loadAndCompressDeviceLogs(
+    logsRepo: LogsRepo,
+    sessionIds: List<SessionId>,
+  ): Map<String, String> {
+    val result = LinkedHashMap<String, String>()
+    for (sessionId in sessionIds) {
+      val sessionDir = File(logsRepo.logsDir, sessionId.value)
+      val logcatFile = LogcatParser.findDeviceLogFile(sessionDir) ?: continue
+      if (!logcatFile.exists() || logcatFile.length() == 0L) continue
+      if (logcatFile.length() > MAX_LOGCAT_RAW_BYTES) {
+        Console.log("  Skipping device logs for ${sessionId.value} — too large (${logcatFile.length() / 1024}KB > ${MAX_LOGCAT_RAW_BYTES / 1024}KB)")
+        continue
+      }
+      try {
+        val allLines = logcatFile.readLines()
+        val content = allLines.takeLast(MAX_LOGCAT_LINES_PER_SESSION).joinToString("\n")
+        val truncated = allLines.size > MAX_LOGCAT_LINES_PER_SESSION
+        // Wrap as a JSON string so the JS decompression pipeline's JSON.parse() succeeds.
+        // Raw text would fail JSON.parse() and the callback would never fire.
+        val jsonEncoded = compactJsonReformatter.encodeToString(content)
+        result[sessionId.value] = compressStringToBase64(jsonEncoded)
+        Console.log("  Loaded device logs for ${sessionId.value} (${logcatFile.length() / 1024}KB raw, ${allLines.size} lines${if (truncated) ", truncated to last $MAX_LOGCAT_LINES_PER_SESSION" else ""})")
+      } catch (e: Exception) {
+        Console.log("  WARNING: Failed to load device logs for ${sessionId.value}: ${e.message}")
+      }
+    }
+    if (result.isEmpty()) {
+      Console.log("  No device logs found for any session")
     }
     return result
   }

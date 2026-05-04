@@ -20,6 +20,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.toolcalls.isSuccess
+import xyz.block.trailblaze.utils.NoOpElementComparator
 
 /**
  * Abstract class for Trailblaze agents that handle Maestro commands.
@@ -40,7 +41,22 @@ abstract class MaestroTrailblazeAgent(
    * [xyz.block.trailblaze.toolcalls.TrailblazeToolRepo] before driver dispatch.
    */
   trailblazeToolRepo: TrailblazeToolRepo? = null,
-) : BaseTrailblazeAgent() {
+  /**
+   * Optional shared [AgentMemory] — see [BaseTrailblazeAgent.memory]. Defaults to a fresh
+   * instance for normal in-process construction; on-device RPC handlers pass an instance
+   * pre-populated from the host's snapshot so writes are visible across the boundary.
+   */
+  memory: AgentMemory = AgentMemory(),
+  /**
+   * Mirrors `RunYamlRequest.config.captureNetworkTraffic`. Surfaced to tools via
+   * [TrailblazeToolExecutionContext.captureNetworkTraffic] so capture-aware launch tools (e.g.
+   * an Android target whose debug build needs SharedPref gates flipped before the first network
+   * call so an out-of-band capture bridge can attach) can branch on the toggle without having to
+   * plumb the request config through every nested helper. Defaults to `false` so existing rules
+   * and tests stay unchanged.
+   */
+  val captureNetworkTraffic: Boolean = false,
+) : BaseTrailblazeAgent(memory = memory) {
 
   override val trailblazeToolRepo: TrailblazeToolRepo? = trailblazeToolRepo
 
@@ -137,7 +153,8 @@ abstract class MaestroTrailblazeAgent(
     screenStateProvider: (() -> ScreenState)?,
   ): TrailblazeToolExecutionContext {
     val trailblazeDeviceInfo = trailblazeDeviceInfoProvider()
-    return TrailblazeToolExecutionContext(
+    lateinit var context: TrailblazeToolExecutionContext
+    context = TrailblazeToolExecutionContext(
       screenState = screenState,
       traceId = traceId,
       trailblazeDeviceInfo = trailblazeDeviceInfo,
@@ -147,8 +164,19 @@ abstract class MaestroTrailblazeAgent(
       trailblazeLogger = trailblazeLogger,
       memory = memory,
       maestroTrailblazeAgent = this,
+      nestedToolExecutor = { nestedTool ->
+        runTrailblazeTools(
+          tools = listOf(nestedTool),
+          traceId = context.traceId,
+          screenState = context.screenState,
+          elementComparator = NoOpElementComparator,
+          screenStateProvider = context.screenStateProvider,
+        ).result
+      },
       nodeSelectorMode = nodeSelectorMode,
+      captureNetworkTraffic = captureNetworkTraffic,
     )
+    return context
   }
 
   override fun executeTool(

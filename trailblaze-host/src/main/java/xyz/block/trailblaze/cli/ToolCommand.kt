@@ -11,20 +11,20 @@ import java.util.concurrent.Callable
  * Invoke one or more tools by name with key=value arguments.
  *
  * Examples:
- *   trailblaze tool tapOnElement ref="Sign In" -o "Tap the Sign In button"
- *   trailblaze tool inputText text="hello" -o "Type hello"
- *   trailblaze tool tapOnElement --yaml "- tapOnElement:\n    ref: Sign In" -o "Tap sign in"
+ *   trailblaze tool -d android/emulator-5554 tap ref=p386 -o "Tap the Sign In button"
+ *   trailblaze tool -d ios/SIM-UUID inputText text="hello" -o "Type hello"
+ *   trailblaze tool -d android tap --yaml "- tap:\n    ref: p386" -o "Tap sign in"
  */
 @Command(
   name = "tool",
   mixinStandardHelpOptions = true,
-  description = ["Run a Trailblaze tool by name (e.g., tapOnElement, inputText)"],
+  description = ["Run a Trailblaze tool by name (e.g., tap, inputText)"],
 )
 class ToolCommand : Callable<Int> {
 
   @Parameters(
     index = "0",
-    description = ["Tool name (e.g., web_click, tapOnElement)"],
+    description = ["Tool name (e.g., web_click, tap)"],
     arity = "0..1",
   )
   var toolName: String? = null
@@ -55,7 +55,8 @@ class ToolCommand : Callable<Int> {
 
   @Option(
     names = ["-d", "--device"],
-    description = ["Device: platform (android, ios, web) or platform/id"],
+    required = true,
+    description = ["Device: platform (android, ios, web) or platform/id. Required."],
   )
   var device: String? = null
 
@@ -66,20 +67,41 @@ class ToolCommand : Callable<Int> {
   var verbose: Boolean = false
 
   @Option(
-    names = ["--fast"],
-    description = ["Text-only mode: skip screenshots, use text-only screen analysis (no vision tokens sent to LLM), and skip disk logging. Also enabled by BLAZE_FAST=1 env var."],
+    names = ["--no-screenshots", "--text-only"],
+    description = [
+      "Skip screenshots — the LLM only sees the textual view hierarchy, no vision " +
+        "tokens, and disk logging of screenshots is skipped too. Faster and cheaper " +
+        "for short objectives where the visual layout doesn't matter; some tasks need " +
+        "vision and will degrade without it."
+    ],
   )
-  var fast: Boolean = System.getenv("BLAZE_FAST") == "1"
+  var noScreenshots: Boolean = false
 
   @Option(
     names = ["--target"],
-    description = ["Target app ID. Saved for future commands."],
+    description = [
+      "Target app ID, saved as the default for future commands. " +
+        "List available targets with `trailblaze toolbox` (no args)."
+    ],
   )
   var target: String? = null
 
+  @CommandLine.Mixin
+  val headlessOption: HeadlessOption = HeadlessOption()
+
   override fun call(): Int {
     applyBlazeTarget(target)
-    return cliWithDevice(verbose, device) { client ->
+    val deviceArg = device
+    if (deviceArg.isNullOrBlank()) {
+      Console.error("Error: --device is required for this command.")
+      return CommandLine.ExitCode.USAGE
+    }
+    return cliReusableWithDevice(
+      verbose = verbose,
+      device = deviceArg,
+      sessionScope = cliDeviceSessionScope(deviceArg),
+      webHeadless = headlessOption.resolve(),
+    ) { client ->
       val toolsYaml = if (yaml != null) {
         yaml!!
       } else if (toolName != null) {
@@ -87,21 +109,24 @@ class ToolCommand : Callable<Int> {
           KeyValueParser.parse(argPairs)
         } catch (e: IllegalArgumentException) {
           Console.error("Error: ${e.message}")
-          return@cliWithDevice CommandLine.ExitCode.USAGE
+          return@cliReusableWithDevice CommandLine.ExitCode.USAGE
         }
         ToolYamlBuilder.build(toolName!!, args)
       } else {
         Console.error("Error: Either a tool name or --yaml must be provided.")
-        return@cliWithDevice CommandLine.ExitCode.USAGE
+        return@cliReusableWithDevice CommandLine.ExitCode.USAGE
       }
       val arguments = mutableMapOf<String, Any?>("objective" to objective, "tools" to toolsYaml)
-      if (fast) arguments["fast"] = true
+      if (noScreenshots) arguments["fast"] = true
       val result = client.callTool("blaze", arguments)
-      // Enhance "Unknown tool" errors with CLI-specific guidance
-      if (result.content.contains("Unknown tool")) {
+      // Enhance "Unknown tool" / "not valid for the current device/target" errors with
+      // CLI-specific guidance. Both surface as plain text in result.content; matching on the
+      // marker phrases keeps us decoupled from the rest of the markdown formatting.
+      val rejectionMarkers = listOf("Unknown tool", "not valid for the current device/target")
+      if (rejectionMarkers.any { result.content.contains(it) }) {
         Console.error(result.content.replace(Regex("\\*\\*.*?\\*\\*\\s*—\\s*"), ""))
-        Console.info("Tip: Run 'trailblaze toolbox' to see available tools.")
-        return@cliWithDevice CommandLine.ExitCode.SOFTWARE
+        Console.info("Tip: Run 'trailblaze toolbox --device <platform> --target <target>' to see what's available.")
+        return@cliReusableWithDevice CommandLine.ExitCode.SOFTWARE
       }
       formatBlazeResultAgent(result)
       blazeExitCode(result)

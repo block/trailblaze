@@ -7,6 +7,7 @@ import org.junit.Assume
 import org.junit.Before
 import org.junit.Test
 import xyz.block.trailblaze.config.project.TrailDiscovery
+import xyz.block.trailblaze.llm.config.TrailblazeConfigPaths
 import xyz.block.trailblaze.recordings.TrailRecordings
 
 /**
@@ -28,18 +29,12 @@ class SampleAppTrailDiscoveryFixtureTest {
 
   @Before
   fun locateSampleApp() {
-    // Walk up from the test's working dir until we find the sample-app. Supports both
-    // the standalone repo layout (`examples/android-sample-app/`) and a nested layout
-    // where Trailblaze lives under a subdirectory of a larger repo
-    // (`opensource/examples/android-sample-app/`). Guarding on "find it anywhere on the
-    // way up" keeps this test portable across different runners (IDE, Gradle, CI).
+    // Walk up from the test's working dir until we find the sample-app at
+    // `examples/android-sample-app/`. Walking up handles different runners (IDE, Gradle,
+    // CI) — gradle invokes tests from the module dir, IntelliJ from the repo root.
     val candidate = generateSequence(File(".").absoluteFile) { it.parentFile }
-      .mapNotNull { dir ->
-        sequenceOf("examples/android-sample-app", "opensource/examples/android-sample-app")
-          .map(dir::resolve)
-          .firstOrNull { it.isDirectory }
-      }
-      .firstOrNull()
+      .map { it.resolve("examples/android-sample-app") }
+      .firstOrNull { it.isDirectory }
     Assume.assumeTrue(
       "sample-app fixture not found via walk-up from ${File(".").absoluteFile}",
       candidate != null,
@@ -51,13 +46,25 @@ class SampleAppTrailDiscoveryFixtureTest {
   fun `discovery against the sample-app trails dir finds every committed trail file`() {
     val trailsDir = File(sampleAppRoot, "trails")
     assertTrue(trailsDir.isDirectory, "missing trails dir at ${trailsDir.absolutePath}")
+    val workspaceAnchor = File(sampleAppRoot, TrailblazeConfigPaths.WORKSPACE_CONFIG_FILE).canonicalFile
 
     val discovered = TrailDiscovery.discoverTrailFiles(trailsDir.toPath())
       .map { it.canonicalPath }
       .toSet()
 
+    // Mirror TrailDiscovery's exclusion list — without this, any dev artifact under
+    // `trails/config/*/node_modules/` (created by the bun/npm install tasks) that
+    // happens to ship an example *.trail.yaml in its package would land in groundTruth
+    // but be pruned by discovered, and the assertion would diverge purely on local
+    // dev state. (Suspected root cause of an intermittent flake on main.)
+    // Reference DEFAULT_EXCLUDED_DIRS directly so production drift in the list
+    // doesn't silently desync this test.
     val groundTruth = trailsDir.walkTopDown()
+      .onEnter { dir -> dir.name !in TrailDiscovery.DEFAULT_EXCLUDED_DIRS }
       .filter { it.isFile && TrailRecordings.isTrailFile(it.name) }
+      // The workspace config manifest is committed under `trails/config/`, but it is not
+      // a runnable trail and TrailDiscovery intentionally excludes it.
+      .filter { it.canonicalFile != workspaceAnchor }
       .map { it.canonicalPath }
       .toSet()
 
@@ -93,7 +100,7 @@ class SampleAppTrailDiscoveryFixtureTest {
       "discovery surfaced non-trails files: $outsideTrails",
     )
 
-    for (excluded in setOf("build", ".gradle", ".git", "node_modules", ".trailblaze")) {
+    for (excluded in TrailDiscovery.DEFAULT_EXCLUDED_DIRS) {
       val leaked = discovered.filter {
         it.startsWith("$excluded${File.separator}") ||
           it.contains("${File.separator}$excluded${File.separator}")

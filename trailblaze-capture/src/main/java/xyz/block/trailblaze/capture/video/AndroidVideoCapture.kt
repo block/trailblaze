@@ -28,7 +28,7 @@ import xyz.block.trailblaze.util.Console
 class AndroidVideoCapture : CaptureStream {
   override val type = CaptureType.VIDEO
 
-  private var process: Process? = null
+  private var streamHandle: AutoCloseable? = null
   private var sessionDir: File? = null
   private var deviceId: String? = null
   private var startTimestampMs: Long = 0
@@ -94,23 +94,23 @@ class AndroidVideoCapture : CaptureStream {
     val dev = deviceId ?: return null
     val dir = sessionDir ?: return null
 
+    val trailblazeDeviceId = TrailblazeDeviceId(dev, TrailblazeDevicePlatform.ANDROID)
+
     // Stop screenrecord on device
     try {
-      AndroidHostAdbUtils.createAdbCommandProcessBuilder(
-          args = listOf("shell", "pkill", "-INT", "screenrecord"),
-          deviceId = TrailblazeDeviceId(dev, TrailblazeDevicePlatform.ANDROID),
-        )
-        .start()
-        .waitFor()
+      AndroidHostAdbUtils.execAdbShellCommand(
+        deviceId = trailblazeDeviceId,
+        args = listOf("pkill", "-INT", "screenrecord"),
+      )
       // Give screenrecord time to finalize the MP4
       Thread.sleep(1500)
     } catch (e: Exception) {
       Console.log("Error stopping screenrecord: ${e.message}")
     }
 
-    // Also destroy our local process handle
-    process?.destroyForcibly()
-    process = null
+    // Also tear down our local stream handle
+    streamHandle?.let { runCatching { it.close() } }
+    streamHandle = null
 
     // Snapshot segments under the lock to avoid ConcurrentModificationException
     // from the chaining thread calling startSegment() concurrently.
@@ -122,19 +122,16 @@ class AndroidVideoCapture : CaptureStream {
     for (segment in segmentsSnapshot) {
       val localFile = File(dir, File(segment).name)
       try {
-        val pullProcess =
-          AndroidHostAdbUtils.createAdbCommandProcessBuilder(
-              args = listOf("pull", segment, localFile.absolutePath),
-              deviceId = TrailblazeDeviceId(dev, TrailblazeDevicePlatform.ANDROID),
-            )
-            .start()
-        val pullOutput = pullProcess.inputStream.bufferedReader().readText()
-        pullProcess.waitFor()
-        if (localFile.exists() && localFile.length() > 0) {
+        val pulled = AndroidHostAdbUtils.pullFile(
+          deviceId = trailblazeDeviceId,
+          remotePath = segment,
+          localFile = localFile,
+        )
+        if (pulled && localFile.exists() && localFile.length() > 0) {
           Console.log("Pulled $segment -> ${localFile.name} (${localFile.length() / 1024}KB)")
           localFiles.add(localFile)
         } else {
-          Console.log("Video segment empty or missing after pull: $segment (pullOutput=$pullOutput)")
+          Console.log("Video segment empty or missing after pull: $segment")
         }
       } catch (e: Exception) {
         Console.log("Failed to pull video segment $segment: ${e.message}")
@@ -144,12 +141,10 @@ class AndroidVideoCapture : CaptureStream {
     // Clean up device files
     for (segment in segmentsSnapshot) {
       try {
-        AndroidHostAdbUtils.createAdbCommandProcessBuilder(
-            args = listOf("shell", "rm", "-f", segment),
-            deviceId = TrailblazeDeviceId(dev, TrailblazeDevicePlatform.ANDROID),
-          )
-          .start()
-          .waitFor()
+        AndroidHostAdbUtils.execAdbShellCommand(
+          deviceId = trailblazeDeviceId,
+          args = listOf("rm", "-f", segment),
+        )
       } catch (_: Exception) {}
     }
     deviceSegments.clear()
@@ -176,15 +171,15 @@ class AndroidVideoCapture : CaptureStream {
 
     val endTimestampMs = DeviceClock.nowMs(dev)
 
-    // Generate a sprite sheet from the video — one tall JPEG with all frames stacked vertically.
-    // If ffmpeg is available, this replaces the full video with a ~3-7MB image.
+    // Generate a WebP sprite sheet from the video.
+    // If ffmpeg is available, this replaces the full video with a compact sprite image.
     // If not, fall back to keeping the original video.
     val spriteSheet =
       VideoSpriteExtractor.generateSpriteSheet(
         videoFile,
         fps = options.spriteFrameFps,
         frameHeight = options.spriteFrameHeight,
-        jpegQuality = options.spriteJpegQuality,
+        webpQuality = options.spriteQuality,
         isLandscape = isLandscape,
       )
     if (spriteSheet != null) {
@@ -210,24 +205,20 @@ class AndroidVideoCapture : CaptureStream {
    * Returns (width, height) reflecting the current orientation, or null if the query fails.
    */
   private fun getDeviceDisplaySize(deviceId: String): Pair<Int, Int>? {
-    try {
-      val proc =
-        AndroidHostAdbUtils.createAdbCommandProcessBuilder(
-            args = listOf("shell", "wm", "size"),
-            deviceId = TrailblazeDeviceId(deviceId, TrailblazeDevicePlatform.ANDROID),
-          )
-          .start()
-      val output = proc.inputStream.bufferedReader().readText().trim()
-      proc.waitFor(5, TimeUnit.SECONDS)
+    return try {
+      val output = AndroidHostAdbUtils.execAdbShellCommand(
+        deviceId = TrailblazeDeviceId(deviceId, TrailblazeDevicePlatform.ANDROID),
+        args = listOf("wm", "size"),
+      ).trim()
       // Output format: "Physical size: 1080x1920" or "Override size: ..."
       // Use the last line (override takes precedence if present)
       val lastLine = output.lines().lastOrNull { it.contains("size:") } ?: return null
       val match = Regex("(\\d+)x(\\d+)").find(lastLine) ?: return null
       val w = match.groupValues[1].toIntOrNull() ?: return null
       val h = match.groupValues[2].toIntOrNull() ?: return null
-      return Pair(w, h)
+      Pair(w, h)
     } catch (_: Exception) {
-      return null
+      null
     }
   }
 
@@ -240,34 +231,25 @@ class AndroidVideoCapture : CaptureStream {
     val trailblazeDeviceId = TrailblazeDeviceId(dev, TrailblazeDevicePlatform.ANDROID)
 
     // Gracefully stop any previous recording so the MP4 container is finalized.
-    // destroyForcibly() would corrupt the segment — mirror the SIGINT approach from stop().
+    // Closing the streaming handle alone would close the wire stream but adbd may not propagate
+    // SIGINT to screenrecord — explicit pkill -INT is what produces a clean MP4 trailer.
     try {
-      AndroidHostAdbUtils.createAdbCommandProcessBuilder(
-          args = listOf("shell", "pkill", "-INT", "screenrecord"),
-          deviceId = trailblazeDeviceId,
-        )
-        .start()
-        .waitFor()
+      AndroidHostAdbUtils.execAdbShellCommand(
+        deviceId = trailblazeDeviceId,
+        args = listOf("pkill", "-INT", "screenrecord"),
+      )
       Thread.sleep(500) // Brief wait for MP4 finalization
     } catch (_: Exception) {}
-    process?.destroyForcibly()
-    process = null
+    streamHandle?.let { runCatching { it.close() } }
+    streamHandle = null
 
     try {
-      process =
-        AndroidHostAdbUtils.createAdbCommandProcessBuilder(
-            args = listOf(
-              "shell",
-              "screenrecord",
-              "--size",
-              videoSize,
-              "--bit-rate",
-              BIT_RATE,
-              devicePath,
-            ),
-            deviceId = trailblazeDeviceId,
-          )
-          .start()
+      val command = "screenrecord --size $videoSize --bit-rate $BIT_RATE $devicePath"
+      streamHandle = AndroidHostAdbUtils.streamingShell(
+        deviceId = trailblazeDeviceId,
+        command = command,
+        onLine = { /* screenrecord is silent on stdout; ignore */ },
+      )
     } catch (e: Exception) {
       Console.log("Failed to start screenrecord segment $index: ${e.message}")
     }

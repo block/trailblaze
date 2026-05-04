@@ -1,8 +1,8 @@
 ## Tool `swipe`
 
 ## Description
-Swipes the screen in the specified direction. This is useful for navigating through long lists or pages.
-The start and end points are automatically calculated based on the direction and screen dimensions.
+Swipe the screen in the specified direction to navigate long lists or pages. Start and end points
+are calculated automatically from the direction and screen dimensions.
 
 ### Command Class
 `xyz.block.trailblaze.toolcalls.commands.SwipeTrailblazeTool`

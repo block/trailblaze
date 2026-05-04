@@ -29,7 +29,7 @@ A key principle: **author once, run deterministically**. While the subagent appr
 
 **Trail storage**: Trails are persisted as `trail.yaml` files on disk, stored in a project-level directory and referenced by path. Downstream test infrastructures may additionally generate trails from natural language when one doesn't exist on disk.
 
-**AI fallback** can recover from trail failures due to UI changes, but is disabled by default. This preserves determinism and avoids LLM costs. When a trail step fails, Trailblaze reports the failure to the MCP client, which can then decide whether to invoke AI-assisted recovery using natural language prompts.
+**self-heal** can recover from trail failures due to UI changes, but is disabled by default. This preserves determinism and avoids LLM costs. When a trail step fails, Trailblaze reports the failure to the MCP client, which can then decide whether to invoke AI-assisted recovery using natural language prompts.
 
 **Custom tools** are a key benefit of Trailblaze. By specifying a target app, teams get access to app-specific tools that expose functionality beyond standard UI interactions. For example, an app target can provide a tool for quickly logging into staging or test accounts, providing the same access as debug menus without navigating through the UI.
 

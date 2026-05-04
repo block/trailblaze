@@ -6,6 +6,7 @@ import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.Hiking
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Smartphone
 import androidx.compose.material3.Icon
@@ -50,6 +51,7 @@ class RunYamlRequestFactory(
       selfHeal = appConfig.selfHealEnabled,
       overrideSessionId = null,
       preferHostAgent = appConfig.preferHostAgent,
+      captureNetworkTraffic = appConfig.captureNetworkTraffic,
     ),
     trailFilePath = trailFilePath,
     trailblazeDeviceId = device.trailblazeDeviceId,
@@ -177,6 +179,14 @@ interface TrailblazeRoute {
     override val displayName = "MCP"
     override val icon: @Composable () -> Unit = {
       Icon(McpLogo, contentDescription = "MCP")
+    }
+  }
+
+  @Serializable
+  data object Waypoints : TrailblazeRoute {
+    override val displayName = "Waypoints"
+    override val icon: @Composable () -> Unit = {
+      Icon(Icons.Filled.Place, contentDescription = "Waypoints")
     }
   }
 }

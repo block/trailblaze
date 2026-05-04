@@ -1,0 +1,24 @@
+# Authored pack for the Playwright Sample example. Replaces the legacy flat target at
+# ../../targets/playwright-sample.yaml — this workspace is now pack-driven via the
+# sibling trailblaze.yaml. Each scripted tool lives in its own file under tools/,
+# referenced from the manifest below; the pack loader resolves each ref to a
+# PackScriptedToolFile and wraps its flat inputSchema into a JSON-Schema-conformant
+# object before handing it to the runtime.
+id: playwrightsample
+target:
+  display_name: Playwright Sample App
+  tools:
+    - tools/playwrightSample_web_openFixtureAndVerifyText.yaml
+    - tools/playwrightSample_web_incrementCounterToValue.yaml
+    - tools/playwrightSample_web_submitContactForm.yaml
+    - tools/playwrightSample_web_openFormIfNeeded.yaml
+    - tools/playwrightSample_web_openDuplicateProductDetail.yaml
+    - tools/playwrightSample_web_searchProductsAndOpenResult.yaml
+
+  platforms:
+    web:
+      drivers: [playwright-native, playwright-electron]
+      tool_sets:
+        - web_core
+        - web_verification
+        - memory

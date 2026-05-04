@@ -9,7 +9,7 @@
     <application
             android:allowBackup="true"
             android:supportsRtl="true">
-        <!-- TrailblazeAccessibilityService is declared in the trailblaze-accessibility library manifest
+        <!-- TrailblazeAccessibilityService is declared in the trailblaze-android library manifest
              and merged automatically via manifest merger. -->
     </application>
 </manifest>

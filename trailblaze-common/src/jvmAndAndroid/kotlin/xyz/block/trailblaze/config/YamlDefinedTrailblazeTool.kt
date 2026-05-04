@@ -2,6 +2,7 @@ package xyz.block.trailblaze.config
 
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
@@ -10,6 +11,7 @@ import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.InstanceNamedTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
+import xyz.block.trailblaze.toolcalls.TrailblazeToolMetadata
 import xyz.block.trailblaze.yaml.TrailblazeYaml
 
 /**
@@ -35,6 +37,20 @@ class YamlDefinedTrailblazeTool(
 ) : DelegatingTrailblazeTool, InstanceNamedTrailblazeTool {
 
   override val instanceToolName: String get() = config.id
+
+  /**
+   * Surface the per-config metadata flags so the resolver helpers
+   * ([xyz.block.trailblaze.toolcalls.getIsRecordableFromAnnotation],
+   * [xyz.block.trailblaze.toolcalls.requiresHostInstance]) read from the YAML, not from the
+   * shared `YamlDefinedTrailblazeTool::class` annotation. Without this override, every
+   * YAML-defined tool would inherit the same defaults regardless of its individual config.
+   */
+  override val toolMetadata: TrailblazeToolMetadata = TrailblazeToolMetadata(
+    isForLlm = config.isForLlm,
+    isRecordable = config.isRecordable,
+    requiresHost = config.requiresHost,
+    isVerification = config.isVerification,
+  )
 
   override fun toExecutableTrailblazeTools(
     executionContext: TrailblazeToolExecutionContext,
@@ -77,7 +93,11 @@ class YamlDefinedTrailblazeTool(
     config.parameters.forEach { p ->
       val caller = params[p.name]
       when {
-        caller != null -> out[p.name] = caller
+        // Treat an explicit JSON null the same as an omitted parameter: fall through to the
+        // declared default behavior. This ensures optional parameters with DropIfOmitted
+        // semantics (e.g. eraseText.charactersToErase) work correctly when the LLM passes
+        // null rather than omitting the field.
+        caller != null && caller != JsonNull -> out[p.name] = caller
         p.required -> error(
           "YAML tool '${config.id}' is missing required parameter '${p.name}'.",
         )

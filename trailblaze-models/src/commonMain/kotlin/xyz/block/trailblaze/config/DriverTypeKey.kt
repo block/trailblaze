@@ -44,6 +44,19 @@ object DriverTypeKey {
   }
 
   /**
+   * Every YAML key string accepted by [resolve], in lowercase. Includes per-driver
+   * keys (e.g., `playwright-native`), platform-level shorthands (e.g., `android`),
+   * and the meta-key `all`.
+   *
+   * Exposed for compile-time reference validators (e.g., `TrailblazeCompiler`) that
+   * need to check whether a `drivers:` entry in a target manifest names a real
+   * driver before emitting the resolved target. Using this set is preferable to
+   * try/catching [resolve] — that path allocates an exception on every miss and
+   * loses the call site of the typo.
+   */
+  val knownKeys: Set<String> = KEY_MAP.keys.toSet()
+
+  /**
    * Resolves a YAML key to a set of [TrailblazeDriverType]s.
    * Keys are case-insensitive.
    *
@@ -55,6 +68,13 @@ object DriverTypeKey {
         "Unknown driver type key: '$key'. Valid keys: ${KEY_MAP.keys.sorted()}"
       )
   }
+
+  /**
+   * Whether [key] (case-insensitive) is a known driver-type key. Cheap membership
+   * check that doesn't allocate or throw — pair this with [resolve] only after a
+   * caller has confirmed the key is valid.
+   */
+  fun isKnown(key: String): Boolean = key.lowercase() in knownKeys
 
   /**
    * Returns all driver types that match ANY of the given keys.

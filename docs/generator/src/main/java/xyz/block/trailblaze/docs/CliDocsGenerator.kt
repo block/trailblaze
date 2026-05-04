@@ -53,26 +53,33 @@ class CliDocsGenerator(
       appendLine("```")
       appendLine()
 
+      appendDeviceClaimsConcepts()
+
       // Global options
       appendLine("## Global Options")
       appendLine()
       generateOptionsTable(spec.options())
       appendLine()
 
-      // Commands summary table
+      // Commands summary table. Skip subcommands marked `hidden = true` — they're
+      // intentionally absent from `trailblaze --help` (and the GroupedCommandListRenderer
+      // filters them too); leaking them into the public CLI.md mirror would defeat the
+      // hidden flag. Same filter is applied to the detailed-section pass below.
+      val visibleSubcommands = commandLine.subcommands
+        .filterValues { !it.commandSpec.usageMessage().hidden() }
       appendLine("## Commands")
       appendLine()
       appendLine("| Command | Description |")
       appendLine("|---------|-------------|")
-      commandLine.subcommands.forEach { (name, subCommand) ->
+      visibleSubcommands.forEach { (name, subCommand) ->
         val desc = subCommand.commandSpec.usageMessage().description().firstOrNull()
           ?.stripPicocli() ?: ""
         appendLine("| `$name` | $desc |")
       }
       appendLine()
 
-      // Detailed documentation for each command
-      commandLine.subcommands.forEach { (name, subCommand) ->
+      // Detailed documentation for each command (also hidden-filtered).
+      visibleSubcommands.forEach { (name, subCommand) ->
         generateCommandSection("trailblaze", name, subCommand)
       }
 
@@ -80,6 +87,61 @@ class CliDocsGenerator(
     }
 
     File(docsDir, "CLI.md").writeText(content)
+  }
+
+  /**
+   * Hand-authored "Concepts" block. Lives in the generator (not a separate
+   * markdown file) so it sits at the top of the generated CLI.md alongside
+   * the Picocli-derived command tables and can never drift out of sync with
+   * the generated content.
+   */
+  private fun StringBuilder.appendDeviceClaimsConcepts() {
+    appendLine("## Device Claims & Sessions")
+    appendLine()
+    appendLine("Trailblaze tracks device ownership per MCP session so two CLI workflows on")
+    appendLine("the same machine cannot accidentally drive the same device at the same time.")
+    appendLine("Understanding the model up front saves debugging time when a command")
+    appendLine("unexpectedly returns `Error: Device <id> is already in use by another MCP session`.")
+    appendLine()
+    appendLine("### Two execution models")
+    appendLine()
+    appendLine("- **One-shot commands** — `ask`, `verify`, `snapshot`, `tool`. Each invocation")
+    appendLine("  opens a fresh MCP session, binds the requested device, runs once, and tears")
+    appendLine("  the session down. Different-device parallel one-shots are fully isolated.")
+    appendLine("- **Reusable workflows** — `blaze`, `blaze --save`, `session start/info/save/recording/stop/end/artifacts/delete`,")
+    appendLine("  `device connect`. These persist an MCP session under `/tmp/trailblaze-cli-session-{port}[-scope]`")
+    appendLine("  so follow-up commands can reattach. `blaze --save` is the canonical reason —")
+    appendLine("  each `blaze` invocation records steps into a per-device scoped session that")
+    appendLine("  `blaze --save` later exports as a trail YAML.")
+    appendLine()
+    appendLine("### Device-claim conflicts (yield-unless-busy)")
+    appendLine()
+    appendLine("Device-binding commands try to claim the requested device on the daemon.")
+    appendLine("If another MCP session already holds the claim, the daemon decides:")
+    appendLine()
+    appendLine("- **Prior holder is idle** → the new command silently displaces it and proceeds.")
+    appendLine("  Idle means \"no MCP tool call currently executing on that session.\"")
+    appendLine("- **Prior holder is mid-tool-call** → the new command fails with a `Device …")
+    appendLine("  is busy.` block naming the holder, the running tool, and how long it has been")
+    appendLine("  running. Wait for it to finish, or stop the holder before retrying.")
+    appendLine()
+    appendLine("Same-session re-claims are always allowed, so a `blaze` workflow that keeps")
+    appendLine("calling into its own scope never trips on this — only cross-session contention")
+    appendLine("with a busy holder does.")
+    appendLine()
+    appendLine("### When a `blaze` scope leaks across commands")
+    appendLine()
+    appendLine("`blaze --device android \"…\"` opens a `blaze-android` scoped MCP session that")
+    appendLine("stays alive on the daemon after the CLI exits, holding the device claim until")
+    appendLine("`blaze --save` (or another `blaze --device android`) reattaches. The session")
+    appendLine("is idle while it waits, so a subsequent one-shot like `ask --device android`")
+    appendLine("just yields and proceeds — the leaked scope no longer blocks unrelated commands.")
+    appendLine("If you want to clear it explicitly, `trailblaze app --stop` recycles the daemon")
+    appendLine("and drops all in-memory sessions.")
+    appendLine()
+    appendLine("Note: `session stop` ends the **global** CLI session created by `session start`.")
+    appendLine("It does not reap device-scoped `blaze` sessions; use `app --stop` for those.")
+    appendLine()
   }
 
   private fun StringBuilder.generateCommandSection(
@@ -97,8 +159,10 @@ class CliDocsGenerator(
     appendLine(spec.usageMessage().description().joinToString(" ").stripPicocli())
     appendLine()
 
-    // Synopsis — show subcommand usage patterns if present
-    val hasSubcommands = commandLine.subcommands.isNotEmpty()
+    // Synopsis — show subcommand usage patterns if present (hidden-filtered).
+    val visibleSubcommandsHere = commandLine.subcommands
+      .filterValues { !it.commandSpec.usageMessage().hidden() }
+    val hasSubcommands = visibleSubcommandsHere.isNotEmpty()
     appendLine("**Synopsis:**")
     appendLine()
     appendLine("```")
@@ -111,7 +175,7 @@ class CliDocsGenerator(
         if (param.required()) append(" <$paramName>") else append(" [<$paramName>]")
       }
       appendLine()
-      commandLine.subcommands.forEach { (subName, _) ->
+      visibleSubcommandsHere.forEach { (subName, _) ->
         appendLine("$fullPath $subName")
       }
     } else {
@@ -149,11 +213,15 @@ class CliDocsGenerator(
       generateConfigKeysSection()
     }
 
-    // Recurse into subcommands
+    // Recurse into subcommands, hidden-filtered (e.g. `desktop snapshot` shouldn't
+    // surface in the public CLI.md just because a hidden parent transitively includes
+    // a non-hidden child).
     if (hasSubcommands) {
-      commandLine.subcommands.forEach { (subName, subCommand) ->
-        generateCommandSection(fullPath, subName, subCommand)
-      }
+      commandLine.subcommands
+        .filterValues { !it.commandSpec.usageMessage().hidden() }
+        .forEach { (subName, subCommand) ->
+          generateCommandSection(fullPath, subName, subCommand)
+        }
     }
   }
 

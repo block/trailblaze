@@ -9,15 +9,12 @@ import kotlin.reflect.full.starProjectedType
 import kotlinx.datetime.Clock
 import kotlinx.datetime.Instant
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.put
 import xyz.block.trailblaze.agent.model.PromptStepStatus
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeAgent
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
-import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSessionProvider
 import xyz.block.trailblaze.logs.model.TraceId
@@ -331,22 +328,18 @@ GUIDELINES:
   }
 
   /**
-   * Maps a tool name and JSON args to a TrailblazeTool using the existing JSON deserialization infrastructure.
-   * Uses "toolName" field which is recognized by OtherTrailblazeToolSerializer (see TrailblazeJson.kt).
+   * Maps a tool name and JSON args to a TrailblazeTool by routing through the
+   * [trailblazeToolRepo]. The repo dispatches by toolName to the matching class-backed or
+   * YAML-defined serializer and decodes the flat args directly. Returns null when no repo
+   * is configured or the lookup fails — the caller logs and continues to the next iteration.
    */
   private fun mapToTrailblazeTool(toolName: String, args: JsonObject): TrailblazeTool? {
+    val repo = trailblazeToolRepo ?: run {
+      Console.log("[DirectMcpAgent] No tool repo configured; cannot resolve '$toolName'")
+      return null
+    }
     return try {
-      // OtherTrailblazeToolSerializer looks for "toolName" to match tool classes by their ToolName
-      // (see OtherTrailblazeToolSerializer.deserialize() which checks jsonObject["toolName"])
-      val toolJson = buildJsonObject {
-        put("toolName", toolName)
-        args.entries.forEach { (key, value) ->
-          put(key, value)
-        }
-      }
-      
-      // Use the existing JSON deserializer infrastructure
-      TrailblazeJsonInstance.decodeFromString<TrailblazeTool>(toolJson.toString())
+      repo.toolCallToTrailblazeTool(toolName, args.toString())
     } catch (e: Exception) {
       Console.log("[DirectMcpAgent] Failed to deserialize tool '$toolName': ${e.message}")
       null

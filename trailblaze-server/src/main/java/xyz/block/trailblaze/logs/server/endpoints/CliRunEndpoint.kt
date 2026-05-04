@@ -42,6 +42,25 @@ data class CliRunRequest(
   val noLogging: Boolean = false,
   /** Agent implementation override (e.g., "MULTI_AGENT_V3"). */
   val agentImplementation: String? = null,
+  /**
+   * Override the persisted `trailblaze config self-heal` setting for this run.
+   * `null` = inherit the saved config; `true`/`false` = explicit CLI override
+   * (from `--self-heal` / `--no-self-heal`).
+   */
+  val selfHeal: Boolean? = null,
+  /** Override capture video setting (null = use app config default). */
+  val captureVideo: Boolean? = null,
+  /** Override capture Android logcat setting (null = use app config default). */
+  val captureLogcat: Boolean? = null,
+  /** Override capture iOS Simulator system logs setting (null = use app config default). */
+  val captureIosLogs: Boolean? = null,
+  /**
+   * When true, the daemon auto-starts framework network capture for the run.
+   * Mirrors the desktop-app "Capture Network Traffic" toggle. From the CLI,
+   * set via `--capture-network` or `--capture-all`. `false` (default) inherits
+   * whatever the daemon's saved app config says.
+   */
+  val captureNetworkTraffic: Boolean = false,
 ) {
   /**
    * Validates that at least one execution mode is specified:

@@ -1,0 +1,17 @@
+- config:
+    title: "LLM Benchmark: Contact form submission"
+    driver: PLAYWRIGHT_NATIVE
+    description: |-
+      Navigate to the Form section via the nav link, fill out every field,
+      submit, and verify the success message. Exercises typed input, select
+      dropdowns, and submission feedback.
+- prompts:
+    - step: Navigate to http://localhost:8765/index.html
+    - step: Click the "Form" navigation link
+    - step: Type "Trail Blaze" into the Name input field
+    - step: Type "trail@example.com" into the Email input field
+    - step: Select "Feedback" from the Category dropdown
+    - step: Type "Trailblaze LLM benchmark message" into the Message textarea
+    - step: Click the "Submit" button
+    - step: Verify the text "Form submitted!" is visible
+    - step: Verify the text "Trail Blaze" is visible in the form summary

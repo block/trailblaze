@@ -73,7 +73,7 @@ data class StepExecutionResult(
  * Executes trail files deterministically without AI.
  *
  * This interface allows running recorded trails by replaying the tool calls
- * captured during recording. Steps without recordings will fail (no AI fallback).
+ * captured during recording. Steps without recordings will fail (no self-heal).
  *
  * Usage:
  * ```
@@ -278,7 +278,7 @@ class TrailExecutorImpl(
 
   /**
    * Executes a single prompt step using its recorded tools.
-   * If no recording exists, the step fails (no AI fallback in deterministic mode).
+   * If no recording exists, the step fails (no self-heal in deterministic mode).
    */
   private suspend fun executePromptStep(
     promptStep: PromptStep,

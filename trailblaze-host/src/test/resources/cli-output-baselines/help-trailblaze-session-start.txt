@@ -1,0 +1,30 @@
+# This file is a CHECKED-IN baseline of CLI output rendered by trailblaze-host's CLI helpers.
+# It is NOT a contract — if a test fails here because output drifted, decide whether the
+# drift is intentional. The test always (re)writes this file from the current rendered output,
+# then asserts the working tree is clean. So `git diff` of this file IS the failure message.
+# Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
+# small wording / spacing changes can be intentional or accidental.
+# ----------------------------------------------------------------------
+Usage: trailblaze session start [-hvV] [--no-logs] [--no-video] [-d=<device>]
+                                [--headless=<headless>] [--mode=<mode>]
+                                [--target=<target>] [--title=<title>]
+Start a new session with automatic video and log capture
+  -d, --device=<device>   Device: platform (android, ios, web) or platform/id
+                            (e.g., ios/DEVICE-UUID). Binds the shared CLI
+                            session to that device for session workflows.
+  -h, --help              Show this help message and exit.
+      --headless=<headless>
+                          For --device web/...: launch the Playwright browser
+                            headless. When omitted, falls back to the persisted
+                            `web-headless` config (see `trailblaze config
+                            web-headless`). Pass --headless=false to force a
+                            visible browser, --headless=true to force headless.
+                            Ignored for non-web devices.
+      --mode=<mode>       Working mode: trail or blaze. Saved to config for
+                            future commands.
+      --no-logs           Disable device log capture
+      --no-video          Disable video capture
+      --target=<target>   Target app ID. Saved to config for future commands.
+      --title=<title>     Title for the session (used as trail name when saving)
+  -v, --verbose           Enable verbose output
+  -V, --version           Print version information and exit.

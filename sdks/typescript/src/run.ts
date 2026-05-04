@@ -1,9 +1,9 @@
-// `trailblaze.run()` — hides the `McpServer` + `StdioServerTransport` boilerplate so an
-// author's toolset file is just `import { trailblaze } from "@trailblaze/scripting"` + a
-// handful of `trailblaze.tool(...)` calls + `await trailblaze.run()` at the bottom.
+// `trailblaze.run()` — hides the `McpServer` + transport boilerplate so an author's toolset
+// file is just `import { trailblaze } from "@trailblaze/scripting"` + a handful of
+// `trailblaze.tool(...)` calls + `await trailblaze.run()` at the bottom.
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 
 import { registerPendingTools } from "./tool.js";
 
@@ -54,9 +54,52 @@ function installConsoleLogStdoutGuard(): void {
 }
 
 /**
- * Connects the MCP server to stdio and registers every tool declared via
- * [tool]. Resolves when the transport is connected and the handshake has completed; the
- * subprocess then runs indefinitely handling requests until stdin closes.
+ * Global name of the in-process transport installed by the on-device bundle runtime's
+ * prelude. Matches `BundleRuntimePrelude.IN_PROCESS_TRANSPORT` on the Kotlin side — a
+ * rename there needs the same rename here. The prelude's transport object already shapes
+ * itself to the MCP SDK's `Transport` interface (`start` / `send` / `close` / `onmessage`
+ * / `onerror` / `onclose`), so `server.connect(...)` accepts it without adaptation.
+ */
+const IN_PROCESS_TRANSPORT_GLOBAL = "__trailblazeInProcessTransport";
+
+/**
+ * Picks the MCP transport appropriate to the runtime.
+ *
+ *  - **On-device** (QuickJS bundle runtime): the prelude pre-installs
+ *    `globalThis.__trailblazeInProcessTransport`. No dynamic import needed; QuickJS takes
+ *    the early return before the `node:process`-dependent stdio module is ever touched.
+ *  - **Host** (bun/tsx/node subprocess): fall back to `StdioServerTransport`. Imported
+ *    dynamically so the on-device bundle doesn't have to resolve it at bundle time — the
+ *    stdio module pulls in `node:process` + `ajv`, which break `--platform=neutral`
+ *    esbuild bundling and would poison the on-device artifact if imported statically.
+ *
+ * Author code is transport-agnostic — the same `await trailblaze.run()` works in both.
+ */
+async function pickTransport(): Promise<Transport> {
+  const inProcess = (globalThis as Record<string, unknown>)[IN_PROCESS_TRANSPORT_GLOBAL];
+  if (inProcess != null) {
+    // Structural check — an object with the three required Transport methods is enough to
+    // trust. We don't validate onmessage/onerror/onclose because the SDK installs those as
+    // setters, not pre-existing fields; a stricter check here would reject valid transports.
+    const t = inProcess as Partial<Transport>;
+    if (typeof t.start === "function" && typeof t.send === "function" && typeof t.close === "function") {
+      return t as Transport;
+    }
+    throw new Error(
+      `globalThis.${IN_PROCESS_TRANSPORT_GLOBAL} is present but doesn't match the MCP Transport ` +
+        `interface (start/send/close required). This usually means a Trailblaze/MCP SDK version ` +
+        `mismatch — report as a bug.`,
+    );
+  }
+  const { StdioServerTransport } = await import("@modelcontextprotocol/sdk/server/stdio.js");
+  return new StdioServerTransport();
+}
+
+/**
+ * Connects the MCP server and registers every tool declared via [tool]. On host, binds
+ * stdio; on-device, binds the pre-installed in-process transport. Resolves when the
+ * handshake has completed; the runtime then handles requests until stdin closes (host) or
+ * the QuickJS session ends (on-device).
  */
 export async function run(options: RunOptions = {}): Promise<void> {
   installConsoleLogStdoutGuard();
@@ -65,6 +108,5 @@ export async function run(options: RunOptions = {}): Promise<void> {
     { capabilities: { tools: {} } },
   );
   registerPendingTools(server);
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+  await server.connect(await pickTransport());
 }

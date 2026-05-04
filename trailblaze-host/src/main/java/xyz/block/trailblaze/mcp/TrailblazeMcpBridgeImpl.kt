@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.mcp
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -25,8 +26,10 @@ import xyz.block.trailblaze.host.devices.TrailblazeDeviceService
 import xyz.block.trailblaze.host.devices.TrailblazeHostDeviceClassifier
 import xyz.block.trailblaze.host.screenstate.AxeScreenState
 import xyz.block.trailblaze.host.screenstate.HostMaestroDriverScreenState
+import xyz.block.trailblaze.http.DynamicLlmClient
 import xyz.block.trailblaze.llm.RunYamlRequest
 import xyz.block.trailblaze.llm.RunYamlResponse
+import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.llm.TrailblazeReferrer
 import xyz.block.trailblaze.logs.client.NoOpLogEmitter
 import xyz.block.trailblaze.logs.client.ScreenStateLogger
@@ -35,10 +38,12 @@ import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSession
 import xyz.block.trailblaze.logs.model.SessionId
 import xyz.block.trailblaze.logs.model.SessionStatus
+import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.model.TrailExecutionResult
 import xyz.block.trailblaze.model.TrailblazeConfig
 import xyz.block.trailblaze.model.findById
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
+import xyz.block.trailblaze.toolcalls.HostLocalExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateRequest
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateResponse
@@ -55,13 +60,18 @@ import xyz.block.trailblaze.compose.driver.rpc.ExecuteToolsRequest as ComposeExe
 import xyz.block.trailblaze.compose.driver.rpc.GetScreenStateResponse as ComposeGetScreenStateResponse
 import xyz.block.trailblaze.compose.driver.tools.ComposeToolSetIds
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
+import xyz.block.trailblaze.host.networkcapture.AndroidNetworkCaptureRegistry
 import xyz.block.trailblaze.host.rules.BasePlaywrightNativeTest
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.mcp.utils.HttpRequestUtils
 import xyz.block.trailblaze.playwright.PlaywrightBrowserManager
+import xyz.block.trailblaze.playwright.PlaywrightTrailblazeAgent
+import xyz.block.trailblaze.playwright.network.WebNetworkCapture
 import xyz.block.trailblaze.playwright.tools.WebToolSetIds
 import xyz.block.trailblaze.revyl.tools.RevylToolSetIds
+import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
 import xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog
+import xyz.block.trailblaze.utils.NoOpElementComparator
 import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.HostAndroidDeviceConnectUtils
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
@@ -88,7 +98,21 @@ class TrailblazeMcpBridgeImpl(
    * Required for runYamlBlocking() to wait for completion.
    */
   private val logsRepo: LogsRepo? = null,
-) : TrailblazeMcpBridge {
+  /**
+   * Builds a [DynamicLlmClient] for the given model. Used when the bridge eagerly
+   * constructs a Playwright-native test instance during async WEB browser init so that
+   * the cached test runs through the host app's own dynamic-client factory rather than
+   * [BasePlaywrightNativeTest]'s default
+   * ([xyz.block.trailblaze.host.rules.TrailblazeHostDynamicLlmClientProvider]), which
+   * only knows about built-in providers (OpenAI, Anthropic, Google, Ollama, OpenRouter)
+   * plus YAML-configured custom providers — not host-app-specific providers wired in by
+   * downstream apps. Required so this trap can't recur silently for a future host app.
+   *
+   * Implementations must be synchronous: this is invoked from a plain `Thread` during
+   * browser init, not a coroutine context.
+   */
+  private val dynamicLlmClientProvider: (TrailblazeLlmModel) -> DynamicLlmClient,
+) : TrailblazeMcpBridge, HostLocalToolDispatchingBridge {
 
   /**
    * Tracks async Playwright browser initialization for WEB devices.
@@ -216,37 +240,80 @@ class TrailblazeMcpBridgeImpl(
           // Clear any previous failure so a retry starts clean.
           webInitErrors.remove(webKey)
           val initThread = Thread {
+            // Hoisted out of `try` so the cleanup path in `catch` can reach them and
+            // close an orphaned Chromium if BasePlaywrightNativeTest construction
+            // throws after we've created the browser. Without this, an init failure
+            // would leak the process until daemon shutdown.
+            var createdBrowser: PlaywrightBrowserManager? = null
+            var registeredTest = false
             try {
-              // Reuse an already-running browser (desktop app "Launch Browser") when
-              // available — no download needed. Otherwise create a headless browser,
-              // passing a progress callback so the MCP client sees download status.
-              val existingBrowser = trailblazeDeviceManager.webBrowserManager.getPageManager()
+              // Reuse an already-running browser for this instance ID (desktop app
+              // "Launch Browser" or a prior MCP session) when available — no download
+              // needed. Otherwise create a fresh browser, passing a progress callback
+              // so the MCP client sees download status. Headless mode honors the
+              // caller's recorded preference (e.g. CLI `--headless false`); when no
+              // preference has been set, we default to headless = true.
+              val existingBrowser = trailblazeDeviceManager.webBrowserManager.getPageManager(webKey)
+              val headless = trailblazeDeviceManager.webBrowserManager.getHeadlessPreference(webKey) ?: true
               val browserManager = existingBrowser ?: PlaywrightBrowserManager(
-                headless = true,
+                headless = headless,
                 onBrowserInstallProgress = { percent, message ->
                   job.progressMessage = if (percent > 0) "[$percent%] $message" else message
                 },
-              )
-              // If we just created a new headless browser, adopt it into WebBrowserManager
-              // so it persists across MCP session boundaries. When cancelSessionForDevice
-              // is called at session close, BasePlaywrightNativeTest.close() won't kill the
-              // browser (ownsTheBrowser=false), and the next device(WEB) call will reuse it
-              // via webBrowserManager.getPageManager() rather than spawning a new instance.
+              ).also { createdBrowser = it }
+              // If we just created a new browser, adopt it into WebBrowserManager so it
+              // persists across MCP session boundaries. When cancelSessionForDevice is
+              // called at session close, BasePlaywrightNativeTest.close() won't kill the
+              // browser (ownsTheBrowser=false), and the next device(WEB) call for this
+              // instance ID will reuse it via webBrowserManager.getPageManager(webKey)
+              // rather than spawning a new instance.
               if (existingBrowser == null) {
-                trailblazeDeviceManager.webBrowserManager.adoptManagedBrowser(browserManager as PlaywrightBrowserManager)
+                trailblazeDeviceManager.webBrowserManager.adoptManagedBrowser(
+                  instanceId = webKey,
+                  manager = browserManager as PlaywrightBrowserManager,
+                  headless = headless,
+                )
               }
               // Update progress to indicate we've moved past driver/browser download.
               job.progressMessage = "Launching browser..."
+              // Resolve the configured LLM model + matching client so the cached test
+              // doesn't fall back to BasePlaywrightNativeTest's OpenAI defaults — those
+              // defaults break every web tool call when the user has configured a
+              // provider that the default client doesn't know about.
+              val configuredLlmModel = trailblazeDeviceManager.currentTrailblazeLlmModelProvider()
+              // Honor the desktop-app "Capture Network Traffic" toggle on the
+              // long-lived MCP test so host-local tool dispatches auto-capture.
+              val mcpAppConfig =
+                trailblazeDeviceManager.settingsRepo.serverStateFlow.value.appConfig
               val test = BasePlaywrightNativeTest(
+                config = TrailblazeConfig(
+                  captureNetworkTraffic = mcpAppConfig.captureNetworkTraffic,
+                ),
                 trailblazeDeviceId = trailblazeDeviceId,
                 existingBrowserManager = browserManager,
+                trailblazeLlmModel = configuredLlmModel,
+                dynamicLlmClient = dynamicLlmClientProvider.invoke(configuredLlmModel),
               )
               trailblazeDeviceManager.setActivePlaywrightNativeTest(trailblazeDeviceId, test)
+              registeredTest = true
               Console.log("[MCP Bridge] WEB browser ready for ${trailblazeDeviceId.instanceId}")
             } catch (e: Exception) {
               val msg = e.message ?: "Unknown error initializing Playwright browser"
               webInitErrors[webKey] = msg
               Console.log("[MCP Bridge] WEB browser init failed: $msg")
+              // Clean up an orphaned browser: we created it but the wrapping test
+              // never registered, so no MCP path can reach it. Closing the browser
+              // and the slot lets the next device(WEB) call retry from scratch
+              // instead of finding a half-broken adopted instance.
+              val orphan = createdBrowser
+              if (orphan != null && !registeredTest) {
+                try {
+                  orphan.close()
+                } catch (closeErr: Exception) {
+                  Console.log("[MCP Bridge] WEB browser cleanup failed (continuing): ${closeErr.message}")
+                }
+                trailblazeDeviceManager.webBrowserManager.closeBrowser(webKey)
+              }
             } finally {
               webInitJobs.remove(webKey)
             }
@@ -310,10 +377,7 @@ class TrailblazeMcpBridgeImpl(
       if (existingLatch != null) {
         // Another call already started driver creation — just wait on the existing latch
         if (!existingLatch.await(DEVICE_CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
-          Console.log(
-            "[MCP Bridge] Persistent device connection still initializing for $key " +
-                "after ${DEVICE_CONNECT_TIMEOUT_SECONDS}s — continuing without it"
-          )
+          recordDriverInitTimeout(key, trailblazeDeviceId, configuredDriverType)
         }
       } else {
         val latch = CountDownLatch(1)
@@ -323,10 +387,7 @@ class TrailblazeMcpBridgeImpl(
         if (raceLatch != null) {
           // Another thread created the latch between our check and putIfAbsent — wait on theirs
           if (!raceLatch.await(DEVICE_CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
-            Console.log(
-              "[MCP Bridge] Persistent device connection still initializing for $key " +
-                  "after ${DEVICE_CONNECT_TIMEOUT_SECONDS}s — continuing without it"
-            )
+            recordDriverInitTimeout(key, trailblazeDeviceId, configuredDriverType)
           }
         } else {
           driverCreationStartTimes[key] = System.currentTimeMillis()
@@ -358,10 +419,7 @@ class TrailblazeMcpBridgeImpl(
           driverThread.start()
 
           if (!latch.await(DEVICE_CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
-            Console.log(
-              "[MCP Bridge] Persistent device connection still initializing for $key " +
-                  "after ${DEVICE_CONNECT_TIMEOUT_SECONDS}s — continuing without it"
-            )
+            recordDriverInitTimeout(key, trailblazeDeviceId, configuredDriverType)
           }
         }
       }
@@ -383,18 +441,69 @@ class TrailblazeMcpBridgeImpl(
     // Fall back to unfiltered available devices — in headless/MCP mode, the UI-level
     // targetDeviceFilter excludes virtual devices (Playwright, Compose) because
     // testingEnvironment is null, but MCP always needs to offer them.
-    return trailblazeDeviceManager.getDeviceState(trailblazeDeviceId)?.device
+    val resolved = trailblazeDeviceManager.getDeviceState(trailblazeDeviceId)?.device
       ?: getAvailableDevices().find { it.trailblazeDeviceId == trailblazeDeviceId }
-      ?: error("Device $trailblazeDeviceId is not available.")
+    if (resolved != null) return resolved
+
+    // Web devices are virtual: the init thread we just kicked off above provisions
+    // the browser asynchronously, so a brand-new `web/<id>` won't appear in the
+    // device state map or the available-devices list yet. Synthesize the summary
+    // from the device ID so the caller gets a successful claim and can poll
+    // `getDriverConnectionStatus` for readiness.
+    if (trailblazeDeviceId.trailblazeDevicePlatform == TrailblazeDevicePlatform.WEB) {
+      return TrailblazeConnectedDeviceSummary(
+        trailblazeDriverType = TrailblazeDriverType.PLAYWRIGHT_NATIVE,
+        instanceId = trailblazeDeviceId.instanceId,
+        description = "Chrome Browser (${trailblazeDeviceId.instanceId})",
+      )
+    }
+
+    error("Device $trailblazeDeviceId is not available.")
+  }
+
+  /**
+   * Records a driver-init timeout in [driverCreationFailures] so that
+   * [getDriverConnectionStatus] surfaces the real reason on the next poll, instead of the
+   * old "continuing without it" pattern that left the daemon claiming the device while
+   * silently bound to a not-ready driver. Also enriches the log line with platform and
+   * driver type so on-call has something to debug from when this rare path fires.
+   *
+   * Re-checks [persistentDevices] before writing because the driver thread can race in
+   * between [java.util.concurrent.CountDownLatch.await] returning false and this method
+   * running — if the driver actually completed during that window, do not record a
+   * spurious failure. Uses [java.util.concurrent.ConcurrentHashMap.putIfAbsent] so a
+   * specific failure already recorded by [PersistentDeviceResult.Failure] wins over the
+   * generic timeout message.
+   */
+  private fun recordDriverInitTimeout(
+    key: String,
+    trailblazeDeviceId: TrailblazeDeviceId,
+    configuredDriverType: TrailblazeDriverType?,
+  ) {
+    val driverLabel = configuredDriverType?.name ?: "driver"
+    val platform = trailblazeDeviceId.trailblazeDevicePlatform.name
+    val message = "$driverLabel ($platform/$key) did not become ready within " +
+      "${DEVICE_CONNECT_TIMEOUT_SECONDS}s. Reconnect with device(action=$platform) to retry."
+    Console.log("[MCP Bridge] $message")
+    if (!persistentDevices.containsKey(key)) {
+      driverCreationFailures.putIfAbsent(key, message)
+    }
   }
 
   companion object {
     /**
-     * How long to wait for the Maestro driver during device connect.
-     * Short timeout so the tool call returns fast. If the driver isn't ready,
-     * it continues initializing in the background and will be available for later calls.
+     * How long to wait for the Maestro driver during device connect. Sized to cover the
+     * worst real first-connection case: an iOS XCTest setup against a device-farm simulator,
+     * which can take 60+ seconds end-to-end. The previous 5s value was the source of the
+     * "Device driver is still initializing" cliff users (and CI) hit on first connect — the
+     * tool call would return success while the driver was still coming up, and then the
+     * very next command would fail because nothing was actually ready.
+     *
+     * Subsequent connections short-circuit when [persistentDevices] already has the device,
+     * so this timeout only applies to the first connect of a session — it does not slow down
+     * steady-state operation.
      */
-    private const val DEVICE_CONNECT_TIMEOUT_SECONDS = 5L
+    private const val DEVICE_CONNECT_TIMEOUT_SECONDS = 120L
 
     /**
      * How long to wait for the on-device agent to start during device connect.
@@ -612,6 +721,7 @@ class TrailblazeMcpBridgeImpl(
     yaml: String,
     startNewSession: Boolean,
     agentImplementation: AgentImplementation = AgentImplementation.DEFAULT,
+    traceId: TraceId? = null,
     onComplete: ((TrailExecutionResult) -> Unit)? = null,
   ): String {
     val deviceId = assertDeviceIsSelected()
@@ -631,6 +741,7 @@ class TrailblazeMcpBridgeImpl(
       existingSessionId = sessionResolution.sessionId,
       referrer = TrailblazeReferrer.MCP,
       agentImplementation = agentImplementation,
+      traceId = traceId,
       onComplete = onComplete,
     )
 
@@ -797,7 +908,7 @@ class TrailblazeMcpBridgeImpl(
       // Initialization is in progress or failed.
       // Failure from a previous attempt — report it until the user retries.
       webInitErrors[key]?.let {
-        return "Playwright browser installation failed: $it. Call device(action=WEB) to retry."
+        return "Playwright browser installation failed: $it"
       }
       val job = webInitJobs[key]
       if (job != null) {
@@ -807,7 +918,7 @@ class TrailblazeMcpBridgeImpl(
           // Downloads are sequential: Playwright driver (~7MB) then Chromium (~150MB).
           // Chromium install subprocess times out at 15 minutes.
           if (elapsedSeconds < 900) append(", timeout in ${900 - elapsedSeconds}s")
-          append("): ${job.progressMessage}. Call device(action=WEB) to check status.")
+          append("): ${job.progressMessage}")
         }
       }
       return null
@@ -979,7 +1090,11 @@ class TrailblazeMcpBridgeImpl(
     return trailblazeDeviceManager.getInstalledAppIdsFlow(trailblazeDeviceId).value
   }
 
-  override suspend fun executeTrailblazeTool(tool: TrailblazeTool, blocking: Boolean): String {
+  override suspend fun executeTrailblazeTool(
+    tool: TrailblazeTool,
+    blocking: Boolean,
+    traceId: TraceId?,
+  ): String {
     val trailblazeDeviceId = assertDeviceIsSelected()
 
     // Use custom executor if provided, otherwise convert to YAML and run
@@ -1020,7 +1135,7 @@ class TrailblazeMcpBridgeImpl(
     // as soon as the session is created), so tool actions like taps return "executed"
     // before the on-device agent actually performs them.
     if (isOnDeviceInstrumentation()) {
-      val result = executeToolViaRpc(tool, trailblazeDeviceId, yaml, blocking)
+      val result = executeToolViaRpc(tool, trailblazeDeviceId, yaml, blocking, traceId)
       cachedScreenStates.remove(trailblazeDeviceId.instanceId)
       return result
     }
@@ -1035,6 +1150,7 @@ class TrailblazeMcpBridgeImpl(
       runYamlInternal(
         yaml = yaml,
         startNewSession = false,
+        traceId = traceId,
         onComplete = { completion.complete(it) },
       )
       val executionResult = withTimeout(300.seconds) { completion.await() }
@@ -1048,8 +1164,27 @@ class TrailblazeMcpBridgeImpl(
       }
     }
 
-    val sessionId = runYaml(yaml, startNewSession = false)
+    val sessionId = runYamlInternal(yaml, startNewSession = false, traceId = traceId)
     return "Executed ${tool::class.simpleName} on device ${trailblazeDeviceId.instanceId} (session: $sessionId)"
+  }
+
+  override suspend fun executeHostLocalTool(
+    tool: TrailblazeTool,
+    toolRepo: TrailblazeToolRepo,
+    traceId: TraceId?,
+  ): String? {
+    if (tool !is HostLocalExecutableTrailblazeTool) return null
+    val deviceId = getEffectiveDeviceId() ?: return null
+    return when (getDriverType()) {
+      TrailblazeDriverType.PLAYWRIGHT_NATIVE,
+      TrailblazeDriverType.PLAYWRIGHT_ELECTRON -> executeHostLocalPlaywrightTool(
+        tool = tool,
+        toolRepo = toolRepo,
+        deviceId = deviceId,
+        traceId = traceId,
+      )
+      else -> null
+    }
   }
 
   /**
@@ -1142,6 +1277,70 @@ class TrailblazeMcpBridgeImpl(
   private fun noOpTrailblazeLogger(): TrailblazeLogger =
     TrailblazeLogger(logEmitter = NoOpLogEmitter, screenStateLogger = ScreenStateLogger { "" })
 
+  private suspend fun executeHostLocalPlaywrightTool(
+    tool: HostLocalExecutableTrailblazeTool,
+    toolRepo: TrailblazeToolRepo,
+    deviceId: TrailblazeDeviceId,
+    traceId: TraceId?,
+  ): String {
+    val test = trailblazeDeviceManager.getActivePlaywrightNativeTest(deviceId)
+      ?: error("Playwright browser is not ready. Connect WEB first and wait for the browser to finish initializing.")
+    val driverType = getDriverType() ?: TrailblazeDriverType.PLAYWRIGHT_NATIVE
+    val deviceInfo = TrailblazeDeviceInfo(
+      trailblazeDeviceId = deviceId,
+      trailblazeDriverType = driverType,
+      widthPixels = PlaywrightBrowserManager.DEFAULT_VIEWPORT_WIDTH,
+      heightPixels = PlaywrightBrowserManager.DEFAULT_VIEWPORT_HEIGHT,
+    )
+    val syntheticSession = TrailblazeSession(
+      sessionId = getActiveSessionId() ?: SessionId.sanitized("mcp_${deviceId.instanceId}"),
+      startTime = Clock.System.now(),
+    )
+    val agent = PlaywrightTrailblazeAgent(
+      browserManager = test.browserManager,
+      trailblazeLogger = noOpTrailblazeLogger(),
+      trailblazeDeviceInfoProvider = { deviceInfo },
+      sessionProvider = { syntheticSession },
+      trailblazeToolRepo = toolRepo,
+      sessionDirProvider = logsRepo?.let { repo -> repo::getSessionDir },
+    )
+    // Honor "Capture Network Traffic" on the host-local MCP path. The test
+    // doesn't go through runTrailblazeYamlSuspend here (each tool dispatches
+    // individually with a synthetic session), so we start capture inline
+    // using the same session id the agent will report. WebNetworkCapture.start
+    // is idempotent, so calling it on every dispatch is safe — it short-
+    // circuits when the existing capture matches the session.
+    val resolvedLogsRepo = logsRepo
+    if (test.config.captureNetworkTraffic && resolvedLogsRepo != null) {
+      runCatching {
+        WebNetworkCapture.start(
+          ctx = test.browserManager.currentPage.context(),
+          sessionId = syntheticSession.sessionId.value,
+          sessionDir = resolvedLogsRepo.getSessionDir(syntheticSession.sessionId),
+          tracker = agent.inflightRequestTracker,
+        )
+      }.onFailure {
+        Console.log("MCP: Auto-start of web network capture failed: ${it.message}")
+      }
+    }
+    val result = withContext(test.browserManager.playwrightDispatcher) {
+      val screenState = test.browserManager.getScreenState()
+      agent.runTrailblazeTools(
+        tools = listOf(tool),
+        traceId = traceId,
+        screenState = screenState,
+        elementComparator = NoOpElementComparator,
+        screenStateProvider = test.browserManager::getScreenState,
+      ).result
+    }
+    return when (result) {
+      is TrailblazeToolResult.Success ->
+        "Executed ${tool.advertisedToolName} on device ${deviceId.instanceId}"
+      is TrailblazeToolResult.Error ->
+        error("Host-local tool execution failed: ${result.errorMessage}")
+    }
+  }
+
   /** One-shot guard — we only want the IOS_AXE session-logging warning printed once per daemon. */
   private val iosAxeSessionLoggingWarningEmitted = java.util.concurrent.atomic.AtomicBoolean(false)
 
@@ -1168,6 +1367,7 @@ class TrailblazeMcpBridgeImpl(
     trailblazeDeviceId: TrailblazeDeviceId,
     yaml: String,
     blocking: Boolean = false,
+    traceId: TraceId? = null,
   ): String {
     val rpcClient = OnDeviceRpcClient(
       trailblazeDeviceId = trailblazeDeviceId,
@@ -1182,6 +1382,34 @@ class TrailblazeMcpBridgeImpl(
       )
 
       val driverType = getConfiguredDriverType(trailblazeDeviceId.trailblazeDevicePlatform)
+      // Honor "Capture Network Traffic" on the host-driven Android RPC path. The MCP bridge
+      // doesn't go through BasePlaywrightNativeTest's `ensureWebNetworkCaptureStarted()`, so we
+      // wire an analog here. The actual capture lives in an external module behind
+      // [AndroidNetworkCaptureActivator] (registered by a downstream desktop app at startup);
+      // default distributions leave the registry empty and this block is a no-op.
+      val captureNetworkTraffic =
+        trailblazeDeviceManager.settingsRepo.serverStateFlow.value.appConfig.captureNetworkTraffic
+      val resolvedLogsRepoForAndroid = logsRepo
+      if (
+        captureNetworkTraffic &&
+          trailblazeDeviceId.trailblazeDevicePlatform == TrailblazeDevicePlatform.ANDROID &&
+          resolvedLogsRepoForAndroid != null
+      ) {
+        val activator = AndroidNetworkCaptureRegistry.activator
+        if (activator != null) {
+          runCatching {
+            activator.start(
+              sessionId = sessionResolution.sessionId.value,
+              sessionDir = resolvedLogsRepoForAndroid.getSessionDir(sessionResolution.sessionId),
+              deviceId = trailblazeDeviceId,
+              targetAppId = getCurrentAppTargetId(),
+            )
+          }
+            .onFailure {
+              Console.log("MCP: Auto-start of Android network capture failed: ${it.message}")
+            }
+        }
+      }
       val request = RunYamlRequest(
         yaml = yaml,
         testName = "tool_${tool::class.simpleName}",
@@ -1191,43 +1419,69 @@ class TrailblazeMcpBridgeImpl(
         trailblazeLlmModel = trailblazeDeviceManager.currentTrailblazeLlmModelProvider(),
         trailblazeDeviceId = trailblazeDeviceId,
         referrer = TrailblazeReferrer.MCP,
+        traceId = traceId,
         driverType = driverType,
+        // Map the caller's `blocking` flag onto the protocol-level wait. With `blocking=true`
+        // (every current caller), the on-device handler holds the HTTP response until the job
+        // terminates — that's also the RunYamlRequest default. With `blocking=false`, fire-and-forget:
+        // the device returns the new sessionId immediately and the caller can move on.
+        awaitCompletion = blocking,
         config = TrailblazeConfig(
           overrideSessionId = sessionResolution.sessionId,
           // Emit start only when this call created the session. This preserves host-managed
           // MCP sessions (no duplicate start logs) while still initializing direct tool-first sessions.
           sendSessionStartLog = sessionResolution.isNewSession,
           sendSessionEndLog = false,
+          // Propagate the toggle so on-device launch tools can do their own capture-aware
+          // setup — they may need to seed debug SharedPrefs that survive the launch tool's own
+          // clearAppData / clearState=true cycle, and the host can't reach into that window
+          // from outside. Today nothing on-device reads this; the host bridge is the only
+          // consumer. Wired here so the next iteration can flip launch-tool behavior off this
+          // signal without another hop.
+          captureNetworkTraffic = captureNetworkTraffic,
         ),
       )
 
       Console.log("[executeToolViaRpc] Sending ${tool::class.simpleName} to on-device agent")
+      // With `awaitCompletion = blocking`, rpcCall returns once the on-device job has reached
+      // its terminal state (when blocking) or as soon as the session is created (when not).
+      // Either way, no host-side log polling is needed — a previous version awaited the
+      // resulting TrailblazeToolLog here under blocking, but by the time that ran every
+      // on-device log was already on disk and `skipExisting=true` filtered them all out,
+      // burning a fixed 120s timeout on every tool call.
       when (val result: RpcResult<RunYamlResponse> = rpcClient.rpcCall(request)) {
         is RpcResult.Success -> {
-          Console.log("[executeToolViaRpc] On-device execution started: ${result.data.sessionId}")
-          if (blocking) {
-            // Wait for the on-device agent to finish executing the tool.
-            // The on-device agent emits exactly ONE TrailblazeToolLog per tool, only
-            // after the tool's full execute() method returns — including all sub-steps
-            // from runTrailblazeSteps/runNamedTrailblazeSteps. Multi-step custom tools
-            // (e.g., myapp_launchAppSignedIn with 12+ sub-steps) still produce a
-            // single log at the end, so awaitLog correctly waits for full completion.
-            // Custom tools can take 60+ seconds (clear data, launch, sign in, wait for
-            // loading), so use a generous timeout.
-            if (logsRepo != null) {
-              val toolLog = logsRepo.awaitLog<TrailblazeLog.TrailblazeToolLog>(
-                sessionId = sessionResolution.sessionId,
-                timeout = 120.seconds,
-                skipExisting = true,
-              )
-              if (toolLog == null) {
-                Console.log("[executeToolViaRpc] Warning: timed out waiting for ${tool::class.simpleName} to complete on-device")
-              }
-            } else {
-              Console.log("[executeToolViaRpc] Warning: blocking=true but logsRepo is null, cannot wait for tool completion")
+          val response = result.data
+          // The wire-level `RpcResult.Success` only tells us the device responded — the
+          // body's `success` field is the actual on-device outcome. A previous version
+          // of this branch returned "Executed …" unconditionally on wire success, which
+          // silently masked on-device failures (e.g. the LLM-init crash on `provider=none`,
+          // tool exceptions, run timeouts) as success. The other host paths
+          // ([HostOnDeviceRpcTrailblazeAgent.toToolResult],
+          // [HostAccessibilityRpcClient.execute]) correctly inspect `success` — match that.
+          //
+          // - `success == true`: terminal success when `awaitCompletion=true` (i.e.
+          //   `blocking=true` here). Report executed.
+          // - `success == false`: terminal failure. Surface the on-device error message
+          //   so the daemon log and the caller see the real cause instead of a phantom OK.
+          // - `success == null`: fire-and-forget (`awaitCompletion=false`). Run is ongoing;
+          //   the session id is the handle the caller subscribes to for terminal state.
+          when (response.success) {
+            true -> {
+              Console.log("[executeToolViaRpc] On-device execution complete: ${response.sessionId}")
+              "Executed ${tool::class.simpleName} on device ${trailblazeDeviceId.instanceId} (session: ${response.sessionId})"
+            }
+            false -> {
+              val message = response.errorMessage?.takeUnless { it.isBlank() }
+                ?: "unknown on-device error"
+              Console.log("[executeToolViaRpc] On-device execution failed: $message")
+              error("On-device execution of ${tool::class.simpleName} failed: $message")
+            }
+            null -> {
+              Console.log("[executeToolViaRpc] On-device execution started: ${response.sessionId}")
+              "Executed ${tool::class.simpleName} on device ${trailblazeDeviceId.instanceId} (session: ${response.sessionId})"
             }
           }
-          "Executed ${tool::class.simpleName} on device ${trailblazeDeviceId.instanceId} (session: ${result.data.sessionId})"
         }
         is RpcResult.Failure -> {
           Console.log("[executeToolViaRpc] RPC failed: ${result.message}")
@@ -1245,7 +1499,20 @@ class TrailblazeMcpBridgeImpl(
     cachedScreenStates.remove(deviceId.instanceId)
     onDeviceAgentReady.remove(deviceId.instanceId)
     closePersistentDevice(deviceId)
+    val activeSessionId = trailblazeDeviceManager.getCurrentSessionIdForDevice(deviceId)
     val endedSessionId = trailblazeDeviceManager.endSessionForDevice(deviceId)
+    // Tear down the Android network capture bridge if one was started for this session. We use
+    // the active sessionId captured *before* endSessionForDevice clears it; without that, the
+    // activator can't match the running bridge to a session and would leave the worker thread
+    // and adb-forward port leaked until the JVM exits.
+    if (activeSessionId != null) {
+      AndroidNetworkCaptureRegistry.activator?.let { activator ->
+        runCatching { activator.stop(activeSessionId.value) }
+          .onFailure {
+            Console.log("MCP: Android network capture stop failed: ${it.message}")
+          }
+      }
+    }
     return endedSessionId != null
   }
 
@@ -1290,7 +1557,9 @@ class TrailblazeMcpBridgeImpl(
     // Get device info from the device state
     val deviceState = trailblazeDeviceManager.getDeviceState(deviceId)
     val device = deviceState?.device
-    val driverType = device?.trailblazeDriverType ?: TrailblazeDriverType.DEFAULT_ANDROID
+    val driverType = device?.trailblazeDriverType
+      ?: getConfiguredDriverType(deviceId.trailblazeDevicePlatform)
+      ?: TrailblazeDriverType.DEFAULT_ANDROID
 
     // Try to get real device dimensions from the Maestro driver
     // Prefer persistent device, then fall back to device manager's active driver
@@ -1450,6 +1719,10 @@ class TrailblazeMcpBridgeImpl(
     McpDeviceContext.currentDeviceId.set(deviceId)
   }
 
+  override fun setWebBrowserHeadless(instanceId: String, headless: Boolean) {
+    trailblazeDeviceManager.webBrowserManager.setHeadlessPreference(instanceId, headless)
+  }
+
   // ─────────────────────────────────────────────────────────────────────────────
   // Configuration access (for config MCP tool)
   // ─────────────────────────────────────────────────────────────────────────────
@@ -1511,9 +1784,13 @@ class TrailblazeMcpBridgeImpl(
         return requestedDeviceId
       }
 
-      // Verify the device is available
+      // Verify the device is available. WEB instances are virtual — any instance ID
+      // is valid because the bridge provisions a Playwright browser on demand for IDs
+      // it hasn't seen yet (e.g. `--device web/foo` from the CLI). Mobile/desktop
+      // device IDs must already be in the discovered list.
       val isAvailable = trailblazeDeviceManager.getDeviceState(requestedDeviceId) != null
           || getAvailableDevices().any { it.trailblazeDeviceId == requestedDeviceId }
+          || requestedDeviceId.trailblazeDevicePlatform == TrailblazeDevicePlatform.WEB
 
       if (!isAvailable) {
         error("Device $requestedDeviceId is not available.")

@@ -6,6 +6,7 @@ import ai.koog.agents.core.tools.reflect.ToolSet
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import xyz.block.trailblaze.capture.logcat.LogcatParser
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.model.SessionId
@@ -63,6 +64,8 @@ class SessionToolSet(
     DELETE,
     /** Generate and return the recording YAML for a session */
     RECORDING,
+    /** Read device logs (logcat / iOS log stream) from a session */
+    DEVICE_LOGS,
   }
 
   @LLMDescription(
@@ -82,17 +85,23 @@ class SessionToolSet(
     session(action=RECORDING) → return recording YAML for current session
     session(action=RECORDING, id="abc123") → return recording YAML for a specific session
     session(action=SAVE, id="abc123", title="Login") → save a specific session as trail
+    session(action=DEVICE_LOGS) → read device logs from current session
+    session(action=DEVICE_LOGS, id="abc123", limit=200) → last 200 lines
+    session(action=DEVICE_LOGS, id="abc123", filter="Exception") → search device logs
+    session(action=DEVICE_LOGS, startMs=1772846521000, endMs=1772846525000) → logs in time window
 
-    Video and device logs are captured by default when a session starts.
+    Video is captured by default when a session starts; device log capture (Android
+    logcat and iOS Simulator system logs) is off by default and is toggled per-platform
+    in the desktop app's settings.
     """
   )
   @Tool(McpToolProfile.TOOL_SESSION)
   suspend fun session(
-    @LLMDescription("Action: START, STOP, SAVE, INFO, LIST, ARTIFACTS, RECORDING, or DELETE")
+    @LLMDescription("Action: START, STOP, SAVE, INFO, LIST, ARTIFACTS, RECORDING, DELETE, or DEVICE_LOGS")
     action: SessionAction,
     @LLMDescription("Session title (for START or SAVE)")
     title: String? = null,
-    @LLMDescription("Session ID for INFO, ARTIFACTS, SAVE, RECORDING (defaults to current session)")
+    @LLMDescription("Session ID for INFO, ARTIFACTS, SAVE, RECORDING, DEVICE_LOGS (defaults to current session)")
     id: String? = null,
     @LLMDescription("Disable video capture (default: false)")
     noVideo: Boolean = false,
@@ -100,8 +109,14 @@ class SessionToolSet(
     noLogs: Boolean = false,
     @LLMDescription("Save as trail when stopping (default: false)")
     save: Boolean = false,
-    @LLMDescription("Max results for LIST (default: 20)")
+    @LLMDescription("Max results for LIST, or max lines for DEVICE_LOGS (default: 20 for LIST, 100 for DEVICE_LOGS)")
     limit: Int? = null,
+    @LLMDescription("Filter pattern for DEVICE_LOGS — only return lines containing this string (case-insensitive)")
+    filter: String? = null,
+    @LLMDescription("For DEVICE_LOGS: start of time window (epoch millis). Use with endMs to get logs for a specific event.")
+    startMs: Long? = null,
+    @LLMDescription("For DEVICE_LOGS: end of time window (epoch millis). Use with startMs to get logs for a specific event.")
+    endMs: Long? = null,
   ): String {
     return when (action) {
       SessionAction.START -> handleStart(title, noVideo, noLogs)
@@ -112,6 +127,7 @@ class SessionToolSet(
       SessionAction.ARTIFACTS -> handleArtifacts(id)
       SessionAction.DELETE -> handleDelete(id)
       SessionAction.RECORDING -> handleRecording(id)
+      SessionAction.DEVICE_LOGS -> handleLogcat(id, limit ?: 100, filter, startMs, endMs)
     }
   }
 
@@ -584,6 +600,91 @@ class SessionToolSet(
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
+  // LOGCAT
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  private fun handleLogcat(
+    id: String?,
+    maxLines: Int,
+    filter: String?,
+    startMs: Long? = null,
+    endMs: Long? = null,
+  ): String {
+    if (logsRepo == null) {
+      return SessionResult(error = "Session browsing not available (no logs configured)").toJson()
+    }
+    val sessionId = if (id != null) {
+      resolveSessionId(id)
+        ?: return SessionResult(error = "Session not found: $id").toJson()
+    } else {
+      sessionIdProvider?.invoke()
+        ?: return SessionResult(error = "No active session").toJson()
+    }
+
+    val sessionDir = logsRepo?.getSessionDir(sessionId)
+    if (sessionDir == null || !sessionDir.exists()) {
+      return SessionResult(error = "Session directory not found").toJson()
+    }
+
+    val logcatFile = LogcatParser.findDeviceLogFile(sessionDir)
+
+    if (logcatFile == null || !logcatFile.exists()) {
+      return SessionResult(
+        sessionId = sessionId.value,
+        error = "No device logs found. Logcat capture may not have been enabled for this session.",
+      ).toJson()
+    }
+
+    // Validate time-range parameters: both must be provided together
+    if ((startMs != null) != (endMs != null)) {
+      return SessionResult(
+        sessionId = sessionId.value,
+        error = "Both startMs and endMs must be provided together for time-range filtering.",
+      ).toJson()
+    }
+    if (startMs != null && endMs != null && startMs > endMs) {
+      return SessionResult(
+        sessionId = sessionId.value,
+        error = "startMs ($startMs) must be <= endMs ($endMs).",
+      ).toJson()
+    }
+
+    // If time range is specified, use LogcatParser for timestamp-based slicing
+    val baseLines: List<String> = if (startMs != null && endMs != null) {
+      LogcatParser.sliceByTimeRange(logcatFile, startMs, endMs)
+        .map { it.text }
+    } else {
+      logcatFile.readLines()
+    }
+
+    val filteredLines = if (filter != null) {
+      baseLines.filter { it.contains(filter, ignoreCase = true) }
+    } else {
+      baseLines
+    }
+
+    val totalLines = baseLines.size
+    val matchedLines = filteredLines.size
+    val safeMaxLines = maxLines.coerceAtLeast(0)
+    val outputLines = filteredLines.takeLast(safeMaxLines)
+    val truncated = matchedLines > safeMaxLines
+
+    val content = outputLines.joinToString("\n")
+
+    return DeviceLogsResult(
+      sessionId = sessionId.value,
+      file = logcatFile.name,
+      totalLines = totalLines,
+      matchedLines = matchedLines,
+      returnedLines = outputLines.size,
+      truncated = truncated,
+      filter = filter,
+      timeRange = if (startMs != null && endMs != null) "${startMs}-${endMs}" else null,
+      content = content,
+    ).toJson()
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
   // Helpers
   // ─────────────────────────────────────────────────────────────────────────────
 
@@ -617,8 +718,8 @@ class SessionToolSet(
       is SessionStatus.Ended.Failed -> "Failed$durationSuffix"
       is SessionStatus.Ended.Cancelled -> "Cancelled$durationSuffix"
       is SessionStatus.Ended.TimeoutReached -> "Timeout$durationSuffix"
-      is SessionStatus.Ended.SucceededWithFallback -> "Succeeded (with fallback)$durationSuffix"
-      is SessionStatus.Ended.FailedWithFallback -> "Failed (with fallback)$durationSuffix"
+      is SessionStatus.Ended.SucceededWithSelfHeal -> "Succeeded (with self-heal)$durationSuffix"
+      is SessionStatus.Ended.FailedWithSelfHeal -> "Failed (with self-heal)$durationSuffix"
       is SessionStatus.Ended.MaxCallsLimitReached -> "Max calls reached$durationSuffix"
     }
   }
@@ -626,7 +727,7 @@ class SessionToolSet(
   private fun categorizeArtifact(fileName: String): String {
     return when {
       fileName.endsWith(".mp4") || fileName.endsWith(".webm") -> "video"
-      fileName.contains("logcat") || fileName.contains("system_log") -> "device_log"
+      LogcatParser.isDeviceLogFile(fileName) -> "device_log"
       fileName.endsWith(".trail.yaml") -> "trail"
       fileName.endsWith(".json") -> "metadata"
       fileName.endsWith(".png") || fileName.endsWith(".jpg") || fileName.endsWith(".webp") -> "screenshot"
@@ -687,6 +788,21 @@ data class SessionListEntry(
 data class SessionListResult(
   val sessions: List<SessionListEntry>,
   val total: Int,
+) {
+  fun toJson(): String = TrailblazeJsonInstance.encodeToString(serializer(), this)
+}
+
+@Serializable
+data class DeviceLogsResult(
+  val sessionId: String,
+  val file: String,
+  val totalLines: Int,
+  val matchedLines: Int,
+  val returnedLines: Int,
+  val truncated: Boolean,
+  val filter: String? = null,
+  val timeRange: String? = null,
+  val content: String,
 ) {
   fun toJson(): String = TrailblazeJsonInstance.encodeToString(serializer(), this)
 }

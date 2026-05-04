@@ -5,6 +5,7 @@ import ai.koog.prompt.executor.clients.openai.OpenAILLMClient
 import ai.koog.prompt.executor.ollama.client.OllamaClient
 import ai.koog.prompt.llm.LLMProvider
 import org.junit.Test
+import xyz.block.trailblaze.AgentMemory
 import xyz.block.trailblaze.android.AndroidTrailblazeRule
 import xyz.block.trailblaze.android.BaseAndroidStandaloneServerTest
 import xyz.block.trailblaze.android.InstrumentationArgUtil
@@ -37,7 +38,7 @@ class AndroidStandaloneServerTest : BaseAndroidStandaloneServerTest() {
     )
   }
 
-  override fun handleRunRequest(runYamlRequest: RunYamlRequest) {
+  override fun handleRunRequest(runYamlRequest: RunYamlRequest, agentMemory: AgentMemory) {
     this.trailblazeDeviceId = runYamlRequest.trailblazeDeviceId
     // Propagate the runtime driver type so session logs reflect the actual driver
     runYamlRequest.driverType?.let { trailblazeLoggingRule.driverTypeOverride = it }
@@ -46,7 +47,8 @@ class AndroidStandaloneServerTest : BaseAndroidStandaloneServerTest() {
       llmClient = getDynamicLlmClient(runYamlRequest.trailblazeLlmModel).createLlmClient(),
       config = runYamlRequest.config,
       trailblazeDeviceId = this.trailblazeDeviceId,
-      trailblazeLoggingRule = trailblazeLoggingRule
+      trailblazeLoggingRule = trailblazeLoggingRule,
+      agentMemoryOverride = agentMemory,
     )
     startInTestCoroutineScope {
       androidTrailblazeRule.runSuspend(
@@ -105,6 +107,6 @@ class AndroidStandaloneServerTest : BaseAndroidStandaloneServerTest() {
       },
       deviceClassifiers = getDeviceClassifiers(),
     )
-    onDeviceRpcServer.startServer(port = adbReversePort, wait = true)
+    onDeviceRpcServer.startServer(port = onDeviceRpcPort, wait = true)
   }
 }

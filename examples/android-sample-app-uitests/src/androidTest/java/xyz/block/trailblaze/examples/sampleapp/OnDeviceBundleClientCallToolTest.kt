@@ -47,9 +47,9 @@ import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
  * session's [TrailblazeToolRepo] → returns the result across the binding.
  *
  * The test fixture (`bundle-callback-fixture.js`) hand-rolls what a real SDK bundle would emit
- * because QuickJS can't parse TypeScript and the TS→JS bundler automation hasn't landed. When
- * that lands, a follow-up will swap the fixture for an SDK-authored tool; the Kotlin-side
- * transport under test is identical either way.
+ * because QuickJS can't parse TypeScript and the TS→JS bundler automation hasn't landed. When that
+ * lands, a follow-up will swap the fixture for an SDK-authored tool; the Kotlin-side transport
+ * under test is identical either way.
  *
  * **Coverage (5 tests, each isolating one branch):**
  * 1. [bundleHandler_callsKotlinToolViaCallback_happyPath] — happy path. Bundle handler calls a

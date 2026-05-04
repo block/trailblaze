@@ -14,7 +14,9 @@
 #
 # Environment variables:
 #   TRAILBLAZE_PORT           - HTTP port (default: 52525). Override to run multiple instances.
-#   TRAILBLAZE_HTTPS_PORT     - HTTPS port (default: 8443). Override to run multiple instances.
+#   TRAILBLAZE_HTTPS_PORT     - HTTPS port (default: TRAILBLAZE_PORT + 1). Rarely overridden;
+#                               derived so a single TRAILBLAZE_PORT override is enough to run
+#                               isolated daemons.
 #   TRAILBLAZE_JAR            - Path to the uber JAR (default: trailblaze.jar next to this script)
 #   TRAILBLAZE_IPC            - Set to 0 to disable the daemon IPC fast path (default: 1).
 #                               The fast path requires `jq` on PATH; if jq is missing the CLI
@@ -156,9 +158,11 @@ fi
 # ---------------------------------------------------------------------------
 
 TRAILBLAZE_DEFAULT_PORT=52525
-TRAILBLAZE_DEFAULT_HTTPS_PORT=8443
 TRAILBLAZE_PORT="${TRAILBLAZE_PORT:-$TRAILBLAZE_DEFAULT_PORT}"
-TRAILBLAZE_HTTPS_PORT="${TRAILBLAZE_HTTPS_PORT:-$TRAILBLAZE_DEFAULT_HTTPS_PORT}"
+# HTTPS defaults to TRAILBLAZE_PORT + 1 so a single port override is enough to
+# run multiple daemons in isolation. Mirrors TrailblazeDevicePort's Kotlin-side
+# convention (the on-device RPC server defaults to TRAILBLAZE_PORT + 2).
+TRAILBLAZE_HTTPS_PORT="${TRAILBLAZE_HTTPS_PORT:-$((TRAILBLAZE_PORT + 1))}"
 
 # Export so the JVM process can read them via System.getenv()
 export TRAILBLAZE_PORT
@@ -170,6 +174,61 @@ export TRAILBLAZE_HTTPS_PORT
 
 is_daemon_running() {
     curl -s --connect-timeout 1 "http://localhost:${TRAILBLAZE_PORT}/ping" > /dev/null 2>&1
+}
+
+# Path to a per-port pidfile recording the JVM PID we spawn for this script.
+# Used to detect "JVM is alive but the port is unbound" — i.e. a previous
+# auto-start that hung in init before binding HTTP. is_daemon_running() only
+# tells us whether the port answers; it can't distinguish "no daemon" from
+# "daemon stuck pre-bind", so without this file the next invocation would
+# happily spawn another stuck JVM, and another, and another.
+TRAILBLAZE_PIDFILE_DIR="${HOME}/.trailblaze"
+TRAILBLAZE_PIDFILE="${TRAILBLAZE_PIDFILE_DIR}/daemon-${TRAILBLAZE_PORT}.pid"
+
+# Returns 0 if the PID in the pidfile is still alive (a previous auto-start
+# is still running), 1 if no pidfile or the PID is dead. Cleans up stale
+# pidfiles as a side-effect.
+prior_daemon_pid_alive() {
+    [ -f "$TRAILBLAZE_PIDFILE" ] || return 1
+    local pid
+    pid=$(cat "$TRAILBLAZE_PIDFILE" 2>/dev/null)
+    [ -n "$pid" ] || { rm -f "$TRAILBLAZE_PIDFILE"; return 1; }
+    if kill -0 "$pid" 2>/dev/null; then
+        return 0
+    fi
+    rm -f "$TRAILBLAZE_PIDFILE"
+    return 1
+}
+
+# Refuses to spawn a new daemon if the previous JVM we spawned for this port
+# is still alive but not responding (i.e. stuck in init). Without this guard,
+# every retry adds another zombie JVM consuming ~4 GB of heap.
+abort_if_stuck_daemon() {
+    if prior_daemon_pid_alive && ! is_daemon_running; then
+        local pid
+        pid=$(cat "$TRAILBLAZE_PIDFILE" 2>/dev/null)
+        echo "" >&2
+        echo "ERROR: A Trailblaze daemon (PID $pid) is alive on port ${TRAILBLAZE_PORT}" >&2
+        echo "       but is not responding to HTTP. It is likely stuck in startup." >&2
+        echo "" >&2
+        echo "       Refusing to spawn another daemon — multiple stuck JVMs would" >&2
+        echo "       compound the problem." >&2
+        echo "" >&2
+        echo "       To recover:" >&2
+        echo "         kill -9 $pid && rm -f $TRAILBLAZE_PIDFILE" >&2
+        echo "" >&2
+        echo "       Or set TRAILBLAZE_PORT to an unused port to start a fresh daemon." >&2
+        exit 1
+    fi
+    # No stuck daemon — clear any stale pidfile so the new spawn can write.
+    rm -f "$TRAILBLAZE_PIDFILE"
+}
+
+# Records the spawned JVM's PID so a subsequent invocation can detect a
+# stuck daemon. Called immediately after tb_run_background / tb_run_background_quiet.
+record_daemon_pid() {
+    mkdir -p "$TRAILBLAZE_PIDFILE_DIR"
+    echo "$1" > "$TRAILBLAZE_PIDFILE"
 }
 
 # ---------------------------------------------------------------------------
@@ -271,6 +330,7 @@ stop_daemon() {
         echo "Daemon did not stop gracefully."
         return 1
     else
+        rm -f "$TRAILBLAZE_PIDFILE"
         echo "Trailblaze stopped."
         return 0
     fi
@@ -361,9 +421,11 @@ elif [ "$STDIO_MODE" = true ]; then
 
     # Auto-start daemon if not running (proxy needs it)
     if ! is_daemon_running; then
+        abort_if_stuck_daemon
         echo "[mcp] Starting Trailblaze daemon..." >&2
         # Ports are passed via exported TRAILBLAZE_PORT/TRAILBLAZE_HTTPS_PORT env vars
         tb_run_background_quiet app --foreground --headless
+        record_daemon_pid "$!"
         echo "[mcp] Daemon starting (PID $!)..." >&2
 
         attempts=0
@@ -383,11 +445,13 @@ elif [ "$STDIO_MODE" = true ]; then
 
     tb_run_exec_quiet "${ARGS_ARRAY[@]}"
 elif ([ "$1" = "trail" ] || [ "$1" = "run" ] || [ "$1" = "blaze" ] || [ "$1" = "ask" ] || ([ "$1" = "session" ] && [ "$2" != "info" ]) || [ "$1" = "tools" ]) && ! is_daemon_running; then
+    abort_if_stuck_daemon
     # Auto-start daemon for commands that need it so subsequent calls reuse it.
     # Use stderr so --json output on stdout stays clean.
     echo "Starting Trailblaze daemon..." >&2
     # Ports are passed via exported TRAILBLAZE_PORT/TRAILBLAZE_HTTPS_PORT env vars
     tb_run_background app --foreground --headless
+    record_daemon_pid "$!"
 
     # Wait for daemon to be ready (all output to stderr for --json safety)
     echo -n "Waiting for Trailblaze daemon" >&2

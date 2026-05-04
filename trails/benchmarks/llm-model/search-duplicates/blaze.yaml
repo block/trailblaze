@@ -1,0 +1,16 @@
+- config:
+    title: "LLM Benchmark: Search + disambiguate by attribute"
+    driver: PLAYWRIGHT_NATIVE
+    description: |-
+      Search for "Mouse" on the product list, then pick the specific
+      result whose subtitle says "USB-C, Gray" out of four "Wireless Mouse"
+      entries that differ only by subtitle and price. Exercises filtering
+      then attribute-based disambiguation (the prior duplicate-list trail
+      tests positional disambiguation; this one tests semantic).
+- prompts:
+    - step: 'Navigate to http://localhost:8765/search-duplicates.html'
+    - step: 'Type "Mouse" into the "Search products..." input field'
+    - step: 'Click the "Search" button'
+    - step: 'Verify that "4 results for ''Mouse''" is visible'
+    - step: 'Click the "Wireless Mouse" result whose subtitle is "USB-C, Gray"'
+    - step: 'Verify that the text "ID: 4" is visible in the detail panel'

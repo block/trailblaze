@@ -79,7 +79,7 @@ sealed interface TrailblazeProgressEvent {
    * A step has completed execution.
    *
    * @property stepIndex Zero-based index of the step
-   * @property usedRecording True if recording was used, false if AI fallback
+   * @property usedRecording True if recording was used, false if self-heal
    * @property durationMs Actual execution time in milliseconds
    * @property success True if the step completed successfully
    * @property errorMessage Error message if step failed

@@ -7,6 +7,7 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateResponse
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
@@ -78,7 +79,11 @@ interface TrailblazeMcpBridge {
    *   the action (e.g., agent-driven CLI flows).
    * @return Result string describing the execution outcome
    */
-  suspend fun executeTrailblazeTool(tool: TrailblazeTool, blocking: Boolean = false): String
+  suspend fun executeTrailblazeTool(
+    tool: TrailblazeTool,
+    blocking: Boolean = false,
+    traceId: TraceId? = null,
+  ): String
 
   /**
    * Ends the current session on the selected device.
@@ -225,6 +230,19 @@ interface TrailblazeMcpBridge {
    * @param deviceId The device whose persistent connection should be closed
    */
   fun releasePersistentDeviceConnection(deviceId: TrailblazeDeviceId) {}
+
+  /**
+   * Records the caller's preferred headless mode for the web browser identified
+   * by [instanceId] before [selectDevice] is called. When the bridge launches
+   * (or re-launches) the browser for that ID, it honors this preference. No-op
+   * when the browser for [instanceId] is already running.
+   *
+   * @param instanceId Web instance ID (e.g. `playwright-native`, or any custom
+   *   ID like `foo` from `--device web/foo`).
+   * @param headless True for a headless browser (default), false for a visible
+   *   window. Driven by the CLI's `--headless` flag.
+   */
+  fun setWebBrowserHeadless(instanceId: String, headless: Boolean) {}
 
   /**
    * Sets the bridge's active device selection without validation or connection setup.

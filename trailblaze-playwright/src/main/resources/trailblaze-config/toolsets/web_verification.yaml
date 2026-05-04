@@ -9,3 +9,4 @@ tools:
   - web_verify_element_visible
   - web_verify_value
   - web_verify_list_visible
+  - web_assert_network_event

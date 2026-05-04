@@ -1,6 +1,12 @@
 plugins {
   alias(libs.plugins.kotlin.jvm)
   alias(libs.plugins.kotlin.serialization)
+  id("trailblaze.bundle")
+}
+
+trailblazeBundle {
+  packsDir.set(layout.projectDirectory.dir("trails/config/packs"))
+  toolsDir.set(layout.projectDirectory.dir("trails/config/tools"))
 }
 
 dependencies {

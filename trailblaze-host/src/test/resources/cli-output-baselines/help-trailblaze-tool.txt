@@ -1,0 +1,43 @@
+# This file is a CHECKED-IN baseline of CLI output rendered by trailblaze-host's CLI helpers.
+# It is NOT a contract — if a test fails here because output drifted, decide whether the
+# drift is intentional. The test always (re)writes this file from the current rendered output,
+# then asserts the working tree is clean. So `git diff` of this file IS the failure message.
+# Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
+# small wording / spacing changes can be intentional or accidental.
+# ----------------------------------------------------------------------
+Usage: trailblaze tool [-hvV] [--text-only] -d=<device> [--headless=<headless>]
+                       -o=<objective> [--target=<target>] [--yaml=<yaml>]
+                       [<toolName>] [<argPairs>...]
+Run a Trailblaze tool by name (e.g., tap, inputText)
+      [<toolName>]        Tool name (e.g., web_click, tap)
+      [<argPairs>...]     Tool arguments as key=value pairs (e.g., ref="Sign
+                            In")
+  -d, --device=<device>   Device: platform (android, ios, web) or platform/id.
+                            Required.
+  -h, --help              Show this help message and exit.
+      --headless=<headless>
+                          For --device web/...: launch the Playwright browser
+                            headless. When omitted, falls back to the persisted
+                            `web-headless` config (see `trailblaze config
+                            web-headless`). Pass --headless=false to force a
+                            visible browser, --headless=true to force headless.
+                            Ignored for non-web devices.
+  -o, --objective=<objective>
+                          Natural language intent — describe what, not how.
+                          If the UI changes, Trailblaze uses this to retry the
+                            step with AI.
+                          'Navigate to Settings' survives a redesign; 'tap
+                            button at 200,400' does not.
+      --target=<target>   Target app ID, saved as the default for future
+                            commands. List available targets with `trailblaze
+                            toolbox` (no args).
+      --text-only, --no-screenshots
+                          Skip screenshots — the LLM only sees the textual view
+                            hierarchy, no vision tokens, and disk logging of
+                            screenshots is skipped too. Faster and cheaper for
+                            short objectives where the visual layout doesn't
+                            matter; some tasks need vision and will degrade
+                            without it.
+  -v, --verbose           Enable verbose output
+  -V, --version           Print version information and exit.
+      --yaml=<yaml>       Raw YAML tool sequence (multiple tools in one call)

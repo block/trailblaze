@@ -46,3 +46,11 @@ models:
       output_per_million: 2.00
       cached_input_per_million: 0.025
 
+  - id: gpt-5-nano
+    context_length: 400000
+    max_output_tokens: 128000
+    cost:
+      input_per_million: 0.05
+      output_per_million: 0.40
+      cached_input_per_million: 0.005
+

@@ -9,11 +9,10 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
 import xyz.block.trailblaze.utils.ElementComparator
 
 @Serializable
-@TrailblazeToolClass("assertEquals")
+@TrailblazeToolClass("assertEquals", isVerification = true)
 @LLMDescription(
   """
-This will calculate the actual and expected values based on the current screen state and assert that
-they are equivalent.
+Calculate the actual and expected values from the current screen state and assert they are equivalent.
       """,
 )
 data class AssertEqualsTrailblazeTool(

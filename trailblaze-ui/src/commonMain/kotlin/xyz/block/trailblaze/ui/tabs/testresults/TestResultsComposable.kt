@@ -31,11 +31,11 @@ fun TestResultsComposable(
   val totalTests = sessions.size
   val succeededTests = sessions.count {
     it.latestStatus is SessionStatus.Ended.Succeeded ||
-        it.latestStatus is SessionStatus.Ended.SucceededWithFallback
+        it.latestStatus is SessionStatus.Ended.SucceededWithSelfHeal
   }
   val failedTests = sessions.count {
     it.latestStatus is SessionStatus.Ended.Failed ||
-        it.latestStatus is SessionStatus.Ended.FailedWithFallback ||
+        it.latestStatus is SessionStatus.Ended.FailedWithSelfHeal ||
         it.latestStatus is SessionStatus.Ended.MaxCallsLimitReached
   }
   val cancelledTests = sessions.count { it.latestStatus is SessionStatus.Ended.Cancelled }

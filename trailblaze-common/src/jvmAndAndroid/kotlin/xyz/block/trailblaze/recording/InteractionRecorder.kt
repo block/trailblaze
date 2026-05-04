@@ -5,6 +5,7 @@ import kotlinx.datetime.Clock
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLogger
 import xyz.block.trailblaze.logs.client.TrailblazeSession
+import xyz.block.trailblaze.toolcalls.toLogPayload
 import xyz.block.trailblaze.yaml.TrailConfig
 import xyz.block.trailblaze.yaml.TrailblazeYaml
 import xyz.block.trailblaze.yaml.createTrailblazeYaml
@@ -80,7 +81,7 @@ class InteractionRecorder(
       _interactions.add(interaction)
 
       val toolLog = TrailblazeLog.TrailblazeToolLog(
-        trailblazeTool = interaction.tool,
+        trailblazeTool = interaction.tool.toLogPayload(),
         toolName = interaction.toolName,
         successful = true,
         traceId = null,

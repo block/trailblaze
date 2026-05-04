@@ -29,6 +29,7 @@ import xyz.block.trailblaze.llm.providers.TrailblazeDynamicLlmTokenProvider
 import xyz.block.trailblaze.ui.tabs.mcp.McpTabComposable
 import xyz.block.trailblaze.ui.tabs.recording.RecordingTabComposable
 import xyz.block.trailblaze.ui.tabs.trails.TrailsBrowserTabComposable
+import xyz.block.trailblaze.ui.tabs.waypoints.WaypointsTabComposable
 import xyz.block.trailblaze.logs.server.McpServerDebugState
 import kotlin.system.exitProcess
 
@@ -115,6 +116,32 @@ object TrailblazeBuiltInTabs {
         )
       }
     }
+  )
+
+  /**
+   * Creates the Waypoints tab which browses [WaypointDefinition]s discovered from the
+   * configured trails directory plus pack-bundled framework waypoints. Same loader used
+   * by the `trailblaze waypoint` CLI.
+   */
+  fun waypointsTab(
+    trailblazeSettingsRepo: TrailblazeSettingsRepo,
+    deviceManager: TrailblazeDeviceManager,
+    logsRepo: LogsRepo,
+  ): TrailblazeAppTab = TrailblazeAppTab(
+    route = TrailblazeRoute.Waypoints,
+    content = {
+      val serverState by trailblazeSettingsRepo.serverStateFlow.collectAsState()
+      val effectiveTrailsDir = TrailblazeDesktopUtil.getEffectiveTrailsDirectory(serverState.appConfig)
+      WaypointsTabComposable(
+        initialRootPath = effectiveTrailsDir,
+        logsRepo = logsRepo,
+        availableTargets = deviceManager.availableAppTargets,
+        appIconProvider = deviceManager.appIconProvider,
+        onChangeDirectory = { newPath ->
+          trailblazeSettingsRepo.updateAppConfig { it.copy(trailsDirectory = newPath) }
+        },
+      )
+    },
   )
 
   /**

@@ -332,6 +332,7 @@ internal fun SessionTimelineView(
             )
             Spacer(modifier = Modifier.weight(1f))
             val watchVideoPath = videoMetadata.videoFilePath
+              ?: videoMetadata.filePath.takeIf { videoMetadata.spriteInfo == null }
             if (watchVideoPath != null) {
               Text(
                 text = "Watch Video \u2197",

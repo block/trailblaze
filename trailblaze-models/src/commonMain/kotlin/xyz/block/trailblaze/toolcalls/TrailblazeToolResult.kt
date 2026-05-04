@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.toolcalls
 
+import kotlinx.serialization.Contextual
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
 
@@ -39,7 +40,7 @@ Please always provide a tool call that will help complete the task.
     @Serializable
     data class ExceptionThrown(
       override val errorMessage: String,
-      val command: TrailblazeTool? = null,
+      @Contextual val command: TrailblazeTool? = null,
       val stackTrace: String? = null,
     ) : Error {
       companion object {
@@ -72,7 +73,7 @@ Please always provide a tool call that will help complete the task.
 
     @Serializable
     data class UnknownTrailblazeTool(
-      val command: TrailblazeTool,
+      @Contextual val command: TrailblazeTool,
     ) : Error {
       override val errorMessage: String
         get() = """
@@ -83,7 +84,7 @@ Unknown custom command, ensure there is a mapping between the custom command and
     @Serializable
     data class InvalidToolCall(
       override val errorMessage: String,
-      val command: TrailblazeTool,
+      @Contextual val command: TrailblazeTool,
     ) : Error
 
     /**

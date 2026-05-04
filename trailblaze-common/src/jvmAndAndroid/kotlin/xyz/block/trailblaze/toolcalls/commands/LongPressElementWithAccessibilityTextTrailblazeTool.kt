@@ -11,7 +11,7 @@ import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeTools.REQUIRED_ACCESSIBILITY_TEXT_DESCRIPTION
 
 @Serializable
-@TrailblazeToolClass("longPressElementWithAccessibilityText")
+@TrailblazeToolClass("longPressElementWithAccessibilityText", isForLlm = false)
 @LLMDescription(
   """
 Invoking this function will trigger a long press on a view with the provided accessibility

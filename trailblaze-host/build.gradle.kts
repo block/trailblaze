@@ -90,6 +90,11 @@ dependencies {
   api(libs.slf4j.api)
 
   implementation(project(":trailblaze-common"))
+  // Goose-config writer in TrailblazeDesktopUtil reuses the bundler module's shared
+  // YAML emit/quote utilities (`xyz.block.trailblaze.bundle.yaml.YamlEmitter`). The
+  // bundler is otherwise build-time-only — this is the only runtime consumer today;
+  // future `trailblaze bundle` CLI will be the second.
+  implementation(project(":trailblaze-pack-bundler"))
   implementation(project(":trailblaze-revyl"))
   implementation(project(":trailblaze-compose"))
   implementation(project(":trailblaze-scripting-subprocess"))
@@ -154,24 +159,36 @@ val generateVersionProperties by tasks.registering {
   val outputDir = layout.buildDirectory.dir("generated/resources/version")
   outputs.dir(outputDir)
 
+  // Declare every input the doLast block reads as a task input so Gradle's up-to-date
+  // check re-runs the task when any of these change. Without these, passing a different
+  // `-Ptrailblaze.variant=...` on the command line silently reuses the previously
+  // generated `version.properties` because the task's outputs haven't changed shape —
+  // which surfaced as `install-trailblaze-source.sh` baking the wrong variant
+  // into a fresh JAR.
+  val gitTagVersion = rootProject.extra["gitTagVersion"] as String
+  val gitVersionFull = rootProject.extra["gitVersionFull"] as String
+  val cliVersionInput = project.version.toString()
+  val hasExplicitVersionInput = gradle.startParameter.projectProperties.containsKey("version")
+  val variantInput = rootProject.findProperty("trailblaze.variant")?.toString() ?: ""
+  inputs.property("gitTagVersion", gitTagVersion)
+  inputs.property("gitVersionFull", gitVersionFull)
+  inputs.property("cliVersion", cliVersionInput)
+  inputs.property("hasExplicitVersion", hasExplicitVersionInput)
+  inputs.property("variant", variantInput)
+
   doLast {
     val dir = outputDir.get().asFile
     dir.mkdirs()
     val propsFile = File(dir, "version.properties")
-    val gitTagVersion = rootProject.extra["gitTagVersion"] as String
-    val gitVersionFull = rootProject.extra["gitVersionFull"] as String
     // Prefer: 1) explicit -Pversion from CLI, 2) semver from git tag, 3) git timestamp
-    val cliVersion = project.version.toString()
-    val hasExplicitVersion = gradle.startParameter.projectProperties.containsKey("version")
     val version = when {
-      hasExplicitVersion -> cliVersion
+      hasExplicitVersionInput -> cliVersionInput
       gitTagVersion.isNotEmpty() -> gitTagVersion
       else -> gitVersionFull
     }
-    val variant = rootProject.findProperty("trailblaze.variant")?.toString() ?: ""
     val content = buildString {
       appendLine("version=$version")
-      if (variant.isNotEmpty()) appendLine("variant=$variant")
+      if (variantInput.isNotEmpty()) appendLine("variant=$variantInput")
     }
     propsFile.writeText(content)
   }

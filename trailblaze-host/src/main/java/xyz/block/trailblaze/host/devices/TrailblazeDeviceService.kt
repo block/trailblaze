@@ -137,5 +137,10 @@ object TrailblazeDeviceService {
     TrailblazeDevicePlatform.WEB -> error(
       "Web tests use PLAYWRIGHT_NATIVE path (BasePlaywrightNativeTest), not TrailblazeDeviceService"
     )
+
+    // Compose desktop driver communicates via ComposeRpcClient, not via the
+    // Maestro/host-driver fan-out below; same shape as ANDROID (null = no Maestro
+    // device backing this CLI invocation, the RPC path takes over).
+    TrailblazeDevicePlatform.DESKTOP -> null
   }
 }

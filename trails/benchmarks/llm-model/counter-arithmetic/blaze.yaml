@@ -1,0 +1,17 @@
+- config:
+    title: "LLM Benchmark: Counter arithmetic with increment and decrement"
+    driver: PLAYWRIGHT_NATIVE
+    description: |-
+      Exercises both the + (Increment) and - (Decrement) buttons in
+      sequence so the running total has to land on the right value
+      after a mix of additions and subtractions. The existing counter
+      trail only uses + and Reset; this one adds the - button and
+      stresses arithmetic state tracking across opposing actions.
+- prompts:
+    - step: Navigate to http://localhost:8765/index.html
+    - step: Click the "Counter" navigation link
+    - step: Verify the counter value shows "0"
+    - step: Click the Increment button (the + button) five times
+    - step: Verify the counter value shows "5"
+    - step: Click the Decrement button (the - button) two times
+    - step: Verify the counter value shows "3"

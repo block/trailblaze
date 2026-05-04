@@ -18,6 +18,15 @@ dependencies {
   implementation(libs.kotlinx.serialization.json)
   implementation(libs.coroutines)
 
+  // The synthesizer's generated wrapper does `pathToFileURL($sdkBundlePath)`, so it needs the
+  // committed `trailblaze-sdk-bundle.js` materialized on disk. The bundle module owns the
+  // classpath resource and the safe extract-to-temp-file logic
+  // (`SdkBundleResource.extractToFile`); we depend on it for both the API call and so the
+  // resource ends up on the host daemon's classpath / inside the installed uber jar (see
+  // `scripts/install-trailblaze-from-source.sh`). Without this dep, any trail that triggers
+  // an inline-script-tool runtime fails with "classpath resource ... not found".
+  implementation(project(":trailblaze-scripting-bundle"))
+
   testImplementation(libs.kotlin.test.junit4)
   testImplementation(libs.assertk)
 }
@@ -35,14 +44,14 @@ dependencies {
 // always the module's own directory; a rootProject-relative path would change meaning when
 // the rootProject does.
 val sampleAppMcpToolsDir = layout.projectDirectory
-  .dir("../examples/android-sample-app/trailblaze-config/mcp")
+  .dir("../examples/android-sample-app/trails/config/mcp")
 
 // Sister install dir for the `@trailblaze/scripting` reference example under the same target.
 // Resolves the SDK dependency via a `file:` link inside the example's package.json, so the
 // install task ends up building the local SDK into this directory's node_modules. Same
 // projectDir-relative anchoring rationale as [sampleAppMcpToolsDir] above.
 val sampleAppMcpSdkToolsDir = layout.projectDirectory
-  .dir("../examples/android-sample-app/trailblaze-config/mcp-sdk")
+  .dir("../examples/android-sample-app/trails/config/mcp-sdk")
 
 // The `@trailblaze/scripting` SDK itself. Bun installs `file:` deps by symlinking each file in
 // the linked package individually (not the package root), so a consumer's `import` from the

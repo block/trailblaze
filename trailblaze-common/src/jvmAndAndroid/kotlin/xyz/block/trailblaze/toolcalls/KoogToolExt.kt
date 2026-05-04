@@ -45,15 +45,34 @@ object KoogToolExt {
    * shares the [YamlDefinedTrailblazeTool] implementation class, differentiated at execute time
    * by the config captured in its serializer.
    *
+   * Tools whose config sets `is_for_llm: false` are filtered out — same rule the class-backed
+   * path applies via `@TrailblazeToolClass(isForLlm = false)` ([toKoogTools] above). The `tools:`
+   * mode default is `null = treat as true`, mirroring the annotation default.
+   *
    * Names without a matching config (e.g. a typo in a toolset's `yamlToolNames`) log a warning
    * and are skipped rather than crashing registration.
    */
   fun buildKoogToolsForYamlDefined(
     yamlToolNames: Set<ToolName>,
     trailblazeToolContextProvider: () -> TrailblazeToolExecutionContext,
+  ): List<TrailblazeKoogTool<out TrailblazeTool>> = buildKoogToolsForYamlDefined(
+    yamlToolNames = yamlToolNames,
+    configsByName = TrailblazeSerializationInitializer.buildYamlDefinedTools(),
+    trailblazeToolContextProvider = trailblazeToolContextProvider,
+  )
+
+  /**
+   * Test seam over [buildKoogToolsForYamlDefined] that lets callers inject a synthetic
+   * [configsByName] map instead of going through the cached classpath scan in
+   * [TrailblazeSerializationInitializer.buildYamlDefinedTools]. Production code should use
+   * the public single-arg overload above.
+   */
+  internal fun buildKoogToolsForYamlDefined(
+    yamlToolNames: Set<ToolName>,
+    configsByName: Map<ToolName, ToolYamlConfig>,
+    trailblazeToolContextProvider: () -> TrailblazeToolExecutionContext,
   ): List<TrailblazeKoogTool<out TrailblazeTool>> {
     if (yamlToolNames.isEmpty()) return emptyList()
-    val configsByName = TrailblazeSerializationInitializer.buildYamlDefinedTools()
     return yamlToolNames.mapNotNull { name ->
       val config = configsByName[name]
       if (config == null) {
@@ -64,6 +83,7 @@ object KoogToolExt {
         )
         return@mapNotNull null
       }
+      if (config.isForLlm == false) return@mapNotNull null
       buildYamlDefinedKoogTool(config, trailblazeToolContextProvider)
     }
   }
@@ -74,11 +94,22 @@ object KoogToolExt {
    * alongside class-backed ones (e.g. [TrailblazeToolRepo.getCurrentToolDescriptors]) and no
    * execution context is available yet.
    *
+   * Same `is_for_llm: false` filter as [buildKoogToolsForYamlDefined].
+   *
    * Skips unknown names with a warning, same as [buildKoogToolsForYamlDefined].
    */
-  fun buildDescriptorsForYamlDefined(yamlToolNames: Set<ToolName>): List<ToolDescriptor> {
+  fun buildDescriptorsForYamlDefined(yamlToolNames: Set<ToolName>): List<ToolDescriptor> =
+    buildDescriptorsForYamlDefined(
+      yamlToolNames = yamlToolNames,
+      configsByName = TrailblazeSerializationInitializer.buildYamlDefinedTools(),
+    )
+
+  /** Test seam mirroring the seam on [buildKoogToolsForYamlDefined]. */
+  internal fun buildDescriptorsForYamlDefined(
+    yamlToolNames: Set<ToolName>,
+    configsByName: Map<ToolName, ToolYamlConfig>,
+  ): List<ToolDescriptor> {
     if (yamlToolNames.isEmpty()) return emptyList()
-    val configsByName = TrailblazeSerializationInitializer.buildYamlDefinedTools()
     return yamlToolNames.mapNotNull { name ->
       val config = configsByName[name]
       if (config == null) {
@@ -87,6 +118,7 @@ object KoogToolExt {
         )
         return@mapNotNull null
       }
+      if (config.isForLlm == false) return@mapNotNull null
       // YAML-defined tools: author-controlled schema via `ToolYamlConfig.parameters[*].type`,
       // so unknown types are a config bug worth erroring on at registration.
       config.toTrailblazeToolDescriptor().toKoogToolDescriptor(strict = true)

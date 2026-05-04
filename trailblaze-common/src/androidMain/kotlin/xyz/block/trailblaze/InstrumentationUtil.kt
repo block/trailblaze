@@ -54,11 +54,127 @@ object InstrumentationUtil {
   }
 
   fun <T> withUiAutomation(work: UiAutomation.() -> T): T = synchronized(uiAutomation) {
-    work(uiAutomation)
+    runWithStaleUiAutomationRecovery { work(uiAutomation) }
   }
 
   fun <T> withUiDevice(work: UiDevice.() -> T): T = synchronized(uiDevice) {
-    work(uiDevice)
+    runWithStaleUiAutomationRecovery { work(uiDevice) }
+  }
+
+  /**
+   * Shared one-shot recovery path for callers that hit `IllegalStateException("UiAutomation not
+   * connected")`. The cached [UiAutomation] on [Instrumentation] is keyed by flags; it can land
+   * in a "constructed-but-never-connected" state (id=-1) when a previous instrumentation cycle
+   * was torn down mid-action — a cancelled YAML run typically reproduces this. The cache survives
+   * across requests on the same long-running on-device server, so the next request re-uses the
+   * stale handle and explodes inside `UiDevice.waitForIdle` / `dumpWindowHierarchy`.
+   *
+   * Recovery: on the first hit we clear the cached handle via reflection on [Instrumentation]'s
+   * private `mUiAutomation` field, force a fresh `getUiAutomation()` (which constructs a new
+   * handle and calls `connect()`), and retry once. If the retry also fails — most likely the
+   * underlying system service is genuinely gone — we re-throw with a wrapped message that points
+   * the operator at the actual recovery (restart the on-device server / test APK).
+   *
+   * Reflection is the only path here because the platform doesn't expose a public way to drop
+   * the cached handle. The field name is stable across all Android versions Trailblaze targets;
+   * the catch makes us tolerant if it ever isn't.
+   */
+  private inline fun <T> runWithStaleUiAutomationRecovery(work: () -> T): T {
+    return try {
+      work()
+    } catch (e: IllegalStateException) {
+      val msg = e.message.orEmpty()
+      if (!msg.contains("UiAutomation not connected")) throw e
+      Console.log(
+        "[InstrumentationUtil] UiAutomation handle was stale (likely from a cancelled prior " +
+          "session); attempting recovery. Original: $msg"
+      )
+      val cleared = clearInstrumentationUiAutomationCache()
+      if (!cleared) {
+        throw IllegalStateException(
+          "UiAutomation is not connected and the cached handle could not be cleared via " +
+            "reflection (both Instrumentation.disconnectUiAutomation() and the mUiAutomation " +
+            "field are inaccessible — Android internal API may have changed). " +
+            "Recover by restarting the Trailblaze on-device server (kill + re-launch the test " +
+            "APK process). Original error: $msg",
+          e,
+        )
+      }
+      try {
+        val result = work()
+        // Log on success so an operator reading the log can correlate "stale connection
+        // happened, but we recovered" — without this, only the failure case is visible and
+        // the cause of one missed beat looks like a flake.
+        Console.log(
+          "[InstrumentationUtil] UiAutomation recovered after stale-handle reset; subsequent " +
+            "operations should be healthy until the next instrumentation lifecycle event."
+        )
+        result
+      } catch (retry: IllegalStateException) {
+        throw IllegalStateException(
+          "UiAutomation reconnect retry also failed. The on-device server's instrumentation is " +
+            "in a non-recoverable state — kill the test APK process (`adb shell am force-stop " +
+            "<your test apk>`) and re-launch the Trailblaze on-device server to recover. " +
+            "Original error: ${retry.message}",
+          retry,
+        )
+      }
+    }
+  }
+
+  /**
+   * Best-effort reset of [Instrumentation]'s cached UiAutomation handle so the next
+   * `getUiAutomation()` call constructs and connects a fresh one.
+   *
+   * Tries two paths in order, since either may break across Android SDK bumps:
+   * 1. **`Instrumentation.disconnectUiAutomation()`** — package-private but historically the
+   *    most-stable name for this purpose (it's the platform's own teardown API). When
+   *    available, this is the right hook because it lets the platform run its connection
+   *    bookkeeping rather than leaving a half-torn-down state.
+   * 2. **Reflective null-out of the `mUiAutomation` field** — fallback if the method above
+   *    isn't accessible. We also call the existing handle's package-private `disconnect()` if
+   *    we can, then null the field. The field name has been `mUiAutomation` across all
+   *    Android versions Trailblaze targets today; the outer try/catch absorbs a future rename.
+   *
+   * Returns true on either success path; false if both attempts threw.
+   */
+  private fun clearInstrumentationUiAutomationCache(): Boolean {
+    // Path 1: the platform's own disconnect.
+    runCatching {
+      val method = Instrumentation::class.java.getDeclaredMethod("disconnectUiAutomation")
+      method.isAccessible = true
+      method.invoke(instrumentation)
+      Console.log("[InstrumentationUtil] cleared cached UiAutomation via Instrumentation.disconnectUiAutomation()")
+      return true
+    }
+      .onFailure {
+        Console.log(
+          "[InstrumentationUtil] Instrumentation.disconnectUiAutomation() reflective call " +
+            "failed (${it::class.java.simpleName}: ${it.message}); falling back to mUiAutomation field reset."
+        )
+      }
+
+    // Path 2: reflective field null-out, with a best-effort UiAutomation.disconnect() first.
+    return try {
+      val field = Instrumentation::class.java.getDeclaredField("mUiAutomation")
+      field.isAccessible = true
+      (field.get(instrumentation) as? UiAutomation)?.let { existing ->
+        runCatching {
+          val disconnect = UiAutomation::class.java.getDeclaredMethod("disconnect")
+          disconnect.isAccessible = true
+          disconnect.invoke(existing)
+        }
+      }
+      field.set(instrumentation, null)
+      Console.log("[InstrumentationUtil] cleared cached UiAutomation via mUiAutomation field reset")
+      true
+    } catch (t: Throwable) {
+      Console.log(
+        "[InstrumentationUtil] Failed to clear Instrumentation.mUiAutomation reflectively: " +
+          "${t::class.java.simpleName}: ${t.message}"
+      )
+      false
+    }
   }
 
   fun inputTextFast(text: String) {

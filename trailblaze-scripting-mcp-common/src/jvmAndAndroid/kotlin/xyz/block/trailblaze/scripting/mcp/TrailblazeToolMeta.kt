@@ -33,7 +33,14 @@ data class TrailblazeToolMeta(
   val requiresHost: Boolean = false,
   /** Empty = unrestricted. Non-empty = registers only if session driver is in the list. */
   val supportedDrivers: List<String> = emptyList(),
-  /** Empty = unrestricted. Non-empty = registers only if session platform is in the list. */
+  /**
+   * Empty = unrestricted. Non-empty = registers only if session platform is in the list.
+   *
+   * Values are normalized to uppercase at parse time ([fromJsonObject]) so authors can
+   * write either casing in YAML — `[web]`, `[WEB]`, `[Web]` all decode to the same canonical
+   * form. Internal comparisons happen against [TrailblazeDevicePlatform.name] (always
+   * uppercase) so the normalization keeps that path branch-free.
+   */
   val supportedPlatforms: List<String> = emptyList(),
   /** Null = global registry (pull-based). Non-null = pushed into that toolset at registration. */
   val toolset: String? = null,
@@ -98,7 +105,10 @@ data class TrailblazeToolMeta(
       isRecordable = meta.readBoolean(KEY_IS_RECORDABLE, default = true),
       requiresHost = meta.readBoolean(KEY_REQUIRES_HOST, default = false),
       supportedDrivers = meta.readStringList(KEY_SUPPORTED_DRIVERS),
-      supportedPlatforms = meta.readStringList(KEY_SUPPORTED_PLATFORMS),
+      // Normalize to uppercase so author-written `[web]`, `[WEB]`, `[Web]` all collapse
+      // to the same canonical form before downstream `!in` checks against
+      // TrailblazeDevicePlatform.name (always uppercase).
+      supportedPlatforms = meta.readStringList(KEY_SUPPORTED_PLATFORMS).map { it.uppercase() },
       toolset = meta.readString(KEY_TOOLSET),
       requiresContext = meta.readBoolean(KEY_REQUIRES_CONTEXT, default = false),
     )

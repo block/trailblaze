@@ -4,15 +4,21 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import xyz.block.trailblaze.docs.Scenario
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.int
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import org.junit.Test
+import xyz.block.trailblaze.config.InlineScriptToolConfig
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.model.TrailblazeHostAppTarget
+import xyz.block.trailblaze.toolcalls.ToolName
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeToolDescriptor
 import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
@@ -68,6 +74,70 @@ class ToolDiscoveryToolSetTest {
       displayName = "Second App",
       androidAppIds = setOf("com.second.app"),
     )
+
+  private val inlineToolTarget = object : TrailblazeHostAppTarget(
+    id = "inlineapp",
+    displayName = "Inline App",
+  ) {
+    override fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): Set<String>? =
+      if (platform == TrailblazeDevicePlatform.WEB) setOf("inline-web") else null
+
+    override fun internalGetCustomToolsForDriver(
+      driverType: TrailblazeDriverType,
+    ): Set<KClass<out TrailblazeTool>> = emptySet()
+
+    override fun getInlineScriptTools(): List<InlineScriptToolConfig> = listOf(
+      InlineScriptToolConfig(
+        script = "./tools/web_inline.js",
+        name = "web_inline_script_tool",
+        description = "Drive a sample web page through an inline script tool",
+        meta = buildJsonObject {
+          put("trailblaze/supportedPlatforms", buildJsonArray { add(JsonPrimitive("WEB")) })
+          put("trailblaze/toolset", "web_core")
+        },
+        inputSchema = buildJsonObject {
+          put("type", "object")
+          put("required", buildJsonArray { add(JsonPrimitive("relativePath")) })
+          put("properties", buildJsonObject {
+            put("relativePath", buildJsonObject { put("type", "string") })
+            put("count", buildJsonObject { put("type", "integer") })
+          })
+        },
+      )
+    )
+  }
+
+  private val iosInlineToolTarget = object : TrailblazeHostAppTarget(
+    id = "iosinlineapp",
+    displayName = "iOS Inline App",
+  ) {
+    override fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): Set<String>? =
+      if (platform == TrailblazeDevicePlatform.IOS) setOf("com.apple.MobileAddressBook") else null
+
+    override fun internalGetCustomToolsForDriver(
+      driverType: TrailblazeDriverType,
+    ): Set<KClass<out TrailblazeTool>> = emptySet()
+
+    override fun getInlineScriptTools(): List<InlineScriptToolConfig> = listOf(
+      InlineScriptToolConfig(
+        script = "./tools/contacts_ios_createContact.js",
+        name = "contacts_ios_createContact",
+        description = "Create a contact in the iOS Contacts app through an inline script tool",
+        meta = buildJsonObject {
+          put("trailblaze/supportedPlatforms", buildJsonArray { add(JsonPrimitive("IOS")) })
+          put("trailblaze/toolset", "ios_contacts")
+        },
+        inputSchema = buildJsonObject {
+          put("type", "object")
+          put("properties", buildJsonObject {
+            put("firstName", buildJsonObject { put("type", "string") })
+            put("lastName", buildJsonObject { put("type", "string") })
+            put("phoneNumber", buildJsonObject { put("type", "string") })
+          })
+        },
+      )
+    )
+  }
 
   /**
    * Builds a list of fake tool descriptors for testing.
@@ -140,7 +210,7 @@ class ToolDiscoveryToolSetTest {
       // currentTarget should be null
       assertNull(obj["currentTarget"])
 
-      // otherTargets should list all non-"none" targets (field is "name" in ToolDiscoveryOtherTarget)
+      // otherTargets should list all non-"default" targets (field is "name" in ToolDiscoveryOtherTarget)
       val otherTargets = obj["otherTargets"]!!.jsonArray
       val otherNames = otherTargets.map { it.jsonObject["name"]!!.jsonPrimitive.content }
       assertContains(otherNames, "testapp")
@@ -222,7 +292,11 @@ class ToolDiscoveryToolSetTest {
   }
 
   @Test
-  fun `INDEX mode without detail shows tool names instead of full descriptors`() = runTest {
+  fun `INDEX mode without detail still includes toolDetails so the CLI can render description peeks`() = runTest {
+    // The compact toolbox listing renders `- name: <first-line description>` per tool,
+    // which means it needs descriptions even when `detail=false`. Server-side, that
+    // means `toolDetails` is now ALWAYS populated; the legacy `tools` (name-only) field
+    // remains present for backward compatibility with any other consumers.
     val toolSet = createToolSet()
 
     val result = toolSet.toolbox(detail = false)
@@ -235,16 +309,16 @@ class ToolDiscoveryToolSetTest {
       }
     val coreObj = coreInteraction.jsonObject
 
-    // Without detail, tools (name list) should be present
+    // Without detail, both `tools` (name list, legacy) and `toolDetails` (rich list, new
+    // requirement for compact-mode peek) should be present.
     val tools = coreObj["tools"]
     assertNotNull(tools, "tools (name list) should be present when detail=false")
     assertTrue(tools is JsonArray)
 
-    // toolDetails (full descriptors) should be absent
-    assertNull(
-      coreObj["toolDetails"],
-      "full tool descriptors should be null when detail=false",
-    )
+    val toolDetails = coreObj["toolDetails"]
+    assertNotNull(toolDetails, "toolDetails should also be present so compact mode can peek descriptions")
+    assertTrue(toolDetails is JsonArray)
+    assertTrue(toolDetails.isNotEmpty(), "toolDetails should not be empty for core_interaction")
   }
 
   // -- 4. Name mode -- tool found in platform category ------------------------
@@ -334,9 +408,9 @@ class ToolDiscoveryToolSetTest {
   // -- 8. Other targets listing -----------------------------------------------
 
   @Test
-  fun `otherTargets excludes current target and none target`() = runTest {
-    val noneTarget = TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget
-    val allTargets = setOf(testTarget, secondTarget, noneTarget)
+  fun `otherTargets excludes current target and default target`() = runTest {
+    val defaultTarget = TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget
+    val allTargets = setOf(testTarget, secondTarget, defaultTarget)
     val toolSet = createToolSet(allTargets = allTargets, currentTarget = testTarget)
 
     val result = toolSet.toolbox()
@@ -347,8 +421,11 @@ class ToolDiscoveryToolSetTest {
 
     // Should exclude current target
     assertTrue("testapp" !in otherNames, "Current target should be excluded")
-    // Should exclude "none" target
-    assertTrue("none" !in otherNames, "DefaultTrailblazeHostAppTarget (none) should be excluded")
+    // Should exclude "default" target
+    assertTrue(
+      TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget.id !in otherNames,
+      "DefaultTrailblazeHostAppTarget (default) should be excluded",
+    )
     // Should include secondapp
     assertContains(otherNames, "secondapp")
   }
@@ -370,6 +447,140 @@ class ToolDiscoveryToolSetTest {
   }
 
   // -- Additional edge cases --------------------------------------------------
+
+  /**
+   * Test target masquerading as the default target with both class-backed and YAML-defined
+   * tools. Uses [TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget.id] so [buildPlatformToolsets]
+   * recognizes it as the platform-tools source (was renamed from `"none"` → `"default"`).
+   *
+   * Mirrors the production YAML-backed target (`default.yaml`) where the toolsets reference some
+   * tools by class binding (e.g. `openUrl`) and others by name only (e.g. `eraseText`, `pressBack`
+   * in `core_interaction.yaml` / `navigation.yaml`).
+   */
+  private class MixedNoneTarget(
+    private val classTools: Set<KClass<out TrailblazeTool>>,
+    private val yamlNames: Set<ToolName>,
+  ) : TrailblazeHostAppTarget(
+    id = TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget.id,
+    displayName = "Default",
+  ) {
+    override fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): Set<String>? = null
+
+    override fun internalGetCustomToolsForDriver(
+      driverType: TrailblazeDriverType,
+    ): Set<KClass<out TrailblazeTool>> = classTools
+
+    override fun getCustomYamlToolNamesForDriver(
+      driverType: TrailblazeDriverType,
+    ): Set<ToolName> = yamlNames
+  }
+
+  @Test
+  fun `INDEX mode lists YAML-defined tools from a YAML-backed default target`() = runTest {
+    // Regression guard: when the default target is loaded from YAML (`default.yaml`,
+    // formerly `none.yaml`), its single tool group exposes BOTH class-backed and YAML-defined
+    // tools. Before the fix, buildPlatformToolsets only iterated `group.toolClasses` and
+    // silently dropped name-only entries like `eraseText` and `pressBack` — even though a class
+    // tool in the same group (`openUrl` here) made `groups.isNotEmpty()` true and bypassed the
+    // working DISCOVERABLE_CATEGORIES fallback.
+    val defaultTarget = MixedNoneTarget(
+      classTools = setOf(xyz.block.trailblaze.toolcalls.commands.OpenUrlTrailblazeTool::class),
+      yamlNames = setOf(ToolName("pressBack"), ToolName("eraseText")),
+    )
+    val toolSet = createToolSet(allTargets = setOf(defaultTarget))
+
+    val result = toolSet.toolbox()
+    val obj = json.parseToJsonElement(result).jsonObject
+
+    val platformToolsets = obj["platformToolsets"]!!.jsonArray
+    val defaultGroup = platformToolsets.firstOrNull {
+      it.jsonObject["name"]!!.jsonPrimitive.content ==
+        TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget.id
+    }?.jsonObject
+    assertNotNull(
+      defaultGroup,
+      "platformToolsets should contain the default group from the YAML-backed target",
+    )
+
+    val tools = defaultGroup["tools"]!!.jsonArray.map { it.jsonPrimitive.content }
+    assertContains(tools, "openUrl", "Class-backed openUrl should still appear in default listing. Got: $tools")
+    assertContains(tools, "pressBack", "YAML-defined pressBack should appear in default listing. Got: $tools")
+    assertContains(tools, "eraseText", "YAML-defined eraseText should appear in default listing. Got: $tools")
+  }
+
+  /** Test target masquerading as the default target that excludes a YAML-defined tool. */
+  private class YamlExcludingNoneTarget : TrailblazeHostAppTarget(
+    id = TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget.id,
+    displayName = "Default",
+  ) {
+    override fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): Set<String>? = null
+
+    override fun internalGetCustomToolsForDriver(
+      driverType: TrailblazeDriverType,
+    ): Set<KClass<out TrailblazeTool>> =
+      setOf(xyz.block.trailblaze.toolcalls.commands.OpenUrlTrailblazeTool::class)
+
+    override fun getCustomYamlToolNamesForDriver(
+      driverType: TrailblazeDriverType,
+    ): Set<ToolName> = setOf(ToolName("pressBack"), ToolName("eraseText"))
+
+    override fun getExcludedYamlToolNamesForDriver(
+      driverType: TrailblazeDriverType,
+    ): Set<ToolName> = setOf(ToolName("pressBack"))
+  }
+
+  @Test
+  fun `INDEX mode honors YAML-name exclusions in addition to class exclusions`() = runTest {
+    // Symmetric counterpart to the inclusion fix: a target's `excluded_tools` can
+    // name a YAML-defined tool (e.g. `pressBack`) and discovery must drop it from
+    // the listing the same way it would drop a class-backed exclusion.
+    val target = YamlExcludingNoneTarget()
+    val toolSet = createToolSet(
+      allTargets = setOf(target),
+      currentTarget = target,
+      currentDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+    )
+
+    val result = toolSet.toolbox()
+    val obj = json.parseToJsonElement(result).jsonObject
+
+    val platformToolsets = obj["platformToolsets"]!!.jsonArray
+    val defaultGroup = platformToolsets.first {
+      it.jsonObject["name"]!!.jsonPrimitive.content ==
+        TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget.id
+    }.jsonObject
+    val tools = defaultGroup["tools"]!!.jsonArray.map { it.jsonPrimitive.content }
+
+    assertTrue(
+      "pressBack" !in tools,
+      "Excluded YAML-defined pressBack must NOT appear in default listing. Got: $tools",
+    )
+    assertContains(tools, "eraseText", "Non-excluded YAML tool eraseText should still appear. Got: $tools")
+    assertContains(tools, "openUrl", "Non-excluded class tool openUrl should still appear. Got: $tools")
+  }
+
+  @Test
+  fun `toMergedDescriptors deduplicates names appearing in both class and YAML buckets`() = runTest {
+    // Defensive: today's YAML-backed target enforces mutual exclusion via the resolver,
+    // but a hand-built ToolGroup could legitimately list the same name in both buckets
+    // (e.g. a transitional target). The renderer must not double-list the row.
+    val collidingGroup = TrailblazeHostAppTarget.ToolGroup(
+      id = "collide",
+      description = "test",
+      toolClasses = setOf(xyz.block.trailblaze.toolcalls.commands.OpenUrlTrailblazeTool::class),
+      yamlToolNames = setOf(ToolName("openUrl"), ToolName("pressBack")),
+    )
+
+    val descriptors = collidingGroup.toMergedDescriptors()
+    val names = descriptors.map { it.name }
+
+    assertEquals(
+      names.size, names.toSet().size,
+      "toMergedDescriptors must dedupe by name. Got duplicates in: $names",
+    )
+    assertContains(names, "openUrl")
+    assertContains(names, "pressBack")
+  }
 
   @Test
   fun `INDEX mode includes YAML-defined pressBack under navigation`() = runTest {
@@ -613,5 +824,249 @@ class ToolDiscoveryToolSetTest {
 
     // Should NOT show flat toolsByPlatform (that's the unfiltered fallback)
     assertNull(obj["toolsByPlatform"], "Should use grouped output, not flat platform listing")
+  }
+
+  @Test
+  fun `TARGET mode includes inline scripted tools for matching driver`() = runTest {
+    val toolSet = createToolSet(
+      allTargets = setOf(inlineToolTarget),
+      currentDriverType = TrailblazeDriverType.PLAYWRIGHT_NATIVE,
+    )
+
+    val result = toolSet.toolbox(target = "inlineapp")
+    val obj = json.parseToJsonElement(result).jsonObject
+
+    val toolGroups = obj["toolGroups"]!!.jsonArray
+    val scriptedGroup = toolGroups.first {
+      it.jsonObject["name"]!!.jsonPrimitive.content == "inlineapp/web_core"
+    }.jsonObject
+    val toolNames = scriptedGroup["tools"]!!.jsonArray.map { it.jsonPrimitive.content }
+
+    assertContains(toolNames, "web_inline_script_tool")
+  }
+
+  @Test
+  fun `TARGET mode includes inline scripted tools for ios host driver`() = runTest {
+    val toolSet = createToolSet(
+      allTargets = setOf(iosInlineToolTarget),
+      currentTarget = iosInlineToolTarget,
+      currentDriverType = TrailblazeDriverType.IOS_HOST,
+    )
+
+    val result = toolSet.toolbox()
+    val obj = json.parseToJsonElement(result).jsonObject
+    val targetToolsets = obj["targetToolsets"]!!.jsonArray
+    val inlineGroup = targetToolsets.first {
+      it.jsonObject["name"]!!.jsonPrimitive.content == "iosinlineapp/ios_contacts"
+    }.jsonObject
+    val tools = inlineGroup["tools"]!!.jsonArray.map { it.jsonPrimitive.content }
+
+    assertContains(tools, "contacts_ios_createContact")
+  }
+
+  @Test
+  fun `NAME mode finds inline scripted tool`() = runTest {
+    val toolSet = createToolSet(allTargets = setOf(inlineToolTarget))
+
+    val result = toolSet.toolbox(name = "web_inline_script_tool")
+    val obj = json.parseToJsonElement(result).jsonObject
+
+    val tool = obj["tool"]?.jsonObject
+    assertNotNull(tool, "Inline scripted tool should be discoverable by name")
+    assertEquals("web_inline_script_tool", tool["name"]!!.jsonPrimitive.content)
+    val foundInTargets = obj["foundInTargets"]!!.jsonArray.map { it.jsonPrimitive.content }
+    assertContains(foundInTargets, "inlineapp")
+  }
+
+  // -- YAML-aware union for target tools (search / name / target-flat paths) ---
+  // `getCustomToolDescriptors` and `getCustomToolDescriptorsForPlatform` previously
+  // iterated only `getCustomToolsForDriver` (class-only) and silently dropped YAML-defined
+  // target tools from search, name lookup, and the target-mode no-device flat listing —
+  // mirror of the bug the index-mode fix solved. Uses real registered YAML tool names
+  // (`pressBack`, `eraseText`) since `buildDescriptorsForYamlDefined` skips unknown names.
+
+  /** Test target that exposes real YAML-registered tool names (no class binding). */
+  private class YamlToolTarget : TrailblazeHostAppTarget(
+    id = "yamltarget",
+    displayName = "YAML Target",
+  ) {
+    override fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): Set<String>? =
+      if (platform == TrailblazeDevicePlatform.ANDROID) setOf("com.yamltarget") else null
+
+    override fun internalGetCustomToolsForDriver(
+      driverType: TrailblazeDriverType,
+    ): Set<KClass<out TrailblazeTool>> = emptySet()
+
+    override fun getCustomYamlToolNamesForDriver(
+      driverType: TrailblazeDriverType,
+    ): Set<ToolName> = setOf(ToolName("pressBack"))
+  }
+
+  @Test
+  fun `SEARCH finds YAML target tool via target tool descriptor path`() = runTest {
+    val target = YamlToolTarget()
+    val toolSet = createToolSet(
+      allTargets = setOf(target),
+      currentTarget = target,
+      currentDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+    )
+
+    val result = toolSet.toolbox(search = "pressBack")
+    val obj = json.parseToJsonElement(result).jsonObject
+
+    val matches = obj["matches"]?.jsonArray ?: JsonArray(emptyList())
+    val sources = matches.map { it.jsonObject["source"]!!.jsonPrimitive.content }
+    // Search dedupes by name and prefers first match. We only need to know it WAS searchable
+    // — match presence + non-empty result is enough. (The platform path may surface it first
+    // since pressBack is also a navigation category tool; both paths must contribute.)
+    assertTrue(
+      matches.isNotEmpty(),
+      "SEARCH must return pressBack via target tool descriptor path. Got: $matches",
+    )
+    val toolNames =
+      matches.map { it.jsonObject["tool"]!!.jsonObject["name"]!!.jsonPrimitive.content }
+    assertContains(toolNames, "pressBack", "Got sources: $sources")
+  }
+
+  @Test
+  fun `NAME finds YAML target tool and reports it under the target`() = runTest {
+    val target = YamlToolTarget()
+    val toolSet = createToolSet(allTargets = setOf(target))
+
+    val result = toolSet.toolbox(name = "pressBack")
+    val obj = json.parseToJsonElement(result).jsonObject
+
+    assertNull(obj["error"], "YAML target tool must be findable by exact name. Got: $obj")
+    val tool = obj["tool"]?.jsonObject
+    assertNotNull(tool, "Tool descriptor must be returned")
+    assertEquals("pressBack", tool["name"]!!.jsonPrimitive.content)
+    val foundInTargets = obj["foundInTargets"]?.jsonArray?.map { it.jsonPrimitive.content }
+      .orEmpty()
+    assertContains(
+      foundInTargets, "yamltarget",
+      "NAME must report the YAML tool under its owning target via the target descriptor path. " +
+        "Got foundInTargets: $foundInTargets",
+    )
+  }
+
+  @Test
+  fun `TARGET mode no-device flat listing includes YAML target tools`() = runTest {
+    val target = YamlToolTarget()
+    val toolSet = createToolSet(allTargets = setOf(target), currentDriverType = null)
+
+    val result = toolSet.toolbox(target = "yamltarget")
+    val obj = json.parseToJsonElement(result).jsonObject
+
+    val toolsByPlatform = obj["toolsByPlatform"]?.jsonArray
+    assertNotNull(toolsByPlatform, "TARGET mode no-device must produce toolsByPlatform. Got: $obj")
+    val androidEntry = toolsByPlatform.first {
+      it.jsonObject["platform"]!!.jsonPrimitive.content == "Android"
+    }.jsonObject
+    val toolNames = androidEntry["tools"]!!.jsonArray
+      .map { it.jsonObject["name"]!!.jsonPrimitive.content }
+    assertContains(
+      toolNames, "pressBack",
+      "TARGET no-device flat listing must include YAML target tools. Got: $toolNames",
+    )
+  }
+
+  // -- Target-mode listings honor target's own excluded_tools ------------------
+  // INDEX/[none] listings always filtered exclusions; the per-target listings did not.
+  // After the fix, `toolbox(target=X)` and `targetToolsets` in INDEX both apply X's
+  // own exclusions so a YAML-declared `excluded_tools:` is consistently respected.
+
+  /** Target with two real YAML tools, excluding one via the YAML-name exclusion bucket. */
+  private class TargetWithYamlExclusion : TrailblazeHostAppTarget(
+    id = "exclude_target",
+    displayName = "Excluding Target",
+  ) {
+    override fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): Set<String>? =
+      if (platform == TrailblazeDevicePlatform.ANDROID) setOf("com.exclude") else null
+
+    override fun internalGetCustomToolsForDriver(
+      driverType: TrailblazeDriverType,
+    ): Set<KClass<out TrailblazeTool>> = emptySet()
+
+    override fun getCustomYamlToolNamesForDriver(
+      driverType: TrailblazeDriverType,
+    ): Set<ToolName> = setOf(ToolName("pressBack"), ToolName("eraseText"))
+
+    override fun getExcludedYamlToolNamesForDriver(
+      driverType: TrailblazeDriverType,
+    ): Set<ToolName> = setOf(ToolName("pressBack"))
+  }
+
+  @Test
+  fun `TARGET mode device-connected filters tools by target's own exclusions`() = runTest {
+    val target = TargetWithYamlExclusion()
+    val toolSet = createToolSet(
+      allTargets = setOf(target),
+      currentTarget = target,
+      currentDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+    )
+
+    val result = toolSet.toolbox(target = "exclude_target")
+    val obj = json.parseToJsonElement(result).jsonObject
+
+    val toolGroups = obj["toolGroups"]?.jsonArray
+    assertNotNull(toolGroups, "TARGET mode device-connected must produce toolGroups. Got: $obj")
+    val tools = toolGroups.flatMap {
+      it.jsonObject["tools"]!!.jsonArray.map { name -> name.jsonPrimitive.content }
+    }
+    assertContains(tools, "eraseText", "Non-excluded YAML tool must remain. Got: $tools")
+    assertTrue(
+      "pressBack" !in tools,
+      "Excluded YAML tool must NOT appear in target listing. Got: $tools",
+    )
+  }
+
+  @Test
+  fun `TARGET mode no-device platform listing filters by target's exclusions`() = runTest {
+    val target = TargetWithYamlExclusion()
+    val toolSet = createToolSet(allTargets = setOf(target), currentDriverType = null)
+
+    val result = toolSet.toolbox(target = "exclude_target")
+    val obj = json.parseToJsonElement(result).jsonObject
+
+    val toolsByPlatform = obj["toolsByPlatform"]?.jsonArray
+    assertNotNull(toolsByPlatform, "TARGET mode no-device must produce toolsByPlatform. Got: $obj")
+    val androidEntry = toolsByPlatform.first {
+      it.jsonObject["platform"]!!.jsonPrimitive.content == "Android"
+    }.jsonObject
+    val toolNames = androidEntry["tools"]!!.jsonArray
+      .map { it.jsonObject["name"]!!.jsonPrimitive.content }
+    assertContains(toolNames, "eraseText", "Non-excluded YAML tool must remain. Got: $toolNames")
+    assertTrue(
+      "pressBack" !in toolNames,
+      "Excluded YAML tool must NOT appear in no-device target listing. Got: $toolNames",
+    )
+  }
+
+  @Test
+  fun `INDEX mode buildTargetToolsets filters by per-target exclusions when device connected`() = runTest {
+    // Index mode shows targetToolsets for the connected target. Each target's tools must be
+    // filtered by THAT target's own exclusions, not just the platform-toolset exclusions.
+    val target = TargetWithYamlExclusion()
+    val toolSet = createToolSet(
+      allTargets = setOf(target),
+      currentTarget = target,
+      currentDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+    )
+
+    val result = toolSet.toolbox()
+    val obj = json.parseToJsonElement(result).jsonObject
+
+    val targetToolsets = obj["targetToolsets"]?.jsonArray ?: JsonArray(emptyList())
+    val tools = targetToolsets.flatMap {
+      it.jsonObject["tools"]?.jsonArray.orEmpty().map { name -> name.jsonPrimitive.content }
+    }
+    assertContains(
+      tools, "eraseText",
+      "Non-excluded YAML tool must remain in targetToolsets. Got: $tools",
+    )
+    assertTrue(
+      "pressBack" !in tools,
+      "Excluded YAML tool must NOT appear in targetToolsets. Got: $tools",
+    )
   }
 }

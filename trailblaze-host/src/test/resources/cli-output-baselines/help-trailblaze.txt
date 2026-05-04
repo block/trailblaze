@@ -1,0 +1,31 @@
+# This file is a CHECKED-IN baseline of CLI output rendered by trailblaze-host's CLI helpers.
+# It is NOT a contract — if a test fails here because output drifted, decide whether the
+# drift is intentional. The test always (re)writes this file from the current rendered output,
+# then asserts the working tree is clean. So `git diff` of this file IS the failure message.
+# Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
+# small wording / spacing changes can be intentional or accidental.
+# ----------------------------------------------------------------------
+Usage: trailblaze [-hV] [COMMAND]
+Trailblaze - AI-powered device automation
+  -h, --help      Show this help message and exit.
+  -V, --version   Print version information and exit.
+
+  blaze     Drive a device with AI — describe what to do in plain English
+  ask       Ask a question about what's on screen (uses AI vision, no actions
+              taken)
+  verify    Check a condition on screen and pass/fail (exit code 0/1, ideal for
+              CI)
+  snapshot  Capture the current screen's UI tree (fast, no AI, no actions)
+  tool      Run a Trailblaze tool by name (e.g., tap, inputText)
+  toolbox   Browse available tools by target app and platform
+  trail     Run a trail file (.trail.yaml) — execute a scripted test on a device
+  session   Every blaze records a session — save it as a replayable trail
+  report    Generate an HTML or JSON report from session recordings
+  waypoint  Match named app locations (waypoints) against captured screen state.
+  config    View and set configuration (target app, device defaults, AI
+              provider)
+  device    List and connect devices (Android, iOS, Web)
+  app       Start or stop the Trailblaze daemon (background service that drives
+              devices)
+  mcp       Start a Model Context Protocol (MCP) server for AI agent integration
+  compile   Compile pack manifests into resolved target YAMLs

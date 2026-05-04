@@ -10,7 +10,7 @@ import java.util.regex.Pattern
  * [DriverNodeDetail.IosMaestro] detail for iOS platform.
  *
  * This follows the same conversion pattern as [AccessibilityNode.toTrailblazeNode()]
- * in trailblaze-accessibility, preserving all Maestro-captured properties in the
+ * in `:trailblaze-android`, preserving all Maestro-captured properties in the
  * typed [DriverNodeDetail.IosMaestro] variant.
  */
 private class NodeIdCounter {

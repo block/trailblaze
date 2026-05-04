@@ -10,7 +10,6 @@ import xyz.block.trailblaze.mcp.McpToolProfile
 import xyz.block.trailblaze.mcp.TrailblazeMcpSessionContext
 import xyz.block.trailblaze.util.AndroidHostAdbUtils
 import xyz.block.trailblaze.util.Console
-import java.util.concurrent.TimeUnit
 
 /**
  * MCP tool for querying and asserting on Android logcat output during test sessions.
@@ -31,6 +30,13 @@ class LogcatToolSet(
   private val deviceIdProvider: (() -> TrailblazeDeviceId?)? = null,
   /** Override for testing — when set, returns these lines instead of calling adb. */
   internal val logcatLinesProvider: (() -> List<String>?)? = null,
+  /**
+   * Test seam — when set, replaces the underlying `execAdbShellCommandWithTimeout` call inside
+   * [readLogcatViaAdb]. Lets tests exercise the timeout-null path (which surfaces a different
+   * error message from the no-device path) without spinning up a real device. Returning `null`
+   * simulates the timeout; returning a list (including empty) simulates a successful read.
+   */
+  internal val readLogcatViaAdbOverride: ((TrailblazeDeviceId) -> List<String>?)? = null,
 ) : ToolSet {
 
   /** Timestamp of when this tool set was created, used to scope adb logcat reads. */
@@ -42,12 +48,6 @@ class LogcatToolSet(
      * Kept small so results stay readable in the MCP chat UI; callers can raise it via `limit`.
      */
     private const val DEFAULT_QUERY_LIMIT = 50
-
-    /**
-     * How long to wait for an `adb logcat -d` dump to complete. `-d` prints whatever is in the
-     * ring buffer and exits, so a low ceiling is safe; this guard only catches a hung adb/adbd.
-     */
-    private const val ADB_LOGCAT_TIMEOUT_SECONDS = 10L
 
     /**
      * Android log priority characters that appear in logcat line formats between the PID
@@ -90,11 +90,21 @@ class LogcatToolSet(
       return LogcatResult(error = "pattern parameter is required for $action").toJson()
     }
 
+    val deviceId = deviceIdProvider?.invoke() ?: sessionContext?.associatedDeviceId
     val lines = readLogcatLines()
     if (lines == null) {
-      return LogcatResult(
-        error = "No logcat available. Connect an Android device first: device(action=ANDROID)"
-      ).toJson()
+      val errorMessage = if (deviceId == null && logcatLinesProvider == null) {
+        // No device, no test override → user genuinely hasn't connected anything.
+        "No logcat available. Connect an Android device first: device(action=ANDROID)"
+      } else {
+        // Device IS connected (or a test wired up the path) but the underlying adb call timed
+        // out / failed. Don't tell the user to "connect a device" — they have one. Surface the
+        // timeout symptom and point at where the actual diagnostic lives (the daemon log
+        // captures the AndroidHostAdbUtils timeout/failure line that explains *why*).
+        "Logcat read timed out for ${deviceId?.instanceId ?: "device"}. " +
+          "The adb daemon or device may be wedged — check the Trailblaze daemon logs for details."
+      }
+      return LogcatResult(error = errorMessage).toJson()
     }
 
     // Filter by tag if specified (logcat format: "... D UserJourney: ..." or "... I OkHttp: ...")
@@ -157,58 +167,33 @@ class LogcatToolSet(
   }
 
   private fun readLogcatViaAdb(deviceId: TrailblazeDeviceId): List<String>? {
+    // Test seam — bypass adb entirely when the override is wired up.
+    readLogcatViaAdbOverride?.let { return it(deviceId) }
     return try {
       // Use -t to scope logcat to lines since session start, preventing stale matches
-      // from prior test runs on the same device/emulator.
-      val process =
-        AndroidHostAdbUtils.createAdbCommandProcessBuilder(
-            args = listOf(
-              "logcat", "-d",
-              "-v", "epoch", "-v", "printable",
-              "-t", "$sessionStartEpochSeconds.0",
-            ),
-            deviceId = deviceId,
-          )
-          .start()
-
-      readProcessOutputWithTimeout(process, ADB_LOGCAT_TIMEOUT_SECONDS)
+      // from prior test runs on the same device/emulator. `logcat -d` dumps the ring buffer and
+      // exits, so a tight bound is safe — the timeout is here to fail fast when adbd or the
+      // dadb transport is wedged rather than hanging the MCP tool call.
+      val output = AndroidHostAdbUtils.execAdbShellCommandWithTimeout(
+        deviceId = deviceId,
+        args = listOf(
+          "logcat", "-d",
+          "-v", "epoch", "-v", "printable",
+          "-t", "$sessionStartEpochSeconds.0",
+        ),
+        timeoutMs = 10_000L,
+      )
+      if (output == null) {
+        // Tie the timeout-from-AndroidHostAdbUtils consequence ("returns null") back to the
+        // caller's surface symptom (timeout error in the tool result) so a flaky adb daemon
+        // shows up clearly in the logs instead of looking like a successful empty query.
+        Console.log("[logcat] adb logcat -d timed out — surfacing timeout error to caller")
+      }
+      output?.lines()
     } catch (e: Exception) {
       Console.log("[logcat] Failed to read logcat via adb: ${e.message}")
       null
     }
-  }
-
-  /**
-   * Reads all stdout from [process] using a background thread, enforcing [timeoutSeconds]. If the
-   * process does not exit within the timeout, [Process.destroyForcibly] is called so the thread
-   * can unblock and we return whatever was read so far.
-   *
-   * Extracted so the timeout-and-destroy path can be unit-tested with a synthetic hanging process
-   * rather than a real adb binary — see `LogcatToolSetTest`.
-   */
-  internal fun readProcessOutputWithTimeout(process: Process, timeoutSeconds: Long): List<String> {
-    val output = StringBuilder()
-    val reader = process.inputStream.bufferedReader()
-    val readThread =
-      Thread {
-        try {
-          reader.lineSequence().forEach { output.appendLine(it) }
-        } catch (_: Exception) {
-          // Stream closed by destroyForcibly() — expected on timeout.
-        }
-      }
-    readThread.start()
-
-    val exited = process.waitFor(timeoutSeconds, TimeUnit.SECONDS)
-    if (!exited) {
-      Console.log("[logcat] adb logcat process did not exit in ${timeoutSeconds}s — destroying")
-      process.destroyForcibly()
-      // Wait briefly for the OS to finalize the kill — destroyForcibly is async on some platforms.
-      process.waitFor(1, TimeUnit.SECONDS)
-    }
-    readThread.join(1_000)
-
-    return output.toString().lines().filter { it.isNotBlank() }
   }
 }
 

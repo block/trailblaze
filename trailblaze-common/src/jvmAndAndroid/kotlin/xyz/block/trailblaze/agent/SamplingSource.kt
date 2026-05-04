@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.agent
 
 import ai.koog.agents.core.tools.ToolDescriptor
+import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.toolcalls.TrailblazeToolDescriptor
@@ -17,6 +18,15 @@ data class ScreenContext(
   val viewHierarchy: ViewHierarchyTreeNode?,
   /** Filtered/simplified view hierarchy (interactable elements only) */
   val viewHierarchyFiltered: ViewHierarchyTreeNode? = null,
+  /**
+   * Trailblaze-native node tree at the time of sampling.
+   *
+   * Required for downstream consumers that need driver-typed details — most
+   * notably the waypoint matcher, which can only validate against logs that
+   * carry this tree. Populate alongside [viewHierarchy] whenever the source
+   * `ScreenState` exposes it.
+   */
+  val trailblazeNodeTree: TrailblazeNode? = null,
   /** Device screen width in pixels */
   val deviceWidth: Int,
   /** Device screen height in pixels */

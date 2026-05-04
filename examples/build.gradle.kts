@@ -25,8 +25,10 @@ val isRunningTests = gradle.startParameter.taskNames.any { taskName ->
   taskName.contains("test", ignoreCase = true) || taskName.contains("connected", ignoreCase = true)
 }
 
-val trailblazeDefaultHttpsPort = 8443
-val trailblazeHttpsPort = System.getenv("TRAILBLAZE_HTTPS_PORT")?.toIntOrNull() ?: trailblazeDefaultHttpsPort
+// HTTPS port defaults to HTTP port + 1 (mirrors TrailblazeDevicePort and the wrapper script).
+val trailblazeDefaultHttpPort = 52525
+val trailblazeHttpPort = System.getenv("TRAILBLAZE_PORT")?.toIntOrNull() ?: trailblazeDefaultHttpPort
+val trailblazeHttpsPort = System.getenv("TRAILBLAZE_HTTPS_PORT")?.toIntOrNull() ?: (trailblazeHttpPort + 1)
 
 android {
   namespace = "xyz.block.trailblaze.examples"

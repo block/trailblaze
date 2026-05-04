@@ -1,0 +1,12 @@
+# This file is a CHECKED-IN baseline of CLI output rendered by trailblaze-host's CLI helpers.
+# It is NOT a contract — if a test fails here because output drifted, decide whether the
+# drift is intentional. The test always (re)writes this file from the current rendered output,
+# then asserts the working tree is clean. So `git diff` of this file IS the failure message.
+# Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
+# small wording / spacing changes can be intentional or accidental.
+# ----------------------------------------------------------------------
+- tap: Tap an element on the screen.
+- assertEquals: Verify two values match exactly.
+- web_select_option: Select one or more options from a <select> dropdown element identified by its element ID, ARIA desc…
+- web_press_key: Press a keyboard key or key combination.…
+- untyped

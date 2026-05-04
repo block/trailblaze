@@ -1,8 +1,7 @@
 ## Tool `assertNotEquals`
 
 ## Description
-This will calculate the actual and expected values based on the current screen state and assert that
-they are not equivalent.
+Calculate the actual and expected values from the current screen state and assert they are NOT equivalent.
 
 ### Command Class
 `xyz.block.trailblaze.toolcalls.commands.memory.AssertNotEqualsTrailblazeTool`

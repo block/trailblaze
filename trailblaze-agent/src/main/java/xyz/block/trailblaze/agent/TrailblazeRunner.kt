@@ -9,6 +9,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.Clock
+import xyz.block.trailblaze.agent.blaze.detectActionCycleHint
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.agent.model.AgentTaskStatus.Success.ObjectiveComplete
 import xyz.block.trailblaze.agent.model.AgentTaskStatusData
@@ -112,10 +113,10 @@ class TrailblazeRunner(
     logObjectiveStart(prompt)
     val stepToolStrategy = prompt.getToolStrategy()
     // Sliding window of recent tool call fingerprints (tool:args) for loop detection.
-    // Capped at STUCK_IDENTICAL_ACTION_THRESHOLD entries to avoid unbounded growth.
+    // Capped at STUCK_FINGERPRINT_WINDOW entries to avoid unbounded growth.
     // Each entry represents one tool call from an LLM response — a single response may
     // contribute multiple entries when the LLM batches tool calls.
-    val recentToolFingerprints = ArrayDeque<String>(STUCK_IDENTICAL_ACTION_THRESHOLD)
+    val recentToolFingerprints = ArrayDeque<String>(STUCK_FINGERPRINT_WINDOW)
     do {
       TrailblazeTracer.trace("prepareNextStep", "agent") {
         stepStatus.prepareNextStep()
@@ -218,31 +219,29 @@ class TrailblazeRunner(
       }
 
       // --- Stuck detection: bail out early if the agent is looping ---
-      // Track tool fingerprints (tool name + args) in a fixed-size sliding window.
-      // If every entry in the window is identical, the agent is stuck and further
-      // calls won't help. We only check fully identical actions (same tool AND same
-      // args) to avoid false positives on legitimate sequences like tapping different
-      // elements or entering repeated PIN digits.
+      // Track tool fingerprints (tool name + args) in a fixed-size sliding window
+      // and look for repeating cycles in the suffix. This catches both consecutive
+      // identical actions (length-1 cycle) AND alternating loops like
+      // tap(A) → tap(B) → tap(A) → tap(B) … (length-2), plus three-step cycles.
+      // Only fully identical actions match (same tool AND same args) to avoid false
+      // positives on legitimate sequences like tapping different elements or
+      // entering repeated PIN digits.
       val toolCalls = koogLlmResponseMessages.filterIsInstance<Message.Tool>()
       for (toolCall in toolCalls) {
         val fingerprint = "${toolCall.tool}:${toolCall.content}"
-        if (recentToolFingerprints.size >= STUCK_IDENTICAL_ACTION_THRESHOLD) {
+        if (recentToolFingerprints.size >= STUCK_FINGERPRINT_WINDOW) {
           recentToolFingerprints.removeFirst()
         }
         recentToolFingerprints.addLast(fingerprint)
       }
 
-      if (recentToolFingerprints.size >= STUCK_IDENTICAL_ACTION_THRESHOLD &&
-        recentToolFingerprints.toSet().size == 1
-      ) {
+      val cycleHint = detectActionCycleHint(recentToolFingerprints.toList())
+      if (cycleHint != null && cycleHint.startsWith("CRITICAL:")) {
         val toolName = toolCalls.lastOrNull()?.tool ?: "unknown"
-        Console.info(
-          "  Agent stuck: $toolName repeated identically " +
-            "$STUCK_IDENTICAL_ACTION_THRESHOLD times consecutively",
-        )
+        Console.info("  Agent stuck: $cycleHint")
         throw MaxCallsLimitReachedException(
           maxCalls = stepStatus.currentStep,
-          objectivePrompt = "${stepStatus.promptStep.prompt} [stuck: $toolName repeated identically]",
+          objectivePrompt = "${stepStatus.promptStep.prompt} [stuck: $toolName in repeating cycle]",
         )
       }
 
@@ -270,8 +269,6 @@ class TrailblazeRunner(
     promptStep: PromptStep,
     recordingResult: PromptRecordingResult.Failure,
   ): AgentTaskStatus {
-    val session = sessionProvider.invoke()
-    trailblazeLogger.logAttemptAiFallback(session, promptStep, recordingResult)
     val calculatedHistory = recordingResult.toLlmResponseHistory()
     val reconstructedStepStatus = PromptStepStatus(
       promptStep = promptStep,
@@ -347,7 +344,10 @@ class TrailblazeRunner(
      * declaring the agent stuck. Set high enough to allow legitimate repetition
      * (e.g., entering repeated PIN digits) but low enough to catch true loops.
      */
-    private const val STUCK_IDENTICAL_ACTION_THRESHOLD = 10
+    // Sliding window over the last N tool fingerprints. Sized to comfortably cover
+    // a length-3 cycle repeated 3 times (9 entries) with headroom; also covers a
+    // length-2 cycle repeated 5 times (10 entries) and length-1 repeated 12 times.
+    private const val STUCK_FINGERPRINT_WINDOW = 12
 
     val baseSystemPrompt = TemplatingUtil.getResourceAsText(
       "trailblaze_base_system_prompt.md",

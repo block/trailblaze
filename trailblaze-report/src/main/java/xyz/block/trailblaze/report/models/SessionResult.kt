@@ -17,6 +17,13 @@ data class CiSummaryReport(
 data class SessionResult(
   val session_id: SessionId,
   val title: String,
+  /**
+   * Stable identifier used to group retries of the same test together. Sourced from
+   * `SessionInfo.stableTestKey` (see that property's kdoc for the resolution priority).
+   * Distinct from [title], which is the human-readable label and may collide between
+   * unrelated tests.
+   */
+  val test_key: String? = null,
   val platform: String,
   val outcome: Outcome,
 
@@ -42,6 +49,9 @@ data class SessionResult(
 
   /** Human-readable failure reason (if failed) */
   val failure_reason: String? = null,
+
+  /** Excerpt from device logs (logcat) around the failure, if available */
+  val device_log_excerpt: String? = null,
 
   // === Recording Info ===
   /** Whether the trail YAML contained recorded steps (recording.tools blocks) */

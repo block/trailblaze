@@ -133,7 +133,7 @@ scripts contribute tools that the target's platforms / drivers can pull
 into their toolsets.
 
 ```yaml
-# trailblaze-config/targets/myapp.yaml
+# trails/config/targets/myapp.yaml
 id: myapp
 display_name: Example App
 

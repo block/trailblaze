@@ -15,7 +15,7 @@ object DisplayUtils {
       is TrailblazeLog.TrailblazeSessionStatusChangeLog -> "Session Status"
       is TrailblazeLog.ObjectiveStartLog -> "Objective Start"
       is TrailblazeLog.ObjectiveCompleteLog -> "Objective Complete"
-      is TrailblazeLog.AttemptAiFallbackLog -> "Attempt AI Fallback"
+      is TrailblazeLog.SelfHealInvokedLog -> "Self-Heal Invoked"
       is TrailblazeLog.TrailblazeSnapshotLog -> "Snapshot"
       is TrailblazeLog.AccessibilityActionLog -> "Accessibility Action"
       is TrailblazeLog.McpAgentRunLog -> "MCP Agent Run"

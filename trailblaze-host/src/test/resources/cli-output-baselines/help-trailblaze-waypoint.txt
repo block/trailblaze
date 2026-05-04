@@ -1,0 +1,22 @@
+# This file is a CHECKED-IN baseline of CLI output rendered by trailblaze-host's CLI helpers.
+# It is NOT a contract — if a test fails here because output drifted, decide whether the
+# drift is intentional. The test always (re)writes this file from the current rendered output,
+# then asserts the working tree is clean. So `git diff` of this file IS the failure message.
+# Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
+# small wording / spacing changes can be intentional or accidental.
+# ----------------------------------------------------------------------
+Usage: trailblaze waypoint [-hV] [COMMAND]
+Match named app locations (waypoints) against captured screen state.
+  -h, --help      Show this help message and exit.
+  -V, --version   Print version information and exit.
+Commands:
+  list             List all waypoint definitions from active packs (workspace +
+                     framework classpath)
+  locate           Given a captured screen state, report which waypoint(s)
+                     match.
+  validate         Validate that a specific waypoint definition matches a
+                     captured screen state.
+  capture-example  Capture a sibling <id>.example.json + screenshot next to the
+                     waypoint YAML.
+  segment          Inspect transitions between waypoints observed in a session
+                     log.

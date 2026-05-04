@@ -12,6 +12,7 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.logs.model.SessionId
+import xyz.block.trailblaze.logs.model.TraceId
 import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.mcp.TrailblazeMcpBridge
 import xyz.block.trailblaze.mcp.TrailblazeMcpMode
@@ -165,7 +166,7 @@ class SessionToolSetTest {
     sessionContext.stopCaptureCallback = {
       listOf(
         TrailblazeMcpSessionContext.CaptureArtifactInfo("video.mp4", "VIDEO", 1024000),
-        TrailblazeMcpSessionContext.CaptureArtifactInfo("logcat.txt", "LOGCAT", 50000),
+        TrailblazeMcpSessionContext.CaptureArtifactInfo("device.log", "LOGCAT", 50000),
       )
     }
 
@@ -181,7 +182,7 @@ class SessionToolSetTest {
     val json = Json.parseToJsonElement(result).jsonObject
 
     assertContains(json["message"]!!.jsonPrimitive.content, "video.mp4")
-    assertContains(json["message"]!!.jsonPrimitive.content, "logcat.txt")
+    assertContains(json["message"]!!.jsonPrimitive.content, "device.log")
   }
 
   @Test
@@ -348,7 +349,11 @@ class SessionTestBridge(
     trailblazeDeviceId: TrailblazeDeviceId,
   ): TrailblazeConnectedDeviceSummary = throw NotImplementedError()
 
-  override suspend fun executeTrailblazeTool(tool: TrailblazeTool, blocking: Boolean): String =
+  override suspend fun executeTrailblazeTool(
+    tool: TrailblazeTool,
+    blocking: Boolean,
+    traceId: TraceId?,
+  ): String =
     "[OK]"
 
   override suspend fun getInstalledAppIds(): Set<String> = emptySet()

@@ -362,6 +362,13 @@ abstract class TrailblazeDesktopAppConfig(
         )
       )
       add(
+        TrailblazeBuiltInTabs.waypointsTab(
+          trailblazeSettingsRepo = trailblazeSettingsRepo,
+          deviceManager = deviceManager,
+          logsRepo = logsRepo,
+        ),
+      )
+      add(
         TrailblazeBuiltInTabs.devicesTab(
           deviceManager = deviceManager,
           trailblazeSettingsRepo = trailblazeSettingsRepo,

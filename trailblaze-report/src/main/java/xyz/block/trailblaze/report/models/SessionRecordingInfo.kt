@@ -9,16 +9,16 @@ import xyz.block.trailblaze.logs.client.TrailblazeLog
 data class SessionRecordingInfo(
   val available: Boolean,
   val skipReason: RecordingSkipReason? = null,
-  val usedAiFallback: Boolean = false,
+  val usedSelfHeal: Boolean = false,
 ) {
   companion object {
     fun fromLogs(logs: List<TrailblazeLog>): SessionRecordingInfo {
-      val fallbackLogs = logs.filterIsInstance<TrailblazeLog.AttemptAiFallbackLog>()
-      return if (fallbackLogs.isNotEmpty()) {
+      val selfHealLogs = logs.filterIsInstance<TrailblazeLog.SelfHealInvokedLog>()
+      return if (selfHealLogs.isNotEmpty()) {
         SessionRecordingInfo(
           available = true,
           skipReason = RecordingSkipReason.EXECUTION_FAILED,
-          usedAiFallback = true,
+          usedSelfHeal = true,
         )
       } else {
         val llmRequestCount = logs.filterIsInstance<TrailblazeLog.TrailblazeLlmRequestLog>()
@@ -26,13 +26,13 @@ data class SessionRecordingInfo(
           SessionRecordingInfo(
             available = true,
             skipReason = null,
-            usedAiFallback = false,
+            usedSelfHeal = false,
           )
         } else {
           SessionRecordingInfo(
             available = false,
             skipReason = RecordingSkipReason.NOT_FOUND,
-            usedAiFallback = false,
+            usedSelfHeal = false,
           )
         }
       }

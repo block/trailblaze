@@ -45,13 +45,24 @@ class DriverTypeKeyTest {
 
   @Test
   fun `web resolves to all web driver types`() {
+    // COMPOSE moved off the WEB platform onto its own DESKTOP platform — see the
+    // 2026-04-28 first-class-platform wiring (TrailblazeDriverType.COMPOSE.platform was
+    // a WEB workaround). The "web" shorthand correspondingly drops COMPOSE; the new
+    // "desktop" shorthand picks it up.
     assertEquals(
       setOf(
         TrailblazeDriverType.PLAYWRIGHT_NATIVE,
         TrailblazeDriverType.PLAYWRIGHT_ELECTRON,
-        TrailblazeDriverType.COMPOSE,
       ),
       DriverTypeKey.resolve("web"),
+    )
+  }
+
+  @Test
+  fun `desktop resolves to compose driver`() {
+    assertEquals(
+      setOf(TrailblazeDriverType.COMPOSE),
+      DriverTypeKey.resolve("desktop"),
     )
   }
 

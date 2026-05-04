@@ -24,7 +24,7 @@ from `_meta`; the existing raw-SDK `tools.ts` that reads
 The host-subprocess landing already ships
 `TrailblazeContextEnvelope` injecting `_trailblazeContext` into the
 `tools/call` `arguments` object, and a follow-up shipped a real sample-app
-example (`examples/android-sample-app/trailblaze-config/mcp/tools.ts`)
+example (`examples/android-sample-app/trails/config/mcp/tools.ts`)
 reading that envelope. The mission invariant is explicit:
 
 > existing `tools.ts` reading `_trailblazeContext` today MUST still

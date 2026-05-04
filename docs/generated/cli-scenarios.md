@@ -195,6 +195,22 @@ _Verified by: `ToolDiscoveryToolSetTest.SEARCH mode finds tools matching keyword
 
 ---
 
+## Trail Execution
+
+### Run a trail with self-heal enabled
+
+Use --self-heal to let AI take over when a recorded step fails. When omitted, the persisted 'trailblaze config self-heal' setting is used (opt-in, off by default).
+
+**CLI:**
+
+```bash
+trailblaze trail --self-heal flows/login.trail.yaml
+```
+
+_Verified by: `CliCommandValidationTest.trail parses --self-heal flag as true`_
+
+---
+
 ## Trail Management
 
 ### Save session as trail file

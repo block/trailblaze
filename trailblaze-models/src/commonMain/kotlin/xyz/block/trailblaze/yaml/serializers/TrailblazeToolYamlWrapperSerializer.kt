@@ -14,6 +14,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.serializer
 import xyz.block.trailblaze.logs.client.temp.OtherTrailblazeTool
+import xyz.block.trailblaze.toolcalls.RawArgumentTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.yaml.TrailblazeToolYamlWrapper
 
@@ -72,6 +73,17 @@ class TrailblazeToolYamlWrapperSerializer(
       encoder.encodeSerializableValue(
         MapSerializer(String.serializer(), trailblazeToolSerializer),
         mapOf(value.name to trailblazeTool),
+      )
+    } else if (trailblazeTool is RawArgumentTrailblazeTool) {
+      // Session-scoped dynamic tools (for example subprocess-backed scripted tools) don't have a
+      // stable class serializer keyed by their runtime tool name. Preserve their invocation
+      // payload verbatim so YAML execution can decode back through OtherTrailblazeTool and let
+      // the session tool repo re-resolve the concrete dynamic tool at dispatch time.
+      val fallback = OtherTrailblazeTool(toolName = value.name, raw = trailblazeTool.rawToolArguments)
+      val trailblazeToolSerializer = OtherTrailblazeTool.serializer() as KSerializer<TrailblazeTool>
+      encoder.encodeSerializableValue(
+        MapSerializer(String.serializer(), trailblazeToolSerializer),
+        mapOf(value.name to fallback),
       )
     } else {
       val knownSerializer = toolSerializersByName[value.name]

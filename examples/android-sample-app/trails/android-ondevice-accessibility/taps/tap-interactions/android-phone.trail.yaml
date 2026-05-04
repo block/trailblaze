@@ -93,8 +93,13 @@
           nodeSelector:
             androidAccessibility:
               textRegex: Toggle A
+      - wait: {}
       - assertVisibleBySelector:
-          reason: After tapping on 'Toggle A', we need to verify that it is selected. The node has 'checked' property, which indicates a toggle or checkbox state.
+          reason: >-
+            After tapping Toggle A, wait for UI idle and then verify the FilterChip
+            is checked. The wait above ensures Compose has recomposed and the
+            AccessibilityDelegate has synced the checked=true state to UiAutomator
+            before the assertion runs.
           selector:
             checked: true
           nodeSelector:
