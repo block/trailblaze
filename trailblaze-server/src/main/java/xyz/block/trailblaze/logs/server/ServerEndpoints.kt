@@ -10,6 +10,7 @@ import io.ktor.server.plugins.cors.routing.CORS
 import io.ktor.server.request.httpMethod
 import io.ktor.server.request.uri
 import io.ktor.server.response.respond
+import io.ktor.server.routing.Routing
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
@@ -74,6 +75,18 @@ object ServerEndpoints {
     installContentNegotiation: Boolean = true,
     cliCallbacks: CliEndpointCallbacks? = null,
     resolvedAuths: Map<String, ResolvedProviderAuth>? = null,
+    /**
+     * Optional hook for host-layer modules (trailblaze-host, etc.) to register
+     * additional Ktor routes alongside the server's built-ins. Invoked inside the
+     * `routing { }` block immediately before the 404 catchall, so any path the
+     * callback registers wins over the catchall.
+     *
+     * Used by the desktop's waypoint-graph endpoint, which lives in trailblaze-host
+     * (where waypoint discovery is) but needs to expose itself on the same Ktor
+     * server the daemon already runs. Keeps the dep direction clean (server doesn't
+     * know about host) by inverting registration into a callback.
+     */
+    additionalRouteRegistration: (Routing.() -> Unit)? = null,
   ) {
     val auths = resolvedAuths ?: LlmAuthResolver.resolveAll(LlmConfigLoader.load())
     if (installContentNegotiation) {
@@ -113,6 +126,10 @@ object ServerEndpoints {
         CliStatusEndpoint.register(this, callbacks.statusProvider)
         callbacks.onCliExecRequest?.let { CliExecEndpoint.register(this, it) }
       }
+
+      // Host-layer routes (e.g. waypoint graph view from trailblaze-host) — registered
+      // before the catchall so they can claim paths the server doesn't know about.
+      additionalRouteRegistration?.invoke(this)
 
       route("{...}") {
         handle {

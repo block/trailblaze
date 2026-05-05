@@ -332,6 +332,136 @@ class WaypointVisualizerLogicTest {
     assertEquals("matched @ –", formatMatchedStepsLabel(emptyList()))
   }
 
+  // ---------- WaypointMapLayout.compute ----------
+
+  @Test
+  fun mapLayout_emptyInputProducesEmptyLayout() {
+    val out = WaypointMapLayout.compute(
+      waypointIds = emptyList(),
+      shortcuts = emptyList(),
+      trailheads = emptyList(),
+    )
+    assertTrue(out.positions.isEmpty())
+    assertEquals(0, out.layerCount)
+    assertEquals(0, out.maxColumns)
+  }
+
+  @Test
+  fun mapLayout_noShortcutsPutsAllNodesAtLayerZero() {
+    // Authored-data-empty case (today's repo): every waypoint sits at layer 0, sorted
+    // alphabetically across columns. Pin both the layer and the column so a future
+    // change to the sort or the initialization can't silently drift the layout.
+    val out = WaypointMapLayout.compute(
+      waypointIds = listOf("c", "a", "b"),
+      shortcuts = emptyList(),
+      trailheads = emptyList(),
+    )
+    assertEquals(WaypointMapLayout.GridPosition(layer = 0, column = 0), out.positions["a"])
+    assertEquals(WaypointMapLayout.GridPosition(layer = 0, column = 1), out.positions["b"])
+    assertEquals(WaypointMapLayout.GridPosition(layer = 0, column = 2), out.positions["c"])
+    assertEquals(1, out.layerCount)
+    assertEquals(3, out.maxColumns)
+  }
+
+  @Test
+  fun mapLayout_simpleChainAssignsIncreasingLayers() {
+    // a → b → c. Longest-path layering: layer(a)=0, layer(b)=1, layer(c)=2.
+    val out = WaypointMapLayout.compute(
+      waypointIds = listOf("a", "b", "c"),
+      shortcuts = listOf(
+        shortcut(from = "a", to = "b"),
+        shortcut(from = "b", to = "c"),
+      ),
+      trailheads = emptyList(),
+    )
+    assertEquals(0, out.positions.getValue("a").layer)
+    assertEquals(1, out.positions.getValue("b").layer)
+    assertEquals(2, out.positions.getValue("c").layer)
+    assertEquals(3, out.layerCount)
+    // Each layer has one node, so max column count is 1.
+    assertEquals(1, out.maxColumns)
+  }
+
+  @Test
+  fun mapLayout_pickLongestPathOverShortest() {
+    // Diamond: a → b → d AND a → d. Longest path to d is 2 hops via b, so layer(d) must
+    // pick the longer path. This is the load-bearing property — without it, edges would
+    // overshoot their target row and cross unnecessarily.
+    val out = WaypointMapLayout.compute(
+      waypointIds = listOf("a", "b", "d"),
+      shortcuts = listOf(
+        shortcut(from = "a", to = "b"),
+        shortcut(from = "b", to = "d"),
+        shortcut(from = "a", to = "d"),
+      ),
+      trailheads = emptyList(),
+    )
+    assertEquals(0, out.positions.getValue("a").layer)
+    assertEquals(1, out.positions.getValue("b").layer)
+    assertEquals(2, out.positions.getValue("d").layer, "longest path wins on diamonds")
+  }
+
+  @Test
+  fun mapLayout_danglingShortcutReferencesAreIgnored() {
+    // YAML may reference a waypoint id that's been removed but not yet cleaned up. The
+    // layout pass must skip such references; the renderer surfaces them separately.
+    // Without this check, the iteration would still run but produce a layer for an
+    // absent waypoint, which would confuse downstream column assignment.
+    val out = WaypointMapLayout.compute(
+      waypointIds = listOf("a"),
+      shortcuts = listOf(shortcut(from = "a", to = "missing")),
+      trailheads = emptyList(),
+    )
+    assertEquals(WaypointMapLayout.GridPosition(layer = 0, column = 0), out.positions["a"])
+    // "missing" must NOT appear in the output map.
+    assertTrue("missing" !in out.positions)
+  }
+
+  @Test
+  fun mapLayout_trailheadsDoNotShiftWaypointLayers() {
+    // Trailheads have no `from` — they target a waypoint via the virtual "outside"
+    // anchor that renders above the grid. The grid layout itself must therefore ignore
+    // trailheads entirely: a trailhead pointing at `home` should NOT push `home` from
+    // layer 0 to layer 1 (which would also push every shortcut chain one row down for
+    // no visual benefit). This pins that the trailhead arg is layout-inert.
+    val out = WaypointMapLayout.compute(
+      waypointIds = listOf("home", "settings"),
+      shortcuts = listOf(shortcut(from = "home", to = "settings")),
+      trailheads = listOf(
+        TrailheadDisplayItem(id = "boot", description = null, to = "home"),
+      ),
+    )
+    assertEquals(0, out.positions.getValue("home").layer)
+    assertEquals(1, out.positions.getValue("settings").layer)
+  }
+
+  @Test
+  fun mapLayout_cyclesAreBoundedByIterationCap() {
+    // a ↔ b. A naive longest-path walker grows layers without bound on a cycle. The
+    // iteration cap prevents that — both nodes land at finite layers within
+    // `waypointIds.size` rounds. We don't pin the exact layers (they're SCC-arbitrary)
+    // but we do pin "the algorithm terminates" and "both nodes are positioned."
+    val out = WaypointMapLayout.compute(
+      waypointIds = listOf("a", "b"),
+      shortcuts = listOf(
+        shortcut(from = "a", to = "b"),
+        shortcut(from = "b", to = "a"),
+      ),
+      trailheads = emptyList(),
+    )
+    assertTrue("a" in out.positions, "cycle node 'a' must still be positioned")
+    assertTrue("b" in out.positions, "cycle node 'b' must still be positioned")
+    assertTrue(out.layerCount > 0)
+  }
+
+  private fun shortcut(from: String, to: String) = ShortcutDisplayItem(
+    id = "$from-to-$to",
+    description = null,
+    from = from,
+    to = to,
+    variant = null,
+  )
+
   // ---------- resolveOverlays — bounds-less matched node ----------
 
   @Test

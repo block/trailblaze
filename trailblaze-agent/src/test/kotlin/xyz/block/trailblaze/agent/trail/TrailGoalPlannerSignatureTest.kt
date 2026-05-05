@@ -95,7 +95,10 @@ class TrailGoalPlannerSignatureTest {
     val signatures = rawHistory.map(::stripActionOutcomeSuffix)
     val hint = detectActionCycleHint(signatures)
     assertNotNull(hint, "alternating tap-pair across mixed outcomes should trigger a hint")
-    assertEquals(true, hint.startsWith("CRITICAL"))
+    // 3 full cycles is below the length-2 CRITICAL threshold (now 15) but above WARNING
+    // (≥ 2). The point of this test is that the SUCCESS/FAILED suffix stripping lets the
+    // detector see the alternation through the variant outcomes — not the specific
+    // severity. Asserting hint+pattern shape is sufficient for that contract.
     assertEquals(true, hint.contains("cycle of 2 actions"))
   }
 

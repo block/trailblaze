@@ -7,20 +7,31 @@ import kotlinx.serialization.Serializable
  * hierarchy. Composed of a list of [required] selector entries (all must match) and a
  * list of [forbidden] selector entries (none may match).
  *
- * ## Pack-scoped id convention
+ * ## Pack-scoped id convention (URL-style)
  *
- * Waypoint [id]s use a `<pack-id>/<local-name>` shape (e.g. `clock/android/alarm_tab`,
- * `gmail/inbox`). The slash is the namespace separator between the owning pack and the
- * waypoint's local name within that pack. On disk, waypoint descriptors live under
- * `trailblaze-config/packs/<pack-id>/waypoints/`, so the leading pack segment maps to
- * the owning pack directory — but the descriptor filename itself does not need to
- * mirror the slash-separated id segments. Pack ownership is implicit by directory
- * layout, so simple local names like `alarm_tab` stay readable and the slash-prefixed
- * form gives an LLM the namespace at a glance.
+ * Waypoint [id]s follow URL conventions: `<pack-id>/<segment>[/<segment>...]`. The slash
+ * is both the pack-namespace separator and the IA hierarchy separator within the pack.
+ * Use `-` for multi-word atoms within a single segment.
  *
- * Three-part ids `<pack-id>/<platform>/<local-name>` are used by packs whose waypoints
- * are platform-specific (e.g. `myapp/android/checkout_keypad`, `myapp/ios/splash`).
- * The platform segment is conventional, not enforced by the loader.
+ * Examples:
+ *  - `myapp/home` — flat, atomic
+ *  - `myapp/withdraw/compose` — composer step within a Withdraw flow
+ *  - `myapp/settings/notifications` — Notifications sub-tab within a Settings tab
+ *  - `myapp/inbox/inventory-upsell` — multi-word atom under an Inbox hub
+ *
+ * **The id is logical, not platform-tagged.** A waypoint named `myapp/home` represents
+ * the conceptual "MyApp home screen" regardless of platform. Today each waypoint YAML
+ * is platform-specific (its selectors are tagged with `androidAccessibility:` or
+ * `iosAccessibility:`), and the file lives under
+ * `packs/<pack-id>/waypoints/<platform>/...` for disk-level organization. When iOS adds
+ * its own home, both files share `id: myapp/home` and the matcher dispatches by
+ * current device platform — a `platforms:` field on this schema is the planned dispatch
+ * mechanism, not yet implemented (no platform-collision exists in the current dataset).
+ *
+ * On disk, waypoint descriptors live under `trailblaze-config/packs/<pack-id>/waypoints/`
+ * with `<platform>/...` subdirectories for platform-specific variants. Filenames mirror
+ * the id's post-pack-segment portion (e.g. id `myapp/withdraw/compose` →
+ * `packs/myapp/waypoints/android/withdraw/compose.waypoint.yaml`).
  *
  * This intentionally diverges from the older underscore tool-naming convention
  * (`2026-01-14-tool-naming-convention.md`), which was driven by serialization needing to

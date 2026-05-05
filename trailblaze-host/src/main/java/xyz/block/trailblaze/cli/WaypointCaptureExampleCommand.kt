@@ -14,6 +14,7 @@ import picocli.CommandLine
 import picocli.CommandLine.Command
 import picocli.CommandLine.Option
 import picocli.CommandLine.Parameters
+import xyz.block.trailblaze.api.ImageFormatDetector
 import xyz.block.trailblaze.api.waypoint.WaypointDefinition
 import xyz.block.trailblaze.logs.client.TrailblazeJson
 import xyz.block.trailblaze.util.Console
@@ -100,10 +101,18 @@ class WaypointCaptureExampleCommand : Callable<Int> {
       return 1
     }
 
-    // Compute output paths next to the waypoint YAML — keep the source file extension
-    // so .png stays .png, .webp stays .webp.
+    // Compute output paths next to the waypoint YAML.
+    //
+    // Pick the extension by **sniffing the source bytes**, NOT by trusting the source
+    // file's extension. The session log directory has historically contained `.png`-named
+    // files whose bytes were actually WebP (caused by `LogsRepo.saveScreenshotBytes`
+    // defaulting the extension and the on-device screencap pipeline returning WebP for
+    // wire-size). Trusting `rawScreenshot.extension` would propagate that lie into the
+    // committed example pair. Sniffing makes the output extension always match the bytes.
     val baseName = defFile.name.removeSuffix(WAYPOINT_SUFFIX)
-    val screenshotExt = rawScreenshot.extension.ifEmpty { "webp" }
+    val sourceBytes = rawScreenshot.readBytes()
+    val screenshotExt = ImageFormatDetector.detectFormat(sourceBytes).fileExtension
+      .ifEmpty { rawScreenshot.extension.ifEmpty { "webp" } }
     val exampleJsonFile = File(defFile.parentFile, "$baseName$EXAMPLE_JSON_SUFFIX")
     val screenshotFile = File(defFile.parentFile, "$baseName.example.$screenshotExt")
 

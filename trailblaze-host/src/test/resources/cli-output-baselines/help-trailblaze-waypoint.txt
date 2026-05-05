@@ -10,13 +10,17 @@ Match named app locations (waypoints) against captured screen state.
   -h, --help      Show this help message and exit.
   -V, --version   Print version information and exit.
 Commands:
-  list             List all waypoint definitions from active packs (workspace +
-                     framework classpath)
-  locate           Given a captured screen state, report which waypoint(s)
-                     match.
-  validate         Validate that a specific waypoint definition matches a
-                     captured screen state.
-  capture-example  Capture a sibling <id>.example.json + screenshot next to the
-                     waypoint YAML.
-  segment          Inspect transitions between waypoints observed in a session
-                     log.
+  list              List all waypoint definitions from active packs (workspace
+                      + framework classpath)
+  locate            Given a captured screen state, report which waypoint(s)
+                      match.
+  validate          Validate that a specific waypoint definition matches a
+                      captured screen state.
+  capture-example   Capture a sibling <id>.example.json + screenshot next to
+                      the waypoint YAML.
+  suggest-selector  Suggest waypoint-ready selector YAML for a specific element
+                      ref in a captured screen.
+  segment           Inspect transitions between waypoints observed in a session
+                      log.
+  graph             Render the waypoint navigation graph (waypoints, authored
+                      shortcuts, authored

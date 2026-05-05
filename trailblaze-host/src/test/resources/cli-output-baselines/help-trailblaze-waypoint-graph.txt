@@ -1,0 +1,28 @@
+# This file is a CHECKED-IN baseline of CLI output rendered by trailblaze-host's CLI helpers.
+# It is NOT a contract — if a test fails here because output drifted, decide whether the
+# drift is intentional. The test always (re)writes this file from the current rendered output,
+# then asserts the working tree is clean. So `git diff` of this file IS the failure message.
+# Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
+# small wording / spacing changes can be intentional or accidental.
+# ----------------------------------------------------------------------
+Usage: trailblaze waypoint graph [-hV] [-o=<out>] [--root=<root>]
+Render the waypoint navigation graph (waypoints, authored shortcuts, authored
+trailheads) as a single self-contained HTML file. The output bakes in
+screenshots
+as data URIs and loads React Flow + dagre at runtime via esm.sh CDN — open it
+in any
+browser, share it via email/Slack/zip, no Trailblaze install required on the
+viewer's
+side.
+
+For a live, refresh-on-edit view from the running daemon, point your browser at
+http://localhost:<daemon-port>/waypoints/graph instead.
+  -h, --help          Show this help message and exit.
+  -o, --out=<out>     Output HTML file path (default: ./waypoint-graph.html in
+                        the current directory). Parent directories are created
+                        if missing. The file is overwritten if present.
+      --root=<root>   Filesystem directory to scan for *.waypoint.yaml files
+                        (default: ./trails, resolved against the current
+                        working directory). Pack-bundled waypoints from the
+                        classpath are always included regardless of this flag.
+  -V, --version       Print version information and exit.

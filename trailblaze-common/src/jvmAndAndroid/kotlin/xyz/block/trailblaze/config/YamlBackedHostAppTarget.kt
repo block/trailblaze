@@ -159,6 +159,16 @@ class YamlBackedHostAppTarget(
   ): Set<ToolName> =
     resolvedExcludedToolsByDriver.yamlNames[driverType] ?: emptySet()
 
+  override fun getDeclaredToolSetIdsForDriver(driverType: TrailblazeDriverType): List<String> {
+    val ids = mutableListOf<String>()
+    config.platforms?.forEach { (platformKey, platformConfig) ->
+      if (driverType in platformConfig.resolveDriverTypes(platformKey)) {
+        platformConfig.toolSets?.let { ids.addAll(it) }
+      }
+    }
+    return ids.distinct()
+  }
+
   // --- MCP server declarations (Decision 038) ---
 
   override fun getMcpServers(): List<McpServerConfig> = config.mcpServers ?: emptyList()

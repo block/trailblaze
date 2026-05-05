@@ -579,7 +579,9 @@ trailblaze waypoint list
 trailblaze waypoint locate
 trailblaze waypoint validate
 trailblaze waypoint capture-example
+trailblaze waypoint suggest-selector
 trailblaze waypoint segment
+trailblaze waypoint graph
 ```
 
 **Options:**
@@ -694,6 +696,36 @@ trailblaze waypoint capture-example [OPTIONS] [<<positionalLogFile>>]
 
 ---
 
+### `trailblaze waypoint suggest-selector`
+
+Suggest waypoint-ready selector YAML for a specific element ref in a captured screen. Pair with `./trailblaze snapshot --all` to see refs, then run this on the matching session log to translate ref → selector. Returns up to --max named candidates (the TrailblazeNodeSelectorGenerator strategies that uniquely resolve to the target), plus one structural-only candidate at the bottom for forbidden-clause use.
+
+**Synopsis:**
+
+```
+trailblaze waypoint suggest-selector [OPTIONS] [<<positionalLogFile>>]
+```
+
+**Arguments:**
+
+| Argument | Description | Required |
+|----------|-------------|----------|
+| `<<positionalLogFile>>` | Path to a *_TrailblazeLlmRequestLog.json (required unless --session/--step given). Same shape as the input to `waypoint validate`. | No |
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--ref` | Element ref from the captured tree (e.g. 'a812'). Required. | - |
+| `--session` | Session log directory (containing *_TrailblazeLlmRequestLog.json files) | - |
+| `--step` | 1-based step within --session (default: last step) | - |
+| `--max` | Maximum candidate selectors to return (default: 5) | - |
+| `--anchor` | Compose the leaf selector with an ancestor predicate. Currently supported:   parent-selected — find the nearest ancestor with isSelected=true and emit a     selector that matches that ancestor as a `View` with `isSelected: true`,     using the leaf as `containsChild`. This is the canonical bottom-nav-tab     waypoint pattern: any app with selectable bottom-nav tabs uses this to     pin identity to the *currently active* tab rather than to any tab with the     given label. Without the anchor, the leaf selector matches a tab regardless     of selection state — fine for tap targets, wrong for waypoint identity,     because we want to know WHICH tab is currently active. | - |
+| `-h`, `--help` | Show this help message and exit. | - |
+| `-V`, `--version` | Print version information and exit. | - |
+
+---
+
 ### `trailblaze waypoint segment`
 
 Inspect transitions between waypoints observed in a session log.
@@ -730,6 +762,27 @@ trailblaze waypoint segment list [OPTIONS]
 |--------|-------------|---------|
 | `--session` | Session log directory (containing *.json log files) | - |
 | `--root` | Additional directory to scan for *.waypoint.yaml files (default: ./trails, resolved against the current working directory). Pack waypoints are always included regardless of --root. | - |
+| `-h`, `--help` | Show this help message and exit. | - |
+| `-V`, `--version` | Print version information and exit. | - |
+
+---
+
+### `trailblaze waypoint graph`
+
+Render the waypoint navigation graph (waypoints, authored shortcuts, authored trailheads) as a single self-contained HTML file. The output bakes in screenshots as data URIs and loads React Flow + dagre at runtime via esm.sh CDN — open it in any browser, share it via email/Slack/zip, no Trailblaze install required on the viewer's side.  For a live, refresh-on-edit view from the running daemon, point your browser at http://localhost:<daemon-port>/waypoints/graph instead.
+
+**Synopsis:**
+
+```
+trailblaze waypoint graph [OPTIONS]
+```
+
+**Options:**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--root` | Filesystem directory to scan for *.waypoint.yaml files (default: ./trails, resolved against the current working directory). Pack-bundled waypoints from the classpath are always included regardless of this flag. | - |
+| `--out`, `-o` | Output HTML file path (default: ./waypoint-graph.html in the current directory). Parent directories are created if missing. The file is overwritten if present. | - |
 | `-h`, `--help` | Show this help message and exit. | - |
 | `-V`, `--version` | Print version information and exit. | - |
 

@@ -137,6 +137,11 @@ object TrailblazeBuiltInTabs {
         logsRepo = logsRepo,
         availableTargets = deviceManager.availableAppTargets,
         appIconProvider = deviceManager.appIconProvider,
+        // The Map view lives in the browser (rendered by React Flow against the
+        // daemon's `/waypoints/graph` endpoint). The tab's "Open Map view →"
+        // button uses this URL to launch the page; rebuilt per recomposition so a
+        // mid-session port-manager change is reflected without a tab remount.
+        graphViewUrl = "http://localhost:${trailblazeSettingsRepo.portManager.httpPort}/waypoints/graph",
         onChangeDirectory = { newPath ->
           trailblazeSettingsRepo.updateAppConfig { it.copy(trailsDirectory = newPath) }
         },

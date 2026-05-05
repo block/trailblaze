@@ -123,6 +123,25 @@ internal fun detectRepetitiveActionHint(state: BlazeState): String? {
 }
 
 /**
+ * Per-cycle-length thresholds for escalating a detected loop from `WARNING` (gentle hint
+ * to the LLM) to `CRITICAL` (consumed by [TrailblazeRunner] to terminate the step).
+ *
+ * Length-1 (consecutive identical actions) tolerates the most repetition because legitimate
+ * cases are common: counter-driven flows ("add the same item three times"), sequential PIN
+ * digit entry that happens to use the same tool with the same args, scrolling a long list
+ * in a fixed direction, etc. Length-2/3 cycles (alternating, three-step) are far less
+ * likely to be intentional, so the threshold drops, but still leaves a buffer so the LLM
+ * can recover after the WARNING hint without us hard-killing the run.
+ *
+ * Numbers chosen to hit roughly the same total entry count (≈ 30) across all three lengths
+ * — that's what determines the sliding window's required size in [TrailblazeRunner]'s
+ * `STUCK_FINGERPRINT_WINDOW`.
+ */
+internal const val LENGTH_1_CRITICAL_REPEATS: Int = 30
+internal const val LENGTH_2_CRITICAL_REPEATS: Int = 15
+internal const val LENGTH_3_CRITICAL_REPEATS: Int = 10
+
+/**
  * Generic cycle detector over a list of action signatures.
  *
  * Each entry in [signatures] should be a stable string representation of one action
@@ -163,9 +182,25 @@ internal fun detectActionCycleHint(signatures: List<String>): String? {
  * Formats a corrective hint for a detected loop. Length-1 phrasing is preserved from
  * the prior single-action detector to avoid regressing prompt quality on the most
  * common case; length-2/3 phrasing surfaces the cycle explicitly.
+ *
+ * The CRITICAL threshold is per cycle length so the bar for hard-failing the run scales
+ * with the loop's "obviousness." Tight single-action repetition can be legitimate (entering
+ * a PIN sequentially, "add the same item N times" instructions, scrolling a long list with
+ * a fixed direction) so we tolerate a much longer streak before declaring stuck. Multi-step
+ * loops (length 2 / 3) are easier to mistake for genuine progress, so they need fewer full
+ * repetitions before we flip to CRITICAL — but still a healthy buffer beyond the previous
+ * 3-cycle bar to give the LLM room to back out on its own after seeing the WARNING-level
+ * hint. All three thresholds intentionally land near 30 raw entries so a single sliding
+ * window (see [STUCK_FINGERPRINT_WINDOW_SIZE] in TrailblazeRunner) sizes to fit any of them.
  */
 private fun formatCycleHint(cycle: List<String>, cycleLen: Int, fullRepeats: Int): String {
-  val isCritical = fullRepeats >= 3
+  val criticalThreshold = when (cycleLen) {
+    1 -> LENGTH_1_CRITICAL_REPEATS
+    2 -> LENGTH_2_CRITICAL_REPEATS
+    3 -> LENGTH_3_CRITICAL_REPEATS
+    else -> LENGTH_1_CRITICAL_REPEATS
+  }
+  val isCritical = fullRepeats >= criticalThreshold
   return when (cycleLen) {
     1 -> {
       val signature = cycle.first()

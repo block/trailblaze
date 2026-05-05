@@ -115,6 +115,27 @@ object ToolYamlLoader {
       .filter { it.mode == ToolYamlConfig.Mode.TOOLS }
       .associate { ToolName(it.id) to it }
 
+  /**
+   * Discovers all `*.shortcut.yaml` and `*.trailhead.yaml` configs — i.e. every config whose
+   * parsed content carries either a [ToolYamlConfig.shortcut] or [ToolYamlConfig.trailhead]
+   * metadata block. **Both `Mode.CLASS` and `Mode.TOOLS` bodies are returned** because the
+   * navigation-graph view cares about the edge metadata, not whether the body is implemented
+   * as Kotlin or as a YAML composition. ([discoverYamlDefinedTools] filters out class-backed
+   * configs and so silently drops class-bodied trailheads / shortcuts; this method is the
+   * graph view's loader of record.)
+   *
+   * Returned [Map] keys are [ToolName]s; the same id never appears twice because the parser's
+   * duplicate-id detection runs in [discoverAllConfigs] / [parseAllConfigs] before we reach
+   * here. The order of entries is the discovery order — callers that want stable rendering
+   * (e.g. the Map view) should sort downstream.
+   */
+  fun discoverShortcutsAndTrailheads(
+    resourceSource: ConfigResourceSource = platformConfigResourceSource(),
+  ): Map<ToolName, ToolYamlConfig> =
+    discoverAllConfigs(resourceSource)
+      .filter { it.shortcut != null || it.trailhead != null }
+      .associate { ToolName(it.id) to it }
+
   private fun discoverAllConfigs(
     resourceSource: ConfigResourceSource,
   ): List<ToolYamlConfig> {

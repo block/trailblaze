@@ -242,11 +242,15 @@ class TrailblazeRunner(
 
       val cycleHint = detectActionCycleHint(recentToolFingerprints.toList())
       if (cycleHint != null && cycleHint.startsWith("CRITICAL:")) {
-        val toolName = toolCalls.lastOrNull()?.tool ?: "unknown"
         Console.info("  Agent stuck: $cycleHint")
+        // Surface the full pattern (tool + args + repeat count) in the exception so
+        // post-mortem readers see *what* was looping, not just that something was. The
+        // previous form collapsed to "[stuck: <toolname> in repeating cycle]" which
+        // dropped the cycle pattern and left no breadcrumb for triaging.
+        val cycleSummary = cycleHint.removePrefix("CRITICAL: ").trim()
         throw MaxCallsLimitReachedException(
           maxCalls = stepStatus.currentStep,
-          objectivePrompt = "${stepStatus.promptStep.prompt} [stuck: $toolName in repeating cycle]",
+          objectivePrompt = "${stepStatus.promptStep.prompt} [stuck: $cycleSummary]",
         )
       }
 
@@ -346,11 +350,18 @@ class TrailblazeRunner(
   companion object {
     /**
      * Sliding window over the last N tool fingerprints, used by `detectActionCycleHint`
-     * to spot repeating cycles (length 1, 2, or 3) in the suffix. Sized to comfortably
-     * cover a length-3 cycle repeated 3 times (9 entries) with headroom; also covers a
-     * length-2 cycle repeated 5 times (10 entries) and length-1 repeated 12 times.
+     * to spot repeating cycles (length 1, 2, or 3) in the suffix.
+     *
+     * Sized to fit any of the per-cycle-length CRITICAL thresholds in `ProgressTracking.kt`:
+     * length-1 needs `LENGTH_1_CRITICAL_REPEATS = 30` entries to fire, length-2 needs
+     * `LENGTH_2_CRITICAL_REPEATS = 15` × 2 = 30 entries, length-3 needs
+     * `LENGTH_3_CRITICAL_REPEATS = 10` × 3 = 30 entries. So 30 is the smallest window
+     * that lets every length reach its CRITICAL threshold without falling off the front.
+     *
+     * Memory cost is small: ~200 bytes per fingerprint × 30 = ~6 KB held during a
+     * running step.
      */
-    private const val STUCK_FINGERPRINT_WINDOW = 12
+    private const val STUCK_FINGERPRINT_WINDOW = 30
 
     val baseSystemPrompt = TemplatingUtil.getResourceAsText(
       "trailblaze_base_system_prompt.md",

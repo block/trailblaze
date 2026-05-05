@@ -519,14 +519,11 @@ class LocalLlmSamplingSource(
       inputTokenBreakdown = inputTokenBreakdown,
     )
 
-    // Save screenshot to disk if available
+    // Save screenshot to disk if available. saveScreenshotBytes sniffs the payload
+    // and picks the right extension internally — caller doesn't supply it.
     val screenshotFile = if (screenshotBytes != null && screenshotBytes.isNotEmpty()) {
       try {
-        repo.saveScreenshotBytes(
-          sessionId = sessionId,
-          bytes = screenshotBytes,
-          fileExtension = ImageFormatDetector.detectFormat(screenshotBytes).fileExtension,
-        )
+        repo.saveScreenshotBytes(sessionId, screenshotBytes)
       } catch (e: Exception) {
         Console.log("[LocalLlmSamplingSource] Failed to save screenshot: ${e.message}")
         null

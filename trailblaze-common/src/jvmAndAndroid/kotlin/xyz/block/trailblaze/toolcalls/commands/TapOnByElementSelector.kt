@@ -28,23 +28,46 @@ import xyz.block.trailblaze.util.Console
  */
 data class TapOnByElementSelector(
   val reason: String? = null,
-  val selector: TrailblazeElementSelector,
+  /**
+   * Legacy Maestro-shaped flat selector. Optional as of the Android 100% accessibility
+   * cutover — accessibility-only recordings (`nodeSelector.androidAccessibility != null`)
+   * skip the Maestro path entirely, so authoring those without a [selector] is the
+   * correct shape going forward. Existing trail recordings that carry both still load
+   * unchanged; the dispatch logic in [execute] picks the right path per recording.
+   *
+   * For the legacy Maestro-driver runtime path (no longer exercised on Android post-
+   * cutover but still used elsewhere), [selector] remains the source of truth. If both
+   * [selector] and [nodeSelector] are null the tool refuses to run with a clear error
+   * rather than silently no-op.
+   */
+  val selector: TrailblazeElementSelector? = null,
   val longPress: Boolean = false,
   /**
    * Rich driver-native selector generated from [TrailblazeNode] trees.
-   * When present, the agent will attempt to use this for richer element matching
-   * before falling back to the legacy Maestro command path via [selector].
+   *
+   * Set this for accessibility-driver recordings. When [selector] is also set, it acts as
+   * the legacy Maestro fallback for non-accessibility runtimes. When [selector] is null,
+   * this is the only way to identify the target — appropriate for Android post-cutover
+   * since Maestro/UiAutomator routing isn't used anymore.
    *
    * Serialized in trail YAML files so recordings preserve the rich selector for playback.
    */
   val nodeSelector: TrailblazeNodeSelector? = null,
 ) : MapsToMaestroCommands() {
-  override fun toMaestroCommands(memory: AgentMemory): List<Command> = listOf(
-    TapOnElementCommand(
-      selector = selector.toMaestroElementSelector(),
-      longPress = longPress,
-    ),
-  )
+  override fun toMaestroCommands(memory: AgentMemory): List<Command> {
+    // Maestro command projection is only meaningful when the legacy flat [selector] is
+    // populated — that's the field whose shape Maestro's Orchestra knows how to consume.
+    // Accessibility-only recordings (selector=null, nodeSelector!=null) can't be lowered
+    // into a Maestro command at all; emit an empty command list and rely on the
+    // accessibility dispatch path in [execute] to handle them.
+    val maestroSelector = selector ?: return emptyList()
+    return listOf(
+      TapOnElementCommand(
+        selector = maestroSelector.toMaestroElementSelector(),
+        longPress = longPress,
+      ),
+    )
+  }
 
   override suspend fun execute(
     toolExecutionContext: TrailblazeToolExecutionContext,
@@ -100,20 +123,22 @@ data class TapOnByElementSelector(
 
     when (mode) {
       NodeSelectorMode.FORCE_LEGACY -> {
-        return super.execute(toolExecutionContext)
+        return runMaestroFallbackOrFail(toolExecutionContext)
       }
       NodeSelectorMode.FORCE_NODE_SELECTOR -> {
         if (agent != null) {
           val effectiveNodeSelector = nodeSelector
-            ?: selector.toTrailblazeNodeSelector(toolExecutionContext.trailblazeDeviceInfo.platform)
-          val result = agent.executeNodeSelectorTap(
-            nodeSelector = effectiveNodeSelector,
-            longPress = longPress,
-            traceId = toolExecutionContext.traceId,
-          )
-          if (result != null) return result
+            ?: selector?.toTrailblazeNodeSelector(toolExecutionContext.trailblazeDeviceInfo.platform)
+          if (effectiveNodeSelector != null) {
+            val result = agent.executeNodeSelectorTap(
+              nodeSelector = effectiveNodeSelector,
+              longPress = longPress,
+              traceId = toolExecutionContext.traceId,
+            )
+            if (result != null) return result
+          }
         }
-        return super.execute(toolExecutionContext)
+        return runMaestroFallbackOrFail(toolExecutionContext)
       }
       NodeSelectorMode.PREFER_NODE_SELECTOR -> {
         if (nodeSelector != null && agent != null) {
@@ -124,8 +149,28 @@ data class TapOnByElementSelector(
           )
           if (result != null) return result
         }
-        return super.execute(toolExecutionContext)
+        return runMaestroFallbackOrFail(toolExecutionContext)
       }
     }
+  }
+
+  /**
+   * Runs the legacy Maestro command path via [super.execute] only when [selector] is set —
+   * the parent class' [toMaestroCommands] would otherwise produce an empty command list and
+   * Maestro would silently no-op. Accessibility-only recordings (selector=null) reach this
+   * point only when nodeSelector dispatch failed, so failing loud is the right behavior.
+   */
+  private suspend fun runMaestroFallbackOrFail(
+    toolExecutionContext: TrailblazeToolExecutionContext,
+  ): TrailblazeToolResult {
+    if (selector == null) {
+      val message = "tapOnElementBySelector: nodeSelector dispatch failed and no Maestro " +
+        "fallback selector is set on this recording. Accessibility-only recordings must " +
+        "resolve via the on-device agent. Check that the device is running with the " +
+        "accessibility driver and the target node is present in the live tree."
+      Console.log("### tap (no fallback): $message — nodeSelector=${nodeSelector?.driverMatch?.description() ?: "?"}")
+      return TrailblazeToolResult.Error.ExceptionThrown(errorMessage = message)
+    }
+    return super.execute(toolExecutionContext)
   }
 }

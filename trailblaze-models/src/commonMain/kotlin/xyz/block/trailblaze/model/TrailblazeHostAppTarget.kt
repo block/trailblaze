@@ -102,6 +102,20 @@ abstract class TrailblazeHostAppTarget(
   open fun getExcludedYamlToolNamesForDriver(driverType: TrailblazeDriverType): Set<ToolName> = emptySet()
 
   /**
+   * Toolset ids the target *declares* for the given driver — the positive list of toolset
+   * names from `platforms.<key>.tool_sets:` in the target YAML, before any catalog
+   * resolution. Drives pack-positive LLM tool resolution: callers pass the result to
+   * [xyz.block.trailblaze.toolcalls.TrailblazeToolSetCatalog.resolveForDriver] instead of
+   * dumping the entire driver-compatible catalog.
+   *
+   * Empty default for non-YAML targets and for targets that don't declare any toolsets on
+   * a given driver. The implication of an empty list is "use only the catalog's
+   * `always_enabled` toolsets" — that's the explicit, opt-in surface, not a kitchen sink.
+   * Targets that need richer surfaces declare them explicitly.
+   */
+  open fun getDeclaredToolSetIdsForDriver(driverType: TrailblazeDriverType): List<String> = emptyList()
+
+  /**
    * MCP server declarations for this target (Decision 038 / `mcp_servers:` in target YAML).
    *
    * Returns the raw [McpServerConfig] entries declared at the target root. The session-startup

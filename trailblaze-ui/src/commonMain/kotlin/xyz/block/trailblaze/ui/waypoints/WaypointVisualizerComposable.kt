@@ -31,6 +31,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
@@ -62,6 +63,20 @@ import xyz.block.trailblaze.ui.models.AppIconProvider
  * Loading concerns (filesystem walks, pack discovery) live in JVM-only callers; this
  * composable just renders whatever items it is given plus a small empty/error surface.
  */
+/**
+ * View modes for the Waypoints tab.
+ *
+ * - [Definitions] — the existing master/detail browser: filterable list on the left,
+ *   waypoint detail with selector overlays on the right. Default mode.
+ * - [Map] — the navigation graph view: waypoint nodes on a layered-DAG canvas, with
+ *   authored shortcuts as solid edges and trailheads as dashed entry edges from a
+ *   virtual "outside" anchor.
+ *
+ * Public so the desktop wrapper or a future WASM caller can pin an initial mode (e.g.
+ * deep-link "?mode=map"). The toggle UI lives inside [WaypointVisualizer].
+ */
+enum class WaypointVisualizerMode { Definitions, Map }
+
 @Composable
 fun WaypointVisualizer(
   items: List<WaypointDisplayItem>,
@@ -81,6 +96,21 @@ fun WaypointVisualizer(
    * responsibility to display, not to reorder.
    */
   matchedStepsByWaypoint: Map<String, List<Int>> = emptyMap(),
+  /**
+   * Authored shortcuts (`*.shortcut.yaml` files — `ToolYamlConfig` with a populated
+   * `shortcut: { from, to }` block). Drawn as solid edges between waypoint nodes when
+   * the user picks Map mode. Empty by default (today's repo has no authored shortcuts);
+   * the rendering is wired so the moment any author commits a shortcut, it appears.
+   */
+  shortcuts: List<ShortcutDisplayItem> = emptyList(),
+  /**
+   * Authored trailheads (`*.trailhead.yaml` files — `ToolYamlConfig` with a populated
+   * `trailhead: { to }` block). Drawn as dashed entry edges from a virtual "outside"
+   * anchor into each trailhead's target waypoint when the user picks Map mode.
+   */
+  trailheads: List<TrailheadDisplayItem> = emptyList(),
+  /** Initial mode the visualizer opens in. Default is the existing definitions browser. */
+  initialMode: WaypointVisualizerMode = WaypointVisualizerMode.Definitions,
 ) {
   var query by remember { mutableStateOf("") }
   var selectedId: String? by remember(items) { mutableStateOf(items.firstOrNull()?.definition?.id) }
@@ -137,6 +167,18 @@ fun WaypointVisualizer(
     filtered.firstOrNull { it.definition.id == selectedId } ?: filtered.firstOrNull()
   }
 
+  // Map mode resolves the selection against the *full* item set, not the filter-scoped
+  // [selected]. Otherwise typing a query that excludes the clicked node would cause the
+  // map's onSelect callback to land on `selectedId`, but [selected] would resolve to a
+  // different (filter-included) waypoint or null, and the visible highlight would bounce
+  // back. Codex / Copilot both flagged this — the filter is a Definitions-mode concern,
+  // not a Map-mode one.
+  val mapSelected = remember(items, selectedId) {
+    items.firstOrNull { it.definition.id == selectedId }
+  }
+
+  var mode by remember(initialMode) { mutableStateOf(initialMode) }
+
   Column(modifier = modifier.fillMaxSize()) {
     if (header != null) {
       header()
@@ -148,48 +190,145 @@ fun WaypointVisualizer(
       }
       return@Column
     }
-    Row(modifier = Modifier.fillMaxSize()) {
-      WaypointListPanel(
-        items = filtered,
-        totalCount = items.size,
-        query = query,
-        onQueryChange = { query = it },
-        targetCounts = targetCounts,
-        selectedTarget = selectedTarget,
-        onTargetChange = {
-          selectedTarget = it
-          selectedPlatform = null
-        },
-        platformCounts = platformCounts,
-        selectedPlatform = selectedPlatform,
-        onPlatformChange = { selectedPlatform = it },
-        availableTargets = availableTargets,
-        appIconProvider = appIconProvider,
-        selectedId = selected?.definition?.id,
-        onSelect = { selectedId = it },
-        matchedStepsByWaypoint = matchedStepsByWaypoint,
-        modifier = Modifier
-          .width(320.dp)
-          .fillMaxHeight()
-          .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)),
-      )
-      if (selected != null) {
-        WaypointDetailPanel(
-          item = selected,
-          matchedSteps = matchedStepsByWaypoint[selected.definition.id].orEmpty(),
-          modifier = Modifier
-            .fillMaxHeight()
-            .fillMaxWidth(),
+    WaypointModeToggle(
+      mode = mode,
+      onModeChange = { mode = it },
+      shortcutCount = shortcuts.size,
+      trailheadCount = trailheads.size,
+      modifier = Modifier
+        .fillMaxWidth()
+        .padding(horizontal = 12.dp, vertical = 8.dp),
+    )
+    HorizontalDivider()
+    when (mode) {
+      WaypointVisualizerMode.Map -> {
+        WaypointMapCanvas(
+          waypoints = items,
+          shortcuts = shortcuts,
+          trailheads = trailheads,
+          selectedId = mapSelected?.definition?.id,
+          onSelect = { selectedId = it },
+          modifier = Modifier.fillMaxSize(),
         )
-      } else {
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-          SelectableText(
-            text = "No waypoints match \"$query\".",
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+      }
+      WaypointVisualizerMode.Definitions -> {
+        Row(modifier = Modifier.fillMaxSize()) {
+          WaypointListPanel(
+            items = filtered,
+            totalCount = items.size,
+            query = query,
+            onQueryChange = { query = it },
+            targetCounts = targetCounts,
+            selectedTarget = selectedTarget,
+            onTargetChange = {
+              selectedTarget = it
+              selectedPlatform = null
+            },
+            platformCounts = platformCounts,
+            selectedPlatform = selectedPlatform,
+            onPlatformChange = { selectedPlatform = it },
+            availableTargets = availableTargets,
+            appIconProvider = appIconProvider,
+            selectedId = selected?.definition?.id,
+            onSelect = { selectedId = it },
+            matchedStepsByWaypoint = matchedStepsByWaypoint,
+            modifier = Modifier
+              .width(320.dp)
+              .fillMaxHeight()
+              .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)),
           )
+          if (selected != null) {
+            WaypointDetailPanel(
+              item = selected,
+              matchedSteps = matchedStepsByWaypoint[selected.definition.id].orEmpty(),
+              modifier = Modifier
+                .fillMaxHeight()
+                .fillMaxWidth(),
+            )
+          } else {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+              SelectableText(
+                text = "No waypoints match \"$query\".",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+              )
+            }
+          }
         }
       }
     }
+  }
+}
+
+/**
+ * Top-of-tab segmented toggle for switching between [WaypointVisualizerMode.Definitions]
+ * and [WaypointVisualizerMode.Map]. Renders edge counts inline on the Map button so
+ * authors get a glanceable signal of "how many shortcuts/trailheads are loaded today"
+ * without switching modes — the issue's guidance was that today's authored set is empty
+ * but should populate as authors create files.
+ *
+ * Implemented with two stacked [Surface]s rather than `SegmentedButton` because the
+ * latter is part of a Material 3 incubator API that lands at different versions across
+ * targets — Surface + clickable is universally available on JVM and WASM.
+ */
+@Composable
+private fun WaypointModeToggle(
+  mode: WaypointVisualizerMode,
+  onModeChange: (WaypointVisualizerMode) -> Unit,
+  shortcutCount: Int,
+  trailheadCount: Int,
+  modifier: Modifier = Modifier,
+) {
+  Row(
+    modifier = modifier,
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(8.dp),
+  ) {
+    WaypointModeChip(
+      label = "Definitions",
+      isSelected = mode == WaypointVisualizerMode.Definitions,
+      onClick = { onModeChange(WaypointVisualizerMode.Definitions) },
+    )
+    val mapLabel = buildString {
+      append("Map")
+      if (shortcutCount > 0 || trailheadCount > 0) {
+        append(" · ")
+        append("$shortcutCount shortcut${if (shortcutCount == 1) "" else "s"}")
+        append(", ")
+        append("$trailheadCount trailhead${if (trailheadCount == 1) "" else "s"}")
+      }
+    }
+    WaypointModeChip(
+      label = mapLabel,
+      isSelected = mode == WaypointVisualizerMode.Map,
+      onClick = { onModeChange(WaypointVisualizerMode.Map) },
+    )
+  }
+}
+
+@Composable
+private fun WaypointModeChip(label: String, isSelected: Boolean, onClick: () -> Unit) {
+  val container = if (isSelected) {
+    MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)
+  } else {
+    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+  }
+  val content = if (isSelected) {
+    MaterialTheme.colorScheme.primary
+  } else {
+    MaterialTheme.colorScheme.onSurfaceVariant
+  }
+  Surface(
+    color = container,
+    contentColor = content,
+    shape = MaterialTheme.shapes.small,
+    modifier = Modifier.clickable(onClick = onClick),
+  ) {
+    Text(
+      text = label,
+      style = MaterialTheme.typography.labelMedium,
+      fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
+      modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+    )
   }
 }
 

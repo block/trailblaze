@@ -37,19 +37,33 @@ class ProgressTrackingTest {
   }
 
   @Test
-  fun `length-1 critical at three repeats`() {
+  fun `length-1 stays WARNING below the critical threshold`() {
+    // Three identical actions is *frequently* legitimate — the trail step might
+    // literally say "add the same item three times" or "tap N to enter PIN digit by
+    // digit." The detector should hint to the LLM but not hard-fail the run yet.
     val hint = detectActionCycleHint(listOf("tap(a)", "tap(a)", "tap(a)"))
     assertNotNull(hint)
-    assertTrue(hint.startsWith("CRITICAL:"))
+    assertTrue(hint.startsWith("WARNING:"))
     assertTrue(hint.contains("3 times"))
   }
 
   @Test
-  fun `length-1 escalates with more repeats`() {
+  fun `length-1 still WARNING at five repeats`() {
+    // Pre-2026-05 this was CRITICAL; the bar is intentionally higher now so legitimate
+    // multi-step repetition (PIN entry, "add the same item N times" prompts, scrolling
+    // a long list with a fixed direction) doesn't trip stuck-detection.
     val hint = detectActionCycleHint(List(5) { "tap(a)" })
     assertNotNull(hint)
-    assertTrue(hint.startsWith("CRITICAL:"))
+    assertTrue(hint.startsWith("WARNING:"))
     assertTrue(hint.contains("5 times"))
+  }
+
+  @Test
+  fun `length-1 escalates to CRITICAL at the configured threshold`() {
+    val hint = detectActionCycleHint(List(LENGTH_1_CRITICAL_REPEATS) { "tap(a)" })
+    assertNotNull(hint)
+    assertTrue(hint.startsWith("CRITICAL:"))
+    assertTrue(hint.contains("$LENGTH_1_CRITICAL_REPEATS times"))
   }
 
   @Test
@@ -71,7 +85,7 @@ class ProgressTrackingTest {
   }
 
   @Test
-  fun `length-2 critical at three full cycles`() {
+  fun `length-2 stays WARNING below the critical threshold`() {
     val hint = detectActionCycleHint(
       listOf(
         "tap(items)", "tap(back)",
@@ -80,9 +94,18 @@ class ProgressTrackingTest {
       ),
     )
     assertNotNull(hint)
-    assertTrue(hint.startsWith("CRITICAL:"))
+    assertTrue(hint.startsWith("WARNING:"))
     assertTrue(hint.contains("cycle of 2 actions"))
     assertTrue(hint.contains("3 times"))
+  }
+
+  @Test
+  fun `length-2 escalates to CRITICAL at the configured threshold`() {
+    val pingPong = List(LENGTH_2_CRITICAL_REPEATS) { listOf("tap(items)", "tap(back)") }.flatten()
+    val hint = detectActionCycleHint(pingPong)
+    assertNotNull(hint)
+    assertTrue(hint.startsWith("CRITICAL:"))
+    assertTrue(hint.contains("$LENGTH_2_CRITICAL_REPEATS times"))
   }
 
   @Test
@@ -131,7 +154,7 @@ class ProgressTrackingTest {
   }
 
   @Test
-  fun `length-3 critical at three full cycles`() {
+  fun `length-3 stays WARNING below the critical threshold`() {
     val hint = detectActionCycleHint(
       listOf(
         "tap(a)", "tap(b)", "tap(c)",
@@ -140,7 +163,16 @@ class ProgressTrackingTest {
       ),
     )
     assertNotNull(hint)
+    assertTrue(hint.startsWith("WARNING:"))
+  }
+
+  @Test
+  fun `length-3 escalates to CRITICAL at the configured threshold`() {
+    val triple = List(LENGTH_3_CRITICAL_REPEATS) { listOf("tap(a)", "tap(b)", "tap(c)") }.flatten()
+    val hint = detectActionCycleHint(triple)
+    assertNotNull(hint)
     assertTrue(hint.startsWith("CRITICAL:"))
+    assertTrue(hint.contains("$LENGTH_3_CRITICAL_REPEATS times"))
   }
 
   // --- Negative cases ---

@@ -3,6 +3,8 @@ package xyz.block.trailblaze.report.utils
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.datetime.Clock
+import xyz.block.trailblaze.api.ImageFormatDetector
+import xyz.block.trailblaze.api.TrailblazeImageFormat
 import xyz.block.trailblaze.logs.TrailblazeLogsDataProvider
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.logs.client.TrailblazeLog
@@ -670,19 +672,26 @@ class LogsRepo(
   /**
    * Saves raw screenshot bytes to disk and returns the filename.
    *
+   * The on-disk file extension comes from sniffing the byte payload via
+   * [ImageFormatDetector] — if the device pipeline returns WebP, the file lands as
+   * `*.webp`, and the same for PNG and JPEG. Don't trust caller-supplied extensions:
+   * historically this was a `String = "png"` parameter that lied for every caller
+   * because the on-device screencap path returns WebP for wire-size, leading to
+   * `.png`-named files containing `RIFF...WEBP` magic bytes scattered across logs/.
+   * Sniffing locally is the single source of truth.
+   *
    * @param sessionId The session ID to save the screenshot under
    * @param bytes The screenshot bytes (PNG, JPEG, or WebP)
-   * @param fileExtension The file extension (e.g. "png", "jpg", "webp")
    * @return The filename of the saved screenshot
    */
   fun saveScreenshotBytes(
     sessionId: SessionId,
     bytes: ByteArray,
-    fileExtension: String = "png",
   ): String {
     if (readOnly) return "noop"
     val sessionDir = getSessionDir(sessionId)
     val timestamp = Clock.System.now().toEpochMilliseconds()
+    val fileExtension = ImageFormatDetector.detectFormat(bytes).fileExtension
     val filename = "${sessionId.value}_${timestamp}.$fileExtension"
     val screenshotFile = File(sessionDir, filename)
     Console.log("Writing Screenshot to ${screenshotFile.absolutePath}")
@@ -691,13 +700,16 @@ class LogsRepo(
   }
 
   /**
-   * Returns a list of image files for the given session.
+   * Returns a list of image files for the given session. Image-vs-non-image is
+   * decided by extension matching the canonical [TrailblazeImageFormat] entries —
+   * adding a new format anywhere in the codebase makes it visible here automatically.
    */
   fun getImagesForSession(sessionId: SessionId): List<File> {
     val sessionDir = File(logsDir, sessionId.value)
     if (!sessionDir.exists()) return emptyList()
+    val imageExtensions = TrailblazeImageFormat.entries.map { it.fileExtension }.toSet() + setOf("jpeg")
     return sessionDir.listFiles()?.filter {
-      it.extension in setOf("png", "jpg", "jpeg", "webp")
+      it.extension.lowercase() in imageExtensions
     }?.sortedBy { it.name }
       ?: emptyList()
   }

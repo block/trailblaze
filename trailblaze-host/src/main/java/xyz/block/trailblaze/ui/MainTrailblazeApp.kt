@@ -128,6 +128,7 @@ class MainTrailblazeApp(
         port = portManager.httpPort,
         httpsPort = portManager.httpsPort,
         wait = true,
+        additionalRouteRegistration = waypointGraphRouteRegistration(trailblazeSavedSettingsRepo),
       )
       return
     }
@@ -142,6 +143,7 @@ class MainTrailblazeApp(
           port = portManager.httpPort,
           httpsPort = portManager.httpsPort,
           wait = false,
+          additionalRouteRegistration = waypointGraphRouteRegistration(trailblazeSavedSettingsRepo),
         )
       }
 
@@ -543,4 +545,25 @@ private fun rememberTrayIcon(): Painter {
   ) { _, _ ->
     RenderVectorGroup(group = icon.root)
   }
+}
+
+/**
+ * Builds the Ktor route-registration callback that wires the waypoint graph endpoints
+ * (`/waypoints/graph` and `/waypoints/graph.json`) onto the daemon's HTTP server.
+ *
+ * The callback is fired once per server start, but the lambda it installs reads the
+ * trails directory **per request** so a settings change reflects without a restart.
+ * `getEffectiveTrailsDirectory` honors any in-app override of the default `./trails`
+ * path, so the browser view shows the same waypoints the desktop tab does.
+ */
+private fun waypointGraphRouteRegistration(
+  settingsRepo: TrailblazeSettingsRepo,
+): (io.ktor.server.routing.Routing.() -> Unit) = {
+  xyz.block.trailblaze.graph.WaypointGraphEndpoint.register(
+    routing = this,
+    defaultRootProvider = {
+      val appConfig = settingsRepo.serverStateFlow.value.appConfig
+      java.io.File(TrailblazeDesktopUtil.getEffectiveTrailsDirectory(appConfig))
+    },
+  )
 }

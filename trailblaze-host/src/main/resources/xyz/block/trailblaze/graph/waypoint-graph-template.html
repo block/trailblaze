@@ -1,0 +1,1917 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Trailblaze · Waypoint navigation graph</title>
+
+  <!-- React Flow's stylesheet. Loaded from esm.sh CDN — internal devtool, browser
+       will fetch on first load and cache thereafter. For air-gap support a future
+       version vendors these assets, but for now we choose the simpler path. -->
+  <link rel="stylesheet" href="https://esm.sh/@xyflow/react@12/dist/style.css">
+
+  <style>
+    /* ============================================================================
+       THEME TOKENS
+       ============================================================================
+       Two palettes (dark default / light) keyed off the [data-theme] attribute on
+       <html>. Every visual surface reads from these vars so the theme toggle is
+       a single attribute swap rather than a CSS recompile.
+    */
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --bg: #0e1014;
+      --bg-radial: radial-gradient(ellipse at top, #1a1f2e 0%, #0e1014 60%);
+      --bg-elevated: #181c25;
+      --bg-elevated-2: #20252f;
+      --bg-overlay: rgba(20, 24, 32, 0.85);
+      --border: #262b35;
+      --border-strong: #353c4a;
+      --border-active: #4f5b76;
+      --accent: #7da9ff;
+      --accent-strong: #a8c4ff;
+      --accent-bg: rgba(125, 169, 255, 0.14);
+      --trailhead: #c4a9ff;
+      --trailhead-bg: rgba(196, 169, 255, 0.14);
+      --tree-edge: rgba(220, 226, 240, 0.38);
+      --cross-edge: rgba(220, 226, 240, 0.14);
+      --back-edge: rgba(220, 226, 240, 0.10);
+      --text: #e7eaf0;
+      --text-strong: #ffffff;
+      --text-muted: #7d8597;
+      --text-faint: #565d6e;
+      --shadow-card: 0 1px 2px rgba(0,0,0,0.3), 0 4px 14px rgba(0,0,0,0.18);
+      --shadow-elevated: 0 8px 32px rgba(0,0,0,0.45), 0 2px 6px rgba(0,0,0,0.25);
+      --badge-navigate: #7da9ff;
+      --badge-auth: #ffb86b;
+      --badge-payment: #5eddb0;
+      --badge-search: #d088ff;
+      --badge-support: #ffd166;
+      --badge-legal: #8a93a3;
+      --badge-cancel: #ff7a8a;
+      --badge-account: #95a4c4;
+    }
+    :root[data-theme="light"] {
+      color-scheme: light;
+      --bg: #f8f9fb;
+      --bg-radial: radial-gradient(ellipse at top, #ffffff 0%, #eef1f6 60%);
+      --bg-elevated: #ffffff;
+      --bg-elevated-2: #f4f6fa;
+      --bg-overlay: rgba(255, 255, 255, 0.92);
+      --border: #e4e7ee;
+      --border-strong: #cdd2dc;
+      --border-active: #98a2b3;
+      --accent: #2563eb;
+      --accent-strong: #1e40af;
+      --accent-bg: rgba(37, 99, 235, 0.10);
+      --trailhead: #7c3aed;
+      --trailhead-bg: rgba(124, 58, 237, 0.10);
+      --tree-edge: rgba(20, 24, 32, 0.42);
+      --cross-edge: rgba(20, 24, 32, 0.18);
+      --back-edge: rgba(20, 24, 32, 0.10);
+      --text: #1f2330;
+      --text-strong: #0a0d14;
+      --text-muted: #5b6478;
+      --text-faint: #8b94a6;
+      --shadow-card: 0 1px 2px rgba(15,23,42,0.06), 0 4px 14px rgba(15,23,42,0.06);
+      --shadow-elevated: 0 8px 32px rgba(15,23,42,0.12), 0 2px 6px rgba(15,23,42,0.08);
+      --badge-navigate: #2563eb;
+      --badge-auth: #b45309;
+      --badge-payment: #047857;
+      --badge-search: #7c3aed;
+      --badge-support: #b45309;
+      --badge-legal: #475569;
+      --badge-cancel: #be123c;
+      --badge-account: #475569;
+    }
+
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0; padding: 0; height: 100vh; width: 100vw;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", system-ui, sans-serif;
+      font-feature-settings: "ss01", "cv11";
+      overflow: hidden;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+    #root { height: 100vh; width: 100vw; display: flex; flex-direction: column; }
+
+    /* ============================================================================
+       HEADER (logo / title / mode toggle / counts / theme toggle)
+       ============================================================================ */
+    .app-header {
+      flex: none;
+      padding: 10px 18px;
+      background: var(--bg-elevated);
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; gap: 14px;
+      font-size: 13px;
+      z-index: 5;
+    }
+    .app-header .brand {
+      display: flex; align-items: center; gap: 8px;
+      font-weight: 600; font-size: 14px; color: var(--text-strong);
+      letter-spacing: -0.01em;
+    }
+    .app-header .brand .logo {
+      width: 18px; height: 18px;
+      display: inline-flex; align-items: center; justify-content: center;
+      background: var(--accent); color: #fff;
+      border-radius: 5px; font-size: 11px; font-weight: 700;
+    }
+    .app-header .scope {
+      color: var(--text-muted); font-weight: 500;
+      padding-left: 12px; margin-left: 4px;
+      border-left: 1px solid var(--border);
+    }
+    .mode-toggle {
+      display: inline-flex;
+      background: var(--bg-elevated-2);
+      border-radius: 8px;
+      padding: 3px;
+      margin: 0 auto;
+      gap: 2px;
+    }
+    .mode-button {
+      padding: 5px 14px;
+      border-radius: 6px;
+      border: none; background: transparent;
+      color: var(--text-muted);
+      font-family: inherit; font-size: 12px; font-weight: 600;
+      letter-spacing: 0.04em; text-transform: uppercase;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+    }
+    .mode-button:hover { color: var(--text); }
+    .mode-button.active {
+      background: var(--bg-elevated);
+      color: var(--text-strong);
+      box-shadow: var(--shadow-card);
+    }
+    .mode-button .count {
+      margin-left: 6px;
+      color: var(--text-faint);
+      font-weight: 500;
+      font-size: 11px;
+    }
+    .mode-button.active .count { color: var(--text-muted); }
+
+    .header-counts {
+      display: flex; align-items: center; gap: 14px;
+      font-size: 11px; color: var(--text-muted);
+      letter-spacing: 0.04em; text-transform: uppercase;
+      font-weight: 600;
+    }
+    .header-counts .count-pair { display: flex; align-items: baseline; gap: 6px; }
+    .header-counts .count-pair .num {
+      color: var(--text-strong); font-size: 13px; font-weight: 600;
+      letter-spacing: -0.01em; text-transform: none;
+    }
+
+    .theme-toggle {
+      width: 30px; height: 30px;
+      display: inline-flex; align-items: center; justify-content: center;
+      border: 1px solid var(--border-strong);
+      border-radius: 7px;
+      background: var(--bg-elevated-2);
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 14px;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    .theme-toggle:hover { color: var(--text); border-color: var(--border-active); }
+
+    /* ============================================================================
+       SUBHEADER (filter pills + agentic-angle pill)
+       ============================================================================ */
+    .subheader {
+      flex: none;
+      padding: 8px 18px;
+      background: var(--bg-elevated);
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; gap: 8px;
+      font-size: 12px;
+      flex-wrap: wrap;
+    }
+    .filter-label {
+      color: var(--text-muted);
+      font-weight: 500;
+      margin-right: 4px;
+      letter-spacing: 0.02em;
+    }
+    .filter-pill {
+      padding: 4px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--border-strong);
+      background: transparent;
+      color: var(--text-muted);
+      font-size: 12px;
+      font-family: inherit;
+      cursor: pointer;
+      transition: background 0.12s, border-color 0.12s, color 0.12s;
+    }
+    .filter-pill:hover { color: var(--text); border-color: var(--border-active); }
+    .filter-pill.active {
+      background: var(--accent-bg);
+      border-color: var(--accent);
+      color: var(--accent-strong);
+    }
+    .filter-pill .count {
+      color: var(--text-faint);
+      margin-left: 5px;
+      font-size: 11px;
+      font-variant-numeric: tabular-nums;
+    }
+    .filter-pill.active .count { color: var(--accent); }
+
+    .agentic-pill {
+      margin-left: auto;
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 5px 11px;
+      background: var(--bg-elevated-2);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      font-size: 11px;
+      color: var(--text-muted);
+      font-variant-numeric: tabular-nums;
+    }
+    .agentic-pill .agentic-icon {
+      display: inline-block;
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--badge-payment);
+      box-shadow: 0 0 6px var(--badge-payment);
+      animation: pulse 2.4s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(0.85); }
+    }
+    .agentic-pill strong { color: var(--text); font-weight: 600; }
+
+    /* ============================================================================
+       MAIN LAYOUT (sidebar / canvas / detail panel)
+       ============================================================================ */
+    .main {
+      flex: 1; display: flex; min-height: 0;
+      background: var(--bg);
+      background-image: var(--bg-radial);
+    }
+    .sidebar {
+      flex: none;
+      width: 280px;
+      background: var(--bg-elevated);
+      border-right: 1px solid var(--border);
+      display: flex; flex-direction: column;
+      transition: width 0.22s ease, opacity 0.18s ease;
+      overflow: hidden;
+    }
+    .sidebar.collapsed { width: 0; border-right: none; }
+    .sidebar-header {
+      padding: 14px 16px 8px;
+      border-bottom: 1px solid var(--border);
+    }
+    .sidebar-header h2 {
+      margin: 0; font-size: 11px; font-weight: 700; letter-spacing: 0.08em;
+      text-transform: uppercase; color: var(--text-muted);
+    }
+    .sidebar-header .sub {
+      font-size: 11px; color: var(--text-faint); margin-top: 2px;
+    }
+    .sidebar-list { flex: 1; overflow-y: auto; padding: 6px 8px; }
+    .journey-item {
+      padding: 10px 10px;
+      border-radius: 8px;
+      cursor: pointer;
+      margin-bottom: 2px;
+      border: 1px solid transparent;
+      transition: background 0.12s, border-color 0.12s;
+    }
+    .journey-item:hover { background: var(--bg-elevated-2); }
+    .journey-item.active {
+      background: var(--accent-bg);
+      border-color: var(--accent);
+    }
+    .journey-item .journey-row1 {
+      display: flex; align-items: center; gap: 6px;
+      margin-bottom: 4px;
+    }
+    .journey-item .journey-row2 {
+      font-size: 13px; line-height: 1.4; color: var(--text);
+      font-weight: 500;
+      word-break: break-word;
+    }
+    .journey-item .journey-row3 {
+      margin-top: 4px;
+      font-size: 11px; color: var(--text-muted);
+      word-break: break-word;
+    }
+    .journey-badge {
+      display: inline-block;
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-size: 10px; font-weight: 700; letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--bg);
+      background: var(--badge-navigate);
+    }
+    .journey-badge.NAVIGATE { background: var(--badge-navigate); }
+    .journey-badge.AUTH { background: var(--badge-auth); }
+    .journey-badge.PAYMENT { background: var(--badge-payment); }
+    .journey-badge.SEARCH { background: var(--badge-search); }
+    .journey-badge.SUPPORT { background: var(--badge-support); }
+    .journey-badge.LEGAL { background: var(--badge-legal); }
+    .journey-badge.CANCEL { background: var(--badge-cancel); }
+    .journey-badge.ACCOUNT { background: var(--badge-account); }
+    .journey-item .journey-screens {
+      color: var(--text-faint);
+      font-size: 11px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .canvas-area { flex: 1; position: relative; min-width: 0; min-height: 0; }
+
+    .detail-panel {
+      flex: none;
+      width: 320px;
+      background: var(--bg-elevated);
+      border-left: 1px solid var(--border);
+      display: flex; flex-direction: column;
+      overflow: hidden;
+      box-shadow: var(--shadow-elevated);
+    }
+    .detail-panel-header {
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: flex-start; gap: 8px;
+    }
+    .detail-panel-header h3 {
+      margin: 0; font-size: 14px; font-weight: 600;
+      color: var(--text-strong); flex: 1; line-height: 1.3;
+      word-break: break-word;
+    }
+    .detail-panel-header .id {
+      font-family: ui-monospace, "SF Mono", monospace;
+      font-size: 11px; color: var(--text-muted);
+      margin-top: 4px; word-break: break-all;
+    }
+    .detail-close {
+      width: 24px; height: 24px;
+      border: none; background: transparent;
+      color: var(--text-muted);
+      cursor: pointer;
+      border-radius: 4px;
+      font-size: 18px; line-height: 1;
+      display: inline-flex; align-items: center; justify-content: center;
+    }
+    .detail-close:hover { background: var(--bg-elevated-2); color: var(--text); }
+    .detail-content { flex: 1; overflow-y: auto; }
+    .detail-screenshot {
+      padding: 16px;
+      background: var(--bg-elevated-2);
+      display: flex; justify-content: center;
+    }
+    .detail-screenshot img {
+      max-width: 240px; width: 100%;
+      border-radius: 6px;
+      box-shadow: var(--shadow-card);
+      border: 1px solid var(--border);
+    }
+    .detail-section {
+      padding: 12px 16px;
+      border-top: 1px solid var(--border);
+    }
+    .detail-section h4 {
+      margin: 0 0 8px;
+      font-size: 11px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.08em;
+      color: var(--text-muted);
+    }
+    .detail-section p {
+      margin: 0; font-size: 13px; line-height: 1.5;
+      color: var(--text);
+    }
+    .detail-edges {
+      display: flex; flex-direction: column; gap: 4px;
+    }
+    .detail-edge {
+      padding: 6px 8px;
+      background: var(--bg-elevated-2);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: border-color 0.12s, background 0.12s;
+    }
+    .detail-edge:hover {
+      border-color: var(--accent);
+      background: var(--accent-bg);
+    }
+    .detail-edge .arrow {
+      color: var(--text-faint);
+      margin: 0 4px;
+      font-family: ui-monospace, monospace;
+    }
+    .detail-edge .target-id {
+      font-family: ui-monospace, "SF Mono", monospace;
+      color: var(--text); font-size: 11px;
+    }
+    .detail-edge .desc {
+      display: block; margin-top: 2px;
+      color: var(--text-muted); font-size: 11px; line-height: 1.4;
+    }
+    .detail-source {
+      padding: 8px 16px 14px;
+      font-family: ui-monospace, "SF Mono", monospace;
+      font-size: 10px; color: var(--text-faint);
+      word-break: break-all;
+    }
+
+    /* Matcher-rule entries — "how does the matcher know this is <id>?".
+       Required entries are bordered in green-ish accent; forbidden in red-ish.
+       Each entry shows the human description and a collapsible YAML preview of
+       the actual selector. */
+    .matcher-entry {
+      padding: 8px 10px;
+      background: var(--bg-elevated-2);
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--badge-payment);
+      border-radius: 5px;
+      margin-bottom: 6px;
+      font-size: 12px;
+    }
+    .matcher-entry.forbidden {
+      border-left-color: var(--badge-cancel);
+    }
+    .matcher-entry .matcher-marker {
+      display: inline-block;
+      width: 14px; height: 14px;
+      line-height: 14px;
+      text-align: center;
+      border-radius: 50%;
+      font-size: 10px; font-weight: 700;
+      margin-right: 6px;
+      vertical-align: -1px;
+      background: var(--badge-payment); color: var(--bg);
+    }
+    .matcher-entry.forbidden .matcher-marker {
+      background: var(--badge-cancel); color: var(--bg);
+    }
+    .matcher-entry .matcher-desc {
+      color: var(--text);
+      line-height: 1.4;
+      display: inline;
+    }
+    .matcher-entry .matcher-fallback {
+      color: var(--text-muted);
+      font-style: italic;
+    }
+    .matcher-entry .matcher-meta {
+      margin-top: 4px;
+      color: var(--text-faint);
+      font-size: 11px;
+      font-family: ui-monospace, "SF Mono", monospace;
+    }
+    .matcher-entry pre {
+      margin: 6px 0 0;
+      padding: 6px 8px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      font-family: ui-monospace, "SF Mono", monospace;
+      font-size: 10.5px;
+      line-height: 1.45;
+      color: var(--text);
+      overflow-x: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    .matcher-entry summary {
+      cursor: pointer;
+      color: var(--text-muted);
+      font-size: 11px;
+      margin-top: 4px;
+      list-style: none;
+      user-select: none;
+    }
+    .matcher-entry summary::before {
+      content: "▸ ";
+      display: inline-block;
+      margin-right: 2px;
+      font-size: 9px;
+      transition: transform 0.12s;
+    }
+    .matcher-entry details[open] summary::before {
+      transform: rotate(90deg);
+    }
+    .matcher-entry summary:hover { color: var(--text); }
+
+    /* ============================================================================
+       MAP VIEW — node cards
+       ============================================================================ */
+    .waypoint-node {
+      width: 168px;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-strong);
+      border-radius: 8px;
+      overflow: hidden;
+      transition: border-color 0.12s, box-shadow 0.12s, transform 0.12s;
+      cursor: pointer;
+      box-shadow: var(--shadow-card);
+    }
+    .waypoint-node:hover {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-bg), var(--shadow-card);
+      transform: translateY(-1px);
+    }
+    .waypoint-node.selected {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-bg), var(--shadow-elevated);
+    }
+    .waypoint-title {
+      padding: 8px 10px 6px;
+      font-size: 12px; font-weight: 600;
+      line-height: 1.3;
+      color: var(--text-strong);
+      letter-spacing: -0.005em;
+      border-bottom: 1px solid var(--border);
+      display: -webkit-box;
+      -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+      overflow: hidden;
+      min-height: 38px;
+    }
+    .waypoint-screenshot {
+      width: 100%;
+      aspect-ratio: 9 / 16;
+      object-fit: contain;
+      background: #000;
+      display: block;
+    }
+    .waypoint-no-screenshot {
+      width: 100%;
+      aspect-ratio: 9 / 16;
+      display: flex; align-items: center; justify-content: center;
+      color: var(--text-faint); font-size: 11px;
+      background: var(--bg-elevated-2);
+      background-image: linear-gradient(135deg, var(--bg-elevated-2) 25%, transparent 25%, transparent 50%, var(--bg-elevated-2) 50%, var(--bg-elevated-2) 75%, transparent 75%, transparent);
+      background-size: 16px 16px;
+    }
+    .waypoint-label {
+      padding: 6px 9px 8px;
+      font-family: ui-monospace, "SF Mono", monospace;
+      font-size: 10.5px;
+      line-height: 1.35;
+      word-break: break-word;
+      color: var(--text-muted);
+      border-top: 1px solid var(--border);
+    }
+
+    /* Edge label — tiny floating chip on each shortcut edge that names the
+       action ("tap Withdraw"). Revyl-style; kept compact so it doesn't
+       compete with the screenshots. */
+    .react-flow__edge-textbg {
+      fill: var(--bg-elevated) !important;
+      fill-opacity: 0.92 !important;
+    }
+    .react-flow__edge-text {
+      fill: var(--text-muted) !important;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif !important;
+      font-size: 9.5px !important;
+      font-weight: 500;
+      pointer-events: none;
+    }
+    /* Back-edge styling — shortcuts pointing at entry points (e.g.
+       Profile → Money tab) are de-emphasized so they don't compete with
+       the tree backbone. Kept visible (the user still sees them) but
+       quiet. */
+    .react-flow__edge.back-edge .react-flow__edge-path {
+      stroke: var(--back-edge) !important;
+      stroke-dasharray: 3 4 !important;
+    }
+    .react-flow__edge.back-edge .react-flow__edge-textbg { fill-opacity: 0.6 !important; }
+    .react-flow__edge.back-edge .react-flow__edge-text { fill: var(--text-faint) !important; }
+    .trailhead-node {
+      padding: 7px 14px;
+      border-radius: 999px;
+      background: var(--trailhead-bg);
+      color: var(--trailhead);
+      border: 1px solid var(--trailhead);
+      font-size: 11px;
+      font-weight: 600;
+      font-family: ui-monospace, "SF Mono", monospace;
+      max-width: 240px;
+      text-align: center;
+      line-height: 1.3;
+      word-break: break-word;
+      box-shadow: var(--shadow-card);
+    }
+    .trailhead-node .trailhead-icon { margin-right: 5px; opacity: 0.85; }
+
+    .empty-state {
+      display: flex; align-items: center; justify-content: center;
+      height: 100%; color: var(--text-muted); flex-direction: column; gap: 8px;
+      padding: 32px;
+    }
+    .empty-state h2 { font-size: 16px; font-weight: 500; margin: 0; color: var(--text); }
+    .empty-state p { font-size: 13px; margin: 0; max-width: 380px; text-align: center; line-height: 1.5; }
+
+    /* React Flow edge & control overrides */
+    .react-flow__edge-path { stroke-linecap: round; }
+    .react-flow__controls button {
+      background: var(--bg-elevated) !important; color: var(--text) !important;
+      border-bottom: 1px solid var(--border) !important;
+    }
+    .react-flow__controls button:hover { background: var(--bg-elevated-2) !important; }
+    .react-flow__minimap {
+      background: var(--bg-elevated) !important;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+    }
+    .react-flow__minimap-mask { fill: rgba(0, 0, 0, 0.4); }
+
+    /* ============================================================================
+       SCREENS VIEW — flat gallery grid of all waypoints
+       ============================================================================ */
+    .screens-view { padding: 18px 22px; overflow-y: auto; height: 100%; }
+    .screens-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+      gap: 14px;
+    }
+    .screen-card {
+      background: var(--bg-elevated);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+      cursor: pointer;
+      transition: transform 0.12s, border-color 0.12s, box-shadow 0.12s;
+      box-shadow: var(--shadow-card);
+    }
+    .screen-card:hover {
+      transform: translateY(-2px);
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-bg), var(--shadow-card);
+    }
+    .screen-card.selected {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-bg), var(--shadow-elevated);
+    }
+    .screen-card .screen-thumb {
+      width: 100%; aspect-ratio: 9 / 16;
+      background: #000;
+      object-fit: contain;
+      display: block;
+    }
+    .screen-card .screen-no-thumb {
+      width: 100%; aspect-ratio: 9 / 16;
+      display: flex; align-items: center; justify-content: center;
+      background: var(--bg-elevated-2);
+      color: var(--text-faint); font-size: 11px;
+      background-image: linear-gradient(135deg, var(--bg-elevated-2) 25%, transparent 25%, transparent 50%, var(--bg-elevated-2) 50%, var(--bg-elevated-2) 75%, transparent 75%, transparent);
+      background-size: 16px 16px;
+    }
+    .screen-card .screen-meta {
+      padding: 9px 11px;
+      border-top: 1px solid var(--border);
+    }
+    .screen-card .screen-id {
+      font-family: ui-monospace, "SF Mono", monospace;
+      font-size: 11px;
+      line-height: 1.35;
+      color: var(--text);
+      word-break: break-word;
+    }
+    .screen-card .screen-desc {
+      margin-top: 4px;
+      font-size: 11px;
+      color: var(--text-muted);
+      line-height: 1.4;
+      display: -webkit-box;
+      -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+
+    /* ============================================================================
+       REPORT VIEW — auto-generated user-flow docs
+       ============================================================================ */
+    .report-view { padding: 26px 32px 80px; overflow-y: auto; height: 100%; }
+    .report-title {
+      font-size: 28px; font-weight: 700;
+      letter-spacing: -0.02em; line-height: 1.15;
+      color: var(--text-strong);
+      margin: 0 0 8px;
+      text-transform: uppercase;
+    }
+    .report-subtitle {
+      color: var(--text-muted); font-size: 13px;
+      margin: 0 0 22px; max-width: 700px; line-height: 1.55;
+    }
+    .report-toc {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 8px; margin-bottom: 32px;
+      padding-top: 18px;
+      border-top: 1px solid var(--border);
+    }
+    .report-toc-item {
+      padding: 8px 12px;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      font-size: 11px;
+      color: var(--text-muted);
+      font-family: ui-monospace, "SF Mono", monospace;
+      cursor: pointer;
+      transition: border-color 0.12s, color 0.12s;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .report-toc-item:hover { border-color: var(--accent); color: var(--text); }
+
+    .report-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(440px, 1fr));
+      gap: 14px;
+    }
+    .report-card {
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 20px;
+      transition: border-color 0.12s;
+    }
+    .report-card:hover { border-color: var(--border-active); }
+    .report-card .meta-row {
+      display: flex; align-items: center; gap: 10px;
+      margin-bottom: 10px;
+      font-size: 11px; color: var(--text-faint);
+      font-family: ui-monospace, "SF Mono", monospace;
+      letter-spacing: 0.04em; text-transform: uppercase;
+    }
+    .report-card .meta-num {
+      color: var(--text-muted); font-weight: 600;
+    }
+    .report-card h3 {
+      margin: 0 0 8px;
+      font-size: 16px; font-weight: 600;
+      line-height: 1.35;
+      color: var(--text-strong);
+    }
+    .report-card .description {
+      font-size: 12px; line-height: 1.55;
+      color: var(--text-muted);
+      margin: 0 0 14px;
+    }
+    .report-card .screens-strip {
+      display: flex; gap: 8px;
+      overflow-x: auto;
+      padding-bottom: 6px;
+      margin-bottom: 14px;
+    }
+    .report-card .strip-screen {
+      flex: none;
+      width: 92px;
+      cursor: pointer;
+    }
+    .report-card .strip-screen img,
+    .report-card .strip-screen .strip-no-screenshot {
+      width: 92px;
+      aspect-ratio: 9 / 16;
+      object-fit: contain;
+      background: #000;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+      display: block;
+      transition: transform 0.12s, border-color 0.12s;
+    }
+    .report-card .strip-screen .strip-no-screenshot {
+      background: var(--bg-elevated-2);
+      display: flex; align-items: center; justify-content: center;
+      color: var(--text-faint); font-size: 9px;
+    }
+    .report-card .strip-screen:hover img,
+    .report-card .strip-screen:hover .strip-no-screenshot {
+      border-color: var(--accent); transform: translateY(-1px);
+    }
+    .report-card .strip-label {
+      margin-top: 4px;
+      font-family: ui-monospace, "SF Mono", monospace;
+      font-size: 10px; color: var(--text-muted);
+      overflow: hidden; text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .report-card .id-pills {
+      display: flex; gap: 6px; flex-wrap: wrap;
+    }
+    .report-card .id-pill {
+      padding: 3px 8px;
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      font-family: ui-monospace, "SF Mono", monospace;
+      font-size: 10px; color: var(--text-muted);
+      max-width: 200px;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+  </style>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "react": "https://esm.sh/react@18.3.1",
+      "react-dom": "https://esm.sh/react-dom@18.3.1",
+      "react-dom/client": "https://esm.sh/react-dom@18.3.1/client",
+      "react/jsx-runtime": "https://esm.sh/react@18.3.1/jsx-runtime",
+      "@xyflow/react": "https://esm.sh/@xyflow/react@12?deps=react@18.3.1,react-dom@18.3.1",
+      "@dagrejs/dagre": "https://esm.sh/@dagrejs/dagre@1"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="root">
+    <div class="empty-state"><p>Loading…</p></div>
+  </div>
+
+  <!-- Graph data is inlined as a JSON literal. The Kotlin renderer replaces the
+       JSON_DATA_PLACEHOLDER token with a JSON-encoded WaypointGraphData. Strict
+       JSON (not JS) so kotlinx.serialization's output drops in unmodified. -->
+  <script>
+    window.WAYPOINT_GRAPH_DATA = /*JSON_DATA_PLACEHOLDER_BEGIN*/ null /*JSON_DATA_PLACEHOLDER_END*/;
+  </script>
+
+  <script type="module">
+    import React, { useState, useMemo, useCallback, useEffect } from 'react';
+    import { createRoot } from 'react-dom/client';
+    import {
+      ReactFlow, Background, Controls, MiniMap,
+      MarkerType, Handle, Position,
+    } from '@xyflow/react';
+    import dagre from '@dagrejs/dagre';
+
+    const NODE_WIDTH = 168;
+    const NODE_HEIGHT = 312;     // title + screenshot + id label
+    const TRAILHEAD_WIDTH = 220;
+    const TRAILHEAD_HEIGHT = 36;
+    const TRAILHEAD_NODE_PREFIX = 'trailhead-node::';
+
+    /* ============================================================================
+       LABEL HELPERS
+       ============================================================================
+       Both helpers extract short human-readable labels from the longer YAML
+       descriptions. The renderer falls back to the id when extraction fails.
+    */
+    function shortNodeTitle(description, id) {
+      if (!description) return id.split('/').slice(1).join(' / ') || id;
+      // Prefer the text up to the first " — " or first sentence, capped at ~50 chars.
+      const dash = description.indexOf(' — ');
+      const period = description.indexOf('. ');
+      let cut = -1;
+      if (dash > 0 && (period < 0 || dash < period)) cut = dash;
+      else if (period > 0) cut = period;
+      let title = cut > 0 ? description.substring(0, cut) : description;
+      // Trim leading "<App> Android" / "<App> iOS" prefixes — they're redundant
+      // with the id's pack/platform segment shown below the screenshot.
+      title = title.replace(/^[A-Z][\w\s]*?\b(?:Android|iOS|Web)\b[,\s]*/i, '').trim();
+      title = title.replace(/^[A-Z][a-z]+ App\b[,\s]*/i, '').trim();
+      title = title.replace(/^,\s+/, '').replace(/^—\s+/, '');
+      if (title.length > 56) title = title.substring(0, 53).trim() + '…';
+      // Capitalize first letter for readability.
+      return title.charAt(0).toUpperCase() + title.slice(1);
+    }
+
+    /* ============================================================================
+       MATCHER RULE RENDERING
+       ============================================================================
+       The required[] / forbidden[] entries on a WaypointDefinition each carry a
+       human description and a TrailblazeNodeSelector — a kitchen-sink shape with
+       optional fields per driver (androidAccessibility, iosAxe, web, etc.) plus
+       spatial relationship pieces. The detail panel renders each entry as a
+       short summary with a collapsible YAML-ish dump of just the populated
+       sub-fields, so the user can see "what does the matcher actually look at."
+    */
+    function selectorSummary(selector) {
+      if (!selector || typeof selector !== 'object') return null;
+      // Pick the driver-specific sub-object that's populated. Listed in priority
+      // so the most informative one wins on the rare entry that sets multiple.
+      const drivers = ['androidAccessibility', 'androidMaestro', 'compose', 'iosAxe', 'iosMaestro', 'web'];
+      for (const d of drivers) {
+        if (selector[d] && typeof selector[d] === 'object') {
+          const fields = Object.entries(selector[d])
+            .filter(([_, v]) => v !== null && v !== undefined && v !== '')
+            .map(([k, v]) => k + '=' + (typeof v === 'object' ? JSON.stringify(v) : v))
+            .join(', ');
+          return d + ' { ' + fields + ' }';
+        }
+      }
+      return null;
+    }
+
+    function selectorYaml(selector) {
+      // Prune null/empty fields recursively so the dump shows only the
+      // fields that actually contribute to the match.
+      function prune(v) {
+        if (v === null || v === undefined || v === '') return undefined;
+        if (Array.isArray(v)) {
+          const filtered = v.map(prune).filter(x => x !== undefined);
+          return filtered.length ? filtered : undefined;
+        }
+        if (typeof v === 'object') {
+          const out = {};
+          let any = false;
+          for (const [k, val] of Object.entries(v)) {
+            const p = prune(val);
+            if (p !== undefined) { out[k] = p; any = true; }
+          }
+          return any ? out : undefined;
+        }
+        return v;
+      }
+      const pruned = prune(selector) || {};
+      return JSON.stringify(pruned, null, 2);
+    }
+
+    function renderMatcherEntry(entry, key, isForbidden) {
+      const summary = selectorSummary(entry.selector);
+      const yaml = selectorYaml(entry.selector);
+      return React.createElement('div', {
+        key: 'm-' + key,
+        className: 'matcher-entry' + (isForbidden ? ' forbidden' : ''),
+      },
+        React.createElement('span', { className: 'matcher-marker' }, isForbidden ? '✕' : '✓'),
+        entry.description
+          ? React.createElement('span', { className: 'matcher-desc' }, entry.description)
+          : React.createElement('span', { className: 'matcher-desc matcher-fallback' }, summary || '(unnamed selector)'),
+        entry.minCount && entry.minCount !== 1
+          ? React.createElement('div', { className: 'matcher-meta' }, 'minCount: ' + entry.minCount)
+          : null,
+        React.createElement('details', null,
+          React.createElement('summary', null, summary || 'show selector'),
+          React.createElement('pre', null, yaml),
+        ),
+      );
+    }
+
+    function shortEdgeAction(description, fromId, toId) {
+      if (description) {
+        // Try "tap [the] X button|tab|row|link|card|cell"
+        const m = description.match(/(tap|swipe|click|press|enter|fill|scroll|long[\- ]press|drag)\s+(?:on\s+)?(?:the\s+)?([\w'+\-]+(?:\s+[\w'+\-]+){0,3}?)\s+(?:button|tab|row|link|card|cell|icon|chip|pill|fab|sheet)\b/i);
+        if (m) {
+          const verb = m[1].toLowerCase();
+          const obj = m[2];
+          return verb + ' ' + obj;
+        }
+        // Try "tap [the] X" up to next punctuation/preposition
+        const m2 = description.match(/(tap|swipe|click|press)\s+(?:on\s+)?(?:the\s+)?([\w'+\-]+(?:\s+[\w'+\-]+){0,2})/i);
+        if (m2) return m2[1].toLowerCase() + ' ' + m2[2];
+      }
+      // Fall back: derive from the to-id's last segment
+      const toLeaf = toId.split('/').pop();
+      return '→ ' + toLeaf;
+    }
+
+    /* ============================================================================
+       JOURNEY DERIVATION
+       ============================================================================
+       We don't (yet) carry trail data through to the graph view, so we derive
+       "user journeys" from the (trailhead, shortcut) graph itself: BFS from each
+       trailhead, then pick interesting (trailhead → reachable-waypoint) pairs
+       and reconstruct a path of length 1–4 between them. Each pair becomes one
+       journey card.
+
+       This deliberately mirrors what trail YAMLs would produce when piped through
+       — once trail data lands, swap derivation for the real thing without
+       touching the rendering layer.
+    */
+    function bfsFromTrailhead(trailheadId, startWaypointId, shortcuts, waypointIds) {
+      // shortest-path BFS, returns { waypointId: [pathOfWaypointIds] }
+      const adj = new Map();
+      shortcuts.forEach(sc => {
+        if (!adj.has(sc.from)) adj.set(sc.from, []);
+        adj.get(sc.from).push({ to: sc.to, sc });
+      });
+      const reached = new Map();
+      reached.set(startWaypointId, [startWaypointId]);
+      const queue = [startWaypointId];
+      while (queue.length > 0) {
+        const cur = queue.shift();
+        const next = adj.get(cur) || [];
+        for (const { to } of next) {
+          if (reached.has(to)) continue;
+          if (!waypointIds.has(to)) continue;
+          reached.set(to, [...reached.get(cur), to]);
+          queue.push(to);
+        }
+      }
+      return reached;
+    }
+
+    function categorizeJourney(path) {
+      // Heuristic: pick the badge from the destination's id segments.
+      const last = path[path.length - 1] || '';
+      const lower = last.toLowerCase();
+      if (lower.includes('sign-in') || lower.includes('login') || lower.includes('auth')) return 'AUTH';
+      if (lower.includes('pay') || lower.includes('payment') || lower.includes('checkout')) return 'PAYMENT';
+      if (lower.includes('search') || lower.includes('find')) return 'SEARCH';
+      if (lower.includes('help') || lower.includes('support')) return 'SUPPORT';
+      if (lower.includes('legal') || lower.includes('terms') || lower.includes('privacy')) return 'LEGAL';
+      if (lower.includes('cancel') || lower.includes('delete')) return 'CANCEL';
+      if (lower.includes('profile') || lower.includes('settings') || lower.includes('account')
+          || lower.includes('linked-banks') || lower.includes('banking')) return 'ACCOUNT';
+      return 'NAVIGATE';
+    }
+
+    function deriveJourneys(waypoints, shortcuts, trailheads) {
+      // For each (trailhead, reachable-waypoint with depth >= 1) pair, build a
+      // journey. Skip the trailhead's direct landing screen (depth 0) since
+      // that's a trivial 1-step path. Cap pairs per trailhead to keep the list
+      // navigable on a real-world dataset.
+      const waypointIds = new Set(waypoints.map(w => w.id));
+      const wpById = new Map(waypoints.map(w => [w.id, w]));
+      const journeys = [];
+      let counter = 1;
+      trailheads.forEach(th => {
+        if (!waypointIds.has(th.to)) return;
+        const reached = bfsFromTrailhead(th.id, th.to, shortcuts, waypointIds);
+        // sort destinations by path length (shortest paths first), then by id
+        const dests = [...reached.entries()]
+          .filter(([id]) => id !== th.to) // skip trivial 1-step "trailhead → its own to"
+          .sort((a, b) => a[1].length - b[1].length || a[0].localeCompare(b[0]));
+        dests.forEach(([destId, path]) => {
+          const dest = wpById.get(destId);
+          journeys.push({
+            num: counter++,
+            id: 'journey::' + th.id + '::' + destId,
+            trailheadId: th.id,
+            trailheadLabel: th.id,
+            destinationId: destId,
+            destinationLabel: dest ? (dest.description?.split('.')[0] || dest.id) : destId,
+            path,
+            screens: path.length,
+            category: categorizeJourney(path),
+          });
+        });
+      });
+      return journeys;
+    }
+
+    /* ============================================================================
+       LAYOUT (SCC condensation + BFS-layered + barycentric ordering)
+       ============================================================================
+       The IA insight: bottom-nav peers in a typical mobile app (the four or
+       five top-level tabs every screen can hop between) are mutually reachable
+       via tap-a-tab shortcuts. In graph theory terms, they form a strongly-
+       connected component (SCC). The user's mental model says these are
+       *peers at the same level* — the same row of the layout, not stacked
+       across multiple rows just because dagre/BFS picks one as the entry and
+       finds the others "one hop away."
+
+       Algorithm:
+        1. Compute SCCs over the full forward graph (Tarjan's, no edge filtering).
+        2. Condense: each SCC is a single super-node. Inter-SCC edges form a DAG.
+        3. BFS-shortest the SCC DAG from entry SCCs (those containing entry
+           points) → each SCC gets a depth.
+        4. Every waypoint inherits its SCC's depth.
+        5. Within each depth row, order nodes by barycentric x (avg parent x
+           from upstream SCCs) to minimize crossings.
+        6. Trailheads anchor above their targets, X-aligned to target center.
+
+       Result: the bottom-nav cluster becomes a single horizontal row of peers,
+       drill-downs flow below as the next layer, deeper drill-downs below those.
+    */
+    function computeLayout(waypoints, shortcuts, trailheads) {
+      const waypointIds = new Set(waypoints.map(w => w.id));
+      const entryPoints = new Set();
+      trailheads.forEach(th => {
+        if (waypointIds.has(th.to)) entryPoints.add(th.to);
+      });
+
+      // Full forward adjacency (no filtering — SCCs need every real edge).
+      const childrenOf = new Map();
+      const parentsOf = new Map();
+      waypoints.forEach(wp => {
+        childrenOf.set(wp.id, []);
+        parentsOf.set(wp.id, []);
+      });
+      shortcuts.forEach(sc => {
+        if (!waypointIds.has(sc.from) || !waypointIds.has(sc.to)) return;
+        childrenOf.get(sc.from).push(sc.to);
+        parentsOf.get(sc.to).push(sc.from);
+      });
+
+      // ---- Tarjan's SCC (iterative, to avoid recursion-depth issues) ----
+      const sccs = []; // array of arrays of waypoint ids
+      const sccIndex = new Map();
+      {
+        const ids = new Map();
+        const low = new Map();
+        const onStack = new Set();
+        const tStack = [];
+        let counter = 0;
+        const callStack = [];
+        waypoints.forEach(wp => {
+          if (ids.has(wp.id)) return;
+          callStack.push({ v: wp.id, phase: 'enter', childIdx: 0, lastChild: null });
+          while (callStack.length > 0) {
+            const frame = callStack[callStack.length - 1];
+            const v = frame.v;
+            if (frame.phase === 'enter') {
+              ids.set(v, counter); low.set(v, counter); counter++;
+              tStack.push(v); onStack.add(v);
+              frame.phase = 'loop';
+            }
+            if (frame.phase === 'returned') {
+              low.set(v, Math.min(low.get(v), low.get(frame.lastChild)));
+              frame.phase = 'loop';
+            }
+            const kids = childrenOf.get(v);
+            let recursed = false;
+            while (frame.childIdx < kids.length && !recursed) {
+              const w = kids[frame.childIdx++];
+              if (!ids.has(w)) {
+                frame.lastChild = w;
+                frame.phase = 'returned';
+                callStack.push({ v: w, phase: 'enter', childIdx: 0, lastChild: null });
+                recursed = true;
+              } else if (onStack.has(w)) {
+                low.set(v, Math.min(low.get(v), ids.get(w)));
+              }
+            }
+            if (!recursed) {
+              if (low.get(v) === ids.get(v)) {
+                const scc = [];
+                let w;
+                do { w = tStack.pop(); onStack.delete(w); scc.push(w); } while (w !== v);
+                const sccI = sccs.length;
+                sccs.push(scc);
+                scc.forEach(id => sccIndex.set(id, sccI));
+              }
+              callStack.pop();
+            }
+          }
+        });
+      }
+
+      // ---- Condensation graph (SCC i → SCC j if any forward edge crosses) ----
+      const sccChildren = new Map();
+      sccs.forEach((_, i) => sccChildren.set(i, new Set()));
+      shortcuts.forEach(sc => {
+        if (!waypointIds.has(sc.from) || !waypointIds.has(sc.to)) return;
+        const i = sccIndex.get(sc.from);
+        const j = sccIndex.get(sc.to);
+        if (i !== j) sccChildren.get(i).add(j);
+      });
+
+      // ---- Entry SCCs: those containing at least one trailhead target ----
+      const entrySCCs = new Set();
+      entryPoints.forEach(ep => {
+        if (sccIndex.has(ep)) entrySCCs.add(sccIndex.get(ep));
+      });
+
+      // ---- BFS-shortest in condensation graph to assign SCC depths ----
+      const sccDepth = new Map();
+      const bfsQueue = [];
+      entrySCCs.forEach(i => { sccDepth.set(i, 0); bfsQueue.push(i); });
+      while (bfsQueue.length > 0) {
+        const cur = bfsQueue.shift();
+        const curDepth = sccDepth.get(cur);
+        sccChildren.get(cur).forEach(next => {
+          if (sccDepth.has(next)) return;
+          sccDepth.set(next, curDepth + 1);
+          bfsQueue.push(next);
+        });
+      }
+      // Orphan SCCs (not reachable from any entry) at depth 0
+      sccs.forEach((_, i) => { if (!sccDepth.has(i)) sccDepth.set(i, 0); });
+
+      // ---- Each waypoint inherits its SCC's depth ----
+      const depth = new Map();
+      waypoints.forEach(wp => {
+        depth.set(wp.id, sccDepth.get(sccIndex.get(wp.id)));
+      });
+
+      // Group by depth
+      const byDepth = new Map();
+      depth.forEach((d, id) => {
+        if (!byDepth.has(d)) byDepth.set(d, []);
+        byDepth.get(d).push(id);
+      });
+      const maxDepth = Math.max(...byDepth.keys(), 0);
+
+      // Within-rank ordering: barycentric. Initialize depth 0 alphabetically
+      // (peers within the same SCC slot in next to each other since they share
+      // a pack-id prefix). For each subsequent depth, sort by avg position of
+      // *upstream* parents only — within-SCC same-depth parents are filtered
+      // out so they don't muddy the heuristic.
+      const orderIndex = new Map();
+      // Cluster depth 0 by SCC so SCC members sit together in the row.
+      const dZero = (byDepth.get(0) || []).slice().sort((a, b) => {
+        const sa = sccIndex.get(a), sb = sccIndex.get(b);
+        return sa - sb || a.localeCompare(b);
+      });
+      dZero.forEach((id, i) => orderIndex.set(id, i));
+      byDepth.set(0, dZero);
+      for (let d = 1; d <= maxDepth; d++) {
+        const inRank = (byDepth.get(d) || []).slice();
+        inRank.sort((a, b) => {
+          const aDepth = depth.get(a);
+          const aParents = parentsOf.get(a)
+            .filter(p => depth.get(p) < aDepth)         // upstream only
+            .map(p => orderIndex.get(p))
+            .filter(x => x !== undefined);
+          const bDepth = depth.get(b);
+          const bParents = parentsOf.get(b)
+            .filter(p => depth.get(p) < bDepth)
+            .map(p => orderIndex.get(p))
+            .filter(x => x !== undefined);
+          const aBary = aParents.length ? aParents.reduce((s, x) => s + x, 0) / aParents.length : 0;
+          const bBary = bParents.length ? bParents.reduce((s, x) => s + x, 0) / bParents.length : 0;
+          // Tie-break: same SCC → cluster together; then alphabetical.
+          if (aBary !== bBary) return aBary - bBary;
+          const sa = sccIndex.get(a), sb = sccIndex.get(b);
+          if (sa !== sb) return sa - sb;
+          return a.localeCompare(b);
+        });
+        inRank.forEach((id, i) => orderIndex.set(id, i));
+        byDepth.set(d, inRank);
+      }
+
+      // Final pixel positions. Each rank's row is centered horizontally
+      // around x=0; rows stack downward.
+      const RANKSEP = 92;
+      const NODESEP = 40;
+      const positions = {};
+      let y = 80;
+      for (let d = 0; d <= maxDepth; d++) {
+        const inRank = byDepth.get(d) || [];
+        const totalWidth = inRank.length * NODE_WIDTH + Math.max(0, inRank.length - 1) * NODESEP;
+        let x = -totalWidth / 2;
+        inRank.forEach(id => {
+          positions[id] = { x, y };
+          x += NODE_WIDTH + NODESEP;
+        });
+        y += NODE_HEIGHT + RANKSEP;
+      }
+
+      // Trailheads above their targets, X-aligned to target center, fanning
+      // horizontally if multiple trailheads share a target.
+      const targetGroups = new Map();
+      trailheads.forEach(th => {
+        if (!waypointIds.has(th.to)) return;
+        if (!targetGroups.has(th.to)) targetGroups.set(th.to, []);
+        targetGroups.get(th.to).push(th);
+      });
+      const TRAILHEAD_GAP_ABOVE = 44;
+      const TRAILHEAD_X_GAP = 18;
+      targetGroups.forEach((ths, targetId) => {
+        const target = positions[targetId];
+        if (!target) return;
+        const targetCenterX = target.x + NODE_WIDTH / 2;
+        const totalWidth = ths.length * TRAILHEAD_WIDTH + Math.max(0, ths.length - 1) * TRAILHEAD_X_GAP;
+        const startX = targetCenterX - totalWidth / 2;
+        const yPos = target.y - TRAILHEAD_HEIGHT - TRAILHEAD_GAP_ABOVE;
+        ths.forEach((th, i) => {
+          const x = startX + i * (TRAILHEAD_WIDTH + TRAILHEAD_X_GAP);
+          positions[TRAILHEAD_NODE_PREFIX + th.id] = { x, y: yPos };
+        });
+      });
+
+      return positions;
+    }
+
+    /* ============================================================================
+       NODE COMPONENTS
+       ============================================================================ */
+    function WaypointNode({ data, selected }) {
+      const cls = 'waypoint-node' + (selected ? ' selected' : '');
+      return React.createElement('div', { className: cls, title: data.sourceLabel || data.label },
+        React.createElement(Handle, {
+          type: 'target', position: Position.Top, isConnectable: false,
+          style: { opacity: 0, top: 0 },
+        }),
+        // Title strip — short human-readable name, derived from the description.
+        // Falls back to the id-leaf when description is missing.
+        React.createElement('div', { className: 'waypoint-title' }, data.title),
+        data.screenshotDataUri
+          ? React.createElement('img', { src: data.screenshotDataUri, className: 'waypoint-screenshot', alt: data.label })
+          : React.createElement('div', { className: 'waypoint-no-screenshot' }, '(no screenshot)'),
+        React.createElement('div', { className: 'waypoint-label' }, data.label),
+        React.createElement(Handle, {
+          type: 'source', position: Position.Bottom, isConnectable: false,
+          style: { opacity: 0, bottom: 0 },
+        }),
+      );
+    }
+
+    function TrailheadNode({ data }) {
+      return React.createElement('div', { title: data.description || data.label },
+        React.createElement('div', { className: 'trailhead-node' },
+          React.createElement('span', { className: 'trailhead-icon' }, '✈'),
+          data.label,
+        ),
+        React.createElement(Handle, {
+          type: 'source', position: Position.Bottom, isConnectable: false,
+          style: { opacity: 0 },
+        }),
+      );
+    }
+
+    const nodeTypes = { waypoint: WaypointNode, trailhead: TrailheadNode };
+
+    /* ============================================================================
+       MAP VIEW
+       ============================================================================ */
+    function MapView({ filtered, selectedWaypoint, onSelectWaypoint, themeKey }) {
+      const positions = useMemo(
+        () => computeLayout(filtered.waypoints, filtered.shortcuts, filtered.trailheads),
+        [filtered.waypoints, filtered.shortcuts, filtered.trailheads],
+      );
+
+      const nodes = useMemo(() => [
+        ...filtered.waypoints.map(wp => ({
+          id: wp.id,
+          type: 'waypoint',
+          position: positions[wp.id] || { x: 0, y: 0 },
+          selected: selectedWaypoint === wp.id,
+          data: {
+            label: wp.id,
+            title: shortNodeTitle(wp.description, wp.id),
+            screenshotDataUri: wp.screenshotDataUri,
+            sourceLabel: wp.sourceLabel,
+          },
+        })),
+        ...filtered.trailheads.map(th => ({
+          id: TRAILHEAD_NODE_PREFIX + th.id,
+          type: 'trailhead',
+          position: positions[TRAILHEAD_NODE_PREFIX + th.id] || { x: 0, y: 0 },
+          data: { label: th.id, description: th.description },
+          draggable: false, selectable: false,
+        })),
+      ], [filtered.waypoints, filtered.trailheads, positions, selectedWaypoint]);
+
+      // Compute the entry-point set once for edge classification — same set
+      // the layout uses to drop back-edges from dagre input. Here we use it
+      // to *style* back-edges differently (faded, dashed) so the user can
+      // still see them but they don't compete with the tree backbone.
+      const entryPoints = useMemo(
+        () => new Set(filtered.trailheads.map(th => th.to)),
+        [filtered.trailheads],
+      );
+      const edges = useMemo(() => [
+        ...filtered.shortcuts.map(sc => {
+          const isBack = entryPoints.has(sc.to);
+          return {
+            id: 'shortcut::' + sc.id,
+            source: sc.from,
+            target: sc.to,
+            type: 'smoothstep',
+            className: isBack ? 'back-edge' : '',
+            // Action label on the edge — short text like "tap Withdraw" —
+            // extracted from the shortcut's description. Hide on back-edges
+            // since the action there is implicit (a back gesture / tab tap).
+            label: isBack ? '' : shortEdgeAction(sc.description, sc.from, sc.to),
+            labelBgPadding: [6, 3],
+            labelBgBorderRadius: 4,
+            markerEnd: { type: MarkerType.ArrowClosed, color: isBack ? 'var(--back-edge)' : 'var(--tree-edge)' },
+            style: {
+              stroke: isBack ? 'var(--back-edge)' : 'var(--tree-edge)',
+              strokeWidth: isBack ? 1 : 1.25,
+            },
+          };
+        }),
+        ...filtered.trailheads.map(th => ({
+          id: 'trailhead::' + th.id,
+          source: TRAILHEAD_NODE_PREFIX + th.id,
+          target: th.to,
+          type: 'smoothstep',
+          label: 'entry',
+          labelBgPadding: [6, 3],
+          labelBgBorderRadius: 4,
+          markerEnd: { type: MarkerType.ArrowClosed, color: 'var(--trailhead)' },
+          style: { stroke: 'var(--trailhead)', strokeWidth: 1.5, strokeDasharray: '6 6' },
+        })),
+      ], [filtered.shortcuts, filtered.trailheads]);
+
+      const onNodeClick = useCallback((_, node) => {
+        if (node.type === 'waypoint') onSelectWaypoint(node.id);
+      }, [onSelectWaypoint]);
+
+      return React.createElement(ReactFlow, {
+        // Re-key on filter/theme change so React Flow flushes layout state and
+        // node positions don't tween between configurations.
+        key: themeKey,
+        nodes, edges, nodeTypes,
+        fitView: true,
+        fitViewOptions: { padding: 0.18 },
+        minZoom: 0.1,
+        nodesConnectable: false,
+        edgesFocusable: false,
+        onNodeClick,
+      },
+        React.createElement(Background, { gap: 24, size: 1, color: 'rgba(220,226,240,0.05)' }),
+        React.createElement(Controls, { showInteractive: false }),
+        React.createElement(MiniMap, { pannable: true, zoomable: true }),
+      );
+    }
+
+    /* ============================================================================
+       SCREENS VIEW — flat gallery
+       ============================================================================ */
+    function ScreensView({ filtered, selectedWaypoint, onSelectWaypoint }) {
+      // Stable order: alphabetical by id. Waypoints with screenshots float above
+      // those without — gallery views look bad with empty placeholders mixed in.
+      const sorted = useMemo(() => {
+        return [...filtered.waypoints].sort((a, b) => {
+          const aHas = !!a.screenshotDataUri, bHas = !!b.screenshotDataUri;
+          if (aHas !== bHas) return aHas ? -1 : 1;
+          return a.id.localeCompare(b.id);
+        });
+      }, [filtered.waypoints]);
+      return React.createElement('div', { className: 'screens-view' },
+        React.createElement('div', { className: 'screens-grid' },
+          sorted.map(wp =>
+            React.createElement('div', {
+              key: wp.id,
+              className: 'screen-card' + (selectedWaypoint === wp.id ? ' selected' : ''),
+              onClick: () => onSelectWaypoint(wp.id),
+              title: wp.sourceLabel || wp.id,
+            },
+              wp.screenshotDataUri
+                ? React.createElement('img', { src: wp.screenshotDataUri, className: 'screen-thumb', alt: wp.id })
+                : React.createElement('div', { className: 'screen-no-thumb' }, '(no screenshot)'),
+              React.createElement('div', { className: 'screen-meta' },
+                React.createElement('div', { className: 'screen-id' }, wp.id),
+                wp.description ? React.createElement('div', { className: 'screen-desc' }, wp.description) : null,
+              ),
+            )
+          ),
+        ),
+      );
+    }
+
+    /* ============================================================================
+       REPORT VIEW — auto-generated user-flow docs
+       ============================================================================ */
+    function ReportView({ filtered, journeys, onSelectWaypoint }) {
+      const wpById = useMemo(
+        () => new Map(filtered.waypoints.map(w => [w.id, w])),
+        [filtered.waypoints],
+      );
+      const targets = [...new Set(filtered.waypoints.map(w => w.id.split('/')[0]))];
+      const titleScope = targets.length === 1 ? targets[0] : 'app';
+
+      return React.createElement('div', { className: 'report-view' },
+        React.createElement('h1', { className: 'report-title' }, titleScope + ' user flows'),
+        React.createElement('p', { className: 'report-subtitle' },
+          'Auto-derived from the waypoint navigation graph: every reachable (trailhead → screen) pair across ',
+          React.createElement('strong', null, filtered.waypoints.length + ' screen' + (filtered.waypoints.length === 1 ? '' : 's')),
+          ', generated from your test corpus and refreshed on every run. Use these for UX teardown work, QA coverage planning, and AI agent navigation context.',
+        ),
+
+        // Table of contents
+        journeys.length > 0 ? React.createElement('div', { className: 'report-toc' },
+          journeys.slice(0, 12).map(j =>
+            React.createElement('div', {
+              key: j.id, className: 'report-toc-item', title: j.destinationLabel,
+            }, (j.num + '').padStart(2, '0') + '  ' + j.destinationId)
+          ),
+        ) : null,
+
+        // Cards
+        React.createElement('div', { className: 'report-grid' },
+          journeys.map(j => {
+            const screensInPath = j.path.map(id => wpById.get(id)).filter(Boolean);
+            return React.createElement('div', { key: j.id, className: 'report-card' },
+              React.createElement('div', { className: 'meta-row' },
+                React.createElement('span', { className: 'meta-num' }, (j.num + '').padStart(2, '0')),
+                React.createElement('span', null, 'Path'),
+                React.createElement('span', { className: 'journey-badge ' + j.category }, j.category),
+                React.createElement('span', null, j.screens + ' screen' + (j.screens === 1 ? '' : 's')),
+              ),
+              React.createElement('h3', null, j.destinationLabel),
+              React.createElement('p', { className: 'description' },
+                'From ' + j.trailheadLabel + ' → ' + j.destinationId + '. ' +
+                'Walks ' + j.screens + ' mapped app ' + (j.screens === 1 ? 'screen' : 'screens') + '. ' +
+                'Use this path for mobile UX teardown work, QA coverage planning, and AI agent navigation context.',
+              ),
+              screensInPath.length > 0 ? React.createElement('div', { className: 'screens-strip' },
+                screensInPath.map((wp, i) =>
+                  React.createElement('div', {
+                    key: i, className: 'strip-screen',
+                    onClick: () => onSelectWaypoint(wp.id),
+                  },
+                    wp.screenshotDataUri
+                      ? React.createElement('img', { src: wp.screenshotDataUri, alt: wp.id })
+                      : React.createElement('div', { className: 'strip-no-screenshot' }, '(no screenshot)'),
+                    React.createElement('div', { className: 'strip-label' }, wp.id),
+                  ),
+                ),
+              ) : null,
+              React.createElement('div', { className: 'id-pills' },
+                screensInPath.map((wp, i) =>
+                  React.createElement('div', { key: i, className: 'id-pill' }, wp.id)
+                ),
+              ),
+            );
+          }),
+        ),
+      );
+    }
+
+    /* ============================================================================
+       SIDEBAR — User Journeys list
+       ============================================================================ */
+    function JourneysSidebar({ journeys, selectedJourneyId, onSelectJourney, mode }) {
+      // The sidebar contributes to MAP and REPORT modes. SCREENS is the gallery
+      // view — a journeys panel next to it would compete visually for no gain.
+      if (mode === 'screens') return null;
+      return React.createElement('aside', { className: 'sidebar' },
+        React.createElement('div', { className: 'sidebar-header' },
+          React.createElement('h2', null, 'User Journeys'),
+          React.createElement('div', { className: 'sub' }, journeys.length + ' path' + (journeys.length === 1 ? '' : 's') + ' discovered'),
+        ),
+        React.createElement('div', { className: 'sidebar-list' },
+          journeys.map(j =>
+            React.createElement('div', {
+              key: j.id,
+              className: 'journey-item' + (selectedJourneyId === j.id ? ' active' : ''),
+              onClick: () => onSelectJourney(j),
+            },
+              React.createElement('div', { className: 'journey-row1' },
+                React.createElement('span', { className: 'journey-badge ' + j.category }, j.category),
+                React.createElement('span', { className: 'journey-screens' }, j.screens + ' scr'),
+              ),
+              React.createElement('div', { className: 'journey-row2' }, j.destinationLabel),
+              React.createElement('div', { className: 'journey-row3' }, 'via ' + j.trailheadLabel),
+            )
+          ),
+        ),
+      );
+    }
+
+    /* ============================================================================
+       DETAIL PANEL — right-side click-to-explore
+       ============================================================================ */
+    function DetailPanel({ waypoint, incoming, outgoing, trailheads, onClose, onSelectWaypoint, allWaypoints }) {
+      if (!waypoint) return null;
+      const wpById = new Map(allWaypoints.map(w => [w.id, w]));
+      return React.createElement('aside', { className: 'detail-panel' },
+        React.createElement('div', { className: 'detail-panel-header' },
+          React.createElement('div', { style: { flex: 1 } },
+            React.createElement('h3', null, waypoint.description?.split('.')[0] || waypoint.id),
+            React.createElement('div', { className: 'id' }, waypoint.id),
+          ),
+          React.createElement('button', { className: 'detail-close', onClick: onClose, 'aria-label': 'Close' }, '×'),
+        ),
+        React.createElement('div', { className: 'detail-content' },
+          waypoint.screenshotDataUri
+            ? React.createElement('div', { className: 'detail-screenshot' },
+                React.createElement('img', { src: waypoint.screenshotDataUri, alt: waypoint.id }),
+              )
+            : null,
+          waypoint.description
+            ? React.createElement('div', { className: 'detail-section' },
+                React.createElement('h4', null, 'Description'),
+                React.createElement('p', null, waypoint.description),
+              )
+            : null,
+          // The "how does the matcher know this is <id>?" sections — required
+          // selectors that must ALL match, plus forbidden selectors that must
+          // NOT match. These are the waypoint's identity, drawn straight from
+          // the *.waypoint.yaml so what's shown is exactly what the runtime
+          // matcher checks.
+          (waypoint.required && waypoint.required.length > 0)
+            ? React.createElement('div', { className: 'detail-section' },
+                React.createElement('h4', null,
+                  'Required (' + waypoint.required.length + ')',
+                ),
+                React.createElement('p', { style: { fontSize: '11px', color: 'var(--text-muted)', marginBottom: '8px' } },
+                  'All of these must match the captured tree for the waypoint to be considered identified.',
+                ),
+                ...waypoint.required.map((entry, i) => renderMatcherEntry(entry, i, false)),
+              )
+            : null,
+          (waypoint.forbidden && waypoint.forbidden.length > 0)
+            ? React.createElement('div', { className: 'detail-section' },
+                React.createElement('h4', null,
+                  'Forbidden (' + waypoint.forbidden.length + ')',
+                ),
+                React.createElement('p', { style: { fontSize: '11px', color: 'var(--text-muted)', marginBottom: '8px' } },
+                  'If any of these match, the waypoint is rejected — used to disambiguate visual siblings.',
+                ),
+                ...waypoint.forbidden.map((entry, i) => renderMatcherEntry(entry, i, true)),
+              )
+            : null,
+          waypoint.platform
+            ? React.createElement('div', { className: 'detail-section' },
+                React.createElement('h4', null, 'Platform'),
+                React.createElement('p', null, waypoint.platform),
+              )
+            : null,
+          trailheads.length > 0
+            ? React.createElement('div', { className: 'detail-section' },
+                React.createElement('h4', null, 'Reached from (trailheads)'),
+                React.createElement('div', { className: 'detail-edges' },
+                  trailheads.map(th =>
+                    React.createElement('div', { key: th.id, className: 'detail-edge' },
+                      React.createElement('span', { className: 'arrow' }, '✈'),
+                      React.createElement('span', { className: 'target-id' }, th.id),
+                      th.description ? React.createElement('span', { className: 'desc' }, th.description) : null,
+                    )
+                  ),
+                ),
+              )
+            : null,
+          incoming.length > 0
+            ? React.createElement('div', { className: 'detail-section' },
+                React.createElement('h4', null, 'Incoming shortcuts'),
+                React.createElement('div', { className: 'detail-edges' },
+                  incoming.map(sc =>
+                    React.createElement('div', {
+                      key: sc.id, className: 'detail-edge',
+                      onClick: () => onSelectWaypoint(sc.from),
+                    },
+                      React.createElement('span', { className: 'target-id' }, sc.from),
+                      React.createElement('span', { className: 'arrow' }, '→'),
+                      React.createElement('span', { className: 'target-id' }, 'here'),
+                      sc.description ? React.createElement('span', { className: 'desc' }, sc.description) : null,
+                    )
+                  ),
+                ),
+              )
+            : null,
+          outgoing.length > 0
+            ? React.createElement('div', { className: 'detail-section' },
+                React.createElement('h4', null, 'Outgoing shortcuts'),
+                React.createElement('div', { className: 'detail-edges' },
+                  outgoing.map(sc =>
+                    React.createElement('div', {
+                      key: sc.id, className: 'detail-edge',
+                      onClick: () => onSelectWaypoint(sc.to),
+                    },
+                      React.createElement('span', { className: 'target-id' }, 'here'),
+                      React.createElement('span', { className: 'arrow' }, '→'),
+                      React.createElement('span', { className: 'target-id' }, sc.to),
+                      sc.description ? React.createElement('span', { className: 'desc' }, sc.description) : null,
+                    )
+                  ),
+                ),
+              )
+            : null,
+          waypoint.sourceLabel
+            ? React.createElement('div', { className: 'detail-source' }, waypoint.sourceLabel)
+            : null,
+        ),
+      );
+    }
+
+    /* ============================================================================
+       APP
+       ============================================================================ */
+    function App({ data }) {
+      const [mode, setMode] = useState('map');                  // 'map' | 'screens' | 'report'
+      const [selectedTarget, setSelectedTarget] = useState(null);
+      const [selectedPlatform, setSelectedPlatform] = useState(null);
+      const [selectedWaypoint, setSelectedWaypoint] = useState(null);
+      const [selectedJourneyId, setSelectedJourneyId] = useState(null);
+      const [theme, setTheme] = useState('dark');
+
+      // Theme is mirrored to <html data-theme> so CSS vars cascade everywhere.
+      useEffect(() => {
+        document.documentElement.setAttribute('data-theme', theme);
+      }, [theme]);
+
+      // ----- target/platform filters -----
+      const targets = useMemo(() => {
+        const counts = new Map();
+        data.waypoints.forEach(wp => {
+          const t = wp.id.split('/')[0];
+          counts.set(t, (counts.get(t) || 0) + 1);
+        });
+        return [...counts.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+      }, [data.waypoints]);
+
+      const platforms = useMemo(() => {
+        const counts = new Map();
+        data.waypoints.forEach(wp => {
+          if (!wp.platform) return;
+          if (selectedTarget && wp.id.split('/')[0] !== selectedTarget) return;
+          counts.set(wp.platform, (counts.get(wp.platform) || 0) + 1);
+        });
+        return [...counts.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+      }, [data.waypoints, selectedTarget]);
+
+      useEffect(() => {
+        if (selectedPlatform && !platforms.some(([p]) => p === selectedPlatform)) {
+          setSelectedPlatform(null);
+        }
+      }, [platforms, selectedPlatform]);
+
+      const filtered = useMemo(() => {
+        if (!selectedTarget && !selectedPlatform) return data;
+        const matches = (wp) => {
+          if (selectedTarget && wp.id.split('/')[0] !== selectedTarget) return false;
+          if (selectedPlatform && wp.platform !== selectedPlatform) return false;
+          return true;
+        };
+        const waypoints = data.waypoints.filter(matches);
+        const wpIds = new Set(waypoints.map(wp => wp.id));
+        const shortcuts = data.shortcuts.filter(sc => wpIds.has(sc.from) && wpIds.has(sc.to));
+        const trailheads = data.trailheads.filter(th => wpIds.has(th.to));
+        return { waypoints, shortcuts, trailheads, generatedNote: data.generatedNote };
+      }, [data, selectedTarget, selectedPlatform]);
+
+      const journeys = useMemo(
+        () => deriveJourneys(filtered.waypoints, filtered.shortcuts, filtered.trailheads),
+        [filtered.waypoints, filtered.shortcuts, filtered.trailheads],
+      );
+
+      // ----- detail-panel data -----
+      const selectedWaypointObj = useMemo(
+        () => selectedWaypoint ? data.waypoints.find(w => w.id === selectedWaypoint) : null,
+        [selectedWaypoint, data.waypoints],
+      );
+      const incomingShortcuts = useMemo(
+        () => selectedWaypoint ? data.shortcuts.filter(sc => sc.to === selectedWaypoint) : [],
+        [selectedWaypoint, data.shortcuts],
+      );
+      const outgoingShortcuts = useMemo(
+        () => selectedWaypoint ? data.shortcuts.filter(sc => sc.from === selectedWaypoint) : [],
+        [selectedWaypoint, data.shortcuts],
+      );
+      const incomingTrailheads = useMemo(
+        () => selectedWaypoint ? data.trailheads.filter(th => th.to === selectedWaypoint) : [],
+        [selectedWaypoint, data.trailheads],
+      );
+
+      // ----- selecting a journey jumps to its destination on the map -----
+      const onSelectJourney = useCallback((j) => {
+        setSelectedJourneyId(j.id);
+        setSelectedWaypoint(j.destinationId);
+        // If we're not in MAP mode, switching there is more useful than staying.
+        if (mode === 'screens') setMode('map');
+      }, [mode]);
+
+      // ----- header strings -----
+      const totalWaypoints = data.waypoints.length;
+      const totalShortcuts = data.shortcuts.length;
+      const totalTrailheads = data.trailheads.length;
+      const scopeLabel = [selectedTarget, selectedPlatform].filter(Boolean).join(' / ') || 'all';
+
+      return React.createElement(React.Fragment, null,
+        // ---- Header ----
+        React.createElement('header', { className: 'app-header' },
+          React.createElement('div', { className: 'brand' },
+            React.createElement('span', { className: 'logo' }, 'T'),
+            'Trailblaze',
+          ),
+          React.createElement('span', { className: 'scope' }, 'Waypoint map · ' + scopeLabel),
+          React.createElement('div', { className: 'mode-toggle' },
+            React.createElement('button', {
+              className: 'mode-button' + (mode === 'map' ? ' active' : ''),
+              onClick: () => setMode('map'),
+            }, 'Map'),
+            React.createElement('button', {
+              className: 'mode-button' + (mode === 'screens' ? ' active' : ''),
+              onClick: () => setMode('screens'),
+            }, 'Screens',
+              React.createElement('span', { className: 'count' }, filtered.waypoints.length),
+            ),
+            React.createElement('button', {
+              className: 'mode-button' + (mode === 'report' ? ' active' : ''),
+              onClick: () => setMode('report'),
+            }, 'Report'),
+          ),
+          React.createElement('div', { className: 'header-counts' },
+            React.createElement('span', { className: 'count-pair' },
+              React.createElement('span', { className: 'num' }, filtered.waypoints.length),
+              'screens',
+            ),
+            React.createElement('span', { className: 'count-pair' },
+              React.createElement('span', { className: 'num' }, journeys.length),
+              'paths',
+            ),
+            React.createElement('span', { className: 'count-pair' },
+              React.createElement('span', { className: 'num' }, filtered.shortcuts.length),
+              'shortcuts',
+            ),
+          ),
+          React.createElement('button', {
+            className: 'theme-toggle',
+            onClick: () => setTheme(t => t === 'dark' ? 'light' : 'dark'),
+            'aria-label': 'Toggle theme',
+            title: 'Toggle dark/light mode',
+          }, theme === 'dark' ? '☀' : '☾'),
+        ),
+
+        // ---- Subheader: filter pills + agentic-angle pill ----
+        React.createElement('div', { className: 'subheader' },
+          targets.length > 1 ? React.createElement(React.Fragment, null,
+            React.createElement('span', { className: 'filter-label' }, 'Target'),
+            React.createElement('button', {
+              className: 'filter-pill' + (selectedTarget === null ? ' active' : ''),
+              onClick: () => setSelectedTarget(null),
+            }, 'All',
+              React.createElement('span', { className: 'count' }, totalWaypoints),
+            ),
+            ...targets.map(([t, count]) =>
+              React.createElement('button', {
+                key: 't::' + t,
+                className: 'filter-pill' + (selectedTarget === t ? ' active' : ''),
+                onClick: () => setSelectedTarget(t),
+              }, t,
+                React.createElement('span', { className: 'count' }, count),
+              ),
+            ),
+          ) : null,
+          platforms.length > 1 ? React.createElement(React.Fragment, null,
+            React.createElement('span', { className: 'filter-label', style: { marginLeft: '12px' } }, 'Platform'),
+            React.createElement('button', {
+              className: 'filter-pill' + (selectedPlatform === null ? ' active' : ''),
+              onClick: () => setSelectedPlatform(null),
+            }, 'All'),
+            ...platforms.map(([p, count]) =>
+              React.createElement('button', {
+                key: 'p::' + p,
+                className: 'filter-pill' + (selectedPlatform === p ? ' active' : ''),
+                onClick: () => setSelectedPlatform(p),
+              }, p,
+                React.createElement('span', { className: 'count' }, count),
+              ),
+            ),
+          ) : null,
+          // Live-dataset pill on the right. The dual-source story (human-authored
+          // canonical waypoints + agent-discovered screens) lives in the tooltip
+          // so the chrome stays factual and avoids competitive-claim phrasing.
+          React.createElement('div', {
+            className: 'agentic-pill',
+            title:
+              'Living waypoint dataset.\n' +
+              'Authored: humans declare canonical waypoints by editing *.waypoint.yaml.\n' +
+              'Discovered: agents propose new waypoints by walking real sessions.\n' +
+              'Both flow into the same map.\n' +
+              (data.generatedNote || ''),
+          },
+            React.createElement('span', { className: 'agentic-icon' }),
+            React.createElement('span', null, 'Living dataset · ',
+              React.createElement('strong', null, totalWaypoints + ' waypoint' + (totalWaypoints === 1 ? '' : 's')),
+              ' · authored + discovered',
+            ),
+          ),
+        ),
+
+        // ---- Main content area ----
+        React.createElement('div', { className: 'main' },
+          React.createElement(JourneysSidebar, {
+            journeys,
+            selectedJourneyId,
+            onSelectJourney,
+            mode,
+          }),
+          React.createElement('div', { className: 'canvas-area' },
+            mode === 'map' ? React.createElement(MapView, {
+              filtered, selectedWaypoint,
+              onSelectWaypoint: setSelectedWaypoint,
+              themeKey: theme + ':' + (selectedTarget || 'all') + ':' + (selectedPlatform || 'all'),
+            }) : null,
+            mode === 'screens' ? React.createElement(ScreensView, {
+              filtered, selectedWaypoint,
+              onSelectWaypoint: setSelectedWaypoint,
+            }) : null,
+            mode === 'report' ? React.createElement(ReportView, {
+              filtered, journeys,
+              onSelectWaypoint: setSelectedWaypoint,
+            }) : null,
+          ),
+          (mode !== 'report' && selectedWaypoint) ? React.createElement(DetailPanel, {
+            waypoint: selectedWaypointObj,
+            incoming: incomingShortcuts,
+            outgoing: outgoingShortcuts,
+            trailheads: incomingTrailheads,
+            allWaypoints: data.waypoints,
+            onClose: () => setSelectedWaypoint(null),
+            onSelectWaypoint: setSelectedWaypoint,
+          }) : null,
+        ),
+      );
+    }
+
+    function EmptyState({ message }) {
+      return React.createElement('div', { className: 'empty-state' },
+        React.createElement('h2', null, 'No waypoints to display'),
+        React.createElement('p', null, message),
+      );
+    }
+
+    const data = window.WAYPOINT_GRAPH_DATA;
+    const root = createRoot(document.getElementById('root'));
+    if (!data || !Array.isArray(data.waypoints) || data.waypoints.length === 0) {
+      root.render(React.createElement(EmptyState, {
+        message: data
+          ? 'The graph data was loaded but contained no waypoints.'
+          : 'No graph data was provided. The page expects window.WAYPOINT_GRAPH_DATA to be set.',
+      }));
+    } else {
+      root.render(React.createElement(App, { data }));
+    }
+  </script>
+</body>
+</html>

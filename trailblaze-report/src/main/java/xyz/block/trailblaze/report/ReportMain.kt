@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.report
 
 import com.github.ajalt.clikt.core.main
+import xyz.block.trailblaze.api.TrailblazeImageFormat
 import xyz.block.trailblaze.llm.LlmLogCostEnricher
 import xyz.block.trailblaze.llm.config.BuiltInLlmModelRegistry
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
@@ -257,7 +258,11 @@ fun moveJsonFilesToSessionDirs(logsDir: File) {
   }
 }
 
-private val IMAGE_EXTENSIONS = setOf("png", "jpg", "jpeg", "webp")
+// Canonical screenshot file extensions, derived from [TrailblazeImageFormat]. Adding a
+// new image format anywhere in the codebase makes it visible to this scanner
+// automatically. The extra "jpeg" entry covers the long-form JPEG extension that
+// TrailblazeImageFormat normalizes to "jpg" for output.
+private val IMAGE_EXTENSIONS = TrailblazeImageFormat.entries.map { it.fileExtension }.toSet() + setOf("jpeg")
 
 fun moveScreenshotsToSessionDirs(logsDir: File) {
   val imageFiles = logsDir.listFiles()?.filter { it.extension in IMAGE_EXTENSIONS } ?: emptyList()

@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
@@ -37,6 +38,7 @@ import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.waypoint.WaypointDefinition
 import xyz.block.trailblaze.cli.WaypointDiscovery
+import xyz.block.trailblaze.config.ToolYamlLoader
 import xyz.block.trailblaze.config.project.LoadedTrailblazePackManifest
 import xyz.block.trailblaze.config.project.PackSource
 import xyz.block.trailblaze.config.project.TrailblazePackManifestLoader
@@ -51,6 +53,8 @@ import xyz.block.trailblaze.ui.waypoints.SegmentDisplayItem
 import xyz.block.trailblaze.ui.waypoints.SessionLensPanel
 import xyz.block.trailblaze.ui.waypoints.SessionLensResult
 import xyz.block.trailblaze.ui.waypoints.SessionLensState
+import xyz.block.trailblaze.ui.waypoints.ShortcutDisplayItem
+import xyz.block.trailblaze.ui.waypoints.TrailheadDisplayItem
 import xyz.block.trailblaze.ui.waypoints.WaypointDisplayItem
 import xyz.block.trailblaze.ui.waypoints.WaypointExample
 import xyz.block.trailblaze.ui.waypoints.WaypointVisualizer
@@ -76,6 +80,12 @@ fun WaypointsTabComposable(
   logsRepo: LogsRepo,
   availableTargets: Set<TrailblazeHostAppTarget> = emptySet(),
   appIconProvider: AppIconProvider = AppIconProvider.DefaultAppIconProvider,
+  /**
+   * URL of the daemon's `/waypoints/graph` endpoint, used by the toolbar's
+   * "Open Map view →" button. Optional so unit tests / future non-Block hosts can
+   * skip the map view entirely; null hides the button.
+   */
+  graphViewUrl: String? = null,
   onChangeDirectory: ((String) -> Unit)? = null,
 ) {
   var rootPath by remember(initialRootPath) { mutableStateOf(initialRootPath) }
@@ -101,6 +111,23 @@ fun WaypointsTabComposable(
       loadWaypoints(File(rootPath))
     }
     isLoading = false
+  }
+
+  // Authored shortcuts and trailheads — sourced from `*.shortcut.yaml` and
+  // `*.trailhead.yaml` files that `ToolYamlLoader.discoverShortcutsAndTrailheads()`
+  // returns (the loader returns configs whose parsed content carries a `shortcut:` or
+  // `trailhead:` metadata block, regardless of class- vs tools-mode body — both are
+  // valid edge metadata as far as the graph is concerned). Today's repo carries zero
+  // of these so the result is normally empty, but the wiring is here so the moment any
+  // author commits one it shows up on the Map view automatically.
+  var shortcuts by remember { mutableStateOf<List<ShortcutDisplayItem>>(emptyList()) }
+  var trailheads by remember { mutableStateOf<List<TrailheadDisplayItem>>(emptyList()) }
+  LaunchedEffect(refreshKey) {
+    val (loadedShortcuts, loadedTrailheads) = withContext(Dispatchers.IO) {
+      loadShortcutsAndTrailheads()
+    }
+    shortcuts = loadedShortcuts
+    trailheads = loadedTrailheads
   }
 
   // Re-extract on any change to (selectedSessionId, waypoint definitions) so a refresh
@@ -138,6 +165,15 @@ fun WaypointsTabComposable(
         }
       } else null,
       onRefresh = { refreshKey += 1 },
+      onOpenMapView = graphViewUrl?.let { url ->
+        {
+          // Pass the current root path so the browser view scopes to whatever
+          // directory the user has currently picked, not the daemon's startup
+          // default. URL-encoded so spaces / special chars survive.
+          val encodedRoot = java.net.URLEncoder.encode(rootPath, Charsets.UTF_8)
+          xyz.block.trailblaze.ui.TrailblazeDesktopUtil.openInDefaultBrowser("$url?root=$encodedRoot")
+        }
+      },
     )
 
     val result = loadResult
@@ -189,6 +225,8 @@ fun WaypointsTabComposable(
           availableTargets = availableTargets,
           appIconProvider = appIconProvider,
           matchedStepsByWaypoint = matchedStepsByWaypoint,
+          shortcuts = shortcuts,
+          trailheads = trailheads,
         )
       }
     }
@@ -200,6 +238,13 @@ private fun WaypointsToolbar(
   rootPath: String,
   onChangeDirectory: (() -> Unit)?,
   onRefresh: () -> Unit,
+  /**
+   * Optional callback to open the navigation graph view in the user's default browser.
+   * Null hides the chip — typically because the host didn't supply a graph URL (e.g.
+   * unit tests or non-Block embeddings). The button label intentionally trails an
+   * arrow ("Open Map view →") so users know it leaves the desktop app.
+   */
+  onOpenMapView: (() -> Unit)?,
 ) {
   Row(
     modifier = Modifier
@@ -239,6 +284,15 @@ private fun WaypointsToolbar(
         Icon(Icons.Filled.Refresh, contentDescription = null)
       },
     )
+    if (onOpenMapView != null) {
+      AssistChip(
+        onClick = onOpenMapView,
+        label = { Text("Open Map view →") },
+        leadingIcon = {
+          Icon(Icons.Filled.Map, contentDescription = null)
+        },
+      )
+    }
   }
 }
 
@@ -288,7 +342,7 @@ internal data class WaypointLoadOutput(
  */
 private const val MAX_FAILURE_MESSAGES_PER_SOURCE = 25
 
-private fun loadWaypoints(root: File): WaypointLoadOutput {
+internal fun loadWaypoints(root: File): WaypointLoadOutput {
   val discovery = WaypointDiscovery.discover(root)
   val idToFile = if (root.isDirectory) buildIdToFileMap(root) else emptyMap()
   val exampleFailures = mutableListOf<String>()
@@ -588,6 +642,52 @@ private fun pickDirectory(start: File): File? {
     JFileChooser.APPROVE_OPTION -> chooser.selectedFile
     else -> null
   }
+}
+
+/**
+ * Discovers authored shortcut and trailhead tools via
+ * [ToolYamlLoader.discoverShortcutsAndTrailheads] and converts each into the commonMain
+ * DTO the Map view renders. The loader returns configs whose parsed content carries a
+ * [xyz.block.trailblaze.config.ShortcutMetadata] or
+ * [xyz.block.trailblaze.config.TrailheadMetadata] block, regardless of whether the body
+ * is class-backed (`class:`) or YAML-bodied (`tools:`) — both shapes are valid edge
+ * metadata as far as the graph is concerned.
+ *
+ * Returns `(shortcuts, trailheads)`. Failures inside the loader (parse errors,
+ * suffix-mismatch) are already logged by the loader's own lenient-load path and surface
+ * as missing entries rather than thrown exceptions — we'd rather render N-1 edges than
+ * fail the whole tab on a single bad YAML. If the loader itself throws, we catch and
+ * return empty lists so the Definitions view continues to function while only the Map
+ * view's edge layer is impacted.
+ */
+private fun loadShortcutsAndTrailheads(): Pair<List<ShortcutDisplayItem>, List<TrailheadDisplayItem>> {
+  val configs = try {
+    ToolYamlLoader.discoverShortcutsAndTrailheads()
+  } catch (e: Exception) {
+    Console.error("[Waypoints Map] failed to discover shortcuts/trailheads: ${e.message}")
+    return emptyList<ShortcutDisplayItem>() to emptyList<TrailheadDisplayItem>()
+  }
+  val shortcuts = mutableListOf<ShortcutDisplayItem>()
+  val trailheads = mutableListOf<TrailheadDisplayItem>()
+  for ((toolName, config) in configs) {
+    config.shortcut?.let { meta ->
+      shortcuts += ShortcutDisplayItem(
+        id = toolName.toolName,
+        description = config.description,
+        from = meta.from,
+        to = meta.to,
+        variant = meta.variant,
+      )
+    }
+    config.trailhead?.let { meta ->
+      trailheads += TrailheadDisplayItem(
+        id = toolName.toolName,
+        description = config.description,
+        to = meta.to,
+      )
+    }
+  }
+  return shortcuts to trailheads
 }
 
 /**

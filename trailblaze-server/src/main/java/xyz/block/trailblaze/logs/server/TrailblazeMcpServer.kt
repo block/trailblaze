@@ -810,6 +810,13 @@ class TrailblazeMcpServer(
     port: Int = TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTP_PORT,
     httpsPort: Int = TrailblazeDevicePort.TRAILBLAZE_DEFAULT_HTTPS_PORT,
     wait: Boolean = false,
+    /**
+     * Optional hook to register additional Ktor routes alongside the daemon's
+     * built-ins. Used by host-layer modules (e.g. trailblaze-host's waypoint graph
+     * endpoint) that need to surface UIs on the same server but live in a higher
+     * module than this one. Invoked inside the routing block, before the catchall.
+     */
+    additionalRouteRegistration: (io.ktor.server.routing.Routing.() -> Unit)? = null,
   ): EmbeddedServer<*, *> {
     serverStartTimeMillis = System.currentTimeMillis()
     emitDebugState()
@@ -1046,6 +1053,7 @@ class TrailblazeMcpServer(
             )
           },
         ),
+        additionalRouteRegistration = additionalRouteRegistration,
       )
       routing {
         // STREAMABLE HTTP TRANSPORT ENDPOINT (at /mcp)
@@ -1392,21 +1400,37 @@ class TrailblazeMcpServer(
               .map { it.toTrailblazeToolDescriptor() }
           } else {
           val driverType = mcpBridge.getDriverType()
+          val activeTarget = findCurrentTarget()
           // Ask the bridge for device-appropriate built-in tools.
-          // For WEB/Playwright: returns Playwright-native toolset (complete replacement for Maestro).
-          // For Android/iOS: returns empty → falls back to ALL Maestro tools so that
-          // availableToolsProvider() delivers the complete toolset to StepToolSet.
+          // For WEB/Playwright/Compose/Revyl: returns a driver-specific replacement (no kitchen sink).
+          // For Android/iOS: returns empty → we resolve from the active target's pack `tool_sets:`
+          // declarations via TrailblazeToolSetCatalog.resolveForDriver (driver-aware, target-scoped),
+          // not the catalog-wide kitchen sink. With no active target, the LLM sees only the
+          // catalog's `always_enabled` toolsets — pack authors opt into more by declaring tool_sets.
           val bridgeToolClasses = mcpBridge.getInnerAgentBuiltInToolClasses()
           val usingBridgeTools = bridgeToolClasses.isNotEmpty()
+
+          val packToolSets = if (driverType != null && activeTarget != null) {
+            activeTarget.getDeclaredToolSetIdsForDriver(driverType)
+          } else emptyList()
+          val resolvedFromPack = if (driverType != null) {
+            TrailblazeToolSetCatalog.resolveForDriver(driverType, packToolSets)
+          } else null
+
           val builtInToolClasses = if (usingBridgeTools) {
             bridgeToolClasses
           } else {
-            ToolSetCategoryMapping.getToolClasses(ToolSetCategory.ALL)
+            resolvedFromPack?.toolClasses ?: emptySet()
           }
-          val customToolClasses = customToolClassesProvider()
+          val customToolClasses = if (driverType != null && activeTarget != null) {
+            activeTarget.getCustomToolsForDriver(driverType)
+          } else emptySet()
+          val excludedToolClasses = if (driverType != null && activeTarget != null) {
+            activeTarget.getExcludedToolsForDriver(driverType)
+          } else emptySet()
           // Custom tools first so the LLM sees app-specific tools (e.g., sign-in)
           // before generic alternatives (e.g., launchApp), improving selection.
-          val classDescriptors = (customToolClasses + builtInToolClasses)
+          val classDescriptors = (customToolClasses + builtInToolClasses - excludedToolClasses)
             .mapNotNull { it.toKoogToolDescriptor()?.toTrailblazeToolDescriptor() }
           // Yaml-defined tools only ride along on the fallback (Android/iOS) path — the
           // bridge path is a complete driver-specific replacement (e.g. Playwright), and
@@ -1414,12 +1438,24 @@ class TrailblazeMcpServer(
           val yamlDescriptors = if (usingBridgeTools) {
             emptyList()
           } else {
+            val customYamlNames = if (driverType != null && activeTarget != null) {
+              activeTarget.getCustomYamlToolNamesForDriver(driverType)
+            } else emptySet()
+            val excludedYamlNames = if (driverType != null && activeTarget != null) {
+              activeTarget.getExcludedYamlToolNamesForDriver(driverType)
+            } else emptySet()
+            val builtInYamlNames = resolvedFromPack?.yamlToolNames ?: emptySet()
             KoogToolExt.buildDescriptorsForYamlDefined(
-              ToolSetCategoryMapping.getYamlToolNames(ToolSetCategory.ALL),
+              (customYamlNames + builtInYamlNames - excludedYamlNames).toSet(),
             ).map { it.toTrailblazeToolDescriptor() }
           }
           val allTools = classDescriptors + yamlDescriptors
-          Console.log("[TrailblazeMcpServer] Inner agent total tools: ${allTools.size} (driver=$driverType, custom: ${customToolClasses.size}, yaml: ${yamlDescriptors.size})")
+          Console.log(
+            "[TrailblazeMcpServer] Inner agent total tools: ${allTools.size} (driver=$driverType, " +
+              "target=${activeTarget?.id}, packToolSets=$packToolSets, " +
+              "custom=${customToolClasses.size}, excluded=${excludedToolClasses.size}, " +
+              "yaml=${yamlDescriptors.size})"
+          )
           allTools
           }
         }
@@ -1476,6 +1512,8 @@ class TrailblazeMcpServer(
             val sessionId = activeSessionIdProvider()
               ?: mcpBridge.ensureSessionAndGetId(null)
             if (logsRepo != null && sessionId != null) {
+              // saveScreenshotBytes sniffs the byte payload via [ImageFormatDetector]
+              // and picks the right extension internally — caller doesn't supply it.
               val filename = logsRepo.saveScreenshotBytes(sessionId, bytes)
               val sessionDir = logsRepo.getSessionDir(sessionId)
               java.io.File(sessionDir, filename).absolutePath

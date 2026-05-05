@@ -1299,11 +1299,12 @@ object TrailblazeHostYamlRunner {
      */
     onSessionStarted: (SessionId) -> Unit = {},
   ): SessionId? {
+    val driverType = TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY
     val customToolClasses = targetTestApp
-      ?.getCustomToolsForDriver(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY)
+      ?.getCustomToolsForDriver(driverType)
       ?: emptySet()
     val excludedToolClasses = targetTestApp
-      ?.getExcludedToolsForDriver(TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY)
+      ?.getExcludedToolsForDriver(driverType)
       ?: emptySet()
 
     val trailblazeYaml = createTrailblazeYaml(
@@ -1369,6 +1370,7 @@ object TrailblazeHostYamlRunner {
     val toolRepo = TrailblazeToolRepo.withDynamicToolSets(
       customToolClasses = customToolClasses,
       excludedToolClasses = excludedToolClasses,
+      driverType = driverType,
     )
 
     // Single AgentMemory shared between host-local tool execution contexts and the RPC
@@ -1665,6 +1667,7 @@ object TrailblazeHostYamlRunner {
     val toolRepo = TrailblazeToolRepo.withDynamicToolSets(
       customToolClasses = customToolClasses,
       excludedToolClasses = excludedToolClasses,
+      driverType = driverType,
     )
 
     val agent = HostOnDeviceRpcTrailblazeAgent(

@@ -87,7 +87,7 @@ fun List<TrailblazeLog>.generateRecordedYaml(
           val recording = if (toolWrappers.isNotEmpty()) {
             ToolRecording(
               tools = toolWrappers,
-              autoSatisfied = false
+              autoSatisfied = false,
             )
           } else {
             // Author observed: zero recordable tools fired during this objective window —
@@ -96,7 +96,7 @@ fun List<TrailblazeLog>.generateRecordedYaml(
             // through to AI. See ToolRecording KDoc for replay semantics.
             ToolRecording(
               tools = emptyList(),
-              autoSatisfied = true
+              autoSatisfied = true,
             )
           }
 
