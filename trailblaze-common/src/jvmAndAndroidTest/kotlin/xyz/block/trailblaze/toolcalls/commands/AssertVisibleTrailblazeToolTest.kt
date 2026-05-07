@@ -125,7 +125,7 @@ class AssertVisibleTrailblazeToolTest {
     assertEquals(1, executables.size)
     val delegated = assertIs<AssertVisibleBySelectorTrailblazeTool>(executables.single())
     assertEquals("verify the submit button", delegated.reason)
-    assertEquals("Submit", delegated.selector.textRegex)
+    assertEquals("Submit", delegated.selector?.textRegex)
     // nodeSelector is generated inside a try/catch that silently nulls on failure; a
     // regression in TrailblazeNodeSelectorGenerator would still produce a passing legacy
     // selector but strip the richer on-device playback path. Assert it survives.

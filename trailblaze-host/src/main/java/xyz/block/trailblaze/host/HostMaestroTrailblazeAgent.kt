@@ -74,7 +74,7 @@ class HostMaestroTrailblazeAgent(
    */
   override suspend fun executeNodeSelectorAssertVisible(
     nodeSelector: TrailblazeNodeSelector,
-    timeoutMs: Long,
+    timeoutMs: Long?,
     traceId: TraceId?,
   ): TrailblazeToolResult? {
     val tree = getCurrentTrailblazeNodeTree() ?: return null
@@ -92,7 +92,7 @@ class HostMaestroTrailblazeAgent(
    */
   override suspend fun executeNodeSelectorAssertNotVisible(
     nodeSelector: TrailblazeNodeSelector,
-    timeoutMs: Long,
+    timeoutMs: Long?,
     traceId: TraceId?,
   ): TrailblazeToolResult? {
     val tree = getCurrentTrailblazeNodeTree() ?: return null

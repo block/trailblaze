@@ -154,7 +154,44 @@ data class InlineScriptToolConfig(
   @SerialName("inputSchema")
   @Serializable(with = JsonObjectYamlSerializer::class)
   val inputSchema: JsonObject = JsonObject(emptyMap()),
-)
+) {
+  init {
+    // Enforce at the canonical runtime construction site so EVERY decode path is gated:
+    // - `PackScriptedToolFile.toInlineScriptToolConfig()` (per-file `<pack>/tools/<id>.yaml`)
+    // - direct YAML decode under `target.tools:` in pack manifests
+    // - test fixtures and any future programmatic construction
+    //
+    // The regex is intentionally colocated with the type that owns the contract — every
+    // downstream consumer (the daemon bundler's defense-in-depth check, the subprocess
+    // synthesizer, the koog tool descriptor builder) reads `InlineScriptToolConfig.name`
+    // and they all rely on it being a wrapper-/JS-/MCP-safe identifier. Validating once
+    // here means the data class itself is the source of truth.
+    //
+    // Authors who give a bad `name:` field in their YAML now see this error at YAML decode
+    // (when the host loads the pack manifest, not when the bundler later trips over it),
+    // pointing at the exact tool. Allowed: letters, digits, `_`, `-`, `.`, starting with
+    // a letter or `_`. The shape covers `clock_android_launchApp`, hyphenated names, and
+    // dotted namespaces while rejecting characters that would either break wrapper-TS
+    // string-literal interpolation (`"`, `\`) or produce invalid JS identifiers
+    // (spaces, control chars, leading digits).
+    require(TOOL_NAME_PATTERN.matches(name)) {
+      "Invalid scripted-tool name '$name' (script: $script): must match $TOOL_NAME_PATTERN " +
+        "(letters, digits, _, -, ., starting with a letter or _). Update the per-tool YAML " +
+        "descriptor's `name:` field to use a supported character set."
+    }
+  }
+
+  companion object {
+    /**
+     * Permissive but non-pathological identifier set for scripted-tool names. Defines the
+     * canonical contract enforced at every construction site (see the [init] block).
+     * Downstream consumers — notably `DaemonScriptedToolBundler` and the subprocess
+     * synthesizer — should reference this constant rather than duplicating the regex so
+     * any future tightening is a one-place change.
+     */
+    val TOOL_NAME_PATTERN: Regex = Regex("^[A-Za-z_][A-Za-z0-9_.\\-]*$")
+  }
+}
 
 /**
  * Bridges YAML maps into [JsonObject] so target-level inline tool declarations can author

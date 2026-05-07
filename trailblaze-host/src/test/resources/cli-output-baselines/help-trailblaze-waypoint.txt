@@ -20,6 +20,8 @@ Commands:
                       the waypoint YAML.
   suggest-selector  Suggest waypoint-ready selector YAML for a specific element
                       ref in a captured screen.
+  migrate-trail     Mechanically migrate legacy `selector` (Maestro-shape) →
+                      `nodeSelector` (accessibility
   segment           Inspect transitions between waypoints observed in a session
                       log.
   graph             Render the waypoint navigation graph (waypoints, authored

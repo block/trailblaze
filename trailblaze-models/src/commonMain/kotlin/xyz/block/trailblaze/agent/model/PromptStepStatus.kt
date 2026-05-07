@@ -27,6 +27,7 @@ data class PromptStepStatus(
   val taskId = TaskId.generate()
 
   private var latestObjectiveStatus: String? = null
+  private var pendingCycleWarning: String? = null
 
   init {
     require(maxHistorySize > 0) { "maxHistorySize must be positive, but was $maxHistorySize" }
@@ -43,6 +44,28 @@ data class PromptStepStatus(
   }
 
   fun getLatestObjectiveStatus(): String? = latestObjectiveStatus
+
+  /**
+   * Latches a stuck-detection WARNING to be injected into the LLM's NEXT call context, then
+   * cleared. Surfacing the warning into the next prompt nudges the LLM to break the loop or
+   * call `objectiveStatus(FAILED)`. Storing it on [PromptStepStatus] (rather than passing
+   * directly through the call stack) lets the runner detect at action-N and the helper
+   * inject at action-(N+1) without changing intermediate signatures.
+   */
+  fun setPendingCycleWarning(warning: String?) {
+    pendingCycleWarning = warning
+  }
+
+  /**
+   * Reads-and-clears the pending cycle warning. Single-shot semantics — once consumed, the
+   * warning won't repeat next call. The runner re-detects on each iteration; if the LLM is
+   * still stuck, a fresh warning is set for the NEXT call.
+   */
+  fun consumePendingCycleWarning(): String? {
+    val w = pendingCycleWarning
+    pendingCycleWarning = null
+    return w
+  }
 
   fun getLimitedHistory(): List<Message> {
     val window = koogLlmResponseHistory.takeLast(maxHistorySize)

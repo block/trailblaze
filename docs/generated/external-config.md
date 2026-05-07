@@ -92,10 +92,10 @@ Targets are declared in `targets/*.yaml`. Each target has an `id`, a `display_na
 
 | Field | Purpose |
 | --- | --- |
-| `platforms.<platform>.app_ids` | App identifiers for that platform. |
+| `platforms.<platform>.app_ids` | App identifiers for that platform. **List ordering is preserved** — the first entry is treated as the primary id (used by host-side launch / kill / clear flows that pick a single id), and subsequent entries are fallbacks consulted when the primary isn't installed on the device. |
 | `platforms.<platform>.tool_sets` | Toolset ids enabled for that platform section. |
 | `platforms.<platform>.tools` | Extra tool names added directly for that platform section. |
-| `platforms.<platform>.excluded_tools` | Tool names explicitly removed for that platform section. |
+| `platforms.<platform>.excluded_tools` | Tool names explicitly removed for that platform section after `tool_sets` and `tools` are merged in. Use when a target ships its own implementation of a default tool (e.g. a `swipe` replacement that needs target-specific gestures) and wants the LLM to see only the custom variant. Names match the `@TrailblazeToolClass` registration string. |
 | `platforms.<platform>.drivers` | Narrow the section to specific drivers instead of the platform shorthand. |
 | `platforms.<platform>.min_build_version` | Optional minimum build gate. |
 | `mcp_servers` | Target-specific JS/TS MCP servers. Current support is `script:` entries. |

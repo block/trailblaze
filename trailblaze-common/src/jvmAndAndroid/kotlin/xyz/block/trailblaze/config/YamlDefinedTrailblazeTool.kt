@@ -10,6 +10,7 @@ import kotlinx.serialization.json.buildJsonObject
 import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.InstanceNamedTrailblazeTool
+import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolMetadata
 import xyz.block.trailblaze.yaml.TrailblazeYaml
@@ -30,7 +31,35 @@ import xyz.block.trailblaze.yaml.TrailblazeYaml
  * YAML-defined tool name registers a [YamlDefinedToolSerializer] instance pre-bound to its
  * [ToolYamlConfig]. That serializer reads the caller's params from the incoming YAML/JSON and
  * constructs a [YamlDefinedTrailblazeTool] with the right config + params attached.
+ *
+ * **Why the class-level [TrailblazeToolClass] annotation is here.** `KClass.toolName()` /
+ * `requiresHost()` / `isVerification()` (in `TrailblazeToolExt`) bottom out at
+ * `trailblazeToolClassAnnotation()` which throws "Please add @TrailblazeToolClass to …" when
+ * the annotation is missing. Anywhere a code path reaches a `YamlDefinedTrailblazeTool` instance
+ * and asks for the class-level metadata directly (e.g. the Tool Palette's "Run on Device" path
+ * encoding the tool back to YAML, the desktop runner's logging payload, etc.) it would crash
+ * the whole UI without this default.
+ *
+ * **The flag values mirror [TrailblazeToolClass]'s framework defaults exactly** —
+ * `isForLlm = true`, `isRecordable = true`, `requiresHost = false`, `isVerification = false`.
+ * That's load-bearing for `YamlDefinedToolLlmVisibilityTest`'s null-passthrough contract: a
+ * YAML config that omits `is_for_llm` / `is_recordable` / `requires_host` produces a per-
+ * instance `toolMetadata` with those fields null, and the resolver helpers
+ * ([xyz.block.trailblaze.toolcalls.getIsRecordableFromAnnotation],
+ * [xyz.block.trailblaze.toolcalls.requiresHostInstance],
+ * [xyz.block.trailblaze.toolcalls.isVerificationToolInstance]) fall through to this class
+ * annotation's value. Picking different defaults here would silently change behavior for every
+ * YAML tool that doesn't explicitly set those flags. The per-instance override still wins when
+ * the YAML config DOES set a value — that's the path tests at lines 80–108 of
+ * `YamlDefinedToolLlmVisibilityTest` exercise.
+ *
+ * The placeholder `name` (`_yaml_defined`) is never user-visible — every reasonable consumer
+ * detects [InstanceNamedTrailblazeTool] first and reads [instanceToolName] (the YAML config's
+ * `id:` field). It exists solely so the class-level annotation has a non-null `name` field;
+ * if it ever shows up in a log line, that's a bug somewhere bypassing the
+ * `InstanceNamedTrailblazeTool` check.
  */
+@TrailblazeToolClass(name = "_yaml_defined")
 class YamlDefinedTrailblazeTool(
   val config: ToolYamlConfig,
   val params: Map<String, JsonElement>,

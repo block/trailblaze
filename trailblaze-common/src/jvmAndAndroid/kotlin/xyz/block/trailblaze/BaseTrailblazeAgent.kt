@@ -10,6 +10,7 @@ import xyz.block.trailblaze.logs.model.TraceId.Companion.TraceOrigin
 import xyz.block.trailblaze.toolcalls.DelegatingTrailblazeTool
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.HostLocalExecutableTrailblazeTool
+import xyz.block.trailblaze.toolcalls.ToolExecutionContextThreadLocal
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
@@ -84,45 +85,59 @@ abstract class BaseTrailblazeAgent(
     val toolsExecuted = mutableListOf<TrailblazeTool>()
     var lastSuccessResult: TrailblazeToolResult = TrailblazeToolResult.Success()
 
-    for (tool in tools) {
-      val resolved = resolveDynamicTool(tool)
-      val result =
-        when (resolved) {
-          is MemoryTrailblazeTool -> {
-            toolsExecuted.add(resolved)
-            resolved.execute(memory = memory, elementComparator = elementComparator)
+    // Install the per-batch context in the scripted-tool composition ThreadLocal so any
+    // QuickJS-bundled author tool that calls `trailblaze.call(...)` mid-dispatch can route
+    // back into the same session's tool repo (#2749). The install/clear pair brackets the
+    // entire sequential loop so every tool in the batch sees the same context, and the
+    // `finally` guarantees the slot is freed even if a tool throws — leaking the slot
+    // across batches would let one session observe another's context if the same thread
+    // gets reused. The ThreadLocal lives in this module (not in
+    // `:trailblaze-quickjs-tools`) so the install site doesn't need a compile-time dep on
+    // QuickJS — the binding consumes the slot on the read side instead.
+    ToolExecutionContextThreadLocal.install(context)
+    try {
+      for (tool in tools) {
+        val resolved = resolveDynamicTool(tool)
+        val result =
+          when (resolved) {
+            is MemoryTrailblazeTool -> {
+              toolsExecuted.add(resolved)
+              resolved.execute(memory = memory, elementComparator = elementComparator)
+            }
+            // Host-local executables (e.g. subprocess MCP tools) bypass driver-specific dispatch
+            // — they round-trip through host-side transport and don't belong to any device /
+            // browser / cloud driver. Done in the base so every agent picks it up uniformly.
+            //
+            // Per-tool session-log entries (`logToolExecution`) are deliberately NOT emitted
+            // here: `TrailblazeLog.TrailblazeToolLog` serializes the full tool instance, and
+            // dynamically-built host-local tools (like `SubprocessTrailblazeTool`) aren't
+            // `@Serializable` — their state (session closures, arg JsonObjects) doesn't fit
+            // the static polymorphic registry. Session start/end logs still capture the
+            // trail YAML + outcomes; richer per-call telemetry is tracked as follow-up.
+            is HostLocalExecutableTrailblazeTool -> {
+              toolsExecuted.add(resolved)
+              runBlocking { resolved.execute(context) }
+            }
+            else -> executeTool(resolved, context, toolsExecuted)
           }
-          // Host-local executables (e.g. subprocess MCP tools) bypass driver-specific dispatch
-          // — they round-trip through host-side transport and don't belong to any device /
-          // browser / cloud driver. Done in the base so every agent picks it up uniformly.
-          //
-          // Per-tool session-log entries (`logToolExecution`) are deliberately NOT emitted
-          // here: `TrailblazeLog.TrailblazeToolLog` serializes the full tool instance, and
-          // dynamically-built host-local tools (like `SubprocessTrailblazeTool`) aren't
-          // `@Serializable` — their state (session closures, arg JsonObjects) doesn't fit
-          // the static polymorphic registry. Session start/end logs still capture the
-          // trail YAML + outcomes; richer per-call telemetry is tracked as follow-up.
-          is HostLocalExecutableTrailblazeTool -> {
-            toolsExecuted.add(resolved)
-            runBlocking { resolved.execute(context) }
-          }
-          else -> executeTool(resolved, context, toolsExecuted)
+        if (!result.isSuccess()) {
+          return RunTrailblazeToolsResult(
+            inputTools = tools,
+            executedTools = toolsExecuted,
+            result = result,
+          )
         }
-      if (!result.isSuccess()) {
-        return RunTrailblazeToolsResult(
-          inputTools = tools,
-          executedTools = toolsExecuted,
-          result = result,
-        )
+        lastSuccessResult = result
       }
-      lastSuccessResult = result
-    }
 
-    return RunTrailblazeToolsResult(
-      inputTools = tools,
-      executedTools = toolsExecuted,
-      result = lastSuccessResult,
-    )
+      return RunTrailblazeToolsResult(
+        inputTools = tools,
+        executedTools = toolsExecuted,
+        result = lastSuccessResult,
+      )
+    } finally {
+      ToolExecutionContextThreadLocal.clear()
+    }
   }
 
   /**

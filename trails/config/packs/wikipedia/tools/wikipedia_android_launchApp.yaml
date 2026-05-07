@@ -1,0 +1,23 @@
+# Per-file in-process scripted tool descriptor for `wikipedia_android_launchApp`.
+#
+# This descriptor declares a tool whose body lives in `script:` below. The pack loader
+# translates it into an `InlineScriptToolConfig` and the framework registers the tool
+# under the workspace `wikipedia` pack — see `target.tools:` in `../../packs/wikipedia/pack.yaml`.
+#
+# `script:` resolves against the JVM's current working directory (i.e. the directory
+# `trailblaze` was invoked from). The `.ts` lives next to this descriptor under the
+# owning pack — the convention library/target packs adopted in #2783.
+script: ./trails/config/packs/wikipedia/tools/wikipedia_android_launchApp.ts
+name: wikipedia_android_launchApp
+description: |
+  Force-stops the Wikipedia (en) app and re-launches it via the package's default
+  launcher activity, so the next step starts from a clean app state. Equivalent to a
+  Maestro `launchApp({ launchMode: FORCE_RESTART })` against `org.wikipedia`, but
+  composed entirely from the dual-mode `adbShell` primitive so the same tool works
+  on host- and on-device-dispatched scripted-tool sessions.
+
+  Use this as the first step of any wikipedia trail that wants a fresh launch state. No
+  arguments — the framework resolves the app id from the `wikipedia` pack manifest's
+  `app_ids:` list against installed apps on the connected device.
+supportedPlatforms:
+  - android

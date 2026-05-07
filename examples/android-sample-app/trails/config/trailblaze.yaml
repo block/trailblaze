@@ -4,5 +4,5 @@
 # inside this sample workspace can walk up to `trails/config/trailblaze.yaml` and discover
 # the rest of this `trails/config/` directory automatically. Concrete target/tool/MCP
 # definitions still live under this same directory.
-packs:
-  - packs/sampleapp/pack.yaml
+targets:
+  - sampleapp

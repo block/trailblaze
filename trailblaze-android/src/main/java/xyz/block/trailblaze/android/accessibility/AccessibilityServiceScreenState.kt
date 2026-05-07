@@ -2,6 +2,8 @@ package xyz.block.trailblaze.android.accessibility
 
 import kotlin.concurrent.thread
 import xyz.block.trailblaze.AdbCommandUtil
+import xyz.block.trailblaze.android.MaestroUiAutomatorXmlParser
+import xyz.block.trailblaze.android.uiautomator.AndroidOnDeviceUiAutomatorScreenState
 import xyz.block.trailblaze.api.AnnotationElement
 import xyz.block.trailblaze.api.CompactScreenElements
 import xyz.block.trailblaze.api.ScreenState
@@ -38,6 +40,20 @@ class AccessibilityServiceScreenState(
    * callers that are willing to pay the larger response size for full fidelity.
    */
   private val includeAllElements: Boolean = false,
+  /**
+   * When true, after the accessibility-derived `viewHierarchy` is built, ALSO dump the
+   * UiAutomator window hierarchy (`UiDevice.dumpWindowHierarchy`) and use the resulting
+   * tree as `viewHierarchy` instead. The accessibility-derived `trailblazeNodeTree` is
+   * unaffected — both are captured side-by-side.
+   *
+   * Used by the deterministic Maestro→accessibility selector migration so legacy Maestro
+   * selectors can be resolved against the EXACT tree the legacy runtime saw, rather than
+   * against the accessibility-shape projection. Off by default — UiAutomator dumps add
+   * ≈ a few hundred ms per capture (capped at 30s by the underlying `dumpWindowHierarchy`
+   * timeout) and roughly double session-log size, neither of which we want absent a
+   * specific need.
+   */
+  private val captureSecondaryTree: Boolean = false,
 ) : ScreenState {
 
   override var deviceWidth: Int = -1
@@ -113,6 +129,45 @@ class AccessibilityServiceScreenState(
     }
 
     screenshotThread?.join()
+
+    // Optional dual-tree capture for Maestro→accessibility migration. Sequential rather
+    // than parallel with the accessibility tree above because both query through the
+    // accessibility IPC channel and concurrent calls have caused ANR-style hangs on
+    // resource-constrained emulators. The cost is tolerable (this path only runs with
+    // `trailblaze.captureSecondaryTree=true` set, which is migration-only).
+    if (captureSecondaryTree) {
+      try {
+        val xmlDump = AndroidOnDeviceUiAutomatorScreenState.dumpViewHierarchy()
+        val maestroTree =
+          MaestroUiAutomatorXmlParser
+            .getUiAutomatorViewHierarchyFromViewHierarchyAsMaestroTreeNodes(
+              viewHiearchyXml = xmlDump,
+              excludeKeyboardElements = false,
+            )
+        val dualVh = maestroTree.toViewHierarchyTreeNode()?.relabelWithFreshIds()
+        if (dualVh != null) {
+          // Overwrite the accessibility-derived projection. The accessibility tree is
+          // already preserved as `trailblazeNodeTree` above, so we lose nothing by
+          // replacing the Maestro-shape projection with the true UiAutomator tree.
+          viewHierarchy = dualVh
+          Console.log(
+            "[dual-tree] viewHierarchy replaced with UiAutomator dump " +
+              "(accessibility-derived projection discarded)",
+          )
+        } else {
+          Console.log(
+            "[dual-tree] UiAutomator dump returned null tree; keeping accessibility-derived viewHierarchy",
+          )
+        }
+      } catch (e: Exception) {
+        // Don't let a dual-tree-capture failure abort the screen-state build — the
+        // primary accessibility path is intact. Log loudly so a CI run with this flag
+        // on but no dumps surfaces the failure.
+        Console.log(
+          "[dual-tree] capture failed; keeping accessibility-derived viewHierarchy: ${e.message}",
+        )
+      }
+    }
   }
 
   override val trailblazeDevicePlatform: TrailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID

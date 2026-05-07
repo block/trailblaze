@@ -55,9 +55,9 @@ class ToolDiscoveryToolSetTest {
   private class TestAppTarget(
     id: String,
     displayName: String,
-    private val androidAppIds: Set<String> = emptySet(),
+    private val androidAppIds: List<String> = emptyList(),
   ) : TrailblazeHostAppTarget(id, displayName) {
-    override fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): Set<String>? =
+    override fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): List<String>? =
       if (platform == TrailblazeDevicePlatform.ANDROID) androidAppIds else null
 
     override fun internalGetCustomToolsForDriver(
@@ -66,21 +66,21 @@ class ToolDiscoveryToolSetTest {
   }
 
   private val testTarget =
-    TestAppTarget(id = "testapp", displayName = "Test App", androidAppIds = setOf("com.test.app"))
+    TestAppTarget(id = "testapp", displayName = "Test App", androidAppIds = listOf("com.test.app"))
 
   private val secondTarget =
     TestAppTarget(
       id = "secondapp",
       displayName = "Second App",
-      androidAppIds = setOf("com.second.app"),
+      androidAppIds = listOf("com.second.app"),
     )
 
   private val inlineToolTarget = object : TrailblazeHostAppTarget(
     id = "inlineapp",
     displayName = "Inline App",
   ) {
-    override fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): Set<String>? =
-      if (platform == TrailblazeDevicePlatform.WEB) setOf("inline-web") else null
+    override fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): List<String>? =
+      if (platform == TrailblazeDevicePlatform.WEB) listOf("inline-web") else null
 
     override fun internalGetCustomToolsForDriver(
       driverType: TrailblazeDriverType,
@@ -111,8 +111,8 @@ class ToolDiscoveryToolSetTest {
     id = "iosinlineapp",
     displayName = "iOS Inline App",
   ) {
-    override fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): Set<String>? =
-      if (platform == TrailblazeDevicePlatform.IOS) setOf("com.apple.MobileAddressBook") else null
+    override fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): List<String>? =
+      if (platform == TrailblazeDevicePlatform.IOS) listOf("com.apple.MobileAddressBook") else null
 
     override fun internalGetCustomToolsForDriver(
       driverType: TrailblazeDriverType,
@@ -464,7 +464,7 @@ class ToolDiscoveryToolSetTest {
     id = TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget.id,
     displayName = "Default",
   ) {
-    override fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): Set<String>? = null
+    override fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): List<String>? = null
 
     override fun internalGetCustomToolsForDriver(
       driverType: TrailblazeDriverType,
@@ -513,7 +513,7 @@ class ToolDiscoveryToolSetTest {
     id = TrailblazeHostAppTarget.DefaultTrailblazeHostAppTarget.id,
     displayName = "Default",
   ) {
-    override fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): Set<String>? = null
+    override fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): List<String>? = null
 
     override fun internalGetCustomToolsForDriver(
       driverType: TrailblazeDriverType,
@@ -718,7 +718,7 @@ class ToolDiscoveryToolSetTest {
     id = "webfiltered",
     displayName = "Web Filtered Target",
   ) {
-    override fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): Set<String>? = null
+    override fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): List<String>? = null
 
     override fun internalGetCustomToolsForDriver(
       driverType: TrailblazeDriverType,
@@ -890,8 +890,8 @@ class ToolDiscoveryToolSetTest {
     id = "yamltarget",
     displayName = "YAML Target",
   ) {
-    override fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): Set<String>? =
-      if (platform == TrailblazeDevicePlatform.ANDROID) setOf("com.yamltarget") else null
+    override fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): List<String>? =
+      if (platform == TrailblazeDevicePlatform.ANDROID) listOf("com.yamltarget") else null
 
     override fun internalGetCustomToolsForDriver(
       driverType: TrailblazeDriverType,
@@ -980,8 +980,8 @@ class ToolDiscoveryToolSetTest {
     id = "exclude_target",
     displayName = "Excluding Target",
   ) {
-    override fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): Set<String>? =
-      if (platform == TrailblazeDevicePlatform.ANDROID) setOf("com.exclude") else null
+    override fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): List<String>? =
+      if (platform == TrailblazeDevicePlatform.ANDROID) listOf("com.exclude") else null
 
     override fun internalGetCustomToolsForDriver(
       driverType: TrailblazeDriverType,

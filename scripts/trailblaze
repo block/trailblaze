@@ -269,8 +269,13 @@ ipc_try_forward() {
     for a in "$@"; do
       args_json=$(jq --arg a "$a" '. + [$a]' <<<"$args_json") || return 1
     done
+    # Send the user's interactive cwd alongside argv so commands that walk relative
+    # paths (e.g. `waypoint --target` resolving the workspace anchor) anchor at the
+    # user's shell directory rather than the daemon's launch directory. Older daemons
+    # ignore the field (kotlinx.serialization with ignoreUnknownKeys=true); newer
+    # daemons fall back to their own cwd if absent. See [CliCallerContext].
     local payload
-    payload=$(jq -n --argjson args "$args_json" '{args: $args}') || return 1
+    payload=$(jq -n --argjson args "$args_json" --arg cwd "$PWD" '{args: $args, cwd: $cwd}') || return 1
 
     local response
     response=$(curl -sS --connect-timeout 2 --max-time 600 \

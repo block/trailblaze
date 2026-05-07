@@ -1,22 +1,21 @@
 - config:
     id: "clock/set-alarm-730am"
+    driver: ANDROID_ONDEVICE_INSTRUMENTATION
+    # Bind the trail to the workspace `clock` pack so its inline scripted tools
+    # (clock_android_launchApp) get loaded into the session repo.
+    target: clock
+
+# Host-side setup. Custom scripted tool defined by the workspace `clock` pack at
+# trails/config/packs/clock/tools/clock_android_launchApp.ts. Replaces the previous raw
+# `maestro: launchApp` block with a `client.callTool("launchApp", ...)`
+# composition that runs in-process on the host JVM via the Scriptine
+# (QuickJS-based) runtime. `launchMode: FORCE_RESTART` covers the
+# stop-and-relaunch behavior the original Maestro setup got from
+# `clearState: true, stopApp: true`.
+- tools:
+    - clock_android_launchApp: {}
+
 - prompts:
-    - step: Reinstall and launch the Clock app (com.android.deskclock)
-      recording:
-        tools:
-          # Inlined raw Maestro launchApp so we can pass `permissions:` (Maestro-native,
-          # cross-platform) without expanding the Trailblaze launchApp tool's API surface.
-          # Granting `notifications` up front suppresses the POST_NOTIFICATIONS dialog
-          # that the host-rpc on-device runner can't see (it's owned by
-          # com.android.permissioncontroller, a separate process from the foreground app).
-          - maestro:
-              commands:
-                - launchApp:
-                    appId: com.android.deskclock
-                    clearState: true
-                    stopApp: true
-                    permissions:
-                      notifications: allow
     - step: Add a new alarm for 7:30 AM
       recording:
         tools:
@@ -65,7 +64,7 @@
                 textRegex: Expand alarm
                 idRegex: com.android.deskclock:id/arrow
                 childOf:
-                  textRegex: 7:30 AM Alarm
+                  textRegex: 7:30 AM Alarm
           - tapOnElementBySelector:
               reason: To delete the 7:30 AM alarm as instructed.
               selector:

@@ -204,7 +204,7 @@ private fun formatCycleHint(cycle: List<String>, cycleLen: Int, fullRepeats: Int
   return when (cycleLen) {
     1 -> {
       val signature = cycle.first()
-      val toolName = signature.substringBefore('(', missingDelimiterValue = signature)
+      val toolName = extractToolNameFromFingerprint(signature)
       val toolDesc = "'$toolName'"
       if (!isCritical) {
         "WARNING: You have called $toolDesc with the same arguments $fullRepeats times in a row. " +
@@ -218,7 +218,7 @@ private fun formatCycleHint(cycle: List<String>, cycleLen: Int, fullRepeats: Int
     }
     else -> {
       val seq = cycle.joinToString(" → ") { sig ->
-        "'${sig.substringBefore('(', missingDelimiterValue = sig)}'"
+        "'${extractToolNameFromFingerprint(sig)}'"
       }
       if (!isCritical) {
         "WARNING: You have repeated a cycle of $cycleLen actions ($seq) $fullRepeats times. " +
@@ -232,6 +232,88 @@ private fun formatCycleHint(cycle: List<String>, cycleLen: Int, fullRepeats: Int
       }
     }
   }
+}
+
+/**
+ * Window size for the dominant-action detector. 15 actions ≈ ~2 minutes of LLM-driven
+ * activity at typical pacing. Long enough to ride out a few legitimate non-repeating actions
+ * (a recovery swipe, a setActiveToolSets call); short enough that a genuinely-stuck mixed
+ * loop trips well before the 50-call hard cap.
+ */
+internal const val DOMINANT_ACTION_WINDOW_SIZE: Int = 15
+
+/**
+ * Threshold for the dominant-action detector, expressed as a percentage (0–100). 70 means
+ * at least 11 of the last 15 actions were the same toolName + args fingerprint. Set high
+ * to avoid false positives from legitimate spammy patterns (sequential PIN entry, "tap N
+ * times", etc.) but low enough to catch the mixed-action stuck pattern that the strict-
+ * consecutive detector misses (the concrete repro: `verifySelfHealFailsGracefully` build
+ * 4805, which had 35 swipe(UP) calls out of 41 — 85% — interleaved with 6 failed
+ * scrollUntilTextIsVisible calls that broke the consecutive run but did nothing else).
+ *
+ * Stored as an Int rather than Double so the predicate is integer math
+ * (`count * 100 >= window * pct`); avoids floating point in a hot per-iteration check.
+ */
+internal const val DOMINANT_ACTION_THRESHOLD_PERCENT: Int = 70
+
+/**
+ * Detects when one action signature dominates the recent action window without strictly
+ * consecutive repetition. Complements [detectActionCycleHint], which only catches strict
+ * length-1/2/3 cycles — when a mixed-action sequence (e.g. swipe×5, scrollFail, swipe×3,
+ * scrollFail, …) keeps interrupting the consecutive run, that detector never fires even
+ * though one tool dominates.
+ *
+ * Fires WARNING tier only — not CRITICAL. The relaxed thresholds in
+ * [detectActionCycleHint] (length-1=30) intentionally tolerate genuine repetition; we
+ * don't want this detector to hard-kill runs at the 70% bar. WARNING surfaces to the LLM
+ * via the next reminder message; if the LLM still ignores it and keeps repeating, the
+ * existing CRITICAL detectors eventually catch the strict-consecutive case.
+ *
+ * @return WARNING-prefixed hint message, or null if no dominant action exceeds threshold.
+ */
+internal fun detectDominantActionHint(
+  signatures: List<String>,
+  windowSize: Int = DOMINANT_ACTION_WINDOW_SIZE,
+  thresholdPercent: Int = DOMINANT_ACTION_THRESHOLD_PERCENT,
+): String? {
+  if (signatures.size < windowSize) return null
+  val window = signatures.takeLast(windowSize)
+  val counts = window.groupingBy { it }.eachCount()
+  val (dominantSig, dominantCount) = counts.maxByOrNull { it.value } ?: return null
+  // Integer-math equivalent of `count / window < pct/100`.
+  if (dominantCount * 100 < windowSize * thresholdPercent) return null
+  // Avoid double-warning when the strict detector would already cover the case — if the
+  // dominant signature is also the tail and forms a length-1 cycle of >= 2, the existing
+  // detector handles it. Only fire when the signal is mixed/non-strictly-consecutive.
+  val tailSig = window.last()
+  val tailRunLength = window.reversed().takeWhile { it == tailSig }.count()
+  if (tailRunLength >= 2 && tailSig == dominantSig) return null
+
+  val toolName = extractToolNameFromFingerprint(dominantSig)
+  return "WARNING: '$toolName' was called $dominantCount of the last $windowSize actions " +
+    "without making observable progress. Other actions in the window did not break the pattern. " +
+    "Try a fundamentally different approach (different tool, different direction). " +
+    "If the objective cannot be achieved from the current screen, call `objectiveStatus(FAILED)` " +
+    "and report what could not be found."
+}
+
+/**
+ * Extracts the bare tool name from a fingerprint produced by either of the two callers.
+ * [TrailblazeRunner] builds fingerprints as `"tool:args"` (colon, args is the JSON content
+ * payload); [detectRepetitiveActionHint] builds them as `"tool(args)"` (paren, args is a
+ * map's `toString`). Splitting on whichever separator appears first yields just the tool
+ * name in both cases — keeps the WARNING text actionable instead of dumping the full
+ * serialized fingerprint into the LLM prompt.
+ */
+private fun extractToolNameFromFingerprint(fingerprint: String): String {
+  val parenIdx = fingerprint.indexOf('(')
+  val colonIdx = fingerprint.indexOf(':')
+  val splitIdx = when {
+    parenIdx < 0 -> colonIdx
+    colonIdx < 0 -> parenIdx
+    else -> minOf(parenIdx, colonIdx)
+  }
+  return if (splitIdx < 0) fingerprint else fingerprint.substring(0, splitIdx)
 }
 
 /**

@@ -650,12 +650,20 @@ class ToolDiscoveryToolSet(
     val optional = mutableListOf<TrailblazeToolParameterDescriptor>()
 
     properties.forEach { (name, schema) ->
+      val schemaObj = schema as? JsonObject
+      val enumValues = (schemaObj?.get("enum") as? JsonArray)
+        ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
       val descriptor = TrailblazeToolParameterDescriptor(
         name = name,
         type = jsonSchemaTypeLabel(schema),
-        description = (schema as? JsonObject)?.get("description")
+        description = schemaObj?.get("description")
           ?.let { it as? JsonPrimitive }
           ?.contentOrNull,
+        // Enum metadata flows through the same JSON schema `enum` array
+        // `jsonSchemaTypeLabel` already inspects to decide the type label. Capturing the
+        // values here lets the recording Tool Palette render a dropdown for inline-script
+        // tools too — without it, only Koog-class enums would get the dropdown treatment.
+        validValues = enumValues,
       )
       if (name in requiredNames) {
         required += descriptor

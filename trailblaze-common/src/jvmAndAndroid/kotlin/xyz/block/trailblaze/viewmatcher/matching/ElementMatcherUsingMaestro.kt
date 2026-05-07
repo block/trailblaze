@@ -80,9 +80,22 @@ object ElementMatcherUsingMaestro {
       ),
     )
 
-    // Use the first constructor with just the maestro parameter - other parameters have default values
+    // Override Orchestra's element-lookup timeouts to 0L. Maestro's `Orchestra.buildFilter`
+    // internally calls `findElement(childSelector, optional = false)` for `containsChild`
+    // clauses (and similar for other relative selectors), which polls the live device for
+    // up to `lookupTimeoutMs = 17_000L` before giving up. We're operating against a static
+    // snapshot — there's nothing to poll for; if the element isn't in the captured tree it
+    // never will be. Without this override, `migrate-trail`'s cursor-scan fallback spends
+    // ~17s per non-matching log, turning a few-hundred-log session into multiple hours.
+    // The matcher logic stays Maestro's (no selector-drift between record and playback);
+    // only the polling behavior changes.
     val constructor = orchestraKClass.constructors.first()
-    val orchestra = constructor.callBy(mapOf(constructor.parameters.first() to maestro))
+    val paramsByName = constructor.parameters.associateBy { it.name }
+    val args = mutableMapOf<kotlin.reflect.KParameter, Any?>()
+    paramsByName["maestro"]?.let { args[it] = maestro }
+    paramsByName["lookupTimeoutMs"]?.let { args[it] = 0L }
+    paramsByName["optionalLookupTimeoutMs"]?.let { args[it] = 0L }
+    val orchestra = constructor.callBy(args)
     val elementSelector = trailblazeElementSelector.toMaestroElementSelector()
     assert(elementSelector.description() == trailblazeElementSelector.description())
 

@@ -5,20 +5,37 @@
 # Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
 # small wording / spacing changes can be intentional or accidental.
 # ----------------------------------------------------------------------
-Usage: trailblaze waypoint validate [-hV] --def=<defId> [--root=<root>]
-                                    [--session=<session>] [--step=<step>]
+Usage: trailblaze waypoint validate [-hV] --id=<waypointId> [--logs-dir=<path>]
+                                    [--root=<path>] [--session=<sessionId>]
+                                    [--step=<step>] [--target=<id>]
                                     [<positionalLogFile>]
 Validate that a specific waypoint definition matches a captured screen state.
-      [<positionalLogFile>] Path to *_TrailblazeLlmRequestLog.json (required
-                              unless --session/--step given)
-      --def=<defId>         Waypoint id to validate (required)
-  -h, --help                Show this help message and exit.
-      --root=<root>         Additional directory to scan for *.waypoint.yaml
-                              files (default: ./trails, resolved against the
-                              current working directory). Pack waypoints are
-                              always included regardless of --root.
-      --session=<session>   Session log directory (containing
-                              *_TrailblazeLlmRequestLog.json files)
-      --step=<step>         1-based index of the step within the session
-                              (default: last step)
-  -V, --version             Print version information and exit.
+      [<positionalLogFile>]
+                          Path to a screen-state log — accepts
+                            *_TrailblazeLlmRequestLog.json, *_AgentDriverLog.
+                            json, *_TrailblazeSnapshotLog.json, or a sibling *.
+                            example.json. Optional: omit and use --session, or
+                            rely on the auto-resolved sibling example pair next
+                            to the matching *.waypoint.yaml.
+  -h, --help              Show this help message and exit.
+      --id=<waypointId>   Waypoint id to validate (matches the YAML's top-level
+                            `id:` field). Required.
+      --logs-dir=<path>   Override the directory containing per-session log
+                            dirs. Defaults to the running daemon's resolved
+                            logsDir.
+      --root=<path>       Additional directory to scan for *.waypoint.yaml
+                            files. Overrides --target. Pack waypoints are
+                            always included regardless. (Convention: ./trails)
+      --session=<sessionId>
+                          Session id (the directory name under --logs-dir, e.g.
+                            `2026_05_07_22_26_48_yaml_6258`). Combine with
+                            --step to pin a specific step; without --step the
+                            last step is used.
+      --step=<step>       1-based index of the step within --session (default:
+                            last step). Requires --session.
+      --target=<id>       Pack id to operate on. Resolves --root to
+                            <workspace>/packs/<id>/waypoints/ — the canonical
+                            workspace-pack location. Warns if no such pack
+                            exists. Mutually exclusive with --root (--root wins
+                            if both given).
+  -V, --version           Print version information and exit.

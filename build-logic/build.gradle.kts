@@ -46,9 +46,16 @@ gradlePlugin {
 // the main-build module compiles — single source-of-truth, two consumers, no drift. The
 // kaml + kotlinx-serialization runtime deps need to be replicated below since the source
 // files are shared but the dependency declarations aren't.
-sourceSets["main"].kotlin.srcDir(
-  file("../trailblaze-pack-bundler/src/main/kotlin"),
-)
+sourceSets["main"].kotlin {
+  srcDir(file("../trailblaze-pack-bundler/src/main/kotlin"))
+  // Exclude the daemon-only `WorkspaceClientDtsGenerator` from build-logic's source set.
+  // That class imports koog (`ToolDescriptor`) and trailblaze-models (`PackScriptedToolFile`)
+  // — neither of which build-logic has on its lean Gradle-plugin classpath, and pulling them
+  // in would inflate every Gradle build's configuration phase. The runtime consumer is
+  // `:trailblaze-host`'s daemon startup; build-logic doesn't construct this generator. See
+  // the matching `compileOnly` declaration in `:trailblaze-pack-bundler/build.gradle.kts`.
+  exclude("**/WorkspaceClientDtsGenerator.kt")
+}
 
 dependencies {
   implementation(libs.plugins.spotless.get().let { "${it.pluginId}:${it.pluginId}.gradle.plugin:${it.version}" })

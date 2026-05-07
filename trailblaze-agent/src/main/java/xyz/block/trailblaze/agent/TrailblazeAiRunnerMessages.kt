@@ -20,6 +20,7 @@ object TrailblazeAiRunnerMessages {
     promptStep: PromptStep,
     completedObjectiveDescriptions: List<String> = emptyList(),
     latestObjectiveStatus: String? = null,
+    cycleWarning: String? = null,
   ): String {
     val prompt = promptStep.prompt
     val isVerification = promptStep is VerificationStep
@@ -53,6 +54,15 @@ object TrailblazeAiRunnerMessages {
           appendLine("Your last status: $status")
           appendLine()
         }
+
+      // Stuck-detection signal — fires when the runner has noticed action repetition without
+      // progress. Surfacing this here lets the LLM break the loop or call objectiveStatus(FAILED)
+      // rather than continuing the same approach.
+      cycleWarning?.let {
+        appendLine("## STUCK-DETECTION HINT")
+        appendLine(it)
+        appendLine()
+      }
 
       // Current objective
       appendLine("## CURRENT OBJECTIVE")

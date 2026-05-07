@@ -20,4 +20,9 @@ class CompositeConfigResourceSource(
     sources.fold(emptyMap()) { acc, source ->
       acc + source.discoverAndLoad(directoryPath, suffix)
     }
+
+  override fun discoverAndLoadRecursive(directoryPath: String, suffix: String): Map<String, String> =
+    sources.fold(emptyMap()) { acc, source ->
+      acc + source.discoverAndLoadRecursive(directoryPath, suffix)
+    }
 }

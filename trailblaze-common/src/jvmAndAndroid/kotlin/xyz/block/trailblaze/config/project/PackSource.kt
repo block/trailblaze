@@ -57,6 +57,55 @@ sealed class PackSource {
     }
   }
 
+  /**
+   * Lists pack-relative file paths inside [relativeDir] whose name ends with one of
+   * [suffixes]. Direct children only — does not recurse. Returns paths relative to the
+   * pack root (e.g. `tools/foo.tool.yaml`), suitable for passing back to [readSibling].
+   *
+   * Used by the pack loader to auto-discover operational tool YAMLs from `<pack>/tools/`
+   * without requiring the manifest to enumerate them. Returns an empty list when
+   * [relativeDir] doesn't exist (a pack with no `tools/` dir is fine — it just contributes
+   * no auto-discovered tools).
+   *
+   * Same containment guarantee as [readSibling]: [relativeDir] is validated through the
+   * same path-rejection rules ([requirePackRelativePath]) so a manifest cannot escape its
+   * own directory via a poisoned directory path.
+   *
+   * @throws IllegalArgumentException if [relativeDir] fails containment validation.
+   */
+  fun listSiblings(relativeDir: String, suffixes: List<String>): List<String> {
+    requirePackRelativePath(relativeDir)
+    return when (this) {
+      is Filesystem -> listFilesystemSiblings(relativeDir, suffixes)
+      is Classpath -> listClasspathSiblings(relativeDir, suffixes)
+    }
+  }
+
+  /**
+   * Like [listSiblings] but recurses into subdirectories. Returns pack-relative paths
+   * (e.g. `waypoints/web/dashboard/home.waypoint.yaml`) for every file under [relativeDir]
+   * — at any depth — whose name matches one of [suffixes].
+   *
+   * Used by the pack loader to auto-discover waypoint YAMLs from `<pack>/waypoints/`
+   * without requiring the manifest to enumerate them. The Square pack organizes its
+   * ~120 waypoints under `waypoints/{android,ios,web}/...` subdirs (web/dashboard/items/
+   * categories.waypoint.yaml is four levels deep), so the discovery path has to walk the
+   * whole tree — same shape `ToolYamlLoader.discoverPackBundledToolContents` already uses
+   * for tools.
+   *
+   * Same containment guarantee as [listSiblings]. Returns an empty list when [relativeDir]
+   * doesn't exist (a pack with no `waypoints/` dir is fine).
+   *
+   * @throws IllegalArgumentException if [relativeDir] fails containment validation.
+   */
+  fun listSiblingsRecursive(relativeDir: String, suffixes: List<String>): List<String> {
+    requirePackRelativePath(relativeDir)
+    return when (this) {
+      is Filesystem -> listFilesystemSiblingsRecursive(relativeDir, suffixes)
+      is Classpath -> listClasspathSiblingsRecursive(relativeDir, suffixes)
+    }
+  }
+
   /** Human-readable identifier used in log messages and error reporting. */
   abstract fun describe(): String
 
@@ -73,6 +122,90 @@ sealed class PackSource {
    */
   data class Classpath(val resourceDir: String) : PackSource() {
     override fun describe(): String = "classpath:$resourceDir"
+  }
+
+  private fun Filesystem.listFilesystemSiblings(
+    relativeDir: String,
+    suffixes: List<String>,
+  ): List<String> {
+    val target = File(packDir, relativeDir)
+    if (!target.isDirectory) return emptyList()
+    val canonicalTarget = target.canonicalFile
+    val canonicalPackDir = packDir.canonicalFile
+    // Same containment check as the read path — a malicious symlink at <packDir>/<relativeDir>
+    // resolving outside packDir must be rejected, not silently followed. See the
+    // containment-guarantee section in the class kdoc.
+    require(canonicalTarget.toPath().startsWith(canonicalPackDir.toPath())) {
+      "Pack-relative directory resolved outside packDir: '$relativeDir' -> $canonicalTarget " +
+        "(packDir=${canonicalPackDir.path})"
+    }
+    return target.listFiles()
+      .orEmpty()
+      .asSequence()
+      .filter { it.isFile }
+      .filter { file -> suffixes.any { file.name.endsWith(it) } }
+      .map { "$relativeDir/${it.name}" }
+      .sorted() // stable, deterministic ordering across filesystems
+      .toList()
+  }
+
+  private fun Classpath.listClasspathSiblings(
+    relativeDir: String,
+    suffixes: List<String>,
+  ): List<String> {
+    val resourceDirPath = "$resourceDir/$relativeDir"
+    val matches = ClasspathResourceDiscovery.discoverFilenamesRecursive(
+      directoryPath = resourceDirPath,
+      suffix = "", // we filter by suffix manually below — recursive walk returns relative paths
+    )
+    return matches.asSequence()
+      // Direct children only: relative path inside `relativeDir` must contain no `/`.
+      .filter { !it.contains('/') }
+      .filter { name -> suffixes.any { name.endsWith(it) } }
+      .map { "$relativeDir/$it" }
+      .sorted()
+      .toList()
+  }
+
+  private fun Filesystem.listFilesystemSiblingsRecursive(
+    relativeDir: String,
+    suffixes: List<String>,
+  ): List<String> {
+    val target = File(packDir, relativeDir)
+    if (!target.isDirectory) return emptyList()
+    val canonicalTarget = target.canonicalFile
+    val canonicalPackDir = packDir.canonicalFile
+    require(canonicalTarget.toPath().startsWith(canonicalPackDir.toPath())) {
+      "Pack-relative directory resolved outside packDir: '$relativeDir' -> $canonicalTarget " +
+        "(packDir=${canonicalPackDir.path})"
+    }
+    val targetPath = target.toPath()
+    return target.walkTopDown()
+      .filter { it.isFile }
+      .filter { file -> suffixes.any { file.name.endsWith(it) } }
+      .map { file ->
+        val rel = targetPath.relativize(file.toPath()).toString()
+          .replace(File.separatorChar, '/')
+        "$relativeDir/$rel"
+      }
+      .sorted() // stable, deterministic ordering across filesystems
+      .toList()
+  }
+
+  private fun Classpath.listClasspathSiblingsRecursive(
+    relativeDir: String,
+    suffixes: List<String>,
+  ): List<String> {
+    val resourceDirPath = "$resourceDir/$relativeDir"
+    val matches = ClasspathResourceDiscovery.discoverFilenamesRecursive(
+      directoryPath = resourceDirPath,
+      suffix = "", // suffix filter applied per-entry below
+    )
+    return matches.asSequence()
+      .filter { name -> suffixes.any { name.endsWith(it) } }
+      .map { "$relativeDir/$it" }
+      .sorted()
+      .toList()
   }
 
   private fun Filesystem.readFilesystemSibling(relativePath: String): String? {

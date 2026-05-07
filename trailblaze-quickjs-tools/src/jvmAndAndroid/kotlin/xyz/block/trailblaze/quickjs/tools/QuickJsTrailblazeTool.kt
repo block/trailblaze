@@ -51,12 +51,24 @@ class QuickJsTrailblazeTool(
   private fun buildCtxEnvelope(toolExecutionContext: TrailblazeToolExecutionContext): JsonObject {
     val sessionId = toolExecutionContext.sessionProvider.invoke().sessionId
     val deviceInfo = toolExecutionContext.trailblazeDeviceInfo
+    // ctx.target is populated only when the host runner pre-resolved a target at session
+    // start (see TrailblazeToolExecutionContext.resolvedTarget). Web/scratch sessions and
+    // unit-test fixtures leave it null, and that's the right shape — the JSON omits the
+    // `target` key entirely so JS authors can `if (ctx.target) { ... }` cleanly.
+    val target = toolExecutionContext.resolvedTarget?.let { resolved ->
+      QuickJsTargetContext(
+        id = resolved.id,
+        appIds = resolved.appIds,
+        resolvedAppId = toolExecutionContext.resolvedAppId,
+      )
+    }
     val ctx = QuickJsToolCtxEnvelope(
       sessionId = sessionId.value,
       device = QuickJsDeviceContext(
         platform = deviceInfo.trailblazeDriverType.platform.name,
         driver = deviceInfo.trailblazeDriverType.yamlKey,
       ),
+      target = target,
     )
     // The host expects the ctx as a JsonObject (it embeds it inline as a JS literal),
     // so encode-to-element rather than encode-to-string — saves a parse-back trip.

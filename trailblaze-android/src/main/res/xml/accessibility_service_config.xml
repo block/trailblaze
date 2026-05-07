@@ -1,3 +1,10 @@
+<!--
+  isAccessibilityTool: API 30+. Signals to the framework that this service is a
+  legitimate accessibility tool, exempting it from accessibilityDataSensitive
+  filtering on supported devices (so Trailblaze can see UI in kiosk apps that opt
+  into sensitive-data hiding by default). Silently ignored on API < 30 — no
+  crash, no warning, just a no-op.
+-->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:accessibilityEventTypes="typeAllMask"
     android:accessibilityFeedbackType="feedbackGeneric"
@@ -5,5 +12,6 @@
     android:canPerformGestures="true"
     android:canRetrieveWindowContent="true"
     android:canTakeScreenshot="true"
+    android:isAccessibilityTool="true"
     android:notificationTimeout="100"
     android:packageNames="@null" />

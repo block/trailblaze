@@ -52,11 +52,11 @@ If no overlay is blocking, choose ONE tool to progress toward the objective.
 - `reasoning`: Why this action achieves the objective
 - `screenSummary`: Brief description of current screen
 - `confidence`: HIGH / MEDIUM / LOW
+- `objectiveAppearsAchieved`: true iff the current screen state satisfies the objective/assertion. Always emit (true or false). In verify mode this is the verdict — without it, the verify command treats the result as "not confirmed".
+- `objectiveAppearsImpossible`: true iff the screen state contradicts the objective/assertion or a blocker prevents progress. Always emit (true or false). Both `objectiveAppearsAchieved` and `objectiveAppearsImpossible` may be false simultaneously (uncertain — neither confirmed nor refuted).
 
 ## Optional Fields
 - `answer`: When the objective is a question, provide a direct answer here (not in reasoning)
-- `objectiveAppearsAchieved`: true if objective is already complete
-- `objectiveAppearsImpossible`: true if blocked by error/missing feature
 - `suggestedToolHint`: NAVIGATION | VERIFICATION | STANDARD | specific tool name
 - `screenState`: Set when screen is NOT normal (see Blocking Overlays above)
 - `recoveryAction`: JSON recovery strategy `{type, ...params}`

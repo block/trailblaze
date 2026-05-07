@@ -23,24 +23,22 @@ class PlaywrightNativeSelectOptionTool(
     "Element ID (e.g., 'e5'), ARIA descriptor (e.g., 'combobox \"Category\"'), " +
       "or CSS selector with css= prefix (e.g., 'css=#my-select').",
   )
-  val ref: String,
-  @param:LLMDescription("Human-readable description of the select element, for logging.")
-  val element: String = "",
+  val ref: String? = null,
   @param:LLMDescription("The option values or visible text labels to select.")
   val values: List<String>,
   override val reasoning: String? = null,
   val nodeSelector: TrailblazeNodeSelector? = null,
 ) : PlaywrightExecutableTool, ReasoningTrailblazeTool {
-  override val elementDescriptor: String? get() = element.ifBlank { null }
-  override val targetRef: String get() = ref
+  override val targetRef: String? get() = ref
+  override val targetNodeSelector: TrailblazeNodeSelector? get() = nodeSelector
   override fun withNodeSelector(selector: TrailblazeNodeSelector): PlaywrightExecutableTool =
-    PlaywrightNativeSelectOptionTool(ref = ref, element = element, values = values, reasoning = reasoning, nodeSelector = selector)
+    PlaywrightNativeSelectOptionTool(ref = null, values = values, reasoning = reasoning, nodeSelector = selector)
 
   override suspend fun executeWithPlaywright(
     page: Page,
     context: TrailblazeToolExecutionContext,
   ): TrailblazeToolResult {
-    val description = element.ifBlank { ref }
+    val description = PlaywrightExecutableTool.describeTarget(nodeSelector, ref)
     reasoning?.let { Console.log("### Reasoning: $it") }
     Console.log("### Selecting options in $description: $values")
     if (values.isEmpty()) {

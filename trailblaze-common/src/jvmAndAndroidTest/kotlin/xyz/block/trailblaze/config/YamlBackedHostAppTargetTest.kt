@@ -77,8 +77,8 @@ class YamlBackedHostAppTargetTest {
       """.trimIndent(),
       toolNameResolver = resolver,
     )
-    assertEquals(setOf("com.example.app.debug"), target.getPossibleAppIdsForPlatform(TrailblazeDevicePlatform.ANDROID))
-    assertEquals(setOf("com.example.app"), target.getPossibleAppIdsForPlatform(TrailblazeDevicePlatform.IOS))
+    assertEquals(listOf("com.example.app.debug"), target.getPossibleAppIdsForPlatform(TrailblazeDevicePlatform.ANDROID))
+    assertEquals(listOf("com.example.app"), target.getPossibleAppIdsForPlatform(TrailblazeDevicePlatform.IOS))
     assertNull(target.getPossibleAppIdsForPlatform(TrailblazeDevicePlatform.WEB))
   }
 

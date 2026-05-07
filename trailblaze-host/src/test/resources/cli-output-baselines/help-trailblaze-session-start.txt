@@ -5,13 +5,17 @@
 # Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
 # small wording / spacing changes can be intentional or accidental.
 # ----------------------------------------------------------------------
-Usage: trailblaze session start [-hvV] [--no-logs] [--no-video] [-d=<device>]
+Usage: trailblaze session start [-hvV] [--no-logs] [--no-video] -d=<device>
                                 [--headless=<headless>] [--mode=<mode>]
                                 [--target=<target>] [--title=<title>]
 Start a new session with automatic video and log capture
-  -d, --device=<device>   Device: platform (android, ios, web) or platform/id
-                            (e.g., ios/DEVICE-UUID). Binds the shared CLI
-                            session to that device for session workflows.
+  -d, --device=<device>   Device to bind the session to: platform (android,
+                            ios, web) or platform/id (e.g., ios/DEVICE-UUID).
+                            Required — the CLI doesn't durably track an
+                            "active" session across single-shot MCP calls, so
+                            every device-acting command takes the device
+                            explicitly. Examples: --device android, --device
+                            ios/DEVICE-UUID, --device web.
   -h, --help              Show this help message and exit.
       --headless=<headless>
                           For --device web/...: launch the Playwright browser

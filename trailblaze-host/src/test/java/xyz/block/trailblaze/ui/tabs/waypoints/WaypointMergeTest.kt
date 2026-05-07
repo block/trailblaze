@@ -92,7 +92,34 @@ class WaypointMergeTest {
   }
 
   @Test
-  fun packOnlyWithoutExample_fallsBackToBundledLabel() {
+  fun packOnlyWithoutExample_usesIdToPackPathLabel() {
+    val root = tempFolder.newFolder("root")
+
+    val items = mergeWaypointSources(
+      definitions = listOf(WaypointDefinition(id = "myapp/home")),
+      idToFile = emptyMap(),
+      packContents = PackContents(
+        ids = setOf("myapp/home"),
+        examples = emptyMap(),
+        idToPackPath = mapOf("myapp/home" to "pack:myapp — waypoints/android/home.waypoint.yaml"),
+      ),
+      root = root,
+      loadFilesystemExample = { _, _ -> error("must not be called") },
+    )
+
+    val item = items.single()
+    // Even without a captured example, pack-provided ids surface their manifest path so
+    // platform derivation (which splits the source label on `/` and matches `android` /
+    // `ios` / `web` as a path *segment*, not a substring) still works.
+    assertEquals(
+      "pack:myapp — waypoints/android/home.waypoint.yaml",
+      item.sourceLabel,
+    )
+    assertNull(item.example)
+  }
+
+  @Test
+  fun packOnlyWithoutExample_orPathFallsBackToBundledLabel() {
     val root = tempFolder.newFolder("root")
 
     val items = mergeWaypointSources(
@@ -110,7 +137,7 @@ class WaypointMergeTest {
     assertEquals(
       "(pack-bundled)",
       item.sourceLabel,
-      "A pack-provided id with no captured example must still describe itself as pack-bundled.",
+      "When neither example nor manifest path is available, the bundled-label fallback still kicks in.",
     )
     assertNull(item.example)
   }

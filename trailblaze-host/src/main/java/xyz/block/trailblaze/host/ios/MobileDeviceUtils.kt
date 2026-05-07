@@ -5,6 +5,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.model.AppVersionInfo
+import xyz.block.trailblaze.model.TrailblazeHostAppTarget
 import xyz.block.trailblaze.util.AndroidHostAdbUtils
 import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils
 import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils.runProcess
@@ -60,6 +61,58 @@ object MobileDeviceUtils {
       TrailblazeDevicePlatform.WEB -> emptyList()
       TrailblazeDevicePlatform.DESKTOP -> emptyList()
     }.toSet()
+  }
+
+  /**
+   * Resolves the app id this [target] has installed on [trailblazeDeviceId] — picks the first
+   * entry from `target.getPossibleAppIdsForPlatform(deviceId.platform)` that's actually present
+   * on the device. Cross-platform via [getInstalledAppIds]: iOS routes through `simctl listapps`,
+   * Android through `pm list packages`.
+   *
+   * Why this exists: a target may declare multiple app ids (e.g. a primary build + a fallback
+   * variant), and which one is "current" depends on the device — different simulators or
+   * emulators may have different builds installed. Picking the first DECLARED id without
+   * consulting the device is wrong for production launch flows; this helper consults the device.
+   *
+   * **No caching.** Reads installed app ids fresh on each call. Two reasons: (1) the install
+   * state can change between test steps (an earlier step may install the app, a later step
+   * may uninstall it), and a stale cache would silently use the wrong value; (2) the existing
+   * UI/MCP path already maintains a `StateFlow`-backed cache via
+   * `TrailblazeDeviceManager.getInstalledAppIdsFlow` for reactive UI; tools should not maintain
+   * a parallel cache that can drift from it. If profiling later shows `listapps`/`pm list` is
+   * a hot-path bottleneck, the right fix is to thread the existing `TrailblazeDeviceManager`
+   * cache through to tool execution rather than re-cache here.
+   *
+   * **Runtime YAML targets are supported.** The signature takes the abstract
+   * [TrailblazeHostAppTarget], so both buildtime Kotlin `data object` targets and runtime
+   * [xyz.block.trailblaze.config.YamlBackedHostAppTarget] instances flow through the same
+   * polymorphic `getPossibleAppIdsForPlatform` and `getAppIdIfInstalled` calls — no special
+   * casing.
+   *
+   * Call sites that only have a target id string (e.g. JS/TS-driven flows once tool migration
+   * lands) should resolve it to an instance via the canonical registry —
+   * `mcpBridge.getAvailableAppTargets().firstOrNull { it.id == id }` or the existing
+   * `Iterable<TrailblazeHostAppTarget>.findById(id)` extension — and pass the resolved instance
+   * here. That keeps the helper itself stateless and avoids baking a registry into a static
+   * utility.
+   *
+   * Throws [IllegalStateException] when none of the target's declared app ids are installed on
+   * the device — the error names the target id, the device, and the declared-vs-installed gap
+   * so the oncaller can either install the right build or update the target's declared list.
+   */
+  fun findInstalledAppIdForTarget(
+    target: TrailblazeHostAppTarget,
+    trailblazeDeviceId: TrailblazeDeviceId,
+  ): String {
+    val installed = getInstalledAppIds(trailblazeDeviceId)
+    val platform = trailblazeDeviceId.trailblazeDevicePlatform
+    return target.getAppIdIfInstalled(platform, installed)
+      ?: error(
+        "Target '${target.id}' declares ${platform.name} app ids " +
+          "${target.getPossibleAppIdsForPlatform(platform)} but none are installed on device " +
+          "'${trailblazeDeviceId.instanceId}'. Installed: $installed. Either install one of the " +
+          "declared ids on the device, or add the actually-installed id to the target's declared list."
+      )
   }
 
   fun ensureAppsAreForceStopped(

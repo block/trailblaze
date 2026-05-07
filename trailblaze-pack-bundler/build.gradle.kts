@@ -29,8 +29,28 @@ dependencies {
   implementation(libs.kaml)
   implementation(libs.kotlinx.serialization.core)
 
+  // [WorkspaceClientDtsGenerator] takes `ToolDescriptor` and `PackScriptedToolFile` directly
+  // (frozen interface contract from #2749 PR-C). These are `compileOnly` because:
+  //   1. The Gradle plugin (build-logic) does NOT use the generator — only the daemon does.
+  //      Build-logic source-includes this module's `src/main/kotlin` via a `srcDir` composition
+  //      (see `build-logic/build.gradle.kts:50`); a normal `implementation` would force build-logic
+  //      to also pull koog + trailblaze-models onto its lean configuration-phase classpath.
+  //      `compileOnly` keeps the bundler's own compile working without imposing a runtime dep on
+  //      callers that don't construct the generator.
+  //   2. Build-logic excludes this single file from its srcDir to avoid the same runtime-dep
+  //      bleedover for build-logic's compileKotlin task. See the matching `kotlin.exclude(...)` in
+  //      `build-logic/build.gradle.kts`.
+  // The runtime consumer (`:trailblaze-host`) already has `koog-agents-tools` and
+  // `:trailblaze-common` (transitive `:trailblaze-models`) in its classpath.
+  compileOnly(libs.koog.agents.tools)
+  compileOnly(project(":trailblaze-models"))
+
   testImplementation(kotlin("test"))
   testImplementation(kotlin("test-junit"))
+  // Tests construct real `ToolDescriptor` and `PackScriptedToolFile` instances, so the test
+  // classpath needs the real deps (not just compileOnly).
+  testImplementation(libs.koog.agents.tools)
+  testImplementation(project(":trailblaze-models"))
 }
 
 tasks.named<Test>("test") {

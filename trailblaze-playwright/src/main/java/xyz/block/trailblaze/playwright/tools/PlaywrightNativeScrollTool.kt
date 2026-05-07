@@ -30,16 +30,14 @@ class PlaywrightNativeScrollTool(
       "or CSS selector with css= prefix (e.g., 'css=#scrollable-panel'). " +
       "When omitted, scrolls the full page.",
   )
-  val ref: String = "",
-  @param:LLMDescription("Human-readable description of the container being scrolled, for logging.")
-  val element: String = "",
+  val ref: String? = null,
   override val reasoning: String? = null,
   val nodeSelector: TrailblazeNodeSelector? = null,
 ) : PlaywrightExecutableTool, ReasoningTrailblazeTool {
-  override val elementDescriptor: String? get() = element.ifBlank { null }
-  override val targetRef: String? get() = ref.ifBlank { null }
+  override val targetRef: String? get() = ref?.takeIf { it.isNotBlank() }
+  override val targetNodeSelector: TrailblazeNodeSelector? get() = nodeSelector
   override fun withNodeSelector(selector: TrailblazeNodeSelector): PlaywrightExecutableTool =
-    PlaywrightNativeScrollTool(direction = direction, amount = amount, ref = ref, element = element, reasoning = reasoning, nodeSelector = selector)
+    PlaywrightNativeScrollTool(direction = direction, amount = amount, ref = null, reasoning = reasoning, nodeSelector = selector)
 
   @Serializable
   enum class ScrollDirection {
@@ -53,7 +51,12 @@ class PlaywrightNativeScrollTool(
     page: Page,
     context: TrailblazeToolExecutionContext,
   ): TrailblazeToolResult {
-    val description = element.ifBlank { ref.ifBlank { "page" } }
+    val hasTarget = nodeSelector != null || !ref.isNullOrBlank()
+    val description = if (hasTarget) {
+      PlaywrightExecutableTool.describeTarget(nodeSelector, ref)
+    } else {
+      "page"
+    }
     reasoning?.let { Console.log("### Reasoning: $it") }
     Console.log("### Scrolling $direction by $amount pixels on '$description'")
     return try {
@@ -65,7 +68,7 @@ class PlaywrightNativeScrollTool(
           ScrollDirection.LEFT -> -amount.toDouble() to 0.0
         }
 
-      if (ref.isNotBlank()) {
+      if (hasTarget) {
         val (locator, error) =
           PlaywrightExecutableTool.validateAndResolveRef(page, ref, description, context, nodeSelector)
         if (error != null) return error

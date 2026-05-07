@@ -1,25 +1,35 @@
-# Trailblaze open source workspace.
+# Trailblaze open-source workspace anchor.
 #
-# This is the workspace anchor for anyone working inside this repo. Walk-up discovery
-# finds it from any cwd under the repo root, layering the demo packs below on top of
-# the bundled framework defaults (the `trailblaze` stdlib pack still ships in the JAR;
-# only consumer-facing demos live here).
+# This file marks the OSS repo as a Trailblaze workspace — walk-up discovery
+# from any cwd inside the repo lands here, which lets the framework pick up the
+# pack manifests under `trails/config/packs/` (clock, contacts, wikipedia).
 #
-# These demo targets used to be bundled into every Trailblaze JAR via classpath
-# resources. They were demoted into this workspace so binary-only adopters running
-# outside the repo see a clean toolbox listing — only their own targets, not framework
-# demos.
+# It deliberately declares no `llm:` defaults. The OSS distro defaults to
+# `llm = none` so that an external CLI user driving Trailblaze through Claude
+# Code, Codex, or another agent doesn't have their `OPENAI_API_KEY` /
+# `ANTHROPIC_API_KEY` / etc. silently consumed. Users opt in explicitly to a
+# provider/model of their choice:
 #
-# LLM defaults — recommended settings for open source contributors. Override with
-# ~/.trailblaze/trailblaze.yaml for personal preferences. Provider connection details
-# and model definitions live in:
-#   trailblaze-models/src/commonMain/resources/trailblaze-config/providers/
+#   trailblaze config llm <provider>/<model>     # persist for this machine
+#   trailblaze trail … --llm <provider>/<model>  # one-shot for a single run
+#
+# `trailblaze config models` lists every provider / model id the framework
+# knows about so an opting-in user doesn't have to guess.
+#
+# `targets:` lists the target-pack ids the workspace opts into. Each id resolves
+# via the convention `<workspace>/packs/<id>/pack.yaml`. Library packs reach
+# scope only through transitive `dependencies:` from a listed target — not by
+# being listed here directly.
+#
+# Listing the targets below is redundant with the filesystem-based auto-discovery
+# the framework runs (an empty `targets:` would also load every target pack
+# under `packs/`) — but a non-empty document is load-bearing: the project-config
+# loader treats an all-comments file as an empty YAML doc, emits a parse warning
+# on every daemon start, and ignores it. The explicit list also doubles as a
+# directory-of-contents for OSS readers.
 
-llm:
-  defaults:
-    model: openai/gpt-4.1
-
-packs:
-  - packs/clock/pack.yaml
-  - packs/contacts/pack.yaml
-  - packs/wikipedia/pack.yaml
+targets:
+  - clock
+  - contacts
+  - wikipedia
+  - calendar

@@ -144,6 +144,13 @@ class TrailblazeLogger(
   ): String? {
     val screenshotFileName = logScreenState(session, screenState) ?: return null
 
+    // If the screenState was captured in migration mode, the producer wraps it in
+    // [MigrationScreenState] (the decorator delegates everything else to the primary
+    // state, so runtime tools and reports are unaffected). Pull the side-channel
+    // accessibility tree off the decorator here so it lands on the snapshot log without
+    // any interface change to ScreenState. Null for every non-migration capture.
+    val driverMigrationTreeNode =
+      (screenState as? xyz.block.trailblaze.api.MigrationScreenState)?.driverMigrationTreeNode
     log(
       session,
       TrailblazeLog.TrailblazeSnapshotLog(
@@ -151,6 +158,7 @@ class TrailblazeLogger(
         screenshotFile = screenshotFileName,
         viewHierarchy = screenState.viewHierarchy,
         trailblazeNodeTree = screenState.trailblazeNodeTree,
+        driverMigrationTreeNode = driverMigrationTreeNode,
         viewHierarchyText = screenState.viewHierarchyTextRepresentation,
         deviceWidth = screenState.deviceWidth,
         deviceHeight = screenState.deviceHeight,
@@ -298,12 +306,21 @@ class TrailblazeLogger(
       inputTokenBreakdown = tokenBreakdown,
     )
 
+    // Side-channel migration tree (see MigrationScreenState). Same logic as logSnapshot —
+    // when the screen state was captured in migration mode the decorator carries the
+    // accessibility-shape tree alongside the canonical primary; pull it off here so
+    // migrate-trail's cursor-scan fallback can read accessibility selectors out of LLM
+    // request logs too. Null on every non-migration capture.
+    val migrationTree =
+      (stepStatus.currentScreenState as? xyz.block.trailblaze.api.MigrationScreenState)
+        ?.driverMigrationTreeNode
     log(
       session,
       TrailblazeLog.TrailblazeLlmRequestLog(
         agentTaskStatus = stepStatus.currentStatus.value,
         viewHierarchy = stepStatus.currentScreenState.viewHierarchy,
         trailblazeNodeTree = stepStatus.currentScreenState.trailblazeNodeTree,
+        driverMigrationTreeNode = migrationTree,
         instructions = stepStatus.promptStep.prompt,
         trailblazeLlmModel = trailblazeLlmModel,
         llmMessages = (koogLlmRequestMessages + response).toTrailblazeLlmMessages(),

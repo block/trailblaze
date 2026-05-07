@@ -1,0 +1,2 @@
+id: exec
+class: xyz.block.trailblaze.toolcalls.commands.ExecTrailblazeTool

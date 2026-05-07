@@ -5,7 +5,8 @@
 # Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
 # small wording / spacing changes can be intentional or accidental.
 # ----------------------------------------------------------------------
-Usage: trailblaze waypoint graph [-hV] [-o=<out>] [--root=<root>]
+Usage: trailblaze waypoint graph [-hV] [-o=<out>] [--platform=<id>]
+                                 [--root=<path>] [--target=<id>]
 Render the waypoint navigation graph (waypoints, authored shortcuts, authored
 trailheads) as a single self-contained HTML file. The output bakes in
 screenshots
@@ -17,12 +18,31 @@ side.
 
 For a live, refresh-on-edit view from the running daemon, point your browser at
 http://localhost:<daemon-port>/waypoints/graph instead.
-  -h, --help          Show this help message and exit.
-  -o, --out=<out>     Output HTML file path (default: ./waypoint-graph.html in
-                        the current directory). Parent directories are created
-                        if missing. The file is overwritten if present.
-      --root=<root>   Filesystem directory to scan for *.waypoint.yaml files
-                        (default: ./trails, resolved against the current
-                        working directory). Pack-bundled waypoints from the
-                        classpath are always included regardless of this flag.
-  -V, --version       Print version information and exit.
+  -h, --help            Show this help message and exit.
+  -o, --out=<out>       Output HTML file path (default: ./.
+                          trailblaze/reports/waypoint-graph.html, relative to
+                          the current directory). The default scopes the
+                          artifact to .trailblaze/reports/ — a stack-agnostic,
+                          generated-output-only subpath that consumers can
+                          gitignore without having to blanket-ignore the rest
+                          of .trailblaze/ (which may hold things they want to
+                          commit). Parent directories are created if missing;
+                          the file is overwritten if present.
+      --platform=<id>   Platform to scope the graph to (`android`, `ios`, or
+                          `web`). Filters waypoints whose source path is under
+                          `waypoints/<platform>/...` and drops
+                          shortcuts/trailheads that cross out of that scope.
+                          Combine with --target to produce a single (target,
+                          platform) map.
+      --root=<path>     Filesystem directory to scan for *.waypoint.yaml files
+                          (default: ./trails, resolved against the current
+                          working directory). Overrides --target's root
+                          resolution. Pack-bundled waypoints from the classpath
+                          are always included regardless of this flag.
+      --target=<id>     Pack id to scope the graph to (e.g. `myapp`, `clock`).
+                          Filters the rendered graph to waypoints whose id
+                          starts with `<id>/` and drops shortcuts/trailheads
+                          that cross out of that scope. Also resolves --root to
+                          <workspace>/packs/<id>/waypoints/ when no explicit
+                          --root is given.
+  -V, --version         Print version information and exit.

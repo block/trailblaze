@@ -1,13 +1,18 @@
 package xyz.block.trailblaze.toolcalls
 
+import ai.koog.agents.core.tools.ToolDescriptor
+import ai.koog.agents.core.tools.ToolParameterDescriptor
 import ai.koog.agents.core.tools.ToolParameterType
 import assertk.assertFailure
 import assertk.assertThat
 import assertk.assertions.containsExactly
 import assertk.assertions.isEqualTo
+import assertk.assertions.isNotNull
+import assertk.assertions.isNull
 import assertk.assertions.messageContains
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.parseKoogParameterType
 import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toKoogToolDescriptor
+import xyz.block.trailblaze.toolcalls.TrailblazeKoogTool.Companion.toTrailblazeToolDescriptor
 import kotlin.test.Test
 
 /**
@@ -86,5 +91,43 @@ class TrailblazeKoogToolTest {
     assertThat(koog.requiredParameters.single().type).isEqualTo(ToolParameterType.String) // unknown → String
     assertThat(koog.optionalParameters.map { it.name }).containsExactly("retries")
     assertThat(koog.optionalParameters.single().type).isEqualTo(ToolParameterType.Integer) // known preserved
+  }
+
+  /**
+   * Pins that an enum-typed Koog parameter surfaces its allowed entries on the Trailblaze
+   * descriptor side as `validValues`. The recording Tool Palette routes its widget choice on
+   * this field — non-null means "render a dropdown of these values", null means "render a
+   * free-text input". Without this round-trip, a Koog enum collapsed to `type = "enum"` with
+   * no values, leaving the dialog with nothing to drop down to.
+   */
+  @Test fun `toTrailblazeToolDescriptor preserves enum entries as validValues`() {
+    val koog = ToolDescriptor(
+      name = "press",
+      description = "Press a direction",
+      requiredParameters = listOf(
+        ToolParameterDescriptor(
+          name = "direction",
+          description = "which direction",
+          type = ToolParameterType.Enum(arrayOf("UP", "DOWN", "LEFT", "RIGHT")),
+        ),
+        ToolParameterDescriptor(
+          name = "label",
+          description = "free text",
+          type = ToolParameterType.String,
+        ),
+      ),
+      optionalParameters = emptyList(),
+    )
+
+    val descriptor = koog.toTrailblazeToolDescriptor()
+    val direction = descriptor.requiredParameters.single { it.name == "direction" }
+    val label = descriptor.requiredParameters.single { it.name == "label" }
+
+    assertThat(direction.validValues).isNotNull()
+      .containsExactly("UP", "DOWN", "LEFT", "RIGHT")
+    // Non-enum parameters must NOT spuriously gain validValues — null vs non-null is the
+    // signal the Tool Palette routes on, and the dialog should fall through to a text field
+    // for plain Strings rather than rendering an empty dropdown.
+    assertThat(label.validValues).isNull()
   }
 }

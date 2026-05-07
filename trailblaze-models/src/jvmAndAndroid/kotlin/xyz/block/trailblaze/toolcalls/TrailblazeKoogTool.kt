@@ -47,7 +47,13 @@ open class TrailblazeKoogTool<T : TrailblazeTool>(
       TrailblazeToolParameterDescriptor(
         name = this.name,
         description = this.description.takeIf { it.isNotBlank() },
-        type = this.type.name
+        type = this.type.name,
+        // Surface enum entries when the Koog type carries them — same `entries.map { it.toString() }`
+        // shape `KoogToMcpExt.fillJsonSchema` uses to emit JSON Schema, so the descriptor and the
+        // schema agree on what values are legal. Type stays as `this.type.name` ("enum") so
+        // existing consumers keying off the name don't shift — `validValues != null` is the new
+        // signal, not a different type label.
+        validValues = (this.type as? ToolParameterType.Enum)?.entries?.map { it.toString() },
       )
 
     fun ToolDescriptor.toTrailblazeToolDescriptor(): TrailblazeToolDescriptor = TrailblazeToolDescriptor(

@@ -26,8 +26,7 @@ import xyz.block.trailblaze.host.util.BufferedImageUtils.toByteArray
 import xyz.block.trailblaze.utils.Ext.toViewHierarchyTreeNode
 import xyz.block.trailblaze.viewhierarchy.ViewHierarchyFilter
 import xyz.block.trailblaze.viewhierarchy.ViewHierarchyTreeNodeUtils
-import xyz.block.trailblaze.viewmatcher.matching.toTrailblazeNodeAndroidMaestro
-import xyz.block.trailblaze.viewmatcher.matching.toTrailblazeNodeIosMaestro
+import xyz.block.trailblaze.viewmatcher.matching.toTrailblazeNode
 import java.awt.image.BufferedImage
 import java.io.ByteArrayInputStream
 import javax.imageio.ImageIO
@@ -80,17 +79,14 @@ class HostMaestroDriverScreenState(
 
     stableRelabeledViewHierarchy = vh?.relabelWithFreshIds()
 
-    // Build platform-specific TrailblazeNode tree for compact element list
-    when (deviceInfo.platform) {
-      Platform.IOS -> {
-        stableTrailblazeNodeTree = rawTree.toTrailblazeNodeIosMaestro()
-        foregroundAppId = extractIosBundleId(rawTree)
-      }
-      Platform.ANDROID -> {
-        stableTrailblazeNodeTree = rawTree.toTrailblazeNodeAndroidMaestro()
-        foregroundAppId = extractAndroidPackageId(rawTree)
-      }
-      else -> {}
+    // Build platform-specific TrailblazeNode tree for compact element list. Tree conversion
+    // is shared via `toTrailblazeNode(platform)`; foreground-app-id extraction stays inline
+    // here because the recording path doesn't need it.
+    stableTrailblazeNodeTree = rawTree.toTrailblazeNode(deviceInfo.platform)
+    foregroundAppId = when (deviceInfo.platform) {
+      Platform.IOS -> extractIosBundleId(rawTree)
+      Platform.ANDROID -> extractAndroidPackageId(rawTree)
+      else -> null
     }
 
     // Take the screenshot (raw, without set of mark).

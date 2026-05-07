@@ -157,8 +157,13 @@ class AndroidOnDeviceUiAutomatorScreenState(
     // Ensure these are set after the loop
     viewHierarchy =
       lastViewHierarchyOriginal ?: throw IllegalStateException("Failed to get view hierarchy")
-    _trailblazeNodeTree = lastMaestroTree?.toTrailblazeNodeAndroidMaestro()
     _screenshotBytes = lastScreenshotBytes ?: ByteArray(0)
+
+    // Populate trailblazeNodeTree with the UiAutomator-derived Maestro tree —
+    // the canonical shape for this driver. Migration capture lives separately
+    // (see MigrationTreeCapture) and rides along the wire response without
+    // mutating the primary tree shape that runtime tools and reports rely on.
+    _trailblazeNodeTree = lastMaestroTree?.toTrailblazeNodeAndroidMaestro()
   }
 
   override val trailblazeDevicePlatform: TrailblazeDevicePlatform = TrailblazeDevicePlatform.ANDROID

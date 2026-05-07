@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.viewmatcher.matching
 
+import maestro.Platform
 import maestro.TreeNode
 import xyz.block.trailblaze.api.DriverNodeDetail
 import xyz.block.trailblaze.api.TrailblazeNode
@@ -23,6 +24,20 @@ fun TreeNode.toTrailblazeNodeAndroidMaestro(): TrailblazeNode? =
 
 fun TreeNode.toTrailblazeNodeIosMaestro(): TrailblazeNode? =
   toTrailblazeNodeIosMaestro(NodeIdCounter())
+
+/**
+ * Platform-dispatched conversion: returns the [TrailblazeNode] tree shape the selector
+ * generator consumes for [platform], or null when the platform doesn't have a Maestro-driven
+ * mapper (web / desktop go through their own paths). Lives here so screen-state, recording,
+ * and any future Maestro-backed surface all converge on the same dispatch — the previous
+ * inline `when (platform) { IOS -> ...; ANDROID -> ...; else -> null }` was duplicated at
+ * each call site and would have drifted when a new platform got added.
+ */
+fun TreeNode.toTrailblazeNode(platform: Platform): TrailblazeNode? = when (platform) {
+  Platform.ANDROID -> toTrailblazeNodeAndroidMaestro()
+  Platform.IOS -> toTrailblazeNodeIosMaestro()
+  else -> null
+}
 
 private fun TreeNode.toTrailblazeNodeAndroidMaestro(counter: NodeIdCounter): TrailblazeNode? {
   if (attributes.isEmpty() && children.isEmpty()) return null

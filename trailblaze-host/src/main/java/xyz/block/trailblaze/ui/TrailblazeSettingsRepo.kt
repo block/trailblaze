@@ -134,11 +134,9 @@ class TrailblazeSettingsRepo(
   }
 
   fun getCurrentSelectedTargetApp(): TrailblazeHostAppTarget? {
-    return allTargetApps()
-      .filter { it.id != defaultHostAppTarget.id }
-      .firstOrNull { appTarget ->
-        appTarget.id == serverStateFlow.value.appConfig.selectedTargetAppId
-      }
+    return allTargetApps().firstOrNull { appTarget ->
+      appTarget.id == serverStateFlow.value.appConfig.selectedTargetAppId
+    }
   }
 
   /** Manages HTTP/HTTPS port resolution (runtime CLI overrides + persisted fallback). */

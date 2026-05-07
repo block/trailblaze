@@ -168,15 +168,48 @@ class TrailblazeAiRunnerMessagesTest {
     assertThat(message).doesNotContain("LAST STATUS UPDATE")
   }
 
+  // -- Stuck-detection cycle warning --
+
+  @Test
+  fun `cycle warning section appears when warning is provided`() {
+    val message = getReminderForStep(
+      prompt = "Tap on Settings",
+      cycleWarning = "WARNING: 'swipe' was called 12 of the last 15 actions",
+    )
+    assertThat(message).contains("STUCK-DETECTION HINT")
+    assertThat(message).contains("WARNING: 'swipe' was called 12 of the last 15 actions")
+  }
+
+  @Test
+  fun `cycle warning section is omitted when warning is null`() {
+    val message = getReminderForStep("Tap on Settings")
+    assertThat(message).doesNotContain("STUCK-DETECTION HINT")
+  }
+
+  @Test
+  fun `cycle warning appears before current objective`() {
+    val message = getReminderForStep(
+      prompt = "Tap on Settings",
+      cycleWarning = "WARNING: stuck",
+    )
+    val warningIdx = message.indexOf("STUCK-DETECTION HINT")
+    val objectiveIdx = message.indexOf("CURRENT OBJECTIVE")
+    assert(warningIdx in 0 until objectiveIdx) {
+      "Expected STUCK-DETECTION HINT (idx=$warningIdx) before CURRENT OBJECTIVE (idx=$objectiveIdx)"
+    }
+  }
+
   // -- Helper --
 
   private fun getReminderForStep(
     prompt: String,
     completedObjectiveDescriptions: List<String> = emptyList(),
     latestObjectiveStatus: String? = null,
+    cycleWarning: String? = null,
   ): String = TrailblazeAiRunnerMessages.getReminderMessage(
     promptStep = DirectionStep(step = prompt),
     completedObjectiveDescriptions = completedObjectiveDescriptions,
     latestObjectiveStatus = latestObjectiveStatus,
+    cycleWarning = cycleWarning,
   )
 }

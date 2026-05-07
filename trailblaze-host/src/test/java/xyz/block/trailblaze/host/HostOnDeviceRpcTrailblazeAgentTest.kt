@@ -19,7 +19,10 @@ import maestro.orchestra.ElementSelector
 import maestro.orchestra.TapOnElementCommand
 import org.junit.After
 import org.junit.Before
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import xyz.block.trailblaze.toolcalls.HostLocalExecutableTrailblazeTool
+import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.api.DriverNodeMatch
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.toolcalls.commands.InputTextTrailblazeTool
@@ -439,6 +442,58 @@ class HostOnDeviceRpcTrailblazeAgentTest {
         )
     }
     assertThat(result).isNull()
+  }
+
+  @Test
+  fun `host-local marker tool dispatches via host execute, not RPC`() {
+    val executedOnHost = AtomicBoolean(false)
+    val fakeTool = FakeHostLocalTool(executedOnHost)
+    val agent = createAgent()
+
+    val executeToolMethod = agent.javaClass.getDeclaredMethod(
+      "executeTool",
+      xyz.block.trailblaze.toolcalls.TrailblazeTool::class.java,
+      TrailblazeToolExecutionContext::class.java,
+      MutableList::class.java,
+    ).apply { isAccessible = true }
+
+    val context = TrailblazeToolExecutionContext(
+      screenState = null,
+      traceId = TraceId.generate(TraceId.Companion.TraceOrigin.TOOL),
+      trailblazeDeviceInfo = TrailblazeDeviceInfo(
+        trailblazeDeviceId = testDeviceId,
+        trailblazeDriverType = TrailblazeDriverType.ANDROID_ONDEVICE_INSTRUMENTATION,
+        widthPixels = 1080,
+        heightPixels = 1920,
+      ),
+      sessionProvider = TrailblazeSessionProvider {
+        TrailblazeSession(
+          sessionId = SessionId("test-session"),
+          startTime = Clock.System.now(),
+        )
+      },
+      trailblazeLogger = TrailblazeLogger.createNoOp(),
+      memory = agent.memory,
+      maestroTrailblazeAgent = agent,
+    )
+
+    val result = executeToolMethod.invoke(agent, fakeTool, context, mutableListOf<Any>())
+
+    assertThat(result).isInstanceOf(TrailblazeToolResult.Success::class)
+    assertThat(executedOnHost.get()).isEqualTo(true)
+    assertThat(mockServer.requestLog["/rpc/RunYamlRequest"].orEmpty()).isEmpty()
+  }
+
+  private class FakeHostLocalTool(
+    private val executedOnHost: AtomicBoolean,
+  ) : HostLocalExecutableTrailblazeTool {
+    override val advertisedToolName: String = "fake_host_local_tool"
+    override suspend fun execute(
+      toolExecutionContext: TrailblazeToolExecutionContext,
+    ): TrailblazeToolResult {
+      executedOnHost.set(true)
+      return TrailblazeToolResult.Success()
+    }
   }
 
   /** Lightweight stub for tests that don't exercise element comparison — every method errors. */

@@ -130,6 +130,16 @@ class InnerLoopScreenAnalyzer(
         description = enumValuesDescription<Confidence>(),
         type = String::class.starProjectedType.asToolType(),
       ),
+      ToolParameterDescriptor(
+        name = ToolCallAnalysisResponse::objectiveAppearsAchieved.name,
+        description = "true iff the objective/assertion is satisfied by the current screen state. Set on every tool call (including objectiveStatus).",
+        type = Boolean::class.starProjectedType.asToolType(),
+      ),
+      ToolParameterDescriptor(
+        name = ToolCallAnalysisResponse::objectiveAppearsImpossible.name,
+        description = "true iff the screen state contradicts the objective/assertion (e.g., asserted element is absent, or a blocker like an error/missing feature). Both achieved and impossible may be false (uncertain).",
+        type = Boolean::class.starProjectedType.asToolType(),
+      ),
     )
 
     /**
@@ -138,16 +148,6 @@ class InnerLoopScreenAnalyzer(
      * Field names derived from [ToolCallAnalysisResponse] property references.
      */
     private val ANALYSIS_OPTIONAL_PARAMS = listOf(
-      ToolParameterDescriptor(
-        name = ToolCallAnalysisResponse::objectiveAppearsAchieved.name,
-        description = "true if done",
-        type = Boolean::class.starProjectedType.asToolType(),
-      ),
-      ToolParameterDescriptor(
-        name = ToolCallAnalysisResponse::objectiveAppearsImpossible.name,
-        description = "true if blocked",
-        type = Boolean::class.starProjectedType.asToolType(),
-      ),
       ToolParameterDescriptor(
         name = ToolCallAnalysisResponse::answer.name,
         description = "Direct answer when objective is a question",
@@ -255,11 +255,11 @@ Analyze the screen and call ONE tool to progress toward the objective.
 - `reasoning`: Why this action achieves the objective
 - `screenSummary`: Brief description of current screen
 - `confidence`: HIGH / MEDIUM / LOW
+- `objectiveAppearsAchieved`: true iff the current screen state satisfies the objective/assertion. Always emit (true or false).
+- `objectiveAppearsImpossible`: true iff the screen state contradicts the objective/assertion or a blocker prevents progress. Always emit (true or false). Both can be false (uncertain).
 
 ## Optional Fields
 - `answer`: When the objective is a question, provide a direct answer here (not in reasoning)
-- `objectiveAppearsAchieved`: true if objective is already complete
-- `objectiveAppearsImpossible`: true if blocked by error/missing feature
 - `suggestedToolHint`: NAVIGATION | VERIFICATION | STANDARD | specific tool name
 - `screenState`: Set when screen is NOT normal (see below)
 - `recoveryAction`: JSON recovery strategy {type, ...params}
@@ -528,7 +528,7 @@ Before acting, check if the screen shows a non-normal state. If so, set `screenS
     appendLine()
     appendLine("Analyze the screen and call ONE of the available tools with your chosen action.")
     if (context.isVerification) {
-      appendLine("IMPORTANT: This is a verification step — an assertion about state, not an instruction to change it. If the screen matches the objective, call objectiveStatus with objectiveAppearsAchieved=true. Do not tap or input; you may scroll only if needed to locate the target element on screen, never to interact with it.")
+      appendLine("IMPORTANT: Verification step — an assertion about state, not an instruction to change it. Set `objectiveAppearsAchieved=true` if the screen state satisfies the assertion, or `objectiveAppearsImpossible=true` if it contradicts the assertion. Do not tap or input; you may scroll only if needed to locate the target element on screen.")
     } else {
       appendLine("IMPORTANT: Always prefer taking a UI action (tap, scroll, input) over calling objectiveStatus. Only call objectiveStatus after you have performed the actual actions needed.")
     }

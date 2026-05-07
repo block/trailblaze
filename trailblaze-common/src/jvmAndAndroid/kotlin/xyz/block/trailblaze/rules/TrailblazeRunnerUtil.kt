@@ -27,6 +27,41 @@ class TrailblazeRunnerUtil(
   // Writes back the `usedSelfHeal = true` session copy from logSelfHealInvoked.
   // Without it, the mark is dropped and SessionManager can't emit *WithSelfHeal end statuses.
   private val sessionUpdater: ((TrailblazeSession) -> Unit)? = null,
+  /**
+   * Optional hook invoked immediately BEFORE each recorded tool's `execute()` runs. The
+   * intended use is per-tool screen-state capture for the deterministic Maestro→
+   * accessibility selector migration: each recorded tool needs its own pre-fire snapshot
+   * so the migration tool can resolve the tool's legacy selector against the exact
+   * captured trees the runtime saw at that moment.
+   *
+   * Off by default — the hook is migration-only and would otherwise add a screenshot +
+   * view-hierarchy capture per tool, doubling session-log size and adding latency. The
+   * platform-side rule wires it (see `AndroidTrailblazeRule.trailblazeRunnerUtil`) when
+   * `trailblaze.captureSecondaryTree` is set.
+   *
+   * `suspend`-typed because the host-side wiring needs to call suspend RPC functions
+   * (`agent.captureScreenState()`) — wrapping those in `runBlocking` from inside the
+   * already-suspending `runRecordedTools` loop risks dispatcher deadlocks (especially
+   * under single-threaded test dispatchers).
+   */
+  private val onBeforeRecordedTool: (suspend (TrailblazeTool) -> Unit)? = null,
+  /**
+   * Optional hook invoked immediately AFTER each recorded tool's `execute()` runs
+   * successfully. Fires only on success — failures already short-circuit the recording
+   * loop and don't need a follow-up capture.
+   *
+   * Companion to [onBeforeRecordedTool] for tool classes whose pre-tool screen state is
+   * unreliable for the Maestro→accessibility migration. Asserts (e.g.
+   * `AssertVisibleBySelectorTrailblazeTool`) can wait up to ~30s for an element to become
+   * visible; the pre-tool snapshot fires BEFORE that wait and may catch a mid-transition
+   * frame where the asserted element isn't yet in the tree. The post-tool snapshot (taken
+   * immediately after the assert succeeds) reliably has the element on screen, so
+   * `migrate-trail` can prefer it for assert-class tools when both exist.
+   *
+   * Off by default — same migration-only gating as [onBeforeRecordedTool]. Hook
+   * exceptions are caught by the runner; they must not abort the recording.
+   */
+  private val onAfterRecordedTool: (suspend (TrailblazeTool) -> Unit)? = null,
 ) {
   fun runPrompt(
     prompts: List<PromptStep>,
@@ -151,6 +186,19 @@ class TrailblazeRunnerUtil(
     for (tool in tools) {
       // Long recordings should abort promptly on trail cancellation (timeout / user abort).
       currentCoroutineContext().ensureActive()
+      // Pre-tool capture hook (off by default; flipped on for Maestro→accessibility migration
+      // captures via [InstrumentationArgUtil.shouldCaptureSecondaryTree]). Wrapped in
+      // try/catch so a hook failure can't sink the recording — the hook is logging-only.
+      // CancellationException is rethrown so trail timeout / user-abort still propagates
+      // through the hook layer — the catch is for observability bugs, not flow control.
+      try {
+        onBeforeRecordedTool?.invoke(tool.trailblazeTool)
+      } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+      } catch (e: Exception) {
+        // Swallow — hook is observational. Surface in logs, not in test results.
+        @Suppress("PrintStackTrace") e.printStackTrace()
+      }
       val result = runTrailblazeTool(listOf(tool.trailblazeTool))
       if (result is TrailblazeToolResult.Error) {
         return PromptRecordingResult.Failure(
@@ -158,6 +206,16 @@ class TrailblazeRunnerUtil(
           failedTool = tool,
           failureResult = result,
         )
+      }
+      // Post-tool capture hook (success path only). Same try/catch shape as the pre-hook:
+      // hook is observational, must not abort the recording; cancellation propagates so
+      // outer trail-timeout / abort still works.
+      try {
+        onAfterRecordedTool?.invoke(tool.trailblazeTool)
+      } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+      } catch (e: Exception) {
+        @Suppress("PrintStackTrace") e.printStackTrace()
       }
       successfulTools.add(tool)
     }

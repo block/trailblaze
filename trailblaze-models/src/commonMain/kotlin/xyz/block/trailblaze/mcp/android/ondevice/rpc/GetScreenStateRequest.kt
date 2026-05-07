@@ -81,6 +81,19 @@ data class GetScreenStateResponse(
   /** Rich node tree from the on-device driver (e.g., accessibility). */
   val trailblazeNodeTree: TrailblazeNode? = null,
 
+  /**
+   * Accessibility-shape side-channel tree captured for the deterministic
+   * Maestro→accessibility selector migration when `trailblaze.captureSecondaryTree=true`
+   * is set as an instrumentation arg. Null when the flag is off or the on-device
+   * accessibility service is not bound at capture time. Strictly additive — does not
+   * displace [trailblazeNodeTree] (the driver's canonical runtime tree).
+   *
+   * Host code surfaces this via [xyz.block.trailblaze.api.MigrationScreenState] so the
+   * snapshot logger can persist it on `TrailblazeSnapshotLog.driverMigrationTreeNode`
+   * without changing the [xyz.block.trailblaze.api.ScreenState] interface.
+   */
+  val driverMigrationTreeNode: TrailblazeNode? = null,
+
   /** Light context string (e.g., app package + activity name). */
   val pageContextSummary: String? = null,
 

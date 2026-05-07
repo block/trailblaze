@@ -11,6 +11,12 @@ Entries tagged as **Decision** record significant architectural or technical cho
 
 | Date | Title | Type |
 | :--- | :--- | :--- |
+| 2026-05-08 | [Waypoint --target Flag and Magic capture-example](2026-05-08-waypoint-target-flag-and-magic-capture.md) | Decision |
+| 2026-05-08 | [Waypoint + shortcut graph: planner/executor, express routes, semantic recording](2026-05-08-waypoint-shortcut-graph-vision.md) | Decision |
+| 2026-05-08 | [Waypoint graph viewer: focal+depth, agent prompt tab, dock UX](2026-05-08-waypoint-graph-viewer-rebuild.md) | Devlog |
+| 2026-05-08 | [Pack Tools: Nested Subdirectories + Waypoint Auto-Discovery](2026-05-08-pack-tools-nested-subdirs.md) | Decision |
+| 2026-05-08 | [Pack config cleanup: id-based targets, implicit tools, transitive dependencies](2026-05-08-pack-config-cleanup.md) | Decision |
+| 2026-05-08 | [Library vs Target Packs](2026-05-08-library-vs-target-packs.md) | Decision |
 | 2026-04-27 | [Pack Manifest V1](2026-04-27-pack-manifest-v1.md) | Decision |
 | 2026-04-26 | [Target Packs: Local-First Packaging for Target-Aware Capabilities](2026-04-26-target-packs-local-first.md) | Decision |
 | 2026-04-26 | [Trailblaze as the Robot Pattern — and More](2026-04-26-robot-pattern-plus-packs.md) | Devlog |

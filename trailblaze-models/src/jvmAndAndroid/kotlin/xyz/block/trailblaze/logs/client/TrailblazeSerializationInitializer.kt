@@ -93,7 +93,10 @@ object TrailblazeSerializationInitializer {
    * almost always means a module with `trailblaze-config/tools/` YAML resources isn't on
    * the classpath / in the Android assets.
    */
-  internal fun buildAllTools(): Map<ToolName, KClass<out TrailblazeTool>> {
+  // Public so cross-module consumers (notably `TrailblazeToolRepo.toolCallToTrailblazeToolUnfiltered`
+  // in `:trailblaze-common`) can fall back to the global class registry when scripted-tool
+  // composition needs to reach a framework tool that isn't in the session's registered set.
+  fun buildAllTools(): Map<ToolName, KClass<out TrailblazeTool>> {
     cached?.let { return it }
     return synchronized(this) {
       cached ?: run {

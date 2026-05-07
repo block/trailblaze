@@ -30,4 +30,20 @@ actual fun platformConfigResourceSource(): ConfigResourceSource =
       )
       return merged
     }
+
+    override fun discoverAndLoadRecursive(directoryPath: String, suffix: String): Map<String, String> {
+      val fromAssets =
+        try {
+          AssetManagerConfigResourceSource.discoverAndLoadRecursive(directoryPath, suffix)
+        } catch (_: IllegalStateException) {
+          null
+        }
+      val classpath = ClasspathConfigResourceSource.discoverAndLoadRecursive(directoryPath, suffix)
+      val merged = classpath + (fromAssets ?: emptyMap())
+      Console.log(
+        "[platformConfigResourceSource/android] recursive dir=$directoryPath assets=" +
+          "${fromAssets?.size ?: "unavailable"} classpath=${classpath.size} merged=${merged.size}",
+      )
+      return merged
+    }
   }

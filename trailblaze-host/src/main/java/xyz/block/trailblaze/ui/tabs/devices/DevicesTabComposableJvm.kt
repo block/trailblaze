@@ -37,7 +37,11 @@ import xyz.block.trailblaze.host.devices.AxeConnectedDevice
 import xyz.block.trailblaze.host.devices.MaestroConnectedDevice
 import xyz.block.trailblaze.host.devices.TrailblazeDeviceService
 import xyz.block.trailblaze.host.devices.WebBrowserState
+import xyz.block.trailblaze.api.TrailblazeNode
+import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.host.recording.MaestroDeviceScreenStream
+import xyz.block.trailblaze.recording.InteractionToolFactory
+import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.playwright.recording.PlaywrightDeviceScreenStream
 import xyz.block.trailblaze.recording.DeviceScreenStream
 import xyz.block.trailblaze.recording.InteractionEventBuffer
@@ -308,26 +312,28 @@ private fun DevicePreviewContent(
   }
 }
 
-private data class NoOpTool(val name: String) : xyz.block.trailblaze.toolcalls.TrailblazeTool
+private data class NoOpTool(val name: String) : TrailblazeTool
 
 /** Placeholder factory for preview-only mode (no interactions recorded). */
-private object NoOpToolFactory : xyz.block.trailblaze.recording.InteractionToolFactory {
+private object NoOpToolFactory : InteractionToolFactory {
   override fun createTapTool(
-    node: xyz.block.trailblaze.api.ViewHierarchyTreeNode?,
+    node: ViewHierarchyTreeNode?,
     x: Int,
     y: Int,
+    trailblazeNodeTree: TrailblazeNode?,
   ) = NoOpTool("tap") to "tap"
 
   override fun createLongPressTool(
-    node: xyz.block.trailblaze.api.ViewHierarchyTreeNode?,
+    node: ViewHierarchyTreeNode?,
     x: Int,
     y: Int,
+    trailblazeNodeTree: TrailblazeNode?,
   ) = NoOpTool("longPress") to "longPress"
 
-  override fun createSwipeTool(startX: Int, startY: Int, endX: Int, endY: Int) =
+  override fun createSwipeTool(startX: Int, startY: Int, endX: Int, endY: Int, durationMs: Long?) =
     NoOpTool("swipe") to "swipe"
 
   override fun createInputTextTool(text: String) = NoOpTool("inputText") to "inputText"
 
-  override fun createPressKeyTool(key: String): Pair<xyz.block.trailblaze.toolcalls.TrailblazeTool, String>? = NoOpTool("pressKey") to "pressKey"
+  override fun createPressKeyTool(key: String): Pair<TrailblazeTool, String>? = NoOpTool("pressKey") to "pressKey"
 }

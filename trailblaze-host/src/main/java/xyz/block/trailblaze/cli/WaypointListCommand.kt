@@ -17,12 +17,24 @@ import java.util.concurrent.Callable
 )
 class WaypointListCommand : Callable<Int> {
   @Option(
-    names = ["--root"],
-    description = ["Additional directory to scan for *.waypoint.yaml files (default: $DEFAULT_WAYPOINT_ROOT, resolved against the current working directory). Pack waypoints are always included regardless of --root."],
+    names = ["--target"],
+    paramLabel = "<id>",
+    description = [
+      "Pack id to operate on. Resolves --root to <workspace>/packs/<id>/waypoints/. " +
+        "Mutually exclusive with --root (--root wins if both given).",
+    ],
   )
-  var root: File = File(DEFAULT_WAYPOINT_ROOT)
+  var targetId: String? = null
+
+  @Option(
+    names = ["--root"],
+    paramLabel = "<path>",
+    description = ["Additional directory to scan for *.waypoint.yaml files. Overrides --target. Pack waypoints are always included regardless. (Convention: $DEFAULT_WAYPOINT_ROOT)"],
+  )
+  var rootOverride: File? = null
 
   override fun call(): Int {
+    val root = resolveWaypointRoot(rootOverride = rootOverride, targetId = targetId)
     val result = WaypointDiscovery.discover(root)
     reportLoadFailures(result.rootFailures)
     if (result.definitions.isEmpty()) {
@@ -34,6 +46,10 @@ class WaypointListCommand : Callable<Int> {
       } else {
         Console.log("No waypoint definitions found.")
       }
+      // Empty + no scoping flags suggests the user might want --target. Hint only here,
+      // not in resolveWaypointRoot — classpath packs typically supply 100+ results and
+      // a default-path warning would be noise on every invocation.
+      maybeWarnNoTarget(rootOverride, targetId, resultIsEmpty = true)
       return CommandLine.ExitCode.OK
     }
     Console.log("Found ${result.definitions.size} waypoint(s):")

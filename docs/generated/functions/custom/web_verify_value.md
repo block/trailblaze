@@ -11,12 +11,12 @@ Verify the value of an element on the page. Supports checking:
 
 ### Registered `PlaywrightNativeVerifyValueTool` in `ToolRegistry`
 ### Required Parameters
-- `ref`: `String`
-  Element ID (e.g., 'e5'), ARIA descriptor (e.g., 'textbox "Email"'), or CSS selector with css= prefix (e.g., 'css=#email-input').
 - `expected`: `String`
   The expected value to verify against.
 
 ### Optional Parameters
+- `ref`: `String`
+  Element ID (e.g., 'e5'), ARIA descriptor (e.g., 'textbox "Email"'), or CSS selector with css= prefix (e.g., 'css=#email-input').
 - `type`: `[
   "TEXT",
   "VALUE",
@@ -24,8 +24,6 @@ Verify the value of an element on the page. Supports checking:
 ]`
 - `attribute`: `String`
   The attribute name to check (required when type is ATTRIBUTE).
-- `element`: `String`
-  Human-readable description of the element being verified, for logging.
 - `reasoning`: `String`
 
 

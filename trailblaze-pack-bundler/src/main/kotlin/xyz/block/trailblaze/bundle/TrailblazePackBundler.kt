@@ -108,7 +108,11 @@ class TrailblazePackBundler(
         val params = tool.inputSchema.map { (key, prop) ->
           ScriptedToolParam(
             name = key,
-            tsType = jsonSchemaToTsType(prop, "Scripted tool ${tool.name} property '$key'"),
+            tsType = jsonSchemaToTsType(
+              type = prop.type,
+              enumValues = prop.enum,
+              propertyContext = "Scripted tool ${tool.name} property '$key'",
+            ),
             description = prop.description,
             optional = !prop.required,
           )
@@ -199,33 +203,6 @@ class TrailblazePackBundler(
     val first = name[0]
     if (!(first.isLetter() || first == '_' || first == '$')) return false
     return name.all { it.isLetterOrDigit() || it == '_' || it == '$' }
-  }
-
-  private fun jsonSchemaToTsType(
-    prop: BundlerScriptedToolProperty,
-    propertyContext: String,
-  ): String {
-    val enumValues = prop.enum
-    if (enumValues != null) {
-      // An author who wrote `enum:` with no values almost certainly meant something else.
-      // Silently emitting `unknown` would degrade autocomplete without surfacing the typo.
-      if (enumValues.isEmpty()) {
-        throw TrailblazePackBundleException.InvalidInputSchema(
-          "$propertyContext: 'enum' must contain at least one value.",
-        )
-      }
-      return enumValues.joinToString(" | ") { "\"${it.replace("\"", "\\\"")}\"" }
-    }
-    return when (prop.type) {
-      "string" -> "string"
-      "number", "integer" -> "number"
-      "boolean" -> "boolean"
-      "array" -> "unknown[]"
-      "object" -> "Record<string, unknown>"
-      "null" -> "null"
-      null -> "unknown"
-      else -> "unknown"
-    }
   }
 
   /**
@@ -353,3 +330,41 @@ data class ScriptedToolParam(
   val description: String?,
   val optional: Boolean,
 )
+
+/**
+ * Translate a single JSON-Schema-shaped property descriptor (`type` + optional `enum`) into the
+ * equivalent TypeScript type literal. The vocabulary mirrors the JSON-Schema subset the
+ * codebase actually uses (`string`, `number`/`integer`, `boolean`, `array`, `object`, `null`),
+ * plus `enum` rendered as a string-literal union. Anything outside that set falls back to
+ * `unknown` rather than failing the build — keeps the bundler unblocked on schema additions.
+ *
+ * Hoisted to a top-level `internal` function so the bundler's twin `.d.ts` writers
+ * ([TrailblazePackBundler] for build-time per-pack output and [WorkspaceClientDtsGenerator]
+ * for daemon-time workspace output) share one mapping with no risk of drift.
+ */
+internal fun jsonSchemaToTsType(
+  type: String?,
+  enumValues: List<String>?,
+  propertyContext: String,
+): String {
+  if (enumValues != null) {
+    // An author who wrote `enum:` with no values almost certainly meant something else.
+    // Silently emitting `unknown` would degrade autocomplete without surfacing the typo.
+    if (enumValues.isEmpty()) {
+      throw TrailblazePackBundleException.InvalidInputSchema(
+        "$propertyContext: 'enum' must contain at least one value.",
+      )
+    }
+    return enumValues.joinToString(" | ") { "\"${it.replace("\"", "\\\"")}\"" }
+  }
+  return when (type) {
+    "string" -> "string"
+    "number", "integer" -> "number"
+    "boolean" -> "boolean"
+    "array" -> "unknown[]"
+    "object" -> "Record<string, unknown>"
+    "null" -> "null"
+    null -> "unknown"
+    else -> "unknown"
+  }
+}

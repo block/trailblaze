@@ -12,12 +12,10 @@ Set clearFirst to false to append text instead.
 ### Required Parameters
 - `text`: `String`
   The text to type into the element.
-- `ref`: `String`
-  Element ID (e.g., 'e5'), ARIA descriptor (e.g., 'textbox "Email"'), or CSS selector with css= prefix (e.g., 'css=#email-input').
 
 ### Optional Parameters
-- `element`: `String`
-  Human-readable description of the element being typed into, for logging.
+- `ref`: `String`
+  Element ID (e.g., 'e5'), ARIA descriptor (e.g., 'textbox "Email"'), or CSS selector with css= prefix (e.g., 'css=#email-input').
 - `clearFirst`: `Boolean`
   If true (default), clear the field before typing. If false, append to existing text.
 - `reasoning`: `String`

@@ -262,7 +262,7 @@ class DynamicToolSetTest {
     //   4. Invariant: excluded wins over custom. `TapTrailblazeTool` appears in BOTH the
     //      target's custom and excluded sets; the result must not contain it.
     val fakeTarget = object : TrailblazeHostAppTarget(id = "fake", displayName = "Fake") {
-      override fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): Set<String>? = null
+      override fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): List<String>? = null
       override fun internalGetCustomToolsForDriver(driverType: TrailblazeDriverType) =
         setOf(MaestroTrailblazeTool::class, TapTrailblazeTool::class)
       override fun getExcludedToolsForDriver(driverType: TrailblazeDriverType) =
@@ -301,7 +301,7 @@ class DynamicToolSetTest {
     // custom overlay (minus any target excludes). This proves the `catalog` arg is forwarded
     // to the base computation AND that custom contributions survive a zeroed-out base.
     val fakeTarget = object : TrailblazeHostAppTarget(id = "fake-catalog", displayName = "Fake") {
-      override fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): Set<String>? = null
+      override fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): List<String>? = null
       override fun internalGetCustomToolsForDriver(driverType: TrailblazeDriverType) =
         setOf(MaestroTrailblazeTool::class)
     }

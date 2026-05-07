@@ -84,6 +84,13 @@ object TrailDiscovery {
     ".git",
     "node_modules",
     ".trailblaze",
+    // Claude Code's local metadata directory — holds sub-agent git worktrees under
+    // `.claude/worktrees/agent-<id>/`, session state, and other ephemera. Sibling-
+    // worktree contents would otherwise leak into trail discovery for THIS branch and
+    // surface as false-positive validation failures (the parallel agent's WIP trails
+    // can be in any state). Treat it as an opaque metadata folder, never a trail
+    // source.
+    ".claude",
   )
 
   /**

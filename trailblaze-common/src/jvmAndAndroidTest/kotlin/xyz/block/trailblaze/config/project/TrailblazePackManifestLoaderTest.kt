@@ -602,6 +602,91 @@ class TrailblazePackManifestLoaderTest {
   }
 
   // ==========================================================================
+  // Library-pack contract: a manifest with no `target:` block cannot declare
+  // `waypoints:`. Catches the contract violation at parse time so the failure
+  // names the offending pack and field instead of surfacing later as
+  // "no target found for waypoint X" during reverse-lookup.
+  // ==========================================================================
+
+  @Test
+  fun `library pack with waypoints fails to load with clear message`() {
+    val tempDir = createTempDirectory("pack-loader-test").toFile()
+    try {
+      val packFile = File(tempDir, "pack.yaml").apply {
+        writeText(
+          """
+          id: bad-library
+          waypoints:
+            - waypoints/home.waypoint.yaml
+          """.trimIndent(),
+        )
+      }
+
+      val error = runCatching { TrailblazePackManifestLoader.load(packFile) }.exceptionOrNull()
+      val typed = assertNotNull(error as? TrailblazeProjectConfigException)
+      val message = typed.message.orEmpty()
+      assertTrue(
+        "Library packs (no target)" in message && "cannot own waypoints" in message,
+        "Expected library-pack waypoint guard message; got: $message",
+      )
+      assertTrue(
+        "waypoints/home.waypoint.yaml" in message,
+        "Expected offending entry named in message; got: $message",
+      )
+    } finally {
+      tempDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `library pack without waypoints loads cleanly`() {
+    // The canonical happy path: a tools-only library pack with no target. Pin so the
+    // new validation rule never starts rejecting this shape.
+    val tempDir = createTempDirectory("pack-loader-test").toFile()
+    try {
+      val packFile = File(tempDir, "pack.yaml").apply {
+        writeText(
+          """
+          id: my-library
+          tools:
+            - tools/foo.tool.yaml
+          """.trimIndent(),
+        )
+      }
+
+      val manifest = TrailblazePackManifestLoader.load(packFile).manifest
+      assertEquals("my-library", manifest.id)
+      assertEquals(null, manifest.target)
+    } finally {
+      tempDir.deleteRecursively()
+    }
+  }
+
+  @Test
+  fun `target pack with waypoints loads cleanly`() {
+    val tempDir = createTempDirectory("pack-loader-test").toFile()
+    try {
+      val packFile = File(tempDir, "pack.yaml").apply {
+        writeText(
+          """
+          id: my-target
+          target:
+            display_name: My Target
+          waypoints:
+            - waypoints/home.waypoint.yaml
+          """.trimIndent(),
+        )
+      }
+
+      val manifest = TrailblazePackManifestLoader.load(packFile).manifest
+      assertEquals("my-target", manifest.id)
+      assertEquals(listOf("waypoints/home.waypoint.yaml"), manifest.waypoints)
+    } finally {
+      tempDir.deleteRecursively()
+    }
+  }
+
+  // ==========================================================================
   // Test infrastructure.
   // ==========================================================================
 

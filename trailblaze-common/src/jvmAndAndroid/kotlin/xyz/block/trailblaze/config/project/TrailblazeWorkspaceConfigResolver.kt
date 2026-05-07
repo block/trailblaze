@@ -64,4 +64,13 @@ data class ResolvedTrailblazeWorkspaceConfig(
 ) {
   fun loadProjectConfig(): TrailblazeProjectConfig? =
     configFile?.let(TrailblazeProjectConfigLoader::loadResolved)
+
+  /**
+   * Full resolved view including dereferenced [AppTargetYamlConfig] target objects on
+   * [TrailblazeResolvedConfig.targets]. Use this when you need the actual target configs
+   * (target discovery, CLI surfaces, the compiler) — [loadProjectConfig] only returns
+   * the schema-shape view (id list).
+   */
+  fun loadResolvedRuntime(): TrailblazeResolvedConfig? =
+    configFile?.let { TrailblazeProjectConfigLoader.loadResolvedRuntime(it) }
 }

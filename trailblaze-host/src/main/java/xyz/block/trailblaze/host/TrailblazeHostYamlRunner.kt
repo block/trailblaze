@@ -72,7 +72,9 @@ import xyz.block.trailblaze.playwright.tools.WebToolSetIds
 import xyz.block.trailblaze.report.utils.TrailblazeYamlSessionRecording.generateRecordedYaml
 import xyz.block.trailblaze.rules.TrailblazeLoggingRule
 import xyz.block.trailblaze.rules.TrailblazeRunnerUtil
-import xyz.block.trailblaze.scripting.subprocess.LaunchedSubprocessRuntime
+import xyz.block.trailblaze.scripting.DaemonScriptedToolBundler
+import xyz.block.trailblaze.scripting.LaunchedScriptingRuntime
+import xyz.block.trailblaze.scripting.LazyYamlScriptedToolRegistration
 import xyz.block.trailblaze.scripting.subprocess.InlineScriptToolServerSynthesizer
 import xyz.block.trailblaze.scripting.subprocess.McpSubprocessRuntimeLauncher
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
@@ -205,27 +207,141 @@ object TrailblazeHostYamlRunner {
     logsRepo: xyz.block.trailblaze.report.utils.LogsRepo,
     toolRepo: TrailblazeToolRepo,
     onProgressMessage: (String) -> Unit,
-  ): LaunchedSubprocessRuntime? {
+  ): LaunchedScriptingRuntime? {
     val sessionDir = logsRepo.getSessionDir(sessionId)
-    val inlineToolServers = InlineScriptToolServerSynthesizer.synthesize(
-      tools = targetTestApp?.getInlineScriptTools().orEmpty(),
-      outputDir = File(sessionDir, "inline-script-tools"),
-    )
-    val mcpServers = targetTestApp?.getMcpServers().orEmpty() + inlineToolServers
+
+    // 1. Inline scripted tools (target.tools: in pack manifests) — the #2749 path,
+    // split by **script file extension**:
+    //
+    //  - `script: foo.js` — Node/Bun-runtime tool. Author imports `node:fs/promises`,
+    //    `node:child_process`, etc. directly. Route through the legacy
+    //    [InlineScriptToolServerSynthesizer] → MCP subprocess path so the handler runs
+    //    inside Node/Bun where those APIs exist. `host_writeArtifact.js` is the
+    //    canonical example.
+    //  - `script: foo.ts` (or anything else) — QuickJS-runtime tool. Author writes
+    //    ECMAScript with JSDoc-only types and composes via `client.callTool(...)`. Bundle
+    //    via [DaemonScriptedToolBundler] (esbuild) and register as an in-process
+    //    QuickJS-backed dynamic tool. No subprocess fork; the LLM-shape
+    //    `isForLlm`/`requiresHost` filter that previously hid `runCommand`/`clearAppData`
+    //    from scripted-tool composition is bypassed via [SessionScopedHostBinding].
+    //
+    // **Why the extension and not `requiresHost: true`?** `_meta.trailblaze/requiresHost`
+    // is the LLM-visibility hint ("hide this from on-device") — it's set on tools whose
+    // semantics make them inappropriate for the on-device LLM, regardless of their
+    // runtime. Many `.ts` tools that compose host-only Kotlin tools via `client.callTool`
+    // are correctly tagged `requiresHost: true` for visibility but DON'T need a Node
+    // runtime. Routing on `requiresHost` would push those .ts tools through MCP where
+    // their `client.callTool` composition can't find the host tools the LLM-noise filter
+    // hides — exactly the bug #2749 set out to fix. The extension reflects the author's
+    // actual runtime intent.
+    val inlineToolConfigs = targetTestApp?.getInlineScriptTools().orEmpty()
+    val (nodeApiInlineTools, quickJsInlineTools) = inlineToolConfigs.partition { tool ->
+      tool.script.lowercase().endsWith(".js") ||
+        tool.script.lowercase().endsWith(".mjs") ||
+        tool.script.lowercase().endsWith(".cjs")
+    }
+    val inlineRegistrations = if (quickJsInlineTools.isNotEmpty()) {
+      val esbuildBinary = LazyYamlScriptedToolRegistration.resolveEsbuildBinary()
+      if (esbuildBinary == null) {
+        Console.log(
+          "[#2749] esbuild binary not found on PATH or build-tree fallback locations — " +
+            "${quickJsInlineTools.size} inline scripted tool(s) will not be available this " +
+            "session. Install esbuild (e.g. via Homebrew or `bun install`) to enable inline " +
+            "scripted-tool dispatch.",
+        )
+        emptyList()
+      } else {
+        val bundler = DaemonScriptedToolBundler(esbuildBinary)
+        // Build registrations one by one so a partial failure (bad bundle, host-connect
+        // throw, addDynamicTools collision, etc.) can dispose the QuickJS engines we
+        // already created before rethrowing. Without this cleanup, every aborted session
+        // start would leak as many QuickJS engines as registrations had succeeded so far.
+        val accumulated = mutableListOf<LazyYamlScriptedToolRegistration>()
+        try {
+          for (tool in quickJsInlineTools) {
+            val bundlePath = bundler.bundleOne(File(tool.script), tool.name)
+            accumulated += LazyYamlScriptedToolRegistration.create(
+              toolConfig = tool,
+              bundlePath = bundlePath,
+              toolRepo = toolRepo,
+              sessionId = sessionId,
+            )
+          }
+          // addDynamicTools is the last opportunity to throw before LaunchedScriptingRuntime
+          // owns the registrations; if it raises (e.g. name collision against the existing
+          // repo), the cleanup below disposes the already-created hosts.
+          toolRepo.addDynamicTools(accumulated)
+        } catch (e: Throwable) {
+          Console.log(
+            "[TrailblazeHostYamlRunner] Rolling back ${accumulated.size} inline " +
+              "scripted-tool registration(s) due to startup failure: ${e.message}",
+          )
+          for (reg in accumulated) {
+            runCatching { reg.dispose() }
+          }
+          throw e
+        }
+        accumulated
+      }
+    } else {
+      emptyList()
+    }
+
+    // 2. MCP subprocesses: explicit `mcp_servers:` entries PLUS the synthesized wrappers
+    // for `.js`-extension inline scripted tools. Both paths run the handler in Node/Bun
+    // where Node APIs exist; the synthesized wrappers are what authors of
+    // `host_writeArtifact.js`-style tools have always relied on, so they keep that
+    // contract end-to-end. If subprocess launch throws after the QuickJS-path inline
+    // registrations succeeded, the inline regs are stranded in the toolRepo with no
+    // cleanup handle — catch + dispose them before rethrowing so the same
+    // partial-construction guarantee applies across both blocks.
+    val nodeApiInlineToolServers = if (nodeApiInlineTools.isNotEmpty()) {
+      InlineScriptToolServerSynthesizer.synthesize(
+        tools = nodeApiInlineTools,
+        outputDir = File(sessionDir, "inline-script-tools"),
+      )
+    } else {
+      emptyList()
+    }
+    val mcpServers = targetTestApp?.getMcpServers().orEmpty() + nodeApiInlineToolServers
     val launchableCount = mcpServers.count { it.script != null }
-    if (launchableCount == 0) return null
-    onProgressMessage("Launching $launchableCount subprocess MCP server(s)...")
-    return McpSubprocessRuntimeLauncher.launchAll(
-      mcpServers = mcpServers,
-      deviceInfo = deviceInfo,
-      config = config,
-      sessionId = sessionId,
-      sessionLogDir = sessionDir,
+    val subprocessRuntime = if (launchableCount > 0) {
+      onProgressMessage("Launching $launchableCount subprocess MCP server(s)...")
+      try {
+        McpSubprocessRuntimeLauncher.launchAll(
+          mcpServers = mcpServers,
+          deviceInfo = deviceInfo,
+          config = config,
+          sessionId = sessionId,
+          sessionLogDir = sessionDir,
+          toolRepo = toolRepo,
+          // Null when no HTTP server was registered for this process (unit-tested runner paths).
+          // The launcher degrades gracefully — envelope omits `_meta.trailblaze.baseUrl` and no
+          // callbacks can fire, which is the right behaviour for those paths.
+          baseUrl = xyz.block.trailblaze.scripting.callback.JsScriptingCallbackBaseUrl.get(),
+        )
+      } catch (e: Throwable) {
+        Console.log(
+          "[TrailblazeHostYamlRunner] Rolling back ${inlineRegistrations.size} inline " +
+            "scripted-tool registration(s) due to MCP server launch failure: ${e.message}",
+        )
+        for (reg in inlineRegistrations) {
+          runCatching { toolRepo.removeDynamicTool(reg.name) }
+          runCatching { reg.dispose() }
+        }
+        throw e
+      }
+    } else {
+      null
+    }
+
+    // If neither path produced anything actionable, no cleanup needed.
+    if (inlineRegistrations.isEmpty() && subprocessRuntime == null) return null
+
+    return LaunchedScriptingRuntime(
+      subprocessRuntime = subprocessRuntime,
+      inlineRegistrations = inlineRegistrations,
       toolRepo = toolRepo,
-      // Null when no HTTP server was registered for this process (unit-tested runner paths).
-      // The launcher degrades gracefully — envelope omits `_meta.trailblaze.baseUrl` and no
-      // callbacks can fire, which is the right behaviour for those paths.
-      baseUrl = xyz.block.trailblaze.scripting.callback.JsScriptingCallbackBaseUrl.get(),
     )
   }
 
@@ -407,7 +523,7 @@ object TrailblazeHostYamlRunner {
 
     onProgressMessage("Launching browser...")
 
-    val subprocessRuntimes = mutableListOf<LaunchedSubprocessRuntime>()
+    val subprocessRuntimes = mutableListOf<LaunchedScriptingRuntime>()
     return executeTrailSession(
       loggingRule = playwrightTest.loggingRule,
       overrideSessionId = runYamlRequest.config.overrideSessionId,
@@ -532,7 +648,7 @@ object TrailblazeHostYamlRunner {
 
     onProgressMessage("Connecting to Electron app...")
 
-    val subprocessRuntimes = mutableListOf<LaunchedSubprocessRuntime>()
+    val subprocessRuntimes = mutableListOf<LaunchedScriptingRuntime>()
     return executeTrailSession(
       loggingRule = electronTest.loggingRule,
       overrideSessionId = runYamlRequest.config.overrideSessionId,
@@ -755,7 +871,7 @@ object TrailblazeHostYamlRunner {
       sessionUpdater = { loggingRule.setSession(it) },
     )
 
-    val subprocessRuntimes = mutableListOf<LaunchedSubprocessRuntime>()
+    val subprocessRuntimes = mutableListOf<LaunchedScriptingRuntime>()
     return executeTrailSession(
       loggingRule = loggingRule,
       overrideSessionId = runYamlRequest.config.overrideSessionId,
@@ -1009,7 +1125,7 @@ object TrailblazeHostYamlRunner {
         sessionUpdater = { loggingRule.setSession(it) },
       )
 
-      val subprocessRuntimes = mutableListOf<LaunchedSubprocessRuntime>()
+      val subprocessRuntimes = mutableListOf<LaunchedScriptingRuntime>()
       return executeTrailSession(
         loggingRule = loggingRule,
         overrideSessionId = runYamlRequest.config.overrideSessionId,
@@ -1167,8 +1283,11 @@ object TrailblazeHostYamlRunner {
       explicitDeviceId = trailblazeDeviceId,
     ) {
       override fun ensureTargetAppIsStopped() {
+        // Convert the YAML-ordered List to a Set for ensureAppsAreForceStopped, which takes
+        // membership-style Set<String>.
         val possibleAppIds = runOnHostParams.targetTestApp
           ?.getPossibleAppIdsForPlatform(runOnHostParams.trailblazeDevicePlatform)
+          ?.toSet()
           ?: emptySet()
         MobileDeviceUtils.ensureAppsAreForceStopped(
           possibleAppIds = possibleAppIds,
@@ -1195,7 +1314,7 @@ object TrailblazeHostYamlRunner {
     // the collection directly without a forward-declared nullable var. Today launch is
     // called at most once per session, but the list shape naturally accommodates
     // splitting per-server launches later without reshaping the control flow.
-    val subprocessRuntimes = mutableListOf<LaunchedSubprocessRuntime>()
+    val subprocessRuntimes = mutableListOf<LaunchedScriptingRuntime>()
 
     return executeTrailSession(
       loggingRule = hostTbRunner.loggingRule,
@@ -1378,6 +1497,28 @@ object TrailblazeHostYamlRunner {
     // to subsequent RPC dispatches. AgentMemory is backed by a ConcurrentHashMap, so this
     // sharing is safe even if tool execution is ever parallelized.
     val sharedAgentMemory = AgentMemory()
+    // Pre-resolve the session's target once (#2699 — closes the deferred wiring note on
+    // ResolvedTarget and surfaces ctx.target.{id, appIds, resolvedAppId} to scripted tools).
+    // `by lazy` keeps the cost off sessions that never invoke a target-aware tool, and means
+    // a multi-tool session pays the device query (`pm list packages` / `simctl listapps`)
+    // exactly once instead of per-dispatch.
+    val resolvedTargetForSession: xyz.block.trailblaze.model.ResolvedTarget? =
+      targetTestApp?.let { target ->
+        xyz.block.trailblaze.model.ResolvedTarget(target = target, deviceId = trailblazeDeviceId)
+      }
+    val resolvedAppIdForSessionLazy = lazy {
+      val resolved = resolvedTargetForSession ?: return@lazy null
+      // Compose the non-throwing primitives directly so a target with zero installed
+      // candidates surfaces as `resolvedAppId = null` rather than a thrown
+      // IllegalStateException at envelope-build time. The throwing wrapper
+      // `MobileDeviceUtils.findInstalledAppIdForTarget` is for production launch flows that
+      // need a hard error; here we want a soft signal so authors can fall back to
+      // `ctx.target.appIds[0]` and let the launch fail downstream with a clearer message.
+      runCatching {
+        val installed = MobileDeviceUtils.getInstalledAppIds(resolved.deviceId)
+        resolved.target.getAppIdIfInstalled(resolved.platform, installed)
+      }.getOrNull()
+    }
     val executor = HostAccessibilityRpcClient(
       rpcClient = onDeviceRpc,
       toolRepo = toolRepo,
@@ -1391,12 +1532,14 @@ object TrailblazeHostYamlRunner {
           sessionProvider = { loggingRule.session ?: error("Session not available") },
           trailblazeLogger = loggingRule.logger,
           memory = sharedAgentMemory,
+          resolvedTarget = resolvedTargetForSession,
+          resolvedAppId = resolvedAppIdForSessionLazy.value,
         )
       },
       memory = sharedAgentMemory,
     )
 
-    val subprocessRuntimes = mutableListOf<LaunchedSubprocessRuntime>()
+    val subprocessRuntimes = mutableListOf<LaunchedScriptingRuntime>()
     return executeTrailSession(
       loggingRule = loggingRule,
       overrideSessionId = runYamlRequest.config.overrideSessionId,
@@ -1533,7 +1676,10 @@ object TrailblazeHostYamlRunner {
               sendSessionEndLog = false,
             ),
           )
-          val ok = executor.executePreAction(singleToolRequest)
+          // Pass the resolved TrailblazeTool so executePreAction can host-local-short-circuit
+          // before RPC'ing to the device (#2749 follow-up: scripted tools that own host-side
+          // QuickJS/subprocess handles can't be RPC'd as if they were on-device tools).
+          val ok = executor.executePreAction(toolWrapper.trailblazeTool, singleToolRequest)
           if (!ok) {
             preActionFailure =
               "Pre-action '${toolWrapper.trailblazeTool::class.simpleName ?: "unknown"}' " +
@@ -1699,6 +1845,79 @@ object TrailblazeHostYamlRunner {
       toolRepo = toolRepo,
     )
 
+    // Per-tool screen capture for Maestro→accessibility migration. Read from env var
+    // (`TRAILBLAZE_CAPTURE_SECONDARY_TREE=true`) since the host runner doesn't currently
+    // surface the on-device instrumentation arg map. The same env var is also bridged to
+    // the on-device APK via [BlockTrailblazeDesktopAppConfig.additionalInstrumentationArgs],
+    // so both sides see the toggle from a single source of truth.
+    val migrationCaptureEnabled =
+      System.getenv("TRAILBLAZE_CAPTURE_SECONDARY_TREE")?.equals("true", ignoreCase = true) == true
+    val onBeforeRecordedTool: (suspend (TrailblazeTool) -> Unit)? = if (migrationCaptureEnabled) {
+      lambda@{ tool: TrailblazeTool ->
+        // Only fire the capture for the tools the migration rewrites. Recordings include
+        // launch / custom flow / verify tools that the migration pass doesn't touch — a
+        // snapshot per non-target tool would inflate session-log size for no benefit.
+        // Keep the filter in lockstep with classNameFromYamlToolName in WaypointMigrateTrailCommand.
+        val isMigrationTarget = tool is xyz.block.trailblaze.toolcalls.commands.TapOnByElementSelector ||
+          tool is xyz.block.trailblaze.toolcalls.commands.AssertVisibleBySelectorTrailblazeTool
+        if (!isMigrationTarget) return@lambda
+        try {
+          val session = loggingRule.session ?: return@lambda
+          // captureScreenState() goes through the on-device RPC; the on-device side reads
+          // its own `trailblaze.captureSecondaryTree` arg and (when set) returns a screen
+          // state with a true UiAutomator viewHierarchy alongside the accessibility-tree
+          // trailblazeNodeTree. Both end up in the snapshot log. Suspended directly (not
+          // wrapped in runBlocking) so single-thread dispatchers don't deadlock.
+          val screen = agent.captureScreenState()
+          if (screen != null) {
+            loggingRule.logger.logSnapshot(
+              session = session,
+              screenState = screen,
+              displayName = "preTool: ${tool::class.simpleName ?: "unknown"}",
+            )
+          }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+          // Cooperative cancellation: trail abort / timeout must propagate. The
+          // outer try/catch in TrailblazeRunnerUtil rethrows this for the same reason.
+          throw e
+        } catch (e: Exception) {
+          // Hook is observational; never let a capture failure kill the recording.
+          Console.log("[migration-capture] pre-tool snapshot failed: ${e.message}")
+        }
+      }
+    } else null
+
+    // Post-tool capture is asserts-only. AssertVisibleBySelector waits up to ~30s for the
+    // target to become visible; the pre-tool snapshot fires before that wait and often
+    // catches a mid-transition frame where the asserted element isn't yet in the tree.
+    // After the assert succeeds, the element IS on screen, and a post-tool snapshot
+    // reliably has it — `migrate-trail` prefers `postTool: AssertVisibleBySelectorTrailblazeTool`
+    // for assert-class tools and falls back to the pre-tool snapshot when no post exists.
+    // Taps are intentionally excluded: a tap's post-state is the NEXT screen, where the
+    // tapped target is no longer present — useless for resolving the original selector.
+    val onAfterRecordedTool: (suspend (TrailblazeTool) -> Unit)? = if (migrationCaptureEnabled) {
+      lambda@{ tool: TrailblazeTool ->
+        if (tool !is xyz.block.trailblaze.toolcalls.commands.AssertVisibleBySelectorTrailblazeTool) {
+          return@lambda
+        }
+        try {
+          val session = loggingRule.session ?: return@lambda
+          val screen = agent.captureScreenState()
+          if (screen != null) {
+            loggingRule.logger.logSnapshot(
+              session = session,
+              screenState = screen,
+              displayName = "postTool: ${tool::class.simpleName ?: "unknown"}",
+            )
+          }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+          throw e
+        } catch (e: Exception) {
+          Console.log("[migration-capture] post-tool snapshot failed: ${e.message}")
+        }
+      }
+    } else null
+
     val runnerUtil = TrailblazeRunnerUtil(
       trailblazeRunner = runner,
       runTrailblazeTool = { tools ->
@@ -1713,9 +1932,11 @@ object TrailblazeHostYamlRunner {
       trailblazeLogger = loggingRule.logger,
       sessionProvider = { loggingRule.session ?: error("Session not available") },
       sessionUpdater = { loggingRule.setSession(it) },
+      onBeforeRecordedTool = onBeforeRecordedTool,
+      onAfterRecordedTool = onAfterRecordedTool,
     )
 
-    val subprocessRuntimes = mutableListOf<LaunchedSubprocessRuntime>()
+    val subprocessRuntimes = mutableListOf<LaunchedScriptingRuntime>()
     return executeTrailSession(
       loggingRule = loggingRule,
       overrideSessionId = runYamlRequest.config.overrideSessionId,

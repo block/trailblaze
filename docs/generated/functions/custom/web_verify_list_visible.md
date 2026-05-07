@@ -9,8 +9,6 @@ Checks that each expected item text is visible within the container element.
 
 ### Registered `PlaywrightNativeVerifyListVisibleTool` in `ToolRegistry`
 ### Required Parameters
-- `ref`: `String`
-  Element ID (e.g., 'e5'), ARIA descriptor (e.g., 'list'), or CSS selector with css= prefix (e.g., 'css=#my-list').
 - `items`: `{
   "itemsType": {
     "name": "STRING"
@@ -19,8 +17,8 @@ Checks that each expected item text is visible within the container element.
 }`
 
 ### Optional Parameters
-- `element`: `String`
-  Human-readable description of the list being verified, for logging.
+- `ref`: `String`
+  Element ID (e.g., 'e5'), ARIA descriptor (e.g., 'list'), or CSS selector with css= prefix (e.g., 'css=#my-list').
 - `reasoning`: `String`
 
 

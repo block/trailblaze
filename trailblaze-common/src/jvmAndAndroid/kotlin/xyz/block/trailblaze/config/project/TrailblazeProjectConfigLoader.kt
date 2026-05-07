@@ -115,18 +115,12 @@ object TrailblazeProjectConfigLoader {
   ): TrailblazeResolvedConfig {
     val anchor = loaded.sourceFile.parentFile ?: File(".")
     val raw = loaded.raw
-    val resolvedTargets = raw.targets.map { resolveTargetEntry(it, anchor) }
     val resolvedToolsets = raw.toolsets.map { resolveToolsetEntry(it, anchor) }
     val resolvedTools = raw.tools.map { resolveToolEntry(it, anchor) }
-    val packArtifacts = resolvePackArtifacts(raw.packs, anchor, includeClasspathPacks)
+    val packArtifacts = resolvePackArtifacts(raw.targets, anchor, includeClasspathPacks)
     val projectConfig = TrailblazeProjectConfig(
       defaults = raw.defaults,
-      packs = packArtifacts.workspaceRefs,
-      targets = mergeById(
-        base = packArtifacts.targets,
-        overrides = resolvedTargets,
-        idSelector = AppTargetYamlConfig::id,
-      ).map(TargetEntry::Inline),
+      targets = packArtifacts.successfulTargetIds,
       toolsets = mergeById(
         base = packArtifacts.toolsets,
         overrides = resolvedToolsets,
@@ -149,6 +143,7 @@ object TrailblazeProjectConfigLoader {
     )
     return TrailblazeResolvedConfig(
       projectConfig = projectConfig,
+      targets = packArtifacts.targets,
       waypoints = packArtifacts.waypoints,
     )
   }
@@ -207,12 +202,6 @@ object TrailblazeProjectConfigLoader {
       )
     }
   }
-
-  internal fun resolveTargetEntry(entry: TargetEntry, anchor: File): AppTargetYamlConfig =
-    when (entry) {
-      is TargetEntry.Inline -> entry.config
-      is TargetEntry.Ref -> loadRef(entry.path, anchor, AppTargetYamlConfig.serializer(), "target")
-    }
 
   internal fun resolveToolsetEntry(entry: ToolsetEntry, anchor: File): ToolSetYamlConfig =
     when (entry) {
@@ -288,52 +277,153 @@ object TrailblazeProjectConfigLoader {
     return File(anchor, refPath)
   }
 
+  /**
+   * Resolves the pack pool from the workspace's declared target ids (or via
+   * auto-discovery if [declaredTargetIds] is empty), bringing transitive `dependencies:`
+   * into scope along the way. Returns the resolved targets, plus the toolsets / tools /
+   * waypoints contributed by every pack that landed in the pool.
+   *
+   * Workspace `<anchor>/packs/<id>/pack.yaml` is the resolution convention for both the
+   * workspace-listed roots and any packs pulled in transitively via `dependencies:`. The
+   * classpath is also a discovery source for both purposes (when [includeClasspathPacks]
+   * is true): a target listed in workspace `targets:` may be classpath-bundled (e.g. the
+   * framework `clock` target), and the same goes for any dependency a pack declares.
+   *
+   * ## Resolution flow
+   *
+   * 1. Determine the **root set** of pack ids — either the explicit [declaredTargetIds]
+   *    list, or (when empty) every target pack discovered under `<anchor>/packs/` plus
+   *    every classpath-bundled target pack. Library packs are not auto-discovered as
+   *    roots — they only enter scope transitively via `dependencies:`.
+   * 2. **Validate roots** are target packs. A workspace listing a library-pack id in
+   *    `targets:` is rejected with a redirecting error message.
+   * 3. **Walk transitive `dependencies:`** to build the full set of pack ids that need
+   *    to load. Each id resolves via the workspace pack dir (`<anchor>/packs/<id>/`) or
+   *    the classpath, with workspace shadowing the classpath on id collisions.
+   * 4. **Strict dep-graph validation**: every pack's `dependencies:` must resolve to a
+   *    pack id in the loaded pool. Unresolvable deps are aggregated and surfaced as a
+   *    single consolidated error.
+   * 5. **Resolve siblings** for each loaded pack — auto-discover operational tool YAMLs
+   *    from `<pack>/tools/`, load declared toolsets and waypoints.
+   * 6. **Apply per-target defaults inheritance** via `PackDependencyResolver` and emit
+   *    the final `AppTargetYamlConfig` list.
+   */
   private fun resolvePackArtifacts(
-    packRefs: List<String>,
+    declaredTargetIds: List<String>,
     anchor: File,
     includeClasspathPacks: Boolean,
   ): ResolvedPackArtifacts {
-    val workspaceLoad = if (packRefs.isEmpty()) {
-      TrailblazePackManifestLoader.LoadResult(emptyList(), emptyList())
-    } else {
-      TrailblazePackManifestLoader.loadAllResilient(packRefs, anchor)
-    }
-    workspaceLoad.failures.forEach { failure ->
-      Console.log(
-        "Warning: Failed to load pack '${failure.requestedPath}': ${failure.cause.message}",
-      )
-    }
+    val workspacePackDir = File(anchor, TrailblazeConfigPaths.PACKS_SUBDIR)
 
-    val classpathManifests = if (includeClasspathPacks) {
+    val classpathManifests: List<LoadedTrailblazePackManifest> = if (includeClasspathPacks) {
       TrailblazePackManifestLoader.discoverAndLoadFromClasspath()
     } else {
       emptyList()
     }
+    val classpathById = classpathManifests.associateBy { it.manifest.id }
 
-    // Workspace pack ids wholesale shadow same-id classpath packs. See the precedence
-    // doc on TrailblazeResolvedConfig.
-    val workspacePackIds = workspaceLoad.definitions.mapTo(mutableSetOf()) { it.manifest.manifest.id }
-    val effectiveClasspathManifests = classpathManifests.filter { it.manifest.id !in workspacePackIds }
+    // Step 1: figure out the root set of target-pack ids that need to load.
+    val rootIds: List<String> = if (declaredTargetIds.isNotEmpty()) {
+      declaredTargetIds
+    } else {
+      autoDiscoverTargetPackIds(workspacePackDir, classpathManifests)
+    }
 
-    // Order matters: classpath packs first (base), workspace packs second (override).
-    // We pair each manifest with its requesting workspace ref (or null for classpath
-    // packs) so the post-resolution `successfulWorkspaceRefs` list can be populated
-    // without leaking workspace-vs-classpath origin into LoadedTrailblazePackManifest.
-    val orderedManifests: List<Pair<LoadedTrailblazePackManifest, String?>> =
-      effectiveClasspathManifests.map { it to null } +
-        workspaceLoad.definitions.map { it.manifest to it.requestedRef }
+    // Step 2: load pack manifests transitively from the root set, walking
+    // `dependencies:` and resolving each id via workspace pack dir → classpath fallback.
+    // Atomic-per-pack on resolution failure (logged), strict on dep-graph violations.
+    val loadCtx = PackLoadContext(
+      workspacePackDir = workspacePackDir,
+      classpathById = classpathById,
+    )
+    // Two distinct failure shapes for workspace-listed roots, handled differently:
+    //   1. **Parse failure** of an existing pack manifest — atomic-per-pack drop with
+    //      a logged warning (existing behavior, preserved). The pack file is there
+    //      but malformed; sibling packs continue to load. The author already gets a
+    //      console warning naming the offending pack and the parse error.
+    //   2. **Hard-error** category errors — id refers to a library pack (cross-target
+    //      reusable tooling, not a runnable target), or id resolves to nothing on
+    //      disk and isn't classpath-bundled. These are config-level mistakes, not
+    //      content-level mistakes; surface them as a single consolidated error so
+    //      the author can fix the workspace declaration.
+    val rootValidationErrors = mutableListOf<String>()
+    rootIds.forEach { rootId ->
+      val rootResult = loadCtx.loadById(rootId)
+      when (rootResult) {
+        is PackLoadResult.NotFound -> {
+          rootValidationErrors += "Workspace target id '$rootId' not found at " +
+            "${File(workspacePackDir, "$rootId/${TrailblazeConfigPaths.PACK_MANIFEST_FILENAME}").absolutePath}" +
+            (if (includeClasspathPacks) " or as a classpath-bundled pack" else "") + "."
+        }
+        is PackLoadResult.ParseFailure -> {
+          // Already logged inside loadById; nothing else to do — atomic-per-pack drop.
+        }
+        is PackLoadResult.Found -> {
+          val rootManifest = rootResult.manifest
+          // Workspace `targets:` only accepts target packs. A library pack id in the list is
+          // a category error: library packs reach scope only via dependencies. Surface here
+          // (rather than silently dropping) so the author understands what to fix.
+          if (rootManifest.manifest.target == null) {
+            rootValidationErrors += "Workspace target id '$rootId' resolves to a *library* pack " +
+              "(no `target:` block in ${rootManifest.source.describe()}). The workspace `targets:` " +
+              "list only accepts target packs. Library packs come into scope automatically when a " +
+              "target pack declares them in `dependencies:`."
+            return@forEach
+          }
+          // Walk transitive dependencies. Atomic-per-pack on a transitive load failure
+          // (e.g. a depended-on pack file is malformed) — those are logged and the
+          // partial graph continues; missing-dep references are caught by the strict
+          // validation pass below.
+          try {
+            loadCtx.loadTransitively(rootManifest)
+          } catch (e: TrailblazeProjectConfigException) {
+            Console.log(
+              "Warning: Failed to load pack '${rootManifest.manifest.id}' " +
+                "from ${rootManifest.source.describe()}: ${e.message}",
+            )
+          }
+        }
+      }
+    }
+    if (rootValidationErrors.isNotEmpty()) {
+      throw TrailblazeProjectConfigException(
+        "Workspace `targets:` validation failed:\n" +
+          rootValidationErrors.joinToString("\n") { "  - $it" },
+      )
+    }
 
-    // First pass: per-pack sibling resolution into [ResolvedPack]. A pack whose siblings
-    // fail to resolve drops out entirely (atomic-per-pack), but doesn't take siblings
-    // down with it.
+    // Step 3: strict dependency-graph validation across the full loaded pool. Every pack's
+    // `dependencies:` must resolve to a pack id in `loadedById`. Aggregate failures into a
+    // single error so the author sees every broken edge in one shot.
+    val loadedById = loadCtx.loaded
+    val depErrors = mutableListOf<String>()
+    loadedById.values.forEach { loaded ->
+      val missing = loaded.manifest.dependencies.filter { it !in loadedById }
+      if (missing.isNotEmpty()) {
+        depErrors += "  - pack '${loaded.manifest.id}' (${loaded.source.describe()}) " +
+          "depends on ${missing.joinToString(", ") { "'$it'" }} which ${
+            if (missing.size > 1) "are" else "is"
+          } not in the resolved pool."
+      }
+    }
+    if (depErrors.isNotEmpty()) {
+      val available = loadedById.keys.sorted().joinToString(", ")
+      throw TrailblazeProjectConfigException(
+        "Pack dependency-graph validation failed:\n" +
+          depErrors.joinToString("\n") + "\n" +
+          "Available pack ids in the resolved pool: [$available]. " +
+          "Add the missing pack(s) to the workspace pack directory or to the framework " +
+          "classpath, or remove the unresolvable dependency.",
+      )
+    }
+
+    // Step 4: per-pack sibling resolution. A pack whose siblings fail to resolve drops
+    // out entirely (atomic-per-pack), but doesn't take siblings down with it.
     val resolvedPacks = mutableListOf<ResolvedPack>()
-    orderedManifests.forEach { (loadedManifest, workspaceRef) ->
+    loadedById.values.forEach { loadedManifest ->
       try {
-        resolvedPacks += resolvePackSiblings(loadedManifest, workspaceRef)
+        resolvedPacks += resolvePackSiblings(loadedManifest)
       } catch (e: TrailblazeProjectConfigException) {
-        // Surface the nested cause class when present so authors can distinguish
-        // "sibling file not found" (most common) from "sibling file malformed YAML",
-        // "containment-rule violation", and other failure shapes without grepping logs.
         val causeHint = e.cause?.let { " (${it::class.simpleName})" }.orEmpty()
         Console.log(
           "Warning: Failed to resolve pack '${loadedManifest.manifest.id}' " +
@@ -342,52 +432,22 @@ object TrailblazeProjectConfigLoader {
       }
     }
 
-    // Second pass: emit targets with dependency-graph defaults applied. Each pack's
-    // bundled artifacts (toolsets/tools/waypoints) contribute to the global pool
-    // regardless of whether the pack itself defines a runnable target.
-    //
-    // ## `successfulWorkspaceRefs` semantics
-    //
-    // Two distinct "this pack contributed" notions live in this loop, and the
-    // workspace-refs list deliberately reflects the second:
-    //  1. Pool contributions (toolsets/tools/waypoints) — UNCONDITIONAL once sibling
-    //     resolution succeeded (pass 1). Even a pack with no `target:` block, or one
-    //     whose dep graph fails to resolve, still ships its bundled files into the
-    //     workspace pool.
-    //  2. Workspace-ref success — recorded only when this pack's *target* made it into
-    //     the resolved config. A pack with no `target:` counts (it has no target to
-    //     fail). A pack whose target failed dep resolution does NOT count, because the
-    //     caller-visible projectConfig.packs: list is meant to answer "which workspace
-    //     packs landed as runnable targets?", not "which workspace files were touched."
-    //     Partial-failure packs (siblings contributed, target dropped) show up as
-    //     not-success so they're visibly distinct from clean loads.
+    // Step 5: emit final targets (with defaults inheritance) + pool contributions
+    // (toolsets/tools/waypoints from every successfully-resolved pack).
     val packsById = resolvedPacks.associateBy { it.manifest.id }
     val targets = mutableListOf<AppTargetYamlConfig>()
+    val successfulTargetIds = mutableListOf<String>()
     val toolsets = mutableListOf<ToolSetYamlConfig>()
     val tools = mutableListOf<ToolYamlConfig>()
     val waypoints = mutableListOf<WaypointDefinition>()
-    val successfulWorkspaceRefs = mutableListOf<String>()
 
     resolvedPacks.forEach { pack ->
-      // (1) Pool contributions — unconditional, see the doc above.
       toolsets += pack.toolsets
       tools += pack.tools
       waypoints += pack.waypoints
 
-      // A pack that doesn't declare a `target:` block isn't surfaced as a runnable
-      // target. Workspace ref still counts as successful — there was no target to fail
-      // and the pack's siblings landed in the pool.
-      val ownTarget = pack.target
-      if (ownTarget == null) {
-        if (pack.workspaceRef != null) successfulWorkspaceRefs += pack.workspaceRef
-        return@forEach
-      }
+      val ownTarget = pack.target ?: return@forEach
 
-      // Walk the dep graph and apply closest-wins defaults inheritance for this target.
-      // Cycle / missing-dep failures isolate to this consumer pack — sibling packs are
-      // unaffected. Per the `successfulWorkspaceRefs` doc above, this branch's failure
-      // *does not* mark the workspace ref successful even though pool contributions
-      // already landed at (1).
       val finalTarget = try {
         PackDependencyResolver.resolveTarget(
           ownTarget = ownTarget,
@@ -404,11 +464,11 @@ object TrailblazeProjectConfigLoader {
       }
 
       targets += finalTarget
-      if (pack.workspaceRef != null) successfulWorkspaceRefs += pack.workspaceRef
+      successfulTargetIds += pack.manifest.id
     }
 
     return ResolvedPackArtifacts(
-      workspaceRefs = successfulWorkspaceRefs,
+      successfulTargetIds = successfulTargetIds,
       targets = targets,
       toolsets = toolsets,
       tools = tools,
@@ -416,9 +476,113 @@ object TrailblazeProjectConfigLoader {
     )
   }
 
+  /**
+   * Walks `<workspacePackDir>` and the classpath pack pool, returning every id that
+   * corresponds to a target pack (one whose `pack.yaml` declares a `target:` block).
+   * Library packs are not auto-discovered as roots — they reach scope only via
+   * transitive `dependencies:`. The auto-discovery branch fires when the workspace's
+   * `targets:` list is empty/omitted.
+   */
+  private fun autoDiscoverTargetPackIds(
+    workspacePackDir: File,
+    classpathManifests: List<LoadedTrailblazePackManifest>,
+  ): List<String> {
+    val ids = linkedSetOf<String>()
+    if (workspacePackDir.isDirectory) {
+      workspacePackDir.listFiles()
+        .orEmpty()
+        .filter { it.isDirectory }
+        .sortedBy { it.name }
+        .forEach { packDir ->
+          val manifestFile = File(packDir, TrailblazeConfigPaths.PACK_MANIFEST_FILENAME)
+          if (!manifestFile.isFile) return@forEach
+          val manifest = try {
+            TrailblazePackManifestLoader.load(manifestFile).manifest
+          } catch (e: TrailblazeProjectConfigException) {
+            Console.log(
+              "Warning: Skipping ${manifestFile.absolutePath} during auto-discovery: ${e.message}",
+            )
+            return@forEach
+          }
+          if (manifest.target != null) ids += manifest.id
+        }
+    }
+    classpathManifests
+      .filter { it.manifest.target != null }
+      .map { it.manifest.id }
+      .sorted()
+      .forEach { ids += it }
+    return ids.toList()
+  }
+
+  /**
+   * Outcome of a pack-id lookup. Distinguishes "id not in scope" (config-level mistake)
+   * from "manifest exists but failed to parse" (content-level mistake) so callers can
+   * apply different policies — workspace `targets:` resolution wants strict on the
+   * former and atomic-per-pack on the latter.
+   */
+  private sealed class PackLoadResult {
+    data class Found(val manifest: LoadedTrailblazePackManifest) : PackLoadResult()
+    /** Manifest file existed but failed to parse — already logged by [PackLoadContext]. */
+    object ParseFailure : PackLoadResult()
+    /** No manifest file at workspace path and not classpath-bundled. */
+    object NotFound : PackLoadResult()
+  }
+
+  /**
+   * Mutable working set for the transitive pack-load walk. Resolves each pack id via
+   * `<workspacePackDir>/<id>/pack.yaml` (workspace shadows classpath on collision),
+   * then recurses into the manifest's `dependencies:` until a fixed point is reached.
+   * Cycles are prevented by checking [loaded] before recursing.
+   */
+  private class PackLoadContext(
+    private val workspacePackDir: File,
+    private val classpathById: Map<String, LoadedTrailblazePackManifest>,
+  ) {
+    val loaded: MutableMap<String, LoadedTrailblazePackManifest> = linkedMapOf()
+
+    fun loadById(id: String): PackLoadResult {
+      loaded[id]?.let { return PackLoadResult.Found(it) }
+      val workspaceFile = File(workspacePackDir, "$id/${TrailblazeConfigPaths.PACK_MANIFEST_FILENAME}")
+      val manifest = if (workspaceFile.isFile) {
+        try {
+          TrailblazePackManifestLoader.load(workspaceFile)
+        } catch (e: TrailblazeProjectConfigException) {
+          Console.log(
+            "Warning: Failed to load workspace pack '$id' at ${workspaceFile.absolutePath}: ${e.message}",
+          )
+          return PackLoadResult.ParseFailure
+        }
+      } else {
+        classpathById[id] ?: return PackLoadResult.NotFound
+      }
+      loaded[id] = manifest
+      return PackLoadResult.Found(manifest)
+    }
+
+    fun loadTransitively(root: LoadedTrailblazePackManifest) {
+      loaded.putIfAbsent(root.manifest.id, root)
+      val frontier = ArrayDeque<LoadedTrailblazePackManifest>().apply { add(root) }
+      while (frontier.isNotEmpty()) {
+        val current = frontier.removeFirst()
+        current.manifest.dependencies.forEach { depId ->
+          if (depId in loaded) return@forEach
+          val depResult = loadById(depId)
+          if (depResult is PackLoadResult.Found) {
+            // loadById already inserted into `loaded` if found; recurse only when we
+            // genuinely advanced the frontier so a cycle terminates after one visit.
+            frontier.add(depResult.manifest)
+          }
+          // Other outcomes (NotFound / ParseFailure) leave `loaded` without `depId`,
+          // so the strict dep-graph validation at the call site catches it as a
+          // missing edge with full context.
+        }
+      }
+    }
+  }
+
   private fun resolvePackSiblings(
     loadedManifest: LoadedTrailblazePackManifest,
-    workspaceRef: String?,
   ): ResolvedPack {
     val resolvedScriptedTools: List<InlineScriptToolConfig> =
       loadedManifest.manifest.target?.tools.orEmpty()
@@ -441,10 +605,61 @@ object TrailblazeProjectConfigLoader {
       )
     val resolvedToolsets = loadedManifest.manifest.toolsets
       .map { path -> loadPackSibling(path, loadedManifest.source, ToolSetYamlConfig.serializer(), "pack toolset") }
-    val resolvedTools = loadedManifest.manifest.tools
-      .map { path -> loadPackSibling(path, loadedManifest.source, ToolYamlConfig.serializer(), "pack tool") }
-    val resolvedWaypoints = loadedManifest.manifest.waypoints
-      .map { path -> loadPackSibling(path, loadedManifest.source, WaypointDefinition.serializer(), "pack waypoint") }
+
+    // Operational tool YAMLs auto-discovered from three sibling directories, one per
+    // operational class:
+    //   - `<pack>/tools/**.tool.yaml`
+    //   - `<pack>/shortcuts/**.shortcut.yaml`
+    //   - `<pack>/trailheads/**.trailhead.yaml`
+    // Each dir is walked recursively at any depth — subdirs are organizational only
+    // (e.g. `shortcuts/web/`, `trailheads/android/`), matching the existing
+    // `<pack>/waypoints/` convention. Library-pack contract: a pack with no `target:`
+    // block cannot ship trailhead tools (a trailhead bootstraps to a known waypoint).
+    // Enforced here because the trailhead block lives inside the tool YAML, not the
+    // manifest, so the check needs the tool decoded first. The waypoints-on-library-pack
+    // rule is enforced in [TrailblazePackManifestLoader] where it's visible from the
+    // manifest alone.
+    val toolPaths = TrailblazeConfigPaths.PACK_TOOL_LAYOUT.flatMap { (dir, suffix) ->
+      loadedManifest.source.listSiblingsRecursive(
+        relativeDir = dir,
+        suffixes = listOf(suffix),
+      )
+    }
+    val resolvedTools = toolPaths.map { path ->
+      val tool = loadPackSibling(path, loadedManifest.source, ToolYamlConfig.serializer(), "pack tool")
+      if (loadedManifest.manifest.target == null && tool.trailhead != null) {
+        throw TrailblazeProjectConfigException(
+          "Pack '${loadedManifest.manifest.id}' (${loadedManifest.source.describe()}) is a library " +
+            "pack (no target: block) but its tool '$path' declares a trailhead: block. " +
+            "Trailheads bootstrap to a known waypoint and only make sense within a target pack. " +
+            "Move the trailhead tool into a target pack, or add a target: block to this pack.",
+        )
+      }
+      tool
+    }
+    // Waypoint YAMLs auto-discovered from `<pack>/waypoints/` (any depth). The manifest no
+    // longer enumerates them — anything in the directory tree with a `.waypoint.yaml`
+    // suffix ships with the pack. Library-pack contract: a pack with no `target:` block
+    // cannot ship waypoints (a waypoint binds to a target's screen state). The
+    // manifest-side check in TrailblazePackManifestLoader still fires when an old-style
+    // pack.yaml lists waypoints explicitly; this discovery-side check covers the new
+    // path where the YAMLs are present on disk without a manifest list.
+    val waypointPaths = loadedManifest.source.listSiblingsRecursive(
+      relativeDir = PACK_WAYPOINTS_DIR,
+      suffixes = PACK_WAYPOINT_SUFFIXES,
+    )
+    if (loadedManifest.manifest.target == null && waypointPaths.isNotEmpty()) {
+      throw TrailblazeProjectConfigException(
+        "Pack '${loadedManifest.manifest.id}' (${loadedManifest.source.describe()}) is a library " +
+          "pack (no target: block) but has waypoint files on disk under $PACK_WAYPOINTS_DIR/: " +
+          "${waypointPaths.joinToString(", ")}. " +
+          "Library packs cannot own waypoints — waypoints bind to a target's screen state. " +
+          "Move the waypoint files into a target pack, or add a target: block to this pack.",
+      )
+    }
+    val resolvedWaypoints = waypointPaths.map { path ->
+      loadPackSibling(path, loadedManifest.source, WaypointDefinition.serializer(), "pack waypoint")
+    }
     return ResolvedPack(
       manifest = loadedManifest.manifest,
       source = loadedManifest.source,
@@ -452,9 +667,11 @@ object TrailblazeProjectConfigLoader {
       toolsets = resolvedToolsets,
       tools = resolvedTools,
       waypoints = resolvedWaypoints,
-      workspaceRef = workspaceRef,
     )
   }
+
+  private const val PACK_WAYPOINTS_DIR = "waypoints"
+  private val PACK_WAYPOINT_SUFFIXES = listOf(".waypoint.yaml")
 
   private fun <T> loadPackSibling(
     refPath: String,
@@ -498,12 +715,11 @@ object TrailblazeProjectConfigLoader {
 
   private data class ResolvedPackArtifacts(
     /**
-     * Successfully resolved workspace `packs:` ref strings (only). Populates
-     * `projectConfig.packs:` so the resolved config can record which workspace packs
-     * actually contributed (broken refs are excluded). Classpath-discovered packs are
-     * NOT included here — they're internal framework defaults, not user-declared.
+     * Target-pack ids that successfully resolved (workspace-listed roots and their
+     * transitive deps that surfaced runnable targets). Populates
+     * [TrailblazeProjectConfig.targets] post-resolution.
      */
-    val workspaceRefs: List<String> = emptyList(),
+    val successfulTargetIds: List<String> = emptyList(),
     val targets: List<AppTargetYamlConfig> = emptyList(),
     val toolsets: List<ToolSetYamlConfig> = emptyList(),
     val tools: List<ToolYamlConfig> = emptyList(),
@@ -523,7 +739,6 @@ object TrailblazeProjectConfigLoader {
     val toolsets: List<ToolSetYamlConfig>,
     val tools: List<ToolYamlConfig>,
     val waypoints: List<WaypointDefinition>,
-    val workspaceRef: String?,
   )
 }
 

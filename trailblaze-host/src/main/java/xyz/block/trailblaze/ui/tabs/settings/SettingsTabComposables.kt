@@ -17,7 +17,6 @@ import xyz.block.trailblaze.llm.LlmProviderEnvVarUtil
 import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.llm.TrailblazeLlmModelList
 import xyz.block.trailblaze.llm.TrailblazeLlmProvider
-import xyz.block.trailblaze.llm.providers.OpenAITrailblazeLlmModelList
 import xyz.block.trailblaze.ui.desktoputil.DesktopUtil
 import xyz.block.trailblaze.ui.desktoputil.EnvVarSaveResult
 import xyz.block.trailblaze.ui.desktoputil.saveEnvVarToShellProfile
@@ -624,19 +623,30 @@ object SettingsTabComposables {
         var showLlmProviderMenu by remember { mutableStateOf(false) }
         var showLlmModelMenu by remember { mutableStateOf(false) }
 
-        val currentProviderModelList = availableModelLists.firstOrNull {
-          it.provider.id == serverState.appConfig.llmProvider
-        } ?: OpenAITrailblazeLlmModelList
+        // When the saved provider is the explicit "none" sentinel — or just isn't in
+        // the available model lists — the UI must NOT silently fall back to a real
+        // provider's display, or the user sees what looks like a configured LLM
+        // while runtime behavior is "no LLM configured" (false-troubleshooting trap
+        // flagged by P2 review on PR #2750). Treat both cases the same: surface the
+        // explicit `TrailblazeLlmProvider.NONE` shape — its `display` is the
+        // user-readable "None (recordings only)" — and leave the model dropdown
+        // empty so picking a real provider is the obvious next step.
+        val savedProviderId = serverState.appConfig.llmProvider
+        val currentProviderModelList: TrailblazeLlmModelList? = availableModelLists.firstOrNull {
+          it.provider.id == savedProviderId
+        }
 
-        val currentProvider: TrailblazeLlmProvider = currentProviderModelList.provider
+        val currentProvider: TrailblazeLlmProvider =
+          currentProviderModelList?.provider ?: TrailblazeLlmProvider.NONE
 
-        val availableModelsForCurrentProvider = currentProviderModelList.entries
-        val currentModel: TrailblazeLlmModel =
-          currentProviderModelList.entries.firstOrNull {
+        val availableModelsForCurrentProvider: List<TrailblazeLlmModel> =
+          currentProviderModelList?.entries.orEmpty()
+        val currentModel: TrailblazeLlmModel? =
+          currentProviderModelList?.entries?.firstOrNull {
             it.modelId == serverState.appConfig.llmModel
-          } ?: currentProviderModelList.entries.first()
+          } ?: currentProviderModelList?.entries?.firstOrNull()
 
-        val currentLlmModelLabel = currentModel.modelId
+        val currentLlmModelLabel = currentModel?.modelId ?: "(none configured)"
 
         // LLM Provider Section
         Column(
@@ -778,7 +788,10 @@ object SettingsTabComposables {
           }
         }
 
-        // Test LLM Connection button
+        // Test LLM Connection button — only enabled when there's a concrete model
+        // to test. The "no LLM configured" / NONE case has no model to round-trip,
+        // so the button is disabled rather than firing a doomed call against a
+        // null target.
         if (onTestLlmConnection != null) {
           val testScope = rememberCoroutineScope()
           var isTesting by remember { mutableStateOf(false) }
@@ -788,16 +801,17 @@ object SettingsTabComposables {
           Spacer(modifier = Modifier.height(8.dp))
           Button(
             onClick = {
+              val modelToTest = currentModel ?: return@Button
               isTesting = true
               testResult = null
               testScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                val result = onTestLlmConnection(currentModel)
+                val result = onTestLlmConnection(modelToTest)
                 testIsSuccess = result.isSuccess
                 testResult = result.getOrElse { it.message ?: "Unknown error" }
                 isTesting = false
               }
             },
-            enabled = !isTesting
+            enabled = !isTesting && currentModel != null
           ) {
             if (isTesting) {
               Row(

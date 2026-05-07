@@ -20,8 +20,6 @@ mouse to its center first. When ref is omitted, scrolls the full page.
   Number of pixels to scroll. Defaults to 500.
 - `ref`: `String`
   Element reference for the container to scroll within: ARIA descriptor (e.g., 'navigation "Sidebar"'), element ID (e.g., 'e5'), or CSS selector with css= prefix (e.g., 'css=#scrollable-panel'). When omitted, scrolls the full page.
-- `element`: `String`
-  Human-readable description of the container being scrolled, for logging.
 - `reasoning`: `String`
 
 

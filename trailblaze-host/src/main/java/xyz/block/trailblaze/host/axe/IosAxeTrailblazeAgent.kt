@@ -83,10 +83,10 @@ class IosAxeTrailblazeAgent(
 
   override suspend fun executeNodeSelectorAssertVisible(
     nodeSelector: TrailblazeNodeSelector,
-    timeoutMs: Long,
+    timeoutMs: Long?,
     traceId: TraceId?,
   ): TrailblazeToolResult = AxeTrailRunner.runActions(
-    actions = listOf(AxeAction.AssertVisible(nodeSelector, timeoutMs)),
+    actions = listOf(AxeAction.AssertVisible(nodeSelector, timeoutMs ?: DEFAULT_AXE_TIMEOUT_MS)),
     traceId = traceId,
     deviceManager = deviceManager,
     trailblazeLogger = trailblazeLogger,
@@ -95,10 +95,10 @@ class IosAxeTrailblazeAgent(
 
   override suspend fun executeNodeSelectorAssertNotVisible(
     nodeSelector: TrailblazeNodeSelector,
-    timeoutMs: Long,
+    timeoutMs: Long?,
     traceId: TraceId?,
   ): TrailblazeToolResult = AxeTrailRunner.runActions(
-    actions = listOf(AxeAction.AssertNotVisible(nodeSelector, timeoutMs)),
+    actions = listOf(AxeAction.AssertNotVisible(nodeSelector, timeoutMs ?: DEFAULT_AXE_TIMEOUT_MS)),
     traceId = traceId,
     deviceManager = deviceManager,
     trailblazeLogger = trailblazeLogger,
@@ -134,5 +134,11 @@ class IosAxeTrailblazeAgent(
           "(ExecutableTrailblazeTool or DelegatingTrailblazeTool) — cannot execute on IOS_AXE.",
       )
     }
+  }
+
+  companion object {
+    /** Driver-default wait when the caller passes `timeoutMs = null`. Matches the prior
+     *  hardcoded default so existing callers see no behavior change. */
+    private const val DEFAULT_AXE_TIMEOUT_MS = 5_000L
   }
 }

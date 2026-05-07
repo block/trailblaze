@@ -4,7 +4,7 @@ import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
-import xyz.block.trailblaze.llm.providers.OpenAITrailblazeLlmModelList
+import xyz.block.trailblaze.llm.TrailblazeLlmProvider
 import xyz.block.trailblaze.mcp.AgentImplementation
 import xyz.block.trailblaze.model.SELF_HEAL_DEFAULT
 import xyz.block.trailblaze.ui.editors.yaml.YamlVisualEditorView
@@ -28,8 +28,14 @@ data class TrailblazeServerState(
     val terminateTargetAppBeforeRunning: Boolean = false,
     val selectedTargetAppId: String? = null,
     val themeMode: ThemeMode = ThemeMode.System,
-    val llmProvider: String = DEFAULT_DESKTOP_APP_MODEL_LLM_MODEL.trailblazeLlmProvider.id,
-    val llmModel: String = DEFAULT_DESKTOP_APP_MODEL_LLM_MODEL.modelId, // Default to GPT-4.1 model
+    // Default to the NONE sentinel so the OSS distro never auto-claims a user's
+    // OPENAI_API_KEY / ANTHROPIC_API_KEY / etc. — external CLI users driving
+    // Trailblaze through Claude Code, Codex, etc. opt in explicitly via
+    // `trailblaze config llm <provider/model>` or per-run `--llm`. Downstream
+    // distributions can override this in their own DesktopAppConfig subclass
+    // when they ship a managed default.
+    val llmProvider: String = TrailblazeLlmProvider.NONE.id,
+    val llmModel: String = TrailblazeLlmProvider.NONE.id,
     val selfHealEnabled: Boolean = SELF_HEAL_DEFAULT,
     /** Agent implementation to use. Defaults to [AgentImplementation.DEFAULT]. */
     val agentImplementation: AgentImplementation = AgentImplementation.DEFAULT,
@@ -103,13 +109,7 @@ data class TrailblazeServerState(
     val cliDevicePlatform: String? = null,
     // Agent execution location: true = host controls via RPC, false = agent runs entirely on-device
     val preferHostAgent: Boolean = true,
-  ) {
-
-    companion object {
-      /** Centralized definition of our default LLM model for the desktop app */
-      private val DEFAULT_DESKTOP_APP_MODEL_LLM_MODEL = OpenAITrailblazeLlmModelList.OPENAI_GPT_4_1
-    }
-  }
+  )
 
   @Serializable
   enum class ThemeMode {

@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.graph
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.api.waypoint.WaypointSelectorEntry
 
 /**
@@ -87,6 +88,15 @@ data class WaypointGraphShortcut(
   val from: String,
   val to: String,
   val variant: String?,
+  /** Inline tool-call list when this shortcut is YAML-defined (`tools:` mode).
+   *  Each element is a raw JSON object — typically a single-key map like
+   *  `{"tapElement": {...}}`. The front-end renders these into a click-to-
+   *  inspect modal so the user can see the actions a shortcut performs. */
+  val toolsList: List<JsonObject>? = null,
+  /** FQ class name when this shortcut is `class:`-mode (Kotlin-backed).
+   *  The front-end shows this as "(native: <classname>)" since the body
+   *  isn't introspectable from YAML. */
+  val toolClass: String? = null,
 )
 
 @Serializable

@@ -123,7 +123,12 @@ object TrailblazeDeviceService {
     appTarget: TrailblazeHostAppTarget? = null,
   ): TrailblazeConnectedDevice? = when (trailblazeDeviceId.trailblazeDevicePlatform) {
     TrailblazeDevicePlatform.ANDROID -> {
-      // Android drivers communicate via RPC and do not need a Maestro host driver.
+      // Android drivers (instrumentation + accessibility) communicate via the on-device RPC
+      // server (`OnDeviceRpcClient` over a dadb-bridged HTTP port), not via a host-side
+      // Maestro driver. There's no `MaestroConnectedDevice` to construct here — the
+      // recording tab's Android path takes a different shape that doesn't go through this
+      // method. Returning null is the correct contract for "no host-side Maestro device";
+      // the recording tab interprets that and routes through the on-device path instead.
       null
     }
     TrailblazeDevicePlatform.IOS -> when (driverType) {

@@ -220,6 +220,20 @@ class TrailblazeDeviceManager(
     onComplete: ((TrailExecutionResult) -> Unit)? = null,
   ) {
     val settingsState = settingsRepo.serverStateFlow.value
+    // Honor `config.driver` from the trail YAML on the desktop UI's "Run trail" path —
+    // mirrors what [TrailCommand] does for the CLI direct path and what
+    // a downstream `AndroidTrailblazeRule` subclass's `applyPerTrailDriverFromAsset` does for on-device runs.
+    // Without this, a trail with `driver: ANDROID_ONDEVICE_ACCESSIBILITY` would silently run
+    // on whatever driver the user-selected device defaults to, regardless of what the YAML
+    // says it requires. [RunYamlRequest.driverType] is consumed downstream by
+    // [AndroidStandaloneServerTest.handleRunRequest], which sets `driverTypeOverride` and
+    // makes the rule resolve to the matching agent.
+    val trailConfigDriver = try {
+      createTrailblazeYaml().extractTrailConfig(yamlToRun)?.driver
+        ?.let { TrailblazeDriverType.fromString(it) }
+    } catch (_: Exception) {
+      null
+    }
     val runYamlRequest = RunYamlRequest(
       yaml = yamlToRun,
       // Use title with ID appended for method name (e.g., for_your_business_page_5374142)
@@ -238,6 +252,7 @@ class TrailblazeDeviceManager(
         captureNetworkTraffic = settingsState.appConfig.captureNetworkTraffic,
       ),
       trailblazeDeviceId = trailblazeDeviceId,
+      driverType = trailConfigDriver,
       referrer = referrer,
       agentImplementation = agentImplementation,
       traceId = traceId,

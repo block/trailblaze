@@ -5,10 +5,13 @@ import picocli.CommandLine.Command
 import picocli.CommandLine.Option
 import picocli.CommandLine.Parameters
 import xyz.block.trailblaze.api.DriverNodeDetail
+import xyz.block.trailblaze.api.ScreenState
+import xyz.block.trailblaze.api.TrailblazeElementSelector
 import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.TrailblazeNodeSelector
 import xyz.block.trailblaze.api.TrailblazeNodeSelectorGenerator
 import xyz.block.trailblaze.util.Console
+import xyz.block.trailblaze.viewmatcher.TapSelectorV2
 import xyz.block.trailblaze.waypoint.SessionLogScreenState
 import xyz.block.trailblaze.yaml.TrailblazeYaml
 import java.io.File
@@ -44,7 +47,7 @@ import java.util.concurrent.Callable
  * resource id when one exists. That's the right call for tap recordings (machine consumes
  * it, stability matters) but the wrong call for waypoint authoring, where the human consumer
  * cares about semantic meaning. A bottom-nav tab might have an opaque resource id like
- * `com.squareup.development:id/nav_tab_0` and a content description like "Banking" — both
+ * `com.example.app:id/nav_tab_0` and a content description like "Banking" — both
  * resolve uniquely, but only the latter carries meaning when a future agent reads the YAML.
  * The author should see both options and choose. (Per the same logic, the structural-only
  * candidate at the bottom of the output is the right pick for `forbidden:` clauses on sibling
@@ -92,10 +95,42 @@ class WaypointSuggestSelectorCommand : Callable<Int> {
 
   @Option(
     names = ["--ref"],
-    description = ["Element ref from the captured tree (e.g. 'a812'). Required."],
-    required = true,
+    description = [
+      "Element ref from the captured tree (e.g. 'a812').",
+      "Mutually exclusive with --at; exactly one must be provided.",
+    ],
   )
-  lateinit var ref: String
+  var ref: String? = null
+
+  @Option(
+    names = ["--at"],
+    description = [
+      "Screen-coordinate pair `x,y` (in device pixels) identifying the target element.",
+      "The frontmost interactive node whose bounds contain the point is selected via",
+      "the same hit-test the runtime uses for taps. Useful for the deterministic",
+      "Maestro-selector → accessibility-selector migration: resolve the Maestro selector",
+      "to a center coordinate, then ask this command for an accessibility selector that",
+      "covers the same node. Mutually exclusive with --ref / --maestro-selector.",
+    ],
+  )
+  var at: String? = null
+
+  @Option(
+    names = ["--maestro-selector"],
+    description = [
+      "Inline TrailblazeElementSelector YAML (the legacy flat selector with fields like",
+      "`textRegex`, `idRegex`, `accessibilityTextRegex`, `index`, `enabled`, etc.) — the",
+      "shape used by the older Maestro-driver tap recordings. The selector is resolved",
+      "against the captured `viewHierarchy` (Maestro tree) using the same matcher the",
+      "runtime taps use; the resulting node's CENTER coordinate is then hit-tested",
+      "against the captured `trailblazeNodeTree` (accessibility tree) to find the",
+      "accessibility node that covers the same on-screen element. The output is the",
+      "same selector cascade as `--ref` / `--at`, but starting from a Maestro selector.",
+      "This is the deterministic Maestro→accessibility migration primitive.",
+      "Mutually exclusive with --ref / --at.",
+    ],
+  )
+  var maestroSelector: String? = null
 
   @Option(
     names = ["--session"],
@@ -140,18 +175,16 @@ class WaypointSuggestSelectorCommand : Callable<Int> {
       return 1
     }
 
-    val target = tree.findFirstByRef(ref) ?: run {
-      Console.error("Ref not found in tree: '$ref' (log: ${logFile.name})")
-      Console.error(
-        "Hint: cross-check with `./trailblaze snapshot --all` — refs are " +
-          "tree-capture-local and don't survive across captures.",
-      )
-      return 1
-    }
+    val target = resolveTarget(tree, screen, logFile) ?: return 1
 
-    Console.log("# Element ref: $ref")
+    val sourceDesc = ref?.let { "ref: $it" }
+      ?: at?.let { "at: $it" }
+      ?: maestroSelector?.let { "maestro-selector (resolved → coords)" }
+      ?: "?"
+    Console.log("# Element $sourceDesc")
     Console.log("# Source: ${logFile.name}")
     Console.log("# ${describeNode(target)}")
+    target.ref?.let { Console.log("# Resolved ref: $it") }
     Console.log("")
 
     val candidates = TrailblazeNodeSelectorGenerator.findAllValidSelectors(
@@ -164,7 +197,7 @@ class WaypointSuggestSelectorCommand : Callable<Int> {
       // findAllValidSelectors guarantees at least the index fallback, so this
       // path is mostly defensive — but we want the failure mode to be loud rather
       // than emitting silently-empty output.
-      Console.error("No selectors generated for ref '$ref'. This shouldn't happen.")
+      Console.error("No selectors generated for target. This shouldn't happen.")
       return 1
     }
 
@@ -215,8 +248,9 @@ class WaypointSuggestSelectorCommand : Callable<Int> {
           (node.driverDetail as? DriverNodeDetail.AndroidAccessibility)?.isSelected == true
         }
         if (ancestor == null) {
-          Console.log("# --anchor=parent-selected: no ancestor with isSelected=true above ref '$ref'.")
-          Console.log("# Drop the flag, or pick a ref whose tab is currently active.")
+          val whichTarget = ref?.let { "ref '$it'" } ?: at?.let { "point ($it)" } ?: "target"
+          Console.log("# --anchor=parent-selected: no ancestor with isSelected=true above $whichTarget.")
+          Console.log("# Drop the flag, or pick a target whose tab is currently active.")
           return
         }
         val ancestorDetail = ancestor.driverDetail as DriverNodeDetail.AndroidAccessibility
@@ -270,6 +304,163 @@ class WaypointSuggestSelectorCommand : Callable<Int> {
    * anchored selectors round-trip through the same matcher.
    */
   private fun escapeForYamlRegex(s: String): String = "\\Q$s\\E"
+
+  private fun resolveTarget(
+    tree: TrailblazeNode,
+    screen: ScreenState,
+    logFile: File,
+  ): TrailblazeNode? {
+    // Mutual-exclusion: exactly one of --ref / --at / --maestro-selector must be provided.
+    val provided = listOfNotNull(
+      ref?.let { "--ref" },
+      at?.let { "--at" },
+      maestroSelector?.let { "--maestro-selector" },
+    )
+    if (provided.size != 1) {
+      Console.error(
+        if (provided.isEmpty()) {
+          "Provide exactly one of --ref, --at, or --maestro-selector (none given)."
+        } else {
+          "Provide exactly one of --ref, --at, or --maestro-selector " +
+            "(got: ${provided.joinToString(", ")})."
+        },
+      )
+      return null
+    }
+
+    ref?.let { r ->
+      val target = tree.findFirstByRef(r)
+      if (target == null) {
+        Console.error("Ref not found in tree: '$r' (log: ${logFile.name})")
+        Console.error(
+          "Hint: cross-check with `./trailblaze snapshot --all` — refs are " +
+            "tree-capture-local and don't survive across captures.",
+        )
+      }
+      return target
+    }
+
+    at?.let { coord ->
+      val (x, y) = parseCoord(coord) ?: return null
+      // Bounds-check before the hit-test: the matcher returns null on miss either way, but
+      // an out-of-range coord is almost always a user error (negative, off-screen, swapped
+      // axis), so surface it with a clearer message than the generic "no node contains".
+      val w = screen.deviceWidth
+      val h = screen.deviceHeight
+      if (w > 0 && h > 0 && (x < 0 || y < 0 || x >= w || y >= h)) {
+        Console.error(
+          "Coordinate ($x, $y) is outside device bounds (${w}x$h) for ${logFile.name}. " +
+            "Verify x,y are device pixels, not normalised units, and not swapped.",
+        )
+        return null
+      }
+      val target = tree.hitTest(x, y)
+      if (target == null) {
+        Console.error("No node contains point ($x, $y) in tree from ${logFile.name}.")
+        Console.error("Verify the coordinates are in device pixels, not normalised units.")
+      }
+      return target
+    }
+
+    maestroSelector?.let { yaml ->
+      return resolveFromMaestroSelector(yaml, tree, screen, logFile)
+    }
+
+    return null
+  }
+
+  /**
+   * Two-tree pipeline:
+   *
+   *  1. Parse the inline YAML into a `TrailblazeElementSelector` (the legacy flat selector
+   *     shape used by historical Maestro-driver tap recordings).
+   *  2. Resolve it against the captured `viewHierarchy` (Maestro tree) using the same matcher
+   *     the runtime uses for taps — `TapSelectorV2.findNodeCenterUsingSelector` returns the
+   *     CENTER coordinate of the matched element, which is exactly what we'd tap.
+   *  3. Hit-test that coordinate against the captured `trailblazeNodeTree` (accessibility
+   *     tree) to find the accessibility node covering the same on-screen element. Re-using
+   *     the same `hitTest` semantics the accessibility runtime applies for routing taps means
+   *     the resulting node is the one a runtime tap at the SAME coordinate would hit.
+   *
+   * That coordinate handoff is what makes the migration deterministic: it doesn't depend on
+   * the LLM's interpretation of the screen, it only depends on the two trees agreeing on
+   * "what's at point (x, y)" — which both drivers do by construction, since both derive from
+   * the underlying accessibility service. Once the migration tool runs, every produced
+   * accessibility selector is a node that the SAME tap coordinate would have hit on the
+   * legacy Maestro path.
+   */
+  private fun resolveFromMaestroSelector(
+    yaml: String,
+    tree: TrailblazeNode,
+    screen: ScreenState,
+    logFile: File,
+  ): TrailblazeNode? {
+    val selector = try {
+      TrailblazeYaml.defaultYamlInstance.decodeFromString(
+        TrailblazeElementSelector.serializer(),
+        yaml,
+      )
+    } catch (e: Exception) {
+      Console.error("Could not parse --maestro-selector YAML: ${e.message}")
+      Console.error("Expected a TrailblazeElementSelector body, e.g.:")
+      Console.error("  --maestro-selector '{ idRegex: \"^foo$\", textRegex: \"^Bar$\" }'")
+      return null
+    }
+
+    if (screen.deviceWidth <= 0 || screen.deviceHeight <= 0) {
+      Console.error(
+        "Log has no device dimensions (width=${screen.deviceWidth}, " +
+          "height=${screen.deviceHeight}); cannot resolve Maestro selector.",
+      )
+      Console.error("Pick a log step whose deviceWidth/deviceHeight are populated.")
+      return null
+    }
+
+    val center = TapSelectorV2.findNodeCenterUsingSelector(
+      root = screen.viewHierarchy,
+      selector = selector,
+      trailblazeDevicePlatform = screen.trailblazeDevicePlatform,
+      widthPixels = screen.deviceWidth,
+      heightPixels = screen.deviceHeight,
+    )
+    if (center == null) {
+      Console.error("Maestro selector did not match any element in viewHierarchy.")
+      Console.error("Source log: ${logFile.name}")
+      Console.error("Selector: $yaml")
+      return null
+    }
+    val (cx, cy) = center
+    Console.log("# Maestro selector resolved to viewHierarchy node at ($cx, $cy)")
+
+    val target = tree.hitTest(cx, cy)
+    if (target == null) {
+      Console.error(
+        "Maestro selector resolved to ($cx, $cy) but no accessibility node " +
+          "covers that point. The two trees may have drifted (e.g. one was captured " +
+          "before a layout change). Verify the same step produced both trees.",
+      )
+    }
+    return target
+  }
+
+  /**
+   * Parse a `x,y` coord string. Whitespace tolerated. Returns null and logs the parse
+   * error on bad input — the caller treats null as a usage failure.
+   */
+  private fun parseCoord(s: String): Pair<Int, Int>? {
+    val parts = s.split(',').map { it.trim() }
+    if (parts.size != 2) {
+      Console.error("Invalid --at value: '$s'. Expected `x,y` (e.g. `540,1200`).")
+      return null
+    }
+    val x = parts[0].toIntOrNull()
+    val y = parts[1].toIntOrNull()
+    if (x == null || y == null) {
+      Console.error("Invalid --at value: '$s'. Both x and y must be integers.")
+      return null
+    }
+    return x to y
+  }
 
   private fun resolveLogFile(): File? {
     positionalLogFile?.let { return validateLogFile(it, label = "Log file") }

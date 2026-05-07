@@ -13,7 +13,37 @@ import xyz.block.trailblaze.config.PlatformConfig
  * Packs are the authored boundary. The nested [target] block carries the target's display
  * shape (id, display_name, platforms, mcp_servers) plus references to per-file scripted
  * tools under the pack's `tools/` directory. The pack's own file-backed artifacts
- * (`toolsets`, `tools`, `waypoints`) stay separate.
+ * ([toolsets], [waypoints], plus operational tool YAMLs auto-discovered from
+ * `<pack>/tools/`) stay separate.
+ *
+ * ## Library packs vs target packs
+ *
+ * The presence or absence of [target] discriminates two pack shapes — a single source of
+ * truth that doesn't risk a `type:` field disagreeing with the actual content:
+ *
+ *  - **Target pack** ([target] is non-null): models a runnable app under test. May declare
+ *    everything below — operational tools (auto-discovered from `<pack>/tools/`),
+ *    [toolsets], [waypoints], trailheads — and surfaces an [AppTargetYamlConfig] that the
+ *    runtime binds devices/sessions to. The framework-bundled `clock`, `wikipedia`,
+ *    `contacts` packs are target packs.
+ *  - **Library pack** ([target] is null): ships cross-target reusable tooling — operational
+ *    tools (auto-discovered from `<pack>/tools/`) and [toolsets] only. **Library packs
+ *    MUST NOT declare [waypoints] or trailhead tools** (a trailhead bootstraps to a known
+ *    waypoint, which only makes sense within a target). The framework-bundled `trailblaze`
+ *    pack — which publishes per-platform [defaults] for the standard built-in toolsets —
+ *    is the canonical library pack.
+ *
+ * Tools and toolsets are orthogonal to pack type — both shapes contribute them through
+ * the same registries. The runtime tool registry doesn't care which pack a tool came
+ * from; it resolves by id.
+ *
+ * The library/target distinction also makes the reverse lookup deterministic: given a
+ * waypoint id, walk the resolved pack list to find the (single) pack that declared it,
+ * then read that pack's [target] for the owning target. No id-prefix convention needed.
+ *
+ * Library-pack contract violations (waypoints declared, trailhead tool referenced) are
+ * caught at load time by [TrailblazePackManifestLoader] and the project config loader,
+ * with the offending field/file named in the error.
  *
  * ## Composition via [dependencies]
  *
@@ -49,10 +79,16 @@ import xyz.block.trailblaze.config.PlatformConfig
  * | Field | Runtime status |
  * | --- | --- |
  * | [id], [target] | Fully wired by `TrailblazeProjectConfigLoader.resolvePackArtifacts`. |
- * | [dependencies], [defaults] | Fully wired — dep graph walked at pack resolution time. |
- * | [toolsets], [tools] | Fully wired — sibling refs resolved at pack load time. |
+ * | [dependencies], [defaults] | Fully wired — dep graph walked at pack resolution time, and a depended-on pack id is brought into scope the same way as a workspace-listed target. |
+ * | [toolsets] | Fully wired — sibling refs resolved at pack load time. |
  * | [waypoints] | Fully wired — surfaced via `TrailblazeResolvedConfig.waypoints` and the `trailblaze waypoint` CLI. |
  * | [trails] | **Reserved schema slot; runtime loading deferred.** |
+ *
+ * **No top-level `tools:` field.** Operational tool YAMLs (`*.tool.yaml`, `*.shortcut.yaml`,
+ * `*.trailhead.yaml`) are auto-discovered from `<pack>/tools/` by directory walk. Authoring is
+ * "drop a YAML file in `tools/`, it ships with the pack" — the manifest doesn't enumerate. Per-
+ * target scripted-tool descriptors stay listed under `target.tools:` because they're per-target
+ * glue, not standard library content.
  *
  * The previous `routes:` reserved slot was removed in 2026-04-28 — routes were dropped as a
  * separate concept in favor of "shortcuts that invoke other shortcuts."
@@ -89,7 +125,19 @@ data class TrailblazePackManifest(
    */
   @SerialName("defaults") val defaults: Map<String, PlatformConfig>? = null,
   @SerialName("toolsets") val toolsets: List<String> = emptyList(),
-  @SerialName("tools") val tools: List<String> = emptyList(),
+  /**
+   * Deprecated / ignored at the resolution layer. Waypoints are now auto-discovered from
+   * any `*.waypoint.yaml` file under `<pack-dir>/waypoints/` (at any depth). The resolver
+   * no longer reads this list. The field remains in the schema only so legacy `pack.yaml`
+   * files with explicit waypoint enumerations don't fail parsing during the migration
+   * window. New packs should leave this field absent and just drop their waypoint YAMLs
+   * into the `waypoints/` directory.
+   *
+   * The manifest-side library-pack guard
+   * ([TrailblazePackManifestLoader.enforceLibraryPackContract]) still fires when this
+   * field is non-empty on a target-less pack — defensive duplication of the discovery-
+   * side guard so legacy packs fail fast at parse time before disk traversal.
+   */
   @SerialName("waypoints") val waypoints: List<String> = emptyList(),
   /** Reserved schema slot — runtime loading deferred. */
   @SerialName("trails") val trails: List<String> = emptyList(),

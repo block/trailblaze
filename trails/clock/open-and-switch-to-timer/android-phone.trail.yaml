@@ -1,0 +1,15 @@
+- config:
+    id: clock/open-and-switch-to-timer
+    description: Open the Clock app and navigate to the Timer tab.
+    platform: android
+    driver: ANDROID_ONDEVICE_INSTRUMENTATION
+- prompts:
+  - step: Launch the Google Clock app (com.google.android.deskclock) with a clean state.
+    recording:
+      autoSatisfied: true
+  - step: Tap the Timer tab.
+    recording:
+      autoSatisfied: true
+  - step: Verify the Timer tab is showing — the screen should display a numeric time entry control or an existing timer list, not the Alarm tab.
+    recording:
+      autoSatisfied: true

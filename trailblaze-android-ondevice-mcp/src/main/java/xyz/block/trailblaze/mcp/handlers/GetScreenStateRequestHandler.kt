@@ -1,11 +1,14 @@
 package xyz.block.trailblaze.mcp.handlers
 
 import io.ktor.util.encodeBase64
+import xyz.block.trailblaze.android.InstrumentationArgUtil
 import xyz.block.trailblaze.android.accessibility.AccessibilityServiceScreenState
+import xyz.block.trailblaze.android.accessibility.MigrationTreeCapture
 import xyz.block.trailblaze.android.accessibility.TrailblazeAccessibilityService
 import xyz.block.trailblaze.android.uiautomator.AndroidOnDeviceUiAutomatorScreenState
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ScreenshotScalingConfig
+import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.mcp.RpcHandler
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateRequest
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateResponse
@@ -62,6 +65,12 @@ class GetScreenStateRequestHandler(
           screenshotScalingConfig = scalingConfig,
           includeScreenshot = request.includeScreenshot,
           includeAllElements = request.includeAllElements,
+          // Forward the migration-mode flag so the on-device capture replaces the
+          // accessibility-derived viewHierarchy with a real UiAutomator dump when set.
+          // Without this propagation, host-side `captureScreenState()` calls would always
+          // get the accessibility-shape projection even when the migration capture is
+          // requested via instrumentation args, breaking 100% Maestro-fidelity migration.
+          captureSecondaryTree = InstrumentationArgUtil.shouldCaptureSecondaryTree(),
         )
       } else {
         AndroidOnDeviceUiAutomatorScreenState(
@@ -72,7 +81,21 @@ class GetScreenStateRequestHandler(
 
       Console.log("📱 GetScreenStateRequestHandler: Screen captured (${screenState.deviceWidth}x${screenState.deviceHeight})")
 
-      RpcResult.Success(buildResponse(request, screenState, deviceClassifiers))
+      // Side-channel migration tree. Captured separately from [screenState] so the primary
+      // tree shape stays canonical for runtime tools/reports — the migration tree rides on
+      // the wire response in its own field and is reassembled host-side via
+      // [MigrationScreenState] before being persisted on the snapshot log. On the
+      // accessibility driver, the primary `trailblazeNodeTree` is already the right shape;
+      // we still re-capture (cheap) to keep both code paths uniform and avoid divergence
+      // if the primary tree's filtering policy changes.
+      val driverMigrationTreeNode: TrailblazeNode? =
+        if (InstrumentationArgUtil.shouldCaptureSecondaryTree()) {
+          MigrationTreeCapture.captureOrNull()
+        } else {
+          null
+        }
+
+      RpcResult.Success(buildResponse(request, screenState, deviceClassifiers, driverMigrationTreeNode))
     } catch (e: Exception) {
       Console.log("❌ GetScreenStateRequestHandler: Failed to capture screen state: ${e.message}")
       e.printStackTrace()
@@ -97,6 +120,7 @@ class GetScreenStateRequestHandler(
       request: GetScreenStateRequest,
       screenState: ScreenState,
       deviceClassifiers: List<TrailblazeDeviceClassifier> = emptyList(),
+      driverMigrationTreeNode: TrailblazeNode? = null,
     ): GetScreenStateResponse {
       val screenshotBase64 = if (request.includeScreenshot) {
         screenState.screenshotBytes?.encodeBase64()
@@ -119,6 +143,7 @@ class GetScreenStateRequestHandler(
         deviceWidth = screenState.deviceWidth,
         deviceHeight = screenState.deviceHeight,
         trailblazeNodeTree = screenState.trailblazeNodeTree,
+        driverMigrationTreeNode = driverMigrationTreeNode,
         pageContextSummary = screenState.pageContextSummary,
         deviceClassifiers = classifierStrings,
       )

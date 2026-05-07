@@ -1,0 +1,14 @@
+# Demo trail: open the Google Clock app and navigate to the Timer tab.
+# Authored to validate the runtime-YAML-config path: the `clock` target is
+# declared in trails/config/packs/clock/pack.yaml as a workspace pack — the
+# framework JAR ships no `clock` target, so this trail can only resolve via
+# the workspace anchor at trails/config/trailblaze.yaml.
+- config:
+    id: "clock/open-and-switch-to-timer"
+    driver: ANDROID_ONDEVICE_INSTRUMENTATION
+    description: "Open the Clock app and navigate to the Timer tab."
+
+- prompts:
+    - step: Launch the Google Clock app (com.google.android.deskclock) with a clean state.
+    - step: Tap the Timer tab.
+    - step: Verify the Timer tab is showing — the screen should display a numeric time entry control or an existing timer list, not the Alarm tab.

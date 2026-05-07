@@ -1,0 +1,12 @@
+- config:
+    id: clock/open-and-verify-clock-tab
+    description: Open the Clock app and verify the Clock tab is visible.
+    platform: android
+    driver: ANDROID_ONDEVICE_INSTRUMENTATION
+- prompts:
+  - step: Launch the Google Clock app (com.google.android.deskclock) with a clean state.
+    recording:
+      autoSatisfied: true
+  - step: Verify the Clock tab is selected and visible. The screen should show the current time prominently. Do not tap anything else.
+    recording:
+      autoSatisfied: true

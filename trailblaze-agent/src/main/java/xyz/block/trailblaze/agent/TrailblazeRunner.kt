@@ -12,6 +12,7 @@ import kotlinx.datetime.Clock
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.JsonObject
 import xyz.block.trailblaze.agent.blaze.detectActionCycleHint
+import xyz.block.trailblaze.agent.blaze.detectDominantActionHint
 import xyz.block.trailblaze.agent.model.AgentTaskStatus
 import xyz.block.trailblaze.logs.client.TrailblazeJsonInstance
 import xyz.block.trailblaze.agent.model.AgentTaskStatus.Success.ObjectiveComplete
@@ -241,17 +242,24 @@ class TrailblazeRunner(
       }
 
       val cycleHint = detectActionCycleHint(recentToolFingerprints.toList())
-      if (cycleHint != null && cycleHint.startsWith("CRITICAL:")) {
-        Console.info("  Agent stuck: $cycleHint")
-        // Surface the full pattern (tool + args + repeat count) in the exception so
-        // post-mortem readers see *what* was looping, not just that something was. The
-        // previous form collapsed to "[stuck: <toolname> in repeating cycle]" which
-        // dropped the cycle pattern and left no breadcrumb for triaging.
-        val cycleSummary = cycleHint.removePrefix("CRITICAL: ").trim()
-        throw MaxCallsLimitReachedException(
-          maxCalls = stepStatus.currentStep,
-          objectivePrompt = "${stepStatus.promptStep.prompt} [stuck: $cycleSummary]",
-        )
+        ?: detectDominantActionHint(recentToolFingerprints.toList())
+      if (cycleHint != null) {
+        if (cycleHint.startsWith("CRITICAL:")) {
+          Console.info("  Agent stuck: $cycleHint")
+          // Surface the full pattern (tool + args + repeat count) in the exception so
+          // post-mortem readers see *what* was looping, not just that something was. The
+          // previous form collapsed to "[stuck: <toolname> in repeating cycle]" which
+          // dropped the cycle pattern and left no breadcrumb for triaging.
+          val cycleSummary = cycleHint.removePrefix("CRITICAL: ").trim()
+          throw MaxCallsLimitReachedException(
+            maxCalls = stepStatus.currentStep,
+            objectivePrompt = "${stepStatus.promptStep.prompt} [stuck: $cycleSummary]",
+          )
+        } else {
+          // WARNING tier — latch onto the step status; the LLM helper consumes it on the next call.
+          Console.info("  Stuck-detection: $cycleHint")
+          stepStatus.setPendingCycleWarning(cycleHint)
+        }
       }
 
       if (stepStatus.currentStep >= maxSteps) {

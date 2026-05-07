@@ -132,6 +132,12 @@ object AccessibilityTrailRunner {
           TrailblazeLog.AgentDriverLog(
             viewHierarchy = screenState.viewHierarchy,
             trailblazeNodeTree = screenState.trailblazeNodeTree,
+            // Migration-mode side tree (see MigrationScreenState). Carried on every log
+            // type with `trailblazeNodeTree` so migrate-trail's cursor-scan fallback
+            // produces accessibility-shape selectors regardless of which log it lands on.
+            driverMigrationTreeNode =
+              (screenState as? xyz.block.trailblaze.api.MigrationScreenState)
+                ?.driverMigrationTreeNode,
             screenshotFile = screenshotFilename,
             action = driverAction,
             durationMs = durationMs,

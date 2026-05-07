@@ -4,6 +4,7 @@ import io.ktor.util.decodeBase64Bytes
 import kotlinx.coroutines.withTimeoutOrNull
 import xyz.block.trailblaze.api.AndroidCompactElementList
 import xyz.block.trailblaze.api.AnnotationElement
+import xyz.block.trailblaze.api.MigrationScreenState
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ScreenshotScalingConfig
 import xyz.block.trailblaze.api.TrailblazeNode
@@ -18,10 +19,30 @@ import xyz.block.trailblaze.mcp.android.ondevice.rpc.GetScreenStateResponse
  *
  * This enables on-device instrumentation screen state responses to be used
  * interchangeably with HOST mode screen state throughout the MCP server.
+ *
+ * For migration capture (`trailblaze.captureSecondaryTree=true`), construct via
+ * [Companion.from] which transparently wraps the adapter in [MigrationScreenState] when
+ * the response carries [GetScreenStateResponse.driverMigrationTreeNode]. Direct
+ * construction skips that wrap and ignores the migration tree — only do that in tests
+ * that don't exercise the migration path.
  */
 class RpcScreenStateAdapter(
   private val response: GetScreenStateResponse,
 ) : ScreenState {
+
+  companion object {
+    /**
+     * Builds a [ScreenState] from [response], wrapping with [MigrationScreenState] iff
+     * [GetScreenStateResponse.driverMigrationTreeNode] is non-null. The wrap only
+     * exposes the extra tree to call sites that opt in via `is MigrationScreenState`
+     * — runtime tools and reports see the same plain [ScreenState] they always have.
+     */
+    fun from(response: GetScreenStateResponse): ScreenState {
+      val base = RpcScreenStateAdapter(response)
+      return response.driverMigrationTreeNode?.let { MigrationScreenState.wrap(base, it) }
+        ?: base
+    }
+  }
 
   private val _screenshotBytes: ByteArray? by lazy {
     response.screenshotBase64?.decodeBase64Bytes()
@@ -132,7 +153,7 @@ object ScreenStateCaptureUtil {
           includeAnnotatedScreenshot = includeAnnotatedScreenshot,
           includeAllElements = includeAllElements,
         )?.let { rpcResponse ->
-          return@withTimeoutOrNull RpcScreenStateAdapter(rpcResponse)
+          return@withTimeoutOrNull RpcScreenStateAdapter.from(rpcResponse)
         }
       }
 

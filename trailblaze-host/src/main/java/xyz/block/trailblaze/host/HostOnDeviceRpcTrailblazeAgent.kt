@@ -98,9 +98,16 @@ class HostOnDeviceRpcTrailblazeAgent(
    * from warm to cold mid-session (app/service restart, transient network blip). In that case
    * we re-run the readiness probe once and retry the capture — no blanket retry loop.
    */
-  suspend fun captureScreenState(): ScreenState? {
-    when (val first = rpcClient.rpcCall(GetScreenStateRequest())) {
-      is RpcResult.Success -> return RpcScreenStateAdapter(first.data)
+  /**
+   * @param includeScreenshot whether the on-device handler should bundle the screenshot
+   *   bytes in the response. Migration capture (the host's per-tool snapshot hook) needs
+   *   only the trees and can pass `false` to skip the Bitmap pull / WEBP encode / base64
+   *   round-trip — saves ~200-500ms per capture on real devices.
+   */
+  suspend fun captureScreenState(includeScreenshot: Boolean = true): ScreenState? {
+    val request = GetScreenStateRequest(includeScreenshot = includeScreenshot)
+    when (val first = rpcClient.rpcCall(request)) {
+      is RpcResult.Success -> return RpcScreenStateAdapter.from(first.data)
       is RpcResult.Failure -> {
         val detail = first.message + (first.details?.let { " | $it" } ?: "")
         lastCaptureFailure = detail
@@ -122,10 +129,10 @@ class HostOnDeviceRpcTrailblazeAgent(
       Console.log("[HostOnDeviceRpcAgent] $detail")
       return null
     }
-    return when (val retry = rpcClient.rpcCall(GetScreenStateRequest())) {
+    return when (val retry = rpcClient.rpcCall(request)) {
       is RpcResult.Success -> {
         lastCaptureFailure = null
-        RpcScreenStateAdapter(retry.data)
+        RpcScreenStateAdapter.from(retry.data)
       }
       is RpcResult.Failure -> {
         val detail = retry.message + (retry.details?.let { " | $it" } ?: "")
@@ -152,7 +159,9 @@ class HostOnDeviceRpcTrailblazeAgent(
         // see the same resolved args — same pattern as HostAccessibilityRpcClient.execute.
         // Cast is safe: interpolation only mutates string scalars, not the concrete tool type.
         val resolvedTool = interpolateMemoryInTool(tool, memory) as ExecutableTrailblazeTool
-        if (resolvedTool.requiresHostInstance()) {
+        if (resolvedTool is HostLocalExecutableTrailblazeTool) {
+          runBlocking { resolvedTool.execute(context) }
+        } else if (resolvedTool.requiresHostInstance()) {
           // Host-only tools (cbot, dip-slot) run locally — they need ADB/USB on the Mac.
           // Instance-level so YAML-defined tools can opt in via `requires_host: true`.
           runBlocking { resolvedTool.execute(context) }

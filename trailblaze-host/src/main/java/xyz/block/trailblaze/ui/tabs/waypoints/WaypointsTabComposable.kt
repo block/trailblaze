@@ -413,6 +413,12 @@ internal fun mergeWaypointSources(
   val sourceLabel = when {
     file != null -> file.toRelativeStringOrAbsolute(root)
     packExample?.sourceLabel != null -> packExample.sourceLabel
+    // Pack-provenance with no captured example: fall back to the manifest path so
+    // the source label still encodes the platform sub-dir
+    // (`packs/<pack>/waypoints/<platform>/...`). Downstream consumers that derive
+    // platform from sourceLabel (e.g. WaypointGraphBuilder) need this for every
+    // waypoint, not just the ones lucky enough to have an example.json sibling.
+    isPackProvenance -> packContents.idToPackPath[def.id] ?: "(pack-bundled)"
     else -> "(pack-bundled)"
   }
   val example = file?.let { loadFilesystemExample(it, def.id) } ?: packExample?.example
@@ -489,11 +495,17 @@ internal data class PackExample(val sourceLabel: String, val example: WaypointEx
 internal data class PackContents(
   val ids: Set<String>,
   val examples: Map<String, PackExample>,
+  /**
+   * Every pack-provided waypoint id → its pack-relative manifest label, e.g.
+   * `pack:myapp — waypoints/android/home.waypoint.yaml`. Populated even for ids
+   * with no captured example, so downstream consumers can read platform out of
+   * the path segment without needing an example.json sibling. Defaults to empty
+   * for backward compatibility with the test fixtures that pre-date this field.
+   */
+  val idToPackPath: Map<String, String> = emptyMap(),
 )
 
 private fun collectPackContents(failures: MutableList<String>): PackContents {
-  val ids = mutableSetOf<String>()
-  val examples = mutableMapOf<String, PackExample>()
   val classpathPacks = runCatching {
     TrailblazePackManifestLoader.discoverAndLoadFromClasspath()
   }.getOrElse { e ->
@@ -504,23 +516,58 @@ private fun collectPackContents(failures: MutableList<String>): PackContents {
     Console.log("[Waypoints] $msg")
     return PackContents(emptySet(), emptyMap())
   }
+  return buildPackContents(classpathPacks, failures)
+}
+
+/**
+ * Pure function over a list of pre-loaded pack manifests — separates the classpath-
+ * discovery side effect (which the test suite can't easily control) from the per-pack
+ * waypoint enumeration that the test suite actually wants to verify. `internal` so
+ * `WaypointPackContentsTest` can drive it with `PackSource.Filesystem`-backed packs.
+ */
+internal fun buildPackContents(
+  classpathPacks: List<LoadedTrailblazePackManifest>,
+  failures: MutableList<String>,
+): PackContents {
+  val ids = mutableSetOf<String>()
+  val examples = mutableMapOf<String, PackExample>()
+  val idToPackPath = mutableMapOf<String, String>()
   for (pack in classpathPacks) {
-    for (waypointPath in pack.manifest.waypoints) {
+    // Modern packs leave `manifest.waypoints` empty and rely on auto-discovery from
+    // `<pack>/waypoints/**/*.waypoint.yaml` (mirroring TrailblazeProjectConfigLoader's
+    // resolveSinglePack). Without this fallback, every modern pack contributes zero
+    // to PackContents — so `idToPackPath` stays empty, the platform-from-source-label
+    // derivation in WaypointGraphBuilder always returns null, and the graph viewer's
+    // platform filter pills silently disappear. Iterate the manifest list when present
+    // (legacy packs still parse), else walk `waypoints/` directly.
+    val waypointPaths = pack.manifest.waypoints.takeIf { it.isNotEmpty() }
+      ?: runCatching {
+        pack.source.listSiblingsRecursive(
+          relativeDir = "waypoints",
+          suffixes = listOf(".waypoint.yaml"),
+        )
+      }.getOrElse { e ->
+        failures += "pack:${pack.manifest.id}: failed to enumerate waypoints/ (${e.message ?: e::class.simpleName})"
+        emptyList()
+      }
+    for (waypointPath in waypointPaths) {
       val parsed = loadPackWaypointAndExample(pack, waypointPath, failures) ?: continue
       // `putIfAbsent`/`add` so the first pack to claim an id wins, mirroring
       // WaypointDiscovery's dedup semantics (workspace > classpath, pack-first within each).
+      val packLabel = "pack:${pack.manifest.id} — $waypointPath"
       ids += parsed.id
+      idToPackPath.putIfAbsent(parsed.id, packLabel)
       parsed.example?.let { ex ->
         if (!examples.containsKey(parsed.id)) {
           examples[parsed.id] = PackExample(
-            sourceLabel = "pack:${pack.manifest.id} — $waypointPath",
+            sourceLabel = packLabel,
             example = ex,
           )
         }
       }
     }
   }
-  return PackContents(ids = ids, examples = examples)
+  return PackContents(ids = ids, examples = examples, idToPackPath = idToPackPath)
 }
 
 internal data class PackParse(val id: String, val example: WaypointExample?)

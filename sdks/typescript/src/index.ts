@@ -13,7 +13,12 @@ import { run, type RunOptions } from "./run.js";
 import { tool, type TrailblazeToolHandler, type TrailblazeToolSpec } from "./tool.js";
 export { z } from "zod";
 
-export { fromMeta, type TrailblazeContext, type TrailblazeDevice } from "./context.js";
+export {
+  fromMeta,
+  type TrailblazeContext,
+  type TrailblazeDevice,
+  type TrailblazeTarget,
+} from "./context.js";
 export type { TrailblazeCallToolResult, TrailblazeClient, TrailblazeToolMap } from "./client.js";
 
 // Side-effect import — pulls in the vendored built-in-tool bindings so authors get

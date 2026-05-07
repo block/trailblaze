@@ -9,51 +9,59 @@ import xyz.block.trailblaze.llm.config.LlmConfig
  * `trails/config/trailblaze.yaml` inside a Trailblaze workspace.
  *
  * All sections are optional. An empty file (or one that decodes to `{}`) is valid: the
- * framework's built-in classpath config still applies.
+ * framework's built-in classpath config still applies, and every target pack found at
+ * `<workspace>/packs/<id>/pack.yaml` is auto-loaded.
  *
  * Example:
  * ```yaml
  * defaults:
- *   target: sampleapp
+ *   target: my-app
  *   llm: openai/gpt-4.1
  *
- * packs:
- *   - packs/sampleapp/pack.yaml
- *
  * targets:
- *   # Inline entry:
- *   - id: sampleapp
- *     display_name: Trailblaze Sample App
- *     platforms:
- *       android:
- *         app_ids:
- *           - xyz.block.trailblaze.examples.sampleapp
- *   # External-file entry (anchor-relative path with leading `/`; caller-file-relative
- *   # otherwise — resolution happens at load time):
- *   - ref: targets/my-app.yaml
- *
- * toolsets:
- *   - ref: toolsets/my-custom-toolset.yaml
- *
- * providers:
- *   - ref: providers/custom.yaml
+ *   - my-app
+ *   - another-target
  *
  * llm:
  *   defaults:
  *     model: openai/gpt-4.1
  * ```
  *
- * The original plan proposed a YAML-native `!include` tag. kaml (the serialization library
- * this repo uses) doesn't expose custom tag resolution for file inclusion — its tag support
- * is limited to polymorphic type discrimination. The `ref:` pointer approach covered by
- * [TrailblazeProjectConfigEntry] works entirely through standard kaml deserialization and
- * is the option explicitly called out in the plan's "Open questions" section for this case.
+ * ## `targets:` semantics
+ *
+ * [targets] holds a list of target-pack ids. Each id resolves via the convention
+ * `<workspace>/packs/<id>/pack.yaml` (or, for classpath-bundled packs the framework
+ * ships, `trailblaze-config/packs/<id>/pack.yaml`). The pack's own
+ * [TrailblazePackManifest.dependencies] then transitively pulls in any library packs
+ * the target depends on.
+ *
+ * **Workspace-listed targets must be target packs** (have a `target:` block in their
+ * `pack.yaml`). Listing a library-pack id here is a load-time error — library packs
+ * reach scope only via classpath bundling or via `dependencies:` from a target pack.
+ *
+ * **Empty / omitted = auto-discover.** When [targets] is empty, the loader walks
+ * every `<workspace>/packs/<id>/pack.yaml` and loads every target pack it finds, the
+ * same way classpath discovery works. When [targets] is non-empty, only the listed
+ * pack ids (plus their transitive deps) load — useful in workspaces with many on-disk
+ * packs where the daemon should only spin up a subset.
+ *
+ * The previous `packs:` field (which took filesystem paths to pack manifests) was
+ * removed in favour of this id-based form.
  */
 @Serializable
 data class TrailblazeProjectConfig(
   @SerialName("defaults") val defaults: ProjectDefaults? = null,
-  @SerialName("packs") val packs: List<String> = emptyList(),
-  @SerialName("targets") val targets: List<TargetEntry> = emptyList(),
+  /**
+   * Target-pack ids the workspace explicitly opts into. Empty/omitted = auto-discover
+   * every target pack found under `<workspace>/packs/`. See class kdoc.
+   *
+   * After resolution this list reflects which target ids successfully landed (broken
+   * pack refs and dependency-resolution failures filter out). The fully-resolved
+   * [xyz.block.trailblaze.config.AppTargetYamlConfig] objects live on
+   * [TrailblazeResolvedConfig.targets] alongside this id list — that wrapper is what
+   * downstream consumers (host discovery, the compiler, the waypoint CLI) read.
+   */
+  @SerialName("targets") val targets: List<String> = emptyList(),
   @SerialName("toolsets") val toolsets: List<ToolsetEntry> = emptyList(),
   @SerialName("tools") val tools: List<ToolEntry> = emptyList(),
   @SerialName("providers") val providers: List<ProviderEntry> = emptyList(),

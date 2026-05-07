@@ -28,6 +28,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.datetime.Clock
 import maestro.TreeNode
+import xyz.block.trailblaze.InstrumentationUtil
 import xyz.block.trailblaze.android.AndroidSdkVersion
 import xyz.block.trailblaze.devices.TrailblazeAndroidDeviceCategory
 import xyz.block.trailblaze.devices.TrailblazeDeviceId
@@ -692,31 +693,50 @@ class TrailblazeAccessibilityService : AccessibilityService() {
       if (Looper.myLooper() == Looper.getMainLooper()) {
         throw IllegalStateException("Cannot run from main thread")
       }
+      // Empty input is a no-op; verifying via focused-text-changed would never succeed.
+      if (text.isEmpty()) return true
 
-      // The focused EditText lives in the application window, not in the IME's `SoftInputWindow`
-      // that becomes "active" when the keyboard is shown. Use the application root so
-      // findFocusedEditableNode actually finds the field the user tapped.
-      val root =
-        getApplicationWindowRoot()
-          ?: run {
-            Console.log("getApplicationWindowRoot returned null for inputText")
-            return false
-          }
+      val initialFocusedText = readFocusedEditableText() ?: run {
+        Console.log("No editable, focused node found in hierarchy")
+        return false
+      }
 
+      // Try the fast ACTION_SET_TEXT path first; verify the field actually changed.
+      if (
+        tryDispatchActionSetText(text) &&
+        focusedTextChangedFrom(initialFocusedText, VERIFY_POLL_TIMEOUT_MS)
+      ) {
+        return true
+      }
+
+      // Fall back to keystroke synthesis. Some masked EditTexts (e.g., payment-form
+      // MM/YY, CVV, ZIP fields) silently reject ACTION_SET_TEXT in their TextWatcher
+      // pipeline and only accept real per-character KeyEvents.
+      Console.log(
+        "inputText (length=${text.length}) ACTION_SET_TEXT did not land; " +
+          "falling back to keystroke synthesis."
+      )
+      return performInputTextWithVerifyAndRetry(text, initialFocusedText)
+    }
+
+    /**
+     * Dispatches [text] via `ACTION_SET_TEXT` on the focused editable node. Returns the
+     * action's boolean result (or false when no focused editable exists). Callers must
+     * verify the field actually changed via [focusedTextChangedFrom] — many masked
+     * EditTexts return true here while silently rejecting the CharSequence.
+     */
+    private fun tryDispatchActionSetText(text: String): Boolean {
+      val root = getApplicationWindowRoot() ?: return false
       return try {
-        val editableNode =
-          findFocusedEditableNode(root)
-            ?: run {
-              Console.log("No editable, focused node found in hierarchy")
-              return false
-            }
-
+        val editableNode = findFocusedEditableNode(root) ?: return false
         try {
           val args =
             Bundle().apply {
-              putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+              putCharSequence(
+                AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                text,
+              )
             }
-
           editableNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
         } finally {
           editableNode.recycle()
@@ -725,6 +745,92 @@ class TrailblazeAccessibilityService : AccessibilityService() {
         root.recycle()
       }
     }
+
+    /**
+     * Read-only access to the currently focused editable field's text. Returns null when no
+     * focused editable exists in the application window. Returns "" for an empty/hint-state
+     * field — the caller distinguishes by treating the initial text as the baseline to compare
+     * post-input.
+     */
+    private fun readFocusedEditableText(): String? {
+      val root = getApplicationWindowRoot() ?: run {
+        Console.log("getApplicationWindowRoot returned null")
+        return null
+      }
+      return try {
+        val editableNode = findFocusedEditableNode(root) ?: return null
+        try {
+          editableNode.text?.toString().orEmpty()
+        } finally {
+          editableNode.recycle()
+        }
+      } finally {
+        root.recycle()
+      }
+    }
+
+    /**
+     * Dispatches [text] via [InstrumentationUtil.inputTextByTyping] and verifies the focused
+     * field's text changed afterward. Retries once if the first dispatch was swallowed by an
+     * IME-not-ready race (observed on some payment-form postal fields). Returns true only when
+     * the field's text actually changed; returns false if both attempts fail to land or the
+     * keystroke loop throws.
+     */
+    private fun performInputTextWithVerifyAndRetry(text: String, baselineText: String): Boolean {
+      val attempts = 2
+      for (attempt in 1..attempts) {
+        try {
+          InstrumentationUtil.inputTextByTyping(text)
+        } catch (t: Throwable) {
+          Console.log(
+            "inputText (length=${text.length}) via inputTextByTyping failed " +
+              "(attempt $attempt/$attempts): ${t::class.java.simpleName}: ${t.message}"
+          )
+          return false
+        }
+        if (focusedTextChangedFrom(baselineText, VERIFY_POLL_TIMEOUT_MS)) return true
+        if (attempt < attempts) {
+          Console.log(
+            "inputText (length=${text.length}) first dispatch did not change focused text; " +
+              "redispatching once."
+          )
+        }
+      }
+      return false
+    }
+
+    /**
+     * Polls the focused editable field's text for up to [timeoutMs], returning true as soon as
+     * its text differs from [baselineText]. Returns false if the timeout expires with no
+     * change, or if the focused editable disappears (e.g., field lost focus to a navigation).
+     * The disappearance case returns false because we can't safely redispatch — there's no
+     * field to type into.
+     */
+    private fun focusedTextChangedFrom(baselineText: String, timeoutMs: Long): Boolean {
+      val deadline = Clock.System.now().toEpochMilliseconds() + timeoutMs
+      while (Clock.System.now().toEpochMilliseconds() < deadline) {
+        val current = readFocusedEditableText() ?: return false
+        if (current != baselineText) return true
+        Thread.sleep(VERIFY_POLL_INTERVAL_MS)
+      }
+      return false
+    }
+
+    /**
+     * How long [focusedTextChangedFrom] polls before declaring the keystrokes unlanded.
+     * 500ms covers the worst observed dispatch-to-text-applied latency on a slow payment-form
+     * postal field (a first dispatch took ~515ms before the field accepted the next try)
+     * without padding the success path noticeably — text changes normally land within one
+     * or two poll intervals.
+     */
+    private const val VERIFY_POLL_TIMEOUT_MS = 500L
+
+    /**
+     * Poll cadence inside [focusedTextChangedFrom]. 50ms gives ~10 reads inside the timeout
+     * window — enough for fast detection of a successful first burst while keeping the cost
+     * of each read (a tree walk via [findFocusedEditableNode]) bounded.
+     */
+    private const val VERIFY_POLL_INTERVAL_MS = 50L
 
     /**
      * Searches the tree rooted at [node] for a focused, editable node.

@@ -129,9 +129,12 @@ class DesktopYamlRunner(
       }
 
       if (forceStopTargetApp) {
-        val possibleAppIds = targetTestApp?.getPossibleAppIdsForPlatform(
-          trailblazeDeviceId.trailblazeDevicePlatform
-        ) ?: emptySet()
+        // Convert the YAML-ordered List to a Set for ensureAppsAreForceStopped, which takes
+        // membership-style Set<String>.
+        val possibleAppIds = targetTestApp
+          ?.getPossibleAppIdsForPlatform(trailblazeDeviceId.trailblazeDevicePlatform)
+          ?.toSet()
+          ?: emptySet()
         MobileDeviceUtils.ensureAppsAreForceStopped(possibleAppIds, trailblazeDeviceId)
       }
 

@@ -51,6 +51,13 @@ internal data class QuickJsContentPart(
 internal data class QuickJsToolCtxEnvelope(
   val sessionId: String,
   val device: QuickJsDeviceContext,
+  /**
+   * The session's active app target — null when the session has no target (web-only,
+   * scratch tools, unit-test fixtures). Authors typically read
+   * `ctx.target?.resolvedAppId ?? ctx.target?.appIds[0]` to get the app id their tool
+   * should act on. See [QuickJsTargetContext] for the field semantics.
+   */
+  val target: QuickJsTargetContext? = null,
 )
 
 /**
@@ -61,6 +68,30 @@ internal data class QuickJsToolCtxEnvelope(
 internal data class QuickJsDeviceContext(
   val platform: String,
   val driver: String,
+)
+
+/**
+ * Target info the bundle handler can read from `ctx.target.{id, appIds, resolvedAppId}`
+ * to act on the session's active app without hardcoding ids.
+ *
+ * **Three fields, intentional separation:**
+ *  - [id] — the target's identifier from its pack manifest (`"clock"`, `"contacts"`, …).
+ *  - [appIds] — the raw declared candidate app ids in priority order, exactly as the
+ *    target's pack manifest declares them. Informational; useful when authors want to
+ *    inspect "what builds are configured for this target" rather than just launch one.
+ *  - [resolvedAppId] — the candidate that's actually installed on the device. Picked at
+ *    session start by intersecting [appIds] with the device's installed-apps list (one
+ *    `pm list packages` / `simctl listapps` roundtrip per session, cached). Null if no
+ *    declared candidate is installed — authors should fall back to `appIds[0]` and let
+ *    the launch fail downstream with a clear "app not installed" error.
+ *
+ * Closes the deferred id-based-overload note from #2699.
+ */
+@Serializable
+internal data class QuickJsTargetContext(
+  val id: String,
+  val appIds: List<String>,
+  val resolvedAppId: String?,
 )
 
 /**

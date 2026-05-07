@@ -2,6 +2,7 @@ package xyz.block.trailblaze.yaml
 
 import xyz.block.trailblaze.logs.client.TrailblazeLog
 import xyz.block.trailblaze.logs.client.TrailblazeLog.ObjectiveCompleteLog
+import xyz.block.trailblaze.logs.model.SessionStatus
 import xyz.block.trailblaze.util.Console
 
 /**
@@ -22,21 +23,37 @@ fun List<TrailblazeLog>.generateRecordedYaml(
     val logs = this
     val items = mutableListOf<TrailYamlItem>()
 
-    // Add config first if provided
-    if (sessionTrailConfig != null) {
+    // Always stamp `driver:` into the saved recording's config block, even when the source
+    // [sessionTrailConfig] doesn't carry one. The recording's selector shape (Maestro `selector:`
+    // vs accessibility `nodeSelector:`) is determined by which driver actually ran the session,
+    // so the saved YAML must declare that driver to be replayable. We fall back to the runtime
+    // driver captured in the [SessionStatus.Started] log when the source config didn't have an
+    // explicit marker — this closes the gap where an LLM-driven recording (no source YAML) or a
+    // legacy YAML lacking `driver:` would be saved without a driver marker.
+    val resolvedDriver = sessionTrailConfig?.driver
+      ?: logs
+        .filterIsInstance<TrailblazeLog.TrailblazeSessionStatusChangeLog>()
+        .map { it.sessionStatus }
+        .filterIsInstance<SessionStatus.Started>()
+        .firstOrNull()
+        ?.trailblazeDeviceInfo?.trailblazeDriverType?.name
+
+    // Add config first if provided OR if we have a runtime driver to stamp (so a logs-only
+    // call without source config still emits a config block carrying the driver marker).
+    if (sessionTrailConfig != null || resolvedDriver != null) {
       items.add(
         TrailYamlItem.ConfigTrailItem(
           TrailConfig(
-            context = sessionTrailConfig.context,
-            id = sessionTrailConfig.id,
-            title = sessionTrailConfig.title,
-            source = sessionTrailConfig.source,
-            description = sessionTrailConfig.description,
-            priority = sessionTrailConfig.priority,
-            metadata = sessionTrailConfig.metadata,
-            target = sessionTrailConfig.target,
-            driver = sessionTrailConfig.driver,
-            platform = sessionTrailConfig.platform,
+            context = sessionTrailConfig?.context,
+            id = sessionTrailConfig?.id,
+            title = sessionTrailConfig?.title,
+            source = sessionTrailConfig?.source,
+            description = sessionTrailConfig?.description,
+            priority = sessionTrailConfig?.priority,
+            metadata = sessionTrailConfig?.metadata,
+            target = sessionTrailConfig?.target,
+            driver = resolvedDriver,
+            platform = sessionTrailConfig?.platform,
           ),
         ),
       )

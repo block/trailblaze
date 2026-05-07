@@ -77,6 +77,13 @@ sealed interface TrailblazeLog {
     val viewHierarchy: ViewHierarchyTreeNode,
     val viewHierarchyFiltered: ViewHierarchyTreeNode? = null,
     val trailblazeNodeTree: TrailblazeNode? = null,
+    /**
+     * Side-channel accessibility-shape tree captured for the deterministic
+     * Maestro→accessibility selector migration. See
+     * [TrailblazeSnapshotLog.driverMigrationTreeNode]. Null on every
+     * non-migration capture.
+     */
+    val driverMigrationTreeNode: TrailblazeNode? = null,
     val instructions: String,
     val trailblazeLlmModel: TrailblazeLlmModel,
     val llmMessages: List<TrailblazeLlmMessage>,
@@ -165,6 +172,16 @@ sealed interface TrailblazeLog {
   data class AgentDriverLog(
     val viewHierarchy: ViewHierarchyTreeNode?,
     val trailblazeNodeTree: TrailblazeNode? = null,
+    /**
+     * Side-channel accessibility-shape tree captured for the deterministic
+     * Maestro→accessibility selector migration when running with
+     * `trailblaze.captureSecondaryTree=true`. Same shape and meaning as
+     * [TrailblazeSnapshotLog.driverMigrationTreeNode] — present on every log
+     * type that carries a [trailblazeNodeTree] so `migrate-trail`'s cursor-scan
+     * fallback path produces accessibility-shape selectors regardless of which
+     * log type it lands on. Null on every non-migration capture.
+     */
+    val driverMigrationTreeNode: TrailblazeNode? = null,
     override val screenshotFile: String?,
     val action: AgentDriverAction,
     override val durationMs: Long,
@@ -267,6 +284,18 @@ sealed interface TrailblazeLog {
 
     val viewHierarchy: ViewHierarchyTreeNode,
     val trailblazeNodeTree: TrailblazeNode? = null,
+    /**
+     * Side-channel accessibility-shape tree for the deterministic Maestro→accessibility
+     * selector migration, captured on the same screen-state read as [trailblazeNodeTree]
+     * when `trailblaze.captureSecondaryTree=true` was passed to the on-device runner.
+     *
+     * Strictly additive — null on every non-migration capture (the default) and on
+     * migration captures where the on-device accessibility service wasn't bound at the
+     * moment of capture. `migrate-trail` prefers this tree over [trailblazeNodeTree] when
+     * generating selectors so it gets the real accessibility shape regardless of which
+     * driver actually ran the test.
+     */
+    val driverMigrationTreeNode: TrailblazeNode? = null,
     /** Human-readable compact text representation of the view hierarchy (same format used in LLM prompts). */
     val viewHierarchyText: String? = null,
     override val deviceWidth: Int,

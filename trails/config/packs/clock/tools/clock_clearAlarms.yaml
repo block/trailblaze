@@ -1,0 +1,23 @@
+# Per-file in-process scripted tool descriptor for `clock_clearAlarms`.
+#
+# This descriptor declares a tool whose body lives in `script:` below. The pack loader
+# translates it into an `InlineScriptToolConfig` and the framework registers the tool
+# under the workspace `clock` pack — see `target.tools:` in `../../packs/clock/pack.yaml`.
+#
+# `script:` resolves against the JVM's current working directory (i.e. the directory
+# `trailblaze` was invoked from). The `.ts` lives next to this descriptor under the
+# owning pack — the convention library/target packs adopted in #2783.
+script: ./trails/config/packs/clock/tools/clock_clearAlarms.ts
+name: clock_clearAlarms
+description: |
+  Wipes all alarms, timers, and stopwatch state from the Google Clock app via
+  `pm clear` followed by `am force-stop`, so the next launch starts from a fresh
+  data directory. Useful as a setup primitive for trails that need a known-clean
+  Clock state without the side effect of leaving the app open.
+
+  No arguments — the framework resolves the app id from the `clock` pack manifest's
+  `app_ids:` list against installed apps on the connected device. Composes only the
+  dual-mode `adbShell` primitive, so this tool works on both host- and on-device-
+  dispatched sessions.
+supportedPlatforms:
+  - android

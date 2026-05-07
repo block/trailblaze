@@ -72,4 +72,30 @@ class TrailblazeDevicePlatformTest {
     assertEquals(TrailblazeDevicePlatform.WEB, TrailblazeDevicePlatform.fromString("web/"))
     assertEquals(TrailblazeDevicePlatform.ANDROID, TrailblazeDevicePlatform.fromString("android/"))
   }
+
+  // toFullyQualifiedDeviceId — inverse of fromString. round-trip-able.
+
+  @Test
+  fun `toFullyQualifiedDeviceId emits platform-slash-instance with lowercase platform`() {
+    assertEquals("android/emulator-5554", TrailblazeDevicePlatform.ANDROID.toFullyQualifiedDeviceId("emulator-5554"))
+    assertEquals("ios/SIM-UUID-1234", TrailblazeDevicePlatform.IOS.toFullyQualifiedDeviceId("SIM-UUID-1234"))
+    assertEquals("web/checkout", TrailblazeDevicePlatform.WEB.toFullyQualifiedDeviceId("checkout"))
+  }
+
+  @Test
+  fun `toFullyQualifiedDeviceId output round-trips through fromString`() {
+    val cases = listOf(
+      TrailblazeDevicePlatform.ANDROID to "emulator-5554",
+      TrailblazeDevicePlatform.IOS to "SIM-UUID-1234",
+      TrailblazeDevicePlatform.WEB to "checkout",
+    )
+    cases.forEach { (platform, instance) ->
+      val id = platform.toFullyQualifiedDeviceId(instance)
+      assertEquals(
+        platform,
+        TrailblazeDevicePlatform.fromString(id),
+        "round-trip failed for $platform with instance=$instance (id=$id)",
+      )
+    }
+  }
 }

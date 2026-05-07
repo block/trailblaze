@@ -4,7 +4,6 @@ import kotlinx.coroutines.runBlocking
 import picocli.CommandLine
 import xyz.block.trailblaze.TrailblazeVersion
 import xyz.block.trailblaze.config.AppTargetYamlLoader
-import xyz.block.trailblaze.config.project.TargetEntry
 import xyz.block.trailblaze.config.project.TrailblazeProjectConfigLoader
 import xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver
 import xyz.block.trailblaze.config.project.WorkspaceContentHasher
@@ -440,9 +439,11 @@ private fun canonicalize(path: String): String = try {
 }
 
 private fun loadTargetIds(anchorFile: File): Set<String> = try {
+  // `projectConfig.targets` is now a list of pack ids — already what this helper
+  // wants. The pre-resolution shape (workspace declaration) and post-resolution
+  // shape (successfully-loaded ids) are both List<String>; no further unwrapping.
   TrailblazeProjectConfigLoader.loadResolved(anchorFile)
     ?.targets
-    ?.mapNotNull { (it as? TargetEntry.Inline)?.config?.id }
     ?.toSet()
     .orEmpty()
 } catch (_: Exception) {

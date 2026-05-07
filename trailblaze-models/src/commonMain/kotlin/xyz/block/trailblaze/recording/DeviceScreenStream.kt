@@ -1,6 +1,7 @@
 package xyz.block.trailblaze.recording
 
 import kotlinx.coroutines.flow.Flow
+import xyz.block.trailblaze.api.TrailblazeNode
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 
 /**
@@ -19,8 +20,15 @@ interface DeviceScreenStream {
   /** Forward a long press at device coordinates. */
   suspend fun longPress(x: Int, y: Int)
 
-  /** Forward a swipe gesture between two points. */
-  suspend fun swipe(startX: Int, startY: Int, endX: Int, endY: Int)
+  /**
+   * Forward a swipe gesture between two points.
+   *
+   * @param durationMs How long the swipe takes on the device, end-to-end. Pass the actual
+   *   wall-clock duration of the user's gesture on the host so the device-side swipe
+   *   matches their intent — a fast flick stays a flick, a slow drag stays a drag. `null`
+   *   means "let the underlying driver pick a default" (typically Maestro's 400ms).
+   */
+  suspend fun swipe(startX: Int, startY: Int, endX: Int, endY: Int, durationMs: Long? = null)
 
   /** Forward text input to the currently focused field. */
   suspend fun inputText(text: String)
@@ -30,6 +38,16 @@ interface DeviceScreenStream {
 
   /** Get the current view hierarchy for hit-testing. */
   suspend fun getViewHierarchy(): ViewHierarchyTreeNode
+
+  /**
+   * Get the current accessibility tree as a [TrailblazeNode] tree.
+   *
+   * This is the richer, driver-typed tree consumed by [xyz.block.trailblaze.api.TrailblazeNodeSelectorGenerator]
+   * to convert a tap coordinate into a stable, semantically meaningful selector during recording.
+   * Returns null when the underlying driver doesn't expose an accessibility tree
+   * (e.g. Compose desktop, or platforms not yet wired).
+   */
+  suspend fun getTrailblazeNodeTree(): TrailblazeNode? = null
 
   /** Capture a screenshot (for recording, separate from the display stream). */
   suspend fun getScreenshot(): ByteArray

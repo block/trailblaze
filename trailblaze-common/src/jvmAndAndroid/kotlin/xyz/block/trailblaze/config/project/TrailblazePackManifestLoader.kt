@@ -3,6 +3,8 @@ package xyz.block.trailblaze.config.project
 import java.io.File
 import java.io.IOException
 import java.util.WeakHashMap
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
 import xyz.block.trailblaze.llm.config.ClasspathResourceDiscovery
 import xyz.block.trailblaze.util.Console
@@ -260,10 +262,38 @@ object TrailblazePackManifestLoader {
     warnOnReservedFields(manifest, identifier)
     warnOnRemovedComposeFields(manifest, content, identifier)
     warnOnRemovedNavFields(manifest, content, identifier)
+    enforceLibraryPackContract(manifest, identifier)
     return LoadedTrailblazePackManifest(
       manifest = manifest,
       source = source,
     )
+  }
+
+  /**
+   * Enforces the library-pack contract from [TrailblazePackManifest]'s kdoc: a pack with
+   * no `target:` block (a *library pack*) cannot declare `waypoints:`. A waypoint binds
+   * to a target's screen geometry — declaring waypoints in a target-less pack is a
+   * category error that would silently surface those waypoints under no owner. We catch
+   * it at parse time so the failure points at the exact pack and field rather than
+   * showing up later as "no target found for waypoint X" during reverse-lookup.
+   *
+   * The library-pack trailhead-tools rule is enforced separately in
+   * `TrailblazeProjectConfigLoader.resolvePackSiblings` because it requires reading each
+   * referenced tool YAML to inspect its `trailhead:` block — information not available
+   * from the manifest alone.
+   */
+  private fun enforceLibraryPackContract(
+    manifest: TrailblazePackManifest,
+    identifier: String,
+  ) {
+    if (manifest.target == null && manifest.waypoints.isNotEmpty()) {
+      throw TrailblazeProjectConfigException(
+        "Pack manifest $identifier declares waypoints: but has no target: block. " +
+          "Library packs (no target) cannot own waypoints — waypoints bind to a target's " +
+          "screen state. Move the waypoint files into a target pack, or add a target: " +
+          "block to this pack. Offending entries: ${manifest.waypoints.joinToString(", ")}",
+      )
+    }
   }
 
   /**
@@ -356,20 +386,50 @@ object TrailblazePackManifestLoader {
    * given source warning doesn't re-fire on every load.
    */
   /**
-   * The `system_prompt:` field used to live on `PackTargetConfig` as an inline string. It's been
-   * replaced by `system_prompt_file:` (file-only authoring). Because the YAML loader runs in
-   * lenient mode and silently drops unknown keys, a legacy pack manifest that still declares
-   * `system_prompt:` would lose its prompt content with no diagnostic. This pre-decode regex
-   * catches that case and fails the load with a clear migration message before the silent-drop
-   * can happen. Matches the field name as a YAML key (start-of-line, optional indent, the literal
-   * `system_prompt:` followed by a value) — `system_prompt_file:` is not matched because the
-   * trailing colon must come directly after `system_prompt`.
+   * Typed shape for the legacy-inline-system-prompt guard. The `system_prompt:` field used to
+   * live on `PackTargetConfig` as an inline string; it's been replaced by `system_prompt_file:`
+   * (file-only authoring). Because the YAML loader runs in lenient mode and silently drops
+   * unknown keys, a legacy pack manifest that still declares `target.system_prompt:` would lose
+   * its prompt content with no diagnostic. We decode pack manifests into this minimal shape
+   * BEFORE the typed `TrailblazePackManifest` decode so we can detect the legacy field and fail
+   * the load with a clear migration message instead of silently dropping it.
+   *
+   * A regex on the raw text was tried first but false-positives on block-scalar content that
+   * happens to contain the literal text `system_prompt:` (e.g. a `display_name:` block scalar
+   * mentioning the field by name). The typed decode is bullet-proof: kaml only populates
+   * `target.systemPrompt` when it's a real YAML key under `target:`.
    */
-  private val LEGACY_INLINE_SYSTEM_PROMPT_PATTERN =
-    Regex("""^\s*system_prompt:\s*\S""", RegexOption.MULTILINE)
+  @Serializable
+  private data class LegacyInlineSystemPromptShape(
+    val target: LegacyTargetShape? = null,
+  ) {
+    @Serializable
+    data class LegacyTargetShape(
+      @SerialName("system_prompt") val systemPrompt: String? = null,
+    )
+  }
 
   private fun errorOnLegacyInlineSystemPrompt(content: String, identifier: String) {
-    if (LEGACY_INLINE_SYSTEM_PROMPT_PATTERN.containsMatchIn(content)) {
+    val legacy =
+      try {
+        TrailblazeProjectConfigLoader.yaml.decodeFromString(
+          LegacyInlineSystemPromptShape.serializer(),
+          content,
+        )
+      } catch (e: Exception) {
+        // Malformed YAML will surface from the real typed decode below. Don't pre-fail here —
+        // we only want to flag legacy fields, not duplicate the parse-error reporting. Catching
+        // Exception (rather than just SerializationException / IllegalArgumentException) covers
+        // kaml's full surface — MissingFieldException, YamlException, and any future subtype —
+        // so a malformed input can never leak through the guard with a confusing stack trace.
+        // Logged so the path stays observable when developers wonder why the legacy detector
+        // didn't fire on their test fixture.
+        Console.log(
+          "[legacy-prompt-guard] skipped pre-decode on $identifier (${e::class.simpleName}: ${e.message}) — real decode will report the underlying error"
+        )
+        return
+      }
+    if (legacy.target?.systemPrompt != null) {
       throw TrailblazeProjectConfigException(
         "Pack manifest $identifier declares the removed inline `system_prompt:` field. " +
           "Inline prompts are no longer supported on PackTargetConfig — move the content to a " +

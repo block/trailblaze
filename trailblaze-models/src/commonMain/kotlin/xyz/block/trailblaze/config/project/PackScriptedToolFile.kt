@@ -23,14 +23,17 @@ import xyz.block.trailblaze.config.JsonObjectYamlSerializer
  * `{ type: object, properties: { ... }, required: [ ... ] }`. The wrapping is mechanical,
  * so the loader does it.
  *
- * Example:
+ * Example (preferred shape — top-level shortcut fields, no `_meta:` ceremony, no
+ * `inputSchema: {}` boilerplate when the tool takes no args, and the `.ts` source
+ * co-located with the descriptor under the owning pack per the library/target pack
+ * convention #2783):
  * ```yaml
- * script: ./tools/openFixtureAndVerifyText.js
+ * # trails/config/packs/playwrightsample/tools/playwrightSample_web_openFixtureAndVerifyText.yaml
+ * script: ./trails/config/packs/playwrightsample/tools/playwrightSample_web_openFixtureAndVerifyText.ts
  * name: playwrightSample_web_openFixtureAndVerifyText
  * description: Open the Playwright sample page and verify visible text.
- * _meta:
- *   trailblaze/supportedPlatforms: [web]
- *   trailblaze/requiresContext: true
+ * supportedPlatforms:
+ *   - web
  * inputSchema:
  *   relativePath:
  *     type: string
@@ -39,6 +42,11 @@ import xyz.block.trailblaze.config.JsonObjectYamlSerializer
  *     type: string
  *     description: Visible text to assert on the loaded page.
  * ```
+ *
+ * The top-level `supportedPlatforms` field is sugar — it's translated into the namespaced
+ * `_meta.trailblaze/supportedPlatforms` key that downstream framework consumers actually
+ * read. The escape-hatch `_meta:` block is still available for arbitrary keys that don't
+ * have shortcuts yet, but most authors should never need it.
  *
  * Note: `trailblaze/supportedPlatforms` values are case-insensitive at parse time
  * (`TrailblazeToolMeta.fromJsonObject` normalizes to uppercase). `[web]`, `[WEB]`, and
@@ -60,9 +68,18 @@ data class PackScriptedToolFile(
    * `McpSubprocessSpawner` contract — the subprocess runs in CWD and imports its module
    * relative to that working directory. Pack-relative resolution would require the host
    * runtime to materialize each pack into a transient working directory before spawning bun,
-   * which we don't do today. Authors should write paths from the repo root (or use absolute
-   * paths) — pack sibling resolution via `tools/<id>.yaml` is for the YAML files themselves,
-   * not for what those YAMLs reference.
+   * which we don't do today.
+   *
+   * **Authoring convention**: even though the resolver is JVM-CWD-relative, **the `.ts`
+   * source itself should live next to its descriptor under the owning pack** —
+   * `trails/config/packs/<pack>/tools/<tool>.ts` co-located with
+   * `trails/config/packs/<pack>/tools/<tool>.yaml`. The `script:` value then writes the
+   * long form `./trails/config/packs/<pack>/tools/<tool>.ts` (resolves from the repo
+   * root). This keeps the on-disk ownership boundary clean — each pack owns the
+   * implementation files of every tool it contributes — without requiring framework
+   * changes to the resolver. The longer path is the workaround until pack-relative
+   * resolution lands; pack sibling resolution via `tools/<id>.yaml` is for the
+   * descriptor YAMLs themselves, not for the scripts those YAMLs reference.
    *
    * If pack-relative `script:` resolution becomes a hard requirement, route through
    * `PackSource.readSibling` and stage the script into a per-pack scratch dir before
@@ -84,6 +101,25 @@ data class PackScriptedToolFile(
    * `_meta["trailblaze/requiresHost"]` you set still flows through unchanged.
    */
   val requiresHost: Boolean = false,
+  /**
+   * Top-level shortcut for `_meta: { trailblaze/supportedPlatforms: [...] }`. Limits the
+   * tool to the listed platforms — Trailblaze's per-target / per-driver gates use this to
+   * filter the tool out of sessions running on other platforms. Values are case-insensitive
+   * (`[web]`, `[WEB]`, `[Web]` all collapse to canonical form at runtime).
+   *
+   * Translated by [toInlineScriptToolConfig] into `_meta["trailblaze/supportedPlatforms"]`
+   * on the runtime [InlineScriptToolConfig]. `null` (the default) is a no-op — any explicit
+   * `_meta["trailblaze/supportedPlatforms"]` you set still flows through unchanged.
+   */
+  val supportedPlatforms: List<String>? = null,
+  /**
+   * Escape hatch for arbitrary `_meta:` keys that don't have a top-level shortcut yet
+   * (e.g., custom MCP-spec extensions, future framework hints). Most authors should
+   * never need to set this — prefer the top-level fields ([requiresHost],
+   * [supportedPlatforms]). Values supplied here merge with the top-level fields'
+   * translations; on key conflicts, the top-level field wins (so a `requiresHost: true`
+   * top-level field overrides a `_meta: { trailblaze/requiresHost: false }`).
+   */
   @SerialName("_meta")
   @Serializable(with = JsonObjectYamlSerializer::class)
   val meta: JsonObject? = null,
@@ -91,6 +127,9 @@ data class PackScriptedToolFile(
    * Flat map of parameter name to property descriptor. Order is preserved by the YAML
    * decoder, which matters for the `properties` map (LLMs sometimes anchor on declaration
    * order) and for the derived `required` array (we emit it in the same order).
+   *
+   * Defaults to empty when omitted from the YAML — tools that take no arguments don't
+   * need to write `inputSchema: {}` explicitly.
    */
   @SerialName("inputSchema") val inputSchema: Map<String, ScriptedToolProperty> = emptyMap(),
 )
@@ -123,6 +162,15 @@ data class ScriptedToolProperty(
  * `enum` keyword requires a non-empty array.
  */
 fun PackScriptedToolFile.toInlineScriptToolConfig(): InlineScriptToolConfig {
+  // Validate the tool name with a YAML-author-facing error message before we hand off to
+  // `InlineScriptToolConfig`'s init block — same regex (the source of truth lives on
+  // `InlineScriptToolConfig.TOOL_NAME_PATTERN`), but this site has the `<pack>/tools/<id>.yaml`
+  // file shape in mind and produces a more actionable message that names the descriptor.
+  require(InlineScriptToolConfig.TOOL_NAME_PATTERN.matches(name)) {
+    "Invalid scripted-tool name '$name' in per-file descriptor for script '$script': must match " +
+      "${InlineScriptToolConfig.TOOL_NAME_PATTERN} (letters, digits, _, -, ., starting with a " +
+      "letter or _). Update the descriptor YAML's `name:` field to use a supported character set."
+  }
   inputSchema.forEach { (propName, prop) ->
     prop.enum?.let { values ->
       require(values.isNotEmpty()) {
@@ -131,14 +179,89 @@ fun PackScriptedToolFile.toInlineScriptToolConfig(): InlineScriptToolConfig {
       }
     }
   }
+  // Validate types on known `trailblaze/...` _meta keys before we merge shortcuts. Without this,
+  // a typo like `_meta: { trailblaze/supportedPlatforms: "android" }` (string, not list) would
+  // silently slip through — the conflicting top-level shortcut would overwrite it before any
+  // consumer noticed, masking the author error. We'd rather fail loudly with a `<pack>/tools/<id>.yaml`-aware
+  // message at parse time.
+  validateKnownMetaShapes(name, meta)
+  // Merge the top-level shortcut field [supportedPlatforms] into the [_meta] JsonObject so
+  // downstream consumers that read namespaced keys directly (`TrailblazeToolMeta`, toolset
+  // filtering, etc.) keep working without needing to know about the new shortcut field.
+  // Top-level wins on key conflicts — explicit YAML `supportedPlatforms: [android]` overrides
+  // any stale `_meta: { trailblaze/supportedPlatforms: [...] }` an author might have copied
+  // from a different descriptor.
+  val mergedMeta = mergeMetaShortcuts(
+    explicitMeta = meta,
+    supportedPlatforms = supportedPlatforms,
+  )
   return InlineScriptToolConfig(
     script = script,
     name = name,
     description = description,
     requiresHost = requiresHost,
-    meta = meta,
+    meta = mergedMeta,
     inputSchema = buildInputSchemaObject(inputSchema),
   )
+}
+
+/**
+ * Fails fast on author errors that the YAML schema can't catch on its own — specifically,
+ * type mismatches on the namespaced `trailblaze/...` keys. The runtime would eventually
+ * misbehave if a string slipped in where a JsonArray is expected, but that error would surface
+ * far from the descriptor file. We'd rather throw here with the descriptor name in the message.
+ *
+ * Only validates keys we know about (`trailblaze/requiresHost`, `trailblaze/supportedPlatforms`);
+ * arbitrary author keys flow through unchecked.
+ */
+private fun validateKnownMetaShapes(toolName: String, meta: JsonObject?) {
+  if (meta == null) return
+  meta["trailblaze/requiresHost"]?.let { v ->
+    require(v is JsonPrimitive && v.isBooleanLiteral()) {
+      "Tool '$toolName' `_meta.trailblaze/requiresHost`: expected a boolean, got ${v::class.simpleName}. " +
+        "Prefer the top-level `requiresHost: true|false` shortcut instead of authoring this key directly."
+    }
+  }
+  meta["trailblaze/supportedPlatforms"]?.let { v ->
+    require(v is JsonArray && v.all { it is JsonPrimitive && it.isString }) {
+      "Tool '$toolName' `_meta.trailblaze/supportedPlatforms`: expected a YAML list of strings " +
+        "(e.g. `[android, web]`), got ${v::class.simpleName}. Prefer the top-level " +
+        "`supportedPlatforms: [...]` shortcut instead of authoring this key directly."
+    }
+  }
+}
+
+/** Recognizes `true` and `false` JSON literals; rejects e.g. the string `"true"`. */
+private fun JsonPrimitive.isBooleanLiteral(): Boolean =
+  !isString && (content == "true" || content == "false")
+
+/**
+ * Folds the top-level shortcut field [PackScriptedToolFile.supportedPlatforms] onto the
+ * explicit `_meta` JsonObject, producing the runtime-shaped meta map. Returns `null` when both
+ * sources are empty so [InlineScriptToolConfig.meta] stays absent rather than becoming an
+ * empty object (downstream code distinguishes "no meta" from "empty meta" in some paths).
+ */
+private fun mergeMetaShortcuts(
+  explicitMeta: JsonObject?,
+  supportedPlatforms: List<String>?,
+): JsonObject? {
+  val explicit = explicitMeta ?: JsonObject(emptyMap())
+  val needsSupportedPlatforms = !supportedPlatforms.isNullOrEmpty()
+  if (explicit.isEmpty() && !needsSupportedPlatforms) {
+    return null
+  }
+  return buildJsonObject {
+    // Write explicit map first, then write shortcut keys after. `buildJsonObject`'s `put` is
+    // last-write-wins, so the shortcut overrides any conflicting key the author copied into
+    // their `_meta:` block.
+    explicit.forEach { (k, v) -> put(k, v) }
+    if (needsSupportedPlatforms) {
+      put(
+        "trailblaze/supportedPlatforms",
+        buildJsonArray { supportedPlatforms!!.forEach { add(JsonPrimitive(it)) } },
+      )
+    }
+  }
 }
 
 private fun buildInputSchemaObject(properties: Map<String, ScriptedToolProperty>): JsonObject =

@@ -332,6 +332,7 @@ class TrailblazeKoogLlmClientHelper(
           promptStep = stepStatus.promptStep,
           completedObjectiveDescriptions = previouslyCompletedStepDescriptions,
           latestObjectiveStatus = stepStatus.getLatestObjectiveStatus(),
+          cycleWarning = stepStatus.consumePendingCycleWarning(),
         ),
         metaInfo = RequestMetaInfo.create(Clock.System),
       ),

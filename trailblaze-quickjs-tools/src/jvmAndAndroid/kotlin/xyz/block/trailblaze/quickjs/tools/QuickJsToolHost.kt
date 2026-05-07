@@ -111,10 +111,52 @@ class QuickJsToolHost internal constructor(
       // `JSON.parseToJsonElement` throws an opaque `JsonDecodingException` from a layer with
       // no author context.
       val dispatchExpr = """
-        const tool = globalThis.__trailblazeTools && globalThis.__trailblazeTools[${jsString(name)}];
-        if (!tool) throw new Error('Tool not registered: ' + ${jsString(name)});
+        const __registry = globalThis.__trailblazeTools || {};
+        const tool = __registry[${jsString(name)}];
+        if (!tool) {
+          // Include the registered tool names in the error so the author sees which tools
+          // actually loaded — typo, mismatched `name:` field in the descriptor, or a bundle
+          // that registered nothing at all are the three things this catches. The bundler
+          // should have ensured at least one registration; emit a more pointed hint when
+          // the registry is empty.
+          const __known = Object.keys(__registry);
+          const __hint = __known.length === 0
+            ? ' (no tools are registered on this host — the bundle may have loaded but its synthesized wrapper failed to populate `globalThis.__trailblazeTools`. Verify your scripted-tool source exports the function under the same `name:` declared in its YAML descriptor.)'
+            : ' (registered tools: ' + __known.sort().join(', ') + ')';
+          throw new Error('Tool not registered: ' + ${jsString(name)} + __hint);
+        }
         const __args = JSON.parse(${argsLiteral});
         const __ctx = ${ctxLiteral};
+        // Inject framework-provided resolver methods on `ctx.target`. Methods can't
+        // survive the JSON-serialization round-trip (host → JS engine), so we attach
+        // them here on the JS side after deserialization. The methods read from the
+        // same `target` data the framework already populates (resolvedAppId, appIds[],
+        // and the future resolvedBaseUrl / baseUrls[] fields when the manifest schema
+        // for `target.platforms.web.base_urls:` lands). Forward-compatible: when the
+        // framework starts emitting baseUrls data, `resolveBaseUrl` automatically
+        // picks it up without any author-side change.
+        if (__ctx && __ctx.target) {
+          __ctx.target.resolveAppId = function(options) {
+            const opts = options || {};
+            const fromTarget = this.resolvedAppId || (this.appIds && this.appIds[0]);
+            if (typeof fromTarget === 'string' && fromTarget.length > 0) return fromTarget;
+            if (typeof opts.defaultAppId === 'string') {
+              const trimmed = opts.defaultAppId.trim();
+              if (trimmed.length > 0) return trimmed;
+            }
+            return undefined;
+          };
+          __ctx.target.resolveBaseUrl = function(options) {
+            const opts = options || {};
+            const fromTarget = this.resolvedBaseUrl || (this.baseUrls && this.baseUrls[0]);
+            if (typeof fromTarget === 'string' && fromTarget.length > 0) return fromTarget;
+            if (typeof opts.defaultBaseUrl === 'string') {
+              const trimmed = opts.defaultBaseUrl.trim();
+              if (trimmed.length > 0) return trimmed;
+            }
+            return undefined;
+          };
+        }
         const result = await tool.handler(__args, __ctx);
         try {
           globalThis.__trailblazeLastResult = JSON.stringify(result == null ? {} : result);

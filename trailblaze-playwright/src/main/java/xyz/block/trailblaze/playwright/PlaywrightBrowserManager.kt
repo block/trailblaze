@@ -236,6 +236,59 @@ class PlaywrightBrowserManager(
     """.trimIndent()
 
   /**
+   * Init script that neuters `navigator.credentials` so WebAuthn / passkey requests
+   * fail fast instead of opening native browser dialogs ("Use saved passkey", "PIN
+   * required", "Set up a new PIN for your security key", etc.) that automated tests
+   * cannot interact with.
+   *
+   * The Chrome `--disable-features=WebAuthentication` launch flag and the
+   * `WebAuthn.enable` CDP call together suppress the "use saved passkey" prompt, but
+   * sites that initiate **registration** (e.g. Square's post-login passkey upsell)
+   * still surface the native PIN-setup dialog. Rejecting `create()` / `get()` at the
+   * JS layer makes the site's passkey path bail out and fall through to whatever
+   * non-passkey flow follows.
+   *
+   * Both the prototype methods and the bound `navigator.credentials.create/get`
+   * properties are replaced because some sites cache the bound function reference at
+   * page load.
+   */
+  private val disableWebAuthnScript =
+    """
+    (function() {
+      try {
+        const reject = () => Promise.reject(new DOMException(
+          'WebAuthn disabled by Trailblaze automation',
+          'NotAllowedError'
+        ));
+        if (navigator.credentials) {
+          // Replace bound methods on the live navigator.credentials object.
+          try { navigator.credentials.create = reject; } catch (e) {}
+          try { navigator.credentials.get = reject; } catch (e) {}
+        }
+        if (typeof CredentialsContainer !== 'undefined') {
+          // Replace prototype methods so any later-cached binding still rejects.
+          try { CredentialsContainer.prototype.create = reject; } catch (e) {}
+          try { CredentialsContainer.prototype.get = reject; } catch (e) {}
+        }
+        if (typeof PublicKeyCredential !== 'undefined') {
+          // Tell sites that platform authenticator probes should report no platform
+          // authenticator available, so they skip the passkey upsell entirely.
+          try {
+            PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable =
+              () => Promise.resolve(false);
+          } catch (e) {}
+          try {
+            PublicKeyCredential.isConditionalMediationAvailable =
+              () => Promise.resolve(false);
+          } catch (e) {}
+        }
+      } catch (e) {
+        // Best-effort — never break the page if the override fails.
+      }
+    })();
+    """.trimIndent()
+
+  /**
    * Init script that installs a `MutationObserver` to track the timestamp of the last
    * DOM change. Registered via [Page.addInitScript] so it runs on every navigation
    * (including SPA route changes that trigger full reloads) and is available immediately.
@@ -370,6 +423,10 @@ class PlaywrightBrowserManager(
     if (idlingConfig.disableAnimations) {
       page.addInitScript(disableAnimationsScript)
     }
+
+    // Reject WebAuthn / passkey calls so native browser dialogs (PIN required,
+    // saved passkey picker, security key registration) never appear.
+    page.addInitScript(disableWebAuthnScript)
 
     // Install DOM stability observer for waitForPageReady() phase 3
     if (idlingConfig.waitForDomStability) {

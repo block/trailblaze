@@ -9,9 +9,27 @@ import kotlinx.serialization.json.jsonPrimitive
 import picocli.CommandLine
 import picocli.CommandLine.Command
 import picocli.CommandLine.Option
+import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.util.Console
 import java.util.concurrent.Callable
+
+/**
+ * Returns true when the user-supplied `--device` argument matches the daemon's
+ * currently bound device. Two ways to match, both case-insensitive:
+ *
+ *  - Fully-qualified — user said `android/emulator-5554` and that's exactly what's bound.
+ *  - Platform-only — user said just `android`; accept any instance of that platform.
+ *
+ * Pure function with no I/O — kept here next to its only callers (`session stop` /
+ * `session end`) rather than on `CliMcpClient`, since the matching policy is a
+ * session-command policy, not a transport-layer one. `internal` so the unit test in
+ * the same module can call it directly.
+ */
+internal fun deviceArgMatches(userDeviceArg: String, boundDevice: TrailblazeDeviceId): Boolean {
+  if (userDeviceArg.equals(boundDevice.toFullyQualifiedDeviceId(), ignoreCase = true)) return true
+  return userDeviceArg.equals(boundDevice.trailblazeDevicePlatform.name, ignoreCase = true)
+}
 
 /**
  * Manage the CLI session — save recordings, end the session.
@@ -103,15 +121,14 @@ class SessionReportCommand : Callable<Int> {
 /**
  * Start a new session.
  *
- * Accepts `--target`, `--mode`, and `--device` to configure and start in one step.
- * If target/mode are already configured, they can be omitted.
- * Session commands still reuse the shared CLI MCP session. The per-invocation
- * device isolation in this PR applies to one-shot commands like blaze/ask/verify.
+ * `--device` is required on every invocation — the CLI is single-shot over MCP and
+ * does not durably honor a daemon-side "active" session, so we name the device
+ * explicitly every time. `--target` and `--mode` may be omitted if already in
+ * config; `--device` may not.
  *
  * Examples:
  *   trailblaze session start --target myapp --mode trail --device android
-  *   trailblaze session start --device ios      (target/mode already configured)
-  *   trailblaze session start                   (uses configured defaults)
+ *   trailblaze session start --device ios      (target/mode already configured)
  */
 @Command(
   name = "start",
@@ -137,10 +154,16 @@ class SessionStartCommand : Callable<Int> {
 
   @Option(
     names = ["-d", "--device"],
-    description = ["Device: platform (android, ios, web) or platform/id (e.g., ios/DEVICE-UUID). " +
-      "Binds the shared CLI session to that device for session workflows."],
+    required = true,
+    description = [
+      "Device to bind the session to: platform (android, ios, web) or platform/id " +
+        "(e.g., ios/DEVICE-UUID). Required — the CLI doesn't durably track an " +
+        "\"active\" session across single-shot MCP calls, so every device-acting " +
+        "command takes the device explicitly. Examples: --device android, " +
+        "--device ios/DEVICE-UUID, --device web.",
+    ],
   )
-  var device: String? = null
+  lateinit var device: String
 
   @Option(
     names = ["--title"],
@@ -202,24 +225,22 @@ class SessionStartCommand : Callable<Int> {
         ?: return@runBlocking CommandLine.ExitCode.SOFTWARE
 
       client.use {
-        // Connect device: per-command flag → config default → auto-detect
-        val effectiveDevice = device ?: CliConfigHelper.readConfig()?.cliDevicePlatform
-        if (effectiveDevice != null) {
-          val deviceError = it.ensureDevice(
-            effectiveDevice,
-            webHeadless = headlessOption.resolve(),
-          )
-          if (deviceError != null) {
-            Console.error(deviceError)
-            return@runBlocking CommandLine.ExitCode.SOFTWARE
-          }
+        // --device is required, so no config-default or auto-detect fallback. The user
+        // tells us the device explicitly on every invocation; we honor it directly.
+        val deviceError = it.ensureDevice(
+          deviceSpec = device,
+          webHeadless = headlessOption.resolve(),
+        )
+        if (deviceError != null) {
+          Console.error(deviceError)
+          return@runBlocking CommandLine.ExitCode.SOFTWARE
         }
-        // Save device to config so subsequent CLI invocations (blaze, ask, etc.) use it
-        if (device != null) {
-          val platformStr = device!!.split("/", limit = 2)[0]
-          if (TrailblazeDevicePlatform.fromString(platformStr) != null) {
-            CliConfigHelper.updateConfig { cfg -> cfg.copy(cliDevicePlatform = platformStr.uppercase()) }
-          }
+        // Save the platform to config so other commands (e.g., `trail`) that still
+        // fall back to cliDevicePlatform when --device is omitted see the most recent
+        // value. The session lifecycle no longer falls back to it itself.
+        val platformStr = device.split("/", limit = 2)[0]
+        if (TrailblazeDevicePlatform.fromString(platformStr) != null) {
+          CliConfigHelper.updateConfig { cfg -> cfg.copy(cliDevicePlatform = platformStr.uppercase()) }
         }
 
         val arguments = mutableMapOf<String, Any?>("action" to "START")
@@ -264,6 +285,19 @@ class SessionStopCommand : Callable<Int> {
   private lateinit var parent: SessionCommand
 
   @Option(
+    names = ["-d", "--device"],
+    required = true,
+    description = [
+      "Device whose session to stop: platform (android, ios, web) or platform/id. " +
+        "The CLI is single-shot over MCP and doesn't durably track an \"active\" session " +
+        "across calls, so --device is the lookup key — there's one session per device, " +
+        "and stop refuses to act if the daemon's currently-bound device doesn't match. " +
+        "Examples: --device android, --device android/emulator-5554, --device ios/UUID.",
+    ],
+  )
+  lateinit var device: String
+
+  @Option(
     names = ["--save"],
     description = ["Save session as a trail before stopping"],
   )
@@ -294,6 +328,28 @@ class SessionStopCommand : Callable<Int> {
 
       var exitCode = CommandLine.ExitCode.OK
       client.use {
+        // Use --device to look up which session this stop is targeting. The contract is
+        // "one session per device", and the CLI's MCP session memory isn't reliable
+        // across single-shot calls — so we ask the daemon what it's bound to, compare,
+        // and refuse to stop if the user named a different device.
+        val boundDevice = it.getBoundDeviceId()
+        when {
+          boundDevice == null -> {
+            Console.log("No active session for device $device.")
+            CliMcpClient.clearSession(port)
+            return@runBlocking CommandLine.ExitCode.OK
+          }
+          !deviceArgMatches(device, boundDevice) -> {
+            Console.error(
+              "No active session for device $device — the daemon's current session is " +
+                "bound to ${boundDevice.toFullyQualifiedDeviceId()}. Pass --device " +
+                "${boundDevice.toFullyQualifiedDeviceId()} if you " +
+                "meant to stop that one.",
+            )
+            return@runBlocking CommandLine.ExitCode.SOFTWARE
+          }
+          // else: match — proceed with stop.
+        }
         val arguments = mutableMapOf<String, Any?>("action" to "STOP")
         if (save) arguments["save"] = true
         if (title != null) arguments["title"] = title
@@ -569,6 +625,19 @@ class SessionEndCommand : Callable<Int> {
   private lateinit var parent: SessionCommand
 
   @Option(
+    names = ["-d", "--device"],
+    required = true,
+    description = [
+      "Device whose session to end: platform (android, ios, web) or platform/id. " +
+        "Same lookup-key semantics as `session stop` — the CLI doesn't trust a " +
+        "daemon-side \"active\" session across single-shot calls, so --device tells us " +
+        "which session you mean and end refuses to act if the daemon's bound device " +
+        "doesn't match.",
+    ],
+  )
+  lateinit var device: String
+
+  @Option(
     names = ["--name", "-n"],
     description = ["Save the recording as a trail before ending"]
   )
@@ -596,7 +665,27 @@ class SessionEndCommand : Callable<Int> {
       }
 
       client.use {
-        // Save if name provided
+        // Use --device as the session lookup key (same contract as `session stop`).
+        // `return@runBlocking` from inside `use` is fine — `close()` runs in the
+        // surrounding finally block.
+        val boundDevice = it.getBoundDeviceId()
+        when {
+          boundDevice == null -> {
+            Console.log("No active session for device $device.")
+            CliMcpClient.clearSession(port)
+            return@runBlocking CommandLine.ExitCode.OK
+          }
+          !deviceArgMatches(device, boundDevice) -> {
+            Console.error(
+              "No active session for device $device — the daemon's current session is " +
+                "bound to ${boundDevice.toFullyQualifiedDeviceId()}. Pass --device " +
+                "${boundDevice.toFullyQualifiedDeviceId()} if you " +
+                "meant to end that one.",
+            )
+            return@runBlocking CommandLine.ExitCode.SOFTWARE
+          }
+          // else: match — proceed with end.
+        }
         if (name != null) {
           val saveResult = it.callTool("trail", mapOf("action" to "SAVE", "name" to name!!))
           if (saveResult.isError) {

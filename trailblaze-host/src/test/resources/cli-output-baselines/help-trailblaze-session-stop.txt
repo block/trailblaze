@@ -5,9 +5,17 @@
 # Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
 # small wording / spacing changes can be intentional or accidental.
 # ----------------------------------------------------------------------
-Usage: trailblaze session stop [-hV] [--save] [-t=<title>]
+Usage: trailblaze session stop [-hV] [--save] -d=<device> [-t=<title>]
 Stop the current session and finalize captures
-  -h, --help            Show this help message and exit.
-      --save            Save session as a trail before stopping
-  -t, --title=<title>   Trail title when saving (overrides session title)
-  -V, --version         Print version information and exit.
+  -d, --device=<device>   Device whose session to stop: platform (android, ios,
+                            web) or platform/id. The CLI is single-shot over
+                            MCP and doesn't durably track an "active" session
+                            across calls, so --device is the lookup key —
+                            there's one session per device, and stop refuses to
+                            act if the daemon's currently-bound device doesn't
+                            match. Examples: --device android, --device
+                            android/emulator-5554, --device ios/UUID.
+  -h, --help              Show this help message and exit.
+      --save              Save session as a trail before stopping
+  -t, --title=<title>     Trail title when saving (overrides session title)
+  -V, --version           Print version information and exit.

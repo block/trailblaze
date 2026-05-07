@@ -12,8 +12,8 @@ import xyz.block.trailblaze.llm.config.LlmProviderConfig
  * Creates [OpenAILLMClient] instances for openai_compatible providers with custom
  * base_url, chat_completions_path, API key, and extra headers.
  *
- * This generalizes the pattern used by BlockDatabricksLLMClient for any
- * OpenAI-compatible endpoint (Azure, vLLM, LM Studio, custom gateways, etc.).
+ * Generic factory for OpenAI-compatible endpoints (Azure, Databricks, vLLM, LM Studio,
+ * custom gateways, etc.) whose request shape matches OpenAI but whose URL/auth differs.
  *
  * The `chat_completions_path` supports `{{model_id}}` placeholder which is substituted
  * with the actual model ID at client creation time. This enables endpoints like Databricks

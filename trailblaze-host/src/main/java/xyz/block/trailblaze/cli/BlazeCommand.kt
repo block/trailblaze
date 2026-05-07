@@ -95,6 +95,17 @@ class BlazeCommand : Callable<Int> {
   var noScreenshots: Boolean = false
 
   @Option(
+    names = ["--snapshot-details"],
+    description = [
+      "Comma-separated snapshot detail levels passed through to the daemon's blaze tool: " +
+        "BOUNDS, OFFSCREEN, ALL_ELEMENTS. Useful for waypoint capture: ALL_ELEMENTS bypasses " +
+        "the on-device accessibility-importance filter so RecyclerView children land in the " +
+        "captured trailblazeNodeTree."
+    ],
+  )
+  var snapshotDetails: String? = null
+
+  @Option(
     names = ["--save"],
     description = ["Save current session as a trail file. Shows steps if --setup not specified."]
   )
@@ -163,6 +174,7 @@ class BlazeCommand : Callable<Int> {
       if (verify) arguments["hint"] = "VERIFY"
       if (context != null) arguments["context"] = context
       if (noScreenshots) arguments["fast"] = true
+      if (snapshotDetails != null) arguments["snapshotDetails"] = snapshotDetails
 
       val result = client.callTool("blaze", arguments)
 

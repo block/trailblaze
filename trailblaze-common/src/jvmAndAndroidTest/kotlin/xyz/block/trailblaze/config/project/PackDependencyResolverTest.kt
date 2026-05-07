@@ -524,7 +524,6 @@ class PackDependencyResolverTest {
     toolsets = emptyList(),
     tools = emptyList(),
     waypoints = emptyList(),
-    workspaceRef = null,
   )
 
   private fun target(

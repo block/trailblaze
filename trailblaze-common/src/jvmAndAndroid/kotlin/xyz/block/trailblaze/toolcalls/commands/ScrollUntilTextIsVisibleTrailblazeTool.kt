@@ -217,9 +217,40 @@ class ScrollUntilTextIsVisibleTrailblazeTool(
 
     } while (System.currentTimeMillis() < endTime)
 
-    val debugMessage = buildString {
-      appendLine("Could not find a visible element matching selector: ${maestroCommand.selector.description()}")
-      appendLine("Tip: Try adjusting the following settings to improve detection:")
+    val debugMessage = buildScrollFailureMessage(maestroCommand)
+    throw MaestroException.ElementNotFound(
+      message = "No visible element found: ${maestroCommand.selector.description()}",
+      hierarchyRoot = screenState.viewHierarchy.asTreeNode(),
+      debugMessage = debugMessage,
+    )
+  }
+
+  companion object {
+    /**
+     * Builds the failure message for the scroll-until-visible loop. Extracted into a pure
+     * function so unit tests can lock in the LLM-facing wording (the leading "could not
+     * find" line and the `objectiveStatus(FAILED)` give-up signal) without spinning up
+     * the full Maestro driver fixture.
+     *
+     * Order matters: the LLM-actionable advice must appear BEFORE the framework-tuning
+     * section because LLMs lean on the head of the message when deciding next steps.
+     * Putting "consider calling objectiveStatus(FAILED)" up front is what unblocks the
+     * `verifySelfHealFailsGracefully` stuck pattern.
+     */
+    internal fun buildScrollFailureMessage(
+      maestroCommand: ScrollUntilVisibleCommand,
+    ): String = buildString {
+      appendLine(
+        "Could not find an element matching '${maestroCommand.selector.description()}' on this screen " +
+          "after scrolling ${maestroCommand.direction.name} to the maximum allowed time."
+      )
+      appendLine(
+        "If you have already tried scrolling in the opposite direction without success, the element " +
+          "is likely not present on this screen. Consider calling `objectiveStatus(FAILED)` and " +
+          "reporting that the element could not be found."
+      )
+      appendLine()
+      appendLine("--- Framework tuning hints (only if you control the trail YAML, not for LLM use) ---")
       appendLine("- `timeout`: current = ${maestroCommand.timeout}ms → Increase if you need more time to find the element")
       val originalSpeed = maestroCommand.originalSpeedValue?.toIntOrNull()
       val speedAdvice = if (originalSpeed != null && originalSpeed > 50) {
@@ -247,14 +278,7 @@ class ScrollUntilTextIsVisibleTrailblazeTool(
       }
       appendLine("- `centerElement`: current = ${maestroCommand.centerElement} → $centerAdvice")
     }
-    throw MaestroException.ElementNotFound(
-      message = "No visible element found: ${maestroCommand.selector.description()}",
-      hierarchyRoot = screenState.viewHierarchy.asTreeNode(),
-      debugMessage = debugMessage,
-    )
-  }
 
-  companion object {
     fun scrollDurationFor(trailblazeDriverType: TrailblazeDriverType): String =
       when (trailblazeDriverType) {
         /**

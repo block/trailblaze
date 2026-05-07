@@ -14,11 +14,12 @@ import xyz.block.trailblaze.util.Console
 /**
  * Tests for [ToolYamlLoader]'s suffix-driven validation.
  *
- * The loader walks `tools/` for `.yaml` files; the resource-source contract returns map
- * keys with `.yaml` already stripped. So a file `eraseText.tool.yaml` becomes a map key
- * `eraseText.tool` — the trailing word identifies the operational class. The loader's
- * job is to dispatch on that trailing word and enforce that the parsed content matches
- * what the suffix promised.
+ * The loader walks `tools/` (regular tools), `shortcuts/`, and `trailheads/` for
+ * `.yaml` files; the resource-source contract returns map keys with `.yaml` already
+ * stripped. So a file `eraseText.tool.yaml` becomes a map key `eraseText.tool` — the
+ * trailing word identifies the operational class. The loader's job is to dispatch on
+ * that trailing word and enforce that the parsed content matches what the suffix
+ * promised.
  *
  * Tests go through [ToolYamlLoader.parseAllConfigs] (internal-visibility) so the
  * `List<ToolYamlConfig>` is directly observable. The lenient `loadAllYamlWithErrorHandling`

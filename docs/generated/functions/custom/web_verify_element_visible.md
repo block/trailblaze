@@ -8,13 +8,9 @@ This is a test assertion — it will fail the test if the element is not visible
 `xyz.block.trailblaze.playwright.tools.PlaywrightNativeVerifyElementVisibleTool`
 
 ### Registered `PlaywrightNativeVerifyElementVisibleTool` in `ToolRegistry`
-### Required Parameters
+### Optional Parameters
 - `ref`: `String`
   Element ID (e.g., 'e5'), ARIA descriptor (e.g., 'button "Submit"'), or CSS selector with css= prefix (e.g., 'css=#my-element').
-
-### Optional Parameters
-- `element`: `String`
-  Human-readable description of the element being verified, for logging.
 - `reasoning`: `String`
 
 

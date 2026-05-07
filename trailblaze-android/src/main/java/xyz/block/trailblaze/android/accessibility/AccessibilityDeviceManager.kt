@@ -9,6 +9,7 @@ import android.telephony.TelephonyManager
 import kotlinx.datetime.Clock
 import xyz.block.trailblaze.AdbCommandUtil
 import xyz.block.trailblaze.InstrumentationUtil.withInstrumentation
+import xyz.block.trailblaze.android.InstrumentationArgUtil
 import xyz.block.trailblaze.api.DriverNodeDetail
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.TrailblazeNode
@@ -54,6 +55,7 @@ class AccessibilityDeviceManager(
     waitForReady()
     return AccessibilityServiceScreenState(
       deviceClassifiers = deviceClassifiers,
+      captureSecondaryTree = InstrumentationArgUtil.shouldCaptureSecondaryTree(),
     )
   }
 
@@ -64,6 +66,7 @@ class AccessibilityDeviceManager(
   fun captureScreenStateForLogging(): ScreenState {
     return AccessibilityServiceScreenState(
       deviceClassifiers = deviceClassifiers,
+      captureSecondaryTree = InstrumentationArgUtil.shouldCaptureSecondaryTree(),
     )
   }
 
@@ -293,8 +296,7 @@ class AccessibilityDeviceManager(
     while (Clock.System.now().toEpochMilliseconds() - startTime < action.timeoutMs) {
       val tree = getAccessibilityTree()
       if (tree != null) {
-        val trailblazeTree = tree.toTrailblazeNode()
-        val result = TrailblazeNodeSelectorResolver.resolve(trailblazeTree, action.nodeSelector)
+        val result = resolveSelectorWithFallback(tree.toTrailblazeNode(), action.nodeSelector)
         when (result) {
           is TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch -> {
             return copyTextAndSetClipboard(result.node, action.nodeSelector)
@@ -374,8 +376,7 @@ class AccessibilityDeviceManager(
     while (Clock.System.now().toEpochMilliseconds() - startTime < action.timeoutMs) {
       val tree = getAccessibilityTree()
       if (tree != null) {
-        val trailblazeTree = tree.toTrailblazeNode()
-        val result = TrailblazeNodeSelectorResolver.resolve(trailblazeTree, action.nodeSelector)
+        val result = resolveSelectorWithFallback(tree.toTrailblazeNode(), action.nodeSelector)
         when (result) {
           is TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch -> {
             val center = result.node.centerPoint()
@@ -440,6 +441,39 @@ class AccessibilityDeviceManager(
     }
   }
 
+  /**
+   * Resolves a [TrailblazeNodeSelector] against the live accessibility tree using a
+   * filtered-first / unfiltered-fallback strategy.
+   *
+   * Default: resolve against the [filterImportantForAccessibility]-applied tree, which
+   * matches the tree shape the LLM and recording-playback see by default
+   * ([AccessibilityServiceScreenState] applies the same filter when [includeAllElements]
+   * is false). Without this, intermediate non-important nodes (e.g. Compose layout
+   * wrappers) break selectors that use [TrailblazeNodeSelector.containsChild] — the
+   * filtered tree promotes children of dropped nodes up, so the selector's
+   * direct-child relationship survives, but the unfiltered tree shows the target as
+   * a grandchild via the wrapper.
+   *
+   * Fallback: if the filtered resolution yields [TrailblazeNodeSelectorResolver.ResolveResult.NoMatch],
+   * try the unfiltered tree. This preserves the `--all` / [SnapshotDetail.ALL_ELEMENTS]
+   * escape hatch — selectors generated from those captures can target nodes that are
+   * themselves `isImportantForAccessibility=false`, so they'd never match the filtered tree.
+   */
+  private fun resolveSelectorWithFallback(
+    baseTree: TrailblazeNode,
+    selector: TrailblazeNodeSelector,
+  ): TrailblazeNodeSelectorResolver.ResolveResult {
+    val filtered = baseTree.filterImportantForAccessibility()
+    val filteredResult = TrailblazeNodeSelectorResolver.resolve(filtered, selector)
+    if (filteredResult !is TrailblazeNodeSelectorResolver.ResolveResult.NoMatch) {
+      return filteredResult
+    }
+    // Selector did not match in the default (filtered) tree shape. Try the unfiltered
+    // tree to support [SnapshotDetail.ALL_ELEMENTS]-generated selectors that target
+    // non-important nodes.
+    return TrailblazeNodeSelectorResolver.resolve(baseTree, selector)
+  }
+
   // --- Private helpers ---
 
   /**
@@ -460,8 +494,7 @@ class AccessibilityDeviceManager(
     while (Clock.System.now().toEpochMilliseconds() - startTime < action.timeoutMs) {
       val tree = getAccessibilityTree()
       if (tree != null) {
-        val trailblazeTree = tree.toTrailblazeNode()
-        val result = TrailblazeNodeSelectorResolver.resolve(trailblazeTree, action.nodeSelector)
+        val result = resolveSelectorWithFallback(tree.toTrailblazeNode(), action.nodeSelector)
         when (result) {
           is TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch -> {
             val center = result.node.centerPoint()
@@ -521,8 +554,7 @@ class AccessibilityDeviceManager(
     while (Clock.System.now().toEpochMilliseconds() - startTime < action.timeoutMs) {
       val tree = getAccessibilityTree()
       if (tree != null) {
-        val trailblazeTree = tree.toTrailblazeNode()
-        val result = TrailblazeNodeSelectorResolver.resolve(trailblazeTree, action.nodeSelector)
+        val result = resolveSelectorWithFallback(tree.toTrailblazeNode(), action.nodeSelector)
         when (result) {
           is TrailblazeNodeSelectorResolver.ResolveResult.SingleMatch -> {
             val center = result.node.centerPoint()
@@ -548,8 +580,7 @@ class AccessibilityDeviceManager(
     while (Clock.System.now().toEpochMilliseconds() - startTime < action.timeoutMs) {
       val tree = getAccessibilityTree()
       if (tree != null) {
-        val trailblazeTree = tree.toTrailblazeNode()
-        val result = TrailblazeNodeSelectorResolver.resolve(trailblazeTree, action.nodeSelector)
+        val result = resolveSelectorWithFallback(tree.toTrailblazeNode(), action.nodeSelector)
         if (result is TrailblazeNodeSelectorResolver.ResolveResult.NoMatch) {
           return ExecutionResult(resolvedX = screenWidth / 2, resolvedY = screenHeight / 2)
         }

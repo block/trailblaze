@@ -208,4 +208,113 @@ class ProgressTrackingTest {
     assertTrue(hint.contains("with the same arguments"))
     assertTrue(!hint.contains("cycle of 2 actions"))
   }
+
+  // --- Dominant-action detector ---
+
+  @Test
+  fun `dominant-action detector fires WARNING when 70 percent of last 15 actions are the same`() {
+    // 13 of 15 are swipe(UP) (~87%), with the tail being a non-dominant action so the
+    // strict-tail-run guard doesn't suppress.
+    val signatures = listOf(
+      "swipe(UP)", "swipe(UP)", "swipe(UP)", "swipe(UP)",
+      "scrollUntilTextIsVisible(Pizza)",
+      "swipe(UP)", "swipe(UP)", "swipe(UP)", "swipe(UP)",
+      "swipe(UP)", "swipe(UP)", "swipe(UP)", "swipe(UP)",
+      "swipe(UP)",
+      "scrollUntilTextIsVisible(Pizza)",
+    )
+    val hint = detectDominantActionHint(signatures)
+    assertNotNull(hint)
+    assertTrue(hint.startsWith("WARNING:"))
+    assertTrue(hint.contains("'swipe'"))
+  }
+
+  @Test
+  fun `dominant-action detector returns null below threshold`() {
+    val signatures = (0 until 15).map { if (it % 2 == 0) "tap(a)" else "tap(b)" } // 50/50
+    assertNull(detectDominantActionHint(signatures))
+  }
+
+  @Test
+  fun `dominant-action detector returns null when window not yet full`() {
+    val signatures = List(10) { "swipe(UP)" } // only 10, need 15
+    assertNull(detectDominantActionHint(signatures))
+  }
+
+  @Test
+  fun `dominant-action detector defers to strict detector for tail-run length-1 cycles`() {
+    // 11 of 15 are swipe(UP), AND the last 11 are strictly consecutive — the strict
+    // detector handles this. Dominant-action returns null to avoid double-warning.
+    val signatures = listOf("tap(a)", "tap(b)", "tap(c)", "tap(d)") + List(11) { "swipe(UP)" }
+    assertNull(detectDominantActionHint(signatures))
+  }
+
+  @Test
+  fun `verifySelfHealFailsGracefully build 4805 trace fires WARNING via dominant detector`() {
+    // Reproduction of the actual stuck pattern: swipe(UP) interleaved with scrollFail.
+    // The 15-action window must end on a non-dominant action so the strict-tail-run
+    // guard doesn't suppress. 13/15 swipe = 87% > 70% threshold.
+    val window15 = listOf(
+      "swipe(UP)", "swipe(UP)", "swipe(UP)", "swipe(UP)",
+      "scrollUntilTextIsVisible(Pizza, UP)",
+      "swipe(UP)", "swipe(UP)", "swipe(UP)", "swipe(UP)",
+      "swipe(UP)", "swipe(UP)", "swipe(UP)", "swipe(UP)",
+      "swipe(UP)",
+      "scrollUntilTextIsVisible(Pizza, UP)", // tail breaks consecutive
+    )
+    val hint = detectDominantActionHint(window15)
+    assertNotNull(hint, "Build 4805's stuck pattern should fire WARNING via dominant detector")
+    assertTrue(hint.startsWith("WARNING:"))
+  }
+
+  @Test
+  fun `dominant-action detector extracts bare tool name from runner colon-separated fingerprints`() {
+    // TrailblazeRunner builds fingerprints as "tool:args" (not "tool(args)"). The hint
+    // must surface just the tool name, otherwise the LLM gets the full JSON-serialized
+    // fingerprint dumped into its prompt — defeats the point of an actionable warning.
+    val args = """{"reasoning":"scrolling for Pizza","direction":"UP"}"""
+    val signatures = List(13) { "swipe:$args" } + listOf(
+      "scrollUntilTextIsVisible:$args",
+      "tap:{}",
+    )
+    val hint = detectDominantActionHint(signatures)
+    assertNotNull(hint)
+    assertTrue(hint.startsWith("WARNING:"))
+    assertTrue(hint.contains("'swipe'"), "Expected bare tool name 'swipe' but got: $hint")
+    // The JSON args must NOT leak into the warning.
+    assertTrue(!hint.contains("reasoning"), "JSON args leaked into warning: $hint")
+  }
+
+  @Test
+  fun `strict cycle detector extracts bare tool name from runner colon-separated fingerprints`() {
+    // Same colon-format issue as the dominant-action detector test above. The strict
+    // length-1 detector calls formatCycleHint, which previously did substringBefore('(')
+    // and dumped the full "swipe:{...}" fingerprint into the WARNING text. Build 4884's
+    // verifySelfHealFailsGracefully run showed exactly this: the LLM saw
+    // 'swipe:{"direction":"UP"}' inside the WARNING instead of just 'swipe' — counts as
+    // noise the LLM had to parse around. Fix routes through extractToolNameFromFingerprint
+    // (shared with detectDominantActionHint).
+    val args = """{"reasoning":"scrolling for Pizza","direction":"UP"}"""
+    val signatures = List(3) { "swipe:$args" }
+    val hint = detectActionCycleHint(signatures)
+    assertNotNull(hint)
+    assertTrue(hint.startsWith("WARNING:"))
+    assertTrue(hint.contains("'swipe'"), "Expected bare tool name 'swipe' but got: $hint")
+    assertTrue(!hint.contains("reasoning"), "JSON args leaked into warning: $hint")
+  }
+
+  @Test
+  fun `length-2 cycle detector extracts bare tool names from runner colon-separated fingerprints`() {
+    // Same as above but for the length-2 path (the else branch in formatCycleHint).
+    val args = """{"reasoning":"x"}"""
+    val signatures = listOf(
+      "tap:$args", "scrollUntilTextIsVisible:$args",
+      "tap:$args", "scrollUntilTextIsVisible:$args",
+    )
+    val hint = detectActionCycleHint(signatures)
+    assertNotNull(hint)
+    assertTrue(hint.contains("'tap'"), "Expected bare 'tap' in: $hint")
+    assertTrue(hint.contains("'scrollUntilTextIsVisible'"), "Expected bare 'scrollUntilTextIsVisible' in: $hint")
+    assertTrue(!hint.contains("reasoning"), "JSON args leaked into warning: $hint")
+  }
 }

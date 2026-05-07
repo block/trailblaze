@@ -24,24 +24,22 @@ class PlaywrightNativeVerifyListVisibleTool(
     "Element ID (e.g., 'e5'), ARIA descriptor (e.g., 'list'), " +
       "or CSS selector with css= prefix (e.g., 'css=#my-list').",
   )
-  val ref: String,
+  val ref: String? = null,
   @param:LLMDescription("The expected item texts that should be visible in the list.")
   val items: List<String>,
-  @param:LLMDescription("Human-readable description of the list being verified, for logging.")
-  val element: String = "",
   override val reasoning: String? = null,
   val nodeSelector: TrailblazeNodeSelector? = null,
 ) : PlaywrightExecutableTool, ReasoningTrailblazeTool {
-  override val elementDescriptor: String? get() = element.ifBlank { null }
-  override val targetRef: String get() = ref
+  override val targetRef: String? get() = ref
+  override val targetNodeSelector: TrailblazeNodeSelector? get() = nodeSelector
   override fun withNodeSelector(selector: TrailblazeNodeSelector): PlaywrightExecutableTool =
-    PlaywrightNativeVerifyListVisibleTool(ref = ref, items = items, element = element, reasoning = reasoning, nodeSelector = selector)
+    PlaywrightNativeVerifyListVisibleTool(ref = null, items = items, reasoning = reasoning, nodeSelector = selector)
 
   override suspend fun executeWithPlaywright(
     page: Page,
     context: TrailblazeToolExecutionContext,
   ): TrailblazeToolResult {
-    val description = element.ifBlank { ref }
+    val description = PlaywrightExecutableTool.describeTarget(nodeSelector, ref)
     reasoning?.let { Console.log("### Reasoning: $it") }
     Console.log("### Verifying list '$description' contains: $items")
     if (items.isEmpty()) {

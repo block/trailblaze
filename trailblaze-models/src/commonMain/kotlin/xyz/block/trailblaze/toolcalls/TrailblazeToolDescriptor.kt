@@ -10,6 +10,16 @@ data class TrailblazeToolParameterDescriptor(
   val name: String,
   val type: String,
   val description: String? = null,
+  /**
+   * Allowed values for this parameter when the source descriptor declares the type as an enum
+   * (Koog `ToolParameterType.Enum`, JSON-schema `"enum": [...]`). UI consumers (the recording
+   * Tool Palette) render a dropdown of these values when present rather than a free-text input.
+   * Null means "any value of [type] goes" — including for tools whose schema doesn't yet thread
+   * enum metadata through the converter; downstream code should not infer "no enum" from null
+   * vs. empty list. Empty list is reserved for explicit "enum with no allowed values" (an edge
+   * case worth surfacing as a misconfiguration rather than silently coercing to null).
+   */
+  val validValues: List<String>? = null,
 )
 
 /**

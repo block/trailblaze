@@ -33,6 +33,24 @@ object TrailblazeDesktopUtil {
   const val SETTINGS_FILENAME = "trailblaze-settings.json"
 
   /**
+   * Subdirectory (relative to the app data dir) where the daemon caches bundled
+   * inline scripted tools. Files inside are named by SHA-256 of the source `.ts`
+   * bytes, so a cache hit on unchanged source skips re-bundling. See
+   * `DaemonScriptedToolBundler` for the bundling pipeline.
+   *
+   * **Operational note — unbounded growth.** The cache currently has no automatic
+   * cleanup: every distinct `.ts` source SHA accumulates a `<sha>.bundle.js` entry
+   * across daemon restarts. A developer iterating on tool variants over months
+   * can collect many MBs to GBs in this directory. The bundles themselves are
+   * small (single-digit KB each in typical cases), so the growth is mostly from
+   * source-version churn, not from one large entry. If oncall sees disk pressure
+   * pointing at this directory, `rm -rf $HOME/.trailblaze/cache/scripted-bundles`
+   * is safe — the next daemon start will rebundle on demand. An automatic
+   * age/LRU cleanup is tracked as a follow-up to #2749.
+   */
+  const val SCRIPTED_BUNDLES_CACHE_SUBDIR: String = "cache/scripted-bundles"
+
+  /**
    * Gets the default app data directory path.
    * @return The default app data directory: ~/.trailblaze
    */

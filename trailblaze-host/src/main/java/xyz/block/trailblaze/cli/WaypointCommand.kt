@@ -20,6 +20,12 @@ import java.util.concurrent.Callable
     // existing TrailblazeNodeSelectorGenerator strategies — same logic the runtime
     // uses for tap recordings, repurposed for waypoint authoring.
     WaypointSuggestSelectorCommand::class,
+    // Mechanical Maestro→accessibility selector migration. Walks a trail YAML, pairs each
+    // selector-bearing tool with the corresponding session log step, runs the deterministic
+    // two-tree resolution (Maestro selector → coordinate → accessibility selector via
+    // findBestSelector), and emits an updated YAML with `nodeSelector:` populated. Replaces
+    // the LLM-driven migration pattern from #2673.
+    WaypointMigrateTrailCommand::class,
     // Segments are derived from waypoints — running the matcher against a session log
     // and emitting the observed transitions between matched waypoints. Lives under
     // `waypoint` rather than as a top-level peer because its inputs (waypoints) and
@@ -33,6 +39,15 @@ import java.util.concurrent.Callable
   ],
 )
 class WaypointCommand : Callable<Int> {
+  /**
+   * Reach the root command so subcommands (validate / capture-example) can call
+   * `cliRoot.configProvider()` to access the same `LogsRepo` the running daemon
+   * already resolved. This is what makes `capture-example --id <id>` "magic" by
+   * default — no need for the caller to pass a `--logs-dir`; we already know it.
+   */
+  @CommandLine.ParentCommand
+  internal lateinit var cliRoot: TrailblazeCliCommand
+
   override fun call(): Int {
     CommandLine(this).usage(System.out)
     return CommandLine.ExitCode.OK

@@ -39,7 +39,7 @@ class YamlBackedHostAppTarget(
 
   override fun getPossibleAppIdsForPlatform(
     platform: TrailblazeDevicePlatform,
-  ): Set<String>? = findPlatformConfig(platform)?.appIds?.toSet()
+  ): List<String>? = findPlatformConfig(platform)?.appIds
 
   // --- Custom tools per driver type ---
 

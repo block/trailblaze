@@ -280,7 +280,16 @@ object AndroidHostAdbUtils {
         runCatching { forwarder.close() }
       }
     } catch (e: Exception) {
-      throw RuntimeException("Failed to start port forwarding: ${e.message}", e)
+      // Many transports throw with a null `message` (notably dadb's BindException for
+      // "Address already in use"), so falling back to `e.javaClass.simpleName` keeps the
+      // user-visible error informative instead of "null". Stack trace is still preserved
+      // via the `cause` parameter for log inspection.
+      val detail = e.message?.takeIf { it.isNotBlank() } ?: e.javaClass.simpleName
+      throw RuntimeException(
+        "Failed to start port forwarding tcp:$localPort -> tcp:$remotePort on " +
+          "${deviceId.instanceId}: $detail",
+        e,
+      )
     }
   }
 

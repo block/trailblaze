@@ -224,7 +224,7 @@ class AssertToolNodeSelectorTest {
 
     override suspend fun executeNodeSelectorAssertVisible(
       nodeSelector: TrailblazeNodeSelector,
-      timeoutMs: Long,
+      timeoutMs: Long?,
       traceId: TraceId?,
     ): TrailblazeToolResult? {
       capturedAssertVisible = nodeSelector
@@ -233,7 +233,7 @@ class AssertToolNodeSelectorTest {
 
     override suspend fun executeNodeSelectorAssertNotVisible(
       nodeSelector: TrailblazeNodeSelector,
-      timeoutMs: Long,
+      timeoutMs: Long?,
       traceId: TraceId?,
     ): TrailblazeToolResult? {
       capturedAssertNotVisible = nodeSelector

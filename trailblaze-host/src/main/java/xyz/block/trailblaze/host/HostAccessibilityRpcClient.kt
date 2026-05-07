@@ -16,6 +16,8 @@ import xyz.block.trailblaze.mcp.android.ondevice.rpc.OnDeviceRpcClient
 import xyz.block.trailblaze.mcp.android.ondevice.rpc.RpcResult
 import xyz.block.trailblaze.mcp.utils.RpcScreenStateAdapter
 import xyz.block.trailblaze.toolcalls.ExecutableTrailblazeTool
+import xyz.block.trailblaze.toolcalls.HostLocalExecutableTrailblazeTool
+import xyz.block.trailblaze.toolcalls.ToolExecutionContextThreadLocal
 import xyz.block.trailblaze.toolcalls.TrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolRepo
@@ -100,16 +102,43 @@ class HostAccessibilityRpcClient(
       // memory is empty. See [interpolateMemoryInTool].
       val resolvedTool = interpolateMemoryInTool(tool, memory)
 
-      // Host-only tools (cbot, dip-slot) must execute locally — they need ADB/USB on the Mac.
-      // Use the instance-level helper so YAML-defined tools that set `requires_host: true`
-      // are honored too, not just class-annotated ones.
-      if (resolvedTool is ExecutableTrailblazeTool && resolvedTool.requiresHostInstance()) {
+      // Host-only tools must execute locally rather than RPC to the device. Two ways a tool
+      // can declare itself host-only:
+      //
+      //  - `HostLocalExecutableTrailblazeTool` interface — used by `QuickJsTrailblazeTool`
+      //    (#2749's in-process scripted-tool runtime) and `SubprocessTrailblazeTool` (legacy
+      //    MCP-subprocess scripted-tool path). Both produce tool *instances* that own
+      //    handles to a host-resident runtime (a QuickJS engine or an MCP subprocess) and
+      //    can't be serialized for RPC. Without this branch the RPC executor would send
+      //    them to the device, which doesn't have those handles registered, and dispatch
+      //    fails with `Tool not registered: <name>` / `OtherTrailblazeTool`.
+      //  - `requiresHostInstance()` — the per-instance/class-level `requires_host: true`
+      //    flag honored by host-side tools like `RunCommandTrailblazeTool` (cbot, dip-slot)
+      //    that need ADB/USB on the Mac. Same destination, different declaration vocabulary.
+      //
+      // Both routes go through the same in-process `execute(context)` dispatch below.
+      val isHostLocal =
+        resolvedTool is HostLocalExecutableTrailblazeTool ||
+          (resolvedTool is ExecutableTrailblazeTool && resolvedTool.requiresHostInstance())
+      if (isHostLocal && resolvedTool is ExecutableTrailblazeTool) {
         val context = toolExecutionContextProvider?.invoke(traceId)
           ?: return ExecutionResult.Failure(
             error = "Host-only tool '$toolName' requires a tool execution context",
             recoverable = false,
           )
-        val result = resolvedTool.execute(context)
+        // Install the context for the duration of the host-local execute so any
+        // QuickJS-bundled scripted tool's `client.callTool(...)` from inside its handler
+        // body can reach `SessionScopedHostBinding`, which reads the slot to dispatch the
+        // nested call. We use `withInstalledContext` (not `install`/`clear`) because the
+        // execute path is a suspend chain whose innermost layer is QuickJS's async
+        // `__trailblazeCall` binding — that callback can resume on whatever dispatcher
+        // the JS engine runs on, and a plain ThreadLocal install on the entry thread
+        // wouldn't survive the dispatcher hop. `withInstalledContext` rides the value on
+        // the coroutine context via `asContextElement` so the binding sees the right
+        // context regardless of resumption thread.
+        val result = ToolExecutionContextThreadLocal.withInstalledContext(context) {
+          resolvedTool.execute(context)
+        }
         val durationMs = System.currentTimeMillis() - startTime
         return when (result) {
           is xyz.block.trailblaze.toolcalls.TrailblazeToolResult.Success ->
@@ -194,19 +223,93 @@ class HostAccessibilityRpcClient(
   }
 
   /**
-   * Executes a pre-action tool (e.g. launchApp) from a trail's `tools:` section via RPC and
-   * returns whether it succeeded on-device. Forces [RunYamlRequest.awaitCompletion]
-   * regardless of what the caller's template had — pre-actions MUST finish before the main
-   * trail starts, so a caller that constructed the template in async-kickoff mode must not
-   * accidentally turn `launchApp` into a race.
+   * Executes a pre-action tool (e.g. launchApp) from a trail's `tools:` section and returns
+   * whether it succeeded. Forces [RunYamlRequest.awaitCompletion] regardless of what the
+   * caller's template had — pre-actions MUST finish before the main trail starts, so a
+   * caller that constructed the template in async-kickoff mode must not accidentally turn
+   * `launchApp` into a race.
    *
-   * Returns `false` on RPC failure, terminal on-device failure, or any server contract
-   * violation. The caller is expected to short-circuit the trail if this returns `false` —
-   * a failed `launchApp` means the main trail would otherwise run against the wrong app
-   * state, producing a confusing "mid-trail tap failed" failure instead of a clean
-   * "couldn't launch the app under test" one.
+   * **Dispatch routing.** [tool] is the resolved [TrailblazeTool] the [request] YAML encodes.
+   * If it's host-local (the [HostLocalExecutableTrailblazeTool] interface or the per-instance
+   * `requires_host: true` flag), execute it on the host directly — these tools own host-side
+   * runtime handles (QuickJS engines, MCP subprocesses, ADB sessions) that the on-device
+   * agent doesn't know about; sending them via RPC would surface as
+   * `Tool not registered: <name>` / `OtherTrailblazeTool`. Otherwise, RPC to the device.
+   * Mirrors the same routing the [execute] method does on its hot path.
+   *
+   * Returns `false` on RPC failure, terminal on-device failure, host-only execution failure,
+   * or any server contract violation. The caller is expected to short-circuit the trail if
+   * this returns `false` — a failed `launchApp` means the main trail would otherwise run
+   * against the wrong app state, producing a confusing "mid-trail tap failed" failure
+   * instead of a clean "couldn't launch the app under test" one.
    */
-  suspend fun executePreAction(request: RunYamlRequest): Boolean {
+  suspend fun executePreAction(tool: TrailblazeTool, request: RunYamlRequest): Boolean {
+    // Resolve through the session's toolRepo before dispatching. Static YAML deserialization
+    // produces `OtherTrailblazeTool` for any tool name the static catalog doesn't know — and
+    // that includes every dynamically-registered tool (#2749 inline scripted tools registered
+    // by `LazyYamlScriptedToolRegistration`, MCP subprocess tools registered by
+    // `SubprocessToolRegistration`, etc.). Going through `toolCallToTrailblazeTool` swaps the
+    // `OtherTrailblazeTool` placeholder for the real instance (e.g. `QuickJsTrailblazeTool`)
+    // so the host-local check below sees the right type. Mirrors the resolution `execute(...)`
+    // does on its hot path; without it the pre-action check below silently fails for every
+    // scripted tool.
+    val resolvedTool: TrailblazeTool = if (tool is OtherTrailblazeTool) {
+      try {
+        toolRepo.toolCallToTrailblazeTool(tool.toolName, tool.raw.toString())
+      } catch (e: Exception) {
+        if (e is CancellationException) throw e
+        // Unknown name — fall through to RPC with the OtherTrailblazeTool fallback. The
+        // on-device runner has its own repo and may know this name even if the host doesn't.
+        tool
+      }
+    } else {
+      tool
+    }
+    // Host-local short-circuit. Same pattern as `execute(...)` on the hot path — tools that
+    // declare themselves host-only via `HostLocalExecutableTrailblazeTool` (QuickJS scripted
+    // tools, MCP subprocess scripted tools) or via `requiresHostInstance()` (cbot / dip-slot
+    // ADB tools, YAML-defined `requires_host: true`) execute locally instead of being RPC'd
+    // to the device.
+    val isHostLocal =
+      resolvedTool is HostLocalExecutableTrailblazeTool ||
+        (resolvedTool is ExecutableTrailblazeTool && resolvedTool.requiresHostInstance())
+    if (isHostLocal && resolvedTool is ExecutableTrailblazeTool) {
+      // Pass the request's traceId through so this host-local pre-action correlates with
+      // the same trace/log context as the rest of the run. The hot-path `execute(...)`
+      // method already threads its `traceId` parameter into the context provider; mirroring
+      // that here keeps trail logs grep-able by trace across the pre-action ↔ prompt-step
+      // boundary.
+      val context = toolExecutionContextProvider?.invoke(request.traceId)
+      if (context == null) {
+        Console.log(
+          "[HostAccessibilityRpcClient] Pre-action host-only tool " +
+            "'${resolvedTool::class.simpleName}' needs an execution context but none was " +
+            "provided — failing the pre-action so the trail aborts cleanly rather than " +
+            "silently skipping the launch step.",
+        )
+        return false
+      }
+      // Install the context for the duration of the host-local execute — same rationale
+      // as in `execute(...)` above (use `withInstalledContext` so the value survives
+      // dispatcher hops in the QuickJS async-binding suspend chain). Pre-action tools
+      // are common entry points for scripted tools whose handlers compose host Kotlin
+      // tools via `client.callTool(...)`; without this install, the nested call returns
+      // a `CALL_NO_CONTEXT` envelope that users typically don't check, leaving the trail
+      // running against state the launch step never actually produced.
+      val result = ToolExecutionContextThreadLocal.withInstalledContext(context) {
+        resolvedTool.execute(context)
+      }
+      return when (result) {
+        is xyz.block.trailblaze.toolcalls.TrailblazeToolResult.Success -> true
+        else -> {
+          Console.log(
+            "[HostAccessibilityRpcClient] Pre-action host-only tool " +
+              "'${resolvedTool::class.simpleName}' failed locally: $result",
+          )
+          false
+        }
+      }
+    }
     val syncRequest = if (request.awaitCompletion) request else request.copy(awaitCompletion = true)
     return when (val rpcResult = rpcClient.rpcCall(syncRequest)) {
       is RpcResult.Failure -> {
@@ -241,7 +344,7 @@ class HostAccessibilityRpcClient(
    */
   override suspend fun captureScreenState(): ScreenState? {
     when (val first = rpcClient.rpcCall(GetScreenStateRequest())) {
-      is RpcResult.Success -> return RpcScreenStateAdapter(first.data)
+      is RpcResult.Success -> return RpcScreenStateAdapter.from(first.data)
       is RpcResult.Failure -> Console.log(
         "[HostAccessibilityRpcClient] GetScreenState ${first.errorType}: ${first.message}" +
           (first.details?.let { "\n  Details: $it" } ?: "") +
@@ -258,7 +361,7 @@ class HostAccessibilityRpcClient(
       return null
     }
     return when (val retry = rpcClient.rpcCall(GetScreenStateRequest())) {
-      is RpcResult.Success -> RpcScreenStateAdapter(retry.data)
+      is RpcResult.Success -> RpcScreenStateAdapter.from(retry.data)
       is RpcResult.Failure -> {
         Console.log(
           "[HostAccessibilityRpcClient] GetScreenState retry after re-warm still failed " +

@@ -5,20 +5,35 @@
 # Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
 # small wording / spacing changes can be intentional or accidental.
 # ----------------------------------------------------------------------
-Usage: trailblaze waypoint capture-example [-hV] [--force] --def=<defId>
-       [--root=<root>] [--session=<session>] [--step=<step>]
-       [<positionalLogFile>]
+Usage: trailblaze waypoint capture-example [-hV] [--force] --id=<waypointId>
+       [--logs-dir=<path>] [--root=<path>] [--session=<sessionId>]
+       [--step=<step>] [--target=<id>] [<positionalLogFile>]
 Capture a sibling <id>.example.json + screenshot next to the waypoint YAML.
-Picks the raw (un-annotated) screenshot twin from the source session.
-      [<positionalLogFile>] Path to a *_TrailblazeLlmRequestLog.json
-                              (alternative to --session/--step)
-      --def=<defId>         Waypoint id to capture an example for (required)
-      --force               Overwrite an existing example pair without
-                              prompting.
-  -h, --help                Show this help message and exit.
-      --root=<root>         Root directory to scan for *.waypoint.yaml files
-                              (default: ./trails)
-      --session=<session>   Session log directory (containing
-                              *_TrailblazeLlmRequestLog.json files)
-      --step=<step>         1-based step within the session (default: last step)
-  -V, --version             Print version information and exit.
+With no --session/--step/positional-log, walks every session under logs/ and
+picks
+the most recent step that the waypoint matches AND that has a real screenshot.
+      [<positionalLogFile>]
+                          Direct path to a screen-state log (alternative to
+                            auto-search / --session)
+      --force             Overwrite an existing example pair without prompting.
+  -h, --help              Show this help message and exit.
+      --id=<waypointId>   Waypoint id to capture an example for (matches the
+                            YAML's top-level `id:` field). Required.
+      --logs-dir=<path>   Override the directory containing per-session log
+                            dirs. Defaults to the running daemon's resolved
+                            logsDir.
+      --root=<path>       Explicit root directory to scan for *.waypoint.yaml
+                            files. Overrides --target. (Convention: ./trails)
+      --session=<sessionId>
+                          Session id (the directory name under --logs-dir, e.g.
+                            `2026_05_07_22_26_48_yaml_6258`). Restricts the
+                            auto-search to that session. Combine with --step to
+                            pin a specific step.
+      --step=<step>       1-based step within --session. Skips auto-search;
+                            uses this step verbatim. Requires --session.
+      --target=<id>       Pack id to operate on. Resolves --root to
+                            <workspace>/packs/<id>/waypoints/ — the canonical
+                            workspace-pack location. Warns if no such pack
+                            exists. Mutually exclusive with --root (--root wins
+                            if both given).
+  -V, --version           Print version information and exit.

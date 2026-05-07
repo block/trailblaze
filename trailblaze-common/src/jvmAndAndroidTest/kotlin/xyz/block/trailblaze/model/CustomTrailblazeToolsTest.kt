@@ -64,7 +64,7 @@ class CustomTrailblazeToolsTest {
     )
   }
 
-  // -- toTrailblazeToolRepo extension: pins the forward used by AndroidTrailblazeRule + BlockAndroidTrailblazeRule --
+  // -- toTrailblazeToolRepo extension: pins the forward used by AndroidTrailblazeRule and downstream subclasses --
 
   @Test
   fun `toTrailblazeToolRepo forwards driverType so Playwright repo drops mobile-only tools`() {

@@ -17,6 +17,14 @@ package xyz.block.trailblaze.toolcalls
  *   whether the LLM-recommended tool may be executed: only verification tools are allowed,
  *   anything else short-circuits to a failed assertion (its success would be unrelated to whether
  *   the assertion holds, and it could side-effect the device).
+ * @property trailheadTo Non-empty value marks this tool as a *trailhead* — a deterministic
+ *   bootstrap step that lands the device at a known waypoint (e.g. `square/checkout/library`).
+ *   Used by the recording UI's trailhead picker to surface the tool as a startable entry point
+ *   and by the navigation graph to draw a dashed entry edge into the destination waypoint.
+ *   Empty string (the default) means "this is a regular tool, not a trailhead". The same
+ *   metadata can also live in a sibling `*.trailhead.yaml` file pairing the class with a `to:`
+ *   block — discovery merges both sources, so a class can self-declare here without a
+ *   companion YAML, or the YAML can stay authoritative if the trailhead is YAML-only.
  */
 @Target(AnnotationTarget.CLASS)
 @Retention(AnnotationRetention.RUNTIME)
@@ -26,4 +34,5 @@ annotation class TrailblazeToolClass(
   val isRecordable: Boolean = true,
   val requiresHost: Boolean = false,
   val isVerification: Boolean = false,
+  val trailheadTo: String = "",
 )

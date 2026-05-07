@@ -12,6 +12,8 @@ dependencies:
   - trailblaze
 target:
   display_name: Wikipedia (en)
+  tools:
+    - tools/wikipedia_android_launchApp.yaml
   platforms:
     android:
       app_ids:

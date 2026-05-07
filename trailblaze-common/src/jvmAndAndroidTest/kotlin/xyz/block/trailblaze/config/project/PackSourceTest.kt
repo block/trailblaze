@@ -216,5 +216,167 @@ class PackSourceTest {
     assertEquals("classpath:trailblaze-config/packs/clock", cp.describe())
   }
 
+  // ==========================================================================
+  // listSiblings — used by the pack loader to auto-discover operational tool
+  // YAMLs from `<pack>/tools/`. Same path-validation guarantees as readSibling
+  // (no `..`, no `%`, no absolute paths) plus a direct-children-only contract.
+  // ==========================================================================
+
+  @Test
+  fun `Filesystem listSiblings returns only direct children matching the suffix list`() {
+    val packDir = newTempDir()
+    val toolsDir = File(packDir, "tools").apply { mkdirs() }
+    File(toolsDir, "foo.tool.yaml").writeText("id: foo")
+    File(toolsDir, "bar.shortcut.yaml").writeText("id: bar")
+    File(toolsDir, "baz.trailhead.yaml").writeText("id: baz")
+    // Files that should NOT match: wrong suffix, nested deeper than direct children.
+    File(toolsDir, "readme.md").writeText("not a tool")
+    File(toolsDir, "scratch.draft.yaml").writeText("id: scratch")
+    File(toolsDir, "subdir").mkdirs()
+    File(toolsDir, "subdir/nested.tool.yaml").writeText("id: nested")
+
+    val source = PackSource.Filesystem(packDir = packDir)
+    val results = source.listSiblings(
+      relativeDir = "tools",
+      suffixes = listOf(".tool.yaml", ".shortcut.yaml", ".trailhead.yaml"),
+    )
+
+    assertEquals(
+      listOf(
+        "tools/bar.shortcut.yaml",
+        "tools/baz.trailhead.yaml",
+        "tools/foo.tool.yaml",
+      ),
+      results,
+      "Expected direct-children matching the suffix list, sorted; got: $results",
+    )
+  }
+
+  @Test
+  fun `Filesystem listSiblings returns empty list when relativeDir does not exist`() {
+    val packDir = newTempDir()
+    val source = PackSource.Filesystem(packDir = packDir)
+
+    // No `tools/` directory at all — listSiblings should degrade gracefully to
+    // empty rather than throw, so a pack with zero auto-discovered tools is fine.
+    assertEquals(
+      emptyList(),
+      source.listSiblings(relativeDir = "tools", suffixes = listOf(".tool.yaml")),
+    )
+  }
+
+  @Test
+  fun `Filesystem listSiblings rejects path-escape and absolute relativeDir values`() {
+    val packDir = newTempDir()
+    val source = PackSource.Filesystem(packDir = packDir)
+
+    // Same containment rules as readSibling — these must throw, not silently
+    // wander outside the pack directory.
+    assertFailsWith<IllegalArgumentException> {
+      source.listSiblings(relativeDir = "../escape", suffixes = listOf(".yaml"))
+    }
+    assertFailsWith<IllegalArgumentException> {
+      source.listSiblings(relativeDir = "/etc", suffixes = listOf(".yaml"))
+    }
+    assertFailsWith<IllegalArgumentException> {
+      source.listSiblings(relativeDir = "%2e%2e/escape", suffixes = listOf(".yaml"))
+    }
+    assertFailsWith<IllegalArgumentException> {
+      source.listSiblings(relativeDir = "", suffixes = listOf(".yaml"))
+    }
+  }
+
+  @Test
+  fun `Filesystem listSiblings rejects symlink that points outside the pack dir`() {
+    // Symlink creation isn't supported on every CI environment (Windows without
+    // developer-mode, certain restricted filesystems). Mirror the skip pattern
+    // used by `TrailDiscoveryTest` / `WorkspaceRootTest` so this test stays
+    // portable while still exercising the containment guarantee where supported.
+    org.junit.Assume.assumeTrue("Symlink support required", supportsSymlinks())
+
+    val packDir = newTempDir()
+    val outsideDir = newTempDir() // separate root, definitely not under packDir
+    File(outsideDir, "leaked.tool.yaml").writeText("id: leaked")
+
+    // Make `<packDir>/tools` a symlink to `outsideDir`. The textual containment
+    // check on `relativeDir` is fine here ("tools" is innocent), but the
+    // canonical-path check inside listFilesystemSiblings must catch the escape.
+    val toolsLink = java.nio.file.Files.createSymbolicLink(
+      java.nio.file.Paths.get(packDir.absolutePath, "tools"),
+      outsideDir.toPath(),
+    )
+    assertTrue(java.nio.file.Files.isSymbolicLink(toolsLink))
+
+    val source = PackSource.Filesystem(packDir = packDir)
+
+    assertFailsWith<IllegalArgumentException> {
+      source.listSiblings(relativeDir = "tools", suffixes = listOf(".tool.yaml"))
+    }
+  }
+
+  /**
+   * Probes whether the current filesystem and JVM permissions allow creating
+   * symbolic links. Mirrors the helper in `TrailDiscoveryTest` / `WorkspaceRootTest`
+   * — kept local here rather than promoting to a shared util since each test class
+   * uses it on a different temp-dir lifecycle and the duplication is ~10 lines.
+   */
+  private fun supportsSymlinks(): Boolean = try {
+    val probeRoot = newTempDir()
+    val probeTarget = File(probeRoot, "_symlink-probe-target").apply { mkdirs() }
+    val probeLink = File(probeRoot, "_symlink-probe-link").toPath()
+    java.nio.file.Files.createSymbolicLink(probeLink, probeTarget.toPath())
+    java.nio.file.Files.deleteIfExists(probeLink)
+    probeTarget.delete()
+    true
+  } catch (_: Exception) {
+    false
+  }
+
+  @Test
+  fun `Classpath listSiblings returns only direct children matching the suffix list`() {
+    // Build a fake classpath layout: a pack at trailblaze-config/packs/sample/ with
+    // a tools/ directory containing direct children of varying suffixes plus a
+    // nested subdir that should be filtered out.
+    val root = newTempDir()
+    val toolsDir = File(root, "trailblaze-config/packs/sample/tools").apply { mkdirs() }
+    File(toolsDir, "foo.tool.yaml").writeText("id: foo")
+    File(toolsDir, "bar.shortcut.yaml").writeText("id: bar")
+    File(toolsDir, "readme.md").writeText("not a tool")
+    File(toolsDir, "subdir").mkdirs()
+    File(toolsDir, "subdir/nested.tool.yaml").writeText("id: nested")
+
+    classpath.withClasspathRoot(root) {
+      val source = PackSource.Classpath(resourceDir = "trailblaze-config/packs/sample")
+      val results = source.listSiblings(
+        relativeDir = "tools",
+        suffixes = listOf(".tool.yaml", ".shortcut.yaml"),
+      )
+
+      assertEquals(
+        listOf(
+          "tools/bar.shortcut.yaml",
+          "tools/foo.tool.yaml",
+        ),
+        results,
+        "Expected direct-children matching the suffix list, sorted; got: $results",
+      )
+    }
+  }
+
+  @Test
+  fun `Classpath listSiblings rejects path-escape relativeDir values`() {
+    val source = PackSource.Classpath(resourceDir = "trailblaze-config/packs/sample")
+
+    assertFailsWith<IllegalArgumentException> {
+      source.listSiblings(relativeDir = "../escape", suffixes = listOf(".yaml"))
+    }
+    assertFailsWith<IllegalArgumentException> {
+      source.listSiblings(relativeDir = "%2e%2e/escape", suffixes = listOf(".yaml"))
+    }
+    assertFailsWith<IllegalArgumentException> {
+      source.listSiblings(relativeDir = "", suffixes = listOf(".yaml"))
+    }
+  }
+
   private fun newTempDir(): File = classpath.newTempDir(prefix = "pack-source-test")
 }

@@ -29,7 +29,19 @@ abstract class TrailblazeHostAppTarget(
     require(isValidId(id)) { invalidIdMessage(id, displayName) }
   }
 
-  abstract fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): Set<String>?
+  /**
+   * Declared app ids for [platform]. Returns null when the platform isn't supported by this
+   * target, an empty list when it's supported but no ids are configured, and a populated list
+   * otherwise.
+   *
+   * **Ordering is contractual.** Callers like `BaseIosTrailblazeTest.ensureTargetAppIsStopped`
+   * rely on `firstOrNull()` returning the primary id. Implementations must preserve the
+   * declaration order they got from their source (YAML list, hand-rolled `listOf(...)`, etc.).
+   * The previous return type was `Set<String>?`, which preserved order in practice via
+   * `LinkedHashSet` but didn't make the guarantee contractual; switched to `List<String>?` so
+   * the contract matches the call-site assumptions.
+   */
+  abstract fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): List<String>?
 
   protected abstract fun internalGetCustomToolsForDriver(driverType: TrailblazeDriverType): Set<KClass<out TrailblazeTool>>
   fun getCustomToolsForDriver(driverType: TrailblazeDriverType): Set<KClass<out TrailblazeTool>> =
@@ -221,7 +233,7 @@ abstract class TrailblazeHostAppTarget(
     id = "default",
     displayName = "Default",
   ) {
-    override fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): Set<String>? = null
+    override fun getPossibleAppIdsForPlatform(platform: TrailblazeDevicePlatform): List<String>? = null
 
     override fun internalGetCustomToolsForDriver(driverType: TrailblazeDriverType): Set<KClass<out TrailblazeTool>> =
       setOf()
@@ -238,6 +250,26 @@ abstract class TrailblazeHostAppTarget(
     }
     return installedAppId
   }
+
+  /**
+   * Returns the primary app id for [platform] — the first entry in [getPossibleAppIdsForPlatform].
+   * Throws [IllegalStateException] when the target declares no app ids for the platform; the
+   * error message names the target id, the platform, the YAML path the oncaller should check,
+   * and the specific YAML field — all four are load-bearing diagnostic pieces, so each is asserted
+   * independently in `ResolvedTargetTest`.
+   *
+   * Consolidates the `firstOrNull() ?: error(...)` pattern that otherwise gets reimplemented at
+   * every call site (`ResolvedTarget.appId`, the various Block-side `Ios*AppUtils` static helpers,
+   * and any future per-target wrapper). Sites that need the full id list still call
+   * [getPossibleAppIdsForPlatform] directly; this is the strict-mode "first-or-fail" accessor.
+   */
+  fun requireFirstAppIdForPlatform(platform: TrailblazeDevicePlatform): String =
+    getPossibleAppIdsForPlatform(platform)?.firstOrNull()
+      ?: error(
+        "Target '$id' declares no app ids for $platform — check " +
+          "`platforms.${platform.name.lowercase()}.app_ids` in trailblaze-config/targets/$id.yaml " +
+          "(or the corresponding Kotlin getPossibleAppIdsForPlatform override).",
+      )
 
   /**
    * Formats the version information for display in the UI.

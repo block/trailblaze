@@ -5,6 +5,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
+import org.gradle.api.GradleException
 
 /**
  * Tests for [PackTargetGenerator] — the core renderer used by the
@@ -610,6 +611,119 @@ class PackTargetGeneratorTest {
     assertTrue(rendered.contains("- framework_web_set"), "web tool_sets inherited from framework")
     assertTrue(rendered.contains("- playwright-native"), "web drivers inherited from framework")
     assertTrue(rendered.contains("- playwright-electron"), "all web drivers inherited from framework")
+  }
+
+  // ===========================================================================
+  // system_prompt_file resolution (build-time `resolveSystemPromptFile`).
+  // ===========================================================================
+
+  @Test
+  fun `pack with system_prompt_file inlines content into generated target system_prompt`() {
+    val packsDir = newTempDir()
+    val targetsDir = newTempDir()
+    File(packsDir, "alpha").mkdirs()
+    File(packsDir, "alpha/pack.yaml").writeText(
+      """
+      id: alpha
+      target:
+        display_name: Alpha
+        system_prompt_file: prompt.md
+      """.trimIndent(),
+    )
+    File(packsDir, "alpha/prompt.md").writeText("Alpha prompt body.\nLine two.")
+
+    val generator = PackTargetGenerator(packsDir, targetsDir, "./gradlew :foo:generate")
+    val expected = generator.buildExpectedTargets()
+    val rendered = expected.values.single()
+
+    // The system_prompt_file path is replaced by the inlined content under `system_prompt:`.
+    assertTrue(rendered.contains("system_prompt:"), "expected `system_prompt:` in rendered: $rendered")
+    assertTrue(rendered.contains("Alpha prompt body."), "prompt content not inlined: $rendered")
+    assertTrue(rendered.contains("Line two."), "multi-line prompt content not preserved: $rendered")
+    assertTrue(
+      !rendered.contains("system_prompt_file:"),
+      "system_prompt_file path should be dropped after resolution; got: $rendered",
+    )
+  }
+
+  @Test
+  fun `pack with missing system_prompt_file fails the build with the resolved path`() {
+    val packsDir = newTempDir()
+    val targetsDir = newTempDir()
+    File(packsDir, "beta").mkdirs()
+    File(packsDir, "beta/pack.yaml").writeText(
+      """
+      id: beta
+      target:
+        display_name: Beta
+        system_prompt_file: nope.md
+      """.trimIndent(),
+    )
+
+    val generator = PackTargetGenerator(packsDir, targetsDir, "./gradlew :foo:generate")
+    val ex =
+      assertFailsWith<GradleException> { generator.buildExpectedTargets() }
+    assertTrue(
+      ex.message?.contains("nope.md") == true,
+      "error should name the missing file; got: ${ex.message}",
+    )
+  }
+
+  @Test
+  fun `system_prompt_file pointing outside the pack directory is rejected`() {
+    // ../-escape attack: a malicious or buggy pack.yaml could try to read a file outside its
+    // pack root. Path-element containment in resolveSystemPromptFile must reject this.
+    val packsDir = newTempDir()
+    val targetsDir = newTempDir()
+    File(packsDir, "gamma").mkdirs()
+    File(packsDir, "gamma/pack.yaml").writeText(
+      """
+      id: gamma
+      target:
+        display_name: Gamma
+        system_prompt_file: ../../outside.md
+      """.trimIndent(),
+    )
+    // Create a file at the escape target so the failure is "outside the pack directory" and
+    // not just "file not found" — the latter would be a weaker assertion.
+    File(packsDir.parentFile, "outside.md").writeText("should not be reachable")
+
+    val generator = PackTargetGenerator(packsDir, targetsDir, "./gradlew :foo:generate")
+    val ex =
+      assertFailsWith<GradleException> { generator.buildExpectedTargets() }
+    assertTrue(
+      ex.message?.contains("resolves outside the pack directory") == true,
+      "error should call out the containment violation; got: ${ex.message}",
+    )
+  }
+
+  @Test
+  fun `system_prompt_file rejects sibling-prefix attack against a similarly-named directory`() {
+    // Without a path-element separator on the containment check, a sibling directory that
+    // starts with the pack dir name as a literal prefix (e.g. `delta-extras/...` against pack
+    // root `/.../delta`) would pass a raw startsWith check. The current implementation appends
+    // `File.separator` to force a real directory boundary; this test pins that.
+    val packsDir = newTempDir()
+    val targetsDir = newTempDir()
+    File(packsDir, "delta").mkdirs()
+    File(packsDir, "delta-extras").mkdirs()
+    File(packsDir, "delta-extras/sneaky.md").writeText("attacker-controlled content")
+    File(packsDir, "delta/pack.yaml").writeText(
+      """
+      id: delta
+      target:
+        display_name: Delta
+        system_prompt_file: ../delta-extras/sneaky.md
+      """.trimIndent(),
+    )
+
+    val generator = PackTargetGenerator(packsDir, targetsDir, "./gradlew :foo:generate")
+    val ex =
+      assertFailsWith<GradleException> { generator.buildExpectedTargets() }
+    assertTrue(
+      ex.message?.contains("resolves outside the pack directory") == true,
+      "sibling-prefix attack should be rejected; got: ${ex.message}",
+    )
   }
 
   private fun newTempDir(): File =

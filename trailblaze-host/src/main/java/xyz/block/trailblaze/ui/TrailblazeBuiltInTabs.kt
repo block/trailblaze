@@ -28,6 +28,7 @@ import xyz.block.trailblaze.ui.tabs.settings.SettingsTabComposables
 import xyz.block.trailblaze.llm.providers.TrailblazeDynamicLlmTokenProvider
 import xyz.block.trailblaze.ui.tabs.mcp.McpTabComposable
 import xyz.block.trailblaze.ui.tabs.recording.RecordingTabComposable
+import xyz.block.trailblaze.ui.recording.RecordingTabState
 import xyz.block.trailblaze.ui.tabs.trails.TrailsBrowserTabComposable
 import xyz.block.trailblaze.ui.tabs.waypoints.WaypointsTabComposable
 import xyz.block.trailblaze.logs.server.McpServerDebugState
@@ -203,18 +204,32 @@ object TrailblazeBuiltInTabs {
     deviceManager: TrailblazeDeviceManager,
     currentTrailblazeLlmModelProvider: () -> TrailblazeLlmModel,
     llmTokenProvider: TrailblazeDynamicLlmTokenProvider = TrailblazeHostDynamicLlmTokenProvider,
-    onSaveTrail: (String) -> Unit = {},
-  ): TrailblazeAppTab = TrailblazeAppTab(
-    route = TrailblazeRoute.Record,
-    content = {
-      RecordingTabComposable(
-        deviceManager = deviceManager,
-        currentTrailblazeLlmModelProvider = currentTrailblazeLlmModelProvider,
-        llmTokenProvider = llmTokenProvider,
-        onSaveTrail = onSaveTrail,
-      )
-    }
-  )
+    /**
+     * Save handler — returns the absolute path the YAML was written to (or null on
+     * failure) so the recording tab can show the user a "Saved to <path>" confirmation
+     * with the real destination, not a generic toast. Default no-op preserves the
+     * "tab works without a save backend" contract that lets in-process tests instantiate
+     * the tab without standing up a filesystem.
+     */
+    onSaveTrail: (String) -> String? = { null },
+  ): TrailblazeAppTab {
+    // Construct ONCE per app boot, captured by the composable lambda below. The lambda is
+    // re-invoked on every navigation back to the tab, but the holder instance is the same —
+    // that's what lets the user navigate to Sessions and back without losing their recording.
+    val state = RecordingTabState<xyz.block.trailblaze.recording.InteractionRecorder>()
+    return TrailblazeAppTab(
+      route = TrailblazeRoute.Record,
+      content = {
+        RecordingTabComposable(
+          deviceManager = deviceManager,
+          currentTrailblazeLlmModelProvider = currentTrailblazeLlmModelProvider,
+          llmTokenProvider = llmTokenProvider,
+          onSaveTrail = onSaveTrail,
+          state = state,
+        )
+      }
+    )
+  }
 
   /**
    * Creates the MCP tab which shows server status, active sessions,

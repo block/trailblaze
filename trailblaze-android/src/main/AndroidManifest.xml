@@ -11,7 +11,8 @@
             android:label="Trailblaze Accessibility Service"
             android:name="xyz.block.trailblaze.android.accessibility.TrailblazeAccessibilityService"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
-            android:exported="true">
+            android:exported="true"
+            android:directBootAware="true">
             <intent-filter>
                 <action android:name="android.accessibilityservice.AccessibilityService"/>
             </intent-filter>

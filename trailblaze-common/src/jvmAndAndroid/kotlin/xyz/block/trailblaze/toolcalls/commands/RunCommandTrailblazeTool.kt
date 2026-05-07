@@ -2,22 +2,14 @@ package xyz.block.trailblaze.toolcalls.commands
 
 import ai.koog.agents.core.tools.annotations.LLMDescription
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.runInterruptible
-import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import xyz.block.trailblaze.toolcalls.HostLocalExecutableTrailblazeTool
 import xyz.block.trailblaze.toolcalls.TrailblazeToolClass
 import xyz.block.trailblaze.toolcalls.TrailblazeToolExecutionContext
 import xyz.block.trailblaze.toolcalls.TrailblazeToolResult
-import xyz.block.trailblaze.util.CommandProcessResult
-import xyz.block.trailblaze.util.Console
 import xyz.block.trailblaze.util.TrailblazeProcessBuilderUtils
 import xyz.block.trailblaze.util.isWindows
 import java.io.File
-import java.io.IOException
-import java.util.concurrent.TimeUnit
 
 internal const val RUN_COMMAND_TOOL_NAME = "runCommand"
 
@@ -101,7 +93,9 @@ data class RunCommandTrailblazeTool(
       }
       val processBuilder = TrailblazeProcessBuilderUtils
         .createProcessBuilder(shellArgs, workingDir?.let(::File))
-      val (result, timedOut) = runProcess(processBuilder, timeoutSeconds)
+      val (result, timedOut) = with(TrailblazeProcessBuilderUtils) {
+        processBuilder.runProcessWithTimeout(timeoutSeconds)
+      }
 
       when {
         timedOut -> TrailblazeToolResult.Error.ExceptionThrown(
@@ -148,62 +142,4 @@ data class RunCommandTrailblazeTool(
     }
   }
 
-  /**
-   * Runs [processBuilder] and collects combined stdout/stderr, optionally enforcing a
-   * wall-clock timeout.
-   *
-   * [runInterruptible] wraps the blocking `waitFor` so that coroutine cancellation is
-   * translated into thread interruption — without it, `process.waitFor()` with no
-   * timeout would ignore cancellation entirely and leave a hung subprocess running.
-   * The `finally` block's [Process.destroyForcibly] is the backstop that unblocks the
-   * reader loop and kills the subprocess on any exit path (normal, timeout, cancel).
-   *
-   * We don't reuse [TrailblazeProcessBuilderUtils.runProcess] here because it wraps
-   * `process.waitFor()` with no timeout and no hook for forced termination.
-   */
-  private suspend fun runProcess(
-    processBuilder: ProcessBuilder,
-    timeoutSeconds: Long?,
-  ): Pair<CommandProcessResult, Boolean> = withContext(Dispatchers.IO) {
-    processBuilder.redirectOutput(ProcessBuilder.Redirect.PIPE)
-    val process = processBuilder.start()
-    val outputLines = mutableListOf<String>()
-    val readerJob = launch {
-      try {
-        process.inputStream.bufferedReader().use { reader ->
-          var line: String?
-          while (reader.readLine().also { line = it } != null) {
-            line?.let { outputLines.add(it) }
-          }
-        }
-      } catch (e: IOException) {
-        // Subprocess closing stdout mid-read (destroyForcibly on timeout/cancel) can
-        // surface as IOException on readLine. Partial output up to that point is still
-        // kept in [outputLines]; log for observability and let the reader exit.
-        Console.log("RunCommandTrailblazeTool reader stopped: ${e.message}")
-      }
-    }
-    try {
-      val finished = runInterruptible {
-        if (timeoutSeconds != null) {
-          process.waitFor(timeoutSeconds, TimeUnit.SECONDS)
-        } else {
-          process.waitFor()
-          true
-        }
-      }
-      if (!finished) {
-        process.destroyForcibly()
-      }
-      // The reader exits on its own once the subprocess closes stdout (normal exit or
-      // forced kill). Joining guarantees [outputLines] is fully populated before read.
-      readerJob.join()
-      CommandProcessResult(
-        outputLines = outputLines.toList(),
-        exitCode = if (finished) process.exitValue() else -1,
-      ) to !finished
-    } finally {
-      if (process.isAlive) process.destroyForcibly()
-    }
-  }
 }

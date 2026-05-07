@@ -26,7 +26,7 @@ class PlaywrightNativeVerifyValueTool(
     "Element ID (e.g., 'e5'), ARIA descriptor (e.g., 'textbox \"Email\"'), " +
       "or CSS selector with css= prefix (e.g., 'css=#email-input').",
   )
-  val ref: String,
+  val ref: String? = null,
   @param:LLMDescription(
     "What property of the element to verify. " +
       "TEXT checks visible text content, VALUE checks form field input values, " +
@@ -37,15 +37,13 @@ class PlaywrightNativeVerifyValueTool(
   val expected: String,
   @param:LLMDescription("The attribute name to check (required when type is ATTRIBUTE).")
   val attribute: String = "",
-  @param:LLMDescription("Human-readable description of the element being verified, for logging.")
-  val element: String = "",
   override val reasoning: String? = null,
   val nodeSelector: TrailblazeNodeSelector? = null,
 ) : PlaywrightExecutableTool, ReasoningTrailblazeTool {
-  override val elementDescriptor: String? get() = element.ifBlank { null }
-  override val targetRef: String get() = ref
+  override val targetRef: String? get() = ref
+  override val targetNodeSelector: TrailblazeNodeSelector? get() = nodeSelector
   override fun withNodeSelector(selector: TrailblazeNodeSelector): PlaywrightExecutableTool =
-    PlaywrightNativeVerifyValueTool(ref = ref, type = type, expected = expected, attribute = attribute, element = element, reasoning = reasoning, nodeSelector = selector)
+    PlaywrightNativeVerifyValueTool(ref = null, type = type, expected = expected, attribute = attribute, reasoning = reasoning, nodeSelector = selector)
 
   @Serializable
   enum class VerifyValueType {
@@ -58,7 +56,7 @@ class PlaywrightNativeVerifyValueTool(
     page: Page,
     context: TrailblazeToolExecutionContext,
   ): TrailblazeToolResult {
-    val description = element.ifBlank { ref }
+    val description = PlaywrightExecutableTool.describeTarget(nodeSelector, ref)
     reasoning?.let { Console.log("### Reasoning: $it") }
     Console.log("### Verifying $type of '$description' equals '$expected'")
     return try {

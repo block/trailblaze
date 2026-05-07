@@ -6,20 +6,22 @@
 # small wording / spacing changes can be intentional or accidental.
 # ----------------------------------------------------------------------
 Usage: trailblaze waypoint locate [-hV] [--live] [--file=<file>]
-                                  [--root=<root>] [--session=<session>]
-                                  [--step=<step>]
+                                  [--root=<path>] [--session=<session>]
+                                  [--step=<step>] [--target=<id>]
 Given a captured screen state, report which waypoint(s) match.
       --file=<file>         Direct path to a *_TrailblazeLlmRequestLog.json
                               file (alternative to --session/--step)
   -h, --help                Show this help message and exit.
       --live                Pull screen state from the connected device (not
                               yet implemented)
-      --root=<root>         Additional directory to scan for *.waypoint.yaml
-                              files (default: ./trails, resolved against the
-                              current working directory). Pack waypoints are
-                              always included regardless of --root.
+      --root=<path>         Additional directory to scan for *.waypoint.yaml
+                              files. Overrides --target. Pack waypoints are
+                              always included regardless. (Convention: ./trails)
       --session=<session>   Session log directory (containing
                               *_TrailblazeLlmRequestLog.json files)
       --step=<step>         1-based index of the step within the session
                               (default: last step)
+      --target=<id>         Pack id to operate on. Resolves --root to
+                              <workspace>/packs/<id>/waypoints/. Mutually
+                              exclusive with --root (--root wins if both given).
   -V, --version             Print version information and exit.

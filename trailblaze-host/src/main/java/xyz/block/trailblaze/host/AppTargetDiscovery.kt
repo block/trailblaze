@@ -9,10 +9,10 @@ import xyz.block.trailblaze.config.ToolSetYamlConfig
 import xyz.block.trailblaze.config.ToolSetYamlLoader
 import xyz.block.trailblaze.config.ToolYamlConfig
 import xyz.block.trailblaze.config.ToolYamlLoader
-import xyz.block.trailblaze.config.project.TargetEntry
 import xyz.block.trailblaze.config.project.ToolEntry
 import xyz.block.trailblaze.config.project.ToolsetEntry
 import xyz.block.trailblaze.config.project.TrailblazeProjectConfig
+import xyz.block.trailblaze.config.project.TrailblazeResolvedConfig
 import xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver
 import xyz.block.trailblaze.config.project.ResolvedTrailblazeWorkspaceConfig
 import xyz.block.trailblaze.llm.config.ClasspathConfigResourceSource
@@ -71,7 +71,8 @@ object AppTargetDiscovery {
     return try {
       val workspaceConfig = workspaceConfigProvider()
       val source = buildResourceSource(workspaceConfig.configDir, logPrefix)
-      val projectConfig = loadProjectConfigLeniently(workspaceConfig, logPrefix)
+      val resolvedConfig = loadResolvedConfigLeniently(workspaceConfig, logPrefix)
+      val projectConfig = resolvedConfig?.projectConfig
       val customToolClasses = loadCustomToolClasses(
         resourceSource = source,
         projectConfig = projectConfig,
@@ -96,8 +97,11 @@ object AppTargetDiscovery {
         companions = companions,
         resourceSource = source,
       )
-      val projectTargets = projectConfig
-        ?.let(::projectTargetConfigs)
+      // Workspace-resolved targets come from the pack pool — a list of fully-resolved
+      // [AppTargetYamlConfig] sitting on TrailblazeResolvedConfig.targets, not on the
+      // schema's `targets:` field (which is now just a list of ids).
+      val projectTargets = resolvedConfig
+        ?.targets
         ?.let {
           AppTargetYamlLoader.loadAllFromConfigs(
             configs = it,
@@ -119,12 +123,12 @@ object AppTargetDiscovery {
     }
   }
 
-  private fun loadProjectConfigLeniently(
+  private fun loadResolvedConfigLeniently(
     workspaceConfig: ResolvedTrailblazeWorkspaceConfig,
     logPrefix: String,
-  ): TrailblazeProjectConfig? {
+  ): TrailblazeResolvedConfig? {
     return try {
-      workspaceConfig.loadProjectConfig()
+      workspaceConfig.loadResolvedRuntime()
     } catch (e: Exception) {
       Console.log(
         "$logPrefix Ignoring workspace trailblaze.yaml due to load failure: " +
@@ -182,14 +186,6 @@ object AppTargetDiscovery {
     }
     return discovered + ToolYamlLoader.loadFromConfigs(projectTools)
   }
-
-  private fun projectTargetConfigs(projectConfig: TrailblazeProjectConfig): List<AppTargetYamlConfig> =
-    projectConfig.targets.map { entry ->
-      when (entry) {
-        is TargetEntry.Inline -> entry.config
-        else -> error("Expected resolved target entries from trailblaze.yaml discovery")
-      }
-    }
 
   private fun projectToolSetConfigs(projectConfig: TrailblazeProjectConfig): List<ToolSetYamlConfig> =
     projectConfig.toolsets.map { entry ->

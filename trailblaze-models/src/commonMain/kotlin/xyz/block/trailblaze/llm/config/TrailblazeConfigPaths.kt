@@ -73,4 +73,23 @@ object TrailblazeConfigPaths {
 
   /** Subpath under [WORKSPACE_CONFIG_DIR] that holds materialized target YAMLs. */
   const val WORKSPACE_DIST_TARGETS_SUBPATH = "$WORKSPACE_DIST_SUBDIR/targets"
+
+  /**
+   * Single source of truth for which pack subdirectory owns each operational tool YAML
+   * suffix. Each suffix lives under exactly one top-level pack dir; subdirectories below
+   * that are organizational only and walked recursively at any depth.
+   *
+   * Both the classpath-bundled discovery path (`ToolYamlLoader.discoverPackBundledToolContents`
+   * in `trailblaze-models`) and the workspace filesystem-pack discovery path
+   * (`TrailblazeProjectConfigLoader.resolvePackSiblings` in `trailblaze-common`) read this
+   * list. Adding a fourth operational class is a single edit here — both loaders pick it up.
+   */
+  val PACK_TOOL_LAYOUT: List<PackToolLayoutEntry> = listOf(
+    PackToolLayoutEntry(dir = "tools", suffix = ".tool.yaml"),
+    PackToolLayoutEntry(dir = "shortcuts", suffix = ".shortcut.yaml"),
+    PackToolLayoutEntry(dir = "trailheads", suffix = ".trailhead.yaml"),
+  )
+
+  /** A (dir, suffix) pair from [PACK_TOOL_LAYOUT]. */
+  data class PackToolLayoutEntry(val dir: String, val suffix: String)
 }

@@ -16,10 +16,20 @@ import xyz.block.trailblaze.util.Console
 
 /**
  * Request to run a CLI subcommand in-process on the daemon.
- * [args] is the tokenized argv the CLI would have passed to picocli.
+ *
+ * @property args the tokenized argv the CLI would have passed to picocli.
+ * @property cwd the caller's interactive cwd (typically `$PWD` from the bash shim),
+ *   plumbed through so commands that walk relative paths (`waypoint --target` resolving
+ *   the workspace anchor at `<cwd>/trails/config/trailblaze.yaml`) anchor at the user's
+ *   shell directory rather than the daemon's launch cwd. Optional for backward
+ *   compatibility with shims that predate this field; when absent, the daemon falls
+ *   back to `Paths.get("")` which is its own cwd. See [xyz.block.trailblaze.cli.CliCallerContext].
  */
 @Serializable
-data class CliExecRequest(val args: List<String>)
+data class CliExecRequest(
+  val args: List<String>,
+  val cwd: String? = null,
+)
 
 /**
  * Result of an in-process CLI execution. The shim in `./trailblaze` prints

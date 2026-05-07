@@ -232,10 +232,23 @@ open class AndroidTrailblazeRule(
     customToolClasses?.toTrailblazeToolRepo() ?: TrailblazeToolRepo.withDynamicToolSets()
 
   private val screenStateProvider: () -> ScreenState = screenStateProviderOverride ?: {
-    AndroidOnDeviceUiAutomatorScreenState(
+    val base = AndroidOnDeviceUiAutomatorScreenState(
       includeScreenshot = true,
       deviceClassifiers = trailblazeLoggingRule.trailblazeDeviceInfoProvider().classifiers,
     )
+    // Migration-mode side-channel. When `trailblaze.captureSecondaryTree=true`, capture an
+    // accessibility-shape tree alongside the Maestro-derived primary state and ride it on
+    // the [MigrationScreenState] decorator so the snapshot logger can persist it without
+    // any change to ScreenState consumers. Off-mode returns the plain primary state.
+    if (xyz.block.trailblaze.android.InstrumentationArgUtil.shouldCaptureSecondaryTree()) {
+      xyz.block.trailblaze.api.MigrationScreenState.wrap(
+        primary = base,
+        driverMigrationTreeNode =
+          xyz.block.trailblaze.android.accessibility.MigrationTreeCapture.captureOrNull(),
+      )
+    } else {
+      base
+    }
   }
 
   init {
@@ -266,13 +279,24 @@ open class AndroidTrailblazeRule(
    * reconnections (which destroy a running accessibility service). The parent
    * [TrailblazeAndroidLoggingRule] does its UiDevice work in its own `beforeTestExecution`,
    * so calling super first and then enabling the service here is the correct order. Same
-   * pattern as [BlockAndroidTrailblazeRule.beforeTestExecution].
+   * pattern as a downstream `AndroidTrailblazeRule` subclass's `beforeTestExecution`.
    */
   override fun beforeTestExecution(description: Description) {
     super.beforeTestExecution(description)
-    if (trailblazeLoggingRule.driverTypeOverride == TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY) {
+    val isAccessibilityDriver =
+      trailblazeLoggingRule.driverTypeOverride == TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY
+    // Bind for the accessibility-driver case (existing behavior — required for taps/swipes).
+    if (isAccessibilityDriver) {
       OnDeviceAccessibilityServiceSetup.ensureAccessibilityServiceReady()
     }
+    // Bind for migration-mode capture (delegated to the shared helper). Subclasses that
+    // insert their own UiDevice operations between this call and the test body
+    // (e.g. a downstream subclass's `onBeforeTest`) MUST call the helper again *after*
+    // those operations — UiAutomation reconnections destroy a running accessibility
+    // service, so an early bind here can be silently torn down by the time
+    // [MigrationTreeCapture] queries the service. Direct subclasses without intervening
+    // UiDevice work are safe with just this call.
+    xyz.block.trailblaze.android.accessibility.MigrationCaptureSetup.ensureAccessibilityBoundIfMigrationModeOn()
   }
 
   private val trailblazeYaml = createTrailblazeYaml(
@@ -390,12 +414,51 @@ open class AndroidTrailblazeRule(
   }
 
   val trailblazeRunnerUtil by lazy {
+    // Per-tool screen-state capture for the deterministic Maestro→accessibility selector
+    // migration. Off by default — wired only when both the dual-tree flag is set AND we're
+    // running the accessibility driver (the only driver that produces the trailblazeNodeTree
+    // the migration's hit-test needs). When wired, the hook fires immediately before each
+    // recorded tool runs and writes a TrailblazeSnapshotLog with both view-hierarchy trees,
+    // so `migrate-trail` has a per-tool pre-fire snapshot to resolve against — closing the
+    // gap where multi-tool recordings only get one captured screen state per LLM round.
+    val migrationCaptureEnabled =
+      InstrumentationArgUtil.shouldCaptureSecondaryTree() &&
+        trailblazeLoggingRule.driverTypeOverride == TrailblazeDriverType.ANDROID_ONDEVICE_ACCESSIBILITY
+
+    val onBeforeRecordedTool: (suspend (xyz.block.trailblaze.toolcalls.TrailblazeTool) -> Unit)? =
+      if (migrationCaptureEnabled) {
+        { tool: xyz.block.trailblaze.toolcalls.TrailblazeTool ->
+          // Only fire the capture for the tools the migration actually rewrites. The
+          // recording playback fires many non-selector tools (launchApp, custom flow tools)
+          // for which a pre-fire snapshot would be wasted I/O + log size. Keep the filter
+          // in lockstep with classNameFromYamlToolName in WaypointMigrateTrailCommand.
+          val isMigrationTarget = tool is xyz.block.trailblaze.toolcalls.commands.TapOnByElementSelector ||
+            tool is xyz.block.trailblaze.toolcalls.commands.AssertVisibleBySelectorTrailblazeTool
+          if (isMigrationTarget) {
+            val accessibilityAgent = trailblazeAgent as? AccessibilityTrailblazeAgent
+            val session = trailblazeLoggingRule.session
+            if (accessibilityAgent != null && session != null) {
+              // getScreenState() honors the captureSecondaryTree flag we plumbed through
+              // AccessibilityServiceScreenState in Phase 2 — both viewHierarchy (UiAutomator
+              // dump) and trailblazeNodeTree (accessibility tree) are populated.
+              val screen = accessibilityAgent.getScreenState()
+              trailblazeLoggingRule.logger.logSnapshot(
+                session = session,
+                screenState = screen,
+                displayName = "preTool: ${tool::class.simpleName ?: "unknown"}",
+              )
+            }
+          }
+        }
+      } else null
+
     TrailblazeRunnerUtil(
       trailblazeRunner = trailblazeRunner,
       runTrailblazeTool = ::runTrailblazeTool,
       trailblazeLogger = trailblazeLoggingRule.logger,
       sessionProvider = { trailblazeLoggingRule.session ?: error("Session not available - ensure test is running") },
       sessionUpdater = { trailblazeLoggingRule.setSession(it) },
+      onBeforeRecordedTool = onBeforeRecordedTool,
     )
   }
 

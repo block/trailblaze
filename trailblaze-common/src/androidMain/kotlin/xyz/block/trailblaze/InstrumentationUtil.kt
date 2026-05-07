@@ -62,12 +62,17 @@ object InstrumentationUtil {
   }
 
   /**
-   * Shared one-shot recovery path for callers that hit `IllegalStateException("UiAutomation not
-   * connected")`. The cached [UiAutomation] on [Instrumentation] is keyed by flags; it can land
-   * in a "constructed-but-never-connected" state (id=-1) when a previous instrumentation cycle
-   * was torn down mid-action — a cancelled YAML run typically reproduces this. The cache survives
+   * Shared one-shot recovery path for callers that hit any platform-level
+   * `IllegalStateException` indicating the cached [UiAutomation] handle on [Instrumentation] is
+   * in a non-functional transitional state. The cache is keyed by flags; it can land in a
+   * "constructed-but-never-connected" state (id=-1) when a previous instrumentation cycle was
+   * torn down mid-action — a cancelled YAML run typically reproduces this. The cache survives
    * across requests on the same long-running on-device server, so the next request re-uses the
-   * stale handle and explodes inside `UiDevice.waitForIdle` / `dumpWindowHierarchy`.
+   * stale handle and explodes — either inside `UiDevice.waitForIdle` / `dumpWindowHierarchy`
+   * ("UiAutomation not connected") or inside the platform's own teardown when [getUiAutomation]
+   * tries to disconnect the half-connected handle to swap flags ("Cannot call disconnect() while
+   * connecting", "Already connected"). All three are the same root cause; the recovery path is
+   * the same.
    *
    * Recovery: on the first hit we clear the cached handle via reflection on [Instrumentation]'s
    * private `mUiAutomation` field, force a fresh `getUiAutomation()` (which constructs a new
@@ -84,7 +89,11 @@ object InstrumentationUtil {
       work()
     } catch (e: IllegalStateException) {
       val msg = e.message.orEmpty()
-      if (!msg.contains("UiAutomation not connected")) throw e
+      val isStaleHandleSignature =
+        msg.contains("UiAutomation not connected") ||
+          msg.contains("Cannot call disconnect()") ||
+          msg.contains("Already connected")
+      if (!isStaleHandleSignature) throw e
       Console.log(
         "[InstrumentationUtil] UiAutomation handle was stale (likely from a cancelled prior " +
           "session); attempting recovery. Original: $msg"

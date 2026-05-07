@@ -124,6 +124,16 @@ abstract class TrailblazeDesktopAppConfig(
 
   abstract fun getCurrentlyAvailableLlmModelLists(): Set<TrailblazeLlmModelList>
 
+  /**
+   * Filesystem path where logs are stored. Side-effect-free path-only accessor —
+   * implemented as a separate field from [logsRepo] so callers that just need the
+   * directory (e.g. the `waypoint capture-example` CLI auto-search) can read it
+   * without triggering construction of the full [LogsRepo] (which spawns
+   * non-daemon file-watcher threads). Subclasses must declare this independently
+   * of `logsRepo` and pass it into the LogsRepo constructor.
+   */
+  abstract val logsDir: java.io.File
+
   /** That's where logs are stored and managed. */
   abstract val logsRepo: LogsRepo
 
@@ -379,6 +389,37 @@ abstract class TrailblazeDesktopAppConfig(
           deviceManager = deviceManager,
           currentTrailblazeLlmModelProvider = { getCurrentLlmModel() },
           llmTokenProvider = llmTokenProvider,
+          // Save Trail writes to `<trailsDir>/_recorded/recording-<timestamp>.trail.yaml`.
+          // Path is derived from the active trails directory (same one the Trails tab
+          // browses) so the saved file shows up there immediately. Until we add a
+          // proper save-as dialog this is the right default — it gets the YAML on
+          // disk where the user can find it, rename it, move it into the per-target
+          // tree, etc. Returns the absolute path so the calling composable can show
+          // a confirmation with the actual location.
+          onSaveTrail = { yaml ->
+            val trailsDir = java.io.File(
+              TrailblazeDesktopUtil.getEffectiveTrailsDirectory(
+                trailblazeSettingsRepo.serverStateFlow.value.appConfig,
+              ),
+            )
+            val timestamp = kotlinx.datetime.Clock.System.now()
+              .toString()
+              .replace(":", "-")
+              .replace(".", "-")
+            val outFile = java.io.File(
+              java.io.File(trailsDir, "_recorded"),
+              "recording-$timestamp.trail.yaml",
+            )
+            try {
+              outFile.parentFile?.mkdirs()
+              outFile.writeText(yaml)
+              xyz.block.trailblaze.util.Console.log("Recording saved to: ${outFile.absolutePath}")
+              outFile.absolutePath
+            } catch (e: Exception) {
+              xyz.block.trailblaze.util.Console.log("Save Trail failed: ${e.message ?: e::class.simpleName}")
+              null
+            }
+          },
         )
       )
       add(

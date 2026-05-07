@@ -65,6 +65,7 @@ data class TapOnByElementSelector(
       TapOnElementCommand(
         selector = maestroSelector.toMaestroElementSelector(),
         longPress = longPress,
+        optional = maestroSelector.optional,
       ),
     )
   }

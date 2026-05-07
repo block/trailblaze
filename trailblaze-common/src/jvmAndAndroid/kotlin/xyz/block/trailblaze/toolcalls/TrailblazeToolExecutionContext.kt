@@ -104,6 +104,31 @@ class TrailblazeToolExecutionContext(
    * won't catch a missed wiring because the default is silent.
    */
   val captureNetworkTraffic: Boolean = false,
+  /**
+   * The session's active app target paired with its device — closes the deferred wiring
+   * note from `ResolvedTarget`'s kdoc (#2699). Null when the session has no target (web
+   * sessions, scratch tools, unit-test fixtures). Pre-computed by host runners at session
+   * start so per-tool-call envelope-building doesn't re-resolve on every dispatch.
+   *
+   * Consumers (notably `QuickJsTrailblazeTool.buildCtxEnvelope`) read both this and
+   * [resolvedAppId] to surface `ctx.target.{id, appIds, resolvedAppId}` to scripted tools.
+   * The two fields are intentionally separate: [resolvedTarget] holds the raw declared
+   * candidates (`appIds` getter returns the unfiltered list), while [resolvedAppId] holds
+   * the device-resolved one. Both can be informative.
+   */
+  val resolvedTarget: xyz.block.trailblaze.model.ResolvedTarget? = null,
+  /**
+   * The actually-installed app id picked from [resolvedTarget]'s declared candidates by
+   * intersecting against the device's installed-apps list. Null if [resolvedTarget] is
+   * null OR if none of the target's declared candidates are installed on the device — in
+   * the latter case scripted tools should fall back to `ctx.target.appIds[0]` (the first
+   * declared) and let the launch fail downstream with a clear "app not installed" error.
+   *
+   * Pre-computed by host runners at session start (one ADB / `simctl listapps` roundtrip
+   * per session, not per tool) via `MobileDeviceUtils.findInstalledAppIdForTarget` or its
+   * non-throwing equivalent. Tests leave this null.
+   */
+  val resolvedAppId: String? = null,
 ) {
   /**
    * Set by a tool during [ExecutableTrailblazeTool.execute] to replace the invoked tool

@@ -7,7 +7,6 @@ import xyz.block.trailblaze.config.ToolSetYamlConfig
 import xyz.block.trailblaze.config.ToolYamlConfig
 import xyz.block.trailblaze.config.TrailblazeConfigYaml
 import xyz.block.trailblaze.config.project.LoadedTrailblazeProjectConfig
-import xyz.block.trailblaze.config.project.TargetEntry
 import xyz.block.trailblaze.config.project.ToolEntry
 import xyz.block.trailblaze.config.project.ToolsetEntry
 import xyz.block.trailblaze.config.project.TrailblazePackManifestLoader
@@ -62,11 +61,19 @@ object TrailblazeCompiler {
    * populated and no files are emitted; pre-existing output files in
    * [CompileResult.outputDir] are left untouched on failure so a botched
    * compile never destroys the previous good output.
+   *
+   * [resolvedTargets] carries the typed in-memory shape of every target the
+   * compiler emitted to disk in this run. Empty on failure (errors populated)
+   * and on no-op runs (no app packs found). Exposed primarily for downstream
+   * codegen callers (notably `WorkspaceClientDtsGenerator`) so they can feed
+   * each target's resolved tool closure into the typed-bindings emitter
+   * without round-tripping through the on-disk YAML files.
    */
   data class CompileResult(
     val emittedTargets: List<File>,
     val deletedOrphans: List<File>,
     val errors: List<String>,
+    val resolvedTargets: List<AppTargetYamlConfig> = emptyList(),
   ) {
     val isSuccess: Boolean get() = errors.isEmpty()
   }
@@ -128,29 +135,17 @@ object TrailblazeCompiler {
             "check permissions / I/O.",
         ),
       )
-    val packRefs = packsListing
+    val packDirs = packsListing
       .filter { File(it, "pack.yaml").isFile }
-      .map { "packs/${it.name}/pack.yaml" }
-      .sorted()
+      .sortedBy { it.name }
 
-    if (packRefs.isEmpty()) {
+    if (packDirs.isEmpty()) {
       return CompileResult(
         emittedTargets = emptyList(),
         deletedOrphans = emptyList(),
         errors = emptyList(),
       )
     }
-
-    // Build a synthetic workspace config: list every discovered pack as a `packs:` ref.
-    // The anchor file's parent is the directory that those refs are resolved against,
-    // so it must equal `packsDir.parentFile` for `packs/<id>/pack.yaml` to land at the
-    // actual on-disk path.
-    val anchorParent = packsDir.parentFile
-      ?: error("packsDir has no parent: ${packsDir.absolutePath}")
-    val loaded = LoadedTrailblazeProjectConfig(
-      raw = TrailblazeProjectConfig(packs = packRefs),
-      sourceFile = File(anchorParent, ANCHOR_FILE_NAME),
-    )
 
     // Pre-pass: parse each pack manifest directly so we can identify app packs (those
     // with a `target:` block) by their structured shape, not by a fragile text scan
@@ -159,13 +154,13 @@ object TrailblazeCompiler {
     // schema additions where `target:` appears at non-root depth.
     val expectedAppPackIds = mutableSetOf<String>()
     val parseErrors = mutableListOf<String>()
-    for (ref in packRefs) {
-      val packFile = File(anchorParent, ref)
+    for (packDir in packDirs) {
+      val packFile = File(packDir, "pack.yaml")
       try {
         val manifest = TrailblazePackManifestLoader.load(packFile).manifest
         if (manifest.target != null) expectedAppPackIds += manifest.id
       } catch (e: TrailblazeProjectConfigException) {
-        parseErrors += "pack '$ref' failed to parse: ${e.message ?: e.javaClass.simpleName}"
+        parseErrors += "pack '${packDir.name}' failed to parse: ${e.message ?: e.javaClass.simpleName}"
       }
     }
     if (parseErrors.isNotEmpty()) {
@@ -175,6 +170,19 @@ object TrailblazeCompiler {
         errors = parseErrors,
       )
     }
+
+    // Build a synthetic workspace config that names every app-pack id as a target. The
+    // loader resolves each id via the `<anchor>/packs/<id>/pack.yaml` convention, so
+    // `anchor` must equal `packsDir.parentFile` for those resolutions to land at the
+    // actual on-disk paths. Library packs without a `target:` block reach scope only
+    // through transitive `dependencies:` from one of these app packs; that's how a
+    // workspace's library content surfaces in the compiled output.
+    val anchorParent = packsDir.parentFile
+      ?: error("packsDir has no parent: ${packsDir.absolutePath}")
+    val loaded = LoadedTrailblazeProjectConfig(
+      raw = TrailblazeProjectConfig(targets = expectedAppPackIds.sorted()),
+      sourceFile = File(anchorParent, ANCHOR_FILE_NAME),
+    )
 
     // Include the JAR's classpath-bundled framework `trailblaze` stdlib pack so workspace
     // packs that declare `dependencies: [trailblaze]` resolve at compile time the same way
@@ -198,9 +206,7 @@ object TrailblazeCompiler {
     // discovery, wrong for a compile step. Detect the gap by diffing expected app
     // pack ids against what the resolver actually emitted; any pack in the gap failed
     // dependency resolution and the user gets named guidance.
-    val resolvedTargetIds = resolved.projectConfig.targets
-      .map { (it as TargetEntry.Inline).config.id }
-      .toSet()
+    val resolvedTargetIds = resolved.projectConfig.targets.toSet()
     val missingAppPacks = (expectedAppPackIds - resolvedTargetIds).toSortedSet()
     if (missingAppPacks.isNotEmpty()) {
       return CompileResult(
@@ -234,8 +240,7 @@ object TrailblazeCompiler {
     val yaml = TrailblazeConfigYaml.instance
     val emitted = mutableListOf<File>()
     val emittedNames = mutableSetOf<String>()
-    for (entry in resolved.projectConfig.targets) {
-      val target = (entry as TargetEntry.Inline).config
+    for (target in resolved.targets) {
       val outFile = File(outputDir, "${target.id}.yaml")
       val rendered = buildString {
         appendLine(GENERATED_BANNER)
@@ -256,6 +261,7 @@ object TrailblazeCompiler {
       emittedTargets = emitted.sortedBy { it.name },
       deletedOrphans = deletedOrphans.sortedBy { it.name },
       errors = emptyList(),
+      resolvedTargets = resolved.targets.sortedBy { it.id },
     )
   }
 
@@ -307,8 +313,7 @@ object TrailblazeCompiler {
     val driverPool: Set<String> = DriverTypeKey.knownKeys
 
     val errors = mutableListOf<String>()
-    for (entry in resolved.projectConfig.targets) {
-      val target = (entry as TargetEntry.Inline).config
+    for (target in resolved.targets) {
       target.platforms?.forEach { (platform, platformConfig) ->
         if (toolsetPool != null) {
           platformConfig.toolSets?.forEach { name ->

@@ -83,7 +83,7 @@ enum class TrailblazeDriverType(
   ;
 
   companion object {
-    val DEFAULT_ANDROID = ANDROID_ONDEVICE_INSTRUMENTATION
+    val DEFAULT_ANDROID = ANDROID_ONDEVICE_ACCESSIBILITY
     val DEFAULT_IOS = IOS_HOST
     val DEFAULT_DESKTOP = COMPOSE
 
@@ -111,14 +111,7 @@ enum class TrailblazeDriverType(
     fun selectableForPlatform(platform: TrailblazeDevicePlatform): List<TrailblazeDriverType> =
       entries.filter { it.platform == platform && it.cliShortName != null }
 
-    /** Legacy aliases for removed driver types. */
-    private val LEGACY_ALIASES = mapOf(
-      "ANDROID_HOST" to ANDROID_ONDEVICE_INSTRUMENTATION,
-      "HOST" to ANDROID_ONDEVICE_INSTRUMENTATION,
-    )
-
     fun fromString(value: String): TrailblazeDriverType? =
       entries.find { it.name.equals(value, ignoreCase = true) }
-        ?: LEGACY_ALIASES.entries.firstOrNull { it.key.equals(value, ignoreCase = true) }?.value
   }
 }

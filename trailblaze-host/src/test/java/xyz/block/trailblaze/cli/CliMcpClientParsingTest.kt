@@ -21,7 +21,7 @@ class CliMcpClientParsingTest {
     assertEquals("emulator-5554", entries[0].instanceId)
     assertEquals(TrailblazeDevicePlatform.ANDROID, entries[0].platform)
     assertEquals("Google Pixel 6", entries[0].description)
-    assertEquals("android/emulator-5554", entries[0].spec)
+    assertEquals("android/emulator-5554", entries[0].toFullyQualifiedDeviceId())
   }
 
   @Test
@@ -44,7 +44,7 @@ class CliMcpClientParsingTest {
     assertEquals(1, entries.size)
     assertEquals("1A2B3C4D-5E6F", entries[0].instanceId)
     assertEquals(TrailblazeDevicePlatform.IOS, entries[0].platform)
-    assertEquals("ios/1A2B3C4D-5E6F", entries[0].spec)
+    assertEquals("ios/1A2B3C4D-5E6F", entries[0].toFullyQualifiedDeviceId())
   }
 
   @Test
@@ -212,18 +212,18 @@ class CliMcpClientParsingTest {
   }
 
   // ---------------------------------------------------------------------------
-  // DeviceListEntry.spec
+  // DeviceListEntry.toFullyQualifiedDeviceId()
   // ---------------------------------------------------------------------------
 
   @Test
-  fun `DeviceListEntry spec formats correctly`() {
+  fun `DeviceListEntry toFullyQualifiedDeviceId formats correctly`() {
     val entry = CliMcpClient.DeviceListEntry("emulator-5554", TrailblazeDevicePlatform.ANDROID)
-    assertEquals("android/emulator-5554", entry.spec)
+    assertEquals("android/emulator-5554", entry.toFullyQualifiedDeviceId())
 
     val iosEntry = CliMcpClient.DeviceListEntry("ABC-123", TrailblazeDevicePlatform.IOS)
-    assertEquals("ios/ABC-123", iosEntry.spec)
+    assertEquals("ios/ABC-123", iosEntry.toFullyQualifiedDeviceId())
 
     val webEntry = CliMcpClient.DeviceListEntry("localhost:3000", TrailblazeDevicePlatform.WEB)
-    assertEquals("web/localhost:3000", webEntry.spec)
+    assertEquals("web/localhost:3000", webEntry.toFullyQualifiedDeviceId())
   }
 }

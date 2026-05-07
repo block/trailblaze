@@ -9,13 +9,9 @@ or a CSS selector prefixed with 'css=' (e.g., 'css=#my-button', 'css=[data-testi
 `xyz.block.trailblaze.playwright.tools.PlaywrightNativeClickTool`
 
 ### Registered `PlaywrightNativeClickTool` in `ToolRegistry`
-### Required Parameters
+### Optional Parameters
 - `ref`: `String`
   Element ID (e.g., 'e5'), ARIA descriptor (e.g., 'button "Submit"'), or CSS selector with css= prefix (e.g., 'css=#my-id', 'css=[data-testid="btn"]').
-
-### Optional Parameters
-- `element`: `String`
-  Human-readable description of the element being clicked, for logging.
 - `reasoning`: `String`
 
 

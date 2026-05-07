@@ -66,8 +66,35 @@ object MaestroUiAutomatorRunner {
   ): TrailblazeToolResult {
     val traceId = traceId ?: TraceId.generate(TraceId.Companion.TraceOrigin.MAESTRO)
 
+    // Same migration-mode wrap as [AndroidTrailblazeRule.screenStateProvider]: when
+    // `trailblaze.captureSecondaryTree=true` is set, ride the side-channel accessibility
+    // tree on a [MigrationScreenState] decorator so the on-device LoggingDriver's
+    // [TrailblazeLog.AgentDriverLog] emit site can pull `driverMigrationTreeNode` off
+    // and persist it. Without this wrap, AgentDriverLogs from the Maestro driver path
+    // miss the migration tree and `migrate-trail`'s cursor-scan fallback degrades to
+    // index/non-accessibility selectors.
+    // Same migration-mode wrap as [AndroidTrailblazeRule.screenStateProvider]: when
+    // `trailblaze.captureSecondaryTree=true` is set, ride the side-channel accessibility
+    // tree on a [MigrationScreenState] decorator so the on-device LoggingDriver's
+    // [TrailblazeLog.AgentDriverLog] emit site can pull `driverMigrationTreeNode` off
+    // and persist it. Without this wrap, AgentDriverLogs from the Maestro driver path
+    // miss the migration tree and `migrate-trail`'s cursor-scan fallback degrades to
+    // index/non-accessibility selectors.
+    //
+    // Primary screenshot is preserved either way (active driver's screenshot is the
+    // session-replay debug context); the migration tree is a tree-only side-channel
+    // with no screenshot of its own.
     val screenStateProvider = {
-      AndroidOnDeviceUiAutomatorScreenState()
+      val base = AndroidOnDeviceUiAutomatorScreenState()
+      if (xyz.block.trailblaze.android.InstrumentationArgUtil.shouldCaptureSecondaryTree()) {
+        xyz.block.trailblaze.api.MigrationScreenState.wrap(
+          primary = base,
+          driverMigrationTreeNode =
+            xyz.block.trailblaze.android.accessibility.MigrationTreeCapture.captureOrNull(),
+        )
+      } else {
+        base
+      }
     }
 
     val maestro = Maestro(

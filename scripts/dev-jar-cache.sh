@@ -23,18 +23,24 @@ dev_source_hash() {
   {
     git rev-parse HEAD
     # Content diff of tracked files (catches edits to already-dirty files).
-    # The `:!trails/**/...` pathspecs exclude trail recordings — they're test
-    # artifacts, not source. Mirrors the untracked-files filter below: drop
-    # `*.trail.yaml`, `blaze.yaml`, and `*.blaze.yaml` (which is what
-    # `./trailblaze trail` writes alongside the original blaze.yaml entrypoint).
+    # The `:!...` pathspecs exclude artifacts that the runtime overwrites —
+    # trail recordings (`trails/**/*.trail.yaml`, `trails/**/blaze.yaml`,
+    # `trails/**/*.blaze.yaml`) and waypoint example pairs (`*.example.json`)
+    # are test artifacts / captured screen-state snapshots, not source.
+    # Without the `*.example.json` exclusion here, every `capture-example`
+    # run that overwrites a tracked snapshot would change the source hash
+    # and force a daemon rebuild on the next CLI invocation, even though
+    # nothing about the binary changed.
     git diff HEAD -- '*.kt' '*.java' '*.kts' '*.properties' '*.toml' '*.xml' '*.json' '*.yaml' '*.yml' '*.pro' '*.sql' \
-      ':!trails/**/*.trail.yaml' ':!trails/**/blaze.yaml' ':!trails/**/*.blaze.yaml' 2>/dev/null
+      ':!trails/**/*.trail.yaml' ':!trails/**/blaze.yaml' ':!trails/**/*.blaze.yaml' \
+      ':!*.example.json' 2>/dev/null
     # Untracked files: list names + sizes so new files are detected.
-    # Skip trail recordings (`trails/**/*.trail.yaml`, `trails/**/blaze.yaml`,
-    # `trails/**/*.blaze.yaml`) for the same reason as the diff filter above.
+    # Same exclusions as the diff filter above so the tracked / untracked
+    # paths give matching results.
     git ls-files --others --exclude-standard \
       | grep -E '\.(kt|java|kts|properties|toml|xml|html|json|yaml|yml|pro|sql)$' \
       | grep -vE '^trails/.*(\.trail\.yaml|/blaze\.yaml|\.blaze\.yaml)$' \
+      | grep -vE '\.example\.json$' \
       | while read -r f; do stat -f '%N %z' "$f" 2>/dev/null || stat --format='%n %s' "$f" 2>/dev/null; done
   } | if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi | cut -d' ' -f1
 }

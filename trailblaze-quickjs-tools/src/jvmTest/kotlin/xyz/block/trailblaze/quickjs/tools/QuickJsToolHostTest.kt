@@ -13,6 +13,8 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
@@ -102,6 +104,38 @@ class QuickJsToolHostTest {
     assertTrue("expected error to mention the missing tool name; got: ${err.message}") {
       err.message.orEmpty().contains("nope")
     }
+    // Empty registry hint: the author's bundle registered nothing, so the dispatch failure
+    // should call out the synthesized-wrapper / `name:` mismatch as the likely cause rather
+    // than letting the author chase a typo in the lookup.
+    assertTrue("expected empty-registry hint; got: ${err.message}") {
+      err.message.orEmpty().contains("no tools are registered on this host")
+    }
+  }
+
+  @Test
+  fun `callTool error lists the registered tool names when the lookup misses but the registry is non-empty`() = runBlocking {
+    // When the registry has tools but not the requested one, the author almost always has a
+    // typo (mismatched `name:` field vs. bundle export). Listing what's there points the fix
+    // at the right place.
+    val host = connect(
+      """
+      globalThis.__trailblazeTools = {
+        alpha: { handler: async () => ({ ok: true }) },
+        beta:  { handler: async () => ({ ok: true }) },
+      };
+      """.trimIndent(),
+    )
+    val err = runCatching {
+      host.callTool("aplha", JsonObject(emptyMap()))
+    }.exceptionOrNull()
+    assertNotNull(err, "expected callTool to throw")
+    val msg = err.message.orEmpty()
+    assertTrue("expected error to name the missing tool; got: $msg") {
+      msg.contains("aplha")
+    }
+    assertTrue("expected error to enumerate registered tools; got: $msg") {
+      msg.contains("alpha") && msg.contains("beta") && msg.contains("registered tools")
+    }
   }
 
   @Test
@@ -158,6 +192,158 @@ class QuickJsToolHostTest {
     val text = (result["content"] as JsonArray).first().jsonObject["text"] as JsonPrimitive
     assertEquals("session-abc", text.content)
   }
+
+  // ---- ctx.target.resolveAppId / resolveBaseUrl method injection ----
+  //
+  // Methods can't survive JSON round-trips (host → QuickJS engine), so the
+  // dispatch script in QuickJsToolHost attaches them to ctx.target after
+  // deserialization. These tests pin every branch of the resolution priority
+  // (resolvedAppId → appIds[0] → defaultAppId → undefined) for both methods,
+  // plus the no-target case.
+
+  @Test
+  fun `ctx target resolveAppId returns resolvedAppId when framework resolved one`() = runBlocking {
+    val host = connectGetAppIdHost("appId")
+    val ctx = buildJsonObject {
+      put("target", buildJsonObject {
+        put("resolvedAppId", "com.framework.resolved")
+        put("appIds", buildJsonArray { add("com.first.declared"); add("com.second.declared") })
+      })
+    }
+    val result = host.callTool("getAppId", buildJsonObject { put("defaultAppId", "com.caller.default") }, ctx = ctx)
+    assertEquals("com.framework.resolved", textContent(result))
+  }
+
+  @Test
+  fun `ctx target resolveAppId falls back to appIds zero when framework didn't resolve`() = runBlocking {
+    val host = connectGetAppIdHost("appId")
+    val ctx = buildJsonObject {
+      put("target", buildJsonObject {
+        put("appIds", buildJsonArray { add("com.first.declared"); add("com.second.declared") })
+      })
+    }
+    val result = host.callTool("getAppId", buildJsonObject { put("defaultAppId", "com.caller.default") }, ctx = ctx)
+    assertEquals("com.first.declared", textContent(result))
+  }
+
+  @Test
+  fun `ctx target resolveAppId falls back to caller default when target has no candidates`() = runBlocking {
+    val host = connectGetAppIdHost("appId")
+    val ctx = buildJsonObject { put("target", buildJsonObject { put("appIds", buildJsonArray { }) }) }
+    val result = host.callTool("getAppId", buildJsonObject { put("defaultAppId", "com.caller.default") }, ctx = ctx)
+    assertEquals("com.caller.default", textContent(result))
+  }
+
+  @Test
+  fun `ctx target resolveAppId returns undefined when nothing is reachable and no default given`() = runBlocking {
+    // Author calls `ctx.target.resolveAppId()` with no options. Target has empty appIds
+    // and no resolvedAppId. Method must return undefined (not throw) — author handles
+    // the missing case in their tool body.
+    val host = connectGetAppIdHost("missing")
+    val ctx = buildJsonObject { put("target", buildJsonObject { put("appIds", buildJsonArray { }) }) }
+    val result = host.callTool("getAppId", JsonObject(emptyMap()), ctx = ctx)
+    assertEquals("missing", textContent(result))
+  }
+
+  @Test
+  fun `ctx target resolveBaseUrl returns caller default today (forward-compat for future base_urls field)`() = runBlocking {
+    // Until target.platforms.web.base_urls: lands in the manifest, the ctx.target
+    // doesn't carry resolvedBaseUrl or baseUrls fields. The method should still work
+    // and fall through to the caller default — that's the forward-compat contract:
+    // when the framework starts emitting baseUrls data, this method automatically
+    // picks it up without any author change.
+    val host = connect(
+      """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools["getBaseUrl"] = {
+        name: "getBaseUrl",
+        spec: {},
+        handler: async (args, ctx) => {
+          const url = ctx?.target?.resolveBaseUrl({ defaultBaseUrl: args.defaultBaseUrl });
+          return { content: [{ type: "text", text: url || "missing" }] };
+        },
+      };
+      """.trimIndent(),
+    )
+    val ctx = buildJsonObject { put("target", buildJsonObject { }) }
+    val result = host.callTool(
+      "getBaseUrl",
+      buildJsonObject { put("defaultBaseUrl", "https://en.wikipedia.org") },
+      ctx = ctx,
+    )
+    assertEquals("https://en.wikipedia.org", textContent(result))
+  }
+
+  @Test
+  fun `ctx target resolveBaseUrl picks up baseUrls when framework starts emitting them`() = runBlocking {
+    // Future-proof: when the framework adds resolvedBaseUrl + baseUrls to ctx.target,
+    // resolveBaseUrl picks them up via the same priority order as resolveAppId.
+    // This test simulates that future state by setting the fields manually.
+    val host = connect(
+      """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools["getBaseUrl"] = {
+        name: "getBaseUrl",
+        spec: {},
+        handler: async (args, ctx) => {
+          const url = ctx?.target?.resolveBaseUrl();
+          return { content: [{ type: "text", text: url || "missing" }] };
+        },
+      };
+      """.trimIndent(),
+    )
+    val ctx = buildJsonObject {
+      put("target", buildJsonObject {
+        put("resolvedBaseUrl", "https://framework.resolved/")
+        put("baseUrls", buildJsonArray { add("https://first.declared/") })
+      })
+    }
+    val result = host.callTool("getBaseUrl", JsonObject(emptyMap()), ctx = ctx)
+    assertEquals("https://framework.resolved/", textContent(result))
+  }
+
+  @Test
+  fun `methods are not injected when ctx target is absent`() = runBlocking {
+    // Belt-and-suspenders: if a tool gets a ctx without a target field (web-only
+    // sessions or fixtures), accessing ctx.target.resolveAppId would throw a
+    // TypeError. Authors are expected to optional-chain (`ctx.target?.resolveAppId`)
+    // — confirm the host doesn't accidentally synthesize a `target` object.
+    val host = connect(
+      """
+      const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+      tools["probeTarget"] = {
+        name: "probeTarget",
+        spec: {},
+        handler: async (args, ctx) => ({
+          content: [{ type: "text", text: ctx?.target === undefined ? "absent" : "present" }],
+        }),
+      };
+      """.trimIndent(),
+    )
+    val ctx = buildJsonObject { put("sessionId", "no-target-session") }  // no target field
+    val result = host.callTool("probeTarget", JsonObject(emptyMap()), ctx = ctx)
+    assertEquals("absent", textContent(result))
+  }
+
+  /** Helper: build a host with a tool that returns whatever `resolveAppId` produces. */
+  private suspend fun connectGetAppIdHost(missingValue: String) = connect(
+    """
+    const tools = (globalThis.__trailblazeTools = globalThis.__trailblazeTools || {});
+    tools["getAppId"] = {
+      name: "getAppId",
+      spec: {},
+      handler: async (args, ctx) => {
+        const appId = ctx?.target?.resolveAppId({ defaultAppId: args.defaultAppId });
+        return { content: [{ type: "text", text: appId || ${jsLiteral(missingValue)} }] };
+      },
+    };
+    """.trimIndent(),
+  )
+
+  private fun jsLiteral(s: String) = "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+
+  private fun textContent(result: JsonObject): String =
+    ((result["content"] as JsonArray).first().jsonObject["text"] as JsonPrimitive).content
 
   // ---- Pinned contracts: lifecycle, error paths, and load-bearing invariants ----
 

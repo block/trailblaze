@@ -25,25 +25,22 @@ import xyz.block.trailblaze.util.Console
 interface PlaywrightExecutableTool : ExecutableTrailblazeTool {
 
   /**
-   * ARIA descriptor of the target element (e.g., "textbox Password", "button Submit").
-   *
-   * Used during recording playback to wait for the element to be present before executing
-   * the tool. This is critical because recorded steps fire without LLM latency — after a
-   * page transition (e.g., clicking "Continue" on a login form), the next tool's target
-   * element may not exist yet. Returning a non-blank descriptor triggers an element-readiness
-   * wait with a fresh screen state capture, ensuring the element is interactable and element
-   * ID mappings are current.
-   *
-   * Returns null for tools that don't target a specific element (e.g., navigate, wait).
-   */
-  val elementDescriptor: String? get() = null
-
-  /**
    * The element ref used by this tool (e.g., "e5", `button "Submit"`, `css=#my-id`).
    * Non-null for tools that target a specific element. Used by the agent to generate
    * [TrailblazeNodeSelector] for recording.
    */
   val targetRef: String? get() = null
+
+  /**
+   * The durable [TrailblazeNodeSelector] attached to this tool, if any.
+   *
+   * Populated by [withNodeSelector] after a successful execution and persisted into the
+   * recorded trail YAML. Drives both action-time element resolution (via
+   * [validateAndResolveRef]) and the recording-playback readiness wait (via
+   * [PlaywrightTrailblazeAgent.waitForElementReadiness]). Returns null for tools that
+   * don't target a specific element (e.g., navigate, wait).
+   */
+  val targetNodeSelector: TrailblazeNodeSelector? get() = null
 
   /**
    * Returns a copy of this tool with the given [TrailblazeNodeSelector] attached.
@@ -76,6 +73,50 @@ interface PlaywrightExecutableTool : ExecutableTrailblazeTool {
   }
 
   companion object {
+    /**
+     * Builds a human-readable description of a tool's target element for log lines.
+     * Prefers the durable [TrailblazeNodeSelector.description] (intent-aligned with the
+     * recorded selector), then the LLM-supplied [ref], with `<unidentified>` as a final
+     * fallback so log lines never blank out.
+     */
+    fun describeTarget(nodeSelector: TrailblazeNodeSelector?, ref: String?): String =
+      nodeSelector?.description()?.takeIf { it.isNotBlank() }
+        ?: ref?.takeIf { it.isNotBlank() }
+        ?: "<unidentified>"
+
+    /**
+     * Best-effort: resolve a [TrailblazeNodeSelector] to a Playwright [Locator] for the
+     * recording-playback readiness wait. Uses driver-direct primitives (CSS selector,
+     * data-testid, ARIA role+name) so it does not require a pre-captured screen-state tree.
+     *
+     * Returns null when the selector has no usable web matcher (e.g., a non-web selector,
+     * or one whose only signal is spatial/hierarchical and needs the resolver). Callers
+     * should fall back to ref-based resolution in that case.
+     */
+    fun nodeSelectorToReadinessLocator(
+      page: Page,
+      nodeSelector: TrailblazeNodeSelector,
+    ): Locator? {
+      val web = nodeSelector.web ?: return null
+      web.cssSelector?.let { return page.locator("css=$it") }
+      web.dataTestId?.let { return page.locator("[data-testid=\"$it\"]") }
+      val role = web.ariaRole ?: return null
+      val descriptor = web.ariaNameRegex?.let { name ->
+        "$role \"${unescapeLiteralRegex(name)}\""
+      } ?: role
+      val locator = PlaywrightAriaSnapshot.resolveRef(page, descriptor)
+      return web.nthIndex?.let { locator.nth(it) } ?: locator
+    }
+
+    private fun unescapeLiteralRegex(text: String): String {
+      // Regex.escape() wraps literals containing metacharacters in \Q...\E.
+      if (text.startsWith("\\Q") && text.endsWith("\\E")) {
+        return text.substring(2, text.length - 2)
+      }
+      // Selector generators sometimes anchor names with ^ ... $.
+      return text.removePrefix("^").removeSuffix("$")
+    }
+
     /**
      * Resolves a ref string to a Playwright [Locator].
      *
@@ -124,33 +165,53 @@ interface PlaywrightExecutableTool : ExecutableTrailblazeTool {
      */
     fun validateAndResolveRef(
       page: Page,
-      ref: String,
+      ref: String?,
       description: String,
       context: TrailblazeToolExecutionContext,
       nodeSelector: TrailblazeNodeSelector? = null,
     ): Pair<Locator?, TrailblazeToolResult?> {
-      if (ref.isBlank() && nodeSelector == null) {
+      val effectiveRef = ref?.takeIf { it.isNotBlank() }
+      if (effectiveRef == null && nodeSelector == null) {
         return null to TrailblazeToolResult.Error.ExceptionThrown(
           "Element ref is required but was blank.",
         )
       }
 
-      // Try nodeSelector first — provides stable resolution across layout changes
+      // Try nodeSelector first — provides stable resolution across layout changes.
+      // Two-stage:
+      //   1. Tree-walk match (`resolveViaNodeSelector`): finds the captured-tree node whose
+      //      `DriverNodeDetail.Web` fields match the selector and dispatches via its ARIA
+      //      descriptor. Best for selectors built off the recorder's `findBestSelector` —
+      //      they carry round-trip-validated structural intent.
+      //   2. Playwright-native (`nodeSelectorToReadinessLocator`): maps `cssSelector` /
+      //      `dataTestId` / `ariaRole`+name straight to `page.locator(...)` without needing
+      //      a captured node to match. This is what makes recordings synthesized in the
+      //      factory's live-DOM fallback path (e.g. `cssSelector="input[name='email']"`)
+      //      replay correctly even when the captured tree's bounds-matching couldn't pin
+      //      the exact node — the locator engine handles arbitrary CSS / role queries.
+      // Either path returns a real Locator; the legacy `ref` fallthrough below is the last
+      // resort for LLM-driven calls that supply a free-form ref string.
       if (nodeSelector != null) {
         resolveViaNodeSelector(page, nodeSelector, context)?.let { locator ->
           return locator to null
         }
+        nodeSelectorToReadinessLocator(page, nodeSelector)?.let { locator ->
+          if (locator.count() > 0) {
+            Console.log("  [nodeSelector] Resolved via Playwright-native locator")
+            return locator to null
+          }
+        }
       }
 
-      if (ref.isBlank()) {
+      if (effectiveRef == null) {
         return null to TrailblazeToolResult.Error.ExceptionThrown(
           "Element ref is required but was blank, and nodeSelector resolution failed.",
         )
       }
-      val locator = resolveRef(page, ref, context)
+      val locator = resolveRef(page, effectiveRef, context)
       if (locator.count() == 0) {
         return null to TrailblazeToolResult.Error.ExceptionThrown(
-          "No element found matching '$ref' ($description). " +
+          "No element found matching '$effectiveRef' ($description). " +
             "Use web_snapshot to refresh the page state.",
         )
       }

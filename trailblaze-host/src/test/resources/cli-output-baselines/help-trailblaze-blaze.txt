@@ -8,8 +8,9 @@
 Usage: trailblaze blaze [-hvV] [--no-setup] [--text-only] [--verify]
                         [--context=<context>] [-d=<device>]
                         [--headless=<headless>] [--save=<savePath>]
-                        [--setup=<setup>] [--target=<target>]
-                        [<objectiveWords>...]
+                        [--setup=<setup>]
+                        [--snapshot-details=<snapshotDetails>]
+                        [--target=<target>] [<objectiveWords>...]
 Drive a device with AI — describe what to do in plain English
       [<objectiveWords>...] Objective or assertion (e.g., 'Tap login', 'The
                               email field is visible')
@@ -30,6 +31,13 @@ Drive a device with AI — describe what to do in plain English
                               if --setup not specified.
       --setup=<setup>       Step range for setup/trailhead (e.g., '1-3'). Use
                               with --save.
+      --snapshot-details=<snapshotDetails>
+                            Comma-separated snapshot detail levels passed
+                              through to the daemon's blaze tool: BOUNDS,
+                              OFFSCREEN, ALL_ELEMENTS. Useful for waypoint
+                              capture: ALL_ELEMENTS bypasses the on-device
+                              accessibility-importance filter so RecyclerView
+                              children land in the captured trailblazeNodeTree.
       --target=<target>     Target app ID, saved as the default for future
                               commands. List available targets with `trailblaze
                               toolbox` (no args).

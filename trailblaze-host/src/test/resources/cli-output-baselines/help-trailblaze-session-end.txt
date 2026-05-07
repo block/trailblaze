@@ -5,8 +5,15 @@
 # Reviewers: scrutinize diffs to baselines the same way you would scrutinize a UI screenshot —
 # small wording / spacing changes can be intentional or accidental.
 # ----------------------------------------------------------------------
-Usage: trailblaze session end [-hV] [-n=<name>]
+Usage: trailblaze session end [-hV] -d=<device> [-n=<name>]
 End the CLI session and release the device (deprecated: use 'stop' instead)
-  -h, --help          Show this help message and exit.
-  -n, --name=<name>   Save the recording as a trail before ending
-  -V, --version       Print version information and exit.
+  -d, --device=<device>   Device whose session to end: platform (android, ios,
+                            web) or platform/id. Same lookup-key semantics as
+                            `session stop` — the CLI doesn't trust a
+                            daemon-side "active" session across single-shot
+                            calls, so --device tells us which session you mean
+                            and end refuses to act if the daemon's bound device
+                            doesn't match.
+  -h, --help              Show this help message and exit.
+  -n, --name=<name>       Save the recording as a trail before ending
+  -V, --version           Print version information and exit.

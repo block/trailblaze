@@ -90,6 +90,19 @@ kotlin {
       dependsOn(commonMain.get())
     }
 
+    // Mirror the main source set on the test side so reflection-based tests (e.g.
+    // [TrailblazeKoogToolTest]) can target jvmAndAndroid types and actually run on the JVM.
+    // Without this `dependsOn` chain the test files compiled in src/jvmAndAndroidTest were
+    // silently excluded from `:trailblaze-models:jvmTest` — the directory existed but no test
+    // task picked it up.
+    val jvmAndAndroidTest by creating {
+      dependsOn(commonTest.get())
+      dependencies {
+        implementation(kotlin("test"))
+        implementation(libs.assertk)
+      }
+    }
+
     jvmMain {
       dependsOn(jvmAndAndroid)
     }
@@ -103,9 +116,13 @@ kotlin {
       }
     }
 
-    jvmTest.dependencies {
-      implementation(kotlin("test"))
-      implementation(libs.kotlinx.serialization.json)
+    jvmTest {
+      dependsOn(jvmAndAndroidTest)
+      dependencies {
+        implementation(kotlin("test"))
+        implementation(libs.kotlinx.serialization.json)
+        implementation(libs.assertk)
+      }
     }
   }
 }
@@ -126,3 +143,36 @@ bundledTrailblazeConfig {
   targetsDir.set(layout.projectDirectory.dir("src/commonMain/resources/trailblaze-config/targets"))
   regenerateCommand.set("./gradlew :trailblaze-models:generateBundledTrailblazeConfig")
 }
+
+// Bundle the TypeScript scripted-tools SDK source as JAR resources at
+// `trailblaze-config/sdk/typescript/...`. `WorkspaceCompileBootstrap` extracts these into
+// each workspace's `<workspace>/trails/config/tools/.trailblaze/sdk/typescript/`
+// at compile/bootstrap time so per-pack `package.json`s can reference the SDK via a
+// workspace-relative `file:` link without any install-time vendoring step.
+//
+// Output goes to `build/generated-resources/sdk/...`, registered as an additional
+// commonMain resources srcDir so it ships in the JAR but doesn't duplicate the SDK source
+// into git. SDK edits flow naturally on the next build — no regen-and-commit dance.
+val copyTypescriptSdkResources by tasks.registering(Copy::class) {
+  group = "trailblaze"
+  description = "Stages TypeScript SDK source into build/ for inclusion in this module's JAR resources."
+  // Path relative to `:trailblaze-models` project dir, so `../sdks/typescript` resolves
+  // to the SDK source tree co-located alongside this module. Using `project.layout` (this
+  // project) NOT `rootProject.layout` because the gradle root depends on which entry
+  // point is used — keying off this project's own dir is unambiguous.
+  from(layout.projectDirectory.dir("../sdks/typescript")) {
+    include("src/**/*.ts", "package.json", "tsconfig.json")
+    exclude("**/*.test.ts")
+  }
+  into(layout.buildDirectory.dir("generated-resources/sdk/trailblaze-config/sdk/typescript"))
+}
+
+kotlin.sourceSets.commonMain.get().resources.srcDir(
+  copyTypescriptSdkResources.map { layout.buildDirectory.dir("generated-resources/sdk").get() },
+)
+
+// NOT also wired into the Android source set's `assets.srcDir`: the SDK is only consumed
+// by the host-side `WorkspaceCompileBootstrap` (JVM-only), never by on-device test
+// runners. Adding it to the Android assets pipeline triggered AGP's strict
+// implicit-dependency validation against `mergeDebugAssets` — and there's no consumer
+// that needs it on-device anyway.

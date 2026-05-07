@@ -321,40 +321,39 @@ class PlaywrightTrailblazeAgent(
    * tool's target element may not exist yet, and stale element ID mappings (e.g., "e4")
    * would resolve to the wrong element. This method:
    *
-   * 1. Uses the tool's [PlaywrightExecutableTool.elementDescriptor] ARIA descriptor
-   *    (e.g., "textbox Password") to wait for the element to appear
-   * 2. Captures a fresh screen state so positional element IDs map correctly
+   * 1. Builds a Playwright locator from the tool's [PlaywrightExecutableTool.targetNodeSelector]
+   *    (or, for legacy trails, an ARIA-/CSS-shaped [PlaywrightExecutableTool.targetRef])
+   * 2. Waits for that locator to be visible
+   * 3. Captures a fresh screen state so positional element IDs map correctly
    *
-   * For tools without an element descriptor (e.g., navigate, wait), or in AI mode
-   * where the screen state is already fresh, this is a no-op that returns the
-   * original context.
+   * For tools without a usable target (e.g., navigate, wait, or LLM live with only an
+   * `e5`-style ref), this is a no-op that returns the original context — the LLM-driven
+   * path has its own latency between tool calls so a readiness gate is unnecessary.
    */
   private fun waitForElementReadiness(
     tool: PlaywrightExecutableTool,
     context: TrailblazeToolExecutionContext,
   ): TrailblazeToolExecutionContext {
-    val descriptor = tool.elementDescriptor
-    if (descriptor.isNullOrBlank()) return context
+    val (locator, label) = resolveReadinessLocator(tool) ?: return context
 
     val result = TrailblazeTracer.trace(
       "waitForElement",
       "tool",
-      mapOf("element" to descriptor),
+      mapOf("element" to label),
     ) {
       try {
-        val locator = PlaywrightAriaSnapshot.resolveRef(browserManager.currentPage, descriptor)
         locator.waitFor(
           com.microsoft.playwright.Locator.WaitForOptions()
             .setState(com.microsoft.playwright.options.WaitForSelectorState.VISIBLE)
             .setTimeout(elementReadinessTimeoutMs),
         )
-        Console.log("  [ready] Element '$descriptor' is present")
+        Console.log("  [ready] Element '$label' is present")
         "ok"
       } catch (_: TimeoutError) {
-        Console.log("  [ready] Element '$descriptor' not found after ${elementReadinessTimeoutMs.toLong()}ms")
+        Console.log("  [ready] Element '$label' not found after ${elementReadinessTimeoutMs.toLong()}ms")
         "timeout"
       } catch (e: Exception) {
-        Console.log("  [ready] Element '$descriptor' readiness check failed: ${e::class.simpleName}: ${e.message}")
+        Console.log("  [ready] Element '$label' readiness check failed: ${e::class.simpleName}: ${e.message}")
         "error"
       }
     }
@@ -383,6 +382,24 @@ class PlaywrightTrailblazeAgent(
     }
 
     return context
+  }
+
+  /**
+   * Build a Playwright locator for the readiness wait, with a label for tracing/logs.
+   * Prefers the durable [TrailblazeNodeSelector]; falls back to an ARIA- or CSS-shaped
+   * legacy [targetRef]. Returns null when no usable target exists (skip the wait).
+   */
+  private fun resolveReadinessLocator(
+    tool: PlaywrightExecutableTool,
+  ): Pair<com.microsoft.playwright.Locator, String>? {
+    tool.targetNodeSelector?.let { selector ->
+      PlaywrightExecutableTool.nodeSelectorToReadinessLocator(browserManager.currentPage, selector)
+        ?.let { return it to selector.description() }
+    }
+    val ref = tool.targetRef ?: return null
+    if (ref.isBlank()) return null
+    if (!ref.contains('"') && !ref.startsWith("css=")) return null
+    return PlaywrightAriaSnapshot.resolveRef(browserManager.currentPage, ref) to ref
   }
 
   private fun executeToolBlocking(
@@ -471,21 +488,21 @@ class PlaywrightTrailblazeAgent(
         )
       is PlaywrightNativeVerifyElementVisibleTool ->
         AgentDriverAction.AssertCondition(
-          conditionDescription = "Verify element visible: ${tool.element.ifBlank { tool.ref }}",
+          conditionDescription = "Verify element visible: ${PlaywrightExecutableTool.describeTarget(tool.nodeSelector, tool.ref)}",
           x = x, y = y,
           isVisible = true,
           succeeded = true,
         )
       is PlaywrightNativeVerifyListVisibleTool ->
         AgentDriverAction.AssertCondition(
-          conditionDescription = "Verify list: ${tool.element.ifBlank { tool.ref }}",
+          conditionDescription = "Verify list: ${PlaywrightExecutableTool.describeTarget(tool.nodeSelector, tool.ref)}",
           x = x, y = y,
           isVisible = true,
           succeeded = true,
         )
       is PlaywrightNativeVerifyValueTool ->
         AgentDriverAction.AssertCondition(
-          conditionDescription = "Verify ${tool.type.name.lowercase()}: ${tool.element.ifBlank { tool.ref }} = '${tool.expected}'",
+          conditionDescription = "Verify ${tool.type.name.lowercase()}: ${PlaywrightExecutableTool.describeTarget(tool.nodeSelector, tool.ref)} = '${tool.expected}'",
           x = x, y = y,
           isVisible = true,
           succeeded = true,
@@ -507,22 +524,26 @@ class PlaywrightTrailblazeAgent(
     context: TrailblazeToolExecutionContext,
   ): Pair<Int, Int> {
     return try {
-      val ref = when (tool) {
-        is PlaywrightNativeClickTool -> tool.ref
-        is PlaywrightNativeHoverTool -> tool.ref
-        is PlaywrightNativeSelectOptionTool -> tool.ref
-        is PlaywrightNativeVerifyElementVisibleTool -> tool.ref
-        is PlaywrightNativeVerifyListVisibleTool -> tool.ref
-        is PlaywrightNativeVerifyValueTool -> tool.ref
-        is PlaywrightNativeVerifyTextVisibleTool -> null
-        else -> null
+      val (ref, nodeSelector) = when (tool) {
+        is PlaywrightNativeClickTool -> tool.ref to tool.nodeSelector
+        is PlaywrightNativeHoverTool -> tool.ref to tool.nodeSelector
+        is PlaywrightNativeSelectOptionTool -> tool.ref to tool.nodeSelector
+        is PlaywrightNativeVerifyElementVisibleTool -> tool.ref to tool.nodeSelector
+        is PlaywrightNativeVerifyListVisibleTool -> tool.ref to tool.nodeSelector
+        is PlaywrightNativeVerifyValueTool -> tool.ref to tool.nodeSelector
+        is PlaywrightNativeVerifyTextVisibleTool -> null to null
+        else -> null to null
       }
-      val locator = if (ref != null) {
-        PlaywrightExecutableTool.resolveRef(browserManager.currentPage, ref, context)
-      } else if (tool is PlaywrightNativeVerifyTextVisibleTool) {
-        browserManager.currentPage.getByText(tool.text)
-      } else {
-        return 0 to 0
+      val locator = when {
+        ref != null || nodeSelector != null -> {
+          val (resolved, _) = PlaywrightExecutableTool.validateAndResolveRef(
+            browserManager.currentPage, ref, "", context, nodeSelector,
+          )
+          resolved ?: return 0 to 0
+        }
+        tool is PlaywrightNativeVerifyTextVisibleTool ->
+          browserManager.currentPage.getByText(tool.text)
+        else -> return 0 to 0
       }
       val box = locator.first().boundingBox()
       if (box != null) {

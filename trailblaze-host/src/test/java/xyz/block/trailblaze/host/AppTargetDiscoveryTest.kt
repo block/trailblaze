@@ -18,6 +18,20 @@ class AppTargetDiscoveryTest {
   @Test
   fun `discover loads app targets from workspace trailblaze_yaml`() {
     val workspace = tempFolder.newFolder("workspace")
+    val packDir = File(workspace, "trails/config/packs/workspaceapp").apply { mkdirs() }
+    File(packDir, "pack.yaml").writeText(
+      """
+      id: workspaceapp
+      target:
+        display_name: Workspace App
+        platforms:
+          android:
+            app_ids:
+              - com.example.workspace
+            tool_sets:
+              - workspace_android_tools
+      """.trimIndent(),
+    )
     File(workspace, "trails/config/trailblaze.yaml").apply {
       parentFile.mkdirs()
       writeText(
@@ -27,14 +41,7 @@ class AppTargetDiscoveryTest {
           tools:
             - tapOnElementWithText
       targets:
-        - id: workspaceapp
-          display_name: Workspace App
-          platforms:
-            android:
-              app_ids:
-                - com.example.workspace
-              tool_sets:
-                - workspace_android_tools
+        - workspaceapp
       """.trimIndent(),
       )
     }
@@ -76,12 +83,15 @@ class AppTargetDiscoveryTest {
           - tools/open_workspace.yaml
       """.trimIndent(),
     )
+    // `target.tools:` (per-target scripted-tool descriptors) is still an explicit list —
+    // those go through the per-target tool path, distinct from the auto-discovered
+    // operational tools under `<pack>/tools/<name>.{tool,shortcut,trailhead}.yaml`.
     File(workspace, "trails/config/trailblaze.yaml").apply {
       parentFile.mkdirs()
       writeText(
         """
-        packs:
-          - packs/workspaceapp/pack.yaml
+        targets:
+          - workspaceapp
         """.trimIndent(),
       )
     }
@@ -99,19 +109,26 @@ class AppTargetDiscoveryTest {
   }
 
   @Test
-  fun `workspace trailblaze_yaml overrides filesystem config targets by id`() {
+  fun `workspace pack-based target overrides filesystem flat target with same id`() {
     val workspace = tempFolder.newFolder("workspace")
+    val packDir = File(workspace, "trails/config/packs/sharedtarget").apply { mkdirs() }
+    File(packDir, "pack.yaml").writeText(
+      """
+      id: sharedtarget
+      target:
+        display_name: Project Override
+        platforms:
+          android:
+            app_ids:
+              - com.example.project
+      """.trimIndent(),
+    )
     File(workspace, "trails/config/trailblaze.yaml").apply {
       parentFile.mkdirs()
       writeText(
       """
       targets:
-        - id: sharedtarget
-          display_name: Project Override
-          platforms:
-            android:
-              app_ids:
-                - com.example.project
+        - sharedtarget
       """.trimIndent(),
       )
     }
@@ -137,7 +154,7 @@ class AppTargetDiscoveryTest {
     assertNotNull(target)
     assertEquals("Project Override", target.displayName)
     assertEquals(
-      setOf("com.example.project"),
+      listOf("com.example.project"),
       target.getPossibleAppIdsForPlatform(xyz.block.trailblaze.devices.TrailblazeDevicePlatform.ANDROID),
     )
   }
@@ -181,6 +198,20 @@ class AppTargetDiscoveryTest {
   @Test
   fun `invalid workspace toolset does not suppress valid workspace toolsets`() {
     val workspace = tempFolder.newFolder("workspace")
+    val packDir = File(workspace, "trails/config/packs/workspaceapp").apply { mkdirs() }
+    File(packDir, "pack.yaml").writeText(
+      """
+      id: workspaceapp
+      target:
+        display_name: Workspace App
+        platforms:
+          android:
+            app_ids:
+              - com.example.workspace
+            tool_sets:
+              - working_tools
+      """.trimIndent(),
+    )
     File(workspace, "trails/config/trailblaze.yaml").apply {
       parentFile.mkdirs()
       writeText(
@@ -195,14 +226,7 @@ class AppTargetDiscoveryTest {
           tools:
             - tapOnElementWithText
       targets:
-        - id: workspaceapp
-          display_name: Workspace App
-          platforms:
-            android:
-              app_ids:
-                - com.example.workspace
-              tool_sets:
-                - working_tools
+        - workspaceapp
       """.trimIndent(),
       )
     }
@@ -222,19 +246,30 @@ class AppTargetDiscoveryTest {
   @Test
   fun `broken workspace pack does not suppress sibling target discovery`() {
     val workspace = tempFolder.newFolder("workspace")
+    // Good pack — sibling that should still resolve.
+    val goodPackDir = File(workspace, "trails/config/packs/workspaceapp").apply { mkdirs() }
+    File(goodPackDir, "pack.yaml").writeText(
+      """
+      id: workspaceapp
+      target:
+        display_name: Workspace App
+        platforms:
+          android:
+            app_ids:
+              - com.example.workspace
+      """.trimIndent(),
+    )
+    // Broken pack at a sibling directory — manifest fails to parse. Not listed in the
+    // workspace `targets:` so it would only enter scope via auto-discovery; the
+    // discovery walk skips it with a logged warning rather than aborting.
+    val brokenPackDir = File(workspace, "trails/config/packs/broken-pack").apply { mkdirs() }
+    File(brokenPackDir, "pack.yaml").writeText("id: broken\ntarget:\n  display_name") // truncated YAML
     File(workspace, "trails/config/trailblaze.yaml").apply {
       parentFile.mkdirs()
       writeText(
         """
-        packs:
-          - packs/broken-pack/pack.yaml
         targets:
-          - id: workspaceapp
-            display_name: Workspace App
-            platforms:
-              android:
-                app_ids:
-                  - com.example.workspace
+          - workspaceapp
         """.trimIndent(),
       )
     }

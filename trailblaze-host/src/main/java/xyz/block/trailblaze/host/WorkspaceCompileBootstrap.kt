@@ -174,6 +174,64 @@ object WorkspaceCompileBootstrap {
         throw WorkspaceCompileException(result.errors)
       }
       writeHash(hashFile, expectedHash)
+      // Emit per-target typed bindings (`client.<target-id>.d.ts`) so authors get IDE
+      // autocomplete on `client.callTool(name, args)` without any explicit setup step.
+      // The hash check above is the gate — if the workspace is up-to-date we skip both
+      // the recompile and the binding regen because the bindings are already on disk
+      // from the previous Recompiled run. If a user manually deletes the bindings,
+      // `trailblaze compile` always regenerates regardless.
+      //
+      // Emission failures are downgraded to warnings: the daemon must come up even if
+      // typed-bindings codegen has a bug, since trail execution doesn't depend on the
+      // `.d.ts` files. The CLI's `trailblaze compile` exits non-zero on the same
+      // failure so authors see it immediately — the asymmetry is intentional.
+      try {
+        PerTargetClientDtsEmitter.emit(
+          workspaceRoot = configDir.parentFile.toPath(),
+          resolvedTargets = result.resolvedTargets,
+        )
+      } catch (e: Exception) {
+        Console.error(
+          "Typed-bindings codegen failed (daemon will continue without per-target " +
+            ".d.ts files): ${e.message ?: e.javaClass.simpleName}",
+        )
+      }
+      // Extract the bundled `@trailblaze/scripting` SDK into `.trailblaze/sdk/typescript/`
+      // and run `bun install` per pack-with-package.json — but ONLY in pack tools dirs
+      // whose `node_modules/` is missing. Subsequent `trailblaze blaze` etc. invocations
+      // don't re-pay the install cost; only the first run after a fresh clone does.
+      // Compile path (`trailblaze compile`) passes `onlyInstallIfMissing = false` so it
+      // always refreshes regardless of the existing state.
+      try {
+        val tsSetup = WorkspaceTypeScriptSetup.setUp(
+          workspaceRoot = configDir.parentFile.toPath(),
+          resolvedTargets = result.resolvedTargets,
+          packsDir = packsDir,
+          onlyInstallIfMissing = true,
+        )
+        // Daemon path is non-fatal on per-pack install failures (the daemon must come up
+        // regardless), but failures need to be SURFACED — silently passing them as
+        // success would leave a half-populated `node_modules/` that subsequent runs would
+        // skip via `onlyInstallIfMissing = true`, leaving authors with broken IDE typing
+        // and no clear signal of why. CLI path (`trailblaze compile`) elevates the same
+        // failures to non-zero exit; this path just logs them loudly.
+        tsSetup.installs
+          .filterIsInstance<WorkspaceTypeScriptSetup.PackInstall.Failed>()
+          .forEach { failed ->
+            Console.error(
+              "trailblaze: bun install failed in pack '${failed.packId}' (exit ${failed.exitCode}); " +
+                "IDE typing for `@trailblaze/scripting` won't resolve in this pack until you " +
+                "fix the failure and re-run `trailblaze compile`. Output:\n" +
+                failed.output.lines().take(8).joinToString("\n"),
+            )
+          }
+      } catch (e: Exception) {
+        Console.error(
+          "TypeScript workspace setup failed (SDK extraction or bun-install — daemon will " +
+            "continue but per-pack node_modules may be missing): " +
+            "${e.message ?: e.javaClass.simpleName}",
+        )
+      }
       BootstrapResult.Recompiled(emitted = result.emittedTargets.size)
     }
   }

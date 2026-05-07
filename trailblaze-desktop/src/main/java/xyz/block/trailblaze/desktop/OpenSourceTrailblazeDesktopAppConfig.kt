@@ -4,7 +4,9 @@ import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDriverType
 import xyz.block.trailblaze.host.ios.MobileDeviceUtils
+import xyz.block.trailblaze.llm.TrailblazeLlmModel
 import xyz.block.trailblaze.llm.TrailblazeLlmModelList
+import xyz.block.trailblaze.llm.TrailblazeLlmProvider
 import xyz.block.trailblaze.llm.LlmLogCostEnricher
 import xyz.block.trailblaze.llm.config.BuiltInLlmModelRegistry
 import xyz.block.trailblaze.llm.config.LlmAuthResolver
@@ -13,6 +15,7 @@ import xyz.block.trailblaze.llm.config.LlmConfigLoader
 import xyz.block.trailblaze.llm.config.LlmConfigResolver
 import xyz.block.trailblaze.llm.providers.AnthropicTrailblazeLlmModelList
 import xyz.block.trailblaze.llm.providers.GoogleTrailblazeLlmModelList
+import xyz.block.trailblaze.llm.providers.NoneTrailblazeLlmModelList
 import xyz.block.trailblaze.llm.providers.OllamaTrailblazeLlmModelList
 import xyz.block.trailblaze.llm.providers.OpenAITrailblazeLlmModelList
 import xyz.block.trailblaze.llm.providers.OpenRouterTrailblazeLlmModelList
@@ -32,8 +35,18 @@ import java.io.File
  * Default Configuration for Open Source Desktop App
  */
 class OpenSourceTrailblazeDesktopAppConfig : TrailblazeDesktopAppConfig(
-  defaultLlmModel = OpenAITrailblazeLlmModelList.OPENAI_GPT_4_1,
-  defaultProviderModelList = OpenAITrailblazeLlmModelList
+  // OSS distro defaults to "no LLM configured" — mirrors the
+  // SavedTrailblazeAppConfig.llmProvider/llmModel = NONE data-class default. Today
+  // the saved-provider=NONE early-return in TrailblazeDesktopAppConfig.getCurrentLlmModel()
+  // shadows these fallback constructor args in the common case; pinning them to NONE
+  // anyway means a corrupted settings file or an unrecognized provider id resolves to
+  // NONE rather than silently auto-claiming a user's OPENAI_API_KEY. External CLI users
+  // driving Trailblaze through Claude Code, Codex, etc. opt in explicitly.
+  defaultLlmModel = TrailblazeLlmModel.fallback(
+    provider = TrailblazeLlmProvider.NONE,
+    modelId = TrailblazeLlmProvider.NONE.id,
+  ),
+  defaultProviderModelList = NoneTrailblazeLlmModelList,
 ) {
 
   private val initialDriverTypes = setOf(
@@ -74,7 +87,7 @@ class OpenSourceTrailblazeDesktopAppConfig : TrailblazeDesktopAppConfig(
       logPrefix = "[OpenSourceAppTargets]",
     )
   }
-  val logsDir = File(
+  override val logsDir = File(
     TrailblazeDesktopUtil.getEffectiveLogsDirectory(
       trailblazeSettingsRepo.serverStateFlow.value.appConfig,
     ),
@@ -86,7 +99,18 @@ class OpenSourceTrailblazeDesktopAppConfig : TrailblazeDesktopAppConfig(
       ?: BuiltInLlmModelRegistry.find(modelId)
   }
 
-  override val logsRepo = LogsRepo(logsDir, costEnricher = costEnricher::enrich)
+  // Lazy so that consumers which only need [logsDir] (e.g. the `waypoint capture-example`
+  // CLI auto-search) don't accidentally trigger LogsRepo construction — the file watchers
+  // it spawns are non-daemon and prevent a one-shot CLI JVM from exiting cleanly.
+  //
+  // For the daemon, `MainTrailblazeApp` accesses `logsRepo.logsDir` during boot (the
+  // `setLogsDirectory` call), which forces initialization on the daemon's main thread.
+  // So this is effectively eager for the daemon and only lazy for one-shot CLI commands
+  // that read `config.logsDir` (path-only) without ever touching `logsRepo`. Don't remove
+  // the boot-time access thinking it's redundant: it pins WHEN initialization happens, on
+  // a known thread, before any UI/HTTP code path could trigger it under load (which would
+  // then cache a construction failure for every subsequent access).
+  override val logsRepo by lazy { LogsRepo(logsDir, costEnricher = costEnricher::enrich) }
 
   val trailsDir = File(
     TrailblazeDesktopUtil.getEffectiveTrailsDirectory(

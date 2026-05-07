@@ -32,8 +32,11 @@
       --accent-strong: #a8c4ff;
       --accent-bg: rgba(125, 169, 255, 0.14);
       --trailhead: #c4a9ff;
+      /* Edge contrast bumped: 0.38 was unreadable at default zoom against
+         the dark background once paths got dense. 0.65 makes paths actually
+         visible without competing with node screenshots. */
       --trailhead-bg: rgba(196, 169, 255, 0.14);
-      --tree-edge: rgba(220, 226, 240, 0.38);
+      --tree-edge: rgba(220, 226, 240, 0.7);
       --cross-edge: rgba(220, 226, 240, 0.14);
       --back-edge: rgba(220, 226, 240, 0.10);
       --text: #e7eaf0;
@@ -66,7 +69,7 @@
       --accent-bg: rgba(37, 99, 235, 0.10);
       --trailhead: #7c3aed;
       --trailhead-bg: rgba(124, 58, 237, 0.10);
-      --tree-edge: rgba(20, 24, 32, 0.42);
+      --tree-edge: rgba(20, 24, 32, 0.72);
       --cross-edge: rgba(20, 24, 32, 0.18);
       --back-edge: rgba(20, 24, 32, 0.10);
       --text: #1f2330;
@@ -512,10 +515,10 @@
        MAP VIEW — node cards
        ============================================================================ */
     .waypoint-node {
-      width: 168px;
+      width: 220px;
       background: var(--bg-elevated);
       border: 1px solid var(--border-strong);
-      border-radius: 8px;
+      border-radius: 10px;
       overflow: hidden;
       transition: border-color 0.12s, box-shadow 0.12s, transform 0.12s;
       cursor: pointer;
@@ -531,16 +534,19 @@
       box-shadow: 0 0 0 3px var(--accent-bg), var(--shadow-elevated);
     }
     .waypoint-title {
-      padding: 8px 10px 6px;
-      font-size: 12px; font-weight: 600;
-      line-height: 1.3;
+      padding: 10px 12px 9px;
+      font-size: 13.5px; font-weight: 600;
+      line-height: 1.4;
       color: var(--text-strong);
       letter-spacing: -0.005em;
       border-bottom: 1px solid var(--border);
-      display: -webkit-box;
-      -webkit-line-clamp: 2; -webkit-box-orient: vertical;
-      overflow: hidden;
-      min-height: 38px;
+      /* No line-clamp — let the title grow to whatever the description needs.
+         The node is wide enough (220px) that ~3-4 lines fits the typical
+         "<short summary>" without becoming ridiculous. Was clamped to 2 lines
+         which truncated descriptive titles into "..." and hid the actual
+         content. */
+      word-break: break-word;
+      min-height: 50px;
     }
     .waypoint-screenshot {
       width: 100%;
@@ -559,27 +565,30 @@
       background-size: 16px 16px;
     }
     .waypoint-label {
-      padding: 6px 9px 8px;
+      padding: 8px 11px 10px;
       font-family: ui-monospace, "SF Mono", monospace;
-      font-size: 10.5px;
-      line-height: 1.35;
+      font-size: 11.5px;
+      line-height: 1.4;
       word-break: break-word;
       color: var(--text-muted);
       border-top: 1px solid var(--border);
     }
 
-    /* Edge label — tiny floating chip on each shortcut edge that names the
-       action ("tap Withdraw"). Revyl-style; kept compact so it doesn't
-       compete with the screenshots. */
+    /* Edge label — floating chip on each shortcut edge that names the
+       action ("tap Withdraw"). Sized for legibility against a dense
+       node backdrop. */
     .react-flow__edge-textbg {
       fill: var(--bg-elevated) !important;
-      fill-opacity: 0.92 !important;
+      fill-opacity: 0.96 !important;
+      stroke: var(--border-strong);
+      stroke-width: 0.75;
+      stroke-opacity: 0.5;
     }
     .react-flow__edge-text {
-      fill: var(--text-muted) !important;
+      fill: var(--text) !important;
       font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif !important;
-      font-size: 9.5px !important;
-      font-weight: 500;
+      font-size: 12px !important;
+      font-weight: 600;
       pointer-events: none;
     }
     /* Back-edge styling — shortcuts pointing at entry points (e.g.
@@ -588,26 +597,895 @@
        quiet. */
     .react-flow__edge.back-edge .react-flow__edge-path {
       stroke: var(--back-edge) !important;
-      stroke-dasharray: 3 4 !important;
+      stroke-dasharray: 4 5 !important;
     }
-    .react-flow__edge.back-edge .react-flow__edge-textbg { fill-opacity: 0.6 !important; }
-    .react-flow__edge.back-edge .react-flow__edge-text { fill: var(--text-faint) !important; }
+    .react-flow__edge.back-edge .react-flow__edge-textbg { fill-opacity: 0.7 !important; }
+    .react-flow__edge.back-edge .react-flow__edge-text {
+      fill: var(--text-muted) !important;
+      font-weight: 500;
+    }
     .trailhead-node {
-      padding: 7px 14px;
+      padding: 9px 16px;
       border-radius: 999px;
       background: var(--trailhead-bg);
       color: var(--trailhead);
-      border: 1px solid var(--trailhead);
-      font-size: 11px;
+      border: 1.5px solid var(--trailhead);
+      font-size: 12.5px;
       font-weight: 600;
       font-family: ui-monospace, "SF Mono", monospace;
-      max-width: 240px;
+      max-width: 280px;
       text-align: center;
       line-height: 1.3;
       word-break: break-word;
       box-shadow: var(--shadow-card);
     }
-    .trailhead-node .trailhead-icon { margin-right: 5px; opacity: 0.85; }
+    .trailhead-node .trailhead-icon { margin-right: 6px; opacity: 0.9; }
+
+    /* Edge hover — when the user mouses over an edge, brighten the path and
+       label so it pops out of the dense graph. React Flow's default :hover is
+       too subtle on the dark theme. */
+    .react-flow__edge:hover .react-flow__edge-path {
+      stroke-width: 4 !important;
+      filter: brightness(1.3);
+    }
+    .react-flow__edge:hover .react-flow__edge-textbg { fill-opacity: 1 !important; }
+    .react-flow__edge:hover .react-flow__edge-text {
+      fill: var(--text-strong) !important;
+      font-size: 13px !important;
+    }
+
+    /* HTML edge labels (rendered via EdgeLabelRenderer in the custom edge
+       component below). React Flow positions the wrapper absolutely; this
+       class styles the chip itself. We use HTML labels instead of SVG `<text>`
+       so the label can carry an index-based Y offset that the smoothstep
+       edge type's built-in label centering doesn't support — multiple edges
+       leaving the same source no longer stack their labels at the same Y. */
+    .edge-label {
+      position: absolute;
+      pointer-events: all;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text);
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-strong);
+      border-radius: 6px;
+      padding: 3px 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+      white-space: nowrap;
+      max-width: 180px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      transition: background 0.12s, color 0.12s, transform 0.12s;
+      cursor: default;
+    }
+    .edge-label.back {
+      color: var(--text-muted);
+      font-weight: 500;
+      border-color: var(--border);
+      background: var(--bg-elevated-2);
+    }
+    .edge-label.trailhead {
+      color: var(--trailhead);
+      border-color: var(--trailhead);
+      background: var(--trailhead-bg);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      font-size: 10px;
+    }
+
+    /* Focus mode — when a waypoint is selected, dim everything not on its
+       1-hop neighborhood. The selected node + its direct upstream/downstream
+       neighbors stay full opacity; everything else fades to 0.18 so the user
+       can trace the local journey through the dense graph. Background is
+       click-clearable (onPaneClick clears the selection). */
+    .react-flow__node.dimmed {
+      opacity: 0.18;
+      transition: opacity 0.18s;
+    }
+    .react-flow__node.dimmed:hover { opacity: 0.55; }
+    .react-flow__edge.dimmed { opacity: 0.12; transition: opacity 0.18s; }
+    /* Edge labels live in a portal (EdgeLabelRenderer) outside the edge SVG,
+       so the .dimmed class on the edge can't cascade down to them. We mark
+       the label div itself with .dimmed via data.labelClass instead. */
+    .edge-label.dimmed { opacity: 0.18; transition: opacity 0.18s; }
+    .react-flow__edge.dimmed .edge-label,
+    .react-flow__edge.dimmed-edge-label { opacity: 0.18; transition: opacity 0.18s; }
+    .react-flow__edge.focused .react-flow__edge-path {
+      stroke-width: 3.5 !important;
+      filter: brightness(1.2);
+    }
+
+    /* ============================================================================
+       SUBWAY VIEW — concentric, focal-centered, expand-on-click
+       ============================================================================
+       Companion to MAP. Where MAP is a tree-ish hierarchy, SUBWAY treats the
+       app's shortcut graph as undirected at the visual level — a metro
+       network where each "line" is a journey and each waypoint is a station.
+       Default focal = first trailhead's destination. Click any visible
+       station to expand its outgoing shortcuts one level further; shift-
+       click (or use the Re-center pill in the detail panel) to make that
+       station the new focal. */
+    .subway-help {
+      position: absolute;
+      top: 14px; left: 14px;
+      z-index: 5;
+      padding: 8px 12px;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-strong);
+      border-radius: 8px;
+      font-size: 11px;
+      color: var(--text-muted);
+      box-shadow: var(--shadow-card);
+      max-width: 280px;
+      line-height: 1.5;
+    }
+    .subway-help kbd {
+      display: inline-block;
+      padding: 1px 5px;
+      margin: 0 2px;
+      background: var(--bg-elevated-2);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      font-family: ui-monospace, "SF Mono", monospace;
+      font-size: 10px;
+      color: var(--text);
+    }
+    /* Agent prompt panel — renders inside the existing right-side dock
+       (.detail-panel base styles) when rightPanelMode === 'agent'. Body
+       gets monospace-pre styling for the textual prompt the LLM sees. */
+    .agent-prompt-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 14px 18px 22px;
+    }
+    .agent-prompt-body pre {
+      margin: 0;
+      font-family: ui-monospace, "SF Mono", monospace;
+      font-size: 12px;
+      line-height: 1.5;
+      color: var(--text);
+      white-space: pre-wrap;
+      word-break: break-word;
+      tab-size: 2;
+    }
+
+    /* Right-panel tabs strip — sits at the top of the right dock, replacing
+       the old per-panel header. Two tabs (Detail / Agent), an optional Copy
+       button (only when Agent is active), and the × collapse button. */
+    .right-panel-tabs {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg-elevated);
+    }
+    .panel-tab {
+      padding: 5px 12px;
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 5px;
+      color: var(--text-muted);
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: background 0.12s, color 0.12s, border-color 0.12s;
+    }
+    .panel-tab:hover {
+      background: var(--bg-elevated-2);
+      color: var(--text);
+    }
+    .panel-tab.active {
+      background: var(--accent-bg);
+      color: var(--accent);
+      border-color: var(--accent);
+    }
+    .panel-tab:disabled {
+      opacity: 0.35;
+      cursor: not-allowed;
+      background: transparent;
+    }
+    .panel-tab-close {
+      width: 28px;
+      height: 28px;
+      border-radius: 5px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--text-muted);
+      font-size: 18px;
+      line-height: 1;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.12s, color 0.12s, border-color 0.12s;
+    }
+    .panel-tab-close:hover {
+      background: var(--bg-elevated-2);
+      color: var(--text);
+      border-color: var(--border-strong);
+    }
+
+    /* Inline title for the Detail tab body — replaces the panel header
+       title that's been moved into the body since tabs now own the top. */
+    .detail-inline-title {
+      padding: 4px 0 14px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 14px;
+    }
+    .detail-inline-title h3 {
+      margin: 0 0 4px 0;
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--text-strong);
+      line-height: 1.4;
+    }
+    .detail-inline-title .id {
+      font-family: ui-monospace, "SF Mono", monospace;
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    /* Show-panel edge button — vertical thin button on the right edge,
+       only visible when the dock is collapsed. Click reopens the dock at
+       whichever tab was last active. */
+    .right-panel-show-btn {
+      position: fixed;
+      right: 0;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 24px;
+      height: 80px;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-strong);
+      border-right: none;
+      border-radius: 8px 0 0 8px;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 18px;
+      line-height: 1;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 50;
+      transition: color 0.12s, background 0.12s, border-color 0.12s;
+    }
+    .right-panel-show-btn:hover {
+      background: var(--bg-elevated-2);
+      color: var(--accent);
+      border-color: var(--accent);
+    }
+
+    /* Dock variant of detail-panel — the unified container that holds
+       tabs + body. Same width as DetailPanel was; just structures the
+       column with tabs row + scrollable content area. */
+    .right-panel-dock {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .right-panel-dock > .detail-content,
+    .right-panel-dock > .agent-prompt-body {
+      flex: 1;
+      overflow-y: auto;
+    }
+    .agent-view-header {
+      padding: 14px 16px 10px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .agent-view-title {
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+    }
+    .agent-view-actions { display: flex; gap: 6px; }
+    .agent-view-btn {
+      padding: 4px 10px;
+      background: var(--bg-elevated-2);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text);
+      cursor: pointer;
+      transition: border-color 0.12s, color 0.12s;
+    }
+    .agent-view-btn:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    .agent-view-btn.copied { border-color: var(--accent); color: var(--accent); }
+    .agent-view-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 14px 16px;
+    }
+    .agent-view-body pre {
+      margin: 0;
+      font-family: ui-monospace, "SF Mono", monospace;
+      font-size: 12px;
+      line-height: 1.5;
+      color: var(--text);
+      white-space: pre-wrap;
+      word-break: break-word;
+      tab-size: 2;
+    }
+
+    .subway-trailhead-picker {
+      position: absolute;
+      top: 14px; right: 14px;
+      z-index: 5;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 10px;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-strong);
+      border-radius: 8px;
+      font-size: 11px;
+      color: var(--text-muted);
+      box-shadow: var(--shadow-card);
+    }
+    .subway-trailhead-picker label {
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .subway-trailhead-picker select {
+      background: var(--bg-elevated-2);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 3px 6px;
+      font-family: ui-monospace, "SF Mono", monospace;
+      font-size: 11px;
+      cursor: pointer;
+      /* Lock the width so the surrounding picker bar doesn't reflow
+         every time the focal id changes length. The dropdown's native
+         truncation handles overlong values; the dropdown menu itself
+         still shows the full id when opened. */
+      width: 260px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      overflow: hidden;
+    }
+    .subway-trailhead-picker select:hover { border-color: var(--accent); }
+    .subway-trailhead-picker .static-value {
+      font-family: ui-monospace, "SF Mono", monospace;
+      font-size: 11px;
+      color: var(--text);
+      padding: 3px 6px;
+      width: 260px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      overflow: hidden;
+    }
+    /* Depth stepper: explicit −/+ buttons around a value chip. The native
+       <input type="number"> spinner is too small to click reliably; this
+       gives generous hit targets and clearly communicates "this is a
+       discrete number you can change by one." */
+    .subway-trailhead-picker .depth-stepper {
+      display: inline-flex;
+      align-items: center;
+      gap: 0;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      background: var(--bg-elevated-2);
+      overflow: hidden;
+    }
+    .subway-trailhead-picker .depth-stepper:hover { border-color: var(--accent); }
+    .subway-trailhead-picker .depth-stepper button {
+      width: 26px;
+      height: 24px;
+      background: transparent;
+      border: none;
+      color: var(--text);
+      font-size: 14px;
+      font-weight: 700;
+      line-height: 1;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      transition: background 0.1s, color 0.1s;
+    }
+    .subway-trailhead-picker .depth-stepper button:hover {
+      background: var(--accent-bg);
+      color: var(--accent);
+    }
+    .subway-trailhead-picker .depth-stepper button:disabled {
+      opacity: 0.35;
+      cursor: not-allowed;
+      background: transparent;
+      color: var(--text-muted);
+    }
+    .subway-trailhead-picker .depth-stepper .depth-value {
+      min-width: 26px;
+      text-align: center;
+      font-family: ui-monospace, "SF Mono", monospace;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text);
+      border-left: 1px solid var(--border);
+      border-right: 1px solid var(--border);
+      padding: 4px 6px;
+      user-select: none;
+    }
+    .subway-reset-btn {
+      background: var(--bg-elevated-2);
+      color: var(--text-muted);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 3px 8px;
+      font-size: 10.5px;
+      font-weight: 600;
+      cursor: pointer;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .subway-reset-btn:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    /* Focal station ring — the centered waypoint gets a colored ring so the
+       eye finds it instantly. */
+    .react-flow__node.subway-focal .waypoint-node {
+      box-shadow: 0 0 0 3px var(--accent), var(--shadow-elevated) !important;
+      border-color: var(--accent) !important;
+    }
+    /* Collapsed-deeper indicator — when a station has outgoing shortcuts
+       beyond the currently-expanded depth, mark it with a ⋯ chip so the
+       user knows it's expandable. */
+    .subway-expandable-indicator {
+      position: absolute;
+      top: -10px; right: -10px;
+      min-width: 26px;
+      height: 26px;
+      padding: 0 8px;
+      border-radius: 999px;
+      background: var(--accent);
+      color: #fff;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 12px;
+      font-weight: 700;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.35);
+      pointer-events: none;
+      letter-spacing: -0.02em;
+      font-family: ui-monospace, "SF Mono", monospace;
+    }
+
+    /* Ghost preview cards — scaled-down waypoint cards that fan out from
+       each expandable parent, one per direct hidden child. Showing the
+       actual screenshot + title (rather than an anonymous dot) gives the
+       user a real sense of "what's past here." Heavily dimmed +
+       desaturated so they read as previews, not interactive stations. */
+    .subway-ghost-card {
+      width: 78px;
+      background: var(--bg-elevated);
+      border: 1px solid rgba(220, 226, 240, 0.22);
+      border-radius: 6px;
+      overflow: hidden;
+      opacity: 0.55;
+      filter: saturate(0.55) brightness(0.92);
+      pointer-events: none;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.32);
+    }
+    .subway-ghost-title {
+      padding: 4px 6px;
+      font-size: 8.5px;
+      line-height: 1.25;
+      color: var(--text);
+      font-weight: 600;
+      letter-spacing: -0.005em;
+      border-bottom: 1px solid rgba(220, 226, 240, 0.1);
+      max-height: 28px;
+      overflow: hidden;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      word-break: break-word;
+    }
+    .subway-ghost-screenshot {
+      width: 100%;
+      aspect-ratio: 9/16;
+      object-fit: cover;
+      background: #000;
+      display: block;
+    }
+    .subway-ghost-no-screenshot {
+      width: 100%;
+      aspect-ratio: 9/16;
+      background: var(--bg-elevated-2);
+    }
+    .subway-ghost-trailhead {
+      width: max-content;
+      padding: 5px 10px 5px 8px;
+      background: var(--trailhead-bg);
+      color: var(--trailhead);
+      border: 1px solid var(--trailhead);
+      border-radius: 999px;
+      font-size: 9px;
+      font-weight: 600;
+      font-family: ui-monospace, "SF Mono", monospace;
+      opacity: 0.6;
+      filter: saturate(0.6);
+      pointer-events: none;
+    }
+    .subway-ghost-trailhead .trailhead-icon { margin-right: 4px; opacity: 0.85; font-size: 10px; }
+
+    /* Back-neighbor cards — incoming-shortcut sources for the focal,
+       rendered as a tight inner halo "above" the focal so a leaf
+       waypoint isn't a dead end. Heavier fade than forward ghosts +
+       dashed border so they clearly read as "where you came from"
+       history, not forward navigation. The ↑ chip in the top-right
+       corner makes the back affordance unambiguous. Hover reveals them
+       fully so the user can read the screenshot before clicking. */
+    .subway-flow .react-flow__node.subway-back-node .subway-ghost-card {
+      opacity: 0.42;
+      filter: saturate(0.4) brightness(0.85);
+      border-style: dashed;
+      border-color: rgba(220, 226, 240, 0.32);
+    }
+    .subway-flow .react-flow__node.subway-back-node:hover .subway-ghost-card {
+      opacity: 0.95;
+      filter: saturate(1) brightness(1);
+      border-style: solid;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px var(--accent-bg), 0 6px 18px rgba(0, 0, 0, 0.42);
+    }
+    .subway-flow .react-flow__node.subway-back-node {
+      position: relative;
+    }
+    .subway-flow .react-flow__node.subway-back-node::after {
+      content: '↑';
+      position: absolute;
+      top: -8px;
+      right: -8px;
+      width: 20px;
+      height: 20px;
+      border-radius: 999px;
+      background: var(--bg-elevated-2);
+      border: 1px solid var(--border-strong);
+      color: var(--text-muted);
+      font-size: 12px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      pointer-events: none;
+      z-index: 5;
+    }
+    .subway-flow .react-flow__node.subway-back-node:hover::after {
+      background: var(--accent-bg);
+      color: var(--accent);
+      border-color: var(--accent);
+    }
+    /* Trailhead pill variant of the back-card */
+    .subway-flow .react-flow__node.subway-back-node .subway-ghost-trailhead {
+      opacity: 0.42;
+      filter: saturate(0.4);
+      border-style: dashed;
+    }
+    .subway-flow .react-flow__node.subway-back-node:hover .subway-ghost-trailhead {
+      opacity: 1;
+      filter: saturate(1);
+      border-style: solid;
+    }
+    .subway-flow .react-flow__node.subway-ghost-node {
+      /* Ghosts ARE clickable — clicking one re-roots the subway at that
+         waypoint, same as clicking a real station. Hover lifts the card
+         out of its dimmed state so the user can tell it responds. */
+      pointer-events: auto;
+      cursor: pointer;
+      transition: opacity 0.3s ease-out;
+    }
+    .subway-flow .react-flow__node.subway-ghost-node:hover .subway-ghost-card {
+      opacity: 0.95;
+      filter: saturate(0.95) brightness(1);
+      box-shadow: 0 0 0 2px var(--accent-bg), 0 6px 18px rgba(0, 0, 0, 0.42);
+    }
+    .subway-flow .react-flow__node.subway-ghost-node:hover .subway-ghost-trailhead {
+      opacity: 1;
+      filter: saturate(1);
+    }
+
+    /* Distance-based size — non-focal cards shrink with depth so the
+       periphery takes less canvas. Combined with the auto-zoom that fits
+       ring 1, this keeps a "you are here" view legible even when a focal
+       has many neighbors. The screenshot inside the card preserves its
+       9:16 aspect ratio, so the entire card shrinks proportionally.
+       Width-only (not transform: scale) so React Flow measures the new
+       size and floating edges still attach to the visible card border. */
+    .subway-flow .react-flow__node.subway-depth-2 .waypoint-node { width: 200px; }
+    .subway-flow .react-flow__node.subway-depth-3 .waypoint-node { width: 180px; }
+    .subway-flow .react-flow__node.subway-depth-4 .waypoint-node { width: 160px; }
+    .subway-flow .react-flow__node.subway-depth-5 .waypoint-node,
+    .subway-flow .react-flow__node.subway-depth-deep .waypoint-node { width: 145px; }
+    .subway-flow .react-flow__node[class*="subway-depth-"] .waypoint-node {
+      transition: width 0.35s ease-out;
+    }
+
+    /* Note: the .subway-depth-N classes still drive *size* scaling on
+       the inner card (deeper rings get smaller widths so the layout
+       fits) but no longer drive opacity or filter dimming. Now that
+       depth is bounded by the configurable cap, everything inside scope
+       should be fully readable — the cap *is* the focus mechanism, so
+       a second layer of dimming hides nodes the user is actively
+       trying to inspect. The hover/selected lifts are kept (no-ops
+       in practice now since defaults are full opacity) so reintroducing
+       a dimming pass later is a one-rule edit. */
+    .react-flow__node[class*="subway-depth-"]:hover {
+      z-index: 50;
+    }
+    .react-flow__node.selected[class*="subway-depth-"] {
+      z-index: 30;
+    }
+
+    /* Smooth slide for subway node positions — when a click re-roots the
+       graph at a new focal, every still-visible node slides from its old
+       world coordinate to its new one instead of teleporting. The bezier
+       overshoots slightly so the motion feels playful. Opacity and filter
+       transitions for depth-based dimming are listed in the same shorthand
+       so the second-rule-wins behavior of CSS doesn't strip transform. */
+    .subway-flow .react-flow__node {
+      transition:
+        transform 0.6s cubic-bezier(0.34, 1.35, 0.64, 1),
+        opacity 0.3s ease-out,
+        filter 0.3s ease-out;
+    }
+
+    /* Selected node in subway gets a stronger visual lock — thicker accent
+       ring + small lift — so once the camera centers on it the user can
+       tell at a glance which station the side panel is describing. */
+    .subway-flow .react-flow__node.selected .waypoint-node {
+      border-width: 2px;
+      box-shadow: 0 0 0 4px var(--accent-bg), 0 0 0 6px var(--accent), var(--shadow-elevated);
+    }
+
+    /* Subway-mode trailhead pill — sits at the very center as the journey
+       origin. Visually distinguished as a pill (not a card) so it reads
+       differently from the surrounding waypoint stations. */
+    .subway-trailhead-pill {
+      width: max-content;
+      padding: 14px 22px 14px 18px;
+      background: var(--trailhead-bg);
+      color: var(--trailhead);
+      border: 2px solid var(--trailhead);
+      border-radius: 999px;
+      font-size: 13.5px;
+      font-weight: 700;
+      font-family: ui-monospace, "SF Mono", monospace;
+      letter-spacing: 0.01em;
+      box-shadow: 0 0 0 6px rgba(124, 58, 237, 0.08), var(--shadow-card);
+      cursor: pointer;
+      transition: transform 0.12s, box-shadow 0.12s;
+    }
+    .subway-trailhead-pill:hover {
+      transform: scale(1.03);
+      box-shadow: 0 0 0 8px rgba(124, 58, 237, 0.12), var(--shadow-elevated);
+    }
+    .subway-trailhead-pill .trailhead-icon { margin-right: 8px; opacity: 0.9; font-size: 15px; }
+    .subway-trailhead-pill.selected {
+      box-shadow: 0 0 0 4px rgba(124, 58, 237, 0.18), 0 0 0 7px var(--trailhead), var(--shadow-elevated);
+    }
+    .subway-flow .react-flow__node.subway-focal .subway-trailhead-pill {
+      box-shadow: 0 0 0 6px rgba(124, 58, 237, 0.18), 0 0 0 9px var(--trailhead), var(--shadow-elevated);
+    }
+
+    /* Shortcut inspect modal — opens when the user clicks an edge label
+       in MAP or SUBWAY view. Shows the shortcut's id, route, description,
+       and the actual sequence of tool calls (or the native class name).
+       Backdrop closes the modal; Escape too. */
+    .shortcut-modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.62);
+      backdrop-filter: blur(2px);
+      -webkit-backdrop-filter: blur(2px);
+      z-index: 1000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 32px;
+      animation: shortcutModalFadeIn 0.18s ease-out;
+    }
+    @keyframes shortcutModalFadeIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+    .shortcut-modal {
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-strong);
+      border-radius: 12px;
+      width: min(720px, 100%);
+      max-height: min(82vh, 800px);
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 24px 80px rgba(0, 0, 0, 0.6);
+      animation: shortcutModalSlideUp 0.22s cubic-bezier(0.34, 1.4, 0.64, 1);
+    }
+    @keyframes shortcutModalSlideUp {
+      from { opacity: 0; transform: translateY(12px) scale(0.98); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    .shortcut-modal-header {
+      padding: 16px 22px 14px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+    }
+    .shortcut-modal-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-muted);
+      letter-spacing: 0.01em;
+      font-family: ui-monospace, "SF Mono", monospace;
+    }
+    .shortcut-modal-route {
+      margin-top: 6px;
+      font-size: 14px;
+      color: var(--text-strong);
+      font-family: ui-monospace, "SF Mono", monospace;
+      font-weight: 600;
+      word-break: break-word;
+    }
+    .shortcut-modal-arrow {
+      color: var(--accent);
+      margin: 0 4px;
+    }
+    .shortcut-modal-description {
+      margin-top: 8px;
+      font-size: 13px;
+      color: var(--text);
+      line-height: 1.5;
+      max-width: 580px;
+    }
+    .shortcut-modal-close {
+      flex-shrink: 0;
+      width: 32px;
+      height: 32px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--text-muted);
+      font-size: 22px;
+      line-height: 1;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.12s, border-color 0.12s, color 0.12s;
+    }
+    .shortcut-modal-close:hover {
+      background: var(--bg-elevated-2);
+      border-color: var(--border-strong);
+      color: var(--text);
+    }
+    .shortcut-modal-body {
+      padding: 16px 22px 22px;
+      overflow-y: auto;
+    }
+    .shortcut-modal-section-label {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 10px;
+    }
+    .shortcut-step {
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+      background: var(--bg-elevated-2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 14px;
+      margin-bottom: 8px;
+    }
+    .shortcut-step-num {
+      flex-shrink: 0;
+      width: 22px;
+      height: 22px;
+      border-radius: 999px;
+      background: var(--accent-bg);
+      color: var(--accent);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      font-weight: 700;
+      font-family: ui-monospace, "SF Mono", monospace;
+    }
+    .shortcut-step-body {
+      flex: 1;
+      margin: 0;
+      font-family: ui-monospace, "SF Mono", monospace;
+      font-size: 12px;
+      line-height: 1.55;
+      color: var(--text);
+      white-space: pre-wrap;
+      word-break: break-word;
+      tab-size: 2;
+    }
+    .shortcut-modal-native {
+      padding: 14px 16px;
+      background: var(--bg-elevated-2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+    .shortcut-modal-native code {
+      font-family: ui-monospace, "SF Mono", monospace;
+      font-size: 12px;
+      color: var(--text-strong);
+      background: rgba(124, 58, 237, 0.1);
+      padding: 3px 6px;
+      border-radius: 4px;
+      word-break: break-all;
+    }
+    .shortcut-modal-native-note {
+      margin-top: 8px;
+      font-size: 12px;
+      color: var(--text-muted);
+      line-height: 1.5;
+    }
+
+    /* Express-shortcut edges: the body has more than one tool call, so
+       the agent traverses a single graph-edge but performs N taps under
+       the hood. Strokes get a slight purple cast and the label shows the
+       tap-count chip so humans can tell at a glance which lines compress
+       multiple steps. */
+    .react-flow__edge.subway-edge-express .react-flow__edge-path {
+      filter: drop-shadow(0 0 1px rgba(124, 58, 237, 0.4));
+    }
+    .edge-label.edge-label-express {
+      border-color: rgba(124, 58, 237, 0.55);
+      background: linear-gradient(180deg, var(--bg-elevated), rgba(124, 58, 237, 0.08));
+    }
+
+    /* Shortest-path overlay: when a destination is set, the edges along
+       the focal → destination shortest path get a brighter accent stroke
+       and a soft glow so they stand out against the rest of the graph
+       without us having to dim everything else. The class is layered on
+       *after* depth-fade classes so the path stays full-opacity even when
+       it crosses depth tiers (e.g. focal → 4 hops past `maxDepth`). */
+    .react-flow__edge.subway-edge-shortest-path .react-flow__edge-path {
+      filter: drop-shadow(0 0 4px var(--accent));
+      opacity: 1 !important;
+    }
+    .react-flow__edge.subway-edge-shortest-path .react-flow__edge-marker {
+      opacity: 1 !important;
+    }
+
+    /* Edge labels become clickable buttons when their data carries an
+       inspect callback — light cursor + hover highlight so the user can
+       tell they're interactive. We can't tween `transform` for the hover
+       pop because each label's transform also encodes its midpoint
+       position; touching transform here would teleport the label to (0,0).
+       Stick to color/box-shadow changes. */
+    .edge-label.clickable {
+      cursor: pointer;
+      transition: background 0.12s, border-color 0.12s, box-shadow 0.12s;
+    }
+    .edge-label.clickable:hover {
+      background: var(--bg-elevated-2);
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-bg);
+      color: var(--accent);
+    }
 
     .empty-state {
       display: flex; align-items: center; justify-content: center;
@@ -839,18 +1717,23 @@
   </script>
 
   <script type="module">
-    import React, { useState, useMemo, useCallback, useEffect } from 'react';
+    import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
     import { createRoot } from 'react-dom/client';
     import {
       ReactFlow, Background, Controls, MiniMap,
       MarkerType, Handle, Position,
+      BaseEdge, EdgeLabelRenderer, getSmoothStepPath, getStraightPath,
+      useInternalNode,
     } from '@xyflow/react';
     import dagre from '@dagrejs/dagre';
 
-    const NODE_WIDTH = 168;
-    const NODE_HEIGHT = 312;     // title + screenshot + id label
-    const TRAILHEAD_WIDTH = 220;
-    const TRAILHEAD_HEIGHT = 36;
+    const NODE_WIDTH = 220;
+    // Effective height when title runs ~4 lines + screenshot (220×~390 contained)
+    // + id label. Used by the layout to reserve vertical space; React Flow
+    // measures actual height for routing.
+    const NODE_HEIGHT = 470;
+    const TRAILHEAD_WIDTH = 260;
+    const TRAILHEAD_HEIGHT = 42;
     const TRAILHEAD_NODE_PREFIX = 'trailhead-node::';
 
     /* ============================================================================
@@ -1236,8 +2119,15 @@
 
       // Final pixel positions. Each rank's row is centered horizontally
       // around x=0; rows stack downward.
-      const RANKSEP = 92;
-      const NODESEP = 40;
+      // RANKSEP is the vertical gap between depth rows. Generous now (260)
+      // because: (1) titles aren't line-clamped anymore so nodes can be ~470px
+      // tall, (2) edge labels need a clear band between rows to read, and
+      // (3) at this depth the smoothstep curves benefit from extra Y to bend
+      // gracefully instead of cramping into right-angle hairpins.
+      // NODESEP scales with width — wide rows (10+ peer screens) need
+      // headroom for edge labels to sit between siblings.
+      const RANKSEP = 260;
+      const NODESEP = 64;
       const positions = {};
       let y = 80;
       for (let d = 0; d <= maxDepth; d++) {
@@ -1317,35 +2207,224 @@
     const nodeTypes = { waypoint: WaypointNode, trailhead: TrailheadNode };
 
     /* ============================================================================
+       CUSTOM EDGE — staggered HTML labels + class for focus dimming
+       ============================================================================
+       Why custom: React Flow's built-in smoothstep edge centers its label at
+       the path midpoint as an SVG `<text>`. When many edges leave the same
+       source going down to a row of children, all those midpoints land at
+       roughly the same Y, producing the stack-of-labels overlap the user
+       reported ("press a contact in / tap a contact name / tap Back / tap +"
+       all clobbering each other on one horizontal line).
+
+       Fix: render the label as an HTML chip via EdgeLabelRenderer, and shift
+       it by `data.labelOffsetY` so siblings stagger vertically. The offset is
+       computed in the edges memo below as `index_within_source_group * 18 px`
+       centered around 0. With 5 siblings that's labels at y∈{-36,-18,0,18,36}
+       relative to the path midpoint — readable at default zoom, and the
+       clamp keeps things from flying off when one source has 30 children.
+    */
+    /** Center + size of an internal-node, with sensible fallbacks for the
+        first render before React Flow has measured the DOM box. */
+    function getNodeBox(node) {
+      const w = (node && node.measured && node.measured.width)
+        || (node && node.width) || NODE_WIDTH;
+      const h = (node && node.measured && node.measured.height)
+        || (node && node.height) || NODE_HEIGHT;
+      const pos = (node && node.internals && node.internals.positionAbsolute)
+        || (node && node.position) || { x: 0, y: 0 };
+      return {
+        x: pos.x, y: pos.y, w, h,
+        cx: pos.x + w / 2, cy: pos.y + h / 2,
+      };
+    }
+
+    /** Where the line from the node's center toward `point` intersects the
+        node's rectangular border. Used by the floating-edge path so arrows
+        attach to whichever side of the card faces the other endpoint —
+        right side for an edge going right, top for one going up, etc. */
+    function getRectIntersection(box, point) {
+      const dx = point.x - box.cx;
+      const dy = point.y - box.cy;
+      if (dx === 0 && dy === 0) return { x: box.cx, y: box.cy };
+      const halfW = box.w / 2;
+      const halfH = box.h / 2;
+      const tx = dx === 0 ? Infinity : Math.abs(halfW / dx);
+      const ty = dy === 0 ? Infinity : Math.abs(halfH / dy);
+      const t = Math.min(tx, ty);
+      return { x: box.cx + dx * t, y: box.cy + dy * t };
+    }
+
+    function StaggeredEdge(props) {
+      const {
+        id, source, target, sourceX, sourceY, targetX, targetY,
+        sourcePosition, targetPosition,
+        markerEnd, style, label, data,
+      } = props;
+      const useStraight = !!(data && data.straight);
+      const useFloating = !!(data && data.floating);
+      // Hooks must run unconditionally — useInternalNode returns null
+      // when the id isn't found, which we just guard against below.
+      const sourceNode = useInternalNode(source);
+      const targetNode = useInternalNode(target);
+
+      let sx = sourceX, sy = sourceY, tx = targetX, ty = targetY;
+      if (useFloating && sourceNode && targetNode) {
+        const sBox = getNodeBox(sourceNode);
+        const tBox = getNodeBox(targetNode);
+        const sPt = getRectIntersection(sBox, { x: tBox.cx, y: tBox.cy });
+        const tPt = getRectIntersection(tBox, { x: sBox.cx, y: sBox.cy });
+        sx = sPt.x; sy = sPt.y; tx = tPt.x; ty = tPt.y;
+      }
+
+      const [edgePath, midX, midY] = useStraight
+        ? getStraightPath({ sourceX: sx, sourceY: sy, targetX: tx, targetY: ty })
+        : getSmoothStepPath({
+            sourceX: sx, sourceY: sy, targetX: tx, targetY: ty,
+            sourcePosition, targetPosition,
+          });
+      const offsetY = (data && data.labelOffsetY) || 0;
+      const offsetX = (data && data.labelOffsetX) || 0;
+      const labelClass = data && data.labelClass ? data.labelClass : '';
+      const onLabelClick = data && data.onLabelClick;
+      const isClickable = typeof onLabelClick === 'function';
+      const fullLabelClass = 'edge-label ' + labelClass + (isClickable ? ' clickable' : '');
+      return React.createElement(React.Fragment, null,
+        React.createElement(BaseEdge, { path: edgePath, markerEnd, style }),
+        label
+          ? React.createElement(EdgeLabelRenderer, null,
+              React.createElement('div', {
+                className: fullLabelClass,
+                onClick: isClickable
+                  ? (e) => { e.stopPropagation(); onLabelClick(); }
+                  : undefined,
+                style: {
+                  transform: `translate(-50%, -50%) translate(${midX + offsetX}px, ${midY + offsetY}px)`,
+                  // Re-render decision: nodrag/nopan attrs let users still
+                  // pan/scroll when starting on a label; without them, React
+                  // Flow eats the gesture.
+                },
+                'data-nodrag': true,
+                'data-nopan': true,
+              }, label),
+            )
+          : null,
+      );
+    }
+    const edgeTypes = { staggered: StaggeredEdge };
+
+    /* ============================================================================
        MAP VIEW
        ============================================================================ */
-    function MapView({ filtered, selectedWaypoint, onSelectWaypoint, themeKey }) {
+    function MapView({ filtered, selectedWaypoint, onSelectWaypoint, onInspectShortcut, themeKey }) {
       const positions = useMemo(
         () => computeLayout(filtered.waypoints, filtered.shortcuts, filtered.trailheads),
         [filtered.waypoints, filtered.shortcuts, filtered.trailheads],
       );
 
+      // Compute the focused set: when a waypoint W is selected, light up
+      // *every shortest path from any trailhead to W*, plus W's immediate
+      // outgoing neighbors. This answers "how could the agent have arrived
+      // here?" — the union of routes back to a trailhead — instead of just
+      // 1-hop neighbors. Everything outside that union dims out.
+      //
+      // Algorithm: forward BFS from each trailhead destination, recording
+      // the parent of each visited node. If W was reached, walk back through
+      // parents to enumerate the shortest path from that trailhead to W and
+      // add every node + the corresponding shortcut edges to the focused set.
+      // Multiple trailheads → multiple paths → the union shows every shortest
+      // way to get there.
+      const focusedSet = useMemo(() => {
+        if (!selectedWaypoint) return null;
+        const nodes = new Set([selectedWaypoint]);
+        const edges = new Set(); // 'shortcut::<id>' or 'trailhead::<id>'
+
+        // Build forward adjacency, keyed by source. Each entry holds the
+        // outgoing shortcut id alongside the destination so we can identify
+        // the exact edge on the path (not just the node pair) — important
+        // when two shortcuts connect the same pair of waypoints.
+        const forward = new Map();
+        filtered.shortcuts.forEach(sc => {
+          if (!forward.has(sc.from)) forward.set(sc.from, []);
+          forward.get(sc.from).push({ to: sc.to, id: sc.id });
+        });
+
+        // For each trailhead's destination, BFS until W is found, then walk
+        // the parent chain back to mark every node + edge on the route.
+        filtered.trailheads.forEach(th => {
+          if (!forward.has(th.to) && th.to !== selectedWaypoint) {
+            // Trailhead lands at a waypoint with no outgoing shortcuts and
+            // it isn't W — no path to W from here.
+            return;
+          }
+          const parent = new Map(); // childWp -> { from, edgeId }
+          parent.set(th.to, null);
+          const queue = [th.to];
+          let found = th.to === selectedWaypoint;
+          while (queue.length && !found) {
+            const v = queue.shift();
+            const children = forward.get(v) || [];
+            for (const c of children) {
+              if (parent.has(c.to)) continue;
+              parent.set(c.to, { from: v, edgeId: c.id });
+              if (c.to === selectedWaypoint) { found = true; break; }
+              queue.push(c.to);
+            }
+          }
+          if (!found) return;
+
+          // Walk back from W → trailhead-destination, marking the route.
+          let cur = selectedWaypoint;
+          while (cur !== null && parent.get(cur) !== null) {
+            nodes.add(cur);
+            const p = parent.get(cur);
+            edges.add('shortcut::' + p.edgeId);
+            cur = p.from;
+          }
+          // Add the trailhead-destination + the trailhead pill itself
+          // + the trailhead → destination edge.
+          nodes.add(th.to);
+          nodes.add(TRAILHEAD_NODE_PREFIX + th.id);
+          edges.add('trailhead::' + th.id);
+        });
+
+        // Strict path-only focus: nothing else gets added. Off-path edges
+        // (including W's own outgoing "next steps") dim with the rest of
+        // the graph — the user explicitly asked for label brightness to
+        // match the dimmed nodes around them.
+
+        return { nodes, edges };
+      }, [selectedWaypoint, filtered.shortcuts, filtered.trailheads]);
+
       const nodes = useMemo(() => [
-        ...filtered.waypoints.map(wp => ({
-          id: wp.id,
-          type: 'waypoint',
-          position: positions[wp.id] || { x: 0, y: 0 },
-          selected: selectedWaypoint === wp.id,
-          data: {
-            label: wp.id,
-            title: shortNodeTitle(wp.description, wp.id),
-            screenshotDataUri: wp.screenshotDataUri,
-            sourceLabel: wp.sourceLabel,
-          },
-        })),
-        ...filtered.trailheads.map(th => ({
-          id: TRAILHEAD_NODE_PREFIX + th.id,
-          type: 'trailhead',
-          position: positions[TRAILHEAD_NODE_PREFIX + th.id] || { x: 0, y: 0 },
-          data: { label: th.id, description: th.description },
-          draggable: false, selectable: false,
-        })),
-      ], [filtered.waypoints, filtered.trailheads, positions, selectedWaypoint]);
+        ...filtered.waypoints.map(wp => {
+          const dimmed = focusedSet && !focusedSet.nodes.has(wp.id);
+          return {
+            id: wp.id,
+            type: 'waypoint',
+            position: positions[wp.id] || { x: 0, y: 0 },
+            selected: selectedWaypoint === wp.id,
+            className: dimmed ? 'dimmed' : '',
+            data: {
+              label: wp.id,
+              title: shortNodeTitle(wp.description, wp.id),
+              screenshotDataUri: wp.screenshotDataUri,
+              sourceLabel: wp.sourceLabel,
+            },
+          };
+        }),
+        ...filtered.trailheads.map(th => {
+          const id = TRAILHEAD_NODE_PREFIX + th.id;
+          const dimmed = focusedSet && !focusedSet.nodes.has(id);
+          return {
+            id,
+            type: 'trailhead',
+            position: positions[id] || { x: 0, y: 0 },
+            data: { label: th.id, description: th.description },
+            className: dimmed ? 'dimmed' : '',
+            draggable: false, selectable: false,
+          };
+        }),
+      ], [filtered.waypoints, filtered.trailheads, positions, selectedWaypoint, focusedSet]);
 
       // Compute the entry-point set once for edge classification — same set
       // the layout uses to drop back-edges from dagre input. Here we use it
@@ -1355,62 +2434,1607 @@
         () => new Set(filtered.trailheads.map(th => th.to)),
         [filtered.trailheads],
       );
-      const edges = useMemo(() => [
-        ...filtered.shortcuts.map(sc => {
-          const isBack = entryPoints.has(sc.to);
-          return {
-            id: 'shortcut::' + sc.id,
-            source: sc.from,
-            target: sc.to,
-            type: 'smoothstep',
-            className: isBack ? 'back-edge' : '',
-            // Action label on the edge — short text like "tap Withdraw" —
-            // extracted from the shortcut's description. Hide on back-edges
-            // since the action there is implicit (a back gesture / tab tap).
-            label: isBack ? '' : shortEdgeAction(sc.description, sc.from, sc.to),
-            labelBgPadding: [6, 3],
-            labelBgBorderRadius: 4,
-            markerEnd: { type: MarkerType.ArrowClosed, color: isBack ? 'var(--back-edge)' : 'var(--tree-edge)' },
-            style: {
-              stroke: isBack ? 'var(--back-edge)' : 'var(--tree-edge)',
-              strokeWidth: isBack ? 1 : 1.25,
-            },
-          };
-        }),
-        ...filtered.trailheads.map(th => ({
-          id: 'trailhead::' + th.id,
-          source: TRAILHEAD_NODE_PREFIX + th.id,
-          target: th.to,
-          type: 'smoothstep',
-          label: 'entry',
-          labelBgPadding: [6, 3],
-          labelBgBorderRadius: 4,
-          markerEnd: { type: MarkerType.ArrowClosed, color: 'var(--trailhead)' },
-          style: { stroke: 'var(--trailhead)', strokeWidth: 1.5, strokeDasharray: '6 6' },
-        })),
-      ], [filtered.shortcuts, filtered.trailheads]);
+
+      const edges = useMemo(() => {
+        // Group shortcuts by source so we can stagger their label Y offsets —
+        // each child gets `index * 18 px` shift centered around 0, which
+        // unstacks labels that would otherwise pile up at the same midpoint.
+        const sourceGroupCount = new Map();
+        const sourceGroupIndex = new Map();
+        filtered.shortcuts.forEach(sc => {
+          sourceGroupCount.set(sc.from, (sourceGroupCount.get(sc.from) || 0) + 1);
+        });
+        const STAGGER_STEP = 18; // px between sibling labels
+        const STAGGER_CAP = 64;  // don't fly off when one source has many children
+
+        return [
+          ...filtered.shortcuts.map(sc => {
+            const isBack = entryPoints.has(sc.to);
+            const idx = sourceGroupIndex.get(sc.from) || 0;
+            sourceGroupIndex.set(sc.from, idx + 1);
+            const total = sourceGroupCount.get(sc.from) || 1;
+            // Center the offset around 0 so siblings spread above and below
+            // the path midpoint symmetrically. Clamped at ±STAGGER_CAP.
+            let offsetY = (idx - (total - 1) / 2) * STAGGER_STEP;
+            if (offsetY > STAGGER_CAP) offsetY = STAGGER_CAP;
+            if (offsetY < -STAGGER_CAP) offsetY = -STAGGER_CAP;
+
+            // An edge is focused IFF it's explicitly on the focused-path set
+            // (the union of trailhead→W shortest-path edges + W's outgoing
+            // 1-hop edges). Endpoint-membership alone is not enough — two
+            // focused nodes can sit on different paths through the graph,
+            // and an edge between them that's not on those paths should
+            // dim with the rest of the off-path graph.
+            const edgeKey = 'shortcut::' + sc.id;
+            const isFocused = !focusedSet || focusedSet.edges.has(edgeKey);
+            const classes = [];
+            if (isBack) classes.push('back-edge');
+            if (!isFocused) classes.push('dimmed');
+            if (focusedSet && isFocused) classes.push('focused');
+
+            // Label class needs the dimmed marker too — labels are rendered
+            // via EdgeLabelRenderer (a portal), so the .dimmed class on the
+            // edge SVG never cascades down to them.
+            const labelClasses = [];
+            if (isBack) labelClasses.push('back');
+            if (!isFocused) labelClasses.push('dimmed');
+
+            return {
+              id: 'shortcut::' + sc.id,
+              source: sc.from,
+              target: sc.to,
+              type: 'staggered',
+              className: classes.join(' '),
+              label: isBack ? '' : shortEdgeAction(sc.description, sc.from, sc.to),
+              data: {
+                labelOffsetY: offsetY,
+                labelClass: labelClasses.join(' '),
+                // Click the label to open the inspect modal — back-edges
+                // have no label so the click handler simply never fires
+                // on them (label === '' in that branch).
+                onLabelClick: onInspectShortcut ? () => onInspectShortcut(sc) : null,
+              },
+              markerEnd: {
+                type: MarkerType.ArrowClosed,
+                color: isBack ? 'var(--back-edge)' : 'var(--tree-edge)',
+                width: isBack ? 14 : 18,
+                height: isBack ? 14 : 18,
+              },
+              style: {
+                stroke: isBack ? 'var(--back-edge)' : 'var(--tree-edge)',
+                strokeWidth: isBack ? 1.25 : 2.5,
+              },
+            };
+          }),
+          ...filtered.trailheads.map(th => {
+            const edgeKey = 'trailhead::' + th.id;
+            // Same strict path-only rule as shortcut edges — the trailhead
+            // edge is focused only when its id is explicitly in the path
+            // set. Sharing a landing waypoint with a focused trailhead
+            // doesn't make this one's edge focused.
+            const isFocused = !focusedSet || focusedSet.edges.has(edgeKey);
+            const classes = [];
+            if (!isFocused) classes.push('dimmed');
+            const labelClasses = ['trailhead'];
+            if (!isFocused) labelClasses.push('dimmed');
+            return {
+              id: 'trailhead::' + th.id,
+              source: TRAILHEAD_NODE_PREFIX + th.id,
+              target: th.to,
+              type: 'staggered',
+              className: classes.join(' '),
+              label: 'entry',
+              data: { labelOffsetY: 0, labelClass: labelClasses.join(' ') },
+              markerEnd: { type: MarkerType.ArrowClosed, color: 'var(--trailhead)', width: 18, height: 18 },
+              style: { stroke: 'var(--trailhead)', strokeWidth: 2, strokeDasharray: '7 6' },
+            };
+          }),
+        ];
+      }, [filtered.shortcuts, filtered.trailheads, entryPoints, focusedSet, onInspectShortcut]);
 
       const onNodeClick = useCallback((_, node) => {
         if (node.type === 'waypoint') onSelectWaypoint(node.id);
       }, [onSelectWaypoint]);
 
+      // Click the empty pane to clear the selection — exits focus mode and
+      // un-dims everything. Also called when the user double-clicks a
+      // node-empty area.
+      const onPaneClick = useCallback(() => onSelectWaypoint(null), [onSelectWaypoint]);
+
+      // Capture the React Flow instance so we can auto-zoom to the
+      // focused-path bounds whenever the user selects a waypoint. With
+      // the off-path nodes already dimmed and the path edges highlighted,
+      // zooming to just those bounds turns the whole map into "this is
+      // how you got here" at a glance.
+      const flowInstanceRef = useRef(null);
+      const onInit = useCallback((instance) => {
+        flowInstanceRef.current = instance;
+      }, []);
+      useEffect(() => {
+        const inst = flowInstanceRef.current;
+        if (!inst) return;
+        const t = setTimeout(() => {
+          if (!focusedSet) {
+            // Selection cleared → return to the full-map fit.
+            inst.fitView({ duration: 600, padding: 0.18 });
+            return;
+          }
+          // Compute a bounding box over every focused node (waypoints +
+          // any focused trailhead pills). Use measured dimensions when
+          // React Flow has them, fall back to the declared sizes.
+          let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+          let counted = 0;
+          focusedSet.nodes.forEach(id => {
+            const node = inst.getNode(id);
+            if (!node || !node.position) return;
+            const isTH = id.startsWith(TRAILHEAD_NODE_PREFIX);
+            const w = (node.measured && node.measured.width) || (isTH ? TRAILHEAD_WIDTH : NODE_WIDTH);
+            const h = (node.measured && node.measured.height) || (isTH ? TRAILHEAD_HEIGHT : NODE_HEIGHT);
+            const x = node.position.x;
+            const y = node.position.y;
+            if (x < minX) minX = x;
+            if (y < minY) minY = y;
+            if (x + w > maxX) maxX = x + w;
+            if (y + h > maxY) maxY = y + h;
+            counted += 1;
+          });
+          if (counted === 0) return;
+          inst.fitBounds(
+            { x: minX, y: minY, width: maxX - minX, height: maxY - minY },
+            { duration: 700, padding: 0.18 },
+          );
+        }, 80);
+        return () => clearTimeout(t);
+      }, [focusedSet]);
+
       return React.createElement(ReactFlow, {
         // Re-key on filter/theme change so React Flow flushes layout state and
         // node positions don't tween between configurations.
         key: themeKey,
-        nodes, edges, nodeTypes,
+        nodes, edges, nodeTypes, edgeTypes,
         fitView: true,
         fitViewOptions: { padding: 0.18 },
         minZoom: 0.1,
         nodesConnectable: false,
         edgesFocusable: false,
+        onInit,
         onNodeClick,
+        onPaneClick,
       },
         React.createElement(Background, { gap: 24, size: 1, color: 'rgba(220,226,240,0.05)' }),
         React.createElement(Controls, { showInteractive: false }),
-        React.createElement(MiniMap, { pannable: true, zoomable: true }),
+        React.createElement(MiniMap, {
+          pannable: true,
+          zoomable: true,
+          nodeColor: subwayMiniMapNodeColor,
+          nodeStrokeColor: 'rgba(220, 226, 240, 0.35)',
+          nodeStrokeWidth: 1,
+          maskColor: 'rgba(0, 0, 0, 0.55)',
+        }),
       );
     }
+
+    /* ============================================================================
+       SUBWAY VIEW — concentric, focal-centered, expand-on-click
+       ============================================================================
+       Mental model: pick a focal station (default = first trailhead's
+       destination). Render the focal at the origin. Stations 1 hop away
+       sit on a ring at radius R₁; 2 hops on a ring at R₂; deeper hops are
+       hidden until the user opts into them by clicking an expandable node.
+       Edges between any two visible stations get drawn — they include
+       upstream shortcuts (so you can see "how could I get here from a
+       neighbor"), not just downstream ones.
+
+       Click semantics:
+         - plain click on a station: expand it — its outgoing shortcuts
+           reveal one more level of children, added to the visible set
+         - shift-click (or ⌘-click) on a station: re-center — that station
+           becomes the new focal, ring distances recompute
+         - click background: clears selection (does not change focal)
+
+       "Lines" = journeys from a trailhead to a leaf waypoint. Each line
+       gets a categorical color from a 12-color palette (rotated by hash).
+       Edges color by the dominant line they belong to. Stations on multiple
+       lines (transfer stations) show no extra decoration — the inbound
+       edges already broadcast the line colors visually.
+    */
+    const SUBWAY_PALETTE = [
+      '#FF6B6B', '#4ECDC4', '#FFD166', '#A78BFA',
+      '#06D6A0', '#FF9F1C', '#118AB2', '#EF476F',
+      '#73D2DE', '#F4A261', '#9D4EDD', '#43AA8B',
+    ];
+    function colorForJourney(idx) { return SUBWAY_PALETTE[idx % SUBWAY_PALETTE.length]; }
+
+    /** Undirected adjacency from shortcuts. Same Map<id, Set<id>> shape used
+        by every subway-graph traversal below. */
+    function buildUndirectedAdj(shortcuts) {
+      const adj = new Map();
+      shortcuts.forEach(sc => {
+        if (!adj.has(sc.from)) adj.set(sc.from, new Set());
+        if (!adj.has(sc.to)) adj.set(sc.to, new Set());
+        adj.get(sc.from).add(sc.to);
+        adj.get(sc.to).add(sc.from);
+      });
+      return adj;
+    }
+
+    /** Build a BFS tree rooted at `rootId` over an adjacency map.
+        Returns { depth, parent, children }. Children only includes BFS-tree
+        edges (not back-edges) so we can recurse for radial layout. */
+    function buildBfsTree(rootId, adj) {
+      const depth = new Map([[rootId, 0]]);
+      const parent = new Map();
+      const children = new Map();
+      const queue = [rootId];
+      while (queue.length) {
+        const v = queue.shift();
+        const d = depth.get(v);
+        const ns = adj.get(v) || new Set();
+        // Stable order — sort neighbors so the BFS tree shape is deterministic
+        // across runs and dropdown switches.
+        [...ns].sort().forEach(n => {
+          if (!depth.has(n)) {
+            depth.set(n, d + 1);
+            parent.set(n, v);
+            if (!children.has(v)) children.set(v, []);
+            children.get(v).push(n);
+            queue.push(n);
+          }
+        });
+      }
+      return { depth, parent, children };
+    }
+
+    /** Radial-tree angles allocated over a *subset* of the full BFS tree.
+        Each visible node owns an angular wedge of its parent's wedge,
+        proportional to its visible-subtree size. Recomputing per visible
+        set is what gives us the "balanced in every direction" property —
+        wedges resize as the user reveals new branches, so freshly-revealed
+        nodes don't crowd into a sliver and existing nodes spread out to
+        share the freed space. */
+    function radialAnglesVisible(rootId, visibleChildren) {
+      const subtreeSize = new Map();
+      function sizeOf(id) {
+        if (subtreeSize.has(id)) return subtreeSize.get(id);
+        const kids = visibleChildren.get(id) || [];
+        let total = 1;
+        kids.forEach(k => { total += sizeOf(k); });
+        subtreeSize.set(id, total);
+        return total;
+      }
+      sizeOf(rootId);
+
+      const angles = new Map();
+      function allocate(id, startAngle, endAngle) {
+        angles.set(id, (startAngle + endAngle) / 2);
+        const kids = visibleChildren.get(id) || [];
+        if (kids.length === 0) return;
+        const totalSize = kids.reduce((s, k) => s + sizeOf(k), 0);
+        let cursor = startAngle;
+        kids.forEach(k => {
+          const fraction = sizeOf(k) / totalSize;
+          const wedge = (endAngle - startAngle) * fraction;
+          allocate(k, cursor, cursor + wedge);
+          cursor += wedge;
+        });
+      }
+      // -π/2 start = first kids land near 12 o'clock — a top-anchored
+      // mental model is what people expect from a centered focal.
+      allocate(rootId, -Math.PI / 2, -Math.PI / 2 + 2 * Math.PI);
+      return angles;
+    }
+
+    const SUBWAY_RING_BASE = 520; // baseline distance to ring 1 from focal
+    const SUBWAY_RING_STEP = 480; // baseline distance between subsequent rings
+    const SUBWAY_RING_MAX = 5200; // hard ceiling so dense rings don't fly off
+    // Depth-keyed effective node width — the CSS shrinks waypoint cards
+    // by ring depth, and the per-ring radius calc reads from this so a
+    // crowded ring 5 of small nodes doesn't get pushed out as far as a
+    // ring 5 of full-size nodes would.
+    function subwayNodeWidthForDepth(d) {
+      if (d <= 1) return 220;
+      if (d === 2) return 200;
+      if (d === 3) return 180;
+      if (d === 4) return 160;
+      return 145;
+    }
+
+    /** Per-depth ring radii. The baseline is `BASE + (d-1)*STEP`, but we push
+        a ring outward when its tightest sibling pair would overlap at the
+        baseline radius — chord = 2·r·sin(Δθ/2), so the smallest gap on the
+        ring dictates the minimum r that fits SUBWAY_MIN_NODE_SEP between
+        adjacent siblings. We also enforce monotonic growth (ring d+1 is
+        always at least one ring-step beyond ring d) so you never get rings
+        crossing each other. */
+    function computeDepthRadii(visibleIds, focalId, angleMap, depthMap) {
+      const byDepth = new Map();
+      visibleIds.forEach(id => {
+        if (id === focalId) return;
+        const d = depthMap.get(id);
+        if (d === undefined) return;
+        if (!byDepth.has(d)) byDepth.set(d, []);
+        byDepth.get(d).push(angleMap.get(id) || 0);
+      });
+      const radii = new Map();
+      const sortedDepths = [...byDepth.keys()].sort((a, b) => a - b);
+      let prevR = 0;
+      sortedDepths.forEach(d => {
+        const angles = byDepth.get(d).slice().sort((a, b) => a - b);
+        let minGap = 2 * Math.PI;
+        if (angles.length > 1) {
+          for (let i = 0; i < angles.length; i++) {
+            const next = angles[(i + 1) % angles.length];
+            let gap = next - angles[i];
+            if (gap <= 0) gap += 2 * Math.PI;
+            if (gap < minGap) minGap = gap;
+          }
+        }
+        const baseR = SUBWAY_RING_BASE + (d - 1) * SUBWAY_RING_STEP;
+        let needed = baseR;
+        if (angles.length > 1 && minGap > 0 && minGap < 2 * Math.PI) {
+          // Depth-aware separation — outer rings of smaller cards can pack
+          // tighter without overlap.
+          const minNodeSep = subwayNodeWidthForDepth(d) + 70;
+          const requiredForGap = (minNodeSep / 2) / Math.sin(minGap / 2);
+          needed = Math.max(needed, requiredForGap);
+        }
+        // Each ring must clear the previous one by at least one ring-step.
+        needed = Math.max(needed, prevR + SUBWAY_RING_STEP);
+        needed = Math.min(needed, SUBWAY_RING_MAX);
+        radii.set(d, needed);
+        prevR = needed;
+      });
+      return radii;
+    }
+
+    /** Slightly bouncy easing — overshoots ~10% then settles. The user
+        asked for "not super bouncy" but with a playful feel; this lands
+        in that window. */
+    function easeOutBack(t) {
+      const c1 = 1.4;
+      const c3 = c1 + 1;
+      return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+    }
+
+    /** Animate the React Flow viewport so a given world point lands at
+        the visual center of the container, with optional zoom change.
+        Uses a custom RAF loop with easeOutBack — React Flow's built-in
+        setCenter/fitView animations are linear-ish and don't have the
+        playful settle the user asked for. Returns a cancel function. */
+    function flyViewportTo(rfInstance, containerEl, worldX, worldY, targetZoom, duration) {
+      if (!rfInstance || !containerEl) return () => {};
+      const rect = containerEl.getBoundingClientRect();
+      const start = rfInstance.getViewport();
+      const z = (targetZoom !== undefined && targetZoom !== null) ? targetZoom : start.zoom;
+      const tX = rect.width / 2 - worldX * z;
+      const tY = rect.height / 2 - worldY * z;
+      const startTime = performance.now();
+      let cancelled = false;
+      function tick() {
+        if (cancelled) return;
+        const elapsed = performance.now() - startTime;
+        const u = Math.min(1, elapsed / duration);
+        const e = easeOutBack(u);
+        rfInstance.setViewport({
+          x: start.x + (tX - start.x) * e,
+          y: start.y + (tY - start.y) * e,
+          zoom: start.zoom + (z - start.zoom) * e,
+        });
+        if (u < 1) requestAnimationFrame(tick);
+      }
+      requestAnimationFrame(tick);
+      return () => { cancelled = true; };
+    }
+
+    /** URL-hash routing for the subway view. The hash carries focal/depth/dest
+        as query-string-style key=value pairs (e.g. `#focal=clock/home&depth=4`)
+        so a user can copy the address bar and share a link that lands at the
+        same view. We use the *hash* (not the path) so the static HTML works
+        equally well opened from `file://` (CLI export) and `http://localhost:.../waypoints/graph`
+        (live daemon) — the server never sees the hash, so no routing config
+        on the daemon side is required.
+
+        URL writes go through `history.replaceState` (not pushState) so each
+        focal change doesn't grow the browser's back stack — the in-app
+        Back/Forward buttons own focal-history navigation, and pushState would
+        compete with them. The recipient of a shared URL still lands correctly
+        because the hash is read once on mount and used as initial state. */
+    function parseSubwayHash() {
+      if (typeof window === 'undefined' || !window.location || !window.location.hash) return {};
+      const raw = window.location.hash.replace(/^#/, '');
+      if (!raw) return {};
+      const out = {};
+      // decodeURIComponent throws URIError on invalid percent-escapes (e.g. a
+      // stray `%` or `%G1`). A single malformed fragment in the address bar
+      // shouldn't crash the page — skip the offending pair and keep going so
+      // the rest of the hash still applies.
+      raw.split('&').forEach(pair => {
+        if (!pair) return;
+        const eq = pair.indexOf('=');
+        if (eq < 0) return;
+        let k, v;
+        try {
+          k = decodeURIComponent(pair.slice(0, eq));
+          v = decodeURIComponent(pair.slice(eq + 1));
+        } catch (_) {
+          return;
+        }
+        if (k && v) out[k] = v;
+      });
+      return out;
+    }
+
+    /** Build the canonical hash string from a partial state. Skips empty/null
+        values so the URL stays minimal — `#focal=x` is shorter than
+        `#focal=x&depth=&dest=`. Callers pass current state; we serialize. */
+    function buildSubwayHash({ focal, depth, dest }) {
+      const parts = [];
+      if (focal) parts.push('focal=' + encodeURIComponent(focal));
+      if (depth !== undefined && depth !== null) parts.push('depth=' + depth);
+      if (dest) parts.push('dest=' + encodeURIComponent(dest));
+      return parts.length > 0 ? '#' + parts.join('&') : '';
+    }
+
+    function SubwayView({ filtered, journeys, selectedWaypoint, onSelectWaypoint, onInspectShortcut, onAgentTextChange, themeKey }) {
+      // Focal model: the subway is a "what can I reach from this waypoint?"
+      // view, with the focal waypoint sitting at the center. The picker
+      // exposes every waypoint as a candidate focal, with trailhead landings
+      // marked (✈) so they're easy to spot. Default focal = the first
+      // trailhead's destination (the natural "starting point" of a journey).
+      const trailheads = filtered.trailheads;
+      const trailheadByLanding = useMemo(() => {
+        const m = new Map();
+        trailheads.forEach(th => {
+          if (!m.has(th.to)) m.set(th.to, []);
+          m.get(th.to).push(th);
+        });
+        return m;
+      }, [trailheads]);
+
+      // Default focal = the first trailhead pill itself (so the journey's
+      // origin is at the visual center). Falls back to the alphabetically-
+      // first waypoint when there are no trailheads.
+      const defaultFocalId = useMemo(() => {
+        if (trailheads.length > 0) return TRAILHEAD_NODE_PREFIX + trailheads[0].id;
+        if (filtered.waypoints.length > 0) {
+          return [...filtered.waypoints].sort((a, b) => a.id.localeCompare(b.id))[0].id;
+        }
+        return null;
+      }, [trailheads, filtered.waypoints]);
+
+      // One-time read of `#focal=...&depth=...&dest=...` so a shared URL lands
+      // at the same view its author saw. Lazy initializer so we read the hash
+      // exactly once on mount — re-reading per render would fight every state
+      // update. Subsequent navigations write back via `history.replaceState`
+      // (see the sync effect below) but never re-read.
+      const initialHash = useRef(parseSubwayHash()).current;
+      const initialFocalFromHash = (() => {
+        const h = initialHash.focal;
+        if (!h) return null;
+        // Validate: trailhead ids carry the prefix; waypoint ids don't. We can't
+        // pre-check membership here because filtered may not have populated yet
+        // on first render — the existing focal-resync effect handles "filter
+        // wiped it out" already, so we trust the hash and let validation flow
+        // through there.
+        return h;
+      })();
+
+      const [focalId, setFocalId] = useState(initialFocalFromHash || defaultFocalId);
+
+      // Browser-style history stack of focal ids the user has navigated
+      // through. Back/Forward step through it without touching the
+      // dropdown. We keep this in-memory (not hash-routed) — simpler,
+      // self-contained, and survives any focal-id format changes; the
+      // shareable-URL story can be a separate hash-router pass later.
+      const [focalHistory, setFocalHistory] = useState(() => defaultFocalId ? [defaultFocalId] : []);
+      const [historyIndex, setHistoryIndex] = useState(0);
+
+      // navigateTo replaces direct setFocalId calls for *user-initiated*
+      // navigation (canvas clicks, dropdown changes). It pushes to history
+      // and truncates any forward entries — same model as a browser
+      // back/forward stack: navigating after a Back wipes the redo path.
+      const navigateTo = useCallback((id) => {
+        if (!id) return;
+        // No-op if already at this focal.
+        if (focalHistory[historyIndex] === id) return;
+        setFocalHistory(prev => {
+          const truncated = prev.slice(0, historyIndex + 1);
+          return [...truncated, id];
+        });
+        setHistoryIndex(idx => idx + 1);
+        setFocalId(id);
+      }, [focalHistory, historyIndex]);
+
+      const goBack = useCallback(() => {
+        if (historyIndex <= 0) return;
+        const newIdx = historyIndex - 1;
+        setHistoryIndex(newIdx);
+        setFocalId(focalHistory[newIdx]);
+        onSelectWaypoint(null);
+      }, [historyIndex, focalHistory, onSelectWaypoint]);
+
+      const goForward = useCallback(() => {
+        if (historyIndex >= focalHistory.length - 1) return;
+        const newIdx = historyIndex + 1;
+        setHistoryIndex(newIdx);
+        setFocalId(focalHistory[newIdx]);
+        onSelectWaypoint(null);
+      }, [historyIndex, focalHistory, onSelectWaypoint]);
+
+      const canGoBack = historyIndex > 0;
+      const canGoForward = historyIndex < focalHistory.length - 1;
+
+      // Helpers for the dual-namespace focal id (waypoint or trailhead pill).
+      const isTrailheadId = (id) => typeof id === 'string' && id.startsWith(TRAILHEAD_NODE_PREFIX);
+      const trailheadFromNodeId = useCallback((id) => {
+        if (!isTrailheadId(id)) return null;
+        const tid = id.slice(TRAILHEAD_NODE_PREFIX.length);
+        return trailheads.find(th => th.id === tid) || null;
+      }, [trailheads]);
+
+      // Resync focal when the filter wipes it out — works for both
+      // waypoint and trailhead-pill ids.
+      useMemo(() => {
+        if (!focalId) return;
+        const existsAsWaypoint = filtered.waypoints.some(w => w.id === focalId);
+        const existsAsTrailhead = isTrailheadId(focalId) && !!trailheadFromNodeId(focalId);
+        if (!existsAsWaypoint && !existsAsTrailhead) {
+          setFocalId(defaultFocalId);
+        }
+      }, [filtered.waypoints, trailheads, focalId, defaultFocalId, trailheadFromNodeId]);
+
+      // Adjacency for the BFS — *directed*. Both shortcuts and trailheads
+      // are one-way edges in the model: from any waypoint, the user can
+      // only forward-navigate via outgoing shortcuts. The subway view
+      // mirrors this — "from where I am, where can I go?" — so the BFS
+      // walks only forward edges. Back-edges from a deeper node to an
+      // earlier visible node are still rendered (they're outgoing from
+      // their own source); they just never *expand* the visible set in
+      // the wrong direction.
+      const adj = useMemo(() => {
+        const a = new Map();
+        filtered.shortcuts.forEach(sc => {
+          if (!a.has(sc.from)) a.set(sc.from, new Set());
+          a.get(sc.from).add(sc.to);
+          // Make sure both endpoints have an entry so callers can iterate
+          // them without `|| new Set()` everywhere.
+          if (!a.has(sc.to)) a.set(sc.to, new Set());
+        });
+        trailheads.forEach(th => {
+          const tid = TRAILHEAD_NODE_PREFIX + th.id;
+          if (!a.has(tid)) a.set(tid, new Set());
+          if (th.to) {
+            a.get(tid).add(th.to);
+            if (!a.has(th.to)) a.set(th.to, new Set());
+          }
+        });
+        return a;
+      }, [filtered.shortcuts, trailheads]);
+
+      const tree = useMemo(() => {
+        if (!focalId) return { depth: new Map(), parent: new Map(), children: new Map() };
+        return buildBfsTree(focalId, adj);
+      }, [focalId, adj]);
+
+      // Per-node manual position overrides — when the user drags a node,
+      // we capture its drop position and use it on every subsequent render
+      // so React Flow doesn't snap the node back to its radial slot. The
+      // map clears whenever the focal changes (fresh layout from the new
+      // center) or when the user hits Reset.
+      const [customPositions, setCustomPositions] = useState(() => new Map());
+
+      // Reset custom positions when the user picks a new focal.
+      const lastFocalRef = useRef(focalId);
+      if (lastFocalRef.current !== focalId) {
+        lastFocalRef.current = focalId;
+        setTimeout(() => {
+          setCustomPositions(new Map());
+        }, 0);
+      }
+
+      // Visible set: focal + every node reachable in ≤ `maxDepth` forward
+      // hops. Defaults to 2 (matches what we'd hand the LLM today) but
+      // exposed as a UI control so we can dial up to e.g. 10 when we want
+      // to see further or hand the agent a richer adjacency snapshot.
+      // The agent-view text uses the same depth, so the canvas and the
+      // prompt stay aligned.
+      const SUBWAY_DEPTH_MIN = 1;
+      const SUBWAY_DEPTH_MAX = 10;
+      const initialDepthFromHash = (() => {
+        const raw = initialHash.depth;
+        if (!raw) return null;
+        const n = parseInt(raw, 10);
+        if (Number.isNaN(n)) return null;
+        return Math.min(SUBWAY_DEPTH_MAX, Math.max(SUBWAY_DEPTH_MIN, n));
+      })();
+      const [maxDepth, setMaxDepth] = useState(initialDepthFromHash != null ? initialDepthFromHash : 3);
+
+      // Destination picker. When set, the viewer overlays the shortest forward
+      // path from focal → destination and ALWAYS makes the full path visible
+      // (even when some path nodes are beyond `maxDepth`) so the answer to
+      // "how do I get from A to B?" is never clipped by the depth bound.
+      // Cleared via the dropdown's "(none)" entry or whenever the user
+      // navigates to a new focal — the destination is always relative to a
+      // specific origin, so it doesn't survive a re-root.
+      // Initialize from `?dest=` in the hash if present so a shared URL with
+      // both focal and dest lands with the path overlay drawn.
+      const [destinationId, setDestinationId] = useState(initialHash.dest || null);
+
+      // Clear the destination when it stops being forward-reachable from the
+      // current focal. Don't clear on *every* focal change — that would
+      // discard a hash-supplied destination the moment the `hashchange`
+      // listener applies a `#focal=x&dest=y` URL (both setters fire in the
+      // same batch, the focal-change effect would still see a transition
+      // and stomp the freshly-set dest). Instead, look at whether `dest`
+      // appears in the new BFS tree and clear only when it doesn't.
+      // Side benefit: clicking through to a focal that still has the dest
+      // forward-reachable preserves the overlay automatically.
+      useEffect(() => {
+        if (!destinationId) return;
+        if (!tree.depth.has(destinationId)) {
+          setDestinationId(null);
+        }
+      }, [tree.depth, destinationId]);
+
+      // Hash sync — write the canonical hash whenever focal/depth/dest changes.
+      // `replaceState` keeps the browser's back stack out of focal navigation
+      // (the in-app Back button owns that history); the hash exists solely to
+      // make the address bar shareable. Skipping this when nothing's loaded
+      // avoids writing a `#focal=null` shape on the first paint.
+      useEffect(() => {
+        if (typeof window === 'undefined' || !window.history) return;
+        if (!focalId) return;
+        const next = buildSubwayHash({ focal: focalId, depth: maxDepth, dest: destinationId });
+        // Avoid no-op writes — replacing with the same hash would still emit
+        // a hashchange event in some browsers, and the listener below would
+        // bounce right back into setState.
+        if (next === window.location.hash) return;
+        try {
+          window.history.replaceState(null, '', next || window.location.pathname + window.location.search);
+        } catch (_) {
+          // file:// URLs sometimes refuse history APIs in strict browser
+          // configurations — fall back silently rather than throwing on the
+          // common offline-export use case.
+        }
+      }, [focalId, maxDepth, destinationId]);
+
+      // Listen for external hash changes (manual edits, browser back/forward
+      // when *another* page on this tab pushed history, paste-and-go) and
+      // resync state. The guard against our own writes is via the equality
+      // check in the writer — if we wrote the current hash, this listener
+      // sees no diff and returns.
+      useEffect(() => {
+        if (typeof window === 'undefined') return;
+        const handler = () => {
+          const h = parseSubwayHash();
+          if (h.focal && h.focal !== focalId) setFocalId(h.focal);
+          // `h.depth != null` (rather than truthiness) so a hypothetical
+          // `depth=0` parses through to the clamp below and lifts to
+          // SUBWAY_DEPTH_MIN, instead of getting silently dropped at the gate.
+          // The parser already filters empty strings via the `if (k && v)`
+          // guard, so the only falsy value reaching here is undefined.
+          if (h.depth != null) {
+            const n = parseInt(h.depth, 10);
+            if (!Number.isNaN(n)) {
+              const clamped = Math.min(SUBWAY_DEPTH_MAX, Math.max(SUBWAY_DEPTH_MIN, n));
+              if (clamped !== maxDepth) setMaxDepth(clamped);
+            }
+          }
+          const nextDest = h.dest || null;
+          if (nextDest !== destinationId) setDestinationId(nextDest);
+        };
+        window.addEventListener('hashchange', handler);
+        return () => window.removeEventListener('hashchange', handler);
+      }, [focalId, maxDepth, destinationId]);
+
+      // Shortest-path from focal → destinationId, computed by walking
+      // `tree.parent` back from the destination. `tree` is already a BFS
+      // tree rooted at the focal, so the parent-walk yields the shortest
+      // forward path by construction. Returns:
+      //   - found: true with `nodes` (focal-to-dest, inclusive) and `edges`
+      //     (set of `subway::<sc.id>` / `subway-th::<th.id>` ids that lie on
+      //     the path) when destination is reachable forward.
+      //   - found: false with empty collections otherwise. The picker UI
+      //     surfaces "no path" so the user knows the destination isn't
+      //     forward-reachable from this focal — they might need to pick a
+      //     different starting point or accept that the graph has no edge.
+      const pathToDest = useMemo(() => {
+        const empty = { found: false, nodes: [], edges: new Set(), hops: 0 };
+        if (!focalId || !destinationId) return empty;
+        if (destinationId === focalId) return empty;
+        if (!tree.depth.has(destinationId)) return empty;
+        // Walk parents back to focal, collecting nodes in reverse.
+        const reverse = [destinationId];
+        let cur = destinationId;
+        while (cur !== focalId) {
+          const p = tree.parent.get(cur);
+          if (p === undefined) return empty; // disconnected — shouldn't happen if depth was set, but defend
+          reverse.push(p);
+          cur = p;
+        }
+        const nodes = reverse.reverse();
+        const edgeIds = new Set();
+        // Build a quick lookup so step-edge resolution is O(1) per step.
+        const shortcutByFromTo = new Map(); // 'from||to' -> sc.id  (any one — multiple parallel edges collapse)
+        filtered.shortcuts.forEach(sc => {
+          const k = sc.from + '||' + sc.to;
+          if (!shortcutByFromTo.has(k)) shortcutByFromTo.set(k, sc.id);
+        });
+        for (let i = 0; i + 1 < nodes.length; i++) {
+          const a = nodes[i];
+          const b = nodes[i + 1];
+          if (typeof a === 'string' && a.startsWith(TRAILHEAD_NODE_PREFIX)) {
+            edgeIds.add('subway-th::' + a.slice(TRAILHEAD_NODE_PREFIX.length));
+          } else {
+            const scId = shortcutByFromTo.get(a + '||' + b);
+            if (scId) edgeIds.add('subway::' + scId);
+          }
+        }
+        return { found: true, nodes, edges: edgeIds, hops: nodes.length - 1 };
+      }, [focalId, destinationId, tree.depth, tree.parent, filtered.shortcuts]);
+
+      const visibleIds = useMemo(() => {
+        if (!focalId) return new Set();
+        const visible = new Set();
+        tree.depth.forEach((d, id) => {
+          if (d <= maxDepth) visible.add(id);
+        });
+        // Always include focal even if depth map didn't capture it.
+        visible.add(focalId);
+        // Always include the full destination path — the user picked a
+        // destination explicitly and shouldn't have to also bump depth to
+        // see the answer. Edges on the path are highlighted regardless.
+        if (pathToDest.found) {
+          pathToDest.nodes.forEach(id => visible.add(id));
+        }
+        return visible;
+      }, [focalId, tree.depth, maxDepth, pathToDest]);
+
+      // Children-of-visible — the slice of the BFS tree that's actually
+      // rendered as full waypoint cards. Ghost previews are layered on
+      // top *without* participating in this allocation, so adding/removing
+      // ghosts doesn't shift the visible siblings' angular slots.
+      const visibleChildren = useMemo(() => {
+        const m = new Map();
+        visibleIds.forEach(id => {
+          const kids = (tree.children.get(id) || []).filter(k => visibleIds.has(k));
+          if (kids.length > 0) m.set(id, kids);
+        });
+        return m;
+      }, [visibleIds, tree.children]);
+
+      const angleMap = useMemo(() => {
+        if (!focalId) return new Map();
+        return radialAnglesVisible(focalId, visibleChildren);
+      }, [focalId, visibleChildren]);
+
+      // Per-depth ring radius — pushed outward when the densest sibling
+      // pair on that ring would overlap at the baseline radius.
+      const depthRadii = useMemo(() => {
+        if (!focalId) return new Map();
+        return computeDepthRadii(visibleIds, focalId, angleMap, tree.depth);
+      }, [focalId, visibleIds, angleMap, tree.depth]);
+
+      // One color per journey (trailhead → leaf path). Edges that appear
+      // on multiple journeys take the color of the lowest-index journey.
+      const edgeColors = useMemo(() => {
+        const colors = new Map();
+        const edgeId = new Map();
+        filtered.shortcuts.forEach(sc => {
+          edgeId.set(sc.from + '||' + sc.to, sc.id);
+        });
+        journeys.forEach((j, idx) => {
+          const color = colorForJourney(idx);
+          for (let i = 0; i + 1 < j.path.length; i++) {
+            const eid = edgeId.get(j.path[i] + '||' + j.path[i + 1]);
+            if (eid && !colors.has(eid)) colors.set(eid, color);
+          }
+        });
+        return colors;
+      }, [journeys, filtered.shortcuts]);
+
+      const positions = useMemo(() => {
+        const m = new Map();
+        if (!focalId) return m;
+        // Custom positions (from manual drags) take precedence over the
+        // auto-computed radial slot. Focal stays at origin unless the
+        // user has explicitly dragged it elsewhere.
+        m.set(focalId, customPositions.get(focalId) || { x: 0, y: 0 });
+        visibleIds.forEach(id => {
+          if (id === focalId) return;
+          if (customPositions.has(id)) {
+            m.set(id, customPositions.get(id));
+            return;
+          }
+          const d = tree.depth.get(id);
+          const a = angleMap.get(id);
+          if (d === undefined || a === undefined) return;
+          const r = depthRadii.get(d) || (SUBWAY_RING_BASE + (d - 1) * SUBWAY_RING_STEP);
+          m.set(id, { x: Math.cos(a) * r, y: Math.sin(a) * r });
+        });
+        return m;
+      }, [focalId, visibleIds, tree.depth, angleMap, depthRadii, customPositions]);
+
+      const stationNodes = useMemo(() => {
+        const arr = [];
+        filtered.waypoints.forEach(wp => {
+          if (!visibleIds.has(wp.id)) return;
+          const pos = positions.get(wp.id) || { x: 0, y: 0 };
+          const isFocal = wp.id === focalId;
+          const d = tree.depth.get(wp.id) || 0;
+          const depthClass = d >= 6 ? 'subway-depth-deep' : ('subway-depth-' + d);
+          const classes = [depthClass];
+          if (isFocal) classes.push('subway-focal');
+          arr.push({
+            id: wp.id,
+            type: 'subwayStation',
+            position: pos,
+            draggable: true,
+            selected: selectedWaypoint === wp.id,
+            className: classes.join(' '),
+            data: {
+              label: wp.id,
+              title: shortNodeTitle(wp.description, wp.id),
+              screenshotDataUri: wp.screenshotDataUri,
+              sourceLabel: wp.sourceLabel,
+            },
+          });
+        });
+        return arr;
+      }, [filtered.waypoints, positions, visibleIds, focalId, selectedWaypoint, tree.depth]);
+
+      // Trailhead pill nodes — first-class citizens in the subway graph.
+      // Click semantics are the same as station nodes (re-root focal).
+      const trailheadNodes = useMemo(() => {
+        const arr = [];
+        trailheads.forEach(th => {
+          const tid = TRAILHEAD_NODE_PREFIX + th.id;
+          if (!visibleIds.has(tid)) return;
+          const pos = positions.get(tid) || { x: 0, y: 0 };
+          const isFocal = tid === focalId;
+          const d = tree.depth.get(tid) || 0;
+          const depthClass = d >= 6 ? 'subway-depth-deep' : ('subway-depth-' + d);
+          const classes = [depthClass];
+          if (isFocal) classes.push('subway-focal');
+          arr.push({
+            id: tid,
+            type: 'subwayTrailhead',
+            position: pos,
+            draggable: true,
+            selected: false,
+            className: classes.join(' '),
+            width: TRAILHEAD_WIDTH,
+            height: TRAILHEAD_HEIGHT,
+            data: {
+              label: th.id,
+              description: th.description,
+            },
+          });
+        });
+        return arr;
+      }, [trailheads, visibleIds, focalId, positions, tree.depth]);
+
+      const allNodes = useMemo(
+        () => [...stationNodes, ...trailheadNodes],
+        [stationNodes, trailheadNodes],
+      );
+
+      // Forward-only edges. Two filters together:
+      //   1. depth(from) < depth(to) — the edge must take the user
+      //      *outward* in the BFS expansion. Back-edges (deeper node →
+      //      shallower) and same-depth cross-edges are skipped, because
+      //      they don't represent forward navigation from "where I am."
+      //   2. dedupe by directed (from, to) pair so variants sharing the
+      //      same source/target collapse into a single rendered edge —
+      //      the inspect modal still surfaces all variants on click.
+      const dedupedEdges = useMemo(() => {
+        const seen = new Set();
+        const out = [];
+        filtered.shortcuts.forEach(sc => {
+          if (!visibleIds.has(sc.from) || !visibleIds.has(sc.to)) return;
+          const dFrom = tree.depth.get(sc.from);
+          const dTo = tree.depth.get(sc.to);
+          if (dFrom === undefined || dTo === undefined) return;
+          if (dFrom >= dTo) return;
+          const key = sc.from + '||' + sc.to;
+          if (seen.has(key)) return;
+          seen.add(key);
+          out.push(sc);
+        });
+        return out;
+      }, [filtered.shortcuts, visibleIds, tree.depth]);
+
+      const edges = useMemo(() => {
+        const arr = dedupedEdges.map(sc => {
+          const edgeKey = 'subway::' + sc.id;
+          const onPath = pathToDest.found && pathToDest.edges.has(edgeKey);
+          const baseColor = edgeColors.get(sc.id) || 'var(--tree-edge)';
+          const color = onPath ? 'var(--accent)' : baseColor;
+          // Edge depth = max of its endpoints, so it fades with the dimmer
+          // side. A label class mirror keeps the portaled label opacity in
+          // sync with the edge stroke. Path-overlay edges bypass the depth
+          // dimming so the answer to "how do I get there" reads cleanly
+          // even when the destination is past `maxDepth`.
+          const dFrom = tree.depth.get(sc.from) || 0;
+          const dTo = tree.depth.get(sc.to) || 0;
+          const d = Math.max(dFrom, dTo);
+          const depthClass = d >= 5 ? 'subway-edge-depth-deep' : ('subway-edge-depth-' + d);
+          // Express-shortcut badge: when the shortcut body is more than
+          // one tool call, the agent reaches the destination in a single
+          // graph-edge but multiple actual taps. Show the tap count
+          // inline so humans see "this is graph-distance 1 but 3 taps
+          // under the hood."
+          const tapCount = (sc.toolsList && sc.toolsList.length) || 0;
+          const baseLabel = shortEdgeAction(sc.description, sc.from, sc.to);
+          const label = (tapCount > 1)
+            ? baseLabel + '  ·  ' + tapCount + ' taps'
+            : baseLabel;
+          const classes = [depthClass];
+          if (tapCount > 1) classes.push('subway-edge-express');
+          if (onPath) classes.push('subway-edge-shortest-path');
+          return {
+            id: edgeKey,
+            source: sc.from,
+            target: sc.to,
+            type: 'staggered',
+            className: classes.join(' '),
+            label,
+            data: {
+              straight: true,
+              floating: true,
+              labelOffsetY: 0,
+              labelClass: tapCount > 1 ? 'edge-label-express' : '',
+              // Click the label to open the shortcut inspect modal —
+              // the user can see exactly which actions take them from
+              // sc.from to sc.to.
+              onLabelClick: onInspectShortcut ? () => onInspectShortcut(sc) : null,
+            },
+            markerEnd: { type: MarkerType.ArrowClosed, color, width: onPath ? 18 : 16, height: onPath ? 18 : 16 },
+            style: {
+              stroke: color,
+              strokeWidth: onPath ? 5 : 3,
+              strokeOpacity: onPath ? 1 : 0.85,
+            },
+          };
+        });
+        // Trailhead → landing "launch" edges. Drawn dashed in the trailhead
+        // color so they're visually distinct from regular shortcuts.
+        trailheads.forEach(th => {
+          const tid = TRAILHEAD_NODE_PREFIX + th.id;
+          if (!visibleIds.has(tid) || !visibleIds.has(th.to)) return;
+          const dFrom = tree.depth.get(tid) || 0;
+          const dTo = tree.depth.get(th.to) || 0;
+          const d = Math.max(dFrom, dTo);
+          const depthClass = d >= 5 ? 'subway-edge-depth-deep' : ('subway-edge-depth-' + d);
+          const edgeKey = 'subway-th::' + th.id;
+          const onPath = pathToDest.found && pathToDest.edges.has(edgeKey);
+          const classes = [depthClass];
+          if (onPath) classes.push('subway-edge-shortest-path');
+          arr.push({
+            id: edgeKey,
+            source: tid,
+            target: th.to,
+            type: 'staggered',
+            className: classes.join(' '),
+            label: 'launch',
+            data: { straight: true, floating: true, labelOffsetY: 0, labelClass: 'trailhead' },
+            markerEnd: { type: MarkerType.ArrowClosed, color: onPath ? 'var(--accent)' : 'var(--trailhead)', width: onPath ? 18 : 16, height: onPath ? 18 : 16 },
+            style: {
+              stroke: onPath ? 'var(--accent)' : 'var(--trailhead)',
+              strokeWidth: onPath ? 5 : 2.5,
+              strokeDasharray: onPath ? null : '5 4',
+              strokeOpacity: onPath ? 1 : 0.95,
+            },
+          });
+        });
+        return arr;
+      }, [dedupedEdges, edgeColors, tree.depth, trailheads, visibleIds, onInspectShortcut, pathToDest]);
+
+      const onNodeClick = useCallback((evt, node) => {
+        // Subway semantics: every click re-roots the focal at that node.
+        // navigateTo pushes onto the history stack so Back can return to
+        // the previous focal, then setFocalId fires the BFS recompute and
+        // the unified animation effect handles the camera move.
+        navigateTo(node.id);
+        if (!isTrailheadId(node.id)) {
+          onSelectWaypoint(node.id);
+        } else {
+          onSelectWaypoint(null);
+        }
+      }, [navigateTo, onSelectWaypoint]);
+
+      const onPaneClick = useCallback(() => onSelectWaypoint(null), [onSelectWaypoint]);
+
+      // Cancel any fly-to-selected animation the moment a drag begins —
+      // otherwise the camera tries to chase the node while the user is
+      // moving it, which feels broken.
+      const onNodeDragStart = useCallback(() => {
+        cancelInFlightAnim();
+      }, []);
+
+      // Update the override on every drag tick so the node visibly tracks
+      // the cursor. Capturing only on dragStop fails because the `position`
+      // prop we pass into ReactFlow is recomputed from the radial layout
+      // each render and snaps the node back to its slot mid-drag.
+      const onNodeDrag = useCallback((evt, node) => {
+        setCustomPositions(prev => {
+          const next = new Map(prev);
+          next.set(node.id, { x: node.position.x, y: node.position.y });
+          return next;
+        });
+      }, []);
+
+      // dragStop is still useful as a safety net — if the final position
+      // arrives via the stop event but not the last drag tick (rare), this
+      // ensures we don't leave the node at a stale intermediate spot.
+      const onNodeDragStop = useCallback((evt, node) => {
+        setCustomPositions(prev => {
+          const next = new Map(prev);
+          next.set(node.id, { x: node.position.x, y: node.position.y });
+          return next;
+        });
+      }, []);
+
+      const resetExpansion = useCallback(() => {
+        setCustomPositions(new Map());
+        onSelectWaypoint(null);
+      }, [onSelectWaypoint]);
+
+      // Two refs: the React Flow instance (for setViewport / fitView) and
+      // the wrapping DOM container (for measuring viewport size when we
+      // compute the centering target).
+      const flowInstanceRef = useRef(null);
+      const containerRef = useRef(null);
+      const animCancelRef = useRef(null);
+      const onInit = useCallback((instance) => {
+        flowInstanceRef.current = instance;
+      }, []);
+
+      // Cancel whatever animation is currently in flight so a fresh request
+      // doesn't fight the previous one.
+      const cancelInFlightAnim = () => {
+        if (animCancelRef.current) {
+          animCancelRef.current();
+          animCancelRef.current = null;
+        }
+      };
+
+      // Unified camera animation. Fires on focal *or* selected change, and
+      // always uses the bouncy easeOutBack tweener so dropdown swaps,
+      // canvas clicks, and external selections all feel the same. Two
+      // separate effects raced each other when both fired in the same
+      // click (focal + selected both update); merging into one with a
+      // single setTimeout makes the cancellation deterministic.
+      useEffect(() => {
+        const inst = flowInstanceRef.current;
+        const container = containerRef.current;
+        if (!inst || !container || !focalId) return;
+        const t = setTimeout(() => {
+          cancelInFlightAnim();
+          // When selected is distinct from focal (e.g. user picked a
+          // waypoint from the side journey panel without re-focusing),
+          // fly to the selected node at the current zoom. Otherwise the
+          // target is the focal itself at world (0, 0), and we also
+          // compute a zoom that fits ring 1 in the viewport — so a click
+          // automatically zooms out enough to see "where can I go from
+          // here?" without losing the neighbors off-screen.
+          let wx = 0, wy = 0;
+          let targetZoom; // undefined = keep current zoom
+          if (selectedWaypoint && selectedWaypoint !== focalId) {
+            const node = inst.getNode(selectedWaypoint);
+            if (node && node.position) {
+              const w = (node.measured && node.measured.width) || NODE_WIDTH;
+              const h = (node.measured && node.measured.height) || NODE_HEIGHT;
+              wx = node.position.x + w / 2;
+              wy = node.position.y + h / 2;
+            }
+          } else {
+            // Fit ring 1 + ring 2 in the viewport. Visible set is capped
+            // at depth 2, so the outer extent is just the largest ring
+            // radius depthRadii has computed.
+            let maxR = depthRadii.get(1) || SUBWAY_RING_BASE;
+            const r2 = depthRadii.get(2);
+            if (r2 && r2 > maxR) maxR = r2;
+            const rect = container.getBoundingClientRect();
+            // Pad each side with a full card half so the outermost
+            // element doesn't clip its own border against the viewport.
+            const fitW = 2 * (maxR + NODE_WIDTH / 2);
+            const fitH = 2 * (maxR + NODE_HEIGHT / 2);
+            if (rect.width > 0 && rect.height > 0 && fitW > 0 && fitH > 0) {
+              const zoomW = (rect.width * 0.9) / fitW;
+              const zoomH = (rect.height * 0.9) / fitH;
+              // No 1× cap — sparse views (focal with few neighbors) should
+              // zoom *in* to fill the viewport, not leave acres of dead
+              // space. 2× cap as a soft upper bound for edge cases like
+              // a leaf focal with nothing else to fit.
+              targetZoom = Math.min(2, Math.min(zoomW, zoomH));
+            }
+          }
+          animCancelRef.current = flyViewportTo(inst, container, wx, wy, targetZoom, 700);
+        }, 80);
+        return () => clearTimeout(t);
+      }, [focalId, selectedWaypoint, depthRadii, visibleIds, tree.children, tree.depth]);
+
+      // Picker options come in three sections: the trailheads themselves
+      // (selecting one re-centers on its pill), then trailhead landings
+      // (waypoints reachable in one launch), then every other waypoint.
+      const focalOptions = useMemo(() => {
+        const trailheadDestSet = new Set(trailheads.map(th => th.to));
+        const sortedWps = [...filtered.waypoints].sort((a, b) => a.id.localeCompare(b.id));
+        const trailheadDests = sortedWps.filter(w => trailheadDestSet.has(w.id));
+        const others = sortedWps.filter(w => !trailheadDestSet.has(w.id));
+        const sortedTHs = [...trailheads].sort((a, b) => a.id.localeCompare(b.id));
+        const groups = [];
+        if (sortedTHs.length > 0) {
+          groups.push(React.createElement('optgroup', { key: 'trailheads', label: 'Trailheads' },
+            sortedTHs.map(th => React.createElement('option', {
+              key: TRAILHEAD_NODE_PREFIX + th.id,
+              value: TRAILHEAD_NODE_PREFIX + th.id,
+            }, '✈ ' + th.id))));
+        }
+        if (trailheadDests.length > 0) {
+          groups.push(React.createElement('optgroup', { key: 'landings', label: 'Trailhead landings' },
+            trailheadDests.map(wp => React.createElement('option', {
+              key: wp.id, value: wp.id,
+            }, wp.id))));
+        }
+        if (others.length > 0) {
+          groups.push(React.createElement('optgroup', { key: 'waypoints', label: 'Other waypoints' },
+            others.map(wp => React.createElement('option', {
+              key: wp.id, value: wp.id,
+            }, wp.id))));
+        }
+        return groups;
+      }, [filtered.waypoints, trailheads]);
+
+      const trailheadHint = useMemo(() => {
+        const ths = trailheadByLanding.get(focalId) || [];
+        if (ths.length === 0) return null;
+        return ths.map(th => th.id).join(', ');
+      }, [trailheadByLanding, focalId]);
+
+      // Destination dropdown options: only waypoints that are forward-reachable
+      // from the current focal, sorted by hop distance then id. Showing
+      // unreachable destinations would give the user the impression they could
+      // pick *anything* and get a path — but the graph is directed and forward-
+      // only navigation is the planner's model, so a backward-only destination
+      // is genuinely a "no path" answer. Filtering at the source is more
+      // honest than rendering "no path" 90% of the time.
+      const destinationOptions = useMemo(() => {
+        if (!focalId) return [];
+        const reachable = [];
+        tree.depth.forEach((d, id) => {
+          if (id === focalId) return;
+          if (typeof id === 'string' && id.startsWith(TRAILHEAD_NODE_PREFIX)) return; // trailheads aren't destinations
+          reachable.push({ id, hops: d });
+        });
+        reachable.sort((a, b) => a.hops - b.hops || a.id.localeCompare(b.id));
+        const groups = [];
+        // Group by hop count up to 3, then a single "Further" bucket so the
+        // dropdown doesn't grow an optgroup per ring. Most useful destinations
+        // are within 1–3 hops; deeper ones are still selectable but live in a
+        // single far group.
+        const buckets = new Map();
+        reachable.forEach(({ id, hops }) => {
+          const bucket = hops <= 3 ? hops : 'far';
+          if (!buckets.has(bucket)) buckets.set(bucket, []);
+          buckets.get(bucket).push(id);
+        });
+        const orderedKeys = [1, 2, 3, 'far'].filter(k => buckets.has(k));
+        orderedKeys.forEach(k => {
+          const label = k === 'far' ? 'Further (4+ hops)' : (k + ' hop' + (k === 1 ? '' : 's'));
+          groups.push(React.createElement('optgroup', { key: 'dest-' + k, label },
+            buckets.get(k).map(id => React.createElement('option', { key: id, value: id }, id))));
+        });
+        return groups;
+      }, [focalId, tree.depth]);
+
+      // Agent-view text — the prompt format we'd hand the LLM. Two-part
+      // structure to keep token usage flat as depth grows: first, a
+      // depth-grouped list of *just* waypoint ids (with the immediate
+      // parent shown for context past depth 1); then two flat lookup
+      // appendices — one for waypoint descriptions, one for the
+      // shortcuts used along the visible BFS tree. Each unique waypoint
+      // and shortcut appears in the dictionary exactly once regardless
+      // of how many paths cite it.
+      const agentViewText = useMemo(() => {
+        if (!focalId) return '';
+        const wpById = new Map();
+        filtered.waypoints.forEach(wp => wpById.set(wp.id, wp));
+        const thById = new Map();
+        filtered.trailheads.forEach(th => thById.set(th.id, th));
+        const labelFor = (id) => {
+          if (id.startsWith(TRAILHEAD_NODE_PREFIX)) return '✈ ' + id.slice(TRAILHEAD_NODE_PREFIX.length);
+          return id;
+        };
+        const shortcutsFromTo = (from, to) => filtered.shortcuts.filter(sc => sc.from === from && sc.to === to);
+
+        const out = [];
+        out.push('You are at: ' + labelFor(focalId));
+        out.push('');
+
+        // Group reachable nodes by hop distance, capped at maxDepth.
+        const byDepth = new Map();
+        tree.depth.forEach((d, id) => {
+          if (id === focalId) return;
+          if (d < 1 || d > maxDepth) return;
+          if (!byDepth.has(d)) byDepth.set(d, []);
+          byDepth.get(d).push(id);
+        });
+
+        for (let d = 1; d <= maxDepth; d++) {
+          const ids = (byDepth.get(d) || []).slice().sort();
+          out.push('Reachable in ' + d + ' hop' + (d === 1 ? '' : 's') + ' (' + ids.length + '):');
+          if (ids.length === 0) {
+            out.push(d === 1 ? '  (none — leaf node)' : '  (none)');
+            out.push('');
+            continue;
+          }
+          ids.forEach(id => {
+            if (d === 1) {
+              out.push('  ' + labelFor(id));
+            } else {
+              // Show only the immediate parent with a back-arrow. The
+              // full chain is recoverable from each node's parent link,
+              // and the action labels live in the SHORTCUTS appendix
+              // below — no need to repeat them per path.
+              const parent = tree.parent.get(id);
+              out.push('  ' + labelFor(id) + '  ← ' + labelFor(parent));
+            }
+          });
+          out.push('');
+        }
+
+        // Appendix 1: descriptions for every waypoint cited above plus
+        // the focal itself. Sorted for stable diffs across regenerations.
+        const allVisible = new Set([focalId]);
+        byDepth.forEach(ids => ids.forEach(id => allVisible.add(id)));
+        const sortedVisible = [...allVisible].sort();
+        out.push('---');
+        out.push('WAYPOINT DESCRIPTIONS');
+        out.push('');
+        sortedVisible.forEach(id => {
+          if (id.startsWith(TRAILHEAD_NODE_PREFIX)) {
+            const thid = id.slice(TRAILHEAD_NODE_PREFIX.length);
+            const th = thById.get(thid);
+            const desc = (th && th.description) ? th.description : '(trailhead)';
+            out.push('  ' + labelFor(id));
+            out.push('    ' + desc);
+          } else {
+            const wp = wpById.get(id);
+            const desc = (wp && wp.description) ? wp.description : '(no description)';
+            out.push('  ' + id);
+            out.push('    ' + desc);
+          }
+        });
+        out.push('');
+
+        // Appendix 2: every shortcut that connects two visible nodes
+        // along the BFS tree (i.e. every edge actually involved in a
+        // visible path). One line per unique (from → to) pair.
+        out.push('---');
+        out.push('SHORTCUTS USED (from → to: action)');
+        out.push('');
+        const seenSc = new Set();
+        const usedShortcutLines = [];
+        byDepth.forEach(ids => {
+          ids.forEach(id => {
+            const parent = tree.parent.get(id);
+            if (!parent) return;
+            // Trailhead → landing edges have no shortcut record.
+            if (parent.startsWith(TRAILHEAD_NODE_PREFIX)) {
+              const key = 'th::' + parent + '||' + id;
+              if (seenSc.has(key)) return;
+              seenSc.add(key);
+              usedShortcutLines.push(
+                '  ' + labelFor(parent) + ' → ' + id + ': launch (trailhead)'
+              );
+              return;
+            }
+            const scs = shortcutsFromTo(parent, id);
+            scs.forEach(sc => {
+              const key = 'sc::' + sc.id;
+              if (seenSc.has(key)) return;
+              seenSc.add(key);
+              const taps = (sc.toolsList && sc.toolsList.length) || 1;
+              const tapNote = taps > 1 ? ' [' + taps + ' taps]' : '';
+              const action = sc.description || sc.id;
+              usedShortcutLines.push(
+                '  ' + labelFor(sc.from) + ' → ' + labelFor(sc.to) + ': ' + action + tapNote
+              );
+            });
+          });
+        });
+        usedShortcutLines.sort();
+        usedShortcutLines.forEach(line => out.push(line));
+
+        return out.join('\n');
+      }, [focalId, maxDepth, tree.depth, tree.parent, filtered.shortcuts, filtered.waypoints, filtered.trailheads]);
+
+      // Bubble the live agent text up to App so the unified right-side
+      // panel can render it without us owning a panel here in SubwayView.
+      // Fires every time the focal/depth/graph data changes — same memo
+      // re-runs already drive the canvas re-render.
+      useEffect(() => {
+        if (onAgentTextChange) onAgentTextChange(agentViewText);
+      }, [agentViewText, onAgentTextChange]);
+
+      // Render — single canvas container. The agent panel lives in App now,
+      // toggled via the right-panel-mode pill so subway can show Detail,
+      // Agent View, or nothing depending on what the user wants.
+      return React.createElement('div', {
+          ref: containerRef,
+          className: 'subway-flow',
+          style: { position: 'relative', height: '100%', width: '100%' },
+        },
+        React.createElement('div', { className: 'subway-help' },
+          React.createElement('strong', { style: { color: 'var(--text)' } }, 'Subway map'),
+          React.createElement('br'),
+          'Focal at center, with every waypoint reachable in ≤ ' + maxDepth + ' forward hop' + (maxDepth === 1 ? '' : 's') + '. This is the same adjacency we hand the agent in its prompt — adjust the Depth input to see further or feed the LLM a richer snapshot.',
+          trailheadHint
+            ? React.createElement(React.Fragment, null,
+                React.createElement('br'),
+                React.createElement('span', { style: { color: 'var(--trailhead)' } }, '✈ Reachable from trailhead: ' + trailheadHint),
+              )
+            : null,
+        ),
+        React.createElement('div', { className: 'subway-trailhead-picker' },
+          // Back / Forward — step through the in-memory focal history
+          // without disturbing the dropdown. Solves the "I clicked into a
+          // leaf and now I'm stuck" problem and the more general "undo a
+          // focal swap" case.
+          React.createElement('div', { className: 'depth-stepper', title: 'Back / Forward through focal history' },
+            React.createElement('button', {
+              type: 'button',
+              onClick: goBack,
+              disabled: !canGoBack,
+              title: 'Back to previous focal',
+              'aria-label': 'Back',
+            }, '‹'),
+            React.createElement('button', {
+              type: 'button',
+              onClick: goForward,
+              disabled: !canGoForward,
+              title: 'Forward to next focal',
+              'aria-label': 'Forward',
+            }, '›'),
+          ),
+          React.createElement('label', null, 'Focal'),
+          React.createElement('select', {
+            value: focalId || '',
+            onChange: (e) => {
+              // Clearing selection on focal change avoids a chase animation:
+              // otherwise the fitView fires for the new focal at the same
+              // moment the fly-to-selected effect fires for a now-stale
+              // selectedWaypoint, and they fight for the viewport.
+              onSelectWaypoint(null);
+              navigateTo(e.target.value);
+            },
+          }, focalOptions),
+          React.createElement('label', { title: 'How many forward hops to render and include in the agent prompt' }, 'Depth'),
+          React.createElement('div', {
+            className: 'depth-stepper',
+            title: 'Hops shown (' + SUBWAY_DEPTH_MIN + '–' + SUBWAY_DEPTH_MAX + ')',
+          },
+            React.createElement('button', {
+              type: 'button',
+              onClick: () => setMaxDepth(d => Math.max(SUBWAY_DEPTH_MIN, d - 1)),
+              disabled: maxDepth <= SUBWAY_DEPTH_MIN,
+              title: 'Decrease depth',
+              'aria-label': 'Decrease depth',
+            }, '−'),
+            React.createElement('div', { className: 'depth-value' }, maxDepth),
+            React.createElement('button', {
+              type: 'button',
+              onClick: () => setMaxDepth(d => Math.min(SUBWAY_DEPTH_MAX, d + 1)),
+              disabled: maxDepth >= SUBWAY_DEPTH_MAX,
+              title: 'Increase depth',
+              'aria-label': 'Increase depth',
+            }, '+'),
+          ),
+          // Destination picker — overlay shortest forward path from focal to
+          // the chosen waypoint. Hidden when no waypoints are forward-reachable
+          // (focal is a leaf or filter wiped everything past it) since the
+          // dropdown would only contain "(none)".
+          (destinationOptions.length > 0)
+            ? React.createElement(React.Fragment, null,
+                React.createElement('label', { title: 'Highlight the shortest forward path from the focal to this waypoint' }, 'Destination'),
+                React.createElement('select', {
+                  value: destinationId || '',
+                  onChange: (e) => setDestinationId(e.target.value || null),
+                  title: pathToDest.found
+                    ? ('Path: ' + pathToDest.hops + ' hop' + (pathToDest.hops === 1 ? '' : 's'))
+                    : (destinationId ? 'No forward path to this destination' : 'Pick a destination to overlay its shortest path'),
+                },
+                  React.createElement('option', { value: '' }, '(none)'),
+                  destinationOptions,
+                ),
+              )
+            : null,
+          React.createElement('button', {
+            className: 'subway-reset-btn',
+            onClick: resetExpansion,
+            title: 'Clear selection and snap viewport back to the focal',
+          }, 'Reset'),
+        ),
+        React.createElement(ReactFlow, {
+          // Key on theme only — including focalId here would unmount the
+          // whole ReactFlow on every focal change, losing every node's
+          // prior DOM identity and short-circuiting CSS transitions.
+          // The clicked node would teleport to center instead of sliding
+          // there with the rest of the graph.
+          key: themeKey,
+          nodes: allNodes, edges,
+          nodeTypes: subwayNodeTypes,
+          edgeTypes: { staggered: StaggeredEdge },
+          fitView: true,
+          fitViewOptions: { padding: 0.22 },
+          minZoom: 0.05,
+          nodesConnectable: false,
+          edgesFocusable: false,
+          onInit, onNodeClick, onPaneClick, onNodeDragStart, onNodeDrag, onNodeDragStop,
+        },
+          React.createElement(Background, { gap: 24, size: 1, color: 'rgba(220,226,240,0.05)' }),
+          React.createElement(Controls, { showInteractive: false }),
+          React.createElement(MiniMap, {
+            pannable: true,
+            zoomable: true,
+            // Default MiniMap reads node.style.background for color, but our
+            // custom nodes carry their fill via CSS classes — so we hand it
+            // an explicit color function. Trailheads in their accent purple,
+            // selected in the focal accent, everything else in a soft text
+            // tone that still reads on the dark MiniMap backdrop.
+            nodeColor: subwayMiniMapNodeColor,
+            nodeStrokeColor: 'rgba(220, 226, 240, 0.35)',
+            nodeStrokeWidth: 1,
+            maskColor: 'rgba(0, 0, 0, 0.55)',
+          }),
+        ),
+      );
+    }
+
+    // Color function shared by the MAP and SUBWAY MiniMaps. Defined at module
+    // scope so the MiniMap doesn't churn props every render.
+    function subwayMiniMapNodeColor(node) {
+      // Ghosts are visual hints, not real graph nodes — keep them barely
+      // there in the MiniMap so they don't impersonate stations.
+      if (node.type === 'subwayGhost') return 'rgba(220, 226, 240, 0.15)';
+      if (node.type === 'subwayTrailhead' || node.type === 'trailhead') return '#7c3aed';
+      if (node.selected) return '#22c55e';
+      const cls = (node && node.className) || '';
+      if (cls.indexOf('subway-focal') >= 0) return '#22c55e';
+      return 'rgba(220, 226, 240, 0.6)';
+    }
+
+    function SubwayStationNode({ data, selected }) {
+      const cls = 'waypoint-node' + (selected ? ' selected' : '');
+      // Only show the count chip for the leftover descendants that aren't
+      // represented by a ghost preview card — the cards themselves
+      // communicate "what's one step past here."
+      const leftover = data.leftover || 0;
+      const indicator = leftover > 0
+        ? React.createElement('div', {
+            className: 'subway-expandable-indicator',
+            title: '+' + leftover + ' more station' + (leftover === 1 ? '' : 's') + ' past the visible previews — click to reveal',
+          }, '+' + leftover)
+        : null;
+      return React.createElement('div', {
+          style: { position: 'relative' },
+          title: data.sourceLabel || data.label,
+        },
+        React.createElement(Handle, {
+          type: 'target', position: Position.Top, isConnectable: false,
+          style: { opacity: 0, top: 0 },
+        }),
+        React.createElement('div', { className: cls },
+          React.createElement('div', { className: 'waypoint-title' }, data.title),
+          data.screenshotDataUri
+            ? React.createElement('img', { src: data.screenshotDataUri, className: 'waypoint-screenshot', alt: data.label })
+            : React.createElement('div', { className: 'waypoint-no-screenshot' }, '(no screenshot)'),
+          React.createElement('div', { className: 'waypoint-label' }, data.label),
+        ),
+        indicator,
+        React.createElement(Handle, {
+          type: 'source', position: Position.Bottom, isConnectable: false,
+          style: { opacity: 0, bottom: 0 },
+        }),
+      );
+    }
+    function SubwayTrailheadNode({ data, selected }) {
+      const leftover = data.leftover || 0;
+      const indicator = leftover > 0
+        ? React.createElement('div', {
+            className: 'subway-expandable-indicator',
+            title: '+' + leftover + ' more station' + (leftover === 1 ? '' : 's') + ' past the visible previews — click to reveal',
+          }, '+' + leftover)
+        : null;
+      const pillCls = 'subway-trailhead-pill' + (selected ? ' selected' : '');
+      return React.createElement('div', {
+          style: { position: 'relative' },
+          title: data.description || data.label,
+        },
+        React.createElement(Handle, {
+          type: 'target', position: Position.Top, isConnectable: false,
+          style: { opacity: 0, top: 0 },
+        }),
+        React.createElement('div', { className: pillCls },
+          React.createElement('span', { className: 'trailhead-icon' }, '✈'),
+          data.label,
+        ),
+        indicator,
+        React.createElement(Handle, {
+          type: 'source', position: Position.Bottom, isConnectable: false,
+          style: { opacity: 0, bottom: 0 },
+        }),
+      );
+    }
+    function SubwayGhostNode({ data }) {
+      // Scaled-down preview card — non-interactive (well, click re-roots
+      // the focal), shows the actual hidden waypoint (or trailhead pill)
+      // so the user can see what lies past their current focal at a
+      // glance. Handles are required for React Flow to register the node
+      // as a valid edge endpoint — without them, ghost-edges to this
+      // node either render at (0, 0) or get silently skipped.
+      if (data.kind === 'trailhead') {
+        return React.createElement('div', {
+            style: { position: 'relative' },
+            title: data.description || data.label,
+          },
+          React.createElement(Handle, {
+            type: 'target', position: Position.Top, isConnectable: false,
+            style: { opacity: 0, top: 0 },
+          }),
+          React.createElement('div', { className: 'subway-ghost-trailhead' },
+            React.createElement('span', { className: 'trailhead-icon' }, '✈'),
+            data.label,
+          ),
+          React.createElement(Handle, {
+            type: 'source', position: Position.Bottom, isConnectable: false,
+            style: { opacity: 0, bottom: 0 },
+          }),
+        );
+      }
+      return React.createElement('div', {
+          style: { position: 'relative' },
+          title: data.label,
+        },
+        React.createElement(Handle, {
+          type: 'target', position: Position.Top, isConnectable: false,
+          style: { opacity: 0, top: 0 },
+        }),
+        React.createElement('div', { className: 'subway-ghost-card' },
+          React.createElement('div', { className: 'subway-ghost-title' }, data.title),
+          data.screenshotDataUri
+            ? React.createElement('img', {
+                src: data.screenshotDataUri,
+                className: 'subway-ghost-screenshot',
+                alt: data.label,
+              })
+            : React.createElement('div', { className: 'subway-ghost-no-screenshot' }),
+        ),
+        React.createElement(Handle, {
+          type: 'source', position: Position.Bottom, isConnectable: false,
+          style: { opacity: 0, bottom: 0 },
+        }),
+      );
+    }
+    const subwayNodeTypes = {
+      subwayStation: SubwayStationNode,
+      subwayTrailhead: SubwayTrailheadNode,
+      subwayGhost: SubwayGhostNode,
+    };
+
+    /** Constants tuning the ghost preview fan. Per-parent we render up to
+        SUBWAY_GHOST_MAX scaled-down cards arranged in two layers fanning
+        outward (away from focal). Anything past the cap stays hidden and
+        the parent gets a "+N more" badge counting the remaining nodes. */
+    const SUBWAY_GHOST_MAX = 12;
+    const SUBWAY_GHOST_PER_LAYER = 6;
+    const SUBWAY_GHOST_LAYER_0_DIST = 150;
+    const SUBWAY_GHOST_LAYER_1_DIST = 280;
+    const SUBWAY_GHOST_FAN = 1.3; // ~75° max arc width per layer
+    const SUBWAY_GHOST_CARD_W = 78;
+    const SUBWAY_GHOST_CARD_H = 145;
 
     /* ============================================================================
        SCREENS VIEW — flat gallery
@@ -1550,6 +4174,109 @@
     /* ============================================================================
        DETAIL PANEL — right-side click-to-explore
        ============================================================================ */
+    /** Body-only version of DetailPanel — no outer aside, no header bar.
+     *  The unified right-panel dock supplies those (tabs at top, single
+     *  × close), so this component just renders the structured detail
+     *  sections inline. The waypoint title moves into the body's first
+     *  section since the tabs replace the title bar. */
+    function DetailPanelInline({ waypoint, incoming, outgoing, trailheads, onSelectWaypoint, allWaypoints }) {
+      if (!waypoint) return null;
+      return React.createElement('div', { className: 'detail-content' },
+        React.createElement('div', { className: 'detail-inline-title' },
+          React.createElement('h3', null, waypoint.description?.split('.')[0] || waypoint.id),
+          React.createElement('div', { className: 'id' }, waypoint.id),
+        ),
+        waypoint.screenshotDataUri
+          ? React.createElement('div', { className: 'detail-screenshot' },
+              React.createElement('img', { src: waypoint.screenshotDataUri, alt: waypoint.id }),
+            )
+          : null,
+        waypoint.description
+          ? React.createElement('div', { className: 'detail-section' },
+              React.createElement('h4', null, 'Description'),
+              React.createElement('p', null, waypoint.description),
+            )
+          : null,
+        (waypoint.required && waypoint.required.length > 0)
+          ? React.createElement('div', { className: 'detail-section' },
+              React.createElement('h4', null, 'Required (' + waypoint.required.length + ')'),
+              React.createElement('p', { style: { fontSize: '11px', color: 'var(--text-muted)', marginBottom: '8px' } },
+                'All of these must match the captured tree for the waypoint to be considered identified.',
+              ),
+              ...waypoint.required.map((entry, i) => renderMatcherEntry(entry, i, false)),
+            )
+          : null,
+        (waypoint.forbidden && waypoint.forbidden.length > 0)
+          ? React.createElement('div', { className: 'detail-section' },
+              React.createElement('h4', null, 'Forbidden (' + waypoint.forbidden.length + ')'),
+              React.createElement('p', { style: { fontSize: '11px', color: 'var(--text-muted)', marginBottom: '8px' } },
+                'If any of these match, the waypoint is rejected — used to disambiguate visual siblings.',
+              ),
+              ...waypoint.forbidden.map((entry, i) => renderMatcherEntry(entry, i, true)),
+            )
+          : null,
+        waypoint.platform
+          ? React.createElement('div', { className: 'detail-section' },
+              React.createElement('h4', null, 'Platform'),
+              React.createElement('p', null, waypoint.platform),
+            )
+          : null,
+        trailheads.length > 0
+          ? React.createElement('div', { className: 'detail-section' },
+              React.createElement('h4', null, 'Reached from (trailheads)'),
+              React.createElement('div', { className: 'detail-edges' },
+                trailheads.map(th =>
+                  React.createElement('div', { key: th.id, className: 'detail-edge' },
+                    React.createElement('span', { className: 'arrow' }, '✈'),
+                    React.createElement('span', { className: 'target-id' }, th.id),
+                    th.description ? React.createElement('span', { className: 'desc' }, th.description) : null,
+                  )
+                ),
+              ),
+            )
+          : null,
+        incoming.length > 0
+          ? React.createElement('div', { className: 'detail-section' },
+              React.createElement('h4', null, 'Incoming shortcuts'),
+              React.createElement('div', { className: 'detail-edges' },
+                incoming.map(sc =>
+                  React.createElement('div', {
+                    key: sc.id, className: 'detail-edge',
+                    onClick: () => onSelectWaypoint(sc.from),
+                  },
+                    React.createElement('span', { className: 'target-id' }, sc.from),
+                    React.createElement('span', { className: 'arrow' }, '→'),
+                    React.createElement('span', { className: 'target-id' }, 'here'),
+                    sc.description ? React.createElement('span', { className: 'desc' }, sc.description) : null,
+                  )
+                ),
+              ),
+            )
+          : null,
+        outgoing.length > 0
+          ? React.createElement('div', { className: 'detail-section' },
+              React.createElement('h4', null, 'Outgoing shortcuts'),
+              React.createElement('div', { className: 'detail-edges' },
+                outgoing.map(sc =>
+                  React.createElement('div', {
+                    key: sc.id, className: 'detail-edge',
+                    onClick: () => onSelectWaypoint(sc.to),
+                  },
+                    React.createElement('span', { className: 'target-id' }, 'here'),
+                    React.createElement('span', { className: 'arrow' }, '→'),
+                    React.createElement('span', { className: 'target-id' }, sc.to),
+                    sc.description ? React.createElement('span', { className: 'desc' }, sc.description) : null,
+                  )
+                ),
+              ),
+            )
+          : null,
+        waypoint.sourceLabel
+          ? React.createElement('div', { className: 'detail-source' }, waypoint.sourceLabel)
+          : null,
+      );
+    }
+
     function DetailPanel({ waypoint, incoming, outgoing, trailheads, onClose, onSelectWaypoint, allWaypoints }) {
       if (!waypoint) return null;
       const wpById = new Map(allWaypoints.map(w => [w.id, w]));
@@ -1667,12 +4394,45 @@
        APP
        ============================================================================ */
     function App({ data }) {
-      const [mode, setMode] = useState('map');                  // 'map' | 'screens' | 'report'
+      const [mode, setMode] = useState('map');                  // 'map' | 'subway' | 'screens' | 'report'
       const [selectedTarget, setSelectedTarget] = useState(null);
       const [selectedPlatform, setSelectedPlatform] = useState(null);
       const [selectedWaypoint, setSelectedWaypoint] = useState(null);
       const [selectedJourneyId, setSelectedJourneyId] = useState(null);
       const [theme, setTheme] = useState('dark');
+      // Shortcut inspect modal — click an edge label in any view to peek
+      // at the shortcut's body (the actions it performs to get from `from`
+      // to `to`). Set to a shortcut object when open, null when closed.
+      const [inspectShortcut, setInspectShortcut] = useState(null);
+
+      // Right-side panel: collapsible dock with two tabs (Detail / Agent).
+      // The user can collapse it via the × on the panel; a thin button on
+      // the right edge brings it back. Once they've explicitly collapsed
+      // it, selecting a waypoint won't pop it back open — they have to
+      // click the show-panel button. The first ever selection auto-opens
+      // it (so first-time users see Detail without hunting), tracked via
+      // a ref so it doesn't re-fire after explicit closes.
+      const [rightPanelOpen, setRightPanelOpen] = useState(false);
+      const [rightPanelTab, setRightPanelTab] = useState('detail');
+      const hasAutoOpenedRef = useRef(false);
+      const [agentViewText, setAgentViewText] = useState('');
+      const [agentViewCopied, setAgentViewCopied] = useState(false);
+      const onCopyAgentView = useCallback(() => {
+        if (!navigator.clipboard) return;
+        navigator.clipboard.writeText(agentViewText).then(() => {
+          setAgentViewCopied(true);
+          setTimeout(() => setAgentViewCopied(false), 1400);
+        });
+      }, [agentViewText]);
+      // Auto-open on first selection, exactly once. Subsequent collapses
+      // are sticky.
+      useEffect(() => {
+        if (selectedWaypoint && !hasAutoOpenedRef.current) {
+          hasAutoOpenedRef.current = true;
+          setRightPanelOpen(true);
+          setRightPanelTab('detail');
+        }
+      }, [selectedWaypoint]);
 
       // Theme is mirrored to <html data-theme> so CSS vars cascade everywhere.
       useEffect(() => {
@@ -1770,6 +4530,11 @@
               onClick: () => setMode('map'),
             }, 'Map'),
             React.createElement('button', {
+              className: 'mode-button' + (mode === 'subway' ? ' active' : ''),
+              onClick: () => setMode('subway'),
+              title: 'Concentric, focal-centered view of the shortcut graph',
+            }, 'Subway'),
+            React.createElement('button', {
               className: 'mode-button' + (mode === 'screens' ? ' active' : ''),
               onClick: () => setMode('screens'),
             }, 'Screens',
@@ -1860,16 +4625,31 @@
 
         // ---- Main content area ----
         React.createElement('div', { className: 'main' },
-          React.createElement(JourneysSidebar, {
-            journeys,
-            selectedJourneyId,
-            onSelectJourney,
-            mode,
-          }),
+          // The journeys sidebar is only useful in modes where you'd want
+          // a quick "jump to a discovered destination" affordance — i.e.
+          // Screens and Report. MAP retired it (the dagre tree already
+          // shows the routes), and SUBWAY replaces it with the inline
+          // Agent-view panel that lives inside SubwayView itself.
+          (mode === 'screens' || mode === 'report')
+            ? React.createElement(JourneysSidebar, {
+                journeys,
+                selectedJourneyId,
+                onSelectJourney,
+                mode,
+              })
+            : null,
           React.createElement('div', { className: 'canvas-area' },
             mode === 'map' ? React.createElement(MapView, {
               filtered, selectedWaypoint,
               onSelectWaypoint: setSelectedWaypoint,
+              onInspectShortcut: setInspectShortcut,
+              themeKey: theme + ':' + (selectedTarget || 'all') + ':' + (selectedPlatform || 'all'),
+            }) : null,
+            mode === 'subway' ? React.createElement(SubwayView, {
+              filtered, journeys, selectedWaypoint,
+              onSelectWaypoint: setSelectedWaypoint,
+              onInspectShortcut: setInspectShortcut,
+              onAgentTextChange: setAgentViewText,
               themeKey: theme + ':' + (selectedTarget || 'all') + ':' + (selectedPlatform || 'all'),
             }) : null,
             mode === 'screens' ? React.createElement(ScreensView, {
@@ -1881,15 +4661,179 @@
               onSelectWaypoint: setSelectedWaypoint,
             }) : null,
           ),
-          (mode !== 'report' && selectedWaypoint) ? React.createElement(DetailPanel, {
-            waypoint: selectedWaypointObj,
-            incoming: incomingShortcuts,
-            outgoing: outgoingShortcuts,
-            trailheads: incomingTrailheads,
-            allWaypoints: data.waypoints,
-            onClose: () => setSelectedWaypoint(null),
-            onSelectWaypoint: setSelectedWaypoint,
-          }) : null,
+          // Right panel — collapsible dock with two tabs inside it.
+          // When open, the panel shows tabs at the top: [Detail] [Agent]
+          // plus a × close. Detail body shows the selected waypoint;
+          // Agent body shows the LLM prompt text from SubwayView. When
+          // closed, a thin "‹" button on the right edge brings it back.
+          // Auto-opens once on the user's first waypoint selection.
+          (mode !== 'report' && rightPanelOpen) ? React.createElement('aside', { className: 'detail-panel right-panel-dock' },
+            React.createElement('div', { className: 'right-panel-tabs' },
+              React.createElement('button', {
+                className: 'panel-tab' + (rightPanelTab === 'detail' ? ' active' : ''),
+                onClick: () => setRightPanelTab('detail'),
+              }, 'Detail'),
+              React.createElement('button', {
+                className: 'panel-tab' + (rightPanelTab === 'agent' ? ' active' : ''),
+                onClick: () => setRightPanelTab('agent'),
+                disabled: mode !== 'subway',
+                title: mode !== 'subway' ? 'Switch to Subway mode to see the agent prompt' : 'Agent prompt for the current focal',
+              }, 'Agent'),
+              rightPanelTab === 'agent' ? React.createElement('button', {
+                className: 'agent-view-btn' + (agentViewCopied ? ' copied' : ''),
+                onClick: onCopyAgentView,
+                style: { marginLeft: 'auto' },
+              }, agentViewCopied ? 'Copied!' : 'Copy') : null,
+              React.createElement('button', {
+                className: 'panel-tab-close',
+                onClick: () => setRightPanelOpen(false),
+                title: 'Collapse panel',
+                'aria-label': 'Close',
+                style: rightPanelTab === 'agent' ? null : { marginLeft: 'auto' },
+              }, '×'),
+            ),
+            // Tab body
+            rightPanelTab === 'agent'
+              ? React.createElement('div', { className: 'agent-prompt-body' },
+                  React.createElement('pre', null, agentViewText || '(no focal selected)'),
+                )
+              : (selectedWaypoint && selectedWaypointObj
+                  ? React.createElement(DetailPanelInline, {
+                      waypoint: selectedWaypointObj,
+                      incoming: incomingShortcuts,
+                      outgoing: outgoingShortcuts,
+                      trailheads: incomingTrailheads,
+                      allWaypoints: data.waypoints,
+                      onSelectWaypoint: setSelectedWaypoint,
+                    })
+                  : React.createElement('div', { className: 'detail-content', style: { padding: '32px 22px', color: 'var(--text-muted)', fontSize: '13px' } },
+                      'Click a waypoint on the canvas to see its details here.',
+                    )
+                ),
+          ) : null,
+          // Right-edge "show panel" button — visible only when the panel
+          // is collapsed. Single click reopens the panel at whichever tab
+          // was last active.
+          (mode !== 'report' && !rightPanelOpen) ? React.createElement('button', {
+            className: 'right-panel-show-btn',
+            onClick: () => setRightPanelOpen(true),
+            title: 'Show panel',
+            'aria-label': 'Show panel',
+          }, '‹') : null,
+        ),
+        // Shortcut inspect modal — overlays everything when open. Closes
+        // on backdrop click, X button, or Escape (handled inside).
+        inspectShortcut ? React.createElement(ShortcutInspectModal, {
+          shortcut: inspectShortcut,
+          onClose: () => setInspectShortcut(null),
+        }) : null,
+      );
+    }
+
+    /** Format a JsonObject (typed as a plain JS object after parsing) into
+        YAML-ish text for the inspect modal. Single-key wrapper objects
+        like `{"tapElement": {...}}` are common — they render as
+        `tapElement:` followed by indented children, mirroring how the
+        shortcut would look in its source `.shortcut.yaml` file. */
+    function formatYamlish(obj, indent) {
+      indent = indent || 0;
+      const pad = '  '.repeat(indent);
+      if (obj === null || obj === undefined) return pad + 'null';
+      if (typeof obj === 'string') return JSON.stringify(obj);
+      if (typeof obj !== 'object') return String(obj);
+      if (Array.isArray(obj)) {
+        if (obj.length === 0) return '[]';
+        return obj.map(item => {
+          if (item !== null && typeof item === 'object') {
+            const inner = formatYamlish(item, indent + 1);
+            // Replace the first line's leading whitespace with `- ` so the
+            // dash anchors the array element at the parent indent.
+            const lines = inner.split('\n');
+            lines[0] = '  '.repeat(indent) + '- ' + lines[0].slice((indent + 1) * 2);
+            return lines.join('\n');
+          }
+          const valStr = typeof item === 'string' ? JSON.stringify(item) : String(item);
+          return pad + '- ' + valStr;
+        }).join('\n');
+      }
+      const entries = Object.entries(obj);
+      if (entries.length === 0) return pad + '{}';
+      return entries.map(([k, v]) => {
+        if (v !== null && typeof v === 'object') {
+          if (Array.isArray(v) && v.length === 0) return pad + k + ': []';
+          if (!Array.isArray(v) && Object.keys(v).length === 0) return pad + k + ': {}';
+          return pad + k + ':\n' + formatYamlish(v, indent + 1);
+        }
+        const valStr = typeof v === 'string' ? JSON.stringify(v) : String(v);
+        return pad + k + ': ' + valStr;
+      }).join('\n');
+    }
+
+    function ShortcutInspectModal({ shortcut, onClose }) {
+      // Close on Escape — registered via useEffect so we don't re-bind
+      // every render.
+      useEffect(() => {
+        const handler = (e) => { if (e.key === 'Escape') onClose(); };
+        window.addEventListener('keydown', handler);
+        return () => window.removeEventListener('keydown', handler);
+      }, [onClose]);
+      const onBackdropClick = useCallback((e) => {
+        // Only close if the click landed on the backdrop, not bubbled up
+        // from inside the modal panel.
+        if (e.target === e.currentTarget) onClose();
+      }, [onClose]);
+      const hasTools = shortcut.toolsList && shortcut.toolsList.length > 0;
+      const variantSuffix = shortcut.variant ? ' · variant: ' + shortcut.variant : '';
+      return React.createElement('div',
+        { className: 'shortcut-modal-overlay', onClick: onBackdropClick },
+        React.createElement('div', { className: 'shortcut-modal' },
+          React.createElement('div', { className: 'shortcut-modal-header' },
+            React.createElement('div', null,
+              React.createElement('div', { className: 'shortcut-modal-title' }, 'Shortcut · ' + shortcut.id),
+              React.createElement('div', { className: 'shortcut-modal-route' },
+                shortcut.from, ' ',
+                React.createElement('span', { className: 'shortcut-modal-arrow' }, '→'), ' ',
+                shortcut.to,
+                variantSuffix,
+              ),
+              shortcut.description
+                ? React.createElement('div', { className: 'shortcut-modal-description' }, shortcut.description)
+                : null,
+            ),
+            React.createElement('button', {
+              className: 'shortcut-modal-close',
+              onClick: onClose,
+              title: 'Close (Esc)',
+            }, '×'),
+          ),
+          React.createElement('div', { className: 'shortcut-modal-body' },
+            hasTools
+              ? React.createElement(React.Fragment, null,
+                  React.createElement('div', { className: 'shortcut-modal-section-label' },
+                    shortcut.toolsList.length + ' step' + (shortcut.toolsList.length === 1 ? '' : 's'),
+                  ),
+                  ...shortcut.toolsList.map((tool, idx) =>
+                    React.createElement('div', { key: idx, className: 'shortcut-step' },
+                      React.createElement('div', { className: 'shortcut-step-num' }, idx + 1),
+                      React.createElement('pre', { className: 'shortcut-step-body' }, formatYamlish(tool)),
+                    ),
+                  ),
+                )
+              : shortcut.toolClass
+                ? React.createElement('div', { className: 'shortcut-modal-native' },
+                    React.createElement('div', { className: 'shortcut-modal-section-label' }, 'Native (Kotlin) tool'),
+                    React.createElement('code', null, shortcut.toolClass),
+                    React.createElement('div', { className: 'shortcut-modal-native-note' },
+                      'This shortcut runs Kotlin code; its body isn\'t introspectable from YAML.',
+                    ),
+                  )
+                : React.createElement('div', { className: 'shortcut-modal-native' },
+                    React.createElement('div', { className: 'shortcut-modal-section-label' }, 'No body'),
+                    React.createElement('div', { className: 'shortcut-modal-native-note' },
+                      'No tool steps or class declared for this shortcut.',
+                    ),
+                  ),
+          ),
         ),
       );
     }

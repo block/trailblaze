@@ -18,5 +18,6 @@ data class TrailblazeReferrer(
     val MCP = TrailblazeReferrer(id = "mcp", display = "MCP")
     val SESSION_TAB_RETRY = TrailblazeReferrer(id = "session_tab_retry", display = "Session Tab Retry")
     val YAML_TAB = TrailblazeReferrer(id = "yaml_tab", display = "Yaml Tab")
+    val RECORDING_TAB_REPLAY = TrailblazeReferrer(id = "recording_tab_replay", display = "Recording Tab Replay")
   }
 }

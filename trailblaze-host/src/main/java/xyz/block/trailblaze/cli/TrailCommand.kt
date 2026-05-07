@@ -818,7 +818,12 @@ open class TrailCommand : Callable<Int> {
           }
         }
       },
-      additionalInstrumentationArgs = emptyMap(),
+      // Pull instrumentation args from the configured app — the desktop UI flow does the same
+      // via `desktopAppConfig.additionalInstrumentationArgs()`, but the CLI path was passing
+      // emptyMap() and dropping any args the config wanted to forward (LLM auth tokens, the
+      // migration-mode dual-tree capture flag, etc.). Calling the same provider keeps env-var
+      // bridging consistent across CLI and UI invocations.
+      additionalInstrumentationArgs = runBlocking { config.additionalInstrumentationArgs() },
       composeRpcPort = composePort,
       onComplete = { result ->
         when (result) {

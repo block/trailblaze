@@ -5,6 +5,7 @@ import ai.koog.prompt.message.RequestMetaInfo
 import org.junit.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNull
 import xyz.block.trailblaze.api.ScreenState
 import xyz.block.trailblaze.api.ViewHierarchyTreeNode
 import xyz.block.trailblaze.devices.TrailblazeDeviceClassifier
@@ -119,5 +120,31 @@ class PromptStepStatusTest {
   fun `maxHistorySize must be positive`() {
     assertFailsWith<IllegalArgumentException> { createStatus(maxHistorySize = 0) }
     assertFailsWith<IllegalArgumentException> { createStatus(maxHistorySize = -1) }
+  }
+
+  // -- Pending cycle warning slot --
+
+  @Test
+  fun `pending cycle warning is null by default`() {
+    val status = createStatus()
+    assertNull(status.consumePendingCycleWarning())
+  }
+
+  @Test
+  fun `consume returns the most recently set warning then clears it`() {
+    val status = createStatus()
+    status.setPendingCycleWarning("WARNING: stuck on swipe")
+    assertEquals("WARNING: stuck on swipe", status.consumePendingCycleWarning())
+    // Single-shot — second consume returns null.
+    assertNull(status.consumePendingCycleWarning())
+  }
+
+  @Test
+  fun `setting a new warning after consume works`() {
+    val status = createStatus()
+    status.setPendingCycleWarning("WARNING: first")
+    assertEquals("WARNING: first", status.consumePendingCycleWarning())
+    status.setPendingCycleWarning("WARNING: second")
+    assertEquals("WARNING: second", status.consumePendingCycleWarning())
   }
 }

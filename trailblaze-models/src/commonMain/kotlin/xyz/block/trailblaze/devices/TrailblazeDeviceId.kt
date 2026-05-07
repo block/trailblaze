@@ -13,5 +13,14 @@ data class TrailblazeDeviceId(
   /** The value from `adb devices` or the simulator id */
   val instanceId: String,
   val trailblazeDevicePlatform: TrailblazeDevicePlatform,
-)
+) {
+  /**
+   * Canonical fully-qualified id for this device — `"<platform>/<instanceId>"` with a
+   * lowercase platform, e.g. `"android/emulator-5554"`. Round-trips via
+   * [TrailblazeDevicePlatform.fromString]. The matching format `--device` accepts on
+   * the CLI.
+   */
+  fun toFullyQualifiedDeviceId(): String =
+    trailblazeDevicePlatform.toFullyQualifiedDeviceId(instanceId)
+}
 

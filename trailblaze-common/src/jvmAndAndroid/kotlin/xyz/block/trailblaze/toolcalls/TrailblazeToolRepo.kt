@@ -294,6 +294,52 @@ class TrailblazeToolRepo(
     )
   }
 
+  /**
+   * Variant of [toolCallToTrailblazeTool] that bypasses the `isForLlm` filter for YAML-defined
+   * tools by falling back to the global [TrailblazeSerializationInitializer.buildYamlDefinedTools]
+   * registry if the standard lookup misses.
+   *
+   * Used by inline scripted-tool composition (`SessionScopedHostBinding` in
+   * `:trailblaze-quickjs-tools`) where author bundles can call into YAML-defined tools that
+   * are intentionally hidden from the LLM (`is_for_llm: false`). The standard
+   * [toolCallToTrailblazeTool] already bypasses the filter for class-backed tools and for
+   * YAML tools that are registered into [registeredYamlToolNames]; this method extends that
+   * bypass to YAML tools that exist globally on the classpath but aren't in the session's
+   * registered set.
+   *
+   * Returns null instead of throwing on a missing tool name — composition callers handle the
+   * miss by returning a structured error envelope to JS rather than propagating an exception.
+   */
+  fun toolCallToTrailblazeToolUnfiltered(
+    toolName: String,
+    toolContent: String,
+  ): TrailblazeTool? {
+    return try {
+      toolCallToTrailblazeTool(toolName, toolContent)
+    } catch (_: IllegalStateException) {
+      // Fall through to the unfiltered global lookups below — first global YAML, then
+      // global class registry. Both extend the bypass to tools that exist on the classpath
+      // but aren't in the session's registered set, which is the shape inline scripted-tool
+      // composition needs: an author calling `client.callTool("runCommand", …)` from inside
+      // a `.ts` body should reach the framework's `RunCommandTrailblazeTool` even when the
+      // session's target hasn't explicitly listed it in its custom tool classes.
+      val typedName = ToolName(toolName)
+      val yamlConfig = TrailblazeSerializationInitializer.buildYamlDefinedTools()[typedName]
+      if (yamlConfig != null) {
+        @OptIn(InternalSerializationApi::class)
+        return TrailblazeJsonInstance.decodeFromString(YamlDefinedToolSerializer(yamlConfig), toolContent)
+      }
+      // Global class-backed registry — any class annotated `@TrailblazeToolClass(name=...)`
+      // that's been discovered at JVM init. The standard [toolCallToTrailblazeTool] only
+      // searches the session's registered classes; this extends the search to every
+      // class-backed tool the framework knows about. Required for scripted-tool composition
+      // of host-side helpers like `runCommand` that aren't part of every target's toolset.
+      val toolClass = TrailblazeSerializationInitializer.buildAllTools()[typedName] ?: return null
+      @OptIn(InternalSerializationApi::class)
+      TrailblazeJsonInstance.decodeFromString(toolClass.serializer(), toolContent)
+    }
+  }
+
   fun getCurrentToolDescriptors(): List<ToolDescriptor> {
     val snapshot = snapshotRegisteredTools()
     val classDescriptors = snapshot.toolClasses.mapNotNull { it.toKoogToolDescriptor() }

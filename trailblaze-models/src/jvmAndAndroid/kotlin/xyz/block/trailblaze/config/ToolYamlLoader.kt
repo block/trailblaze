@@ -1,5 +1,6 @@
 package xyz.block.trailblaze.config
 
+import xyz.block.trailblaze.config.project.TrailblazePackManifest
 import xyz.block.trailblaze.llm.config.ConfigResourceSource
 import xyz.block.trailblaze.llm.config.TrailblazeConfigPaths
 import xyz.block.trailblaze.llm.config.platformConfigResourceSource
@@ -146,7 +147,144 @@ object ToolYamlLoader {
       directoryPath = TrailblazeConfigPaths.TOOLS_DIR,
       suffix = ".yaml",
     )
-    return parseAllConfigs(yamlContents)
+    val packBundled = discoverPackBundledToolContents(resourceSource)
+    return parseAllConfigs(yamlContents + packBundled)
+  }
+
+  /**
+   * Discovers tool YAMLs bundled inside library / target packs under three sibling
+   * directories, one per operational class:
+   *
+   * - `trailblaze-config/packs/<id>/tools/[<subdir>/...]<name>.tool.yaml`
+   * - `trailblaze-config/packs/<id>/shortcuts/[<subdir>/...]<name>.shortcut.yaml`
+   * - `trailblaze-config/packs/<id>/trailheads/[<subdir>/...]<name>.trailhead.yaml`
+   *
+   * Each suffix is permitted in exactly one directory. A `.shortcut.yaml` dropped under
+   * `tools/` (or vice versa) is dropped by discovery and logged at warning level so the
+   * author sees a signal — misfiled YAMLs never reach [parseAllConfigs], so the in-parser
+   * suffix-content contract can't fire on them.
+   *
+   * Subdirectories under each top-level dir are allowed at any depth so authors can
+   * organize a pack's surface by platform, sub-flow, or any other grouping that fits
+   * the pack (e.g. `shortcuts/web/`, `shortcuts/android/checkout/`). This mirrors the
+   * existing `<pack>/waypoints/<...>/<name>.waypoint.yaml` layout. The constraint is
+   * **structural, not organizational**: a YAML must live somewhere under the matching
+   * top-level directory for its operational class — a stray YAML elsewhere in the pack
+   * doesn't accidentally register.
+   *
+   * Why this lives next to the flat-`tools/`-dir scan: pack-bundled tools must surface
+   * in the same global tool registry that the flat scan populates so toolset YAMLs and
+   * trail YAMLs can reference them by bare id, regardless of which pack ships them.
+   * Without this step, moving a tool YAML from `trailblaze-config/tools/` into a pack's
+   * subdirectory would silently drop it from the resolver — toolsets would log
+   * "unknown tool" warnings and trails would fail to decode.
+   *
+   * Per-target scripted-tool descriptors (`PackScriptedToolFile`) live under `tools/`
+   * but use a plain `.yaml` extension and are deliberately excluded — they flow
+   * through the per-target `target.tools:` resolution path instead of the global
+   * registry.
+   *
+   * Map keys are the **full pack-relative path** with `.yaml` stripped (e.g.
+   * `<pack-id>/shortcuts/<name>.shortcut`). Keying by basename only would silently
+   * collapse two packs that ship a same-named file (e.g. `packs/a/shortcuts/login.shortcut.yaml`
+   * vs `packs/b/shortcuts/login.shortcut.yaml`) into one entry before the YAML is even
+   * parsed, losing one tool from the registry without any duplicate-id warning. Keying
+   * by full path keeps both files in the discovery map and lets [warnOnDuplicateIds]
+   * catch the collision at the *id* level instead.
+   *
+   * **Library-pack trailhead guard.** A pack with no `target:` block cannot legitimately
+   * ship a `*.trailhead.yaml` file (a trailhead bootstraps to a known waypoint, which
+   * only makes sense within a target). The manifest-side rule lives in
+   * `TrailblazeProjectConfigLoader.resolvePackSiblings` and only fires for tools that
+   * are referenced by `pack.yaml`'s `tools:` list. To prevent a library pack from
+   * silently registering a trailhead tool *just by dropping it on disk*, this discovery
+   * pass also classifies each pack and skips `*.trailhead.yaml` files inside library
+   * packs (with a loud warning naming the offending file).
+   *
+   * Routes through [ConfigResourceSource.discoverAndLoadRecursive] so the same logic works
+   * on JVM (classpath URL scan) and on Android (AssetManager walk). The pack-bundled hook
+   * was JVM-only originally — on-device tests now resolve pack-bundled tools the same way.
+   */
+  private fun discoverPackBundledToolContents(
+    resourceSource: ConfigResourceSource,
+  ): Map<String, String> {
+    val libraryPackIds = discoverLibraryPackIds(resourceSource)
+    val result = mutableMapOf<String, String>()
+    TrailblazeConfigPaths.PACK_TOOL_LAYOUT.forEach { (expectedDir, suffix) ->
+      val matches = resourceSource.discoverAndLoadRecursive(
+        directoryPath = TrailblazeConfigPaths.PACKS_DIR,
+        suffix = suffix,
+      )
+      matches.forEach { (relPath, content) ->
+        // Layout: `<pack-id>/<expectedDir>/[<subdir>/...]<name><suffix>` (the
+        // resource-source contract strips the leading `trailblaze-config/packs/`
+        // prefix from `relPath`). Require segments[1] == expectedDir so each
+        // operational class lives under its own top-level directory; subdirs at
+        // any depth below that are permitted.
+        val segments = relPath.split('/')
+        if (segments.size < 3) return@forEach
+        if (segments[1] != expectedDir) {
+          // A YAML with a recognized suffix landed under the wrong sibling directory
+          // (e.g. `<pack>/tools/foo.shortcut.yaml`). The author almost certainly meant
+          // it to register, so log loudly rather than dropping silently — the sibling
+          // library-pack-trailhead branch below uses the same shape for the same
+          // reason. The suffix-content contract in `parseAllConfigs` only fires for
+          // YAMLs that survive discovery, so misfiled YAMLs would otherwise produce
+          // no signal at all.
+          Console.log(
+            "Warning: Skipping '$relPath' — file with suffix '$suffix' must live under " +
+              "'<pack>/$expectedDir/' but was found under '<pack>/${segments[1]}/'. " +
+              "Move the file or rename its suffix.",
+          )
+          return@forEach
+        }
+        val packId = segments[0]
+        if (suffix == ".trailhead.yaml" && packId in libraryPackIds) {
+          Console.log(
+            "Warning: Skipping trailhead tool '$relPath' — pack '$packId' is a library " +
+              "pack (no target: block) and library packs cannot ship trailhead tools. " +
+              "Trailheads bootstrap to a known waypoint, which only makes sense within a " +
+              "target pack. Move the tool into a target pack or add a target: block to " +
+              "the owning pack.",
+          )
+          return@forEach
+        }
+        val key = relPath.removeSuffix(".yaml")
+        result[key] = content
+      }
+    }
+    return result
+  }
+
+  /**
+   * Returns the ids of classpath-discovered packs that have no `target:` block (library
+   * packs). Used by [discoverPackBundledToolContents] to skip `*.trailhead.yaml` files
+   * inside library packs at discovery time. A best-effort decode: a malformed
+   * `pack.yaml` is silently skipped here (it'll fail with a better message in
+   * `TrailblazePackManifestLoader` during the host-side path).
+   */
+  private fun discoverLibraryPackIds(resourceSource: ConfigResourceSource): Set<String> {
+    val packManifests = resourceSource.discoverAndLoadRecursive(
+      directoryPath = TrailblazeConfigPaths.PACKS_DIR,
+      suffix = "/pack.yaml",
+    )
+    val ids = mutableSetOf<String>()
+    packManifests.forEach { (relPath, content) ->
+      // Only direct `<pack-id>/pack.yaml` entries count — same convention as
+      // TrailblazePackManifestLoader.discoverAndLoadFromClasspath.
+      val packDirectoryName = relPath.removeSuffix("/pack.yaml")
+      if (packDirectoryName.isEmpty() || packDirectoryName.contains('/')) return@forEach
+      val manifest = try {
+        TrailblazeConfigYaml.instance.decodeFromString(
+          TrailblazePackManifest.serializer(),
+          content,
+        )
+      } catch (_: Exception) {
+        return@forEach
+      }
+      if (manifest.target == null) ids.add(packDirectoryName)
+    }
+    return ids
   }
 
   internal fun parseAllConfigs(yamlContents: Map<String, String>): List<ToolYamlConfig> {

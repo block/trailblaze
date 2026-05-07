@@ -170,12 +170,12 @@ class AccessibilityTrailblazeAgent(
    */
   override suspend fun executeNodeSelectorAssertVisible(
     nodeSelector: TrailblazeNodeSelector,
-    timeoutMs: Long,
+    timeoutMs: Long?,
     traceId: TraceId?,
   ): TrailblazeToolResult {
     val action = AccessibilityAction.AssertVisible(
       nodeSelector = nodeSelector,
-      timeoutMs = timeoutMs,
+      timeoutMs = timeoutMs ?: DEFAULT_ACCESSIBILITY_TIMEOUT_MS,
     )
 
     return AccessibilityTrailRunner.runActions(
@@ -192,12 +192,12 @@ class AccessibilityTrailblazeAgent(
    */
   override suspend fun executeNodeSelectorAssertNotVisible(
     nodeSelector: TrailblazeNodeSelector,
-    timeoutMs: Long,
+    timeoutMs: Long?,
     traceId: TraceId?,
   ): TrailblazeToolResult {
     val action = AccessibilityAction.AssertNotVisible(
       nodeSelector = nodeSelector,
-      timeoutMs = timeoutMs,
+      timeoutMs = timeoutMs ?: DEFAULT_ACCESSIBILITY_TIMEOUT_MS,
     )
 
     return AccessibilityTrailRunner.runActions(
@@ -211,4 +211,12 @@ class AccessibilityTrailblazeAgent(
 
   /** Provides the screen state using the accessibility service (no Maestro driver). */
   fun getScreenState() = deviceManager.getScreenState()
+
+  companion object {
+    /**
+     * Driver-default wait when the caller passes `timeoutMs = null`. Matches the prior
+     * hardcoded default so trails that never set the field keep their existing behavior.
+     */
+    private const val DEFAULT_ACCESSIBILITY_TIMEOUT_MS = 5_000L
+  }
 }

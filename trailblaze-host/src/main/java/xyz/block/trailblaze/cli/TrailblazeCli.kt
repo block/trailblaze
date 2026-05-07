@@ -239,6 +239,14 @@ object TrailblazeCli {
     val stdoutBuf = CappedByteArrayOutputStream(MAX_CAPTURE_BYTES)
     val stderrBuf = CappedByteArrayOutputStream(MAX_CAPTURE_BYTES)
 
+    val callerCwd = request.cwd?.takeIf { it.isNotBlank() }?.let {
+      try {
+        java.nio.file.Paths.get(it)
+      } catch (_: java.nio.file.InvalidPathException) {
+        null
+      }
+    }
+
     val exitCode = synchronized(execLock) {
       // Save/restore the global `Console.quietMode` flag. cli*WithDevice(verbose=false)
       // flips it for the duration of the CLI command, but there's no reset path in
@@ -247,20 +255,27 @@ object TrailblazeCli {
       // safer than unconditional `disableQuietMode()` because a future daemon
       // feature could legitimately set quiet mode outside this scope.
       val priorQuiet = Console.isQuietMode()
-      CliOutCapture.withCapture(stdoutBuf, stderrBuf) {
-        val cli = TrailblazeCliCommand(appProvider, configProvider)
-        val commandLine = CommandLine(cli).setCaseInsensitiveEnumValuesAllowed(true)
-        commandLine.helpSectionMap[CommandLine.Model.UsageMessageSpec.SECTION_KEY_COMMAND_LIST] =
-          GroupedCommandListRenderer(showHidden = args.contains("--all"))
-        try {
-          commandLine.execute(*args.toTypedArray())
-        } catch (e: CancellationException) {
-          throw e
-        } catch (e: Throwable) {
-          System.err.println("cli/exec: uncaught ${e::class.simpleName}: ${e.message}")
-          1
-        } finally {
-          if (priorQuiet) Console.enableQuietMode() else Console.disableQuietMode()
+      // Pin the caller's cwd as a thread-local so any picocli command that walks
+      // relative paths (e.g. waypoint --target's workspace-anchor lookup) anchors at
+      // the user's shell directory rather than the daemon's launch directory. Null
+      // cwd is fine — `CliCallerContext.callerCwd()` falls back to `Paths.get("")`
+      // which preserves the prior daemon-cwd behavior for older shims.
+      CliCallerContext.withCallerCwd(callerCwd) {
+        CliOutCapture.withCapture(stdoutBuf, stderrBuf) {
+          val cli = TrailblazeCliCommand(appProvider, configProvider)
+          val commandLine = CommandLine(cli).setCaseInsensitiveEnumValuesAllowed(true)
+          commandLine.helpSectionMap[CommandLine.Model.UsageMessageSpec.SECTION_KEY_COMMAND_LIST] =
+            GroupedCommandListRenderer(showHidden = args.contains("--all"))
+          try {
+            commandLine.execute(*args.toTypedArray())
+          } catch (e: CancellationException) {
+            throw e
+          } catch (e: Throwable) {
+            System.err.println("cli/exec: uncaught ${e::class.simpleName}: ${e.message}")
+            1
+          } finally {
+            if (priorQuiet) Console.enableQuietMode() else Console.disableQuietMode()
+          }
         }
       }
     }

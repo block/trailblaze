@@ -86,20 +86,36 @@ data class SwipeWithRelativeCoordinatesTool(
   val startRelative: String,
   val endRelative: String,
   val swipeOnElementText: String? = null,
+  /**
+   * How long the swipe takes on the device, end-to-end. Mirrors Maestro's
+   * `SwipeCommand.duration`; null falls through to Maestro's 400ms default. The recording
+   * UI populates this with the actual wall-clock duration of the user's gesture so a fast
+   * flick replays as a flick and a slow drag replays as a drag.
+   */
+  val durationMs: Long? = null,
 ) : MapsToMaestroCommands() {
   override fun toMaestroCommands(memory: AgentMemory): List<Command> {
-    val command = SwipeCommand(
-      startRelative = startRelative,
-      endRelative = endRelative,
-      elementSelector = swipeOnElementText?.let {
-        ElementSelector(
-          textRegex = swipeOnElementText,
-        )
-      },
-    )
+    val command = if (durationMs != null) {
+      SwipeCommand(
+        startRelative = startRelative,
+        endRelative = endRelative,
+        elementSelector = swipeOnElementText?.let {
+          ElementSelector(textRegex = swipeOnElementText)
+        },
+        duration = durationMs,
+      )
+    } else {
+      SwipeCommand(
+        startRelative = startRelative,
+        endRelative = endRelative,
+        elementSelector = swipeOnElementText?.let {
+          ElementSelector(textRegex = swipeOnElementText)
+        },
+      )
+    }
 
     Console.log(
-      "SwipeWithRelativeCoordinatesTool creating Maestro SwipeCommand: startRelative=$startRelative, endRelative=$endRelative, elementSelector=${command.elementSelector}",
+      "SwipeWithRelativeCoordinatesTool creating Maestro SwipeCommand: startRelative=$startRelative, endRelative=$endRelative, elementSelector=${command.elementSelector}, durationMs=$durationMs",
     )
 
     return listOf(command)

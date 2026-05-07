@@ -120,6 +120,10 @@ The migrated `contacts` pack (39 lines → 18 lines) is a worked example — see
 
 ## Per-file scripted tools
 
+This section is the **schema reference**. For a step-by-step authoring walkthrough that
+covers the `.ts` source, the descriptor, the pack-manifest entry, and the runtime
+composition contract, see [Author Your First Scripted Tool](scripted_tools.md).
+
 Each entry under `target.tools:` is a path to a YAML file with this shape:
 
 ```yaml
@@ -153,15 +157,20 @@ for the field-level conventions:
 
 ## Tool YAML file suffixes — `.tool.yaml`, `.shortcut.yaml`, `.trailhead.yaml`
 
-Files under `tools/` use one of three suffixes that signal the tool's operational class.
-The loader enforces that the file's content matches what the suffix promises — a
+Each operational class lives under its own pack subdirectory and uses a matching filename
+suffix. The loader enforces that the file's content matches what the suffix promises — a
 `.tool.yaml` file with a stray `shortcut:` block is a load-time error.
 
-| Suffix              | Class      | Available when                       | Required block       |
-| ------------------- | ---------- | ------------------------------------ | -------------------- |
-| `*.tool.yaml`       | tool       | toolset rules (existing)             | (none)               |
-| `*.shortcut.yaml`   | shortcut   | current waypoint matches `from`      | `shortcut:`          |
-| `*.trailhead.yaml`  | trailhead  | always (bootstrap from any state)    | `trailhead:`         |
+| Suffix              | Pack subdir   | Class      | Available when                       | Required block       |
+| ------------------- | ------------- | ---------- | ------------------------------------ | -------------------- |
+| `*.tool.yaml`       | `tools/`      | tool       | toolset rules (existing)             | (none)               |
+| `*.shortcut.yaml`   | `shortcuts/`  | shortcut   | current waypoint matches `from`      | `shortcut:`          |
+| `*.trailhead.yaml`  | `trailheads/` | trailhead  | always (bootstrap from any state)    | `trailhead:`         |
+
+Subdirectories below each top-level dir are organizational only — the loader walks them
+recursively at any depth. A pack with multi-platform shortcuts can group them as
+`shortcuts/{android,ios,web}/...` (or any other grouping that fits) without changing how
+discovery works.
 
 The three classes share one data class (`ToolYamlConfig`) with two optional metadata
 blocks (`shortcut`, `trailhead`); they're mutually exclusive — a tool can't be both a
@@ -176,7 +185,7 @@ framework adds a contextual descriptor filter (only surfaces shortcut tools whos
 matches the current waypoint) and a pre/post-condition wrapper at execution time.
 
 ```yaml
-# packs/clock/tools/clock_create_alarm.shortcut.yaml
+# packs/clock/shortcuts/clock_create_alarm.shortcut.yaml
 id: clock_create_alarm
 description: Create an alarm at a given time.
 parameters:
@@ -213,7 +222,7 @@ body runs, just like a shortcut's post-condition. Trailheads are the right shape
 reset/genesis moves that need to work regardless of where the agent currently is.
 
 ```yaml
-# packs/myapp/tools/myapp_launchAppSignedIn.trailhead.yaml
+# packs/myapp/trailheads/myapp_launchAppSignedIn.trailhead.yaml
 id: myapp_launchAppSignedIn
 description: Launch MyApp and sign in to the home screen.
 parameters:

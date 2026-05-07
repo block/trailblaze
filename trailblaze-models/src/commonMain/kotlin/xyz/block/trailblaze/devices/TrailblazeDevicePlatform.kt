@@ -33,6 +33,18 @@ enum class TrailblazeDevicePlatform(
 
   fun asTrailblazeDeviceClassifier(): TrailblazeDeviceClassifier = TrailblazeDeviceClassifier(this.name.lowercase())
 
+  /**
+   * Canonical, fully-qualified device identifier: `platform/instanceId` (lowercase
+   * platform). Round-trips through [fromString].
+   *
+   * Examples:
+   *   ANDROID.toFullyQualifiedDeviceId("emulator-5554") → "android/emulator-5554"
+   *   IOS.toFullyQualifiedDeviceId("SIM-UUID-1234")     → "ios/SIM-UUID-1234"
+   *   WEB.toFullyQualifiedDeviceId("checkout")          → "web/checkout"
+   */
+  fun toFullyQualifiedDeviceId(instanceId: String): String =
+    "${name.lowercase()}/$instanceId"
+
   companion object {
     /**
      * Matches platform names case-insensitively. Accepts both the bare platform name

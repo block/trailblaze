@@ -98,6 +98,12 @@ dependencies {
   implementation(project(":trailblaze-revyl"))
   implementation(project(":trailblaze-compose"))
   implementation(project(":trailblaze-scripting-subprocess"))
+  // Inline scripted tools (under pack manifest `target.tools:`) now run their handlers
+  // in-process inside QuickJsToolHost rather than via an MCP subprocess detour — see
+  // `LazyYamlScriptedToolRegistration` and #2749 for the swap. The dep is added here
+  // (not in :trailblaze-scripting-subprocess) because the wire-in lives in
+  // TrailblazeHostYamlRunner.launchSubprocessMcpServersIfAny.
+  implementation(project(":trailblaze-quickjs-tools"))
   implementation(libs.compose.ui.test.junit4)
   implementation(project(":trailblaze-playwright"))
   implementation(project(":trailblaze-report"))

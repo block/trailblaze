@@ -77,7 +77,7 @@ See: the [Packs guide](packs.md) for the manifest schema, per-file scripted tool
 
 Custom tools, written in TypeScript, that drop into a pack with no Kotlin or Gradle build. The `@trailblaze/scripting` SDK gives typed access to device context (`platform`, `memory`, `sessionId`) and lets a scripted tool call back into Trailblaze primitives via `client.callTool()` to compose higher-level behavior. Tools execute in a QuickJS sandbox on-device or in a host subprocess.
 
-See: [@trailblaze/scripting Authoring Vision](devlog/2026-04-22-scripting-sdk-authoring-vision.md), [Scripted Tools Execution Model](devlog/2026-04-20-scripted-tools-execution-model.md).
+Walkthrough: [Author Your First Scripted Tool](scripted_tools.md). Background: [@trailblaze/scripting Authoring Vision](devlog/2026-04-22-scripting-sdk-authoring-vision.md), [Scripted Tools Execution Model](devlog/2026-04-20-scripted-tools-execution-model.md).
 
 ### Waypoints
 

@@ -117,8 +117,9 @@ class TrailblazeCompilerTest {
 
     assertTrue(!result.isSuccess, "Expected compile to fail on missing dep")
     assertTrue(
-      result.errors.any { "consumer" in it && "failed dependency resolution" in it },
-      "Expected error message to name the failing pack 'consumer'; got: ${result.errors}",
+      result.errors.any { "consumer" in it && "missing-pack" in it },
+      "Expected error message to name the failing pack 'consumer' and the missing dep " +
+        "'missing-pack'; got: ${result.errors}",
     )
     assertTrue(result.emittedTargets.isEmpty(), "No targets should be emitted on error")
   }

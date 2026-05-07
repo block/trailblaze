@@ -9,14 +9,13 @@ import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.descriptors.buildClassSerialDescriptor
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
-import xyz.block.trailblaze.config.AppTargetYamlConfig
 import xyz.block.trailblaze.config.ToolSetYamlConfig
 import xyz.block.trailblaze.config.ToolYamlConfig
 import xyz.block.trailblaze.llm.config.BuiltInProviderConfig
 
 /**
- * Each of the list-shaped sections in [TrailblazeProjectConfig] (`targets`, `toolsets`,
- * `tools`, `providers`) accepts entries in one of two forms:
+ * The list-shaped sections in [TrailblazeProjectConfig] for `toolsets`, `tools`, and
+ * `providers` accept entries in one of two forms:
  *
  * - **Inline**: the full YAML body for the entry is written directly inside
  *   `trailblaze.yaml`. Carries the same schema the standalone per-file YAMLs use today.
@@ -30,16 +29,11 @@ import xyz.block.trailblaze.llm.config.BuiltInProviderConfig
  * absolute path such as `/Users/foo.yaml` is **not** an OS-absolute escape hatch. Only
  * paths the JVM considers absolute in other forms (e.g. Windows `C:\...`) are passed
  * through unchanged.
+ *
+ * Targets do **not** use this inline-or-ref shape — `TrailblazeProjectConfig.targets`
+ * is a list of target-pack ids (`List<String>`). Each id resolves to a `pack.yaml`
+ * by convention; targets are no longer authored inline at the workspace level.
  */
-@Serializable(with = TargetEntrySerializer::class)
-sealed interface TargetEntry {
-  @Serializable
-  data class Inline(val config: AppTargetYamlConfig) : TargetEntry
-
-  @Serializable
-  data class Ref(val path: String) : TargetEntry
-}
-
 @Serializable(with = ToolsetEntrySerializer::class)
 sealed interface ToolsetEntry {
   @Serializable
@@ -109,28 +103,6 @@ internal inline fun <T, R> decodeProjectConfigEntry(
 /** Single-key map shape used to encode a Ref back to YAML. */
 @Serializable
 private data class RefOnly(val ref: String)
-
-object TargetEntrySerializer : KSerializer<TargetEntry> {
-  override val descriptor: SerialDescriptor = buildClassSerialDescriptor("TargetEntry")
-
-  override fun serialize(encoder: Encoder, value: TargetEntry) {
-    when (value) {
-      is TargetEntry.Inline ->
-        encoder.encodeSerializableValue(AppTargetYamlConfig.serializer(), value.config)
-      is TargetEntry.Ref ->
-        encoder.encodeSerializableValue(RefOnly.serializer(), RefOnly(value.path))
-    }
-  }
-
-  override fun deserialize(decoder: Decoder): TargetEntry =
-    decodeProjectConfigEntry(
-      decoder = decoder,
-      typeName = "TargetEntry",
-      inlineSerializer = AppTargetYamlConfig.serializer(),
-      onRef = { TargetEntry.Ref(it) },
-      onInline = { TargetEntry.Inline(it) },
-    )
-}
 
 object ToolsetEntrySerializer : KSerializer<ToolsetEntry> {
   override val descriptor: SerialDescriptor = buildClassSerialDescriptor("ToolsetEntry")

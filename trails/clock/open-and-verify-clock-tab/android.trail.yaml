@@ -1,0 +1,11 @@
+# Demo trail: launch Google Clock and verify the default tab loads.
+# Authored as a minimal smoke trail to validate the runtime-YAML config wiring
+# for the workspace-only `clock` target.
+- config:
+    id: "clock/open-and-verify-clock-tab"
+    driver: ANDROID_ONDEVICE_INSTRUMENTATION
+    description: "Open the Clock app and verify the Clock tab is visible."
+
+- prompts:
+    - step: Launch the Google Clock app (com.google.android.deskclock) with a clean state.
+    - step: Verify the Clock tab is selected and visible. The screen should show the current time prominently. Do not tap anything else.

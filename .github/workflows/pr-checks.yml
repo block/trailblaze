@@ -19,7 +19,7 @@ jobs:
   # Run Tests
   checks:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
 
     steps:
       - name: Checkout
@@ -73,6 +73,9 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
 
       - name: Create and start emulator and run tests (Linux)
         if: runner.os == 'Linux'
@@ -150,6 +153,9 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
 
       - name: Create and start emulator and run tests (Linux)
         if: runner.os == 'Linux'

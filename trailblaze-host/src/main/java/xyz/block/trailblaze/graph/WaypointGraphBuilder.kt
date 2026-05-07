@@ -2,8 +2,15 @@ package xyz.block.trailblaze.graph
 
 import xyz.block.trailblaze.api.ImageFormatDetector
 import xyz.block.trailblaze.config.ToolYamlLoader
+import xyz.block.trailblaze.config.project.TrailblazeWorkspaceConfigResolver
+import xyz.block.trailblaze.llm.config.ClasspathConfigResourceSource
+import xyz.block.trailblaze.llm.config.CompositeConfigResourceSource
+import xyz.block.trailblaze.llm.config.ConfigResourceSource
+import xyz.block.trailblaze.llm.config.FilesystemConfigResourceSource
 import xyz.block.trailblaze.ui.tabs.waypoints.loadWaypoints
 import java.io.File
+import java.nio.file.Path
+import java.nio.file.Paths
 import java.time.Instant
 import java.time.format.DateTimeFormatter
 import kotlin.io.encoding.Base64
@@ -40,11 +47,22 @@ object WaypointGraphBuilder {
    * @param liveSourceLabel populates the trailing `(live)` / `(snapshot)` suffix in the
    *             generated note. The desktop endpoint passes "live"; the CLI passes a
    *             timestamp-based label so users opening a saved file know it's frozen.
+   * @param fromPath cwd anchor used to discover the workspace `trails/config/`
+   *             directory for layered shortcut/trailhead loading. Defaults to the
+   *             JVM cwd, which works for the daemon (always run from the workspace);
+   *             the CLI passes the caller's cwd via [CliCallerContext.callerCwd]
+   *             so its server-served invocations resolve against the user's shell,
+   *             not the daemon process. Without this, only classpath-bundled tools
+   *             load — pack tools authored under `<workspace>/trails/config/packs/<id>/tools/`
+   *             (the convention introduced in PR #2796) are silently invisible.
    */
   @OptIn(ExperimentalEncodingApi::class)
   fun build(
     root: File,
     liveSourceLabel: String = "live",
+    fromPath: Path = Paths.get(""),
+    targetFilter: String? = null,
+    platformFilter: String? = null,
   ): WaypointGraphData {
     val output = loadWaypoints(root)
 
@@ -63,11 +81,18 @@ object WaypointGraphBuilder {
       // Derive platform from the source-label path (`packs/<pack>/waypoints/<platform>/...`).
       // The id no longer carries it post-URL-rename — the platform lives on disk now and
       // gets surfaced here so the front-end filter pills don't have to parse it themselves.
+      //
+      // Match the platform as a *path segment* (not a substring) so a relative label that
+      // starts with the platform — e.g. `ios/contacts_ios_X.waypoint.yaml` when `--target`
+      // redirected root into `<pack>/waypoints/` — gets attributed correctly. The earlier
+      // `/<platform>/` substring check missed exactly that shape because there's no
+      // leading slash on a relative-from-root path.
       val platform = item.sourceLabel?.let { label ->
+        val segments = label.split('/')
         when {
-          "/android/" in label -> "android"
-          "/ios/" in label -> "ios"
-          "/web/" in label -> "web"
+          "android" in segments -> "android"
+          "ios" in segments -> "ios"
+          "web" in segments -> "web"
           else -> null
         }
       }
@@ -87,7 +112,9 @@ object WaypointGraphBuilder {
     }
 
     val toolConfigs = try {
-      ToolYamlLoader.discoverShortcutsAndTrailheads()
+      ToolYamlLoader.discoverShortcutsAndTrailheads(
+        resourceSource = buildToolResourceSource(fromPath),
+      )
     } catch (e: Exception) {
       // Loader failures are non-fatal for the graph view — we'd rather render the
       // node grid with no edges than fail the whole page on a single bad YAML.
@@ -104,6 +131,8 @@ object WaypointGraphBuilder {
           from = meta.from,
           to = meta.to,
           variant = meta.variant,
+          toolsList = config.toolsList,
+          toolClass = config.toolClass,
         )
       }
     }
@@ -119,13 +148,80 @@ object WaypointGraphBuilder {
     }
 
     val timestamp = DateTimeFormatter.ISO_INSTANT.format(Instant.now())
-    val generatedNote = "Generated $timestamp from ${root.absolutePath} ($liveSourceLabel)"
+    val scopeSuffix = listOfNotNull(
+      targetFilter?.let { "target=$it" },
+      platformFilter?.let { "platform=$it" },
+    ).joinToString(", ").let { if (it.isEmpty()) "" else " · $it" }
+    val generatedNote = "Generated $timestamp from ${root.absolutePath} ($liveSourceLabel)$scopeSuffix"
 
-    return WaypointGraphData(
+    val filtered = applyScope(
       waypoints = nodes,
       shortcuts = shortcuts,
       trailheads = trailheads,
+      targetFilter = targetFilter,
+      platformFilter = platformFilter,
+    )
+
+    return WaypointGraphData(
+      waypoints = filtered.first,
+      shortcuts = filtered.second,
+      trailheads = filtered.third,
       generatedNote = generatedNote,
+    )
+  }
+
+  /**
+   * Drop waypoints (and their incident edges) that fall outside the requested target
+   * or platform scope. Mirrors the front-end filter pills in
+   * `waypoint-graph-template.html` (target derived from `id.split('/')[0]`, platform
+   * read off `WaypointGraphNode.platform`) so the CLI's `--target` / `--platform`
+   * options give the same view as picking those pills in the live viewer — minus the
+   * data the viewer has to chew through.
+   *
+   * `internal` (not private) so the test suite can drive it with synthetic graph data
+   * without spinning up a real workspace anchor.
+   */
+  internal fun applyScope(
+    waypoints: List<WaypointGraphNode>,
+    shortcuts: List<WaypointGraphShortcut>,
+    trailheads: List<WaypointGraphTrailhead>,
+    targetFilter: String?,
+    platformFilter: String?,
+  ): Triple<List<WaypointGraphNode>, List<WaypointGraphShortcut>, List<WaypointGraphTrailhead>> {
+    if (targetFilter == null && platformFilter == null) {
+      return Triple(waypoints, shortcuts, trailheads)
+    }
+    val keptWaypoints = waypoints.filter { wp ->
+      val targetOk = targetFilter == null || wp.id.substringBefore('/') == targetFilter
+      val platformOk = platformFilter == null || wp.platform == platformFilter
+      targetOk && platformOk
+    }
+    val keptIds = keptWaypoints.mapTo(mutableSetOf()) { it.id }
+    val keptShortcuts = shortcuts.filter { it.from in keptIds && it.to in keptIds }
+    val keptTrailheads = trailheads.filter { it.to in keptIds }
+    return Triple(keptWaypoints, keptShortcuts, keptTrailheads)
+  }
+
+  /**
+   * Layered resource source: classpath alone if no workspace anchor is found,
+   * otherwise classpath + workspace `trails/config/`. The workspace layer means
+   * pack-bundled tools authored under `<workspace>/trails/config/packs/<id>/tools/`
+   * surface alongside framework-classpath ones — without it the standalone CLI
+   * export silently drops every workspace-pack shortcut/trailhead from the graph.
+   *
+   * Composes via the same shape `AppTargetDiscovery.buildResourceSource` uses
+   * (kept independent here so the graph path doesn't depend on the AppTarget
+   * loader's heavier setup — companions, project tool overlays — both unnecessary
+   * for graph edges).
+   */
+  private fun buildToolResourceSource(fromPath: Path): ConfigResourceSource {
+    val workspace = TrailblazeWorkspaceConfigResolver.resolve(fromPath)
+    val configDir = workspace.configDir ?: return ClasspathConfigResourceSource
+    return CompositeConfigResourceSource(
+      sources = listOf(
+        ClasspathConfigResourceSource,
+        FilesystemConfigResourceSource(rootDir = configDir),
+      ),
     )
   }
 

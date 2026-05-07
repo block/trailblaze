@@ -28,10 +28,21 @@ class WaypointLocateCommand : Callable<Int> {
   var file: File? = null
 
   @Option(
-    names = ["--root"],
-    description = ["Additional directory to scan for *.waypoint.yaml files (default: $DEFAULT_WAYPOINT_ROOT, resolved against the current working directory). Pack waypoints are always included regardless of --root."],
+    names = ["--target"],
+    paramLabel = "<id>",
+    description = [
+      "Pack id to operate on. Resolves --root to <workspace>/packs/<id>/waypoints/. " +
+        "Mutually exclusive with --root (--root wins if both given).",
+    ],
   )
-  var root: File = File(DEFAULT_WAYPOINT_ROOT)
+  var targetId: String? = null
+
+  @Option(
+    names = ["--root"],
+    paramLabel = "<path>",
+    description = ["Additional directory to scan for *.waypoint.yaml files. Overrides --target. Pack waypoints are always included regardless. (Convention: $DEFAULT_WAYPOINT_ROOT)"],
+  )
+  var rootOverride: File? = null
 
   @Option(names = ["--live"], description = ["Pull screen state from the connected device (not yet implemented)"])
   var live: Boolean = false
@@ -41,6 +52,7 @@ class WaypointLocateCommand : Callable<Int> {
       Console.error("--live is not yet implemented for waypoint locate. Use --session/--step or --file.")
       return CommandLine.ExitCode.USAGE
     }
+    val root = resolveWaypointRoot(rootOverride = rootOverride, targetId = targetId)
     val logFile = resolveLogFile() ?: return CommandLine.ExitCode.USAGE
     val screen = SessionLogScreenState.loadStep(logFile)
     val discovery = WaypointDiscovery.discover(root)
@@ -53,6 +65,7 @@ class WaypointLocateCommand : Callable<Int> {
         ""
       }
       Console.error("No waypoint definitions found in active packs or under ${root.absolutePath}.$suffix")
+      maybeWarnNoTarget(rootOverride, targetId, resultIsEmpty = true)
       return CommandLine.ExitCode.USAGE
     }
     Console.log("Locating against ${defs.size} waypoint(s); screen state: ${logFile.name}")

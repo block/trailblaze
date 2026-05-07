@@ -12,6 +12,9 @@ dependencies:
   - trailblaze
 target:
   display_name: Google Clock
+  tools:
+    - tools/clock_android_launchApp.yaml
+    - tools/clock_clearAlarms.yaml
   platforms:
     android:
       app_ids:
@@ -20,7 +23,4 @@ target:
     ios: {}
     web: {}
     compose: {}
-waypoints:
-  - waypoints/clock_android_clock_tab.waypoint.yaml
-  - waypoints/clock_android_alarm_tab.waypoint.yaml
-  - waypoints/clock_android_alarm_time_picker.waypoint.yaml
+# Waypoint YAMLs are auto-discovered from `waypoints/**.waypoint.yaml` (any depth).

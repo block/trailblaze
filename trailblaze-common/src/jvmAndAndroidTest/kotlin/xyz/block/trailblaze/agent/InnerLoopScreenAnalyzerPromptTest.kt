@@ -66,8 +66,9 @@ class InnerLoopScreenAnalyzerPromptTest {
       ),
       viewHierarchy = "Dialog\n  [n1] Text 'Coffee Americano'",
     )
-    assertThat(message).contains("verification step")
+    assertThat(message).contains("Verification step")
     assertThat(message).contains("objectiveAppearsAchieved=true")
+    assertThat(message).contains("objectiveAppearsImpossible=true")
     // The direction-step bias must NOT leak into verify — that's what caused the historical loop.
     assertThat(message).doesNotContain("prefer taking a UI action")
   }
@@ -82,7 +83,7 @@ class InnerLoopScreenAnalyzerPromptTest {
       viewHierarchy = "List\n  [n1] Text 'Coffee Americano'",
     )
     assertThat(message).contains("prefer taking a UI action")
-    assertThat(message).doesNotContain("verification step")
+    assertThat(message).doesNotContain("Verification step")
   }
 
   @Test

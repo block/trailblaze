@@ -8,4 +8,7 @@ package xyz.block.trailblaze.llm.config
 object ClasspathConfigResourceSource : ConfigResourceSource {
   override fun discoverAndLoad(directoryPath: String, suffix: String): Map<String, String> =
     ClasspathResourceDiscovery.discoverAndLoad(directoryPath, suffix)
+
+  override fun discoverAndLoadRecursive(directoryPath: String, suffix: String): Map<String, String> =
+    ClasspathResourceDiscovery.discoverAndLoadRecursive(directoryPath, suffix)
 }

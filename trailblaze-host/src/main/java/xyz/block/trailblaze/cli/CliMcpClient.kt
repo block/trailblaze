@@ -26,6 +26,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
 import xyz.block.trailblaze.TrailblazeVersion
+import xyz.block.trailblaze.devices.TrailblazeDeviceId
 import xyz.block.trailblaze.devices.TrailblazeDevicePlatform
 import xyz.block.trailblaze.devices.TrailblazeDevicePort
 import xyz.block.trailblaze.mcp.newtools.DeviceManagerToolSet
@@ -347,7 +348,7 @@ class CliMcpClient(
     // The daemon's Maestro driver persists across CLI invocations within the same MCP session,
     // so force-reconnecting on every call just adds latency (~2-5s on iOS).
     if (hasExistingDevice) {
-      val infoResult = callTool("device", mapOf("action" to "INFO"))
+      val infoResult = callTool(DEVICE_TOOL_NAME, mapOf(ACTION_KEY to DEVICE_ACTION_INFO))
       val currentPlatform = if (!infoResult.isError) parseDevicePlatform(infoResult) else null
       val currentInstanceId = if (!infoResult.isError) parseConnectedInstanceId(infoResult) else null
       val currentSpec = currentPlatform?.let {
@@ -408,9 +409,31 @@ class CliMcpClient(
       }
       else -> {
         "Multiple devices found. Specify which to use with --device (-d):\n" +
-          mobileDevices.joinToString("\n") { "  --device ${it.spec}" }
+          mobileDevices.joinToString("\n") { "  --device ${it.toFullyQualifiedDeviceId()}" }
       }
     }
+  }
+
+  /**
+   * Returns the daemon's currently-bound device as a typed [TrailblazeDeviceId], or
+   * `null` if no device is bound (or the daemon's response is missing either platform
+   * or instance id).
+   *
+   * Read-only inspection — unlike [ensureDevice], it does not switch the device or
+   * start a session. Callers do their own matching; see [deviceSpecMatches] in
+   * `SessionCommand.kt`.
+   *
+   * Used by `session stop` / `session end` to find the session bound to the user's
+   * `--device`. The contract is "one session per device, --device is the lookup key"
+   * — so callers that get a non-null id which doesn't match their `--device` should
+   * fail loudly rather than acting on an unrelated session.
+   */
+  suspend fun getBoundDeviceId(): TrailblazeDeviceId? {
+    val infoResult = callTool(DEVICE_TOOL_NAME, mapOf(ACTION_KEY to DEVICE_ACTION_INFO))
+    if (infoResult.isError) return null
+    val platform = parseDevicePlatform(infoResult) ?: return null
+    val instance = parseConnectedInstanceId(infoResult) ?: return null
+    return TrailblazeDeviceId(instanceId = instance, trailblazeDevicePlatform = platform)
   }
 
   private suspend fun connectToDevice(
@@ -430,7 +453,7 @@ class CliMcpClient(
       // should not block an unqualified `web` selection.
       if (instanceId == null && platformDevices.size > 1 && platform != TrailblazeDevicePlatform.WEB) {
         return "Multiple ${platform.displayName} devices found. Specify which one:\n" +
-          platformDevices.joinToString("\n") { "  --device ${it.spec}" }
+          platformDevices.joinToString("\n") { "  --device ${it.toFullyQualifiedDeviceId()}" }
       }
 
       // Validate the instance ID against available devices — policy is per-platform.
@@ -439,8 +462,8 @@ class CliMcpClient(
           TrailblazeDevicePlatform.ANDROID, TrailblazeDevicePlatform.IOS -> {
             val knownIds = platformDevices.map { it.instanceId }
             if (knownIds.isNotEmpty() && instanceId !in knownIds) {
-              val available = knownIds.joinToString(", ") { "${platform.name.lowercase()}/$it" }
-              return "Device '${platform.name.lowercase()}/$instanceId' not found. Available: $available"
+              val available = knownIds.joinToString(", ") { platform.toFullyQualifiedDeviceId(it) }
+              return "Device '${platform.toFullyQualifiedDeviceId(instanceId)}' not found. Available: $available"
             }
           }
           TrailblazeDevicePlatform.WEB -> {
@@ -558,7 +581,7 @@ class CliMcpClient(
    */
   suspend fun getTrailblazeSessionId(): String? {
     return try {
-      val result = callTool("session", mapOf("action" to "INFO"))
+      val result = callTool(SESSION_TOOL_NAME, mapOf(ACTION_KEY to SESSION_ACTION_INFO))
       if (result.isError) return null
       val parsed = Json.parseToJsonElement(result.content).jsonObject
       parsed["sessionId"]?.jsonPrimitive?.content
@@ -633,7 +656,7 @@ class CliMcpClient(
     val platform: TrailblazeDevicePlatform,
     val description: String? = null,
   ) {
-    val spec: String get() = "${platform.name.lowercase()}/$instanceId"
+    fun toFullyQualifiedDeviceId(): String = platform.toFullyQualifiedDeviceId(instanceId)
   }
 
   class CliMcpException(message: String, cause: Throwable? = null) : Exception(message, cause)
@@ -676,6 +699,10 @@ class CliMcpClient(
     private const val TOOLS_CALL_METHOD = "tools/call"
     private const val SESSION_TOOL_NAME = "session"
     private const val SESSION_ACTION_STOP = "STOP"
+    private const val SESSION_ACTION_INFO = "INFO"
+    private const val DEVICE_TOOL_NAME = "device"
+    private const val DEVICE_ACTION_INFO = "INFO"
+    private const val ACTION_KEY = "action"
     private const val TMP_DIR_PROPERTY = "java.io.tmpdir"
 
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = true }
@@ -832,7 +859,7 @@ class CliMcpClient(
         } else {
           client.sessionId = savedSessionId
           try {
-            val result = client.callTool("device", mapOf("action" to "INFO"))
+            val result = client.callTool(DEVICE_TOOL_NAME, mapOf(ACTION_KEY to DEVICE_ACTION_INFO))
             val sessionIsAlive = !result.isError || result.content.contains("No device connected")
             if (sessionIsAlive) {
               // Session is alive — reuse it

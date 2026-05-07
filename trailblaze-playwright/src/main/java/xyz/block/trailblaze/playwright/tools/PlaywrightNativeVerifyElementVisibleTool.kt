@@ -24,22 +24,20 @@ class PlaywrightNativeVerifyElementVisibleTool(
     "Element ID (e.g., 'e5'), ARIA descriptor (e.g., 'button \"Submit\"'), " +
       "or CSS selector with css= prefix (e.g., 'css=#my-element').",
   )
-  val ref: String,
-  @param:LLMDescription("Human-readable description of the element being verified, for logging.")
-  val element: String = "",
+  val ref: String? = null,
   override val reasoning: String? = null,
   val nodeSelector: TrailblazeNodeSelector? = null,
 ) : PlaywrightExecutableTool, ReasoningTrailblazeTool {
-  override val elementDescriptor: String? get() = element.ifBlank { null }
-  override val targetRef: String get() = ref
+  override val targetRef: String? get() = ref
+  override val targetNodeSelector: TrailblazeNodeSelector? get() = nodeSelector
   override fun withNodeSelector(selector: TrailblazeNodeSelector): PlaywrightExecutableTool =
-    PlaywrightNativeVerifyElementVisibleTool(ref = ref, element = element, reasoning = reasoning, nodeSelector = selector)
+    PlaywrightNativeVerifyElementVisibleTool(ref = null, reasoning = reasoning, nodeSelector = selector)
 
   override suspend fun executeWithPlaywright(
     page: Page,
     context: TrailblazeToolExecutionContext,
   ): TrailblazeToolResult {
-    val description = element.ifBlank { ref }
+    val description = PlaywrightExecutableTool.describeTarget(nodeSelector, ref)
     reasoning?.let { Console.log("### Reasoning: $it") }
     Console.log("### Verifying element visible: $description")
     return try {

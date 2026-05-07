@@ -32,6 +32,20 @@ class FilesystemConfigResourceSource(
       .associate { it.name.removeSuffix(suffix) to it.readText() }
   }
 
+  override fun discoverAndLoadRecursive(directoryPath: String, suffix: String): Map<String, String> {
+    val subDir = resolveSubDir(rootDir, directoryPath)
+    if (!subDir.isDirectory) return emptyMap()
+    val rootPath = subDir.toPath()
+    return subDir.walkTopDown()
+      .filter { it.isFile }
+      .mapNotNull { file ->
+        val rel = rootPath.relativize(file.toPath()).toString()
+          .replace(File.separatorChar, '/')
+        if (rel.endsWith(suffix)) rel to file.readText() else null
+      }
+      .toMap()
+  }
+
   companion object {
     /**
      * Strips the conventional `trailblaze-config/` prefix from classpath-style paths so the

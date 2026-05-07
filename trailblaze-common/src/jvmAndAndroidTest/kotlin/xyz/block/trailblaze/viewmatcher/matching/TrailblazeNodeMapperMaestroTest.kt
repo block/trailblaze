@@ -5,6 +5,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import maestro.Platform
 import maestro.TreeNode
 import xyz.block.trailblaze.api.DriverNodeDetail
 
@@ -235,5 +236,34 @@ class TrailblazeNodeMapperMaestroTest {
     assertEquals(-20, bounds.top)
     assertEquals(100, bounds.right)
     assertEquals(200, bounds.bottom)
+  }
+
+  // ---- Platform-dispatched conversion -------------------------------------
+  // Pins the contract for `TreeNode.toTrailblazeNode(platform)`: Android and iOS produce
+  // populated trees through their respective per-platform mappers; web/desktop return null
+  // because Maestro doesn't drive those (the recorder skips them, the screen-state path
+  // skips them). A future "I added a Maestro path for X" needs to extend the helper, and
+  // this test is the place where that decision becomes visible.
+
+  @Test
+  fun `toTrailblazeNode returns Android tree for ANDROID platform`() {
+    val tree = TreeNode(attributes = mutableMapOf("text" to "Hello"))
+    val result = tree.toTrailblazeNode(Platform.ANDROID)
+    assertNotNull(result)
+    assertIs<DriverNodeDetail.AndroidMaestro>(result.driverDetail)
+  }
+
+  @Test
+  fun `toTrailblazeNode returns iOS tree for IOS platform`() {
+    val tree = TreeNode(attributes = mutableMapOf("text" to "Hello"))
+    val result = tree.toTrailblazeNode(Platform.IOS)
+    assertNotNull(result)
+    assertIs<DriverNodeDetail.IosMaestro>(result.driverDetail)
+  }
+
+  @Test
+  fun `toTrailblazeNode returns null for WEB platform`() {
+    val tree = TreeNode(attributes = mutableMapOf("text" to "Hello"))
+    assertNull(tree.toTrailblazeNode(Platform.WEB))
   }
 }

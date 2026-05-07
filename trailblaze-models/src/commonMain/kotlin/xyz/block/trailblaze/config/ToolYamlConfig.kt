@@ -63,15 +63,16 @@ import xyz.block.trailblaze.logs.client.temp.YamlJsonBridge
  * Three operational classes of tool live in this single data class, distinguished by which
  * (if any) metadata block is populated:
  *
- * | File suffix          | Block populated  | Class      | Available when                      |
- * | -------------------- | ---------------- | ---------- | ----------------------------------- |
- * | `*.tool.yaml`        | (neither)        | tool       | toolset rules (existing)            |
- * | `*.shortcut.yaml`    | [shortcut]       | shortcut   | current waypoint matches `from`     |
- * | `*.trailhead.yaml`   | [trailhead]      | trailhead  | always (bootstrap from any state)   |
+ * | File suffix        | Pack subdir      | Block populated  | Class      | Available when                      |
+ * | ------------------ | ---------------- | ---------------- | ---------- | ----------------------------------- |
+ * | `*.tool.yaml`      | `tools/`         | (neither)        | tool       | toolset rules (existing)            |
+ * | `*.shortcut.yaml`  | `shortcuts/`     | [shortcut]       | shortcut   | current waypoint matches `from`     |
+ * | `*.trailhead.yaml` | `trailheads/`    | [trailhead]      | trailhead  | always (bootstrap from any state)   |
  *
  * The blocks are mutually exclusive — a tool is at most one of those classes. File-suffix
  * conformance is enforced by [ToolYamlLoader] at load time; the data class itself
- * stays loader-agnostic.
+ * stays loader-agnostic. Subdirectories below each top-level pack dir are organizational
+ * only — `shortcuts/web/`, `trailheads/android/`, etc. are walked recursively.
  *
  * ### Shortcut
  *

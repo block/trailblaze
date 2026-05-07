@@ -1,0 +1,33 @@
+# Default target — platform tools only, no app-specific configuration.
+id: default
+display_name: Default
+
+platforms:
+  android:
+    tool_sets:
+      - core_interaction
+      - navigation
+      - observation
+      - verification
+      - memory
+
+  ios:
+    tool_sets:
+      - core_interaction
+      - navigation
+      - observation
+      - verification
+      - memory
+
+  web:
+    drivers: [playwright-native, playwright-electron]
+    tool_sets:
+      - web_core
+      - web_verification
+      - memory
+
+  compose:
+    tool_sets:
+      - compose_core
+      - compose_verification
+      - memory

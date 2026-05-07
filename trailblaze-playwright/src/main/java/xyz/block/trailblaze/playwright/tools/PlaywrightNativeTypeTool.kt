@@ -25,25 +25,23 @@ class PlaywrightNativeTypeTool(
     "Element ID (e.g., 'e5'), ARIA descriptor (e.g., 'textbox \"Email\"'), " +
       "or CSS selector with css= prefix (e.g., 'css=#email-input').",
   )
-  val ref: String,
-  @param:LLMDescription("Human-readable description of the element being typed into, for logging.")
-  val element: String = "",
+  val ref: String? = null,
   @param:LLMDescription("If true (default), clear the field before typing. If false, append to existing text.")
   val clearFirst: Boolean = true,
   override val reasoning: String? = null,
   val nodeSelector: TrailblazeNodeSelector? = null,
 ) : PlaywrightExecutableTool, ReasoningTrailblazeTool {
-  override val elementDescriptor: String? get() = element.ifBlank { null }
-  override val targetRef: String get() = ref
+  override val targetRef: String? get() = ref
+  override val targetNodeSelector: TrailblazeNodeSelector? get() = nodeSelector
   override fun withNodeSelector(selector: TrailblazeNodeSelector): PlaywrightExecutableTool =
-    PlaywrightNativeTypeTool(text = text, ref = ref, element = element, clearFirst = clearFirst, reasoning = reasoning, nodeSelector = selector)
+    PlaywrightNativeTypeTool(text = text, ref = null, clearFirst = clearFirst, reasoning = reasoning, nodeSelector = selector)
 
   override suspend fun executeWithPlaywright(
     page: Page,
     context: TrailblazeToolExecutionContext,
   ): TrailblazeToolResult {
     val interpolatedText = context.memory.interpolateVariables(text)
-    val description = element.ifBlank { ref }
+    val description = PlaywrightExecutableTool.describeTarget(nodeSelector, ref)
     reasoning?.let { Console.log("### Reasoning: $it") }
     Console.log("### Typing into $description: $interpolatedText")
     return try {

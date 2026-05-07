@@ -6,8 +6,8 @@
 # small wording / spacing changes can be intentional or accidental.
 # ----------------------------------------------------------------------
 Usage: trailblaze waypoint suggest-selector [-hV] [--anchor=<anchor>]
-       [--max=<max>] --ref=<ref> [--session=<session>] [--step=<step>]
-       [<positionalLogFile>]
+       [--at=<at>] [--maestro-selector=<maestroSelector>] [--max=<max>]
+       [--ref=<ref>] [--session=<session>] [--step=<step>] [<positionalLogFile>]
 Suggest waypoint-ready selector YAML for a specific element ref in a captured
 screen.
 Pair with `./trailblaze snapshot --all` to see refs, then run this on the
@@ -37,10 +37,43 @@ plus one structural-only candidate at the bottom for forbidden-clause use.
                               wrong for waypoint identity,
                                 because we want to know WHICH tab is currently
                               active.
+      --at=<at>             Screen-coordinate pair `x,y` (in device pixels)
+                              identifying the target element.
+                            The frontmost interactive node whose bounds contain
+                              the point is selected via
+                            the same hit-test the runtime uses for taps. Useful
+                              for the deterministic
+                            Maestro-selector → accessibility-selector
+                              migration: resolve the Maestro selector
+                            to a center coordinate, then ask this command for
+                              an accessibility selector that
+                            covers the same node. Mutually exclusive with --ref
+                              / --maestro-selector.
   -h, --help                Show this help message and exit.
+      --maestro-selector=<maestroSelector>
+                            Inline TrailblazeElementSelector YAML (the legacy
+                              flat selector with fields like
+                            `textRegex`, `idRegex`, `accessibilityTextRegex`,
+                              `index`, `enabled`, etc.) — the
+                            shape used by the older Maestro-driver tap
+                              recordings. The selector is resolved
+                            against the captured `viewHierarchy` (Maestro tree)
+                              using the same matcher the
+                            runtime taps use; the resulting node's CENTER
+                              coordinate is then hit-tested
+                            against the captured `trailblazeNodeTree`
+                              (accessibility tree) to find the
+                            accessibility node that covers the same on-screen
+                              element. The output is the
+                            same selector cascade as `--ref` / `--at`, but
+                              starting from a Maestro selector.
+                            This is the deterministic Maestro→accessibility
+                              migration primitive.
+                            Mutually exclusive with --ref / --at.
       --max=<max>           Maximum candidate selectors to return (default: 5)
       --ref=<ref>           Element ref from the captured tree (e.g. 'a812').
-                              Required.
+                            Mutually exclusive with --at; exactly one must be
+                              provided.
       --session=<session>   Session log directory (containing
                               *_TrailblazeLlmRequestLog.json files)
       --step=<step>         1-based step within --session (default: last step)

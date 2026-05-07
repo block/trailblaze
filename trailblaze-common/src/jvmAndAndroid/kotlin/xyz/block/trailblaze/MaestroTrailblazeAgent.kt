@@ -98,7 +98,12 @@ abstract class MaestroTrailblazeAgent(
    */
   open suspend fun executeNodeSelectorAssertVisible(
     nodeSelector: TrailblazeNodeSelector,
-    timeoutMs: Long = 5_000L,
+    /**
+     * How long to wait for the element to become visible. `null` means the call site is
+     * not opinionated about timeout and each agent implementation should apply its own
+     * idle/wait policy (typically a per-driver default).
+     */
+    timeoutMs: Long? = null,
     traceId: TraceId?,
   ): TrailblazeToolResult? = null
 
@@ -113,7 +118,12 @@ abstract class MaestroTrailblazeAgent(
    */
   open suspend fun executeNodeSelectorAssertNotVisible(
     nodeSelector: TrailblazeNodeSelector,
-    timeoutMs: Long = 5_000L,
+    /**
+     * How long to wait for the element to disappear. `null` means the call site is not
+     * opinionated about timeout and each agent implementation should apply its own
+     * idle/wait policy (typically a per-driver default).
+     */
+    timeoutMs: Long? = null,
     traceId: TraceId?,
   ): TrailblazeToolResult? = null
 
