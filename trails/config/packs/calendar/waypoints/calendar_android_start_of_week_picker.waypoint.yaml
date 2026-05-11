@@ -1,0 +1,28 @@
+id: "calendar/android/start_of_week_picker"
+description: "Start of the week picker dialog — Saturday/Sunday/Monday choices. Opened from Settings → General → Start of the week."
+required:
+  - description: "Dialog title 'Start of the week'"
+    selector:
+      androidAccessibility:
+        textRegex: "^Start of the week$"
+  - description: "Sunday option"
+    selector:
+      androidAccessibility:
+        textRegex: "^Sunday$"
+  - description: "Monday option"
+    selector:
+      androidAccessibility:
+        textRegex: "^Monday$"
+  - description: "Saturday option"
+    selector:
+      androidAccessibility:
+        textRegex: "^Saturday$"
+  - description: "Picker dialog list"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/select_dialog_listview$"
+forbidden:
+  - description: "Theme picker's options would not coexist"
+    selector:
+      androidAccessibility:
+        textRegex: "^Choose theme$"

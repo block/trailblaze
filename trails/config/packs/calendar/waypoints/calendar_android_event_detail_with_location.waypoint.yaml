@@ -1,0 +1,20 @@
+id: "calendar/android/event_detail_with_location"
+description: "Event detail showing a location segment with an address row + 'View on map' link. Variant of event_detail when the event has a saved location."
+required:
+  - description: "View-screen coordinator"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/view_screen_coordinator_layout$"
+  - description: "Segment container"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/segment_container$"
+  - description: "Map / location row content description"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "(?s)^Location\\n.*"
+forbidden:
+  - description: "Quick-create handle (would mean editor)"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/drag_handle$"

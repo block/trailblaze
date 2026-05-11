@@ -1,0 +1,26 @@
+id: "calendar/android/discard_feedback_dialog"
+description: "'Discard your feedback?' confirmation surfaced when backing out of the in-progress feedback form. Continue writing / Discard."
+required:
+  - description: "Dialog title"
+    selector:
+      androidAccessibility:
+        textRegex: "^Discard your feedback\\?$"
+  - description: "Body text confirming discard"
+    selector:
+      androidAccessibility:
+        textRegex: ".*are you sure you don.t want to send this.*"
+  - description: "Discard button"
+    selector:
+      androidAccessibility:
+        textRegex: "^Discard$"
+        classNameRegex: "\\Qandroid.widget.Button\\E"
+  - description: "Continue writing button"
+    selector:
+      androidAccessibility:
+        textRegex: "^Continue writing$"
+        classNameRegex: "\\Qandroid.widget.Button\\E"
+forbidden:
+  - description: "Calendar's discard-event dialog has a different prompt"
+    selector:
+      androidAccessibility:
+        textRegex: "^Discard this event\\?$"

@@ -1,0 +1,8 @@
+id: calendar_android_feedbackBack
+description: From the feedback describe form, press Back to surface the discard-feedback dialog.
+shortcut:
+  from: calendar/android/feedback_describe
+  to: calendar/android/discard_feedback_dialog
+parameters: []
+tools:
+  - pressBack: {}

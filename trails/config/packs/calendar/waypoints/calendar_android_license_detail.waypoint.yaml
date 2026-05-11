@@ -1,0 +1,20 @@
+id: "calendar/android/license_detail"
+description: "Single-license detail screen showing the full license text for one OSS dependency. Reached from open_source_licenses → tap a license row."
+required:
+  - description: "License-text scrollview"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/license_activity_scrollview$"
+  - description: "License-text textview"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/license_activity_textview$"
+  - description: "Navigate-up button"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^Navigate up$"
+forbidden:
+  - description: "License list (would mean we're on the index, not detail)"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/license_list$"

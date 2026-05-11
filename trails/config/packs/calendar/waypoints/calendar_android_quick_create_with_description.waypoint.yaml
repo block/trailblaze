@@ -1,0 +1,20 @@
+id: "calendar/android/quick_create_with_description"
+description: "Expanded event sheet with a non-empty description (Add description placeholder is replaced with the typed text)."
+required:
+  - description: "Drag handle"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/drag_handle$"
+  - description: "Collapse action — sheet expanded"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^Collapse event sheet$"
+  - description: "Save button"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/save$"
+forbidden:
+  - description: "'Add description' placeholder text"
+    selector:
+      androidAccessibility:
+        textRegex: "^Add description$"

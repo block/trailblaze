@@ -1,0 +1,24 @@
+id: "calendar/android/create_account_menu"
+description: "Google sign-in 'Create account' dropdown — 'For my personal use / For my child / For work or my business' menu items overlaid on the sign-in webview."
+required:
+  - description: "GMS minute-maid container (still inside sign-in flow)"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.gms:id/minute_maid$"
+  - description: "'For my personal use' option"
+    selector:
+      androidAccessibility:
+        textRegex: "^For my personal use$"
+  - description: "'For work or my business' option"
+    selector:
+      androidAccessibility:
+        textRegex: "^For work or my business$"
+  - description: "'For my child' option"
+    selector:
+      androidAccessibility:
+        textRegex: "^For my child$"
+forbidden:
+  - description: "Add-account loading screen"
+    selector:
+      androidAccessibility:
+        textRegex: "^Checking info…$"

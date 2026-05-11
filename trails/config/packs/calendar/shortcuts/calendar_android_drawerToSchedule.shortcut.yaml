@@ -1,0 +1,12 @@
+id: calendar_android_drawerToSchedule
+description: From the open drawer, switch to Schedule view.
+shortcut:
+  from: calendar/android/drawer_open
+  to: calendar/android/schedule_view
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      reason: ""
+      nodeSelector:
+        androidAccessibility:
+          contentDescriptionRegex: "^Schedule view$"

@@ -1,0 +1,12 @@
+id: calendar_android_dateToYear
+description: From the modal date picker (day grid), tap the year header to switch to year-grid mode.
+shortcut:
+  from: calendar/android/event_date_picker
+  to: calendar/android/event_year_picker
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      reason: ""
+      nodeSelector:
+        androidAccessibility:
+          resourceIdRegex: "^android:id/date_picker_header_year$"

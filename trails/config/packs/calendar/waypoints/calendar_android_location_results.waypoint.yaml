@@ -1,0 +1,24 @@
+id: "calendar/android/location_results"
+description: "Add-location screen with results showing — query typed, suggestions list populated with nearby places + clear-search action."
+required:
+  - description: "Locations toolbar a11y label"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^Locations$"
+  - description: "Suggestions list"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/suggestions$"
+  - description: "Clear-search action — only present once query is non-empty"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^Clear search$"
+  - description: "Suggestion-row tile-icon"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/tile_icon$"
+forbidden:
+  - description: "'Add location' header text — only on pristine state with no query"
+    selector:
+      androidAccessibility:
+        textRegex: "^Add location$"

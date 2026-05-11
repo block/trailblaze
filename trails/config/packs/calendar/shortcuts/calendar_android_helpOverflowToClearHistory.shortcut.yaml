@@ -1,0 +1,13 @@
+id: calendar_android_helpOverflowToClearHistory
+description: From the help overflow popup, tap 'Clear help history' to open the confirmation dialog.
+shortcut:
+  from: calendar/android/help_overflow_menu
+  to: calendar/android/settings_overflow_clear_history
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      reason: ""
+      nodeSelector:
+        androidAccessibility:
+          textRegex: "^Clear help history$"
+          resourceIdRegex: "^com\\.google\\.android\\.gms:id/title$"

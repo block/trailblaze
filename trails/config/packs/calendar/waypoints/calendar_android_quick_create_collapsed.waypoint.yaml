@@ -1,0 +1,28 @@
+id: "calendar/android/quick_create_collapsed"
+description: "Bottom sheet for new event in collapsed state — title, start/end date+time, with an 'Expand event sheet' handle. Distinct from the expanded sheet (which has 'Collapse event sheet' instead)."
+required:
+  - description: "Drag handle for the bottom sheet"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/drag_handle$"
+  - description: "Expand action — only visible while sheet is collapsed"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^Expand event sheet$"
+  - description: "Start date row"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^Start date: .*$"
+  - description: "End date row"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^End date: .*$"
+  - description: "Save button id"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/save$"
+forbidden:
+  - description: "Collapse action would mean the sheet is fully expanded"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^Collapse event sheet$"

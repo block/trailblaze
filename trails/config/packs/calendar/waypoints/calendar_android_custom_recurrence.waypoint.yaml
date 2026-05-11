@@ -1,0 +1,32 @@
+id: "calendar/android/custom_recurrence"
+description: "Custom recurrence editor screen — frequency picker, interval, weekday buttons, end-recurrence selectors. Reached via Repeat picker → Custom…"
+required:
+  - description: "Recurrence picker view container"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/recurrence_picker_view$"
+  - description: "Frequency dropdown"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/frequency$"
+  - description: "Weekday button group"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/week_buttons$"
+  - description: "End-recurrence layout"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/end_recurrence_layout$"
+  - description: "'Repeat every 1 week' summary"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^Repeat every \\d+ (day|week|month|year)s?$"
+  - description: "Back button"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^Back$"
+forbidden:
+  - description: "Repeat picker dialog list (we should be on the editor, not the picker)"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/select_dialog_listview$"

@@ -1,0 +1,23 @@
+id: "calendar/android/event_overflow_menu"
+description: "Event-detail overflow popup — Delete / Duplicate / Help & feedback. Reached via the 3-dots More options on event detail."
+required:
+  - description: "Delete menu item"
+    selector:
+      androidAccessibility:
+        textRegex: "^Delete$"
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/title$"
+  - description: "Duplicate menu item"
+    selector:
+      androidAccessibility:
+        textRegex: "^Duplicate$"
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/title$"
+  - description: "Help & feedback menu item"
+    selector:
+      androidAccessibility:
+        textRegex: "^Help & feedback$"
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/title$"
+forbidden:
+  - description: "Settings overflow has only Help & feedback (no Delete/Duplicate)"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/settings_content$"

@@ -1,0 +1,12 @@
+id: calendar_android_dayToFab
+description: From the day view, tap the FAB to open the quick-create event sheet (collapsed).
+shortcut:
+  from: calendar/android/day_view
+  to: calendar/android/quick_create_collapsed
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      reason: ""
+      nodeSelector:
+        androidAccessibility:
+          contentDescriptionRegex: "^Create new event$"

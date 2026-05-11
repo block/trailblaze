@@ -1,0 +1,25 @@
+id: "calendar/android/quick_create_with_repeat"
+description: "Expanded event sheet with repeat set to a non-default value (Every day / week / etc). Distinct from quick_create_expanded (where 'Does not repeat' is the placeholder)."
+required:
+  - description: "Drag handle"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/drag_handle$"
+  - description: "Collapse action — sheet expanded"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^Collapse event sheet$"
+  - description: "Repeat row shows a non-default frequency"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/first_line_text$"
+        textRegex: "^Every (?:day|week|month|year)$"
+  - description: "Save button"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/save$"
+forbidden:
+  - description: "'Does not repeat' would mean default state"
+    selector:
+      androidAccessibility:
+        textRegex: "^Does not repeat$"

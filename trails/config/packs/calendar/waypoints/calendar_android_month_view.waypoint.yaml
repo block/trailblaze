@@ -1,0 +1,21 @@
+id: "calendar/android/month_view"
+description: "Google Calendar, Month view selected. Grid of day cells with numeric Julian-day content-desc. Distinct from day/week (which use 'Open Day View' descriptors)."
+required:
+  - description: "Day picker button"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/date_picker_button$"
+  - description: "FAB visible"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/floating_action_button$"
+  - description: "At least 28 day-cells in the month grid (date-named like 'Sunday 26 April' or numeric Julian id)"
+    minCount: 28
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^(?:\\d{9}|(?:Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday) \\d+ [A-Z][a-z]+)$"
+forbidden:
+  - description: "Day-view single-cell switcher absent on month grid"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: ".*, Open Schedule View$"

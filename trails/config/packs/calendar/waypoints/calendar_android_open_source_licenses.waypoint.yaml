@@ -1,0 +1,24 @@
+id: "calendar/android/open_source_licenses"
+description: "Open-source licenses screen reached from Help → overflow → 'Open source licenses'. Lists every bundled OSS dependency."
+required:
+  - description: "License list container"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/license_list$"
+  - description: "License menu fragment container"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/license_menu_fragment_container$"
+  - description: "Single-license row resource id"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/license$"
+  - description: "Navigate-up action"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^Navigate up$"
+forbidden:
+  - description: "Help app bar (would mean we're on a help screen, not licenses)"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.gms:id/gh_help_app_bar$"

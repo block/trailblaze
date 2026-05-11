@@ -1,0 +1,29 @@
+id: "calendar/android/help_overflow_menu"
+description: "Help & feedback toolbar overflow popup — Clear help history / View in Google Play Store / Open source licenses / Privacy Policy / Terms of Service / Version info."
+required:
+  - description: "'Clear help history' menu item"
+    selector:
+      androidAccessibility:
+        textRegex: "^Clear help history$"
+        resourceIdRegex: "^com\\.google\\.android\\.gms:id/title$"
+  - description: "'View in Google Play Store' menu item"
+    selector:
+      androidAccessibility:
+        textRegex: "^View in Google Play Store$"
+  - description: "'Open source licenses' menu item"
+    selector:
+      androidAccessibility:
+        textRegex: "^Open source licenses$"
+  - description: "'Version info' menu item"
+    selector:
+      androidAccessibility:
+        textRegex: "^Version info$"
+  - description: "'Terms of Service' menu item"
+    selector:
+      androidAccessibility:
+        textRegex: "^Terms of Service$"
+forbidden:
+  - description: "Calendar settings overflow has only Help & feedback (no Version info)"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/settings_content$"

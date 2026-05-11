@@ -1,0 +1,20 @@
+id: "calendar/android/add_people_typing"
+description: "Add-people screen with a query typed — adds the clear-search action. Distinct from add_people pristine state which has no clear button."
+required:
+  - description: "People list recycler"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/recycler$"
+  - description: "Clear-search action"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^Clear search$"
+  - description: "Search input"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/search_text$"
+forbidden:
+  - description: "'Add people' header text — only on pristine state with no query"
+    selector:
+      androidAccessibility:
+        textRegex: "^Add people$"

@@ -1,0 +1,12 @@
+id: calendar_android_generalToAltCalendar
+description: From Settings → General, tap 'Alternate calendar' to open the calendar overlay picker.
+shortcut:
+  from: calendar/android/settings_general
+  to: calendar/android/alternate_calendar_picker
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      reason: ""
+      nodeSelector:
+        androidAccessibility:
+          textRegex: "^Alternate calendar$"

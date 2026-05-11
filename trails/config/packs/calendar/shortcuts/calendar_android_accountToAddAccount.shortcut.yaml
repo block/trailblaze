@@ -1,0 +1,12 @@
+id: calendar_android_accountToAddAccount
+description: From the account sheet, tap 'Add another account' to enter the Google sign-in flow (loading state first).
+shortcut:
+  from: calendar/android/account_sheet
+  to: calendar/android/add_account_loading
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      reason: ""
+      nodeSelector:
+        androidAccessibility:
+          textRegex: "^Add another account$"

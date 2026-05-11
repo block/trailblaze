@@ -1,0 +1,15 @@
+id: calendar
+dependencies:
+  - trailblaze
+target:
+  display_name: Google Calendar
+  tools:
+    - tools/calendar_android_launchApp.yaml
+  platforms:
+    android:
+      app_ids:
+        - com.google.android.calendar
+    ios: {}
+    web: {}
+    compose: {}
+# Waypoint YAMLs are auto-discovered from `waypoints/**.waypoint.yaml` (any depth).

@@ -1,0 +1,24 @@
+id: "calendar/android/event_notification_picker"
+description: "In-event notification picker dialog (a `customPanel` shape with `id/list` instead of `select_dialog_listview`) — same options as the per-calendar default-notifications picker but a different layout."
+required:
+  - description: "Custom-panel-shape dialog list"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/list$"
+  - description: "Custom-panel container (distinguishes from select_dialog_listview shape)"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/customPanel$"
+  - description: "5 minutes before option"
+    selector:
+      androidAccessibility:
+        textRegex: "^5 minutes before$"
+  - description: "Custom… option"
+    selector:
+      androidAccessibility:
+        textRegex: "^Custom…$"
+forbidden:
+  - description: "Plain select_dialog_listview shape would mean the settings-side picker"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/select_dialog_listview$"

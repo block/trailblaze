@@ -1,0 +1,25 @@
+id: "calendar/android/three_day_view"
+description: "Google Calendar, 3-Days view selected. Three contiguous day-cells across the screen. Distinct from week (7 cells), day (1 cell), schedule (week ranges)."
+required:
+  - description: "Day picker button"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/date_picker_button$"
+  - description: "FAB visible (still on a calendar view)"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/floating_action_button$"
+  - description: "At least 3 multi-day cells with 'Open Day View' contentDescription"
+    minCount: 3
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: ".*, Open Day View$"
+forbidden:
+  - description: "Day view's single-day-cell switcher would not appear when 3 cells are visible"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: ".*, Open Schedule View$"
+  - description: "Schedule view's week-range labels (e.g. 'May 10 – 16') don't appear in 3-day"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^[A-Z][a-z]+ \\d+ . \\d+$"

@@ -1,0 +1,12 @@
+id: calendar_android_licensesToDetail
+description: From the open-source licenses index, tap a license row to open its full text.
+shortcut:
+  from: calendar/android/open_source_licenses
+  to: calendar/android/license_detail
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      reason: ""
+      nodeSelector:
+        androidAccessibility:
+          resourceIdRegex: "^com\\.google\\.android\\.calendar:id/license$"

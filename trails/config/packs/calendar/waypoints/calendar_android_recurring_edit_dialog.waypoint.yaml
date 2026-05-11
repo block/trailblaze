@@ -1,0 +1,28 @@
+id: "calendar/android/recurring_edit_dialog"
+description: "'Change recurring event' confirmation prompt — three-radio dialog (This event / This and following events / All events) shown when saving an edit to a recurring event. Mirror of recurring_delete_dialog with a different title."
+required:
+  - description: "Dialog title ('Change recurring event' or 'Save recurring event')"
+    selector:
+      androidAccessibility:
+        textRegex: "^(Change|Save) recurring event$"
+  - description: "'This event' radio option"
+    selector:
+      androidAccessibility:
+        textRegex: "^This event$"
+  - description: "'This and following events' radio option"
+    selector:
+      androidAccessibility:
+        textRegex: "^This and following events$"
+  - description: "'All events' radio option"
+    selector:
+      androidAccessibility:
+        textRegex: "^All events$"
+  - description: "Picker dialog list"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/select_dialog_listview$"
+forbidden:
+  - description: "Delete-recurring dialog has its own title"
+    selector:
+      androidAccessibility:
+        textRegex: "^Delete recurring event$"

@@ -1,0 +1,23 @@
+id: "calendar/android/location_permission_dialog"
+description: "OS location permission prompt — 'Allow Calendar to access this device's approximate location?' Triggered first time the user opens a screen that requests location."
+required:
+  - description: "Permission grant dialog container"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.android\\.permissioncontroller:id/grant_dialog$"
+  - description: "Permission message about approximate location"
+    selector:
+      androidAccessibility:
+        textRegex: ".*access this device.s approximate location.*"
+  - description: "'While using the app' button"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.android\\.permissioncontroller:id/permission_allow_foreground_only_button$"
+  - description: "'Only this time' button"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.android\\.permissioncontroller:id/permission_allow_one_time_button$"
+  - description: "'Don't allow' button"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.android\\.permissioncontroller:id/permission_deny_and_dont_ask_again_button$"

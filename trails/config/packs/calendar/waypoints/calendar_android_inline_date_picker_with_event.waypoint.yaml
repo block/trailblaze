@@ -1,0 +1,20 @@
+id: "calendar/android/inline_date_picker_with_event"
+description: "Inline date picker with at least one event card visible on the timeline below the mini-month grid. Variant of inline_date_picker."
+required:
+  - description: "Inline date-picker container"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/timely_date_picker_container$"
+  - description: "Toolbar in 'Hide' state"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^[A-Z][a-z]+, Hide date picker$"
+  - description: "Event card with 'Response:' content-desc on the underlying timeline"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: ".*, Response: .*$"
+forbidden:
+  - description: "Modal datePicker dialog"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^android:id/datePicker$"

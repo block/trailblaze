@@ -1,0 +1,22 @@
+id: "calendar/android/settings_overflow_clear_history"
+description: "'Clear help history?' confirmation dialog reached from Help → overflow → Clear help history. Two buttons: Cancel / OK."
+required:
+  - description: "Confirmation title or body about clearing help history"
+    selector:
+      androidAccessibility:
+        textRegex: ".*[Cc]lear.*help.*history.*"
+  - description: "OK / Confirm button"
+    selector:
+      androidAccessibility:
+        textRegex: "^(OK|Clear)$"
+        classNameRegex: "\\Qandroid.widget.Button\\E"
+  - description: "Cancel button"
+    selector:
+      androidAccessibility:
+        textRegex: "^Cancel$"
+        classNameRegex: "\\Qandroid.widget.Button\\E"
+forbidden:
+  - description: "Help app bar (would mean we're back on the help root)"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.gms:id/gh_help_app_bar$"

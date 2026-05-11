@@ -1,0 +1,20 @@
+id: "calendar/android/event_detail_with_attendees"
+description: "Event detail showing an attendees segment (people row with RSVP chips). Variant of event_detail when the event has guests."
+required:
+  - description: "View-screen coordinator"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/view_screen_coordinator_layout$"
+  - description: "Segment container present"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/segment_container$"
+  - description: "Attendee count or 'guest' text in a segment"
+    selector:
+      androidAccessibility:
+        textRegex: "^\\d+ guest(s)?(, .*)?$"
+forbidden:
+  - description: "Quick-create handle (would mean editor)"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/drag_handle$"

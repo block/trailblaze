@@ -1,0 +1,25 @@
+id: "calendar/android/quick_create_with_location"
+description: "Expanded event sheet with a location row populated (after picking from add_location). Distinct from quick_create_expanded where 'Add location' is the placeholder."
+required:
+  - description: "Drag handle"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/drag_handle$"
+  - description: "Collapse action — sheet is expanded"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^Collapse event sheet$"
+  - description: "Save button"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/save$"
+  - description: "Location-row populated (a non-placeholder address line in first_line_text style)"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/first_line_text$"
+        textRegex: "^.{8,}$"
+forbidden:
+  - description: "'Add location' placeholder — would mean none picked"
+    selector:
+      androidAccessibility:
+        textRegex: "^Add location$"

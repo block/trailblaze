@@ -1,0 +1,24 @@
+id: "calendar/android/availability_picker"
+description: "Event availability (busy/free) picker dialog opened from the event editor availability row."
+required:
+  - description: "Busy option"
+    selector:
+      androidAccessibility:
+        textRegex: "^Busy$"
+  - description: "Free option"
+    selector:
+      androidAccessibility:
+        textRegex: "^Free$"
+  - description: "Picker dialog list"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/select_dialog_listview$"
+forbidden:
+  - description: "Visibility picker would have a Public option"
+    selector:
+      androidAccessibility:
+        textRegex: "^Public$"
+  - description: "Repeat picker would have 'Does not repeat'"
+    selector:
+      androidAccessibility:
+        textRegex: "^Does not repeat$"

@@ -1,0 +1,544 @@
+{
+    "waypointId": "calendar/android/log_access_dialog",
+    "capturedAt": "2026-05-08T16:27:50.720774Z",
+    "capturedFrom": "logs/2026_05_08_12_27_17_yaml_6258/016_TrailblazeLlmRequestLog.json",
+    "screenshotFile": "calendar_android_log_access_dialog.example.webp",
+    "deviceWidth": 1080,
+    "deviceHeight": 2400,
+    "viewHierarchy": {
+        "x1": 28,
+        "y1": 489,
+        "x2": 1052,
+        "y2": 1976,
+        "centerPoint": "540,1232",
+        "children": [
+            {
+                "nodeId": 2,
+                "x1": 70,
+                "y1": 531,
+                "x2": 1010,
+                "y2": 1934,
+                "centerPoint": "540,1232",
+                "children": [
+                    {
+                        "nodeId": 3,
+                        "x1": 70,
+                        "y1": 531,
+                        "x2": 1010,
+                        "y2": 1934,
+                        "centerPoint": "540,1232",
+                        "children": [
+                            {
+                                "nodeId": 4,
+                                "x1": 70,
+                                "y1": 531,
+                                "x2": 1010,
+                                "y2": 1934,
+                                "centerPoint": "540,1232",
+                                "children": [
+                                    {
+                                        "nodeId": 5,
+                                        "x1": 70,
+                                        "y1": 531,
+                                        "x2": 1010,
+                                        "y2": 1934,
+                                        "centerPoint": "540,1232",
+                                        "children": [
+                                            {
+                                                "nodeId": 6,
+                                                "x1": 70,
+                                                "y1": 531,
+                                                "x2": 1010,
+                                                "y2": 1934,
+                                                "centerPoint": "540,1232",
+                                                "children": [
+                                                    {
+                                                        "nodeId": 7,
+                                                        "x1": 70,
+                                                        "y1": 531,
+                                                        "x2": 1010,
+                                                        "y2": 1934,
+                                                        "centerPoint": "540,1232",
+                                                        "children": [
+                                                            {
+                                                                "nodeId": 8,
+                                                                "x1": 70,
+                                                                "y1": 531,
+                                                                "x2": 1010,
+                                                                "y2": 1934,
+                                                                "centerPoint": "540,1232",
+                                                                "children": [
+                                                                    {
+                                                                        "nodeId": 9,
+                                                                        "x1": 498,
+                                                                        "y1": 594,
+                                                                        "x2": 582,
+                                                                        "y2": 678,
+                                                                        "centerPoint": "540,636",
+                                                                        "className": "android.widget.ImageView",
+                                                                        "resourceId": "android:id/log_access_image_view"
+                                                                    },
+                                                                    {
+                                                                        "nodeId": 10,
+                                                                        "x1": 133,
+                                                                        "y1": 720,
+                                                                        "x2": 947,
+                                                                        "y2": 878,
+                                                                        "centerPoint": "540,799",
+                                                                        "className": "android.widget.TextView",
+                                                                        "resourceId": "android:id/log_access_dialog_title",
+                                                                        "text": "Allow Google Play services to access all device logs?"
+                                                                    },
+                                                                    {
+                                                                        "nodeId": 11,
+                                                                        "x1": 133,
+                                                                        "y1": 962,
+                                                                        "x2": 947,
+                                                                        "y2": 1486,
+                                                                        "centerPoint": "540,1224",
+                                                                        "className": "android.widget.TextView",
+                                                                        "resourceId": "android:id/log_access_dialog_body",
+                                                                        "text": "Device logs record what happens on your device. Apps can use these logs to find and fix issues.\n\nSome logs may contain sensitive info, so only allow apps you trust to access all device logs. \n\nIf you don’t allow this app to access all device logs, it can still access its own logs. Your device manufacturer may still be able to access some logs or info on your device.\n\nLearn more"
+                                                                    },
+                                                                    {
+                                                                        "nodeId": 12,
+                                                                        "x1": 133,
+                                                                        "y1": 1591,
+                                                                        "x2": 947,
+                                                                        "y2": 1871,
+                                                                        "centerPoint": "540,1731",
+                                                                        "children": [
+                                                                            {
+                                                                                "nodeId": 13,
+                                                                                "x1": 133,
+                                                                                "y1": 1596,
+                                                                                "x2": 947,
+                                                                                "y2": 1722,
+                                                                                "centerPoint": "540,1659",
+                                                                                "className": "android.widget.Button",
+                                                                                "clickable": true,
+                                                                                "resourceId": "android:id/log_access_dialog_allow_button",
+                                                                                "text": "Allow one-time access"
+                                                                            },
+                                                                            {
+                                                                                "nodeId": 14,
+                                                                                "x1": 133,
+                                                                                "y1": 1740,
+                                                                                "x2": 947,
+                                                                                "y2": 1866,
+                                                                                "centerPoint": "540,1803",
+                                                                                "className": "android.widget.Button",
+                                                                                "clickable": true,
+                                                                                "resourceId": "android:id/log_access_dialog_deny_button",
+                                                                                "text": "Don’t allow"
+                                                                            }
+                                                                        ],
+                                                                        "className": "android.widget.LinearLayout"
+                                                                    }
+                                                                ],
+                                                                "className": "android.widget.LinearLayout"
+                                                            }
+                                                        ],
+                                                        "className": "android.widget.ScrollView"
+                                                    }
+                                                ],
+                                                "className": "android.widget.FrameLayout",
+                                                "resourceId": "android:id/custom"
+                                            }
+                                        ],
+                                        "className": "android.widget.FrameLayout",
+                                        "resourceId": "android:id/customPanel"
+                                    }
+                                ],
+                                "className": "android.widget.LinearLayout",
+                                "resourceId": "android:id/parentPanel"
+                            }
+                        ],
+                        "className": "android.widget.FrameLayout",
+                        "resourceId": "android:id/content"
+                    }
+                ],
+                "className": "android.widget.FrameLayout"
+            }
+        ],
+        "className": "android.widget.FrameLayout"
+    },
+    "trailblazeNodeTree": {
+        "nodeId": 14,
+        "children": [
+            {
+                "nodeId": 13,
+                "children": [
+                    {
+                        "nodeId": 12,
+                        "children": [
+                            {
+                                "nodeId": 11,
+                                "children": [
+                                    {
+                                        "nodeId": 10,
+                                        "children": [
+                                            {
+                                                "nodeId": 9,
+                                                "children": [
+                                                    {
+                                                        "nodeId": 8,
+                                                        "children": [
+                                                            {
+                                                                "nodeId": 7,
+                                                                "children": [
+                                                                    {
+                                                                        "nodeId": 1,
+                                                                        "bounds": {
+                                                                            "left": 498,
+                                                                            "top": 594,
+                                                                            "right": 582,
+                                                                            "bottom": 678
+                                                                        },
+                                                                        "driverDetail": {
+                                                                            "class": "androidAccessibility",
+                                                                            "className": "android.widget.ImageView",
+                                                                            "resourceId": "android:id/log_access_image_view",
+                                                                            "packageName": "android",
+                                                                            "isImportantForAccessibility": false,
+                                                                            "drawingOrder": 1,
+                                                                            "maxTextLength": -1,
+                                                                            "actions": [
+                                                                                "ACTION_SELECT",
+                                                                                "ACTION_CLEAR_SELECTION",
+                                                                                "ACTION_64",
+                                                                                "ACTION_SHOW_ON_SCREEN"
+                                                                            ]
+                                                                        }
+                                                                    },
+                                                                    {
+                                                                        "nodeId": 2,
+                                                                        "ref": "x65",
+                                                                        "bounds": {
+                                                                            "left": 133,
+                                                                            "top": 720,
+                                                                            "right": 947,
+                                                                            "bottom": 878
+                                                                        },
+                                                                        "driverDetail": {
+                                                                            "class": "androidAccessibility",
+                                                                            "className": "android.widget.TextView",
+                                                                            "resourceId": "android:id/log_access_dialog_title",
+                                                                            "text": "Allow Google Play services to access all device logs?",
+                                                                            "isMultiLine": true,
+                                                                            "packageName": "android",
+                                                                            "drawingOrder": 2,
+                                                                            "maxTextLength": -1,
+                                                                            "actions": [
+                                                                                "ACTION_SELECT",
+                                                                                "ACTION_CLEAR_SELECTION",
+                                                                                "ACTION_64",
+                                                                                "ACTION_256",
+                                                                                "ACTION_512",
+                                                                                "ACTION_SET_SELECTION",
+                                                                                "ACTION_SHOW_ON_SCREEN"
+                                                                            ]
+                                                                        }
+                                                                    },
+                                                                    {
+                                                                        "nodeId": 3,
+                                                                        "ref": "e21",
+                                                                        "bounds": {
+                                                                            "left": 133,
+                                                                            "top": 962,
+                                                                            "right": 947,
+                                                                            "bottom": 1486
+                                                                        },
+                                                                        "driverDetail": {
+                                                                            "class": "androidAccessibility",
+                                                                            "className": "android.widget.TextView",
+                                                                            "resourceId": "android:id/log_access_dialog_body",
+                                                                            "text": "Device logs record what happens on your device. Apps can use these logs to find and fix issues.\n\nSome logs may contain sensitive info, so only allow apps you trust to access all device logs. \n\nIf you don’t allow this app to access all device logs, it can still access its own logs. Your device manufacturer may still be able to access some logs or info on your device.\n\nLearn more",
+                                                                            "isMultiLine": true,
+                                                                            "packageName": "android",
+                                                                            "isFocusable": true,
+                                                                            "drawingOrder": 3,
+                                                                            "maxTextLength": -1,
+                                                                            "actions": [
+                                                                                "ACTION_FOCUS",
+                                                                                "ACTION_SELECT",
+                                                                                "ACTION_CLEAR_SELECTION",
+                                                                                "ACTION_64",
+                                                                                "ACTION_256",
+                                                                                "ACTION_512",
+                                                                                "ACTION_SET_SELECTION",
+                                                                                "ACTION_SHOW_ON_SCREEN"
+                                                                            ]
+                                                                        }
+                                                                    },
+                                                                    {
+                                                                        "nodeId": 6,
+                                                                        "children": [
+                                                                            {
+                                                                                "nodeId": 4,
+                                                                                "ref": "y56",
+                                                                                "bounds": {
+                                                                                    "left": 133,
+                                                                                    "top": 1596,
+                                                                                    "right": 947,
+                                                                                    "bottom": 1722
+                                                                                },
+                                                                                "driverDetail": {
+                                                                                    "class": "androidAccessibility",
+                                                                                    "className": "android.widget.Button",
+                                                                                    "resourceId": "android:id/log_access_dialog_allow_button",
+                                                                                    "text": "Allow one-time access",
+                                                                                    "isClickable": true,
+                                                                                    "isMultiLine": true,
+                                                                                    "packageName": "android",
+                                                                                    "isFocusable": true,
+                                                                                    "drawingOrder": 1,
+                                                                                    "maxTextLength": -1,
+                                                                                    "actions": [
+                                                                                        "ACTION_FOCUS",
+                                                                                        "ACTION_SELECT",
+                                                                                        "ACTION_CLEAR_SELECTION",
+                                                                                        "ACTION_CLICK",
+                                                                                        "ACTION_64",
+                                                                                        "ACTION_256",
+                                                                                        "ACTION_512",
+                                                                                        "ACTION_SET_SELECTION",
+                                                                                        "ACTION_SHOW_ON_SCREEN"
+                                                                                    ]
+                                                                                }
+                                                                            },
+                                                                            {
+                                                                                "nodeId": 5,
+                                                                                "ref": "p893",
+                                                                                "bounds": {
+                                                                                    "left": 133,
+                                                                                    "top": 1740,
+                                                                                    "right": 947,
+                                                                                    "bottom": 1866
+                                                                                },
+                                                                                "driverDetail": {
+                                                                                    "class": "androidAccessibility",
+                                                                                    "className": "android.widget.Button",
+                                                                                    "resourceId": "android:id/log_access_dialog_deny_button",
+                                                                                    "text": "Don’t allow",
+                                                                                    "isClickable": true,
+                                                                                    "isMultiLine": true,
+                                                                                    "packageName": "android",
+                                                                                    "isFocusable": true,
+                                                                                    "drawingOrder": 2,
+                                                                                    "maxTextLength": -1,
+                                                                                    "actions": [
+                                                                                        "ACTION_FOCUS",
+                                                                                        "ACTION_SELECT",
+                                                                                        "ACTION_CLEAR_SELECTION",
+                                                                                        "ACTION_CLICK",
+                                                                                        "ACTION_64",
+                                                                                        "ACTION_256",
+                                                                                        "ACTION_512",
+                                                                                        "ACTION_SET_SELECTION",
+                                                                                        "ACTION_SHOW_ON_SCREEN"
+                                                                                    ]
+                                                                                }
+                                                                            }
+                                                                        ],
+                                                                        "bounds": {
+                                                                            "left": 133,
+                                                                            "top": 1591,
+                                                                            "right": 947,
+                                                                            "bottom": 1871
+                                                                        },
+                                                                        "driverDetail": {
+                                                                            "class": "androidAccessibility",
+                                                                            "className": "android.widget.LinearLayout",
+                                                                            "packageName": "android",
+                                                                            "isImportantForAccessibility": false,
+                                                                            "drawingOrder": 5,
+                                                                            "maxTextLength": -1,
+                                                                            "actions": [
+                                                                                "ACTION_SELECT",
+                                                                                "ACTION_CLEAR_SELECTION",
+                                                                                "ACTION_64",
+                                                                                "ACTION_SHOW_ON_SCREEN"
+                                                                            ]
+                                                                        }
+                                                                    }
+                                                                ],
+                                                                "bounds": {
+                                                                    "left": 70,
+                                                                    "top": 531,
+                                                                    "right": 1010,
+                                                                    "bottom": 1934
+                                                                },
+                                                                "driverDetail": {
+                                                                    "class": "androidAccessibility",
+                                                                    "className": "android.widget.LinearLayout",
+                                                                    "packageName": "android",
+                                                                    "isImportantForAccessibility": false,
+                                                                    "drawingOrder": 1,
+                                                                    "maxTextLength": -1,
+                                                                    "actions": [
+                                                                        "ACTION_SELECT",
+                                                                        "ACTION_CLEAR_SELECTION",
+                                                                        "ACTION_64",
+                                                                        "ACTION_SHOW_ON_SCREEN"
+                                                                    ]
+                                                                }
+                                                            }
+                                                        ],
+                                                        "bounds": {
+                                                            "left": 70,
+                                                            "top": 531,
+                                                            "right": 1010,
+                                                            "bottom": 1934
+                                                        },
+                                                        "driverDetail": {
+                                                            "class": "androidAccessibility",
+                                                            "className": "android.widget.ScrollView",
+                                                            "packageName": "android",
+                                                            "isFocusable": true,
+                                                            "drawingOrder": 1,
+                                                            "maxTextLength": -1,
+                                                            "actions": [
+                                                                "ACTION_FOCUS",
+                                                                "ACTION_SELECT",
+                                                                "ACTION_CLEAR_SELECTION",
+                                                                "ACTION_64",
+                                                                "ACTION_SHOW_ON_SCREEN"
+                                                            ]
+                                                        }
+                                                    }
+                                                ],
+                                                "bounds": {
+                                                    "left": 70,
+                                                    "top": 531,
+                                                    "right": 1010,
+                                                    "bottom": 1934
+                                                },
+                                                "driverDetail": {
+                                                    "class": "androidAccessibility",
+                                                    "className": "android.widget.FrameLayout",
+                                                    "resourceId": "android:id/custom",
+                                                    "packageName": "android",
+                                                    "isImportantForAccessibility": false,
+                                                    "drawingOrder": 1,
+                                                    "maxTextLength": -1,
+                                                    "actions": [
+                                                        "ACTION_SELECT",
+                                                        "ACTION_CLEAR_SELECTION",
+                                                        "ACTION_64",
+                                                        "ACTION_SHOW_ON_SCREEN"
+                                                    ]
+                                                }
+                                            }
+                                        ],
+                                        "bounds": {
+                                            "left": 70,
+                                            "top": 531,
+                                            "right": 1010,
+                                            "bottom": 1934
+                                        },
+                                        "driverDetail": {
+                                            "class": "androidAccessibility",
+                                            "className": "android.widget.FrameLayout",
+                                            "resourceId": "android:id/customPanel",
+                                            "packageName": "android",
+                                            "isImportantForAccessibility": false,
+                                            "drawingOrder": 3,
+                                            "maxTextLength": -1,
+                                            "actions": [
+                                                "ACTION_SELECT",
+                                                "ACTION_CLEAR_SELECTION",
+                                                "ACTION_64",
+                                                "ACTION_SHOW_ON_SCREEN"
+                                            ]
+                                        }
+                                    }
+                                ],
+                                "bounds": {
+                                    "left": 70,
+                                    "top": 531,
+                                    "right": 1010,
+                                    "bottom": 1934
+                                },
+                                "driverDetail": {
+                                    "class": "androidAccessibility",
+                                    "className": "android.widget.LinearLayout",
+                                    "resourceId": "android:id/parentPanel",
+                                    "packageName": "android",
+                                    "isImportantForAccessibility": false,
+                                    "drawingOrder": 1,
+                                    "maxTextLength": -1,
+                                    "actions": [
+                                        "ACTION_SELECT",
+                                        "ACTION_CLEAR_SELECTION",
+                                        "ACTION_64",
+                                        "ACTION_SHOW_ON_SCREEN"
+                                    ]
+                                }
+                            }
+                        ],
+                        "bounds": {
+                            "left": 70,
+                            "top": 531,
+                            "right": 1010,
+                            "bottom": 1934
+                        },
+                        "driverDetail": {
+                            "class": "androidAccessibility",
+                            "className": "android.widget.FrameLayout",
+                            "resourceId": "android:id/content",
+                            "packageName": "android",
+                            "isImportantForAccessibility": false,
+                            "drawingOrder": 1,
+                            "maxTextLength": -1,
+                            "actions": [
+                                "ACTION_SELECT",
+                                "ACTION_CLEAR_SELECTION",
+                                "ACTION_64",
+                                "ACTION_SHOW_ON_SCREEN"
+                            ]
+                        }
+                    }
+                ],
+                "bounds": {
+                    "left": 70,
+                    "top": 531,
+                    "right": 1010,
+                    "bottom": 1934
+                },
+                "driverDetail": {
+                    "class": "androidAccessibility",
+                    "className": "android.widget.FrameLayout",
+                    "packageName": "android",
+                    "isImportantForAccessibility": false,
+                    "drawingOrder": 1,
+                    "maxTextLength": -1,
+                    "actions": [
+                        "ACTION_SELECT",
+                        "ACTION_CLEAR_SELECTION",
+                        "ACTION_64",
+                        "ACTION_SHOW_ON_SCREEN"
+                    ]
+                }
+            }
+        ],
+        "bounds": {
+            "left": 28,
+            "top": 489,
+            "right": 1052,
+            "bottom": 1976
+        },
+        "driverDetail": {
+            "class": "androidAccessibility",
+            "className": "android.widget.FrameLayout",
+            "packageName": "android",
+            "maxTextLength": -1,
+            "actions": [
+                "ACTION_SELECT",
+                "ACTION_CLEAR_SELECTION",
+                "ACTION_64",
+                "ACTION_SHOW_ON_SCREEN"
+            ]
+        }
+    }
+}

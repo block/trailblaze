@@ -1,0 +1,29 @@
+id: "calendar/android/settings_calendar"
+description: "Settings → <calendar name> sub-screen. Per-calendar notification & sync preferences. Distinct from settings_general (different toolbar title and rows)."
+required:
+  - description: "Toolbar shows the calendar name (default 'Local')"
+    selector:
+      androidAccessibility:
+        textRegex: "^Local$"
+        classNameRegex: "\\Qandroid.widget.TextView\\E"
+  - description: "Default-notifications header for timed events"
+    selector:
+      androidAccessibility:
+        textRegex: "^Default notifications$"
+  - description: "Default-notifications header for all-day events"
+    selector:
+      androidAccessibility:
+        textRegex: "^Default notifications for all-day events$"
+  - description: "Add a notification entry"
+    selector:
+      androidAccessibility:
+        textRegex: "^Add a notification$"
+  - description: "Back button"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^Back$"
+forbidden:
+  - description: "Theme is only in Settings → General"
+    selector:
+      androidAccessibility:
+        textRegex: "^Theme$"

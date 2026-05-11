@@ -1,0 +1,24 @@
+id: "calendar/android/timezone_picker"
+description: "Time-zone picker screen with a search field and a suggestions container. Reached from the event editor's timezone row."
+required:
+  - description: "Timezone suggestions container (unique id)"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/timezone_picker_suggestions_container$"
+  - description: "Search input field"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/search_text$"
+  - description: "'Enter a region or time zone' placeholder/label"
+    selector:
+      androidAccessibility:
+        textRegex: "^Enter a region or time zone$"
+  - description: "Back button"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^Back$"
+forbidden:
+  - description: "Add-location 'suggestions' alone would not coexist with timezone picker"
+    selector:
+      androidAccessibility:
+        textRegex: "^Add location$"

@@ -1,0 +1,20 @@
+id: "calendar/android/inline_date_picker"
+description: "Inline date picker — toolbar 'Show date picker' is toggled to 'Hide date picker' and a mini-month grid drops down beneath the toolbar over the timeline."
+required:
+  - description: "Toolbar date button is now in 'Hide' state (was 'Show' when collapsed)"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^[A-Z][a-z]+, Hide date picker$"
+  - description: "Inline date-picker container"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/timely_date_picker_container$"
+  - description: "Spacing between mini-month and timeline (only present in inline picker)"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/minimonth_and_timeline_spacing$"
+forbidden:
+  - description: "Modal datePicker resource id (a different picker)"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^android:id/datePicker$"

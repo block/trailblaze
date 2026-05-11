@@ -1,0 +1,12 @@
+id: calendar_android_notificationToCustom
+description: From the notification time picker, tap 'Custom…' to open the custom notification editor dialog.
+shortcut:
+  from: calendar/android/notification_picker
+  to: calendar/android/custom_notification_dialog
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      reason: ""
+      nodeSelector:
+        androidAccessibility:
+          textRegex: "^Custom…$"

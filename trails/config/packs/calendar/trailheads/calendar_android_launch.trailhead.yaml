@@ -1,0 +1,7 @@
+id: calendar_android_launch
+description: Launch Google Calendar fresh and land on the default day view.
+trailhead:
+  to: calendar/android/day_view
+parameters: []
+tools:
+  - calendar_android_launchApp: {}

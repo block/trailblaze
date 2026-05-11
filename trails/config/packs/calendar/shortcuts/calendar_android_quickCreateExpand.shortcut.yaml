@@ -1,0 +1,12 @@
+id: calendar_android_quickCreateExpand
+description: Drag the quick-create sheet up to expand it (full editor with all fields).
+shortcut:
+  from: calendar/android/quick_create_collapsed
+  to: calendar/android/quick_create_expanded
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      reason: ""
+      nodeSelector:
+        androidAccessibility:
+          contentDescriptionRegex: "^Expand event sheet$"

@@ -1,0 +1,24 @@
+id: "calendar/android/settings_quick_responses"
+description: "Settings → Quick responses sub-screen — list of canned replies ('Be there in about 10 minutes', 'Running just a couple of minutes late', etc.). Toolbar reads 'Quick responses'."
+required:
+  - description: "Toolbar reads 'Quick responses'"
+    selector:
+      androidAccessibility:
+        textRegex: "^Quick responses$"
+        classNameRegex: "\\Qandroid.widget.TextView\\E"
+  - description: "Default canned response 1"
+    selector:
+      androidAccessibility:
+        textRegex: "^Be there in about 10 minutes\\.$"
+  - description: "Default canned response 2"
+    selector:
+      androidAccessibility:
+        textRegex: "^Running just a couple of minutes late\\.$"
+  - description: "Default canned response 3"
+    selector:
+      androidAccessibility:
+        textRegex: "^Go ahead and start without me\\.$"
+  - description: "Settings recycler view"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/recycler_view$"

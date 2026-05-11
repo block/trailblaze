@@ -1,0 +1,28 @@
+id: "calendar/android/drawer_calendars"
+description: "Drawer scrolled to / showing the calendars list section, including the 'Calendar' product header logo lockup. Subset of drawer_open with calendar rows + product logo."
+required:
+  - description: "Drawer list container"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/drawer_list$"
+  - description: "Calendar product name header"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/product_name$"
+  - description: "Calendar item row in the list"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/calendar_item$"
+  - description: "Calendar text label inside a calendar row"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/calendar_text$"
+  - description: "Settings shortcut at bottom of drawer"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^Settings$"
+forbidden:
+  - description: "Settings sub-screen would not have drawer_list"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/settings_content$"

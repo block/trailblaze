@@ -1,0 +1,1276 @@
+{
+    "waypointId": "calendar/android/event_time_picker",
+    "capturedAt": "2026-05-08T15:54:17.307024Z",
+    "capturedFrom": "logs/2026_05_08_09_16_40_yaml_6258/004_TrailblazeLlmRequestLog.json",
+    "screenshotFile": "calendar_android_event_time_picker.example.webp",
+    "deviceWidth": 1080,
+    "deviceHeight": 2400,
+    "viewHierarchy": {
+        "x1": 120,
+        "y1": 670,
+        "x2": 960,
+        "y2": 1795,
+        "centerPoint": "540,1232",
+        "children": [
+            {
+                "nodeId": 2,
+                "x1": 162,
+                "y1": 712,
+                "x2": 918,
+                "y2": 1753,
+                "centerPoint": "540,1232",
+                "children": [
+                    {
+                        "nodeId": 3,
+                        "x1": 162,
+                        "y1": 712,
+                        "x2": 918,
+                        "y2": 1753,
+                        "centerPoint": "540,1232",
+                        "children": [
+                            {
+                                "nodeId": 4,
+                                "x1": 162,
+                                "y1": 712,
+                                "x2": 918,
+                                "y2": 1753,
+                                "centerPoint": "540,1232",
+                                "children": [
+                                    {
+                                        "nodeId": 5,
+                                        "x1": 162,
+                                        "y1": 712,
+                                        "x2": 918,
+                                        "y2": 1753,
+                                        "centerPoint": "540,1232",
+                                        "children": [
+                                            {
+                                                "nodeId": 6,
+                                                "x1": 162,
+                                                "y1": 712,
+                                                "x2": 918,
+                                                "y2": 1753,
+                                                "centerPoint": "540,1232",
+                                                "children": [
+                                                    {
+                                                        "nodeId": 7,
+                                                        "x1": 162,
+                                                        "y1": 712,
+                                                        "x2": 918,
+                                                        "y2": 1753,
+                                                        "centerPoint": "540,1232",
+                                                        "children": [
+                                                            {
+                                                                "nodeId": 8,
+                                                                "x1": 162,
+                                                                "y1": 712,
+                                                                "x2": 918,
+                                                                "y2": 1753,
+                                                                "centerPoint": "540,1232",
+                                                                "children": [
+                                                                    {
+                                                                        "nodeId": 9,
+                                                                        "x1": 162,
+                                                                        "y1": 712,
+                                                                        "x2": 918,
+                                                                        "y2": 975,
+                                                                        "centerPoint": "540,843",
+                                                                        "children": [
+                                                                            {
+                                                                                "nodeId": 10,
+                                                                                "x1": 338,
+                                                                                "y1": 733,
+                                                                                "x2": 516,
+                                                                                "y2": 943,
+                                                                                "centerPoint": "427,838",
+                                                                                "className": "android.widget.TextView",
+                                                                                "clickable": true,
+                                                                                "resourceId": "android:id/hours",
+                                                                                "text": "9"
+                                                                            },
+                                                                            {
+                                                                                "nodeId": 11,
+                                                                                "x1": 521,
+                                                                                "y1": 733,
+                                                                                "x2": 559,
+                                                                                "y2": 954,
+                                                                                "centerPoint": "540,843",
+                                                                                "className": "android.widget.TextView",
+                                                                                "resourceId": "android:id/separator",
+                                                                                "text": ":"
+                                                                            },
+                                                                            {
+                                                                                "nodeId": 12,
+                                                                                "x1": 564,
+                                                                                "y1": 733,
+                                                                                "x2": 742,
+                                                                                "y2": 943,
+                                                                                "centerPoint": "653,838",
+                                                                                "className": "android.widget.TextView",
+                                                                                "clickable": true,
+                                                                                "resourceId": "android:id/minutes",
+                                                                                "text": "30"
+                                                                            },
+                                                                            {
+                                                                                "nodeId": 13,
+                                                                                "x1": 763,
+                                                                                "y1": 770,
+                                                                                "x2": 828,
+                                                                                "y2": 931,
+                                                                                "centerPoint": "795,850",
+                                                                                "children": [
+                                                                                    {
+                                                                                        "nodeId": 14,
+                                                                                        "x1": 763,
+                                                                                        "y1": 770,
+                                                                                        "x2": 828,
+                                                                                        "y2": 861,
+                                                                                        "centerPoint": "795,815",
+                                                                                        "checked": true,
+                                                                                        "className": "android.widget.RadioButton",
+                                                                                        "clickable": true,
+                                                                                        "resourceId": "android:id/am_label",
+                                                                                        "text": "AM"
+                                                                                    },
+                                                                                    {
+                                                                                        "nodeId": 15,
+                                                                                        "x1": 763,
+                                                                                        "y1": 840,
+                                                                                        "x2": 827,
+                                                                                        "y2": 931,
+                                                                                        "centerPoint": "795,885",
+                                                                                        "className": "android.widget.RadioButton",
+                                                                                        "clickable": true,
+                                                                                        "resourceId": "android:id/pm_label",
+                                                                                        "text": "PM"
+                                                                                    }
+                                                                                ],
+                                                                                "className": "android.widget.RadioGroup",
+                                                                                "resourceId": "android:id/ampm_layout"
+                                                                            }
+                                                                        ],
+                                                                        "className": "android.widget.RelativeLayout",
+                                                                        "resourceId": "android:id/time_header"
+                                                                    },
+                                                                    {
+                                                                        "nodeId": 16,
+                                                                        "x1": 204,
+                                                                        "y1": 1017,
+                                                                        "x2": 876,
+                                                                        "y2": 1605,
+                                                                        "centerPoint": "540,1311",
+                                                                        "children": [
+                                                                            {
+                                                                                "nodeId": 17,
+                                                                                "accessibilityText": "1",
+                                                                                "x1": 605,
+                                                                                "y1": 1053,
+                                                                                "x2": 711,
+                                                                                "y2": 1159,
+                                                                                "centerPoint": "658,1106",
+                                                                                "className": "android.widget.RadialTimePickerView$RadialPickerTouchHelper"
+                                                                            },
+                                                                            {
+                                                                                "nodeId": 18,
+                                                                                "accessibilityText": "2",
+                                                                                "x1": 691,
+                                                                                "y1": 1140,
+                                                                                "x2": 797,
+                                                                                "y2": 1246,
+                                                                                "centerPoint": "744,1193",
+                                                                                "className": "android.widget.RadialTimePickerView$RadialPickerTouchHelper"
+                                                                            },
+                                                                            {
+                                                                                "nodeId": 19,
+                                                                                "accessibilityText": "3",
+                                                                                "x1": 723,
+                                                                                "y1": 1258,
+                                                                                "x2": 829,
+                                                                                "y2": 1364,
+                                                                                "centerPoint": "776,1311",
+                                                                                "className": "android.widget.RadialTimePickerView$RadialPickerTouchHelper"
+                                                                            },
+                                                                            {
+                                                                                "nodeId": 20,
+                                                                                "accessibilityText": "4",
+                                                                                "x1": 691,
+                                                                                "y1": 1376,
+                                                                                "x2": 797,
+                                                                                "y2": 1482,
+                                                                                "centerPoint": "744,1429",
+                                                                                "className": "android.widget.RadialTimePickerView$RadialPickerTouchHelper"
+                                                                            },
+                                                                            {
+                                                                                "nodeId": 21,
+                                                                                "accessibilityText": "5",
+                                                                                "x1": 605,
+                                                                                "y1": 1462,
+                                                                                "x2": 711,
+                                                                                "y2": 1568,
+                                                                                "centerPoint": "658,1515",
+                                                                                "className": "android.widget.RadialTimePickerView$RadialPickerTouchHelper"
+                                                                            },
+                                                                            {
+                                                                                "nodeId": 22,
+                                                                                "accessibilityText": "6",
+                                                                                "x1": 487,
+                                                                                "y1": 1494,
+                                                                                "x2": 593,
+                                                                                "y2": 1600,
+                                                                                "centerPoint": "540,1547",
+                                                                                "className": "android.widget.RadialTimePickerView$RadialPickerTouchHelper"
+                                                                            },
+                                                                            {
+                                                                                "nodeId": 23,
+                                                                                "accessibilityText": "7",
+                                                                                "x1": 369,
+                                                                                "y1": 1462,
+                                                                                "x2": 475,
+                                                                                "y2": 1568,
+                                                                                "centerPoint": "422,1515",
+                                                                                "className": "android.widget.RadialTimePickerView$RadialPickerTouchHelper"
+                                                                            },
+                                                                            {
+                                                                                "nodeId": 24,
+                                                                                "accessibilityText": "8",
+                                                                                "x1": 282,
+                                                                                "y1": 1376,
+                                                                                "x2": 388,
+                                                                                "y2": 1482,
+                                                                                "centerPoint": "335,1429",
+                                                                                "className": "android.widget.RadialTimePickerView$RadialPickerTouchHelper"
+                                                                            },
+                                                                            {
+                                                                                "nodeId": 25,
+                                                                                "accessibilityText": "9",
+                                                                                "x1": 251,
+                                                                                "y1": 1258,
+                                                                                "x2": 357,
+                                                                                "y2": 1364,
+                                                                                "centerPoint": "304,1311",
+                                                                                "className": "android.widget.RadialTimePickerView$RadialPickerTouchHelper",
+                                                                                "selected": true
+                                                                            },
+                                                                            {
+                                                                                "nodeId": 26,
+                                                                                "accessibilityText": "10",
+                                                                                "x1": 282,
+                                                                                "y1": 1140,
+                                                                                "x2": 388,
+                                                                                "y2": 1246,
+                                                                                "centerPoint": "335,1193",
+                                                                                "className": "android.widget.RadialTimePickerView$RadialPickerTouchHelper"
+                                                                            },
+                                                                            {
+                                                                                "nodeId": 27,
+                                                                                "accessibilityText": "11",
+                                                                                "x1": 369,
+                                                                                "y1": 1053,
+                                                                                "x2": 475,
+                                                                                "y2": 1159,
+                                                                                "centerPoint": "422,1106",
+                                                                                "className": "android.widget.RadialTimePickerView$RadialPickerTouchHelper"
+                                                                            },
+                                                                            {
+                                                                                "nodeId": 28,
+                                                                                "accessibilityText": "12",
+                                                                                "x1": 487,
+                                                                                "y1": 1022,
+                                                                                "x2": 593,
+                                                                                "y2": 1128,
+                                                                                "centerPoint": "540,1075",
+                                                                                "className": "android.widget.RadialTimePickerView$RadialPickerTouchHelper"
+                                                                            }
+                                                                        ],
+                                                                        "className": "android.view.View",
+                                                                        "resourceId": "android:id/radial_picker"
+                                                                    },
+                                                                    {
+                                                                        "nodeId": 29,
+                                                                        "x1": 162,
+                                                                        "y1": 1605,
+                                                                        "x2": 918,
+                                                                        "y2": 1753,
+                                                                        "centerPoint": "540,1679",
+                                                                        "children": [
+                                                                            {
+                                                                                "nodeId": 30,
+                                                                                "accessibilityText": "Switch to text input mode for the time input.",
+                                                                                "x1": 194,
+                                                                                "y1": 1615,
+                                                                                "x2": 321,
+                                                                                "y2": 1742,
+                                                                                "centerPoint": "257,1678",
+                                                                                "className": "android.widget.ImageButton",
+                                                                                "clickable": true,
+                                                                                "resourceId": "android:id/toggle_mode"
+                                                                            },
+                                                                            {
+                                                                                "nodeId": 31,
+                                                                                "x1": 476,
+                                                                                "y1": 1605,
+                                                                                "x2": 918,
+                                                                                "y2": 1753,
+                                                                                "centerPoint": "697,1679",
+                                                                                "children": [
+                                                                                    {
+                                                                                        "nodeId": 32,
+                                                                                        "x1": 476,
+                                                                                        "y1": 1605,
+                                                                                        "x2": 918,
+                                                                                        "y2": 1753,
+                                                                                        "centerPoint": "697,1679",
+                                                                                        "children": [
+                                                                                            {
+                                                                                                "nodeId": 33,
+                                                                                                "x1": 529,
+                                                                                                "y1": 1616,
+                                                                                                "x2": 697,
+                                                                                                "y2": 1742,
+                                                                                                "centerPoint": "613,1679",
+                                                                                                "className": "android.widget.Button",
+                                                                                                "clickable": true,
+                                                                                                "resourceId": "android:id/button2",
+                                                                                                "text": "Cancel"
+                                                                                            },
+                                                                                            {
+                                                                                                "nodeId": 34,
+                                                                                                "x1": 718,
+                                                                                                "y1": 1616,
+                                                                                                "x2": 886,
+                                                                                                "y2": 1742,
+                                                                                                "centerPoint": "802,1679",
+                                                                                                "className": "android.widget.Button",
+                                                                                                "clickable": true,
+                                                                                                "resourceId": "android:id/button1",
+                                                                                                "text": "OK"
+                                                                                            }
+                                                                                        ],
+                                                                                        "className": "android.widget.LinearLayout"
+                                                                                    }
+                                                                                ],
+                                                                                "className": "android.widget.ScrollView",
+                                                                                "resourceId": "android:id/buttonPanel"
+                                                                            }
+                                                                        ],
+                                                                        "className": "android.widget.LinearLayout"
+                                                                    }
+                                                                ],
+                                                                "className": "android.widget.LinearLayout"
+                                                            }
+                                                        ],
+                                                        "className": "android.widget.TimePicker",
+                                                        "resourceId": "android:id/timePicker"
+                                                    }
+                                                ],
+                                                "className": "android.widget.FrameLayout",
+                                                "resourceId": "android:id/custom"
+                                            }
+                                        ],
+                                        "className": "android.widget.FrameLayout",
+                                        "resourceId": "android:id/customPanel"
+                                    }
+                                ],
+                                "className": "android.widget.LinearLayout",
+                                "resourceId": "android:id/parentPanel"
+                            }
+                        ],
+                        "className": "android.widget.FrameLayout",
+                        "resourceId": "android:id/content"
+                    }
+                ],
+                "className": "android.widget.LinearLayout"
+            }
+        ],
+        "className": "android.widget.FrameLayout"
+    },
+    "trailblazeNodeTree": {
+        "nodeId": 34,
+        "children": [
+            {
+                "nodeId": 33,
+                "children": [
+                    {
+                        "nodeId": 32,
+                        "children": [
+                            {
+                                "nodeId": 31,
+                                "children": [
+                                    {
+                                        "nodeId": 30,
+                                        "children": [
+                                            {
+                                                "nodeId": 29,
+                                                "children": [
+                                                    {
+                                                        "nodeId": 28,
+                                                        "children": [
+                                                            {
+                                                                "nodeId": 27,
+                                                                "children": [
+                                                                    {
+                                                                        "nodeId": 7,
+                                                                        "children": [
+                                                                            {
+                                                                                "nodeId": 1,
+                                                                                "ref": "i951",
+                                                                                "bounds": {
+                                                                                    "left": 338,
+                                                                                    "top": 733,
+                                                                                    "right": 516,
+                                                                                    "bottom": 943
+                                                                                },
+                                                                                "driverDetail": {
+                                                                                    "class": "androidAccessibility",
+                                                                                    "className": "android.widget.TextView",
+                                                                                    "resourceId": "android:id/hours",
+                                                                                    "text": "9",
+                                                                                    "isClickable": true,
+                                                                                    "packageName": "com.google.android.calendar",
+                                                                                    "isFocusable": true,
+                                                                                    "drawingOrder": 1,
+                                                                                    "maxTextLength": -1,
+                                                                                    "actions": [
+                                                                                        "ACTION_FOCUS",
+                                                                                        "ACTION_SELECT",
+                                                                                        "ACTION_CLEAR_SELECTION",
+                                                                                        "ACTION_64",
+                                                                                        "ACTION_256",
+                                                                                        "ACTION_512",
+                                                                                        "ACTION_SET_SELECTION",
+                                                                                        "ACTION_SHOW_ON_SCREEN",
+                                                                                        "ACTION_CLICK"
+                                                                                    ]
+                                                                                }
+                                                                            },
+                                                                            {
+                                                                                "nodeId": 2,
+                                                                                "bounds": {
+                                                                                    "left": 521,
+                                                                                    "top": 733,
+                                                                                    "right": 559,
+                                                                                    "bottom": 954
+                                                                                },
+                                                                                "driverDetail": {
+                                                                                    "class": "androidAccessibility",
+                                                                                    "className": "android.widget.TextView",
+                                                                                    "resourceId": "android:id/separator",
+                                                                                    "text": ":",
+                                                                                    "isMultiLine": true,
+                                                                                    "packageName": "com.google.android.calendar",
+                                                                                    "isImportantForAccessibility": false,
+                                                                                    "drawingOrder": 2,
+                                                                                    "maxTextLength": -1,
+                                                                                    "actions": [
+                                                                                        "ACTION_SELECT",
+                                                                                        "ACTION_CLEAR_SELECTION",
+                                                                                        "ACTION_64",
+                                                                                        "ACTION_256",
+                                                                                        "ACTION_512",
+                                                                                        "ACTION_SET_SELECTION",
+                                                                                        "ACTION_SHOW_ON_SCREEN"
+                                                                                    ]
+                                                                                }
+                                                                            },
+                                                                            {
+                                                                                "nodeId": 3,
+                                                                                "ref": "v487",
+                                                                                "bounds": {
+                                                                                    "left": 564,
+                                                                                    "top": 733,
+                                                                                    "right": 742,
+                                                                                    "bottom": 943
+                                                                                },
+                                                                                "driverDetail": {
+                                                                                    "class": "androidAccessibility",
+                                                                                    "className": "android.widget.TextView",
+                                                                                    "resourceId": "android:id/minutes",
+                                                                                    "text": "30",
+                                                                                    "isClickable": true,
+                                                                                    "packageName": "com.google.android.calendar",
+                                                                                    "isFocusable": true,
+                                                                                    "drawingOrder": 3,
+                                                                                    "maxTextLength": -1,
+                                                                                    "actions": [
+                                                                                        "ACTION_FOCUS",
+                                                                                        "ACTION_SELECT",
+                                                                                        "ACTION_CLEAR_SELECTION",
+                                                                                        "ACTION_64",
+                                                                                        "ACTION_256",
+                                                                                        "ACTION_512",
+                                                                                        "ACTION_SET_SELECTION",
+                                                                                        "ACTION_SHOW_ON_SCREEN",
+                                                                                        "ACTION_CLICK"
+                                                                                    ]
+                                                                                }
+                                                                            },
+                                                                            {
+                                                                                "nodeId": 6,
+                                                                                "children": [
+                                                                                    {
+                                                                                        "nodeId": 4,
+                                                                                        "ref": "y112",
+                                                                                        "bounds": {
+                                                                                            "left": 763,
+                                                                                            "top": 770,
+                                                                                            "right": 828,
+                                                                                            "bottom": 861
+                                                                                        },
+                                                                                        "driverDetail": {
+                                                                                            "class": "androidAccessibility",
+                                                                                            "className": "android.widget.RadioButton",
+                                                                                            "resourceId": "android:id/am_label",
+                                                                                            "text": "AM",
+                                                                                            "stateDescription": "selected",
+                                                                                            "isClickable": true,
+                                                                                            "isCheckable": true,
+                                                                                            "isChecked": true,
+                                                                                            "isMultiLine": true,
+                                                                                            "collectionItemInfo": {
+                                                                                                "rowIndex": 0,
+                                                                                                "rowSpan": 1,
+                                                                                                "columnIndex": 0,
+                                                                                                "columnSpan": 1,
+                                                                                                "isHeading": false
+                                                                                            },
+                                                                                            "packageName": "com.google.android.calendar",
+                                                                                            "isFocusable": true,
+                                                                                            "drawingOrder": 1,
+                                                                                            "maxTextLength": -1,
+                                                                                            "actions": [
+                                                                                                "ACTION_FOCUS",
+                                                                                                "ACTION_SELECT",
+                                                                                                "ACTION_CLEAR_SELECTION",
+                                                                                                "ACTION_CLICK",
+                                                                                                "ACTION_64",
+                                                                                                "ACTION_256",
+                                                                                                "ACTION_512",
+                                                                                                "ACTION_SET_SELECTION",
+                                                                                                "ACTION_SHOW_ON_SCREEN"
+                                                                                            ]
+                                                                                        }
+                                                                                    },
+                                                                                    {
+                                                                                        "nodeId": 5,
+                                                                                        "ref": "s54",
+                                                                                        "bounds": {
+                                                                                            "left": 763,
+                                                                                            "top": 840,
+                                                                                            "right": 827,
+                                                                                            "bottom": 931
+                                                                                        },
+                                                                                        "driverDetail": {
+                                                                                            "class": "androidAccessibility",
+                                                                                            "className": "android.widget.RadioButton",
+                                                                                            "resourceId": "android:id/pm_label",
+                                                                                            "text": "PM",
+                                                                                            "stateDescription": "not selected",
+                                                                                            "isClickable": true,
+                                                                                            "isCheckable": true,
+                                                                                            "isMultiLine": true,
+                                                                                            "collectionItemInfo": {
+                                                                                                "rowIndex": 1,
+                                                                                                "rowSpan": 1,
+                                                                                                "columnIndex": 0,
+                                                                                                "columnSpan": 1,
+                                                                                                "isHeading": false
+                                                                                            },
+                                                                                            "packageName": "com.google.android.calendar",
+                                                                                            "isFocusable": true,
+                                                                                            "drawingOrder": 2,
+                                                                                            "maxTextLength": -1,
+                                                                                            "actions": [
+                                                                                                "ACTION_FOCUS",
+                                                                                                "ACTION_SELECT",
+                                                                                                "ACTION_CLEAR_SELECTION",
+                                                                                                "ACTION_CLICK",
+                                                                                                "ACTION_64",
+                                                                                                "ACTION_256",
+                                                                                                "ACTION_512",
+                                                                                                "ACTION_SET_SELECTION",
+                                                                                                "ACTION_SHOW_ON_SCREEN"
+                                                                                            ]
+                                                                                        }
+                                                                                    }
+                                                                                ],
+                                                                                "bounds": {
+                                                                                    "left": 763,
+                                                                                    "top": 770,
+                                                                                    "right": 828,
+                                                                                    "bottom": 931
+                                                                                },
+                                                                                "driverDetail": {
+                                                                                    "class": "androidAccessibility",
+                                                                                    "className": "android.widget.RadioGroup",
+                                                                                    "resourceId": "android:id/ampm_layout",
+                                                                                    "packageName": "com.google.android.calendar",
+                                                                                    "drawingOrder": 4,
+                                                                                    "maxTextLength": -1,
+                                                                                    "actions": [
+                                                                                        "ACTION_SELECT",
+                                                                                        "ACTION_CLEAR_SELECTION",
+                                                                                        "ACTION_64",
+                                                                                        "ACTION_SHOW_ON_SCREEN"
+                                                                                    ],
+                                                                                    "collectionInfo": {
+                                                                                        "rowCount": 2,
+                                                                                        "columnCount": 1,
+                                                                                        "isHierarchical": false
+                                                                                    }
+                                                                                }
+                                                                            }
+                                                                        ],
+                                                                        "bounds": {
+                                                                            "left": 162,
+                                                                            "top": 712,
+                                                                            "right": 918,
+                                                                            "bottom": 975
+                                                                        },
+                                                                        "driverDetail": {
+                                                                            "class": "androidAccessibility",
+                                                                            "className": "android.widget.RelativeLayout",
+                                                                            "resourceId": "android:id/time_header",
+                                                                            "packageName": "com.google.android.calendar",
+                                                                            "drawingOrder": 1,
+                                                                            "maxTextLength": -1,
+                                                                            "actions": [
+                                                                                "ACTION_SELECT",
+                                                                                "ACTION_CLEAR_SELECTION",
+                                                                                "ACTION_64",
+                                                                                "ACTION_SHOW_ON_SCREEN"
+                                                                            ]
+                                                                        }
+                                                                    },
+                                                                    {
+                                                                        "nodeId": 20,
+                                                                        "children": [
+                                                                            {
+                                                                                "nodeId": 8,
+                                                                                "bounds": {
+                                                                                    "left": 605,
+                                                                                    "top": 1053,
+                                                                                    "right": 711,
+                                                                                    "bottom": 1159
+                                                                                },
+                                                                                "driverDetail": {
+                                                                                    "class": "androidAccessibility",
+                                                                                    "className": "android.widget.RadialTimePickerView$RadialPickerTouchHelper",
+                                                                                    "contentDescription": "1",
+                                                                                    "packageName": "com.google.android.calendar",
+                                                                                    "isImportantForAccessibility": false,
+                                                                                    "maxTextLength": -1,
+                                                                                    "actions": [
+                                                                                        "ACTION_CLICK",
+                                                                                        "ACTION_64"
+                                                                                    ]
+                                                                                }
+                                                                            },
+                                                                            {
+                                                                                "nodeId": 9,
+                                                                                "bounds": {
+                                                                                    "left": 691,
+                                                                                    "top": 1140,
+                                                                                    "right": 797,
+                                                                                    "bottom": 1246
+                                                                                },
+                                                                                "driverDetail": {
+                                                                                    "class": "androidAccessibility",
+                                                                                    "className": "android.widget.RadialTimePickerView$RadialPickerTouchHelper",
+                                                                                    "contentDescription": "2",
+                                                                                    "packageName": "com.google.android.calendar",
+                                                                                    "isImportantForAccessibility": false,
+                                                                                    "maxTextLength": -1,
+                                                                                    "actions": [
+                                                                                        "ACTION_CLICK",
+                                                                                        "ACTION_64"
+                                                                                    ]
+                                                                                }
+                                                                            },
+                                                                            {
+                                                                                "nodeId": 10,
+                                                                                "bounds": {
+                                                                                    "left": 723,
+                                                                                    "top": 1258,
+                                                                                    "right": 829,
+                                                                                    "bottom": 1364
+                                                                                },
+                                                                                "driverDetail": {
+                                                                                    "class": "androidAccessibility",
+                                                                                    "className": "android.widget.RadialTimePickerView$RadialPickerTouchHelper",
+                                                                                    "contentDescription": "3",
+                                                                                    "packageName": "com.google.android.calendar",
+                                                                                    "isImportantForAccessibility": false,
+                                                                                    "maxTextLength": -1,
+                                                                                    "actions": [
+                                                                                        "ACTION_CLICK",
+                                                                                        "ACTION_64"
+                                                                                    ]
+                                                                                }
+                                                                            },
+                                                                            {
+                                                                                "nodeId": 11,
+                                                                                "bounds": {
+                                                                                    "left": 691,
+                                                                                    "top": 1376,
+                                                                                    "right": 797,
+                                                                                    "bottom": 1482
+                                                                                },
+                                                                                "driverDetail": {
+                                                                                    "class": "androidAccessibility",
+                                                                                    "className": "android.widget.RadialTimePickerView$RadialPickerTouchHelper",
+                                                                                    "contentDescription": "4",
+                                                                                    "packageName": "com.google.android.calendar",
+                                                                                    "isImportantForAccessibility": false,
+                                                                                    "maxTextLength": -1,
+                                                                                    "actions": [
+                                                                                        "ACTION_CLICK",
+                                                                                        "ACTION_64"
+                                                                                    ]
+                                                                                }
+                                                                            },
+                                                                            {
+                                                                                "nodeId": 12,
+                                                                                "bounds": {
+                                                                                    "left": 605,
+                                                                                    "top": 1462,
+                                                                                    "right": 711,
+                                                                                    "bottom": 1568
+                                                                                },
+                                                                                "driverDetail": {
+                                                                                    "class": "androidAccessibility",
+                                                                                    "className": "android.widget.RadialTimePickerView$RadialPickerTouchHelper",
+                                                                                    "contentDescription": "5",
+                                                                                    "packageName": "com.google.android.calendar",
+                                                                                    "isImportantForAccessibility": false,
+                                                                                    "maxTextLength": -1,
+                                                                                    "actions": [
+                                                                                        "ACTION_CLICK",
+                                                                                        "ACTION_64"
+                                                                                    ]
+                                                                                }
+                                                                            },
+                                                                            {
+                                                                                "nodeId": 13,
+                                                                                "bounds": {
+                                                                                    "left": 487,
+                                                                                    "top": 1494,
+                                                                                    "right": 593,
+                                                                                    "bottom": 1600
+                                                                                },
+                                                                                "driverDetail": {
+                                                                                    "class": "androidAccessibility",
+                                                                                    "className": "android.widget.RadialTimePickerView$RadialPickerTouchHelper",
+                                                                                    "contentDescription": "6",
+                                                                                    "packageName": "com.google.android.calendar",
+                                                                                    "isImportantForAccessibility": false,
+                                                                                    "maxTextLength": -1,
+                                                                                    "actions": [
+                                                                                        "ACTION_CLICK",
+                                                                                        "ACTION_64"
+                                                                                    ]
+                                                                                }
+                                                                            },
+                                                                            {
+                                                                                "nodeId": 14,
+                                                                                "bounds": {
+                                                                                    "left": 369,
+                                                                                    "top": 1462,
+                                                                                    "right": 475,
+                                                                                    "bottom": 1568
+                                                                                },
+                                                                                "driverDetail": {
+                                                                                    "class": "androidAccessibility",
+                                                                                    "className": "android.widget.RadialTimePickerView$RadialPickerTouchHelper",
+                                                                                    "contentDescription": "7",
+                                                                                    "packageName": "com.google.android.calendar",
+                                                                                    "isImportantForAccessibility": false,
+                                                                                    "maxTextLength": -1,
+                                                                                    "actions": [
+                                                                                        "ACTION_CLICK",
+                                                                                        "ACTION_64"
+                                                                                    ]
+                                                                                }
+                                                                            },
+                                                                            {
+                                                                                "nodeId": 15,
+                                                                                "bounds": {
+                                                                                    "left": 282,
+                                                                                    "top": 1376,
+                                                                                    "right": 388,
+                                                                                    "bottom": 1482
+                                                                                },
+                                                                                "driverDetail": {
+                                                                                    "class": "androidAccessibility",
+                                                                                    "className": "android.widget.RadialTimePickerView$RadialPickerTouchHelper",
+                                                                                    "contentDescription": "8",
+                                                                                    "packageName": "com.google.android.calendar",
+                                                                                    "isImportantForAccessibility": false,
+                                                                                    "maxTextLength": -1,
+                                                                                    "actions": [
+                                                                                        "ACTION_CLICK",
+                                                                                        "ACTION_64"
+                                                                                    ]
+                                                                                }
+                                                                            },
+                                                                            {
+                                                                                "nodeId": 16,
+                                                                                "bounds": {
+                                                                                    "left": 251,
+                                                                                    "top": 1258,
+                                                                                    "right": 357,
+                                                                                    "bottom": 1364
+                                                                                },
+                                                                                "driverDetail": {
+                                                                                    "class": "androidAccessibility",
+                                                                                    "className": "android.widget.RadialTimePickerView$RadialPickerTouchHelper",
+                                                                                    "contentDescription": "9",
+                                                                                    "isSelected": true,
+                                                                                    "packageName": "com.google.android.calendar",
+                                                                                    "isImportantForAccessibility": false,
+                                                                                    "maxTextLength": -1,
+                                                                                    "actions": [
+                                                                                        "ACTION_CLICK",
+                                                                                        "ACTION_64"
+                                                                                    ]
+                                                                                }
+                                                                            },
+                                                                            {
+                                                                                "nodeId": 17,
+                                                                                "bounds": {
+                                                                                    "left": 282,
+                                                                                    "top": 1140,
+                                                                                    "right": 388,
+                                                                                    "bottom": 1246
+                                                                                },
+                                                                                "driverDetail": {
+                                                                                    "class": "androidAccessibility",
+                                                                                    "className": "android.widget.RadialTimePickerView$RadialPickerTouchHelper",
+                                                                                    "contentDescription": "10",
+                                                                                    "packageName": "com.google.android.calendar",
+                                                                                    "isImportantForAccessibility": false,
+                                                                                    "maxTextLength": -1,
+                                                                                    "actions": [
+                                                                                        "ACTION_CLICK",
+                                                                                        "ACTION_64"
+                                                                                    ]
+                                                                                }
+                                                                            },
+                                                                            {
+                                                                                "nodeId": 18,
+                                                                                "bounds": {
+                                                                                    "left": 369,
+                                                                                    "top": 1053,
+                                                                                    "right": 475,
+                                                                                    "bottom": 1159
+                                                                                },
+                                                                                "driverDetail": {
+                                                                                    "class": "androidAccessibility",
+                                                                                    "className": "android.widget.RadialTimePickerView$RadialPickerTouchHelper",
+                                                                                    "contentDescription": "11",
+                                                                                    "packageName": "com.google.android.calendar",
+                                                                                    "isImportantForAccessibility": false,
+                                                                                    "maxTextLength": -1,
+                                                                                    "actions": [
+                                                                                        "ACTION_CLICK",
+                                                                                        "ACTION_64"
+                                                                                    ]
+                                                                                }
+                                                                            },
+                                                                            {
+                                                                                "nodeId": 19,
+                                                                                "bounds": {
+                                                                                    "left": 487,
+                                                                                    "top": 1022,
+                                                                                    "right": 593,
+                                                                                    "bottom": 1128
+                                                                                },
+                                                                                "driverDetail": {
+                                                                                    "class": "androidAccessibility",
+                                                                                    "className": "android.widget.RadialTimePickerView$RadialPickerTouchHelper",
+                                                                                    "contentDescription": "12",
+                                                                                    "packageName": "com.google.android.calendar",
+                                                                                    "isImportantForAccessibility": false,
+                                                                                    "maxTextLength": -1,
+                                                                                    "actions": [
+                                                                                        "ACTION_CLICK",
+                                                                                        "ACTION_64"
+                                                                                    ]
+                                                                                }
+                                                                            }
+                                                                        ],
+                                                                        "bounds": {
+                                                                            "left": 204,
+                                                                            "top": 1017,
+                                                                            "right": 876,
+                                                                            "bottom": 1605
+                                                                        },
+                                                                        "driverDetail": {
+                                                                            "class": "androidAccessibility",
+                                                                            "className": "android.view.View",
+                                                                            "resourceId": "android:id/radial_picker",
+                                                                            "packageName": "com.google.android.calendar",
+                                                                            "drawingOrder": 2,
+                                                                            "maxTextLength": -1,
+                                                                            "actions": [
+                                                                                "ACTION_SELECT",
+                                                                                "ACTION_CLEAR_SELECTION",
+                                                                                "ACTION_64",
+                                                                                "ACTION_SCROLL_FORWARD",
+                                                                                "ACTION_SCROLL_BACKWARD",
+                                                                                "ACTION_SHOW_ON_SCREEN"
+                                                                            ]
+                                                                        }
+                                                                    },
+                                                                    {
+                                                                        "nodeId": 26,
+                                                                        "children": [
+                                                                            {
+                                                                                "nodeId": 21,
+                                                                                "ref": "q478",
+                                                                                "bounds": {
+                                                                                    "left": 194,
+                                                                                    "top": 1615,
+                                                                                    "right": 321,
+                                                                                    "bottom": 1742
+                                                                                },
+                                                                                "driverDetail": {
+                                                                                    "class": "androidAccessibility",
+                                                                                    "className": "android.widget.ImageButton",
+                                                                                    "resourceId": "android:id/toggle_mode",
+                                                                                    "contentDescription": "Switch to text input mode for the time input.",
+                                                                                    "isClickable": true,
+                                                                                    "packageName": "com.google.android.calendar",
+                                                                                    "isFocusable": true,
+                                                                                    "drawingOrder": 1,
+                                                                                    "maxTextLength": -1,
+                                                                                    "actions": [
+                                                                                        "ACTION_FOCUS",
+                                                                                        "ACTION_SELECT",
+                                                                                        "ACTION_CLEAR_SELECTION",
+                                                                                        "ACTION_CLICK",
+                                                                                        "ACTION_64",
+                                                                                        "ACTION_256",
+                                                                                        "ACTION_512",
+                                                                                        "ACTION_SET_SELECTION",
+                                                                                        "ACTION_SHOW_ON_SCREEN"
+                                                                                    ]
+                                                                                }
+                                                                            },
+                                                                            {
+                                                                                "nodeId": 25,
+                                                                                "children": [
+                                                                                    {
+                                                                                        "nodeId": 24,
+                                                                                        "children": [
+                                                                                            {
+                                                                                                "nodeId": 22,
+                                                                                                "ref": "r998",
+                                                                                                "bounds": {
+                                                                                                    "left": 529,
+                                                                                                    "top": 1616,
+                                                                                                    "right": 697,
+                                                                                                    "bottom": 1742
+                                                                                                },
+                                                                                                "driverDetail": {
+                                                                                                    "class": "androidAccessibility",
+                                                                                                    "className": "android.widget.Button",
+                                                                                                    "resourceId": "android:id/button2",
+                                                                                                    "text": "Cancel",
+                                                                                                    "isClickable": true,
+                                                                                                    "packageName": "com.google.android.calendar",
+                                                                                                    "isFocusable": true,
+                                                                                                    "drawingOrder": 3,
+                                                                                                    "maxTextLength": -1,
+                                                                                                    "actions": [
+                                                                                                        "ACTION_FOCUS",
+                                                                                                        "ACTION_SELECT",
+                                                                                                        "ACTION_CLEAR_SELECTION",
+                                                                                                        "ACTION_CLICK",
+                                                                                                        "ACTION_64",
+                                                                                                        "ACTION_256",
+                                                                                                        "ACTION_512",
+                                                                                                        "ACTION_SET_SELECTION",
+                                                                                                        "ACTION_SHOW_ON_SCREEN"
+                                                                                                    ]
+                                                                                                }
+                                                                                            },
+                                                                                            {
+                                                                                                "nodeId": 23,
+                                                                                                "ref": "m382",
+                                                                                                "bounds": {
+                                                                                                    "left": 718,
+                                                                                                    "top": 1616,
+                                                                                                    "right": 886,
+                                                                                                    "bottom": 1742
+                                                                                                },
+                                                                                                "driverDetail": {
+                                                                                                    "class": "androidAccessibility",
+                                                                                                    "className": "android.widget.Button",
+                                                                                                    "resourceId": "android:id/button1",
+                                                                                                    "text": "OK",
+                                                                                                    "isClickable": true,
+                                                                                                    "packageName": "com.google.android.calendar",
+                                                                                                    "isFocusable": true,
+                                                                                                    "drawingOrder": 4,
+                                                                                                    "maxTextLength": -1,
+                                                                                                    "actions": [
+                                                                                                        "ACTION_FOCUS",
+                                                                                                        "ACTION_SELECT",
+                                                                                                        "ACTION_CLEAR_SELECTION",
+                                                                                                        "ACTION_CLICK",
+                                                                                                        "ACTION_64",
+                                                                                                        "ACTION_256",
+                                                                                                        "ACTION_512",
+                                                                                                        "ACTION_SET_SELECTION",
+                                                                                                        "ACTION_SHOW_ON_SCREEN"
+                                                                                                    ]
+                                                                                                }
+                                                                                            }
+                                                                                        ],
+                                                                                        "bounds": {
+                                                                                            "left": 476,
+                                                                                            "top": 1605,
+                                                                                            "right": 918,
+                                                                                            "bottom": 1753
+                                                                                        },
+                                                                                        "driverDetail": {
+                                                                                            "class": "androidAccessibility",
+                                                                                            "className": "android.widget.LinearLayout",
+                                                                                            "packageName": "com.google.android.calendar",
+                                                                                            "isImportantForAccessibility": false,
+                                                                                            "drawingOrder": 1,
+                                                                                            "maxTextLength": -1,
+                                                                                            "actions": [
+                                                                                                "ACTION_SELECT",
+                                                                                                "ACTION_CLEAR_SELECTION",
+                                                                                                "ACTION_64",
+                                                                                                "ACTION_SHOW_ON_SCREEN"
+                                                                                            ]
+                                                                                        }
+                                                                                    }
+                                                                                ],
+                                                                                "bounds": {
+                                                                                    "left": 476,
+                                                                                    "top": 1605,
+                                                                                    "right": 918,
+                                                                                    "bottom": 1753
+                                                                                },
+                                                                                "driverDetail": {
+                                                                                    "class": "androidAccessibility",
+                                                                                    "className": "android.widget.ScrollView",
+                                                                                    "resourceId": "android:id/buttonPanel",
+                                                                                    "packageName": "com.google.android.calendar",
+                                                                                    "isFocusable": true,
+                                                                                    "drawingOrder": 3,
+                                                                                    "maxTextLength": -1,
+                                                                                    "actions": [
+                                                                                        "ACTION_FOCUS",
+                                                                                        "ACTION_SELECT",
+                                                                                        "ACTION_CLEAR_SELECTION",
+                                                                                        "ACTION_64",
+                                                                                        "ACTION_SHOW_ON_SCREEN"
+                                                                                    ]
+                                                                                }
+                                                                            }
+                                                                        ],
+                                                                        "bounds": {
+                                                                            "left": 162,
+                                                                            "top": 1605,
+                                                                            "right": 918,
+                                                                            "bottom": 1753
+                                                                        },
+                                                                        "driverDetail": {
+                                                                            "class": "androidAccessibility",
+                                                                            "className": "android.widget.LinearLayout",
+                                                                            "packageName": "com.google.android.calendar",
+                                                                            "isImportantForAccessibility": false,
+                                                                            "drawingOrder": 5,
+                                                                            "maxTextLength": -1,
+                                                                            "actions": [
+                                                                                "ACTION_SELECT",
+                                                                                "ACTION_CLEAR_SELECTION",
+                                                                                "ACTION_64",
+                                                                                "ACTION_SHOW_ON_SCREEN"
+                                                                            ]
+                                                                        }
+                                                                    }
+                                                                ],
+                                                                "bounds": {
+                                                                    "left": 162,
+                                                                    "top": 712,
+                                                                    "right": 918,
+                                                                    "bottom": 1753
+                                                                },
+                                                                "driverDetail": {
+                                                                    "class": "androidAccessibility",
+                                                                    "className": "android.widget.LinearLayout",
+                                                                    "packageName": "com.google.android.calendar",
+                                                                    "isImportantForAccessibility": false,
+                                                                    "drawingOrder": 1,
+                                                                    "maxTextLength": -1,
+                                                                    "actions": [
+                                                                        "ACTION_SELECT",
+                                                                        "ACTION_CLEAR_SELECTION",
+                                                                        "ACTION_64",
+                                                                        "ACTION_SHOW_ON_SCREEN"
+                                                                    ]
+                                                                }
+                                                            }
+                                                        ],
+                                                        "bounds": {
+                                                            "left": 162,
+                                                            "top": 712,
+                                                            "right": 918,
+                                                            "bottom": 1753
+                                                        },
+                                                        "driverDetail": {
+                                                            "class": "androidAccessibility",
+                                                            "className": "android.widget.TimePicker",
+                                                            "resourceId": "android:id/timePicker",
+                                                            "packageName": "com.google.android.calendar",
+                                                            "isImportantForAccessibility": false,
+                                                            "drawingOrder": 1,
+                                                            "maxTextLength": -1,
+                                                            "actions": [
+                                                                "ACTION_SELECT",
+                                                                "ACTION_CLEAR_SELECTION",
+                                                                "ACTION_64",
+                                                                "ACTION_SHOW_ON_SCREEN"
+                                                            ]
+                                                        }
+                                                    }
+                                                ],
+                                                "bounds": {
+                                                    "left": 162,
+                                                    "top": 712,
+                                                    "right": 918,
+                                                    "bottom": 1753
+                                                },
+                                                "driverDetail": {
+                                                    "class": "androidAccessibility",
+                                                    "className": "android.widget.FrameLayout",
+                                                    "resourceId": "android:id/custom",
+                                                    "packageName": "com.google.android.calendar",
+                                                    "isImportantForAccessibility": false,
+                                                    "drawingOrder": 1,
+                                                    "maxTextLength": -1,
+                                                    "actions": [
+                                                        "ACTION_SELECT",
+                                                        "ACTION_CLEAR_SELECTION",
+                                                        "ACTION_64",
+                                                        "ACTION_SHOW_ON_SCREEN"
+                                                    ]
+                                                }
+                                            }
+                                        ],
+                                        "bounds": {
+                                            "left": 162,
+                                            "top": 712,
+                                            "right": 918,
+                                            "bottom": 1753
+                                        },
+                                        "driverDetail": {
+                                            "class": "androidAccessibility",
+                                            "className": "android.widget.FrameLayout",
+                                            "resourceId": "android:id/customPanel",
+                                            "packageName": "com.google.android.calendar",
+                                            "isImportantForAccessibility": false,
+                                            "drawingOrder": 3,
+                                            "maxTextLength": -1,
+                                            "actions": [
+                                                "ACTION_SELECT",
+                                                "ACTION_CLEAR_SELECTION",
+                                                "ACTION_64",
+                                                "ACTION_SHOW_ON_SCREEN"
+                                            ]
+                                        }
+                                    }
+                                ],
+                                "bounds": {
+                                    "left": 162,
+                                    "top": 712,
+                                    "right": 918,
+                                    "bottom": 1753
+                                },
+                                "driverDetail": {
+                                    "class": "androidAccessibility",
+                                    "className": "android.widget.LinearLayout",
+                                    "resourceId": "android:id/parentPanel",
+                                    "packageName": "com.google.android.calendar",
+                                    "isImportantForAccessibility": false,
+                                    "drawingOrder": 1,
+                                    "maxTextLength": -1,
+                                    "actions": [
+                                        "ACTION_SELECT",
+                                        "ACTION_CLEAR_SELECTION",
+                                        "ACTION_64",
+                                        "ACTION_SHOW_ON_SCREEN"
+                                    ]
+                                }
+                            }
+                        ],
+                        "bounds": {
+                            "left": 162,
+                            "top": 712,
+                            "right": 918,
+                            "bottom": 1753
+                        },
+                        "driverDetail": {
+                            "class": "androidAccessibility",
+                            "className": "android.widget.FrameLayout",
+                            "resourceId": "android:id/content",
+                            "packageName": "com.google.android.calendar",
+                            "isImportantForAccessibility": false,
+                            "drawingOrder": 2,
+                            "maxTextLength": -1,
+                            "actions": [
+                                "ACTION_SELECT",
+                                "ACTION_CLEAR_SELECTION",
+                                "ACTION_64",
+                                "ACTION_SHOW_ON_SCREEN"
+                            ]
+                        }
+                    }
+                ],
+                "bounds": {
+                    "left": 162,
+                    "top": 712,
+                    "right": 918,
+                    "bottom": 1753
+                },
+                "driverDetail": {
+                    "class": "androidAccessibility",
+                    "className": "android.widget.LinearLayout",
+                    "packageName": "com.google.android.calendar",
+                    "isImportantForAccessibility": false,
+                    "drawingOrder": 1,
+                    "maxTextLength": -1,
+                    "actions": [
+                        "ACTION_SELECT",
+                        "ACTION_CLEAR_SELECTION",
+                        "ACTION_64",
+                        "ACTION_SHOW_ON_SCREEN"
+                    ]
+                }
+            }
+        ],
+        "bounds": {
+            "left": 120,
+            "top": 670,
+            "right": 960,
+            "bottom": 1795
+        },
+        "driverDetail": {
+            "class": "androidAccessibility",
+            "className": "android.widget.FrameLayout",
+            "packageName": "com.google.android.calendar",
+            "maxTextLength": -1,
+            "actions": [
+                "ACTION_SELECT",
+                "ACTION_CLEAR_SELECTION",
+                "ACTION_64",
+                "ACTION_SHOW_ON_SCREEN"
+            ]
+        }
+    }
+}

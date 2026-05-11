@@ -1,0 +1,16 @@
+id: "calendar/android/event_url_share_dialog"
+description: "Event-share intent picker when sharing an event URL from the event_overflow_menu. Inferred — opens the Android system share sheet (chooser activity)."
+required:
+  - description: "Android chooser content container"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^android:id/(content|chooser_header)$"
+  - description: "'Send to' or chooser-title text"
+    selector:
+      androidAccessibility:
+        textRegex: "^(Share|Send to|Sharing options).*$"
+forbidden:
+  - description: "Event-detail header (would mean we never left detail)"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/header_action_bar$"

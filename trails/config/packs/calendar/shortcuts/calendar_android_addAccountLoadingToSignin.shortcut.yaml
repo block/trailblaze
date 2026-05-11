@@ -1,0 +1,8 @@
+id: calendar_android_addAccountLoadingToSignin
+description: After the add-account loading screen finishes, the Google sign-in webview appears.
+shortcut:
+  from: calendar/android/add_account_loading
+  to: calendar/android/google_signin
+parameters: []
+tools:
+  - wait: { ms: 5000 }

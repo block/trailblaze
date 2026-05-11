@@ -1,0 +1,12 @@
+id: calendar_android_overflowToHelp
+description: From the Settings overflow popup, tap the 'Help & feedback' item.
+shortcut:
+  from: calendar/android/settings_overflow_menu
+  to: calendar/android/help_feedback
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      reason: ""
+      nodeSelector:
+        androidAccessibility:
+          textRegex: "^Help & feedback$"

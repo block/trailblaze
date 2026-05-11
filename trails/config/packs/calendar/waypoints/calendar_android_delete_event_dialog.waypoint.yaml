@@ -1,0 +1,22 @@
+id: "calendar/android/delete_event_dialog"
+description: "'Delete this event?' confirmation dialog (single-occurrence event). Two buttons: Cancel / Delete."
+required:
+  - description: "Dialog title"
+    selector:
+      androidAccessibility:
+        textRegex: "^Delete this event\\?$"
+  - description: "Delete button"
+    selector:
+      androidAccessibility:
+        textRegex: "^Delete$"
+        classNameRegex: "\\Qandroid.widget.Button\\E"
+  - description: "Cancel button"
+    selector:
+      androidAccessibility:
+        textRegex: "^Cancel$"
+        classNameRegex: "\\Qandroid.widget.Button\\E"
+forbidden:
+  - description: "Discard event dialog is a sibling-shape dialog with different copy"
+    selector:
+      androidAccessibility:
+        textRegex: "^Discard this event\\?$"

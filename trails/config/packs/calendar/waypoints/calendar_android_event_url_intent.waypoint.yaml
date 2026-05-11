@@ -1,0 +1,20 @@
+id: "calendar/android/event_url_intent"
+description: "Calendar opened from a deep link / event URL intent — direct landing on event_detail without navigating from the main grid. Inferred — same UI as event_detail but reached via Intent."
+required:
+  - description: "View-screen header (event detail)"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/view_screen_header$"
+  - description: "Header action bar"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/header_action_bar$"
+  - description: "Edit action"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^Edit$"
+forbidden:
+  - description: "Day picker (would mean we're on the main grid, not direct-to-event)"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/date_picker_button$"

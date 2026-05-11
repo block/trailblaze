@@ -1,0 +1,28 @@
+id: "calendar/android/google_signin"
+description: "Google sign-in webview ('Sign in — Google Accounts') reached after Add Account loading. Has Email field + Forgot email / Create account / Next buttons."
+required:
+  - description: "GMS minute-maid container"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.gms:id/minute_maid$"
+  - description: "'Sign in — Google Accounts' page title"
+    selector:
+      androidAccessibility:
+        textRegex: "^Sign in - Google Accounts$"
+  - description: "'Forgot email?' link"
+    selector:
+      androidAccessibility:
+        textRegex: "^Forgot email\\?$"
+  - description: "'Create account' link"
+    selector:
+      androidAccessibility:
+        textRegex: "^Create account$"
+  - description: "'Next' button"
+    selector:
+      androidAccessibility:
+        textRegex: "^Next$"
+forbidden:
+  - description: "Loading text (would mean we're still on the loading screen)"
+    selector:
+      androidAccessibility:
+        textRegex: "^Checking info…$"

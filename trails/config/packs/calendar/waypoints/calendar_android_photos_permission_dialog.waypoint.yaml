@@ -1,0 +1,24 @@
+id: "calendar/android/photos_permission_dialog"
+description: "OS photos/videos permission dialog — 'Allow Google to access photos and videos on this device?'. Triggered when adding people / pulling avatars on first run."
+required:
+  - description: "Permission grant dialog container"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.android\\.permissioncontroller:id/grant_dialog$"
+  - description: "Photos-permission message"
+    selector:
+      androidAccessibility:
+        textRegex: ".*access photos and videos.*"
+  - description: "Allow button"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.android\\.permissioncontroller:id/permission_allow_button$"
+  - description: "Deny button"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.android\\.permissioncontroller:id/permission_deny_button$"
+forbidden:
+  - description: "Location permission dialog has its own foreground/one-time button"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.android\\.permissioncontroller:id/permission_allow_foreground_only_button$"

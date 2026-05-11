@@ -1,0 +1,20 @@
+id: "calendar/android/snooze_options"
+description: "Snooze duration picker shown when tapping Snooze on a fired event notification. Inferred — typical Calendar feature with 5min/30min/1h/Tomorrow morning options."
+required:
+  - description: "Picker dialog list"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/select_dialog_listview$"
+  - description: "5 minutes snooze option"
+    selector:
+      androidAccessibility:
+        textRegex: "^5 minutes$"
+  - description: "Tomorrow morning snooze option"
+    selector:
+      androidAccessibility:
+        textRegex: "^Tomorrow morning$"
+forbidden:
+  - description: "Notification picker has 'minutes before' phrasing instead"
+    selector:
+      androidAccessibility:
+        textRegex: "^5 minutes before$"

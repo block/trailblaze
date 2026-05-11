@@ -1,0 +1,28 @@
+id: "calendar/android/quick_create_allday"
+description: "Expanded event sheet with All-day toggled ON — time fields are removed, only Start/End date rows remain. Distinct from quick_create_expanded (which has time rows)."
+required:
+  - description: "All-day toggle row"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/all_day_tile$"
+  - description: "Start date row (still present in all-day mode)"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^Start date: .*$"
+  - description: "End date row (still present in all-day mode)"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^End date: .*$"
+  - description: "Save button"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/save$"
+forbidden:
+  - description: "Time-row content-desc absent in all-day mode"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^Start time: .*$"
+  - description: "Time-row content-desc absent in all-day mode"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^End time: .*$"

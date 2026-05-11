@@ -1,0 +1,13 @@
+id: calendar_android_eventOverflowToHelp
+description: From event-detail overflow, tap Help & feedback to open the gms help screen.
+shortcut:
+  from: calendar/android/event_overflow_menu
+  to: calendar/android/help_feedback
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      reason: ""
+      nodeSelector:
+        androidAccessibility:
+          textRegex: "^Help & feedback$"
+          resourceIdRegex: "^com\\.google\\.android\\.calendar:id/title$"

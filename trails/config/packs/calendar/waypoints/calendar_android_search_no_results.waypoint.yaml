@@ -1,0 +1,13 @@
+id: "calendar/android/search_no_results"
+description: "Search screen with a query submitted but zero results found — shows the 'No entries found' empty-state label. Variant of search_typing."
+required:
+  - description: "Clear-search action"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^Clear search$"
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/clear$"
+  - description: "Empty-state label for no search results"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/no_result_label$"
+        textRegex: "^No entries found.*$"

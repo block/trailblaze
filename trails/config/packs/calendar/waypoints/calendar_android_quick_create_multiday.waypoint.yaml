@@ -1,0 +1,24 @@
+id: "calendar/android/quick_create_multiday"
+description: "Expanded event sheet with start and end on different dates (multi-day event). Distinct from quick_create_expanded (same-day default)."
+required:
+  - description: "Drag handle"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/drag_handle$"
+  - description: "Collapse action"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^Collapse event sheet$"
+  - description: "Start and end dates differ — content-desc for end mentions a different month or weekday than start"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^End date: .+, .+ \\d+, \\d+$"
+  - description: "Save button"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/save$"
+forbidden:
+  - description: "Same-day events have a single date in 'New event:' content-desc"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^New event: [^,]+, \\d+:\\d+ [AP]M . \\d+:\\d+ [AP]M$"

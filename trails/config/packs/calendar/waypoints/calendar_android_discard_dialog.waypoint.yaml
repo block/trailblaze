@@ -1,0 +1,22 @@
+id: "calendar/android/discard_dialog"
+description: "'Discard this event?' confirmation dialog shown when the user backs out of an event with unsaved changes. Two buttons: Discard / Keep editing."
+required:
+  - description: "Dialog message text"
+    selector:
+      androidAccessibility:
+        textRegex: "^Discard this event\\?$"
+  - description: "'Discard' button"
+    selector:
+      androidAccessibility:
+        textRegex: "^Discard$"
+        classNameRegex: "\\Qandroid.widget.Button\\E"
+  - description: "'Keep editing' button"
+    selector:
+      androidAccessibility:
+        textRegex: "^Keep editing$"
+        classNameRegex: "\\Qandroid.widget.Button\\E"
+forbidden:
+  - description: "Quick-create sheet drag handle would mean we're not in the discard dialog"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/drag_handle$"

@@ -1,0 +1,24 @@
+id: "calendar/android/event_detail_with_description"
+description: "Event detail showing a description segment (notes / details body). Variant of event_detail when the event has a description set."
+required:
+  - description: "View-screen coordinator"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/view_screen_coordinator_layout$"
+  - description: "Segment container"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/segment_container$"
+  - description: "Notes (description) segment row"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^Notes$"
+  - description: "Edit action (only present on event detail, not on quick editor)"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^Edit$"
+forbidden:
+  - description: "Quick-create handle (would mean editor)"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/drag_handle$"

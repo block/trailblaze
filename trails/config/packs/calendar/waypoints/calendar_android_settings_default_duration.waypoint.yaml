@@ -1,0 +1,17 @@
+id: "calendar/android/settings_default_duration"
+description: "Settings → Default event duration sub-screen — explanatory text and a list of duration choices. Toolbar reads 'Default event duration'."
+required:
+  - description: "Toolbar text reads 'Default event duration'"
+    selector:
+      androidAccessibility:
+        textRegex: "^Default event duration$"
+        classNameRegex: "\\Qandroid.widget.TextView\\E"
+  - description: "Explanatory summary text describing default duration behavior"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^android:id/summary$"
+        textRegex: "(?s).*default duration of a newly created event.*"
+  - description: "Back button"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^Back$"

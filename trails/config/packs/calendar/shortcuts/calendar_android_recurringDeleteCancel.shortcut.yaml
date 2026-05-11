@@ -1,0 +1,8 @@
+id: calendar_android_recurringDeleteCancel
+description: From the recurring-delete dialog, press Back to dismiss and return to the event detail.
+shortcut:
+  from: calendar/android/recurring_delete_dialog
+  to: calendar/android/event_detail
+parameters: []
+tools:
+  - pressBack: {}

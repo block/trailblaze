@@ -1,0 +1,634 @@
+{
+    "waypointId": "calendar/android/location_permission_dialog",
+    "capturedAt": "2026-05-08T15:57:59.080908Z",
+    "capturedFrom": "logs/2026_05_08_11_04_32_yaml_6258/024_TrailblazeLlmRequestLog.json",
+    "screenshotFile": "calendar_android_location_permission_dialog.example.webp",
+    "deviceWidth": 1080,
+    "deviceHeight": 2400,
+    "viewHierarchy": {
+        "x1": 28,
+        "y1": 513,
+        "x2": 1052,
+        "y2": 1952,
+        "centerPoint": "540,1232",
+        "children": [
+            {
+                "nodeId": 2,
+                "x1": 28,
+                "y1": 513,
+                "x2": 1052,
+                "y2": 1952,
+                "centerPoint": "540,1232",
+                "children": [
+                    {
+                        "nodeId": 3,
+                        "x1": 28,
+                        "y1": 513,
+                        "x2": 1052,
+                        "y2": 1952,
+                        "centerPoint": "540,1232",
+                        "children": [
+                            {
+                                "nodeId": 4,
+                                "x1": 28,
+                                "y1": 513,
+                                "x2": 1052,
+                                "y2": 1952,
+                                "centerPoint": "540,1232",
+                                "children": [
+                                    {
+                                        "nodeId": 5,
+                                        "x1": 28,
+                                        "y1": 513,
+                                        "x2": 1052,
+                                        "y2": 1952,
+                                        "centerPoint": "540,1232",
+                                        "children": [
+                                            {
+                                                "nodeId": 6,
+                                                "x1": 28,
+                                                "y1": 513,
+                                                "x2": 1052,
+                                                "y2": 1952,
+                                                "centerPoint": "540,1232",
+                                                "children": [
+                                                    {
+                                                        "nodeId": 7,
+                                                        "x1": 70,
+                                                        "y1": 555,
+                                                        "x2": 1010,
+                                                        "y2": 914,
+                                                        "centerPoint": "540,734",
+                                                        "children": [
+                                                            {
+                                                                "nodeId": 8,
+                                                                "x1": 133,
+                                                                "y1": 602,
+                                                                "x2": 947,
+                                                                "y2": 851,
+                                                                "centerPoint": "540,726",
+                                                                "children": [
+                                                                    {
+                                                                        "nodeId": 9,
+                                                                        "x1": 498,
+                                                                        "y1": 602,
+                                                                        "x2": 582,
+                                                                        "y2": 686,
+                                                                        "centerPoint": "540,644",
+                                                                        "className": "android.widget.ImageView",
+                                                                        "resourceId": "com.android.permissioncontroller:id/permission_icon"
+                                                                    },
+                                                                    {
+                                                                        "nodeId": 10,
+                                                                        "x1": 133,
+                                                                        "y1": 718,
+                                                                        "x2": 947,
+                                                                        "y2": 851,
+                                                                        "centerPoint": "540,784",
+                                                                        "className": "android.widget.TextView",
+                                                                        "resourceId": "com.android.permissioncontroller:id/permission_message",
+                                                                        "text": "Allow Calendar to access this device’s approximate location?"
+                                                                    }
+                                                                ],
+                                                                "className": "android.widget.LinearLayout"
+                                                            }
+                                                        ],
+                                                        "className": "android.widget.LinearLayout",
+                                                        "resourceId": "com.android.permissioncontroller:id/content_container"
+                                                    },
+                                                    {
+                                                        "nodeId": 11,
+                                                        "x1": 70,
+                                                        "y1": 914,
+                                                        "x2": 1010,
+                                                        "y2": 1381,
+                                                        "centerPoint": "540,1147",
+                                                        "children": [
+                                                            {
+                                                                "nodeId": 12,
+                                                                "accessibilityText": "Approximate location",
+                                                                "x1": 70,
+                                                                "y1": 977,
+                                                                "x2": 1010,
+                                                                "y2": 1318,
+                                                                "centerPoint": "540,1147",
+                                                                "className": "android.widget.ImageView",
+                                                                "resourceId": "com.android.permissioncontroller:id/permission_location_accuracy_coarse_only"
+                                                            }
+                                                        ],
+                                                        "className": "android.widget.LinearLayout",
+                                                        "resourceId": "com.android.permissioncontroller:id/permission_location_accuracy"
+                                                    },
+                                                    {
+                                                        "nodeId": 13,
+                                                        "x1": 70,
+                                                        "y1": 1381,
+                                                        "x2": 1010,
+                                                        "y2": 1910,
+                                                        "centerPoint": "540,1645",
+                                                        "children": [
+                                                            {
+                                                                "nodeId": 14,
+                                                                "x1": 133,
+                                                                "y1": 1386,
+                                                                "x2": 947,
+                                                                "y2": 1533,
+                                                                "centerPoint": "540,1459",
+                                                                "className": "android.widget.Button",
+                                                                "clickable": true,
+                                                                "resourceId": "com.android.permissioncontroller:id/permission_allow_foreground_only_button",
+                                                                "text": "While using the app"
+                                                            },
+                                                            {
+                                                                "nodeId": 15,
+                                                                "x1": 133,
+                                                                "y1": 1543,
+                                                                "x2": 947,
+                                                                "y2": 1690,
+                                                                "centerPoint": "540,1616",
+                                                                "className": "android.widget.Button",
+                                                                "clickable": true,
+                                                                "resourceId": "com.android.permissioncontroller:id/permission_allow_one_time_button",
+                                                                "text": "Only this time"
+                                                            },
+                                                            {
+                                                                "nodeId": 16,
+                                                                "x1": 133,
+                                                                "y1": 1700,
+                                                                "x2": 947,
+                                                                "y2": 1847,
+                                                                "centerPoint": "540,1773",
+                                                                "className": "android.widget.Button",
+                                                                "clickable": true,
+                                                                "resourceId": "com.android.permissioncontroller:id/permission_deny_and_dont_ask_again_button",
+                                                                "text": "Don’t allow"
+                                                            }
+                                                        ],
+                                                        "className": "android.widget.LinearLayout"
+                                                    }
+                                                ],
+                                                "className": "android.widget.LinearLayout",
+                                                "clickable": true,
+                                                "resourceId": "com.android.permissioncontroller:id/grant_dialog"
+                                            }
+                                        ],
+                                        "className": "android.widget.LinearLayout",
+                                        "clickable": true,
+                                        "resourceId": "com.android.permissioncontroller:id/grant_singleton"
+                                    }
+                                ],
+                                "className": "android.widget.ScrollView"
+                            }
+                        ],
+                        "className": "android.widget.FrameLayout",
+                        "resourceId": "android:id/content"
+                    }
+                ],
+                "className": "android.widget.FrameLayout"
+            }
+        ],
+        "className": "android.widget.FrameLayout"
+    },
+    "trailblazeNodeTree": {
+        "nodeId": 16,
+        "children": [
+            {
+                "nodeId": 15,
+                "children": [
+                    {
+                        "nodeId": 14,
+                        "children": [
+                            {
+                                "nodeId": 13,
+                                "children": [
+                                    {
+                                        "nodeId": 12,
+                                        "ref": "q164",
+                                        "children": [
+                                            {
+                                                "nodeId": 11,
+                                                "ref": "q164b",
+                                                "children": [
+                                                    {
+                                                        "nodeId": 4,
+                                                        "children": [
+                                                            {
+                                                                "nodeId": 3,
+                                                                "children": [
+                                                                    {
+                                                                        "nodeId": 1,
+                                                                        "bounds": {
+                                                                            "left": 498,
+                                                                            "top": 602,
+                                                                            "right": 582,
+                                                                            "bottom": 686
+                                                                        },
+                                                                        "driverDetail": {
+                                                                            "class": "androidAccessibility",
+                                                                            "className": "android.widget.ImageView",
+                                                                            "resourceId": "com.android.permissioncontroller:id/permission_icon",
+                                                                            "packageName": "com.google.android.permissioncontroller",
+                                                                            "isImportantForAccessibility": false,
+                                                                            "drawingOrder": 1,
+                                                                            "maxTextLength": -1,
+                                                                            "actions": [
+                                                                                "ACTION_SELECT",
+                                                                                "ACTION_CLEAR_SELECTION",
+                                                                                "ACTION_64",
+                                                                                "ACTION_SHOW_ON_SCREEN"
+                                                                            ]
+                                                                        }
+                                                                    },
+                                                                    {
+                                                                        "nodeId": 2,
+                                                                        "ref": "a536",
+                                                                        "bounds": {
+                                                                            "left": 133,
+                                                                            "top": 718,
+                                                                            "right": 947,
+                                                                            "bottom": 851
+                                                                        },
+                                                                        "driverDetail": {
+                                                                            "class": "androidAccessibility",
+                                                                            "className": "android.widget.TextView",
+                                                                            "resourceId": "com.android.permissioncontroller:id/permission_message",
+                                                                            "text": "Allow Calendar to access this device’s approximate location?",
+                                                                            "isMultiLine": true,
+                                                                            "packageName": "com.google.android.permissioncontroller",
+                                                                            "drawingOrder": 2,
+                                                                            "maxTextLength": -1,
+                                                                            "actions": [
+                                                                                "ACTION_SELECT",
+                                                                                "ACTION_CLEAR_SELECTION",
+                                                                                "ACTION_64",
+                                                                                "ACTION_256",
+                                                                                "ACTION_512",
+                                                                                "ACTION_SET_SELECTION",
+                                                                                "ACTION_SHOW_ON_SCREEN"
+                                                                            ]
+                                                                        }
+                                                                    }
+                                                                ],
+                                                                "bounds": {
+                                                                    "left": 133,
+                                                                    "top": 602,
+                                                                    "right": 947,
+                                                                    "bottom": 851
+                                                                },
+                                                                "driverDetail": {
+                                                                    "class": "androidAccessibility",
+                                                                    "className": "android.widget.LinearLayout",
+                                                                    "packageName": "com.google.android.permissioncontroller",
+                                                                    "isImportantForAccessibility": false,
+                                                                    "drawingOrder": 1,
+                                                                    "maxTextLength": -1,
+                                                                    "actions": [
+                                                                        "ACTION_SELECT",
+                                                                        "ACTION_CLEAR_SELECTION",
+                                                                        "ACTION_64",
+                                                                        "ACTION_SHOW_ON_SCREEN"
+                                                                    ]
+                                                                }
+                                                            }
+                                                        ],
+                                                        "bounds": {
+                                                            "left": 70,
+                                                            "top": 555,
+                                                            "right": 1010,
+                                                            "bottom": 914
+                                                        },
+                                                        "driverDetail": {
+                                                            "class": "androidAccessibility",
+                                                            "className": "android.widget.LinearLayout",
+                                                            "resourceId": "com.android.permissioncontroller:id/content_container",
+                                                            "packageName": "com.google.android.permissioncontroller",
+                                                            "isImportantForAccessibility": false,
+                                                            "drawingOrder": 1,
+                                                            "maxTextLength": -1,
+                                                            "actions": [
+                                                                "ACTION_SELECT",
+                                                                "ACTION_CLEAR_SELECTION",
+                                                                "ACTION_64",
+                                                                "ACTION_SHOW_ON_SCREEN"
+                                                            ]
+                                                        }
+                                                    },
+                                                    {
+                                                        "nodeId": 6,
+                                                        "children": [
+                                                            {
+                                                                "nodeId": 5,
+                                                                "ref": "y499",
+                                                                "bounds": {
+                                                                    "left": 70,
+                                                                    "top": 977,
+                                                                    "right": 1010,
+                                                                    "bottom": 1318
+                                                                },
+                                                                "driverDetail": {
+                                                                    "class": "androidAccessibility",
+                                                                    "className": "android.widget.ImageView",
+                                                                    "resourceId": "com.android.permissioncontroller:id/permission_location_accuracy_coarse_only",
+                                                                    "contentDescription": "Approximate location",
+                                                                    "packageName": "com.google.android.permissioncontroller",
+                                                                    "drawingOrder": 3,
+                                                                    "maxTextLength": -1,
+                                                                    "actions": [
+                                                                        "ACTION_SELECT",
+                                                                        "ACTION_CLEAR_SELECTION",
+                                                                        "ACTION_64",
+                                                                        "ACTION_256",
+                                                                        "ACTION_512",
+                                                                        "ACTION_SET_SELECTION",
+                                                                        "ACTION_SHOW_ON_SCREEN"
+                                                                    ]
+                                                                }
+                                                            }
+                                                        ],
+                                                        "bounds": {
+                                                            "left": 70,
+                                                            "top": 914,
+                                                            "right": 1010,
+                                                            "bottom": 1381
+                                                        },
+                                                        "driverDetail": {
+                                                            "class": "androidAccessibility",
+                                                            "className": "android.widget.LinearLayout",
+                                                            "resourceId": "com.android.permissioncontroller:id/permission_location_accuracy",
+                                                            "packageName": "com.google.android.permissioncontroller",
+                                                            "isImportantForAccessibility": false,
+                                                            "drawingOrder": 2,
+                                                            "maxTextLength": -1,
+                                                            "actions": [
+                                                                "ACTION_SELECT",
+                                                                "ACTION_CLEAR_SELECTION",
+                                                                "ACTION_64",
+                                                                "ACTION_SHOW_ON_SCREEN"
+                                                            ]
+                                                        }
+                                                    },
+                                                    {
+                                                        "nodeId": 10,
+                                                        "children": [
+                                                            {
+                                                                "nodeId": 7,
+                                                                "ref": "y760",
+                                                                "bounds": {
+                                                                    "left": 133,
+                                                                    "top": 1386,
+                                                                    "right": 947,
+                                                                    "bottom": 1533
+                                                                },
+                                                                "driverDetail": {
+                                                                    "class": "androidAccessibility",
+                                                                    "className": "android.widget.Button",
+                                                                    "resourceId": "com.android.permissioncontroller:id/permission_allow_foreground_only_button",
+                                                                    "text": "While using the app",
+                                                                    "isClickable": true,
+                                                                    "isMultiLine": true,
+                                                                    "packageName": "com.google.android.permissioncontroller",
+                                                                    "isFocusable": true,
+                                                                    "drawingOrder": 3,
+                                                                    "maxTextLength": -1,
+                                                                    "actions": [
+                                                                        "ACTION_FOCUS",
+                                                                        "ACTION_SELECT",
+                                                                        "ACTION_CLEAR_SELECTION",
+                                                                        "ACTION_CLICK",
+                                                                        "ACTION_64",
+                                                                        "ACTION_256",
+                                                                        "ACTION_512",
+                                                                        "ACTION_SET_SELECTION",
+                                                                        "ACTION_SHOW_ON_SCREEN"
+                                                                    ]
+                                                                }
+                                                            },
+                                                            {
+                                                                "nodeId": 8,
+                                                                "ref": "u501",
+                                                                "bounds": {
+                                                                    "left": 133,
+                                                                    "top": 1543,
+                                                                    "right": 947,
+                                                                    "bottom": 1690
+                                                                },
+                                                                "driverDetail": {
+                                                                    "class": "androidAccessibility",
+                                                                    "className": "android.widget.Button",
+                                                                    "resourceId": "com.android.permissioncontroller:id/permission_allow_one_time_button",
+                                                                    "text": "Only this time",
+                                                                    "isClickable": true,
+                                                                    "isMultiLine": true,
+                                                                    "packageName": "com.google.android.permissioncontroller",
+                                                                    "isFocusable": true,
+                                                                    "drawingOrder": 4,
+                                                                    "maxTextLength": -1,
+                                                                    "actions": [
+                                                                        "ACTION_FOCUS",
+                                                                        "ACTION_SELECT",
+                                                                        "ACTION_CLEAR_SELECTION",
+                                                                        "ACTION_CLICK",
+                                                                        "ACTION_64",
+                                                                        "ACTION_256",
+                                                                        "ACTION_512",
+                                                                        "ACTION_SET_SELECTION",
+                                                                        "ACTION_SHOW_ON_SCREEN"
+                                                                    ]
+                                                                }
+                                                            },
+                                                            {
+                                                                "nodeId": 9,
+                                                                "ref": "z864",
+                                                                "bounds": {
+                                                                    "left": 133,
+                                                                    "top": 1700,
+                                                                    "right": 947,
+                                                                    "bottom": 1847
+                                                                },
+                                                                "driverDetail": {
+                                                                    "class": "androidAccessibility",
+                                                                    "className": "android.widget.Button",
+                                                                    "resourceId": "com.android.permissioncontroller:id/permission_deny_and_dont_ask_again_button",
+                                                                    "text": "Don’t allow",
+                                                                    "isClickable": true,
+                                                                    "isMultiLine": true,
+                                                                    "packageName": "com.google.android.permissioncontroller",
+                                                                    "isFocusable": true,
+                                                                    "drawingOrder": 6,
+                                                                    "maxTextLength": -1,
+                                                                    "actions": [
+                                                                        "ACTION_FOCUS",
+                                                                        "ACTION_SELECT",
+                                                                        "ACTION_CLEAR_SELECTION",
+                                                                        "ACTION_CLICK",
+                                                                        "ACTION_64",
+                                                                        "ACTION_256",
+                                                                        "ACTION_512",
+                                                                        "ACTION_SET_SELECTION",
+                                                                        "ACTION_SHOW_ON_SCREEN"
+                                                                    ]
+                                                                }
+                                                            }
+                                                        ],
+                                                        "bounds": {
+                                                            "left": 70,
+                                                            "top": 1381,
+                                                            "right": 1010,
+                                                            "bottom": 1910
+                                                        },
+                                                        "driverDetail": {
+                                                            "class": "androidAccessibility",
+                                                            "className": "android.widget.LinearLayout",
+                                                            "packageName": "com.google.android.permissioncontroller",
+                                                            "isImportantForAccessibility": false,
+                                                            "drawingOrder": 3,
+                                                            "maxTextLength": -1,
+                                                            "actions": [
+                                                                "ACTION_SELECT",
+                                                                "ACTION_CLEAR_SELECTION",
+                                                                "ACTION_64",
+                                                                "ACTION_SHOW_ON_SCREEN"
+                                                            ]
+                                                        }
+                                                    }
+                                                ],
+                                                "bounds": {
+                                                    "left": 28,
+                                                    "top": 513,
+                                                    "right": 1052,
+                                                    "bottom": 1952
+                                                },
+                                                "driverDetail": {
+                                                    "class": "androidAccessibility",
+                                                    "className": "android.widget.LinearLayout",
+                                                    "resourceId": "com.android.permissioncontroller:id/grant_dialog",
+                                                    "isClickable": true,
+                                                    "packageName": "com.google.android.permissioncontroller",
+                                                    "isFocusable": true,
+                                                    "isImportantForAccessibility": false,
+                                                    "drawingOrder": 1,
+                                                    "maxTextLength": -1,
+                                                    "actions": [
+                                                        "ACTION_FOCUS",
+                                                        "ACTION_SELECT",
+                                                        "ACTION_CLEAR_SELECTION",
+                                                        "ACTION_CLICK",
+                                                        "ACTION_64",
+                                                        "ACTION_SHOW_ON_SCREEN"
+                                                    ]
+                                                }
+                                            }
+                                        ],
+                                        "bounds": {
+                                            "left": 28,
+                                            "top": 513,
+                                            "right": 1052,
+                                            "bottom": 1952
+                                        },
+                                        "driverDetail": {
+                                            "class": "androidAccessibility",
+                                            "className": "android.widget.LinearLayout",
+                                            "resourceId": "com.android.permissioncontroller:id/grant_singleton",
+                                            "isClickable": true,
+                                            "packageName": "com.google.android.permissioncontroller",
+                                            "isImportantForAccessibility": false,
+                                            "drawingOrder": 1,
+                                            "maxTextLength": -1,
+                                            "actions": [
+                                                "ACTION_SELECT",
+                                                "ACTION_CLEAR_SELECTION",
+                                                "ACTION_CLICK",
+                                                "ACTION_64",
+                                                "ACTION_SHOW_ON_SCREEN"
+                                            ]
+                                        }
+                                    }
+                                ],
+                                "bounds": {
+                                    "left": 28,
+                                    "top": 513,
+                                    "right": 1052,
+                                    "bottom": 1952
+                                },
+                                "driverDetail": {
+                                    "class": "androidAccessibility",
+                                    "className": "android.widget.ScrollView",
+                                    "packageName": "com.google.android.permissioncontroller",
+                                    "isFocusable": true,
+                                    "drawingOrder": 1,
+                                    "maxTextLength": -1,
+                                    "actions": [
+                                        "ACTION_FOCUS",
+                                        "ACTION_SELECT",
+                                        "ACTION_CLEAR_SELECTION",
+                                        "ACTION_64",
+                                        "ACTION_SHOW_ON_SCREEN"
+                                    ]
+                                }
+                            }
+                        ],
+                        "bounds": {
+                            "left": 28,
+                            "top": 513,
+                            "right": 1052,
+                            "bottom": 1952
+                        },
+                        "driverDetail": {
+                            "class": "androidAccessibility",
+                            "className": "android.widget.FrameLayout",
+                            "resourceId": "android:id/content",
+                            "packageName": "com.google.android.permissioncontroller",
+                            "isImportantForAccessibility": false,
+                            "drawingOrder": 1,
+                            "maxTextLength": -1,
+                            "actions": [
+                                "ACTION_SELECT",
+                                "ACTION_CLEAR_SELECTION",
+                                "ACTION_64",
+                                "ACTION_SHOW_ON_SCREEN"
+                            ]
+                        }
+                    }
+                ],
+                "bounds": {
+                    "left": 28,
+                    "top": 513,
+                    "right": 1052,
+                    "bottom": 1952
+                },
+                "driverDetail": {
+                    "class": "androidAccessibility",
+                    "className": "android.widget.FrameLayout",
+                    "packageName": "com.google.android.permissioncontroller",
+                    "isImportantForAccessibility": false,
+                    "drawingOrder": 1,
+                    "maxTextLength": -1,
+                    "actions": [
+                        "ACTION_SELECT",
+                        "ACTION_CLEAR_SELECTION",
+                        "ACTION_64",
+                        "ACTION_SHOW_ON_SCREEN"
+                    ]
+                }
+            }
+        ],
+        "bounds": {
+            "left": 28,
+            "top": 513,
+            "right": 1052,
+            "bottom": 1952
+        },
+        "driverDetail": {
+            "class": "androidAccessibility",
+            "className": "android.widget.FrameLayout",
+            "packageName": "com.google.android.permissioncontroller",
+            "maxTextLength": -1,
+            "actions": [
+                "ACTION_SELECT",
+                "ACTION_CLEAR_SELECTION",
+                "ACTION_64",
+                "ACTION_SHOW_ON_SCREEN"
+            ]
+        }
+    }
+}

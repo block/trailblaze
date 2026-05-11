@@ -1,0 +1,10 @@
+script: ./trails/config/packs/calendar/tools/calendar_android_launchApp.ts
+name: calendar_android_launchApp
+description: |
+  Force-stops Google Calendar and re-launches it via the package's default launcher
+  activity, so the next step starts from a clean app state. Composed from the dual-mode
+  `adbShell` primitive so the same tool works on host- and on-device-dispatched
+  scripted-tool sessions. No arguments — the framework resolves the app id from the
+  `calendar` pack manifest's `app_ids:` list against installed apps on the device.
+supportedPlatforms:
+  - android

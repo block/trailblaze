@@ -1,0 +1,28 @@
+id: "calendar/android/help_article"
+description: "Help & feedback article view — opened from a help-section card. Has 'Return to Calendar' and 'Navigate up' actions plus a close-article overflow menu."
+required:
+  - description: "Help app bar (gms namespace)"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.gms:id/gh_help_app_bar$"
+  - description: "Article content container"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.gms:id/gh_help_answer$"
+  - description: "Article content scroll area"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.gms:id/gh_answer_content$"
+  - description: "Close-article overflow icon"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.gms:id/gh_menu_close_article$"
+  - description: "'Return to Calendar' action"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^Return to Calendar$"
+forbidden:
+  - description: "Help-content cards list (only visible on Help & feedback root, not article view)"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.gms:id/gh_articles_card$"

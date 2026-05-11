@@ -1,0 +1,16 @@
+id: "calendar/android/event_notification_fired"
+description: "OS notification shade showing a Calendar event reminder with action buttons ('Snooze', 'Email guests'). Inferred — appears when an event reminder fires."
+required:
+  - description: "System notification shade"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.android\\.systemui:id/notification_panel$"
+  - description: "Calendar notification action button (e.g. Snooze)"
+    selector:
+      androidAccessibility:
+        textRegex: "^(Snooze|Dismiss|Email guests)$"
+forbidden:
+  - description: "Calendar action_bar_root (would mean we're in-app, not in shade)"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/action_bar_root$"

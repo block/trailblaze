@@ -1,0 +1,20 @@
+id: "calendar/android/search_with_results"
+description: "Search with results — query typed and matching events visible in the list. Variant of search_typing where the result rows are populated."
+required:
+  - description: "Search-list container"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/search_list$"
+  - description: "Clear-search action"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^Clear search$"
+  - description: "At least one event-row content-desc (search-result row)"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^.+, (Response: .*|All day: .*)$"
+forbidden:
+  - description: "No-entries-found empty-state label"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/no_result_label$"

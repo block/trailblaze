@@ -1,0 +1,33 @@
+id: "calendar/android/event_detail"
+description: "Event detail screen reached by tapping a saved event. Shows the event header, time, color indicator, and a command bar with Close / Edit / More options actions."
+required:
+  - description: "View-screen header coordinator (root container unique to event detail)"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/view_screen_coordinator_layout$"
+  - description: "Event detail header bar"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/header_action_bar$"
+  - description: "Color indicator dot for the event"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/color_indicator$"
+  - description: "Edit action button"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^Edit$"
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/info_action_edit_hit$"
+  - description: "More-options overflow on the detail header"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/info_action_overflow$"
+  - description: "Close action button"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^Close$"
+forbidden:
+  - description: "Quick-create sheet drag handle would mean we're in the editor, not detail"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/drag_handle$"

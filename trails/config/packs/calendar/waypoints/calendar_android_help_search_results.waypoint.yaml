@@ -1,0 +1,21 @@
+id: "calendar/android/help_search_results"
+description: "Help search overlay with a typed query and result rows visible. Variant of help_search where article suggestions are populated."
+required:
+  - description: "Search-box input"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.gms:id/gh_search_box$"
+  - description: "At least one article suggestion row"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.gms:id/gh_article_suggestion_icon$"
+    minCount: 1
+  - description: "'Clear text' action button"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^Clear text$"
+forbidden:
+  - description: "Help-article content (would mean we're inside an article)"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.gms:id/gh_help_answer$"

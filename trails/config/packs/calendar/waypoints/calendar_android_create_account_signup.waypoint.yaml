@@ -1,0 +1,20 @@
+id: "calendar/android/create_account_signup"
+description: "Google account create-flow signup form (after picking a personal-use type). Inferred — same minute_maid container, but with name/birthday fields shown."
+required:
+  - description: "GMS minute-maid container"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.gms:id/minute_maid$"
+  - description: "Page title indicates create-flow"
+    selector:
+      androidAccessibility:
+        textRegex: "^(Create your Google Account|First name|Tell us your name).*$"
+  - description: "Next button"
+    selector:
+      androidAccessibility:
+        textRegex: "^Next$"
+forbidden:
+  - description: "Sign-in page (would mean we're not on create form)"
+    selector:
+      androidAccessibility:
+        textRegex: "^Forgot email\\?$"

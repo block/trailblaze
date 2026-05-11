@@ -1,0 +1,738 @@
+{
+    "waypointId": "calendar/android/recurring_delete_dialog",
+    "capturedAt": "2026-05-08T15:59:45.858435Z",
+    "capturedFrom": "logs/2026_05_08_11_45_55_yaml_315/028_TrailblazeLlmRequestLog.json",
+    "screenshotFile": "calendar_android_recurring_delete_dialog.example.webp",
+    "deviceWidth": 1080,
+    "deviceHeight": 2400,
+    "viewHierarchy": {
+        "x1": 28,
+        "y1": 645,
+        "x2": 1052,
+        "y2": 1819,
+        "centerPoint": "540,1232",
+        "children": [
+            {
+                "nodeId": 2,
+                "x1": 91,
+                "y1": 855,
+                "x2": 989,
+                "y2": 1609,
+                "centerPoint": "540,1232",
+                "children": [
+                    {
+                        "nodeId": 3,
+                        "x1": 91,
+                        "y1": 855,
+                        "x2": 989,
+                        "y2": 1609,
+                        "centerPoint": "540,1232",
+                        "children": [
+                            {
+                                "nodeId": 4,
+                                "x1": 91,
+                                "y1": 855,
+                                "x2": 989,
+                                "y2": 1609,
+                                "centerPoint": "540,1232",
+                                "children": [
+                                    {
+                                        "nodeId": 5,
+                                        "x1": 91,
+                                        "y1": 855,
+                                        "x2": 989,
+                                        "y2": 1609,
+                                        "centerPoint": "540,1232",
+                                        "children": [
+                                            {
+                                                "nodeId": 6,
+                                                "x1": 91,
+                                                "y1": 855,
+                                                "x2": 989,
+                                                "y2": 1609,
+                                                "centerPoint": "540,1232",
+                                                "children": [
+                                                    {
+                                                        "nodeId": 7,
+                                                        "x1": 91,
+                                                        "y1": 855,
+                                                        "x2": 989,
+                                                        "y2": 1031,
+                                                        "centerPoint": "540,943",
+                                                        "children": [
+                                                            {
+                                                                "nodeId": 8,
+                                                                "x1": 91,
+                                                                "y1": 855,
+                                                                "x2": 989,
+                                                                "y2": 989,
+                                                                "centerPoint": "540,922",
+                                                                "className": "android.widget.TextView",
+                                                                "text": "Delete recurring event"
+                                                            },
+                                                            {
+                                                                "nodeId": 9,
+                                                                "x1": 91,
+                                                                "y1": 989,
+                                                                "x2": 989,
+                                                                "y2": 1031,
+                                                                "centerPoint": "540,1010",
+                                                                "className": "android.view.View",
+                                                                "resourceId": "com.google.android.calendar:id/titleDividerNoCustom"
+                                                            }
+                                                        ],
+                                                        "className": "android.widget.LinearLayout",
+                                                        "resourceId": "com.google.android.calendar:id/topPanel"
+                                                    },
+                                                    {
+                                                        "nodeId": 10,
+                                                        "x1": 91,
+                                                        "y1": 1031,
+                                                        "x2": 989,
+                                                        "y2": 1409,
+                                                        "centerPoint": "540,1220",
+                                                        "children": [
+                                                            {
+                                                                "nodeId": 11,
+                                                                "x1": 91,
+                                                                "y1": 1031,
+                                                                "x2": 989,
+                                                                "y2": 1409,
+                                                                "centerPoint": "540,1220",
+                                                                "children": [
+                                                                    {
+                                                                        "nodeId": 12,
+                                                                        "x1": 91,
+                                                                        "y1": 1031,
+                                                                        "x2": 989,
+                                                                        "y2": 1157,
+                                                                        "centerPoint": "540,1094",
+                                                                        "checked": true,
+                                                                        "className": "android.widget.CheckedTextView",
+                                                                        "clickable": true,
+                                                                        "resourceId": "android:id/text1",
+                                                                        "text": "This event"
+                                                                    },
+                                                                    {
+                                                                        "nodeId": 13,
+                                                                        "x1": 91,
+                                                                        "y1": 1157,
+                                                                        "x2": 989,
+                                                                        "y2": 1283,
+                                                                        "centerPoint": "540,1220",
+                                                                        "className": "android.widget.CheckedTextView",
+                                                                        "clickable": true,
+                                                                        "resourceId": "android:id/text1",
+                                                                        "text": "This and following events"
+                                                                    },
+                                                                    {
+                                                                        "nodeId": 14,
+                                                                        "x1": 91,
+                                                                        "y1": 1283,
+                                                                        "x2": 989,
+                                                                        "y2": 1409,
+                                                                        "centerPoint": "540,1346",
+                                                                        "className": "android.widget.CheckedTextView",
+                                                                        "clickable": true,
+                                                                        "resourceId": "android:id/text1",
+                                                                        "text": "All events"
+                                                                    }
+                                                                ],
+                                                                "className": "android.widget.ListView",
+                                                                "resourceId": "com.google.android.calendar:id/select_dialog_listview"
+                                                            }
+                                                        ],
+                                                        "className": "android.widget.FrameLayout",
+                                                        "resourceId": "com.google.android.calendar:id/contentPanel"
+                                                    },
+                                                    {
+                                                        "nodeId": 15,
+                                                        "x1": 91,
+                                                        "y1": 1409,
+                                                        "x2": 989,
+                                                        "y2": 1609,
+                                                        "centerPoint": "540,1509",
+                                                        "children": [
+                                                            {
+                                                                "nodeId": 16,
+                                                                "x1": 91,
+                                                                "y1": 1409,
+                                                                "x2": 989,
+                                                                "y2": 1609,
+                                                                "centerPoint": "540,1509",
+                                                                "children": [
+                                                                    {
+                                                                        "nodeId": 17,
+                                                                        "x1": 545,
+                                                                        "y1": 1446,
+                                                                        "x2": 730,
+                                                                        "y2": 1572,
+                                                                        "centerPoint": "637,1509",
+                                                                        "className": "android.widget.Button",
+                                                                        "clickable": true,
+                                                                        "resourceId": "android:id/button2",
+                                                                        "text": "Cancel"
+                                                                    },
+                                                                    {
+                                                                        "nodeId": 18,
+                                                                        "x1": 751,
+                                                                        "y1": 1446,
+                                                                        "x2": 926,
+                                                                        "y2": 1572,
+                                                                        "centerPoint": "838,1509",
+                                                                        "className": "android.widget.Button",
+                                                                        "clickable": true,
+                                                                        "resourceId": "android:id/button1",
+                                                                        "text": "Delete"
+                                                                    }
+                                                                ],
+                                                                "className": "android.widget.LinearLayout"
+                                                            }
+                                                        ],
+                                                        "className": "android.widget.ScrollView",
+                                                        "resourceId": "com.google.android.calendar:id/buttonPanel"
+                                                    }
+                                                ],
+                                                "className": "android.support.v7.widget.LinearLayoutCompat",
+                                                "resourceId": "com.google.android.calendar:id/parentPanel"
+                                            }
+                                        ],
+                                        "className": "android.widget.FrameLayout",
+                                        "resourceId": "android:id/content"
+                                    }
+                                ],
+                                "className": "android.widget.FrameLayout",
+                                "resourceId": "com.google.android.calendar:id/action_bar_root"
+                            }
+                        ],
+                        "className": "android.widget.FrameLayout"
+                    }
+                ],
+                "className": "android.widget.LinearLayout"
+            }
+        ],
+        "className": "android.widget.FrameLayout"
+    },
+    "trailblazeNodeTree": {
+        "nodeId": 18,
+        "children": [
+            {
+                "nodeId": 17,
+                "children": [
+                    {
+                        "nodeId": 16,
+                        "children": [
+                            {
+                                "nodeId": 15,
+                                "children": [
+                                    {
+                                        "nodeId": 14,
+                                        "children": [
+                                            {
+                                                "nodeId": 13,
+                                                "children": [
+                                                    {
+                                                        "nodeId": 3,
+                                                        "children": [
+                                                            {
+                                                                "nodeId": 1,
+                                                                "ref": "y718",
+                                                                "bounds": {
+                                                                    "left": 91,
+                                                                    "top": 855,
+                                                                    "right": 989,
+                                                                    "bottom": 989
+                                                                },
+                                                                "driverDetail": {
+                                                                    "class": "androidAccessibility",
+                                                                    "className": "android.widget.TextView",
+                                                                    "text": "Delete recurring event",
+                                                                    "isMultiLine": true,
+                                                                    "packageName": "com.google.android.calendar",
+                                                                    "drawingOrder": 1,
+                                                                    "maxTextLength": -1,
+                                                                    "actions": [
+                                                                        "ACTION_SELECT",
+                                                                        "ACTION_CLEAR_SELECTION",
+                                                                        "ACTION_64",
+                                                                        "ACTION_256",
+                                                                        "ACTION_512",
+                                                                        "ACTION_SET_SELECTION",
+                                                                        "ACTION_SHOW_ON_SCREEN"
+                                                                    ]
+                                                                }
+                                                            },
+                                                            {
+                                                                "nodeId": 2,
+                                                                "bounds": {
+                                                                    "left": 91,
+                                                                    "top": 989,
+                                                                    "right": 989,
+                                                                    "bottom": 1031
+                                                                },
+                                                                "driverDetail": {
+                                                                    "class": "androidAccessibility",
+                                                                    "className": "android.view.View",
+                                                                    "resourceId": "com.google.android.calendar:id/titleDividerNoCustom",
+                                                                    "packageName": "com.google.android.calendar",
+                                                                    "isImportantForAccessibility": false,
+                                                                    "drawingOrder": 3,
+                                                                    "maxTextLength": -1,
+                                                                    "actions": [
+                                                                        "ACTION_SELECT",
+                                                                        "ACTION_CLEAR_SELECTION",
+                                                                        "ACTION_64",
+                                                                        "ACTION_SHOW_ON_SCREEN"
+                                                                    ]
+                                                                }
+                                                            }
+                                                        ],
+                                                        "bounds": {
+                                                            "left": 91,
+                                                            "top": 855,
+                                                            "right": 989,
+                                                            "bottom": 1031
+                                                        },
+                                                        "driverDetail": {
+                                                            "class": "androidAccessibility",
+                                                            "className": "android.widget.LinearLayout",
+                                                            "resourceId": "com.google.android.calendar:id/topPanel",
+                                                            "packageName": "com.google.android.calendar",
+                                                            "isImportantForAccessibility": false,
+                                                            "drawingOrder": 1,
+                                                            "maxTextLength": -1,
+                                                            "actions": [
+                                                                "ACTION_SELECT",
+                                                                "ACTION_CLEAR_SELECTION",
+                                                                "ACTION_64",
+                                                                "ACTION_SHOW_ON_SCREEN"
+                                                            ]
+                                                        }
+                                                    },
+                                                    {
+                                                        "nodeId": 8,
+                                                        "children": [
+                                                            {
+                                                                "nodeId": 7,
+                                                                "children": [
+                                                                    {
+                                                                        "nodeId": 4,
+                                                                        "ref": "o352",
+                                                                        "bounds": {
+                                                                            "left": 91,
+                                                                            "top": 1031,
+                                                                            "right": 989,
+                                                                            "bottom": 1157
+                                                                        },
+                                                                        "driverDetail": {
+                                                                            "class": "androidAccessibility",
+                                                                            "className": "android.widget.CheckedTextView",
+                                                                            "resourceId": "android:id/text1",
+                                                                            "text": "This event",
+                                                                            "isClickable": true,
+                                                                            "isCheckable": true,
+                                                                            "isChecked": true,
+                                                                            "isMultiLine": true,
+                                                                            "collectionItemInfo": {
+                                                                                "rowIndex": 0,
+                                                                                "rowSpan": 1,
+                                                                                "columnIndex": 0,
+                                                                                "columnSpan": 1,
+                                                                                "isHeading": false
+                                                                            },
+                                                                            "packageName": "com.google.android.calendar",
+                                                                            "drawingOrder": 1,
+                                                                            "maxTextLength": -1,
+                                                                            "actions": [
+                                                                                "ACTION_SELECT",
+                                                                                "ACTION_CLEAR_SELECTION",
+                                                                                "ACTION_CLICK",
+                                                                                "ACTION_64",
+                                                                                "ACTION_256",
+                                                                                "ACTION_512",
+                                                                                "ACTION_SET_SELECTION",
+                                                                                "ACTION_SHOW_ON_SCREEN"
+                                                                            ]
+                                                                        }
+                                                                    },
+                                                                    {
+                                                                        "nodeId": 5,
+                                                                        "ref": "k744",
+                                                                        "bounds": {
+                                                                            "left": 91,
+                                                                            "top": 1157,
+                                                                            "right": 989,
+                                                                            "bottom": 1283
+                                                                        },
+                                                                        "driverDetail": {
+                                                                            "class": "androidAccessibility",
+                                                                            "className": "android.widget.CheckedTextView",
+                                                                            "resourceId": "android:id/text1",
+                                                                            "text": "This and following events",
+                                                                            "isClickable": true,
+                                                                            "isCheckable": true,
+                                                                            "isMultiLine": true,
+                                                                            "collectionItemInfo": {
+                                                                                "rowIndex": 1,
+                                                                                "rowSpan": 1,
+                                                                                "columnIndex": 0,
+                                                                                "columnSpan": 1,
+                                                                                "isHeading": false
+                                                                            },
+                                                                            "packageName": "com.google.android.calendar",
+                                                                            "drawingOrder": 2,
+                                                                            "maxTextLength": -1,
+                                                                            "actions": [
+                                                                                "ACTION_SELECT",
+                                                                                "ACTION_CLEAR_SELECTION",
+                                                                                "ACTION_CLICK",
+                                                                                "ACTION_64",
+                                                                                "ACTION_256",
+                                                                                "ACTION_512",
+                                                                                "ACTION_SET_SELECTION",
+                                                                                "ACTION_SHOW_ON_SCREEN"
+                                                                            ]
+                                                                        }
+                                                                    },
+                                                                    {
+                                                                        "nodeId": 6,
+                                                                        "ref": "g336",
+                                                                        "bounds": {
+                                                                            "left": 91,
+                                                                            "top": 1283,
+                                                                            "right": 989,
+                                                                            "bottom": 1409
+                                                                        },
+                                                                        "driverDetail": {
+                                                                            "class": "androidAccessibility",
+                                                                            "className": "android.widget.CheckedTextView",
+                                                                            "resourceId": "android:id/text1",
+                                                                            "text": "All events",
+                                                                            "isClickable": true,
+                                                                            "isCheckable": true,
+                                                                            "isMultiLine": true,
+                                                                            "collectionItemInfo": {
+                                                                                "rowIndex": 2,
+                                                                                "rowSpan": 1,
+                                                                                "columnIndex": 0,
+                                                                                "columnSpan": 1,
+                                                                                "isHeading": false
+                                                                            },
+                                                                            "packageName": "com.google.android.calendar",
+                                                                            "drawingOrder": 3,
+                                                                            "maxTextLength": -1,
+                                                                            "actions": [
+                                                                                "ACTION_SELECT",
+                                                                                "ACTION_CLEAR_SELECTION",
+                                                                                "ACTION_CLICK",
+                                                                                "ACTION_64",
+                                                                                "ACTION_256",
+                                                                                "ACTION_512",
+                                                                                "ACTION_SET_SELECTION",
+                                                                                "ACTION_SHOW_ON_SCREEN"
+                                                                            ]
+                                                                        }
+                                                                    }
+                                                                ],
+                                                                "bounds": {
+                                                                    "left": 91,
+                                                                    "top": 1031,
+                                                                    "right": 989,
+                                                                    "bottom": 1409
+                                                                },
+                                                                "driverDetail": {
+                                                                    "class": "androidAccessibility",
+                                                                    "className": "android.widget.ListView",
+                                                                    "resourceId": "com.google.android.calendar:id/select_dialog_listview",
+                                                                    "packageName": "com.google.android.calendar",
+                                                                    "isFocusable": true,
+                                                                    "drawingOrder": 1,
+                                                                    "maxTextLength": -1,
+                                                                    "actions": [
+                                                                        "ACTION_FOCUS",
+                                                                        "ACTION_SELECT",
+                                                                        "ACTION_CLEAR_SELECTION",
+                                                                        "ACTION_64",
+                                                                        "ACTION_SHOW_ON_SCREEN",
+                                                                        "ACTION_16908343"
+                                                                    ],
+                                                                    "collectionInfo": {
+                                                                        "rowCount": -1,
+                                                                        "columnCount": -1,
+                                                                        "isHierarchical": false
+                                                                    }
+                                                                }
+                                                            }
+                                                        ],
+                                                        "bounds": {
+                                                            "left": 91,
+                                                            "top": 1031,
+                                                            "right": 989,
+                                                            "bottom": 1409
+                                                        },
+                                                        "driverDetail": {
+                                                            "class": "androidAccessibility",
+                                                            "className": "android.widget.FrameLayout",
+                                                            "resourceId": "com.google.android.calendar:id/contentPanel",
+                                                            "packageName": "com.google.android.calendar",
+                                                            "isImportantForAccessibility": false,
+                                                            "drawingOrder": 2,
+                                                            "maxTextLength": -1,
+                                                            "actions": [
+                                                                "ACTION_SELECT",
+                                                                "ACTION_CLEAR_SELECTION",
+                                                                "ACTION_64",
+                                                                "ACTION_SHOW_ON_SCREEN"
+                                                            ]
+                                                        }
+                                                    },
+                                                    {
+                                                        "nodeId": 12,
+                                                        "children": [
+                                                            {
+                                                                "nodeId": 11,
+                                                                "children": [
+                                                                    {
+                                                                        "nodeId": 9,
+                                                                        "ref": "p582",
+                                                                        "bounds": {
+                                                                            "left": 545,
+                                                                            "top": 1446,
+                                                                            "right": 730,
+                                                                            "bottom": 1572
+                                                                        },
+                                                                        "driverDetail": {
+                                                                            "class": "androidAccessibility",
+                                                                            "className": "android.widget.Button",
+                                                                            "resourceId": "android:id/button2",
+                                                                            "text": "Cancel",
+                                                                            "isClickable": true,
+                                                                            "packageName": "com.google.android.calendar",
+                                                                            "isFocusable": true,
+                                                                            "drawingOrder": 3,
+                                                                            "maxTextLength": -1,
+                                                                            "actions": [
+                                                                                "ACTION_FOCUS",
+                                                                                "ACTION_SELECT",
+                                                                                "ACTION_CLEAR_SELECTION",
+                                                                                "ACTION_CLICK",
+                                                                                "ACTION_64",
+                                                                                "ACTION_256",
+                                                                                "ACTION_512",
+                                                                                "ACTION_SET_SELECTION",
+                                                                                "ACTION_SHOW_ON_SCREEN"
+                                                                            ]
+                                                                        }
+                                                                    },
+                                                                    {
+                                                                        "nodeId": 10,
+                                                                        "ref": "a811",
+                                                                        "bounds": {
+                                                                            "left": 751,
+                                                                            "top": 1446,
+                                                                            "right": 926,
+                                                                            "bottom": 1572
+                                                                        },
+                                                                        "driverDetail": {
+                                                                            "class": "androidAccessibility",
+                                                                            "className": "android.widget.Button",
+                                                                            "resourceId": "android:id/button1",
+                                                                            "text": "Delete",
+                                                                            "isClickable": true,
+                                                                            "packageName": "com.google.android.calendar",
+                                                                            "isFocusable": true,
+                                                                            "drawingOrder": 4,
+                                                                            "maxTextLength": -1,
+                                                                            "actions": [
+                                                                                "ACTION_FOCUS",
+                                                                                "ACTION_SELECT",
+                                                                                "ACTION_CLEAR_SELECTION",
+                                                                                "ACTION_CLICK",
+                                                                                "ACTION_64",
+                                                                                "ACTION_256",
+                                                                                "ACTION_512",
+                                                                                "ACTION_SET_SELECTION",
+                                                                                "ACTION_SHOW_ON_SCREEN"
+                                                                            ]
+                                                                        }
+                                                                    }
+                                                                ],
+                                                                "bounds": {
+                                                                    "left": 91,
+                                                                    "top": 1409,
+                                                                    "right": 989,
+                                                                    "bottom": 1609
+                                                                },
+                                                                "driverDetail": {
+                                                                    "class": "androidAccessibility",
+                                                                    "className": "android.widget.LinearLayout",
+                                                                    "packageName": "com.google.android.calendar",
+                                                                    "isImportantForAccessibility": false,
+                                                                    "drawingOrder": 1,
+                                                                    "maxTextLength": -1,
+                                                                    "actions": [
+                                                                        "ACTION_SELECT",
+                                                                        "ACTION_CLEAR_SELECTION",
+                                                                        "ACTION_64",
+                                                                        "ACTION_SHOW_ON_SCREEN"
+                                                                    ]
+                                                                }
+                                                            }
+                                                        ],
+                                                        "bounds": {
+                                                            "left": 91,
+                                                            "top": 1409,
+                                                            "right": 989,
+                                                            "bottom": 1609
+                                                        },
+                                                        "driverDetail": {
+                                                            "class": "androidAccessibility",
+                                                            "className": "android.widget.ScrollView",
+                                                            "resourceId": "com.google.android.calendar:id/buttonPanel",
+                                                            "packageName": "com.google.android.calendar",
+                                                            "isFocusable": true,
+                                                            "drawingOrder": 4,
+                                                            "maxTextLength": -1,
+                                                            "actions": [
+                                                                "ACTION_FOCUS",
+                                                                "ACTION_SELECT",
+                                                                "ACTION_CLEAR_SELECTION",
+                                                                "ACTION_64",
+                                                                "ACTION_SHOW_ON_SCREEN"
+                                                            ]
+                                                        }
+                                                    }
+                                                ],
+                                                "bounds": {
+                                                    "left": 91,
+                                                    "top": 855,
+                                                    "right": 989,
+                                                    "bottom": 1609
+                                                },
+                                                "driverDetail": {
+                                                    "class": "androidAccessibility",
+                                                    "className": "android.support.v7.widget.LinearLayoutCompat",
+                                                    "resourceId": "com.google.android.calendar:id/parentPanel",
+                                                    "packageName": "com.google.android.calendar",
+                                                    "isImportantForAccessibility": false,
+                                                    "drawingOrder": 1,
+                                                    "maxTextLength": -1,
+                                                    "actions": [
+                                                        "ACTION_SELECT",
+                                                        "ACTION_CLEAR_SELECTION",
+                                                        "ACTION_64",
+                                                        "ACTION_SHOW_ON_SCREEN"
+                                                    ]
+                                                }
+                                            }
+                                        ],
+                                        "bounds": {
+                                            "left": 91,
+                                            "top": 855,
+                                            "right": 989,
+                                            "bottom": 1609
+                                        },
+                                        "driverDetail": {
+                                            "class": "androidAccessibility",
+                                            "className": "android.widget.FrameLayout",
+                                            "resourceId": "android:id/content",
+                                            "packageName": "com.google.android.calendar",
+                                            "isImportantForAccessibility": false,
+                                            "drawingOrder": 1,
+                                            "maxTextLength": -1,
+                                            "actions": [
+                                                "ACTION_SELECT",
+                                                "ACTION_CLEAR_SELECTION",
+                                                "ACTION_64",
+                                                "ACTION_SHOW_ON_SCREEN"
+                                            ]
+                                        }
+                                    }
+                                ],
+                                "bounds": {
+                                    "left": 91,
+                                    "top": 855,
+                                    "right": 989,
+                                    "bottom": 1609
+                                },
+                                "driverDetail": {
+                                    "class": "androidAccessibility",
+                                    "className": "android.widget.FrameLayout",
+                                    "resourceId": "com.google.android.calendar:id/action_bar_root",
+                                    "packageName": "com.google.android.calendar",
+                                    "isImportantForAccessibility": false,
+                                    "drawingOrder": 1,
+                                    "maxTextLength": -1,
+                                    "actions": [
+                                        "ACTION_SELECT",
+                                        "ACTION_CLEAR_SELECTION",
+                                        "ACTION_64",
+                                        "ACTION_SHOW_ON_SCREEN"
+                                    ]
+                                }
+                            }
+                        ],
+                        "bounds": {
+                            "left": 91,
+                            "top": 855,
+                            "right": 989,
+                            "bottom": 1609
+                        },
+                        "driverDetail": {
+                            "class": "androidAccessibility",
+                            "className": "android.widget.FrameLayout",
+                            "packageName": "com.google.android.calendar",
+                            "isImportantForAccessibility": false,
+                            "drawingOrder": 2,
+                            "maxTextLength": -1,
+                            "actions": [
+                                "ACTION_SELECT",
+                                "ACTION_CLEAR_SELECTION",
+                                "ACTION_64",
+                                "ACTION_SHOW_ON_SCREEN"
+                            ]
+                        }
+                    }
+                ],
+                "bounds": {
+                    "left": 91,
+                    "top": 855,
+                    "right": 989,
+                    "bottom": 1609
+                },
+                "driverDetail": {
+                    "class": "androidAccessibility",
+                    "className": "android.widget.LinearLayout",
+                    "packageName": "com.google.android.calendar",
+                    "isImportantForAccessibility": false,
+                    "drawingOrder": 1,
+                    "maxTextLength": -1,
+                    "actions": [
+                        "ACTION_SELECT",
+                        "ACTION_CLEAR_SELECTION",
+                        "ACTION_64",
+                        "ACTION_SHOW_ON_SCREEN"
+                    ]
+                }
+            }
+        ],
+        "bounds": {
+            "left": 28,
+            "top": 645,
+            "right": 1052,
+            "bottom": 1819
+        },
+        "driverDetail": {
+            "class": "androidAccessibility",
+            "className": "android.widget.FrameLayout",
+            "packageName": "com.google.android.calendar",
+            "maxTextLength": -1,
+            "actions": [
+                "ACTION_SELECT",
+                "ACTION_CLEAR_SELECTION",
+                "ACTION_64",
+                "ACTION_SHOW_ON_SCREEN"
+            ]
+        }
+    }
+}

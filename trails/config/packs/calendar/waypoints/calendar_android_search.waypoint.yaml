@@ -1,0 +1,24 @@
+id: "calendar/android/search"
+description: "Search screen for events — text input bound to a results list. Reached from the toolbar Search button."
+required:
+  - description: "Search-results list"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/search_list$"
+  - description: "Search results swipe-refresh layout"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/search_results$"
+  - description: "Search text input"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/search_text$"
+  - description: "Back button"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^Back$"
+forbidden:
+  - description: "Add-location screen has 'Locations' toolbar a11y label"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^Locations$"

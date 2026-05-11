@@ -1,0 +1,28 @@
+id: "calendar/android/schedule_view"
+description: "Google Calendar, Schedule view selected. Vertically scrolling list grouped by week with 'May N – N' range labels. Distinct from day (which has 'Open Schedule View' switcher)."
+required:
+  - description: "Day picker button"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/date_picker_button$"
+  - description: "FAB visible"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/floating_action_button$"
+  - description: "At least one day cell with 'Open Day View' switcher (schedule entries link back to day)"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: ".*, Open Day View$"
+  - description: "Week-range divider label (e.g. 'May 10 – 16'). En-dash is U+2013."
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^[A-Z][a-z]+ \\d+ . (?:[A-Z][a-z]+ )?\\d+$"
+forbidden:
+  - description: "Day view's switcher action ('Open Schedule View') would mean we're on Day, not Schedule"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: ".*, Open Schedule View$"
+  - description: "Numeric Julian-day cells (Month view)"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^\\d{9}$"

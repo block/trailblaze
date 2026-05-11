@@ -1,0 +1,24 @@
+id: "calendar/android/event_duplicate_form"
+description: "Event editor opened from event_overflow_menu → 'Duplicate' — same shape as quick_create_expanded but pre-filled with the original event's data and a fresh save target. Inferred."
+required:
+  - description: "Drag handle"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/drag_handle$"
+  - description: "Collapse action — sheet expanded"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^Collapse event sheet$"
+  - description: "Save button"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/save$"
+  - description: "Title is pre-filled (non-empty 'New event:' content-desc)"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^New event: [A-Za-z][^,]+,.+$"
+forbidden:
+  - description: "Event-detail header (would mean we're on detail, not editor)"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/view_screen_header$"

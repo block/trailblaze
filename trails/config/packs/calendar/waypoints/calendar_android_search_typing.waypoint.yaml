@@ -1,0 +1,25 @@
+id: "calendar/android/search_typing"
+description: "Search screen with a query typed — adds the 'Clear search' (X) action and a populated text field. Distinct from search (which has no clear button while empty)."
+required:
+  - description: "Search-results list"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/search_list$"
+  - description: "Clear-search action — only present once query is non-empty"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^Clear search$"
+  - description: "Clear button id"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/clear$"
+  - description: "Search text input"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/search_text$"
+forbidden:
+  - description: "Empty 'Search' header text — only present in pristine search state"
+    selector:
+      androidAccessibility:
+        textRegex: "^Search$"
+        classNameRegex: "\\Qandroid.widget.TextView\\E"

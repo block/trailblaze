@@ -1,0 +1,33 @@
+id: "calendar/android/settings_general"
+description: "Settings → General sub-screen with rows for Theme, Time zone, Default event duration, etc. Distinct from settings_root (no Theme entry there)."
+required:
+  - description: "Toolbar reads 'General'"
+    selector:
+      androidAccessibility:
+        textRegex: "^General$"
+        classNameRegex: "\\Qandroid.widget.TextView\\E"
+  - description: "'Start of the week' setting row"
+    selector:
+      androidAccessibility:
+        textRegex: "^Start of the week$"
+  - description: "'Theme' setting row"
+    selector:
+      androidAccessibility:
+        textRegex: "^Theme$"
+  - description: "'Time zone' setting row"
+    selector:
+      androidAccessibility:
+        textRegex: "^Time zone$"
+  - description: "'Default event duration' setting row"
+    selector:
+      androidAccessibility:
+        textRegex: "^Default event duration$"
+  - description: "Back button"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^Back$"
+forbidden:
+  - description: "FAB hidden on settings"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/floating_action_button$"

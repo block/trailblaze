@@ -1,0 +1,20 @@
+id: "calendar/android/timezone_results"
+description: "Time-zone picker after typing a query — shows matching results (e.g. 'Tokyo' / 'Japan Standard Time') and the clear-search action."
+required:
+  - description: "Search input"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/search_text$"
+  - description: "Clear-search action"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^Clear search$"
+  - description: "Results main container"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/main_container$"
+  - description: "Result row tile icon"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/tile_icon$"
+forbidden: []

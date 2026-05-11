@@ -1,0 +1,24 @@
+id: "calendar/android/event_detail_allday"
+description: "Event detail for an all-day event. Time row reads 'All-day' instead of '12:00 – 1:00 AM'. Variant of event_detail."
+required:
+  - description: "View-screen coordinator"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/view_screen_coordinator_layout$"
+  - description: "Color indicator"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/color_indicator$"
+  - description: "All-day-style time row content-desc (date only)"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^[A-Z][a-z]+(, [A-Z][a-z]+ \\d+)?$"
+  - description: "Edit action"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^Edit$"
+forbidden:
+  - description: "Time-range content-desc (would mean a timed event)"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: ".*\\d+:\\d+ [AP]M.*"

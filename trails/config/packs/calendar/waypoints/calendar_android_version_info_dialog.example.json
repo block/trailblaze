@@ -1,0 +1,455 @@
+{
+    "waypointId": "calendar/android/version_info_dialog",
+    "capturedAt": "2026-05-08T16:26:07.637727Z",
+    "capturedFrom": "logs/2026_05_08_12_25_33_yaml_6258/028_TrailblazeLlmRequestLog.json",
+    "screenshotFile": "calendar_android_version_info_dialog.example.webp",
+    "deviceWidth": 1080,
+    "deviceHeight": 2400,
+    "viewHierarchy": {
+        "x1": 28,
+        "y1": 1019,
+        "x2": 1052,
+        "y2": 1445,
+        "centerPoint": "540,1232",
+        "children": [
+            {
+                "nodeId": 2,
+                "x1": 70,
+                "y1": 1061,
+                "x2": 1010,
+                "y2": 1403,
+                "centerPoint": "540,1232",
+                "children": [
+                    {
+                        "nodeId": 3,
+                        "x1": 70,
+                        "y1": 1061,
+                        "x2": 1010,
+                        "y2": 1403,
+                        "centerPoint": "540,1232",
+                        "children": [
+                            {
+                                "nodeId": 4,
+                                "x1": 70,
+                                "y1": 1061,
+                                "x2": 1010,
+                                "y2": 1403,
+                                "centerPoint": "540,1232",
+                                "children": [
+                                    {
+                                        "nodeId": 5,
+                                        "x1": 70,
+                                        "y1": 1061,
+                                        "x2": 1010,
+                                        "y2": 1403,
+                                        "centerPoint": "540,1232",
+                                        "children": [
+                                            {
+                                                "nodeId": 6,
+                                                "x1": 70,
+                                                "y1": 1061,
+                                                "x2": 1010,
+                                                "y2": 1403,
+                                                "centerPoint": "540,1232",
+                                                "children": [
+                                                    {
+                                                        "nodeId": 7,
+                                                        "x1": 70,
+                                                        "y1": 1061,
+                                                        "x2": 1010,
+                                                        "y2": 1403,
+                                                        "centerPoint": "540,1232",
+                                                        "children": [
+                                                            {
+                                                                "nodeId": 8,
+                                                                "x1": 133,
+                                                                "y1": 1124,
+                                                                "x2": 259,
+                                                                "y2": 1250,
+                                                                "centerPoint": "196,1187",
+                                                                "className": "android.widget.ImageView",
+                                                                "resourceId": "com.google.android.gms:id/gh_application_logo"
+                                                            },
+                                                            {
+                                                                "nodeId": 9,
+                                                                "x1": 259,
+                                                                "y1": 1124,
+                                                                "x2": 937,
+                                                                "y2": 1350,
+                                                                "centerPoint": "598,1237",
+                                                                "children": [
+                                                                    {
+                                                                        "nodeId": 10,
+                                                                        "x1": 296,
+                                                                        "y1": 1124,
+                                                                        "x2": 514,
+                                                                        "y2": 1199,
+                                                                        "centerPoint": "405,1161",
+                                                                        "className": "android.widget.TextView",
+                                                                        "resourceId": "com.google.android.gms:id/gh_application_title",
+                                                                        "text": "Calendar"
+                                                                    },
+                                                                    {
+                                                                        "nodeId": 11,
+                                                                        "x1": 296,
+                                                                        "y1": 1199,
+                                                                        "x2": 937,
+                                                                        "y2": 1251,
+                                                                        "centerPoint": "616,1225",
+                                                                        "className": "android.widget.TextView",
+                                                                        "resourceId": "com.google.android.gms:id/gh_application_version",
+                                                                        "text": "Version 2022.30.2-463576837-release"
+                                                                    },
+                                                                    {
+                                                                        "nodeId": 12,
+                                                                        "x1": 296,
+                                                                        "y1": 1304,
+                                                                        "x2": 561,
+                                                                        "y2": 1350,
+                                                                        "centerPoint": "428,1327",
+                                                                        "className": "android.widget.TextView",
+                                                                        "resourceId": "com.google.android.gms:id/gh_application_copyright",
+                                                                        "text": "©2026 Google Inc."
+                                                                    }
+                                                                ],
+                                                                "className": "android.widget.LinearLayout"
+                                                            }
+                                                        ],
+                                                        "className": "android.widget.LinearLayout"
+                                                    }
+                                                ],
+                                                "className": "android.widget.FrameLayout",
+                                                "resourceId": "android:id/custom"
+                                            }
+                                        ],
+                                        "className": "android.widget.FrameLayout",
+                                        "resourceId": "android:id/customPanel"
+                                    }
+                                ],
+                                "className": "android.widget.LinearLayout",
+                                "resourceId": "android:id/parentPanel"
+                            }
+                        ],
+                        "className": "android.widget.FrameLayout",
+                        "resourceId": "android:id/content"
+                    }
+                ],
+                "className": "android.widget.FrameLayout"
+            }
+        ],
+        "className": "android.widget.FrameLayout"
+    },
+    "trailblazeNodeTree": {
+        "nodeId": 12,
+        "children": [
+            {
+                "nodeId": 11,
+                "children": [
+                    {
+                        "nodeId": 10,
+                        "children": [
+                            {
+                                "nodeId": 9,
+                                "children": [
+                                    {
+                                        "nodeId": 8,
+                                        "children": [
+                                            {
+                                                "nodeId": 7,
+                                                "children": [
+                                                    {
+                                                        "nodeId": 6,
+                                                        "children": [
+                                                            {
+                                                                "nodeId": 1,
+                                                                "bounds": {
+                                                                    "left": 133,
+                                                                    "top": 1124,
+                                                                    "right": 259,
+                                                                    "bottom": 1250
+                                                                },
+                                                                "driverDetail": {
+                                                                    "class": "androidAccessibility",
+                                                                    "className": "android.widget.ImageView",
+                                                                    "resourceId": "com.google.android.gms:id/gh_application_logo",
+                                                                    "packageName": "com.google.android.gms",
+                                                                    "isImportantForAccessibility": false,
+                                                                    "drawingOrder": 1,
+                                                                    "maxTextLength": -1,
+                                                                    "actions": [
+                                                                        "ACTION_SELECT",
+                                                                        "ACTION_CLEAR_SELECTION",
+                                                                        "ACTION_64",
+                                                                        "ACTION_SHOW_ON_SCREEN"
+                                                                    ]
+                                                                }
+                                                            },
+                                                            {
+                                                                "nodeId": 5,
+                                                                "children": [
+                                                                    {
+                                                                        "nodeId": 2,
+                                                                        "ref": "a673",
+                                                                        "bounds": {
+                                                                            "left": 296,
+                                                                            "top": 1124,
+                                                                            "right": 514,
+                                                                            "bottom": 1199
+                                                                        },
+                                                                        "driverDetail": {
+                                                                            "class": "androidAccessibility",
+                                                                            "className": "android.widget.TextView",
+                                                                            "resourceId": "com.google.android.gms:id/gh_application_title",
+                                                                            "text": "Calendar",
+                                                                            "isMultiLine": true,
+                                                                            "packageName": "com.google.android.gms",
+                                                                            "drawingOrder": 1,
+                                                                            "maxTextLength": -1,
+                                                                            "actions": [
+                                                                                "ACTION_SELECT",
+                                                                                "ACTION_CLEAR_SELECTION",
+                                                                                "ACTION_64",
+                                                                                "ACTION_256",
+                                                                                "ACTION_512",
+                                                                                "ACTION_SET_SELECTION",
+                                                                                "ACTION_SHOW_ON_SCREEN"
+                                                                            ]
+                                                                        }
+                                                                    },
+                                                                    {
+                                                                        "nodeId": 3,
+                                                                        "ref": "j90",
+                                                                        "bounds": {
+                                                                            "left": 296,
+                                                                            "top": 1199,
+                                                                            "right": 937,
+                                                                            "bottom": 1251
+                                                                        },
+                                                                        "driverDetail": {
+                                                                            "class": "androidAccessibility",
+                                                                            "className": "android.widget.TextView",
+                                                                            "resourceId": "com.google.android.gms:id/gh_application_version",
+                                                                            "text": "Version 2022.30.2-463576837-release",
+                                                                            "isMultiLine": true,
+                                                                            "packageName": "com.google.android.gms",
+                                                                            "drawingOrder": 2,
+                                                                            "maxTextLength": -1,
+                                                                            "actions": [
+                                                                                "ACTION_SELECT",
+                                                                                "ACTION_CLEAR_SELECTION",
+                                                                                "ACTION_64",
+                                                                                "ACTION_256",
+                                                                                "ACTION_512",
+                                                                                "ACTION_SET_SELECTION",
+                                                                                "ACTION_SHOW_ON_SCREEN"
+                                                                            ]
+                                                                        }
+                                                                    },
+                                                                    {
+                                                                        "nodeId": 4,
+                                                                        "ref": "y393",
+                                                                        "bounds": {
+                                                                            "left": 296,
+                                                                            "top": 1304,
+                                                                            "right": 561,
+                                                                            "bottom": 1350
+                                                                        },
+                                                                        "driverDetail": {
+                                                                            "class": "androidAccessibility",
+                                                                            "className": "android.widget.TextView",
+                                                                            "resourceId": "com.google.android.gms:id/gh_application_copyright",
+                                                                            "text": "©2026 Google Inc.",
+                                                                            "isMultiLine": true,
+                                                                            "packageName": "com.google.android.gms",
+                                                                            "drawingOrder": 3,
+                                                                            "maxTextLength": -1,
+                                                                            "actions": [
+                                                                                "ACTION_SELECT",
+                                                                                "ACTION_CLEAR_SELECTION",
+                                                                                "ACTION_64",
+                                                                                "ACTION_256",
+                                                                                "ACTION_512",
+                                                                                "ACTION_SET_SELECTION",
+                                                                                "ACTION_SHOW_ON_SCREEN"
+                                                                            ]
+                                                                        }
+                                                                    }
+                                                                ],
+                                                                "bounds": {
+                                                                    "left": 259,
+                                                                    "top": 1124,
+                                                                    "right": 937,
+                                                                    "bottom": 1350
+                                                                },
+                                                                "driverDetail": {
+                                                                    "class": "androidAccessibility",
+                                                                    "className": "android.widget.LinearLayout",
+                                                                    "packageName": "com.google.android.gms",
+                                                                    "isImportantForAccessibility": false,
+                                                                    "drawingOrder": 2,
+                                                                    "maxTextLength": -1,
+                                                                    "actions": [
+                                                                        "ACTION_SELECT",
+                                                                        "ACTION_CLEAR_SELECTION",
+                                                                        "ACTION_64",
+                                                                        "ACTION_SHOW_ON_SCREEN"
+                                                                    ]
+                                                                }
+                                                            }
+                                                        ],
+                                                        "bounds": {
+                                                            "left": 70,
+                                                            "top": 1061,
+                                                            "right": 1010,
+                                                            "bottom": 1403
+                                                        },
+                                                        "driverDetail": {
+                                                            "class": "androidAccessibility",
+                                                            "className": "android.widget.LinearLayout",
+                                                            "packageName": "com.google.android.gms",
+                                                            "isImportantForAccessibility": false,
+                                                            "drawingOrder": 1,
+                                                            "maxTextLength": -1,
+                                                            "actions": [
+                                                                "ACTION_SELECT",
+                                                                "ACTION_CLEAR_SELECTION",
+                                                                "ACTION_64",
+                                                                "ACTION_SHOW_ON_SCREEN"
+                                                            ]
+                                                        }
+                                                    }
+                                                ],
+                                                "bounds": {
+                                                    "left": 70,
+                                                    "top": 1061,
+                                                    "right": 1010,
+                                                    "bottom": 1403
+                                                },
+                                                "driverDetail": {
+                                                    "class": "androidAccessibility",
+                                                    "className": "android.widget.FrameLayout",
+                                                    "resourceId": "android:id/custom",
+                                                    "packageName": "com.google.android.gms",
+                                                    "isImportantForAccessibility": false,
+                                                    "drawingOrder": 1,
+                                                    "maxTextLength": -1,
+                                                    "actions": [
+                                                        "ACTION_SELECT",
+                                                        "ACTION_CLEAR_SELECTION",
+                                                        "ACTION_64",
+                                                        "ACTION_SHOW_ON_SCREEN"
+                                                    ]
+                                                }
+                                            }
+                                        ],
+                                        "bounds": {
+                                            "left": 70,
+                                            "top": 1061,
+                                            "right": 1010,
+                                            "bottom": 1403
+                                        },
+                                        "driverDetail": {
+                                            "class": "androidAccessibility",
+                                            "className": "android.widget.FrameLayout",
+                                            "resourceId": "android:id/customPanel",
+                                            "packageName": "com.google.android.gms",
+                                            "isImportantForAccessibility": false,
+                                            "drawingOrder": 3,
+                                            "maxTextLength": -1,
+                                            "actions": [
+                                                "ACTION_SELECT",
+                                                "ACTION_CLEAR_SELECTION",
+                                                "ACTION_64",
+                                                "ACTION_SHOW_ON_SCREEN"
+                                            ]
+                                        }
+                                    }
+                                ],
+                                "bounds": {
+                                    "left": 70,
+                                    "top": 1061,
+                                    "right": 1010,
+                                    "bottom": 1403
+                                },
+                                "driverDetail": {
+                                    "class": "androidAccessibility",
+                                    "className": "android.widget.LinearLayout",
+                                    "resourceId": "android:id/parentPanel",
+                                    "packageName": "com.google.android.gms",
+                                    "isImportantForAccessibility": false,
+                                    "drawingOrder": 1,
+                                    "maxTextLength": -1,
+                                    "actions": [
+                                        "ACTION_SELECT",
+                                        "ACTION_CLEAR_SELECTION",
+                                        "ACTION_64",
+                                        "ACTION_SHOW_ON_SCREEN"
+                                    ]
+                                }
+                            }
+                        ],
+                        "bounds": {
+                            "left": 70,
+                            "top": 1061,
+                            "right": 1010,
+                            "bottom": 1403
+                        },
+                        "driverDetail": {
+                            "class": "androidAccessibility",
+                            "className": "android.widget.FrameLayout",
+                            "resourceId": "android:id/content",
+                            "packageName": "com.google.android.gms",
+                            "isImportantForAccessibility": false,
+                            "drawingOrder": 1,
+                            "maxTextLength": -1,
+                            "actions": [
+                                "ACTION_SELECT",
+                                "ACTION_CLEAR_SELECTION",
+                                "ACTION_64",
+                                "ACTION_SHOW_ON_SCREEN"
+                            ]
+                        }
+                    }
+                ],
+                "bounds": {
+                    "left": 70,
+                    "top": 1061,
+                    "right": 1010,
+                    "bottom": 1403
+                },
+                "driverDetail": {
+                    "class": "androidAccessibility",
+                    "className": "android.widget.FrameLayout",
+                    "packageName": "com.google.android.gms",
+                    "isImportantForAccessibility": false,
+                    "drawingOrder": 1,
+                    "maxTextLength": -1,
+                    "actions": [
+                        "ACTION_SELECT",
+                        "ACTION_CLEAR_SELECTION",
+                        "ACTION_64",
+                        "ACTION_SHOW_ON_SCREEN"
+                    ]
+                }
+            }
+        ],
+        "bounds": {
+            "left": 28,
+            "top": 1019,
+            "right": 1052,
+            "bottom": 1445
+        },
+        "driverDetail": {
+            "class": "androidAccessibility",
+            "className": "android.widget.FrameLayout",
+            "packageName": "com.google.android.gms",
+            "maxTextLength": -1,
+            "actions": [
+                "ACTION_SELECT",
+                "ACTION_CLEAR_SELECTION",
+                "ACTION_64",
+                "ACTION_SHOW_ON_SCREEN"
+            ]
+        }
+    }
+}

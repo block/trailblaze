@@ -1,0 +1,33 @@
+id: "calendar/android/drawer_open"
+description: "Side navigation drawer open over the main calendar surface. Shows view options (Schedule/Day/3-days/Week/Month), calendars list, and Refresh/Settings/Help shortcuts."
+required:
+  - description: "Schedule view drawer entry"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^Schedule view(, Selected)?$"
+  - description: "Day view drawer entry"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^Day view(, Selected)?$"
+  - description: "Week view drawer entry"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^Week view(, Selected)?$"
+  - description: "Month view drawer entry"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^Month view(, Selected)?$"
+  - description: "Settings shortcut at bottom of drawer"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^Settings$"
+  - description: "Help & feedback shortcut"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^Help & feedback$"
+forbidden:
+  - description: "FAB hidden when drawer is open"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/floating_action_button$"
+        isClickable: true

@@ -1,0 +1,24 @@
+id: "calendar/android/theme_picker"
+description: "Theme picker dialog — modal listing System default / Light / Dark, opened from Settings → General → Theme."
+required:
+  - description: "Dialog title 'Choose theme'"
+    selector:
+      androidAccessibility:
+        textRegex: "^Choose theme$"
+  - description: "System default option"
+    selector:
+      androidAccessibility:
+        textRegex: "^System default$"
+  - description: "Light option"
+    selector:
+      androidAccessibility:
+        textRegex: "^Light$"
+  - description: "Dark option"
+    selector:
+      androidAccessibility:
+        textRegex: "^Dark$"
+  - description: "Cancel button"
+    selector:
+      androidAccessibility:
+        textRegex: "^Cancel$"
+        classNameRegex: "\\Qandroid.widget.Button\\E"

@@ -1,0 +1,26 @@
+id: "calendar/android/notification_permission_prompt"
+description: "Calendar's in-app notification permission upsell — 'Don't miss a thing' headline with Allow notifications / Not right now buttons. Shown on launch when POST_NOTIFICATIONS hasn't been granted."
+required:
+  - description: "'Don't miss a thing' headline"
+    selector:
+      androidAccessibility:
+        textRegex: "^Don't miss a thing$"
+  - description: "Body explaining the notifications request"
+    selector:
+      androidAccessibility:
+        textRegex: ".*allow Calendar to send notifications.*"
+  - description: "'Allow notifications' button"
+    selector:
+      androidAccessibility:
+        textRegex: "^Allow notifications$"
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/allow_button$"
+  - description: "'Not right now' button"
+    selector:
+      androidAccessibility:
+        textRegex: "^Not right now$"
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/skip_button$"
+forbidden:
+  - description: "Day picker (would mean we're past the upsell)"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/date_picker_button$"

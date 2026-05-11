@@ -1,0 +1,24 @@
+id: "calendar/android/find_email"
+description: "'Find your email' webview reached from Google sign-in → 'Forgot email?'. Phone-or-recovery-email input + Next button."
+required:
+  - description: "GMS minute-maid container"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.gms:id/minute_maid$"
+  - description: "'Find your email' page title"
+    selector:
+      androidAccessibility:
+        textRegex: "^Find your email$"
+  - description: "Phone/email input prompt"
+    selector:
+      androidAccessibility:
+        textRegex: "^Enter your phone number or recovery email$"
+  - description: "Next button"
+    selector:
+      androidAccessibility:
+        textRegex: "^Next$"
+forbidden:
+  - description: "'Forgot email' link still visible (would mean we're on parent sign-in)"
+    selector:
+      androidAccessibility:
+        textRegex: "^Forgot email\\?$"

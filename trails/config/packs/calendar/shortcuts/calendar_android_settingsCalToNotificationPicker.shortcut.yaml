@@ -1,0 +1,12 @@
+id: calendar_android_settingsCalToNotificationPicker
+description: Already covered by calendar_android_calendarToNotificationPicker — alternate id reserved for the all-day notifications path.
+shortcut:
+  from: calendar/android/settings_calendar
+  to: calendar/android/allday_notification_picker
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      reason: ""
+      nodeSelector:
+        androidAccessibility:
+          textRegex: "^Add a notification$"

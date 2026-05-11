@@ -1,0 +1,12 @@
+id: calendar_android_signinToCreateMenu
+description: From Google sign-in, tap 'Create account' to open the personal/work/child dropdown.
+shortcut:
+  from: calendar/android/google_signin
+  to: calendar/android/create_account_menu
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      reason: ""
+      nodeSelector:
+        androidAccessibility:
+          textRegex: "^Create account$"

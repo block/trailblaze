@@ -1,0 +1,16 @@
+id: "calendar/android/drawer_calendar_unchecked"
+description: "Drawer with the Local calendar checkbox toggled OFF — the calendar's content-desc reads '…, unchecked' instead of '…, checked'. Distinct from drawer_calendars (default checked state)."
+required:
+  - description: "Drawer list container"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/drawer_list$"
+  - description: "Calendar item row in unchecked state"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^[a-z][^,]*, [A-Z][^,]+, unchecked$"
+forbidden:
+  - description: "Same calendar in checked state would be the default"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^[a-z][^,]*, [A-Z][^,]+, checked$"

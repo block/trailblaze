@@ -1,0 +1,16 @@
+id: "calendar/android/settings_invitations"
+description: "Settings → Adding invitations sub-screen — explanatory text about how invitations are added. Toolbar reads 'Adding invitations'."
+required:
+  - description: "Toolbar text reads 'Adding invitations'"
+    selector:
+      androidAccessibility:
+        textRegex: "^Adding invitations$"
+        classNameRegex: "\\Qandroid.widget.TextView\\E"
+  - description: "Explanatory summary describing invitation behavior"
+    selector:
+      androidAccessibility:
+        textRegex: "(?s).*Calendar will display events that you have been invited to.*"
+  - description: "Back button"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^Back$"

@@ -1,0 +1,24 @@
+id: "calendar/android/add_account_loading"
+description: "Add-Google-account loading state ('Checking info…') reached from account_sheet → 'Add another account'. The flow lives in the gms 'minute_maid' / 'glif_layout' template UI."
+required:
+  - description: "GMS glif setup layout"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.gms:id/glif_layout$"
+  - description: "Minute Maid (account add) container"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.gms:id/minute_maid$"
+  - description: "Progress bar container"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.gms:id/progress_bar_layout$"
+  - description: "'Checking info…' loading text"
+    selector:
+      androidAccessibility:
+        textRegex: "^Checking info…$"
+forbidden:
+  - description: "Calendar's app_bar_root (would mean we're back in Calendar, not setup)"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/action_bar_root$"

@@ -1,0 +1,22 @@
+id: "calendar/android/quick_create_with_visibility"
+description: "Expanded event sheet with Default visibility changed to Private or Public. Distinct from quick_create_expanded (where 'Default visibility' is the placeholder)."
+required:
+  - description: "Drag handle"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/drag_handle$"
+  - description: "Collapse action — sheet expanded"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^Collapse event sheet$"
+  - description: "Visibility row shows Private or Public"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/first_line_text$"
+        textRegex: "^(Private|Public)$"
+forbidden:
+  - description: "'Default visibility' default placeholder"
+    selector:
+      androidAccessibility:
+        textRegex: "^Default visibility$"
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/first_line_text$"

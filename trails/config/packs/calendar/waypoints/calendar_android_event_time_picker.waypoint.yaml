@@ -1,0 +1,32 @@
+id: "calendar/android/event_time_picker"
+description: "Modal time picker dialog (radial clock face) opened from event-editor Start/End time row."
+required:
+  - description: "Native timePicker widget"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^android:id/timePicker$"
+  - description: "Radial clock picker"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^android:id/radial_picker$"
+  - description: "Hours field"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^android:id/hours$"
+  - description: "Minutes field"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^android:id/minutes$"
+  - description: "AM/PM layout"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^android:id/ampm_layout$"
+forbidden:
+  - description: "Date picker would mean a different dialog"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^android:id/datePicker$"
+  - description: "Text-input fields would mean we're in text-entry mode"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^android:id/input_hour$"

@@ -1,0 +1,24 @@
+id: "calendar/android/event_invite_response"
+description: "Event detail with RSVP picker visible — 'Going? Yes / No / Maybe' segment. Inferred — appears for invited events."
+required:
+  - description: "View-screen coordinator"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/view_screen_coordinator_layout$"
+  - description: "RSVP question"
+    selector:
+      androidAccessibility:
+        textRegex: "^Going\\?$"
+  - description: "Yes RSVP option"
+    selector:
+      androidAccessibility:
+        textRegex: "^Yes$"
+  - description: "Maybe RSVP option"
+    selector:
+      androidAccessibility:
+        textRegex: "^Maybe$"
+forbidden:
+  - description: "Editor handle (would mean we're in the editor)"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/drag_handle$"

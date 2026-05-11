@@ -1,0 +1,17 @@
+id: "calendar/android/settings_overflow_menu"
+description: "Toolbar overflow popup on a settings screen — single item 'Help & feedback'. Reached via the 3-dots 'More options' button."
+required:
+  - description: "Help & feedback menu item"
+    selector:
+      androidAccessibility:
+        textRegex: "^Help & feedback$"
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/title$"
+forbidden:
+  - description: "Settings recycler view (would mean we're still on the parent settings screen, no popup)"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/recycler_view$"
+  - description: "FAB visible (would mean main app surface, not settings popup)"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/floating_action_button$"

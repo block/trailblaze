@@ -1,0 +1,12 @@
+id: calendar_android_helpToArticle
+description: From Help & feedback root, tap any help-content row to open the article view.
+shortcut:
+  from: calendar/android/help_feedback
+  to: calendar/android/help_article
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      reason: ""
+      nodeSelector:
+        androidAccessibility:
+          resourceIdRegex: "^com\\.google\\.android\\.gms:id/gh_help_content_line_item$"

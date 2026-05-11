@@ -1,0 +1,28 @@
+id: "calendar/android/feedback_describe"
+description: "Send-feedback issue-description form — text-input box plus mic-input button. Reached after Get Started → Don't allow logs."
+required:
+  - description: "Toolbar a11y label"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^Send feedback to Google$"
+  - description: "Issue-description prompt"
+    selector:
+      androidAccessibility:
+        textRegex: "^Could you describe your issue or suggestion\\?$"
+  - description: "Text input box"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.gms:id/edit_text_box$"
+  - description: "Voice/mic input button"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.gms:id/mic_icon$"
+  - description: "Submit-feedback action"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^Submit the feedback that you entered$"
+forbidden:
+  - description: "Get Started button (would mean we're on the welcome screen)"
+    selector:
+      androidAccessibility:
+        textRegex: "^Get Started$"

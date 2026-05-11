@@ -1,0 +1,28 @@
+id: "calendar/android/quick_create_expanded"
+description: "Quick-create event bottom sheet in expanded state — full editor with timezone, repeat, location, attendees, all-day toggle, and a 'Collapse event sheet' handle."
+required:
+  - description: "Drag handle for the bottom sheet"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/drag_handle$"
+  - description: "Collapse action — present only while expanded"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^Collapse event sheet$"
+  - description: "All-day toggle row"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/all_day_tile$"
+  - description: "Save button"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/save$"
+  - description: "Add-people accessibility action"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^Add people$"
+forbidden:
+  - description: "'Expand event sheet' is replaced by 'Collapse' in this state"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^Expand event sheet$"

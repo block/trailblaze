@@ -1,0 +1,16 @@
+id: "calendar/android/widget_config"
+description: "Calendar home-screen widget configuration screen — shown when adding the Calendar widget on the launcher. Inferred from standard Android widget API."
+required:
+  - description: "Widget config root"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/(widget_config|month_widget_config|schedule_widget_config)$"
+  - description: "Widget preview area"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/(widget_preview|preview).*$"
+forbidden:
+  - description: "Calendar action_bar_root (would mean we're in the app)"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/action_bar_root$"

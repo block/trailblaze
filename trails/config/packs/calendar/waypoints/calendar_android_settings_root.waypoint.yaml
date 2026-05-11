@@ -1,0 +1,29 @@
+id: "calendar/android/settings_root"
+description: "Settings root listing 'General' plus a row per calendar account. Distinct from Settings → General (which lists Theme/Time zone/etc)."
+required:
+  - description: "Settings toolbar title"
+    selector:
+      androidAccessibility:
+        textRegex: "^Settings$"
+        classNameRegex: "\\Qandroid.widget.TextView\\E"
+  - description: "Settings content container"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/settings_content$"
+  - description: "'General' top-level entry"
+    selector:
+      androidAccessibility:
+        textRegex: "^General$"
+  - description: "Back button in toolbar"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^Back$"
+forbidden:
+  - description: "FAB doesn't render on settings screens"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/floating_action_button$"
+  - description: "Theme entry only present in Settings → General sub-screen"
+    selector:
+      androidAccessibility:
+        textRegex: "^Theme$"

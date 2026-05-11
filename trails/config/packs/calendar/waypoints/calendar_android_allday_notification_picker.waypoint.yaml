@@ -1,0 +1,24 @@
+id: "calendar/android/allday_notification_picker"
+description: "Notification picker dialog for all-day events — distinct option list with 'On the day at 9 AM' and 'The day before at 9 AM'. Distinct from the regular notification_picker (minutes/hours-before)."
+required:
+  - description: "Picker dialog list"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/list$"
+  - description: "All-day-specific 'On the day at 9 AM' option"
+    selector:
+      androidAccessibility:
+        textRegex: "^On the day at 9 AM$"
+  - description: "All-day-specific 'The day before at 9 AM' option"
+    selector:
+      androidAccessibility:
+        textRegex: "^The day before at 9 AM$"
+  - description: "Custom… option"
+    selector:
+      androidAccessibility:
+        textRegex: "^Custom…$"
+forbidden:
+  - description: "'5 minutes before' is timed-event only"
+    selector:
+      androidAccessibility:
+        textRegex: "^5 minutes before$"

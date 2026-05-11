@@ -1,0 +1,8 @@
+id: calendar_android_dayCloseDrawer
+description: From the open drawer, press Back to dismiss it and return to day view.
+shortcut:
+  from: calendar/android/drawer_open
+  to: calendar/android/day_view
+parameters: []
+tools:
+  - pressBack: {}

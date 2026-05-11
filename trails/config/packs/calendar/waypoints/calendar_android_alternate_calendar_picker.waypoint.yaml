@@ -1,0 +1,24 @@
+id: "calendar/android/alternate_calendar_picker"
+description: "Alternate calendar picker dialog — Hijri/Hebrew/Chinese/Indian/Korean calendar overlay options. Opened from Settings → General → Alternate calendar."
+required:
+  - description: "Dialog title 'Alternate calendar'"
+    selector:
+      androidAccessibility:
+        textRegex: "^Alternate calendar$"
+  - description: "Hebrew calendar option"
+    selector:
+      androidAccessibility:
+        textRegex: "^Hebrew calendar$"
+  - description: "Hijri calendar (one of the variants — anchored regex would be too strict for variant suffix)"
+    selector:
+      androidAccessibility:
+        textRegex: "^Hijri calendar - (Civil|Kuwaiti|Saudi)$"
+  - description: "Chinese calendar option"
+    selector:
+      androidAccessibility:
+        textRegex: "^Chinese calendar - (Simplified|Traditional)$"
+  - description: "Cancel button"
+    selector:
+      androidAccessibility:
+        textRegex: "^Cancel$"
+        classNameRegex: "\\Qandroid.widget.Button\\E"

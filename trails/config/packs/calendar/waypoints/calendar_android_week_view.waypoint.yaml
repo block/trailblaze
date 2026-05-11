@@ -1,0 +1,21 @@
+id: "calendar/android/week_view"
+description: "Google Calendar, Week view selected. Seven contiguous day-cells (one full week) across the screen. Distinct from 3-day (3 cells) and day (1 cell)."
+required:
+  - description: "Day picker button"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/date_picker_button$"
+  - description: "FAB visible"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/floating_action_button$"
+  - description: "At least 7 day cells with 'Open Day View' content-desc — full week"
+    minCount: 7
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: ".*, Open Day View$"
+forbidden:
+  - description: "Day view's single-day-cell switcher; would not appear in week"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: ".*, Open Schedule View$"

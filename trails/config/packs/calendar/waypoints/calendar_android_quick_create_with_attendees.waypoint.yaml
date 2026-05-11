@@ -1,0 +1,25 @@
+id: "calendar/android/quick_create_with_attendees"
+description: "Expanded event sheet with attendees added — Add-people row replaced with attendee chips. Distinct from quick_create_expanded (placeholder text only)."
+required:
+  - description: "Drag handle"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/drag_handle$"
+  - description: "Collapse action — sheet expanded"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^Collapse event sheet$"
+  - description: "Attendee chip text matches an email or contact name"
+    selector:
+      androidAccessibility:
+        textRegex: "^.+@.+\\..+$"
+        contentDescriptionRegex: "^.+@.+\\..+$"
+  - description: "Save button"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/save$"
+forbidden:
+  - description: "'Add people' placeholder text — would mean none added"
+    selector:
+      androidAccessibility:
+        textRegex: "^Add people$"

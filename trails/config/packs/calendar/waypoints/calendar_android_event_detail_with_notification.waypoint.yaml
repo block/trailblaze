@@ -1,0 +1,20 @@
+id: "calendar/android/event_detail_with_notification"
+description: "Event detail showing a notification segment with the configured notification time chip(s). Variant of event_detail when the event has at least one notification set."
+required:
+  - description: "View-screen coordinator"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/view_screen_coordinator_layout$"
+  - description: "Segment container"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/segment_container$"
+  - description: "Notification chip text"
+    selector:
+      androidAccessibility:
+        textRegex: "^(\\d+ minutes? before|\\d+ hours? before|\\d+ days? before|At \\d+:\\d+ [AP]M)$"
+forbidden:
+  - description: "Quick-create handle (would mean editor)"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/drag_handle$"

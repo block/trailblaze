@@ -1,0 +1,12 @@
+id: calendar_android_accountToManageAccounts
+description: From the account sheet, tap 'Manage accounts on this device' to open the system Passwords & accounts screen.
+shortcut:
+  from: calendar/android/account_sheet
+  to: calendar/android/passwords_accounts
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      reason: ""
+      nodeSelector:
+        androidAccessibility:
+          textRegex: "^Manage accounts on this device$"

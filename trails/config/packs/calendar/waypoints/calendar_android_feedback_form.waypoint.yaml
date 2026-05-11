@@ -1,0 +1,28 @@
+id: "calendar/android/feedback_form"
+description: "'Send feedback to Google' welcome screen — onboarding step list with 'Get Started' button. Reached from Help → Send feedback."
+required:
+  - description: "Toolbar a11y label"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^Send feedback to Google$"
+  - description: "Feedback container layout"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.gms:id/feedback_content$"
+  - description: "Onboarding-step rows"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.gms:id/step_view$"
+  - description: "'Get Started' CTA"
+    selector:
+      androidAccessibility:
+        textRegex: "^Get Started$"
+  - description: "Close-feedback action"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^Close Feedback$"
+forbidden:
+  - description: "Help app bar (would mean we're back on Help, not feedback)"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.gms:id/gh_help_app_bar$"

@@ -1,0 +1,28 @@
+id: "calendar/android/time_picker_text_mode"
+description: "Time picker in keyboard / text-entry mode. Toggled from the radial dial via the keyboard icon. Distinct from event_time_picker (which has the radial clock face)."
+required:
+  - description: "Hour text field"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^android:id/input_hour$"
+  - description: "Minute text field"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^android:id/input_minute$"
+  - description: "Hour/minute separator"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^android:id/input_separator$"
+  - description: "AM/PM spinner"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^android:id/am_pm_spinner$"
+  - description: "OK button"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^android:id/button1$"
+forbidden:
+  - description: "Radial picker would mean we're in clock-face mode"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^android:id/radial_picker$"

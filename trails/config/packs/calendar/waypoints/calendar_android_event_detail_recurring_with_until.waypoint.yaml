@@ -1,0 +1,17 @@
+id: "calendar/android/event_detail_recurring_with_until"
+description: "Event detail for a recurring event that has an end-date set ('Daily until Jul 8'). Variant of event_detail_recurring."
+required:
+  - description: "View-screen coordinator"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/view_screen_coordinator_layout$"
+  - description: "Recurrence row with 'Repeats … until …' summary"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/recurrence$"
+        textRegex: "^Repeats .+; until .+$"
+forbidden:
+  - description: "Quick-create handle"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/drag_handle$"

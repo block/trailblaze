@@ -1,0 +1,32 @@
+id: "calendar/android/event_date_picker"
+description: "Modal date picker dialog (Android stock DatePicker) opened from the event editor's Start/End date row."
+required:
+  - description: "Native datePicker widget"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^android:id/datePicker$"
+  - description: "Day picker month grid"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^android:id/month_view$"
+  - description: "Header date display"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^android:id/date_picker_header_date$"
+  - description: "OK button (positive)"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^android:id/button1$"
+  - description: "Cancel button (negative)"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^android:id/button2$"
+forbidden:
+  - description: "Time picker would mean a different dialog is open"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^android:id/timePicker$"
+  - description: "Year-grid picker would mean we've switched to year mode"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^android:id/date_picker_year_picker$"

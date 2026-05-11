@@ -1,0 +1,12 @@
+id: calendar_android_settingsOverflow
+description: From Settings root, tap the toolbar 'More options' (3-dots) to open the overflow popup.
+shortcut:
+  from: calendar/android/settings_root
+  to: calendar/android/settings_overflow_menu
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      reason: ""
+      nodeSelector:
+        androidAccessibility:
+          contentDescriptionRegex: "^More options$"

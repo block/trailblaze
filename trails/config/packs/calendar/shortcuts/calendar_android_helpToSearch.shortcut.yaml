@@ -1,0 +1,12 @@
+id: calendar_android_helpToSearch
+description: From Help & feedback root, tap 'Search help' to open the search overlay.
+shortcut:
+  from: calendar/android/help_feedback
+  to: calendar/android/help_search
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      reason: ""
+      nodeSelector:
+        androidAccessibility:
+          contentDescriptionRegex: "^Search help$"

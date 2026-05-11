@@ -1,0 +1,20 @@
+id: "calendar/android/quick_create_with_notification"
+description: "Expanded event sheet with at least one notification chip already added — distinct from quick_create_expanded (where 'Add notification' is the placeholder text). The Add-notification row converts to a chip with a remove (X) button."
+required:
+  - description: "Drag handle"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/drag_handle$"
+  - description: "Collapse action — sheet is expanded"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^Collapse event sheet$"
+  - description: "Notification chip text (e.g. '5 minutes before')"
+    selector:
+      androidAccessibility:
+        textRegex: "^(\\d+ minutes? before|\\d+ hours? before|\\d+ days? before|At \\d+:\\d+ [AP]M|On the day at .+|The day before at .+)$"
+  - description: "Save button"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/save$"
+forbidden: []

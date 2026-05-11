@@ -1,0 +1,12 @@
+id: calendar_android_drawerTo3Day
+description: From the open drawer, switch to 3-Days view.
+shortcut:
+  from: calendar/android/drawer_open
+  to: calendar/android/three_day_view
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      reason: ""
+      nodeSelector:
+        androidAccessibility:
+          contentDescriptionRegex: "^3-days view$"

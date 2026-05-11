@@ -1,0 +1,29 @@
+id: "calendar/android/event_detail_recurring"
+description: "Event detail variant for a recurring event — same shell as event_detail with an additional repeat-frequency segment row visible (e.g. 'Daily until …'). Distinct from event_detail (single occurrence)."
+required:
+  - description: "View-screen coordinator"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/view_screen_coordinator_layout$"
+  - description: "Event-detail header bar"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/header_action_bar$"
+  - description: "Color indicator"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/color_indicator$"
+  - description: "Recurrence summary row (cd 'Repeats …', rid recurrence)"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/recurrence$"
+        textRegex: "^Repeats .+$"
+  - description: "Edit action"
+    selector:
+      androidAccessibility:
+        contentDescriptionRegex: "^Edit$"
+forbidden:
+  - description: "Quick-create drag handle (would mean we're in the editor, not detail)"
+    selector:
+      androidAccessibility:
+        resourceIdRegex: "^com\\.google\\.android\\.calendar:id/drag_handle$"
