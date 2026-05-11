@@ -1,0 +1,9 @@
+id: contacts_ios_contactDetailToAvatarOnboarding
+description: Tap the Contact Photo & Poster row to open the avatar onboarding picker.
+shortcut:
+  from: contacts/ios/contact-detail
+  to: contacts/ios/avatar-onboarding
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: Contact Photo & Poster

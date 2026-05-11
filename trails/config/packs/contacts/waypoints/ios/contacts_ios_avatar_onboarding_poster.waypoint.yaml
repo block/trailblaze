@@ -1,0 +1,26 @@
+id: "contacts/ios/avatar-onboarding-poster"
+description: >
+  iOS Contacts app, "Choose a Poster" tab of the avatar onboarding picker — same modal as
+  contacts/ios/avatar-onboarding but with the Poster tab selected. Shows a "Choose a
+  Poster" header instead of "Choose an Avatar". Distinct from contacts/ios/avatar-onboarding
+  (Avatar tab selected). Sibling waypoints because the selected segment changes the
+  effective state (different downstream flows for posters vs avatars).
+required:
+  - description: "Onboarding cancel button"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^OnboardingCancelButton$"
+  - description: "Avatar/Poster segmented control: Poster selected"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Poster$"
+        selected: true
+  - description: "Choose-a-Poster header"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Choose a Poster$"
+forbidden:
+  - description: "Choose-an-Avatar header — would mean Avatar tab is selected"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Choose an Avatar$"

@@ -1,0 +1,9 @@
+id: contacts_ios_listsToAddListModal
+description: Tap Add List on the Lists view to open the inline list-name editor.
+shortcut:
+  from: contacts/ios/lists
+  to: contacts/ios/add-list-modal
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: Add List

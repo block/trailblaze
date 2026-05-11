@@ -1,0 +1,16 @@
+id: "contacts/ios/contact-card-poster-full"
+description: >
+  iOS Contacts app, full-screen contact card poster — the user tapped the contact's
+  Contact Photo & Poster row's "Forward" affordance to expand the avatar to full-screen
+  poster preview. Distinct from contacts/ios/avatar-onboarding (no Choose-an-Avatar
+  picker; this is a preview, not a picker).
+required:
+  - description: "SharedProfileChevronImage row resourceId on detail"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^SharedProfileAvatarView-SharedProfileTitleText-SharedProfileChevronImage$"
+forbidden:
+  - description: "OnboardingMainVStack — would mean we're on avatar-onboarding"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^OnboardingMainVStack$"

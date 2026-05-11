@@ -1,0 +1,38 @@
+id: "contacts/ios/lists"
+description: >
+  iOS Contacts app, Lists view (entered by tapping the "Back" button on the top-level
+  contacts list). Shows the user's contact lists organized by source — "All Contacts"
+  with a count, an "iPhone" section header, and per-list entries ("All iPhone", "Friends",
+  "Work") each with a contact count badge. Top-right Edit button enters list-editing mode.
+  Top-left has Add List affordance. Distinct from contacts/ios/lists-edit-mode (Done
+  instead of Edit) and from contacts/ios/list (the Lists view shows lists, not contacts).
+required:
+  - description: "Lists header title"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Lists$"
+  - description: "Edit button (toggles into list-editing mode)"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Edit$"
+  - description: "Add List button"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Add List$"
+  - description: "All Contacts entry — always shown on the Lists view"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^All Contacts: .*"
+forbidden:
+  - description: "Done button — would mean we're in list-editing mode"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Done$"
+  - description: "List Name input — would mean Add List is open"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^List Name$"
+  - description: "InlineActionsHStack — only when a contact is selected (detail showing)"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^InlineActionsHStack$"

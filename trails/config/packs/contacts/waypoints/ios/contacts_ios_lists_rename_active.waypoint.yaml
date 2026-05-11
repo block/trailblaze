@@ -1,0 +1,26 @@
+id: "contacts/ios/lists-rename-active"
+description: >
+  iOS Contacts app, Lists Edit mode with a single list row in active rename state —
+  entered by tapping a list (e.g. Friends) while in Lists Edit mode, OR by tapping
+  Rename on the list-context-menu. The selected row gains a "Name: <list-name>" label
+  carrying the keyboard-edit cursor, while the rest of the Lists Edit shape (Done +
+  Add List + other list rows) remains. Distinct from contacts/ios/lists-edit-mode (no
+  active rename row).
+required:
+  - description: "Done button (still in edit mode)"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Done$"
+  - description: "Lists header"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Lists$"
+  - description: "Active rename row labeled 'Name: <something>'"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Name: .+$"
+forbidden:
+  - description: "Edit nav button — would mean we're not in edit mode anymore"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Edit$"

@@ -1,0 +1,25 @@
+id: "contacts/ios/edit-contact-with-twitter-row"
+description: >
+  iOS Contacts app, edit-contact form after the user has tapped "add social profile",
+  which inserts a Twitter row inline (Apple's default first social profile choice). The
+  row label is "Twitter" with a "Remove Twitter" affordance and a "Social profile"
+  placeholder for the username. Distinct from contacts/ios/edit-contact (no Twitter row
+  / no Remove Twitter affordance — pure pre-add state).
+required:
+  - description: "Edit form's close button"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^close$"
+  - description: "Twitter row label"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Twitter$"
+  - description: "Remove Twitter affordance"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Remove Twitter$"
+forbidden:
+  - description: "New Contact title — would mean we're on the new-contact draft"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^New Contact$"

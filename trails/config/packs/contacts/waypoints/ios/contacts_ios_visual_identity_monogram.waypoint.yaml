@@ -1,0 +1,37 @@
+id: "contacts/ios/visual-identity-monogram"
+description: >
+  iOS Contacts app, monogram-creation editor (entered via avatar-onboarding > Monogram).
+  Shows the Avatar/Poster segmented control, a VisualIdentityChooseButton (Choose), a
+  Suggestions sticky header with Sans-serif/Serif/Condensed/Rounded font variant rows,
+  and a Text/Font/Color tab segmented control under id=VisualIdentityEditorContainerVStack.
+  Distinct from contacts/ios/visual-identity-emoji (Color/Emoji tabs only) and
+  contacts/ios/avatar-onboarding (no Choose button).
+required:
+  - description: "Visual identity Cancel button"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^VisualIdentityCancelButton$"
+  - description: "Visual identity Choose button"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^VisualIdentityChooseButton$"
+  - description: "Text editor tab"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Text$"
+        resourceIdRegex: "^VisualIdentityEditorContainerVStack$"
+  - description: "Font editor tab — only present on the monogram (text-based) editor"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Font$"
+        resourceIdRegex: "^VisualIdentityEditorContainerVStack$"
+forbidden:
+  - description: "Emoji editor tab — would mean we're on the emoji editor variant"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Emoji$"
+        resourceIdRegex: "^VisualIdentityEditorContainerVStack$"
+  - description: "Onboarding header — would mean we're on the avatar-onboarding picker"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Choose an Avatar$"

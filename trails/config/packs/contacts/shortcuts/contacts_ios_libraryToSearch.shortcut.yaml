@@ -1,0 +1,9 @@
+id: contacts_ios_libraryToSearch
+description: Tap the Search affordance in the photo library toolbar to focus the search field.
+shortcut:
+  from: contacts/ios/photo-library
+  to: contacts/ios/photo-library-search-active
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: Search

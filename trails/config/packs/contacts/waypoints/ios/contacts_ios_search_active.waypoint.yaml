@@ -1,0 +1,32 @@
+id: "contacts/ios/search-active"
+description: >
+  iOS Contacts app, search-bar focused with the on-screen keyboard up but no query typed
+  yet. The search field carries a sibling "close" button (cancels the search), an
+  "Activate to dismiss" overlay covers the contacts list (tap-to-dismiss the keyboard),
+  and the keyboard letters Q/W/E/.../shift/return are present offscreen. Distinct from
+  contacts/ios/search-results (no "Search results" / "top name matches" headers — search
+  hasn't been initiated yet).
+required:
+  - description: "Activate-to-dismiss overlay (keyboard scrim)"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Activate to dismiss$"
+  - description: "Search-field close (X) button — cancels the active search"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^close$"
+        childOf:
+          iosMaestro:
+            resourceIdRegex: "^Toolbar$"
+forbidden:
+  - description: "Search results container — would mean a query has been entered"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Search results$"
+  - description: "Add (+) toolbar button — only present when search is NOT active"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Add$"
+        childOf:
+          iosMaestro:
+            resourceIdRegex: "^Toolbar$"

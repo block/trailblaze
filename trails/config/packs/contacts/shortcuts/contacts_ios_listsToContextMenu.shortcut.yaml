@@ -1,0 +1,9 @@
+id: contacts_ios_listsToContextMenu
+description: Long-press a user-defined list on the Lists view to open the list context menu (Email All / Message All / Export / Rename / Delete).
+shortcut:
+  from: contacts/ios/lists
+  to: contacts/ios/list-context-menu
+parameters: []
+tools:
+  - longPressOnElementWithText:
+      text: Friends

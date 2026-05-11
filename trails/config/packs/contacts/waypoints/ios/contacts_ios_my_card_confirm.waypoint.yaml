@@ -1,0 +1,24 @@
+id: "contacts/ios/my-card-confirm"
+description: >
+  iOS Contacts app, "Make This My Card" confirmation popover — shown after tapping
+  "Make This My Card" on the contact context menu. A popover with the warning
+  "Are you sure you want to set "<Contact Name>" as My Card?" and two buttons:
+  "Make This My Card" confirm and "Cancel".
+required:
+  - description: "Set-as-My-Card warning text"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Are you sure you want to set .+ as My Card\\?$"
+  - description: "Make-This-My-Card confirm button"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Make This My Card$"
+  - description: "Cancel button"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Cancel$"
+forbidden:
+  - description: "Delete-card warning — sibling popover variant"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Are you sure you want to delete the card.*"

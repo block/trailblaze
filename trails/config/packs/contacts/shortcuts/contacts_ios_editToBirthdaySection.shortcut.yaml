@@ -1,0 +1,9 @@
+id: contacts_ios_editToBirthdaySection
+description: Continue scrolling the edit form to expose the birthday and dates section.
+shortcut:
+  from: contacts/ios/edit-contact-address-section
+  to: contacts/ios/edit-contact-birthday-section
+parameters: []
+tools:
+  - swipe:
+      direction: UP

@@ -1,0 +1,25 @@
+id: "contacts/ios/list-context-menu-empty"
+description: >
+  iOS Contacts app, list context menu opened on an empty user-defined list (zero contacts). Sibling of contacts/ios/list-context-menu but missing the bulk-action affordances (Email All / Message All / Export) because there are no contacts to operate on. Only Preview + Rename + Delete are available.
+required:
+  - description: "Preview block"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Preview$"
+  - description: "Rename row"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Rename$"
+  - description: "Delete row"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Delete$"
+forbidden:
+  - description: "Email All — only on non-empty list context menu"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Email All$"
+  - description: "Message All — only on non-empty list context menu"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Message All$"

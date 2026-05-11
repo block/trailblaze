@@ -1,0 +1,31 @@
+id: "contacts/ios/haptics-picker"
+description: >
+  iOS Contacts app, Haptics picker — sub-screen of the Ringtone or Text Tone picker
+  (entered by tapping "Haptics"). A "Haptics" titled list of haptic patterns (Heartbeat,
+  Quick, Rapid, S.O.S., Staccato, Symphony) plus a "None" option.
+required:
+  - description: "Haptics header"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Haptics$"
+  - description: "Heartbeat haptic option (always-present, distinguishes from ringtone list)"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Heartbeat$"
+  - description: "S.O.S. haptic option"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^S\\.O\\.S\\.$"
+forbidden:
+  - description: "Ringtone header — would mean we're on the Ringtone picker, not Haptics"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Ringtone$"
+  - description: "Text Tone header"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Text Tone$"
+  - description: "Default reset row — only on the parent Ringtone/TextTone picker"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Default$"

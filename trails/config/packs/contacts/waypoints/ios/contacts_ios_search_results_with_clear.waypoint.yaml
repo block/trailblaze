@@ -1,0 +1,20 @@
+id: "contacts/ios/search-results-with-clear"
+description: >
+  iOS Contacts app, search results visible with a "Clear text" affordance present in the
+  active search field (signaling that the query can be cleared). Sibling to
+  contacts/ios/search-results — same panel content but also requiring the Clear-text
+  control to confirm we're in the writable post-input state.
+required:
+  - description: "Search results panel"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Search results$"
+  - description: "Clear-text affordance"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Clear text$"
+forbidden:
+  - description: "Dictate — only when query is empty"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Dictate$"

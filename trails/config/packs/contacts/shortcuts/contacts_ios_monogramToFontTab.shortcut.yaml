@@ -1,0 +1,9 @@
+id: contacts_ios_monogramToFontTab
+description: Tap the Font tab on the monogram editor to switch to font-variant selection.
+shortcut:
+  from: contacts/ios/visual-identity-monogram
+  to: contacts/ios/visual-identity-monogram-font-tab
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: Font

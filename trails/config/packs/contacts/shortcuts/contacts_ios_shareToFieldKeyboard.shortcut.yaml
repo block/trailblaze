@@ -1,0 +1,9 @@
+id: contacts_ios_shareToFieldKeyboard
+description: Tap a field on the share-contact field selector to focus its inline edit.
+shortcut:
+  from: contacts/ios/share-contact-fields
+  to: contacts/ios/share-contact-fields-with-keyboard
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: "^First name "

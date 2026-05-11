@@ -1,0 +1,24 @@
+id: "contacts/ios/search-no-results"
+description: >
+  iOS Contacts app, search active with a query that produces no matches — the Search
+  results panel is absent (or shows an empty state) but the active "Search: <query>"
+  field with Clear text is present. Sibling waypoint to contacts/ios/search-results
+  (which carries a populated results panel).
+required:
+  - description: "Active search field with query"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Search: .+$"
+  - description: "Clear-text affordance"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Clear text$"
+forbidden:
+  - description: "Search results panel — would mean there are matches"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Search results$"
+  - description: "top name matches sub-header"
+    selector:
+      iosMaestro:
+        textRegex: "^top name matches$"

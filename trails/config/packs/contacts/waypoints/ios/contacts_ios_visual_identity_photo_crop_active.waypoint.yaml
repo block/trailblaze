@@ -1,0 +1,26 @@
+id: "contacts/ios/visual-identity-photo-crop-active"
+description: >
+  iOS Contacts app, photo-avatar editor with the Crop tab actively engaged — pinch-pan
+  gestures resize / position the photo. Sibling to contacts/ios/visual-identity-photo
+  (which is the picker landing state, before crop interaction).
+required:
+  - description: "Crop editor tab"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Crop$"
+        resourceIdRegex: "^VisualIdentityEditorContainerVStack$"
+  - description: "Visual identity Choose button"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^VisualIdentityChooseButton$"
+  - description: "Avatar option suggestion (the picked photo)"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Avatar Option$"
+        resourceIdRegex: "^SuggestionListItemButton$"
+forbidden:
+  - description: "Text tab — would mean we're on the monogram editor"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Text$"
+        resourceIdRegex: "^VisualIdentityEditorContainerVStack$"

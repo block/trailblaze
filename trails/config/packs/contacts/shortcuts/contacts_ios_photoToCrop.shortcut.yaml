@@ -1,0 +1,9 @@
+id: contacts_ios_photoToCrop
+description: Engage the Crop tab on the photo editor for pinch-pan crop interaction.
+shortcut:
+  from: contacts/ios/visual-identity-photo
+  to: contacts/ios/visual-identity-photo-crop-active
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: Crop

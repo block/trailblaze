@@ -1,0 +1,26 @@
+id: "contacts/ios/visual-identity-monogram-color-tab"
+description: >
+  iOS Contacts app, monogram editor with the Color tab active — shows a color palette
+  selector (foreground/background color pickers for the monogram). Sibling waypoint to
+  contacts/ios/visual-identity-monogram-text-tab and -font-tab.
+required:
+  - description: "Visual identity Choose button"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^VisualIdentityChooseButton$"
+  - description: "Color editor tab"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Color$"
+        resourceIdRegex: "^VisualIdentityEditorContainerVStack$"
+  - description: "Text editor tab still in segmented control"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Text$"
+        resourceIdRegex: "^VisualIdentityEditorContainerVStack$"
+forbidden:
+  - description: "Emoji tab — sibling editor variant"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Emoji$"
+        resourceIdRegex: "^VisualIdentityEditorContainerVStack$"

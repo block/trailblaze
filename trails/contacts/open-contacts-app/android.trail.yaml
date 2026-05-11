@@ -1,0 +1,14 @@
+# Demo trail: launch Google Contacts and verify the main screen loads.
+# Authored to validate the runtime-YAML-config path: the `contacts` target is
+# declared in trails/config/packs/contacts/pack.yaml as a workspace
+# pack — the framework JAR ships no `contacts` target, so this trail can only
+# resolve via the workspace anchor.
+- config:
+    id: "contacts/open-contacts-app"
+    driver: ANDROID_ONDEVICE_INSTRUMENTATION
+    description: "Open the Contacts app and verify the main screen is visible."
+
+- prompts:
+    - step: Launch the Google Contacts app (com.google.android.contacts) with a clean state.
+    - step: If a sign-in / account-setup interstitial appears (e.g. a "Sign in" or "Skip" button), dismiss it by tapping "Skip" so the main contacts screen loads. If the main contacts screen is already visible, do nothing.
+    - step: Verify the main contacts screen is visible. The screen should show either an empty state ("No contacts" / "Add a contact") or a list of contacts. Do not tap anything else.

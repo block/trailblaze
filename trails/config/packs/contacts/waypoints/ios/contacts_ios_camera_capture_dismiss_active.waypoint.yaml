@@ -1,0 +1,15 @@
+id: "contacts/ios/camera-capture-dismiss-active"
+description: >
+  iOS Contacts app, in-app camera mid-dismiss — the user tapped the Dismiss button and
+  the camera is fading out. Brief intermediate state where Take Picture is no longer
+  responsive.
+required:
+  - description: "Dismiss button (still in DOM during fade-out)"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^DismissImagePickerButton$"
+forbidden:
+  - description: "Take Picture — should not be tappable mid-dismiss"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^PhotoCapture$"

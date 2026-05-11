@@ -1,0 +1,28 @@
+id: "contacts/ios/add-favorites-action-picker"
+description: >
+  iOS Contacts app, "Add to Favorites" action picker — shown when the user taps
+  "Add to Favorites" on a contact's detail. A simple list of favorite-action types:
+  Message (id=message), Call (id=phone), Mail (id=envelope). After picking one, a
+  follow-up screen lets the user choose which phone-number / email to use
+  (contacts/ios/favorite-number-picker).
+required:
+  - description: "Message action row (id=message)"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Message$"
+        resourceIdRegex: "^message$"
+  - description: "Call action row (id=phone)"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Call$"
+        resourceIdRegex: "^phone$"
+  - description: "Mail action row (id=envelope)"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Mail$"
+        resourceIdRegex: "^envelope$"
+forbidden:
+  - description: "Edit button — only on the contact detail, not the action picker"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Edit$"

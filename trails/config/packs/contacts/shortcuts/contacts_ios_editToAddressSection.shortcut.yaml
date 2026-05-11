@@ -1,0 +1,9 @@
+id: contacts_ios_editToAddressSection
+description: Scroll the edit form down to expose the address section (Street/City/State/ZIP/Country).
+shortcut:
+  from: contacts/ios/edit-contact
+  to: contacts/ios/edit-contact-address-section
+parameters: []
+tools:
+  - swipe:
+      direction: UP

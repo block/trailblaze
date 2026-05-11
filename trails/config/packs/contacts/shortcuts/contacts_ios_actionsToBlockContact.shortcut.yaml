@@ -1,0 +1,9 @@
+id: contacts_ios_actionsToBlockContact
+description: Tap Block Contact to open the block confirmation popover.
+shortcut:
+  from: contacts/ios/contact-detail-actions
+  to: contacts/ios/block-contact-confirm
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: Block Contact

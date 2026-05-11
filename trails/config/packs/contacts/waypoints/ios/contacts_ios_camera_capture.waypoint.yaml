@@ -1,0 +1,29 @@
+id: "contacts/ios/camera-capture"
+description: >
+  iOS Contacts app, in-app camera capture screen (entered via avatar-onboarding > Photos >
+  Camera). Live camera preview with the standard iOS UIImagePicker camera affordances:
+  Take Picture (PhotoCapture), Flash (FlashButton), Camera Chooser flip (FlipButton),
+  PHOTO mode segmented control, and a Dismiss (DismissImagePickerButton) cancel button.
+  Distinct from contacts/ios/photos-picker (no live preview / Take Picture).
+required:
+  - description: "Take Picture (shutter)"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^PhotoCapture$"
+  - description: "Flash button"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^FlashButton$"
+  - description: "Front/back camera flip"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^FlipButton$"
+  - description: "Dismiss the image picker"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^DismissImagePickerButton$"
+forbidden:
+  - description: "Photo grid — would mean we're in the library picker"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^PXGGridLayout-Group$"

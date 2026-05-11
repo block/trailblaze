@@ -1,0 +1,28 @@
+id: "contacts/ios/edit-contact-birthday-section"
+description: >
+  iOS Contacts app, edit-contact form scrolled to expose the birthday/dates section —
+  birthday row + add date / add related name / add social profile / add instant message
+  / Notes affordances visible. Different available actions than the un-scrolled state
+  (these "add X" buttons are now tappable).
+required:
+  - description: "close button"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^close$"
+  - description: "birthday row"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^birthday$"
+  - description: "add date row"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^add date$"
+  - description: "add related name row"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^add related name$"
+forbidden:
+  - description: "New Contact title — would mean we're on the new-contact draft"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^New Contact$"

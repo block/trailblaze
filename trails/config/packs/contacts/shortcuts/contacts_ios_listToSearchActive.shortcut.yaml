@@ -1,0 +1,9 @@
+id: contacts_ios_listToSearchActive
+description: From the contacts list, tap the Search field to focus it (keyboard up).
+shortcut:
+  from: contacts/ios/list
+  to: contacts/ios/search-active
+parameters: []
+tools:
+  - tapOnElementWithAccessibilityText:
+      accessibilityText: Search

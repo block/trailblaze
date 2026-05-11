@@ -1,0 +1,9 @@
+id: contacts_ios_avatarOnboardingToFocusedEmoji
+description: Hover-focus on the New Emoji affordance — keyboard-focus highlight, no transition.
+shortcut:
+  from: contacts/ios/avatar-onboarding
+  to: contacts/ios/avatar-onboarding-emoji-focused
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: New Emoji

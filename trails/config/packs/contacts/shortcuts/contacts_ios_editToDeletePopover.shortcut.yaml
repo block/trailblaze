@@ -1,0 +1,9 @@
+id: contacts_ios_editToDeletePopover
+description: Tap the Delete Contact footer button at the bottom of the edit form to open the delete popover.
+shortcut:
+  from: contacts/ios/edit-contact
+  to: contacts/ios/delete-from-edit-popover
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: Delete Contact

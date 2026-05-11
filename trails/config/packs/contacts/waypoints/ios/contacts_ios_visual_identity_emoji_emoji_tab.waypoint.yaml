@@ -1,0 +1,25 @@
+id: "contacts/ios/visual-identity-emoji-emoji-tab"
+description: >
+  iOS Contacts app, emoji editor with the Emoji tab active — exposes the emoji-pick
+  affordance (search field + categorized grid). Sibling to
+  contacts/ios/visual-identity-emoji-color-tab.
+required:
+  - description: "Emoji editor tab"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Emoji$"
+        resourceIdRegex: "^VisualIdentityEditorContainerVStack$"
+  - description: "Visual identity Choose button"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^VisualIdentityChooseButton$"
+  - description: "Emoji glyph suggestion row"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^SuggestionListItemButton$"
+forbidden:
+  - description: "Text tab — would mean we're on the monogram editor"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Text$"
+        resourceIdRegex: "^VisualIdentityEditorContainerVStack$"

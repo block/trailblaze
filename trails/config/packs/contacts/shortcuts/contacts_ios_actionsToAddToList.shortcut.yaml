@@ -1,0 +1,9 @@
+id: contacts_ios_actionsToAddToList
+description: Tap Add to List to pick a user-defined list to add the contact to.
+shortcut:
+  from: contacts/ios/contact-detail-actions
+  to: contacts/ios/add-to-list-picker
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: Add to List

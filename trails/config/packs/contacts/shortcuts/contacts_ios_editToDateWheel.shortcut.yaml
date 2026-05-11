@@ -1,0 +1,9 @@
+id: contacts_ios_editToDateWheel
+description: Tap the birthday row on the edit form to bring up the date-wheel picker inline.
+shortcut:
+  from: contacts/ios/edit-contact
+  to: contacts/ios/edit-contact-date-wheel
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: birthday

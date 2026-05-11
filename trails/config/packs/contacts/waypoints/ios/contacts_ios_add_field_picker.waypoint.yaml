@@ -1,0 +1,34 @@
+id: "contacts/ios/add-field-picker"
+description: >
+  iOS Contacts app, "Add Field" picker (entered via the Edit form > "add field" link at
+  the bottom of the scroll). A modal sheet with a Cancel button, an "Add Field" header,
+  and a list of field-type rows the user can add to a contact (Prefix / Phonetic first
+  name / Pronunciation first name / Middle name / Phonetic middle name / Phonetic last
+  name / Pronunciation last name / Maiden name / Suffix / Nickname / Department /
+  Phonetic company name).
+required:
+  - description: "Add Field header"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Add Field$"
+  - description: "Cancel button"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Cancel$"
+  - description: "Prefix row (always present in the field type list)"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Prefix$"
+  - description: "Maiden name row"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Maiden name$"
+forbidden:
+  - description: "Done button — would mean we're in the Edit form, not the field picker"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Done$"
+  - description: "Add Photo — only on the contact form, not the field picker"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Add Photo$"

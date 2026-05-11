@@ -1,0 +1,29 @@
+id: "contacts/ios/my-card-detail"
+description: >
+  iOS Contacts app, "My Card" detail view — the contact-detail-like view for the
+  user's own card (set via the long-press context menu's "Make This My Card"). Has a
+  similar layout to contacts/ios/contact-detail but is reached via the My Card entry on
+  the Lists view rather than via the contacts list.
+required:
+  - description: "Inline action bar HStack"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^InlineActionsHStack$"
+  - description: "Contact card details rows"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^ContactCardDetailsView$"
+  - description: "Edit nav button"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Edit$"
+  - description: "BackButton to Lists (My Card is reached from Lists)"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Lists$"
+        resourceIdRegex: "^BackButton$"
+forbidden:
+  - description: "Add (+) — would mean we're on a contacts list view"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Add$"

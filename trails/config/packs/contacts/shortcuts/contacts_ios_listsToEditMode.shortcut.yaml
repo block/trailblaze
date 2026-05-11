@@ -1,0 +1,9 @@
+id: contacts_ios_listsToEditMode
+description: Tap Edit on the Lists view to enter list-editing mode.
+shortcut:
+  from: contacts/ios/lists
+  to: contacts/ios/lists-edit-mode
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: Edit

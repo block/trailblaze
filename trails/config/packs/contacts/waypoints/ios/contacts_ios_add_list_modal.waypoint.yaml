@@ -1,0 +1,20 @@
+id: "contacts/ios/add-list-modal"
+description: >
+  iOS Contacts app, "Add List" inline editor — shown after tapping Add List on the Lists
+  view. The Lists view stays visible above; a new "List Name" input field appears at the
+  bottom with the keyboard up. Until the user names the list and confirms, the new list
+  is uncommitted.
+required:
+  - description: "List Name input field (specific to the inline add-list editor)"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^List Name$"
+  - description: "Lists header still present (the editor overlays the Lists view)"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Lists$"
+forbidden:
+  - description: "Sheet Grabber — would mean we're on a sheet (e.g. Add Contacts to <List>)"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Sheet Grabber: Expanded$"

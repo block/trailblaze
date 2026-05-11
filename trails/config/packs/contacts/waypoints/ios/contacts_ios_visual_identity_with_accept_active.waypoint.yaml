@@ -1,0 +1,21 @@
+id: "contacts/ios/visual-identity-composition-with-customize"
+description: >
+  iOS Contacts app, post-Choose visual identity composition picker with the Customize
+  link visible — clicking Customize re-opens the editor for the chosen suggestion.
+  Sibling to contacts/ios/visual-identity-composition (when Customize isn't yet
+  scrolled into view).
+required:
+  - description: "Visual identity Done button"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^VisualIdentityDoneButton$"
+  - description: "Customize link"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Customize$"
+        resourceIdRegex: "^VisualIdentityEditorContainerVStack$"
+forbidden:
+  - description: "Choose button — only on the editor, not composition"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^VisualIdentityChooseButton$"

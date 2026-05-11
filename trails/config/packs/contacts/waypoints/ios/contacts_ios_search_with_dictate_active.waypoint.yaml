@@ -1,0 +1,20 @@
+id: "contacts/ios/search-dictate-active"
+description: >
+  iOS Contacts app, search field active with the Dictate (microphone) affordance focused
+  — a microphone listening UI is overlaid. Sibling to contacts/ios/search-active
+  (keyboard up but not in dictation mode).
+required:
+  - description: "Active search field"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Search$"
+  - description: "Dictate affordance focused"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Dictate$"
+        focused: true
+forbidden:
+  - description: "Search results panel"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Search results$"

@@ -1,0 +1,9 @@
+id: contacts_ios_editAddSocial
+description: Tap 'add social profile' on the edit form to insert a default Twitter row inline.
+shortcut:
+  from: contacts/ios/edit-contact-birthday-section
+  to: contacts/ios/edit-contact-with-twitter-row
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: add social profile

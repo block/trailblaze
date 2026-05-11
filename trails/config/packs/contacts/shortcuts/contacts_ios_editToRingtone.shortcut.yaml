@@ -1,0 +1,9 @@
+id: contacts_ios_editToRingtone
+description: Tap the Ringtone row on the edit form to choose a per-contact ringtone.
+shortcut:
+  from: contacts/ios/edit-contact
+  to: contacts/ios/ringtone-picker
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: "Ringtone: Default"

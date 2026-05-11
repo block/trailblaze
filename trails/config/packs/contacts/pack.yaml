@@ -11,12 +11,117 @@ id: contacts
 dependencies:
   - trailblaze
 target:
-  display_name: Google Contacts
+  display_name: Contacts
+  tools:
+    - tools/contacts_android_launchApp.yaml
   platforms:
     android:
       app_ids:
         - com.google.android.contacts
         - com.android.contacts
-    ios: {}
+    ios:
+      app_ids:
+        - com.apple.MobileAddressBook
     web: {}
     compose: {}
+waypoints:
+  - waypoints/ios/contacts_ios_add_contacts_to_list_sheet.waypoint.yaml
+  - waypoints/ios/contacts_ios_add_contacts_to_list_with_selection.waypoint.yaml
+  - waypoints/ios/contacts_ios_add_favorites_action_picker.waypoint.yaml
+  - waypoints/ios/contacts_ios_add_field_picker.waypoint.yaml
+  - waypoints/ios/contacts_ios_add_field_picker_scrolled.waypoint.yaml
+  - waypoints/ios/contacts_ios_add_list_keyboard.waypoint.yaml
+  - waypoints/ios/contacts_ios_add_list_modal.waypoint.yaml
+  - waypoints/ios/contacts_ios_add_to_list_picker.waypoint.yaml
+  - waypoints/ios/contacts_ios_avatar_onboarding.waypoint.yaml
+  - waypoints/ios/contacts_ios_avatar_onboarding_avatar_tab_emoji_focused.waypoint.yaml
+  - waypoints/ios/contacts_ios_avatar_onboarding_photos_loading.waypoint.yaml
+  - waypoints/ios/contacts_ios_avatar_onboarding_poster.waypoint.yaml
+  - waypoints/ios/contacts_ios_avatar_onboarding_with_existing.waypoint.yaml
+  - waypoints/ios/contacts_ios_block_contact_confirm.waypoint.yaml
+  - waypoints/ios/contacts_ios_camera_capture.waypoint.yaml
+  - waypoints/ios/contacts_ios_camera_capture_dismiss_active.waypoint.yaml
+  - waypoints/ios/contacts_ios_camera_capture_front_facing.waypoint.yaml
+  - waypoints/ios/contacts_ios_camera_capture_with_flash_on.waypoint.yaml
+  - waypoints/ios/contacts_ios_contact_card_poster_full.waypoint.yaml
+  - waypoints/ios/contacts_ios_contact_context_menu.waypoint.yaml
+  - waypoints/ios/contacts_ios_contact_detail.waypoint.yaml
+  - waypoints/ios/contacts_ios_contact_detail_actions.waypoint.yaml
+  - waypoints/ios/contacts_ios_contact_detail_no_email.waypoint.yaml
+  - waypoints/ios/contacts_ios_contact_detail_no_phone.waypoint.yaml
+  - waypoints/ios/contacts_ios_delete_contact_confirm.waypoint.yaml
+  - waypoints/ios/contacts_ios_delete_contact_from_edit_popover.waypoint.yaml
+  - waypoints/ios/contacts_ios_delete_list_confirm.waypoint.yaml
+  - waypoints/ios/contacts_ios_discard_changes_confirm.waypoint.yaml
+  - waypoints/ios/contacts_ios_edit_contact.waypoint.yaml
+  - waypoints/ios/contacts_ios_edit_contact_address_section.waypoint.yaml
+  - waypoints/ios/contacts_ios_edit_contact_birthday_section.waypoint.yaml
+  - waypoints/ios/contacts_ios_edit_contact_date_wheel.waypoint.yaml
+  - waypoints/ios/contacts_ios_edit_contact_done_enabled.waypoint.yaml
+  - waypoints/ios/contacts_ios_edit_contact_keyboard.waypoint.yaml
+  - waypoints/ios/contacts_ios_edit_contact_linked_section.waypoint.yaml
+  - waypoints/ios/contacts_ios_edit_contact_with_anniversary.waypoint.yaml
+  - waypoints/ios/contacts_ios_edit_contact_with_remove_button.waypoint.yaml
+  - waypoints/ios/contacts_ios_edit_contact_with_twitter.waypoint.yaml
+  - waypoints/ios/contacts_ios_emergency_phone_picker.waypoint.yaml
+  - waypoints/ios/contacts_ios_emergency_phone_picker_with_main.waypoint.yaml
+  - waypoints/ios/contacts_ios_emergency_phone_picker_with_main_only.waypoint.yaml
+  - waypoints/ios/contacts_ios_favorite_number_picker.waypoint.yaml
+  - waypoints/ios/contacts_ios_favorite_number_picker_email_only.waypoint.yaml
+  - waypoints/ios/contacts_ios_haptics_picker.waypoint.yaml
+  - waypoints/ios/contacts_ios_haptics_picker_none_selected.waypoint.yaml
+  - waypoints/ios/contacts_ios_haptics_picker_with_selection.waypoint.yaml
+  - waypoints/ios/contacts_ios_link_contacts_picker.waypoint.yaml
+  - waypoints/ios/contacts_ios_list.waypoint.yaml
+  - waypoints/ios/contacts_ios_list_context_menu.waypoint.yaml
+  - waypoints/ios/contacts_ios_list_context_menu_empty.waypoint.yaml
+  - waypoints/ios/contacts_ios_lists.waypoint.yaml
+  - waypoints/ios/contacts_ios_lists_edit_mode.waypoint.yaml
+  - waypoints/ios/contacts_ios_lists_rename_active.waypoint.yaml
+  - waypoints/ios/contacts_ios_lists_rename_keyboard.waypoint.yaml
+  - waypoints/ios/contacts_ios_lists_with_keyboard_dismiss.waypoint.yaml
+  - waypoints/ios/contacts_ios_lists_with_my_card_separate.waypoint.yaml
+  - waypoints/ios/contacts_ios_lists_with_my_list_added.waypoint.yaml
+  - waypoints/ios/contacts_ios_lists_with_remove_button.waypoint.yaml
+  - waypoints/ios/contacts_ios_my_card_confirm.waypoint.yaml
+  - waypoints/ios/contacts_ios_my_card_detail.waypoint.yaml
+  - waypoints/ios/contacts_ios_new_contact.waypoint.yaml
+  - waypoints/ios/contacts_ios_new_contact_address_section.waypoint.yaml
+  - waypoints/ios/contacts_ios_new_contact_bottom_section.waypoint.yaml
+  - waypoints/ios/contacts_ios_new_contact_done_enabled.waypoint.yaml
+  - waypoints/ios/contacts_ios_new_contact_keyboard_active.waypoint.yaml
+  - waypoints/ios/contacts_ios_photo_library.waypoint.yaml
+  - waypoints/ios/contacts_ios_photo_library_with_photo_selected.waypoint.yaml
+  - waypoints/ios/contacts_ios_photo_library_with_search_active.waypoint.yaml
+  - waypoints/ios/contacts_ios_photos_picker.waypoint.yaml
+  - waypoints/ios/contacts_ios_pronouns_modal.waypoint.yaml
+  - waypoints/ios/contacts_ios_pronouns_modal_with_input.waypoint.yaml
+  - waypoints/ios/contacts_ios_ringtone_picker.waypoint.yaml
+  - waypoints/ios/contacts_ios_ringtone_picker_with_selection.waypoint.yaml
+  - waypoints/ios/contacts_ios_search_active.waypoint.yaml
+  - waypoints/ios/contacts_ios_search_active_with_clear_only.waypoint.yaml
+  - waypoints/ios/contacts_ios_search_no_results.waypoint.yaml
+  - waypoints/ios/contacts_ios_search_results.waypoint.yaml
+  - waypoints/ios/contacts_ios_search_results_with_clear.waypoint.yaml
+  - waypoints/ios/contacts_ios_search_with_dictate_active.waypoint.yaml
+  - waypoints/ios/contacts_ios_share_contact_all_selected.waypoint.yaml
+  - waypoints/ios/contacts_ios_share_contact_fields.waypoint.yaml
+  - waypoints/ios/contacts_ios_share_contact_with_keyboard.waypoint.yaml
+  - waypoints/ios/contacts_ios_sub_list.waypoint.yaml
+  - waypoints/ios/contacts_ios_text_tone_picker.waypoint.yaml
+  - waypoints/ios/contacts_ios_text_tone_picker_with_selection.waypoint.yaml
+  - waypoints/ios/contacts_ios_visual_identity_composition.waypoint.yaml
+  - waypoints/ios/contacts_ios_visual_identity_composition_memoji_section.waypoint.yaml
+  - waypoints/ios/contacts_ios_visual_identity_composition_monogram_section.waypoint.yaml
+  - waypoints/ios/contacts_ios_visual_identity_composition_photos_section.waypoint.yaml
+  - waypoints/ios/contacts_ios_visual_identity_emoji.waypoint.yaml
+  - waypoints/ios/contacts_ios_visual_identity_emoji_color_tab.waypoint.yaml
+  - waypoints/ios/contacts_ios_visual_identity_emoji_emoji_tab.waypoint.yaml
+  - waypoints/ios/contacts_ios_visual_identity_monogram.waypoint.yaml
+  - waypoints/ios/contacts_ios_visual_identity_monogram_color_tab.waypoint.yaml
+  - waypoints/ios/contacts_ios_visual_identity_monogram_font_tab.waypoint.yaml
+  - waypoints/ios/contacts_ios_visual_identity_monogram_text_tab.waypoint.yaml
+  - waypoints/ios/contacts_ios_visual_identity_photo.waypoint.yaml
+  - waypoints/ios/contacts_ios_visual_identity_photo_crop_active.waypoint.yaml
+  - waypoints/ios/contacts_ios_visual_identity_with_accept_active.waypoint.yaml
+  - waypoints/ios/contacts_ios_visual_identity_with_avatar_option.waypoint.yaml

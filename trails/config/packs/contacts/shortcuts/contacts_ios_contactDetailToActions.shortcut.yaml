@@ -1,0 +1,9 @@
+id: contacts_ios_contactDetailToActions
+description: Scroll the contact detail down to bring the Send Message / Share Contact / Add to Favorites / Add to List / Add to Emergency Contacts / Block Contact action stack into view.
+shortcut:
+  from: contacts/ios/contact-detail
+  to: contacts/ios/contact-detail-actions
+parameters: []
+tools:
+  - swipe:
+      direction: UP

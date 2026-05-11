@@ -1,0 +1,15 @@
+- config:
+    id: contacts/open-contacts-app
+    description: Open the Contacts app and verify the main screen is visible.
+    platform: android
+    driver: ANDROID_ONDEVICE_INSTRUMENTATION
+- prompts:
+  - step: Launch the Google Contacts app (com.google.android.contacts) with a clean state.
+    recording:
+      autoSatisfied: true
+  - step: If a sign-in / account-setup interstitial appears (e.g. a "Sign in" or "Skip" button), dismiss it by tapping "Skip" so the main contacts screen loads. If the main contacts screen is already visible, do nothing.
+    recording:
+      autoSatisfied: true
+  - step: Verify the main contacts screen is visible. The screen should show either an empty state ("No contacts" / "Add a contact") or a list of contacts. Do not tap anything else.
+    recording:
+      autoSatisfied: true

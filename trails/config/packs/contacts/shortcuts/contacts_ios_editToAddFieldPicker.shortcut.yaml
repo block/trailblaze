@@ -1,0 +1,9 @@
+id: contacts_ios_editToAddFieldPicker
+description: Tap 'add field' at the bottom of the edit form to choose an additional field to add.
+shortcut:
+  from: contacts/ios/edit-contact
+  to: contacts/ios/add-field-picker
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: add field

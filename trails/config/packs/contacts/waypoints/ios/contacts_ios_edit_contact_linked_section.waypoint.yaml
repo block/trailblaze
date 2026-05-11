@@ -1,0 +1,28 @@
+id: "contacts/ios/edit-contact-linked-section"
+description: >
+  iOS Contacts app, edit-contact form scrolled to the bottom — Linked Contacts section
+  with the "link contacts…" affordance, "add to list", and the bottom red "Delete
+  Contact" footer button. Distinct from the upper-scroll variants because the link /
+  Delete affordances are now in-view (different available actions).
+required:
+  - description: "close button"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^close$"
+  - description: "Linked Contacts section header"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Linked Contacts$"
+  - description: "link contacts… affordance"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^link contacts…$"
+  - description: "Delete Contact footer button"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Delete Contact$"
+forbidden:
+  - description: "Sheet Grabber — would mean we're on the new-contact sheet"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Sheet Grabber: Expanded$"

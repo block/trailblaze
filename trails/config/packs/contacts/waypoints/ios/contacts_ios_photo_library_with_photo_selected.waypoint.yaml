@@ -1,0 +1,24 @@
+id: "contacts/ios/photo-library-with-photo-selected"
+description: >
+  iOS Contacts app, photo library grid with one photo highlighted as [selected] (the user
+  tapped a thumbnail; just before the transition to the photo-avatar editor). Sibling to
+  contacts/ios/photo-library (no selected thumbnail).
+required:
+  - description: "Photo grid container"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^PXGGridLayout-Group$"
+  - description: "PXGGridLayout-Info — appears when a thumbnail is selected"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^PXGGridLayout-Info$"
+        selected: true
+  - description: "Cancel button (still on picker)"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^Cancel$"
+forbidden:
+  - description: "Visual identity Choose — would mean we already transitioned to the editor"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^VisualIdentityChooseButton$"

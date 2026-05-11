@@ -1,0 +1,9 @@
+id: contacts_ios_listsToContextMenuEmpty
+description: Long-press an empty user-defined list to open the abbreviated context menu (no Email All / Message All / Export — only Rename + Delete).
+shortcut:
+  from: contacts/ios/lists-with-user-list
+  to: contacts/ios/list-context-menu-empty
+parameters: []
+tools:
+  - longPressOnElementWithText:
+      text: "^.*: 0 contacts$"

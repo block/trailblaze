@@ -1,0 +1,38 @@
+id: "contacts/ios/edit-contact"
+description: >
+  iOS Contacts app, edit-contact form (entered via the Edit button on a contact's detail).
+  Carries a "close" leading button, a "Done" trailing button (initially disabled until edits
+  are made), an "Add Photo" / "Remove photo" pair, and editable rows for each existing
+  contact field with "Remove <label>" / "Insert add <label>" affordances. Distinct from
+  contacts/ios/new-contact (no "New Contact" header / Sheet Grabber) and from
+  contacts/ios/contact-detail (no editable rows / no "close" button).
+required:
+  - description: "Close (X) leading nav button"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^close$"
+  - description: "Add Photo button (the editable-photo affordance, only present when editing)"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Add Photo$"
+  - description: "Remove photo button (RemoveAvatarPosterButton resourceId)"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^RemoveAvatarPosterButton$"
+  - description: "Insert-add-phone affordance — only on the edit/new contact form"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^add phone$"
+forbidden:
+  - description: "New Contact header — would mean we're on the new-contact draft, not edit"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^New Contact$"
+  - description: "Sheet Grabber — only present on the new-contact bottom sheet"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Sheet Grabber: Expanded$"
+  - description: "Edit nav button — present on read-only detail, not in edit mode"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Edit$"

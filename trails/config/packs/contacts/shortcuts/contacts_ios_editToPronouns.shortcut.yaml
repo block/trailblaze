@@ -1,0 +1,9 @@
+id: contacts_ios_editToPronouns
+description: Tap 'add pronouns' on the edit form to open the pronouns modal.
+shortcut:
+  from: contacts/ios/edit-contact
+  to: contacts/ios/pronouns-modal
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: add pronouns

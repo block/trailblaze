@@ -1,0 +1,28 @@
+id: "contacts/ios/pronouns-modal"
+description: >
+  iOS Contacts app, "Pronouns" modal — opened from new/edit contact > "add pronouns".
+  Carries a Cancel button, a "Pronouns" header, an "Add" trailing button (disabled until
+  pronouns are entered), an "English" language row, and an explainer "Pronouns are only
+  used on your devices by supported Apple apps. They are not sh…" caption.
+required:
+  - description: "Pronouns header"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Pronouns$"
+  - description: "Pronouns explainer caption"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Pronouns are only used on your devices.*"
+  - description: "Cancel button"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Cancel$"
+forbidden:
+  - description: "Ringtone header — would mean we're on the ringtone picker"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Ringtone$"
+  - description: "Add Field header — would mean we're on the add-field picker"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Add Field$"

@@ -1,0 +1,9 @@
+id: contacts_ios_ringtoneToHaptics
+description: Tap Haptics on the Ringtone picker to drill into the haptics sub-picker.
+shortcut:
+  from: contacts/ios/ringtone-picker
+  to: contacts/ios/haptics-picker
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: Haptics

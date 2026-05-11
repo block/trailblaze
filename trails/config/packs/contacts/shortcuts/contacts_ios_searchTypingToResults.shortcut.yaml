@@ -1,0 +1,9 @@
+id: contacts_ios_searchTypingToResults
+description: Continue typing to surface the Search results panel.
+shortcut:
+  from: contacts/ios/search-active-typing
+  to: contacts/ios/search-results
+parameters: []
+tools:
+  - inputText:
+      text: a

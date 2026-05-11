@@ -1,0 +1,12 @@
+id: contacts_ios_launchApp
+description: >
+  Launch the iOS Contacts app (com.apple.MobileAddressBook) with FORCE_RESTART so we land
+  on the top-level alphabetical contacts list. The trailhead is the agent's bootstrap into
+  the contacts/ios/list waypoint regardless of which screen the device is currently on.
+trailhead:
+  to: contacts/ios/list
+parameters: []
+tools:
+  - launchApp:
+      appId: com.apple.MobileAddressBook
+      launchMode: FORCE_RESTART

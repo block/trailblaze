@@ -1,0 +1,28 @@
+id: "contacts/ios/new-contact-address-section"
+description: >
+  iOS Contacts app, new-contact draft scrolled to the add-address section — the user
+  scrolled past the initial Phone/Email/Pronouns/Ringtone fields. add address / add
+  birthday / add date / add related name / add social profile / add instant message
+  / Notes / add verification code rows are in view.
+required:
+  - description: "Sheet Grabber"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Sheet Grabber: Expanded$"
+  - description: "New Contact title"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^New Contact$"
+  - description: "add address affordance"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^add address$"
+  - description: "add birthday affordance"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^add birthday$"
+forbidden:
+  - description: "Edit nav button — would mean we're on contact-detail"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Edit$"

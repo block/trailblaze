@@ -1,0 +1,9 @@
+id: contacts_ios_contactDetailToEdit
+description: Tap the Edit nav button on a contact's detail to enter the edit form.
+shortcut:
+  from: contacts/ios/contact-detail
+  to: contacts/ios/edit-contact
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: Edit

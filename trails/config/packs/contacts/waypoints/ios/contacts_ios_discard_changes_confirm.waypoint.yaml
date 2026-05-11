@@ -1,0 +1,28 @@
+id: "contacts/ios/discard-changes-confirm"
+description: >
+  iOS Contacts app, "Discard Changes" confirmation popover — shown after tapping the close
+  (X) button on a dirty edit-contact form (one with unsaved field changes). PopoverDismissRegion
+  scrim with a "Are you sure you want to discard your changes?" warning and a "Discard Changes"
+  red button. Tap-outside cancels.
+required:
+  - description: "Popover dismiss region"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^PopoverDismissRegion$"
+  - description: "Discard-changes warning text"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Are you sure you want to discard your changes\\?$"
+  - description: "Discard Changes confirm button"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Discard Changes$"
+forbidden:
+  - description: "Delete-card warning — sibling popover variant"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Are you sure you want to delete the card.*"
+  - description: "Block-Contact warning — sibling popover variant"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^You will not receive phone calls.*"

@@ -1,0 +1,28 @@
+id: "contacts/ios/delete-contact-confirm"
+description: >
+  iOS Contacts app, "Delete Contact" confirmation popover — shown after tapping
+  "Delete Contact" on the contact context menu. A popover with the warning
+  "Are you sure you want to delete the card for "<Contact Name>"?" (curly quotes,
+  per-contact text) and two buttons: a red "Delete Contact" confirm and a "Cancel".
+required:
+  - description: "Delete-card warning text (regex matches any contact name in curly quotes)"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Are you sure you want to delete the card for .+\\?$"
+  - description: "Delete Contact confirm button"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Delete Contact$"
+  - description: "Cancel button"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Cancel$"
+forbidden:
+  - description: "Block-Contact warning — sibling popover variant"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^You will not receive phone calls.*"
+  - description: "Set-as-My-Card warning"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Are you sure you want to set .+ as My Card\\?$"

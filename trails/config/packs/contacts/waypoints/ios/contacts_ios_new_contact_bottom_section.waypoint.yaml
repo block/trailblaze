@@ -1,0 +1,23 @@
+id: "contacts/ios/new-contact-bottom-section"
+description: >
+  iOS Contacts app, new-contact draft scrolled all the way to the bottom — exposes
+  add field / add to list affordances. Different available actions than the top of the
+  form (the field picker and list picker are now reachable).
+required:
+  - description: "Sheet Grabber"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Sheet Grabber: Expanded$"
+  - description: "add field affordance"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^add field$"
+  - description: "add to list affordance"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^add to list$"
+forbidden:
+  - description: "Delete Contact footer button — only on edit form"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Delete Contact$"

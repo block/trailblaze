@@ -1,0 +1,9 @@
+id: contacts_ios_emojiToColorTab
+description: Tap the Color tab on the emoji editor to set the background color.
+shortcut:
+  from: contacts/ios/visual-identity-emoji
+  to: contacts/ios/visual-identity-emoji-color-tab
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: Color

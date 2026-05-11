@@ -1,0 +1,25 @@
+id: "contacts/ios/text-tone-picker"
+description: >
+  iOS Contacts app, Text Tone picker — opened from a contact's edit/new form by tapping
+  the "Text Tone: Default" row. Sibling waypoint to contacts/ios/ringtone-picker — same
+  layout (Cancel/Done, Haptics row, Default reset, Classic group) but the header reads
+  "Text Tone" and the tone catalog is the shorter alert-tone set (Rebound, Slide, Welcome,
+  ...). Two waypoints because the operational state differs (different setting changed).
+required:
+  - description: "Text Tone header"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Text Tone$"
+  - description: "Haptics sub-row"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Haptics$"
+  - description: "Cancel button (modal nav)"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Cancel$"
+forbidden:
+  - description: "Ringtone header — would mean we're on the sibling ringtone picker"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Ringtone$"

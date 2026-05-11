@@ -1,0 +1,29 @@
+id: "contacts/ios/photo-library"
+description: >
+  iOS Contacts app, system Photos picker grid (entered via avatar-onboarding > Photos >
+  Photo Library). The grid renders thumbnails with timestamped accessibilityText
+  ("Photo, March 30, 2018, 3:14 PM") inside a PXGGridLayout-Group container. Header is
+  "Photos" with a "Collections" subtext. Toolbar has a Search affordance. Distinct from
+  contacts/ios/photos-picker (no thumbnails — only Camera + Photo Library buttons).
+required:
+  - description: "Photo grid container (PHPickerViewController-style)"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^PXGGridLayout-Group$"
+  - description: "Photos header (top-of-grid title)"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Photos$"
+  - description: "Cancel button to dismiss the picker"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^Cancel$"
+forbidden:
+  - description: "Camera button — only on the photos-picker (Camera+Library buttons)"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^CameraButton$"
+  - description: "Take Picture — would mean we're in camera-capture mode"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^PhotoCapture$"

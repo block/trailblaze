@@ -1,0 +1,25 @@
+id: "contacts/ios/search-results"
+description: >
+  iOS Contacts app, search field active with a query typed and the matching contacts
+  shown under a "Search results" / "top name matches" panel. The toolbar carries a
+  "Search: <query>" populated field with a "Clear text" affordance (instead of a fresh
+  Search/Dictate). Distinct from contacts/ios/search-active (no Search-results panel,
+  query is empty).
+required:
+  - description: "Search results container header"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Search results$"
+  - description: "Top-matches sub-header"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^top name matches$"
+  - description: "Active search field with query (matches 'Search: <anything>')"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Search: .+$"
+forbidden:
+  - description: "Empty Search/Dictate prompt — would mean we haven't typed yet"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Dictate$"

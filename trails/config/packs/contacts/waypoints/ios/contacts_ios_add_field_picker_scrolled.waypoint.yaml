@@ -1,0 +1,23 @@
+id: "contacts/ios/add-field-picker-scrolled"
+description: >
+  iOS Contacts app, Add Field picker scrolled to its second page — exposes additional
+  field options (Department / Phonetic company name and below) that aren't visible in
+  the first viewport. Sibling to contacts/ios/add-field-picker (first viewport).
+required:
+  - description: "Add Field header"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Add Field$"
+  - description: "Phonetic company name row (second-page field)"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Phonetic company name$"
+  - description: "Department row"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Department$"
+forbidden:
+  - description: "Done button — would mean we're on the edit form"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Done$"

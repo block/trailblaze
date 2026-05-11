@@ -1,0 +1,19 @@
+id: "contacts/ios/favorite-number-picker-email-only"
+description: >
+  iOS Contacts app, favorite-action number picker after picking Mail — only email-typed
+  rows are available (no phone numbers). Sibling to contacts/ios/favorite-number-picker
+  (which surfaces phone numbers when Message/Call is the chosen action).
+required:
+  - description: "Mail header (or chosen action context)"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Mail$"
+  - description: "work email row"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^work$"
+forbidden:
+  - description: "mobile phone row — would mean Message/Call action chosen, not Mail"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^mobile$"

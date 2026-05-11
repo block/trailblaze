@@ -1,0 +1,25 @@
+id: "contacts/ios/share-contact-fields"
+description: >
+  iOS Contacts app, "Share Contact" field-selection screen (entered from contact-detail >
+  scroll > "Share Contact"). Shows a "Share Contact" header, a Done button, a
+  "Select All Fields" toggle, and a list of toggleable per-field rows ("First name X",
+  "Last name Y", "Job title …", "mobile (phone)", "work (email)", etc.) each with a
+  checkmark.circle.fill (selected) or circle (unselected) glyph.
+required:
+  - description: "Share Contact header"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Share Contact$"
+  - description: "Select All Fields toggle"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Select All Fields$"
+  - description: "Done button (commits selection / triggers share sheet)"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Done$"
+forbidden:
+  - description: "Edit button — would mean we're on the read-only contact detail"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Edit$"

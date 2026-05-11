@@ -1,0 +1,23 @@
+id: "contacts/ios/photo-library-search-active"
+description: >
+  iOS Contacts app, photo library grid with the toolbar Search affordance focused
+  (keyboard up). The grid stays visible in the background; an active search field
+  appears in the toolbar.
+required:
+  - description: "Photo grid container"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^PXGGridLayout-Group$"
+  - description: "Toolbar"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^Toolbar$"
+  - description: "Active keyboard accessory: AutoFill"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^AutoFill$"
+forbidden:
+  - description: "Camera button — would mean we're on the source picker"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^CameraButton$"

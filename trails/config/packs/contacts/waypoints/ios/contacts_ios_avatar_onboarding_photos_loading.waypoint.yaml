@@ -1,0 +1,19 @@
+id: "contacts/ios/avatar-onboarding-photos-loading"
+description: >
+  iOS Contacts app, avatar onboarding picker mid-transition after the user tapped Photos
+  — the avatar onboarding panel is still partially visible while the photos source picker
+  (Camera + Photo Library buttons) is loading in. Brief intermediate state.
+required:
+  - description: "Onboarding cancel button"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^OnboardingCancelButton$"
+  - description: "Camera button (loading in)"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^CameraButton$"
+forbidden:
+  - description: "Choose an Avatar header — would mean we're back on the picker"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Choose an Avatar$"

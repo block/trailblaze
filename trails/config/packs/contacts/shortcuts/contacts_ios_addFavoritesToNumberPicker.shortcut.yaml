@@ -1,0 +1,9 @@
+id: contacts_ios_addFavoritesToNumberPicker
+description: Pick the Message action — opens a phone-number picker for which number to message-favorite.
+shortcut:
+  from: contacts/ios/add-favorites-action-picker
+  to: contacts/ios/favorite-number-picker
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: Message

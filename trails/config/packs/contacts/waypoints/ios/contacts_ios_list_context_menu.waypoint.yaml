@@ -1,0 +1,37 @@
+id: "contacts/ios/list-context-menu"
+description: >
+  iOS Contacts app, list context menu — opened by long-pressing a user-defined list on
+  the Lists view (e.g. Friends or Work). Shows a Preview block with the list's name and
+  contact-count, plus action rows: Email All, Message All, Export, Rename, Delete.
+  Distinct from contacts/ios/contact-context-menu (which shows Make-This-My-Card / Delete
+  Contact / Share / Copy).
+required:
+  - description: "Preview block"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Preview$"
+  - description: "Email All row — unique to the list context menu"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Email All$"
+  - description: "Message All row"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Message All$"
+  - description: "Rename row"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Rename$"
+  - description: "Export row"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Export$"
+forbidden:
+  - description: "Make This My Card — only on the contact context menu"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Make This My Card$"
+  - description: "Delete Contact — only on the contact context menu"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Delete Contact$"

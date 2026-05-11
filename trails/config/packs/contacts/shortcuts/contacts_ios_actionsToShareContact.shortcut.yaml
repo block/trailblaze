@@ -1,0 +1,9 @@
+id: contacts_ios_actionsToShareContact
+description: Tap Share Contact to open the per-field share selection screen.
+shortcut:
+  from: contacts/ios/contact-detail-actions
+  to: contacts/ios/share-contact-fields
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: Share Contact

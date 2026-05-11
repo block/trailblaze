@@ -1,0 +1,25 @@
+id: "contacts/ios/visual-identity-emoji-color-tab"
+description: >
+  iOS Contacts app, emoji editor with the Color tab active — exposes the background-color
+  picker for the emoji avatar. Sibling to contacts/ios/visual-identity-emoji-emoji-tab.
+required:
+  - description: "Color editor tab"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Color$"
+        resourceIdRegex: "^VisualIdentityEditorContainerVStack$"
+  - description: "Visual identity Choose button"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^VisualIdentityChooseButton$"
+  - description: "Emoji editor tab in segmented control (sibling)"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Emoji$"
+        resourceIdRegex: "^VisualIdentityEditorContainerVStack$"
+forbidden:
+  - description: "Font tab — only on monogram editor"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Font$"
+        resourceIdRegex: "^VisualIdentityEditorContainerVStack$"

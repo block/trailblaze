@@ -1,0 +1,21 @@
+id: "contacts/ios/delete-list-confirm"
+description: >
+  iOS Contacts app, 'Delete List' confirmation popover — shown after tapping Delete on a list's context menu. Carries a warning 'Are you sure you want to delete the list <Name>?' with Cancel + Delete buttons. Distinct from contacts/ios/delete-contact-confirm (the warning text references a list, not a card).
+required:
+  - description: "Delete-list warning text"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Are you sure you want to delete the list .+\\?$"
+  - description: "Delete confirm button"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Delete$"
+  - description: "Cancel button"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Cancel$"
+forbidden:
+  - description: "Delete-card warning — sibling popover for contacts not lists"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Are you sure you want to delete the card.*"

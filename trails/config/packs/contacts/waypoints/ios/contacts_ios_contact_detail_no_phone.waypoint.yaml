@@ -1,0 +1,24 @@
+id: "contacts/ios/contact-detail-no-phone"
+description: >
+  iOS Contacts app, contact detail for a contact with no phone — the Call/Video actions
+  in the Inline action bar are absent. Sibling to contacts/ios/contact-detail.
+required:
+  - description: "Inline action bar HStack"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^InlineActionsHStack$"
+  - description: "Edit nav button"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Edit$"
+  - description: "Mail action button (only field present)"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Mail$"
+        resourceIdRegex: "^InlineActionsHStack$"
+forbidden:
+  - description: "Call action — would mean phone present"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Call$"
+        resourceIdRegex: "^InlineActionsHStack$"

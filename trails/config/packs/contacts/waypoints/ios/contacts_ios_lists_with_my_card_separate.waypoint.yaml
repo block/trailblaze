@@ -1,0 +1,23 @@
+id: "contacts/ios/lists-with-my-card"
+description: >
+  iOS Contacts app, Lists view variant when a contact has been set as "My Card" via
+  the contact context menu — the Lists view shows a separate "My Card" entry at the top
+  next to All Contacts. Sibling to contacts/ios/lists (no My Card set).
+required:
+  - description: "Lists header"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Lists$"
+  - description: "Edit button"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Edit$"
+  - description: "My Card entry"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^My Card$"
+forbidden:
+  - description: "Done button — would mean we're in edit mode"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Done$"

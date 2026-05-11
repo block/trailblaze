@@ -1,0 +1,9 @@
+id: contacts_ios_editToAvatarOnboarding
+description: Tap the Add Photo button on the edit form to open the avatar onboarding picker.
+shortcut:
+  from: contacts/ios/edit-contact
+  to: contacts/ios/avatar-onboarding
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: Add Photo

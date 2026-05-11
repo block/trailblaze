@@ -1,0 +1,11 @@
+id: contacts_ios_addToListSheetSelect
+description: Tap a contact's selection circle to mark it for adding to the list.
+shortcut:
+  from: contacts/ios/add-contacts-to-list-sheet
+  to: contacts/ios/add-contacts-to-list-with-selection
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      nodeSelector:
+        iosMaestro:
+          resourceIdRegex: "^circle$"

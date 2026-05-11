@@ -1,0 +1,22 @@
+id: "contacts/ios/pronouns-modal-with-input"
+description: >
+  iOS Contacts app, Pronouns modal with text typed — the trailing Add button is now
+  enabled, distinct from the empty-input contacts/ios/pronouns-modal (Add disabled).
+required:
+  - description: "Pronouns header"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Pronouns$"
+  - description: "Cancel button"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Cancel$"
+  - description: "Add button (enabled — has input)"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Add$"
+forbidden:
+  - description: "Add Field header — would mean we're on the field picker"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Add Field$"

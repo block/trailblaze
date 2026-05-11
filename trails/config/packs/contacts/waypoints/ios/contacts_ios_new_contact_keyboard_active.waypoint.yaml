@@ -1,0 +1,31 @@
+id: "contacts/ios/new-contact-keyboard"
+description: >
+  iOS Contacts app, new-contact draft sheet with the on-screen keyboard up — entered by
+  tapping a text-input row inside the new-contact sheet (e.g. an "add phone" row's
+  Phone field). Same sheet structure as contacts/ios/new-contact (Sheet Grabber + close +
+  New Contact + Done) but the keyboard is on-screen (Paste / AutoFill / Back accessory
+  toolbar visible above the keyboard). Distinct from contacts/ios/new-contact (no
+  keyboard) because the available actions now include text input plus the AutoFill
+  shortcut.
+required:
+  - description: "New Contact title (sheet still active)"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^New Contact$"
+  - description: "Sheet Grabber"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Sheet Grabber: Expanded$"
+  - description: "Keyboard accessory: AutoFill shortcut (only present when keyboard up)"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^AutoFill$"
+  - description: "Keyboard accessory: Paste action"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Paste$"
+forbidden:
+  - description: "Edit button — only on the read-only contact-detail"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Edit$"

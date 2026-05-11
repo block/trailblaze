@@ -1,0 +1,25 @@
+id: "contacts/ios/edit-contact-keyboard"
+description: >
+  iOS Contacts app, edit-contact form with the on-screen keyboard up — the user tapped
+  a text field (e.g. a phone number, email, notes, name) and the keyboard's
+  AutoFill/Paste/Back accessory toolbar is visible. Distinct from contacts/ios/edit-contact
+  (no keyboard) because the available actions now include text input, dismiss-keyboard,
+  paste, and AutoFill.
+required:
+  - description: "Edit form's close button"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^close$"
+  - description: "Add Photo affordance — confirms we're in the edit form"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Add Photo$"
+  - description: "Keyboard accessory: AutoFill"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^AutoFill$"
+forbidden:
+  - description: "New Contact title — would mean we're on the new-contact draft"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^New Contact$"

@@ -1,0 +1,9 @@
+id: contacts_ios_editToTextTone
+description: Tap the Text Tone row on the edit form to choose a per-contact text tone.
+shortcut:
+  from: contacts/ios/edit-contact
+  to: contacts/ios/text-tone-picker
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: "Text Tone: Default"

@@ -1,0 +1,9 @@
+id: contacts_ios_avatarToEmoji
+description: Tap Emoji on the avatar onboarding picker to open the emoji-avatar editor.
+shortcut:
+  from: contacts/ios/avatar-onboarding
+  to: contacts/ios/visual-identity-emoji
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: Emoji

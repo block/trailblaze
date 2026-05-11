@@ -1,0 +1,9 @@
+id: contacts_ios_editAddDate
+description: Tap 'add date' on the edit form to insert an anniversary row with a date wheel inline.
+shortcut:
+  from: contacts/ios/edit-contact-birthday-section
+  to: contacts/ios/edit-contact-with-anniversary
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: add date

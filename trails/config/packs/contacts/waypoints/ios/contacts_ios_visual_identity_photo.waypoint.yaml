@@ -1,0 +1,31 @@
+id: "contacts/ios/visual-identity-photo"
+description: >
+  iOS Contacts app, photo-avatar editor (entered after picking a photo from the photo
+  library). Same shape as the monogram/emoji editors (Avatar/Poster tabs, Choose button,
+  Cancel button) but the editor tab is "Crop" (photo-only) and the suggestion rows are
+  "Avatar Option" entries rather than font variants or emoji glyphs.
+required:
+  - description: "Visual identity Cancel button"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^VisualIdentityCancelButton$"
+  - description: "Visual identity Choose button"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^VisualIdentityChooseButton$"
+  - description: "Crop editor tab — only on the photo-avatar editor"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Crop$"
+        resourceIdRegex: "^VisualIdentityEditorContainerVStack$"
+forbidden:
+  - description: "Text editor tab — only on the monogram editor"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Text$"
+        resourceIdRegex: "^VisualIdentityEditorContainerVStack$"
+  - description: "Emoji editor tab — only on the emoji editor"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Emoji$"
+        resourceIdRegex: "^VisualIdentityEditorContainerVStack$"

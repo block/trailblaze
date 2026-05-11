@@ -1,0 +1,11 @@
+id: contacts_ios_photosPickerToCamera
+description: Tap Camera on the photos source picker to open the in-app camera.
+shortcut:
+  from: contacts/ios/photos-picker
+  to: contacts/ios/camera-capture
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      nodeSelector:
+        iosMaestro:
+          resourceIdRegex: "^CameraButton$"

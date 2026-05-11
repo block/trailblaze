@@ -1,0 +1,23 @@
+id: "contacts/ios/haptics-picker-none-selected"
+description: >
+  iOS Contacts app, Haptics picker with the "None" option selected — checkmark is on
+  None. Sibling state of contacts/ios/haptics-picker (default state with Heartbeat or
+  another pattern selected).
+required:
+  - description: "Haptics header"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Haptics$"
+  - description: "None option present"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^None$"
+  - description: "Heartbeat option (catalog still visible)"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Heartbeat$"
+forbidden:
+  - description: "Ringtone header — would mean we're on the parent ringtone picker"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Ringtone$"

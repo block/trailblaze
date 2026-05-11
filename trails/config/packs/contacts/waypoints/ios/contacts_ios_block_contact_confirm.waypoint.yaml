@@ -1,0 +1,25 @@
+id: "contacts/ios/block-contact-confirm"
+description: >
+  iOS Contacts app, "Block Contact" confirmation popover — shown when the user taps
+  "Block Contact" on a contact's detail. A PopoverDismissRegion overlay covers the screen
+  with a warning "You will not receive phone calls, messages, email or FaceTime from
+  blocked contacts" and a single red "Block Contact" confirm button. Tap outside (the
+  PopoverDismissRegion) cancels.
+required:
+  - description: "Popover dismiss region (the scrim that cancels on tap-outside)"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^PopoverDismissRegion$"
+  - description: "Block-Contact warning text"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^You will not receive phone calls, messages, email.*"
+forbidden:
+  - description: "Cancel button — this confirm uses tap-outside, not an explicit Cancel"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Cancel$"
+  - description: "Delete-card warning — the delete confirm is a sibling popover"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Are you sure you want to delete the card.*"

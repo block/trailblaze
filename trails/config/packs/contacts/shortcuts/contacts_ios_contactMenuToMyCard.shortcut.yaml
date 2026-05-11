@@ -1,0 +1,9 @@
+id: contacts_ios_contactMenuToMyCard
+description: Tap Make This My Card on the contact context menu to open the set-as-my-card confirmation popover.
+shortcut:
+  from: contacts/ios/contact-context-menu
+  to: contacts/ios/my-card-confirm
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: Make This My Card

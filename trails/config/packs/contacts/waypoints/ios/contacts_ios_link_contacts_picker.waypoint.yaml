@@ -1,0 +1,34 @@
+id: "contacts/ios/link-contacts-picker"
+description: >
+  iOS Contacts app, "Link Contacts" picker — entered from the edit-contact form by tapping
+  the "link contacts…" affordance under the Linked Contacts section. A modal contact-list
+  with a Cancel button (no Add (+) button), letting the user pick a contact to merge with
+  the one being edited. Distinct from contacts/ios/list (no Cancel button) and from
+  contacts/ios/add-contacts-to-list-sheet (no "Add contacts to <List>" header / no
+  Sheet Grabber / no Select Contacts footer).
+required:
+  - description: "Cancel button (modal nav)"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Cancel$"
+  - description: "Toolbar present (the standard list toolbar)"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Search$"
+forbidden:
+  - description: "Edit nav button — would mean we're on contact-detail"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Edit$"
+  - description: "Sheet Grabber — would mean we're on a sheet, not a push picker"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Sheet Grabber: Expanded$"
+  - description: "Add List — would mean we're on the Lists view"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Add List$"
+  - description: "InlineActionsHStack — only on contact-detail"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^InlineActionsHStack$"

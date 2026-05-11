@@ -1,0 +1,11 @@
+# Demo trail: launch Google Contacts and open the new-contact form.
+# Authored to exercise one level deeper than the simple smoke trail.
+- config:
+    id: "contacts/open-create-contact-form"
+    driver: ANDROID_ONDEVICE_INSTRUMENTATION
+    description: "Open the Contacts app and tap the create-contact action."
+
+- prompts:
+    - step: Launch the Google Contacts app (com.google.android.contacts) with a clean state.
+    - step: Tap the floating action button (the "+" icon, usually labeled "Create contact") to open the new-contact form.
+    - step: Verify the new-contact form is visible — the screen should show name and phone-number text fields ready for input. Do not enter any data.

@@ -1,0 +1,31 @@
+id: "contacts/ios/sub-list"
+description: >
+  iOS Contacts app, filtered sub-list view (entered from Lists by tapping any non-"All
+  Contacts" list, e.g. Friends or Work). Same toolbar shape as the top-level contacts
+  list (Search field + Add button) but the BackButton text is "Lists" (not "Back" / no
+  BackButton at all on the top-level list) and the navigation header is the LIST NAME
+  rather than "Contacts". Distinct from contacts/ios/list (BackButton text differs;
+  the visible contacts are list-membership-filtered).
+required:
+  - description: "BackButton labeled 'Lists' — only when inside a sub-list"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Lists$"
+        resourceIdRegex: "^BackButton$"
+  - description: "Toolbar with Search affordance (same as top-level list)"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^Toolbar$"
+  - description: "Add (+) button in the toolbar"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Add$"
+forbidden:
+  - description: "Lists header title — would mean we're on the Lists view itself"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Add List$"
+  - description: "InlineActionsHStack — only when a contact is selected"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^InlineActionsHStack$"

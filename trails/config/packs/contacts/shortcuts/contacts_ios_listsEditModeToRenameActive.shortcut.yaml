@@ -1,0 +1,9 @@
+id: contacts_ios_listsEditModeToRenameActive
+description: While in Lists Edit mode, tap a list row to put it into rename state.
+shortcut:
+  from: contacts/ios/lists-edit-mode
+  to: contacts/ios/lists-rename-active
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: Friends

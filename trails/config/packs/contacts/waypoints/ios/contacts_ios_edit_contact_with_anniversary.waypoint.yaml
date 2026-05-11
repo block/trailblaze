@@ -1,0 +1,26 @@
+id: "contacts/ios/edit-contact-with-anniversary"
+description: >
+  iOS Contacts app, edit-contact form after tapping "add date", which inserts an
+  "anniversary" row with a paired date wheel. The wheel shows month/day/----/year
+  columns (--- placeholder for unset year). Distinct from contacts/ios/edit-contact
+  (no anniversary row), and from contacts/ios/edit-contact-date-wheel (anniversary
+  is the second date — birthday-then-anniversary — and the row label specifically
+  reads "anniversary").
+required:
+  - description: "Anniversary row label"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^anniversary$"
+  - description: "Remove anniversary affordance"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Remove anniversary$"
+  - description: "Edit form's close button"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^close$"
+forbidden:
+  - description: "New Contact title — would mean we're on the new-contact draft"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^New Contact$"

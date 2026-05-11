@@ -1,0 +1,19 @@
+id: "contacts/ios/contact-detail-no-email"
+description: >
+  iOS Contacts app, contact detail for a contact with no email field — the Mail action
+  in the Inline action bar is grayed out (or absent). Sibling to
+  contacts/ios/contact-detail (which has Mail enabled).
+required:
+  - description: "Inline action bar HStack"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^InlineActionsHStack$"
+  - description: "Edit nav button"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Edit$"
+forbidden:
+  - description: "Get Mail action button — only when contact has email"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Get Mail$"

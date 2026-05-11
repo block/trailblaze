@@ -1,0 +1,18 @@
+# Open the new-contact form and type a name into the First-name field. Exercises
+# the custom `contacts_android_launchApp` scripted tool (declared by the `contacts`
+# workspace pack) for setup, then drives the agent through form interaction.
+- config:
+    id: "contacts/enter-name-in-create-form"
+    driver: ANDROID_ONDEVICE_INSTRUMENTATION
+    target: contacts
+    description: "Launch Contacts via the custom scripted tool, then enter a name in the create-contact form."
+
+- tools:
+    - contacts_android_launchApp: {}
+
+- prompts:
+    - step: If a sign-in / account-setup interstitial appears (e.g. a "Sign in" or "Skip" button), tap "Skip".
+    - step: Tap the floating action button (the "+" icon, usually labeled "Create contact") to open the new-contact form.
+    - step: Tap the "First name" text field to focus it.
+    - step: Type "Trailblaze Test" into the focused field.
+    - step: Verify the First name field now contains "Trailblaze Test".

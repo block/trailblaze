@@ -1,0 +1,9 @@
+id: contacts_ios_subListToContactDetail
+description: Tap a contact inside a sub-list to open the contact detail card.
+shortcut:
+  from: contacts/ios/sub-list
+  to: contacts/ios/contact-detail
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: Daniel Higgins Jr.

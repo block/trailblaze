@@ -1,0 +1,9 @@
+id: contacts_ios_editToKeyboard
+description: Tap a text field (Phone, Email, Notes, name) on the edit form to bring up the keyboard.
+shortcut:
+  from: contacts/ios/edit-contact
+  to: contacts/ios/edit-contact-keyboard
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: Phone

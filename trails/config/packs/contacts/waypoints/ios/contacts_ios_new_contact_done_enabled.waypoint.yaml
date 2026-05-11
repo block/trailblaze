@@ -1,0 +1,26 @@
+id: "contacts/ios/new-contact-done-enabled"
+description: >
+  iOS Contacts app, new-contact draft sheet with at least one field populated, so the
+  trailing "Done" button is now enabled (committable). The sheet shape (Sheet Grabber +
+  New Contact + close + Done) is identical to contacts/ios/new-contact, but the available
+  actions differ: Done can now be tapped to save the contact, which is the substantive
+  state change.
+required:
+  - description: "Sheet Grabber"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Sheet Grabber: Expanded$"
+  - description: "New Contact title"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^New Contact$"
+  - description: "close button"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^close$"
+forbidden:
+  - description: "Done [disabled] — would mean form is empty"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Done$"
+        focused: false

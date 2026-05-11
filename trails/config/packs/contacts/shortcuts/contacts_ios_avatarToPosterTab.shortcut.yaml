@@ -1,0 +1,9 @@
+id: contacts_ios_avatarToPosterTab
+description: On the avatar onboarding picker, switch from the Avatar tab to the Poster tab.
+shortcut:
+  from: contacts/ios/avatar-onboarding
+  to: contacts/ios/avatar-onboarding-poster
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: Poster

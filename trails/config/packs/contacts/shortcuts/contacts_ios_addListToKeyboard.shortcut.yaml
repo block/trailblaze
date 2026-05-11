@@ -1,0 +1,9 @@
+id: contacts_ios_addListToKeyboard
+description: Tap the List Name input field on the Add List inline editor to bring up the keyboard.
+shortcut:
+  from: contacts/ios/add-list-modal
+  to: contacts/ios/add-list-keyboard
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: List Name

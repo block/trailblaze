@@ -1,0 +1,9 @@
+id: contacts_ios_monogramToTextTab
+description: Tap the Text tab on the monogram editor to engage the text-input mode.
+shortcut:
+  from: contacts/ios/visual-identity-monogram
+  to: contacts/ios/visual-identity-monogram-text-tab
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: Text

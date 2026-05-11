@@ -1,0 +1,30 @@
+id: "contacts/ios/edit-contact-date-wheel"
+description: >
+  iOS Contacts app, edit-contact form with a date wheel actively visible — entered by
+  tapping a "birthday" / "anniversary" / "add date" row. The standard edit-form shape
+  remains (close button, Done, Add Photo, scroll) but a UIDatePicker wheel is now in
+  the row's view, exposing a month/day/year tri-column with independent spin actions
+  the parent edit form does NOT have. Distinct from contacts/ios/edit-contact (no
+  date-wheel columns).
+required:
+  - description: "Edit form's leading close (X) button"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^close$"
+  - description: "Edit form's Add Photo affordance"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Add Photo$"
+  - description: "Date-wheel month column (text-bearing — present only when wheel active)"
+    selector:
+      iosMaestro:
+        textRegex: "^(January|February|March|April|May|June|July|August|September|October|November|December)$"
+  - description: "Date-wheel year-or-empty column (e.g. '----' when no year set)"
+    selector:
+      iosMaestro:
+        textRegex: "^----$"
+forbidden:
+  - description: "New Contact title — would mean we're on the new-contact draft"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^New Contact$"

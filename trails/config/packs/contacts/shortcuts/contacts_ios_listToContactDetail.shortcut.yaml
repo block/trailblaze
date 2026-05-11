@@ -1,0 +1,9 @@
+id: contacts_ios_listToContactDetail
+description: From the contacts list, tap a contact name to open the detail card.
+shortcut:
+  from: contacts/ios/list
+  to: contacts/ios/contact-detail
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: Kate Bell

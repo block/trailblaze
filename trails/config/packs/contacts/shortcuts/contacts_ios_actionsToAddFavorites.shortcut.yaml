@@ -1,0 +1,9 @@
+id: contacts_ios_actionsToAddFavorites
+description: Tap Add to Favorites to choose a favorite-action type (Message/Call/Mail).
+shortcut:
+  from: contacts/ios/contact-detail-actions
+  to: contacts/ios/add-favorites-action-picker
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: Add to Favorites

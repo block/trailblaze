@@ -1,0 +1,2661 @@
+{
+  "waypointId": "contacts/ios/visual-identity-monogram-text-tab",
+  "capturedAt": "2026-05-08T07:39:38.466847Z",
+  "capturedFrom": "copied-from:contacts_ios_visual_identity_monogram (visual parent \u2014 variant has no on-device capture)",
+  "screenshotFile": "contacts_ios_visual_identity_monogram_text_tab.example.webp",
+  "deviceWidth": 402,
+  "deviceHeight": 874,
+  "viewHierarchy": {
+    "centerPoint": "0,0",
+    "children": [
+      {
+        "nodeId": 2,
+        "accessibilityText": "Contacts",
+        "x2": 402,
+        "y2": 874,
+        "centerPoint": "201,437",
+        "children": [
+          {
+            "nodeId": 3,
+            "x2": 402,
+            "y2": 874,
+            "centerPoint": "201,437",
+            "children": [
+              {
+                "nodeId": 4,
+                "x2": 402,
+                "y2": 874,
+                "centerPoint": "201,437",
+                "children": [
+                  {
+                    "nodeId": 5,
+                    "x2": 402,
+                    "y2": 874,
+                    "centerPoint": "201,437",
+                    "children": [
+                      {
+                        "nodeId": 6,
+                        "x2": 402,
+                        "y2": 874,
+                        "centerPoint": "201,437",
+                        "children": [
+                          {
+                            "nodeId": 7,
+                            "x2": 402,
+                            "y2": 874,
+                            "centerPoint": "201,437",
+                            "children": [
+                              {
+                                "nodeId": 8,
+                                "x2": 402,
+                                "y2": 874,
+                                "centerPoint": "201,437",
+                                "children": [
+                                  {
+                                    "nodeId": 9,
+                                    "y1": 62,
+                                    "x2": 402,
+                                    "y2": 116,
+                                    "centerPoint": "201,89",
+                                    "children": [
+                                      {
+                                        "nodeId": 10,
+                                        "accessibilityText": "Cancel",
+                                        "x1": 20,
+                                        "y1": 66,
+                                        "x2": 96,
+                                        "y2": 102,
+                                        "centerPoint": "58,84",
+                                        "children": [
+                                          {
+                                            "nodeId": 11,
+                                            "x1": 20,
+                                            "y1": 66,
+                                            "x2": 96,
+                                            "y2": 102,
+                                            "centerPoint": "58,84",
+                                            "children": [
+                                              {
+                                                "nodeId": 12,
+                                                "accessibilityText": "Cancel",
+                                                "x1": 20,
+                                                "y1": 66,
+                                                "x2": 96,
+                                                "y2": 102,
+                                                "centerPoint": "58,84",
+                                                "resourceId": "VisualIdentityCancelButton"
+                                              }
+                                            ]
+                                          }
+                                        ],
+                                        "resourceId": "VisualIdentityCancelButton"
+                                      },
+                                      {
+                                        "nodeId": 13,
+                                        "x1": 112,
+                                        "y1": 60,
+                                        "x2": 276,
+                                        "y2": 108,
+                                        "centerPoint": "194,84",
+                                        "children": [
+                                          {
+                                            "nodeId": 14,
+                                            "x1": 112,
+                                            "y1": 60,
+                                            "x2": 276,
+                                            "y2": 108,
+                                            "centerPoint": "194,84",
+                                            "children": [
+                                              {
+                                                "nodeId": 15,
+                                                "x1": 112,
+                                                "y1": 60,
+                                                "x2": 276,
+                                                "y2": 108,
+                                                "centerPoint": "194,84",
+                                                "children": [
+                                                  {
+                                                    "nodeId": 16,
+                                                    "accessibilityText": "Avatar",
+                                                    "x1": 112,
+                                                    "y1": 60,
+                                                    "x2": 194,
+                                                    "y2": 109,
+                                                    "centerPoint": "153,84",
+                                                    "selected": true
+                                                  },
+                                                  {
+                                                    "nodeId": 17,
+                                                    "accessibilityText": "Poster",
+                                                    "x1": 194,
+                                                    "y1": 60,
+                                                    "x2": 276,
+                                                    "y2": 109,
+                                                    "centerPoint": "235,84"
+                                                  }
+                                                ],
+                                                "resourceId": "IdentityTypePicker"
+                                              }
+                                            ]
+                                          }
+                                        ]
+                                      },
+                                      {
+                                        "nodeId": 18,
+                                        "accessibilityText": "Choose",
+                                        "x1": 299,
+                                        "y1": 66,
+                                        "x2": 382,
+                                        "y2": 102,
+                                        "centerPoint": "340,84",
+                                        "children": [
+                                          {
+                                            "nodeId": 19,
+                                            "x1": 299,
+                                            "y1": 66,
+                                            "x2": 382,
+                                            "y2": 102,
+                                            "centerPoint": "340,84",
+                                            "children": [
+                                              {
+                                                "nodeId": 20,
+                                                "accessibilityText": "Choose",
+                                                "x1": 299,
+                                                "y1": 66,
+                                                "x2": 382,
+                                                "y2": 102,
+                                                "centerPoint": "340,84",
+                                                "resourceId": "VisualIdentityChooseButton"
+                                              }
+                                            ]
+                                          }
+                                        ],
+                                        "resourceId": "VisualIdentityChooseButton"
+                                      }
+                                    ],
+                                    "resourceId": "_TtGC7SwiftUI32NavigationStackHosting"
+                                  },
+                                  {
+                                    "nodeId": 21,
+                                    "x2": 402,
+                                    "y2": 874,
+                                    "centerPoint": "201,437",
+                                    "children": [
+                                      {
+                                        "nodeId": 22,
+                                        "x2": 402,
+                                        "y2": 874,
+                                        "centerPoint": "201,437",
+                                        "children": [
+                                          {
+                                            "nodeId": 23,
+                                            "x2": 402,
+                                            "y2": 874,
+                                            "centerPoint": "201,437",
+                                            "children": [
+                                              {
+                                                "nodeId": 24,
+                                                "x2": 402,
+                                                "y2": 874,
+                                                "centerPoint": "201,437",
+                                                "children": [
+                                                  {
+                                                    "nodeId": 25,
+                                                    "x2": 402,
+                                                    "y2": 874,
+                                                    "centerPoint": "201,437",
+                                                    "children": [
+                                                      {
+                                                        "nodeId": 26,
+                                                        "x2": 402,
+                                                        "y2": 874,
+                                                        "centerPoint": "201,437",
+                                                        "children": [
+                                                          {
+                                                            "nodeId": 27,
+                                                            "x2": 402,
+                                                            "y2": 172,
+                                                            "centerPoint": "201,86"
+                                                          }
+                                                        ]
+                                                      },
+                                                      {
+                                                        "nodeId": 28,
+                                                        "x2": 402,
+                                                        "y2": 874,
+                                                        "centerPoint": "201,437"
+                                                      },
+                                                      {
+                                                        "nodeId": 29,
+                                                        "x1": 16,
+                                                        "y1": 141,
+                                                        "x2": 386,
+                                                        "y2": 936,
+                                                        "centerPoint": "201,538",
+                                                        "children": [
+                                                          {
+                                                            "nodeId": 30,
+                                                            "accessibilityText": "Suggestions",
+                                                            "x1": 20,
+                                                            "y1": 531,
+                                                            "x2": 119,
+                                                            "y2": 551,
+                                                            "centerPoint": "69,541",
+                                                            "resourceId": "StickyHeaderContent"
+                                                          },
+                                                          {
+                                                            "nodeId": 31,
+                                                            "x1": 16,
+                                                            "y1": 566,
+                                                            "x2": 386,
+                                                            "y2": 936,
+                                                            "centerPoint": "201,751",
+                                                            "children": [
+                                                              {
+                                                                "nodeId": 32,
+                                                                "accessibilityText": ",Sans-serif",
+                                                                "x1": 16,
+                                                                "y1": 566,
+                                                                "x2": 101,
+                                                                "y2": 651,
+                                                                "centerPoint": "58,608",
+                                                                "children": [
+                                                                  {
+                                                                    "nodeId": 33,
+                                                                    "accessibilityText": ",Sans-serif",
+                                                                    "x1": 16,
+                                                                    "y1": 516,
+                                                                    "x2": 101,
+                                                                    "y2": 701,
+                                                                    "centerPoint": "58,608",
+                                                                    "resourceId": "VisualIdentityView"
+                                                                  },
+                                                                  {
+                                                                    "nodeId": 34,
+                                                                    "accessibilityText": ",Sans-serif",
+                                                                    "x1": 16,
+                                                                    "y1": 516,
+                                                                    "x2": 101,
+                                                                    "y2": 701,
+                                                                    "centerPoint": "58,608",
+                                                                    "resourceId": "VisualIdentityView"
+                                                                  }
+                                                                ],
+                                                                "resourceId": "SuggestionListItemButton"
+                                                              },
+                                                              {
+                                                                "nodeId": 35,
+                                                                "accessibilityText": ",Sans-serif",
+                                                                "x1": 111,
+                                                                "y1": 566,
+                                                                "x2": 196,
+                                                                "y2": 651,
+                                                                "centerPoint": "153,608",
+                                                                "children": [
+                                                                  {
+                                                                    "nodeId": 36,
+                                                                    "accessibilityText": ",Sans-serif",
+                                                                    "x1": 111,
+                                                                    "y1": 516,
+                                                                    "x2": 196,
+                                                                    "y2": 701,
+                                                                    "centerPoint": "153,608",
+                                                                    "resourceId": "VisualIdentityView"
+                                                                  },
+                                                                  {
+                                                                    "nodeId": 37,
+                                                                    "accessibilityText": ",Sans-serif",
+                                                                    "x1": 111,
+                                                                    "y1": 516,
+                                                                    "x2": 196,
+                                                                    "y2": 701,
+                                                                    "centerPoint": "153,608",
+                                                                    "resourceId": "VisualIdentityView"
+                                                                  }
+                                                                ],
+                                                                "resourceId": "SuggestionListItemButton"
+                                                              },
+                                                              {
+                                                                "nodeId": 38,
+                                                                "accessibilityText": ",Sans-serif",
+                                                                "x1": 206,
+                                                                "y1": 566,
+                                                                "x2": 291,
+                                                                "y2": 651,
+                                                                "centerPoint": "248,608",
+                                                                "children": [
+                                                                  {
+                                                                    "nodeId": 39,
+                                                                    "accessibilityText": ",Sans-serif",
+                                                                    "x1": 206,
+                                                                    "y1": 516,
+                                                                    "x2": 291,
+                                                                    "y2": 701,
+                                                                    "centerPoint": "248,608",
+                                                                    "resourceId": "VisualIdentityView"
+                                                                  },
+                                                                  {
+                                                                    "nodeId": 40,
+                                                                    "accessibilityText": ",Sans-serif",
+                                                                    "x1": 206,
+                                                                    "y1": 516,
+                                                                    "x2": 291,
+                                                                    "y2": 701,
+                                                                    "centerPoint": "248,608",
+                                                                    "resourceId": "VisualIdentityView"
+                                                                  }
+                                                                ],
+                                                                "resourceId": "SuggestionListItemButton"
+                                                              },
+                                                              {
+                                                                "nodeId": 41,
+                                                                "accessibilityText": ",Rounded",
+                                                                "x1": 301,
+                                                                "y1": 566,
+                                                                "x2": 386,
+                                                                "y2": 651,
+                                                                "centerPoint": "343,608",
+                                                                "children": [
+                                                                  {
+                                                                    "nodeId": 42,
+                                                                    "accessibilityText": ",Rounded",
+                                                                    "x1": 301,
+                                                                    "y1": 516,
+                                                                    "x2": 386,
+                                                                    "y2": 701,
+                                                                    "centerPoint": "343,608",
+                                                                    "resourceId": "VisualIdentityView"
+                                                                  },
+                                                                  {
+                                                                    "nodeId": 43,
+                                                                    "accessibilityText": ",Rounded",
+                                                                    "x1": 301,
+                                                                    "y1": 516,
+                                                                    "x2": 386,
+                                                                    "y2": 701,
+                                                                    "centerPoint": "343,608",
+                                                                    "resourceId": "VisualIdentityView"
+                                                                  }
+                                                                ],
+                                                                "resourceId": "SuggestionListItemButton"
+                                                              },
+                                                              {
+                                                                "nodeId": 44,
+                                                                "accessibilityText": ",Sans-serif",
+                                                                "x1": 16,
+                                                                "y1": 661,
+                                                                "x2": 101,
+                                                                "y2": 746,
+                                                                "centerPoint": "58,703",
+                                                                "children": [
+                                                                  {
+                                                                    "nodeId": 45,
+                                                                    "accessibilityText": ",Sans-serif",
+                                                                    "x1": 16,
+                                                                    "y1": 611,
+                                                                    "x2": 101,
+                                                                    "y2": 796,
+                                                                    "centerPoint": "58,703",
+                                                                    "resourceId": "VisualIdentityView"
+                                                                  },
+                                                                  {
+                                                                    "nodeId": 46,
+                                                                    "accessibilityText": ",Sans-serif",
+                                                                    "x1": 16,
+                                                                    "y1": 611,
+                                                                    "x2": 101,
+                                                                    "y2": 796,
+                                                                    "centerPoint": "58,703",
+                                                                    "resourceId": "VisualIdentityView"
+                                                                  }
+                                                                ],
+                                                                "resourceId": "SuggestionListItemButton"
+                                                              },
+                                                              {
+                                                                "nodeId": 47,
+                                                                "accessibilityText": ",Serif",
+                                                                "x1": 111,
+                                                                "y1": 661,
+                                                                "x2": 196,
+                                                                "y2": 746,
+                                                                "centerPoint": "153,703",
+                                                                "children": [
+                                                                  {
+                                                                    "nodeId": 48,
+                                                                    "accessibilityText": ",Serif",
+                                                                    "x1": 111,
+                                                                    "y1": 611,
+                                                                    "x2": 196,
+                                                                    "y2": 796,
+                                                                    "centerPoint": "153,703",
+                                                                    "resourceId": "VisualIdentityView"
+                                                                  },
+                                                                  {
+                                                                    "nodeId": 49,
+                                                                    "accessibilityText": ",Serif",
+                                                                    "x1": 111,
+                                                                    "y1": 611,
+                                                                    "x2": 196,
+                                                                    "y2": 796,
+                                                                    "centerPoint": "153,703",
+                                                                    "resourceId": "VisualIdentityView"
+                                                                  }
+                                                                ],
+                                                                "resourceId": "SuggestionListItemButton"
+                                                              },
+                                                              {
+                                                                "nodeId": 50,
+                                                                "accessibilityText": ",Condensed",
+                                                                "x1": 206,
+                                                                "y1": 661,
+                                                                "x2": 291,
+                                                                "y2": 746,
+                                                                "centerPoint": "248,703",
+                                                                "children": [
+                                                                  {
+                                                                    "nodeId": 51,
+                                                                    "accessibilityText": ",Condensed",
+                                                                    "x1": 206,
+                                                                    "y1": 611,
+                                                                    "x2": 291,
+                                                                    "y2": 796,
+                                                                    "centerPoint": "248,703",
+                                                                    "resourceId": "VisualIdentityView"
+                                                                  },
+                                                                  {
+                                                                    "nodeId": 52,
+                                                                    "accessibilityText": ",Condensed",
+                                                                    "x1": 206,
+                                                                    "y1": 611,
+                                                                    "x2": 291,
+                                                                    "y2": 796,
+                                                                    "centerPoint": "248,703",
+                                                                    "resourceId": "VisualIdentityView"
+                                                                  }
+                                                                ],
+                                                                "resourceId": "SuggestionListItemButton"
+                                                              },
+                                                              {
+                                                                "nodeId": 53,
+                                                                "accessibilityText": ",Sans-serif",
+                                                                "x1": 301,
+                                                                "y1": 661,
+                                                                "x2": 386,
+                                                                "y2": 746,
+                                                                "centerPoint": "343,703",
+                                                                "children": [
+                                                                  {
+                                                                    "nodeId": 54,
+                                                                    "accessibilityText": ",Sans-serif",
+                                                                    "x1": 301,
+                                                                    "y1": 611,
+                                                                    "x2": 386,
+                                                                    "y2": 796,
+                                                                    "centerPoint": "343,703",
+                                                                    "resourceId": "VisualIdentityView"
+                                                                  },
+                                                                  {
+                                                                    "nodeId": 55,
+                                                                    "accessibilityText": ",Sans-serif",
+                                                                    "x1": 301,
+                                                                    "y1": 611,
+                                                                    "x2": 386,
+                                                                    "y2": 796,
+                                                                    "centerPoint": "343,703",
+                                                                    "resourceId": "VisualIdentityView"
+                                                                  }
+                                                                ],
+                                                                "resourceId": "SuggestionListItemButton"
+                                                              },
+                                                              {
+                                                                "nodeId": 56,
+                                                                "accessibilityText": ",Sans-serif",
+                                                                "x1": 16,
+                                                                "y1": 756,
+                                                                "x2": 101,
+                                                                "y2": 841,
+                                                                "centerPoint": "58,798",
+                                                                "children": [
+                                                                  {
+                                                                    "nodeId": 57,
+                                                                    "accessibilityText": ",Sans-serif",
+                                                                    "x1": 16,
+                                                                    "y1": 706,
+                                                                    "x2": 101,
+                                                                    "y2": 891,
+                                                                    "centerPoint": "58,798",
+                                                                    "resourceId": "VisualIdentityView"
+                                                                  },
+                                                                  {
+                                                                    "nodeId": 58,
+                                                                    "accessibilityText": ",Sans-serif",
+                                                                    "x1": 16,
+                                                                    "y1": 706,
+                                                                    "x2": 101,
+                                                                    "y2": 891,
+                                                                    "centerPoint": "58,798",
+                                                                    "resourceId": "VisualIdentityView"
+                                                                  }
+                                                                ],
+                                                                "resourceId": "SuggestionListItemButton"
+                                                              },
+                                                              {
+                                                                "nodeId": 59,
+                                                                "accessibilityText": ",Sans-serif",
+                                                                "x1": 111,
+                                                                "y1": 756,
+                                                                "x2": 196,
+                                                                "y2": 841,
+                                                                "centerPoint": "153,798",
+                                                                "children": [
+                                                                  {
+                                                                    "nodeId": 60,
+                                                                    "accessibilityText": ",Sans-serif",
+                                                                    "x1": 111,
+                                                                    "y1": 706,
+                                                                    "x2": 196,
+                                                                    "y2": 891,
+                                                                    "centerPoint": "153,798",
+                                                                    "resourceId": "VisualIdentityView"
+                                                                  },
+                                                                  {
+                                                                    "nodeId": 61,
+                                                                    "accessibilityText": ",Sans-serif",
+                                                                    "x1": 111,
+                                                                    "y1": 706,
+                                                                    "x2": 196,
+                                                                    "y2": 891,
+                                                                    "centerPoint": "153,798",
+                                                                    "resourceId": "VisualIdentityView"
+                                                                  }
+                                                                ],
+                                                                "resourceId": "SuggestionListItemButton"
+                                                              },
+                                                              {
+                                                                "nodeId": 62,
+                                                                "accessibilityText": ",Rounded",
+                                                                "x1": 206,
+                                                                "y1": 756,
+                                                                "x2": 291,
+                                                                "y2": 841,
+                                                                "centerPoint": "248,798",
+                                                                "children": [
+                                                                  {
+                                                                    "nodeId": 63,
+                                                                    "accessibilityText": ",Rounded",
+                                                                    "x1": 206,
+                                                                    "y1": 706,
+                                                                    "x2": 291,
+                                                                    "y2": 891,
+                                                                    "centerPoint": "248,798",
+                                                                    "resourceId": "VisualIdentityView"
+                                                                  },
+                                                                  {
+                                                                    "nodeId": 64,
+                                                                    "accessibilityText": ",Rounded",
+                                                                    "x1": 206,
+                                                                    "y1": 706,
+                                                                    "x2": 291,
+                                                                    "y2": 891,
+                                                                    "centerPoint": "248,798",
+                                                                    "resourceId": "VisualIdentityView"
+                                                                  }
+                                                                ],
+                                                                "resourceId": "SuggestionListItemButton"
+                                                              },
+                                                              {
+                                                                "nodeId": 65,
+                                                                "accessibilityText": ",Sans-serif",
+                                                                "x1": 301,
+                                                                "y1": 756,
+                                                                "x2": 386,
+                                                                "y2": 841,
+                                                                "centerPoint": "343,798",
+                                                                "children": [
+                                                                  {
+                                                                    "nodeId": 66,
+                                                                    "accessibilityText": ",Sans-serif",
+                                                                    "x1": 301,
+                                                                    "y1": 706,
+                                                                    "x2": 386,
+                                                                    "y2": 891,
+                                                                    "centerPoint": "343,798",
+                                                                    "resourceId": "VisualIdentityView"
+                                                                  },
+                                                                  {
+                                                                    "nodeId": 67,
+                                                                    "accessibilityText": ",Sans-serif",
+                                                                    "x1": 301,
+                                                                    "y1": 706,
+                                                                    "x2": 386,
+                                                                    "y2": 891,
+                                                                    "centerPoint": "343,798",
+                                                                    "resourceId": "VisualIdentityView"
+                                                                  }
+                                                                ],
+                                                                "resourceId": "SuggestionListItemButton"
+                                                              },
+                                                              {
+                                                                "nodeId": 68,
+                                                                "accessibilityText": ",Serif",
+                                                                "x1": 16,
+                                                                "y1": 851,
+                                                                "x2": 101,
+                                                                "y2": 936,
+                                                                "centerPoint": "58,893",
+                                                                "children": [
+                                                                  {
+                                                                    "nodeId": 69,
+                                                                    "accessibilityText": ",Serif",
+                                                                    "x1": 16,
+                                                                    "y1": 801,
+                                                                    "x2": 101,
+                                                                    "y2": 986,
+                                                                    "centerPoint": "58,893",
+                                                                    "resourceId": "VisualIdentityView"
+                                                                  },
+                                                                  {
+                                                                    "nodeId": 70,
+                                                                    "accessibilityText": ",Serif",
+                                                                    "x1": 16,
+                                                                    "y1": 801,
+                                                                    "x2": 101,
+                                                                    "y2": 986,
+                                                                    "centerPoint": "58,893",
+                                                                    "resourceId": "VisualIdentityView"
+                                                                  }
+                                                                ],
+                                                                "resourceId": "SuggestionListItemButton"
+                                                              },
+                                                              {
+                                                                "nodeId": 71,
+                                                                "accessibilityText": ",Condensed",
+                                                                "x1": 111,
+                                                                "y1": 851,
+                                                                "x2": 196,
+                                                                "y2": 936,
+                                                                "centerPoint": "153,893",
+                                                                "children": [
+                                                                  {
+                                                                    "nodeId": 72,
+                                                                    "accessibilityText": ",Condensed",
+                                                                    "x1": 111,
+                                                                    "y1": 801,
+                                                                    "x2": 196,
+                                                                    "y2": 986,
+                                                                    "centerPoint": "153,893",
+                                                                    "resourceId": "VisualIdentityView"
+                                                                  },
+                                                                  {
+                                                                    "nodeId": 73,
+                                                                    "accessibilityText": ",Condensed",
+                                                                    "x1": 111,
+                                                                    "y1": 801,
+                                                                    "x2": 196,
+                                                                    "y2": 986,
+                                                                    "centerPoint": "153,893",
+                                                                    "resourceId": "VisualIdentityView"
+                                                                  }
+                                                                ],
+                                                                "resourceId": "SuggestionListItemButton"
+                                                              },
+                                                              {
+                                                                "nodeId": 74,
+                                                                "accessibilityText": ",Sans-serif",
+                                                                "x1": 206,
+                                                                "y1": 851,
+                                                                "x2": 291,
+                                                                "y2": 936,
+                                                                "centerPoint": "248,893",
+                                                                "children": [
+                                                                  {
+                                                                    "nodeId": 75,
+                                                                    "accessibilityText": ",Sans-serif",
+                                                                    "x1": 206,
+                                                                    "y1": 801,
+                                                                    "x2": 291,
+                                                                    "y2": 986,
+                                                                    "centerPoint": "248,893",
+                                                                    "resourceId": "VisualIdentityView"
+                                                                  },
+                                                                  {
+                                                                    "nodeId": 76,
+                                                                    "accessibilityText": ",Sans-serif",
+                                                                    "x1": 206,
+                                                                    "y1": 801,
+                                                                    "x2": 291,
+                                                                    "y2": 986,
+                                                                    "centerPoint": "248,893",
+                                                                    "resourceId": "VisualIdentityView"
+                                                                  }
+                                                                ],
+                                                                "resourceId": "SuggestionListItemButton"
+                                                              },
+                                                              {
+                                                                "nodeId": 77,
+                                                                "accessibilityText": ",Sans-serif",
+                                                                "x1": 301,
+                                                                "y1": 851,
+                                                                "x2": 386,
+                                                                "y2": 936,
+                                                                "centerPoint": "343,893",
+                                                                "children": [
+                                                                  {
+                                                                    "nodeId": 78,
+                                                                    "accessibilityText": ",Sans-serif",
+                                                                    "x1": 301,
+                                                                    "y1": 801,
+                                                                    "x2": 386,
+                                                                    "y2": 986,
+                                                                    "centerPoint": "343,893",
+                                                                    "resourceId": "VisualIdentityView"
+                                                                  },
+                                                                  {
+                                                                    "nodeId": 79,
+                                                                    "accessibilityText": ",Sans-serif",
+                                                                    "x1": 301,
+                                                                    "y1": 801,
+                                                                    "x2": 386,
+                                                                    "y2": 986,
+                                                                    "centerPoint": "343,893",
+                                                                    "resourceId": "VisualIdentityView"
+                                                                  }
+                                                                ],
+                                                                "resourceId": "SuggestionListItemButton"
+                                                              }
+                                                            ],
+                                                            "resourceId": "StickyHeaderContent"
+                                                          }
+                                                        ]
+                                                      }
+                                                    ],
+                                                    "resourceId": "VisualIdentityEditorContainerVStack"
+                                                  },
+                                                  {
+                                                    "nodeId": 80,
+                                                    "accessibilityText": ",Sans-serif",
+                                                    "x1": 55,
+                                                    "y1": -28,
+                                                    "x2": 346,
+                                                    "y2": 600,
+                                                    "centerPoint": "200,286",
+                                                    "resourceId": "VisualIdentityEditorContainerVStack"
+                                                  },
+                                                  {
+                                                    "nodeId": 81,
+                                                    "accessibilityText": ",Sans-serif",
+                                                    "x1": 55,
+                                                    "y1": -28,
+                                                    "x2": 346,
+                                                    "y2": 600,
+                                                    "centerPoint": "200,286",
+                                                    "resourceId": "VisualIdentityEditorContainerVStack"
+                                                  },
+                                                  {
+                                                    "nodeId": 82,
+                                                    "accessibilityText": "Text",
+                                                    "x1": 98,
+                                                    "y1": 451,
+                                                    "x2": 163,
+                                                    "y2": 495,
+                                                    "centerPoint": "130,473",
+                                                    "resourceId": "VisualIdentityEditorContainerVStack"
+                                                  },
+                                                  {
+                                                    "nodeId": 83,
+                                                    "x1": 98,
+                                                    "y1": 462,
+                                                    "x2": 163,
+                                                    "y2": 484,
+                                                    "centerPoint": "130,473",
+                                                    "children": [
+                                                      {
+                                                        "nodeId": 84,
+                                                        "x1": 98,
+                                                        "y1": 462,
+                                                        "x2": 163,
+                                                        "y2": 484,
+                                                        "centerPoint": "130,473"
+                                                      },
+                                                      {
+                                                        "nodeId": 85,
+                                                        "x1": 98,
+                                                        "y1": 462,
+                                                        "x2": 163,
+                                                        "y2": 484,
+                                                        "centerPoint": "130,473",
+                                                        "children": [
+                                                          {
+                                                            "nodeId": 86,
+                                                            "x1": 98,
+                                                            "y1": 463,
+                                                            "x2": 98,
+                                                            "y2": 484,
+                                                            "centerPoint": "98,473"
+                                                          }
+                                                        ]
+                                                      }
+                                                    ],
+                                                    "resourceId": "VisualIdentityEditorContainerVStack"
+                                                  },
+                                                  {
+                                                    "nodeId": 87,
+                                                    "accessibilityText": "Font",
+                                                    "x1": 168,
+                                                    "y1": 451,
+                                                    "x2": 233,
+                                                    "y2": 495,
+                                                    "centerPoint": "200,473",
+                                                    "resourceId": "VisualIdentityEditorContainerVStack"
+                                                  },
+                                                  {
+                                                    "nodeId": 88,
+                                                    "x1": 168,
+                                                    "y1": 462,
+                                                    "x2": 233,
+                                                    "y2": 484,
+                                                    "centerPoint": "200,473",
+                                                    "children": [
+                                                      {
+                                                        "nodeId": 89,
+                                                        "x1": 168,
+                                                        "y1": 462,
+                                                        "x2": 233,
+                                                        "y2": 484,
+                                                        "centerPoint": "200,473"
+                                                      },
+                                                      {
+                                                        "nodeId": 90,
+                                                        "x1": 168,
+                                                        "y1": 462,
+                                                        "x2": 233,
+                                                        "y2": 484,
+                                                        "centerPoint": "200,473",
+                                                        "children": [
+                                                          {
+                                                            "nodeId": 91,
+                                                            "x1": 168,
+                                                            "y1": 463,
+                                                            "x2": 168,
+                                                            "y2": 484,
+                                                            "centerPoint": "168,473"
+                                                          }
+                                                        ]
+                                                      }
+                                                    ],
+                                                    "resourceId": "VisualIdentityEditorContainerVStack"
+                                                  },
+                                                  {
+                                                    "nodeId": 92,
+                                                    "accessibilityText": "Color",
+                                                    "x1": 238,
+                                                    "y1": 451,
+                                                    "x2": 303,
+                                                    "y2": 495,
+                                                    "centerPoint": "270,473",
+                                                    "resourceId": "VisualIdentityEditorContainerVStack"
+                                                  },
+                                                  {
+                                                    "nodeId": 93,
+                                                    "x1": 238,
+                                                    "y1": 462,
+                                                    "x2": 303,
+                                                    "y2": 484,
+                                                    "centerPoint": "270,473",
+                                                    "children": [
+                                                      {
+                                                        "nodeId": 94,
+                                                        "x1": 238,
+                                                        "y1": 462,
+                                                        "x2": 303,
+                                                        "y2": 484,
+                                                        "centerPoint": "270,473"
+                                                      },
+                                                      {
+                                                        "nodeId": 95,
+                                                        "x1": 238,
+                                                        "y1": 462,
+                                                        "x2": 303,
+                                                        "y2": 484,
+                                                        "centerPoint": "270,473",
+                                                        "children": [
+                                                          {
+                                                            "nodeId": 96,
+                                                            "x1": 238,
+                                                            "y1": 463,
+                                                            "x2": 238,
+                                                            "y2": 484,
+                                                            "centerPoint": "238,473"
+                                                          }
+                                                        ]
+                                                      }
+                                                    ],
+                                                    "resourceId": "VisualIdentityEditorContainerVStack"
+                                                  }
+                                                ]
+                                              }
+                                            ]
+                                          }
+                                        ]
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "nodeId": 97,
+                                    "x2": 402,
+                                    "y2": 874,
+                                    "centerPoint": "201,437",
+                                    "children": [
+                                      {
+                                        "nodeId": 98,
+                                        "x2": 402,
+                                        "y2": 874,
+                                        "centerPoint": "201,437"
+                                      }
+                                    ]
+                                  }
+                                ],
+                                "resourceId": "VisualIdentityEditorNavigationStack"
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "nodeId": 99,
+            "x2": 402,
+            "y2": 874,
+            "centerPoint": "201,437",
+            "children": [
+              {
+                "nodeId": 100,
+                "x2": 402,
+                "y2": 874,
+                "centerPoint": "201,437",
+                "children": [
+                  {
+                    "nodeId": 101,
+                    "x2": 402,
+                    "y2": 874,
+                    "centerPoint": "201,437"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "nodeId": 102,
+        "centerPoint": "0,0",
+        "children": [
+          {
+            "nodeId": 103,
+            "x2": 402,
+            "y2": 54,
+            "centerPoint": "201,27"
+          },
+          {
+            "nodeId": 104,
+            "x2": 402,
+            "y2": 54,
+            "centerPoint": "201,27",
+            "children": [
+              {
+                "nodeId": 105,
+                "x2": 402,
+                "y2": 54,
+                "centerPoint": "201,27",
+                "children": [
+                  {
+                    "nodeId": 106,
+                    "x2": 402,
+                    "y2": 54,
+                    "centerPoint": "201,27",
+                    "children": [
+                      {
+                        "nodeId": 107,
+                        "accessibilityText": "7:34\u202fAM",
+                        "x1": 56,
+                        "y1": 22,
+                        "x2": 92,
+                        "y2": 42,
+                        "centerPoint": "74,32"
+                      },
+                      {
+                        "nodeId": 108,
+                        "accessibilityText": "Cellular",
+                        "x1": 288,
+                        "y1": 26,
+                        "x2": 307,
+                        "y2": 38,
+                        "centerPoint": "297,32",
+                        "text": "No signal"
+                      },
+                      {
+                        "nodeId": 109,
+                        "x1": 315,
+                        "y1": 26,
+                        "x2": 332,
+                        "y2": 38,
+                        "centerPoint": "323,32",
+                        "resourceId": "3 of 3 Wi-Fi bars",
+                        "text": "SSID, 3 of 3 Wi-Fi bars"
+                      },
+                      {
+                        "nodeId": 110,
+                        "accessibilityText": "100% battery power",
+                        "x1": 339,
+                        "y1": 26,
+                        "x2": 366,
+                        "y2": 39,
+                        "centerPoint": "352,32",
+                        "text": "Not charging"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "enabled": false
+      }
+    ],
+    "enabled": false
+  },
+  "trailblazeNodeTree": {
+    "children": [
+      {
+        "nodeId": 1,
+        "ref": "w72",
+        "children": [
+          {
+            "nodeId": 2,
+            "children": [
+              {
+                "nodeId": 3,
+                "children": [
+                  {
+                    "nodeId": 4,
+                    "children": [
+                      {
+                        "nodeId": 5,
+                        "children": [
+                          {
+                            "nodeId": 6,
+                            "children": [
+                              {
+                                "nodeId": 7,
+                                "children": [
+                                  {
+                                    "nodeId": 8,
+                                    "children": [
+                                      {
+                                        "nodeId": 9,
+                                        "ref": "h374",
+                                        "children": [
+                                          {
+                                            "nodeId": 10,
+                                            "children": [
+                                              {
+                                                "nodeId": 11,
+                                                "bounds": {
+                                                  "left": 20,
+                                                  "top": 66,
+                                                  "right": 96,
+                                                  "bottom": 102
+                                                },
+                                                "driverDetail": {
+                                                  "class": "iosMaestro",
+                                                  "resourceId": "VisualIdentityCancelButton",
+                                                  "accessibilityText": "Cancel"
+                                                }
+                                              }
+                                            ],
+                                            "bounds": {
+                                              "left": 20,
+                                              "top": 66,
+                                              "right": 96,
+                                              "bottom": 102
+                                            },
+                                            "driverDetail": {
+                                              "class": "iosMaestro"
+                                            }
+                                          }
+                                        ],
+                                        "bounds": {
+                                          "left": 20,
+                                          "top": 66,
+                                          "right": 96,
+                                          "bottom": 102
+                                        },
+                                        "driverDetail": {
+                                          "class": "iosMaestro",
+                                          "resourceId": "VisualIdentityCancelButton",
+                                          "accessibilityText": "Cancel"
+                                        }
+                                      },
+                                      {
+                                        "nodeId": 12,
+                                        "children": [
+                                          {
+                                            "nodeId": 13,
+                                            "children": [
+                                              {
+                                                "nodeId": 14,
+                                                "children": [
+                                                  {
+                                                    "nodeId": 15,
+                                                    "ref": "j351",
+                                                    "bounds": {
+                                                      "left": 112,
+                                                      "top": 60,
+                                                      "right": 194,
+                                                      "bottom": 109
+                                                    },
+                                                    "driverDetail": {
+                                                      "class": "iosMaestro",
+                                                      "accessibilityText": "Avatar",
+                                                      "selected": true
+                                                    }
+                                                  },
+                                                  {
+                                                    "nodeId": 16,
+                                                    "ref": "i240",
+                                                    "bounds": {
+                                                      "left": 194,
+                                                      "top": 60,
+                                                      "right": 276,
+                                                      "bottom": 109
+                                                    },
+                                                    "driverDetail": {
+                                                      "class": "iosMaestro",
+                                                      "accessibilityText": "Poster"
+                                                    }
+                                                  }
+                                                ],
+                                                "bounds": {
+                                                  "left": 112,
+                                                  "top": 60,
+                                                  "right": 276,
+                                                  "bottom": 108
+                                                },
+                                                "driverDetail": {
+                                                  "class": "iosMaestro",
+                                                  "resourceId": "IdentityTypePicker"
+                                                }
+                                              }
+                                            ],
+                                            "bounds": {
+                                              "left": 112,
+                                              "top": 60,
+                                              "right": 276,
+                                              "bottom": 108
+                                            },
+                                            "driverDetail": {
+                                              "class": "iosMaestro"
+                                            }
+                                          }
+                                        ],
+                                        "bounds": {
+                                          "left": 112,
+                                          "top": 60,
+                                          "right": 276,
+                                          "bottom": 108
+                                        },
+                                        "driverDetail": {
+                                          "class": "iosMaestro"
+                                        }
+                                      },
+                                      {
+                                        "nodeId": 17,
+                                        "ref": "e451",
+                                        "children": [
+                                          {
+                                            "nodeId": 18,
+                                            "children": [
+                                              {
+                                                "nodeId": 19,
+                                                "bounds": {
+                                                  "left": 299,
+                                                  "top": 66,
+                                                  "right": 382,
+                                                  "bottom": 102
+                                                },
+                                                "driverDetail": {
+                                                  "class": "iosMaestro",
+                                                  "resourceId": "VisualIdentityChooseButton",
+                                                  "accessibilityText": "Choose"
+                                                }
+                                              }
+                                            ],
+                                            "bounds": {
+                                              "left": 299,
+                                              "top": 66,
+                                              "right": 382,
+                                              "bottom": 102
+                                            },
+                                            "driverDetail": {
+                                              "class": "iosMaestro"
+                                            }
+                                          }
+                                        ],
+                                        "bounds": {
+                                          "left": 299,
+                                          "top": 66,
+                                          "right": 382,
+                                          "bottom": 102
+                                        },
+                                        "driverDetail": {
+                                          "class": "iosMaestro",
+                                          "resourceId": "VisualIdentityChooseButton",
+                                          "accessibilityText": "Choose"
+                                        }
+                                      }
+                                    ],
+                                    "bounds": {
+                                      "left": 0,
+                                      "top": 62,
+                                      "right": 402,
+                                      "bottom": 116
+                                    },
+                                    "driverDetail": {
+                                      "class": "iosMaestro",
+                                      "resourceId": "_TtGC7SwiftUI32NavigationStackHosting"
+                                    }
+                                  },
+                                  {
+                                    "nodeId": 20,
+                                    "children": [
+                                      {
+                                        "nodeId": 21,
+                                        "children": [
+                                          {
+                                            "nodeId": 22,
+                                            "children": [
+                                              {
+                                                "nodeId": 23,
+                                                "children": [
+                                                  {
+                                                    "nodeId": 24,
+                                                    "children": [
+                                                      {
+                                                        "nodeId": 25,
+                                                        "children": [
+                                                          {
+                                                            "nodeId": 26,
+                                                            "bounds": {
+                                                              "left": 0,
+                                                              "top": 0,
+                                                              "right": 402,
+                                                              "bottom": 172
+                                                            },
+                                                            "driverDetail": {
+                                                              "class": "iosMaestro"
+                                                            }
+                                                          }
+                                                        ],
+                                                        "bounds": {
+                                                          "left": 0,
+                                                          "top": 0,
+                                                          "right": 402,
+                                                          "bottom": 874
+                                                        },
+                                                        "driverDetail": {
+                                                          "class": "iosMaestro"
+                                                        }
+                                                      },
+                                                      {
+                                                        "nodeId": 27,
+                                                        "bounds": {
+                                                          "left": 0,
+                                                          "top": 0,
+                                                          "right": 402,
+                                                          "bottom": 874
+                                                        },
+                                                        "driverDetail": {
+                                                          "class": "iosMaestro"
+                                                        }
+                                                      },
+                                                      {
+                                                        "nodeId": 28,
+                                                        "children": [
+                                                          {
+                                                            "nodeId": 29,
+                                                            "ref": "k891",
+                                                            "bounds": {
+                                                              "left": 20,
+                                                              "top": 531,
+                                                              "right": 119,
+                                                              "bottom": 551
+                                                            },
+                                                            "driverDetail": {
+                                                              "class": "iosMaestro",
+                                                              "resourceId": "StickyHeaderContent",
+                                                              "accessibilityText": "Suggestions"
+                                                            }
+                                                          },
+                                                          {
+                                                            "nodeId": 30,
+                                                            "children": [
+                                                              {
+                                                                "nodeId": 31,
+                                                                "ref": "e641",
+                                                                "children": [
+                                                                  {
+                                                                    "nodeId": 32,
+                                                                    "bounds": {
+                                                                      "left": 16,
+                                                                      "top": 516,
+                                                                      "right": 101,
+                                                                      "bottom": 701
+                                                                    },
+                                                                    "driverDetail": {
+                                                                      "class": "iosMaestro",
+                                                                      "resourceId": "VisualIdentityView",
+                                                                      "accessibilityText": ",Sans-serif"
+                                                                    }
+                                                                  },
+                                                                  {
+                                                                    "nodeId": 33,
+                                                                    "bounds": {
+                                                                      "left": 16,
+                                                                      "top": 516,
+                                                                      "right": 101,
+                                                                      "bottom": 701
+                                                                    },
+                                                                    "driverDetail": {
+                                                                      "class": "iosMaestro",
+                                                                      "resourceId": "VisualIdentityView",
+                                                                      "accessibilityText": ",Sans-serif"
+                                                                    }
+                                                                  }
+                                                                ],
+                                                                "bounds": {
+                                                                  "left": 16,
+                                                                  "top": 566,
+                                                                  "right": 101,
+                                                                  "bottom": 651
+                                                                },
+                                                                "driverDetail": {
+                                                                  "class": "iosMaestro",
+                                                                  "resourceId": "SuggestionListItemButton",
+                                                                  "accessibilityText": ",Sans-serif"
+                                                                }
+                                                              },
+                                                              {
+                                                                "nodeId": 34,
+                                                                "children": [
+                                                                  {
+                                                                    "nodeId": 35,
+                                                                    "bounds": {
+                                                                      "left": 111,
+                                                                      "top": 516,
+                                                                      "right": 196,
+                                                                      "bottom": 701
+                                                                    },
+                                                                    "driverDetail": {
+                                                                      "class": "iosMaestro",
+                                                                      "resourceId": "VisualIdentityView",
+                                                                      "accessibilityText": ",Sans-serif"
+                                                                    }
+                                                                  },
+                                                                  {
+                                                                    "nodeId": 36,
+                                                                    "bounds": {
+                                                                      "left": 111,
+                                                                      "top": 516,
+                                                                      "right": 196,
+                                                                      "bottom": 701
+                                                                    },
+                                                                    "driverDetail": {
+                                                                      "class": "iosMaestro",
+                                                                      "resourceId": "VisualIdentityView",
+                                                                      "accessibilityText": ",Sans-serif"
+                                                                    }
+                                                                  }
+                                                                ],
+                                                                "bounds": {
+                                                                  "left": 111,
+                                                                  "top": 566,
+                                                                  "right": 196,
+                                                                  "bottom": 651
+                                                                },
+                                                                "driverDetail": {
+                                                                  "class": "iosMaestro",
+                                                                  "resourceId": "SuggestionListItemButton",
+                                                                  "accessibilityText": ",Sans-serif"
+                                                                }
+                                                              },
+                                                              {
+                                                                "nodeId": 37,
+                                                                "children": [
+                                                                  {
+                                                                    "nodeId": 38,
+                                                                    "bounds": {
+                                                                      "left": 206,
+                                                                      "top": 516,
+                                                                      "right": 291,
+                                                                      "bottom": 701
+                                                                    },
+                                                                    "driverDetail": {
+                                                                      "class": "iosMaestro",
+                                                                      "resourceId": "VisualIdentityView",
+                                                                      "accessibilityText": ",Sans-serif"
+                                                                    }
+                                                                  },
+                                                                  {
+                                                                    "nodeId": 39,
+                                                                    "bounds": {
+                                                                      "left": 206,
+                                                                      "top": 516,
+                                                                      "right": 291,
+                                                                      "bottom": 701
+                                                                    },
+                                                                    "driverDetail": {
+                                                                      "class": "iosMaestro",
+                                                                      "resourceId": "VisualIdentityView",
+                                                                      "accessibilityText": ",Sans-serif"
+                                                                    }
+                                                                  }
+                                                                ],
+                                                                "bounds": {
+                                                                  "left": 206,
+                                                                  "top": 566,
+                                                                  "right": 291,
+                                                                  "bottom": 651
+                                                                },
+                                                                "driverDetail": {
+                                                                  "class": "iosMaestro",
+                                                                  "resourceId": "SuggestionListItemButton",
+                                                                  "accessibilityText": ",Sans-serif"
+                                                                }
+                                                              },
+                                                              {
+                                                                "nodeId": 40,
+                                                                "ref": "u549",
+                                                                "children": [
+                                                                  {
+                                                                    "nodeId": 41,
+                                                                    "bounds": {
+                                                                      "left": 301,
+                                                                      "top": 516,
+                                                                      "right": 386,
+                                                                      "bottom": 701
+                                                                    },
+                                                                    "driverDetail": {
+                                                                      "class": "iosMaestro",
+                                                                      "resourceId": "VisualIdentityView",
+                                                                      "accessibilityText": ",Rounded"
+                                                                    }
+                                                                  },
+                                                                  {
+                                                                    "nodeId": 42,
+                                                                    "bounds": {
+                                                                      "left": 301,
+                                                                      "top": 516,
+                                                                      "right": 386,
+                                                                      "bottom": 701
+                                                                    },
+                                                                    "driverDetail": {
+                                                                      "class": "iosMaestro",
+                                                                      "resourceId": "VisualIdentityView",
+                                                                      "accessibilityText": ",Rounded"
+                                                                    }
+                                                                  }
+                                                                ],
+                                                                "bounds": {
+                                                                  "left": 301,
+                                                                  "top": 566,
+                                                                  "right": 386,
+                                                                  "bottom": 651
+                                                                },
+                                                                "driverDetail": {
+                                                                  "class": "iosMaestro",
+                                                                  "resourceId": "SuggestionListItemButton",
+                                                                  "accessibilityText": ",Rounded"
+                                                                }
+                                                              },
+                                                              {
+                                                                "nodeId": 43,
+                                                                "children": [
+                                                                  {
+                                                                    "nodeId": 44,
+                                                                    "bounds": {
+                                                                      "left": 16,
+                                                                      "top": 611,
+                                                                      "right": 101,
+                                                                      "bottom": 796
+                                                                    },
+                                                                    "driverDetail": {
+                                                                      "class": "iosMaestro",
+                                                                      "resourceId": "VisualIdentityView",
+                                                                      "accessibilityText": ",Sans-serif"
+                                                                    }
+                                                                  },
+                                                                  {
+                                                                    "nodeId": 45,
+                                                                    "bounds": {
+                                                                      "left": 16,
+                                                                      "top": 611,
+                                                                      "right": 101,
+                                                                      "bottom": 796
+                                                                    },
+                                                                    "driverDetail": {
+                                                                      "class": "iosMaestro",
+                                                                      "resourceId": "VisualIdentityView",
+                                                                      "accessibilityText": ",Sans-serif"
+                                                                    }
+                                                                  }
+                                                                ],
+                                                                "bounds": {
+                                                                  "left": 16,
+                                                                  "top": 661,
+                                                                  "right": 101,
+                                                                  "bottom": 746
+                                                                },
+                                                                "driverDetail": {
+                                                                  "class": "iosMaestro",
+                                                                  "resourceId": "SuggestionListItemButton",
+                                                                  "accessibilityText": ",Sans-serif"
+                                                                }
+                                                              },
+                                                              {
+                                                                "nodeId": 46,
+                                                                "ref": "y672",
+                                                                "children": [
+                                                                  {
+                                                                    "nodeId": 47,
+                                                                    "bounds": {
+                                                                      "left": 111,
+                                                                      "top": 611,
+                                                                      "right": 196,
+                                                                      "bottom": 796
+                                                                    },
+                                                                    "driverDetail": {
+                                                                      "class": "iosMaestro",
+                                                                      "resourceId": "VisualIdentityView",
+                                                                      "accessibilityText": ",Serif"
+                                                                    }
+                                                                  },
+                                                                  {
+                                                                    "nodeId": 48,
+                                                                    "bounds": {
+                                                                      "left": 111,
+                                                                      "top": 611,
+                                                                      "right": 196,
+                                                                      "bottom": 796
+                                                                    },
+                                                                    "driverDetail": {
+                                                                      "class": "iosMaestro",
+                                                                      "resourceId": "VisualIdentityView",
+                                                                      "accessibilityText": ",Serif"
+                                                                    }
+                                                                  }
+                                                                ],
+                                                                "bounds": {
+                                                                  "left": 111,
+                                                                  "top": 661,
+                                                                  "right": 196,
+                                                                  "bottom": 746
+                                                                },
+                                                                "driverDetail": {
+                                                                  "class": "iosMaestro",
+                                                                  "resourceId": "SuggestionListItemButton",
+                                                                  "accessibilityText": ",Serif"
+                                                                }
+                                                              },
+                                                              {
+                                                                "nodeId": 49,
+                                                                "ref": "g23",
+                                                                "children": [
+                                                                  {
+                                                                    "nodeId": 50,
+                                                                    "bounds": {
+                                                                      "left": 206,
+                                                                      "top": 611,
+                                                                      "right": 291,
+                                                                      "bottom": 796
+                                                                    },
+                                                                    "driverDetail": {
+                                                                      "class": "iosMaestro",
+                                                                      "resourceId": "VisualIdentityView",
+                                                                      "accessibilityText": ",Condensed"
+                                                                    }
+                                                                  },
+                                                                  {
+                                                                    "nodeId": 51,
+                                                                    "bounds": {
+                                                                      "left": 206,
+                                                                      "top": 611,
+                                                                      "right": 291,
+                                                                      "bottom": 796
+                                                                    },
+                                                                    "driverDetail": {
+                                                                      "class": "iosMaestro",
+                                                                      "resourceId": "VisualIdentityView",
+                                                                      "accessibilityText": ",Condensed"
+                                                                    }
+                                                                  }
+                                                                ],
+                                                                "bounds": {
+                                                                  "left": 206,
+                                                                  "top": 661,
+                                                                  "right": 291,
+                                                                  "bottom": 746
+                                                                },
+                                                                "driverDetail": {
+                                                                  "class": "iosMaestro",
+                                                                  "resourceId": "SuggestionListItemButton",
+                                                                  "accessibilityText": ",Condensed"
+                                                                }
+                                                              },
+                                                              {
+                                                                "nodeId": 52,
+                                                                "children": [
+                                                                  {
+                                                                    "nodeId": 53,
+                                                                    "bounds": {
+                                                                      "left": 301,
+                                                                      "top": 611,
+                                                                      "right": 386,
+                                                                      "bottom": 796
+                                                                    },
+                                                                    "driverDetail": {
+                                                                      "class": "iosMaestro",
+                                                                      "resourceId": "VisualIdentityView",
+                                                                      "accessibilityText": ",Sans-serif"
+                                                                    }
+                                                                  },
+                                                                  {
+                                                                    "nodeId": 54,
+                                                                    "bounds": {
+                                                                      "left": 301,
+                                                                      "top": 611,
+                                                                      "right": 386,
+                                                                      "bottom": 796
+                                                                    },
+                                                                    "driverDetail": {
+                                                                      "class": "iosMaestro",
+                                                                      "resourceId": "VisualIdentityView",
+                                                                      "accessibilityText": ",Sans-serif"
+                                                                    }
+                                                                  }
+                                                                ],
+                                                                "bounds": {
+                                                                  "left": 301,
+                                                                  "top": 661,
+                                                                  "right": 386,
+                                                                  "bottom": 746
+                                                                },
+                                                                "driverDetail": {
+                                                                  "class": "iosMaestro",
+                                                                  "resourceId": "SuggestionListItemButton",
+                                                                  "accessibilityText": ",Sans-serif"
+                                                                }
+                                                              },
+                                                              {
+                                                                "nodeId": 55,
+                                                                "children": [
+                                                                  {
+                                                                    "nodeId": 56,
+                                                                    "bounds": {
+                                                                      "left": 16,
+                                                                      "top": 706,
+                                                                      "right": 101,
+                                                                      "bottom": 891
+                                                                    },
+                                                                    "driverDetail": {
+                                                                      "class": "iosMaestro",
+                                                                      "resourceId": "VisualIdentityView",
+                                                                      "accessibilityText": ",Sans-serif"
+                                                                    }
+                                                                  },
+                                                                  {
+                                                                    "nodeId": 57,
+                                                                    "bounds": {
+                                                                      "left": 16,
+                                                                      "top": 706,
+                                                                      "right": 101,
+                                                                      "bottom": 891
+                                                                    },
+                                                                    "driverDetail": {
+                                                                      "class": "iosMaestro",
+                                                                      "resourceId": "VisualIdentityView",
+                                                                      "accessibilityText": ",Sans-serif"
+                                                                    }
+                                                                  }
+                                                                ],
+                                                                "bounds": {
+                                                                  "left": 16,
+                                                                  "top": 756,
+                                                                  "right": 101,
+                                                                  "bottom": 841
+                                                                },
+                                                                "driverDetail": {
+                                                                  "class": "iosMaestro",
+                                                                  "resourceId": "SuggestionListItemButton",
+                                                                  "accessibilityText": ",Sans-serif"
+                                                                }
+                                                              },
+                                                              {
+                                                                "nodeId": 58,
+                                                                "children": [
+                                                                  {
+                                                                    "nodeId": 59,
+                                                                    "bounds": {
+                                                                      "left": 111,
+                                                                      "top": 706,
+                                                                      "right": 196,
+                                                                      "bottom": 891
+                                                                    },
+                                                                    "driverDetail": {
+                                                                      "class": "iosMaestro",
+                                                                      "resourceId": "VisualIdentityView",
+                                                                      "accessibilityText": ",Sans-serif"
+                                                                    }
+                                                                  },
+                                                                  {
+                                                                    "nodeId": 60,
+                                                                    "bounds": {
+                                                                      "left": 111,
+                                                                      "top": 706,
+                                                                      "right": 196,
+                                                                      "bottom": 891
+                                                                    },
+                                                                    "driverDetail": {
+                                                                      "class": "iosMaestro",
+                                                                      "resourceId": "VisualIdentityView",
+                                                                      "accessibilityText": ",Sans-serif"
+                                                                    }
+                                                                  }
+                                                                ],
+                                                                "bounds": {
+                                                                  "left": 111,
+                                                                  "top": 756,
+                                                                  "right": 196,
+                                                                  "bottom": 841
+                                                                },
+                                                                "driverDetail": {
+                                                                  "class": "iosMaestro",
+                                                                  "resourceId": "SuggestionListItemButton",
+                                                                  "accessibilityText": ",Sans-serif"
+                                                                }
+                                                              },
+                                                              {
+                                                                "nodeId": 61,
+                                                                "children": [
+                                                                  {
+                                                                    "nodeId": 62,
+                                                                    "bounds": {
+                                                                      "left": 206,
+                                                                      "top": 706,
+                                                                      "right": 291,
+                                                                      "bottom": 891
+                                                                    },
+                                                                    "driverDetail": {
+                                                                      "class": "iosMaestro",
+                                                                      "resourceId": "VisualIdentityView",
+                                                                      "accessibilityText": ",Rounded"
+                                                                    }
+                                                                  },
+                                                                  {
+                                                                    "nodeId": 63,
+                                                                    "bounds": {
+                                                                      "left": 206,
+                                                                      "top": 706,
+                                                                      "right": 291,
+                                                                      "bottom": 891
+                                                                    },
+                                                                    "driverDetail": {
+                                                                      "class": "iosMaestro",
+                                                                      "resourceId": "VisualIdentityView",
+                                                                      "accessibilityText": ",Rounded"
+                                                                    }
+                                                                  }
+                                                                ],
+                                                                "bounds": {
+                                                                  "left": 206,
+                                                                  "top": 756,
+                                                                  "right": 291,
+                                                                  "bottom": 841
+                                                                },
+                                                                "driverDetail": {
+                                                                  "class": "iosMaestro",
+                                                                  "resourceId": "SuggestionListItemButton",
+                                                                  "accessibilityText": ",Rounded"
+                                                                }
+                                                              },
+                                                              {
+                                                                "nodeId": 64,
+                                                                "children": [
+                                                                  {
+                                                                    "nodeId": 65,
+                                                                    "bounds": {
+                                                                      "left": 301,
+                                                                      "top": 706,
+                                                                      "right": 386,
+                                                                      "bottom": 891
+                                                                    },
+                                                                    "driverDetail": {
+                                                                      "class": "iosMaestro",
+                                                                      "resourceId": "VisualIdentityView",
+                                                                      "accessibilityText": ",Sans-serif"
+                                                                    }
+                                                                  },
+                                                                  {
+                                                                    "nodeId": 66,
+                                                                    "bounds": {
+                                                                      "left": 301,
+                                                                      "top": 706,
+                                                                      "right": 386,
+                                                                      "bottom": 891
+                                                                    },
+                                                                    "driverDetail": {
+                                                                      "class": "iosMaestro",
+                                                                      "resourceId": "VisualIdentityView",
+                                                                      "accessibilityText": ",Sans-serif"
+                                                                    }
+                                                                  }
+                                                                ],
+                                                                "bounds": {
+                                                                  "left": 301,
+                                                                  "top": 756,
+                                                                  "right": 386,
+                                                                  "bottom": 841
+                                                                },
+                                                                "driverDetail": {
+                                                                  "class": "iosMaestro",
+                                                                  "resourceId": "SuggestionListItemButton",
+                                                                  "accessibilityText": ",Sans-serif"
+                                                                }
+                                                              },
+                                                              {
+                                                                "nodeId": 67,
+                                                                "children": [
+                                                                  {
+                                                                    "nodeId": 68,
+                                                                    "bounds": {
+                                                                      "left": 16,
+                                                                      "top": 801,
+                                                                      "right": 101,
+                                                                      "bottom": 986
+                                                                    },
+                                                                    "driverDetail": {
+                                                                      "class": "iosMaestro",
+                                                                      "resourceId": "VisualIdentityView",
+                                                                      "accessibilityText": ",Serif"
+                                                                    }
+                                                                  },
+                                                                  {
+                                                                    "nodeId": 69,
+                                                                    "bounds": {
+                                                                      "left": 16,
+                                                                      "top": 801,
+                                                                      "right": 101,
+                                                                      "bottom": 986
+                                                                    },
+                                                                    "driverDetail": {
+                                                                      "class": "iosMaestro",
+                                                                      "resourceId": "VisualIdentityView",
+                                                                      "accessibilityText": ",Serif"
+                                                                    }
+                                                                  }
+                                                                ],
+                                                                "bounds": {
+                                                                  "left": 16,
+                                                                  "top": 851,
+                                                                  "right": 101,
+                                                                  "bottom": 936
+                                                                },
+                                                                "driverDetail": {
+                                                                  "class": "iosMaestro",
+                                                                  "resourceId": "SuggestionListItemButton",
+                                                                  "accessibilityText": ",Serif"
+                                                                }
+                                                              },
+                                                              {
+                                                                "nodeId": 70,
+                                                                "children": [
+                                                                  {
+                                                                    "nodeId": 71,
+                                                                    "bounds": {
+                                                                      "left": 111,
+                                                                      "top": 801,
+                                                                      "right": 196,
+                                                                      "bottom": 986
+                                                                    },
+                                                                    "driverDetail": {
+                                                                      "class": "iosMaestro",
+                                                                      "resourceId": "VisualIdentityView",
+                                                                      "accessibilityText": ",Condensed"
+                                                                    }
+                                                                  },
+                                                                  {
+                                                                    "nodeId": 72,
+                                                                    "bounds": {
+                                                                      "left": 111,
+                                                                      "top": 801,
+                                                                      "right": 196,
+                                                                      "bottom": 986
+                                                                    },
+                                                                    "driverDetail": {
+                                                                      "class": "iosMaestro",
+                                                                      "resourceId": "VisualIdentityView",
+                                                                      "accessibilityText": ",Condensed"
+                                                                    }
+                                                                  }
+                                                                ],
+                                                                "bounds": {
+                                                                  "left": 111,
+                                                                  "top": 851,
+                                                                  "right": 196,
+                                                                  "bottom": 936
+                                                                },
+                                                                "driverDetail": {
+                                                                  "class": "iosMaestro",
+                                                                  "resourceId": "SuggestionListItemButton",
+                                                                  "accessibilityText": ",Condensed"
+                                                                }
+                                                              },
+                                                              {
+                                                                "nodeId": 73,
+                                                                "children": [
+                                                                  {
+                                                                    "nodeId": 74,
+                                                                    "bounds": {
+                                                                      "left": 206,
+                                                                      "top": 801,
+                                                                      "right": 291,
+                                                                      "bottom": 986
+                                                                    },
+                                                                    "driverDetail": {
+                                                                      "class": "iosMaestro",
+                                                                      "resourceId": "VisualIdentityView",
+                                                                      "accessibilityText": ",Sans-serif"
+                                                                    }
+                                                                  },
+                                                                  {
+                                                                    "nodeId": 75,
+                                                                    "bounds": {
+                                                                      "left": 206,
+                                                                      "top": 801,
+                                                                      "right": 291,
+                                                                      "bottom": 986
+                                                                    },
+                                                                    "driverDetail": {
+                                                                      "class": "iosMaestro",
+                                                                      "resourceId": "VisualIdentityView",
+                                                                      "accessibilityText": ",Sans-serif"
+                                                                    }
+                                                                  }
+                                                                ],
+                                                                "bounds": {
+                                                                  "left": 206,
+                                                                  "top": 851,
+                                                                  "right": 291,
+                                                                  "bottom": 936
+                                                                },
+                                                                "driverDetail": {
+                                                                  "class": "iosMaestro",
+                                                                  "resourceId": "SuggestionListItemButton",
+                                                                  "accessibilityText": ",Sans-serif"
+                                                                }
+                                                              },
+                                                              {
+                                                                "nodeId": 76,
+                                                                "children": [
+                                                                  {
+                                                                    "nodeId": 77,
+                                                                    "bounds": {
+                                                                      "left": 301,
+                                                                      "top": 801,
+                                                                      "right": 386,
+                                                                      "bottom": 986
+                                                                    },
+                                                                    "driverDetail": {
+                                                                      "class": "iosMaestro",
+                                                                      "resourceId": "VisualIdentityView",
+                                                                      "accessibilityText": ",Sans-serif"
+                                                                    }
+                                                                  },
+                                                                  {
+                                                                    "nodeId": 78,
+                                                                    "bounds": {
+                                                                      "left": 301,
+                                                                      "top": 801,
+                                                                      "right": 386,
+                                                                      "bottom": 986
+                                                                    },
+                                                                    "driverDetail": {
+                                                                      "class": "iosMaestro",
+                                                                      "resourceId": "VisualIdentityView",
+                                                                      "accessibilityText": ",Sans-serif"
+                                                                    }
+                                                                  }
+                                                                ],
+                                                                "bounds": {
+                                                                  "left": 301,
+                                                                  "top": 851,
+                                                                  "right": 386,
+                                                                  "bottom": 936
+                                                                },
+                                                                "driverDetail": {
+                                                                  "class": "iosMaestro",
+                                                                  "resourceId": "SuggestionListItemButton",
+                                                                  "accessibilityText": ",Sans-serif"
+                                                                }
+                                                              }
+                                                            ],
+                                                            "bounds": {
+                                                              "left": 16,
+                                                              "top": 566,
+                                                              "right": 386,
+                                                              "bottom": 936
+                                                            },
+                                                            "driverDetail": {
+                                                              "class": "iosMaestro",
+                                                              "resourceId": "StickyHeaderContent"
+                                                            }
+                                                          },
+                                                          {
+                                                            "nodeId": 79,
+                                                            "bounds": {
+                                                              "left": 0,
+                                                              "top": 0,
+                                                              "right": 0,
+                                                              "bottom": 0
+                                                            },
+                                                            "driverDetail": {
+                                                              "class": "iosMaestro",
+                                                              "resourceId": "StickyHeaderSpacer"
+                                                            }
+                                                          }
+                                                        ],
+                                                        "bounds": {
+                                                          "left": 16,
+                                                          "top": 141,
+                                                          "right": 386,
+                                                          "bottom": 936
+                                                        },
+                                                        "driverDetail": {
+                                                          "class": "iosMaestro"
+                                                        }
+                                                      }
+                                                    ],
+                                                    "bounds": {
+                                                      "left": 0,
+                                                      "top": 0,
+                                                      "right": 402,
+                                                      "bottom": 874
+                                                    },
+                                                    "driverDetail": {
+                                                      "class": "iosMaestro",
+                                                      "resourceId": "VisualIdentityEditorContainerVStack"
+                                                    }
+                                                  },
+                                                  {
+                                                    "nodeId": 80,
+                                                    "bounds": {
+                                                      "left": 55,
+                                                      "top": -28,
+                                                      "right": 346,
+                                                      "bottom": 600
+                                                    },
+                                                    "driverDetail": {
+                                                      "class": "iosMaestro",
+                                                      "resourceId": "VisualIdentityEditorContainerVStack",
+                                                      "accessibilityText": ",Sans-serif"
+                                                    }
+                                                  },
+                                                  {
+                                                    "nodeId": 81,
+                                                    "bounds": {
+                                                      "left": 55,
+                                                      "top": -28,
+                                                      "right": 346,
+                                                      "bottom": 600
+                                                    },
+                                                    "driverDetail": {
+                                                      "class": "iosMaestro",
+                                                      "resourceId": "VisualIdentityEditorContainerVStack",
+                                                      "accessibilityText": ",Sans-serif"
+                                                    }
+                                                  },
+                                                  {
+                                                    "nodeId": 82,
+                                                    "ref": "m328",
+                                                    "bounds": {
+                                                      "left": 98,
+                                                      "top": 451,
+                                                      "right": 163,
+                                                      "bottom": 495
+                                                    },
+                                                    "driverDetail": {
+                                                      "class": "iosMaestro",
+                                                      "resourceId": "VisualIdentityEditorContainerVStack",
+                                                      "accessibilityText": "Text"
+                                                    }
+                                                  },
+                                                  {
+                                                    "nodeId": 83,
+                                                    "children": [
+                                                      {
+                                                        "nodeId": 84,
+                                                        "bounds": {
+                                                          "left": 98,
+                                                          "top": 462,
+                                                          "right": 163,
+                                                          "bottom": 484
+                                                        },
+                                                        "driverDetail": {
+                                                          "class": "iosMaestro"
+                                                        }
+                                                      },
+                                                      {
+                                                        "nodeId": 85,
+                                                        "children": [
+                                                          {
+                                                            "nodeId": 86,
+                                                            "bounds": {
+                                                              "left": 98,
+                                                              "top": 463,
+                                                              "right": 98,
+                                                              "bottom": 484
+                                                            },
+                                                            "driverDetail": {
+                                                              "class": "iosMaestro"
+                                                            }
+                                                          }
+                                                        ],
+                                                        "bounds": {
+                                                          "left": 98,
+                                                          "top": 462,
+                                                          "right": 163,
+                                                          "bottom": 484
+                                                        },
+                                                        "driverDetail": {
+                                                          "class": "iosMaestro"
+                                                        }
+                                                      }
+                                                    ],
+                                                    "bounds": {
+                                                      "left": 98,
+                                                      "top": 462,
+                                                      "right": 163,
+                                                      "bottom": 484
+                                                    },
+                                                    "driverDetail": {
+                                                      "class": "iosMaestro",
+                                                      "resourceId": "VisualIdentityEditorContainerVStack"
+                                                    }
+                                                  },
+                                                  {
+                                                    "nodeId": 87,
+                                                    "ref": "a821",
+                                                    "bounds": {
+                                                      "left": 168,
+                                                      "top": 451,
+                                                      "right": 233,
+                                                      "bottom": 495
+                                                    },
+                                                    "driverDetail": {
+                                                      "class": "iosMaestro",
+                                                      "resourceId": "VisualIdentityEditorContainerVStack",
+                                                      "accessibilityText": "Font"
+                                                    }
+                                                  },
+                                                  {
+                                                    "nodeId": 88,
+                                                    "children": [
+                                                      {
+                                                        "nodeId": 89,
+                                                        "bounds": {
+                                                          "left": 168,
+                                                          "top": 462,
+                                                          "right": 233,
+                                                          "bottom": 484
+                                                        },
+                                                        "driverDetail": {
+                                                          "class": "iosMaestro"
+                                                        }
+                                                      },
+                                                      {
+                                                        "nodeId": 90,
+                                                        "children": [
+                                                          {
+                                                            "nodeId": 91,
+                                                            "bounds": {
+                                                              "left": 168,
+                                                              "top": 463,
+                                                              "right": 168,
+                                                              "bottom": 484
+                                                            },
+                                                            "driverDetail": {
+                                                              "class": "iosMaestro"
+                                                            }
+                                                          }
+                                                        ],
+                                                        "bounds": {
+                                                          "left": 168,
+                                                          "top": 462,
+                                                          "right": 233,
+                                                          "bottom": 484
+                                                        },
+                                                        "driverDetail": {
+                                                          "class": "iosMaestro"
+                                                        }
+                                                      }
+                                                    ],
+                                                    "bounds": {
+                                                      "left": 168,
+                                                      "top": 462,
+                                                      "right": 233,
+                                                      "bottom": 484
+                                                    },
+                                                    "driverDetail": {
+                                                      "class": "iosMaestro",
+                                                      "resourceId": "VisualIdentityEditorContainerVStack"
+                                                    }
+                                                  },
+                                                  {
+                                                    "nodeId": 92,
+                                                    "ref": "t255",
+                                                    "bounds": {
+                                                      "left": 238,
+                                                      "top": 451,
+                                                      "right": 303,
+                                                      "bottom": 495
+                                                    },
+                                                    "driverDetail": {
+                                                      "class": "iosMaestro",
+                                                      "resourceId": "VisualIdentityEditorContainerVStack",
+                                                      "accessibilityText": "Color"
+                                                    }
+                                                  },
+                                                  {
+                                                    "nodeId": 93,
+                                                    "children": [
+                                                      {
+                                                        "nodeId": 94,
+                                                        "bounds": {
+                                                          "left": 238,
+                                                          "top": 462,
+                                                          "right": 303,
+                                                          "bottom": 484
+                                                        },
+                                                        "driverDetail": {
+                                                          "class": "iosMaestro"
+                                                        }
+                                                      },
+                                                      {
+                                                        "nodeId": 95,
+                                                        "children": [
+                                                          {
+                                                            "nodeId": 96,
+                                                            "bounds": {
+                                                              "left": 238,
+                                                              "top": 463,
+                                                              "right": 238,
+                                                              "bottom": 484
+                                                            },
+                                                            "driverDetail": {
+                                                              "class": "iosMaestro"
+                                                            }
+                                                          }
+                                                        ],
+                                                        "bounds": {
+                                                          "left": 238,
+                                                          "top": 462,
+                                                          "right": 303,
+                                                          "bottom": 484
+                                                        },
+                                                        "driverDetail": {
+                                                          "class": "iosMaestro"
+                                                        }
+                                                      }
+                                                    ],
+                                                    "bounds": {
+                                                      "left": 238,
+                                                      "top": 462,
+                                                      "right": 303,
+                                                      "bottom": 484
+                                                    },
+                                                    "driverDetail": {
+                                                      "class": "iosMaestro",
+                                                      "resourceId": "VisualIdentityEditorContainerVStack"
+                                                    }
+                                                  }
+                                                ],
+                                                "bounds": {
+                                                  "left": 0,
+                                                  "top": 0,
+                                                  "right": 402,
+                                                  "bottom": 874
+                                                },
+                                                "driverDetail": {
+                                                  "class": "iosMaestro"
+                                                }
+                                              }
+                                            ],
+                                            "bounds": {
+                                              "left": 0,
+                                              "top": 0,
+                                              "right": 402,
+                                              "bottom": 874
+                                            },
+                                            "driverDetail": {
+                                              "class": "iosMaestro"
+                                            }
+                                          }
+                                        ],
+                                        "bounds": {
+                                          "left": 0,
+                                          "top": 0,
+                                          "right": 402,
+                                          "bottom": 874
+                                        },
+                                        "driverDetail": {
+                                          "class": "iosMaestro"
+                                        }
+                                      }
+                                    ],
+                                    "bounds": {
+                                      "left": 0,
+                                      "top": 0,
+                                      "right": 402,
+                                      "bottom": 874
+                                    },
+                                    "driverDetail": {
+                                      "class": "iosMaestro"
+                                    }
+                                  },
+                                  {
+                                    "nodeId": 97,
+                                    "children": [
+                                      {
+                                        "nodeId": 98,
+                                        "bounds": {
+                                          "left": 0,
+                                          "top": 0,
+                                          "right": 402,
+                                          "bottom": 874
+                                        },
+                                        "driverDetail": {
+                                          "class": "iosMaestro"
+                                        }
+                                      }
+                                    ],
+                                    "bounds": {
+                                      "left": 0,
+                                      "top": 0,
+                                      "right": 402,
+                                      "bottom": 874
+                                    },
+                                    "driverDetail": {
+                                      "class": "iosMaestro"
+                                    }
+                                  }
+                                ],
+                                "bounds": {
+                                  "left": 0,
+                                  "top": 0,
+                                  "right": 402,
+                                  "bottom": 874
+                                },
+                                "driverDetail": {
+                                  "class": "iosMaestro",
+                                  "resourceId": "VisualIdentityEditorNavigationStack"
+                                }
+                              }
+                            ],
+                            "bounds": {
+                              "left": 0,
+                              "top": 0,
+                              "right": 402,
+                              "bottom": 874
+                            },
+                            "driverDetail": {
+                              "class": "iosMaestro"
+                            }
+                          }
+                        ],
+                        "bounds": {
+                          "left": 0,
+                          "top": 0,
+                          "right": 402,
+                          "bottom": 874
+                        },
+                        "driverDetail": {
+                          "class": "iosMaestro"
+                        }
+                      }
+                    ],
+                    "bounds": {
+                      "left": 0,
+                      "top": 0,
+                      "right": 402,
+                      "bottom": 874
+                    },
+                    "driverDetail": {
+                      "class": "iosMaestro"
+                    }
+                  }
+                ],
+                "bounds": {
+                  "left": 0,
+                  "top": 0,
+                  "right": 402,
+                  "bottom": 874
+                },
+                "driverDetail": {
+                  "class": "iosMaestro"
+                }
+              }
+            ],
+            "bounds": {
+              "left": 0,
+              "top": 0,
+              "right": 402,
+              "bottom": 874
+            },
+            "driverDetail": {
+              "class": "iosMaestro"
+            }
+          },
+          {
+            "nodeId": 99,
+            "children": [
+              {
+                "nodeId": 100,
+                "children": [
+                  {
+                    "nodeId": 101,
+                    "bounds": {
+                      "left": 0,
+                      "top": 0,
+                      "right": 402,
+                      "bottom": 874
+                    },
+                    "driverDetail": {
+                      "class": "iosMaestro"
+                    }
+                  }
+                ],
+                "bounds": {
+                  "left": 0,
+                  "top": 0,
+                  "right": 402,
+                  "bottom": 874
+                },
+                "driverDetail": {
+                  "class": "iosMaestro"
+                }
+              }
+            ],
+            "bounds": {
+              "left": 0,
+              "top": 0,
+              "right": 402,
+              "bottom": 874
+            },
+            "driverDetail": {
+              "class": "iosMaestro"
+            }
+          }
+        ],
+        "bounds": {
+          "left": 0,
+          "top": 0,
+          "right": 402,
+          "bottom": 874
+        },
+        "driverDetail": {
+          "class": "iosMaestro",
+          "accessibilityText": "Contacts"
+        }
+      },
+      {
+        "nodeId": 102,
+        "children": [
+          {
+            "nodeId": 103,
+            "bounds": {
+              "left": 0,
+              "top": 0,
+              "right": 402,
+              "bottom": 54
+            },
+            "driverDetail": {
+              "class": "iosMaestro"
+            }
+          },
+          {
+            "nodeId": 104,
+            "children": [
+              {
+                "nodeId": 105,
+                "children": [
+                  {
+                    "nodeId": 106,
+                    "children": [
+                      {
+                        "nodeId": 107,
+                        "bounds": {
+                          "left": 56,
+                          "top": 22,
+                          "right": 92,
+                          "bottom": 42
+                        },
+                        "driverDetail": {
+                          "class": "iosMaestro",
+                          "accessibilityText": "7:34\u202fAM"
+                        }
+                      },
+                      {
+                        "nodeId": 108,
+                        "bounds": {
+                          "left": 288,
+                          "top": 26,
+                          "right": 307,
+                          "bottom": 38
+                        },
+                        "driverDetail": {
+                          "class": "iosMaestro",
+                          "text": "No signal",
+                          "accessibilityText": "Cellular"
+                        }
+                      },
+                      {
+                        "nodeId": 109,
+                        "bounds": {
+                          "left": 315,
+                          "top": 26,
+                          "right": 332,
+                          "bottom": 38
+                        },
+                        "driverDetail": {
+                          "class": "iosMaestro",
+                          "text": "SSID, 3 of 3 Wi-Fi bars",
+                          "resourceId": "3 of 3 Wi-Fi bars"
+                        }
+                      },
+                      {
+                        "nodeId": 110,
+                        "bounds": {
+                          "left": 339,
+                          "top": 26,
+                          "right": 366,
+                          "bottom": 39
+                        },
+                        "driverDetail": {
+                          "class": "iosMaestro",
+                          "text": "Not charging",
+                          "accessibilityText": "100% battery power"
+                        }
+                      }
+                    ],
+                    "bounds": {
+                      "left": 0,
+                      "top": 0,
+                      "right": 402,
+                      "bottom": 54
+                    },
+                    "driverDetail": {
+                      "class": "iosMaestro"
+                    }
+                  }
+                ],
+                "bounds": {
+                  "left": 0,
+                  "top": 0,
+                  "right": 402,
+                  "bottom": 54
+                },
+                "driverDetail": {
+                  "class": "iosMaestro"
+                }
+              }
+            ],
+            "bounds": {
+              "left": 0,
+              "top": 0,
+              "right": 402,
+              "bottom": 54
+            },
+            "driverDetail": {
+              "class": "iosMaestro"
+            }
+          }
+        ],
+        "bounds": {
+          "left": 0,
+          "top": 0,
+          "right": 0,
+          "bottom": 0
+        },
+        "driverDetail": {
+          "class": "iosMaestro",
+          "enabled": false
+        }
+      }
+    ],
+    "bounds": {
+      "left": 0,
+      "top": 0,
+      "right": 0,
+      "bottom": 0
+    },
+    "driverDetail": {
+      "class": "iosMaestro",
+      "enabled": false
+    }
+  }
+}

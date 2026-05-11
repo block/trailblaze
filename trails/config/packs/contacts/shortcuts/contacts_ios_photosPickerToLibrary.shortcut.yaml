@@ -1,0 +1,11 @@
+id: contacts_ios_photosPickerToLibrary
+description: Tap Photo Library on the photos source picker to open the system photo grid.
+shortcut:
+  from: contacts/ios/photos-picker
+  to: contacts/ios/photo-library
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      nodeSelector:
+        iosMaestro:
+          resourceIdRegex: "^PhotoLibraryButton$"

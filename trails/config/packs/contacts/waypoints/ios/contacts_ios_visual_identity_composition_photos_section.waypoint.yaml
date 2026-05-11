@@ -1,0 +1,26 @@
+id: "contacts/ios/visual-identity-composition-photos-section"
+description: >
+  iOS Contacts app, post-Choose visual identity composition picker with the "Photos"
+  StickyHeaderContent section actively expanded — the "New Photo" CreateSuggestionButton
+  is the call-to-action for adding a fresh photo. Sibling to other section variants
+  (Memoji / Monogram).
+required:
+  - description: "Visual identity Done button"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^VisualIdentityDoneButton$"
+  - description: "Photos StickyHeader"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Photos$"
+        resourceIdRegex: "^StickyHeaderContent$"
+  - description: "New Photo create-suggestion button"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^New Photo$"
+        resourceIdRegex: "^StickyHeaderContent$"
+forbidden:
+  - description: "Choose button — only on the per-type editor, not the composition"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^VisualIdentityChooseButton$"

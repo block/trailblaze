@@ -1,0 +1,37 @@
+id: "contacts/ios/list"
+description: >
+  iOS Contacts app, top-level Contacts list screen — alphabetical list of contacts
+  with the navigation header "Contacts", a Search field and an Add (+) button in
+  the bottom toolbar, and a horizontal scroll bar of alphabet section indices.
+  Distinct from contacts/ios/new-contact (no "First name" / "Last name" fields)
+  and from contacts/ios/contact-detail (no "Edit" / "Share Contact" buttons).
+required:
+  - description: "Navigation header container resourceId 'Contacts'"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^Contacts$"
+  - description: "Bottom toolbar (resourceId 'Toolbar')"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^Toolbar$"
+  - description: "Add (+) button in the toolbar"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Add$"
+forbidden:
+  - description: "First-name field — would mean we're on the new-contact / edit-contact draft"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^First name$"
+  - description: "Sheet Grabber — would mean a modal sheet (new-contact / add-contacts-to-list) is open"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Sheet Grabber: Expanded$"
+  - description: "close (X) nav button — would mean we're in the edit-contact form"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^close$"
+# NOTE: in iPad-style split-view, the right-pane contact-detail can co-exist with
+# the list-pane on the left, so we deliberately do NOT forbid InlineActionsHStack /
+# ContactCardDetailsView here — those signals are also true when a contact is selected.
+# Use the contacts/ios/contact-detail waypoint when the goal is "a contact is selected."

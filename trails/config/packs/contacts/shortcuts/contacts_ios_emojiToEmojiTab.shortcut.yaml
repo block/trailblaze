@@ -1,0 +1,9 @@
+id: contacts_ios_emojiToEmojiTab
+description: Engage the Emoji tab on the emoji editor (default tab).
+shortcut:
+  from: contacts/ios/visual-identity-emoji
+  to: contacts/ios/visual-identity-emoji-emoji-tab
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: Emoji

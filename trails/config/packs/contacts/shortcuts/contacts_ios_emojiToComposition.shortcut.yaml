@@ -1,0 +1,11 @@
+id: contacts_ios_emojiToComposition
+description: Tap Choose on the emoji editor to commit the emoji and land on the composition picker.
+shortcut:
+  from: contacts/ios/visual-identity-emoji
+  to: contacts/ios/visual-identity-composition
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      nodeSelector:
+        iosMaestro:
+          resourceIdRegex: "^VisualIdentityChooseButton$"

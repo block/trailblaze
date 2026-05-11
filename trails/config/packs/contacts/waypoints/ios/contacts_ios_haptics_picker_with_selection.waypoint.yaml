@@ -1,0 +1,22 @@
+id: "contacts/ios/haptics-picker-with-selection"
+description: >
+  iOS Contacts app, Haptics picker with a non-default haptic pattern selected (checkmark
+  visible next to the chosen pattern). Sibling state of contacts/ios/haptics-picker.
+required:
+  - description: "Haptics header"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Haptics$"
+  - description: "Heartbeat option (always present in catalog)"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Heartbeat$"
+  - description: "checkmark icon"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^checkmark$"
+forbidden:
+  - description: "Ringtone header — would mean we're on the parent ringtone picker"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Ringtone$"

@@ -1,0 +1,9 @@
+id: contacts_ios_listsToSubList
+description: Tap a user-defined list (e.g. Friends) on the Lists view to drill into the filtered roster.
+shortcut:
+  from: contacts/ios/lists
+  to: contacts/ios/sub-list
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: Friends

@@ -1,0 +1,9 @@
+id: contacts_ios_listsRenameToKeyboard
+description: Tap into the active rename row to bring up the keyboard for typing the new list name.
+shortcut:
+  from: contacts/ios/lists-rename-active
+  to: contacts/ios/lists-rename-keyboard
+parameters: []
+tools:
+  - tapOnElementWithAccessibilityText:
+      accessibilityText: "^Name: "

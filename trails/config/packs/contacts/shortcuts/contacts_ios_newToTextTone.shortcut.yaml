@@ -1,0 +1,9 @@
+id: contacts_ios_newToTextTone
+description: Tap the Text Tone row on the new-contact draft.
+shortcut:
+  from: contacts/ios/new-contact
+  to: contacts/ios/text-tone-picker
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: "Text Tone: Default"

@@ -1,0 +1,11 @@
+id: contacts_ios_listToLists
+description: From the contacts list, tap the Back button to navigate up to the Lists view.
+shortcut:
+  from: contacts/ios/list
+  to: contacts/ios/lists
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      nodeSelector:
+        iosMaestro:
+          resourceIdRegex: "^BackButton$"

@@ -1,0 +1,11 @@
+id: contacts_ios_monogramToComposition
+description: Tap Choose on the monogram editor to commit the monogram and land on the composition picker.
+shortcut:
+  from: contacts/ios/visual-identity-monogram
+  to: contacts/ios/visual-identity-composition
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      nodeSelector:
+        iosMaestro:
+          resourceIdRegex: "^VisualIdentityChooseButton$"

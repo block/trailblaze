@@ -1,0 +1,9 @@
+id: contacts_ios_shareContactSelectAll
+description: Tap Select All Fields to mark every share-contact checkbox.
+shortcut:
+  from: contacts/ios/share-contact-fields
+  to: contacts/ios/share-contact-all-selected
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: Select All Fields

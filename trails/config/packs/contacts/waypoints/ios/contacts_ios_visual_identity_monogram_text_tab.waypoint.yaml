@@ -1,0 +1,25 @@
+id: "contacts/ios/visual-identity-monogram-text-tab"
+description: >
+  iOS Contacts app, monogram editor with the Text editor tab active (the user is editing
+  the displayed letters of the monogram, e.g. switching from "KB" to a custom 1-3-letter
+  string). Sibling to contacts/ios/visual-identity-monogram-font-tab and -color-tab.
+required:
+  - description: "Visual identity Choose button"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^VisualIdentityChooseButton$"
+  - description: "Text editor tab"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Text$"
+        resourceIdRegex: "^VisualIdentityEditorContainerVStack$"
+  - description: "Keyboard accessory (text input is active)"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^AutoFill$"
+forbidden:
+  - description: "Crop tab — only on the photo editor"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Crop$"
+        resourceIdRegex: "^VisualIdentityEditorContainerVStack$"

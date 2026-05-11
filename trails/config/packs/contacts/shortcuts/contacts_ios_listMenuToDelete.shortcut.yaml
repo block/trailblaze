@@ -1,0 +1,9 @@
+id: contacts_ios_listMenuToDelete
+description: Tap Delete on the (full) list context menu to open the delete-list confirm popover.
+shortcut:
+  from: contacts/ios/list-context-menu
+  to: contacts/ios/delete-list-confirm
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: Delete

@@ -1,0 +1,33 @@
+id: "contacts/ios/add-to-list-picker"
+description: >
+  iOS Contacts app, "Add to List" picker (entered from contact-detail > "Add to List"
+  OR from edit/new-contact > "add to list"). Shows a Cancel button, a "Lists" header,
+  an "iPhone" account section, and the user's list rows ("Friends", "Work") each with
+  a member-count badge. Differs from contacts/ios/lists by the absence of the Add List /
+  Edit affordances (this is a picker, not the manager).
+required:
+  - description: "Cancel button (modal)"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Cancel$"
+  - description: "Lists header"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Lists$"
+  - description: "iPhone account section header"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^iPhone$"
+forbidden:
+  - description: "Add List button — only on the Lists manager, not the picker"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Add List$"
+  - description: "Edit button — only on the Lists manager"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Edit$"
+  - description: "All Contacts row — picker hides All Contacts (you can't add a contact to it)"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^All Contacts: .*"

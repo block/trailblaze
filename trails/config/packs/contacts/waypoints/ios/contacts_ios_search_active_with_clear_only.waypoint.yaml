@@ -1,0 +1,23 @@
+id: "contacts/ios/search-active-typing"
+description: >
+  iOS Contacts app, search-active with at least one character typed but no results yet
+  rendered (the Search results panel takes a moment to populate). Sibling state of
+  contacts/ios/search-active and contacts/ios/search-results.
+required:
+  - description: "Search field with query"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Search: .+$"
+  - description: "Clear-text affordance"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Clear text$"
+forbidden:
+  - description: "Search results panel — would mean results are rendered"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Search results$"
+  - description: "Dictate — would mean query is empty"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Dictate$"

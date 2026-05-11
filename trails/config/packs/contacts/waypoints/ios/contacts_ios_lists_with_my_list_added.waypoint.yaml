@@ -1,0 +1,24 @@
+id: "contacts/ios/lists-with-user-list"
+description: >
+  iOS Contacts app, Lists view with at least one user-defined list that has zero contacts
+  (inserted via Add List). Sibling state of contacts/ios/lists — the "X: 0 contacts"
+  empty rows are present in the layout, indicating the user just created a list. Same
+  Edit / Add List / All Contacts affordances available.
+required:
+  - description: "Lists header"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Lists$"
+  - description: "Add List affordance"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Add List$"
+  - description: "An empty-list row (zero contacts)"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: ".*: 0 contacts$"
+forbidden:
+  - description: "Done button — would mean we're in edit mode"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Done$"

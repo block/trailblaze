@@ -1,0 +1,9 @@
+id: contacts_ios_searchTypingToNoResults
+description: Type a query that matches no contacts — no Search results panel appears.
+shortcut:
+  from: contacts/ios/search-active
+  to: contacts/ios/search-no-results
+parameters: []
+tools:
+  - inputText:
+      text: zzzzzz

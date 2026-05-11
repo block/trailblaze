@@ -1,0 +1,36 @@
+id: "contacts/ios/visual-identity-emoji"
+description: >
+  iOS Contacts app, emoji-avatar editor (entered via avatar-onboarding > Emoji). Same
+  composition as the monogram editor but the editor tabs are Emoji + Color (no Text /
+  Font), and the Suggestions row carries emoji glyphs rather than letter pairs. Distinct
+  from contacts/ios/visual-identity-monogram (Text/Font/Color tabs).
+required:
+  - description: "Visual identity Cancel button"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^VisualIdentityCancelButton$"
+  - description: "Visual identity Choose button"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^VisualIdentityChooseButton$"
+  - description: "Emoji editor tab"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Emoji$"
+        resourceIdRegex: "^VisualIdentityEditorContainerVStack$"
+  - description: "Color editor tab"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Color$"
+        resourceIdRegex: "^VisualIdentityEditorContainerVStack$"
+forbidden:
+  - description: "Text editor tab — only on the monogram editor variant"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Text$"
+        resourceIdRegex: "^VisualIdentityEditorContainerVStack$"
+  - description: "Font editor tab — only on the monogram editor variant"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Font$"
+        resourceIdRegex: "^VisualIdentityEditorContainerVStack$"

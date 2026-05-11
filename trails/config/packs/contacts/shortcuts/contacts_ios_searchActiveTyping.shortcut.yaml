@@ -1,0 +1,9 @@
+id: contacts_ios_searchActiveTyping
+description: Type a query but before results render — intermediate state with Clear-text but no Search-results panel yet.
+shortcut:
+  from: contacts/ios/search-active
+  to: contacts/ios/search-active-typing
+parameters: []
+tools:
+  - inputText:
+      text: q

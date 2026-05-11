@@ -1,0 +1,9 @@
+id: contacts_ios_listToContactContextMenu
+description: Long-press a contact in the contacts list to open the context menu (Preview/Message/Call/Mail/Copy/Share/Make This My Card/Delete Contact).
+shortcut:
+  from: contacts/ios/list
+  to: contacts/ios/contact-context-menu
+parameters: []
+tools:
+  - longPressOnElementWithText:
+      text: Kate Bell

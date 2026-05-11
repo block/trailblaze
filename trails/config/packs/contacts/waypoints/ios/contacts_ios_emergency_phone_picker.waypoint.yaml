@@ -1,0 +1,28 @@
+id: "contacts/ios/emergency-phone-picker"
+description: >
+  iOS Contacts app, "Add to Emergency Contacts" phone-number picker — shown after tapping
+  "Add to Emergency Contacts" on a contact's detail. Lists the contact's stored phone
+  labels (e.g. "mobile", "main") so the user can pick which number to use for emergency
+  alerts.
+required:
+  - description: "mobile phone label row"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^mobile$"
+  - description: "main phone label row"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^main$"
+forbidden:
+  - description: "Edit button — only on contact-detail, not on this picker"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Edit$"
+  - description: "Lists header — would mean we're on the Add-to-List picker, not phone picker"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Lists$"
+  - description: "Inline action bar — only on contact-detail"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^InlineActionsHStack$"

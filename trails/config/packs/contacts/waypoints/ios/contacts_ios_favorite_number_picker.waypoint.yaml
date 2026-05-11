@@ -1,0 +1,32 @@
+id: "contacts/ios/favorite-number-picker"
+description: >
+  iOS Contacts app, favorite-number picker — entered after picking an action type
+  (Message / Call / Mail) on the Add-to-Favorites action picker. Shows the action's
+  header (e.g. "Message") and the contact's per-label phone-number rows ("mobile",
+  "work", "main") so the user can pick which number/email to favorite for that action.
+required:
+  - description: "mobile phone label row"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^mobile$"
+  - description: "work label row"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^work$"
+  - description: "main phone label row"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^main$"
+forbidden:
+  - description: "Edit button — only on contact-detail"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Edit$"
+  - description: "Lists header — would mean we're on Add to List picker"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Lists$"
+  - description: "InlineActionsHStack — only on contact-detail"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^InlineActionsHStack$"

@@ -1,0 +1,24 @@
+id: "contacts/ios/lists-keyboard-dismissed"
+description: >
+  iOS Contacts app, Lists view immediately after dismissing the on-screen keyboard
+  (from a previous Add List or rename keyboard state). The Lists view itself is in its
+  default mode but the just-dismissed-keyboard transitional layout is briefly distinct
+  (no Sheet Grabber, no Add List inline editor).
+required:
+  - description: "Lists header"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Lists$"
+  - description: "Edit button (lists view default mode)"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Edit$"
+forbidden:
+  - description: "List Name input — would mean Add List is still active"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^List Name$"
+  - description: "AutoFill toolbar — would mean keyboard still up"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^AutoFill$"

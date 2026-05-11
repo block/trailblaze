@@ -1,0 +1,9 @@
+id: contacts_ios_editToLinkedSection
+description: Scroll to the bottom of the edit form to expose the Linked Contacts section + Delete Contact footer.
+shortcut:
+  from: contacts/ios/edit-contact-birthday-section
+  to: contacts/ios/edit-contact-linked-section
+parameters: []
+tools:
+  - swipe:
+      direction: UP

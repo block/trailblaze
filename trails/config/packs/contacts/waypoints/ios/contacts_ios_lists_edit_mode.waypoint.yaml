@@ -1,0 +1,29 @@
+id: "contacts/ios/lists-edit-mode"
+description: >
+  iOS Contacts app, Lists view in editing mode (entered by tapping Edit on the Lists view).
+  The trailing nav button is now "Done" (commits edits), the per-list entries are no longer
+  marked [disabled] so the user can rename / reorder them, and the Add List affordance
+  remains. Distinct from contacts/ios/lists (Edit button instead of Done; entries are
+  read-only).
+required:
+  - description: "Done button (commits list edits)"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Done$"
+  - description: "Lists header title"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Lists$"
+  - description: "Add List button (still present in edit mode)"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Add List$"
+forbidden:
+  - description: "Edit button — would mean we're NOT in editing mode"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Edit$"
+  - description: "Sheet Grabber — would mean we're in the Add List modal"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Sheet Grabber: Expanded$"

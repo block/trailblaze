@@ -1,0 +1,11 @@
+id: contacts_ios_photoSuggestionsToComposition
+description: Tap Choose on the photo editor to commit the photo and land on the composition picker.
+shortcut:
+  from: contacts/ios/visual-identity-photo-suggestions
+  to: contacts/ios/visual-identity-composition
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      nodeSelector:
+        iosMaestro:
+          resourceIdRegex: "^VisualIdentityChooseButton$"

@@ -1,0 +1,27 @@
+id: "contacts/ios/visual-identity-monogram-font-tab"
+description: >
+  iOS Contacts app, monogram editor with the Font tab active — shows a row of font
+  options (Sans-serif / Serif / Condensed / Rounded variants) the user can apply to the
+  monogram. Sibling waypoint to contacts/ios/visual-identity-monogram-text-tab and
+  -color-tab.
+required:
+  - description: "Visual identity Choose button"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^VisualIdentityChooseButton$"
+  - description: "Font editor tab"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Font$"
+        resourceIdRegex: "^VisualIdentityEditorContainerVStack$"
+  - description: "Font suggestion row (Sans-serif/Serif/Condensed/Rounded)"
+    selector:
+      iosMaestro:
+        textRegex: ",(Sans-serif|Serif|Condensed|Rounded)$"
+        resourceIdRegex: "^SuggestionListItemButton$"
+forbidden:
+  - description: "Crop tab — only on the photo editor variant"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Crop$"
+        resourceIdRegex: "^VisualIdentityEditorContainerVStack$"

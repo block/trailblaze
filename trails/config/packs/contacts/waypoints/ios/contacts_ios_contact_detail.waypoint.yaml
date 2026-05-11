@@ -1,0 +1,30 @@
+id: "contacts/ios/contact-detail"
+description: >
+  iOS Contacts app, single-contact detail view (right pane in iPad-style split view) showing the
+  inline action buttons (Message/Call/Video/Mail), the Contact Photo & Poster avatar, and the
+  contact card details (phone numbers, email, URL, etc.) for the currently selected contact.
+  The header carries an "Edit" button instead of "Add" — that's the cleanest disambiguator from
+  the new-contact draft. Distinct from contacts/ios/edit-contact (no "Done"/"Cancel" buttons,
+  rows are read-only) and from contacts/ios/list (no inline action bar / detail card).
+required:
+  - description: "Inline action bar HStack (Message/Call/Video/Mail buttons)"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^InlineActionsHStack$"
+  - description: "Contact card details rows (phone/email/URL)"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^ContactCardDetailsView$"
+  - description: "Edit button on the right-pane navigation"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Edit$"
+forbidden:
+  - description: "First-name field — would mean we're in the edit-contact form"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^First name$"
+  - description: "Done button — only present in edit/new-contact forms"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Done$"

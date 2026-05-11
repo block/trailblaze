@@ -1,0 +1,22 @@
+id: "contacts/ios/text-tone-picker-with-selection"
+description: >
+  iOS Contacts app, Text Tone picker with a non-default tone selected (checkmark visible).
+  Sibling state of contacts/ios/text-tone-picker (default-only state).
+required:
+  - description: "Text Tone header"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Text Tone$"
+  - description: "Done button"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Done$"
+  - description: "checkmark icon (a tone is selected)"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^checkmark$"
+forbidden:
+  - description: "Ringtone header — sibling picker"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Ringtone$"

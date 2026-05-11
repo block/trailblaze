@@ -1,0 +1,24 @@
+id: "contacts/ios/photos-picker"
+description: >
+  iOS Contacts app, intermediate Photos source picker shown after tapping "Photos" on the
+  avatar onboarding screen. Two large iconified buttons — "Camera" (CameraButton resourceId)
+  and "Photo Library" (PhotoLibraryButton resourceId) — let the user pick the source. From
+  here the user goes either to the system camera or to the system photo grid.
+required:
+  - description: "Camera source button"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^CameraButton$"
+  - description: "Photo Library source button"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^PhotoLibraryButton$"
+forbidden:
+  - description: "PXGGridLayout-Group — would mean we're on the actual photo grid"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^PXGGridLayout-Group$"
+  - description: "Take Picture — would mean we're in the camera capture screen"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^PhotoCapture$"

@@ -1,0 +1,9 @@
+id: contacts_ios_listsToMyCard
+description: Tap the My Card entry on the Lists view to open the user's own contact card.
+shortcut:
+  from: contacts/ios/lists-with-my-card
+  to: contacts/ios/my-card-detail
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: My Card

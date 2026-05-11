@@ -1,0 +1,9 @@
+id: contacts_ios_subListToAddContacts
+description: Tap the + Add toolbar button while inside a sub-list to open the multi-select sheet for adding contacts to that list.
+shortcut:
+  from: contacts/ios/sub-list
+  to: contacts/ios/add-contacts-to-list-sheet
+parameters: []
+tools:
+  - tapOnElementWithAccessibilityText:
+      accessibilityText: Add

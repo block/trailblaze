@@ -1,0 +1,9 @@
+id: contacts_ios_avatarToMonogram
+description: Tap Monogram on the avatar onboarding picker to open the monogram editor.
+shortcut:
+  from: contacts/ios/avatar-onboarding
+  to: contacts/ios/visual-identity-monogram
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: Monogram

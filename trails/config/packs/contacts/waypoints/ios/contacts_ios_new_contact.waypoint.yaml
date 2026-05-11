@@ -1,0 +1,31 @@
+id: "contacts/ios/new-contact"
+description: >
+  iOS Contacts app, new-contact draft sheet (entered via the toolbar "+" / Add button on
+  the contacts list). Modal bottom sheet carrying a "Sheet Grabber: Expanded" affordance,
+  a "New Contact" title, a leading "close" button, a trailing "Done" (disabled until any
+  field is filled), and rows for "add phone" / "add email" / "add pronouns" / Ringtone /
+  Text Tone. Distinct from contacts/ios/edit-contact (no "New Contact" title / no sheet
+  grabber, the edit form does NOT have a sheet grabber and shows Remove-row affordances).
+required:
+  - description: "Modal sheet grabber — only present on the new-contact bottom sheet"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Sheet Grabber: Expanded$"
+  - description: "New Contact title"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^New Contact$"
+  - description: "Insert-add-phone affordance"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^add phone$"
+  - description: "Insert-add-pronouns row (specific to the new-contact form on iOS 26+)"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^add pronouns$"
+forbidden: []
+# NOTE: in iPad-style split-view the underlying contact-detail (with Edit + Remove rows)
+# stays in the tree while the new-contact sheet is open over it, so we don't forbid those
+# signals — the Sheet Grabber + "New Contact" title required signals are unique enough.
+# Both the new-contact sheet AND the edit-contact form use the same "close" leading
+# nav button, so we don't forbid it either.

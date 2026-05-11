@@ -1,0 +1,23 @@
+id: "contacts/ios/edit-contact-with-remove-button"
+description: >
+  iOS Contacts app, edit-contact form with a row's Remove (table swipe) affordance
+  exposed — the user partially-swiped a phone/email/address row to reveal the standard
+  red Remove button. Sibling state of contacts/ios/edit-contact (rows in default state).
+required:
+  - description: "close button"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^close$"
+  - description: "Add Photo affordance"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Add Photo$"
+  - description: "Red Remove (row-removal) button"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Remove$"
+forbidden:
+  - description: "New Contact title — would mean we're on the new-contact draft"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^New Contact$"

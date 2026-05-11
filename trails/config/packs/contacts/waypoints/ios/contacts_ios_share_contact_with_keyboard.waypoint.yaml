@@ -1,0 +1,23 @@
+id: "contacts/ios/share-contact-fields-with-keyboard"
+description: >
+  iOS Contacts app, Share Contact field-selection screen with a field's text input focused
+  (e.g. tapping a phone-number row to inline-edit before sharing). Sibling to
+  contacts/ios/share-contact-fields (no keyboard).
+required:
+  - description: "Share Contact header"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Share Contact$"
+  - description: "Done button"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Done$"
+  - description: "Keyboard accessory: AutoFill"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^AutoFill$"
+forbidden:
+  - description: "Edit nav button — would mean we're on contact-detail"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Edit$"

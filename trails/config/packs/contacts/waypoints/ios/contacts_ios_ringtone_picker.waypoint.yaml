@@ -1,0 +1,33 @@
+id: "contacts/ios/ringtone-picker"
+description: >
+  iOS Contacts app, Ringtone picker — opened from a contact's edit/new form by tapping
+  the "Ringtone: Default" row. Shows a Cancel/Done nav, a "Ringtone" header, a "Haptics"
+  sub-row (links to contacts/ios/haptics-picker), a "Default" reset row, and the full
+  ringtone-name list (Chalet, Chirp, Daybreak, Departure, Dollop, Kettle, Little Bird,
+  Mercury, ..., Classic).
+required:
+  - description: "Ringtone header"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Ringtone$"
+  - description: "Haptics sub-row (links to the haptics picker)"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Haptics$"
+  - description: "Cancel button (modal nav)"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Cancel$"
+  - description: "Classic ringtones group header (always present at bottom)"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Classic$"
+forbidden:
+  - description: "Text Tone header — would mean we're on the sibling text-tone picker"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Text Tone$"
+  - description: "Heartbeat — only on the haptics-picker sub-screen"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Heartbeat$"

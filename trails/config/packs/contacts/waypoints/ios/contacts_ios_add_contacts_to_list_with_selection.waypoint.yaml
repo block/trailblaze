@@ -1,0 +1,24 @@
+id: "contacts/ios/add-contacts-to-list-with-selection"
+description: >
+  iOS Contacts app, multi-select "Add contacts to <List>" sheet with at least one contact
+  ticked — the Done button now reads enabled (commits the selection) and the row(s)
+  selected carry a checkmark.circle.fill icon. Sibling of
+  contacts/ios/add-contacts-to-list-sheet (no selection).
+required:
+  - description: "Sheet Grabber"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Sheet Grabber: Expanded$"
+  - description: "Add-contacts-to-list header"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Add contacts to .+"
+  - description: "Selected checkmark for at least one contact"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^selected$"
+forbidden:
+  - description: "InlineActionsHStack — only on contact-detail"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^InlineActionsHStack$"

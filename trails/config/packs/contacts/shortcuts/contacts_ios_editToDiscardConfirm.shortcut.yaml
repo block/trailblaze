@@ -1,0 +1,9 @@
+id: contacts_ios_editToDiscardConfirm
+description: Tap the close (X) button on a dirty edit form to open the Discard Changes confirmation.
+shortcut:
+  from: contacts/ios/edit-contact-done-enabled
+  to: contacts/ios/discard-changes-confirm
+parameters: []
+tools:
+  - tapOnElementWithAccessibilityText:
+      accessibilityText: close

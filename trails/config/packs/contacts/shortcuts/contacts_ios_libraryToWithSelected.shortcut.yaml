@@ -1,0 +1,11 @@
+id: contacts_ios_libraryToWithSelected
+description: Tap a thumbnail in the photo library — the row highlights as [selected] before transition.
+shortcut:
+  from: contacts/ios/photo-library
+  to: contacts/ios/photo-library-with-photo-selected
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      nodeSelector:
+        iosMaestro:
+          resourceIdRegex: "^PXGGridLayout-Group$"

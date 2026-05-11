@@ -1,0 +1,9 @@
+id: contacts_ios_listsToWithUserList
+description: After completing the Add List flow, the Lists view shows a new empty user-defined list.
+shortcut:
+  from: contacts/ios/lists
+  to: contacts/ios/lists-with-user-list
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: Add List

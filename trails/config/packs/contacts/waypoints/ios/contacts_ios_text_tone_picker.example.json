@@ -1,0 +1,1555 @@
+{
+  "waypointId": "contacts/ios/text-tone-picker",
+  "capturedAt": "2026-05-08T07:40:05.018343Z",
+  "capturedFrom": "copied-from:contacts_ios_add_field_picker (visual parent \u2014 variant has no on-device capture)",
+  "screenshotFile": "contacts_ios_text_tone_picker.example.webp",
+  "deviceWidth": 402,
+  "deviceHeight": 874,
+  "viewHierarchy": {
+    "centerPoint": "0,0",
+    "children": [
+      {
+        "nodeId": 2,
+        "accessibilityText": "Contacts",
+        "x2": 402,
+        "y2": 874,
+        "centerPoint": "201,437",
+        "children": [
+          {
+            "nodeId": 3,
+            "x2": 402,
+            "y2": 874,
+            "centerPoint": "201,437",
+            "children": [
+              {
+                "nodeId": 4,
+                "x2": 402,
+                "y2": 874,
+                "centerPoint": "201,437",
+                "children": [
+                  {
+                    "nodeId": 5,
+                    "x1": -402,
+                    "y1": -874,
+                    "x2": 804,
+                    "y2": 1748,
+                    "centerPoint": "201,437"
+                  },
+                  {
+                    "nodeId": 6,
+                    "y1": 62,
+                    "x2": 402,
+                    "y2": 874,
+                    "centerPoint": "201,468",
+                    "children": [
+                      {
+                        "nodeId": 7,
+                        "y1": 62,
+                        "x2": 402,
+                        "y2": 874,
+                        "centerPoint": "201,468",
+                        "children": [
+                          {
+                            "nodeId": 8,
+                            "y1": 62,
+                            "x2": 402,
+                            "y2": 874,
+                            "centerPoint": "201,468",
+                            "children": [
+                              {
+                                "nodeId": 9,
+                                "y1": 62,
+                                "x2": 402,
+                                "y2": 874,
+                                "centerPoint": "201,468",
+                                "children": [
+                                  {
+                                    "nodeId": 10,
+                                    "y1": 78,
+                                    "x2": 402,
+                                    "y2": 132,
+                                    "centerPoint": "201,105",
+                                    "children": [
+                                      {
+                                        "nodeId": 11,
+                                        "accessibilityText": "Cancel",
+                                        "x1": 20,
+                                        "y1": 82,
+                                        "x2": 56,
+                                        "y2": 118,
+                                        "centerPoint": "38,100"
+                                      },
+                                      {
+                                        "nodeId": 12,
+                                        "accessibilityText": "Add Field",
+                                        "x1": 163,
+                                        "y1": 89,
+                                        "x2": 238,
+                                        "y2": 110,
+                                        "centerPoint": "200,99"
+                                      }
+                                    ],
+                                    "resourceId": "Add Field"
+                                  },
+                                  {
+                                    "nodeId": 13,
+                                    "y1": 62,
+                                    "x2": 402,
+                                    "y2": 874,
+                                    "centerPoint": "201,468",
+                                    "children": [
+                                      {
+                                        "nodeId": 14,
+                                        "y1": 62,
+                                        "x2": 402,
+                                        "y2": 874,
+                                        "centerPoint": "201,468",
+                                        "children": [
+                                          {
+                                            "nodeId": 15,
+                                            "y1": 62,
+                                            "x2": 402,
+                                            "y2": 874,
+                                            "centerPoint": "201,468",
+                                            "children": [
+                                              {
+                                                "nodeId": 16,
+                                                "x1": 20,
+                                                "y1": 167,
+                                                "x2": 382,
+                                                "y2": 219,
+                                                "centerPoint": "201,193",
+                                                "children": [
+                                                  {
+                                                    "nodeId": 17,
+                                                    "accessibilityText": "Prefix",
+                                                    "x1": 36,
+                                                    "y1": 167,
+                                                    "x2": 366,
+                                                    "y2": 219,
+                                                    "centerPoint": "201,193"
+                                                  },
+                                                  {
+                                                    "nodeId": 18,
+                                                    "x1": 36,
+                                                    "y1": 218,
+                                                    "x2": 366,
+                                                    "y2": 219,
+                                                    "centerPoint": "201,218"
+                                                  }
+                                                ]
+                                              },
+                                              {
+                                                "nodeId": 19,
+                                                "x1": 20,
+                                                "y1": 219,
+                                                "x2": 382,
+                                                "y2": 271,
+                                                "centerPoint": "201,245",
+                                                "children": [
+                                                  {
+                                                    "nodeId": 20,
+                                                    "accessibilityText": "Phonetic first name",
+                                                    "x1": 36,
+                                                    "y1": 219,
+                                                    "x2": 366,
+                                                    "y2": 271,
+                                                    "centerPoint": "201,245"
+                                                  },
+                                                  {
+                                                    "nodeId": 21,
+                                                    "x1": 36,
+                                                    "y1": 270,
+                                                    "x2": 366,
+                                                    "y2": 271,
+                                                    "centerPoint": "201,270"
+                                                  }
+                                                ]
+                                              },
+                                              {
+                                                "nodeId": 22,
+                                                "x1": 20,
+                                                "y1": 271,
+                                                "x2": 382,
+                                                "y2": 323,
+                                                "centerPoint": "201,297",
+                                                "children": [
+                                                  {
+                                                    "nodeId": 23,
+                                                    "accessibilityText": "Pronunciation first name",
+                                                    "x1": 36,
+                                                    "y1": 271,
+                                                    "x2": 366,
+                                                    "y2": 323,
+                                                    "centerPoint": "201,297"
+                                                  },
+                                                  {
+                                                    "nodeId": 24,
+                                                    "x1": 36,
+                                                    "y1": 322,
+                                                    "x2": 366,
+                                                    "y2": 323,
+                                                    "centerPoint": "201,322"
+                                                  }
+                                                ]
+                                              },
+                                              {
+                                                "nodeId": 25,
+                                                "x1": 20,
+                                                "y1": 323,
+                                                "x2": 382,
+                                                "y2": 375,
+                                                "centerPoint": "201,349",
+                                                "children": [
+                                                  {
+                                                    "nodeId": 26,
+                                                    "accessibilityText": "Middle name",
+                                                    "x1": 36,
+                                                    "y1": 323,
+                                                    "x2": 366,
+                                                    "y2": 375,
+                                                    "centerPoint": "201,349"
+                                                  },
+                                                  {
+                                                    "nodeId": 27,
+                                                    "x1": 36,
+                                                    "y1": 374,
+                                                    "x2": 366,
+                                                    "y2": 375,
+                                                    "centerPoint": "201,374"
+                                                  }
+                                                ]
+                                              },
+                                              {
+                                                "nodeId": 28,
+                                                "x1": 20,
+                                                "y1": 375,
+                                                "x2": 382,
+                                                "y2": 427,
+                                                "centerPoint": "201,401",
+                                                "children": [
+                                                  {
+                                                    "nodeId": 29,
+                                                    "accessibilityText": "Phonetic middle name",
+                                                    "x1": 36,
+                                                    "y1": 375,
+                                                    "x2": 366,
+                                                    "y2": 427,
+                                                    "centerPoint": "201,401"
+                                                  },
+                                                  {
+                                                    "nodeId": 30,
+                                                    "x1": 36,
+                                                    "y1": 426,
+                                                    "x2": 366,
+                                                    "y2": 427,
+                                                    "centerPoint": "201,426"
+                                                  }
+                                                ]
+                                              },
+                                              {
+                                                "nodeId": 31,
+                                                "x1": 20,
+                                                "y1": 427,
+                                                "x2": 382,
+                                                "y2": 479,
+                                                "centerPoint": "201,453",
+                                                "children": [
+                                                  {
+                                                    "nodeId": 32,
+                                                    "accessibilityText": "Phonetic last name",
+                                                    "x1": 36,
+                                                    "y1": 427,
+                                                    "x2": 366,
+                                                    "y2": 479,
+                                                    "centerPoint": "201,453"
+                                                  },
+                                                  {
+                                                    "nodeId": 33,
+                                                    "x1": 36,
+                                                    "y1": 478,
+                                                    "x2": 366,
+                                                    "y2": 479,
+                                                    "centerPoint": "201,478"
+                                                  }
+                                                ]
+                                              },
+                                              {
+                                                "nodeId": 34,
+                                                "x1": 20,
+                                                "y1": 479,
+                                                "x2": 382,
+                                                "y2": 531,
+                                                "centerPoint": "201,505",
+                                                "children": [
+                                                  {
+                                                    "nodeId": 35,
+                                                    "accessibilityText": "Pronunciation last name",
+                                                    "x1": 36,
+                                                    "y1": 479,
+                                                    "x2": 366,
+                                                    "y2": 531,
+                                                    "centerPoint": "201,505"
+                                                  },
+                                                  {
+                                                    "nodeId": 36,
+                                                    "x1": 36,
+                                                    "y1": 530,
+                                                    "x2": 366,
+                                                    "y2": 531,
+                                                    "centerPoint": "201,530"
+                                                  }
+                                                ]
+                                              },
+                                              {
+                                                "nodeId": 37,
+                                                "x1": 20,
+                                                "y1": 531,
+                                                "x2": 382,
+                                                "y2": 583,
+                                                "centerPoint": "201,557",
+                                                "children": [
+                                                  {
+                                                    "nodeId": 38,
+                                                    "accessibilityText": "Maiden name",
+                                                    "x1": 36,
+                                                    "y1": 531,
+                                                    "x2": 366,
+                                                    "y2": 583,
+                                                    "centerPoint": "201,557"
+                                                  },
+                                                  {
+                                                    "nodeId": 39,
+                                                    "x1": 36,
+                                                    "y1": 582,
+                                                    "x2": 366,
+                                                    "y2": 583,
+                                                    "centerPoint": "201,582"
+                                                  }
+                                                ]
+                                              },
+                                              {
+                                                "nodeId": 40,
+                                                "x1": 20,
+                                                "y1": 583,
+                                                "x2": 382,
+                                                "y2": 635,
+                                                "centerPoint": "201,609",
+                                                "children": [
+                                                  {
+                                                    "nodeId": 41,
+                                                    "accessibilityText": "Suffix",
+                                                    "x1": 36,
+                                                    "y1": 583,
+                                                    "x2": 366,
+                                                    "y2": 635,
+                                                    "centerPoint": "201,609"
+                                                  },
+                                                  {
+                                                    "nodeId": 42,
+                                                    "x1": 36,
+                                                    "y1": 634,
+                                                    "x2": 366,
+                                                    "y2": 635,
+                                                    "centerPoint": "201,634"
+                                                  }
+                                                ]
+                                              },
+                                              {
+                                                "nodeId": 43,
+                                                "x1": 20,
+                                                "y1": 635,
+                                                "x2": 382,
+                                                "y2": 687,
+                                                "centerPoint": "201,661",
+                                                "children": [
+                                                  {
+                                                    "nodeId": 44,
+                                                    "x1": 20,
+                                                    "y1": 686,
+                                                    "x2": 382,
+                                                    "y2": 687,
+                                                    "centerPoint": "201,686"
+                                                  },
+                                                  {
+                                                    "nodeId": 45,
+                                                    "accessibilityText": "Nickname",
+                                                    "x1": 36,
+                                                    "y1": 635,
+                                                    "x2": 366,
+                                                    "y2": 687,
+                                                    "centerPoint": "201,661"
+                                                  }
+                                                ]
+                                              },
+                                              {
+                                                "nodeId": 46,
+                                                "x1": 20,
+                                                "y1": 722,
+                                                "x2": 382,
+                                                "y2": 774,
+                                                "centerPoint": "201,748",
+                                                "children": [
+                                                  {
+                                                    "nodeId": 47,
+                                                    "accessibilityText": "Department",
+                                                    "x1": 36,
+                                                    "y1": 722,
+                                                    "x2": 366,
+                                                    "y2": 774,
+                                                    "centerPoint": "201,748"
+                                                  },
+                                                  {
+                                                    "nodeId": 48,
+                                                    "x1": 36,
+                                                    "y1": 773,
+                                                    "x2": 366,
+                                                    "y2": 774,
+                                                    "centerPoint": "201,773"
+                                                  }
+                                                ]
+                                              },
+                                              {
+                                                "nodeId": 49,
+                                                "x1": 20,
+                                                "y1": 774,
+                                                "x2": 382,
+                                                "y2": 826,
+                                                "centerPoint": "201,800",
+                                                "children": [
+                                                  {
+                                                    "nodeId": 50,
+                                                    "x1": 20,
+                                                    "y1": 825,
+                                                    "x2": 382,
+                                                    "y2": 826,
+                                                    "centerPoint": "201,825"
+                                                  },
+                                                  {
+                                                    "nodeId": 51,
+                                                    "accessibilityText": "Phonetic company name",
+                                                    "x1": 36,
+                                                    "y1": 774,
+                                                    "x2": 366,
+                                                    "y2": 826,
+                                                    "centerPoint": "201,800"
+                                                  }
+                                                ]
+                                              },
+                                              {
+                                                "nodeId": 52,
+                                                "accessibilityText": "Vertical scroll bar, 2 pages",
+                                                "x1": 369,
+                                                "y1": 132,
+                                                "x2": 399,
+                                                "y2": 812,
+                                                "centerPoint": "384,472",
+                                                "children": [
+                                                  {
+                                                    "nodeId": 53,
+                                                    "x1": 396,
+                                                    "y1": 816,
+                                                    "x2": 399,
+                                                    "y2": 823,
+                                                    "centerPoint": "397,819"
+                                                  }
+                                                ],
+                                                "text": "0%"
+                                              },
+                                              {
+                                                "nodeId": 54,
+                                                "accessibilityText": "Horizontal scroll bar, 1 page",
+                                                "x1": 62,
+                                                "y1": 807,
+                                                "x2": 340,
+                                                "y2": 837,
+                                                "centerPoint": "201,822",
+                                                "children": [
+                                                  {
+                                                    "nodeId": 55,
+                                                    "x1": 344,
+                                                    "y1": 834,
+                                                    "x2": 351,
+                                                    "y2": 837,
+                                                    "centerPoint": "347,835"
+                                                  }
+                                                ],
+                                                "text": "0%"
+                                              }
+                                            ]
+                                          }
+                                        ]
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "nodeId": 56,
+                                    "y1": 62,
+                                    "x2": 402,
+                                    "y2": 874,
+                                    "centerPoint": "201,468",
+                                    "children": [
+                                      {
+                                        "nodeId": 57,
+                                        "y1": 62,
+                                        "x2": 402,
+                                        "y2": 874,
+                                        "centerPoint": "201,468"
+                                      }
+                                    ]
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "nodeId": 58,
+            "x2": 402,
+            "y2": 874,
+            "centerPoint": "201,437",
+            "children": [
+              {
+                "nodeId": 59,
+                "x2": 402,
+                "y2": 874,
+                "centerPoint": "201,437",
+                "children": [
+                  {
+                    "nodeId": 60,
+                    "x2": 402,
+                    "y2": 874,
+                    "centerPoint": "201,437"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "nodeId": 61,
+        "centerPoint": "0,0",
+        "children": [
+          {
+            "nodeId": 62,
+            "x2": 402,
+            "y2": 54,
+            "centerPoint": "201,27"
+          },
+          {
+            "nodeId": 63,
+            "x2": 402,
+            "y2": 54,
+            "centerPoint": "201,27",
+            "children": [
+              {
+                "nodeId": 64,
+                "x2": 402,
+                "y2": 54,
+                "centerPoint": "201,27",
+                "children": [
+                  {
+                    "nodeId": 65,
+                    "x2": 402,
+                    "y2": 54,
+                    "centerPoint": "201,27",
+                    "children": [
+                      {
+                        "nodeId": 66,
+                        "accessibilityText": "7:36\u202fAM",
+                        "x1": 56,
+                        "y1": 22,
+                        "x2": 92,
+                        "y2": 42,
+                        "centerPoint": "74,32"
+                      },
+                      {
+                        "nodeId": 67,
+                        "accessibilityText": "Cellular",
+                        "x1": 288,
+                        "y1": 26,
+                        "x2": 307,
+                        "y2": 38,
+                        "centerPoint": "297,32",
+                        "text": "No signal"
+                      },
+                      {
+                        "nodeId": 68,
+                        "x1": 315,
+                        "y1": 26,
+                        "x2": 332,
+                        "y2": 38,
+                        "centerPoint": "323,32",
+                        "resourceId": "3 of 3 Wi-Fi bars",
+                        "text": "SSID, 3 of 3 Wi-Fi bars"
+                      },
+                      {
+                        "nodeId": 69,
+                        "accessibilityText": "100% battery power",
+                        "x1": 339,
+                        "y1": 26,
+                        "x2": 366,
+                        "y2": 39,
+                        "centerPoint": "352,32",
+                        "text": "Not charging"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "enabled": false
+      }
+    ],
+    "enabled": false
+  },
+  "trailblazeNodeTree": {
+    "children": [
+      {
+        "nodeId": 1,
+        "ref": "w72",
+        "children": [
+          {
+            "nodeId": 2,
+            "children": [
+              {
+                "nodeId": 3,
+                "children": [
+                  {
+                    "nodeId": 4,
+                    "bounds": {
+                      "left": -402,
+                      "top": -874,
+                      "right": 804,
+                      "bottom": 1748
+                    },
+                    "driverDetail": {
+                      "class": "iosMaestro"
+                    }
+                  },
+                  {
+                    "nodeId": 5,
+                    "children": [
+                      {
+                        "nodeId": 6,
+                        "children": [
+                          {
+                            "nodeId": 7,
+                            "children": [
+                              {
+                                "nodeId": 8,
+                                "children": [
+                                  {
+                                    "nodeId": 9,
+                                    "children": [
+                                      {
+                                        "nodeId": 10,
+                                        "ref": "y504",
+                                        "bounds": {
+                                          "left": 20,
+                                          "top": 82,
+                                          "right": 56,
+                                          "bottom": 118
+                                        },
+                                        "driverDetail": {
+                                          "class": "iosMaestro",
+                                          "accessibilityText": "Cancel"
+                                        }
+                                      },
+                                      {
+                                        "nodeId": 11,
+                                        "ref": "c550",
+                                        "bounds": {
+                                          "left": 163,
+                                          "top": 89,
+                                          "right": 238,
+                                          "bottom": 110
+                                        },
+                                        "driverDetail": {
+                                          "class": "iosMaestro",
+                                          "accessibilityText": "Add Field"
+                                        }
+                                      }
+                                    ],
+                                    "bounds": {
+                                      "left": 0,
+                                      "top": 78,
+                                      "right": 402,
+                                      "bottom": 132
+                                    },
+                                    "driverDetail": {
+                                      "class": "iosMaestro",
+                                      "resourceId": "Add Field"
+                                    }
+                                  },
+                                  {
+                                    "nodeId": 12,
+                                    "children": [
+                                      {
+                                        "nodeId": 13,
+                                        "children": [
+                                          {
+                                            "nodeId": 14,
+                                            "children": [
+                                              {
+                                                "nodeId": 15,
+                                                "children": [
+                                                  {
+                                                    "nodeId": 16,
+                                                    "ref": "u686",
+                                                    "bounds": {
+                                                      "left": 36,
+                                                      "top": 167,
+                                                      "right": 366,
+                                                      "bottom": 219
+                                                    },
+                                                    "driverDetail": {
+                                                      "class": "iosMaestro",
+                                                      "accessibilityText": "Prefix"
+                                                    }
+                                                  },
+                                                  {
+                                                    "nodeId": 17,
+                                                    "bounds": {
+                                                      "left": 36,
+                                                      "top": 218,
+                                                      "right": 366,
+                                                      "bottom": 219
+                                                    },
+                                                    "driverDetail": {
+                                                      "class": "iosMaestro"
+                                                    }
+                                                  }
+                                                ],
+                                                "bounds": {
+                                                  "left": 20,
+                                                  "top": 167,
+                                                  "right": 382,
+                                                  "bottom": 219
+                                                },
+                                                "driverDetail": {
+                                                  "class": "iosMaestro"
+                                                }
+                                              },
+                                              {
+                                                "nodeId": 18,
+                                                "children": [
+                                                  {
+                                                    "nodeId": 19,
+                                                    "ref": "x752",
+                                                    "bounds": {
+                                                      "left": 36,
+                                                      "top": 219,
+                                                      "right": 366,
+                                                      "bottom": 271
+                                                    },
+                                                    "driverDetail": {
+                                                      "class": "iosMaestro",
+                                                      "accessibilityText": "Phonetic first name"
+                                                    }
+                                                  },
+                                                  {
+                                                    "nodeId": 20,
+                                                    "bounds": {
+                                                      "left": 36,
+                                                      "top": 270,
+                                                      "right": 366,
+                                                      "bottom": 271
+                                                    },
+                                                    "driverDetail": {
+                                                      "class": "iosMaestro"
+                                                    }
+                                                  }
+                                                ],
+                                                "bounds": {
+                                                  "left": 20,
+                                                  "top": 219,
+                                                  "right": 382,
+                                                  "bottom": 271
+                                                },
+                                                "driverDetail": {
+                                                  "class": "iosMaestro"
+                                                }
+                                              },
+                                              {
+                                                "nodeId": 21,
+                                                "children": [
+                                                  {
+                                                    "nodeId": 22,
+                                                    "ref": "l369",
+                                                    "bounds": {
+                                                      "left": 36,
+                                                      "top": 271,
+                                                      "right": 366,
+                                                      "bottom": 323
+                                                    },
+                                                    "driverDetail": {
+                                                      "class": "iosMaestro",
+                                                      "accessibilityText": "Pronunciation first name"
+                                                    }
+                                                  },
+                                                  {
+                                                    "nodeId": 23,
+                                                    "bounds": {
+                                                      "left": 36,
+                                                      "top": 322,
+                                                      "right": 366,
+                                                      "bottom": 323
+                                                    },
+                                                    "driverDetail": {
+                                                      "class": "iosMaestro"
+                                                    }
+                                                  }
+                                                ],
+                                                "bounds": {
+                                                  "left": 20,
+                                                  "top": 271,
+                                                  "right": 382,
+                                                  "bottom": 323
+                                                },
+                                                "driverDetail": {
+                                                  "class": "iosMaestro"
+                                                }
+                                              },
+                                              {
+                                                "nodeId": 24,
+                                                "children": [
+                                                  {
+                                                    "nodeId": 25,
+                                                    "ref": "f163",
+                                                    "bounds": {
+                                                      "left": 36,
+                                                      "top": 323,
+                                                      "right": 366,
+                                                      "bottom": 375
+                                                    },
+                                                    "driverDetail": {
+                                                      "class": "iosMaestro",
+                                                      "accessibilityText": "Middle name"
+                                                    }
+                                                  },
+                                                  {
+                                                    "nodeId": 26,
+                                                    "bounds": {
+                                                      "left": 36,
+                                                      "top": 374,
+                                                      "right": 366,
+                                                      "bottom": 375
+                                                    },
+                                                    "driverDetail": {
+                                                      "class": "iosMaestro"
+                                                    }
+                                                  }
+                                                ],
+                                                "bounds": {
+                                                  "left": 20,
+                                                  "top": 323,
+                                                  "right": 382,
+                                                  "bottom": 375
+                                                },
+                                                "driverDetail": {
+                                                  "class": "iosMaestro"
+                                                }
+                                              },
+                                              {
+                                                "nodeId": 27,
+                                                "children": [
+                                                  {
+                                                    "nodeId": 28,
+                                                    "ref": "a240",
+                                                    "bounds": {
+                                                      "left": 36,
+                                                      "top": 375,
+                                                      "right": 366,
+                                                      "bottom": 427
+                                                    },
+                                                    "driverDetail": {
+                                                      "class": "iosMaestro",
+                                                      "accessibilityText": "Phonetic middle name"
+                                                    }
+                                                  },
+                                                  {
+                                                    "nodeId": 29,
+                                                    "bounds": {
+                                                      "left": 36,
+                                                      "top": 426,
+                                                      "right": 366,
+                                                      "bottom": 427
+                                                    },
+                                                    "driverDetail": {
+                                                      "class": "iosMaestro"
+                                                    }
+                                                  }
+                                                ],
+                                                "bounds": {
+                                                  "left": 20,
+                                                  "top": 375,
+                                                  "right": 382,
+                                                  "bottom": 427
+                                                },
+                                                "driverDetail": {
+                                                  "class": "iosMaestro"
+                                                }
+                                              },
+                                              {
+                                                "nodeId": 30,
+                                                "children": [
+                                                  {
+                                                    "nodeId": 31,
+                                                    "ref": "w818",
+                                                    "bounds": {
+                                                      "left": 36,
+                                                      "top": 427,
+                                                      "right": 366,
+                                                      "bottom": 479
+                                                    },
+                                                    "driverDetail": {
+                                                      "class": "iosMaestro",
+                                                      "accessibilityText": "Phonetic last name"
+                                                    }
+                                                  },
+                                                  {
+                                                    "nodeId": 32,
+                                                    "bounds": {
+                                                      "left": 36,
+                                                      "top": 478,
+                                                      "right": 366,
+                                                      "bottom": 479
+                                                    },
+                                                    "driverDetail": {
+                                                      "class": "iosMaestro"
+                                                    }
+                                                  }
+                                                ],
+                                                "bounds": {
+                                                  "left": 20,
+                                                  "top": 427,
+                                                  "right": 382,
+                                                  "bottom": 479
+                                                },
+                                                "driverDetail": {
+                                                  "class": "iosMaestro"
+                                                }
+                                              },
+                                              {
+                                                "nodeId": 33,
+                                                "children": [
+                                                  {
+                                                    "nodeId": 34,
+                                                    "ref": "h622",
+                                                    "bounds": {
+                                                      "left": 36,
+                                                      "top": 479,
+                                                      "right": 366,
+                                                      "bottom": 531
+                                                    },
+                                                    "driverDetail": {
+                                                      "class": "iosMaestro",
+                                                      "accessibilityText": "Pronunciation last name"
+                                                    }
+                                                  },
+                                                  {
+                                                    "nodeId": 35,
+                                                    "bounds": {
+                                                      "left": 36,
+                                                      "top": 530,
+                                                      "right": 366,
+                                                      "bottom": 531
+                                                    },
+                                                    "driverDetail": {
+                                                      "class": "iosMaestro"
+                                                    }
+                                                  }
+                                                ],
+                                                "bounds": {
+                                                  "left": 20,
+                                                  "top": 479,
+                                                  "right": 382,
+                                                  "bottom": 531
+                                                },
+                                                "driverDetail": {
+                                                  "class": "iosMaestro"
+                                                }
+                                              },
+                                              {
+                                                "nodeId": 36,
+                                                "children": [
+                                                  {
+                                                    "nodeId": 37,
+                                                    "ref": "r200",
+                                                    "bounds": {
+                                                      "left": 36,
+                                                      "top": 531,
+                                                      "right": 366,
+                                                      "bottom": 583
+                                                    },
+                                                    "driverDetail": {
+                                                      "class": "iosMaestro",
+                                                      "accessibilityText": "Maiden name"
+                                                    }
+                                                  },
+                                                  {
+                                                    "nodeId": 38,
+                                                    "bounds": {
+                                                      "left": 36,
+                                                      "top": 582,
+                                                      "right": 366,
+                                                      "bottom": 583
+                                                    },
+                                                    "driverDetail": {
+                                                      "class": "iosMaestro"
+                                                    }
+                                                  }
+                                                ],
+                                                "bounds": {
+                                                  "left": 20,
+                                                  "top": 531,
+                                                  "right": 382,
+                                                  "bottom": 583
+                                                },
+                                                "driverDetail": {
+                                                  "class": "iosMaestro"
+                                                }
+                                              },
+                                              {
+                                                "nodeId": 39,
+                                                "children": [
+                                                  {
+                                                    "nodeId": 40,
+                                                    "ref": "v299",
+                                                    "bounds": {
+                                                      "left": 36,
+                                                      "top": 583,
+                                                      "right": 366,
+                                                      "bottom": 635
+                                                    },
+                                                    "driverDetail": {
+                                                      "class": "iosMaestro",
+                                                      "accessibilityText": "Suffix"
+                                                    }
+                                                  },
+                                                  {
+                                                    "nodeId": 41,
+                                                    "bounds": {
+                                                      "left": 36,
+                                                      "top": 634,
+                                                      "right": 366,
+                                                      "bottom": 635
+                                                    },
+                                                    "driverDetail": {
+                                                      "class": "iosMaestro"
+                                                    }
+                                                  }
+                                                ],
+                                                "bounds": {
+                                                  "left": 20,
+                                                  "top": 583,
+                                                  "right": 382,
+                                                  "bottom": 635
+                                                },
+                                                "driverDetail": {
+                                                  "class": "iosMaestro"
+                                                }
+                                              },
+                                              {
+                                                "nodeId": 42,
+                                                "children": [
+                                                  {
+                                                    "nodeId": 43,
+                                                    "bounds": {
+                                                      "left": 20,
+                                                      "top": 686,
+                                                      "right": 382,
+                                                      "bottom": 687
+                                                    },
+                                                    "driverDetail": {
+                                                      "class": "iosMaestro"
+                                                    }
+                                                  },
+                                                  {
+                                                    "nodeId": 44,
+                                                    "ref": "o747",
+                                                    "bounds": {
+                                                      "left": 36,
+                                                      "top": 635,
+                                                      "right": 366,
+                                                      "bottom": 687
+                                                    },
+                                                    "driverDetail": {
+                                                      "class": "iosMaestro",
+                                                      "accessibilityText": "Nickname"
+                                                    }
+                                                  }
+                                                ],
+                                                "bounds": {
+                                                  "left": 20,
+                                                  "top": 635,
+                                                  "right": 382,
+                                                  "bottom": 687
+                                                },
+                                                "driverDetail": {
+                                                  "class": "iosMaestro"
+                                                }
+                                              },
+                                              {
+                                                "nodeId": 45,
+                                                "children": [
+                                                  {
+                                                    "nodeId": 46,
+                                                    "ref": "l120",
+                                                    "bounds": {
+                                                      "left": 36,
+                                                      "top": 722,
+                                                      "right": 366,
+                                                      "bottom": 774
+                                                    },
+                                                    "driverDetail": {
+                                                      "class": "iosMaestro",
+                                                      "accessibilityText": "Department"
+                                                    }
+                                                  },
+                                                  {
+                                                    "nodeId": 47,
+                                                    "bounds": {
+                                                      "left": 36,
+                                                      "top": 773,
+                                                      "right": 366,
+                                                      "bottom": 774
+                                                    },
+                                                    "driverDetail": {
+                                                      "class": "iosMaestro"
+                                                    }
+                                                  }
+                                                ],
+                                                "bounds": {
+                                                  "left": 20,
+                                                  "top": 722,
+                                                  "right": 382,
+                                                  "bottom": 774
+                                                },
+                                                "driverDetail": {
+                                                  "class": "iosMaestro"
+                                                }
+                                              },
+                                              {
+                                                "nodeId": 48,
+                                                "children": [
+                                                  {
+                                                    "nodeId": 49,
+                                                    "bounds": {
+                                                      "left": 20,
+                                                      "top": 825,
+                                                      "right": 382,
+                                                      "bottom": 826
+                                                    },
+                                                    "driverDetail": {
+                                                      "class": "iosMaestro"
+                                                    }
+                                                  },
+                                                  {
+                                                    "nodeId": 50,
+                                                    "ref": "u980",
+                                                    "bounds": {
+                                                      "left": 36,
+                                                      "top": 774,
+                                                      "right": 366,
+                                                      "bottom": 826
+                                                    },
+                                                    "driverDetail": {
+                                                      "class": "iosMaestro",
+                                                      "accessibilityText": "Phonetic company name"
+                                                    }
+                                                  }
+                                                ],
+                                                "bounds": {
+                                                  "left": 20,
+                                                  "top": 774,
+                                                  "right": 382,
+                                                  "bottom": 826
+                                                },
+                                                "driverDetail": {
+                                                  "class": "iosMaestro"
+                                                }
+                                              },
+                                              {
+                                                "nodeId": 51,
+                                                "ref": "f630",
+                                                "children": [
+                                                  {
+                                                    "nodeId": 52,
+                                                    "bounds": {
+                                                      "left": 396,
+                                                      "top": 816,
+                                                      "right": 399,
+                                                      "bottom": 823
+                                                    },
+                                                    "driverDetail": {
+                                                      "class": "iosMaestro"
+                                                    }
+                                                  }
+                                                ],
+                                                "bounds": {
+                                                  "left": 369,
+                                                  "top": 132,
+                                                  "right": 399,
+                                                  "bottom": 812
+                                                },
+                                                "driverDetail": {
+                                                  "class": "iosMaestro",
+                                                  "text": "0%",
+                                                  "accessibilityText": "Vertical scroll bar, 2 pages"
+                                                }
+                                              },
+                                              {
+                                                "nodeId": 53,
+                                                "ref": "f715",
+                                                "children": [
+                                                  {
+                                                    "nodeId": 54,
+                                                    "bounds": {
+                                                      "left": 344,
+                                                      "top": 834,
+                                                      "right": 351,
+                                                      "bottom": 837
+                                                    },
+                                                    "driverDetail": {
+                                                      "class": "iosMaestro"
+                                                    }
+                                                  }
+                                                ],
+                                                "bounds": {
+                                                  "left": 62,
+                                                  "top": 807,
+                                                  "right": 340,
+                                                  "bottom": 837
+                                                },
+                                                "driverDetail": {
+                                                  "class": "iosMaestro",
+                                                  "text": "0%",
+                                                  "accessibilityText": "Horizontal scroll bar, 1 page"
+                                                }
+                                              }
+                                            ],
+                                            "bounds": {
+                                              "left": 0,
+                                              "top": 62,
+                                              "right": 402,
+                                              "bottom": 874
+                                            },
+                                            "driverDetail": {
+                                              "class": "iosMaestro"
+                                            }
+                                          }
+                                        ],
+                                        "bounds": {
+                                          "left": 0,
+                                          "top": 62,
+                                          "right": 402,
+                                          "bottom": 874
+                                        },
+                                        "driverDetail": {
+                                          "class": "iosMaestro"
+                                        }
+                                      }
+                                    ],
+                                    "bounds": {
+                                      "left": 0,
+                                      "top": 62,
+                                      "right": 402,
+                                      "bottom": 874
+                                    },
+                                    "driverDetail": {
+                                      "class": "iosMaestro"
+                                    }
+                                  },
+                                  {
+                                    "nodeId": 55,
+                                    "children": [
+                                      {
+                                        "nodeId": 56,
+                                        "bounds": {
+                                          "left": 0,
+                                          "top": 62,
+                                          "right": 402,
+                                          "bottom": 874
+                                        },
+                                        "driverDetail": {
+                                          "class": "iosMaestro"
+                                        }
+                                      }
+                                    ],
+                                    "bounds": {
+                                      "left": 0,
+                                      "top": 62,
+                                      "right": 402,
+                                      "bottom": 874
+                                    },
+                                    "driverDetail": {
+                                      "class": "iosMaestro"
+                                    }
+                                  }
+                                ],
+                                "bounds": {
+                                  "left": 0,
+                                  "top": 62,
+                                  "right": 402,
+                                  "bottom": 874
+                                },
+                                "driverDetail": {
+                                  "class": "iosMaestro"
+                                }
+                              }
+                            ],
+                            "bounds": {
+                              "left": 0,
+                              "top": 62,
+                              "right": 402,
+                              "bottom": 874
+                            },
+                            "driverDetail": {
+                              "class": "iosMaestro"
+                            }
+                          }
+                        ],
+                        "bounds": {
+                          "left": 0,
+                          "top": 62,
+                          "right": 402,
+                          "bottom": 874
+                        },
+                        "driverDetail": {
+                          "class": "iosMaestro"
+                        }
+                      }
+                    ],
+                    "bounds": {
+                      "left": 0,
+                      "top": 62,
+                      "right": 402,
+                      "bottom": 874
+                    },
+                    "driverDetail": {
+                      "class": "iosMaestro"
+                    }
+                  }
+                ],
+                "bounds": {
+                  "left": 0,
+                  "top": 0,
+                  "right": 402,
+                  "bottom": 874
+                },
+                "driverDetail": {
+                  "class": "iosMaestro"
+                }
+              }
+            ],
+            "bounds": {
+              "left": 0,
+              "top": 0,
+              "right": 402,
+              "bottom": 874
+            },
+            "driverDetail": {
+              "class": "iosMaestro"
+            }
+          },
+          {
+            "nodeId": 57,
+            "children": [
+              {
+                "nodeId": 58,
+                "children": [
+                  {
+                    "nodeId": 59,
+                    "bounds": {
+                      "left": 0,
+                      "top": 0,
+                      "right": 402,
+                      "bottom": 874
+                    },
+                    "driverDetail": {
+                      "class": "iosMaestro"
+                    }
+                  }
+                ],
+                "bounds": {
+                  "left": 0,
+                  "top": 0,
+                  "right": 402,
+                  "bottom": 874
+                },
+                "driverDetail": {
+                  "class": "iosMaestro"
+                }
+              }
+            ],
+            "bounds": {
+              "left": 0,
+              "top": 0,
+              "right": 402,
+              "bottom": 874
+            },
+            "driverDetail": {
+              "class": "iosMaestro"
+            }
+          }
+        ],
+        "bounds": {
+          "left": 0,
+          "top": 0,
+          "right": 402,
+          "bottom": 874
+        },
+        "driverDetail": {
+          "class": "iosMaestro",
+          "accessibilityText": "Contacts"
+        }
+      },
+      {
+        "nodeId": 60,
+        "children": [
+          {
+            "nodeId": 61,
+            "bounds": {
+              "left": 0,
+              "top": 0,
+              "right": 402,
+              "bottom": 54
+            },
+            "driverDetail": {
+              "class": "iosMaestro"
+            }
+          },
+          {
+            "nodeId": 62,
+            "children": [
+              {
+                "nodeId": 63,
+                "children": [
+                  {
+                    "nodeId": 64,
+                    "children": [
+                      {
+                        "nodeId": 65,
+                        "bounds": {
+                          "left": 56,
+                          "top": 22,
+                          "right": 92,
+                          "bottom": 42
+                        },
+                        "driverDetail": {
+                          "class": "iosMaestro",
+                          "accessibilityText": "7:36\u202fAM"
+                        }
+                      },
+                      {
+                        "nodeId": 66,
+                        "bounds": {
+                          "left": 288,
+                          "top": 26,
+                          "right": 307,
+                          "bottom": 38
+                        },
+                        "driverDetail": {
+                          "class": "iosMaestro",
+                          "text": "No signal",
+                          "accessibilityText": "Cellular"
+                        }
+                      },
+                      {
+                        "nodeId": 67,
+                        "bounds": {
+                          "left": 315,
+                          "top": 26,
+                          "right": 332,
+                          "bottom": 38
+                        },
+                        "driverDetail": {
+                          "class": "iosMaestro",
+                          "text": "SSID, 3 of 3 Wi-Fi bars",
+                          "resourceId": "3 of 3 Wi-Fi bars"
+                        }
+                      },
+                      {
+                        "nodeId": 68,
+                        "bounds": {
+                          "left": 339,
+                          "top": 26,
+                          "right": 366,
+                          "bottom": 39
+                        },
+                        "driverDetail": {
+                          "class": "iosMaestro",
+                          "text": "Not charging",
+                          "accessibilityText": "100% battery power"
+                        }
+                      }
+                    ],
+                    "bounds": {
+                      "left": 0,
+                      "top": 0,
+                      "right": 402,
+                      "bottom": 54
+                    },
+                    "driverDetail": {
+                      "class": "iosMaestro"
+                    }
+                  }
+                ],
+                "bounds": {
+                  "left": 0,
+                  "top": 0,
+                  "right": 402,
+                  "bottom": 54
+                },
+                "driverDetail": {
+                  "class": "iosMaestro"
+                }
+              }
+            ],
+            "bounds": {
+              "left": 0,
+              "top": 0,
+              "right": 402,
+              "bottom": 54
+            },
+            "driverDetail": {
+              "class": "iosMaestro"
+            }
+          }
+        ],
+        "bounds": {
+          "left": 0,
+          "top": 0,
+          "right": 0,
+          "bottom": 0
+        },
+        "driverDetail": {
+          "class": "iosMaestro",
+          "enabled": false
+        }
+      }
+    ],
+    "bounds": {
+      "left": 0,
+      "top": 0,
+      "right": 0,
+      "bottom": 0
+    },
+    "driverDetail": {
+      "class": "iosMaestro",
+      "enabled": false
+    }
+  }
+}

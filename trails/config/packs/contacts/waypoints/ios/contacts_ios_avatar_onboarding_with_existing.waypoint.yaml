@@ -1,0 +1,25 @@
+id: "contacts/ios/avatar-onboarding-existing-suggestions"
+description: >
+  iOS Contacts app, avatar onboarding picker with contact-specific suggestions populated
+  (e.g. KB monogram variants for Kate Bell). The body shows monogram suggestions matching
+  the contact's initials. Sibling to contacts/ios/avatar-onboarding (the launch state)
+  because the suggestion content reveals new available picks.
+required:
+  - description: "Onboarding cancel button"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^OnboardingCancelButton$"
+  - description: "Choose an Avatar header"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Choose an Avatar$"
+  - description: "Initial-based suggestion (e.g. 'KB,Sans-serif')"
+    selector:
+      iosMaestro:
+        textRegex: "^[A-Z]{1,3},(Sans-serif|Serif|Condensed|Rounded)$"
+        resourceIdRegex: "^SuggestionListItemButton$"
+forbidden:
+  - description: "Visual identity Choose — would mean we're in the editor"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^VisualIdentityChooseButton$"

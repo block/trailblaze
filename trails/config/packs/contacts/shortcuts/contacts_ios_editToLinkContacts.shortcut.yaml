@@ -1,0 +1,9 @@
+id: contacts_ios_editToLinkContacts
+description: Tap 'link contacts…' in the Linked Contacts section of the edit form to open the contact-link picker.
+shortcut:
+  from: contacts/ios/edit-contact
+  to: contacts/ios/link-contacts-picker
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: link contacts…

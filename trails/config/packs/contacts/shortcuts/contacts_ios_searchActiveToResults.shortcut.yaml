@@ -1,0 +1,9 @@
+id: contacts_ios_searchActiveToResults
+description: Type a query (e.g. 'Kate') in the active search field to surface matching contacts under a Search results panel.
+shortcut:
+  from: contacts/ios/search-active
+  to: contacts/ios/search-results
+parameters: []
+tools:
+  - inputText:
+      text: Kate

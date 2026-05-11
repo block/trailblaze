@@ -1,0 +1,21 @@
+id: "contacts/ios/share-contact-all-selected"
+description: >
+  iOS Contacts app, Share Contact field-selection screen with all fields selected — the
+  user tapped "Select All Fields" so every checkbox.circle.fill is set. Distinct from
+  contacts/ios/share-contact-fields (default selective state) because the bulk-selection
+  toggle now reads "Deselect All Fields" (different action label, different available
+  action: deselect-all).
+required:
+  - description: "Share Contact header"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Share Contact$"
+  - description: "Deselect All Fields toggle (only present when everything is selected)"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Deselect All Fields$"
+forbidden:
+  - description: "Select All Fields — would mean not all are selected"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Select All Fields$"

@@ -1,0 +1,11 @@
+id: contacts_ios_libraryToPhotoSuggestions
+description: Tap any photo in the library grid to enter the photo-avatar editor (with photo-derived suggestions).
+shortcut:
+  from: contacts/ios/photo-library
+  to: contacts/ios/visual-identity-photo-suggestions
+parameters: []
+tools:
+  - tapOnElementBySelector:
+      nodeSelector:
+        iosMaestro:
+          resourceIdRegex: "^PXGGridLayout-Group$"

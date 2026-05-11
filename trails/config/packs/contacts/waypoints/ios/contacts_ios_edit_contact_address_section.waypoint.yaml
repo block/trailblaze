@@ -1,0 +1,24 @@
+id: "contacts/ios/edit-contact-address-section"
+description: >
+  iOS Contacts app, edit-contact form scrolled into the address section — Street / City /
+  State / ZIP / Country or Region rows visible. Distinct from the un-scrolled
+  contacts/ios/edit-contact because new editable fields are now reachable (Street/City
+  etc. are new available actions).
+required:
+  - description: "close button"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^close$"
+  - description: "Street row"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Street$"
+  - description: "Country or Region row"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Country or Region: .*$"
+forbidden:
+  - description: "New Contact title — would mean we're on the new-contact draft"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^New Contact$"

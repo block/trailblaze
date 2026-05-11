@@ -1,0 +1,23 @@
+id: "contacts/ios/edit-contact-done-enabled"
+description: >
+  iOS Contacts app, edit-contact form with at least one unsaved change — the "Done"
+  trailing nav button is enabled (commits saves). Distinct from contacts/ios/edit-contact
+  (entered with no changes; Done starts disabled).
+required:
+  - description: "close button"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^close$"
+  - description: "Add Photo affordance"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Add Photo$"
+  - description: "Done button (enabled)"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Done$"
+forbidden:
+  - description: "New Contact title — would mean we're on the new-contact draft"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^New Contact$"

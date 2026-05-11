@@ -1,0 +1,9 @@
+id: contacts_ios_actionsToEmergency
+description: Tap Add to Emergency Contacts to pick which phone number to use as the emergency contact.
+shortcut:
+  from: contacts/ios/contact-detail-actions
+  to: contacts/ios/emergency-phone-picker
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: Add to Emergency Contacts

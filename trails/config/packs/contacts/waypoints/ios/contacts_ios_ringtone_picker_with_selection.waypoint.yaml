@@ -1,0 +1,24 @@
+id: "contacts/ios/ringtone-picker-with-selection"
+description: >
+  iOS Contacts app, Ringtone picker after a non-default tone has been selected — a
+  checkmark glyph appears next to the chosen tone, the Done button becomes the actionable
+  commit state (vs Cancel = revert). Distinct from contacts/ios/ringtone-picker (no
+  selection yet, Default has the checkmark).
+required:
+  - description: "Ringtone header"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Ringtone$"
+  - description: "Done button"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Done$"
+  - description: "checkmark icon (a tone is selected)"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^checkmark$"
+forbidden:
+  - description: "Text Tone header — sibling picker"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Text Tone$"

@@ -1,0 +1,9 @@
+id: contacts_ios_contactMenuToDelete
+description: Tap Delete Contact on the contact context menu to open the delete-card confirmation popover.
+shortcut:
+  from: contacts/ios/contact-context-menu
+  to: contacts/ios/delete-contact-confirm
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: Delete Contact

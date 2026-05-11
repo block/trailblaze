@@ -1,0 +1,9 @@
+id: contacts_ios_avatarToPhotosPicker
+description: Tap Photos on the avatar onboarding picker to open the Camera+Library source picker.
+shortcut:
+  from: contacts/ios/avatar-onboarding
+  to: contacts/ios/photos-picker
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: Photos

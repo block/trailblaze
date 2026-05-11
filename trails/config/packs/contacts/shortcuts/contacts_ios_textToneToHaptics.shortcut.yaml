@@ -1,0 +1,9 @@
+id: contacts_ios_textToneToHaptics
+description: Tap Haptics on the Text Tone picker to drill into the haptics sub-picker.
+shortcut:
+  from: contacts/ios/text-tone-picker
+  to: contacts/ios/haptics-picker
+parameters: []
+tools:
+  - tapOnElementWithText:
+      text: Haptics

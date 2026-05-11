@@ -1,0 +1,24 @@
+id: "contacts/ios/visual-identity-composition-monogram-section"
+description: >
+  iOS Contacts app, visual identity composition picker with the Monogram section
+  prominent. Sibling to the Photos / Memoji variants.
+required:
+  - description: "Visual identity Done button"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^VisualIdentityDoneButton$"
+  - description: "Monogram StickyHeader"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Monogram$"
+        resourceIdRegex: "^StickyHeaderContent$"
+  - description: "New Monogram create-suggestion button"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^New Monogram$"
+        resourceIdRegex: "^CreateSuggestionButton$"
+forbidden:
+  - description: "Choose button — only on the editor, not composition"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^VisualIdentityChooseButton$"

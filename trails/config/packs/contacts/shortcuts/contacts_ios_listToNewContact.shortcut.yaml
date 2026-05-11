@@ -1,0 +1,9 @@
+id: contacts_ios_listToNewContact
+description: From the contacts list, tap the + (Add) toolbar button to open the new-contact draft.
+shortcut:
+  from: contacts/ios/list
+  to: contacts/ios/new-contact
+parameters: []
+tools:
+  - tapOnElementWithAccessibilityText:
+      accessibilityText: Add

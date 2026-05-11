@@ -1,0 +1,32 @@
+id: "contacts/ios/avatar-onboarding"
+description: >
+  iOS Contacts app, "Choose an Avatar" onboarding picker — a modal that opens when a user
+  taps "Add Photo" on a new or edit contact. Shows the Avatar/Poster segmented control with
+  Avatar selected, a "Choose an Avatar" header, and four type-of-avatar options (Photos /
+  Monogram / Memoji / Emoji) under id=OnboardingMainVStack, each with a sibling
+  "New <Photo|Monogram|Memoji|Emoji>" affordance. Distinct from
+  contacts/ios/avatar-onboarding-poster (Poster tab selected) and from
+  contacts/ios/visual-identity-monogram (no editor, no Customize button).
+required:
+  - description: "Onboarding cancel button"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^OnboardingCancelButton$"
+  - description: "Avatar/Poster segmented control: Avatar selected"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Avatar$"
+        selected: true
+  - description: "Choose-an-Avatar header (locale-bound but stable in en-US)"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Choose an Avatar$"
+forbidden:
+  - description: "Visual-identity Choose button — only on the editor (after picking a type)"
+    selector:
+      iosMaestro:
+        resourceIdRegex: "^VisualIdentityChooseButton$"
+  - description: "Choose-a-Poster header — would mean Poster is selected"
+    selector:
+      iosMaestro:
+        accessibilityTextRegex: "^Choose a Poster$"
